@@ -30,6 +30,13 @@ services:
       CORE_GATEWAY_TOKEN: ${CORE_GATEWAY_TOKEN}
       MEMORY_URL: http://memory:8002
       CORE_MEMORY_TOKEN: ${CORE_MEMORY_TOKEN}
+      # The bundled metasearch service, reached in-network by the web_search
+      # tool. Keyless (a stock battery, not a bearer peer) and loopback-only,
+      # so this is a plain URL, not a token pair. Search is best-effort: core
+      # does NOT depend_on it, so a slow or missing searxng never blocks core
+      # from starting — web_search states "unavailable" instead of faking a
+      # result (app/tools/web_search.py).
+      SEARXNG_URL: http://searxng:8080
       # Where the workspace tools may write, and the only place they may.
       # Stated here rather than left to the code's default so the boundary
       # is visible next to the mount that backs it.
@@ -111,6 +118,44 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  searxng:
+    # Nova's bundled web search. A stock metasearch engine — no key, no build,
+    # just the upstream image plus our settings.yml. It comes up with the base
+    # stack (no profile) so "what's the latest on X" always has a real search
+    # behind it instead of the model guessing a URL. The image is `latest`
+    # deliberately: it is not one of our built services, carries no state we
+    # own, and a metasearch engine that lags upstream quietly stops matching
+    # the sites it scrapes — pinning it would be a maintenance burden with no
+    # reproducibility payoff here.
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      # The image's entrypoint substitutes this into settings.yml's
+      # server.secret_key. A default keeps a bare `docker compose up` (no
+      # install.sh) working; install.sh generates a real one into .env.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-nova-searxng-dev-secret}
+    volumes:
+      # The DIRECTORY, not the single settings.yml file. A single-file bind
+      # resolves to a host inode at container-create time, so when Docker
+      # Desktop recycled its WSL mount the v3 container died with exit 127 and
+      # `restart: unless-stopped` retried it forever without ever repairing it
+      # (v3 lost web search for 43h that way). Read-only: the service never
+      # writes its own config.
+      - ../searxng:/etc/searxng:ro
+    ports:
+      # Loopback only, like every other host bind here. Publishing is not
+      # required — core reaches it in-network at http://searxng:8080 — but it
+      # lets the operator eyeball the JSON API directly while verifying.
+      - "127.0.0.1:8380:8080"
+    healthcheck:
+      # searxng/searxng ships wget and exposes /healthz; this touches only the
+      # search service itself, so a red `searxng` means searxng, never core.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
 
   ollama:
     # PINNED, not `latest`. An untagged image is only pulled when it is absent,

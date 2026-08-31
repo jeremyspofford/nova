@@ -22,13 +22,18 @@ GPU_COMPOSE_FILE="$DEPLOY_DIR/docker-compose.gpu.yml"
 # a stale value from before this change; that line is left exactly where it
 # is rather than edited out, since touching a file this script did not need
 # to touch is its own kind of bug.
-SECRET_KEYS="POSTGRES_PASSWORD CORE_TOKEN CORE_GATEWAY_TOKEN CORE_MEMORY_TOKEN"
+# SEARXNG_SECRET signs SearXNG's own result URLs; it has a compose default so a
+# bare `docker compose up` works, but a real install generates a random one here
+# like every other secret rather than shipping the shared default.
+SECRET_KEYS="POSTGRES_PASSWORD CORE_TOKEN CORE_GATEWAY_TOKEN CORE_MEMORY_TOKEN SEARXNG_SECRET"
 # The bundled ollama joins this list only when it is actually being started —
-# see decide_inference.
-HEALTH_CHECKED_SERVICES="postgres core gateway memory web"
+# see decide_inference. searxng comes up with the base stack (no profile), so it
+# is always waited on: web search is a first-class capability, not an add-on.
+HEALTH_CHECKED_SERVICES="postgres core gateway memory web searxng"
 # Ports we WARN about: the services below are ours, so a busy port here is
 # almost always our own previous install, and a warning is the honest level.
-REQUIRED_PORTS="3000 8000 8001 8002"
+# 8380 is searxng's published loopback port (docker-compose.yml).
+REQUIRED_PORTS="3000 8000 8001 8002 8380"
 # The bundled ollama's port is NOT in that list, because a warning is the
 # wrong level for it: the container publishes it, so a busy port is a hard
 # failure a few seconds later. decide_inference refuses up front instead.

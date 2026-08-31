@@ -304,6 +304,11 @@ run_secrets_noop() {
       printf 'CORE_TOKEN=already-set\n'
       printf 'CORE_GATEWAY_TOKEN=already-set\n'
       printf 'CORE_MEMORY_TOKEN=already-set\n'
+      # Every key in SECRET_KEYS must be pre-populated for this to be a genuine
+      # no-op: SEARXNG_SECRET joined that list with web search, so it belongs
+      # here too, or generate_secrets would rewrite the file via set_env_value
+      # and this would stop testing the chmod-on-noop path it exists for.
+      printf 'SEARXNG_SECRET=already-set\n'
     } > "$ENV_FILE"
     chmod 644 "$ENV_FILE"
     generate_secrets >/dev/null 2>&1
