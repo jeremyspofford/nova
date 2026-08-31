@@ -86,6 +86,11 @@ export type ChatAction =
   // and model), just with no rows, so the empty state shows for the same chat.
   | { type: 'cleared'; conversationId: string }
   | { type: 'modelSwitched'; model: string }
+  // A local, un-sent assistant row — the /help command prints the command
+  // listing this way (see lib/commands.ts). It never streams to the model and
+  // is not persisted server-side: it is a client-only note, so a reconcile or
+  // reload naturally drops it, which is correct for ephemeral help text.
+  | { type: 'localMessage'; id: string; text: string }
   // Dispatched by chat-store.tsx's decideConsent AFTER the decide API call
   // succeeds — the card it returns is the new truth for that row. Never
   // dispatched from a stream event: deciding is an operator action against
@@ -292,6 +297,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     // behind. Everything else about the conversation in flight is untouched.
     case 'modelSwitched':
       return { ...state, model: action.model }
+
+    case 'localMessage':
+      return {
+        ...state,
+        rows: [...state.rows, message({ id: action.id, role: 'assistant', text: action.text })],
+      }
 
     case 'send':
       return {

@@ -15,7 +15,7 @@ import {
 } from '../lib/api'
 import type { ConsentCard } from '../lib/consentCard'
 import { continuationMessage } from '../lib/consentCard'
-import { isClearCommand } from '../lib/clearCommand'
+import { matchCommand } from '../lib/commands'
 import { streamChat, type FetchLike } from '../lib/streamChat'
 import { chatReducer, emptyChat, type ChatState } from '../pages/chat/chatReducer'
 
@@ -123,7 +123,7 @@ interface ChatStore {
    * conversation's empty state (never a fake success — the UI resets after the
    * server confirms). A no-op with nothing loaded yet. The command is parsed in
    * sendMessage: a whole-message `/clear` routes here instead of streaming; a
-   * message merely containing "/clear" sends normally (see lib/clearCommand.ts).
+   * message merely containing "/clear" sends normally (see lib/commands.ts).
    */
   clearChat: () => Promise<void>
 }
@@ -222,13 +222,21 @@ export function ChatProvider({
     dispatch({ type: 'cleared', conversationId })
   }, [conversationsApi])
 
+  // A local, un-sent assistant row (the /help listing). Never streamed to the
+  // model, never persisted — see chatReducer's 'localMessage'.
+  const appendLocalMessage = useCallback((text: string) => {
+    dispatch({ type: 'localMessage', id: nextId('local'), text })
+  }, [])
+
   const sendMessage = useCallback(
     (text: string) => {
-      if (isClearCommand(text)) {
-        // A whole-message /clear (or /reset) is a command, not a turn: clear the
-        // chat instead of streaming it to the model. Fire-and-forget — clearChat
-        // empties the store on the clear API's ok, never before.
-        void clearChat()
+      const command = matchCommand(text)
+      if (command) {
+        // A whole-message slash command (e.g. /clear, /help) is a command, not a
+        // turn: run its registered effect instead of streaming to the model. The
+        // parser is the registry's own (lib/commands.ts), so a message that
+        // merely CONTAINS "/clear" mid-text still sends normally.
+        command.run({ clearChat, appendLocalMessage })
         return
       }
       const userId = nextId('u')
@@ -260,7 +268,7 @@ export function ChatProvider({
         }
       })()
     },
-    [fetchImpl, clearChat],
+    [fetchImpl, clearChat, appendLocalMessage],
   )
 
   const loadConversation = useCallback(
