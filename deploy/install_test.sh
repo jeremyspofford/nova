@@ -335,6 +335,53 @@ case "$STALE_BODY" in
     report 1 "existing .env: stale INSTANCE_SECRET left harmlessly in place" "$STALE_BODY" ;;
 esac
 
+# REGRESSION (rd7): a newly-added secret ABSENT from an existing .env must not
+# abort generate_secrets. get_env_value's `grep | cut` returns 1 on a miss under
+# `set -o pipefail`, and `existing="$(get_env_value …)"` in ensure_secret is a
+# simple command whose non-zero status trips `set -e` — which aborted the whole
+# install right before it would have generated the missing key. SEARXNG_SECRET
+# (added with web search) was the first key that could be missing from an
+# existing .env, and it did exactly this in production. This case runs
+# generate_secrets WITH set -e ACTIVE (as the real install does) — unlike
+# run_secrets above, which sets +e and so cannot see this abort — against a .env
+# holding the OLD keys but not the new one.
+run_secrets_missing_new_key() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"   # sets -euo pipefail — deliberately NOT relaxed
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    # shellcheck disable=SC2034
+    ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+    {
+      printf 'POSTGRES_PASSWORD=already-set\n'
+      printf 'CORE_TOKEN=already-set\n'
+      printf 'CORE_GATEWAY_TOKEN=already-set\n'
+      printf 'CORE_MEMORY_TOKEN=already-set\n'
+      # SEARXNG_SECRET deliberately ABSENT — the existing-install upgrade case.
+    } > "$ENV_FILE"
+    generate_secrets >/dev/null 2>&1   # set -e active: aborts HERE if the bug is back
+    # Reached only if generate_secrets did NOT abort:
+    grep -q '^SEARXNG_SECRET=..*' "$ENV_FILE" && printf 'GENERATED'
+  )
+}
+# NO `|| true` here: putting the call in a `||` list would make bash IGNORE
+# `set -e` for its whole body (subshell included), so generate_secrets could not
+# abort and this case would be vacuous. A bare command-substitution assignment
+# keeps the subshell's `set -e` live; the outer script is `set -uo pipefail`
+# (no -e), so a subshell that DOES abort just yields an empty string here — which
+# is exactly the failure this case reports.
+MISSING_KEY_RESULT="$(run_secrets_missing_new_key)"
+case "$MISSING_KEY_RESULT" in
+  GENERATED)
+    report 0 "existing .env missing a newly-added secret: generated it, no abort under set -e" ;;
+  *)
+    report 1 "existing .env missing a newly-added secret: generated it, no abort under set -e" \
+      "aborted or not generated (got '$MISSING_KEY_RESULT')" ;;
+esac
+
 # ── preflight: openssl is required to generate secrets, so check for it ────
 run_openssl_check() {
   (

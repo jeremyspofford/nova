@@ -419,7 +419,14 @@ JSON
 get_env_value() {
   local key="$1"
   [ -f "$ENV_FILE" ] || return 0
-  grep -m1 "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2-
+  # `|| true`: a key that is ABSENT is a normal case (a newly-added secret like
+  # SEARXNG_SECRET on an existing .env), not an error. Without it, grep's exit 1
+  # on a miss rides `set -o pipefail` out through `existing="$(get_env_value …)"`
+  # in ensure_secret — a `var=$(cmd)` simple command whose non-zero status trips
+  # `set -e`, aborting the whole install right before it would have generated the
+  # missing secret. The empty stdout is the answer ("not set"); the exit code is
+  # not.
+  grep -m1 "^${key}=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true
 }
 
 set_env_value() {

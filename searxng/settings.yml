@@ -28,3 +28,22 @@ search:
   formats:
     - html
     - json
+
+# Engine selection. SearXNG's default general engines (brave, duckduckgo,
+# startpage) all CAPTCHA/rate-limit a headless, IP-static instance like this one,
+# so a stock config returns ZERO results — measured live 2026-08-30: brave "too
+# many requests", duckduckgo/startpage "CAPTCHA". bing was the one general web
+# engine that answered (10 results for "openai"); github answers for code. So we
+# explicitly ENABLE bing as the reliable general workhorse. The blocked defaults
+# are left enabled too (they self-suspend when blocked and cost nothing, and may
+# recover), and wikipedia/duckduckgo are re-asserted enabled so any that DO
+# answer add to the merge. Engine blocking is volatile: if bing later returns
+# nothing, enable more here (mojeek, qwant, brave, google) and re-measure with
+# `/search?q=…&format=json&engines=<name>`.
+engines:
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: wikipedia
+    disabled: false
