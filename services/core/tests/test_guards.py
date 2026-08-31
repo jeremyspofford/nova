@@ -535,3 +535,170 @@ def test_read_one_file_and_wrote_another_flags_only_the_unbacked_write():
 def test_the_matcher_never_raises_on_odd_input(reply):
     # We do not care about the verdict here — only that it returns cleanly.
     guards.narration_check(reply, [])
+
+
+# -- the deferral guard: a promised tool action that never ran -------------
+#
+# guards.deferral_check(reply, spans, available_tools) is pure and precision-
+# first, the mirror of narration_check (a fabricated COMPLETED action) for a
+# PROMISED FUTURE action that never ran. As with the other guards, the
+# must-NOT-fire cases are as load-bearing as the fabrications: a wrongly-
+# corrected honest reply would make the guard the liar. The live registry is
+# used so a phrase counts only when its satisfying tool is actually available.
+
+from app import tools as _tools  # noqa: E402  (kept beside the deferral suite)
+
+DEFERRAL_TOOLS = _tools.tool_names()  # the real registry: has web_search + fetch_url
+
+
+def deferred(correction) -> str | None:
+    return correction.tool if correction is not None else None
+
+
+# MUST FIRE: a first-person future commitment to a registered tool action, with
+# no successful span of that tool this turn. The owner's exact case leads.
+DEFERRAL_MUST_FIRE = [
+    ("owner_web_search", "I'll perform a web search for the latest Pixel news.", "web_search"),
+    ("ill_search", "I'll search for the latest on that.", "web_search"),
+    ("let_me_look_it_up", "Let me look it up.", "web_search"),
+    ("going_to_check_the_web", "I'm going to check the web.", "web_search"),
+    ("i_can_now_search", "I can now search online for you.", "web_search"),
+    ("let_me_google", "Let me google that.", "web_search"),
+    ("ill_fetch_that_page", "I'll fetch that page.", "fetch_url"),
+    ("let_me_pull_up_the_site", "Let me pull up the website.", "fetch_url"),
+    ("ill_retrieve_a_url", "I'll retrieve https://example.com/data.", "fetch_url"),
+    ("going_to_read_the_page", "I'm going to read the page at that link.", "fetch_url"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,tool", DEFERRAL_MUST_FIRE, ids=[c[0] for c in DEFERRAL_MUST_FIRE]
+)
+def test_deferral_must_fire_when_the_tool_never_ran(label, reply, tool):
+    correction = guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS)
+    assert correction is not None, f"{label!r} should have fired but did not"
+    assert deferred(correction) == tool
+
+
+# MUST NOT FIRE: an offer/question, a conditional, a non-tool "action", a
+# past/negated/other-subject form, a promise about an unmapped tool (memory /
+# workspace read), and the guard's own honest-note / note text.
+DEFERRAL_MUST_NOT_FIRE = [
+    # offer / question — the operator has not accepted a commitment
+    ("question_would_you_like", "Would you like me to search for it?"),
+    ("question_should_i", "Should I look it up?"),
+    ("offer_want_me_to", "Want me to check the web?"),
+    ("conditional_if_youd_like", "I can search if you'd like."),
+    ("conditional_now_if_you_want", "I can now search if you want me to."),
+    # a non-tool "action" — the verb maps to no registered tool
+    ("let_me_think", "Let me think about that."),
+    ("keep_in_mind", "I'll keep that in mind."),
+    ("let_me_explain", "Let me explain how it works."),
+    ("get_back_to_you", "I'll get back to you shortly."),
+    # past / other-subject / negation
+    ("past_couldnt", "I couldn't search for it."),
+    ("other_subject_you", "You can search for it yourself."),
+    ("negation_wont", "I won't search for that."),
+    ("negation_will_not", "I will not search the web for that."),
+    # an unmapped tool: searching memory is memory_search, reading a file is a
+    # workspace read — neither is a web_search / fetch_url deferral
+    ("search_memory", "Let me search my memory for that."),
+    ("read_the_file", "I'll read the file back to you."),
+    # the guard's own frames must never trip it (self-reference)
+    (
+        "honest_note_web",
+        "I said I'd search the web but couldn't complete it automatically — "
+        "ask me again and I'll try.",
+    ),
+    (
+        "honest_note_fetch",
+        "I said I'd fetch that page but couldn't complete it automatically — "
+        "ask me again and I'll try.",
+    ),
+    ("deferral_note", "Doing that now instead of just saying I would."),
+    # a plain answer carries no commitment at all
+    ("plain_answer", "The Pixel 10 has a 50-megapixel main camera."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", DEFERRAL_MUST_NOT_FIRE, ids=[c[0] for c in DEFERRAL_MUST_NOT_FIRE]
+)
+def test_deferral_must_not_fire_on_honest_replies(label, reply):
+    assert (
+        guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS) is None
+    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+
+
+def test_deferral_does_not_fire_when_the_tool_actually_ran():
+    """The precision crux: the reply says 'let me search' AND a successful
+    web_search span exists this turn, so it is an honest narration, not a
+    deferral."""
+    reply = "Let me search the web — here is what I found."
+    spans = [tool_span("web_search")]
+    assert guards.deferral_check(reply, spans, DEFERRAL_TOOLS) is None
+
+
+def test_deferral_fires_when_the_matching_span_failed():
+    """A web_search that FAILED (ok=false) did not do the thing, so a promise to
+    search is still an unkept one."""
+    reply = "Let me search the web for the latest."
+    spans = [tool_span("web_search", ok=False)]
+    assert guards.deferral_check(reply, spans, DEFERRAL_TOOLS) is not None
+
+
+def test_deferral_needs_the_right_tool_span():
+    """A fetch_url that ran does not back a promise to SEARCH — the span must be
+    of the tool the commitment maps to."""
+    reply = "I'll search for the latest news."
+    spans = [tool_span("fetch_url", url="https://example.com")]
+    assert guards.deferral_check(reply, spans, DEFERRAL_TOOLS) is not None
+
+
+def test_the_deferral_verdict_is_derived_from_the_live_registry():
+    """The same 'I'll search' is a deferral only when web_search is registered —
+    the derived-not-hardcoded property (CLAUDE.md): the verdict flips on the tool
+    set alone."""
+    reply = "I'll search for the latest on that."
+    fired = guards.deferral_check(reply, [other_span()], ["web_search"])
+    assert fired is not None and deferred(fired) == "web_search"
+    # web_search not in the set -> the promise is not one this guard maps.
+    assert guards.deferral_check(reply, [other_span()], ["fetch_url"]) is None
+    assert guards.deferral_check(reply, [other_span()], []) is None
+
+
+def test_the_fetch_deferral_verdict_is_derived_from_the_live_registry():
+    reply = "I'll fetch that page for you."
+    fired = guards.deferral_check(reply, [other_span()], ["fetch_url"])
+    assert fired is not None and deferred(fired) == "fetch_url"
+    assert guards.deferral_check(reply, [other_span()], ["web_search"]) is None
+
+
+def test_deferral_is_pure_same_inputs_same_verdict():
+    reply = "I'll search for the latest on that."
+    spans = [other_span()]
+    first = guards.deferral_check(reply, spans, DEFERRAL_TOOLS)
+    second = guards.deferral_check(reply, spans, DEFERRAL_TOOLS)
+    assert (first is None) == (second is None)
+    assert first is not None
+    assert deferred(first) == deferred(second)
+
+
+def test_an_empty_reply_is_never_a_deferral():
+    assert guards.deferral_check("", [other_span()], DEFERRAL_TOOLS) is None
+    assert guards.deferral_check("   \n ", [other_span()], DEFERRAL_TOOLS) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I'll \\((((search and [unbalanced",
+        "search search search",
+        "创建 web search 文件",  # non-ascii around a real phrase
+        "\n\n\n",
+        "I'll search " + "web " * 200,
+    ],
+)
+def test_the_deferral_matcher_never_raises_on_odd_input(reply):
+    # We do not care about the verdict here — only that it returns cleanly.
+    guards.deferral_check(reply, [], DEFERRAL_TOOLS)

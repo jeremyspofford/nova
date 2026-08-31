@@ -951,3 +951,182 @@ def capability_claim_check(
         for phrase, tool in denied
     )
     return Correction(claims=claims, text=_capability_correction_text(tools_named))
+
+
+# -- the deferral guard ----------------------------------------------------
+#
+# The fourth sibling, for the class the S3 owner walk hit (2026-08-30): asked
+# "what about the pixel?", the small model replied "I'll perform a web search…
+# Let me check recent announcements…" and called NO tool — turn a3ffb48e had
+# tool_calls=0, no web_search span, status ok. It COMMITTED to a tool action and
+# never did it; the turn ended reading like it was still working. This is the
+# MIRROR of narration_check: narration catches a fabricated COMPLETED action ("I
+# searched and found…" with no span), this catches a PROMISED FUTURE action that
+# never ran. A broken promise is a defect, not a preference — and (unlike the
+# opt-in responsiveness check, which second-guesses good answers) the redirect it
+# triggers only ever fires when a deferral ACTUALLY happened, so the cost is
+# targeted. That is why the detector is safe to run on every turn.
+#
+# deferral_check(reply_text, spans, available_tools) fires ONLY when the reply
+# makes a FIRST-PERSON FUTURE COMMITMENT to an action a REGISTERED tool performs
+# ("I'll search", "let me look it up", "I'm going to fetch that page") AND no
+# successful span of that tool ran this turn. The commitment-phrase -> tool map
+# is DERIVED against the live tool set the caller passes: a phrase counts only
+# when its tool is in available_tools — the same derived-not-hardcoded property
+# as the capability guard, so removing web_search makes "I'll search" honest
+# again by itself, and the pinned corpus reddens the day a shipped search/fetch
+# tool leaves the registry (the intended alarm).
+#
+# Built to the family's two rules: PURE (text + spans + the tool names; no model,
+# network or clock, so it can never itself become a source of narration) and
+# PRECISION-first (a wrongly-corrected honest reply makes the guard the liar,
+# worse than a missed one). The precision cuts, all reusing narration_check's
+# clause/first-person/question machinery:
+#
+#   * The tool ACTUALLY RAN this turn (a matching successful span exists) — even
+#     when the reply also said "let me search" before showing the results.
+#   * An OFFER / question ("Want me to search?", "Should I look it up?", "I can
+#     search if you'd like") — a question clause, or an offer/conditional marker,
+#     asserts no commitment. (Same exemption as the deferral-guard lesson: a
+#     "want me to" is never read as an action.)
+#   * A non-tool "action" ("Let me think.", "I'll explain.", "I'll keep that in
+#     mind.") — the verb maps to no registered tool, so it is never a deferral.
+#   * Past / other-subject / negation ("I couldn't search", "you can search",
+#     "I won't search", "I will not search") — the commitment leads are
+#     first-person present/future, and a negation between the lead and the action
+#     drops the match, so none of these reach a fired verdict.
+
+# Commitment-phrase -> (tool, human action phrase). The pattern is a GENERAL
+# future commitment to a class of action, never a specific completed one
+# (narration's job). Every alternative is anchored so an unrelated verb cannot be
+# swept in: web search phrases exclude a memory/notes object (that would be
+# memory_search, a different, unmapped tool), and the fetch verbs require a URL
+# or a page/link/site object (so "read the file" — a workspace read — is not a
+# fetch). The action phrase is what the redirect nudge and the honest note read
+# out to the operator.
+_DEFERRAL_TOOLS: tuple[tuple[re.Pattern[str], str, str], ...] = (
+    (
+        re.compile(
+            r"\bweb\s+search\b"
+            # "search" for the public web, but NOT "search my/your/the memory|notes"
+            # (that is memory_search, which this guard does not map).
+            r"|\bsearch(?:ing|es)?\b(?!\s+(?:through\s+)?(?:my|your|our|the)\s+"
+            r"(?:memor(?:y|ies)|notes?))"
+            r"|\blook(?:ing)?\s+(?:it|that|this|them|these|those|him|her|up)\b"
+            r"|\bfind\s+(?:\w+\s+){0,4}?\bonline\b"
+            r"|\bcheck\s+(?:the\s+)?(?:web|internet)\b"
+            r"|\bgoogle\b",
+            re.I,
+        ),
+        "web_search",
+        "search the web",
+    ),
+    (
+        re.compile(
+            r"\b(?:fetch|retrieve|pull\s+up|pull|grab|load|open|read|visit|access"
+            r"|go\s+to|navigate\s+to)\b"
+            r"[^.?!]*?"  # a short bridge, bounded to the clause (no sentence ender)
+            r"(?:https?://\S+|\b(?:url|link|page|site|website|web\s*page)\b)",
+            re.I,
+        ),
+        "fetch_url",
+        "fetch that page",
+    ),
+)
+
+# A first-person future-commitment lead — the action follows it. "I'll" REQUIRES
+# the apostrophe (bare "ill" is the adjective; "I will" covers the un-contracted
+# form), and "let's"/"I'm going to" likewise require it, so an ordinary word
+# ("lets me", "im") is never mistaken for a lead. A past ("I searched"), a modal
+# ("I could search"), a bare "I can" (only "I can now" commits), a negation ("I
+# won't"), and another subject ("you can search") all use other words, so none
+# reach a lead — precision comes from the lead set, not a separate blocker.
+_COMMIT_LEAD = re.compile(
+    r"\bi['’]ll\b"
+    r"|\bi\s+will\b"
+    r"|\bi['’]m\s+going\s+to\b"
+    r"|\bi\s+am\s+going\s+to\b"
+    r"|\bi['’]m\s+gonna\b"
+    r"|\blet\s+me\b"
+    r"|\blet['’]s\b"
+    r"|\bi\s+can\s+now\b",
+    re.I,
+)
+# An offer / conditional turns a commitment into a request the operator has not
+# accepted ("I can now search IF YOU'D LIKE", "WANT ME TO look it up?"). A clause
+# carrying one of these markers is never a deferral — same rule as a question.
+_OFFER_MARKER = re.compile(
+    r"\bif\s+you\b"
+    r"|\bwould\s+you\s+like\b"
+    r"|\bdo\s+you\s+want\b"
+    r"|\bwant\s+me\s+to\b"
+    r"|\bshall\s+i\b"
+    r"|\bshould\s+i\b"
+    r"|\blet\s+me\s+know\s+if\b",
+    re.I,
+)
+# A negation sitting BETWEEN the lead and the action un-commits it ("I will NOT
+# search", "I'll never fetch that page"); the more common "I won't"/"I can't"
+# never form a lead in the first place.
+_COMMIT_NEGATION = re.compile(r"\bnot\b|\bnever\b|n['’]t\b", re.I)
+
+
+@dataclass(frozen=True)
+class DeferralClaim:
+    """A first-person future commitment to a registered tool action that never
+    ran this turn. `tool` is the registered tool that would satisfy it,
+    `action_phrase` the human phrase the redirect/honest-note read out, and
+    `phrase` the matched commitment text for the guard span."""
+
+    tool: str
+    action_phrase: str
+    phrase: str
+
+
+def _tool_ran(tool: str, successful: Sequence[Any]) -> bool:
+    """True if a successful span of `tool` ran this turn — the mechanical fact
+    that turns a 'let me search' into an honest narration of work done."""
+    return any(getattr(span, "name", None) == tool for span in successful)
+
+
+def deferral_check(
+    reply_text: str, spans: Sequence[Any], available_tools: Sequence[str]
+) -> DeferralClaim | None:
+    """A first-person future commitment to a tool action that never ran, or None.
+
+    Returns a DeferralClaim when the reply commits to an action a REGISTERED tool
+    performs and no successful span of that tool ran this turn; None otherwise —
+    an honest reply, a reply whose tool actually ran, an offer/question/
+    conditional, a non-tool 'action', or a past/negated/other-subject form. Pure
+    and precision-first (see the section header). Derived from `available_tools`:
+    a commitment is only a deferral when its satisfying tool is in that set, so
+    the verdict reads the live registry, never a hardcoded list.
+    """
+    if not reply_text or not reply_text.strip():
+        return None
+    registered = frozenset(available_tools)
+    successful = _successful(spans)
+    for clause, is_question in _clauses(reply_text):
+        if is_question:
+            continue  # a question/offer asserts no commitment
+        if _OFFER_MARKER.search(clause):
+            continue  # "if you'd like", "want me to" — an offer, not a promise
+        lead = _COMMIT_LEAD.search(clause)
+        if lead is None:
+            continue
+        for pattern, tool, action_phrase in _DEFERRAL_TOOLS:
+            if tool not in registered:
+                # No such tool -> a promise to do it is not a deferral this guard
+                # can act on (derived-not-hardcoded: the verdict follows the
+                # live registry).
+                continue
+            m = pattern.search(clause, lead.end())
+            if m is None:
+                continue  # the action must come AFTER the commitment lead
+            if _COMMIT_NEGATION.search(clause[lead.end() : m.start()]):
+                continue  # "I will NOT search" — the commitment is negated
+            if _tool_ran(tool, successful):
+                continue  # the reply said "let me search" and actually searched
+            phrase = clause[lead.start() : m.end()].strip()
+            return DeferralClaim(tool=tool, action_phrase=action_phrase, phrase=phrase[:80])
+    return None

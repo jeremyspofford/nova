@@ -78,6 +78,22 @@ REFOCUS_NOTE = "Refocusing on your question — that reply drifted off-topic."
 # off_topic contains no on_topic substring, so the first match wins cleanly.
 _VERDICT_RE = re.compile(r"\b(on|off)[_\s-]?topic\b", re.I)
 
+# The ALWAYS-ON deferral guard's two live frames (both {correction}, so the
+# screen shows what happened). The note precedes a corrected reply that stopped
+# deferring; the honest note is the fail-safe when the one redirect could not
+# complete the action — a plain, one-sentence admission, never a fabricated
+# claim, so the operator is never left waiting on a promise. Both carry no
+# completed-action claim and no pending-state phrase, and (checked in the guard
+# suite) neither trips deferral_check itself.
+DEFERRAL_NOTE = "Doing that now instead of just saying I would."
+
+
+def _deferral_honest_note(action_phrase: str) -> str:
+    return (
+        f"I said I'd {action_phrase} but couldn't complete it automatically — "
+        "ask me again and I'll try."
+    )
+
 # How much of a tool call lands in its span. The result head is the
 # Activity page's evidence that the call did what it says; the argument
 # head keeps a 256 KB file body out of the trace. Both are heads, and both
@@ -161,6 +177,8 @@ def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
         "and say plainly when you do not know something.\n\n"
         f"You can call these tools: {', '.join(tool_names)}. "
         "Use one when it gets a real answer instead of a guess. "
+        "When the user asks for something a tool can do, call the tool in THIS "
+        "turn — never say you 'will' search or fetch and then stop; do it now. "
         "After writing a file, read it back before you say it worked. "
         "When a tool answers with a line starting 'Error:', say plainly what failed "
         "and do not claim the work was done. "
@@ -744,6 +762,96 @@ async def _responsiveness_redirect(
         return corrected, True
 
 
+# -- the always-on deferral guard ------------------------------------------
+#
+# Separate from agents.responsiveness_check: a deferral is a broken promise (a
+# DEFECT), not a preference, so the detector runs on every turn — but the
+# redirect it triggers only ever fires when a deferral ACTUALLY happened
+# (guards.deferral_check returned a claim), so the cost is targeted, unlike the
+# opt-in responsiveness check which second-guesses good answers. This runs FIRST
+# and shares the turn's single redirect budget: if it redirects, the (opt-in)
+# responsiveness check does not redirect again this turn (no loops, ever).
+
+
+async def _deferral_redirect(
+    app,
+    turn: traces.Turn,
+    model: str,
+    claim: guards.DeferralClaim,
+    reply: str,
+    messages: Sequence[dict],
+    emit: Callable[[str | None], None],
+) -> str:
+    """Regenerate ONCE to actually do the promised action, or say so honestly.
+
+    Reuses the responsiveness redirect's shape: one corrective regeneration off
+    the turn's EXISTING message context (so this turn's context is reused) plus a
+    nudge to do it now by calling the tool. Returns the durable text:
+
+      * On a regeneration that no longer defers, the corrected reply is emitted
+        after a brief note and REPLACES the durable text (the deferral already
+        streamed live as `t` frames but must not be what the next turn reads,
+        like the responsiveness/anti-poison replace).
+      * If the redirect STILL defers, produces nothing, or errors, it is NOT
+        retried — an honest one-sentence note is appended so the operator is
+        never left waiting on a promise. This is the only always-on behavior
+        that is not a redirect, and it never fabricates a completed action.
+
+    FAIL-OPEN and bounded to ONE redirect: the regenerated reply is checked once
+    (never re-redirected), and a gateway/transport error degrades to the honest
+    note rather than an error frame or a lost turn. Records exactly one
+    'deferral' guard span.
+    """
+    with turn.span("guard", "deferral") as span:
+        span.meta.update(detected=True, action=claim.tool, phrase=claim.phrase)
+        nudge = {
+            "role": "system",
+            "content": (
+                f"You told the user you would {claim.action_phrase}. Do it now "
+                "by calling the appropriate tool — do not say you will; actually "
+                "make the call."
+            ),
+        }
+        try:
+            corrected = (await _collect_completion(app, model, [*messages, nudge])).strip()
+        except Exception as exc:
+            span.meta.update(redirected=False, error=peers.reason(exc))
+            logger.warning(
+                "deferral redirect failed, appending an honest note: %s",
+                peers.reason(exc),
+            )
+            note = _deferral_honest_note(claim.action_phrase)
+            emit(_frame({"correction": note}))
+            return f"{reply}\n\n{note}"
+
+        # Bounded to ONE redirect: the regenerated reply is judged once, never
+        # re-redirected. A redirect that STILL commits to the tool without
+        # calling it (or that produced nothing) has not done the thing, so it
+        # degrades to the honest note rather than looping.
+        still_defers = False
+        if corrected:
+            try:
+                still_defers = (
+                    guards.deferral_check(corrected, turn.spans, tools.tool_names())
+                    is not None
+                )
+            except Exception:
+                logger.exception(
+                    "deferral re-check raised; treating the redirect as complete"
+                )
+                still_defers = False
+        if not corrected or still_defers:
+            span.meta["redirected"] = False
+            note = _deferral_honest_note(claim.action_phrase)
+            emit(_frame({"correction": note}))
+            return f"{reply}\n\n{note}"
+
+        span.meta["redirected"] = True
+        emit(_frame({"correction": DEFERRAL_NOTE}))
+        emit(_frame({"t": corrected}))
+        return corrected
+
+
 async def _run_turn(
     app,
     pool: asyncpg.Pool,
@@ -1120,6 +1228,50 @@ async def _run_turn(
             or consent_correction is not None
             or capability_correction is not None
         )
+
+        # The ALWAYS-ON deferral guard, and the FIRST claim on the turn's single
+        # redirect budget. Run on the composed reply + this turn's spans + the
+        # live registry: it fires only when the reply COMMITS to a tool action
+        # ("I'll search…") that no successful span backs — a broken promise. Pure
+        # and fail-OPEN: a detector error ships the reply, logs, never breaks the
+        # turn. It is skipped when a mechanical honesty guard already corrected
+        # the reply (the same reason responsiveness is: a regeneration could
+        # re-introduce the very fabrication that guard just removed, and the
+        # honesty correction outranks re-prompting a promise).
+        try:
+            deferral = guards.deferral_check(persisted, turn.spans, tools.tool_names())
+        except Exception:
+            logger.exception("deferral guard raised; shipping the reply uncorrected")
+            deferral = None
+        deferral_fired = deferral is not None
+        if deferral is not None and not mechanical_guard_fired:
+            # ONE redirect: _deferral_redirect regenerates once (do it now), and
+            # REPLACES persisted with the corrected reply — or, if it still
+            # defers/errors, appends an honest note. Either way it consumes the
+            # turn's one redirect, so the responsiveness check below is skipped.
+            persisted = await _deferral_redirect(
+                app, turn, model, deferral, persisted, messages, emit
+            )
+
+        # The OPT-IN responsiveness check (agents.responsiveness_check, default
+        # OFF): a SOFT, LLM-judged guard that catches a reply drifting off the
+        # user's question and re-answers ONCE. It runs here, on the durable text,
+        # AFTER the mechanical guards — and NEVER second-guesses one of them:
+        # when a mechanical guard fired (the hard line), its handling stands and
+        # this soft check is skipped, because a regeneration could re-introduce
+        # the very fabrication the hard guard just removed (the mechanical guards
+        # do not re-run over the regenerated reply). In the common case no
+        # mechanical guard fired, so `persisted` is exactly the model's reply.
+        #
+        # It also YIELDS to the deferral guard: the two share ONE redirect budget
+        # per turn (deferral has first claim), so if a deferral was detected this
+        # turn the responsiveness check does not run — total ≤ 1 redirect, no
+        # loops.
+        #
+        # When the setting is OFF there is ZERO overhead — the model is not
+        # called and no span is recorded. When ON, the redirect (if any) REPLACES
+        # `persisted`, so the corrected reply is what persists and ingests below;
+        # the drift already streamed live but is not what the next turn reads.
         try:
             responsiveness_on = bool(
                 await settings_store.read_value(pool, "agents.responsiveness_check")
@@ -1129,7 +1281,7 @@ async def _run_turn(
             # start spending extra model calls on every turn.
             logger.exception("responsiveness setting read failed; treating it as off")
             responsiveness_on = False
-        if responsiveness_on and not mechanical_guard_fired:
+        if responsiveness_on and not mechanical_guard_fired and not deferral_fired:
             # The redirect REPLACES persisted on drift; its redirected flag is
             # recorded in the span it files, not needed further here.
             persisted, _redirected = await _responsiveness_redirect(
