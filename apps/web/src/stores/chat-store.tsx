@@ -8,12 +8,14 @@ import {
   type ReactNode,
 } from 'react'
 import {
+  clearConversation as apiClearConversation,
   decideConsent as apiDecideConsent,
   getActiveConversation as apiGetActiveConversation,
   getMessages as apiGetMessages,
 } from '../lib/api'
 import type { ConsentCard } from '../lib/consentCard'
 import { continuationMessage } from '../lib/consentCard'
+import { isClearCommand } from '../lib/clearCommand'
 import { streamChat, type FetchLike } from '../lib/streamChat'
 import { chatReducer, emptyChat, type ChatState } from '../pages/chat/chatReducer'
 
@@ -114,12 +116,27 @@ interface ChatStore {
    * conversation that turn resolves to, not necessarily this card's.
    */
   resumeApprovedCard: (card: ConsentCard) => Promise<void>
+  /**
+   * Clear the open conversation's transcript — the "Clear chat" button and the
+   * `/clear` (alias `/reset`) slash command both land here. Aborts any turn in
+   * flight, calls the clear API, and ONLY on its ok empties the store to the
+   * conversation's empty state (never a fake success — the UI resets after the
+   * server confirms). A no-op with nothing loaded yet. The command is parsed in
+   * sendMessage: a whole-message `/clear` routes here instead of streaming; a
+   * message merely containing "/clear" sends normally (see lib/clearCommand.ts).
+   */
+  clearChat: () => Promise<void>
 }
 
 /** The DI seam for the decide call — same idiom as `fetchImpl`: production
  * uses the real api.decideConsent, tests inject a spy. */
 interface ConsentsApi {
   decideConsent: typeof apiDecideConsent
+}
+
+/** The DI seam for the clear-chat call — same idiom as `consentsApi`. */
+interface ConversationsApi {
+  clearConversation: typeof apiClearConversation
 }
 
 /** The DI seam resumeApprovedCard uses to find/load the active conversation
@@ -138,6 +155,7 @@ export function ChatProvider({
   personId = null,
   consentsApi = { decideConsent: apiDecideConsent },
   chatApi = { getActiveConversation: apiGetActiveConversation, getMessages: apiGetMessages },
+  conversationsApi = { clearConversation: apiClearConversation },
 }: {
   children: ReactNode
   /** Test seam only — production always uses the real fetch. */
@@ -148,6 +166,8 @@ export function ChatProvider({
   consentsApi?: ConsentsApi
   /** Test seam only — production always uses the real conversation reads. */
   chatApi?: ChatApi
+  /** Test seam only — production always uses the real api.clearConversation. */
+  conversationsApi?: ConversationsApi
 }) {
   const [state, dispatch] = useReducer(chatReducer, undefined, emptyChat)
   // Read inside the send loop via a ref, not the `state` closed over at call
@@ -186,8 +206,31 @@ export function ChatProvider({
     }
   }, [personId])
 
+  const clearChat = useCallback(async () => {
+    const conversationId = stateRef.current.conversationId
+    if (!conversationId) {
+      // Nothing loaded in this tab yet — there is nothing on the server to
+      // clear. Still empty any local rows so the UI is consistent.
+      dispatch({ type: 'reset' })
+      return
+    }
+    // Stop any turn in flight first: its late frames must not land into a
+    // transcript we are about to empty.
+    abortRef.current?.abort()
+    await conversationsApi.clearConversation(conversationId)
+    // Only after the server confirms the delete — no fake success.
+    dispatch({ type: 'cleared', conversationId })
+  }, [conversationsApi])
+
   const sendMessage = useCallback(
     (text: string) => {
+      if (isClearCommand(text)) {
+        // A whole-message /clear (or /reset) is a command, not a turn: clear the
+        // chat instead of streaming it to the model. Fire-and-forget — clearChat
+        // empties the store on the clear API's ok, never before.
+        void clearChat()
+        return
+      }
       const userId = nextId('u')
       const assistantId = nextId('a')
       dispatch({ type: 'send', userId, assistantId, text })
@@ -217,7 +260,7 @@ export function ChatProvider({
         }
       })()
     },
-    [fetchImpl],
+    [fetchImpl, clearChat],
   )
 
   const loadConversation = useCallback(
@@ -287,6 +330,7 @@ export function ChatProvider({
         setModel,
         decideConsent,
         resumeApprovedCard,
+        clearChat,
       }}
     >
       {children}

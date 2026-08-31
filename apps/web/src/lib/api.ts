@@ -245,6 +245,24 @@ export async function getMessages(conversationId: string): Promise<StoredMessage
   return body.messages
 }
 
+export interface ClearedConversation {
+  id: string
+  /** How many message rows were removed — a real count from the server, never
+   * a bare "ok". */
+  cleared: number
+}
+
+/**
+ * Clear this conversation's transcript (POST .../clear). Deletes the messages
+ * only — turns/turn_spans and the governance ledger (Activity + audit) and
+ * long-term memory are deliberately left intact server-side
+ * (services/core/app/conversations.py). The store resets the UI only AFTER this
+ * resolves, so there is no fake success.
+ */
+export async function clearConversation(conversationId: string): Promise<ClearedConversation> {
+  return apiSend<ClearedConversation>(`/api/v1/conversations/${conversationId}/clear`, 'POST')
+}
+
 // ── activity (the turn ledger, read-only) ───────────────────────────────
 
 export interface ActivityTurn {

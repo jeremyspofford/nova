@@ -621,3 +621,132 @@ describe('ChatProvider — resumeApprovedCard (S3-T3: go ahead on an approved ca
     expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 })
+
+/**
+ * Clear chat: the "Clear chat" button and the `/clear` (alias `/reset`) slash
+ * command both land in clearChat, which calls the clear API and — only on its
+ * ok — empties the store to the conversation's empty state. `conversationsApi`
+ * is the same DI seam as `consentsApi`. The load-bearing behaviours: the command
+ * is recognised only as a WHOLE message (mid-text "/clear" is an ordinary turn),
+ * clearing is never a chat turn (no fetch), and a failed clear never fakes
+ * success (the transcript stays put).
+ */
+describe('ChatProvider — clearChat + the /clear slash command', () => {
+  const loaded = [
+    { id: 'u1', role: 'user', content: 'hi' },
+    { id: 'a1', role: 'assistant', content: 'hello' },
+  ]
+
+  it('clearChat calls the clear API and empties the open conversation', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const clearConversation = vi.fn(async () => ({ id: 'conv-1', cleared: 2 }))
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} conversationsApi={{ clearConversation }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', loaded))
+    expect(probe.store!.state.rows).toHaveLength(2)
+
+    await act(async () => {
+      await probe.store!.clearChat()
+    })
+
+    expect(clearConversation).toHaveBeenCalledWith('conv-1')
+    expect(probe.store!.state.rows).toEqual([]) // empty state
+    expect(probe.store!.state.conversationId).toBe('conv-1') // same chat, still open
+    expect(fetchImpl).not.toHaveBeenCalled() // clearing is not a chat turn
+  })
+
+  it('a whole-message /clear routes to clearChat and is NOT sent as a turn', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const clearConversation = vi.fn(async () => ({ id: 'conv-1', cleared: 2 }))
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} conversationsApi={{ clearConversation }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', loaded))
+
+    act(() => probe.store!.sendMessage('/clear'))
+    await tick()
+
+    expect(clearConversation).toHaveBeenCalledWith('conv-1')
+    expect(fetchImpl).not.toHaveBeenCalled() // never streamed to the model
+    expect(probe.store!.state.rows).toEqual([]) // empty state after
+  })
+
+  it('/reset is accepted as an alias for /clear', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const clearConversation = vi.fn(async () => ({ id: 'conv-1', cleared: 2 }))
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} conversationsApi={{ clearConversation }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', loaded))
+
+    act(() => probe.store!.sendMessage('/reset'))
+    await tick()
+
+    expect(clearConversation).toHaveBeenCalledWith('conv-1')
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(probe.store!.state.rows).toEqual([])
+  })
+
+  it('a message CONTAINING /clear mid-text is sent normally, not treated as a command', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const clearConversation = vi.fn(async () => ({ id: 'conv-1', cleared: 0 }))
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} conversationsApi={{ clearConversation }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', []))
+
+    act(() => probe.store!.sendMessage('please run /clear when you are done'))
+    await tick()
+
+    expect(clearConversation).not.toHaveBeenCalled() // not a command
+    expect(fetchImpl).toHaveBeenCalledTimes(1) // a real turn went out
+    expect(probe.store!.state.streaming).toBe(true)
+    const userRow = probe.store!.state.rows.find(r => r.kind === 'message' && r.role === 'user')
+    expect(userRow && userRow.kind === 'message' && userRow.text).toBe(
+      'please run /clear when you are done',
+    )
+  })
+
+  it('does not fake success — a failed clear surfaces and leaves the transcript intact', async () => {
+    const stream = controlledStream()
+    const { fetchImpl } = fakeStreamingFetch(stream)
+    const clearConversation = vi.fn(async () => {
+      throw new Error('server said no')
+    })
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+
+    render(
+      <ChatProvider fetchImpl={fetchImpl} conversationsApi={{ clearConversation }}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    act(() => probe.store!.loadConversation('conv-1', loaded))
+
+    await act(async () => {
+      await expect(probe.store!.clearChat()).rejects.toThrow(/server said no/)
+    })
+
+    expect(probe.store!.state.rows).toHaveLength(2) // unchanged — no fake empty
+  })
+})

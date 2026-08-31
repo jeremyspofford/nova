@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ChatPage } from './ChatPage'
 import { ChatProvider } from '../../stores/chat-store'
-import type { Conversation, StoredMessage } from '../../lib/api'
+import type { ClearedConversation, Conversation, StoredMessage } from '../../lib/api'
 
 /**
  * The durable-turn recovery path (S2c): after a HARD REFRESH mid-reply the
@@ -136,6 +136,68 @@ describe('ChatPage — recovering a turn that finished server-side', () => {
     // the resolve all reconcile into the same rows.
     expect(assistantBubbles()).toHaveLength(1)
     expect(screen.getAllByTestId('message-user')).toHaveLength(1)
+  })
+})
+
+describe('ChatPage — Clear chat button (with a light confirm)', () => {
+  function renderChatWithClear(
+    api: {
+      getActiveConversation: () => Promise<Conversation>
+      getMessages: (id: string) => Promise<StoredMessage[]>
+    },
+    clearConversation: (id: string) => Promise<ClearedConversation>,
+  ) {
+    return render(
+      <ChatProvider fetchImpl={noopFetch} conversationsApi={{ clearConversation }}>
+        <ChatPage api={api} pollIntervalMs={5} maxPollMs={2000} />
+      </ChatProvider>,
+    )
+  }
+
+  const loadedApi = {
+    getActiveConversation: vi.fn(async () => conversation({ pending_turn: false })),
+    getMessages: vi.fn(async () => [
+      stored('u1', 'user', 'hello'),
+      stored('a1', 'assistant', 'a real reply'),
+    ]),
+  }
+
+  it('clears the transcript on confirm — calls the API, then shows the empty state', async () => {
+    const clearConversation = vi.fn(async () => ({ id: 'c1', cleared: 2 }))
+    renderChatWithClear(loadedApi, clearConversation)
+
+    // The conversation loads with two messages.
+    await screen.findByText('a real reply')
+    expect(assistantBubbles()).toHaveLength(1)
+
+    // One click arms the confirm (destructive → never fires on a single click);
+    // the API has not been touched yet.
+    fireEvent.click(screen.getByTestId('chat-clear'))
+    expect(screen.getByTestId('chat-clear-confirm')).toBeDefined()
+    expect(clearConversation).not.toHaveBeenCalled()
+
+    // Confirm actually clears.
+    fireEvent.click(screen.getByTestId('chat-clear-confirm'))
+
+    await waitFor(() => expect(clearConversation).toHaveBeenCalledWith('c1'))
+    // The transcript empties and the empty state appears (UI reset only after ok).
+    await screen.findByText('Nothing here yet. Say something.')
+    expect(assistantBubbles()).toHaveLength(0)
+  })
+
+  it('cancel dismisses the confirm without clearing anything', async () => {
+    const clearConversation = vi.fn(async () => ({ id: 'c1', cleared: 2 }))
+    renderChatWithClear(loadedApi, clearConversation)
+
+    await screen.findByText('a real reply')
+    fireEvent.click(screen.getByTestId('chat-clear'))
+    fireEvent.click(screen.getByTestId('chat-clear-cancel'))
+
+    expect(clearConversation).not.toHaveBeenCalled()
+    // The confirm is gone and the plain Clear button is back; the transcript stays.
+    expect(screen.queryByTestId('chat-clear-confirm')).toBeNull()
+    expect(screen.getByTestId('chat-clear')).toBeDefined()
+    expect(assistantBubbles()).toHaveLength(1)
   })
 })
 

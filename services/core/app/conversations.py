@@ -111,3 +111,34 @@ async def get_messages(
             for row in rows
         ]
     }
+
+
+async def clear_messages(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> int:
+    """Delete this conversation's transcript rows, and ONLY those.
+
+    "Clear chat" clears the transcript the operator sees and the model's
+    history_window source (chat.py reads `messages` for the next turn's
+    context) — nothing else. turns/turn_spans and the governance ledger are the
+    AUDIT trail and stay untouched (Activity keeps its history; the conversation
+    row itself survives, so turns' conversation_id is not even nulled). Durable
+    memory lives in a separate service and is not reached from here. Returns the
+    number of rows removed, parsed from the command tag, so the caller reports a
+    real count rather than an unchecked "ok"."""
+    tag = await pool.execute("DELETE FROM messages WHERE conversation_id = $1", conversation_id)
+    # asyncpg returns a command tag like "DELETE 3"; the trailing field is the
+    # row count. A malformed tag is a real failure, not a silent zero.
+    return int(tag.rsplit(" ", 1)[1])
+
+
+@router.post("/{conversation_id}/clear")
+async def clear_conversation(
+    conversation_id: uuid.UUID, person: Person = Depends(identity.require_person)
+) -> dict:
+    """Clear the CURRENT conversation's messages. require_person + ownership:
+    someone else's conversation is a 404 (owned_conversation), never touched.
+    Deletes rows in `messages` only — see clear_messages on what is deliberately
+    left intact (audit + memory)."""
+    pool = await db.get_pool()
+    await owned_conversation(pool, person, conversation_id)
+    cleared = await clear_messages(pool, conversation_id)
+    return {"id": str(conversation_id), "cleared": cleared}

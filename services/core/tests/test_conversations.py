@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 
-from tests.conftest import requires_db
+from tests.conftest import OWNER, requires_db
 
 pytestmark = requires_db
 
@@ -82,3 +82,112 @@ async def test_an_unknown_conversation_is_a_404(owner_client):
 
 async def test_conversations_need_an_identity(client):
     assert (await client.get("/api/v1/conversations/active")).status_code == 401
+
+
+# -- clear chat: delete the transcript, leave the audit + memory alone ------
+
+
+async def test_clear_deletes_this_conversations_messages(owner_client, pool):
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+    for role, content in [("user", "hi"), ("assistant", "hello"), ("user", "again")]:
+        await pool.execute(
+            "INSERT INTO messages (conversation_id, role, content) VALUES ($1, $2, $3)",
+            conversation,
+            role,
+            content,
+        )
+
+    resp = await owner_client.post(f"/api/v1/conversations/{conversation}/clear")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {"id": conversation, "cleared": 3}  # a real count, not a bare "ok"
+
+    # The transcript is gone; the empty state is real.
+    remaining = await pool.fetchval(
+        "SELECT count(*) FROM messages WHERE conversation_id = $1", conversation
+    )
+    assert remaining == 0
+    listed = (await owner_client.get(f"/api/v1/conversations/{conversation}/messages")).json()
+    assert listed["messages"] == []
+
+
+async def test_clear_needs_an_identity(client, pool):
+    # A real, owned conversation exists — the refusal is about the caller, not
+    # the target. Register the owner, take their conversation, then call as an
+    # anonymous client (no cookie, no bearer).
+    resp = await client.post("/api/v1/auth/register", json=OWNER)
+    assert resp.status_code == 200
+    conversation = (await client.get("/api/v1/conversations/active")).json()["id"]
+    # Drop the session cookie so the next call carries no identity at all.
+    client.cookies.clear()
+    resp = await client.post(f"/api/v1/conversations/{conversation}/clear")
+    assert resp.status_code == 401
+    # Nothing was cleared — but there was nothing to clear; the point is the 401.
+
+
+async def test_clear_on_someone_elses_conversation_is_a_404_and_touches_nothing(
+    owner_client, pool
+):
+    stranger = await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('stranger', 'adult') RETURNING id"
+    )
+    theirs = await pool.fetchval(
+        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", stranger
+    )
+    await pool.execute(
+        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', 'theirs')",
+        theirs,
+    )
+
+    resp = await owner_client.post(f"/api/v1/conversations/{theirs}/clear")
+    assert resp.status_code == 404  # not found, not forbidden — someone else's
+
+    # Their message is untouched: a 404 clears nothing.
+    assert (
+        await pool.fetchval("SELECT count(*) FROM messages WHERE conversation_id = $1", theirs)
+    ) == 1
+
+
+async def test_clear_on_an_unknown_conversation_is_a_404(owner_client):
+    resp = await owner_client.post(f"/api/v1/conversations/{uuid.uuid4()}/clear")
+    assert resp.status_code == 404
+
+
+async def test_clear_leaves_the_audit_trail_and_conversation_intact(owner_client, pool):
+    """Clear removes the transcript, NOT the audit history. turns/turn_spans and
+    the governance ledger are what Activity and the operator's audit read; they
+    must survive a clear — and the conversation row itself survives, so a turn's
+    conversation_id is not even nulled."""
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+    await pool.execute(
+        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', 'ask')",
+        conversation,
+    )
+    turn_id = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id, status, ended_at) "
+        "VALUES ('chat', $1, 'ok', now()) RETURNING id",
+        conversation,
+    )
+    await pool.execute(
+        "INSERT INTO turn_spans (turn_id, kind, name) VALUES ($1, 'tool', 'fetch_url')",
+        turn_id,
+    )
+    await pool.execute(
+        "INSERT INTO governance_events (kind, action_class) VALUES ('consent.raised', 'fetch_url')"
+    )
+
+    resp = await owner_client.post(f"/api/v1/conversations/{conversation}/clear")
+    assert resp.status_code == 200
+
+    # Transcript gone...
+    assert (
+        await pool.fetchval("SELECT count(*) FROM messages WHERE conversation_id = $1", conversation)
+    ) == 0
+    # ...but every audit row remains, and the conversation still exists.
+    assert await pool.fetchval("SELECT count(*) FROM turns") == 1
+    assert await pool.fetchval("SELECT conversation_id FROM turns WHERE id = $1", turn_id) is not None
+    assert await pool.fetchval("SELECT count(*) FROM turn_spans WHERE turn_id = $1", turn_id) == 1
+    assert await pool.fetchval("SELECT count(*) FROM governance_events") == 1
+    assert (
+        await pool.fetchval("SELECT count(*) FROM conversations WHERE id = $1", conversation)
+    ) == 1

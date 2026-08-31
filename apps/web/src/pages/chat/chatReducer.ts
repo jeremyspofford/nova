@@ -80,6 +80,11 @@ export type ChatAction =
       messages: { id: string; role: string; content: string }[]
     }
   | { type: 'reset' }
+  // Clear-chat (button or the /clear slash command): the operator emptied THIS
+  // conversation's transcript. Dispatched by chat-store.tsx only AFTER the clear
+  // API returns ok — never a fake success. Keeps the conversation open (its id
+  // and model), just with no rows, so the empty state shows for the same chat.
+  | { type: 'cleared'; conversationId: string }
   | { type: 'modelSwitched'; model: string }
   // Dispatched by chat-store.tsx's decideConsent AFTER the decide API call
   // succeeds — the card it returns is the new truth for that row. Never
@@ -272,6 +277,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
     case 'reset':
       return emptyChat()
+
+    case 'cleared':
+      // Same shape a just-loaded empty conversation has: no rows, streaming
+      // off, pending cleared — but the conversation itself (id) stays open and
+      // the model badge is preserved. fromFetchedMessages with no messages is
+      // exactly that.
+      return fromFetchedMessages(state, action.conversationId, [])
 
     // Slice 2f Fix A: a Settings->Models switch, not a server event — sets
     // `model` DIRECTLY (never "action.model || state.model" the way the

@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Trash2 } from 'lucide-react'
 import {
   getActiveConversation as apiGetActiveConversation,
   getMessages as apiGetMessages,
@@ -59,9 +60,14 @@ export function ChatPage({
   pollIntervalMs?: number
   maxPollMs?: number
 }) {
-  const { state, sendMessage, loadConversation, resolveServerTurn } = useChatStore()
+  const { state, sendMessage, loadConversation, resolveServerTurn, clearChat } = useChatStore()
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  // The clear-chat control's light confirm: one click arms it ("Clear this
+  // chat?"), a second confirms. Destructive, so it never fires on a single
+  // click — but no modal, kept light per the owner's ask.
+  const [confirmingClear, setConfirmingClear] = useState(false)
+  const [clearError, setClearError] = useState<string | null>(null)
   // True while a turn that finished (or is finishing) server-side is being
   // polled for — the operator hard-refreshed mid-reply and the answer is
   // still on its way. Bumped `resolvedTick` forces a scroll-to-bottom once it
@@ -172,6 +178,18 @@ export function ChatPage({
 
   const model = state.model || initialModel || ''
 
+  const confirmClear = async () => {
+    setClearError(null)
+    try {
+      await clearChat()
+      setConfirmingClear(false)
+    } catch (err) {
+      // No fake success: the transcript stays exactly as it is until the server
+      // confirms the delete. The reason is shown, not swallowed.
+      setClearError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return (
     <div
       className="flex flex-col h-full min-h-0 bg-surface-root dark:bg-transparent"
@@ -183,15 +201,53 @@ export function ChatPage({
     >
       <header className="shrink-0 flex items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle">
         <h1 className="text-h3 text-content-primary">Chat</h1>
-        {model && (
-          <span
-            className="font-mono text-micro text-content-tertiary truncate"
-            title="serving model"
-            data-testid="chat-model"
-          >
-            {model}
-          </span>
-        )}
+        <div className="flex items-center gap-3">
+          {model && (
+            <span
+              className="font-mono text-micro text-content-tertiary truncate"
+              title="serving model"
+              data-testid="chat-model"
+            >
+              {model}
+            </span>
+          )}
+          {confirmingClear ? (
+            <span className="flex items-center gap-2" role="group" aria-label="Confirm clear chat">
+              <span className="text-micro text-content-tertiary">Clear this chat?</span>
+              <button
+                type="button"
+                onClick={confirmClear}
+                data-testid="chat-clear-confirm"
+                className="rounded-sm px-2 py-1 text-micro text-danger hover:bg-danger-dim transition-colors duration-fast"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingClear(false)
+                  setClearError(null)
+                }}
+                data-testid="chat-clear-cancel"
+                className="rounded-sm px-2 py-1 text-micro text-content-tertiary hover:bg-surface-elevated transition-colors duration-fast"
+              >
+                Cancel
+              </button>
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmingClear(true)}
+              data-testid="chat-clear"
+              aria-label="Clear chat"
+              title="Clear chat"
+              className="flex items-center gap-1.5 rounded-sm px-2 py-1 text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-elevated transition-colors duration-fast"
+            >
+              <Trash2 size={14} />
+              <span className="hidden sm:inline">Clear</span>
+            </button>
+          )}
+        </div>
       </header>
 
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
@@ -202,6 +258,15 @@ export function ChatPage({
               className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
             >
               Could not load this conversation: {loadError}
+            </div>
+          )}
+
+          {clearError && (
+            <div
+              role="alert"
+              className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+            >
+              Could not clear this chat: {clearError}
             </div>
           )}
 
