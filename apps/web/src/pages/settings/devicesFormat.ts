@@ -59,8 +59,12 @@ export function fsRootRefusal(path: string): string | null {
   if (!trimmed.startsWith('/')) {
     return `A filesystem root must be an absolute path — "${trimmed}" does not start with "/".`
   }
-  if (trimmed.includes('..')) {
-    return `A filesystem root cannot contain ".." — give the real path.`
+  // Mirror the backend (services/core/app/devices.clean_fs_roots): a ".."
+  // path SEGMENT is refused, but ".." inside a name is not — so
+  // "/home/jeremy/my..project" is a real directory the backend accepts, and
+  // refusing it here would be a false refusal the operator can't act on.
+  if (trimmed.split('/').includes('..')) {
+    return `A filesystem root cannot contain a ".." path segment — give the real path.`
   }
   return null
 }

@@ -88,8 +88,12 @@ describe('fsRootRefusal — fast client-side feedback the backend also enforces'
     expect(fsRootRefusal('   ')).not.toBeNull()
   })
 
-  it('refuses a path containing ".." (the backend refuses it too)', () => {
+  it('refuses a ".." path SEGMENT but accepts ".." inside a name (mirrors the backend)', () => {
+    // A real ".." segment escapes the root — refused, like clean_fs_roots.
     expect(fsRootRefusal('/home/jeremy/../etc')).toMatch(/\.\./)
+    // But ".." inside a directory NAME is a real path the backend accepts;
+    // refusing it here would be a false refusal.
+    expect(fsRootRefusal('/home/jeremy/my..project')).toBeNull()
   })
 })
 

@@ -126,10 +126,76 @@ describe('DevicesSection', () => {
 
     await waitFor(() =>
       expect(api.setGrants).toHaveBeenCalledWith('d-1', {
-        capabilities: ['system.info', 'fs.read'],
+        // Saved as the whole drafted set, sorted — preserves anything the row
+        // holds that this UI doesn't render (see the preservation test below).
+        capabilities: ['fs.read', 'system.info'],
         fs_roots: [],
       }),
     )
+  })
+
+  it('toggling a capability on one device tile does not cross-toggle another (unique per-tile ids)', async () => {
+    renderSection({
+      listDevices: vi.fn(async () => [
+        device({ id: 'a', name: 'alpha', capabilities: ['system.info'] }),
+        device({ id: 'b', name: 'bravo', capabilities: ['system.info'] }),
+      ]),
+    })
+    await waitFor(() => screen.getByText('alpha'))
+    const tileA = screen.getByTestId('device-a')
+    const tileB = screen.getByTestId('device-b')
+
+    // Open Grants on BOTH — the two "fs.read" checkboxes now coexist.
+    fireEvent.click(within(tileA).getByRole('button', { name: /grants/i }))
+    fireEvent.click(within(tileB).getByRole('button', { name: /grants/i }))
+
+    const aRead = within(tileA).getByRole('checkbox', { name: /fs\.read/i }) as HTMLInputElement
+    const bRead = within(tileB).getByRole('checkbox', { name: /fs\.read/i }) as HTMLInputElement
+    // Distinct DOM ids: the exact thing the dup-id bug collapses.
+    expect(aRead.id).not.toBe(bRead.id)
+    expect(aRead.checked).toBe(false)
+    expect(bRead.checked).toBe(false)
+
+    // Click device B's LABEL (what a user actually clicks — the input is
+    // sr-only). A label routes to its associated control by id; with a shared
+    // id it would toggle device A's box instead.
+    fireEvent.click(within(tileB).getByText(/read files \(fs\.read\)/i))
+
+    expect(bRead.checked).toBe(true)
+    expect(aRead.checked).toBe(false) // device A must NOT have moved
+  })
+
+  it('a capability the UI does not render survives an unrelated toggle + save (derived, not hardcoded)', async () => {
+    const { api } = renderSection({
+      // "future.cap" is held by the row but not among the rendered 8.
+      listDevices: vi.fn(async () => [device({ capabilities: ['system.info', 'future.cap'] })]),
+      setGrants: vi.fn(async () => device({ capabilities: ['system.info', 'future.cap', 'fs.read'] })),
+    })
+    await waitFor(() => screen.getByText('laptop'))
+    fireEvent.click(screen.getByRole('button', { name: /grants/i }))
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /fs\.read/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    await waitFor(() => expect(api.setGrants).toHaveBeenCalled())
+    // The unrendered capability is preserved in the saved list, never stripped.
+    expect(api.setGrants.mock.calls[0][1].capabilities).toContain('future.cap')
+    expect(api.setGrants.mock.calls[0][1].capabilities).toContain('fs.read')
+    expect(api.setGrants.mock.calls[0][1].capabilities).toContain('system.info')
+  })
+
+  it('stops polling after unmount — the interval is cleared', async () => {
+    const listDevices = vi.fn(async () => [device()])
+    const { unmount, api } = renderSection({ listDevices }, 10)
+
+    // Let the poll tick a few times so we know it is genuinely running.
+    await waitFor(() => expect(api.listDevices.mock.calls.length).toBeGreaterThanOrEqual(3))
+    unmount()
+    const countAtUnmount = api.listDevices.mock.calls.length
+
+    // Wait well past several 10ms intervals; a leaked interval would keep firing.
+    await new Promise(resolve => setTimeout(resolve, 80))
+    expect(api.listDevices.mock.calls.length).toBe(countAtUnmount)
   })
 
   it('adding a relative fs-root shows a stated refusal and does not enter the list', async () => {

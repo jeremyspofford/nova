@@ -164,8 +164,6 @@ export function DevicesSection({
 
 // ── one device ─────────────────────────────────────────────────────────────
 
-const ALL_TOKENS = CAPABILITY_GROUPS.flatMap(group => group.caps.map(cap => cap.token))
-
 function DeviceTile({
   device,
   api,
@@ -259,8 +257,11 @@ function DeviceTile({
   }
 
   async function saveGrants() {
-    // Canonical order (the CAPABILITY_GROUPS order), filtered to what is drafted.
-    const capabilities = ALL_TOKENS.filter(token => draftCaps.has(token))
+    // The draft is seeded from the device's CURRENT capabilities, so saving the
+    // whole set (sorted for a stable payload) PRESERVES any capability the row
+    // holds that this UI doesn't render — never filter to a hardcoded 8, or a
+    // capability added server-side would be silently stripped on the next save.
+    const capabilities = Array.from(draftCaps).sort()
     setSaving(true)
     setSaveMsg(null)
     try {
@@ -287,7 +288,7 @@ function DeviceTile({
   }
 
   return (
-    <div className="py-3">
+    <div className="py-3" data-testid={`device-${device.id}`}>
       <div className="flex items-center gap-3 flex-wrap">
         <LivenessIndicator state={live.state} label={live.label} pulse={live.pulse} />
 
@@ -366,6 +367,11 @@ function DeviceTile({
                 {group.caps.map(cap => (
                   <Checkbox
                     key={cap.token}
+                    // Device-scoped id: ui/Checkbox otherwise derives the id
+                    // from the label, so the SAME id would repeat across every
+                    // tile and a label click would toggle the FIRST tile's box,
+                    // silently granting the wrong machine.
+                    id={`${device.id}-${cap.token}`}
                     checked={draftCaps.has(cap.token)}
                     onChange={checked => toggleCap(cap.token, checked)}
                     label={`${cap.label} (${cap.token})`}
