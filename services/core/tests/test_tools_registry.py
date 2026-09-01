@@ -88,6 +88,12 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # Deliberate snapshot update (migration 009): web_search joined the registry,
     # so this pinned set moved from seven to eight. A tool appearing or vanishing
     # here without this line moving is a mistake the test is meant to catch.
+    #
+    # Deliberate snapshot update (slice 5, T2 / migration 012): the nine device
+    # tools (tools/devices.py) joined the registry, so this pinned set moved from
+    # eight to SEVENTEEN. Each rides the same dispatch->authorize funnel as every
+    # other tool — no new authorizer — and each has an action-class row seeded by
+    # migration 012, so the "every registered tool has a row" tripwire stays green.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -97,6 +103,15 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "get_time",
         "fetch_url",
         "web_search",
+        "device_list",
+        "device_info",
+        "device_list_files",
+        "device_read_file",
+        "device_list_apps",
+        "device_notify",
+        "device_run",
+        "device_write_file",
+        "device_launch_app",
     }
 
 

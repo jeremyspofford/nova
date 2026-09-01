@@ -25,7 +25,7 @@ import json
 import logging
 import uuid
 
-from app.tools import memory_tools, schema, util, web, web_search, workspace
+from app.tools import devices, memory_tools, schema, util, web, web_search, workspace
 from app.tools.base import ERROR_PREFIX, Tool, ToolContext, ToolFailure
 
 __all__ = [
@@ -50,6 +50,7 @@ REGISTRY: dict[str, Tool] = {
         *util.TOOLS,
         *web.TOOLS,
         *web_search.TOOLS,
+        *devices.TOOLS,
     )
 }
 

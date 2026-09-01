@@ -184,4 +184,11 @@ async def revoke_device(
         device = await devices.revoke(pool, device_id=device_id, actor=str(person.id))
     except devices.DeviceRefused as exc:
         raise _refuse(exc) from exc
+    # A revoked device must drop NOW, not at its next heartbeat: kill its live
+    # socket if the hub holds one. get_live already refuses its reconnect (the
+    # row is gone), so this closes the door that was already open. Imported
+    # locally so the REST surface never depends on the WS module load order.
+    from app import devices_ws
+
+    await devices_ws.hub.disconnect(device_id, "revoked")
     return {"device": device}

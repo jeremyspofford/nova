@@ -3,13 +3,18 @@
 The seed was ruling S3-R1 (fetch_url=consent, everything else auto); migration
 008 then flipped fetch_url to auto as an owner-directed disposition edit (web
 reads need no approval — a read-only, SSRF-guarded fetch is a contained read).
-So the seed the kernel now reads is: EVERY currently-registered tool is auto.
+
+Slice 5 (migration 012) is the first seed that is NOT all-auto: the nine device
+tools land with the six reads/harmless effects auto and the three that change a
+machine or run code on it (device_run, device_write_file, device_launch_app) at
+CONSENT — exactly the irreversible set rd6 keeps a gate on. So the auto-set test
+below now asserts dispositions PER TOOL, not "everything is auto".
+
 The load-bearing property is unchanged and independent of that: every REGISTERED
 tool must have a row, or it is denied by default AND this suite reddens — a new
 tool is never auto by accident, and the day one lands without a migration row
 this test says so. (The consent MECHANISM is proven with a private consent-tier
-class in test_chat_consent.py / test_policy_funnel.py, decoupled from fetch_url's
-real disposition — see those files.)
+class in test_chat_consent.py / test_policy_funnel.py.)
 """
 from __future__ import annotations
 
@@ -19,18 +24,24 @@ from tests.conftest import requires_db
 pytestmark = requires_db
 
 
-async def test_the_seed_makes_every_registered_tool_auto(pool):
+async def test_the_seed_gives_each_tool_its_intended_disposition(pool):
     # Deliberate tripwire update (migration 008): fetch_url was seeded 'consent'
-    # under S3-R1 and is now 'auto' by owner directive. The seed carries no
-    # consent-tier class at all anymore; the consent flow is exercised via a
-    # PRIVATE class in the consent-mechanism suites so it stays fully proven.
-    # web_search joined 'auto' with migration 009 (the search half of the same
-    # owner directive that flipped fetch_url — web reads need no approval).
+    # under S3-R1 and is now 'auto' by owner directive. web_search joined 'auto'
+    # with migration 009 (the search half of the same directive — web reads need
+    # no approval).
+    #
+    # Deliberate tripwire update (slice 5 / migration 012): the nine device tools
+    # arrive. Six are auto (device_info/list/list_files/read_file/list_apps and
+    # device_notify — reads plus one reversible, harmless effect); THREE are
+    # consent (device_run, device_write_file, device_launch_app — the irreversible
+    # set: run code, write a file, launch an app on a real machine). This test was
+    # "every registered tool is auto" until here; it now asserts each disposition,
+    # because the all-auto invariant is deliberately no longer true.
     rows = {
         r["action_class"]: r["disposition"]
         for r in await pool.fetch("SELECT action_class, disposition FROM action_classes")
     }
-    for name in (
+    auto = (
         "fetch_url",
         "web_search",
         "workspace_write_file",
@@ -39,8 +50,18 @@ async def test_the_seed_makes_every_registered_tool_auto(pool):
         "memory_search",
         "memory_save",
         "get_time",
-    ):
+        "device_list",
+        "device_info",
+        "device_list_files",
+        "device_read_file",
+        "device_list_apps",
+        "device_notify",
+    )
+    consent = ("device_run", "device_write_file", "device_launch_app")
+    for name in auto:
         assert rows[name] == "auto", name
+    for name in consent:
+        assert rows[name] == "consent", name
 
 
 async def test_every_registered_tool_has_an_action_class_row(pool):
