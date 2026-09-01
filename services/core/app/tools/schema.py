@@ -82,6 +82,10 @@ def validate(schema: dict, arguments: Any) -> str | None:
                 f"argument {name!r} must be {_article(expected)} {expected}, "
                 f"got {json_type_name(value)}"
             )
+        if expected == "array":
+            bad = _array_failure(name, value, spec)
+            if bad is not None:
+                return bad
         bound = _range_failure(name, value, spec)
         if bound is not None:
             return bound
@@ -90,6 +94,33 @@ def validate(schema: dict, arguments: Any) -> str | None:
 
 def _article(word: str) -> str:
     return "an" if word[:1] in "aeiou" else "a"
+
+
+def _array_failure(name: str, value: Any, spec: dict) -> str | None:
+    """Checks an array's length and its elements' types — what makes `argv:
+    [str]` refusable BEFORE the kernel. The caller has already confirmed the
+    value IS an array; here `minItems` bounds it (device_run needs argv >= 1)
+    and `items.type`, when declared, is checked element by element so a single
+    bad element (a number where a string belongs) names its own index rather
+    than reaching a shell. An `items` with no declared type accepts anything —
+    the same no-blame stance _matches takes on an unknown type keyword."""
+    minimum = spec.get("minItems")
+    if minimum is not None and len(value) < minimum:
+        unit = "item" if minimum == 1 else "items"
+        return f"argument {name!r} must have at least {minimum} {unit}, got {len(value)}"
+    items = spec.get("items")
+    if not isinstance(items, dict):
+        return None
+    item_type = items.get("type")
+    if item_type is None:
+        return None
+    for index, element in enumerate(value):
+        if not _matches(element, item_type):
+            return (
+                f"argument {name!r}[{index}] must be {_article(item_type)} {item_type}, "
+                f"got {json_type_name(element)}"
+            )
+    return None
 
 
 def _range_failure(name: str, value: Any, spec: dict) -> str | None:
