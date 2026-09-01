@@ -22,6 +22,7 @@ in file order in a single worker.
 | 13 | `13-re-run-onboarding.spec.ts` | S2e DoD item 3: "Re-run setup" in Settings clears `onboarding.completed` and lands on the wizard's resume shape (Hardware first) — never `CreateAccount`, so the owner account is provably not re-minted — then walks the wizard back to a finished `/chat`. Runs last on purpose (see the file header). **Authored in S2e-T4, not yet run.** |
 | 14 | `14-policy-card-ui.spec.ts` | S3 DoD items 1 & 4, the model-independent halves: a pending consent seeded straight into postgres renders on the Approvals page through the real `GET /api/v1/consents` — the same `ApprovalCard` the inline chat card uses — with the exact args summary and Approve/Deny; deciding needs auth (`401` with no session); Deny leaves the pending list and the stored row reads `denied`, in the governance audit; Approve flips it to `approved` (stored too) and it stays with a "Go ahead", because approving runs nothing at the kernel (ruling S3-R4). The model-driven inline-card-in-chat and approve-then-it-runs flows are the owner's live walk. **Authored in S3-T4, not yet run.** |
 | 15 | `15-autonomy-governance.spec.ts` | S3 DoD items 3 & 4, the model-independent halves: Settings → Autonomy shows each class's real disposition and, for a class still earning it, its real `consecutive_successes / graduation_runs` straight off `GET /api/v1/autonomy`; an earned-auto class offers Revoke, and revoking calls the API and returns the class to consent (a governance event, and the row loses its Revoke); the Governance page lists decisions newest-first off `GET /api/v1/governance`. Full model-driven graduation is the owner's live walk. **Authored in S3-T4, not yet run.** |
+| 16 | `16-devices.spec.ts` | S5 DoD items 1, 2 & 4, the parts that need no live daemon: the pairing modal mints a real code and shows the `novad enroll` one-liner for this origin; a paired device's tile liveness is DERIVED from `last_seen` (a fresh one reads "online", a never-seen one reads "never connected", never a green dot); the grants editor toggles a capability and the PUT lands in the `devices` row; a `device_run` consent card renders through the SAME `ApprovalCard` the inline chat card uses, and Deny (leaves the list, DB `denied`, in the governance audit) / Approve (`approved`, stays with "Go ahead") drive the exact same consent path a text turn does. Deterministic state seeded straight into postgres (`lib/devices.ts` + `lib/policy.ts`). Pairing a REAL machine and asking Nova to act on it (the daemon's own audit agreeing) is the owner's live walk. **Authored in S5-T5, not yet run.** |
 
 ## Scenarios 11-13 (S2e model & settings surface)
 
@@ -276,6 +277,27 @@ deterministic state inside the postgres container over the docker socket
 postgres is deliberately not published outside the compose network. Treat a
 first run the way scenario 6 was treated after S2-T4: read what actually happens
 before trusting the selectors blind.
+
+## Scenario 16 (S5 devices)
+
+Authored against slice-05-daemon's shipped T4 surface (`DevicesSection.tsx`,
+`devicesFormat.ts`) and the shared `ApprovalCard.tsx`, by reading the actual
+components for real selectors — the per-tile `data-testid="device-<id>"`, the
+`devices-skeleton` load state, and the `approval-card-<id>` the Approvals page
+already renders for every consent — rather than guessed ones, but **not run**:
+the real-stack testing policy forbids a throwaway isolated stack, and there was
+no rebuilt `:3000` at authoring time. It runs for the first time, in file order
+alongside 1-15, once the controller rebuilds the stack from this source. It
+needs no live novad — a paired+granted device and two pending `device_run`
+consents are seeded straight into the postgres container over the docker socket
+(`lib/devices.ts` for the device rows, `lib/policy.ts` for the consents), the
+same place `lib/evidence.ts` READS the ledger. The behaviour that DOES need a
+daemon — pairing a real machine with the printed code, and the model
+re-attempting an approved `device_run` so the daemon executes and its own audit
+agrees nothing ran on a deny — is the owner's live walk (the build / enroll /
+run commands are in `.superpowers/sdd/slice-05-daemon/task-5-report.md`). Treat
+a first run the way scenario 6 was treated after S2-T4: read what actually
+happens before trusting the selectors blind.
 
 ## Re-running scenario 1
 
