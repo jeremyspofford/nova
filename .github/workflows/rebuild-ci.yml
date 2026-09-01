@@ -68,6 +68,30 @@ jobs:
       - run: npm run build
       - run: npm test -- --run
 
+  # The daemon is the first code that runs OUTSIDE the compose stack, and its
+  # whole interop risk is one encoder that must be byte-identical to core's
+  # canonical JSON. The suite asserts that against the committed core fixture
+  # (services/core/tests/fixtures/envelope_vectors.json), so the full repo
+  # checkout is deliberate — the Go test reaches the Python-owned fixture
+  # read-only, which is the cross-language pin working. CGO_ENABLED=0 is the
+  # real ship shape (a static binary with no libc dependency), and the arm64
+  # cross-build is a smoke that the syscall/statfs paths still compile off-amd64.
+  novad:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/novad
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: apps/novad/go.sum
+      - run: go vet ./...
+      - run: go test ./...
+      - run: CGO_ENABLED=0 go build ./...
+      - run: GOARCH=arm64 CGO_ENABLED=0 go build ./...
+
   # DISABLED ON PURPOSE — needs a GPU-less profile decision, enable deliberately.
   #
   # The e2e walk pulls a model into the bundled ollama and waits for a real
