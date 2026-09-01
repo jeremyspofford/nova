@@ -55,6 +55,14 @@ type Agent struct {
 	deps  caps.Deps
 	wsURL string
 	logf  func(string, ...any)
+
+	// verifier is built ONCE and reused across every reconnect, so its one-use
+	// seen-set spans the envelope validity window (TTL + skew) rather than a
+	// single socket lifetime. If it were rebuilt per connection, a command
+	// redelivered after a socket flap inside its window would re-verify and
+	// RE-EXECUTE — the replay defence has to outlive the socket. Its own pruning
+	// (past expiry + skew) keeps the set from growing unbounded.
+	verifier *wire.Verifier
 }
 
 // New assembles an agent from loaded custody. logf may be nil.
@@ -63,17 +71,25 @@ func New(cfg config.Config, priv ed25519.PrivateKey, deny *config.DenyList, log 
 	if err != nil {
 		return nil, err
 	}
+	// Pin the command verifier at construction. A bad core pubkey is a config
+	// fault surfaced here at startup, not a mystery mid-run — and the one
+	// instance now lives for the whole process.
+	verifier, err := wire.NewVerifier(cfg.CorePubKey, cfg.DeviceID, nil)
+	if err != nil {
+		return nil, fmt.Errorf("cannot build command verifier: %w", err)
+	}
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	return &Agent{
-		cfg:   cfg,
-		priv:  priv,
-		deny:  deny,
-		audit: log,
-		deps:  caps.Deps{Deny: deny, Home: home},
-		wsURL: wsURL,
-		logf:  logf,
+		cfg:      cfg,
+		priv:     priv,
+		deny:     deny,
+		audit:    log,
+		deps:     caps.Deps{Deny: deny, Home: home},
+		wsURL:    wsURL,
+		logf:     logf,
+		verifier: verifier,
 	}, nil
 }
 
@@ -138,39 +154,40 @@ func (a *Agent) connectOnce(ctx context.Context) error {
 	defer c.CloseNow()
 	c.SetReadLimit(wsReadLimit)
 
-	verifier, err := a.handshake(ctx, c)
-	if err != nil {
+	if err := a.handshake(ctx, c); err != nil {
 		return err
 	}
 	a.logf("authenticated; serving")
-	return a.serve(ctx, c, verifier)
+	return a.serve(ctx, c)
 }
 
 // handshake reads the challenge, refuses a core key that is not the pinned one
 // (fatal), signs the RAW nonce bytes, sends auth, reads ready, and replays the
-// audit chain from core's last_seq.
-func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) (*wire.Verifier, error) {
+// audit chain from core's last_seq. The command verifier is NOT built here —
+// it is a.verifier, constructed once in New and reused across reconnects so its
+// one-use seen-set persists between connections.
+func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 	hsCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	frame, err := readFrame(hsCtx, c)
 	if err != nil {
-		return nil, fmt.Errorf("reading challenge: %w", err)
+		return fmt.Errorf("reading challenge: %w", err)
 	}
 	if t, _ := frame["type"].(string); t != wire.TypeChallenge {
-		return nil, fmt.Errorf("expected a challenge, got %q", t)
+		return fmt.Errorf("expected a challenge, got %q", t)
 	}
 	nonceHex, _ := frame["nonce"].(string)
 	coreKey, _ := frame["core_pubkey"].(string)
 
 	// TOFU: a changed core key is a refuse-and-exit, not a silent re-trust.
 	if coreKey != a.cfg.CorePubKey {
-		return nil, fatal{fmt.Errorf("core presented key %s but we pinned %s at enrollment", short(coreKey), short(a.cfg.CorePubKey))}
+		return fatal{fmt.Errorf("core presented key %s but we pinned %s at enrollment", short(coreKey), short(a.cfg.CorePubKey))}
 	}
 
 	nonce, err := hex.DecodeString(nonceHex)
 	if err != nil {
-		return nil, fmt.Errorf("challenge nonce is not hex: %w", err)
+		return fmt.Errorf("challenge nonce is not hex: %w", err)
 	}
 	sig := ed25519.Sign(a.priv, nonce) // RAW nonce bytes, not the hex string
 	if err := writeFrame(hsCtx, c, wire.Auth{
@@ -178,30 +195,26 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) (*wire.Verifie
 		DeviceID: a.cfg.DeviceID,
 		Sig:      hex.EncodeToString(sig),
 	}); err != nil {
-		return nil, fmt.Errorf("sending auth: %w", err)
+		return fmt.Errorf("sending auth: %w", err)
 	}
 
 	reply, err := readFrame(hsCtx, c)
 	if err != nil {
-		return nil, fmt.Errorf("reading ready/auth_error: %w", err)
+		return fmt.Errorf("reading ready/auth_error: %w", err)
 	}
 	switch t, _ := reply["type"].(string); t {
 	case wire.TypeAuthError:
 		reason, _ := reply["reason"].(string)
 		// Retryable: a revoked device keeps being refused here, correctly; it
 		// cannot get in, but a re-grant heals without a manual restart.
-		return nil, fmt.Errorf("core refused auth: %s", reason)
+		return fmt.Errorf("core refused auth: %s", reason)
 	case wire.TypeReady:
-		verifier, err := wire.NewVerifier(a.cfg.CorePubKey, a.cfg.DeviceID, nil)
-		if err != nil {
-			return nil, fatal{fmt.Errorf("cannot build verifier: %w", err)}
-		}
 		if err := a.replayAudit(hsCtx, c, reply["last_seq"]); err != nil {
-			return nil, fmt.Errorf("replaying audit: %w", err)
+			return fmt.Errorf("replaying audit: %w", err)
 		}
-		return verifier, nil
+		return nil
 	default:
-		return nil, fmt.Errorf("expected ready or auth_error, got %q", t)
+		return fmt.Errorf("expected ready or auth_error, got %q", t)
 	}
 }
 
@@ -229,7 +242,7 @@ func (a *Agent) replayAudit(ctx context.Context, c *websocket.Conn, lastSeqField
 // in their own goroutines so the reader stays responsive (coder/websocket
 // needs a live reader to handle control frames) and a slow command cannot
 // block the heartbeat.
-func (a *Agent) serve(ctx context.Context, c *websocket.Conn, verifier *wire.Verifier) error {
+func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -245,7 +258,7 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn, verifier *wire.Ver
 		}
 		switch t, _ := frame["type"].(string); t {
 		case wire.TypeCommand:
-			go a.handleCommand(serveCtx, c, verifier, frame)
+			go a.handleCommand(serveCtx, c, frame)
 		default:
 			a.logf("ignoring unexpected frame type %q", t)
 		}
@@ -270,7 +283,7 @@ func (a *Agent) heartbeat(ctx context.Context, c *websocket.Conn) {
 
 // handleCommand verifies then dispatches, and ALWAYS emits both a result frame
 // and an audit entry — a refusal is ok:false in both, never silent.
-func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, verifier *wire.Verifier, frame map[string]any) {
+func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[string]any) {
 	envelope, _ := frame["envelope"].(map[string]any)
 	sig, _ := frame["sig"].(string)
 	envelopeID := ""
@@ -280,7 +293,7 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, verifier *
 		attemptedCap, _ = envelope["capability"].(string)
 	}
 
-	capability, args, verr := verifier.VerifyCommand(envelope, sig)
+	capability, args, verr := a.verifier.VerifyCommand(envelope, sig)
 	if verr != nil {
 		a.emit(ctx, c, wire.Result{
 			Type:       wire.TypeResult,

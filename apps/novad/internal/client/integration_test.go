@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -380,6 +381,129 @@ func TestAChangedCoreKeyIsFatalAndDoesNotReconnect(t *testing.T) {
 	case <-time.After(time.Second):
 		// The handler may not have reached its read; the fatal-return assertion
 		// above is the load-bearing one.
+	}
+}
+
+// I1: the one-use seen-set must span the envelope validity window, NOT a single
+// socket lifetime. A command accepted on one connection, then the SAME
+// {envelope, sig} redelivered after the daemon reconnects, must be refused as a
+// replay — proving the Verifier is built once (in New) and reused across
+// reconnects. If it were rebuilt per connection (inside handshake), the fresh
+// seen-set would accept the redelivery and this reddens.
+func TestAReplayIsRefusedAcrossAReconnect(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-replay-reconnect"
+
+	// One command, signed once, delivered verbatim on BOTH connections. A long
+	// window (+600s) keeps it valid across the reconnect backoff so the ONLY
+	// reason the second delivery can fail is the seen-set, not expiry.
+	now := time.Now().Unix()
+	env := map[string]any{
+		"v": int64(1), "envelope_id": "replay-across-reconnect", "device_id": deviceID,
+		"capability": "system.info", "args": map[string]any{},
+		"issued_at": now, "expires_at": now + 600,
+	}
+	canon, _ := wire.Canonical(env)
+	cmdSig := hex.EncodeToString(ed25519.Sign(corePriv, canon))
+
+	type outcome struct {
+		conn int
+		ok   bool
+		err  string
+	}
+	results := make(chan outcome, 2)
+
+	var mu sync.Mutex
+	connCount := 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+
+		mu.Lock()
+		connCount++
+		myConn := connCount
+		mu.Unlock()
+
+		// handshake
+		nonce := make([]byte, 32)
+		_, _ = rand.Read(nonce)
+		_ = coreWrite(ctx, c, map[string]any{"type": "challenge", "nonce": hex.EncodeToString(nonce), "core_pubkey": hex.EncodeToString(corePub)})
+		auth, err := coreRead(ctx, c)
+		if err != nil {
+			return
+		}
+		sigHex, _ := auth["sig"].(string)
+		sig, _ := hex.DecodeString(sigHex)
+		if !ed25519.Verify(devPub, nonce, sig) {
+			_ = c.Close(4401, "bad auth")
+			return
+		}
+		_ = coreWrite(ctx, c, map[string]any{"type": "ready", "last_seq": nil})
+
+		// Deliver the SAME command on this connection.
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": cmdSig})
+
+		// Read frames until the result for our command arrives (skip the audit
+		// replay frame the daemon sends on the second connection).
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				return
+			}
+			if f["type"] == "result" {
+				ok, _ := f["ok"].(bool)
+				es, _ := f["error"].(string)
+				results <- outcome{conn: myConn, ok: ok, err: es}
+				break
+			}
+		}
+
+		if myConn == 1 {
+			// Force the daemon to reconnect: drop this socket after the result.
+			_ = c.Close(websocket.StatusNormalClosure, "cycling")
+		} else {
+			// Hold the second connection open until the test tears down.
+			<-ctx.Done()
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+
+	got := map[int]outcome{}
+	for len(got) < 2 {
+		select {
+		case o := <-results:
+			got[o.conn] = o
+		case <-ctx.Done():
+			t.Fatalf("timed out; observed %d/2 results: %+v", len(got), got)
+		}
+	}
+	cancel()
+
+	// First delivery: accepted.
+	if !got[1].ok {
+		t.Fatalf("first delivery must be accepted, got ok=false err=%q", got[1].err)
+	}
+	// Second delivery, after the reconnect: refused as a replay. The seen-set
+	// survived the new socket because the Verifier is process-lived.
+	if got[2].ok {
+		t.Fatal("the same envelope after a reconnect must be refused (replay) — the seen-set must span reconnects, not one socket")
+	}
+	if !strings.Contains(got[2].err, "replay") {
+		t.Errorf("the second refusal should name the replay, got: %q", got[2].err)
 	}
 }
 
