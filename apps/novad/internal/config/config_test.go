@@ -140,6 +140,40 @@ func TestForbidsCatchesADotDotEscape(t *testing.T) {
 	}
 }
 
+// M4: a deny root can itself be a symlink. A target addressed via its REAL
+// resolved path must still be refused — the roots are resolved at load so the
+// check is symmetric with Forbids' target-side resolution.
+func TestForbidsResolvesASymlinkedDenyRoot(t *testing.T) {
+	p := testPaths(t)
+	real := filepath.Join(p.Home, "realsecrets")
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(p.Home, "secrets")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	// deny_roots names the SYMLINK path.
+	if err := os.MkdirAll(p.ConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.DenyRootsFile, []byte(link+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dl, err := LoadDenyRoots(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Via the real resolved path:
+	if forbid, _ := dl.Forbids(filepath.Join(real, "id_ed25519")); !forbid {
+		t.Errorf("a target under the RESOLVED deny root must be refused: %s", real)
+	}
+	// And via the symlink path:
+	if forbid, _ := dl.Forbids(filepath.Join(link, "id_ed25519")); !forbid {
+		t.Errorf("a target under the symlink deny-root path must be refused: %s", link)
+	}
+}
+
 func TestForbidsCatchesASymlinkedParent(t *testing.T) {
 	p := testPaths(t)
 	dl, err := LoadDenyRoots(p)

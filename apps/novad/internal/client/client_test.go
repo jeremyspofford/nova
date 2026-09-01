@@ -1,6 +1,31 @@
 package client
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"unicode/utf8"
+)
+
+// truncate caps by bytes but must never split a rune — a mangled rune in an
+// audit summary re-canonicalizes to a different chain hash on core's side and
+// logs a spurious device.audit_break.
+func TestTruncateNeverSplitsARune(t *testing.T) {
+	s := strings.Repeat("界", 200) // U+754C, 3 bytes each -> 600 bytes
+	out := truncate(s, 301)       // 301 is not a rune boundary
+	if len(out) > 301 {
+		t.Fatalf("len %d exceeds the cap", len(out))
+	}
+	if !utf8.ValidString(out) {
+		t.Fatal("truncate produced invalid UTF-8 (split a rune)")
+	}
+	if len(out) != 300 {
+		t.Fatalf("expected a back-off to the 300-byte boundary, got %d", len(out))
+	}
+	// A string already within the cap is returned whole.
+	if got := truncate("ok", 300); got != "ok" {
+		t.Errorf("short string changed: %q", got)
+	}
+}
 
 func TestWSURLDerivation(t *testing.T) {
 	cases := []struct {

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/url"
 	"time"
+	"unicode/utf8"
 
 	"github.com/coder/websocket"
 
@@ -370,9 +371,16 @@ func summarize(capability string, o caps.Outcome) string {
 	return truncate(s, 300)
 }
 
+// truncate caps a summary at n BYTES but never mid-rune: a split multibyte
+// rune would be invalid UTF-8, and core re-canonicalizes the summary into the
+// chain hash — a mangled rune there would recompute a different hash and log a
+// spurious device.audit_break. So back off to a rune boundary.
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
 	}
 	return s[:n]
 }

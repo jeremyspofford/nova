@@ -106,6 +106,23 @@ func TestSignatureVerifiesOverCanonicalForEveryVector(t *testing.T) {
 	}
 }
 
+// The astral / surrogate-pair branch is the one path no committed vector
+// reaches (all three stay within the BMP). Python emits a lowercase UTF-16
+// surrogate pair for a rune beyond U+FFFF; the daemon must match. 😀 is
+// U+1F600 -> 😀.
+func TestCanonicalEmitsAstralAsASurrogatePair(t *testing.T) {
+	got, err := Canonical(map[string]any{"x": "😀"})
+	if err != nil {
+		t.Fatalf("Canonical errored: %v", err)
+	}
+	// The ASCII escape Python emits: a lowercase UTF-16 surrogate pair. Built
+	// with doubled backslashes so the literal is unambiguous ASCII.
+	want := "{\"x\":\"\\ud83d\\ude00\"}"
+	if string(got) != want {
+		t.Fatalf("astral encoding differs\n want: %s\n  got: %s", want, string(got))
+	}
+}
+
 // Vector 2 is the whole interop risk in one payload: non-ASCII (café, naïve, ✓)
 // AND the three HTML-ish bytes (< > &). A naive encoding/json.Marshal fails it
 // two ways — it emits UTF-8 for the non-ASCII and escapes < > & as < etc.

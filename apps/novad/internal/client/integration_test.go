@@ -185,6 +185,204 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 	}
 }
 
+// buildAgent assembles an Agent over a fresh temp custody dir, pinning
+// corePubHex and signing with devPriv.
+func buildAgent(t *testing.T, serverURL, deviceID, corePubHex string, devPriv ed25519.PrivateKey) (*Agent, *audit.Log) {
+	t.Helper()
+	home := t.TempDir()
+	paths := config.Paths{
+		ConfigDir: filepath.Join(home, ".config", "novad"),
+		StateDir:  filepath.Join(home, ".local", "state", "novad"),
+		AuditFile: filepath.Join(home, ".local", "state", "novad", "audit.jsonl"),
+		Home:      home,
+	}
+	paths.DenyRootsFile = filepath.Join(paths.ConfigDir, "deny_roots")
+	deny, err := config.LoadDenyRoots(paths)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditLog, err := audit.Open(paths.AuditFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{DeviceID: deviceID, Name: "itest", Server: serverURL, CorePubKey: corePubHex}
+	agent, err := New(cfg, devPriv, deny, auditLog, home, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return agent, auditLog
+}
+
+// I1: a command that FAILS verification must produce BOTH a result{ok:false}
+// AND an appended audit entry{ok:false} — the "never report success/failure
+// unchecked" tripwire. A refactor that early-returns on the verify error
+// without emitting/appending reddens this.
+func TestARefusedCommandIsAResultOkFalseAndAnAuditEntry(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-refuse-1"
+
+	type observed struct {
+		result map[string]any
+		audit  map[string]any
+	}
+	obsCh := make(chan observed, 1)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+
+		nonce := make([]byte, 32)
+		_, _ = rand.Read(nonce)
+		_ = coreWrite(ctx, c, map[string]any{"type": "challenge", "nonce": hex.EncodeToString(nonce), "core_pubkey": hex.EncodeToString(corePub)})
+		auth, err := coreRead(ctx, c)
+		if err != nil {
+			return
+		}
+		sigHex, _ := auth["sig"].(string)
+		sig, _ := hex.DecodeString(sigHex)
+		if !ed25519.Verify(devPub, nonce, sig) {
+			_ = c.Close(4401, "bad auth")
+			return
+		}
+		_ = coreWrite(ctx, c, map[string]any{"type": "ready", "last_seq": nil})
+
+		// A command whose signature does NOT verify (64 zero bytes).
+		now := time.Now().Unix()
+		env := map[string]any{
+			"v": int64(1), "envelope_id": "refuse-e1", "device_id": deviceID,
+			"capability": "system.info", "args": map[string]any{},
+			"issued_at": now, "expires_at": now + 60,
+		}
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": strings.Repeat("00", 64)})
+
+		var obs observed
+		deadline := time.Now().Add(8 * time.Second)
+		for (obs.result == nil || obs.audit == nil) && time.Now().Before(deadline) {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				break
+			}
+			switch f["type"] {
+			case "result":
+				obs.result = f
+			case "audit":
+				if raw, ok := f["entries"].([]any); ok && len(raw) > 0 {
+					if m, ok := raw[0].(map[string]any); ok {
+						obs.audit = m
+					}
+				}
+			}
+		}
+		obsCh <- obs
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	agent, auditLog := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+
+	var obs observed
+	select {
+	case obs = <-obsCh:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for the refusal result + audit")
+	}
+	cancel()
+
+	// (a) a result frame with ok:false and a stated error.
+	if obs.result == nil {
+		t.Fatal("no result frame for the refused command")
+	}
+	if ok, _ := obs.result["ok"].(bool); ok {
+		t.Fatal("a refused command must be result ok:false")
+	}
+	if e, _ := obs.result["error"].(string); e == "" {
+		t.Error("a refusal result must carry a stated error")
+	}
+	// (b) an audit entry with ok:false was appended for it.
+	if obs.audit == nil {
+		t.Fatal("a refusal must ALSO be an audit entry — none received")
+	}
+	if ok, _ := obs.audit["ok"].(bool); ok {
+		t.Fatal("the audit entry for a refusal must be ok:false")
+	}
+	if auditLog.LastSeq() != 0 {
+		t.Errorf("a refusal must append to the local chain (seq 0), got LastSeq %d", auditLog.LastSeq())
+	}
+}
+
+// I2: a challenge whose core_pubkey != the pinned one is a FATAL, non-
+// reconnecting refusal — the daemon's half of the mutual pinning. It must not
+// send auth, must not loop, and must surface the changed-key reason. A refactor
+// that inverts the check or downgrades fatal->retryable reddens this.
+func TestAChangedCoreKeyIsFatalAndDoesNotReconnect(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)  // the key we PIN
+	otherPub, _, _ := ed25519.GenerateKey(rand.Reader) // the key the socket PRESENTS
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-tofu-1"
+
+	authSeen := make(chan bool, 4)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		nonce := make([]byte, 32)
+		_, _ = rand.Read(nonce)
+		// Present the WRONG core key.
+		_ = coreWrite(ctx, c, map[string]any{"type": "challenge", "nonce": hex.EncodeToString(nonce), "core_pubkey": hex.EncodeToString(otherPub)})
+		// The daemon must refuse before auth: this read should error (socket
+		// closed), never return an auth frame.
+		if _, err := coreRead(ctx, c); err == nil {
+			authSeen <- true
+		} else {
+			authSeen <- false
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	runErr := make(chan error, 1)
+	go func() { runErr <- agent.Run(ctx) }()
+
+	select {
+	case err := <-runErr:
+		if err == nil {
+			t.Fatal("a changed core key must be a fatal error, not a clean return")
+		}
+		if !strings.Contains(err.Error(), "pinned") {
+			t.Errorf("the fatal reason should name the pin, got: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return — a changed key must be fatal, not a reconnect loop")
+	}
+
+	select {
+	case got := <-authSeen:
+		if got {
+			t.Error("the daemon sent an auth frame despite a changed core key — it must refuse BEFORE auth")
+		}
+	case <-time.After(time.Second):
+		// The handler may not have reached its read; the fatal-return assertion
+		// above is the load-bearing one.
+	}
+}
+
 func coreWrite(ctx context.Context, c *websocket.Conn, v any) error {
 	data, _ := json.Marshal(v)
 	return c.Write(ctx, websocket.MessageText, data)

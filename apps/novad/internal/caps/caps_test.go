@@ -100,6 +100,24 @@ func TestFsReadRefusesOverTheCapWithoutTruncating(t *testing.T) {
 	}
 }
 
+// The boundary: a file exactly at the cap is allowed and read in full (proving
+// the mechanical LimitReader(ReadCap+1) reads all ReadCap bytes), while ReadCap+1
+// (above) is refused.
+func TestFsReadAllowsExactlyTheCap(t *testing.T) {
+	d, _ := testDeps(t)
+	path := filepath.Join(d.Home, "atcap.bin")
+	if err := os.WriteFile(path, make([]byte, ReadCap), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := Dispatch(context.Background(), "fs.read", map[string]any{"path": path}, d)
+	if !out.OK {
+		t.Fatalf("a file exactly at the cap must be allowed: %q", out.Error)
+	}
+	if len(out.Output) != ReadCap {
+		t.Fatalf("expected a full read of %d bytes, got %d", ReadCap, len(out.Output))
+	}
+}
+
 // The ok-vs-exit_code seam: a process that RAN to completion is ok:true even on
 // a nonzero exit; exit_code carries the command's own result.
 func TestShellExecNonzeroExitIsOkTrueWithTheCode(t *testing.T) {

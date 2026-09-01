@@ -2,6 +2,7 @@ package caps
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
@@ -67,13 +68,24 @@ func fsRead(args map[string]any, d Deps) Outcome {
 	if info.IsDir() {
 		return fail("%s is a directory, not a file", path)
 	}
-	// The cap is checked BEFORE reading: never truncate-and-claim-success.
-	if info.Size() > ReadCap {
-		return fail("file is %d bytes, over the %d KiB read cap", info.Size(), ReadCap/1024)
-	}
-	body, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return fail("could not read %s: %v", path, err)
+	}
+	defer f.Close()
+	// The cap is MECHANICAL, enforced on the read itself, not on the prior
+	// stat: read at most ReadCap+1 bytes and refuse on overflow — a file that
+	// grows past the cap between stat and read is still refused, never
+	// truncated-and-claimed-success.
+	body, err := io.ReadAll(io.LimitReader(f, ReadCap+1))
+	if err != nil {
+		return fail("could not read %s: %v", path, err)
+	}
+	if len(body) > ReadCap {
+		if size := info.Size(); size > ReadCap {
+			return fail("file is %d bytes, over the %d KiB read cap", size, ReadCap/1024)
+		}
+		return fail("file grew past the %d KiB read cap while reading", ReadCap/1024)
 	}
 	return ok0(string(body))
 }

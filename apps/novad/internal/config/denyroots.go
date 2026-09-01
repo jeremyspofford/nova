@@ -48,15 +48,25 @@ func LoadDenyRoots(p Paths) (*DenyList, error) {
 	}
 	seen := map[string]bool{}
 	var roots []string
+	store := func(p string) {
+		if !seen[p] {
+			seen[p] = true
+			roots = append(roots, p)
+		}
+	}
 	add := func(raw string) {
 		abs, err := filepath.Abs(raw)
 		if err != nil {
 			return
 		}
 		abs = filepath.Clean(abs)
-		if !seen[abs] {
-			seen[abs] = true
-			roots = append(roots, abs)
+		store(abs)
+		// A deny root can itself be a symlink (a symlinked ~/.ssh, or $HOME on
+		// some setups). Store its resolved form too, so a target addressed via
+		// its REAL path is caught — the check must be symmetric with the
+		// target-side symlink resolution in Forbids.
+		if resolved := resolveExistingAncestor(abs); resolved != abs {
+			store(resolved)
 		}
 	}
 	sc := bufio.NewScanner(strings.NewReader(string(body)))
