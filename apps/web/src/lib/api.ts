@@ -494,6 +494,78 @@ export async function revokeAutonomy(actionClass: string): Promise<AutonomyClass
   return body.classes
 }
 
+// ── devices (services/core/app/devices_api.py) ──────────────────────────
+
+/**
+ * A machine paired to this Nova. `capabilities`/`fs_roots` are the live grant
+ * (edited here, read per call by core). `last_seen` is core's clock at the last
+ * heartbeat, or null before the first — the ONLY liveness fact the REST list
+ * carries: `connected` is ALWAYS false on this route by design (only the
+ * model-facing device_list tool overwrites it from live WS hub membership), so
+ * the tile derives liveness from `last_seen` freshness, never from `connected`.
+ * See pages/settings/devicesFormat.ts. A revoked device is still listed — a
+ * machine that was revoked is part of what the operator needs to see.
+ */
+export interface Device {
+  id: string
+  name: string
+  platform: string
+  hostname: string
+  capabilities: string[]
+  fs_roots: string[]
+  enrolled_at: string
+  last_seen: string | null
+  revoked_at: string | null
+  connected: boolean
+}
+
+/** A freshly minted pairing code — shown ONCE (core stores only its hash). */
+export interface PairingCode {
+  code: string
+  expires_at: string
+}
+
+export async function listDevices(): Promise<Device[]> {
+  const body = await apiGet<{ devices: Device[] }>('/api/v1/devices')
+  return body.devices
+}
+
+/** POST /devices/pairing-code — the code is returned once and never again. */
+export const mintPairingCode = () =>
+  apiSend<PairingCode>('/api/v1/devices/pairing-code', 'POST')
+
+export async function renameDevice(id: string, name: string): Promise<Device> {
+  const body = await apiSend<{ device: Device }>(
+    `/api/v1/devices/${encodeURIComponent(id)}`,
+    'PATCH',
+    { name },
+  )
+  return body.device
+}
+
+/** PUT /devices/{id}/grants — the full capability + fs-root grant, replaced
+ * wholesale (core validates the capability names and the absolute roots). */
+export async function setGrants(
+  id: string,
+  grants: { capabilities: string[]; fs_roots: string[] },
+): Promise<Device> {
+  const body = await apiSend<{ device: Device }>(
+    `/api/v1/devices/${encodeURIComponent(id)}/grants`,
+    'PUT',
+    grants,
+  )
+  return body.device
+}
+
+/** POST /devices/{id}/revoke — core also drops the device's live socket. */
+export async function revokeDevice(id: string): Promise<Device> {
+  const body = await apiSend<{ device: Device }>(
+    `/api/v1/devices/${encodeURIComponent(id)}/revoke`,
+    'POST',
+  )
+  return body.device
+}
+
 // ── governance audit (services/core/app/governance_api.py) ──────────────
 
 /** One row of the append-only ledger: every decision, verbatim. Never
