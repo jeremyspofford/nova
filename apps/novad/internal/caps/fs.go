@@ -102,6 +102,13 @@ func fsWrite(args map[string]any, d Deps) Outcome {
 	if refusal := denyCheck(d, path); refusal != nil {
 		return *refusal
 	}
+	// The cap is MECHANICAL and defence-in-depth: the daemon refuses an oversize
+	// write even for a fully-verified, core-signed envelope (core caps it too).
+	// Byte length, matching core's UTF-8 byte-length check, and refused BEFORE
+	// the write so nothing is partially written.
+	if len(content) > WriteCap {
+		return fail("content is %d bytes, over the %d KiB write cap", len(content), WriteCap/1024)
+	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		return fail("could not write %s: %v", path, err)
 	}

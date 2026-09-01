@@ -118,6 +118,42 @@ func TestFsReadAllowsExactlyTheCap(t *testing.T) {
 	}
 }
 
+// The write cap mirrors the read cap: content over 256 KiB is a STATED refusal
+// at the edge (defence in depth — core caps it too), never a partial write.
+func TestFsWriteRefusesOverTheCapWithoutWriting(t *testing.T) {
+	d, _ := testDeps(t)
+	path := filepath.Join(d.Home, "big.txt")
+	out := Dispatch(context.Background(), "fs.write",
+		map[string]any{"path": path, "content": strings.Repeat("a", WriteCap+1)}, d)
+	if out.OK {
+		t.Fatal("content over the 256 KiB write cap must be refused, never written")
+	}
+	if !strings.Contains(out.Error, "write cap") {
+		t.Errorf("refusal should name the cap, got: %q", out.Error)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("the refused write must not have created the file")
+	}
+}
+
+// The boundary: content exactly at the cap is allowed and written in full.
+func TestFsWriteAllowsExactlyTheCap(t *testing.T) {
+	d, _ := testDeps(t)
+	path := filepath.Join(d.Home, "atcap.txt")
+	out := Dispatch(context.Background(), "fs.write",
+		map[string]any{"path": path, "content": strings.Repeat("a", WriteCap)}, d)
+	if !out.OK {
+		t.Fatalf("content exactly at the cap must be allowed: %q", out.Error)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("the write should have created the file: %v", err)
+	}
+	if info.Size() != int64(WriteCap) {
+		t.Fatalf("wrote %d bytes, want %d", info.Size(), WriteCap)
+	}
+}
+
 // The ok-vs-exit_code seam: a process that RAN to completion is ok:true even on
 // a nonzero exit; exit_code carries the command's own result.
 func TestShellExecNonzeroExitIsOkTrueWithTheCode(t *testing.T) {

@@ -16,9 +16,14 @@ import (
 	"novad/internal/config"
 )
 
-// Caps for the two byte budgets in the plan.
+// Caps for the byte budgets in the plan. ReadCap and WriteCap share the same
+// 256 KiB fs domain (the plan's "no v1 capability moves >256 KiB"); a write
+// over it is refused at the edge — defence in depth even for a signed envelope,
+// and it never reaches the transport where an oversize frame would flap the
+// socket instead of stating a refusal.
 const (
 	ReadCap   = 256 * 1024 // fs.read refuses a larger file; it never truncates
+	WriteCap  = 256 * 1024 // fs.write refuses larger content; it never partial-writes
 	OutputCap = 64 * 1024  // shell.exec output; reaching it is stated, not silent
 )
 
