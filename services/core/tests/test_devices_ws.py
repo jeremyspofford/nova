@@ -23,7 +23,7 @@ import pytest
 
 from app import devices, devices_ws, governance, tools
 from app.identity import Person
-from app.tools.base import ToolContext
+from app.tools.base import ToolContext, ToolFailure
 from tests.conftest import requires_db
 from tests.device_fakes import FakeDevice, FakeWSConn
 
@@ -450,6 +450,81 @@ async def test_the_exact_root_and_a_legitimate_child_reach_the_wire(pool):
     assert ok2 is True
 
     await _close(conn, task)
+
+
+# -- the write cap and the lone-surrogate guard refuse before the wire --------
+
+
+async def test_device_write_file_over_the_cap_is_refused_before_the_wire(pool):
+    """M2: content over 256 KiB is a STATED refusal in the executor, BEFORE the
+    envelope reaches the transport — an oversize write would otherwise flap the
+    socket into a timeout (a hang, not a refusal). Nothing crosses the wire."""
+    from app.tools import devices as device_tools
+
+    device_id, _device = await _enroll(
+        pool, name="laptop", capabilities=["fs.write"], fs_roots=["/home/jeremy"]
+    )
+    conn = FakeWSConn()
+    devices_ws.hub.register(device_id, conn)  # connected, so a leak WOULD show a frame
+    person = await _person(pool)
+    oversize = "a" * (device_tools.WRITE_FILE_CAP_KIB * 1024 + 1)
+
+    with pytest.raises(ToolFailure) as excinfo:
+        await device_tools.device_write_file(
+            {"device": "laptop", "path": "/home/jeremy/big.txt", "content": oversize},
+            _ctx(person),
+        )
+    assert "write cap" in str(excinfo.value)
+    assert conn.sent == []  # refused before hub.command — nothing crossed the wire
+
+
+async def test_device_write_file_at_exactly_the_cap_reaches_the_wire(pool):
+    """M2 boundary: content exactly at 256 KiB is allowed and the full content
+    crosses in a signed envelope — the cap refuses, it must not over-refuse."""
+    from app.tools import devices as device_tools
+
+    device_id, device, conn, task = await _connect(
+        pool, name="laptop", capabilities=["fs.write"], fs_roots=["/home/jeremy"]
+    )
+    person = await _person(pool)
+    cap_bytes = device_tools.WRITE_FILE_CAP_KIB * 1024
+    exact = "a" * cap_bytes
+
+    async def answer():
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        assert frame["type"] == "command"
+        assert frame["envelope"]["capability"] == "fs.write"
+        # the whole content crossed, unmodified — no truncation at the boundary
+        assert len(frame["envelope"]["args"]["content"].encode("utf-8")) == cap_bytes
+        conn.feed(device.result(frame["envelope"], ok=True, output="", exit_code=0))
+
+    ans = asyncio.create_task(answer())
+    result = await device_tools.device_write_file(
+        {"device": "laptop", "path": "/home/jeremy/atcap.txt", "content": exact},
+        _ctx(person),
+    )
+    await asyncio.wait_for(ans, 2)
+    assert "Wrote" in result
+    await _close(conn, task)
+
+
+async def test_a_lone_surrogate_arg_is_refused_before_signing(pool):
+    """M1: an arg carrying an unpaired UTF-16 surrogate is refused NAMING it,
+    before signing — Go decodes a lone surrogate to U+FFFD, so it would surface
+    as an opaque "signature did not verify" at the daemon. No frame crosses."""
+    from app.tools import devices as device_tools
+
+    device_id, _device = await _enroll(pool, name="laptop", capabilities=["system.notify"])
+    conn = FakeWSConn()
+    devices_ws.hub.register(device_id, conn)  # connected, so a leak WOULD show a frame
+    person = await _person(pool)
+
+    with pytest.raises(ToolFailure) as excinfo:
+        await device_tools.device_notify(
+            {"device": "laptop", "message": "hi \ud83d there"}, _ctx(person)
+        )
+    assert "surrogate" in str(excinfo.value)
+    assert conn.sent == []  # refused before hub.command — nothing was signed or sent
 
 
 async def test_a_command_send_failure_is_the_same_stale_tile_refusal(pool):

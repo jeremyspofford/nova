@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import posixpath
 
-from app import db, devices, devices_ws
+from app import db, devices, devices_ws, envelopes
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 # How long core waits for a device to answer one command. Bounded (<=120s per
@@ -41,6 +41,14 @@ COMMAND_TIMEOUT_SECONDS = 120
 # device_read_file's cap. Enforced ON THE DEVICE (T3) — stated here so the model
 # knows the boundary before it asks, not after a truncation it cannot see.
 READ_FILE_CAP_KIB = 256
+
+# device_write_file's cap — the same 256 KiB fs domain as the read cap and the
+# roadmap's "no v1 capability moves >256 KiB". Enforced HERE, mechanically,
+# BEFORE the envelope reaches the transport: an oversize write would otherwise
+# blow past the socket read limit and flap the connection into a command
+# timeout — a hang, not the stated refusal the rail requires. The device caps it
+# too (defence in depth).
+WRITE_FILE_CAP_KIB = 256
 
 _DEVICE_ARG = {
     "type": "string",
@@ -101,7 +109,19 @@ def _check_fs_path(row, path: object) -> str:
 
 async def _command(pool, row, capability: str, args: dict) -> dict:
     """Send one command through the hub, restating a DeviceRefused as the
-    ToolFailure the model reads. Only a `result` frame gets here as a return."""
+    ToolFailure the model reads. Only a `result` frame gets here as a return.
+
+    The single funnel every envelope-backed device tool passes through, so the
+    lone-surrogate guard lives here: an arg carrying an unpaired UTF-16
+    surrogate cannot be canonicalized identically on the daemon (Go decodes it
+    to U+FFFD), so it would surface as an opaque "signature did not verify". We
+    refuse it BEFORE signing, naming the bad input, rather than shipping a
+    mystery signature failure to the edge."""
+    if envelopes.contains_lone_surrogate(args):
+        raise ToolFailure(
+            "an argument contains an unpaired UTF-16 surrogate, which cannot be signed "
+            "for the device — remove the malformed character and try again"
+        )
     try:
         return await devices_ws.hub.command(
             pool,
@@ -202,8 +222,20 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
     row = await _resolve(pool, args["device"])
     _require_grant(row, "fs.write")
     path = _check_fs_path(row, args["path"])
+    content = args["content"]
+    if not isinstance(content, str):
+        raise ToolFailure("the 'content' argument must be a string")
+    # Mechanical, BEFORE the envelope reaches the transport: an oversize write
+    # would flap the socket into a timeout (a hang), so it is a stated refusal
+    # here instead. Byte length, matching the device's own byte-level cap.
+    size = len(content.encode("utf-8"))
+    if size > WRITE_FILE_CAP_KIB * 1024:
+        raise ToolFailure(
+            f"content is {size} bytes, over the {WRITE_FILE_CAP_KIB} KiB write cap for a "
+            "device — no v1 device capability moves more than that; write a smaller file"
+        )
     _require_ok(
-        await _command(pool, row, "fs.write", {"path": path, "content": args["content"]}), row
+        await _command(pool, row, "fs.write", {"path": path, "content": content}), row
     )
     return f"Wrote {path} on {row['name']}."
 
@@ -320,13 +352,16 @@ TOOLS: tuple[Tool, ...] = (
         name="device_write_file",
         description=(
             "Write a text file on a paired device. The path must be absolute and inside a "
-            "granted folder."
+            f"granted folder; content larger than {WRITE_FILE_CAP_KIB} KiB is refused."
         ),
         parameters=_obj(
             {
                 "device": _DEVICE_ARG,
                 "path": {"type": "string", "description": "Absolute file path on the device."},
-                "content": {"type": "string", "description": "The full new file contents."},
+                "content": {
+                    "type": "string",
+                    "description": f"The full new file contents (up to {WRITE_FILE_CAP_KIB} KiB).",
+                },
             },
             ["device", "path", "content"],
         ),

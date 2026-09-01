@@ -67,8 +67,40 @@ def canonical(payload: dict[str, Any]) -> bytes:
     `<`, `>`, `&` are left as themselves (which Go's encoding/json DOES escape
     unless told not to). The daemon matches these bytes; the bytes do not move
     to suit the daemon.
+
+    Byte-identity holds for every VALID-UTF-8 input. The one exception is a lone
+    UTF-16 surrogate: json.dumps preserves it, but Go's json.Unmarshal decodes
+    it to U+FFFD, so the daemon would re-derive different bytes. Such input is
+    refused fail-closed BEFORE signing (see contains_lone_surrogate, enforced in
+    the device-tool funnel), so it never reaches this function on the wire.
     """
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+
+
+def contains_lone_surrogate(value: Any) -> bool:
+    """True if `value` — a str, or a dict/list of them — holds a UTF-16 lone
+    surrogate: a code point in U+D800..U+DFFF.
+
+    This is the one input where canonical() is NOT byte-identical across the two
+    languages. Python's json.dumps preserves a lone surrogate as a `\\udXXX`
+    escape, so core would sign those bytes; but Go's json.Unmarshal decodes a
+    lone surrogate to U+FFFD, so the daemon re-derives DIFFERENT canonical bytes
+    and refuses with a mystery "signature did not verify". A Python str can only
+    ever carry a surrogate singly (a valid astral character is a single code
+    point outside this range, and there are no pairs inside a str), so any code
+    point in the range is a lone surrogate. Scan for it BEFORE signing so the
+    refusal names the bad input instead of surfacing as an opaque signature
+    failure at the edge — fail-closed, and labelled.
+    """
+    if isinstance(value, str):
+        return any(0xD800 <= ord(ch) <= 0xDFFF for ch in value)
+    if isinstance(value, dict):
+        return any(
+            contains_lone_surrogate(k) or contains_lone_surrogate(v) for k, v in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(contains_lone_surrogate(item) for item in value)
+    return False
 
 
 def sign(private_key: ed25519.Ed25519PrivateKey, payload: dict[str, Any]) -> str:
