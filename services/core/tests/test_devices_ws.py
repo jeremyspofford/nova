@@ -381,6 +381,94 @@ async def test_an_fs_path_outside_the_granted_roots_is_refused(pool):
     assert conn.sent == []
 
 
+async def test_a_dotdot_path_escaping_the_root_is_refused(pool):
+    # normpath collapses the ".." to /etc/shadow, which is not under the granted
+    # root — this reddens if a refactor ever prefix-checks the raw string.
+    device_id, _device = await _enroll(
+        pool, name="laptop", capabilities=["fs.read"], fs_roots=["/home/jeremy"]
+    )
+    conn = FakeWSConn()
+    devices_ws.hub.register(device_id, conn)
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_read_file",
+        {"device": "laptop", "path": "/home/jeremy/../../etc/shadow"},
+        _ctx(person),
+    )
+    assert ok is False
+    assert "outside the roots" in result
+    assert conn.sent == []  # never reached the wire
+
+
+async def test_a_sibling_prefix_path_is_not_treated_as_inside_the_root(pool):
+    # The classic prefix trap: /home/jeremy-evil is NOT under /home/jeremy, even
+    # though the latter is a string prefix of the former. The "/" boundary in the
+    # check is what refuses it.
+    device_id, _device = await _enroll(
+        pool, name="laptop", capabilities=["fs.read"], fs_roots=["/home/jeremy"]
+    )
+    conn = FakeWSConn()
+    devices_ws.hub.register(device_id, conn)
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_read_file", {"device": "laptop", "path": "/home/jeremy-evil/x"}, _ctx(person)
+    )
+    assert ok is False
+    assert "outside the roots" in result
+    assert conn.sent == []
+
+
+async def test_the_exact_root_and_a_legitimate_child_reach_the_wire(pool):
+    # The other half of the prefix check: it must not OVER-refuse. The exact root
+    # and a real child both pass, and the normalized path is what crosses.
+    device_id, device, conn, task = await _connect(
+        pool, name="laptop", capabilities=["fs.list"], fs_roots=["/home/jeremy"]
+    )
+    person = await _person(pool)
+
+    async def answer_expecting(expected_path: str):
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        assert frame["type"] == "command"
+        assert frame["envelope"]["capability"] == "fs.list"
+        assert frame["envelope"]["args"]["path"] == expected_path
+        conn.feed(device.result(frame["envelope"], ok=True, output="listing", exit_code=0))
+
+    ans = asyncio.create_task(answer_expecting("/home/jeremy"))
+    _r, ok = await tools.dispatch(
+        "device_list_files", {"device": "laptop", "path": "/home/jeremy"}, _ctx(person)
+    )
+    await asyncio.wait_for(ans, 2)
+    assert ok is True
+
+    # A child given with a redundant "." segment proves normpath ran on the
+    # allowed path too, not only the refused ones.
+    ans2 = asyncio.create_task(answer_expecting("/home/jeremy/notes.txt"))
+    _r2, ok2 = await tools.dispatch(
+        "device_list_files", {"device": "laptop", "path": "/home/jeremy/./notes.txt"}, _ctx(person)
+    )
+    await asyncio.wait_for(ans2, 2)
+    assert ok2 is True
+
+    await _close(conn, task)
+
+
+async def test_a_command_send_failure_is_the_same_stale_tile_refusal(pool):
+    # The socket dies between the in-hub check and the write: a send that failed
+    # never reached the device, so it must read exactly like a missing socket,
+    # never as "failed unexpectedly — <ExcType>".
+    class _DeadConn(FakeWSConn):
+        async def send(self, frame: dict) -> None:
+            raise ConnectionResetError("socket went away mid-write")
+
+    device_id, _device = await _enroll(pool, name="laptop", capabilities=["system.info"])
+    devices_ws.hub.register(device_id, _DeadConn())
+    person = await _person(pool)
+    result, ok = await tools.dispatch("device_info", {"device": "laptop"}, _ctx(person))
+    assert ok is False
+    assert "not connected" in result and "tile is stale" in result
+    assert "unexpectedly" not in result  # a stated refusal, not a leaked exception
+
+
 async def test_a_disconnected_device_tool_is_a_stated_failure(pool):
     await _enroll(pool, name="laptop", capabilities=["system.info"])  # paired, not connected
     person = await _person(pool)
@@ -421,14 +509,21 @@ async def test_a_device_reporting_failure_is_not_dressed_as_success(pool):
 
 
 async def test_device_list_derives_connected_from_hub_membership(pool):
-    connected_id, _d1 = await _enroll(pool, name="online")
-    await _enroll(pool, name="offline")
-    devices_ws.hub.register(connected_id, FakeWSConn())
+    # Names deliberately do NOT echo a status word, so the assertions prove the
+    # DERIVED status per device rather than a name colliding with the status text.
+    laptop_id, _d1 = await _enroll(pool, name="laptop")
+    await _enroll(pool, name="deskbox")
+    devices_ws.hub.register(laptop_id, FakeWSConn())  # only the laptop is in the hub
     person = await _person(pool)
     result, ok = await tools.dispatch("device_list", {}, _ctx(person))
     assert ok is True
-    assert "online" in result and "connected" in result
-    assert "offline" in result and "offline," in result  # "offline — offline, last seen never"
+    lines = {
+        line.split(" (")[0].removeprefix("- "): line
+        for line in result.splitlines()
+        if line.startswith("- ")
+    }
+    assert "connected" in lines["laptop"]  # in the hub -> connected
+    assert "offline" in lines["deskbox"]  # not in the hub -> offline
 
 
 # -- authorize precedes the executor, for a device tool ----------------------

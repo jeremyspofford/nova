@@ -194,7 +194,17 @@ class Hub:
         fut: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending.setdefault(did, {})[envelope["envelope_id"]] = fut
         try:
-            await conn.send({"type": "command", "envelope": envelope, "sig": sig})
+            try:
+                await conn.send({"type": "command", "envelope": envelope, "sig": sig})
+            except Exception as exc:
+                # The socket died between the in-hub check and the write. A send
+                # that failed did NOT reach the device, so it must read exactly
+                # like a missing socket — the same stale-tile refusal — never as
+                # an unexpected crash the model has to decode.
+                raise devices.DeviceRefused(
+                    f"device {name!r} is not connected — its tile is stale; check it is "
+                    "powered on and online"
+                ) from exc
             return await asyncio.wait_for(fut, timeout)
         except TimeoutError as exc:
             raise devices.DeviceRefused(
