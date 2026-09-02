@@ -723,3 +723,135 @@ async def test_an_honest_specific_result_reply_is_not_capability_corrected_and_s
     assert stored == reply  # untouched — no guard fired
     await chat.drain_background()
     assert len(memory.ingests) == 1  # ordinary turn, not plumbing
+
+
+# -- a raised card ends the tool loop ---------------------------------------
+#
+# The owner's walk (2026-09-01): after a card was raised mid-turn the local
+# model kept calling OTHER tools round after round until the 6-round cap
+# ("[stopped after 6 tool rounds without finishing]"); his approve landed while
+# the turn was still streaming, so the web's auto-continue never fired and he
+# had to click "Go ahead" by hand. Mechanically: once a round raises a card the
+# tool loop is CLOSED for the rest of the turn — the model gets exactly ONE
+# more gateway round, made WITHOUT tools advertised, to say so in text, and the
+# turn ends. A tool call it emits anyway in that round is never dispatched: it
+# gets the stated pending-approval result and the turn still ends.
+
+
+def _tools_advertised(payload: dict) -> bool:
+    return bool(payload.get("tools"))
+
+
+async def _governance_raised(pool) -> int:
+    from app import governance
+
+    return sum(
+        1
+        for e in await governance.recent_events(pool, limit=200)
+        if e["kind"] == governance.CONSENT_RAISED
+    )
+
+
+async def test_a_raised_card_closes_the_tool_loop_for_the_rest_of_the_turn(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    probe = await _arm_consent_tool(pool, monkeypatch)
+    fetch = _spy_fetch(monkeypatch)
+    # Round 1 raises the card. Round 2 (the narration round) narrates AND
+    # tries a second, auto tool — which must never run. A third round would
+    # be a loud 500 from the script, so `calls == 2` is also "no wandering".
+    gateway = ScriptedGateway(
+        rounds=(
+            (probe_call("c1", URL),),
+            (text("Awaiting your approval."), fetch_call("c2", "https://example.com/other")),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "check the pricing page and the other one")
+
+    assert probe.calls == []  # the gated call never ran
+    assert fetch.calls == []  # the second tool was NEVER dispatched
+    assert gateway.calls == 2  # exactly one more round after the card, then done
+    assert _tools_advertised(gateway.payloads[0])  # the card round had tools
+    assert not _tools_advertised(gateway.payloads[1])  # the narration round had none
+    # The card was raised exactly once — on the wire, in the table, in the ledger.
+    assert len(consent_frames(sent)) == 1
+    assert len(await consents.pending_all(pool)) == 1
+    assert await _governance_raised(pool) == 1
+    # The refused second call is visible: an error activity and a tool span
+    # carrying the stated reason — never a silent drop.
+    assert _activities(sent) == [
+        (CONSENT_ACTION, "start"),
+        (CONSENT_ACTION, "awaiting"),
+        ("fetch_url", "start"),
+        ("fetch_url", "error"),
+    ]
+    span = await pool.fetchrow(
+        "SELECT meta FROM turn_spans WHERE kind = 'tool' AND name = 'fetch_url'"
+    )
+    assert span["meta"]["ok"] is False
+    assert "an approval is pending" in span["meta"]["error"]
+    # The turn ended promptly and healthy: no cap note, status ok, the
+    # model's own narration is what persisted.
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert "[stopped after" not in stored
+    assert stored == "Awaiting your approval."
+    assert _corrections(sent) == []
+
+
+async def test_a_narration_round_that_only_calls_tools_still_ends_the_turn_ok(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The small-model case: told to narrate, it emits nothing but another
+    tool call. The call is refused, and the turn still ends OK with a stated
+    note rather than as an empty-reply error — the card is pending and the
+    owner's approve must land on a FINISHED turn."""
+    await _arm_consent_tool(pool, monkeypatch)
+    fetch = _spy_fetch(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=(
+            (probe_call("c1", URL),),
+            (fetch_call("c2", "https://example.com/other"),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "check the pricing page")
+
+    assert fetch.calls == []
+    assert gateway.calls == 2
+    assert len(consent_frames(sent)) == 1
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert "[stopped after" not in stored
+    assert stored == chat.PENDING_APPROVAL_NOTE
+    assert _corrections(sent) == []  # a card IS pending, so the note is true
+
+
+async def test_a_turn_with_no_card_still_gets_its_full_rounds(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """No regression: without a card the loop runs every round it needs, each
+    with tools advertised."""
+    fetch = _spy_fetch(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=(
+            (fetch_call("c1", URL),),
+            (fetch_call("c2", "https://example.com/other"),),
+            (text("Both pages read."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "read both pages")
+
+    assert fetch.calls == [{"url": URL}, {"url": "https://example.com/other"}]
+    assert gateway.calls == 3
+    assert all(_tools_advertised(p) for p in gateway.payloads)
+    assert consent_frames(sent) == []
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    assert await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'") == (
+        "Both pages read."
+    )

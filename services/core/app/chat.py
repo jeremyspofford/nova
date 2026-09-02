@@ -99,6 +99,18 @@ def _deferral_honest_note(action_phrase: str) -> str:
 # head keeps a 256 KB file body out of the trace. Both are heads, and both
 # say how much they left out.
 SPAN_RESULT_HEAD_CHARS = 500
+
+# Once a round raises an approval card, the tool loop is CLOSED for the rest of
+# the turn (see _run_turn): the model gets one more gateway round, WITHOUT tools
+# advertised, to tell the user, and the turn ends. A tool call it emits anyway
+# in that round is never dispatched — it gets this stated result — and if it
+# said nothing at all in text, this note is the reply, so a turn with a card
+# pending always ENDS (status ok) instead of dying as an empty reply. Both are
+# mechanical facts about the turn (the sink is non-empty), never a claim.
+PENDING_APPROVAL_REFUSAL = (
+    f"{tools.ERROR_PREFIX}an approval is pending — tell the user and wait for it"
+)
+PENDING_APPROVAL_NOTE = "[waiting for your approval before continuing]"
 SPAN_ARG_HEAD_CHARS = 200
 SPAN_ARGS_TOTAL_CHARS = 2000
 
@@ -595,6 +607,21 @@ async def _run_tool(
     return result, ok, awaiting
 
 
+def _refuse_pending(turn: traces.Turn, call: ToolCall) -> str:
+    """A tool call made in the narration round after a card was raised: NOT
+    dispatched. It is still recorded as a tool span — ok=False with the stated
+    reason as `error` — so the trace shows the call the model made and why it
+    did not run, rather than a silent drop (a reply is a claim, the span is the
+    fact). Returns the stated result the call is answered with."""
+    with turn.span("tool", call.name) as span:
+        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        span.meta["ok"] = False
+        span.meta["result_head"] = PENDING_APPROVAL_REFUSAL[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["error"] = PENDING_APPROVAL_REFUSAL[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["refused_pending_approval"] = True
+    return PENDING_APPROVAL_REFUSAL
+
+
 # -- the opt-in responsiveness check ---------------------------------------
 #
 # A SOFT, LLM-JUDGED, OPT-IN quality guard — the first LLM-judgment control in a
@@ -938,6 +965,14 @@ async def _run_turn(
         rounds_allowed = max(1, max_tool_rounds)
         failure: str | None = None
         out_of_rounds = False
+        # Set the moment any call this turn raises a card (awaiting=True). From
+        # then on the tool loop is CLOSED: the next gateway round is the LAST,
+        # made with NO tools advertised so the model has to answer in text,
+        # and a call it emits anyway is refused (never dispatched) and the
+        # turn ends. Mechanical, not a prompt: the owner's walk had the model
+        # wander through other tools to the round cap after a card, so his
+        # approve landed mid-stream and the web's auto-continue never fired.
+        card_raised = False
 
         for round_number in range(1, rounds_allowed + 1):
             round_parts: list[str] = []
@@ -945,12 +980,15 @@ async def _run_turn(
             with turn.span("llm_call", model or None) as span:
                 span.meta["model"] = model
                 span.meta["round"] = round_number
+                span.meta["tools_advertised"] = not card_raised
                 try:
                     async with peers.client(app, peers.GATEWAY, GATEWAY_TIMEOUT) as client:
                         async with client.stream(
                             "POST",
                             "/v1/chat/completions",
-                            json=completion_payload(model, messages, advertised),
+                            json=completion_payload(
+                                model, messages, () if card_raised else advertised
+                            ),
                         ) as response:
                             served_by = response.headers.get("x-nova-served-by")
                             if served_by:
@@ -1003,6 +1041,26 @@ async def _run_turn(
                 break
             if not calls:
                 break
+            if card_raised:
+                # The narration round asked for tools anyway. Nothing is
+                # dispatched: each call is answered with the stated pending
+                # result, recorded as a refused span, and the turn ends here
+                # — not at the round cap, and not with the cap's note.
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "".join(round_parts),
+                        "tool_calls": [call.as_openai() for call in calls],
+                    }
+                )
+                for call in calls:
+                    emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
+                    result = _refuse_pending(turn, call)
+                    emit(_frame({"activity": {"tool": call.name, "status": "error"}}))
+                    messages.append(
+                        {"role": "tool", "tool_call_id": call.id, "content": result}
+                    )
+                break
             if round_number == rounds_allowed:
                 out_of_rounds = True
                 break
@@ -1032,6 +1090,8 @@ async def _run_turn(
                 # live tile must match the span rather than flashing a failure.
                 status = "awaiting" if awaiting else ("ok" if ok else "error")
                 emit(_frame({"activity": {"tool": call.name, "status": status}}))
+                if awaiting:
+                    card_raised = True
                 messages.append(
                     {"role": "tool", "tool_call_id": call.id, "content": result}
                 )
@@ -1067,6 +1127,13 @@ async def _run_turn(
             note = f"\n\n{note}" if parts else note
             parts.append(note)
             emit(_frame({"t": note}))
+        elif card_raised and not "".join(parts).strip():
+            # A card is pending and the model said nothing in text (it only
+            # tried more tools, or went quiet). The turn must still END, ok,
+            # so the operator's decision lands on a finished turn — the note
+            # states the one true thing about it.
+            parts.append(PENDING_APPROVAL_NOTE)
+            emit(_frame({"t": PENDING_APPROVAL_NOTE}))
 
         text = "".join(parts)
         if not text:
