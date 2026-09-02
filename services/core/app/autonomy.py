@@ -19,6 +19,11 @@ Who calls this, and when:
     caller reports 404), matching Fix 1's "always revocable" scope: what was
     earned can be taken back, what was granted by design is not this
     button's business.
+  * `set_disposition` — the operator, via autonomy_api.py's PUT
+    .../{action_class}, from Settings -> Autonomy. The owner's own control
+    over a class: auto ("runs automatically"), consent ("needs my approval")
+    or deny ("never"). Same table, same column, same one-transaction event as
+    revoke — the kernel reads the row it edits. Not a second authorizer.
   * `state`/`graduation_runs` — read-only, for the Settings and governance
     surfaces.
 """
@@ -29,6 +34,11 @@ import asyncpg
 from app import governance, settings_store
 
 GRADUATION_RUNS_SETTING = "autonomy.graduation_runs"
+
+# The dispositions the kernel reads (migration 004's CHECK is the last line;
+# this is the first, so a typo is a stated ValueError rather than a postgres
+# constraint error the API has to decode).
+DISPOSITIONS = ("auto", "consent", "deny")
 
 
 async def graduation_runs(pool: asyncpg.Pool) -> int:
@@ -157,6 +167,82 @@ async def revoke(pool: asyncpg.Pool, *, action_class: str, actor: str | None) ->
         return True
 
 
+async def set_disposition(
+    pool: asyncpg.Pool, *, action_class: str, disposition: str, actor: str
+) -> dict:
+    """The owner sets `action_class`'s disposition by hand.
+
+    This is NOT a second authorizer. It edits the DATA the kernel reads — the
+    same `action_classes.disposition` row `revoke` and `record_outcome` edit —
+    and policy.authorize sees the new value on its very next call by reading
+    the row, exactly as it reads any other. No decision is made here; one is
+    recorded: the row write and the AUTONOMY_DISPOSITION_SET governance event
+    (meta before/after, actor = the person) commit together or not at all.
+
+    Every disposition is written as earned=false with the streak reset:
+      * auto     an operator-set auto is exactly a seeded auto — the kernel
+                 allows it untracked, so a failure never self-demotes it, and
+                 `revoke` (earned-only) has nothing to take back. Pinning auto
+                 onto a class that EARNED auto therefore makes it the owner's
+                 decision rather than a streak a failure can undo.
+      * consent  the card returns; graduation starts over from 0.
+      * deny     the kernel refuses the class by name.
+
+    Refuses (writes nothing): a disposition outside DISPOSITIONS is a stated
+    ValueError; a class with no row is a stated LookupError — a row is never
+    created here, because a class with no row is denied by absence and an
+    owner setting a class that does not exist is a typo to name, not a grant
+    to invent. The API maps these to 400 and 404.
+    """
+    if disposition not in DISPOSITIONS:
+        raise ValueError(
+            f"disposition must be one of {', '.join(DISPOSITIONS)} — not {disposition!r}"
+        )
+    async with pool.acquire() as conn, conn.transaction():
+        before = await conn.fetchrow(
+            "SELECT disposition FROM action_classes WHERE action_class = $1 FOR UPDATE",
+            action_class,
+        )
+        if before is None:
+            raise LookupError(f"{action_class} is not an action class")
+        row = await conn.fetchrow(
+            "UPDATE action_classes SET disposition = $2, earned = false, "
+            "consecutive_successes = 0, updated_at = now() WHERE action_class = $1 "
+            "RETURNING action_class, risk_tier, disposition, earned, consecutive_successes, "
+            "updated_at",
+            action_class,
+            disposition,
+        )
+        await governance.record_event(
+            conn,
+            kind=governance.AUTONOMY_DISPOSITION_SET,
+            action_class=action_class,
+            actor=actor,
+            meta={
+                "before": before["disposition"],
+                "after": disposition,
+                "action_class": action_class,
+            },
+        )
+        threshold = await settings_store.read_value(conn, GRADUATION_RUNS_SETTING)
+    return _entry(row, threshold)
+
+
+def _entry(row: asyncpg.Record, threshold: int) -> dict:
+    """One class as Settings -> Autonomy renders it — the same shape from
+    `state` and from `set_disposition`, so the UI can echo a returned row into
+    the list it already holds."""
+    return {
+        "action_class": row["action_class"],
+        "risk_tier": row["risk_tier"],
+        "disposition": row["disposition"],
+        "earned": row["earned"],
+        "consecutive_successes": row["consecutive_successes"],
+        "graduation_runs": threshold,
+        "updated_at": row["updated_at"].isoformat(),
+    }
+
+
 async def state(pool: asyncpg.Pool) -> list[dict]:
     """Every action class's current disposition and graduation progress —
     the real stored counters, for Settings -> Autonomy and the governance
@@ -168,15 +254,4 @@ async def state(pool: asyncpg.Pool) -> list[dict]:
         "SELECT action_class, risk_tier, disposition, earned, consecutive_successes, updated_at "
         "FROM action_classes ORDER BY action_class"
     )
-    return [
-        {
-            "action_class": row["action_class"],
-            "risk_tier": row["risk_tier"],
-            "disposition": row["disposition"],
-            "earned": row["earned"],
-            "consecutive_successes": row["consecutive_successes"],
-            "graduation_runs": threshold,
-            "updated_at": row["updated_at"].isoformat(),
-        }
-        for row in rows
-    ]
+    return [_entry(row, threshold) for row in rows]

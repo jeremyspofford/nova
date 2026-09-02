@@ -41,6 +41,7 @@ const KIND_COLOR: Record<string, 'success' | 'danger' | 'accent' | 'neutral'> = 
   'autonomy.promoted': 'success',
   'autonomy.demoted': 'danger',
   'autonomy.revoked': 'danger',
+  'autonomy.disposition_set': 'accent',
 }
 
 export function GovernancePage({

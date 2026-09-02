@@ -20,12 +20,14 @@ function renderSection(
   api: Partial<{
     getAutonomyState: ReturnType<typeof vi.fn>
     revokeAutonomy: ReturnType<typeof vi.fn>
+    setDisposition: ReturnType<typeof vi.fn>
     getGovernanceEvents: ReturnType<typeof vi.fn>
   }> = {},
 ) {
   const full = {
     getAutonomyState: vi.fn(async () => [cls()]),
     revokeAutonomy: vi.fn(),
+    setDisposition: vi.fn(),
     getGovernanceEvents: vi.fn(async () => [] as GovernanceEvent[]),
     ...api,
   }
@@ -96,6 +98,73 @@ describe('AutonomySection', () => {
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('404'))
     expect(api.revokeAutonomy).toHaveBeenCalled()
     expect(screen.getByRole('button', { name: /revoke/i })).toBeTruthy()
+  })
+
+  it('every class row carries a disposition selector with the three plain-word choices', async () => {
+    renderSection({
+      getAutonomyState: vi.fn(async () => [
+        cls({ action_class: 'device_run', disposition: 'consent' }),
+        cls({ action_class: 'memory_save', disposition: 'auto' }),
+      ]),
+    })
+    await waitFor(() => screen.getByText('device_run'))
+    const select = screen.getByRole('combobox', { name: /disposition for device_run/i }) as HTMLSelectElement
+    expect(select.value).toBe('consent')
+    const labels = Array.from(select.options).map(o => o.textContent)
+    expect(labels).toEqual(['Runs automatically', 'Needs my approval', 'Never'])
+    const other = screen.getByRole('combobox', { name: /disposition for memory_save/i }) as HTMLSelectElement
+    expect(other.value).toBe('auto')
+    expect(screen.getByText(/recorded in governance/i)).toBeTruthy()
+  })
+
+  it('choosing "Runs automatically" calls setDisposition with auto and echoes the returned row', async () => {
+    const returned = cls({
+      action_class: 'device_run',
+      disposition: 'auto',
+      earned: false,
+      consecutive_successes: 0,
+    })
+    const { api } = renderSection({
+      getAutonomyState: vi.fn(async () => [
+        cls({ action_class: 'device_run', disposition: 'consent', consecutive_successes: 3 }),
+      ]),
+      setDisposition: vi.fn(async () => returned),
+    })
+    await waitFor(() => screen.getByText('device_run'))
+    expect(screen.getByText(/3\s*\/\s*5/)).toBeTruthy()
+
+    fireEvent.change(screen.getByRole('combobox', { name: /disposition for device_run/i }), {
+      target: { value: 'auto' },
+    })
+
+    await waitFor(() => expect(api.setDisposition).toHaveBeenCalledWith('device_run', 'auto'))
+    // The row is the SERVER's: auto, progress bar gone, and no Revoke (an
+    // operator-set auto is not earned — there is nothing to take back).
+    await waitFor(() => expect(screen.queryByText(/3\s*\/\s*5/)).toBeNull())
+    expect(
+      (screen.getByRole('combobox', { name: /disposition for device_run/i }) as HTMLSelectElement).value,
+    ).toBe('auto')
+    expect(screen.queryByRole('button', { name: /revoke/i })).toBeNull()
+  })
+
+  it('choosing "Never" sends deny; a refused change states the reason and leaves the row as it was', async () => {
+    const { api } = renderSection({
+      getAutonomyState: vi.fn(async () => [cls({ action_class: 'fetch_url', disposition: 'consent' })]),
+      setDisposition: vi.fn(async () => {
+        throw new Error('the server refused the turn (404)')
+      }),
+    })
+    await waitFor(() => screen.getByText('fetch_url'))
+
+    fireEvent.change(screen.getByRole('combobox', { name: /disposition for fetch_url/i }), {
+      target: { value: 'deny' },
+    })
+
+    await waitFor(() => expect(api.setDisposition).toHaveBeenCalledWith('fetch_url', 'deny'))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('404'))
+    expect(
+      (screen.getByRole('combobox', { name: /disposition for fetch_url/i }) as HTMLSelectElement).value,
+    ).toBe('consent')
   })
 
   it('a failed load states the reason', async () => {

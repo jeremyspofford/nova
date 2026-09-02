@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, ShieldCheck, Sparkles } from 'lucide-react'
-import { Badge, Button, EmptyState, ProgressBar, Section, Skeleton } from '../../components/ui'
+import { Badge, Button, EmptyState, ProgressBar, Section, Select, Skeleton } from '../../components/ui'
 import {
   getAutonomyState as apiGetAutonomyState,
   getGovernanceEvents as apiGetGovernanceEvents,
   revokeAutonomy as apiRevokeAutonomy,
+  setDisposition as apiSetDisposition,
   type AutonomyClass,
   type GovernanceEvent,
 } from '../../lib/api'
@@ -21,6 +22,15 @@ import {
  * never gated, seeded auto by ruling S3-R1) shows neither a progress bar nor
  * a Revoke button: there is nothing this loop granted to take back.
  *
+ * Every row also carries the OWNER'S control: a disposition selector ("Runs
+ * automatically" / "Needs my approval" / "Never") that PUTs the class's
+ * disposition and echoes the returned row in place. It is not a second
+ * authorizer — core edits the same action_classes row the kernel reads and
+ * records the change in the governance ledger (autonomy.disposition_set).
+ * The owner's walk (2026-09-01) wanted fewer/no approvals for actions he had
+ * already instructed; before this the only control was Revoke, and setting a
+ * class open meant asking an engineer to edit the database.
+ *
  * Clicking a row expands its recent governance-ledger decisions, fetched
  * on demand (not eagerly for every class) via GET /api/v1/governance
  * filtered to that action_class.
@@ -31,14 +41,27 @@ import {
 interface AutonomyApi {
   getAutonomyState: typeof apiGetAutonomyState
   revokeAutonomy: typeof apiRevokeAutonomy
+  setDisposition: typeof apiSetDisposition
   getGovernanceEvents: typeof apiGetGovernanceEvents
 }
 
 const DEFAULT_API: AutonomyApi = {
   getAutonomyState: apiGetAutonomyState,
   revokeAutonomy: apiRevokeAutonomy,
+  setDisposition: apiSetDisposition,
   getGovernanceEvents: apiGetGovernanceEvents,
 }
+
+/** The selector's labels — plain words for the three values the kernel reads. */
+export const DISPOSITION_LABELS: Record<AutonomyClass['disposition'], string> = {
+  auto: 'Runs automatically',
+  consent: 'Needs my approval',
+  deny: 'Never',
+}
+
+const DISPOSITION_ITEMS = (Object.keys(DISPOSITION_LABELS) as AutonomyClass['disposition'][]).map(
+  value => ({ value, label: DISPOSITION_LABELS[value] }),
+)
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -54,6 +77,8 @@ export function AutonomySection({ api = DEFAULT_API }: { api?: AutonomyApi } = {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [revokeError, setRevokeError] = useState<string | null>(null)
   const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [setError, setSetError] = useState<string | null>(null)
+  const [settingId, setSettingId] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [events, setEvents] = useState<Record<string, EventsState>>({})
 
@@ -103,11 +128,31 @@ export function AutonomySection({ api = DEFAULT_API }: { api?: AutonomyApi } = {
     [api],
   )
 
+  const handleSetDisposition = useCallback(
+    async (actionClass: string, disposition: AutonomyClass['disposition']) => {
+      setSettingId(actionClass)
+      setSetError(null)
+      try {
+        // Echo the row the server returned — the stored state, never the
+        // value the operator picked. A refused PUT leaves the row as it was.
+        const updated = await api.setDisposition(actionClass, disposition)
+        setClasses(prev =>
+          prev ? prev.map(c => (c.action_class === updated.action_class ? updated : c)) : prev,
+        )
+      } catch (err) {
+        setSetError(reasonOf(err))
+      } finally {
+        setSettingId(null)
+      }
+    },
+    [api],
+  )
+
   return (
     <Section
       icon={Sparkles}
       title="Autonomy"
-      description="Which actions Nova can take without asking, earned by demonstrated reliability — and revocable any time."
+      description="Which actions Nova can take without asking — set by you, or earned by demonstrated reliability — and changeable any time."
     >
       {loadError && (
         <div
@@ -125,6 +170,14 @@ export function AutonomySection({ api = DEFAULT_API }: { api?: AutonomyApi } = {
           Could not revoke that class: {revokeError}
         </div>
       )}
+      {setError && (
+        <div
+          role="alert"
+          className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+        >
+          Could not change that class: {setError}
+        </div>
+      )}
 
       {classes === null ? (
         !loadError && (
@@ -139,19 +192,26 @@ export function AutonomySection({ api = DEFAULT_API }: { api?: AutonomyApi } = {
           description="Nothing here is behind a consent or an earned promotion yet."
         />
       ) : (
-        <div className="divide-y divide-border-subtle">
-          {classes.map(entry => (
-            <AutonomyRow
-              key={entry.action_class}
-              entry={entry}
-              expanded={expanded === entry.action_class}
-              eventsState={events[entry.action_class]}
-              revoking={revokingId === entry.action_class}
-              onToggle={() => toggle(entry.action_class)}
-              onRevoke={() => handleRevoke(entry.action_class)}
-            />
-          ))}
-        </div>
+        <>
+          <p className="text-caption text-content-tertiary">
+            Every change here is recorded in Governance.
+          </p>
+          <div className="divide-y divide-border-subtle">
+            {classes.map(entry => (
+              <AutonomyRow
+                key={entry.action_class}
+                entry={entry}
+                expanded={expanded === entry.action_class}
+                eventsState={events[entry.action_class]}
+                revoking={revokingId === entry.action_class}
+                setting={settingId === entry.action_class}
+                onToggle={() => toggle(entry.action_class)}
+                onRevoke={() => handleRevoke(entry.action_class)}
+                onSetDisposition={disposition => handleSetDisposition(entry.action_class, disposition)}
+              />
+            ))}
+          </div>
+        </>
       )}
     </Section>
   )
@@ -168,15 +228,19 @@ function AutonomyRow({
   expanded,
   eventsState,
   revoking,
+  setting,
   onToggle,
   onRevoke,
+  onSetDisposition,
 }: {
   entry: AutonomyClass
   expanded: boolean
   eventsState: EventsState | undefined
   revoking: boolean
+  setting: boolean
   onToggle: () => void
   onRevoke: () => void
+  onSetDisposition: (disposition: AutonomyClass['disposition']) => void
 }) {
   const showProgress = entry.disposition === 'consent'
   const showRevoke = entry.disposition === 'auto' && entry.earned
@@ -227,6 +291,19 @@ function AutonomyRow({
             Revoke
           </Button>
         )}
+        <span className="w-44 shrink-0">
+          <Select
+            // Row-scoped id: ui/Select otherwise derives one from the label,
+            // which would repeat across every row (the DevicesSection
+            // checkbox lesson).
+            id={`disposition-${entry.action_class}`}
+            aria-label={`Disposition for ${entry.action_class}`}
+            items={DISPOSITION_ITEMS}
+            value={entry.disposition}
+            disabled={setting}
+            onChange={e => onSetDisposition(e.target.value as AutonomyClass['disposition'])}
+          />
+        </span>
       </div>
 
       {expanded && (

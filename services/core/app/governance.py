@@ -28,6 +28,11 @@ POLICY_DENIED = "policy.denied"
 AUTONOMY_PROMOTED = "autonomy.promoted"
 AUTONOMY_DEMOTED = "autonomy.demoted"
 AUTONOMY_REVOKED = "autonomy.revoked"
+# The owner set a class's disposition by hand (autonomy.set_disposition):
+# meta {"before", "after", "action_class"}, actor = the person. Distinct from
+# promoted/demoted/revoked so the ledger reads "the owner decided", never "the
+# streak decided".
+AUTONOMY_DISPOSITION_SET = "autonomy.disposition_set"
 # Devices (slice 5). A paired machine's whole arc is readable here: which key
 # was bound to which name and on whose pairing code, every time its grants
 # moved and to what, and the revoke that ended it. DEVICE_AUDIT_BREAK is

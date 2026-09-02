@@ -16,7 +16,11 @@ from __future__ import annotations
 import asyncio
 import uuid
 
-from app import autonomy, consents, governance
+import pytest
+
+from app import autonomy, consents, governance, policy
+from app.identity import Person
+from app.tools.base import ToolContext
 from tests.conftest import requires_db
 
 pytestmark = requires_db
@@ -362,3 +366,140 @@ async def test_state_includes_every_seeded_class(pool):
     assert "fetch_url" in classes
     assert "workspace_write_file" in classes
     assert "get_time" in classes
+
+
+# -- set_disposition: the owner's own control over a class ---------------------
+#
+# Not a second authorizer: it edits the DATA the kernel reads (the same
+# action_classes.disposition row revoke edits) and records that edit. The
+# kernel's next authorize() call sees it by reading the row, as ever.
+
+
+async def test_set_disposition_auto_pins_a_consent_class_open_and_records_it(pool):
+    """The walk's friction 5: device_run is seeded consent, so every distinct
+    command needs approve(+go ahead) until 5 successes graduate it. The owner
+    wants none of that for actions he already instructed — so he sets the
+    class auto himself. Operator-set auto is earned=false, exactly like a
+    seeded auto: it never self-demotes on a failure (policy tracks only
+    earned autos)."""
+    await _seed(pool, "disp_auto", disposition="consent", consecutive_successes=3)
+    entry = await autonomy.set_disposition(
+        pool, action_class="disp_auto", disposition="auto", actor="person-1"
+    )
+    assert entry["action_class"] == "disp_auto"
+    assert entry["disposition"] == "auto"
+    assert entry["earned"] is False
+    assert entry["consecutive_successes"] == 0
+    assert entry["graduation_runs"] == await autonomy.graduation_runs(pool)
+    row = await _row(pool, "disp_auto")
+    assert (row["disposition"], row["earned"], row["consecutive_successes"]) == ("auto", False, 0)
+
+    events = await _of_kind(pool, governance.AUTONOMY_DISPOSITION_SET, "disp_auto")
+    assert len(events) == 1
+    assert events[0]["actor"] == "person-1"
+    assert events[0]["meta"] == {"before": "consent", "after": "auto", "action_class": "disp_auto"}
+
+
+async def test_operator_set_auto_never_self_demotes_on_a_failure(pool):
+    await _seed(pool, "disp_auto_stays", disposition="consent")
+    await autonomy.set_disposition(
+        pool, action_class="disp_auto_stays", disposition="auto", actor="p"
+    )
+    await autonomy.record_outcome(pool, action_class="disp_auto_stays", succeeded=False)
+    row = await _row(pool, "disp_auto_stays")
+    assert row["disposition"] == "auto"  # a seeded/operator auto is not this loop's to demote
+    assert await _of_kind(pool, governance.AUTONOMY_DEMOTED, "disp_auto_stays") == []
+
+
+async def test_set_disposition_consent_over_an_earned_auto_clears_earned(pool):
+    await _seed(pool, "disp_consent", disposition="auto", earned=True)
+    entry = await autonomy.set_disposition(
+        pool, action_class="disp_consent", disposition="consent", actor="p"
+    )
+    assert (entry["disposition"], entry["earned"], entry["consecutive_successes"]) == (
+        "consent",
+        False,
+        0,
+    )
+    events = await _of_kind(pool, governance.AUTONOMY_DISPOSITION_SET, "disp_consent")
+    assert events[0]["meta"]["before"] == "auto" and events[0]["meta"]["after"] == "consent"
+
+
+async def test_set_disposition_auto_over_an_earned_auto_makes_it_operator_set(pool):
+    """Pinning auto onto a class that EARNED auto flips earned off: from now on
+    it is the owner's decision, not a streak a failure can undo."""
+    await _seed(pool, "disp_pin", disposition="auto", earned=True)
+    entry = await autonomy.set_disposition(
+        pool, action_class="disp_pin", disposition="auto", actor="p"
+    )
+    assert entry["disposition"] == "auto" and entry["earned"] is False
+    # Revoke (earned-only) now has nothing to take back — the owner set it.
+    assert await autonomy.revoke(pool, action_class="disp_pin", actor="p") is False
+    assert (await _row(pool, "disp_pin"))["disposition"] == "auto"
+
+
+async def test_set_disposition_deny_refuses_the_class_by_name_at_the_kernel(pool):
+    """The kernel reads the row: after the owner sets deny, authorize() DENIES
+    with the class named; after auto, it ALLOWS untracked (operator-set auto
+    is not an earned auto). No code in autonomy.py decided either — the row did."""
+    await _seed(pool, "disp_kernel", disposition="consent")
+    pid = await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('kern', 'owner') RETURNING id"
+    )
+    ctx = ToolContext(
+        app=None,
+        person=Person(id=pid, name="kern", role="owner"),
+        workspace_root=None,
+        conversation_id=None,
+    )
+
+    await autonomy.set_disposition(pool, action_class="disp_kernel", disposition="deny", actor="p")
+    decision = await policy.authorize(ctx, "disp_kernel", {})
+    assert decision.outcome == policy.DENY
+    assert "disp_kernel" in decision.reason
+
+    await autonomy.set_disposition(pool, action_class="disp_kernel", disposition="auto", actor="p")
+    decision = await policy.authorize(ctx, "disp_kernel", {})
+    assert decision.outcome == policy.ALLOW
+    assert decision.track_outcome is False
+
+    await autonomy.set_disposition(
+        pool, action_class="disp_kernel", disposition="consent", actor="p"
+    )
+    decision = await policy.authorize(ctx, "disp_kernel", {})
+    assert decision.outcome == policy.REQUIRE_CONSENT
+
+
+async def test_set_disposition_records_one_event_per_call_even_when_unchanged(pool):
+    """Setting consent on a consent class still resets the streak (a real
+    change to the row) and is still the owner's act — it is recorded."""
+    await _seed(pool, "disp_same", disposition="consent", consecutive_successes=4)
+    entry = await autonomy.set_disposition(
+        pool, action_class="disp_same", disposition="consent", actor="p"
+    )
+    assert entry["consecutive_successes"] == 0
+    events = await _of_kind(pool, governance.AUTONOMY_DISPOSITION_SET, "disp_same")
+    assert len(events) == 1
+    assert events[0]["meta"]["before"] == "consent" and events[0]["meta"]["after"] == "consent"
+
+
+async def test_set_disposition_refuses_an_unknown_disposition_and_writes_nothing(pool):
+    await _seed(pool, "disp_bad", disposition="consent", consecutive_successes=2)
+    with pytest.raises(ValueError) as excinfo:
+        await autonomy.set_disposition(
+            pool, action_class="disp_bad", disposition="always", actor="p"
+        )
+    assert "always" in str(excinfo.value)
+    row = await _row(pool, "disp_bad")
+    assert (row["disposition"], row["consecutive_successes"]) == ("consent", 2)
+    assert await _of_kind(pool, governance.AUTONOMY_DISPOSITION_SET, "disp_bad") == []
+
+
+async def test_set_disposition_refuses_an_unknown_class_and_writes_nothing(pool):
+    with pytest.raises(LookupError) as excinfo:
+        await autonomy.set_disposition(
+            pool, action_class="no_such_class", disposition="auto", actor="p"
+        )
+    assert "no_such_class" in str(excinfo.value)
+    assert await _row(pool, "no_such_class") is None  # never inserted
+    assert await _of_kind(pool, governance.AUTONOMY_DISPOSITION_SET, "no_such_class") == []

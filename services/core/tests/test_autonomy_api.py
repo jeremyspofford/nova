@@ -1,4 +1,5 @@
-"""GET/POST /api/v1/autonomy — Settings -> Autonomy's read + revoke (Fix 2)."""
+"""GET/POST/PUT /api/v1/autonomy — Settings -> Autonomy's read, revoke (Fix 2)
+and the owner's disposition control (PUT)."""
 from __future__ import annotations
 
 from app import governance
@@ -70,3 +71,75 @@ async def test_revoking_a_class_that_never_graduated_is_a_404(owner_client, pool
 async def test_revoking_an_unknown_class_is_a_404(owner_client):
     resp = await owner_client.post("/api/v1/autonomy/does_not_exist/revoke")
     assert resp.status_code == 404
+
+
+# -- PUT /{action_class}: the owner sets a class's disposition -----------------
+
+
+async def test_set_disposition_needs_an_identity(client):
+    resp = await client.put("/api/v1/autonomy/fetch_url", json={"disposition": "auto"})
+    assert resp.status_code == 401
+
+
+async def test_set_disposition_writes_the_row_and_returns_it(owner_client, pool):
+    await _seed(pool, "api_disp_class", disposition="consent", n=2)
+    resp = await owner_client.put(
+        "/api/v1/autonomy/api_disp_class", json={"disposition": "auto"}
+    )
+    assert resp.status_code == 200, resp.text
+    entry = resp.json()["class"]
+    assert entry["action_class"] == "api_disp_class"
+    assert entry["disposition"] == "auto"
+    assert entry["earned"] is False
+    assert entry["consecutive_successes"] == 0
+    assert entry["graduation_runs"] == 5
+    assert set(entry) == {
+        "action_class",
+        "risk_tier",
+        "disposition",
+        "earned",
+        "consecutive_successes",
+        "graduation_runs",
+        "updated_at",
+    }
+
+    # The GET agrees (the row, not an echo), and the ledger names the person.
+    listing = (await owner_client.get("/api/v1/autonomy")).json()["classes"]
+    listed = {c["action_class"]: c for c in listing}
+    assert listed["api_disp_class"]["disposition"] == "auto"
+    me = (await owner_client.get("/api/v1/auth/me")).json()["person"]["id"]
+    events = await governance.recent_events(pool, action_class="api_disp_class")
+    set_events = [e for e in events if e["kind"] == governance.AUTONOMY_DISPOSITION_SET]
+    assert len(set_events) == 1
+    assert set_events[0]["actor"] == me
+    assert set_events[0]["meta"]["before"] == "consent"
+    assert set_events[0]["meta"]["after"] == "auto"
+
+
+async def test_set_disposition_deny_then_consent_round_trips(owner_client, pool):
+    await _seed(pool, "api_disp_rt", disposition="auto", earned=True)
+    deny = await owner_client.put("/api/v1/autonomy/api_disp_rt", json={"disposition": "deny"})
+    assert deny.status_code == 200 and deny.json()["class"]["disposition"] == "deny"
+    back = await owner_client.put(
+        "/api/v1/autonomy/api_disp_rt", json={"disposition": "consent"}
+    )
+    assert back.status_code == 200
+    assert back.json()["class"]["disposition"] == "consent"
+    assert back.json()["class"]["earned"] is False
+
+
+async def test_set_disposition_refuses_a_bad_value_with_a_400(owner_client, pool):
+    await _seed(pool, "api_disp_bad", disposition="consent")
+    resp = await owner_client.put(
+        "/api/v1/autonomy/api_disp_bad", json={"disposition": "sometimes"}
+    )
+    assert resp.status_code == 400
+    assert "sometimes" in resp.json()["error"]
+
+
+async def test_set_disposition_on_an_unknown_class_is_a_404(owner_client):
+    resp = await owner_client.put(
+        "/api/v1/autonomy/does_not_exist", json={"disposition": "auto"}
+    )
+    assert resp.status_code == 404
+    assert "does_not_exist" in resp.json()["error"]

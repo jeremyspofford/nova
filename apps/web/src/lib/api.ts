@@ -484,6 +484,23 @@ export async function getAutonomyState(): Promise<AutonomyClass[]> {
   return body.classes
 }
 
+/** The owner sets a class's disposition by hand — PUT /autonomy/{class}.
+ * Not an authorizer: core edits the action_classes row the kernel reads and
+ * records who did it (governance `autonomy.disposition_set`). Returns that
+ * class's state row, so the caller echoes it into the list it holds. The
+ * server 400s an unknown disposition and 404s an unknown class, by name. */
+export async function setDisposition(
+  actionClass: string,
+  disposition: AutonomyClass['disposition'],
+): Promise<AutonomyClass> {
+  const body = await apiSend<{ class: AutonomyClass }>(
+    `/api/v1/autonomy/${encodeURIComponent(actionClass)}`,
+    'PUT',
+    { disposition },
+  )
+  return body.class
+}
+
 /** Demotes an earned-auto class back to consent (a governance event); the
  * server 404s a class that never graduated rather than a silent no-op. */
 export async function revokeAutonomy(actionClass: string): Promise<AutonomyClass[]> {
