@@ -83,3 +83,10 @@ to measure. Remaining carries: stale S2e 8b probe row (weights frame) must
 be re-probed post-deploy to read correct; ctx-aware KV footprint (needed
 scales with context) is still a later model-slice item; probe force-loads
 a model (GPU time) — a "probe this model" button is future UX.
+
+- **(2026-09-02) Live catalog + provenance → roadmap S10a.** The owner's
+  hand-pulled `muse-glimmer:latest` showed no metadata (the curated file is the
+  only source) and `:latest` drift is untracked. Ollama `/api/tags`+`/api/show`
+  already hold size/quant/context/license/digest locally; the registry v2
+  manifest resolves tag→digest without pulling; HF Hub API + `hf.co/…` pulls
+  cover direct-from-HuggingFace. Specified as S10a in the master roadmap.
