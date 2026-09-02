@@ -112,3 +112,55 @@ never pushed. A process lesson recorded to memory: a mutation-testing reviewer
 that edits files must not run concurrently with another agent in the same
 worktree — its revert/restore races with the other agent (it resolved cleanly
 here by luck).
+
+## Post-close fix wave (2026-09-02) — the device-tool friction from the owner's first walk
+
+The owner's live walk (local model muse-glimmer, device DELL-XPS-8950) exposed
+four mechanical gaps; fixed in e9afa46a..676d554f (verified by an adversarial
+reviewer + a replay verifier that mutation-proved each fix site against the
+exact observed sequences; core 841 / novad 48 / web 395).
+- **Precheck before the kernel** (e9afa46a): `Tool.precheck` runs after schema
+  validation and BEFORE `policy.authorize` and may ONLY refuse (D-012 intact).
+  Device tools precheck paired→connected→granted→fs-path, so a card is never
+  raised — and an approval never burned — for a call that cannot run (the 23:48
+  wasted approval; the 23:58 card raised for a garbage device name). The
+  executor keeps the same checks (defence in depth).
+- **A raised card closes the tool loop** (1d1440ac): one tool-less narration
+  round, then the turn ends — no wandering to the round cap, so the owner's
+  approve lands after streaming and the web auto-continue fires (one click).
+- **fs grants need a root; the device's home is suggested** (ad1adea6,
+  migration 013 `devices.home_dir`): `set_grants` refuses fs.* with empty
+  fs_roots (stated, no ledger row); novad reports home_dir at enroll and in the
+  auth frame (additive optional field); the grants editor suggests it.
+- **Owner disposition control** (59608403): `PUT /api/v1/autonomy/{class}`
+  {auto|consent|deny} + a per-class selector in Settings→Autonomy, governance
+  kind `autonomy.disposition_set` (before/after, actor). Operator-set auto has
+  seeded-auto semantics (earned=false, never self-demotes). This is the lever
+  for the owner's zero-approvals direction: seeds stay conservative for new
+  installs; the owner flips his own instance, logged.
+
+Carries from this wave (all Minor, final-review-agreed):
+- Two deterministic args-only refusals still sit BEHIND the kernel: the
+  256 KiB write cap and the lone-surrogate guard. A consent-tier oversize write
+  raises a card and burns the approval on retry (same class as the 23:48
+  defect, one refusal over); a lone surrogate makes `raise_consent` fail on the
+  jsonb (fail-closed, but as a retryable "could not authorize"). Move both into
+  the device precheck.
+- Precheck-first means an attempt at a class the owner set to `deny` on an
+  ungranted device is refused by the device layer and never reaches the kernel
+  → no `policy.denied` row for that attempt (the tool span still records it).
+- `PENDING_APPROVAL_NOTE` ("[waiting for your approval before continuing]") is
+  persisted as the assistant text when the narration round emits only tool
+  calls — true, but it is the shape [[consent-loop-context-poisoning]] names;
+  watch whether the local model parrots "still waiting" on "Go ahead" instead
+  of re-calling the tool.
+- `clean_home_dir` bounds shape (absolute, no `..`) but not length or control
+  chars — a device could store a huge/odd home_dir that the UI then offers as a
+  root. Add a length cap + reject control chars.
+- `PUT /autonomy/{class}` is `require_person`-gated only (any role, or the
+  service bearer) and grants a STANDING auto — widens the S8 role-ceiling carry
+  (owner-only is a one-line gate once roles exist; single-account today).
+- Same-round trailing tool calls after a card-raising call still dispatch
+  (only subsequent rounds close). Unobserved shape; close if it shows up.
+- Docs: slice-05-daemon.md's "per-device layer inside the executor" and "12
+  migrations" are superseded by this section.

@@ -98,6 +98,9 @@ lingering (`loginctl enable-linger`) is still how a user unit survives logout.
   reindexed.
 
 ### Capabilities v1 → core tools (9 new; registry pin moves 8→17)
+(Amended 2026-09-02 after the owner's first walk — a precheck layer now runs
+BEFORE the kernel, fs grants require a root, and the owner sets dispositions
+from Settings→Autonomy; see slice-05-carries.md §Post-close fix wave.)
 - auto: `device_list` (core DB read, no envelope), `device_info`
   (system.info), `device_list_files` (fs.list), `device_read_file` (fs.read,
   256 KiB cap, stated refusal beyond), `device_list_apps` (apps.list),
