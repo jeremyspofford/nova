@@ -45,7 +45,7 @@ async def _owner(pool) -> Person:
     return Person(id=pid, name="jeremy", role="owner")
 
 
-async def _enrolled(pool, person, *, name="laptop", pubkey=PUBKEY_A) -> dict:
+async def _enrolled(pool, person, *, name="laptop", pubkey=PUBKEY_A, home_dir=None) -> dict:
     minted = await devices.mint_pairing_code(pool, created_by=person.id)
     return await devices.enroll(
         pool,
@@ -54,6 +54,7 @@ async def _enrolled(pool, person, *, name="laptop", pubkey=PUBKEY_A) -> dict:
         name=name,
         platform="linux",
         hostname="thinkpad",
+        home_dir=home_dir,
     )
 
 
@@ -371,6 +372,7 @@ async def test_listing_reports_the_stored_state_and_never_a_fake_green(pool):
         "last_seen",
         "revoked_at",
         "connected",
+        "home_dir",
     }
 
 
@@ -440,7 +442,7 @@ async def test_capabilities_are_stored_sorted_and_deduplicated(pool):
         pool,
         device_id=uuid.UUID(enrolled["device_id"]),
         capabilities=["fs.read", "system.info", "fs.read"],
-        fs_roots=[],
+        fs_roots=["/home/jeremy"],  # fs.read needs a root now (a rootless fs grant is refused)
         actor=str(person.id),
     )
     assert spec["capabilities"] == ["fs.read", "system.info"]
@@ -504,6 +506,144 @@ async def test_a_relative_or_traversing_fs_root_is_refused(pool):
             )
     row = await devices.get(pool, device_id)
     assert row["fs_roots"] == []
+
+
+async def test_an_fs_grant_with_no_root_is_refused_naming_the_capability_and_the_home(pool):
+    """The 3rd walk defect (2026-09-01): fs.list granted with fs_roots=[] is a
+    DEAD grant — it reads as granted in Settings and refuses every call at the
+    device ("no filesystem roots granted"). It is refused where it is written.
+    The refusal names the capability that needs a root and suggests the one
+    root the operator almost always wants — the device's own home, when the
+    daemon reported it. Nothing is written: no row change, no ledger row."""
+    person = await _owner(pool)
+    enrolled = await _enrolled(pool, person, home_dir="/home/jeremy")
+    device_id = uuid.UUID(enrolled["device_id"])
+
+    with pytest.raises(devices.DeviceRefused) as excinfo:
+        await devices.set_grants(
+            pool,
+            device_id=device_id,
+            capabilities=["system.info", "fs.list"],
+            fs_roots=[],
+            actor=str(person.id),
+        )
+    assert excinfo.value.status_code == 400
+    assert "fs.list" in excinfo.value.reason
+    assert "/home/jeremy" in excinfo.value.reason
+    row = await devices.get(pool, device_id)
+    assert row["capabilities"] == ["system.info"]
+    assert row["fs_roots"] == []
+    assert await _events(pool, "device.grants_changed") == []
+
+
+async def test_an_fs_grant_with_no_root_and_no_known_home_still_refuses(pool):
+    """No home reported (an older daemon, or one that could not name it): the
+    refusal still names every fs capability that needs a root; it just cannot
+    suggest one."""
+    person = await _owner(pool)
+    enrolled = await _enrolled(pool, person)
+    with pytest.raises(devices.DeviceRefused) as excinfo:
+        await devices.set_grants(
+            pool,
+            device_id=uuid.UUID(enrolled["device_id"]),
+            capabilities=["fs.read", "fs.write", "system.info"],
+            fs_roots=[],
+            actor=str(person.id),
+        )
+    assert "fs.read" in excinfo.value.reason and "fs.write" in excinfo.value.reason
+    assert "e.g." not in excinfo.value.reason
+    assert await _events(pool, "device.grants_changed") == []
+
+
+async def test_removing_the_last_root_from_an_fs_grant_is_refused(pool):
+    """The dead state must be unreachable from BOTH directions: dropping the
+    only root while fs.read stays granted is the same dead grant."""
+    person = await _owner(pool)
+    enrolled = await _enrolled(pool, person)
+    device_id = uuid.UUID(enrolled["device_id"])
+    await devices.set_grants(
+        pool,
+        device_id=device_id,
+        capabilities=["fs.read"],
+        fs_roots=["/home/jeremy"],
+        actor=str(person.id),
+    )
+    with pytest.raises(devices.DeviceRefused) as excinfo:
+        await devices.set_grants(
+            pool, device_id=device_id, capabilities=["fs.read"], fs_roots=[], actor="op"
+        )
+    assert "fs.read" in excinfo.value.reason
+    row = await devices.get(pool, device_id)
+    assert row["fs_roots"] == ["/home/jeremy"]  # the root survived the refused save
+    assert len(await _events(pool, "device.grants_changed")) == 1  # only the first save
+
+
+async def test_a_grant_without_fs_capabilities_needs_no_root(pool):
+    person = await _owner(pool)
+    enrolled = await _enrolled(pool, person)
+    spec = await devices.set_grants(
+        pool,
+        device_id=uuid.UUID(enrolled["device_id"]),
+        capabilities=["shell.exec", "apps.launch", "system.notify"],
+        fs_roots=[],
+        actor=str(person.id),
+    )
+    assert spec["fs_roots"] == []
+    assert spec["capabilities"] == ["apps.launch", "shell.exec", "system.notify"]
+
+
+async def test_an_fs_grant_with_a_root_is_stored_and_recorded(pool):
+    person = await _owner(pool)
+    enrolled = await _enrolled(pool, person, home_dir="/home/jeremy")
+    spec = await devices.set_grants(
+        pool,
+        device_id=uuid.UUID(enrolled["device_id"]),
+        capabilities=["fs.list", "fs.read"],
+        fs_roots=["/home/jeremy"],
+        actor=str(person.id),
+    )
+    assert spec["capabilities"] == ["fs.list", "fs.read"]
+    assert spec["fs_roots"] == ["/home/jeremy"]
+    assert len(await _events(pool, "device.grants_changed")) == 1
+
+
+def test_clean_home_dir_keeps_only_an_absolute_traversal_free_path():
+    """home_dir is a SUGGESTION the refusal quotes back as a root, so it must
+    already be a root clean_fs_roots would accept; anything else is dropped
+    (None), never an error — a daemon that cannot name its home still pairs."""
+    assert devices.clean_home_dir("/home/jeremy") == "/home/jeremy"
+    assert devices.clean_home_dir("  /home/jeremy/  ") == "/home/jeremy"
+    assert devices.clean_home_dir("/") == "/"
+    for junk in ("relative/home", "", "   ", None, 42, "/home/../etc", ["/home"]):
+        assert devices.clean_home_dir(junk) is None, junk
+
+
+async def test_enroll_stores_the_home_dir_the_daemon_reports(pool):
+    person = await _owner(pool)
+    enrolled = await _enrolled(pool, person, name="laptop", home_dir="/home/jeremy/")
+    row = await devices.get(pool, uuid.UUID(enrolled["device_id"]))
+    assert row["home_dir"] == "/home/jeremy"
+    assert devices.device_spec(row)["home_dir"] == "/home/jeremy"
+
+
+async def test_enroll_ignores_a_home_dir_it_cannot_use(pool):
+    person = await _owner(pool)
+    enrolled = await _enrolled(pool, person, name="laptop", home_dir="C:relative")
+    row = await devices.get(pool, uuid.UUID(enrolled["device_id"]))
+    assert row["home_dir"] is None
+    assert devices.device_spec(row)["home_dir"] is None
+
+
+async def test_record_home_dir_updates_a_live_row_and_ignores_junk(pool):
+    """The WS auth path: an already-enrolled device reports its home on its
+    next connect. Junk leaves whatever is stored alone."""
+    person = await _owner(pool)
+    enrolled = await _enrolled(pool, person)
+    device_id = uuid.UUID(enrolled["device_id"])
+    assert await devices.record_home_dir(pool, device_id, "/home/jeremy") is True
+    assert (await devices.get(pool, device_id))["home_dir"] == "/home/jeremy"
+    assert await devices.record_home_dir(pool, device_id, "nope") is False
+    assert (await devices.get(pool, device_id))["home_dir"] == "/home/jeremy"
 
 
 async def test_setting_grants_on_an_unknown_device_is_refused(pool):
@@ -821,6 +961,48 @@ async def test_an_unknown_capability_is_refused_by_name(owner_client, pool):
     assert "fs.raed" in resp.json()["error"]
     row = await devices.get(pool, uuid.UUID(enrolled["device_id"]))
     assert row["capabilities"] == ["system.info"]
+
+
+async def test_an_fs_grant_without_a_root_is_a_400_naming_the_capability(owner_client, pool):
+    """PUT /grants refuses the dead grant with the same words the module uses,
+    and the suggested root is the home the daemon reported at enroll."""
+    enrolled = (
+        await _api_enrol(owner_client, await _api_code(owner_client), home_dir="/home/jeremy")
+    ).json()
+    resp = await owner_client.put(
+        f"/api/v1/devices/{enrolled['device_id']}/grants",
+        json={"capabilities": ["system.info", "fs.list"], "fs_roots": []},
+    )
+    assert resp.status_code == 400
+    assert "fs.list" in resp.json()["error"]
+    assert "/home/jeremy" in resp.json()["error"]
+    row = await devices.get(pool, uuid.UUID(enrolled["device_id"]))
+    assert row["capabilities"] == ["system.info"]
+    assert await _events(pool, "device.grants_changed") == []
+
+
+async def test_an_fs_grant_with_a_root_is_accepted(owner_client):
+    enrolled = (await _api_enrol(owner_client, await _api_code(owner_client))).json()
+    resp = await owner_client.put(
+        f"/api/v1/devices/{enrolled['device_id']}/grants",
+        json={"capabilities": ["fs.list"], "fs_roots": ["/home/jeremy"]},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["device"]["fs_roots"] == ["/home/jeremy"]
+
+
+async def test_enroll_accepts_an_optional_home_dir_and_the_listing_carries_it(owner_client):
+    await _api_enrol(owner_client, await _api_code(owner_client), home_dir="/home/jeremy")
+    (device,) = (await owner_client.get("/api/v1/devices")).json()["devices"]
+    assert device["home_dir"] == "/home/jeremy"
+
+
+async def test_enroll_without_a_home_dir_lists_null(owner_client):
+    """An older daemon sends no home_dir: the field is optional, never a 422."""
+    resp = await _api_enrol(owner_client, await _api_code(owner_client))
+    assert resp.status_code == 200, resp.text
+    (device,) = (await owner_client.get("/api/v1/devices")).json()["devices"]
+    assert device["home_dir"] is None
 
 
 async def test_a_relative_fs_root_is_refused(owner_client):

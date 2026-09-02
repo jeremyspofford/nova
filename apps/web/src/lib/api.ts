@@ -517,6 +517,12 @@ export interface Device {
   last_seen: string | null
   revoked_at: string | null
   connected: boolean
+  /** The home directory the daemon reported (enroll body, or its WS auth
+   * frame on a later connect); null until it has. The grants editor offers it
+   * as the suggested first fs root — it grants nothing by itself, and core
+   * refuses an fs.* grant with no root (devicesFormat.grantsRefusal mirrors
+   * that refusal for fast feedback). */
+  home_dir: string | null
 }
 
 /** A freshly minted pairing code — shown ONCE (core stores only its hash). */

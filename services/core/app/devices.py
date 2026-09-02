@@ -18,7 +18,14 @@ property it holds is held by a statement:
   * set_grants — capabilities are checked against KNOWN_CAPABILITIES and
     fs_roots against absoluteness before anything is written. A typo'd grant is
     worse than a missing one: it reads as granted in Settings and refuses
-    forever at the device, with nothing anywhere naming the typo.
+    forever at the device, with nothing anywhere naming the typo. The same
+    logic refuses an fs.* capability with NO root: that grant is dead on
+    arrival (every call refuses "no filesystem roots granted"), and the owner's
+    live walk hit exactly it. The refusal names the capability and suggests
+    the device's own home directory (`home_dir`, reported by the daemon) — a
+    suggestion the operator accepts by adding it, never a root granted by
+    itself, because a machine reporting its own home must not widen its own
+    grant.
   * revoke — stamps revoked_at. get_live stops answering (which is how T2's hub
     refuses the socket), rename and grants refuse, the name frees up, and the
     row stays so the audit trail survives the grant.
@@ -63,6 +70,11 @@ KNOWN_CAPABILITIES = frozenset(
 # column default in migration 011 is the real enforcement; this constant exists
 # so the API and the tests can name it.
 DEFAULT_CAPABILITIES = ["system.info"]
+
+# The capabilities that are scoped to fs_roots (tools/devices.py prefix-checks
+# every path they touch against the roots). Granting one with no root is a grant
+# that can never be exercised, so set_grants refuses the combination.
+FS_CAPABILITIES = frozenset({"fs.list", "fs.read", "fs.write"})
 
 PAIRING_CODE_TTL_SECONDS = 10 * 60
 PAIRING_CODE_LENGTH = 8
@@ -109,8 +121,8 @@ RETURNING id, created_by
 """
 
 _INSERT_DEVICE_SQL = """
-INSERT INTO devices (name, platform, hostname, pubkey, owner_person)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO devices (name, platform, hostname, pubkey, owner_person, home_dir)
+VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING *
 """
 
@@ -135,6 +147,10 @@ def device_spec(row: asyncpg.Record | dict) -> dict:
         "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
         "revoked_at": row["revoked_at"].isoformat() if row["revoked_at"] else None,
         "connected": False,
+        # The home directory the daemon reported (enroll body, or its WS auth
+        # frame on a later connect) — null until it has. The grants editor
+        # offers it as the suggested first fs root; it grants nothing by itself.
+        "home_dir": row["home_dir"],
     }
 
 
@@ -210,6 +226,20 @@ def _clean_pubkey(pubkey: str) -> str:
     return candidate
 
 
+def clean_home_dir(home_dir: Any) -> str | None:
+    """The daemon's reported home, or None if it is not a path a grant could
+    use. It is quoted back to the operator as a suggested fs root, so it must
+    already be a root clean_fs_roots would accept (absolute, no `..` segment);
+    anything else is dropped rather than refused — a daemon that cannot name
+    its home is still a machine that can pair and connect."""
+    if not isinstance(home_dir, str):
+        return None
+    path = home_dir.strip()
+    if not path.startswith("/") or ".." in path.split("/"):
+        return None
+    return path.rstrip("/") or "/"
+
+
 def _clean_name(name: str) -> str:
     candidate = (name or "").strip()
     if not candidate:
@@ -227,9 +257,14 @@ async def enroll(
     name: str,
     platform: str,
     hostname: str,
+    home_dir: Any = None,
 ) -> dict:
     """Spend a pairing code to bind this key to this name, and hand back core's
     own key so each side has pinned the other.
+
+    `home_dir` is optional and additive (novad sends os.UserHomeDir(); an older
+    daemon sends nothing): kept only when clean_home_dir accepts it, ignored
+    otherwise, never a reason to refuse the pairing.
 
     Shape validation happens BEFORE the burn, so a mistyped key does not cost
     the operator their code. Everything after the burn shares one transaction
@@ -245,6 +280,7 @@ async def enroll(
     clean_name = _clean_name(name)
     clean_platform = (platform or "").strip() or "unknown"
     clean_hostname = (hostname or "").strip() or "unknown"
+    clean_home = clean_home_dir(home_dir)
     core_pubkey = await core_public_key_hex(pool)
 
     async with pool.acquire() as conn:
@@ -264,6 +300,7 @@ async def enroll(
                     clean_hostname,
                     clean_pubkey,
                     burned["created_by"],
+                    clean_home,
                 )
                 await governance.record_event(
                     conn,
@@ -311,6 +348,21 @@ async def get_live_by_name(pool: asyncpg.Pool, name: str) -> asyncpg.Record | No
     return await pool.fetchrow(
         "SELECT * FROM devices WHERE name = $1 AND revoked_at IS NULL", name
     )
+
+
+async def record_home_dir(pool: asyncpg.Pool, device_id: uuid.UUID, home_dir: Any) -> bool:
+    """Store the home directory a device reported in its WS auth frame, so a
+    machine enrolled before the field existed picks it up on its next connect.
+    True only when a usable path was actually written; junk writes nothing and
+    leaves whatever is stored alone. Called by devices_ws AFTER the challenge
+    verifies — an unauthenticated frame never reaches this."""
+    clean = clean_home_dir(home_dir)
+    if clean is None:
+        return False
+    tag = await pool.execute(
+        "UPDATE devices SET home_dir = $1 WHERE id = $2 AND revoked_at IS NULL", clean, device_id
+    )
+    return tag == "UPDATE 1"
 
 
 async def list_devices(pool: asyncpg.Pool) -> list[dict]:
@@ -396,6 +448,28 @@ def clean_fs_roots(fs_roots: Any) -> list[str]:
     return sorted(set(cleaned))
 
 
+def _require_a_root_for_fs(
+    capabilities: list[str], fs_roots: list[str], home_dir: str | None
+) -> None:
+    """Refuse an fs.* grant that has no root to be scoped to.
+
+    Such a grant reads as granted in Settings and refuses every call at the
+    device ("no filesystem roots granted") — the owner's live walk (2026-09-01)
+    granted fs.list with fs_roots=[] and every device_list_files call died on
+    it. The refusal names the capabilities that need a root and, when the
+    daemon has reported its home, suggests it: the one root the operator almost
+    always wants. It stays a suggestion — the operator adds it; nothing here
+    writes it."""
+    needing = sorted(set(capabilities) & FS_CAPABILITIES)
+    if not needing or fs_roots:
+        return
+    verb = "needs" if len(needing) == 1 else "need"
+    hint = f", e.g. {home_dir}" if home_dir else " in Settings -> Devices"
+    raise DeviceRefused(
+        f"{', '.join(needing)} {verb} at least one filesystem root — add one{hint}"
+    )
+
+
 async def set_grants(
     pool: asyncpg.Pool,
     *,
@@ -414,6 +488,9 @@ async def set_grants(
     clean_roots = clean_fs_roots(fs_roots)
     async with pool.acquire() as conn, conn.transaction():
         before = await _live_or_refuse(conn, device_id)
+        # Raised before the UPDATE and the event, inside the transaction: a
+        # refused grant leaves the row as it was and writes NO ledger row.
+        _require_a_root_for_fs(clean_caps, clean_roots, before["home_dir"])
         row = await conn.fetchrow(
             "UPDATE devices SET capabilities = $2::jsonb, fs_roots = $3::jsonb "
             "WHERE id = $1 RETURNING *",

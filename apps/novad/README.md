@@ -47,6 +47,11 @@ core's public key. Re-enrolling is deliberate — it refuses to overwrite an
 existing enrollment without `--force`. A spent, expired, or wrong code is
 surfaced verbatim from the server.
 
+The enroll body (and, additively, every WS `auth` frame) also carries this
+user's home directory (`home_dir`). Core stores it so Settings → Devices can
+suggest it as the first filesystem root — an `fs.*` grant with no root is
+refused there as dead on arrival. It grants nothing by itself.
+
 Custody, under `~/.config/novad/` (honors `XDG_CONFIG_HOME`):
 
 - `config.json` — device id, server, pinned core key.

@@ -1,0 +1,15 @@
+-- The device's home directory, reported by the daemon itself (novad sends
+-- os.UserHomeDir() in its enroll body and, additively, in every WS auth frame,
+-- so an already-enrolled device picks it up on its next connect).
+--
+-- Why it exists: an fs.* grant with NO filesystem root is a dead grant — it
+-- reads as granted in Settings and refuses every call at the device ("no
+-- filesystem roots granted"). The owner's live walk (2026-09-01) hit exactly
+-- that. devices.set_grants now REFUSES such a grant, and the refusal names the
+-- one root the operator almost always wants: this column. It is a suggestion
+-- the operator accepts by adding it — never a root granted by itself, because
+-- a machine reporting its own home must not widen its own grant.
+--
+-- NULL until the device reports one; a value that is not an absolute path is
+-- ignored at the edge (devices.clean_home_dir), never stored.
+ALTER TABLE devices ADD COLUMN home_dir text;

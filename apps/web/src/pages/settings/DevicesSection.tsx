@@ -11,7 +11,7 @@ import {
   type Device,
   type PairingCode,
 } from '../../lib/api'
-import { CAPABILITY_GROUPS, deviceLiveness, enrollCommand, fsRootRefusal } from './devicesFormat'
+import { CAPABILITY_GROUPS, deviceLiveness, enrollCommand, fsRootRefusal, grantsRefusal } from './devicesFormat'
 
 /**
  * Settings → Devices (S5-T4): the machines Nova can act on. Each tile is a
@@ -256,7 +256,21 @@ function DeviceTile({
     setRootError(null)
   }
 
+  function addSuggestedRoot(root: string) {
+    if (!draftRoots.includes(root)) setDraftRoots([...draftRoots, root])
+    setRootError(null)
+    setSaveMsg(null)
+  }
+
   async function saveGrants() {
+    // An fs.* capability with no root is a dead grant — core refuses it (400)
+    // with these same words; refusing here first is the fast feedback, and the
+    // PUT is never made for a save that could only be refused.
+    const refusal = grantsRefusal(draftCaps, draftRoots, device.home_dir)
+    if (refusal) {
+      setSaveMsg({ kind: 'err', text: refusal })
+      return
+    }
     // The draft is seeded from the device's CURRENT capabilities, so saving the
     // whole set (sorted for a stable payload) PRESERVES any capability the row
     // holds that this UI doesn't render — never filter to a hardcoded 8, or a
@@ -405,6 +419,25 @@ function DeviceTile({
                   </li>
                 ))}
               </ul>
+            )}
+            {device.home_dir !== null && !draftRoots.includes(device.home_dir) && (
+              // The root the operator almost always wants: the machine's own
+              // home, as the daemon reported it. Offered, never pre-added — a
+              // device reporting its home must not widen its own grant.
+              <p className="mt-1.5 flex items-center gap-2 text-caption text-content-secondary">
+                <span>
+                  Suggested root:{' '}
+                  <code className="font-mono text-mono-sm text-content-primary">{device.home_dir}</code>
+                </span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  aria-label="Add suggested root"
+                  onClick={() => addSuggestedRoot(device.home_dir as string)}
+                >
+                  Add
+                </Button>
+              </p>
             )}
             <div className="mt-2 flex items-start gap-2">
               <div className="flex-1">

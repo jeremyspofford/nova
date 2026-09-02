@@ -43,10 +43,19 @@ type Challenge struct {
 
 // Auth is device -> core: the device id and its signature over the RAW nonce
 // bytes (bytes.fromhex(nonce)) — not an envelope, not the hex string.
+//
+// HomeDir is OPTIONAL and additive (omitempty): the daemon's os.UserHomeDir(),
+// which core stores on the device row only AFTER the signature verifies, so
+// Settings -> Devices can suggest it as the first filesystem root (an fs.*
+// grant with no root is refused there as dead on arrival). It grants nothing
+// by itself, and a core that predates the field ignores the unknown key. The
+// contract is mirrored in services/core/app/devices_ws.py ("The frame
+// contract").
 type Auth struct {
 	Type     string `json:"type"`
 	DeviceID string `json:"device_id"`
 	Sig      string `json:"sig"`
+	HomeDir  string `json:"home_dir,omitempty"`
 }
 
 // Ready is core -> device: the last audit seq core has stored (null when none).

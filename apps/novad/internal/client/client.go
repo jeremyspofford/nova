@@ -194,6 +194,10 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 		Type:     wire.TypeAuth,
 		DeviceID: a.cfg.DeviceID,
 		Sig:      hex.EncodeToString(sig),
+		// Additive: core stores it as the suggested first fs root once the
+		// signature verifies; a device enrolled before the field existed
+		// reports it here on its next connect. See wire.Auth.
+		HomeDir: a.deps.Home,
 	}); err != nil {
 		return fmt.Errorf("sending auth: %w", err)
 	}

@@ -55,6 +55,11 @@ class EnrollBody(BaseModel):
     name: str = Field(min_length=1)
     platform: str = Field(min_length=1)
     hostname: str = Field(min_length=1)
+    # Optional and additive: novad sends os.UserHomeDir() so the grants editor
+    # can suggest it as the first fs root. An older daemon omits it; a value
+    # that is not an absolute path is ignored (devices.clean_home_dir), never
+    # a 422 — a machine that cannot name its home must still be able to pair.
+    home_dir: str | None = None
 
 
 class RenameBody(BaseModel):
@@ -118,6 +123,7 @@ async def enroll(request: Request, body: EnrollBody) -> dict:
             name=body.name,
             platform=body.platform,
             hostname=body.hostname,
+            home_dir=body.home_dir,
         )
     except devices.DeviceRefused as exc:
         if exc.status_code == 403:

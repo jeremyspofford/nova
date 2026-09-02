@@ -32,9 +32,10 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 	const deviceID = "dev-integration-1"
 
 	type observed struct {
-		result map[string]any
-		audits []map[string]any
-		authOK bool
+		result  map[string]any
+		audits  []map[string]any
+		authOK  bool
+		homeDir string
 	}
 	obsCh := make(chan observed, 1)
 
@@ -64,6 +65,7 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 		sigHex, _ := auth["sig"].(string)
 		sig, _ := hex.DecodeString(sigHex)
 		obs.authOK = ed25519.Verify(devPub, nonce, sig)
+		obs.homeDir, _ = auth["home_dir"].(string)
 		if !obs.authOK {
 			_ = c.Close(4401, "bad auth")
 			obsCh <- obs
@@ -147,6 +149,11 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 
 	if !obs.authOK {
 		t.Fatal("the device's challenge signature did not verify over the raw nonce")
+	}
+	// The auth frame's additive home_dir is the agent's home, verbatim — core
+	// stores it (after the signature verifies) as the suggested first fs root.
+	if obs.homeDir != home {
+		t.Errorf("auth frame home_dir = %q, want the agent's home %q", obs.homeDir, home)
 	}
 	if obs.result == nil {
 		t.Fatal("no result frame received")

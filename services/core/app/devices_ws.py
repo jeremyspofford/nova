@@ -49,6 +49,27 @@ router = APIRouter()
 # the key, and it is the whole auth.
 NONCE_BYTES = 32
 
+# The frame contract (mirrored in apps/novad/internal/wire/envelope.go). Every
+# frame is one JSON object with a "type"; unknown keys are ignored on both
+# sides, so a field may be ADDED without a version bump.
+#
+#   core -> device
+#     challenge  {nonce: hex(32 bytes), core_pubkey: hex}
+#     ready      {last_seq: int | null}
+#     auth_error {reason}                        then close 4401
+#     command    {envelope, sig}                  (envelopes.build / sign)
+#   device -> core
+#     auth       {device_id, sig: hex(sign(raw nonce)), home_dir?: str}
+#                home_dir is OPTIONAL and additive (novad ≥ this change sends
+#                os.UserHomeDir()): stored on the device row AFTER the
+#                signature verifies, so an already-enrolled device gets it on
+#                its next connect. It is a suggestion the grants editor offers
+#                as the first fs root — it never widens a grant by itself, and
+#                junk is dropped (devices.clean_home_dir), never a refusal.
+#     heartbeat  {ts}                            -> devices.last_seen = now()
+#     result     {envelope_id, ok, output, exit_code, error}
+#     audit      {entries: [_ENTRY_KEYS...]}     (ingest_audit)
+
 # WebSocket close codes in the application-private 4000-4999 range. 4401 mirrors
 # HTTP 401 (the challenge did not authenticate); 4403 mirrors 403 (the row is
 # gone from under a live socket — a revoke).
@@ -251,7 +272,8 @@ async def authenticate(conn: object, pool) -> object | None:
     Sends the nonce and core's pubkey; the device must return a valid signature
     over the raw nonce with the key its live row pins. A revoked device has no
     live row, so this is where its reconnect is refused — by the absence of the
-    row, not a flag."""
+    row, not a flag. The auth frame's optional `home_dir` (see the frame
+    contract above) is recorded only once the signature has verified."""
     nonce = secrets.token_bytes(NONCE_BYTES)
     core_pubkey = await devices.core_public_key_hex(pool)
     await conn.send({"type": "challenge", "nonce": nonce.hex(), "core_pubkey": core_pubkey})
@@ -279,6 +301,12 @@ async def authenticate(conn: object, pool) -> object | None:
     if not isinstance(sig, str) or not verify_nonce(row["pubkey"], nonce, sig):
         await _auth_error(conn, "the challenge signature did not verify")
         return None
+
+    # Only past the signature: the frame is now the device's own word. The
+    # optional home_dir is stored for the grants editor to suggest; a frame
+    # without it (an older daemon) changes nothing.
+    if "home_dir" in frame:
+        await devices.record_home_dir(pool, device_id, frame.get("home_dir"))
 
     last_seq = await pool.fetchval(
         "SELECT max(seq) FROM device_audit WHERE device_id = $1", device_id

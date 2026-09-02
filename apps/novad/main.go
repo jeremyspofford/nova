@@ -98,13 +98,10 @@ func cmdEnroll(argv []string) {
 		fail("could not generate a device key: %v", err)
 	}
 
-	reqBody, _ := json.Marshal(map[string]string{
-		"code":     *code,
-		"pubkey":   hex.EncodeToString(pub),
-		"name":     devName,
-		"platform": "linux",
-		"hostname": hostname,
-	})
+	reqBody, err := enrollBody(*code, hex.EncodeToString(pub), devName, hostname, paths.Home)
+	if err != nil {
+		fail("could not build the enroll request: %v", err)
+	}
 	enrollURL := strings.TrimRight(*server, "/") + "/api/v1/devices/enroll"
 
 	httpc := &http.Client{Timeout: 15 * time.Second}
@@ -156,6 +153,22 @@ func cmdEnroll(argv []string) {
 	fmt.Printf("core key pinned: %s…\n", shortKey(ok.CorePubKey))
 	fmt.Printf("config: %s\n", paths.ConfigFile)
 	fmt.Printf("\nnext: run `novad run` in a desktop session, or install the user service (see README).\n")
+}
+
+// enrollBody is the POST /api/v1/devices/enroll payload. home_dir is optional
+// and additive on core's side (an older core ignores it): it lets Settings ->
+// Devices suggest this machine's home directory as the first filesystem root,
+// so an fs.* grant is never saved rootless. It grants nothing by itself — core
+// stores it as a suggestion the operator accepts by adding it.
+func enrollBody(code, pubkeyHex, name, hostname, homeDir string) ([]byte, error) {
+	return json.Marshal(map[string]string{
+		"code":     code,
+		"pubkey":   pubkeyHex,
+		"name":     name,
+		"platform": "linux",
+		"hostname": hostname,
+		"home_dir": homeDir,
+	})
 }
 
 func cmdRun(argv []string) {

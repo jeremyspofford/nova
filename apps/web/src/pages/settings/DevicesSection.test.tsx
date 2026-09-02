@@ -15,6 +15,7 @@ function device(overrides: Partial<Device> = {}): Device {
     last_seen: null,
     revoked_at: null,
     connected: false,
+    home_dir: null,
     ...overrides,
   }
 }
@@ -104,8 +105,10 @@ describe('DevicesSection', () => {
     expect(screen.queryByText(/last seen/i)).toBeNull()
   })
 
-  it('a device with only system.info shows the powerful capabilities unchecked, and granting fs.read saves the new list', async () => {
-    const updated = device({ capabilities: ['system.info', 'fs.read'] })
+  it('a device with only system.info shows the powerful capabilities unchecked, and granting apps.list saves the new list', async () => {
+    // apps.list, not fs.read: an fs.* grant now needs a root (its own tests
+    // below) — this test is about the whole-set, sorted save.
+    const updated = device({ capabilities: ['apps.list', 'system.info'] })
     const { api } = renderSection({
       listDevices: vi.fn(async () => [device({ capabilities: ['system.info'] })]),
       setGrants: vi.fn(async () => updated),
@@ -120,15 +123,15 @@ describe('DevicesSection', () => {
     expect(shellBox.checked).toBe(false)
     expect(writeBox.checked).toBe(false)
 
-    // Grant fs.read and save.
-    fireEvent.click(screen.getByRole('checkbox', { name: /fs\.read/i }))
+    // Grant apps.list and save.
+    fireEvent.click(screen.getByRole('checkbox', { name: /apps\.list/i }))
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
     await waitFor(() =>
       expect(api.setGrants).toHaveBeenCalledWith('d-1', {
         // Saved as the whole drafted set, sorted — preserves anything the row
         // holds that this UI doesn't render (see the preservation test below).
-        capabilities: ['fs.read', 'system.info'],
+        capabilities: ['apps.list', 'system.info'],
         fs_roots: [],
       }),
     )
@@ -169,18 +172,18 @@ describe('DevicesSection', () => {
     const { api } = renderSection({
       // "future.cap" is held by the row but not among the rendered 8.
       listDevices: vi.fn(async () => [device({ capabilities: ['system.info', 'future.cap'] })]),
-      setGrants: vi.fn(async () => device({ capabilities: ['system.info', 'future.cap', 'fs.read'] })),
+      setGrants: vi.fn(async () => device({ capabilities: ['system.info', 'future.cap', 'apps.list'] })),
     })
     await waitFor(() => screen.getByText('laptop'))
     fireEvent.click(screen.getByRole('button', { name: /grants/i }))
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /fs\.read/i }))
+    fireEvent.click(screen.getByRole('checkbox', { name: /apps\.list/i }))
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
 
     await waitFor(() => expect(api.setGrants).toHaveBeenCalled())
     // The unrendered capability is preserved in the saved list, never stripped.
     expect(api.setGrants.mock.calls[0][1].capabilities).toContain('future.cap')
-    expect(api.setGrants.mock.calls[0][1].capabilities).toContain('fs.read')
+    expect(api.setGrants.mock.calls[0][1].capabilities).toContain('apps.list')
     expect(api.setGrants.mock.calls[0][1].capabilities).toContain('system.info')
   })
 
@@ -201,13 +204,15 @@ describe('DevicesSection', () => {
   it('adding a relative fs-root shows a stated refusal and does not enter the list', async () => {
     const { api } = renderSection({
       listDevices: vi.fn(async () => [device({ capabilities: ['system.info'] })]),
-      setGrants: vi.fn(async () => device({ capabilities: ['system.info', 'fs.list'] })),
+      setGrants: vi.fn(async () => device({ capabilities: ['system.info', 'apps.list'] })),
     })
     await waitFor(() => screen.getByText('laptop'))
     fireEvent.click(screen.getByRole('button', { name: /grants/i }))
 
-    // A legitimate toggle makes the panel dirty so Save is offered.
-    fireEvent.click(screen.getByRole('checkbox', { name: /fs\.list/i }))
+    // A legitimate toggle makes the panel dirty so Save is offered (apps.list,
+    // not an fs.* capability — those need a root, and the bad path below is
+    // refused at entry so no root would be there to satisfy it).
+    fireEvent.click(screen.getByRole('checkbox', { name: /apps\.list/i }))
 
     const rootInput = screen.getByPlaceholderText(/\/absolute\/path/i)
     fireEvent.change(rootInput, { target: { value: 'projects/notes' } })
@@ -220,6 +225,58 @@ describe('DevicesSection', () => {
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
     await waitFor(() => expect(api.setGrants).toHaveBeenCalled())
     expect(api.setGrants.mock.calls[0][1].fs_roots).toEqual([])
+  })
+
+  it('saving an fs grant with no root is refused with the stated message and the API is never called', async () => {
+    const { api } = renderSection({
+      listDevices: vi.fn(async () => [device({ capabilities: ['system.info'], home_dir: '/home/jeremy' })]),
+    })
+    await waitFor(() => screen.getByText('laptop'))
+    fireEvent.click(screen.getByRole('button', { name: /grants/i }))
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /fs\.list/i }))
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    // The same words core answers with: the capability, and the suggested home.
+    const message = await screen.findByText(/fs\.list needs at least one filesystem root/i)
+    expect(message.textContent).toContain('/home/jeremy')
+    expect(api.setGrants).not.toHaveBeenCalled()
+  })
+
+  it('the suggested root (the device home) is offered, Add puts it in the list, and the save carries it', async () => {
+    const { api } = renderSection({
+      listDevices: vi.fn(async () => [device({ capabilities: ['system.info'], home_dir: '/home/jeremy' })]),
+      setGrants: vi.fn(async () =>
+        device({ capabilities: ['fs.list', 'system.info'], fs_roots: ['/home/jeremy'], home_dir: '/home/jeremy' }),
+      ),
+    })
+    await waitFor(() => screen.getByText('laptop'))
+    fireEvent.click(screen.getByRole('button', { name: /grants/i }))
+
+    expect(screen.getByText(/suggested root/i)).toBeTruthy()
+    fireEvent.click(screen.getByRole('checkbox', { name: /fs\.list/i }))
+    fireEvent.click(screen.getByRole('button', { name: /add suggested root/i }))
+
+    // It is now in the roots list (and the suggestion disappears — nothing to offer).
+    expect(screen.getByRole('button', { name: /remove \/home\/jeremy/i })).toBeTruthy()
+    expect(screen.queryByText(/suggested root/i)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await waitFor(() =>
+      expect(api.setGrants).toHaveBeenCalledWith('d-1', {
+        capabilities: ['fs.list', 'system.info'],
+        fs_roots: ['/home/jeremy'],
+      }),
+    )
+  })
+
+  it('no suggestion is shown when the device reported no home', async () => {
+    renderSection({
+      listDevices: vi.fn(async () => [device({ capabilities: ['system.info'], home_dir: null })]),
+    })
+    await waitFor(() => screen.getByText('laptop'))
+    fireEvent.click(screen.getByRole('button', { name: /grants/i }))
+    expect(screen.queryByText(/suggested root/i)).toBeNull()
   })
 
   it('revoke takes a confirm — one click does not call the API, the confirm does', async () => {

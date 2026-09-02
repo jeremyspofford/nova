@@ -69,6 +69,32 @@ export function fsRootRefusal(path: string): string | null {
   return null
 }
 
+/** The capabilities scoped to fs_roots — mirrors core's devices.FS_CAPABILITIES. */
+export const FS_CAPABILITIES: readonly string[] = ['fs.list', 'fs.read', 'fs.write']
+
+/**
+ * A stated refusal for SAVING a grant whose fs.* capabilities have no root to
+ * be scoped to, or null when the save is fine. Such a grant is dead on arrival
+ * — it reads as granted here and refuses every call at the device — so core's
+ * devices.set_grants refuses the combination (400) with these same words. This
+ * is FAST FEEDBACK only: it never lets through a save the PUT would reject as
+ * a surprise, and never blocks one it would accept. `homeDir` is the device's
+ * reported home, suggested as the root the operator almost always wants.
+ */
+export function grantsRefusal(
+  capabilities: Iterable<string>,
+  fsRoots: string[],
+  homeDir: string | null,
+): string | null {
+  const needing = Array.from(capabilities)
+    .filter(cap => FS_CAPABILITIES.includes(cap))
+    .sort()
+  if (needing.length === 0 || fsRoots.length > 0) return null
+  const verb = needing.length === 1 ? 'needs' : 'need'
+  const hint = homeDir ? `, e.g. ${homeDir}` : ' below'
+  return `${needing.join(', ')} ${verb} at least one filesystem root — add one${hint}`
+}
+
 /**
  * The enroll one-liner shown in the pairing modal (controller ruling R-pre2,
  * reconciled against T3's CLI: `novad enroll --server <url> --code <code>`).

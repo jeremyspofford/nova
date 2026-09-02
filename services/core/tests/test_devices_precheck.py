@@ -248,8 +248,17 @@ async def test_a_disconnected_device_is_refused_before_the_kernel(pool):
 async def test_an_empty_fs_roots_grant_is_refused_before_the_kernel(pool):
     """The 3rd walk defect: fs.list granted with fs_roots=[] is a dead grant.
     The stated refusal names it, and for a consent-tier fs write it never
-    reaches the kernel either."""
-    device_id = await _enroll(pool, name="laptop", capabilities=["fs.list", "fs.write"])
+    reaches the kernel either.
+
+    devices.set_grants now REFUSES writing this state (a rootless fs grant is
+    a 400 naming the capability), so the dead row is seeded straight into the
+    table here — this precheck is the defence in depth for a row written any
+    other way (a hand edit, a migration), and it must keep refusing."""
+    device_id = await _enroll(pool, name="laptop")
+    await pool.execute(
+        "UPDATE devices SET capabilities = '[\"fs.list\", \"fs.write\"]'::jsonb WHERE id = $1",
+        device_id,
+    )
     conn = FakeWSConn()
     devices_ws.hub.register(device_id, conn)
     person = await _person(pool)

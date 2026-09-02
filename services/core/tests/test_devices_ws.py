@@ -193,6 +193,78 @@ async def test_a_revoked_device_cannot_authenticate(pool):
     assert not devices_ws.hub.is_connected(device_id)
 
 
+# -- the auth frame's optional home_dir ---------------------------------------
+
+
+async def _auth(pool, device_id, device, extra: dict) -> tuple[FakeWSConn, asyncio.Task, dict]:
+    """Drive serve() through the challenge with an auth frame carrying `extra`
+    keys; return the conn, the serve task and the frame core answered with."""
+    conn = FakeWSConn()
+    task = asyncio.create_task(devices_ws.serve(conn, pool))
+    challenge = await asyncio.wait_for(conn.next_sent(), 2)
+    conn.feed(
+        {
+            "type": "auth",
+            "device_id": str(device_id),
+            "sig": device.sign_nonce(challenge["nonce"]),
+            **extra,
+        }
+    )
+    reply = await asyncio.wait_for(conn.next_sent(), 2)
+    return conn, task, reply
+
+
+async def _stored_home(pool, device_id) -> str | None:
+    return await pool.fetchval("SELECT home_dir FROM devices WHERE id = $1", device_id)
+
+
+async def test_a_successful_auth_records_the_home_dir_the_device_reports(pool):
+    """An already-enrolled device (no home_dir on its row) reports one in its
+    auth frame — an ADDITIVE optional key — and core stores it on the row, so
+    the grants editor can suggest it without a re-pair."""
+    device_id, device = await _enroll(pool)
+    assert await _stored_home(pool, device_id) is None
+    conn, task, reply = await _auth(pool, device_id, device, {"home_dir": "/home/jeremy"})
+    assert reply["type"] == "ready"
+    assert await _stored_home(pool, device_id) == "/home/jeremy"
+    await _close(conn, task)
+
+
+async def test_an_auth_frame_without_a_home_dir_leaves_the_stored_one_alone(pool):
+    device_id, device = await _enroll(pool)
+    await devices.record_home_dir(pool, device_id, "/home/jeremy")
+    conn, task, reply = await _auth(pool, device_id, device, {})
+    assert reply["type"] == "ready"
+    assert await _stored_home(pool, device_id) == "/home/jeremy"
+    await _close(conn, task)
+
+
+async def test_a_junk_home_dir_on_auth_is_ignored_and_auth_still_succeeds(pool):
+    """A daemon that cannot name its home is still a paired machine: junk is
+    dropped, never stored, and never a reason to refuse the socket."""
+    device_id, device = await _enroll(pool)
+    conn, task, reply = await _auth(pool, device_id, device, {"home_dir": "relative"})
+    assert reply["type"] == "ready"
+    assert await _stored_home(pool, device_id) is None
+    await _close(conn, task)
+
+
+async def test_a_failed_auth_records_no_home_dir(pool):
+    """The home_dir is stored only AFTER the challenge verifies — an
+    unauthenticated frame must not write anything onto a device row."""
+    device_id, _device = await _enroll(pool)
+    conn = FakeWSConn()
+    task = asyncio.create_task(devices_ws.serve(conn, pool))
+    await asyncio.wait_for(conn.next_sent(), 2)  # the challenge
+    conn.feed(
+        {"type": "auth", "device_id": str(device_id), "sig": "00" * 64, "home_dir": "/home/mallory"}
+    )
+    reply = await asyncio.wait_for(conn.next_sent(), 2)
+    assert reply["type"] == "auth_error"
+    await asyncio.wait_for(task, 2)
+    assert await _stored_home(pool, device_id) is None
+
+
 # -- heartbeat ---------------------------------------------------------------
 
 

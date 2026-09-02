@@ -3,6 +3,7 @@ import {
   ONLINE_THRESHOLD_SECONDS,
   deviceLiveness,
   fsRootRefusal,
+  grantsRefusal,
   enrollCommand,
   CAPABILITY_GROUPS,
 } from './devicesFormat'
@@ -21,6 +22,7 @@ function device(overrides: Partial<Device> = {}): Device {
     revoked_at: null,
     // Always false from the REST list by design — deviceLiveness must ignore it.
     connected: false,
+    home_dir: null,
     ...overrides,
   }
 }
@@ -121,5 +123,29 @@ describe('CAPABILITY_GROUPS — the 8 known capabilities in order', () => {
     for (const group of CAPABILITY_GROUPS) {
       for (const cap of group.caps) expect(cap.label.length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('grantsRefusal — an fs.* grant with no root is dead on arrival (mirrors core)', () => {
+  it('refuses fs.list with no roots, naming the capability and suggesting the home', () => {
+    const refusal = grantsRefusal(['system.info', 'fs.list'], [], '/home/jeremy')
+    expect(refusal).toContain('fs.list')
+    expect(refusal).toContain('/home/jeremy')
+    expect(refusal).toMatch(/needs at least one filesystem root/)
+  })
+
+  it('names every fs capability that needs a root, sorted, with no suggestion when no home is known', () => {
+    const refusal = grantsRefusal(new Set(['fs.write', 'fs.read', 'shell.exec']), [], null)
+    expect(refusal).toMatch(/^fs\.read, fs\.write need at least one filesystem root/)
+    expect(refusal).not.toContain('e.g.')
+  })
+
+  it('is null when a root is present', () => {
+    expect(grantsRefusal(['fs.list', 'fs.read'], ['/home/jeremy'], '/home/jeremy')).toBeNull()
+  })
+
+  it('is null when no fs capability is granted, roots or not', () => {
+    expect(grantsRefusal(['system.info', 'shell.exec', 'apps.launch'], [], '/home/jeremy')).toBeNull()
+    expect(grantsRefusal([], [], null)).toBeNull()
   })
 })
