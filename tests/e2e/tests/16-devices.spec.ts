@@ -124,6 +124,10 @@ test('devices: the Settings section pairs, grants, and decides real device state
     // The fs.read box starts unchecked (default grant is system.info only);
     // clicking its label (the input is sr-only) toggles it on for THIS tile.
     await onlineTile.getByText('Read files (fs.read)').click()
+    // An fs.* grant needs a root — Save is refused (client-side, and by core)
+    // without one, so add the root the grant will be scoped to first.
+    await onlineTile.getByLabel('New filesystem root').fill('/tmp')
+    await onlineTile.getByRole('button', { name: 'Add root' }).click()
     await onlineTile.getByRole('button', { name: 'Save' }).click()
 
     // The edit hit the database, not just the DOM — read the row back.
