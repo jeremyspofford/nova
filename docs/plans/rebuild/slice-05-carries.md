@@ -164,3 +164,53 @@ Carries from this wave (all Minor, final-review-agreed):
   (only subsequent rounds close). Unobserved shape; close if it shows up.
 - Docs: slice-05-daemon.md's "per-device layer inside the executor" and "12
   migrations" are superseded by this section.
+
+## Second post-close wave (2026-09-02, later) — "try again" did nothing
+
+The owner's next exchange (local model): "try again" on a device command →
+the reply's whole stance was a fabricated "still awaiting your approval"
+(no card pending, no tool call); the consent guard caught and replaced it,
+but nothing retried and the correction promised a card that auto-tier
+classes never raise. Root cause: approval choreography in history
+("You're approved: … go ahead now", "[waiting for your approval…]") that a
+weak model pattern-completes — [[consent-loop-context-poisoning]] again.
+Fixed in dce3d19a, 7577f0a9, 532d3a34 + review-fix ea40afcf (adversarial
+review found 1 Critical + 3 Important, all reproduced by execution and fixed;
+re-review mutation-checked each; core 860 / web 397):
+- **A fired consent guard now RETRIES once** (one regeneration, tools
+  available, the truth stated) — but ONLY when the turn has no successful
+  tool span and is not out of rounds (no double side effects, never past the
+  operator's cap), and the regeneration must pass the FULL mechanical guard
+  set (live consent re-check, narration against live spans, capability)
+  before it may replace the durable text; otherwise the correction persists
+  and the turn stays plumbing (not ingested). The nudge is derived and
+  raises rather than state an untrue fact. Shares the single redirect budget.
+- **Correction wording is mechanism-neutral** (no promise of a card).
+- **Choreography is plumbing** (migration 014 `messages.kind`): the web
+  sends `continuation_of` (consent id); core marks the continuation user
+  message plumbing ONLY when the consent is this conversation's, this
+  person's, and approved (scoped lookup — an unscoped id could hide any
+  message from history); note-only replies are plumbing; history_window and
+  its query exclude plumbing; a plumbing user message makes the turn
+  plumbing (never ingested).
+
+Carries from this wave:
+- The redirect gate is blunt: ANY successful tool span this turn blocks the
+  retry, even when the fabricated claim is about a different action than the
+  one that ran (a search then a false "awaiting" about a device command).
+  Safe side; narrowing needs the claim tied to an action class.
+- `continuation_of` non-string values still 422 (string coercion only);
+  unreachable from the web client. Coerce anything non-string to None.
+- The capability leg of the regen check has no dedicated tripwire test (the
+  narration leg does); add one.
+- A regen that honestly says "awaiting" after the redirect itself raised a
+  card persists as kind='chat' (only the exact note is marked plumbing) —
+  memory is safe (turn is plumbing) but that narration replays into later
+  history windows.
+- The Approvals-page resume loads the ACTIVE conversation, so a card from
+  another conversation falls back to kind='chat' (correct fail-open; the S3
+  "cross-page continuation targets the active conversation" carry).
+- The consent_claim guard span now wraps the whole redirect (seconds), so it
+  reads as guard latency in Activity; a separate redirect_ms meta would fix it.
+- Dead belt-and-braces loop after `assert memory.ingests == []` in
+  test_chat_consent.py.
