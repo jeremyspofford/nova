@@ -87,6 +87,19 @@ _VERDICT_RE = re.compile(r"\b(on|off)[_\s-]?topic\b", re.I)
 # suite) neither trips deferral_check itself.
 DEFERRAL_NOTE = "Doing that now instead of just saying I would."
 
+# The consent-claim redirect's nudge and live note (FIX 1, owner walk
+# 2026-09-02 22:22). The nudge STATES THE MECHANICAL FACTS the guard just
+# established — no card is pending, no tool ran this turn — and asks for one of
+# exactly two honest outcomes: do it now, or say plainly you cannot. It names
+# no mechanism ("a card will be raised") because the class may be 'auto'. The
+# note, like DEFERRAL_NOTE, carries no completed-action claim and no
+# pending-state phrase, so the mechanical guards stay clean over it.
+CONSENT_REDIRECT_NUDGE = (
+    "No approval is pending and nothing has run this turn. Do it now by "
+    "calling the tool, or say plainly that you cannot."
+)
+CONSENT_REDIRECT_NOTE = "Nothing was pending — doing it now instead of waiting."
+
 
 def _deferral_honest_note(action_phrase: str) -> str:
     return (
@@ -607,6 +620,54 @@ async def _run_tool(
     return result, ok, awaiting
 
 
+async def _dispatch_calls(
+    turn: traces.Turn,
+    tool_ctx: tools.ToolContext,
+    calls: Sequence[ToolCall],
+    messages: list[dict],
+    emit: Callable[[str | None], None],
+    consents_emitted: int,
+) -> tuple[int, bool, bool]:
+    """Run one round's tool calls, append their results, stream what happened.
+
+    Sequential, in the model's own order: concurrency is a later slice, and two
+    tools writing the same file at once is not a problem worth having yet. The
+    turn loop and the consent redirect share this ONE implementation, so a call
+    made in a redirect is dispatched, recorded, framed and consent-gated exactly
+    like a call made in a normal round — there is no second, weaker path.
+
+    Returns (consents_emitted, ran_ephemeral, card_raised), each a MECHANICAL
+    fact about this batch: how much of the consent sink has now been streamed,
+    whether a successful call was an ephemeral (point-in-time) read, and whether
+    any call raised an approval card. The caller ORs the two flags into its own.
+    """
+    ran_ephemeral = False
+    card_raised = False
+    for call in calls:
+        emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
+        result, ok, awaiting = await _run_tool(turn, tool_ctx, call)
+        ran_tool = tools.REGISTRY.get(call.name)
+        if ok and ran_tool is not None and ran_tool.ephemeral:
+            ran_ephemeral = True
+        # A card-raising call is "awaiting", not "error": ok is False (nothing
+        # ran) but the operator's decision is pending, so the live tile must
+        # match the span rather than flashing a failure.
+        status = "awaiting" if awaiting else ("ok" if ok else "error")
+        emit(_frame({"activity": {"tool": call.name, "status": status}}))
+        if awaiting:
+            card_raised = True
+        messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+        # One frame per card the policy kernel raised on THIS call — never more
+        # than once each, even if the same card gets appended again
+        # (raise_consent reuses an existing pending row, but the sink still
+        # records every dispatch that hit it): the slice beyond
+        # `consents_emitted` is exactly what is new since the last look.
+        for card in tool_ctx.consent_sink[consents_emitted:]:
+            emit(_frame({"consent": card}))
+        consents_emitted = len(tool_ctx.consent_sink)
+    return consents_emitted, ran_ephemeral, card_raised
+
+
 def _refuse_pending(turn: traces.Turn, call: ToolCall) -> str:
     """A tool call made in the narration round after a card was raised: NOT
     dispatched. It is still recorded as a tool span — ok=False with the stated
@@ -632,6 +693,94 @@ def _refuse_pending(turn: traces.Turn, call: ToolCall) -> str:
 # bounded (one redirect, no re-judge loop). It catches RELEVANCE drift — the
 # "asked about the pixel, answered about openai" case, most common on small
 # local models — NOT factual accuracy, which the mechanical guards and tools own.
+
+
+async def _gateway_round(
+    app,
+    turn: traces.Turn,
+    model: str,
+    messages: Sequence[dict],
+    advertised: Sequence[dict],
+    *,
+    round_number: int,
+    on_delta: Callable[[str], None] | None,
+) -> tuple[str, list[ToolCall], str | None]:
+    """ONE gateway round: its text, the tool calls it asked for, a failure or None.
+
+    The turn loop's own round, lifted out verbatim so it has exactly one
+    implementation — the loop below and the consent redirect (which must be able
+    to CALL TOOLS, unlike the text-only `_collect_completion`) run the same code,
+    record the same `llm_call` span, and parse the same wire shapes. A gateway
+    that refuses, or a transport that dies, is returned as a STATED reason rather
+    than raised: every caller has to decide what a dead round means for its own
+    flow, and none of them may treat one as an empty success.
+
+    `on_delta` receives each content delta as it arrives (the turn loop streams
+    it live and accumulates it); passing None collects silently, which is what a
+    redirect wants — its text is emitted once, after the note, and only if it is
+    actually going to be used.
+    """
+    collected: list[str] = []
+    buffer = ToolCallBuffer()
+    failure: str | None = None
+    with turn.span("llm_call", model or None) as span:
+        span.meta["model"] = model
+        span.meta["round"] = round_number
+        span.meta["tools_advertised"] = bool(advertised)
+        try:
+            async with peers.client(app, peers.GATEWAY, GATEWAY_TIMEOUT) as client:
+                async with client.stream(
+                    "POST",
+                    "/v1/chat/completions",
+                    json=completion_payload(model, messages, advertised),
+                ) as response:
+                    served_by = response.headers.get("x-nova-served-by")
+                    if served_by:
+                        span.meta["served_by"] = served_by
+                    if response.status_code != 200:
+                        detail = (await response.aread()).decode(errors="replace")[:400]
+                        raise GatewayFailure(
+                            f"the gateway refused the request "
+                            f"({response.status_code}): {detail}"
+                        )
+                    async for line in response.aiter_lines():
+                        line = line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[len("data:") :].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            span.meta["malformed_chunks"] = (
+                                span.meta.get("malformed_chunks", 0) + 1
+                            )
+                            continue
+                        delta, usage, error, fragments = _chunk_parts(chunk)
+                        if error is not None:
+                            raise GatewayFailure(f"the gateway reported: {error}")
+                        if usage is not None:
+                            # Only what the gateway actually reported — a null
+                            # token count is not a measurement.
+                            for field in ("prompt_tokens", "completion_tokens"):
+                                if usage.get(field) is not None:
+                                    span.meta[field] = usage[field]
+                        for fragment in fragments:
+                            buffer.add(fragment)
+                        if delta:
+                            collected.append(delta)
+                            if on_delta is not None:
+                                on_delta(delta)
+        except GatewayFailure as exc:
+            failure = str(exc)
+            span.meta["error"] = failure
+        except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
+            failure = f"could not reach the gateway — {peers.reason(exc)}"
+            span.meta["error"] = failure
+        calls = buffer.finished()
+        span.meta["tool_calls"] = len(calls)
+    return "".join(collected), calls, failure
 
 
 async def _collect_completion(
@@ -882,6 +1031,140 @@ async def _deferral_redirect(
         return corrected
 
 
+# -- the consent-claim redirect --------------------------------------------
+#
+# The owner's walk, 2026-09-02 22:22: he said "try again" (re-run a device
+# command), the local model produced a reply whose WHOLE stance was "still
+# awaiting your approval" with no tool call, guards.consent_claim_check
+# correctly fired (nothing was pending) — and nothing was retried. The lie was
+# contradicted and the WORK still did not happen: "try again" did nothing.
+#
+# So the consent guard now gets the same ONE mechanical redirect the deferral
+# guard has, off the turn's existing message context, with a nudge that states
+# the facts the guard just established. The difference from _deferral_redirect
+# is that this one advertises TOOLS: the whole point is that the action runs, so
+# a tool call in the redirect is dispatched through the SAME machinery as any
+# other round (_dispatch_calls), followed by one final text round with the loop
+# closed. Bounded to that: at most two gateway calls, never a second redirect,
+# and it spends the turn's single shared redirect budget so a deferral or
+# responsiveness redirect can never also run.
+
+
+@dataclass
+class _ConsentRedirect:
+    """What the one redirect produced, as facts the caller composes from."""
+
+    text: str
+    redirected: bool
+    consents_emitted: int
+    read_ephemeral: bool
+
+
+async def _consent_redirect(
+    app,
+    turn: traces.Turn,
+    model: str,
+    correction: guards.Correction,
+    has_pending_consent: bool,
+    messages: Sequence[dict],
+    advertised: Sequence[dict],
+    tool_ctx: tools.ToolContext,
+    consents_emitted: int,
+    emit: Callable[[str | None], None],
+) -> _ConsentRedirect:
+    """Regenerate ONCE, with tools, after a fabricated pending-approval claim.
+
+    Outcomes, all recorded on the turn's single 'consent_claim' guard span:
+
+      * The regeneration no longer claims a pending approval (and may have
+        actually called the tool): it REPLACES the durable text — the fabricated
+        prose already streamed live, but what the NEXT turn reads is the reply
+        that did the work. redirected=True.
+      * It still claims one, produces nothing, or the gateway fails: the
+        correction persists exactly as before. redirected=False.
+
+    The re-check uses the LIVE pending fact, not the stale one: if the redirect's
+    own call raised a card, an "awaiting your approval" reply is then TRUE and
+    must not be corrected — the same boolean that makes the guard fire or stay
+    silent, read again after the tools ran.
+
+    FAIL-OPEN throughout: any exception ships the correction, never an error
+    frame and never a lost turn.
+    """
+    read_ephemeral = False
+    with turn.span("guard", "consent_claim") as span:
+        # The fact the guard fired on, recorded as the caller measured it (the
+        # guard only fires on False) — read from the caller, never asserted here.
+        span.meta["has_pending_consent"] = has_pending_consent
+        attempt: list[dict] = [
+            *messages,
+            {"role": "system", "content": CONSENT_REDIRECT_NUDGE},
+        ]
+        try:
+            # round_number 0: not one of the turn's numbered rounds — this is
+            # the redirect, and the span says so rather than pretending to be
+            # round N+1. Deltas are collected silently: the regenerated text is
+            # emitted once, after the note, and only if it is actually used.
+            regenerated, calls, failure = await _gateway_round(
+                app,
+                turn,
+                model,
+                attempt,
+                advertised,
+                round_number=0,
+                on_delta=None,
+            )
+            if failure is not None:
+                raise GatewayFailure(failure)
+            span.meta["redirect_tool_calls"] = len(calls)
+            if calls:
+                attempt.append(
+                    {
+                        "role": "assistant",
+                        "content": regenerated,
+                        "tool_calls": [call.as_openai() for call in calls],
+                    }
+                )
+                consents_emitted, read_ephemeral, _raised = await _dispatch_calls(
+                    turn, tool_ctx, calls, attempt, emit, consents_emitted
+                )
+                # One final round to say what happened, with the tool loop
+                # CLOSED (no tools advertised) — the redirect gets one attempt at
+                # the action, never a loop of its own.
+                regenerated, _more, failure = await _gateway_round(
+                    app, turn, model, attempt, (), round_number=0, on_delta=None
+                )
+                if failure is not None:
+                    raise GatewayFailure(failure)
+        except Exception as exc:
+            span.meta.update(redirected=False, error=peers.reason(exc))
+            logger.warning(
+                "consent redirect failed, shipping the correction: %s", peers.reason(exc)
+            )
+            emit(_frame({"correction": correction.text}))
+            return _ConsentRedirect(correction.text, False, consents_emitted, read_ephemeral)
+
+        corrected = regenerated.strip()
+        # Judged ONCE, against the live pending fact, and never re-redirected.
+        try:
+            still_claims = (
+                guards.consent_claim_check(corrected, bool(tool_ctx.consent_sink))
+                is not None
+            )
+        except Exception:
+            logger.exception("consent re-check raised; treating the redirect as clean")
+            still_claims = False
+        if not corrected or still_claims:
+            span.meta["redirected"] = False
+            emit(_frame({"correction": correction.text}))
+            return _ConsentRedirect(correction.text, False, consents_emitted, read_ephemeral)
+
+        span.meta["redirected"] = True
+        emit(_frame({"correction": CONSENT_REDIRECT_NOTE}))
+        emit(_frame({"t": corrected}))
+        return _ConsentRedirect(corrected, True, consents_emitted, read_ephemeral)
+
+
 async def _run_turn(
     app,
     pool: asyncpg.Pool,
@@ -974,68 +1257,22 @@ async def _run_turn(
         # approve landed mid-stream and the web's auto-continue never fired.
         card_raised = False
 
+        def _stream_delta(delta: str) -> None:
+            """Every content delta, live and accumulated: the turn's durable text
+            is exactly what the watcher saw, in order, across every round."""
+            parts.append(delta)
+            emit(_frame({"t": delta}))
+
         for round_number in range(1, rounds_allowed + 1):
-            round_parts: list[str] = []
-            buffer = ToolCallBuffer()
-            with turn.span("llm_call", model or None) as span:
-                span.meta["model"] = model
-                span.meta["round"] = round_number
-                span.meta["tools_advertised"] = not card_raised
-                try:
-                    async with peers.client(app, peers.GATEWAY, GATEWAY_TIMEOUT) as client:
-                        async with client.stream(
-                            "POST",
-                            "/v1/chat/completions",
-                            json=completion_payload(
-                                model, messages, () if card_raised else advertised
-                            ),
-                        ) as response:
-                            served_by = response.headers.get("x-nova-served-by")
-                            if served_by:
-                                span.meta["served_by"] = served_by
-                            if response.status_code != 200:
-                                detail = (await response.aread()).decode(errors="replace")[:400]
-                                raise GatewayFailure(
-                                    f"the gateway refused the request "
-                                    f"({response.status_code}): {detail}"
-                                )
-                            async for line in response.aiter_lines():
-                                line = line.strip()
-                                if not line.startswith("data:"):
-                                    continue
-                                data = line[len("data:") :].strip()
-                                if data == "[DONE]":
-                                    break
-                                try:
-                                    chunk = json.loads(data)
-                                except json.JSONDecodeError:
-                                    span.meta["malformed_chunks"] = (
-                                        span.meta.get("malformed_chunks", 0) + 1
-                                    )
-                                    continue
-                                delta, usage, error, fragments = _chunk_parts(chunk)
-                                if error is not None:
-                                    raise GatewayFailure(f"the gateway reported: {error}")
-                                if usage is not None:
-                                    # Only what the gateway actually reported —
-                                    # a null token count is not a measurement.
-                                    for field in ("prompt_tokens", "completion_tokens"):
-                                        if usage.get(field) is not None:
-                                            span.meta[field] = usage[field]
-                                for fragment in fragments:
-                                    buffer.add(fragment)
-                                if delta:
-                                    parts.append(delta)
-                                    round_parts.append(delta)
-                                    emit(_frame({"t": delta}))
-                except GatewayFailure as exc:
-                    failure = str(exc)
-                    span.meta["error"] = failure
-                except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
-                    failure = f"could not reach the gateway — {peers.reason(exc)}"
-                    span.meta["error"] = failure
-                calls = buffer.finished()
-                span.meta["tool_calls"] = len(calls)
+            round_text, calls, failure = await _gateway_round(
+                app,
+                turn,
+                model,
+                messages,
+                () if card_raised else advertised,
+                round_number=round_number,
+                on_delta=_stream_delta,
+            )
 
             if failure is not None:
                 break
@@ -1049,7 +1286,7 @@ async def _run_turn(
                 messages.append(
                     {
                         "role": "assistant",
-                        "content": "".join(round_parts),
+                        "content": round_text,
                         "tool_calls": [call.as_openai() for call in calls],
                     }
                 )
@@ -1072,39 +1309,15 @@ async def _run_turn(
                     # tool calls on, and not every backend accepts a null
                     # content there.
                     "role": "assistant",
-                    "content": "".join(round_parts),
+                    "content": round_text,
                     "tool_calls": [call.as_openai() for call in calls],
                 }
             )
-            # Sequential, in the model's own order: concurrency is a later
-            # slice, and two tools writing the same file at once is not a
-            # problem worth having yet.
-            for call in calls:
-                emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
-                result, ok, awaiting = await _run_tool(turn, tool_ctx, call)
-                ran_tool = tools.REGISTRY.get(call.name)
-                if ok and ran_tool is not None and ran_tool.ephemeral:
-                    read_ephemeral = True
-                # A card-raising call is "awaiting", not "error": ok is False
-                # (nothing ran) but the operator's decision is pending, so the
-                # live tile must match the span rather than flashing a failure.
-                status = "awaiting" if awaiting else ("ok" if ok else "error")
-                emit(_frame({"activity": {"tool": call.name, "status": status}}))
-                if awaiting:
-                    card_raised = True
-                messages.append(
-                    {"role": "tool", "tool_call_id": call.id, "content": result}
-                )
-                # One frame per card the policy kernel raised on THIS call —
-                # never more than once each, even if the same card gets
-                # appended again (raise_consent reuses an existing pending
-                # row, but the sink still records every dispatch that hit
-                # it): the slice beyond `consents_emitted` is exactly what is
-                # new since the last time this loop looked.
-                new_cards = tool_ctx.consent_sink[consents_emitted:]
-                for card in new_cards:
-                    emit(_frame({"consent": card}))
-                consents_emitted = len(tool_ctx.consent_sink)
+            consents_emitted, ran_ephemeral, raised = await _dispatch_calls(
+                turn, tool_ctx, calls, messages, emit, consents_emitted
+            )
+            read_ephemeral = read_ephemeral or ran_ephemeral
+            card_raised = card_raised or raised
 
         if failure is not None:
             stated = failure
@@ -1232,10 +1445,35 @@ async def _run_turn(
         except Exception:
             logger.exception("consent-claim guard raised; shipping the reply uncorrected")
             consent_correction = None
+        # A fired consent guard gets ONE redirect (the FIX for the walk where
+        # the correction was right and "try again" still did nothing). The
+        # redirect owns the guard's single span and its live frame: on success
+        # it emits a note plus the regenerated reply, on any other outcome the
+        # correction, exactly as this block used to. It spends the turn's one
+        # shared redirect budget either way — trying is what costs, so a
+        # failed redirect can never be followed by a second one below.
+        consent_redirected = False
+        consent_text: str | None = None
         if consent_correction is not None:
-            with turn.span("guard", "consent_claim") as span:
-                span.meta["has_pending_consent"] = has_pending_consent
-            emit(_frame({"correction": consent_correction.text}))
+            outcome = await _consent_redirect(
+                app,
+                turn,
+                model,
+                consent_correction,
+                has_pending_consent,
+                messages,
+                # Defensive, and mechanical: a turn that raised a card has
+                # has_pending_consent True, so the guard cannot have fired —
+                # but if it ever could, the tool loop stays closed.
+                () if card_raised else advertised,
+                tool_ctx,
+                consents_emitted,
+                emit,
+            )
+            consent_text = outcome.text
+            consent_redirected = outcome.redirected
+            consents_emitted = outcome.consents_emitted
+            read_ephemeral = read_ephemeral or outcome.read_ephemeral
 
         # The capability-denial guard, on the same raw reply, same fail-OPEN
         # contract. Derived from the live tool registry (tools.tool_names()): a
@@ -1268,7 +1506,13 @@ async def _run_turn(
         replace_corrections = [
             c for c in (consent_correction, capability_correction) if c is not None
         ]
-        if replace_corrections:
+        if consent_redirected:
+            # The redirect produced a reply that no longer fabricates a pending
+            # state — and may have actually run the tool. THAT is the durable
+            # record: the discarded prose (and any correction about it) already
+            # streamed live, but what the next turn reads is the honest reply.
+            persisted = consent_text or ""
+        elif replace_corrections:
             persisted = "\n\n".join(
                 c.text
                 for c in (correction, consent_correction, capability_correction)
@@ -1298,6 +1542,9 @@ async def _run_turn(
             or consent_correction is not None
             or capability_correction is not None
         )
+        # The turn's single redirect budget, already spent if the consent guard
+        # fired: ONE regeneration per turn, first claim wins, never two.
+        redirect_spent = consent_correction is not None
 
         # The ALWAYS-ON deferral guard, and the FIRST claim on the turn's single
         # redirect budget. Run on the composed reply + this turn's spans + the
@@ -1314,7 +1561,7 @@ async def _run_turn(
             logger.exception("deferral guard raised; shipping the reply uncorrected")
             deferral = None
         deferral_fired = deferral is not None
-        if deferral is not None and not mechanical_guard_fired:
+        if deferral is not None and not mechanical_guard_fired and not redirect_spent:
             # ONE redirect: _deferral_redirect regenerates once (do it now), and
             # REPLACES persisted with the corrected reply — or, if it still
             # defers/errors, appends an honest note. Either way it consumes the
@@ -1351,7 +1598,12 @@ async def _run_turn(
             # start spending extra model calls on every turn.
             logger.exception("responsiveness setting read failed; treating it as off")
             responsiveness_on = False
-        if responsiveness_on and not mechanical_guard_fired and not deferral_fired:
+        if (
+            responsiveness_on
+            and not mechanical_guard_fired
+            and not deferral_fired
+            and not redirect_spent
+        ):
             # The redirect REPLACES persisted on drift; its redirected flag is
             # recorded in the span it files, not needed further here.
             persisted, _redirected = await _responsiveness_redirect(
@@ -1370,9 +1622,14 @@ async def _run_turn(
         # owner's walk hit). The transcript still persists above; only the
         # durable MEMORY must not carry it. Nothing is lost: the funnel raises a
         # fresh card mechanically the next time the model calls the tool.
+        # A consent guard whose REDIRECT succeeded is the exception: the durable
+        # reply is then the regenerated one, which did the work instead of
+        # narrating a pending state, so it is ordinary knowledge again. (A card
+        # raised BY the redirect still lands in the sink and still marks the
+        # turn plumbing, through the first clause.)
         plumbing_turn = (
             bool(tool_ctx.consent_sink)
-            or consent_correction is not None
+            or (consent_correction is not None and not consent_redirected)
             or capability_correction is not None
         )
         # A turn that only READ live external data (a web fetch — an ephemeral

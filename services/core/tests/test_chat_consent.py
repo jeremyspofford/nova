@@ -855,3 +855,211 @@ async def test_a_turn_with_no_card_still_gets_its_full_rounds(
     assert await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'") == (
         "Both pages read."
     )
+
+
+# -- the consent guard's ONE redirect ---------------------------------------
+#
+# The owner's walk, 2026-09-02 22:22: he said "try again" (re-run a device
+# command); the local model answered with a whole-stance "still awaiting your
+# approval" and no tool call; the guard fired correctly (nothing was pending)
+# — and NOTHING WAS RETRIED. The lie was contradicted and the work still did
+# not happen. So a fired consent guard now spends the turn's single redirect
+# budget on ONE regeneration WITH TOOLS: it either does the thing or says
+# plainly that it cannot, and only when that fails does the correction persist.
+
+AUTO_ACTION = "auto_probe"
+FABRICATION = "That's still awaiting your approval — I can't run it until you OK it."
+
+
+def auto_call(call_id: str, url: str) -> dict:
+    return call_delta(
+        0, call_id=call_id, name=AUTO_ACTION, arguments=json.dumps({"url": url})
+    )
+
+
+async def _arm_auto_tool(pool, monkeypatch) -> Spy:
+    """A private AUTO-disposition tool: the redirect's call must actually RUN,
+    raising no card (the owner can set any class to auto — the very reason the
+    correction no longer promises one). Non-ephemeral, so a redirected turn is
+    ordinary knowledge and the ingest assertion means something."""
+    spy = Spy(result="Ran it: the desk light is on.")
+    monkeypatch.setitem(
+        tools.REGISTRY, AUTO_ACTION, Tool(AUTO_ACTION, "d", FETCH_SCHEMA, spy)
+    )
+    await pool.execute(
+        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
+        "consecutive_successes) VALUES ($1, 'outward', 'auto', false, 0) "
+        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'auto', "
+        "earned = false, consecutive_successes = 0, updated_at = now()",
+        AUTO_ACTION,
+    )
+    return spy
+
+
+async def _guard_spans(pool) -> list:
+    return await pool.fetch(
+        "SELECT name, meta FROM turn_spans WHERE kind = 'guard' ORDER BY started_at"
+    )
+
+
+async def test_a_fabricated_pending_claim_is_redirected_and_the_tool_actually_runs(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The headline fix. Round 1 fabricates a pending approval and calls nothing.
+    The guard fires (nothing pending) and, instead of only contradicting it, the
+    turn regenerates ONCE with tools advertised: the redirect calls the tool, it
+    is dispatched through the SAME machinery as any other round (the spy proves
+    the real body ran), and the reply that reports the result REPLACES the
+    durable text. No correction persists — the work happened."""
+    spy = await _arm_auto_tool(pool, monkeypatch)
+    done = "Done — the desk light is on."
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(FABRICATION),),
+            (auto_call("r1", URL),),
+            (text(done),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "try again")
+
+    # The fabrication, ONE redirect round (with tools), then the closing round.
+    assert gateway.calls == 3
+    assert spy.calls == [{"url": URL}]  # the tool really ran
+    assert _activities(sent) == [(AUTO_ACTION, "start"), (AUTO_ACTION, "ok")]
+
+    # The regenerated reply is the durable record — not the lie, not a correction.
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == done
+    assert guards.CONSENT_CLAIM_CORRECTION not in stored
+    assert "awaiting your approval" not in stored
+
+    # Exactly one consent_claim span, recording that the redirect was taken.
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["consent_claim"]
+    assert spans[0]["meta"]["has_pending_consent"] is False
+    assert spans[0]["meta"]["redirected"] is True
+
+    # Live: the note, then the regenerated reply — never the correction.
+    assert _corrections(sent) == [chat.CONSENT_REDIRECT_NOTE]
+    assert [f["t"] for f in sent if isinstance(f, dict) and "t" in f] == [FABRICATION, done]
+
+    # No card was invented anywhere, and a turn that DID the work is knowledge
+    # again — not the "awaiting approval" plumbing an uncorrected turn would be.
+    assert await consents.pending_all(pool) == []
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    await chat.drain_background()
+    assert len(memory.ingests) == 1
+
+
+async def test_a_redirect_that_still_fabricates_persists_the_correction_and_stops(
+    owner_client, pool, mount_peers
+):
+    """Bounded to ONE. If the regeneration repeats the same lie, the correction
+    persists exactly as before and there is no second redirect — two gateway
+    calls, never three (a third would be a loud 500 from the script)."""
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(FABRICATION),),
+            (text("It is still pending your approval, sorry."),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "try again")
+
+    assert gateway.calls == 2  # the reply, one redirect, and stop
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == guards.CONSENT_CLAIM_CORRECTION
+    assert "still pending your approval" not in stored
+    assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
+
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["consent_claim"]  # exactly one, still
+    assert spans[0]["meta"]["redirected"] is False
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+    await chat.drain_background()
+    assert memory.ingests == []  # an uncorrected consent turn stays plumbing
+
+
+async def test_a_gateway_failure_in_the_redirect_ships_the_correction(
+    owner_client, pool, mount_peers
+):
+    """FAIL-OPEN: the redirect's gateway round dies (the script has no round 2,
+    so it answers 500). The turn ships the correction exactly as it did before
+    the redirect existed — never an error frame, never a lost turn."""
+    gateway = ScriptedGateway(rounds=((text(FABRICATION),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "try again")
+
+    assert gateway.calls == 2  # the reply, then the redirect that failed
+    assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
+    assert not [f for f in sent if isinstance(f, dict) and "error" in f]
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == guards.CONSENT_CLAIM_CORRECTION
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["consent_claim"]
+    assert spans[0]["meta"]["redirected"] is False
+    assert spans[0]["meta"]["error"]  # the stated reason, on record
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+
+async def test_no_redirect_when_a_card_really_is_pending(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The toggle still governs everything: with a card actually pending in the
+    conversation, the same 'awaiting your approval' sentence is TRUE, so the
+    guard does not fire, no redirect runs (no extra gateway call — a third would
+    be a loud 500), no span is filed, and the reply stands untouched."""
+    await _arm_consent_tool(pool, monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=((probe_call("c1", URL),), (text("Awaiting your approval."),))
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    first = await _say(owner_client, "check the pricing page")
+    conv_id = first[0]["meta"]["conversation_id"]
+    assert consent_frames(first)
+
+    gateway2 = ScriptedGateway(rounds=((text("That's still awaiting your approval."),),))
+    mount_peers(gateway=gateway2, memory=FakeMemory())
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={"message": "any update?", "conversation_id": conv_id},
+    )
+    sent2 = frames(resp.text)
+
+    assert gateway2.calls == 1  # no redirect: the guard never fired
+    assert _corrections(sent2) == []
+    assert [s["name"] for s in await _guard_spans(pool)] == []
+    stored = await pool.fetch(
+        "SELECT content FROM messages WHERE role = 'assistant' ORDER BY created_at, id"
+    )
+    assert stored[-1]["content"] == "That's still awaiting your approval."
+
+
+async def test_the_consent_redirect_spends_the_shared_budget_so_deferral_cannot(
+    owner_client, pool, mount_peers
+):
+    """ONE redirect per turn, first claim wins. A reply that BOTH fabricates a
+    pending approval AND defers a promised search would qualify for two — the
+    consent guard takes the budget, so the deferral redirect never runs: two
+    gateway calls total and no deferral span anywhere."""
+    both = "That's awaiting your approval. I'll search the web for it once you OK it."
+    checked = "I checked directly: the desk light is already on."
+    gateway = ScriptedGateway(rounds=((text(both),), (text(checked),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "try again")
+
+    assert gateway.calls == 2  # ONE redirect, not two
+    names = [s["name"] for s in await _guard_spans(pool)]
+    assert names == ["consent_claim"]  # deferral never redirected
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == checked
+    assert _corrections(sent) == [chat.CONSENT_REDIRECT_NOTE]
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
