@@ -659,10 +659,16 @@ def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
 # trigger is a CURRENT-state phrase — future/conditional forms ("that would need
 # your approval", "I'd have to request approval", "I can ask for approval") use
 # other words and so never match.
+# MECHANISM-NEUTRAL on purpose. The old wording promised "I'll raise an
+# approval card you can approve or deny" — which is now often FALSE: the owner
+# can set an action class to 'auto' (autonomy.set_disposition), and then the
+# next attempt just RUNS, with no card anywhere. A correction that mis-states
+# how the system behaves is its own small lie, so this says only what is
+# mechanically true (nothing pending, nothing ran) and invites the retry
+# without promising which path it takes.
 CONSENT_CLAIM_CORRECTION = (
-    "Correction: nothing is actually awaiting your approval — I have not "
-    "started that. Ask me to do it and I'll raise an approval card you can "
-    "approve or deny."
+    "Correction: nothing is awaiting your approval and nothing has run. "
+    "Tell me again and I'll do it."
 )
 
 # Present/present-perfect state phrases asserting an action is blocked on the

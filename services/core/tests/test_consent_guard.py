@@ -106,3 +106,29 @@ def test_a_negated_pending_state_does_not_fire():
         )
         is None
     )
+
+
+def test_the_correction_names_no_mechanism_and_trips_no_guard_of_its_own():
+    """MECHANISM-NEUTRAL (2026-09-02): the correction must not promise a card.
+    The owner can set a class to 'auto' (autonomy.set_disposition), and then the
+    next attempt just RUNS — a correction that says "I'll raise an approval card
+    you can approve or deny" would be its own small lie about the system. And,
+    like every other correction text here, it must survive its own family of
+    guards: it is what PERSISTS, so a text that tripped one would be corrected
+    forever."""
+    from app import chat
+
+    text = guards.CONSENT_CLAIM_CORRECTION
+    assert "card" not in text.lower()
+    assert "approve or deny" not in text.lower()
+    assert guards.consent_claim_check(text, has_pending_consent=False) is None
+    assert guards.narration_check(text, []) is None
+    assert guards.capability_claim_check(text, ["fetch_url", "web_search"]) is None
+    assert guards.deferral_check(text, [], ["fetch_url", "web_search"]) is None
+
+    # The live note the redirect ships in front of a regenerated reply is held
+    # to exactly the same bar.
+    note = chat.CONSENT_REDIRECT_NOTE
+    assert guards.consent_claim_check(note, has_pending_consent=False) is None
+    assert guards.narration_check(note, []) is None
+    assert guards.deferral_check(note, [], ["fetch_url", "web_search"]) is None

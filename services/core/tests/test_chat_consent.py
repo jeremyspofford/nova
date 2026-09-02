@@ -355,7 +355,7 @@ async def test_a_parroted_pending_claim_with_no_real_card_is_corrected(
     assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
     # REPLACE, not append: correction only, none of the fabricated prose. (The
-    # correction itself says "nothing is actually awaiting your approval", so the
+    # correction itself says "nothing is awaiting your approval", so the
     # tell is the model's OWN wording — "That fetch is awaiting", "OK'ing it".)
     assert stored == guards.CONSENT_CLAIM_CORRECTION
     assert "That fetch is awaiting" not in stored
