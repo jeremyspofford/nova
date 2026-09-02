@@ -23,6 +23,8 @@ import json
 import uuid
 from dataclasses import dataclass, field
 
+import pytest
+
 from app import chat, consents, guards, tools
 from app.main import app
 from app.tools import web, web_search
@@ -342,7 +344,14 @@ async def test_a_parroted_pending_claim_with_no_real_card_is_corrected(
     made no tool call and nothing is pending. The guard contradicts it on its
     own frame, records a guard span — and the PERSISTED reply is the correction
     ALONE (the anti-poison fix): the fabricated prose must not survive into the
-    record, or the next turn's history would replay it."""
+    record, or the next turn's history would replay it.
+
+    Post-redirect-wave this is also the FAIL-OPEN path, ASSERTED rather than
+    relied on: the one-round script leaves the redirect no round to regenerate
+    from (the script answers 500), so the redirect is attempted — two gateway
+    calls — and its failure degrades to exactly this pre-wave behaviour, with
+    the stated reason on the span. Without those assertions the test would pass
+    identically if the redirect had silently stopped running at all."""
     fabrication = (
         "That fetch is awaiting your approval — I can't complete it "
         "without you OK'ing it."
@@ -352,6 +361,9 @@ async def test_a_parroted_pending_claim_with_no_real_card_is_corrected(
 
     sent = await _say(owner_client, "what's new on bigblueview.com")
 
+    # The reply, then the ONE redirect the guard is entitled to (refused by the
+    # exhausted script) — never a third call, and never zero.
+    assert gateway.calls == 2
     assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
     # REPLACE, not append: correction only, none of the fabricated prose. (The
@@ -363,6 +375,11 @@ async def test_a_parroted_pending_claim_with_no_real_card_is_corrected(
     guard = await pool.fetchrow("SELECT name, meta FROM turn_spans WHERE kind = 'guard'")
     assert guard["name"] == "consent_claim"
     assert guard["meta"]["has_pending_consent"] is False
+    # The redirect really was attempted and really did fail open: the span says
+    # so out loud, rather than the test inferring it from the correction alone.
+    assert guard["meta"]["ran_a_tool"] is False
+    assert guard["meta"]["redirected"] is False
+    assert guard["meta"]["error"]
     # No card was invented — the whole point.
     assert await consents.pending_all(pool) == []
 
@@ -590,6 +607,10 @@ async def test_both_guards_firing_compose_coherently_without_the_lie(
 
     sent = await _say(owner_client, "make a report and check the page")
 
+    # The reply, then the ONE refused redirect: this composition is the
+    # FAIL-OPEN outcome, and saying so here stops the test passing by the
+    # redirect having quietly stopped running.
+    assert gateway.calls == 2
     # Both corrections streamed, in order (narration, then consent), each once.
     assert _corrections(sent) == [
         guards.CORRECTION_TEXT,
@@ -606,8 +627,13 @@ async def test_both_guards_firing_compose_coherently_without_the_lie(
     # correction (asserted above, for the operator); but this is a consent-flow
     # turn, so durable MEMORY ingests nothing — neither fabrication nor
     # correction crosses into later turns' recall.
-    guards_seen = await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'guard'")
+    guards_seen = await pool.fetch(
+        "SELECT name, meta FROM turn_spans WHERE kind = 'guard'"
+    )
     assert sorted(g["name"] for g in guards_seen) == ["consent_claim", "narration"]
+    consent_span = next(g for g in guards_seen if g["name"] == "consent_claim")
+    assert consent_span["meta"]["redirected"] is False
+    assert consent_span["meta"]["error"]  # tried, failed open — not skipped
     await chat.drain_background()
     assert memory.ingests == []
 
@@ -1231,3 +1257,337 @@ async def test_a_continuation_of_no_real_consent_is_an_ordinary_message(
     )
     assert resp.status_code == 200
     assert "go ahead now" in _history_sent(gateway2)
+
+
+# -- the redirect's own output is VETTED, and gated on side effects ----------
+#
+# Adversarial review of the redirect wave (2026-09-02), reproduced by execution.
+# The redirect does not just re-word: its output REPLACES the durable record and
+# is INGESTED, and it can CALL TOOLS. Both of those need a mechanical bound:
+#
+#   * C1 — the regenerated reply was judged by consent_claim_check ALONE, so a
+#     regen that fabricated a COMPLETED action ("I've saved it to report.md")
+#     persisted unvetted AND was ingested into per-person memory. Trading a
+#     pending-state lie for a completed-action one is a worse trade, because the
+#     second one crosses conversations through recall.
+#   * I2 — nothing gated the redirect on what the turn had already DONE, so a
+#     turn that really ran the tool in round 1 and then falsely narrated
+#     "awaiting approval" ran it a SECOND time; and the dispatch could happen
+#     past the round cap.
+
+
+NARRATION_LIE = (
+    "Done — KV offloading moves the attention cache to CPU RAM. "
+    "I've saved this to kv_offloading.md."
+)
+
+
+async def test_a_regenerated_reply_that_fabricates_a_completed_action_is_refused(
+    owner_client, pool, mount_peers
+):
+    """C1, the reviewer's exact repro. Round 1 fabricates a pending approval; the
+    redirect answers with a completed-action claim no span backs. The regen is
+    REJECTED by the narration guard, so the correction persists exactly as it did
+    before the redirect existed, the span names the guard that refused, and the
+    turn stays plumbing — the fabrication never reaches memory."""
+    gateway = ScriptedGateway(rounds=((text(FABRICATION),), (text(NARRATION_LIE),)))
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "try again")
+
+    assert gateway.calls == 2  # the reply, one redirect, and stop
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == guards.CONSENT_CLAIM_CORRECTION
+    assert "kv_offloading.md" not in stored  # the regen's lie does not persist
+    assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
+
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["consent_claim"]
+    assert spans[0]["meta"]["redirected"] is False
+    assert spans[0]["meta"]["regen_rejected_by"] == "narration"
+
+    await chat.drain_background()
+    assert memory.ingests == []  # a refused regen leaves the turn plumbing
+
+
+async def test_a_rejected_regen_still_persists_the_original_capability_correction(
+    owner_client, pool, mount_peers
+):
+    """C1's second half: a rejected regen must not silently drop the OTHER
+    corrections the original reply earned. A reply that both fabricates a pending
+    state and denies a capability it holds fires two guards; when the redirect is
+    refused, the record is exactly what the pre-redirect code composed — both
+    corrections, adjacent, no fabrication between them."""
+    reply = "That's awaiting your approval. I cannot access external websites."
+    gateway = ScriptedGateway(rounds=((text(reply),), (text(NARRATION_LIE),)))
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "what's the latest from bigblueview.com?")
+
+    corrections = _corrections(sent)
+    assert corrections[0] == guards.CONSENT_CLAIM_CORRECTION
+    assert "fetch_url" in corrections[1]  # the capability correction, still there
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == f"{guards.CONSENT_CLAIM_CORRECTION}\n\n{corrections[1]}"
+    assert "I cannot access external websites" not in stored
+    assert "kv_offloading.md" not in stored
+
+    names = [s["name"] for s in await _guard_spans(pool)]
+    assert names == ["consent_claim", "capability_claim"]
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+async def test_no_redirect_when_the_turn_already_ran_the_tool(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """I2, reproduced: round 1 REALLY runs the tool, round 2 falsely narrates
+    'awaiting your approval' about it. Redirecting would dispatch the same call a
+    SECOND time — a duplicated side effect is worse than the lie. Derived from
+    the turn's spans (a successful tool span), never from the prose: the spy is
+    called exactly once, no third gateway round happens, and the span states
+    why."""
+    spy = await _arm_auto_tool(pool, monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=(
+            (auto_call("r1", URL),),
+            (text("That's awaiting your approval — I can't run it yet."),),
+        )
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "turn on the desk light")
+
+    assert spy.calls == [{"url": URL}]  # ONCE — never twice
+    assert gateway.calls == 2  # no redirect round at all
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == guards.CONSENT_CLAIM_CORRECTION
+    assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
+
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["consent_claim"]
+    assert spans[0]["meta"]["redirected"] is False
+    assert spans[0]["meta"]["ran_a_tool"] is True
+    assert spans[0]["meta"]["not_redirected_because"] == "tools_already_ran"
+
+
+async def test_no_redirect_dispatch_when_the_turn_ran_out_of_rounds(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """I2's other half: a turn that hit its round cap must not get one more tool
+    dispatch through the redirect's side door. The cap round narrates the
+    fabrication and asks for a tool; nothing is dispatched, and the redirect
+    refuses to start."""
+    spy = await _arm_auto_tool(pool, monkeypatch)
+    resp = await owner_client.put(
+        "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": 1}
+    )
+    assert resp.status_code == 200, resp.text
+    gateway = ScriptedGateway(
+        rounds=((text("That's awaiting your approval."), auto_call("r1", URL)),)
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "turn on the desk light")
+
+    assert spy.calls == []  # nothing dispatched, in the round OR the redirect
+    assert gateway.calls == 1
+    assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
+    spans = await _guard_spans(pool)
+    assert spans[0]["meta"]["redirected"] is False
+    assert spans[0]["meta"]["not_redirected_because"] == "out_of_rounds"
+
+
+def test_the_redirect_nudge_refuses_to_state_a_fact_that_is_not_true():
+    """The nudge asserts 'nothing is pending and nothing has run', so it is BUILT
+    from those two facts rather than written as a constant that could drift out
+    of step with them. Told otherwise, it refuses — a lie to the model is what
+    produces the double execution above."""
+    nudge = chat.consent_redirect_nudge(has_pending_consent=False, ran_a_tool=False)
+    assert "No approval is pending and nothing has run this turn" in nudge
+    for pending, ran in ((True, False), (False, True), (True, True)):
+        with pytest.raises(ValueError):
+            chat.consent_redirect_nudge(has_pending_consent=pending, ran_a_tool=ran)
+
+
+# -- continuation_of is SCOPED, and a plumbing turn stays out of memory ------
+#
+# Same review, the other two findings. Citing a consent id marks a message
+# plumbing, which removes it from every later history window — so the id is a
+# request to make something unreadable, and existence is nowhere near enough
+# authority for it: every authenticated caller can list ids (GET
+# /api/v1/consents), so a bare existence check let anyone cite a DENIED card, or
+# another conversation's, or another person's, to hide any message they liked
+# (I3). And an approved continuation that resolved cleanly still ingested "You're
+# approved: … Please go ahead now." into per-person memory, where recall carries
+# it into other conversations — the poisoning the kind column exists to stop,
+# arriving through the ingest door instead (I4).
+
+
+async def _plant_consent(pool, *, person_id, conversation_id, status: str) -> str:
+    """A consent row in a chosen state, for the scoping cases. Written directly
+    because the point is what the LOOKUP refuses, not how the row was made."""
+    return str(
+        await pool.fetchval(
+            "INSERT INTO consents (action_class, args_hash, requestor_person, "
+            "requestor_agent, conversation_id, args, summary, status, expires_at) "
+            "VALUES ($1, 'h', $2, 'chat', $3, '{}'::jsonb, 'do the thing', $4, "
+            "now() + interval '1 hour') RETURNING id",
+            CONSENT_ACTION,
+            person_id,
+            conversation_id,
+            status,
+        )
+    )
+
+
+async def _kind_of(pool, content: str) -> str:
+    return await pool.fetchval("SELECT kind FROM messages WHERE content = $1", content)
+
+
+async def test_a_denied_cards_id_cannot_mark_a_message_plumbing(
+    owner_client, pool, mount_peers
+):
+    """I3: a card the operator DENIED is not a card anyone is resuming. Citing it
+    leaves the message ordinary chat — visible to later turns, exactly as if the
+    field had not been sent."""
+    gateway = ScriptedGateway(rounds=((text("Sure."),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    first = await _say(owner_client, "hello")
+    conv_id = uuid.UUID(first[0]["meta"]["conversation_id"])
+    denied = await _plant_consent(
+        pool, person_id=await _owner_id(pool), conversation_id=conv_id, status="denied"
+    )
+
+    gateway2 = ScriptedGateway(rounds=((text("Ok."),),))
+    mount_peers(gateway=gateway2, memory=FakeMemory())
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={
+            "message": "hide this one",
+            "conversation_id": str(conv_id),
+            "continuation_of": denied,
+        },
+    )
+    assert resp.status_code == 200
+    assert await _kind_of(pool, "hide this one") == "chat"
+
+    gateway3 = ScriptedGateway(rounds=((text("Yes."),),))
+    mount_peers(gateway=gateway3, memory=FakeMemory())
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={"message": "and now?", "conversation_id": str(conv_id)},
+    )
+    assert resp.status_code == 200
+    assert "hide this one" in _history_sent(gateway3)  # never hidden
+
+
+async def test_another_persons_or_conversations_card_cannot_mark_a_message_plumbing(
+    owner_client, pool, mount_peers
+):
+    """I3: an APPROVED card is still only resumable by the person who requested
+    it, in the conversation it was raised in. Both mismatches leave the message
+    ordinary chat."""
+    gateway = ScriptedGateway(rounds=((text("Sure."),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    first = await _say(owner_client, "hello")
+    conv_id = uuid.UUID(first[0]["meta"]["conversation_id"])
+    owner_id = await _owner_id(pool)
+
+    stranger = await pool.fetchval(
+        "INSERT INTO people (name, role, password_hash) VALUES ('sam', 'adult', 'x') "
+        "RETURNING id"
+    )
+    other_conversation = await pool.fetchval(
+        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", owner_id
+    )
+    theirs = await _plant_consent(
+        pool, person_id=stranger, conversation_id=conv_id, status="approved"
+    )
+    elsewhere = await _plant_consent(
+        pool, person_id=owner_id, conversation_id=other_conversation, status="approved"
+    )
+
+    for label, consent_id in (("theirs", theirs), ("elsewhere", elsewhere)):
+        gw = ScriptedGateway(rounds=((text("Ok."),),))
+        mount_peers(gateway=gw, memory=FakeMemory())
+        resp = await owner_client.post(
+            "/api/v1/chat/stream",
+            json={
+                "message": f"borrowed {label}",
+                "conversation_id": str(conv_id),
+                "continuation_of": consent_id,
+            },
+        )
+        assert resp.status_code == 200
+        assert await _kind_of(pool, f"borrowed {label}") == "chat", label
+
+
+async def test_a_malformed_continuation_of_is_absent_not_a_refusal(
+    owner_client, pool, mount_peers
+):
+    """M7: continuation_of is an optional HINT that can only remove a message
+    from future history. A malformed one must cost nothing — no 422 from the
+    model layer, no lost turn: it is simply treated as absent."""
+    gateway = ScriptedGateway(rounds=((text("Sure."),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={"message": "go ahead now", "continuation_of": "not-a-uuid"},
+    )
+    assert resp.status_code == 200  # never a 4xx over a hint
+    assert await _kind_of(pool, "go ahead now") == "chat"
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+
+async def test_an_approved_continuation_turn_is_never_ingested(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """I4: the happy path — the operator approved, the continuation runs the
+    action cleanly, no new card. The turn still must not reach memory: ingesting
+    it puts "You're approved: … Please go ahead now." into per-person recall,
+    which crosses conversations and teaches exactly the approval-choreography
+    pattern the kind column exists to keep out."""
+    await _arm_consent_tool(pool, monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=((probe_call("c1", URL),), (text("Awaiting your approval."),))
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    first = await _say(owner_client, "check the pricing page")
+    card = consent_frames(first)[0]
+    conv_id = first[0]["meta"]["conversation_id"]
+    await consents.decide(
+        pool,
+        consent_id=uuid.UUID(card["consent_id"]),
+        approve=True,
+        decided_by=await _owner_id(pool),
+    )
+
+    continuation = f"You're approved: {card['summary']}. Please go ahead now."
+    # The re-attempt burns the consent and RUNS: an ordinary, successful turn in
+    # every respect except that its user message is plumbing.
+    gateway2 = ScriptedGateway(
+        rounds=((probe_call("c2", URL),), (text("Done — I read the pricing page."),))
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway2, memory=memory)
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={
+            "message": continuation,
+            "conversation_id": conv_id,
+            "continuation_of": card["consent_id"],
+        },
+    )
+    assert resp.status_code == 200
+    assert consent_frames(frames(resp.text)) == []  # no new card: it just ran
+    assert await _kind_of(pool, continuation) == "plumbing"
+
+    await chat.drain_background()
+    assert memory.ingests == []
+    for ingest in memory.ingests:  # belt and braces if the skip ever loosens
+        assert "You're approved" not in json.dumps(ingest)

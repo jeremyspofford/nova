@@ -229,6 +229,38 @@ async def get(pool: asyncpg.Pool, consent_id: uuid.UUID) -> asyncpg.Record | Non
     return await pool.fetchrow("SELECT * FROM consents WHERE id = $1", consent_id)
 
 
+async def get_for_continuation(
+    pool: asyncpg.Pool,
+    consent_id: uuid.UUID,
+    *,
+    conversation_id: uuid.UUID,
+    person_id: uuid.UUID,
+) -> asyncpg.Record | None:
+    """The ONE consent a continuation may legitimately claim to be resuming.
+
+    chat.py marks a user message 'plumbing' when it cites the consent it
+    resumes, and a plumbing row is dropped from every later history window — so
+    citing an id is a request to REMOVE a message from what the model will ever
+    read again. Existence is not remotely enough authority for that: every
+    authenticated caller can list ids (GET /api/v1/consents), so a bare
+    `get()` would let anyone cite a denied card, another conversation's card, or
+    another person's card and quietly hide any message they liked.
+
+    So the WHERE clause is the whole check, the way the burn's is
+    (validate_and_use): the card must be THIS conversation's, THIS person's,
+    and APPROVED — the only state a continuation can honestly resume. Anything
+    else returns None and the message stays ordinary chat. Scoped mechanically,
+    never by trusting the id the client sent.
+    """
+    return await pool.fetchrow(
+        "SELECT * FROM consents WHERE id = $1 AND conversation_id = $2 "
+        "AND requestor_person = $3 AND status = 'approved'",
+        consent_id,
+        conversation_id,
+        person_id,
+    )
+
+
 async def pending_for_conversation(
     pool: asyncpg.Pool, conversation_id: uuid.UUID
 ) -> list[dict]:

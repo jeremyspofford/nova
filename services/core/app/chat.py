@@ -87,18 +87,32 @@ _VERDICT_RE = re.compile(r"\b(on|off)[_\s-]?topic\b", re.I)
 # suite) neither trips deferral_check itself.
 DEFERRAL_NOTE = "Doing that now instead of just saying I would."
 
-# The consent-claim redirect's nudge and live note (FIX 1, owner walk
-# 2026-09-02 22:22). The nudge STATES THE MECHANICAL FACTS the guard just
-# established — no card is pending, no tool ran this turn — and asks for one of
-# exactly two honest outcomes: do it now, or say plainly you cannot. It names
-# no mechanism ("a card will be raised") because the class may be 'auto'. The
-# note, like DEFERRAL_NOTE, carries no completed-action claim and no
-# pending-state phrase, so the mechanical guards stay clean over it.
-CONSENT_REDIRECT_NUDGE = (
-    "No approval is pending and nothing has run this turn. Do it now by "
-    "calling the tool, or say plainly that you cannot."
-)
+# The consent-claim redirect's live note (owner walk 2026-09-02 22:22). Like
+# DEFERRAL_NOTE it carries no completed-action claim and no pending-state
+# phrase, so the mechanical guards stay clean over it.
 CONSENT_REDIRECT_NOTE = "Nothing was pending — doing it now instead of waiting."
+
+
+def consent_redirect_nudge(*, has_pending_consent: bool, ran_a_tool: bool) -> str:
+    """The redirect's nudge, DERIVED from the facts the caller measured.
+
+    The sentence asserts two things about the turn — no approval is pending, and
+    nothing has run — so it is built from those two booleans rather than written
+    out as a constant that could drift away from the truth. If either fact does
+    not hold the sentence would be a lie, and a lie told to the model is how you
+    get the tool run a SECOND time (the double-execution the redirect is gated
+    against); so this REFUSES rather than emitting it. The caller's fail-open
+    turns that refusal into the ordinary correction, never an error frame.
+    """
+    if has_pending_consent or ran_a_tool:
+        raise ValueError(
+            "the redirect nudge asserts nothing is pending and nothing has run; "
+            f"has_pending_consent={has_pending_consent} ran_a_tool={ran_a_tool}"
+        )
+    return (
+        "No approval is pending and nothing has run this turn. Do it now by "
+        "calling the tool, or say plainly that you cannot."
+    )
 
 
 def _deferral_honest_note(action_phrase: str) -> str:
@@ -154,8 +168,13 @@ class ChatRequest(BaseModel):
     # approve — chat-store.tsx). It marks the user row as plumbing so later
     # turns never read the choreography back; see MESSAGE_KIND_* below. It is
     # a HINT, never a permission: nothing about the turn changes, and a value
-    # naming no real consent is simply ignored.
-    continuation_of: uuid.UUID | None = None
+    # that does not name a consent this person may resume is simply ignored.
+    #
+    # Typed `str`, not `uuid.UUID`, deliberately: a uuid field makes pydantic
+    # reject a malformed value with a 422 BEFORE the endpoint runs, which would
+    # cost the operator a whole turn over an optional hint. Parsed leniently
+    # below instead — unparseable means absent.
+    continuation_of: str | None = None
 
 
 # Detached work held so it can be awaited at shutdown instead of vanishing
@@ -177,6 +196,22 @@ async def drain_background() -> None:
     """Wait for everything fired and forgotten so far."""
     while _BACKGROUND:
         await asyncio.gather(*list(_BACKGROUND), return_exceptions=True)
+
+
+def _as_uuid(value: str | None) -> uuid.UUID | None:
+    """A uuid, or None — a malformed one is ABSENT, never an error.
+
+    continuation_of is an optional hint that can only ever remove a message from
+    future history. Refusing the turn over a bad one would cost the operator the
+    whole message to protect nothing.
+    """
+    if not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except (ValueError, AttributeError, TypeError):
+        logger.info("continuation_of was not a uuid; treating the message as chat")
+        return None
 
 
 def _frame(payload: dict) -> str:
@@ -1083,6 +1118,47 @@ async def _deferral_redirect(
 # responsiveness redirect can never also run.
 
 
+def _regen_rejected_by(
+    corrected: str, turn: traces.Turn, tool_ctx: tools.ToolContext
+) -> str | None:
+    """Which mechanical guard, if any, REFUSES the regenerated reply.
+
+    The redirect's output does not just stream — it REPLACES the durable record
+    and (unlike a corrected turn) is INGESTED into per-person memory. So it must
+    clear the same bar the model's own reply had to clear, not merely the
+    consent re-check that motivated the redirect: the full mechanical set, over
+    THIS turn's live spans and the live tool registry. Without that, a regen
+    answering "Done — I've saved it to report.md" with no span behind it would
+    persist unvetted and poison recall — trading a pending-state fabrication for
+    a completed-action one, which is worse, because it is ingested.
+
+    Returns the NAME of the first guard that fires (checked cheapest-first, in
+    the same order the turn runs them), or None when the regen is clean. Each
+    check is fail-OPEN on its own: a guard that raises is logged and does not
+    reject, exactly as in the turn body.
+    """
+    checks: tuple[tuple[str, Callable[[], object | None]], ...] = (
+        (
+            "consent_claim",
+            lambda: guards.consent_claim_check(corrected, bool(tool_ctx.consent_sink)),
+        ),
+        ("narration", lambda: guards.narration_check(corrected, turn.spans)),
+        (
+            "capability_claim",
+            lambda: guards.capability_claim_check(corrected, tools.tool_names()),
+        ),
+    )
+    for name, check in checks:
+        try:
+            if check() is not None:
+                return name
+        except Exception:
+            logger.exception(
+                "%s re-check raised over the redirect; not rejecting on it", name
+            )
+    return None
+
+
 @dataclass
 class _ConsentRedirect:
     """What the one redirect produced, as facts the caller composes from."""
@@ -1099,6 +1175,7 @@ async def _consent_redirect(
     model: str,
     correction: guards.Correction,
     has_pending_consent: bool,
+    out_of_rounds: bool,
     messages: Sequence[dict],
     advertised: Sequence[dict],
     tool_ctx: tools.ToolContext,
@@ -1109,17 +1186,33 @@ async def _consent_redirect(
 
     Outcomes, all recorded on the turn's single 'consent_claim' guard span:
 
-      * The regeneration no longer claims a pending approval (and may have
-        actually called the tool): it REPLACES the durable text — the fabricated
-        prose already streamed live, but what the NEXT turn reads is the reply
-        that did the work. redirected=True.
-      * It still claims one, produces nothing, or the gateway fails: the
-        correction persists exactly as before. redirected=False.
+      * The regeneration is CLEAN under the full mechanical guard set (and may
+        have actually called the tool): it REPLACES the durable text — the
+        fabricated prose already streamed live, but what the NEXT turn reads is
+        the reply that did the work. redirected=True.
+      * It is rejected by a guard, produces nothing, or the gateway fails: the
+        correction persists exactly as before, the turn stays plumbing (not
+        ingested), and the span names the rejecting guard. redirected=False.
 
-    The re-check uses the LIVE pending fact, not the stale one: if the redirect's
-    own call raised a card, an "awaiting your approval" reply is then TRUE and
-    must not be corrected — the same boolean that makes the guard fire or stay
-    silent, read again after the tools ran.
+    Two mechanical PRECONDITIONS, checked before anything is generated, because
+    a redirect is an ACTION and not just a re-word:
+
+      * NOTHING RAN YET (guards.ran_a_tool over this turn's spans). If round 1
+        really executed the tool and round 2 merely narrated "awaiting approval"
+        about it, redirecting would run it a SECOND time — a duplicated side
+        effect, which is worse than the lie it was correcting.
+      * THE TURN IS NOT OUT OF ROUNDS. A turn that hit its round cap must not
+        get one more dispatch through a side door.
+
+    Either way the correction ships with a stated reason in the span. The nudge
+    itself is DERIVED from the same facts (consent_redirect_nudge), so the
+    sentence "nothing has run this turn" is true by construction rather than by
+    a comment promising it is.
+
+    The consent re-check uses the LIVE pending fact, not the stale one: if the
+    redirect's own call raised a card, an "awaiting your approval" reply is then
+    TRUE and must not be corrected — the same boolean that makes the guard fire
+    or stay silent, read again after the tools ran.
 
     FAIL-OPEN throughout: any exception ships the correction, never an error
     frame and never a lost turn.
@@ -1129,11 +1222,33 @@ async def _consent_redirect(
         # The fact the guard fired on, recorded as the caller measured it (the
         # guard only fires on False) — read from the caller, never asserted here.
         span.meta["has_pending_consent"] = has_pending_consent
-        attempt: list[dict] = [
-            *messages,
-            {"role": "system", "content": CONSENT_REDIRECT_NUDGE},
-        ]
+        # DERIVED from the turn's own spans, never from the reply's prose: a
+        # successful tool span means the work already happened this turn.
+        ran_a_tool = guards.ran_a_tool(turn.spans)
+        span.meta["ran_a_tool"] = ran_a_tool
+        blocked = (
+            "tools_already_ran"
+            if ran_a_tool
+            else ("out_of_rounds" if out_of_rounds else None)
+        )
+        if blocked is not None:
+            # No regeneration at all: doing the work twice, or past the cap, is
+            # not a correction. The lie is still contradicted, as before.
+            span.meta.update(redirected=False, not_redirected_because=blocked)
+            logger.info("consent redirect skipped (%s); shipping the correction", blocked)
+            emit(_frame({"correction": correction.text}))
+            return _ConsentRedirect(correction.text, False, consents_emitted, read_ephemeral)
+
         try:
+            attempt: list[dict] = [
+                *messages,
+                {
+                    "role": "system",
+                    "content": consent_redirect_nudge(
+                        has_pending_consent=has_pending_consent, ran_a_tool=ran_a_tool
+                    ),
+                },
+            ]
             # round_number 0: not one of the turn's numbered rounds — this is
             # the redirect, and the span says so rather than pretending to be
             # round N+1. Deltas are collected silently: the regenerated text is
@@ -1178,17 +1293,18 @@ async def _consent_redirect(
             return _ConsentRedirect(correction.text, False, consents_emitted, read_ephemeral)
 
         corrected = regenerated.strip()
-        # Judged ONCE, against the live pending fact, and never re-redirected.
-        try:
-            still_claims = (
-                guards.consent_claim_check(corrected, bool(tool_ctx.consent_sink))
-                is not None
-            )
-        except Exception:
-            logger.exception("consent re-check raised; treating the redirect as clean")
-            still_claims = False
-        if not corrected or still_claims:
+        # Judged ONCE by the FULL mechanical set — this text is about to replace
+        # the durable record AND be ingested — and never re-redirected.
+        rejected_by = _regen_rejected_by(corrected, turn, tool_ctx) if corrected else None
+        if not corrected or rejected_by is not None:
             span.meta["redirected"] = False
+            if rejected_by is not None:
+                span.meta["regen_rejected_by"] = rejected_by
+                logger.warning(
+                    "consent redirect regenerated a reply the %s guard refused; "
+                    "shipping the correction",
+                    rejected_by,
+                )
             emit(_frame({"correction": correction.text}))
             return _ConsentRedirect(correction.text, False, consents_emitted, read_ephemeral)
 
@@ -1209,6 +1325,8 @@ async def _run_turn(
     model: str,
     max_tool_rounds: int,
     emit: Callable[[str | None], None],
+    *,
+    message_kind: str = MESSAGE_KIND_CHAT,
 ) -> None:
     """The whole turn, run to completion regardless of who is still watching.
 
@@ -1494,6 +1612,9 @@ async def _run_turn(
                 model,
                 consent_correction,
                 has_pending_consent,
+                # A turn already at its round cap gets no extra dispatch through
+                # the redirect's side door.
+                out_of_rounds,
                 messages,
                 # Defensive, and mechanical: a turn that raised a card has
                 # has_pending_consent True, so the guard cannot have fired —
@@ -1672,10 +1793,19 @@ async def _run_turn(
         # narrating a pending state, so it is ordinary knowledge again. (A card
         # raised BY the redirect still lands in the sink and still marks the
         # turn plumbing, through the first clause.)
+        #
+        # And a turn whose USER MESSAGE is plumbing is plumbing whatever else
+        # happens in it — including the happy path where the approved action
+        # runs cleanly and no new card is raised. Otherwise the ingest carries
+        # "You're approved: <summary>. Please go ahead now." into per-person
+        # memory, where recall re-injects the choreography into later turns in
+        # other conversations: exactly the poisoning the kind column exists to
+        # stop, arriving by the other door.
         plumbing_turn = (
             bool(tool_ctx.consent_sink)
             or (consent_correction is not None and not consent_redirected)
             or capability_correction is not None
+            or message_kind == MESSAGE_KIND_PLUMBING
         )
         # A turn that only READ live external data (a web fetch — an ephemeral
         # tool) is a point-in-time snapshot, not durable knowledge. Ingesting it
@@ -1744,9 +1874,20 @@ async def chat_stream(
     # future history, so a lookup that cannot confirm it must not turn a real
     # message into an error, and must not silently hide it either.
     kind = MESSAGE_KIND_CHAT
-    if body.continuation_of is not None:
+    resumed_id = _as_uuid(body.continuation_of)
+    if resumed_id is not None:
         try:
-            resumed = await consents.get(pool, body.continuation_of)
+            # SCOPED, never a bare existence check: citing an id is a request to
+            # hide a message from every later history window, and every
+            # authenticated caller can list ids (GET /api/v1/consents). The card
+            # must be THIS conversation's, THIS person's, and APPROVED — the
+            # only state a continuation can honestly resume.
+            resumed = await consents.get_for_continuation(
+                pool,
+                resumed_id,
+                conversation_id=conversation_id,
+                person_id=person.id,
+            )
         except Exception:
             logger.exception(
                 "continuation_of lookup failed; persisting the message as ordinary chat"
@@ -1808,6 +1949,7 @@ async def chat_stream(
             model,
             max_tool_rounds,
             queue.put_nowait,
+            message_kind=kind,
         )
     )
 

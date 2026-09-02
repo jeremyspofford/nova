@@ -568,6 +568,18 @@ def _successful(spans: Sequence[Any]) -> list[Any]:
     return out
 
 
+def ran_a_tool(spans: Sequence[Any]) -> bool:
+    """Did this turn actually RUN something? Derived from the spans, never prose.
+
+    One derivation, shared: `_successful` is the same filter every claim check
+    already uses to decide what a reply may assert (kind 'tool', meta.ok True,
+    a name). chat.py's consent redirect reads it to refuse re-running work that
+    already happened — a redirect after a real execution would dispatch the tool
+    a SECOND time.
+    """
+    return bool(_successful(spans))
+
+
 def _target_of(span: Any) -> str | None:
     """The path/url a span actually touched, or None when it cannot be read.
 

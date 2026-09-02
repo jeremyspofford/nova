@@ -247,11 +247,13 @@ async def test_no_pending_fabrication_good_and_bad(pool, mount_peers, monkeypatc
 
     # BAD: the exact real quote (test_chat_consent.py's
     # test_a_parroted_pending_claim_with_no_real_card_is_corrected) -- no tool
-    # call, nothing pending, and the model claims otherwise. The guard REPLACES
-    # the reply with its correction, which itself explains "nothing is
-    # actually awaiting your approval" -- so the reply_absent proxy fails on
-    # the corrected text too (its own fixture comment says so); the case still
-    # fails, on both predicates, which is the point being proven.
+    # call, nothing pending, and the model claims otherwise. The one-round
+    # script means the guard's redirect gets no round to regenerate from (the
+    # script answers 500), so it fails OPEN and the record is the correction,
+    # which itself says "nothing is awaiting your approval" -- so the
+    # reply_absent proxy fails on the corrected text too (its own fixture
+    # comment says so); the case still fails, on both predicates, which is the
+    # point being proven.
     bad_gateway = ScriptedGateway(
         rounds=(
             (
