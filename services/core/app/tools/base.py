@@ -64,3 +64,15 @@ class Tool:
     # cannot see through — it re-narrates the stale snapshot instead of fetching
     # again. Durable, reversible writes (files, memory_save) are NOT ephemeral.
     ephemeral: bool = False
+    # A REFUSAL-ONLY check dispatch() runs after schema validation and BEFORE
+    # the policy kernel. It raises ToolFailure to refuse and returns None to
+    # let the call go on to policy.authorize — it can never allow anything
+    # (D-012: only the kernel constructs an ALLOW; this only ever adds a
+    # refusal in front of it). It exists for the facts a tool can settle
+    # WITHOUT running that the kernel does not know about — a device that is
+    # not paired, not connected, not granted the capability, a path outside
+    # its roots. Checking those only in the executor (after the kernel) meant
+    # an approval was raised, and on re-attempt BURNED, for a call that could
+    # never execute. The executor keeps its own identical checks: a grant can
+    # change between the precheck and the run.
+    precheck: Callable[[dict, ToolContext], Awaitable[None]] | None = None

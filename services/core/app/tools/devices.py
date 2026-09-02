@@ -8,17 +8,28 @@ kernel gates by action-class DISPOSITION (auto vs consent), read live from the
 seeded rows.
 
 What each envelope-backed tool adds, in code and before it ever sends, is the
-PER-DEVICE layer the kernel does not know about:
+PER-DEVICE layer the kernel does not know about (`_admit`):
 
   1. resolve the device by name (get_live_by_name) — a revoked or unknown name
-     is a stated ToolFailure, never a silent no-op;
-  2. the live grant check — the capability this tool needs must be in the row's
+     is a stated ToolFailure naming the live devices, never a silent no-op;
+  2. the device is connected in the hub — an offline machine is the stated
+     "not connected — its tile is stale" refusal;
+  3. the live grant check — the capability this tool needs must be in the row's
      granted `capabilities`, read fresh per call, else refuse naming Settings ->
      Devices. This is the tool's OWN check, separate from the kernel's;
-  3. for fs.* tools, a path prefix check against the row's fs_roots — the grant
+  4. for fs.* tools, a path prefix check against the row's fs_roots — the grant
      BOUNDARY. (The device enforces its own deny-roots regardless of what core
      signed; that is the mechanical backstop, this is the boundary — both exist
      by design.)
+
+That layer runs TWICE per call, on purpose. First as the tool's `precheck`,
+which dispatch runs BEFORE policy.authorize: a call that can never execute is
+refused before the kernel can raise a card for it or burn an approval on it
+(the owner's walk approved a device_run that was then burned and refused as
+ungranted, and approved a card raised for a device name that was leaked XML).
+Then again inside the executor, AFTER the kernel allowed: a grant, a revoke or
+a disconnect can land between the two, and the executor is the last line
+before the wire. Neither run decides anything — both only refuse (D-012).
 
 Only then hub.command, and only the device's own `result` frame comes back as
 success: a timeout, a dropped socket or a device-reported failure is a
@@ -66,11 +77,28 @@ async def _resolve(pool, name: object):
         raise ToolFailure("the 'device' argument must be the device's name")
     row = await devices.get_live_by_name(pool, name)
     if row is None:
+        live = sorted(
+            d["name"] for d in await devices.list_devices(pool) if d["revoked_at"] is None
+        )
+        known = (
+            f"the paired devices are: {', '.join(live)}" if live else "no device is paired"
+        )
         raise ToolFailure(
-            f"no paired device named {name!r} — check the name in Settings → Devices "
-            "(a revoked device is gone until it is paired again)"
+            f"no paired device named {name!r} — {known}; check the name in Settings → "
+            "Devices (a revoked device is gone until it is paired again)"
         )
     return row
+
+
+def _require_connected(row) -> None:
+    """Refuse unless the device's socket is live in the hub right now. The same
+    words hub.command uses for a socket that is gone by the time it sends, so
+    the model reads one refusal for one fact whichever layer states it."""
+    if not devices_ws.hub.is_connected(row["id"]):
+        raise ToolFailure(
+            f"device {row['name']!r} is not connected — its tile is stale; check it is "
+            "powered on and online"
+        )
 
 
 def _require_grant(row, capability: str) -> None:
@@ -105,6 +133,31 @@ def _check_fs_path(row, path: object) -> str:
         f"path {path!r} is outside the roots granted to {row['name']} "
         f"({', '.join(roots)}) — widen them in Settings → Devices"
     )
+
+
+async def _admit(args: dict, capability: str, *, fs_path: bool = False):
+    """The per-device layer, in order: paired (not revoked) -> connected ->
+    granted `capability` -> (fs tools) path inside a granted root. Returns
+    (pool, row, normalized path or None) for an executor to send with; raises
+    ToolFailure to refuse. This is the ONLY place the order lives, so the
+    precheck and the executor cannot drift apart."""
+    pool = await db.get_pool()
+    row = await _resolve(pool, args["device"])
+    _require_connected(row)
+    _require_grant(row, capability)
+    path = _check_fs_path(row, args["path"]) if fs_path else None
+    return pool, row, path
+
+
+def _precheck(capability: str, *, fs_path: bool = False):
+    """The refusal-only hook dispatch runs BEFORE the kernel for one device
+    tool: `_admit` for its capability, result discarded. See the module
+    docstring for why it runs here as well as in the executor."""
+
+    async def precheck(args: dict, ctx: ToolContext) -> None:
+        await _admit(args, capability, fs_path=fs_path)
+
+    return precheck
 
 
 async def _command(pool, row, capability: str, args: dict) -> dict:
@@ -164,52 +217,38 @@ async def device_list(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_info(args: dict, ctx: ToolContext) -> str:
-    pool = await db.get_pool()
-    row = await _resolve(pool, args["device"])
-    _require_grant(row, "system.info")
+    pool, row, _ = await _admit(args, "system.info")
     result = _require_ok(await _command(pool, row, "system.info", {}), row)
     detail = result.get("output") or "(the device returned no detail)"
     return f"{row['name']} system info:\n{detail}"
 
 
 async def device_list_files(args: dict, ctx: ToolContext) -> str:
-    pool = await db.get_pool()
-    row = await _resolve(pool, args["device"])
-    _require_grant(row, "fs.list")
-    path = _check_fs_path(row, args["path"])
+    pool, row, path = await _admit(args, "fs.list", fs_path=True)
     result = _require_ok(await _command(pool, row, "fs.list", {"path": path}), row)
     return f"{row['name']} {path}:\n{result.get('output') or '(empty)'}"
 
 
 async def device_read_file(args: dict, ctx: ToolContext) -> str:
-    pool = await db.get_pool()
-    row = await _resolve(pool, args["device"])
-    _require_grant(row, "fs.read")
-    path = _check_fs_path(row, args["path"])
+    pool, row, path = await _admit(args, "fs.read", fs_path=True)
     result = _require_ok(await _command(pool, row, "fs.read", {"path": path}), row)
     return f"{row['name']}:{path}\n{result.get('output') or '(empty file)'}"
 
 
 async def device_list_apps(args: dict, ctx: ToolContext) -> str:
-    pool = await db.get_pool()
-    row = await _resolve(pool, args["device"])
-    _require_grant(row, "apps.list")
+    pool, row, _ = await _admit(args, "apps.list")
     result = _require_ok(await _command(pool, row, "apps.list", {}), row)
     return f"Apps on {row['name']}:\n{result.get('output') or '(none reported)'}"
 
 
 async def device_notify(args: dict, ctx: ToolContext) -> str:
-    pool = await db.get_pool()
-    row = await _resolve(pool, args["device"])
-    _require_grant(row, "system.notify")
+    pool, row, _ = await _admit(args, "system.notify")
     _require_ok(await _command(pool, row, "system.notify", {"message": args["message"]}), row)
     return f"Sent a notification to {row['name']}."
 
 
 async def device_run(args: dict, ctx: ToolContext) -> str:
-    pool = await db.get_pool()
-    row = await _resolve(pool, args["device"])
-    _require_grant(row, "shell.exec")
+    pool, row, _ = await _admit(args, "shell.exec")
     argv = args["argv"]
     result = _require_ok(await _command(pool, row, "shell.exec", {"argv": argv}), row)
     exit_code = result.get("exit_code")
@@ -218,10 +257,7 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_write_file(args: dict, ctx: ToolContext) -> str:
-    pool = await db.get_pool()
-    row = await _resolve(pool, args["device"])
-    _require_grant(row, "fs.write")
-    path = _check_fs_path(row, args["path"])
+    pool, row, path = await _admit(args, "fs.write", fs_path=True)
     content = args["content"]
     if not isinstance(content, str):
         raise ToolFailure("the 'content' argument must be a string")
@@ -241,9 +277,7 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_launch_app(args: dict, ctx: ToolContext) -> str:
-    pool = await db.get_pool()
-    row = await _resolve(pool, args["device"])
-    _require_grant(row, "apps.launch")
+    pool, row, _ = await _admit(args, "apps.launch")
     _require_ok(await _command(pool, row, "apps.launch", {"app": args["app"]}), row)
     return f"Launched {args['app']} on {row['name']}."
 
@@ -273,6 +307,7 @@ TOOLS: tuple[Tool, ...] = (
         description="Report a paired device's OS, disk and memory summary.",
         parameters=_obj({"device": _DEVICE_ARG}, ["device"]),
         executor=device_info,
+        precheck=_precheck("system.info"),
         ephemeral=True,
     ),
     Tool(
@@ -289,6 +324,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path"],
         ),
         executor=device_list_files,
+        precheck=_precheck("fs.list", fs_path=True),
         ephemeral=True,
     ),
     Tool(
@@ -305,6 +341,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path"],
         ),
         executor=device_read_file,
+        precheck=_precheck("fs.read", fs_path=True),
         ephemeral=True,
     ),
     Tool(
@@ -312,6 +349,7 @@ TOOLS: tuple[Tool, ...] = (
         description="List the applications installed on a paired device.",
         parameters=_obj({"device": _DEVICE_ARG}, ["device"]),
         executor=device_list_apps,
+        precheck=_precheck("apps.list"),
         ephemeral=True,
     ),
     Tool(
@@ -325,6 +363,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "message"],
         ),
         executor=device_notify,
+        precheck=_precheck("system.notify"),
         ephemeral=True,
     ),
     Tool(
@@ -346,6 +385,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "argv"],
         ),
         executor=device_run,
+        precheck=_precheck("shell.exec"),
         ephemeral=False,
     ),
     Tool(
@@ -366,6 +406,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path", "content"],
         ),
         executor=device_write_file,
+        precheck=_precheck("fs.write", fs_path=True),
         ephemeral=False,
     ),
     Tool(
@@ -379,6 +420,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "app"],
         ),
         executor=device_launch_app,
+        precheck=_precheck("apps.launch"),
         ephemeral=False,
     ),
 )

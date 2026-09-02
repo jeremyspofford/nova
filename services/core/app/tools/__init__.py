@@ -135,6 +135,18 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
     `ok` is decided mechanically here and never by reading the text back:
     a caller writing a span or an activity frame must not have to guess
     from prose whether the call worked.
+
+    The order inside is load-bearing and pinned by test_policy_funnel:
+    schema validation, then the tool's own `precheck` (if it has one), then
+    the policy kernel, then the executor. A precheck may ONLY refuse — it
+    raises ToolFailure to state why the call can never run (D-012: it adds a
+    refusal in front of the kernel; it never allows, and it never decides).
+    When it refuses, the kernel is NOT called: no consent card is raised, no
+    approval is burned, no governance row is written — the walk's "approved,
+    then burned, then refused as ungranted" defect cannot recur, because the
+    ungranted call never reaches the place that burns. Anything a precheck
+    raises that is NOT a ToolFailure is a bug and is the same fail-closed
+    refusal the executor path gives a bug: stated, never thrown.
     """
     tool = REGISTRY.get(name)
     if tool is None:
@@ -153,6 +165,22 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
     problem = schema.validate(tool.parameters, parsed)
     if problem is not None:
         return _retryable(problem), False
+
+    # The tool's own refusal-only precheck, BEFORE the kernel — see the
+    # docstring. A refusal here reaches the model as a stated `Error:` and
+    # nothing below runs; it can never let anything through that the kernel
+    # would have refused, because the kernel still runs on a pass.
+    if tool.precheck is not None:
+        try:
+            await tool.precheck(parsed, ctx)
+        except ToolFailure as exc:
+            return f"{ERROR_PREFIX}{exc}", False
+        except Exception as exc:
+            logger.exception("precheck for %s raised", name)
+            return (
+                f"{ERROR_PREFIX}{name} failed unexpectedly — {type(exc).__name__}: {exc}",
+                False,
+            )
 
     # The policy gate (D-012): the executor below is reachable ONLY on an ALLOW
     # from the one kernel. This wraps dispatch's schema/executor contract rather

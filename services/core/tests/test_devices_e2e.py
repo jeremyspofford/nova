@@ -248,22 +248,12 @@ async def test_the_device_daemon_walks_the_entire_dod(
     assert read_result.startswith("Error: ")
     assert "fs.read" in read_result and "Settings" in read_result
     assert len(_command_frames(conn)) == 1  # the ungranted read never reached the wire
-
-    # (c2) NO-IDENTITY POLICY DENY — a consent-tier device tool with no requestor
-    # ----------------------------- has nothing to bind an approval to: the kernel
-    # DENIES it and ledgers policy.denied, no frame. (The per-device grant refusal
-    # in (c) is a ToolFailure at the executor layer, NOT a policy.denied — the
-    # kernel ALLOWED the auto class and the tool's own grant check refused; this
-    # is the device path's one true policy.denied.) [DoD item 6 audit]
-    denied_result, denied_ok = await tools.dispatch(
-        "device_run", {"device": DEVICE_NAME, "argv": ["true"]}, _ctx(None)
-    )
-    assert denied_ok is False and denied_result.startswith("Error: ")
-    assert any(
-        e["kind"] == governance.POLICY_DENIED and e["action_class"] == "device_run"
-        for e in await _events(pool)
-    )
-    assert len(_command_frames(conn)) == 1  # denied at the kernel, nothing sent
+    # That refusal came from the tool's PRECHECK, before the kernel: an ungranted
+    # call is refused before a card can be raised or an approval burned for it,
+    # so no policy.denied (and no consent row) exists for it — the kernel never
+    # saw the call. (test_devices_precheck.py pins this for the consent tier.)
+    assert not any(e["kind"] == governance.POLICY_DENIED for e in await _events(pool))
+    assert await consents.pending_all(pool) == []
 
     # (d) GRANT — add fs.read (+ shell.exec for the consent flow) with a root;
     # ---------- the auto read now dispatches, a signed command crosses, the fake
@@ -290,6 +280,24 @@ async def test_the_device_daemon_walks_the_entire_dod(
     assert read_frame["envelope"]["args"]["path"] == "/home/jeremy/notes.txt"
     assert envelopes.verify(core_pubkey, read_frame["envelope"], read_frame["sig"])
     assert len(_command_frames(conn)) == 2
+
+    # (d2) NO-IDENTITY POLICY DENY — a consent-tier device tool with no requestor
+    # ----------------------------- has nothing to bind an approval to: the kernel
+    # DENIES it and ledgers policy.denied, no frame. Probed AFTER the shell.exec
+    # grant on purpose: the per-device precheck sits in front of the kernel, so
+    # an ungranted call would be refused there and never reach it (that refusal
+    # is a ToolFailure, not a policy.denied). With the grant in place the
+    # precheck passes and this is the device path's one true policy.denied.
+    # [DoD item 6 audit]
+    denied_result, denied_ok = await tools.dispatch(
+        "device_run", {"device": DEVICE_NAME, "argv": ["true"]}, _ctx(None)
+    )
+    assert denied_ok is False and denied_result.startswith("Error: ")
+    assert any(
+        e["kind"] == governance.POLICY_DENIED and e["action_class"] == "device_run"
+        for e in await _events(pool)
+    )
+    assert len(_command_frames(conn)) == 2  # denied at the kernel, nothing sent
 
     # (e) CONSENT CARD — device_run is consent-tier: with no approval the kernel
     # ---------------- raises a card and REQUIRE_CONSENTs; a consents row + a

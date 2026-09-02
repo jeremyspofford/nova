@@ -87,12 +87,33 @@ def _ctx(person, *, conversation_id=None, sink=None) -> ToolContext:
 # -- structural pin: authorize precedes the executor -----------------------
 
 
+def _dispatch_code() -> str:
+    """dispatch()'s CODE, with its docstring cut off — so a token the docstring
+    mentions in prose cannot satisfy (or defeat) an ordering pin."""
+    src = Path(tools.__file__).read_text(encoding="utf-8")
+    body = src.split("async def dispatch")[1]
+    if '"""' in body:
+        _sig, _doc, body = body.split('"""', 2)
+    return body
+
+
 def test_dispatch_authorizes_before_it_executes():
     """Ruling S3-R2, pinned in the source: within dispatch, policy.authorize is
     awaited before tool.executor ever is — no path reaches an executor first."""
-    src = Path(tools.__file__).read_text(encoding="utf-8")
-    body = src.split("async def dispatch")[1]
+    body = _dispatch_code()
     assert body.index("policy.authorize(") < body.index("tool.executor(")
+
+
+def test_dispatch_prechecks_before_it_authorizes():
+    """The per-tool precheck (a refusal-only hook, see devices.py) runs BEFORE
+    the kernel and the kernel before the executor: precheck < authorize <
+    executor in the source. A precheck that ran after authorize would be back
+    to burning approvals on calls that could never execute."""
+    body = _dispatch_code()
+    precheck = body.index("tool.precheck(")
+    authorize = body.index("policy.authorize(")
+    executor = body.index("tool.executor(")
+    assert precheck < authorize < executor
 
 
 # -- auto runs as before ---------------------------------------------------
