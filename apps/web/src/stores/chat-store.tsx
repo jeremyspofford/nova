@@ -58,7 +58,13 @@ const nextId = (prefix: string) => `${prefix}-${Date.now()}-${++seq}`
 
 interface ChatStore {
   state: ChatState
-  sendMessage: (text: string) => void
+  /**
+   * `continuationOf` is the consent_id a message RESUMES — passed by the two
+   * approve paths below, omitted by every ordinary send. It rides to core,
+   * which marks that row as plumbing so later turns never read the approval
+   * choreography back to the model; the visible transcript row is unchanged.
+   */
+  sendMessage: (text: string, continuationOf?: string) => void
   loadConversation: (
     conversationId: string,
     messages: { id: string; role: string; content: string }[],
@@ -229,7 +235,7 @@ export function ChatProvider({
   }, [])
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string, continuationOf?: string) => {
       const command = matchCommand(text)
       if (command) {
         // A whole-message slash command (e.g. /clear, /help) is a command, not a
@@ -251,7 +257,7 @@ export function ChatProvider({
       ;(async () => {
         try {
           for await (const event of streamChat(
-            { message: text, conversationId, signal: controller.signal },
+            { message: text, conversationId, continuationOf, signal: controller.signal },
             fetchImpl,
           )) {
             // The identity effect above aborts the underlying request the
@@ -297,7 +303,7 @@ export function ChatProvider({
         updated.conversation_id !== null &&
         updated.conversation_id === stateRef.current.conversationId
       if (decision === 'approve' && sameConversation && !stateRef.current.streaming) {
-        sendMessage(continuationMessage(updated))
+        sendMessage(continuationMessage(updated), updated.consent_id)
       }
       return updated
     },
@@ -323,7 +329,7 @@ export function ChatProvider({
         const messages = await chatApi.getMessages(conversation.id)
         loadConversation(conversation.id, messages)
       }
-      sendMessage(continuationMessage(card))
+      sendMessage(continuationMessage(card), card.consent_id)
     },
     [chatApi, loadConversation, sendMessage],
   )

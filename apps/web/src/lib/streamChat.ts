@@ -178,15 +178,25 @@ async function statedRefusal(response: Response): Promise<string> {
 export interface StreamChatOptions {
   message: string
   conversationId?: string | null
+  /**
+   * The consent_id this message RESUMES — set only by the continuation the
+   * chat store sends after an approve. Core verifies it against the consents
+   * table and, when it names a real card, records the message as PLUMBING, so
+   * later turns never read the approval choreography back to the model
+   * (migration 014). Nothing visible changes: the row still shows in the
+   * transcript, and this turn still receives the message.
+   */
+  continuationOf?: string | null
   signal?: AbortSignal
 }
 
 export async function* streamChat(
-  { message, conversationId, signal }: StreamChatOptions,
+  { message, conversationId, continuationOf, signal }: StreamChatOptions,
   fetchImpl: FetchLike = ((url, init) => fetch(url, init)) as FetchLike,
 ): AsyncGenerator<StreamEvent> {
   const body: Record<string, unknown> = { message }
   if (conversationId) body.conversation_id = conversationId
+  if (continuationOf) body.continuation_of = continuationOf
 
   let response: Response
   try {

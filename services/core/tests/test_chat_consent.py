@@ -1063,3 +1063,171 @@ async def test_the_consent_redirect_spends_the_shared_budget_so_deferral_cannot(
     assert _corrections(sent) == [chat.CONSENT_REDIRECT_NOTE]
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
+
+# -- approval choreography is PLUMBING, not conversation ---------------------
+#
+# The other half of the same walk. Every approve the web resumes posts a real
+# user message ("You're approved: <summary>. Please go ahead now.") and a
+# card-pending turn persists "[waiting for your approval before continuing]".
+# A few approvals in, the history window handed to a small local model is mostly
+# approval choreography — and it pattern-completes "awaiting approval" out of it
+# instead of calling the tool. Those rows are how the SYSTEM resumes a turn, not
+# something the household said: they stay in the transcript the operator reads
+# (messages.kind = 'plumbing', migration 014) and are simply never fed back as
+# history. Mechanical: the query filters them AND history_window drops them.
+
+
+def _kinds(rows) -> list[tuple[str, str, str]]:
+    return [(r["role"], r["content"], r["kind"]) for r in rows]
+
+
+async def _messages(pool) -> list:
+    return await pool.fetch(
+        "SELECT role, content, kind FROM messages ORDER BY created_at, id"
+    )
+
+
+def _history_sent(gateway: ScriptedGateway) -> list[str]:
+    """Every user/assistant message the FIRST round of a turn carried."""
+    return [
+        m["content"]
+        for m in gateway.payloads[0]["messages"]
+        if m["role"] in ("user", "assistant")
+    ]
+
+
+def test_history_window_drops_plumbing_rows():
+    """The pure half, independent of any query: a plumbing row never enters a
+    window, so the property holds even if a caller forgets the WHERE. A row with
+    no `kind` at all (an eval fixture, a hand-built dict) counts as chat, exactly
+    as the column default does."""
+    window = chat.history_window(
+        [
+            {"role": "user", "content": "newest", "kind": "chat"},
+            {"role": "user", "content": "You're approved: do it.", "kind": "plumbing"},
+            {"role": "assistant", "content": chat.PENDING_APPROVAL_NOTE, "kind": "plumbing"},
+            {"role": "user", "content": "oldest"},
+        ]
+    )
+    assert [m["content"] for m in window] == ["oldest", "newest"]
+
+
+async def test_a_continuation_is_plumbing_and_leaves_later_history_clean(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The web's approve→continue path, end to end. The continuation names the
+    consent it resumes, so its row is persisted as plumbing — and the CONTINUING
+    turn still receives it as its own message (that is not history, so "go ahead
+    now" still works). A later turn simply never sees it, while the ordinary
+    messages around it are all still there."""
+    await _arm_consent_tool(pool, monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=((probe_call("c1", URL),), (text("Awaiting your approval."),))
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    first = await _say(owner_client, "check the pricing page")
+    card = consent_frames(first)[0]
+    conv_id = first[0]["meta"]["conversation_id"]
+
+    await consents.decide(
+        pool,
+        consent_id=uuid.UUID(card["consent_id"]),
+        approve=True,
+        decided_by=await _owner_id(pool),
+    )
+
+    # The continuation the web sends, carrying the consent it resumes.
+    continuation = f"You're approved: {card['summary']}. Please go ahead now."
+    gateway2 = ScriptedGateway(rounds=((text("Done — I read the page."),),))
+    mount_peers(gateway=gateway2, memory=FakeMemory())
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={
+            "message": continuation,
+            "conversation_id": conv_id,
+            "continuation_of": card["consent_id"],
+        },
+    )
+    assert resp.status_code == 200
+
+    # Persisted as plumbing — and STILL delivered to the turn it resumes.
+    rows = await _messages(pool)
+    assert (("user", continuation, "plumbing")) in _kinds(rows)
+    assert _history_sent(gateway2)[-1] == continuation
+
+    # A LATER turn never reads the choreography back, but keeps the real ones.
+    gateway3 = ScriptedGateway(rounds=((text("Yes."),),))
+    mount_peers(gateway=gateway3, memory=FakeMemory())
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={"message": "anything else?", "conversation_id": conv_id},
+    )
+    assert resp.status_code == 200
+    seen = _history_sent(gateway3)
+    assert continuation not in seen
+    assert "check the pricing page" in seen  # an ordinary message is kept
+    assert "Done — I read the page." in seen
+
+
+async def test_a_pending_approval_note_reply_is_plumbing_and_omitted_from_history(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The assistant half: a reply that is ONLY the pending-approval note says
+    the turn ended with a card up, nothing more. It persists (the operator sees
+    it) as plumbing, so the next turn does not read "[waiting for your approval
+    before continuing]" back and learn to narrate a pending state."""
+    await _arm_consent_tool(pool, monkeypatch)
+    _spy_fetch(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=((probe_call("c1", URL),), (fetch_call("c2", "https://example.com/other"),))
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    first = await _say(owner_client, "check the pricing page")
+    conv_id = first[0]["meta"]["conversation_id"]
+
+    rows = await _messages(pool)
+    assert (("assistant", chat.PENDING_APPROVAL_NOTE, "plumbing")) in _kinds(rows)
+    # The user's own message beside it is ordinary conversation.
+    assert (("user", "check the pricing page", "chat")) in _kinds(rows)
+
+    gateway2 = ScriptedGateway(rounds=((text("Sure."),),))
+    mount_peers(gateway=gateway2, memory=FakeMemory())
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={"message": "never mind", "conversation_id": conv_id},
+    )
+    assert resp.status_code == 200
+    seen = _history_sent(gateway2)
+    assert chat.PENDING_APPROVAL_NOTE not in seen
+    assert "check the pricing page" in seen
+
+
+async def test_a_continuation_of_no_real_consent_is_an_ordinary_message(
+    owner_client, pool, mount_peers
+):
+    """VERIFIED, never trusted, and fail-OPEN in the direction that keeps a real
+    message visible: continuation_of naming no consent is ignored — the row is
+    ordinary 'chat', the turn runs normally, and there is no 4xx (the flag only
+    ever removes a row from future history, so a bad one must not cost a turn)."""
+    gateway = ScriptedGateway(rounds=((text("Sure."),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={"message": "go ahead now", "continuation_of": str(uuid.uuid4())},
+    )
+    assert resp.status_code == 200
+    conv_id = frames(resp.text)[0]["meta"]["conversation_id"]
+
+    rows = await _messages(pool)
+    assert (("user", "go ahead now", "chat")) in _kinds(rows)
+
+    # And it is REAL conversation: the next turn reads it back.
+    gateway2 = ScriptedGateway(rounds=((text("Ok."),),))
+    mount_peers(gateway=gateway2, memory=FakeMemory())
+    resp = await owner_client.post(
+        "/api/v1/chat/stream",
+        json={"message": "and?", "conversation_id": conv_id},
+    )
+    assert resp.status_code == 200
+    assert "go ahead now" in _history_sent(gateway2)

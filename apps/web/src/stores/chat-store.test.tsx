@@ -411,6 +411,10 @@ describe('ChatProvider — decideConsent (S3-T2: approve has an executor)', () =
     const body = JSON.parse(String(init.body))
     expect(body.message).toBe(continuationMessage(card({ status: 'approved' })))
     expect(body.conversation_id).toBe('conv-1')
+    // The continuation names the consent it resumes, so core can record that
+    // row as plumbing and keep approval choreography out of later turns'
+    // history (migration 014). The visible transcript row is unchanged.
+    expect(body.continuation_of).toBe('c-1')
     expect(probe.store!.state.streaming).toBe(true)
   })
 
@@ -559,7 +563,9 @@ describe('ChatProvider — resumeApprovedCard (S3-T3: go ahead on an approved ca
     expect(chatApi.getActiveConversation).not.toHaveBeenCalled()
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
-    expect(JSON.parse(String(init.body)).message).toBe(continuationMessage(card()))
+    const resumed = JSON.parse(String(init.body))
+    expect(resumed.message).toBe(continuationMessage(card()))
+    expect(resumed.continuation_of).toBe('c-1') // plumbing, not conversation
     expect(probe.store!.state.streaming).toBe(true)
   })
 
@@ -596,7 +602,9 @@ describe('ChatProvider — resumeApprovedCard (S3-T3: go ahead on an approved ca
     expect(chatApi.getMessages).toHaveBeenCalledWith('conv-1')
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit]
-    expect(JSON.parse(String(init.body)).message).toBe(continuationMessage(card()))
+    const resumed = JSON.parse(String(init.body))
+    expect(resumed.message).toBe(continuationMessage(card()))
+    expect(resumed.continuation_of).toBe('c-1') // plumbing, not conversation
     expect(probe.store!.state.streaming).toBe(true)
   })
 

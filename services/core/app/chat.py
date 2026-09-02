@@ -124,6 +124,14 @@ PENDING_APPROVAL_REFUSAL = (
     f"{tools.ERROR_PREFIX}an approval is pending — tell the user and wait for it"
 )
 PENDING_APPROVAL_NOTE = "[waiting for your approval before continuing]"
+
+# messages.kind (migration 014). 'plumbing' marks a row that exists so the
+# SYSTEM can resume a turn — the web's continuation message after an approve,
+# and a reply that is ONLY the note above — as opposed to something a person or
+# Nova actually said. Plumbing rows stay in the transcript the operator reads;
+# they are simply never fed back to the model as history.
+MESSAGE_KIND_CHAT = "chat"
+MESSAGE_KIND_PLUMBING = "plumbing"
 SPAN_ARG_HEAD_CHARS = 200
 SPAN_ARGS_TOTAL_CHARS = 2000
 
@@ -142,6 +150,12 @@ class GatewayFailure(RuntimeError):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: uuid.UUID | None = None
+    # The consent this message is RESUMING (the web's continuation after an
+    # approve — chat-store.tsx). It marks the user row as plumbing so later
+    # turns never read the choreography back; see MESSAGE_KIND_* below. It is
+    # a HINT, never a permission: nothing about the turn changes, and a value
+    # naming no real consent is simply ignored.
+    continuation_of: uuid.UUID | None = None
 
 
 # Detached work held so it can be awaited at shutdown instead of vanishing
@@ -176,10 +190,22 @@ def history_window(
 
     A message that would cross the budget is dropped entirely, and so is
     everything older — a half-quoted message is worse than an absent one.
+
+    PLUMBING rows never make it into a window. Approval choreography — the web's
+    "You're approved: …, please go ahead now" continuation, the "[waiting for
+    your approval before continuing]" note — is how the system resumes a turn,
+    not something the household said; replaying it teaches a small model to
+    pattern-complete "awaiting approval" instead of calling the tool (the
+    context-poisoning loop the owner's walk hit). The query below filters them
+    out too; this second check is what makes the property hold even if a caller
+    forgets the WHERE, and a row that never carried `kind` (an eval fixture, a
+    hand-built dict) counts as 'chat' exactly as the column default does.
     """
     kept: list[dict[str, str]] = []
     used = 0
     for row in newest_first:
+        if row.get("kind", MESSAGE_KIND_CHAT) == MESSAGE_KIND_PLUMBING:
+            continue
         cost = len(row["content"])
         if used + cost > budget:
             break
@@ -545,11 +571,18 @@ def _queue_ingest(
         span.meta["queued"] = True
 
 
-async def _persist_assistant(pool: asyncpg.Pool, conversation_id: uuid.UUID, text: str) -> None:
+async def _persist_assistant(
+    pool: asyncpg.Pool,
+    conversation_id: uuid.UUID,
+    text: str,
+    kind: str = MESSAGE_KIND_CHAT,
+) -> None:
     await pool.execute(
-        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'assistant', $2)",
+        "INSERT INTO messages (conversation_id, role, content, kind) "
+        "VALUES ($1, 'assistant', $2, $3)",
         conversation_id,
         text,
+        kind,
     )
 
 
@@ -1610,7 +1643,19 @@ async def _run_turn(
                 app, turn, model, message, persisted, messages, emit
             )
 
-        await _persist_assistant(pool, conversation_id, persisted)
+        # A reply that is ONLY the pending-approval note is choreography: it says
+        # the turn ended with a card up, nothing more. Persisted so the operator
+        # sees it, marked so no later turn reads it back and learns to narrate a
+        # pending state. Compared to the exact constant — the note is generated
+        # HERE, so this is an identity check, never prose-sniffing.
+        await _persist_assistant(
+            pool,
+            conversation_id,
+            persisted,
+            MESSAGE_KIND_PLUMBING
+            if persisted.strip() == PENDING_APPROVAL_NOTE
+            else MESSAGE_KIND_CHAT,
+        )
         # Memory hygiene: a guarded consent/capability turn is interaction
         # PLUMBING, not knowledge. A turn that raised an approval card
         # (consent_sink non-empty), that the consent guard had to correct, or
@@ -1687,23 +1732,54 @@ async def chat_stream(
     conversation = await conversations.resolve(pool, person, body.conversation_id)
     conversation_id = conversation["id"]
 
+    # A continuation the web sends after an approve is PLUMBING: the operator
+    # clicked Approve, and this message exists so the turn can resume. It is
+    # persisted and shown exactly like any other message — this turn even reads
+    # it as `message` below, so "go ahead" still works — but it is marked so
+    # LATER turns never read the choreography back (migration 014).
+    #
+    # VERIFIED against the consents table, never trusted: a continuation_of
+    # naming no real consent is ignored and the row is an ordinary 'chat'
+    # message. Fail-open by design — the flag only ever REMOVES a row from
+    # future history, so a lookup that cannot confirm it must not turn a real
+    # message into an error, and must not silently hide it either.
+    kind = MESSAGE_KIND_CHAT
+    if body.continuation_of is not None:
+        try:
+            resumed = await consents.get(pool, body.continuation_of)
+        except Exception:
+            logger.exception(
+                "continuation_of lookup failed; persisting the message as ordinary chat"
+            )
+            resumed = None
+        if resumed is not None:
+            kind = MESSAGE_KIND_PLUMBING
+
     message_id = await pool.fetchval(
-        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2) "
-        "RETURNING id",
+        "INSERT INTO messages (conversation_id, role, content, kind) "
+        "VALUES ($1, 'user', $2, $3) RETURNING id",
         conversation_id,
         message,
+        kind,
     )
     # user/assistant only, because that is all the messages table holds. A
     # turn's tool calls and their results live in that turn's transcript and
     # in its spans, and are deliberately not replayed into the next turn: a
     # follow-up like "add milk to that list" works because she reads the
     # file again, not because a stale copy of it is still in the prompt.
+    #
+    # And never a PLUMBING row: approval choreography is how the system resumes
+    # a turn, not conversation, and replaying it is what trains a small model to
+    # narrate "awaiting approval" instead of acting (history_window drops them
+    # too, so the property does not rest on this WHERE alone).
     history = history_window(
         await pool.fetch(
-            "SELECT role, content FROM messages WHERE conversation_id = $1 AND id <> $2 "
-            "ORDER BY created_at DESC, id DESC LIMIT $3",
+            "SELECT role, content, kind FROM messages "
+            "WHERE conversation_id = $1 AND id <> $2 AND kind = $3 "
+            "ORDER BY created_at DESC, id DESC LIMIT $4",
             conversation_id,
             message_id,
+            MESSAGE_KIND_CHAT,
             HISTORY_MAX_MESSAGES,
         )
     )

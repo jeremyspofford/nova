@@ -235,6 +235,38 @@ describe('streamChat', () => {
     expect(JSON.parse(String(seen!.init.body))).toEqual({ message: 'hey', conversation_id: 'c9' })
   })
 
+  it('posts continuation_of when the message resumes an approved card', async () => {
+    // The plumbing marker (migration 014): a continuation sent after an
+    // approve names the consent it resumes, so core records that row as
+    // plumbing and later turns never read the choreography back.
+    let seen: { url: string; init: RequestInit } | null = null
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      seen = { url, init }
+      return fakeResponse(['data: [DONE]\n\n'])
+    }
+    await collect(
+      streamChat(
+        { message: 'go ahead', conversationId: 'c9', continuationOf: 'consent-7' },
+        fetchImpl,
+      ),
+    )
+    expect(JSON.parse(String(seen!.init.body))).toEqual({
+      message: 'go ahead',
+      conversation_id: 'c9',
+      continuation_of: 'consent-7',
+    })
+  })
+
+  it('omits continuation_of from an ordinary send', async () => {
+    let seen: { url: string; init: RequestInit } | null = null
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      seen = { url, init }
+      return fakeResponse(['data: [DONE]\n\n'])
+    }
+    await collect(streamChat({ message: 'hey' }, fetchImpl))
+    expect(JSON.parse(String(seen!.init.body))).toEqual({ message: 'hey' })
+  })
+
   it('turns a refused request into a stated error, never silence', async () => {
     const fetchImpl = async () =>
       fakeResponse([], { ok: false, status: 401, text: '{"detail":"no identity"}' })
