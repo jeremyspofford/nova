@@ -1380,21 +1380,34 @@ async def test_no_redirect_dispatch_when_the_turn_ran_out_of_rounds(
     """I2's other half: a turn that hit its round cap must not get one more tool
     dispatch through the redirect's side door. The cap round narrates the
     fabrication and asks for a tool; nothing is dispatched, and the redirect
-    refuses to start."""
+    refuses to start.
+
+    PIN MOVED (out-of-rounds narration, 2026-09-03): a capped turn now gets ONE
+    tool-less narration round so the cap cannot swallow an answer, so the
+    gateway is called twice, not once. What this test is actually about is
+    unchanged and asserted harder: the spy proves NOTHING was dispatched — not
+    in the capped round, not in the narration round, not in a redirect that
+    never started."""
     spy = await _arm_auto_tool(pool, monkeypatch)
     resp = await owner_client.put(
         "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": 1}
     )
     assert resp.status_code == 200, resp.text
     gateway = ScriptedGateway(
-        rounds=((text("That's awaiting your approval."), auto_call("r1", URL)),)
+        rounds=(
+            (text("That's awaiting your approval."), auto_call("r1", URL)),
+            # The out-of-rounds narration round: no tools advertised, and it
+            # says nothing new here — the fabrication is what the guard judges.
+            (text(""),),
+        )
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     sent = await _say(owner_client, "turn on the desk light")
 
     assert spy.calls == []  # nothing dispatched, in the round OR the redirect
-    assert gateway.calls == 1
+    assert gateway.calls == 2  # the capped round + the one narration round
+    assert gateway.payloads[1].get("tools") in (None, [])
     assert _corrections(sent) == [guards.CONSENT_CLAIM_CORRECTION]
     spans = await _guard_spans(pool)
     assert spans[0]["meta"]["redirected"] is False

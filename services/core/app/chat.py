@@ -176,6 +176,29 @@ PENDING_APPROVAL_REFUSAL = (
 )
 PENDING_APPROVAL_NOTE = "[waiting for your approval before continuing]"
 
+# The round cap must not SWALLOW an answer. The owner's walk, 2026-09-02 23:52:
+# the model ran device_run tree (honest "executable not found"), adapted to
+# device_run find (exit 0 — the listing he asked for came back), then which
+# tree, and hit max_tool_rounds=6. The persisted reply was ONLY
+# "[stopped after 6 tool rounds without finishing]": a successful result existed
+# and the user never saw it.
+#
+# So a capped turn gets ONE final NARRATION round — the same mechanism the
+# card-closes-the-loop round uses, no tools advertised — with every accumulated
+# tool result still in context, so the model answers with what it has. It is
+# exactly one extra GATEWAY call and dispatches nothing, so the operator's cap
+# on TOOL rounds is honored to the letter; a call the model emits anyway is
+# refused with a stated result, never run. The note still lands after whatever
+# it says: the operator must still know the turn stopped early.
+OUT_OF_ROUNDS_REFUSAL = (
+    f"{tools.ERROR_PREFIX}out of tool rounds — answer with what you have"
+)
+OUT_OF_ROUNDS_NUDGE = (
+    "You have used every tool round for this turn and no further tool will run. "
+    "Answer now with what the tool results above already give you, and say "
+    "plainly what is still unknown."
+)
+
 # messages.kind (migration 014). 'plumbing' marks a row that exists so the
 # SYSTEM can resume a turn — the web's continuation message after an approve,
 # and a reply that is ONLY the note above — as opposed to something a person or
@@ -795,19 +818,31 @@ async def _dispatch_calls(
     return consents_emitted, ran_ephemeral, card_raised
 
 
-def _refuse_pending(turn: traces.Turn, call: ToolCall) -> str:
-    """A tool call made in the narration round after a card was raised: NOT
-    dispatched. It is still recorded as a tool span — ok=False with the stated
-    reason as `error` — so the trace shows the call the model made and why it
-    did not run, rather than a silent drop (a reply is a claim, the span is the
-    fact). Returns the stated result the call is answered with."""
+def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> str:
+    """A tool call made in a CLOSED round: NOT dispatched. It is still recorded
+    as a tool span — ok=False with the stated reason as `error` — so the trace
+    shows the call the model made and why it did not run, rather than a silent
+    drop (a reply is a claim, the span is the fact). Returns the stated result
+    the call is answered with. ONE implementation for both closed rounds (a card
+    is pending, or the tool rounds ran out), so neither can quietly become a
+    dispatch."""
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"] = _span_arguments(call.arguments)
         span.meta["ok"] = False
-        span.meta["result_head"] = PENDING_APPROVAL_REFUSAL[:SPAN_RESULT_HEAD_CHARS]
-        span.meta["error"] = PENDING_APPROVAL_REFUSAL[:SPAN_RESULT_HEAD_CHARS]
-        span.meta["refused_pending_approval"] = True
-    return PENDING_APPROVAL_REFUSAL
+        span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta[flag] = True
+    return reason
+
+
+def _refuse_pending(turn: traces.Turn, call: ToolCall) -> str:
+    """The card-pending closed round's refusal."""
+    return _refuse_call(turn, call, PENDING_APPROVAL_REFUSAL, "refused_pending_approval")
+
+
+def _refuse_out_of_rounds(turn: traces.Turn, call: ToolCall) -> str:
+    """The out-of-rounds narration round's refusal."""
+    return _refuse_call(turn, call, OUT_OF_ROUNDS_REFUSAL, "refused_out_of_rounds")
 
 
 # -- the opt-in responsiveness check ---------------------------------------
@@ -1574,6 +1609,47 @@ async def _run_turn(
             return
 
         if out_of_rounds:
+            # ONE final narration round, no tools advertised, with every
+            # accumulated tool result still in `messages`: the answer the work
+            # already earned must not be swallowed by the cap (see
+            # OUT_OF_ROUNDS_NUDGE). Its deltas stream and accumulate exactly like
+            # any other round's, so the operator watches it arrive.
+            final_text, final_calls, final_failure = await _gateway_round(
+                app,
+                turn,
+                model,
+                [*messages, {"role": "system", "content": OUT_OF_ROUNDS_NUDGE}],
+                (),
+                round_number=0,
+                on_delta=_stream_delta,
+            )
+            if final_failure is not None:
+                # FAIL-OPEN: a dead narration round costs the answer, never the
+                # turn. Whatever streamed before it died stays (it was watched
+                # live) and the note below still lands.
+                logger.warning(
+                    "the out-of-rounds narration round failed: %s", final_failure
+                )
+            elif final_calls:
+                # It asked for tools anyway. NOTHING is dispatched: each call is
+                # answered with the stated result and recorded as a refused span,
+                # so the cap on TOOL rounds holds mechanically rather than by the
+                # nudge asking nicely. The refusals join `messages` so the
+                # transcript any later redirect reads stays well-formed.
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": final_text,
+                        "tool_calls": [call.as_openai() for call in final_calls],
+                    }
+                )
+                for call in final_calls:
+                    emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
+                    result = _refuse_out_of_rounds(turn, call)
+                    emit(_frame({"activity": {"tool": call.name, "status": "error"}}))
+                    messages.append(
+                        {"role": "tool", "tool_call_id": call.id, "content": result}
+                    )
             note = (
                 f"[stopped after {rounds_allowed} tool rounds without finishing]"
             )
