@@ -106,6 +106,15 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:80"
+    environment:
+      # Blank = the pre-auth gate is OFF and nginx behaves exactly as before
+      # this existed. Set to a `openssl rand -hex 32` value only when
+      # temporarily exposing this origin on a public URL (e.g. a cloudflared
+      # quick tunnel) — every path then needs a matching `nova_gate` cookie,
+      # minted by visiting /gate?token=<the value>. install.sh deliberately
+      # does not generate this: it's opt-in, never a default secret. See
+      # apps/web/nginx.conf.template for the mechanism.
+      NOVA_PUBLIC_GATE_TOKEN: ${NOVA_PUBLIC_GATE_TOKEN:-}
     # Start ordering only, deliberately not `condition: service_healthy`: if
     # core is sick the UI must still come up to say so, rather than leaving
     # the operator with nothing at all to look at.

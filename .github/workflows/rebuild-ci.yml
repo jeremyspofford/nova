@@ -67,6 +67,11 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test -- --run
+      # Builds the real Dockerfile and curls the pre-auth gate's fail-closed
+      # matrix against throwaway containers — see apps/web/gate_test.sh. No
+      # stack dependency, so it's cheap here: image build + a couple of
+      # short-lived containers on ports docker picks itself.
+      - run: bash gate_test.sh
 
   # The daemon is the first code that runs OUTSIDE the compose stack, and its
   # whole interop risk is one encoder that must be byte-identical to core's
