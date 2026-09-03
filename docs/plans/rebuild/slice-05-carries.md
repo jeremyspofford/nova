@@ -383,3 +383,51 @@ Carries:
 - The cap-raise commit (ae0d7705) shipped to core via a `--build`
   dependency side effect before its re-review finished; use `--no-deps`
   when redeploying one service.
+
+## Day-3 wave (2026-09-03) — "Checking…" with no action; corpus v2; the window's edges
+
+Trace: "show me my workspace directory structure" → "Got it. Checking the
+workspace…" (zero tool calls); "how much disk is free on DELL-XPS-8950?" →
+"I'll check the disk usage for you." (zero tool calls). Neither the
+commitment-form deferral guard (needs a web/fetch phrasing after "I'll") nor
+any other guard saw them. Both models pass agent_quality v1 7/7 — v1 (the S3
+walk's failures) is blind to this week's five shapes.
+- **bare_intent guard** (70d7c54e, 1f50b993, e04db9f0): a reply that is ONLY
+  an acknowledgment/intent to act — present-progressive ("Checking…"),
+  stock ("On it", "One sec"), or first-person future ("I'll check/look
+  into/run <object>") — with no successful tool span is a deferral: one
+  guard-vetted retry with tools via the shared `_claim_redirect` (single
+  budget; gated on out_of_rounds/card_raised), else an honest note that
+  NEVER says "did not" when the retry's tool actually ran (derived from
+  spans: "[I ran <tool> but could not report…]"). Precision held under two
+  adversarial rounds (hedges, questions, content-bearing, past tense) after
+  narrowing `run`/`look`/`get` to command-shaped objects with idiom-head
+  lookaheads ("run out of/late/to", "look forward to", "get back to") and
+  dropping `see`. Mutual exclusion with deferral_check pinned.
+- **Markup scan window, corrected twice** (8eb80bd6, 07217168): a call whose
+  wrapper closer straddles the 1 MiB edge is left intact+unparsed (never
+  half-stripped); the dangling-opener rule that achieved it is gated on
+  actual truncation, because ungated it let a prose mention of
+  `<function_calls>` silence a real call later (raw XML persisted — the
+  original bug by a mundane trigger). Residual: inside a truncated (>1 MiB)
+  reply, an in-window prose mention still suppresses later free invokes.
+- **agent_quality v2** (d2d1e868): 12 cases, suite_version 2, device-free —
+  the five observed shapes as mechanical contracts (tool_succeeded /
+  reply_matches(\d) / guard_absent(consent_claim) / reply_absent
+  (function_calls) / tool_called), setups mirroring the real poisoning.
+  The owner re-measures both models on v2 after the redeploy.
+- Ops: novad moved to a systemd user unit (survives restarts once
+  `loginctl enable-linger` is run with sudo); each review/impl agent now uses
+  its own scratch database (concurrent suites on one DB raced TRUNCATEs).
+
+Carries:
+- The truncated-window prose-mention suppression above (only for >1 MiB
+  replies; inert direction).
+- `chat.py` sets no max_tokens on ordinary rounds — a repetition-looping
+  model can still produce multi-MiB replies; the scan is O(window) now, but
+  a token ceiling is the upstream fix (owner's dial via settings later).
+- Bare-intent misses are the accepted precision trade: "I'll see about
+  that.", "I'll get back to you shortly." (genuine later-promises).
+- The local model (muse-glimmer) produced five distinct fabrication shapes
+  in three days; each is now caught mechanically at the cost of a redirect
+  round. Corpus v2 is the instrument; the owner decides the model.
