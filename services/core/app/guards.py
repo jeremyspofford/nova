@@ -47,7 +47,7 @@ import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, NamedTuple
 
 # Successful spans of these tools ground each kind of claim. The names come
 # from the tool registry; a new filesystem/fetch tool must be added here, or
@@ -1629,3 +1629,418 @@ def bare_intent_check(reply_text: str, spans: Sequence[Any]) -> BareIntentClaim 
     if _BARE_INTENT_SHAPE.fullmatch(normalized) is None:
         return None
     return BareIntentClaim(phrase=normalized[:80])
+
+
+# -- the presented-listing guard -------------------------------------------
+#
+# The seventh sibling, for the shape measured on the agent_quality corpus
+# (2026-09-03, qwen3.8:27b, case bare-intent-no-action): asked to list the
+# workspace, the model made ZERO tool calls and answered with a plausible file
+# listing — tree-drawn, WITH FILE SIZES — recited out of a memory recall of an
+# earlier listing. Nothing else in this module sees it: it is not a completed-
+# action claim with a file target (narration needs "I created X.md"), not a
+# pending state, not a capability denial, not a promise, not a bare ack, and a
+# file listing is not a paired device. A reply is a claim; the trace is the
+# fact — and a listing is the most convincing claim of all, because it LOOKS
+# like tool output.
+#
+# presented_listing_check(reply_text, spans, listing_tools, user_message) fires
+# ONLY when the reply PRESENTS a directory/file listing — at least
+# _LISTING_MIN_ENTRIES consecutive lines that each look like a listing ENTRY —
+# AND no listing-producing call ran this turn. "A listing-producing call ran"
+# is DERIVED two ways, never from a tool-name list kept here:
+#
+#   * DECLARED: a successful span of a tool whose registry entry declares
+#     `result_kind == "listing"` (app/tools/base.py). The caller passes the
+#     names it derives from the live registry (tools.tool_names_by_result_kind),
+#     so a NEW listing tool self-registers by setting that one field, and the
+#     guard never has to be told about it.
+#   * SHAPED: a successful span whose recorded result head is ITSELF a listing —
+#     the same entry detector, applied to the tool's output. A device_run of
+#     ls/find/tree produces a listing whatever its declaration says, and the
+#     verdict follows the OUTPUT rather than a belief about which commands list.
+#     The result side is read more LOOSELY than the reply side (a bare `ls`
+#     prints bare names, one per line) because a miss there is a false
+#     correction, and a false correction makes the guard the liar — but a bare-
+#     name run still needs ONE line that could only be a listing (a slash, a
+#     size, a tree lead, a mode string) or a shell run's own `ran […] — exit`
+#     preamble, so three nav-menu words in a fetched page back nothing.
+#
+#   A result that merely CONTAINS the presented names is deliberately NOT a
+#   backing (adversarial review, 2026-09-03): a memory_search recalls an old
+#   listing flattened onto one line, and "every name appears in a result" would
+#   have laundered the measured defect through a tool call. She can name notes
+#   in prose; a tree of note titles fires.
+#
+# Built to the family's two rules: PURE (text + spans + the names; no model,
+# network or clock) and PRECISION-first — this guard REPLACES the reply it
+# corrects, so every false positive costs her prose. The precision cuts:
+#
+#   * An ENTRY line is structural, never prose: an optional tree/bullet lead, ONE
+#     whitespace-free name token, and a trailing size — and nothing else. On the
+#     reply side a line counts ONLY with a tree lead, a size, a mode string, or
+#     a table cell under a column headed Size. A bulleted or bare dotted/slashed
+#     name is NEVER enough: hostnames ("- nova.tailba0abb.ts.net"), python
+#     modules ("- app.chat"), file types ("- .png") and the everyday planned
+#     skeleton ("I would create:\n- src/\n- tests/\n- README.md") all look
+#     exactly like a bare path list, and none is a listing of anything.
+#   * A SIZE must be set off from the name — a spaced dash, two spaces, a tab, or
+#     parentheses — and its unit is case-sensitive. A single space is not a
+#     separator ("- L1 32 KB", "- DIMM0 16 GB", "- nova-backend 512 MB" are
+#     caches, memory and containers) and ":" is not one either ("qwen3.6:27b" is
+#     an ollama tag with a parameter count, not 27 bytes).
+#   * A TREE with no sizes is `tree`'s own output shape — but also a JSON-key
+#     tree, a tree of API routes, or a proposed layout. It counts only when at
+#     least one entry is path-like (a slash or a letter-led extension), a
+#     leading-slash name without a size ("├── /api/v1/chat") is not an entry,
+#     and none of the few lines introducing the run (a fence or a root line
+#     may sit between) proposes or plans ("Proposed layout:", "A typical
+#     FastAPI layout:", "I would create:") — a plan is not a claim about what
+#     is there.
+#   * The entries must be CONTIGUOUS (blank lines and code-fence markers do not
+#     break a run): three paths scattered through a paragraph are prose.
+#   * Markdown wrapping (`name`, **name**) is stripped before the name is read,
+#     so the common renderings are seen as what they name.
+#   * A URL is never an entry — a list of links is not a file listing.
+#   * The USER'S OWN text is exempt: an entry whose name (or basename) is a whole
+#     token of the user's message was pasted by them, and echoing, re-rendering
+#     or annotating it is honest. CARRY: this reads `user_message` only — if
+#     attachment filenames ever reach the model outside the message text (v4
+#     has no attachments yet), the exemption cannot see them and the caller
+#     must fold them into what it passes here.
+#
+# PRIOR-TURN listings. A listing a tool returned in an EARLIER turn and the
+# model re-presents now is stale, not invented — and this guard still fires on
+# it, deliberately, for the same reason state_claim_check fires on "the device
+# is still offline" parroted out of history: backing is THIS turn's spans, and
+# a listing shown as current that nothing produced this turn is exactly the
+# defect. The honest regeneration is cheap (the list tool is a read) and the
+# honest no-tool answer is available without reproducing the block ("I have not
+# listed it this turn; earlier it had config.json, README.md and notes.md").
+#
+# A LISTING AFTER SOME OTHER TOOL RAN is chat.py's call, not this function's: it
+# still returns a claim (nothing recognisable listed), but a tool that DID run
+# may have produced a listing this detector cannot read in a 500-char head (a
+# `find` whose head is permission-denied noise), so chat.py APPENDS an
+# "unverified" note there instead of replacing an honest listing.
+
+# The stated correction. MECHANISM-NEUTRAL and honest: it says only what is
+# mechanically true (nothing listed those files this turn), never what the
+# real listing is — the guard has not looked either.
+PRESENTED_LISTING_CORRECTION = (
+    "Correction: I did not actually list those files this turn — that listing "
+    "is not a record of their current state."
+)
+
+_LISTING_MIN_ENTRIES = 3
+
+# A code-fence marker: neither an entry nor a break in a run of them.
+_FENCE_LINE = re.compile(r"^\s*(?:```|~~~)")
+# Tree-drawing leads ("├── ", "│   └── ", ASCII "|-- ", "`-- ", "+-- ").
+_TREE_LEAD = re.compile(r"^[\s│|]*(?:├|└|\|--|`--|\+--)[─-]*\s*")
+# A bullet or a numbered-list marker.
+_BULLET_LEAD = re.compile(r"^(?:[-*•+]|\d{1,3}[.)])\s+")
+# A size: "12.4 KB", "905.6 GiB", "1,234 bytes", "1.2K", "48 B". Case-SENSITIVE
+# on purpose (no re.I anywhere below): "27b" is a parameter count, not bytes.
+_SIZE = r"\d[\d,]*(?:\.\d+)?\s?(?:[Bb]ytes?|[KMGTP]i?B|[KMGTP]|B)"
+# A size trailing the name and SET OFF from it: a spaced dash, two spaces, a
+# tab, or parentheses. A single space or a colon is not a separator.
+_TRAILING_SIZE = re.compile(
+    r"(?:\s+[—–-]\s+|\s{2,}|\t+)\s*" + _SIZE + r"\s*$" + r"|\s*\(" + _SIZE + r"\)\s*$"
+)
+# Under a TREE lead a single space will do ("├── backups/ 905.6 GiB"): the
+# tree markup is the listing's own idiom, and there is no cache/DIMM/container
+# line that draws itself as a tree.
+_TRAILING_SIZE_TREE = re.compile(r"\s+" + _SIZE + r"\s*$")
+_SIZE_ONLY = re.compile("^" + _SIZE + "$")
+# An `ls -l` line: a mode string then at least four more fields.
+_PERMS_LINE = re.compile(r"^[-dlbcps][rwxsStT-]{9}[+@.]?\s+\S+(?:\s+\S+){3,}$")
+_URLISH = re.compile(r"://|^www\.", re.I)
+# ONE whitespace-free token, free of quote/bracket punctuation (a JSON or YAML
+# line is never a name).
+_NAME_TOKEN = re.compile(r"^[^\s\"'`<>|;:,{}\[\]()]+$")
+# Path-like: carries a slash, or ends in a LETTER-led short extension (so a
+# version "v1.2" or an archive "a.7z" is not a file, by choice).
+_PATHLIKE = re.compile(r"/|\.[A-Za-z][A-Za-z0-9]{0,5}$")
+# The loose (result-side) extras: a bare name, and size-first ("12K src").
+_BARE_NAME = re.compile(r"^[\w.@+~-]+/?$")
+_SIZE_FIRST = re.compile("^" + _SIZE + r"\s+(\S+)$")
+# A shell run's own preamble (app/tools/devices.py device_run: "<name> ran
+# [argv] — exit N"): the one context in which a run of bare names in a result
+# is known to be a program's output rather than a page's words.
+_RUN_PREAMBLE = re.compile(r"\bran \[[^\n]*\] — exit -?\d+")
+# A table column headed Size arms the rows beneath it.
+_TABLE_SIZE_HEADER = re.compile(r"\bsize\b", re.I)
+_TABLE_SEPARATOR_CELL = re.compile(r"^:?-+:?$")
+# A line that INTRODUCES a plan, proposal or future action rather than a report:
+# a tree with no sizes beneath one of these is a layout, not a listing.
+_PLAN_MARKER = re.compile(
+    r"\b(?:would|could|might|should|suggest(?:ed|ion)?|propos(?:e|ed|al|ing)"
+    r"|recommend(?:ed|ation)?|plan(?:ned|ning)?|example|e\.g\.|template|layout"
+    r"|scaffold(?:ing)?|skeleton|boilerplate|starter"
+    r"|typical(?:ly)?|usually|i['’]ll|i['’]d|i\s+will|going\s+to|let['’]s"
+    r"|we\s+can|i\s+can)\b",
+    re.I,
+)
+# How many introducing lines before a run are read for a plan marker: a code
+# fence and a root line ("myapp/", ".") commonly sit between "Proposed layout:"
+# and the first tree entry, and neither is the introduction.
+_INTRO_LOOKBACK = 3
+# A tree's ROOT line — a bare "dir/" or "." with no lead — belongs to the tree,
+# not to its introduction; it is skipped like a blank line.
+_ROOT_LINE = re.compile(r"^(?:[\w.@+~-]+/|\.{1,2})$")
+_USER_TOKEN = re.compile(r"[\w.@+~/-]+")
+
+
+class _Entry(NamedTuple):
+    line: str
+    name: str
+    sized: bool  # a size or a mode string: a record of state, never a plan
+    strong: bool  # tree lead, size, mode string, or a slash: never a bare word
+
+
+def _unwrap(token: str) -> str:
+    """Strip markdown code/emphasis wrapping (`x`, **x**, *x*, _x_) so the name
+    is read as what it names. Underscores are stripped only when they wrap a
+    name that does not itself start or end with one — __init__.py keeps its."""
+    s = token.strip()
+    for wrap in ("`", "**", "*"):
+        while len(s) > 2 * len(wrap) and s.startswith(wrap) and s.endswith(wrap):
+            s = s[len(wrap) : -len(wrap)].strip()
+    if len(s) > 2 and s[0] == "_" and s[-1] == "_" and s[1] != "_" and s[-2] != "_":
+        s = s[1:-1]
+    return s
+
+
+def _table_cells(line: str) -> list[str] | None:
+    """The cells of a markdown table row, or None if the line is not one."""
+    if "|" not in line:
+        return None
+    cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+    if not (2 <= len(cells) <= 4):
+        return None
+    return cells
+
+
+def _is_name(name: str) -> bool:
+    return (
+        bool(name)
+        and name not in (".", "..")
+        and _URLISH.search(name) is None
+        and _NAME_TOKEN.match(name) is not None
+    )
+
+
+def _listing_entry(line: str, *, strict: bool, size_col: int | None) -> _Entry | None:
+    """This line as a listing entry, or None.
+
+    `strict` is the reply side (precision-first: a tree lead, a size, a mode
+    string, or a Size-column cell — never a bare or merely path-like word);
+    loose is the result side, where a bare name and a size-first field also
+    count, because a miss there is a false correction. `size_col` is the
+    Size-headed table column in force, if any.
+    """
+    s = line.strip()
+    if not s or _FENCE_LINE.match(s):
+        return None
+    if _PERMS_LINE.match(s):
+        return _Entry(s, _unwrap(s.split()[-1]), True, True)
+    cells = _table_cells(s)
+    if cells is not None:
+        if size_col is None or size_col >= len(cells) or size_col == 0:
+            return None
+        name = _unwrap(cells[0])
+        # A table needs a path-like name as well as a Size column: "| L1 | 32
+        # KB |" under a Size header is a cache table, not a directory.
+        if _is_name(name) and _PATHLIKE.search(name) and _SIZE_ONLY.match(cells[size_col]):
+            return _Entry(s, name, True, True)
+        return None
+    tree = False
+    lead = _TREE_LEAD.match(s)
+    if lead is not None:
+        s = s[lead.end() :]
+        tree = True
+    else:
+        lead = _BULLET_LEAD.match(s)
+        if lead is not None:
+            s = s[lead.end() :]
+    sized = False
+    tail = _TRAILING_SIZE.search(s) or (_TRAILING_SIZE_TREE.search(s) if tree else None)
+    if tail is not None:
+        s = s[: tail.start()].rstrip()
+        sized = True
+    if not strict and not sized:
+        first = _SIZE_FIRST.match(s)
+        if first is not None:
+            s = first.group(1)
+            sized = True
+    name = _unwrap(s)
+    if not _is_name(name):
+        return None
+    if strict and tree and not sized and name.startswith("/"):
+        # "├── /api/v1/chat": a leading-slash name with no size under a tree is
+        # a route as often as a path. A sized one ("/dev/sda1 — 905.6 GiB") and
+        # the loose side (`find /` prints leading slashes) still count.
+        return None
+    if tree or sized:
+        return _Entry(line.strip(), name, sized, True)
+    if strict:
+        return None  # a bare or path-like word under a bullet is prose
+    if _PATHLIKE.search(name) or _BARE_NAME.match(name):
+        # Loose: a path ("./src", "src/app.py") or a bare name. Only a SLASH
+        # makes it strong — an extension alone is a requirements pin's shape.
+        return _Entry(line.strip(), name, False, "/" in name)
+    return None
+
+
+def _listing_lines(text: str, *, strict: bool) -> tuple[list[_Entry], tuple[str, ...]]:
+    """The longest CONTIGUOUS run of listing entries in `text`, with the lines
+    that introduced it (the last _INTRO_LOOKBACK non-entry lines before the
+    run). Blank lines, fence markers, table separator rows and a tree's root
+    line neither count nor break a run; any other line does. Returns ([], ())
+    below the minimum."""
+    best: list[_Entry] = []
+    best_prev: tuple[str, ...] = ()
+    run: list[_Entry] = []
+    run_prev: tuple[str, ...] = ()
+    prev: list[str] = []
+    size_col: int | None = None
+    for raw in text.splitlines():
+        stripped = raw.strip()
+        if not stripped or _FENCE_LINE.match(stripped):
+            continue
+        if strict and _ROOT_LINE.match(stripped):
+            continue  # the reply's tree root; on the result side `ls -p` prints dir/ entries
+        cells = _table_cells(stripped)
+        if cells is None:
+            size_col = None
+        elif all(_TABLE_SEPARATOR_CELL.match(cell) for cell in cells):
+            continue  # "|---|---|" between a header and its rows
+        elif not any(_SIZE_ONLY.match(cell) for cell in cells):
+            # A header row. One naming a Size column arms the rows beneath it;
+            # any other disarms them. Never itself an entry.
+            size_col = next(
+                (i for i, cell in enumerate(cells) if _TABLE_SIZE_HEADER.search(cell)), None
+            )
+        entry = _listing_entry(raw, strict=strict, size_col=size_col)
+        if entry is None:
+            if len(run) > len(best):
+                best, best_prev = run, run_prev
+            run = []
+            prev = (prev + [stripped])[-_INTRO_LOOKBACK:]
+            continue
+        if not run:
+            run_prev = tuple(prev)
+        run.append(entry)
+    if len(run) > len(best):
+        best, best_prev = run, run_prev
+    if len(best) < _LISTING_MIN_ENTRIES:
+        return [], ()
+    return best, best_prev
+
+
+def _presented(text: str, *, strict: bool) -> list[_Entry]:
+    """The listing `text` presents, as entries, or [] — with the run-level
+    cuts applied: on the reply side a tree with no sizes must carry a path-like
+    name and must not be introduced as a plan; on the result side a bare-name
+    run must carry one line that could only be a listing, or a shell run's
+    preamble."""
+    entries, intro = _listing_lines(text, strict=strict)
+    if not entries:
+        return []
+    if strict:
+        if not any(e.sized for e in entries):
+            if not any(_PATHLIKE.search(e.name) for e in entries):
+                return []  # a tree of bare words: JSON keys, headings, a plan
+            if any(_PLAN_MARKER.search(line) for line in intro):
+                return []  # "Proposed layout:" / "I would create:" — a plan
+        return entries
+    if not any(e.strong for e in entries) and _RUN_PREAMBLE.search(text) is None:
+        return []  # three bare words in a page or a requirements file
+    return entries
+
+
+def is_listing(text: str, *, strict: bool = True) -> bool:
+    """Does `text` present a directory/file listing? Pure; the same detector
+    the guard applies to a reply (strict) and to a tool result (loose)."""
+    return bool(text) and bool(_presented(text, strict=strict))
+
+
+def _listing_ran(spans: Sequence[Any], listing_tools: Sequence[str]) -> bool:
+    """Did a listing-producing call succeed this turn? DECLARED (the tool's
+    registry entry says its result is a listing) or SHAPED (its recorded
+    result head is one) — see the section header."""
+    declared = frozenset(listing_tools)
+    for span in _successful(spans):
+        if span.name in declared:
+            return True
+        head = (getattr(span, "meta", None) or {}).get("result_head")
+        if isinstance(head, str) and is_listing(head, strict=False):
+            return True
+    return False
+
+
+def _user_names(user_message: str) -> frozenset[str]:
+    """Every whole token of the user's message that could name a file, plus
+    each token's basename — the set a presented name is exempt against."""
+    names: set[str] = set()
+    for token in _USER_TOKEN.findall(user_message or ""):
+        token = token.rstrip(".,").rstrip("/")
+        if not token:
+            continue
+        names.add(token)
+        names.add(token.rsplit("/", 1)[-1])
+    return frozenset(names)
+
+
+def _pasted(name: str, theirs: frozenset[str]) -> bool:
+    """True if the user's own message carries this name as a whole token (or
+    its basename) — a substring is not enough: 'cab' names neither a nor b."""
+    norm = name.rstrip("/")
+    return bool(norm) and (norm in theirs or norm.rsplit("/", 1)[-1] in theirs)
+
+
+@dataclass(frozen=True)
+class PresentedListingClaim:
+    """A directory/file listing the reply presents that no listing-producing
+    call backs this turn. `entries` is how many entry lines were presented
+    (after the user's own pasted names are exempted), `phrase` the first one,
+    for the guard span; `text` the stated correction, the same shape the other
+    claims carry so the turn's composition reads it identically."""
+
+    entries: int
+    phrase: str
+    text: str = PRESENTED_LISTING_CORRECTION
+
+
+def presented_listing_check(
+    reply_text: str,
+    spans: Sequence[Any],
+    listing_tools: Sequence[str],
+    user_message: str = "",
+) -> PresentedListingClaim | None:
+    """Contradict a presented file listing that nothing produced this turn.
+
+    Returns a PresentedListingClaim when the reply presents a listing (three or
+    more contiguous entry lines) and no listing-producing call ran this turn —
+    not a declared listing tool, and not a call whose recorded result is
+    listing-shaped; None otherwise — prose that merely names files, a bulleted
+    path list, one or two entries, a list of steps or links, a plan, a listing
+    the user pasted, or a listing a real call backs. Pure and precision-first
+    (see the section header). Derived from `listing_tools` and the spans' own
+    recorded results, never a tool-name list kept here. `user_message` is the
+    only text the paste exemption reads: attachment names that reach the model
+    another way (none do in v4 yet) must be folded into it by the caller.
+    """
+    if not reply_text or not reply_text.strip():
+        return None
+    presented = _presented(reply_text, strict=True)
+    if not presented:
+        return None
+    theirs = _user_names(user_message)
+    own = [entry for entry in presented if not _pasted(entry.name, theirs)]
+    if len(own) < _LISTING_MIN_ENTRIES:
+        return None  # the user pasted it; echoing or annotating it is honest
+    if _listing_ran(spans, listing_tools):
+        return None
+    return PresentedListingClaim(entries=len(own), phrase=own[0].line[:80])

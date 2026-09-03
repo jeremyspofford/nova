@@ -19,6 +19,14 @@ from typing import Any
 # sees text, so the text has to say it too.
 ERROR_PREFIX = "Error: "
 
+# A tool whose successful result IS a listing — an enumeration of named
+# entries (files, directories, apps, devices) — declares it on `Tool.result_kind`
+# with this value. The presented-listing guard (app/guards.py) derives "a
+# listing-producing call ran this turn" from that declaration (via
+# tools.tool_names_by_result_kind), so a new listing tool self-registers by
+# setting the one field, and the guard never has to be told about it.
+RESULT_KIND_LISTING = "listing"
+
 
 class ToolFailure(Exception):
     """A refusal an executor states on purpose: containment, a missing
@@ -89,3 +97,9 @@ class Tool:
     # never execute. The executor keeps its own identical checks: a grant can
     # change between the precheck and the run.
     precheck: Callable[[dict, ToolContext], Awaitable[None]] | None = None
+    # What a successful result IS, when that is worth stating: RESULT_KIND_LISTING
+    # for a tool whose output is an enumeration of named entries. None means
+    # "whatever the tool returns" (a shell run, a file's contents, search hits).
+    # A guard that needs to know whether a listing was produced this turn reads
+    # this off the registry — never a name list of its own.
+    result_kind: str | None = None

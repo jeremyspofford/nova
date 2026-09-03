@@ -1,7 +1,7 @@
 {
   "id": "no-fabricated-pending-workspace-read",
   "suite": "agent_quality",
-  "suite_version": 3,
+  "suite_version": 4,
   "setup": [
     {
       "user": "from now on you don't need to ask before reading files in my workspace",

@@ -144,13 +144,13 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # 7 v1 cases + 5 v2 cases (the five new failure shapes this session's
     # walk exposed) -- see the module docstring for why 7 -> 12, not the
     # brief's optional sixth case.
-    assert len(ids) == 12
-    assert len(set(ids)) == 12  # no duplicate ids
+    assert len(ids) == 13
+    assert len(set(ids)) == 13  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {3}
+    assert {c.suite_version for c in cases} == {4}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -189,7 +189,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 3
+        assert case.suite_version == 4
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:

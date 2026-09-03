@@ -168,6 +168,51 @@ def state_redirect_nudge(*, device: str, ran_a_tool: bool) -> str:
     )
 
 
+# The presented-listing redirect's live note (agent_quality measurement
+# 2026-09-03, case bare-intent-no-action: a tree-drawn listing with sizes and
+# ZERO tool calls). Same properties as the notes above: no completed-action
+# claim, no pending-state phrase, no listing lines — so every guard, this one
+# included, comes back clean over it.
+PRESENTED_LISTING_REDIRECT_NOTE = (
+    "Listing the files now instead of presenting a listing from memory."
+)
+
+
+def presented_listing_redirect_nudge(*, ran_a_tool: bool) -> str:
+    """The presented-listing redirect's nudge, DERIVED from the fact the caller
+    measured. It asserts one thing about the turn — nothing has run — so it is
+    built from that boolean rather than written out as a constant that could
+    drift away from the truth; told otherwise it REFUSES (a lie to the model is
+    how you get a second dispatch), and the caller's fail-open turns that
+    refusal into the ordinary correction, never an error frame."""
+    if ran_a_tool:
+        raise ValueError(
+            "the presented-listing redirect nudge asserts nothing has run this "
+            f"turn; ran_a_tool={ran_a_tool}"
+        )
+    return (
+        "You presented a file listing, but no listing tool ran this turn, so it "
+        "is not a record of the current state. Either list it now by calling the "
+        "tool, or say plainly that it is from before and you have not listed it "
+        "this turn."
+    )
+
+
+# The note APPENDED (never replacing) when a presented listing is unbacked but
+# some other tool DID run this turn: that tool may have produced a listing the
+# detector cannot read in a 500-char result head (a `find` whose head is
+# permission-denied noise), so dropping the prose could drop an honest listing
+# — and a redirect is refused anyway (a second dispatch is worse than the
+# doubt). Bracketed backend prose, like the round-cap note; it makes no claim
+# about what the listing IS, only that nothing recorded backs it. Carries no
+# listing line, no completed-action claim and no pending-state phrase, so every
+# guard comes back clean over it (pinned in the guard suite).
+PRESENTED_LISTING_UNVERIFIED_NOTE = (
+    "[this listing is not backed by a recorded listing this turn — treat it as "
+    "unverified]"
+)
+
+
 def _deferral_honest_note(action_phrase: str) -> str:
     return (
         f"I said I'd {action_phrase} but couldn't complete it automatically — "
@@ -1558,6 +1603,7 @@ def _regen_rejected_by(
     turn: traces.Turn,
     tool_ctx: tools.ToolContext,
     device_names: Sequence[str],
+    user_message: str,
 ) -> str | None:
     """Which mechanical guard, if any, REFUSES the regenerated reply.
 
@@ -1576,7 +1622,11 @@ def _regen_rejected_by(
     reject, exactly as in the turn body. bare_intent is included so a regen
     that itself came back as another bare ack-and-go ("Checking now…", no
     call) is caught here too, whichever claim's redirect produced it — not
-    only the bare-intent redirect's own attempt.
+    only the bare-intent redirect's own attempt. presented_listing reads the
+    same live spans: a redirect that actually listed (a declared listing tool,
+    or a shell run whose result is a listing) backs the listing the regen then
+    presents; one that did not is refused by name. `user_message` is what the
+    listing guard exempts — lines the user pasted are theirs, not a claim.
     """
     checks: tuple[tuple[str, Callable[[], object | None]], ...] = (
         (
@@ -1591,6 +1641,15 @@ def _regen_rejected_by(
         (
             "state_claim",
             lambda: guards.state_claim_check(corrected, turn.spans, device_names),
+        ),
+        (
+            "presented_listing",
+            lambda: guards.presented_listing_check(
+                corrected,
+                turn.spans,
+                tools.tool_names_by_result_kind(tools.RESULT_KIND_LISTING),
+                user_message,
+            ),
         ),
         ("bare_intent", lambda: guards.bare_intent_check(corrected, turn.spans)),
     )
@@ -1637,13 +1696,15 @@ async def _claim_redirect(
     advertised: Sequence[dict],
     tool_ctx: tools.ToolContext,
     device_names: Sequence[str],
+    user_message: str,
     consents_emitted: int,
     emit: Callable[[str | None], None],
 ) -> _ClaimRedirect:
     """Regenerate ONCE, with tools, after a REPLACE-class guard fired.
 
     `claim_kind` names the guard span this owns ("consent_claim",
-    "state_claim"); `span_meta` are the facts that guard measured, recorded as
+    "state_claim", "presented_listing"); `span_meta` are the facts that guard
+    measured, recorded as
     the caller measured them; `nudge_for` DERIVES the system nudge from
     ran_a_tool (measured here, from the spans) so the sentence it sends the
     model is true by construction rather than by a comment promising it is; and
@@ -1813,7 +1874,7 @@ async def _claim_redirect(
         # Judged ONCE by the FULL mechanical set — this text is about to replace
         # the durable record AND be ingested — and never re-redirected.
         rejected_by = (
-            _regen_rejected_by(corrected, turn, tool_ctx, device_names)
+            _regen_rejected_by(corrected, turn, tool_ctx, device_names, user_message)
             if corrected
             else None
         )
@@ -2277,6 +2338,7 @@ async def _run_turn(
                 advertised=() if card_raised else advertised,
                 tool_ctx=tool_ctx,
                 device_names=device_names,
+                user_message=message,
                 consents_emitted=consents_emitted,
                 emit=emit,
             )
@@ -2365,6 +2427,7 @@ async def _run_turn(
                     advertised=() if card_raised else advertised,
                     tool_ctx=tool_ctx,
                     device_names=device_names,
+                    user_message=message,
                     consents_emitted=consents_emitted,
                     emit=emit,
                 )
@@ -2375,10 +2438,113 @@ async def _run_turn(
                 backend_note = backend_note or outcome.markup_note
                 redirect_spent = True
 
+        # The PRESENTED-LISTING guard, on the same raw reply, same fail-OPEN
+        # contract. It fires only when the reply presents a directory/file
+        # listing (three or more contiguous entry lines) and NO listing-producing
+        # call ran this turn — the agent_quality measurement of 2026-09-03, where
+        # "list the workspace" got a tree-drawn listing WITH SIZES and zero tool
+        # calls, recited from a memory recall. Derived two ways, never a name
+        # list: a tool DECLARING its result is a listing (tools.tool_names_by_
+        # result_kind, read live off the registry), or a call whose recorded
+        # result is listing-SHAPED (a device_run of ls/find/tree). A result
+        # that merely contains the names backs nothing — a memory recall of an
+        # old listing is the defect, not its backing. The user's own pasted
+        # names are exempt.
+        #
+        # Skipped when an earlier redirect already STOOD: the durable text is
+        # then the regeneration, which `_regen_rejected_by` vetted with this very
+        # check against the now-live spans — judging the discarded prose would
+        # file a span about text nobody reads.
+        listing_claim = None
+        listing_redirected = False
+        # Set when the listing is unbacked but some other tool DID run: the
+        # claim then APPENDS a note instead of replacing the prose (see
+        # PRESENTED_LISTING_UNVERIFIED_NOTE).
+        listing_unverified = False
+        listing_text: str | None = None
+        listing_tools: list[str] = []
+        if not consent_redirected and not state_redirected:
+            try:
+                # The registry read sits INSIDE the fail-open: a registry that
+                # blips must ship the reply, never break the turn.
+                listing_tools = tools.tool_names_by_result_kind(tools.RESULT_KIND_LISTING)
+                listing_claim = guards.presented_listing_check(
+                    text, turn.spans, listing_tools, message
+                )
+            except Exception:
+                logger.exception(
+                    "presented-listing guard raised; shipping the reply uncorrected"
+                )
+                listing_claim = None
+        if listing_claim is not None:
+            listing_meta = {
+                "detected": True,
+                "entries": listing_claim.entries,
+                "phrase": listing_claim.phrase,
+                "listing_tools": listing_tools,
+            }
+            if guards.ran_a_tool(turn.spans):
+                # A tool ran, and its recorded result is not one this guard can
+                # read as a listing. That is DOUBT, not a fabrication: a `find`
+                # whose 500-char head is permission-denied noise still listed.
+                # No redirect (a second dispatch is worse than the doubt), no
+                # replacement (that could drop an honest listing): the note is
+                # appended and the span says why, the same reason
+                # `_claim_redirect` would have refused with.
+                listing_unverified = True
+                with turn.span("guard", "presented_listing") as span:
+                    span.meta.update(
+                        listing_meta,
+                        ran_a_tool=True,
+                        redirected=False,
+                        not_redirected_because="tools_already_ran",
+                        appended_note=True,
+                    )
+                emit(_frame({"correction": PRESENTED_LISTING_UNVERIFIED_NOTE}))
+            elif redirect_spent:
+                # An earlier claim took the turn's one redirect and its own
+                # regeneration did not stand. Both are still contradicted (the
+                # composition below carries both corrections); what does not
+                # happen is a SECOND regeneration.
+                with turn.span("guard", "presented_listing") as span:
+                    span.meta.update(
+                        listing_meta,
+                        redirected=False,
+                        not_redirected_because="redirect_spent",
+                    )
+                emit(_frame({"correction": listing_claim.text}))
+            else:
+                outcome = await _claim_redirect(
+                    app,
+                    turn,
+                    model,
+                    claim_kind="presented_listing",
+                    correction_text=listing_claim.text,
+                    span_meta=listing_meta,
+                    nudge_for=lambda ran: presented_listing_redirect_nudge(ran_a_tool=ran),
+                    redirect_note=PRESENTED_LISTING_REDIRECT_NOTE,
+                    card_raised=card_raised,
+                    out_of_rounds=out_of_rounds,
+                    messages=messages,
+                    advertised=() if card_raised else advertised,
+                    tool_ctx=tool_ctx,
+                    device_names=device_names,
+                    user_message=message,
+                    consents_emitted=consents_emitted,
+                    emit=emit,
+                )
+                listing_text = outcome.text
+                listing_redirected = outcome.redirected
+                consents_emitted = outcome.consents_emitted
+                read_ephemeral = read_ephemeral or outcome.read_ephemeral
+                backend_note = backend_note or outcome.markup_note
+                redirect_spent = True
+
         # Compose the DURABLE text once, from the outcome above. The consent,
-        # capability and state guards are REPLACE-class: each catches a
-        # whole-stance fabrication (a non-existent pending state, a disowned
-        # capability, or an unchecked assertion about a live device) that must
+        # capability, state and presented-listing guards are REPLACE-class: each
+        # catches a whole-stance fabrication (a non-existent pending state, a
+        # disowned capability, an unchecked assertion about a live device, or a
+        # listing nothing produced) that must
         # not survive into the next turn's context, so a fired one DROPS the
         # model's prose and the record becomes the correction(s) alone.
         # If narration ALSO fired on the same turn (a doubly-fabricated reply),
@@ -2387,9 +2553,17 @@ async def _run_turn(
         # not blocks stacked around the fabrication. When ONLY narration fired,
         # its correction is APPENDED, preserving any real content the reply
         # carried. When none fired, the reply stands.
+        # The unverified-listing case is APPEND-class (a note after the prose),
+        # never a replacement — see the guard block above.
+        listing_replacement = None if listing_unverified else listing_claim
         replace_corrections = [
             c
-            for c in (consent_correction, capability_correction, state_claim)
+            for c in (
+                consent_correction,
+                capability_correction,
+                state_claim,
+                listing_replacement,
+            )
             if c is not None
         ]
         if consent_redirected:
@@ -2403,6 +2577,10 @@ async def _run_turn(
             # device (or said plainly that it did not) and is what the next turn
             # reads. The unchecked prose already streamed live.
             persisted = state_text or ""
+        elif listing_redirected:
+            # And the third: the regeneration LISTED the files (or said plainly
+            # that it had not) and is what the next turn reads.
+            persisted = listing_text or ""
         elif replace_corrections:
             persisted = "\n\n".join(
                 c.text
@@ -2411,6 +2589,7 @@ async def _run_turn(
                     consent_correction,
                     capability_correction,
                     state_claim,
+                    listing_replacement,
                 )
                 if c is not None
             )
@@ -2427,10 +2606,17 @@ async def _run_turn(
         # without this the operator would be told nothing at all about the call
         # the model tried to make.
         prose_dropped = (
-            consent_redirected or state_redirected or bool(replace_corrections)
+            consent_redirected
+            or state_redirected
+            or listing_redirected
+            or bool(replace_corrections)
         )
         if backend_note is not None and prose_dropped:
             persisted = f"{persisted}\n\n{backend_note}" if persisted else backend_note
+        if listing_unverified:
+            # Appended after whatever the composition kept — the prose itself in
+            # the ordinary case — so the operator sees the listing AND the doubt.
+            persisted = f"{persisted}\n\n{PRESENTED_LISTING_UNVERIFIED_NOTE}"
 
         # The OPT-IN responsiveness check (agents.responsiveness_check, default
         # OFF): a SOFT, LLM-judged guard that catches a reply drifting off the
@@ -2451,6 +2637,7 @@ async def _run_turn(
             or consent_correction is not None
             or capability_correction is not None
             or state_claim is not None
+            or listing_claim is not None
         )
 
         # The ALWAYS-ON deferral guard, and the FIRST claim on the turn's single
@@ -2540,6 +2727,7 @@ async def _run_turn(
                 advertised=() if card_raised else advertised,
                 tool_ctx=tool_ctx,
                 device_names=device_names,
+                user_message=message,
                 consents_emitted=consents_emitted,
                 emit=emit,
             )
@@ -2667,6 +2855,12 @@ async def _run_turn(
             # line. A redirect that stood did the check (or said plainly it did
             # not), so THAT turn is ordinary knowledge again.
             or (state_claim is not None and not state_redirected)
+            # A presented listing nothing produced is the same noise again —
+            # and the worst of it, because a recalled listing is exactly what
+            # produced this one: ingesting it is how the next parrot gets its
+            # tree. A redirect that stood listed for real (or said plainly it
+            # had not), so THAT turn is ordinary knowledge.
+            or (listing_claim is not None and not listing_redirected)
             # A bare-intent claim that did not redirect is the same shape: the
             # honest note ("I said I'd check but did not…") is choreography
             # about the broken promise, not knowledge, so it must not recall

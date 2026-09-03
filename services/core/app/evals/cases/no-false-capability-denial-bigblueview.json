@@ -1,7 +1,7 @@
 {
   "id": "no-false-capability-denial-bigblueview",
   "suite": "agent_quality",
-  "suite_version": 3,
+  "suite_version": 4,
   "message": "what's the latest from bigblueview.com?",
   "contract": [
     {"predicate": "tool_called", "arg": "fetch_url"},

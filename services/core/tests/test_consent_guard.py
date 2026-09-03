@@ -125,6 +125,9 @@ def test_the_correction_names_no_mechanism_and_trips_no_guard_of_its_own():
     assert guards.narration_check(text, []) is None
     assert guards.capability_claim_check(text, ["fetch_url", "web_search"]) is None
     assert guards.deferral_check(text, [], ["fetch_url", "web_search"]) is None
+    # 2026-09-03: the guard set grew a seventh sibling (presented_listing);
+    # every persisted text is held to it too.
+    assert guards.presented_listing_check(text, [], ["workspace_list_files"]) is None
 
     # The live note the redirect ships in front of a regenerated reply is held
     # to exactly the same bar.
@@ -132,3 +135,4 @@ def test_the_correction_names_no_mechanism_and_trips_no_guard_of_its_own():
     assert guards.consent_claim_check(note, has_pending_consent=False) is None
     assert guards.narration_check(note, []) is None
     assert guards.deferral_check(note, [], ["fetch_url", "web_search"]) is None
+    assert guards.presented_listing_check(note, [], ["workspace_list_files"]) is None

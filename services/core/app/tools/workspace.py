@@ -22,7 +22,7 @@ import os
 import tempfile
 from pathlib import Path
 
-from app.tools.base import Tool, ToolContext, ToolFailure
+from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 WORKSPACE_ROOT_ENV = "WORKSPACE_ROOT"
 DEFAULT_WORKSPACE_ROOT = "/data/workspace"
@@ -247,5 +247,8 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=list_files,
+        # Its result IS a listing: the presented-listing guard reads this
+        # declaration to know a real listing was produced this turn.
+        result_kind=RESULT_KIND_LISTING,
     ),
 )

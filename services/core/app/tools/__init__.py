@@ -26,11 +26,12 @@ import logging
 import uuid
 
 from app.tools import devices, memory_tools, schema, util, web, web_search, workspace
-from app.tools.base import ERROR_PREFIX, Tool, ToolContext, ToolFailure
+from app.tools.base import ERROR_PREFIX, RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 __all__ = [
     "ERROR_PREFIX",
     "REGISTRY",
+    "RESULT_KIND_LISTING",
     "Tool",
     "ToolContext",
     "ToolFailure",
@@ -38,6 +39,7 @@ __all__ = [
     "context_for",
     "dispatch",
     "tool_names",
+    "tool_names_by_result_kind",
 ]
 
 logger = logging.getLogger("core")
@@ -57,6 +59,13 @@ REGISTRY: dict[str, Tool] = {
 
 def tool_names() -> list[str]:
     return sorted(REGISTRY)
+
+
+def tool_names_by_result_kind(kind: str) -> list[str]:
+    """The registered tools declaring `Tool.result_kind == kind`, sorted.
+    Derived from the live registry every call, so a tool added (or
+    monkeypatched in) with the declaration is counted by that fact alone."""
+    return sorted(name for name, tool in REGISTRY.items() if tool.result_kind == kind)
 
 
 def context_for(

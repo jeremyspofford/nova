@@ -42,7 +42,7 @@ from __future__ import annotations
 import posixpath
 
 from app import db, devices, devices_ws, envelopes
-from app.tools.base import Tool, ToolContext, ToolFailure
+from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 # How long core waits for a device to answer one command. Bounded (<=120s per
 # the plan) because a command with no answer must become a STATED failure, not
@@ -294,6 +294,9 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
     result = _require_ok(await _command(pool, row, "shell.exec", {"argv": argv}, ctx=ctx), row)
     exit_code = result.get("exit_code")
     output = result.get("output") or "(no output)"
+    # The "<name> ran <argv> — exit <code>" preamble is READ by the presented-
+    # listing guard (app/guards.py _RUN_PREAMBLE): under it, a run of bare names
+    # in the output (a plain `ls`) counts as a listing. Pinned in its suite.
     return f"{row['name']} ran {argv} — exit {exit_code}\n{output}"
 
 
@@ -342,6 +345,10 @@ TOOLS: tuple[Tool, ...] = (
         parameters=_obj({}, []),
         executor=device_list,
         ephemeral=True,
+        # The three device_list* tools enumerate a container (paired devices,
+        # a directory, installed apps): their result IS a listing, and the
+        # presented-listing guard reads that declaration rather than a name.
+        result_kind=RESULT_KIND_LISTING,
     ),
     Tool(
         name="device_info",
@@ -367,6 +374,7 @@ TOOLS: tuple[Tool, ...] = (
         executor=device_list_files,
         precheck=_precheck("fs.list", fs_path=True),
         ephemeral=True,
+        result_kind=RESULT_KIND_LISTING,
     ),
     Tool(
         name="device_read_file",
@@ -392,6 +400,7 @@ TOOLS: tuple[Tool, ...] = (
         executor=device_list_apps,
         precheck=_precheck("apps.list"),
         ephemeral=True,
+        result_kind=RESULT_KIND_LISTING,
     ),
     Tool(
         name="device_notify",
