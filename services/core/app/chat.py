@@ -45,6 +45,7 @@ from app import (
     devices,
     guards,
     identity,
+    markup_calls,
     peers,
     settings_store,
     tools,
@@ -205,6 +206,19 @@ OUT_OF_ROUNDS_NUDGE = (
     "Answer now with what the tool results above already give you, and say "
     "plainly what is still unknown."
 )
+
+
+def markup_closed_refusal(name: str) -> str:
+    """The stated result for a call the model wrote as MARKUP in a round that
+    advertised no tools (the owner's walk, 2026-09-03 11:57 — see
+    app/markup_calls.py). It states both facts the model needs: what it wrote
+    was text and not a tool call, and this round had no tools to call anyway.
+    Derived from the call's own name, so it can never name the wrong tool."""
+    return (
+        f"{tools.ERROR_PREFIX}that was tool-call markup in your reply text, not a tool "
+        f"call: you tried to call {name} in a round with no tools, so nothing ran"
+    )
+
 
 # messages.kind (migration 014). 'plumbing' marks a row that exists so the
 # SYSTEM can resume a turn — the web's continuation message after an approve,
@@ -418,6 +432,12 @@ class ToolCall:
     id: str
     name: str
     arguments: str
+    # This call was written as MARKUP in the round's reply text and recovered by
+    # markup_calls, rather than arriving in `tool_calls` on the wire. It is
+    # dispatched (or refused) through exactly the same path as any other call —
+    # the flag only ever adds a fact to the span, so the trace says where the
+    # call came from and the accommodation is never invisible.
+    from_markup: bool = False
 
     def as_openai(self) -> dict:
         return {
@@ -695,12 +715,46 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
         return []
 
 
+def without_markup(text: str) -> str:
+    """`text` with any tool-call markup removed and an honest note in its place.
+
+    THE INVARIANT, and it is pinned at the persist boundary: no message Nova
+    stores may contain tool-call markup. A raw `<atem:function_calls>` blob is
+    not an answer — the operator reads XML instead of a reply, and worse, the
+    next turn reads it back through history_window and learns to write more of
+    them (the very loop migration 015 has to back-fill out of the live DB).
+
+    Every path that could produce one is already handled upstream (a round's
+    text is scanned in _gateway_round, the turn's accumulated deltas in
+    _run_turn), so this is DEFENCE IN DEPTH: it is a no-op on clean text, and
+    the day someone adds a fifth way for model text to reach the database it is
+    still true. Nothing is dispatched from here — by this point the round is
+    long over — so the note states exactly that.
+    """
+    scan = markup_calls.parse_markup_tool_calls(text)
+    if not scan.found:
+        return text
+    logger.warning(
+        "tool-call markup reached the record boundary (%d call(s), unparsed=%s); "
+        "stripping it",
+        len(scan.calls),
+        scan.unparsed,
+    )
+    note = (
+        markup_calls.no_tool_round_note(scan.names)
+        if scan.calls
+        else markup_calls.MALFORMED_MARKUP_NOTE
+    )
+    return f"{scan.text}\n\n{note}" if scan.text.strip() else note
+
+
 async def _persist_assistant(
     pool: asyncpg.Pool,
     conversation_id: uuid.UUID,
     text: str,
     kind: str = MESSAGE_KIND_CHAT,
 ) -> None:
+    text = without_markup(text)
     await pool.execute(
         "INSERT INTO messages (conversation_id, role, content, kind) "
         "VALUES ($1, 'assistant', $2, $3)",
@@ -765,6 +819,12 @@ async def _run_tool(
     facts = ctx.facts_sink
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"] = _span_arguments(call.arguments)
+        if call.from_markup:
+            # Recovered from tool-call markup in the round's text rather than
+            # read off the wire. It still went through schema validation, the
+            # precheck and the policy kernel — the accommodation changes where
+            # the call was READ, never what it is allowed to do.
+            span.meta["parsed_from_markup"] = True
         # Pre-set, and overwritten the moment dispatch answers. A turn the
         # client abandons mid-call still files this span on the way out, and
         # it must read as "never finished" rather than as an untested
@@ -845,13 +905,23 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
     drop (a reply is a claim, the span is the fact). Returns the stated result
     the call is answered with. ONE implementation for both closed rounds (a card
     is pending, or the tool rounds ran out), so neither can quietly become a
-    dispatch."""
+    dispatch.
+
+    A call the model wrote as MARKUP in the reply text is refused here too, and
+    the stated reason names that: it wrote text, and the round had no tools. The
+    span carries `refused_markup`, which is what the turn derives its honest
+    note from — never the reply's prose."""
+    if call.from_markup:
+        reason = markup_closed_refusal(call.name)
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"] = _span_arguments(call.arguments)
         span.meta["ok"] = False
         span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
         span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
         span.meta[flag] = True
+        if call.from_markup:
+            span.meta["parsed_from_markup"] = True
+            span.meta["refused_markup"] = True
     return reason
 
 
@@ -865,11 +935,62 @@ def _refuse_out_of_rounds(turn: traces.Turn, call: ToolCall) -> str:
     return _refuse_call(turn, call, OUT_OF_ROUNDS_REFUSAL, "refused_out_of_rounds")
 
 
-def _refuse_redirect_closed(turn: traces.Turn, calls: Sequence[ToolCall]) -> None:
+def _refuse_redirect_closed(turn: traces.Turn, calls: Sequence[ToolCall]) -> list[str]:
     """Every tool call a redirect made in a round that advertised no tools:
-    refused and recorded, never dispatched, never silently dropped."""
+    refused and recorded, never dispatched, never silently dropped.
+
+    Returns the names of the refused calls that were written as MARKUP, so the
+    redirect can report an honest note for a round whose whole text was a tool
+    call it could not make — derived from what was actually refused."""
     for call in calls:
         _refuse_call(turn, call, REDIRECT_CLOSED_REFUSAL, "refused_redirect_closed")
+    return [call.name for call in calls if call.from_markup]
+
+
+def _markup_tool_calls(
+    parsed: Sequence[markup_calls.ParsedCall], existing: Sequence[ToolCall]
+) -> list[ToolCall]:
+    """Recovered markup calls as ordinary ToolCalls, minus any the round ALSO
+    made properly on the wire.
+
+    The de-duplication is the load-bearing half: a model that emits a real tool
+    call and then narrates the same call in XML would otherwise have it executed
+    TWICE under two ids — a duplicated side effect, which is worse than the
+    formatting problem this is accommodating. Sameness is (name, arguments)
+    compared as canonical JSON, never as raw text.
+    """
+
+    def _canonical(arguments: object) -> str:
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except (json.JSONDecodeError, TypeError):
+                return arguments.strip()
+        try:
+            return json.dumps(arguments, sort_keys=True)
+        except (TypeError, ValueError):
+            return repr(arguments)
+
+    seen = {(call.name, _canonical(call.arguments)) for call in existing}
+    taken = {call.id for call in existing}
+    out: list[ToolCall] = []
+    for position, call in enumerate(parsed, start=1):
+        arguments = call.arguments
+        encoded = arguments if isinstance(arguments, str) else json.dumps(arguments)
+        key = (call.name, _canonical(arguments))
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate = f"markup_{position}"
+        suffix = 0
+        while candidate in taken:
+            suffix += 1
+            candidate = f"markup_{position}_{suffix}"
+        taken.add(candidate)
+        out.append(
+            ToolCall(id=candidate, name=call.name, arguments=encoded, from_markup=True)
+        )
+    return out
 
 
 # -- the opt-in responsiveness check ---------------------------------------
@@ -968,8 +1089,31 @@ async def _gateway_round(
             failure = f"could not reach the gateway — {peers.reason(exc)}"
             span.meta["error"] = failure
         calls = buffer.finished()
+        # A round's content is scanned ONCE, here, so every round in the system
+        # — the turn loop's, the out-of-rounds narration round, both of a
+        # redirect's — gets the same treatment from the same code. A model that
+        # writes its tool call as XML in the reply text (see app/markup_calls.py)
+        # has it recovered and turned into an ordinary ToolCall; the text that
+        # remains is the round's content, and the markup is gone from it.
+        #
+        # NOTHING is decided here about what happens to those calls. The caller
+        # already knows whether it advertised tools: an open round dispatches
+        # them through _dispatch_calls like any other call (schema validation,
+        # precheck, policy kernel, executor — no weaker path exists), and a
+        # closed round refuses them through _refuse_call like any other call it
+        # cannot run.
+        text = "".join(collected)
+        scan = markup_calls.parse_markup_tool_calls(text)
+        if scan.found:
+            text = scan.text
+            span.meta["markup_calls"] = len(scan.calls)
+            if scan.unparsed:
+                # Markup too malformed to read: stripped, never dispatched, and
+                # said out loud in the span rather than silently dropped.
+                span.meta["markup_unparsed"] = True
+            calls.extend(_markup_tool_calls(scan.calls, calls))
         span.meta["tool_calls"] = len(calls)
-    return "".join(collected), calls, failure
+    return text, calls, failure
 
 
 async def _collect_completion(
@@ -1306,6 +1450,12 @@ class _ClaimRedirect:
     redirected: bool
     consents_emitted: int
     read_ephemeral: bool
+    # Set when a round of this redirect wrote a tool call as MARKUP and it was
+    # refused (the round advertised no tools). A BACKEND note, like the round-cap
+    # note: the caller keeps it whatever the composition below does with the
+    # model's prose, so a turn whose last word was an unrunnable tool call says
+    # so instead of showing XML or nothing.
+    markup_note: str | None = None
 
 
 async def _claim_redirect(
@@ -1380,6 +1530,15 @@ async def _claim_redirect(
     frame and never a lost turn.
     """
     read_ephemeral = False
+    # Tool calls this redirect wrote as MARKUP and had refused (a round with no
+    # tools). Collected from the refusals themselves, never from the text.
+    markup_refused: list[str] = []
+
+    def _markup_note() -> str | None:
+        if not markup_refused:
+            return None
+        return markup_calls.no_tool_round_note(markup_refused)
+
     with turn.span("guard", claim_kind) as span:
         span.meta.update(span_meta)
         # DERIVED from the turn's own spans, never from the reply's prose: a
@@ -1403,7 +1562,13 @@ async def _claim_redirect(
                 "%s redirect skipped (%s); shipping the correction", claim_kind, blocked
             )
             emit(_frame({"correction": correction_text}))
-            return _ClaimRedirect(correction_text, False, consents_emitted, read_ephemeral)
+            return _ClaimRedirect(
+                correction_text,
+                False,
+                consents_emitted,
+                read_ephemeral,
+                markup_note=_markup_note(),
+            )
 
         try:
             attempt: list[dict] = [
@@ -1432,7 +1597,7 @@ async def _claim_redirect(
                 # rounds. Nothing is dispatched, and the regenerated text still
                 # stands or falls on the guard vetting below.
                 span.meta["refused_calls"] = len(calls)
-                _refuse_redirect_closed(turn, calls)
+                markup_refused.extend(_refuse_redirect_closed(turn, calls))
             elif calls:
                 attempt.append(
                     {
@@ -1453,7 +1618,7 @@ async def _claim_redirect(
                 )
                 if more:
                     span.meta["refused_calls"] = len(more)
-                    _refuse_redirect_closed(turn, more)
+                    markup_refused.extend(_refuse_redirect_closed(turn, more))
                 if failure is not None:
                     raise GatewayFailure(failure)
         except Exception as exc:
@@ -1464,7 +1629,20 @@ async def _claim_redirect(
                 peers.reason(exc),
             )
             emit(_frame({"correction": correction_text}))
-            return _ClaimRedirect(correction_text, False, consents_emitted, read_ephemeral)
+            return _ClaimRedirect(
+                correction_text,
+                False,
+                consents_emitted,
+                read_ephemeral,
+                markup_note=_markup_note(),
+            )
+
+        if markup_refused:
+            # The redirect wrote a tool call as text in a round that had no
+            # tools. It is already refused and recorded as a tool span; naming it
+            # on the guard span too is what makes the note the caller keeps
+            # traceable to the round that earned it.
+            span.meta["refused_markup_calls"] = len(markup_refused)
 
         corrected = regenerated.strip()
         # Judged ONCE by the FULL mechanical set — this text is about to replace
@@ -1485,12 +1663,20 @@ async def _claim_redirect(
                     rejected_by,
                 )
             emit(_frame({"correction": correction_text}))
-            return _ClaimRedirect(correction_text, False, consents_emitted, read_ephemeral)
+            return _ClaimRedirect(
+                correction_text,
+                False,
+                consents_emitted,
+                read_ephemeral,
+                markup_note=_markup_note(),
+            )
 
         span.meta["redirected"] = True
         emit(_frame({"correction": redirect_note}))
         emit(_frame({"t": corrected}))
-        return _ClaimRedirect(corrected, True, consents_emitted, read_ephemeral)
+        return _ClaimRedirect(
+            corrected, True, consents_emitted, read_ephemeral, markup_note=_markup_note()
+        )
 
 
 async def _run_turn(
@@ -1678,6 +1864,30 @@ async def _run_turn(
         # note, and a capped turn then read exactly like an ordinary one).
         backend_note: str | None = None
 
+        # Tool-call MARKUP in what streamed. _gateway_round already parsed it out
+        # of each round's returned text (and dispatched or refused what it
+        # found), but `parts` holds the raw deltas exactly as they were emitted,
+        # so the DURABLE text is cleaned here — once, over the whole turn. What
+        # the watcher saw is unchanged; what the next turn READS never contains
+        # a tool call written as text.
+        streamed_scan = markup_calls.parse_markup_tool_calls("".join(parts))
+        if streamed_scan.found:
+            logger.info(
+                "chat turn %s: stripped tool-call markup from the reply text "
+                "(%d call(s), unparsed=%s)",
+                turn.id,
+                len(streamed_scan.calls),
+                streamed_scan.unparsed,
+            )
+            parts[:] = [streamed_scan.text] if streamed_scan.text else []
+        # Which of those calls were REFUSED because their round advertised no
+        # tools — read off the spans the refusals filed, never off the prose.
+        refused_markup = [
+            span.name
+            for span in turn.spans
+            if span.kind == "tool" and span.meta.get("refused_markup")
+        ]
+
         if out_of_rounds:
             # ONE final narration round, no tools advertised, with every
             # accumulated tool result still in `messages`: the answer the work
@@ -1732,6 +1942,20 @@ async def _run_turn(
             backend_note = PENDING_APPROVAL_NOTE
             parts.append(PENDING_APPROVAL_NOTE)
             emit(_frame({"t": PENDING_APPROVAL_NOTE}))
+        elif streamed_scan.found and not "".join(parts).strip():
+            # The whole reply was a tool call written as text and there is
+            # nothing else to show. An empty reply would be an error frame, and
+            # the markup itself must never be the answer, so the turn says the
+            # true thing instead: nothing ran, ask again. A refused call NAMES
+            # itself (the span said so); markup too malformed to name one says
+            # only what is known.
+            backend_note = (
+                markup_calls.no_tool_round_note(refused_markup)
+                if refused_markup
+                else markup_calls.MALFORMED_MARKUP_NOTE
+            )
+            parts.append(backend_note)
+            emit(_frame({"t": backend_note}))
 
         text = "".join(parts)
         if not text:
@@ -1880,6 +2104,7 @@ async def _run_turn(
             consent_redirected = outcome.redirected
             consents_emitted = outcome.consents_emitted
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
+            backend_note = backend_note or outcome.markup_note
         # The turn's single redirect budget: ONE regeneration per turn, first
         # claim wins, never two. Spent by TRYING, not by succeeding.
         redirect_spent = consent_correction is not None
@@ -1967,6 +2192,7 @@ async def _run_turn(
                 state_redirected = outcome.redirected
                 consents_emitted = outcome.consents_emitted
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
+                backend_note = backend_note or outcome.markup_note
                 redirect_spent = True
 
         # Compose the DURABLE text once, from the outcome above. The consent,
@@ -2015,7 +2241,11 @@ async def _run_turn(
         # `text` carries the backend note, so the two branches above keep it by
         # construction. The three that DROP the model's prose have to put it
         # back — mechanically, off the same flag, never by looking for the note
-        # in the string.
+        # in the string. A note a REDIRECT earned (its closing round wrote a tool
+        # call as markup and had it refused) rides the same slot: the redirect is
+        # exactly the path where the composition below drops the prose, so
+        # without this the operator would be told nothing at all about the call
+        # the model tried to make.
         prose_dropped = (
             consent_redirected or state_redirected or bool(replace_corrections)
         )
@@ -2116,6 +2346,13 @@ async def _run_turn(
             persisted, _redirected = await _responsiveness_redirect(
                 app, turn, model, message, persisted, messages, emit
             )
+
+        # The record boundary. Everything above has already been cleaned where it
+        # was produced; this is the one line that makes the invariant hold for
+        # the durable record AND for memory, including the two soft redirects
+        # (deferral, responsiveness) whose text comes back through
+        # _collect_completion rather than a scanned round. A no-op on clean text.
+        persisted = without_markup(persisted)
 
         # A reply that is ONLY the pending-approval note is choreography: it says
         # the turn ended with a card up, nothing more. Persisted so the operator
