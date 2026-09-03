@@ -21,6 +21,17 @@ services:
     build:
       context: ../services/core
     restart: unless-stopped
+    # How long a redeploy waits after SIGTERM before SIGKILL. Compose's
+    # default is 10s; a 27B chat turn runs 13-55s, so every `up -d core`
+    # mid-turn killed the process before it could close the turn's trace
+    # (measured 2026-09-01: one turn left status NULL, and the chat read it
+    # as "still responding" for a day). 300s is the gateway read timeout —
+    # the longest one gateway call can hold a turn open, and the uvicorn
+    # --timeout-graceful-shutdown in services/core/Dockerfile — plus 30s
+    # for the lifespan drain (close_turn, memory ingest) that uvicorn runs
+    # only after that wait. Startup still sweeps whatever a SIGKILL leaves
+    # (traces.sweep_orphaned_turns); this is what makes the sweep rare.
+    stop_grace_period: 330s
     ports:
       - "127.0.0.1:8000:8000"
     environment:

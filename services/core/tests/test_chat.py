@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from app import chat, guards
+from app import chat, guards, traces
 from app.main import app
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway, FakeMemory, ScriptedGateway
@@ -516,6 +516,52 @@ async def test_a_failure_storing_the_reply_still_ends_the_stream_properly(
     assert sent[-2]["error"]
     assert sent[-1] == DONE
     assert await pool.fetchval("SELECT status FROM turns") == "error"
+
+
+@pytest.mark.parametrize("outcome", ["ok", "error"])
+async def test_a_turn_is_in_flight_exactly_while_this_process_runs_it(
+    owner_client, pool, mount_peers, outcome
+):
+    """traces.INFLIGHT holds a turn's id from open_turn to the close, and
+    /conversations/active reports pending_turn from THAT set — so while the
+    model is talking the flag is true, and once the turn has reached a
+    terminal status (ok or error alike) the id is gone and the flag is
+    false. A row left NULL by a dead process is never in the set, which is
+    what keeps a reload from spinning over nothing."""
+    hold = asyncio.Event()
+    gateway = FakeGateway(deltas=("almost there",), hold=hold)
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await _set_model(owner_client)
+    assert traces.INFLIGHT == set()
+
+    turn = asyncio.create_task(
+        owner_client.post("/api/v1/chat/stream", json={"message": "say something"})
+    )
+    while not gateway.seen:
+        await asyncio.sleep(0.01)
+    # Mid-turn: the row is open, this process holds its id, and the owner's
+    # active conversation says so. Release the gateway in a finally so a
+    # failed assertion cannot leave the turn held and cascade into the
+    # module's later tests through the pool fixture's drain timeout.
+    try:
+        turn_id = await pool.fetchval("SELECT id FROM turns WHERE status IS NULL")
+        assert traces.INFLIGHT == {turn_id}
+        active = await owner_client.get("/api/v1/conversations/active")
+        assert active.json()["pending_turn"] is True
+
+        if outcome == "error":
+            # Take the conversation away so persisting the reply fails — the
+            # turn's error path, not its happy one.
+            await pool.execute("DELETE FROM conversations")
+    finally:
+        hold.set()
+    resp = await asyncio.wait_for(turn, timeout=10)
+    assert resp.status_code == 200
+    assert frames(resp.text)[-1] == DONE
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+
+    assert traces.INFLIGHT == set()
+    assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id) == outcome
 
 
 async def test_chat_needs_an_identity(client, mount_peers):

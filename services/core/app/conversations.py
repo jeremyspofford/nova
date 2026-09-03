@@ -1,15 +1,17 @@
 """Conversations and their messages — scoped to the person who owns them."""
 from __future__ import annotations
 
+import logging
 import uuid
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 
-from app import db, identity
+from app import db, identity, traces
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
+logger = logging.getLogger("core")
 
 
 def as_json(row: asyncpg.Record) -> dict:
@@ -21,21 +23,42 @@ def as_json(row: asyncpg.Record) -> dict:
 
 
 async def has_pending_turn(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> bool:
-    """Is a turn for this conversation still running (status NULL, unclosed)?
+    """Is a turn for this conversation running in THIS process right now?
 
-    Derived from the ledger, never a flag someone maintains: a turn opens with
-    status NULL and closes to 'ok'/'error' in traces.close_turn, so an
-    unclosed row IS an in-flight turn. Since S2c a client disconnect finishes
-    the turn server-side rather than abandoning it, so a NULL here means
-    genuinely still-generating — which is exactly what a reloaded client polls
-    on before rendering the finished reply.
+    Derived from two live facts, never a flag someone maintains: the ledger
+    (a turn opens with status NULL and closes in traces.close_turn) AND the
+    process's own traces.INFLIGHT set. A NULL row alone is not enough — a
+    process killed mid-turn never runs close_turn, and the row it leaves
+    behind would otherwise read as "still responding" forever (the 2026-09-01
+    defect: one such row, one day of a spinner over nothing). Since S2c a
+    client disconnect finishes the turn server-side rather than abandoning
+    it, so a NULL row that IS in INFLIGHT means genuinely still-generating —
+    exactly what a reloaded client polls on before rendering the reply.
+
+    A NULL row NOT in INFLIGHT is never reported pending. It should not exist
+    at all — the startup sweep (traces.sweep_orphaned_turns) closes every
+    orphan before the first request — so one here is a tripwire: logged at
+    WARNING, because it means the sweep was bypassed, not that a turn is
+    running.
     """
-    return bool(
-        await pool.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM turns WHERE conversation_id = $1 AND status IS NULL)",
-            conversation_id,
-        )
+    rows = await pool.fetch(
+        "SELECT id, started_at FROM turns WHERE conversation_id = $1 AND status IS NULL",
+        conversation_id,
     )
+    pending = False
+    for row in rows:
+        if row["id"] in traces.INFLIGHT:
+            pending = True
+            continue
+        logger.warning(
+            "turn %s (conversation %s, started %s) has status NULL but no process is running "
+            "it — not reported pending; either its close failed in this process "
+            "(see 'could not close turn') or the startup sweep was bypassed",
+            row["id"],
+            conversation_id,
+            row["started_at"].isoformat(),
+        )
+    return pending
 
 
 async def active_conversation(pool: asyncpg.Pool, person: Person) -> asyncpg.Record:

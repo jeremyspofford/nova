@@ -1,8 +1,11 @@
 """Conversations belong to a person, and only to that person."""
 from __future__ import annotations
 
+import logging
 import uuid
 
+from app import traces
+from app.main import app, lifespan
 from tests.conftest import OWNER, requires_db
 
 pytestmark = requires_db
@@ -24,22 +27,86 @@ async def test_active_creates_one_then_reuses_it(owner_client, pool):
     assert await pool.fetchval("SELECT count(*) FROM conversations") == 1
 
 
-async def test_active_reports_a_turn_still_in_flight(owner_client, pool):
-    """A turns row with status NULL is a turn still running — the flag a
-    reloaded client reads to know it should poll for the finishing reply."""
+async def _pending(owner_client) -> bool:
+    return (await owner_client.get("/api/v1/conversations/active")).json()["pending_turn"]
+
+
+async def test_active_reports_a_turn_this_process_is_running(owner_client, pool):
+    """pending_turn is derived from TWO live facts: an unclosed turns row
+    (status NULL) AND this process holding it in traces.INFLIGHT — the flag a
+    reloaded client reads to know it should poll for the finishing reply.
+    The row alone is not a turn: the moment the process lets go of the id
+    the flag clears, whether or not the row has closed yet."""
     conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
 
     # An open, not-yet-closed turn (status NULL), exactly as chat.py leaves it
-    # while the model is still answering.
+    # while the model is still answering...
     turn_id = await pool.fetchval(
         "INSERT INTO turns (kind, conversation_id) VALUES ('chat', $1) RETURNING id",
         uuid.UUID(conversation),
     )
-    assert (await owner_client.get("/api/v1/conversations/active")).json()["pending_turn"] is True
+    # ...and registered as running HERE, exactly as chat_stream does.
+    traces.INFLIGHT.add(turn_id)
+    try:
+        assert await _pending(owner_client) is True
+    finally:
+        traces.INFLIGHT.discard(turn_id)
+    # Let go of it — the process is no longer running this turn.
+    assert await _pending(owner_client) is False
 
-    # Once it closes, the flag clears — the reply has landed.
+    # Closed, the row is terminal and stays clear.
     await pool.execute("UPDATE turns SET status = 'ok', ended_at = now() WHERE id = $1", turn_id)
-    assert (await owner_client.get("/api/v1/conversations/active")).json()["pending_turn"] is False
+    assert await _pending(owner_client) is False
+
+
+async def test_a_turn_no_process_is_running_is_never_pending(owner_client, pool, caplog):
+    """The 2026-09-01 defect: core was SIGKILLed mid-turn by a redeploy, so
+    close_turn never ran, and the NULL row it left read as "Nova is still
+    responding" for a day. A NULL row THIS process is not running is not
+    pending — and because the startup sweep should have closed it, finding one
+    is said at WARNING rather than tidied silently."""
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+    turn_id = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id) VALUES ('chat', $1) RETURNING id",
+        uuid.UUID(conversation),
+    )
+    assert turn_id not in traces.INFLIGHT
+
+    with caplog.at_level(logging.WARNING, logger="core"):
+        assert await _pending(owner_client) is False
+
+    (line,) = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and str(turn_id) in r.getMessage()
+    ]
+    assert "no process is running" in line
+    assert conversation in line
+    # The row itself is untouched: reporting is not repairing — the sweep at
+    # startup is the one writer of 'interrupted'.
+    assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id) is None
+
+
+async def test_startup_closes_an_orphan_before_anyone_can_read_it_as_pending(
+    owner_client, pool
+):
+    """The whole path, through the app's real lifespan: a NULL-status turn in
+    the owner's active conversation left by a dead process is 'interrupted'
+    once the app has started, and /conversations/active reports no pending
+    turn. (Plain ASGITransport never runs the lifespan — conftest — so it is
+    entered here directly; that is the startup the container runs.)"""
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+    orphan = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id) VALUES ('chat', $1) RETURNING id",
+        uuid.UUID(conversation),
+    )
+    assert orphan not in traces.INFLIGHT
+
+    async with lifespan(app):
+        row = await pool.fetchrow("SELECT status, ended_at FROM turns WHERE id = $1", orphan)
+        assert row["status"] == "interrupted"
+        assert row["ended_at"] is not None
+        assert await _pending(owner_client) is False
 
 
 async def test_messages_come_back_oldest_first(owner_client, pool):

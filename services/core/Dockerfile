@@ -24,4 +24,13 @@ USER appuser
 
 ENV PATH="/app/.venv/bin:${PATH}"
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# --timeout-graceful-shutdown: on SIGTERM uvicorn stops accepting, waits for
+# open connections (an in-flight SSE turn is one) up to this many seconds,
+# and only THEN runs the lifespan shutdown — the drain that lets a detached
+# turn close its trace (app/main.py). Unset it waits forever, so a stuck
+# connection meant compose's SIGKILL landed before the drain ever ran. 300 =
+# chat.GATEWAY_TIMEOUT.read, the longest one gateway call can hold a turn
+# open; deploy/docker-compose.yml's stop_grace_period is this plus a margin
+# for the drain itself, and tests/test_traces.py pins the ordering.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", \
+     "--timeout-graceful-shutdown", "300"]

@@ -2907,6 +2907,12 @@ async def _run_turn(
             # retrieve it), so it is logged and the sentinel still fires.
             logger.exception("could not close turn %s", turn.id)
         finally:
+            # No longer this process's in-flight turn — closed (or its close
+            # failed and was logged). Before the sentinel, so a reader that
+            # saw [DONE] also sees pending_turn clear. discard, not remove:
+            # an eval turn never registered (scratch persons stay off the
+            # owner's flag) and still ends here.
+            traces.INFLIGHT.discard(turn.id)
             emit(None)
 
 
@@ -2990,6 +2996,10 @@ async def chat_stream(
     model = await settings_store.read_value(pool, "chat.model")
     max_tool_rounds = await settings_store.read_value(pool, "agents.max_tool_rounds")
     turn = await traces.open_turn(pool, conversation_id=conversation_id, model=model)
+    # Registered the instant it exists (no await between): this process is
+    # running it, which is what conversations.has_pending_turn reads —
+    # discarded in _run_turn's finally, after the close, on every exit path.
+    traces.INFLIGHT.add(turn.id)
 
     # The turn runs as its own detached task; the response only FORWARDS the
     # frames it produces (through this queue). Decoupling "does it finish" from

@@ -26,6 +26,7 @@ from app import (
     governance_api,
     proxies,
     settings_store,
+    traces,
     workspace_api,
 )
 from app.identity import identity_middleware
@@ -50,7 +51,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("migrations failed — refusing to start")
         raise
-    await db.init_pool()
+    pool = await db.init_pool()
+    # A fresh process runs no turns, so every NULL-status row is an orphan of
+    # the process that died — closed as 'interrupted' here, before any request
+    # can read it as pending (traces.sweep_orphaned_turns says why).
+    await traces.sweep_orphaned_turns(pool)
     try:
         yield
     finally:
