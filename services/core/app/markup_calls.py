@@ -485,13 +485,28 @@ def parse_markup_tool_calls(text: str, *, streamed: bool = False) -> MarkupScan:
     # of its closer survives at the window edge) left behind as visible XML.
     # `dangling_from` is the earliest such opener; nothing from there to the
     # window's end may be read as free-standing.
-    dangling_from = min(
-        (
-            opener.start()
-            for opener in _FUNCTION_CALLS_OPENER.finditer(masked)
-            if not _overlaps(opener.span(), resolved)
-        ),
-        default=None,
+    #
+    # ONLY meaningful when the window actually truncated `text`: that is the
+    # one condition under which an opener's missing closer might merely be
+    # sitting past the window rather than genuinely absent. In non-truncated
+    # text there is no window edge for a closer to hide beyond, so an opener
+    # with no closer anywhere is the I4 case — prose about tags — and does
+    # not poison a later, unrelated free-standing invoke. Gating on
+    # `truncated` is what keeps that true: without it, a reply that merely
+    # MENTIONS "<function_calls>" earlier silences every real invoke after
+    # it, and `without_markup` persists the real call verbatim — the
+    # original incident, reopened by a mundane trigger.
+    dangling_from = (
+        min(
+            (
+                opener.start()
+                for opener in _FUNCTION_CALLS_OPENER.finditer(masked)
+                if not _overlaps(opener.span(), resolved)
+            ),
+            default=None,
+        )
+        if truncated
+        else None
     )
 
     # A complete invoke outside any block is still unambiguously a call —

@@ -641,3 +641,83 @@ def test_a_free_invoke_with_no_wrapper_at_all_is_still_extracted():
     scan = markup_calls.parse_markup_tool_calls(text)
     assert [c.name for c in scan.calls] == ["device_run"]
     assert scan.text == "Sure.\n\nDone."
+
+
+# -- NEW-6: dangling-opener poisoning must not reach ORDINARY text ---------
+#
+# Round 4 of review found the NEW-5 fix itself over-fired: `dangling_from`
+# was computed for any in-window `<function_calls>` opener with no closer,
+# with no tie to whether the window actually did any truncating. In ordinary
+# (non-truncated) text, a plain PROSE MENTION of the literal string
+# "<function_calls>" — with no closer anywhere, because it is prose, not a
+# call — silenced every later free-standing real invoke: calls==(),
+# unparsed=False, found=False, and `without_markup` persisted the real
+# `<invoke …>` verbatim with no note. The original incident, reopened by a
+# mundane trigger (any reply that happens to explain the tag format before
+# making a real call elsewhere).
+#
+# The fix: `dangling_from` is only meaningful as "a closer that might be
+# hiding past the window edge" — so it is computed ONLY when `truncated` is
+# True. In non-truncated text an opener with no closer anywhere is the I4
+# case (prose about tags) and does not touch anything after it; a later free
+# invoke is extracted exactly as it always was pre-8eb80bd6.
+
+
+def test_a_prose_mention_of_the_tag_does_not_silence_a_later_real_invoke():
+    """The reviewer's first repro: an explanatory sentence using the literal
+    string, then a real free-standing call. The call must still be found and
+    stripped — this is ordinary text, nowhere near the window."""
+    text = (
+        "A call opens with <function_calls> and closes with the tag.\n\n"
+        '<a:invoke name="device_run"><a:parameter name="k">1</a:parameter></a:invoke>'
+    )
+    scan = markup_calls.parse_markup_tool_calls(text)
+    assert scan.found is True
+    assert [c.name for c in scan.calls] == ["device_run"]
+    assert scan.text == "A call opens with <function_calls> and closes with the tag."
+
+
+def test_a_minimal_unclosed_mention_then_a_real_invoke_still_extracts_it():
+    """The reviewer's second, more minimal repro: nothing but the bare opener
+    substring (no closer anywhere in the whole text) ahead of a real invoke.
+    The stray opener mention is left standing as inert text — it names no
+    tool, so there is nothing to say about it — but the real call after it
+    is still recognised."""
+    text = "<function_calls>\n\n" + (
+        '<a:invoke name="device_run"></a:invoke>'
+    )
+    scan = markup_calls.parse_markup_tool_calls(text)
+    assert [c.name for c in scan.calls] == ["device_run"]
+    assert "<a:invoke" not in scan.text
+    assert "<function_calls>" in scan.text  # the stray mention survives, inert
+
+
+def test_a_resolved_block_then_a_dangling_mention_then_a_free_invoke_both_extract():
+    """A block that DOES resolve, followed by an unrelated prose mention with
+    no closer, followed by a genuine free-standing invoke: all in ordinary
+    (non-truncated) text. Both calls come out — the dangling mention in the
+    middle affects neither the block before it nor the free invoke after."""
+    text = (
+        '<b:function_calls><b:invoke name="first">'
+        '<b:parameter name="k">1</b:parameter></b:invoke></b:function_calls>'
+        "\n\nSome mention of <function_calls> without a closer.\n\n"
+        '<a:invoke name="second"><a:parameter name="k">2</a:parameter></a:invoke>'
+    )
+    scan = markup_calls.parse_markup_tool_calls(text)
+    assert [c.name for c in scan.calls] == ["first", "second"]
+
+
+@pytest.mark.parametrize("offset", [-2, -1, 0, 1, 2, 5, 10])
+def test_straddle_cases_from_8eb80bd6_are_unaffected_by_the_truncated_gate(offset):
+    """The NEW-5 fix itself must still hold: gating `dangling_from` on
+    `truncated` must not weaken it for the case it was built for, since a
+    straddling wrapper closer ALWAYS means truncated text by construction."""
+    text = _wrapped_invoke_straddling_window(offset, _STRADDLING_INVOKE)
+    scan = markup_calls.parse_markup_tool_calls(text)
+    if offset <= 0:
+        assert [c.name for c in scan.calls] == ["device_run"]
+        assert scan.unparsed is False
+    else:
+        assert scan.calls == ()
+        assert scan.unparsed is True
+        assert scan.text == text
