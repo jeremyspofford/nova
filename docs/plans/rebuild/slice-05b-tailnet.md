@@ -60,12 +60,14 @@ Funnel: ports 443/8443/10000, ACL `funnel` attr, a port is serve OR funnel.
 ## Architecture (revision 2, 2026-09-03 — after the T2 review MEASURED the pod shape's restart trap)
 - **Fixed addresses, no shared namespace.** Revision 1 used the pod shape (an
   unprofiled pause container that web and the sidecar join). The T2 review
-  measured, in a throwaway pod on compose v5.3.0: `docker compose restart`
-  races the namespace join and web dies `Exited (128) cannot join network
-  namespace of a non running container` with NO restart-policy retry (that
-  is S1's committed DoD 2 command); `docker restart netns` strands web
-  (loopback only, published port gone) while its healthcheck stays GREEN;
-  `docker compose up -d` afterwards is a no-op. Any `service:`/pause shape
+  measured, in a throwaway pod on compose v5.3.0: `docker restart netns`
+  strands web (loopback only, published port gone, healthcheck GREEN) and a
+  following `docker compose up -d` is a no-op — reproduced deterministically
+  by deploy/tailnet_topology_test.sh's negative control. The same review
+  reported `docker compose restart` racing the join (web `Exited (128)`,
+  S1's committed DoD command); the topology test could NOT reproduce that on
+  this box (14/14 pod restarts survived), so it is recorded as reported, not
+  measured. Any `service:`/pause shape
   couples start ORDER — a class of trap, not one bug. So: the project network
   declares its IPAM (`subnet 172.18.0.0/16`, `gateway 172.18.0.1` — the
   values docker already assigned to nova_default — plus `ip_range
@@ -189,9 +191,13 @@ Funnel: ports 443/8443/10000, ACL `funnel` attr, a port is serve OR funnel.
   at a fixed address, and `sc: nginx:alpine` at another fixed address reverse-
   proxying `http://<web addr>:80`; then `up -d --no-deps --force-recreate
   web`, `docker compose restart`, `docker restart web`, and after EACH
-  `docker exec sc wget -qO- http://127.0.0.1/` must answer (the pod shape
-  FAILS the `compose restart` step; this shape passes — it decides the
-  topology and is DoD 2's pin). Then: the compose service (profile, pinned
+  `docker exec sc wget -qO- http://127.0.0.1/` must answer, plus a negative
+  control: the pod shape under `docker restart <netns>` must strand (if it
+  stays reachable the test FAILS loudly — "the topology test is not
+  measuring anything"); this shape passes every step — it decides the
+  topology and is DoD 2's pin. SHIPPED as deploy/tailnet_topology_test.sh
+  (24 checks) — note the negative control is the owner-restart strand, not
+  `compose restart`, which did not reproduce (see Architecture). Then: the compose service (profile, pinned
   image, TS_HOSTNAME, fixed address, state volume, TS_AUTH_ONCE, userspace,
   no TS_SERVE_CONFIG, the directory-mounted wrapper, healthcheck),
   install.sh refuse/prompt/profile/health, `.env.example`, README. CI

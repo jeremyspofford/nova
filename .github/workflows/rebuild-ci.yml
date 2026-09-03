@@ -44,12 +44,15 @@ jobs:
   # The installer is the real install path, so its decisions get a real suite.
   # No docker and no network: install_test.sh sources install.sh (whose entry
   # point is guarded) and stubs only what touches the outside world.
+  # tailnet_topology_test.sh (S5b's DoD 2 pin) is only LINTED here — it needs
+  # docker and throwaway compose projects, so running it belongs in a
+  # docker-backed job like web's gate_test.sh, not in this one.
   installer:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: bash -n deploy/install.sh && bash -n deploy/install_test.sh
-      - run: shellcheck -S warning deploy/install.sh deploy/install_test.sh install
+      - run: bash -n deploy/install.sh && bash -n deploy/install_test.sh && bash -n deploy/tailnet_topology_test.sh
+      - run: shellcheck -S warning deploy/install.sh deploy/install_test.sh deploy/tailnet_topology_test.sh install
       - run: ./deploy/install_test.sh
 
   web:
@@ -72,6 +75,12 @@ jobs:
       # stack dependency, so it's cheap here: image build + a couple of
       # short-lived containers on ports docker picks itself.
       - run: bash gate_test.sh
+      # S5b's topology pin: a reverse proxy targeting web by a FIXED address
+      # keeps answering across every restart shape (recreate, compose
+      # restart, docker restart of either side), and the pod shape's
+      # owner-restart strand is reproduced as a negative control so the test
+      # cannot pass vacuously. Throwaway compose projects on 10.98.x only.
+      - run: bash ../../deploy/tailnet_topology_test.sh
 
   # The daemon is the first code that runs OUTSIDE the compose stack, and its
   # whole interop risk is one encoder that must be byte-identical to core's
