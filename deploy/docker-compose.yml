@@ -106,6 +106,13 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:80"
+    networks:
+      default:
+        # Fixed, in the upper half of the subnet (see `networks:` at the
+        # bottom): the address the tailnet sidecar's `tailscale serve`
+        # targets (S5b T1), so a recreated web keeps the address the sidecar
+        # already knows — nothing to re-resolve, nothing to go stale.
+        ipv4_address: ${NOVA_WEB_ADDR:-172.18.128.10}
     environment:
       # Blank = the pre-auth gate is OFF and nginx behaves exactly as before
       # this existed. Set to a `openssl rand -hex 32` value only when
@@ -115,6 +122,13 @@ services:
       # does not generate this: it's opt-in, never a default secret. See
       # apps/web/nginx.conf.template for the mechanism.
       NOVA_PUBLIC_GATE_TOKEN: ${NOVA_PUBLIC_GATE_TOKEN:-}
+      # The ONE source address nginx believes a Tailscale-User-* identity
+      # header from — the tailnet sidecar's fixed address (S5b T1 pins the
+      # sidecar to it; a tailnet peer is exempt from the gate on that basis).
+      # Rendered into the conf by envsubst at container start (the image's
+      # ^NOVA_ filter), which is why it is passed here and not only read by
+      # the sidecar; blank means nobody is trusted.
+      NOVA_TAILSCALE_ADDR: ${NOVA_TAILSCALE_ADDR:-172.18.128.20}
     # Start ordering only, deliberately not `condition: service_healthy`: if
     # core is sick the UI must still come up to say so, rather than leaving
     # the operator with nothing at all to look at.
@@ -201,6 +215,35 @@ services:
       timeout: 10s
       retries: 12
       start_period: 20s
+
+networks:
+  # Declared so the project network's addressing is a fact of this file
+  # rather than whatever docker handed out. The tailnet sidecar (S5b T1)
+  # targets web at a FIXED address, and web's nginx trusts an identity
+  # header from the sidecar's FIXED address alone (apps/web/
+  # nginx.conf.template, $from_sidecar): on a bridge a TCP connection cannot
+  # be completed with a spoofed source address, so the address IS the trust
+  # boundary — and it has to be one nothing else can ever be handed.
+  #
+  # The subnet matches the network the live instance already has
+  # (172.18.0.0/16, gateway .1; every container so far at .2–.9), so
+  # declaring it moves nothing. Dynamic allocation is confined to the lower
+  # half (ip_range /17); the fixed addresses live in the upper half
+  # (172.18.128.x), where the allocator never reaches.
+  #
+  # Changing IPAM on a network that already exists is NOT applied in place —
+  # compose will say so. It is a one-time `docker compose down && docker
+  # compose up -d` at deploy: the network is recreated, volumes are
+  # untouched. A RUNNING container that is not this project's but is
+  # attached to the network (the old nova4-tailscale-1 was `docker network
+  # connect`ed) blocks the recreate with "network has active endpoints" and
+  # leaves web down — stop or disconnect it FIRST.
+  default:
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
+          ip_range: 172.18.0.0/17
+          gateway: 172.18.0.1
 
 volumes:
   v4_pgdata:

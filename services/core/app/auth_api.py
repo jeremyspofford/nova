@@ -56,10 +56,12 @@ def _password_matches(stored_hash: str | None, password: str) -> bool:
         return False
 
 
-async def _sign_in(person: Person, body: dict) -> JSONResponse:
+async def _sign_in(request: Request, person: Person, body: dict) -> JSONResponse:
     token = await identity.create_session(await db.get_pool(), person.id)
     response = JSONResponse(body)
-    identity.set_session_cookie(response, token)
+    # Secure iff the browser reached us over TLS, as the forwarding hop
+    # reported it — never from request.url.scheme (always http here).
+    identity.set_session_cookie(response, token, secure=identity.request_is_https(request))
     return response
 
 
@@ -71,7 +73,7 @@ async def auth_state() -> dict:
 
 
 @router.post("/register")
-async def register(body: Credentials) -> JSONResponse:
+async def register(request: Request, body: Credentials) -> JSONResponse:
     pool = await db.get_pool()
     closed = HTTPException(
         status_code=403, detail="registration is closed — this instance already has an owner"
@@ -90,11 +92,11 @@ async def register(body: Credentials) -> JSONResponse:
         raise closed from exc
     person = Person(id=row["id"], name=row["name"], role=row["role"])
     logger.info("owner account created: %s", person.name)
-    return await _sign_in(person, {"person": person.as_json()})
+    return await _sign_in(request, person, {"person": person.as_json()})
 
 
 @router.post("/login")
-async def login(body: Credentials) -> JSONResponse:
+async def login(request: Request, body: Credentials) -> JSONResponse:
     if len(_recent_failures(body.name)) >= MAX_LOGIN_FAILURES:
         raise HTTPException(
             status_code=429,
@@ -113,7 +115,7 @@ async def login(body: Credentials) -> JSONResponse:
 
     _LOGIN_FAILURES.pop(body.name, None)
     person = Person(id=row["id"], name=row["name"], role=row["role"])
-    return await _sign_in(person, {"person": person.as_json()})
+    return await _sign_in(request, person, {"person": person.as_json()})
 
 
 @router.post("/logout")
@@ -121,7 +123,7 @@ async def logout(request: Request) -> JSONResponse:
     token = request.cookies.get(identity.COOKIE_NAME)
     deleted = await identity.delete_session(await db.get_pool(), token) if token else False
     response = JSONResponse({"logged_out": deleted})
-    identity.clear_session_cookie(response)
+    identity.clear_session_cookie(response, secure=identity.request_is_https(request))
     return response
 
 

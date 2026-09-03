@@ -28,6 +28,15 @@ ENV NGINX_ENVSUBST_FILTER=^NOVA_
 # empty" are the same gate-off case everywhere this image runs.
 ENV NOVA_PUBLIC_GATE_TOKEN=
 
+# Same reason, same shape. This is the ONE source address nginx believes a
+# Tailscale-User-* identity header from (nginx.conf.template, $from_sidecar
+# — the tailnet sidecar's fixed address, set by deploy/docker-compose.yml).
+# Unset has to mean "trust nobody", and with this baked default it does: the
+# map key renders as the empty string, which no $remote_addr ever equals —
+# rather than a literal `${NOVA_TAILSCALE_ADDR}` left in the rendered conf.
+# Pinned by gate_test.sh (a web run without it refuses the trusted address).
+ENV NOVA_TAILSCALE_ADDR=
+
 # Rendered to /etc/nginx/conf.d/default.conf by the entrypoint above, every
 # container start — NOT copied to conf.d directly like a plain conf would be.
 COPY nginx.conf.template /etc/nginx/templates/default.conf.template

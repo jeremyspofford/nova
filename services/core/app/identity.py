@@ -78,20 +78,47 @@ async def delete_session(pool: asyncpg.Pool, token: str) -> bool:
     return result != "DELETE 0"
 
 
-def set_session_cookie(response: Response, token: str) -> None:
+def request_is_https(request: Request) -> bool:
+    """Did the browser reach us over TLS? Read from the ONE hop that knows.
+
+    Core never terminates TLS and uvicorn is started bare (no --proxy-headers),
+    so `request.url.scheme` is always `http` here and says nothing about the
+    browser's connection. The web origin's nginx forwards `X-Forwarded-Proto`
+    as the scheme the TLS-terminating hop reported (`tailscale serve` or
+    cloudflared send `https`; nginx's own `$scheme`, `http`, otherwise — see
+    apps/web/nginx.conf.template, "The forwarded scheme"), so that header is
+    the single honest source and is read explicitly rather than via a proxy-
+    headers middleware that would also rewrite the client address.
+
+    Trusting it is safe in both directions: a client can only influence its
+    OWN request's copy (the proxies overwrite it for real visitors; browsers
+    never send it), and the only thing a forged `https` buys is a Secure
+    cookie on plain http that the liar's own browser then drops. A forged
+    `http` cannot strip Secure on a TLS path, because that hop sets `https`.
+    """
+    return request.headers.get("x-forwarded-proto", "").strip().lower() == "https"
+
+
+def set_session_cookie(response: Response, token: str, *, secure: bool) -> None:
+    """The single place a session cookie is minted; `secure` is derived from
+    the request by `request_is_https`, never assumed. Plain http on localhost
+    gets no Secure flag (the browser would drop the cookie); a TLS origin gets
+    it, so the cookie is never sent in the clear."""
     response.set_cookie(
         COOKIE_NAME,
         token,
         max_age=SESSION_TTL_SECONDS,
         httponly=True,
         samesite="lax",
-        secure=False,  # S1 serves plain HTTP on localhost
+        secure=secure,
         path="/",
     )
 
 
-def clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(COOKIE_NAME, path="/")
+def clear_session_cookie(response: Response, *, secure: bool) -> None:
+    """Same attributes as the cookie being cleared: a delete that does not
+    match the original's flags is a second cookie, not a removal."""
+    response.delete_cookie(COOKIE_NAME, path="/", secure=secure, httponly=True, samesite="lax")
 
 
 async def person_for_token(pool: asyncpg.Pool, token: str) -> Person | None:

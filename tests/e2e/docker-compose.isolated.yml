@@ -24,7 +24,7 @@
 # ever correct WITH it, and `config` shows which name won before anything
 # is created.
 #
-# Two things this file changes, and nothing else:
+# Three things this file changes, and nothing else:
 #
 #   1. every published host port is dropped. Two stacks cannot both hold
 #      127.0.0.1:3000, and an isolated stack that quietly took the port off
@@ -32,6 +32,14 @@
 #      reaches this stack on the compose network (http://web:80) where no
 #      published port is involved at all — the same in-network path
 #      docker-compose.e2e.yml already uses.
+#
+#   3. the project network gets a subnet of its own. The base file pins the
+#      project network's IPAM to the live instance's 172.18.0.0/16 (so the
+#      tailnet sidecar's fixed addresses stay put), and docker refuses a
+#      second network on an overlapping subnet — so without this the
+#      isolated stack could not even create its network while the real one
+#      is up. Same shape, a different range; web's fixed address and the
+#      address its nginx trusts (NOVA_TAILSCALE_ADDR) move with it.
 #
 #   2. the bundled ollama is pinned to the CPU. This box has one GPU and the
 #      other stack's model may be resident on it; a functional walk that
@@ -59,8 +67,23 @@ services:
 
   web:
     ports: !reset []
+    networks:
+      default:
+        ipv4_address: 172.28.128.10
+    environment:
+      NOVA_TAILSCALE_ADDR: 172.28.128.20
 
   ollama:
     ports: !reset []
     # CPU-only. See note 2 above.
     deploy: !reset null
+
+# See note 3 above. `!override` replaces the base file's ipam wholesale —
+# a merge would leave two subnets on one network.
+networks:
+  default:
+    ipam: !override
+      config:
+        - subnet: 172.28.0.0/16
+          ip_range: 172.28.0.0/17
+          gateway: 172.28.0.1
