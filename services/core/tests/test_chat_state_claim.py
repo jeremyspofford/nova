@@ -431,9 +431,15 @@ async def test_a_refused_not_connected_call_backs_an_offline_report(
     stale"): ok=False, but connectivity WAS determined. The model then honestly
     reports the machine is offline. No guard may fire, no redirect may run, and
     the true reply must persist verbatim — correcting it would make the guard
-    the liar in exactly the scenario it exists for."""
+    the liar in exactly the scenario it exists for.
+
+    The reply below is deliberately intent-verb-free ("check"/"verify"/…):
+    with one of those words in front of the assertion, `_state_prefix_blocks`
+    suppresses the claim on its own, and this test would pass even without the
+    facts-branch fix (see test_state_guard.py's redone unit pin). Silence here
+    can only come from `meta["facts"]` backing the claim."""
     await _pair(pool)
-    honest = f"I ran the check and it came back not connected — {DEVICE} is offline."
+    honest = f"{DEVICE} is offline — its tile is stale."
     gateway = ScriptedGateway(
         rounds=(
             (tool_call("d1", "device_run", {"device": DEVICE, "argv": ["ls"]}),),

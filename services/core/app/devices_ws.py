@@ -191,6 +191,7 @@ class Hub:
         capability: str,
         args: dict,
         timeout: float,
+        facts_sink: list[dict] | None = None,
     ) -> dict:
         """Send one signed command and await the device's own result.
 
@@ -198,13 +199,24 @@ class Hub:
         a revoke between name-resolution and dispatch must refuse, and the socket
         may still be draining. `name` rides in for the refusal text only. Only a
         `result` frame resolves the returned payload; a timeout or a missing
-        socket raises DeviceRefused, which the tool restates as a ToolFailure."""
+        socket raises DeviceRefused, which the tool restates as a ToolFailure.
+
+        `facts_sink` (review N3) closes the one gap `_require_connected` cannot
+        see: it determines connectivity at the PRECHECK, but a socket can die in
+        the window between that and this actual send — a race the precheck
+        never observes. Both re-checks below ALSO determine connectivity (a
+        connected=False the caller did not already know), so both record it
+        here, the same {"device", "connected"} shape `_require_connected` uses,
+        so a span's `facts` ends on the truth the refusal is actually reporting
+        rather than staying stuck on the precheck's stale True."""
         did = str(device_id)
         row = await devices.get_live(pool, _as_uuid(device_id))
         if row is None:
             raise devices.DeviceRefused(f"device {name!r} is not paired or has been revoked")
         conn = self._conns.get(did)
         if conn is None:
+            if facts_sink is not None:
+                facts_sink.append({"device": name, "connected": False})
             raise devices.DeviceRefused(
                 f"device {name!r} is not connected — its tile is stale; check it is "
                 "powered on and online"
@@ -222,6 +234,8 @@ class Hub:
                 # that failed did NOT reach the device, so it must read exactly
                 # like a missing socket — the same stale-tile refusal — never as
                 # an unexpected crash the model has to decode.
+                if facts_sink is not None:
+                    facts_sink.append({"device": name, "connected": False})
                 raise devices.DeviceRefused(
                     f"device {name!r} is not connected — its tile is stale; check it is "
                     "powered on and online"

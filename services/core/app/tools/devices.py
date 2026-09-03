@@ -102,10 +102,20 @@ def _require_connected(row, ctx: ToolContext | None = None) -> None:
     state-claim guard would correct it (a false correction of an honest reply is
     the worst thing that guard can do). Structured, so nothing downstream ever
     has to read a refusal string to learn what happened.
+
+    dispatch() runs this TWICE per call on a full success — once from the
+    tool's precheck, once from the executor's own `_admit` (module docstring)
+    — with the same ctx both times. Without a dedupe, a span's `facts` would
+    carry the identical {device, connected} twice for no reason. Comparing
+    only to the LAST entry already in the sink is enough: it collapses that
+    exact back-to-back repeat while still recording a REAL transition (e.g. a
+    later call on the same device that finds it gone).
     """
     connected = devices_ws.hub.is_connected(row["id"])
     if ctx is not None and ctx.facts_sink is not None:
-        ctx.facts_sink.append({"device": row["name"], "connected": connected})
+        fact = {"device": row["name"], "connected": connected}
+        if not ctx.facts_sink or ctx.facts_sink[-1] != fact:
+            ctx.facts_sink.append(fact)
     if not connected:
         raise ToolFailure(
             f"device {row['name']!r} is not connected — its tile is stale; check it is "
@@ -180,7 +190,9 @@ def _precheck(capability: str, *, fs_path: bool = False):
     return precheck
 
 
-async def _command(pool, row, capability: str, args: dict) -> dict:
+async def _command(
+    pool, row, capability: str, args: dict, *, ctx: ToolContext | None = None
+) -> dict:
     """Send one command through the hub, restating a DeviceRefused as the
     ToolFailure the model reads. Only a `result` frame gets here as a return.
 
@@ -189,7 +201,13 @@ async def _command(pool, row, capability: str, args: dict) -> dict:
     surrogate cannot be canonicalized identically on the daemon (Go decodes it
     to U+FFFD), so it would surface as an opaque "signature did not verify". We
     refuse it BEFORE signing, naming the bad input, rather than shipping a
-    mystery signature failure to the edge."""
+    mystery signature failure to the edge.
+
+    `ctx` is threaded through only so hub.command can record the ONE gap
+    `_require_connected` cannot see: a device present at precheck time whose
+    socket is gone by the time this actually sends (review N3). Passing None
+    is fine — every caller in this module has a ctx, but the sink is optional
+    the same way `_require_connected`'s is."""
     if envelopes.contains_lone_surrogate(args):
         raise ToolFailure(
             "an argument contains an unpaired UTF-16 surrogate, which cannot be signed "
@@ -203,6 +221,7 @@ async def _command(pool, row, capability: str, args: dict) -> dict:
             capability=capability,
             args=args,
             timeout=COMMAND_TIMEOUT_SECONDS,
+            facts_sink=ctx.facts_sink if ctx is not None else None,
         )
     except devices.DeviceRefused as exc:
         raise ToolFailure(exc.reason) from exc
@@ -238,39 +257,41 @@ async def device_list(args: dict, ctx: ToolContext) -> str:
 
 async def device_info(args: dict, ctx: ToolContext) -> str:
     pool, row, _ = await _admit(args, "system.info", ctx=ctx)
-    result = _require_ok(await _command(pool, row, "system.info", {}), row)
+    result = _require_ok(await _command(pool, row, "system.info", {}, ctx=ctx), row)
     detail = result.get("output") or "(the device returned no detail)"
     return f"{row['name']} system info:\n{detail}"
 
 
 async def device_list_files(args: dict, ctx: ToolContext) -> str:
     pool, row, path = await _admit(args, "fs.list", ctx=ctx, fs_path=True)
-    result = _require_ok(await _command(pool, row, "fs.list", {"path": path}), row)
+    result = _require_ok(await _command(pool, row, "fs.list", {"path": path}, ctx=ctx), row)
     return f"{row['name']} {path}:\n{result.get('output') or '(empty)'}"
 
 
 async def device_read_file(args: dict, ctx: ToolContext) -> str:
     pool, row, path = await _admit(args, "fs.read", ctx=ctx, fs_path=True)
-    result = _require_ok(await _command(pool, row, "fs.read", {"path": path}), row)
+    result = _require_ok(await _command(pool, row, "fs.read", {"path": path}, ctx=ctx), row)
     return f"{row['name']}:{path}\n{result.get('output') or '(empty file)'}"
 
 
 async def device_list_apps(args: dict, ctx: ToolContext) -> str:
     pool, row, _ = await _admit(args, "apps.list", ctx=ctx)
-    result = _require_ok(await _command(pool, row, "apps.list", {}), row)
+    result = _require_ok(await _command(pool, row, "apps.list", {}, ctx=ctx), row)
     return f"Apps on {row['name']}:\n{result.get('output') or '(none reported)'}"
 
 
 async def device_notify(args: dict, ctx: ToolContext) -> str:
     pool, row, _ = await _admit(args, "system.notify", ctx=ctx)
-    _require_ok(await _command(pool, row, "system.notify", {"message": args["message"]}), row)
+    _require_ok(
+        await _command(pool, row, "system.notify", {"message": args["message"]}, ctx=ctx), row
+    )
     return f"Sent a notification to {row['name']}."
 
 
 async def device_run(args: dict, ctx: ToolContext) -> str:
     pool, row, _ = await _admit(args, "shell.exec", ctx=ctx)
     argv = args["argv"]
-    result = _require_ok(await _command(pool, row, "shell.exec", {"argv": argv}), row)
+    result = _require_ok(await _command(pool, row, "shell.exec", {"argv": argv}, ctx=ctx), row)
     exit_code = result.get("exit_code")
     output = result.get("output") or "(no output)"
     return f"{row['name']} ran {argv} — exit {exit_code}\n{output}"
@@ -291,14 +312,14 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
             "device — no v1 device capability moves more than that; write a smaller file"
         )
     _require_ok(
-        await _command(pool, row, "fs.write", {"path": path, "content": content}), row
+        await _command(pool, row, "fs.write", {"path": path, "content": content}, ctx=ctx), row
     )
     return f"Wrote {path} on {row['name']}."
 
 
 async def device_launch_app(args: dict, ctx: ToolContext) -> str:
     pool, row, _ = await _admit(args, "apps.launch", ctx=ctx)
-    _require_ok(await _command(pool, row, "apps.launch", {"app": args["app"]}), row)
+    _require_ok(await _command(pool, row, "apps.launch", {"app": args["app"]}, ctx=ctx), row)
     return f"Launched {args['app']} on {row['name']}."
 
 

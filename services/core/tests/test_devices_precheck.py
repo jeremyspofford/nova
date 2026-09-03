@@ -19,6 +19,7 @@ FRAMES the FakeWSConn recorded, and a spy on the kernel — never the reply text
 """
 from __future__ import annotations
 
+import asyncio
 import dataclasses
 import uuid
 from pathlib import Path
@@ -479,6 +480,44 @@ async def test_an_unknown_device_name_determines_nothing_and_records_nothing(poo
     assert facts == []
 
 
+async def test_a_fully_successful_call_records_the_fact_exactly_once(pool):
+    """N2: dispatch() runs `_admit` — and so `_require_connected` — TWICE for a
+    call that fully succeeds: once from the tool's precheck (before the
+    kernel), once again inside the executor's own `_admit` (module docstring).
+    Both determine the SAME connectivity for the SAME device this call, so
+    without the dedupe in `_require_connected` the fact would land in
+    facts_sink twice for one real check — trace noise a guard would then have
+    to explain away. It must land exactly once."""
+    device_id = await _enroll(pool, name="laptop")  # DEFAULT_CAPABILITIES = ["system.info"]
+    conn = FakeWSConn()
+    devices_ws.hub.register(device_id, conn)
+    person = await _person(pool)
+    facts: list[dict] = []
+
+    task = asyncio.create_task(
+        tools.dispatch("device_info", {"device": "laptop"}, _ctx(person, facts=facts))
+    )
+    frame = await asyncio.wait_for(conn.next_sent(), 2)
+    assert frame["type"] == "command"  # both the precheck AND the executor passed
+    envelope_id = frame["envelope"]["envelope_id"]
+    devices_ws.hub.resolve(
+        device_id,
+        envelope_id,
+        {
+            "type": "result",
+            "envelope_id": envelope_id,
+            "ok": True,
+            "output": "disk: 431 GiB free",
+            "exit_code": 0,
+            "error": None,
+        },
+    )
+    result, ok = await asyncio.wait_for(task, 2)
+
+    assert ok is True and "disk: 431 GiB free" in result
+    assert facts == [{"device": "laptop", "connected": True}]  # not twice
+
+
 async def test_a_missing_facts_sink_changes_nothing(pool):
     """The channel is optional: a caller that passes none still gets the same
     refusal, and nothing raises."""
@@ -491,3 +530,44 @@ async def test_a_missing_facts_sink_changes_nothing(pool):
 
     assert ok is False
     assert "not connected" in result
+
+
+# -- N3: the gap `_require_connected` cannot see — gone by send time -----------
+#
+# `_require_connected` determines connectivity twice per call (precheck, then
+# the executor's own `_admit`), both BEFORE the kernel and BEFORE anything is
+# sent. Neither run sees a socket that dies in the window between that check
+# and hub.command's actual write — the real race the owner's walk named (module
+# docstring, review N3). hub.command has its OWN re-check right before it sends
+# (devices_ws.py); until threaded, that re-check determined "not connected" and
+# refused, but recorded nothing — leaving the precheck's stale
+# facts=[{"connected": true}] as the only word on a span whose refusal says the
+# opposite. Simulated here by patching `Hub.is_connected` to always say True
+# (what both `_require_connected` calls see) while the device never actually
+# joins `hub._conns` (what hub.command's own check sees) — the same shape a
+# real mid-flight drop produces, without needing to win an actual race.
+
+
+async def test_a_device_gone_by_send_time_ends_the_facts_on_connected_false(
+    pool, monkeypatch
+):
+    """A device present (per is_connected) at precheck AND executor time, but
+    never actually registered in the hub: hub.command's own re-check is the
+    ONLY thing that sees the truth, and — with facts_sink threaded through —
+    the ONLY thing that gets the last word."""
+    await _enroll(pool, name="laptop", capabilities=["system.info"])  # never joins the hub
+    monkeypatch.setattr(devices_ws.Hub, "is_connected", lambda self, device_id: True)
+    person = await _person(pool)
+    facts: list[dict] = []
+
+    result, ok = await tools.dispatch(
+        "device_info", {"device": "laptop"}, _ctx(person, facts=facts)
+    )
+
+    assert ok is False
+    assert "not connected" in result and "tile is stale" in result
+    # The precheck's (and the deduped executor's) stale read, then the truth.
+    assert facts == [
+        {"device": "laptop", "connected": True},
+        {"device": "laptop", "connected": False},
+    ]

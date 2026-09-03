@@ -13,6 +13,9 @@ verdict on a successful device span, and on whether anything is paired at all.
 """
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from app import chat, guards
@@ -147,7 +150,9 @@ def test_must_not_fire_on_replies_that_assert_no_current_state(label, reply):
 ACCEPTED_MISSES = [
     ("polysemy_down_right_now", "The device is down right now."),
     ("polysemy_up_right_now", "The device is up right now."),
-    ("bare_pronoun", "It's offline."),
+    # "It's offline." is already pinned as MUST_NOT_FIRE's bare_pronoun_subject
+    # (a bare pronoun has no paired-device subject at all, so it never fires —
+    # not an accepted miss the guard chooses to let through).
     ("no_state_word", "The device is back."),
     ("plural_no_named_subject", "Both devices are offline."),
     ("responding", "The device is not responding."),
@@ -196,10 +201,23 @@ def test_an_empty_or_blank_reply_never_fires():
 def test_a_refusal_that_determined_connectivity_backs_the_claim():
     """The reviewer's exact sequence: device_run refused not-connected, then the
     model reports the machine is offline. It DID check. The guard must be
-    silent — correcting a true reply is the worst thing it can do."""
-    refused = Span("device_run", ok=False, facts=[{"device": DEVICE, "connected": False}])
-    reply = f"I ran the check and it came back not connected — {DEVICE} is offline."
-    assert guards.state_claim_check(reply, [refused], NAMES) is None
+    silent — correcting a true reply is the worst thing it can do.
+
+    PIN FIX (2026-09-03, re-review): the original reply here was "I ran the
+    CHECK and it came back not connected — X is offline" — but "check" is an
+    intent-verb token (_STATE_INTENT), so `_state_prefix_blocks` suppresses the
+    assertion by itself, regardless of what the span carries. That test passed
+    even with `_checked_a_device`'s facts branch deleted, which made it a
+    vacuous tripwire for the very thing this pin exists to prove. The reply
+    below carries no intent/hedge word in front of the assertion, so silence
+    here can only come from the facts branch — proved by the second assertion,
+    the identical reply with a same-shaped but factless refusal, which fires."""
+    reply = f"{DEVICE} is offline — its tile is stale."
+    backed = Span("device_run", ok=False, facts=[{"device": DEVICE, "connected": False}])
+    assert guards.state_claim_check(reply, [backed], NAMES) is None
+
+    unbacked = Span("device_run", ok=False)  # same shape, no fact recorded
+    assert guards.state_claim_check(reply, [unbacked], NAMES) is not None
 
 
 def test_a_refusal_that_determined_nothing_still_backs_nothing():
@@ -280,3 +298,178 @@ def test_the_redirect_nudge_refuses_to_state_a_fact_that_is_not_true():
     assert "device tool" in nudge
     with pytest.raises(ValueError):
         chat.state_redirect_nudge(device=DEVICE, ran_a_tool=True)
+
+
+# -- N3: every connectivity-determining call site is allow-listed -----------
+#
+# Mirrors the D-012 AST pin (test_policy.py's test_only_policy_constructs_an_
+# allow_decision): a regex over the source is too weak — it would have to be
+# taught every alias and dotted spelling by hand — so this AST-walks every
+# *.py under app/ for the three call shapes that read a device's LIVE socket
+# state: `hub.is_connected(...)`, `.connected_ids(...)`, and
+# `self._conns.get(...)` / `_conns.get(...)`. Each occurrence must sit inside a
+# function this file names in `_ALLOWED_CONNECTIVITY_SITES`, together with why
+# it is safe not to be treated as an ungoverned read: it RECORDS what it
+# determines onto a facts_sink, it is a documented REPORTER whose own success
+# already backs the claim, or it is internal BOOKKEEPING that never surfaces a
+# connectivity claim anywhere a guard or a reply reads from.
+#
+# The alarm this exists to raise: a device tool shipped tomorrow that reads
+# connectivity a FOURTH way — a new hub method, a raw dict poke — and forgets
+# either half of state_claim_check's contract (a real check must be seen as
+# backing, an unchecked claim must still fire). This reddens the day that
+# lands, pointing at the exact call site to classify, instead of the gap
+# staying invisible until a live walk hits it (the way `hub.command`'s own
+# re-check did — N3, 2026-09-03: it determined "not connected" and raised,
+# but recorded nothing, so a span already carrying a stale
+# facts=[{"connected": true}] from the precheck backed a refusal reporting
+# the opposite. Fixed by threading facts_sink into hub.command; this pin is
+# what keeps the next one from being silent too).
+
+_RECORDS = "records"
+_REPORTER = "reporter"
+_BOOKKEEPING = "bookkeeping"
+
+# (relative path under app/, dotted Class.method or bare function name) -> a
+# (kind, reason) pair. `kind` gates a light structural check below; the reason
+# is read by a human deciding whether a NEW site belongs here.
+_ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
+    ("devices_ws.py", "Hub.unregister"): (
+        _BOOKKEEPING,
+        "compares which conn is still the registered one to decide whether to "
+        "tear down cleanup state for THIS socket — never returns a connectivity "
+        "claim to anything a reply or a guard reads.",
+    ),
+    ("devices_ws.py", "Hub.command"): (
+        _RECORDS,
+        "the not-connected re-check right before sending (the precheck's real "
+        "gap, N3): a socket gone or dead between precheck and send determines "
+        "connectivity=False here, and records it onto facts_sink when the "
+        "caller threaded one through _command, so a span's facts end on the "
+        "truth this refusal is actually reporting.",
+    ),
+    ("tools/devices.py", "_require_connected"): (
+        _RECORDS,
+        "the ONE place core determines a device's connectivity during _admit; "
+        "writes {device, connected} to ctx.facts_sink for BOTH outcomes.",
+    ),
+    ("tools/devices.py", "device_list"): (
+        _REPORTER,
+        "reads connected_ids() to render each paired device's status and "
+        "returns ok=True on success — the state guard already treats any "
+        "successful device_* span as backing (meta.ok is True), so this one "
+        "does not also need a fact recorded to be honest.",
+    ),
+}
+
+
+class _ConnectivityCallFinder(ast.NodeVisitor):
+    """Every `hub.is_connected(...)`, `.connected_ids(...)`, and
+    `self._conns.get(...)` / `_conns.get(...)` CALL in a module, tagged with
+    its enclosing Class.method (or bare function) — never its definition line,
+    only where it is actually invoked."""
+
+    def __init__(self) -> None:
+        self._stack: list[str] = []
+        self.hits: list[tuple[str, str, int]] = []  # (kind, qualname, lineno)
+
+    def _dotted(self, node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            base = self._dotted(node.value)
+            return f"{base}.{node.attr}" if base else node.attr
+        return ""
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._stack.append(node.name)
+        self.generic_visit(node)
+        self._stack.pop()
+
+    def _visit_func(self, node: ast.AST) -> None:
+        self._stack.append(node.name)  # type: ignore[attr-defined]
+        self.generic_visit(node)
+        self._stack.pop()
+
+    visit_FunctionDef = _visit_func
+    visit_AsyncFunctionDef = _visit_func
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        kind = None
+        if isinstance(func, ast.Attribute):
+            if func.attr == "is_connected":
+                kind = "hub.is_connected("
+            elif func.attr == "connected_ids":
+                kind = "connected_ids("
+            elif func.attr == "get" and self._dotted(func.value) in ("self._conns", "_conns"):
+                kind = "_conns.get("
+        if kind is not None:
+            qualname = ".".join(self._stack) if self._stack else "<module>"
+            self.hits.append((kind, qualname, node.lineno))
+        self.generic_visit(node)
+
+
+def test_every_connectivity_read_site_is_allow_listed():
+    """A device tool must be seen as backed when it really checked, and must
+    still fire the guard when it did not — `_ALLOWED_CONNECTIVITY_SITES` is
+    where that promise is kept for every site that reads the hub's live socket
+    state. A NEW site missing here is the alarm (see the section header)."""
+    app_dir = Path(guards.__file__).parent
+    offenders: list[str] = []
+    seen: set[tuple[str, str]] = set()
+    for py in sorted(app_dir.rglob("*.py")):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        finder = _ConnectivityCallFinder()
+        finder.visit(tree)
+        rel = str(py.relative_to(app_dir))
+        for kind, qualname, lineno in finder.hits:
+            key = (rel, qualname)
+            seen.add(key)
+            if key not in _ALLOWED_CONNECTIVITY_SITES:
+                offenders.append(f"{rel}:{lineno} {qualname} ({kind})")
+                continue
+            site_kind, _reason = _ALLOWED_CONNECTIVITY_SITES[key]
+            if site_kind == _RECORDS:
+                source = py.read_text(encoding="utf-8")
+                func_src = ast.get_source_segment(source, _find(tree, qualname))
+                assert func_src is not None and "facts_sink" in func_src, (
+                    f"{key} is allow-listed as 'records' but its source no "
+                    "longer mentions facts_sink — update the allow-list or "
+                    "restore the recording"
+                )
+    assert offenders == [], (
+        "a new connectivity read site is not allow-listed in "
+        f"_ALLOWED_CONNECTIVITY_SITES — classify it (records/reporter/"
+        f"bookkeeping) and say why: {offenders}"
+    )
+    # The allow-list itself must not go stale: every entry names a site that
+    # really exists, or the pin is testing nothing.
+    assert seen == set(_ALLOWED_CONNECTIVITY_SITES), (
+        f"allow-listed sites with no matching call left in the source: "
+        f"{set(_ALLOWED_CONNECTIVITY_SITES) - seen}"
+    )
+
+
+def _find(tree: ast.AST, qualname: str) -> ast.AST:
+    """The (Class.method or bare function) node named by `qualname`, for
+    pulling its source text to check a light structural claim."""
+    parts = qualname.split(".")
+
+    def _walk(node: ast.AST, remaining: list[str]) -> ast.AST | None:
+        if not remaining:
+            return node
+        name = remaining[0]
+        for child in ast.iter_child_nodes(node):
+            if (
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and child.name == name
+            ):
+                found = _walk(child, remaining[1:])
+                if found is not None:
+                    return found
+        return None
+
+    found = _walk(tree, parts)
+    assert found is not None, f"could not locate {qualname} in the module"
+    return found
