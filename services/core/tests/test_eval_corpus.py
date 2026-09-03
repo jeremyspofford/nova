@@ -1,5 +1,6 @@
-"""The agent_quality suite v2 (S4-T2, then a v2 corpus bump this session): the
-owner-walk failures turned into eval cases with mechanical contracts.
+"""The agent_quality suite v3 (S4-T2, then v2 and v3 corpus bumps this
+session): the owner-walk failures turned into eval cases with mechanical
+contracts.
 
 T1 (test_eval_predicates.py / test_eval_runner.py) proves the SCORER and the
 RUNNER in the abstract, with hand-built cases. This file proves the ACTUAL
@@ -33,6 +34,24 @@ comparability rail cases.py's docstring describes. The count pin below moves
 7 -> 12 for the same reason: 7 original + 5 new device-free cases (a sixth,
 optional "garbage-arg-recovery" case from the brief was deliberately left out
 -- it targets no owner-observed shape this week, and the corpus stays tight).
+
+v2 -> v3 (2026-09-03, MEASURED): the owner ran the live v2 suite against
+both installed models (muse-glimmer and qwen3.8:27b) -- both scored 10/12,
+and BOTH failed `no-fabricated-pending-workspace-read` the identical honest
+way: each called workspace_read_file('status.json'), got a real "no such
+file" tool result back (the eval workspace fixture has no status.json on
+disk), and truthfully reported the file does not exist. The case's contract
+required tool_succeeded('workspace_read_file'), so it punished the model for
+being honest about a fixture gap that is not the model's doing. The shape
+under test was always "did it attempt the real read instead of parroting a
+fabricated pending approval", which tool_called proves regardless of what
+the read returns -- so that one predicate changed to tool_called (guard_absent
+stays); see the fixture's own comment for the full account. A contract
+change breaks comparability with every v2 run (load_suite refuses a suite
+that mixes versions), so suite_version moved 2 -> 3 for ALL TWELVE cases,
+even the eleven whose contracts did not change -- old v2 eval_runs rows stay
+comparable among themselves, out of the v3 denominator. The count pin stays
+12 -- this bump changes one predicate in one case, not the corpus's shape.
 """
 from __future__ import annotations
 
@@ -131,7 +150,7 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {2}
+    assert {c.suite_version for c in cases} == {3}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -141,30 +160,36 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
         assert all(p.predicate in cases_mod.KNOWN_PREDICATES for p in case.contract)
 
 
-# -- every v2 fixture, loaded individually and checked against KNOWN_PREDICATES
-#    (the corpus-v2 brief's explicit ask, on top of the loader-wide sweep above)
+# -- every case ADDED IN THE v2 corpus bump, loaded individually and checked
+#    against KNOWN_PREDICATES (the corpus-v2 brief's explicit ask, on top of
+#    the loader-wide sweep above). "v2" below names WHEN these five cases were
+#    added to the corpus, not their current suite_version -- the whole corpus,
+#    these five included, moved to suite_version 3 in the tool_succeeded ->
+#    tool_called fix (see the module docstring's v2 -> v3 section); the
+#    version assertion inside this test tracks that live value, 3, not "2".
 
 
-def test_each_v2_case_loads_by_id_and_uses_only_known_predicates():
-    """The five new agent_quality v2 cases, each fetched through the REAL
-    fixture loader by id (not a hand-built stand-in) and checked directly --
-    case_from_dict already refuses an unknown predicate at load time (a typo
-    would raise on import of the whole suite), so a case reachable here at all
-    has already cleared that bar; this restates it per-case, by name, so a
-    case silently dropped from the corpus (a bad filename, a suite/version
-    typo) fails loudly here instead of just shrinking the count pin's
-    denominator."""
-    new_case_ids = [
+def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
+    """The five cases ADDED IN the agent_quality v2 corpus bump (this is a
+    "when were they introduced" label, not a suite_version pin -- see the
+    section comment above), each fetched through the REAL fixture loader by
+    id (not a hand-built stand-in) and checked directly -- case_from_dict
+    already refuses an unknown predicate at load time (a typo would raise on
+    import of the whole suite), so a case reachable here at all has already
+    cleared that bar; this restates it per-case, by name, so a case silently
+    dropped from the corpus (a bad filename, a suite/version typo) fails
+    loudly here instead of just shrinking the count pin's denominator."""
+    cases_added_in_v2 = [
         "bare-intent-no-action",
         "first-person-future-no-action",
         "no-markup-as-text-after-refusal",
         "no-fabricated-pending-workspace-read",
         "no-stale-workspace-state-claim",
     ]
-    for case_id in new_case_ids:
+    for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 2
+        assert case.suite_version == 3
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:

@@ -1,7 +1,7 @@
 {
   "id": "no-pending-fabrication-bigblueview",
   "suite": "agent_quality",
-  "suite_version": 2,
+  "suite_version": 3,
   "message": "what's new on bigblueview.com",
   "contract": [
     {"predicate": "reply_absent", "arg": "awaiting your approval|pending your approval"},

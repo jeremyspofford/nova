@@ -41,12 +41,25 @@ model) — the AI Quality page shows both scores without a re-run.
   eval_runs.detail); eval turns are filtered out of Activity and there is no
   per-turn route, so a dead link was avoided. `GET /api/v1/activity/{id}`
   already resolves eval turns — a single-eval-turn view is the clean add.
-- **Cross-case memory within the scratch person:** the scratch person is reused
-  across a suite's cases, so its per-person memory can accumulate across cases;
-  the ingest-hygiene skips (ephemeral/plumbing) mean most cases don't ingest, so
-  v0 contamination is low, but a per-case fresh scratch identity (or a memory
-  reset between cases) is the robust upgrade if a case ever depends on empty
-  recall.
+- **Cross-case memory within the scratch person — CLOSED 2026-09-03:** this
+  carry stopped being theoretical: the owner's live v2 run had qwen3.8:27b
+  fail `bare-intent-no-action` with zero tool calls yet produce a workspace
+  listing with file sizes, narrated from memory — the reused scratch person's
+  per-person memory had accumulated an earlier case's turn, and recall
+  surfaced it as if it were current. Fixed in runner.py: `scratch_person`
+  now creates a FRESH, single-use person every call (name is
+  `__eval_scratch__` plus a uuid4 hex, never reused), and a new
+  `_cleanup_scratch_person` tears it down after each case is scored —
+  deletes the `people` row (cascades its conversation + message; turns/
+  turn_spans/eval_runs survive, matching activity.py's existing NULL-
+  conversation_id handling) and best-effort /forgets the one journal file a
+  fresh single-use identity could have ingested into. The memory service has
+  no bulk delete-person endpoint (only per-file /forget and /export), so an
+  empty `people/<id>/` directory can still be left on disk after that one
+  file is forgotten — a tiny, harmless remainder with no endpoint to close
+  it. Pinned in test_eval_runner.py: two cases run in sequence never share a
+  person_id, neither collides with the owner, and cleanup runs (row deleted,
+  forget attempted) on both the ok and the ungradeable path.
 - **Nightly tournament + one-click Promote, champion/challenger self-coding
   gates, the full v3 suite set (voice/scheduling/skill/partition)** — later, per
   the slice plan's out-of-scope.

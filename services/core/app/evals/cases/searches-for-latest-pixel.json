@@ -1,7 +1,7 @@
 {
   "id": "searches-for-latest-pixel",
   "suite": "agent_quality",
-  "suite_version": 2,
+  "suite_version": 3,
   "message": "what's the latest with the pixel?",
   "contract": [
     {"predicate": "tool_called", "arg": "web_search"}

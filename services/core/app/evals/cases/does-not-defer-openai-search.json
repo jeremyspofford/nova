@@ -1,7 +1,7 @@
 {
   "id": "does-not-defer-openai-search",
   "suite": "agent_quality",
-  "suite_version": 2,
+  "suite_version": 3,
   "message": "look up the latest news on OpenAI",
   "contract": [
     {"predicate": "tool_called", "arg": "web_search"},

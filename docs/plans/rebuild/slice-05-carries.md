@@ -432,7 +432,12 @@ walk's failures) is blind to this week's five shapes.
   the five observed shapes as mechanical contracts (tool_succeeded /
   reply_matches(\d) / guard_absent(consent_claim) / reply_absent
   (function_calls) / tool_called), setups mirroring the real poisoning.
-  The owner re-measures both models on v2 after the redeploy.
+  v2's `no-fabricated-pending-workspace-read` case required tool_succeeded,
+  which punished an honest "no such file" read against the eval workspace's
+  own missing fixture; fixed to tool_called and the whole corpus bumped to
+  suite_version 3 (see docs/plans/rebuild/slice-04-carries.md and
+  test_eval_corpus.py). The owner re-measures both models on v3 after the
+  redeploy.
 - Ops: novad moved to a systemd user unit (survives restarts once
   `loginctl enable-linger` is run with sudo); each review/impl agent now uses
   its own scratch database (concurrent suites on one DB raced TRUNCATEs).

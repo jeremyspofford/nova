@@ -1,7 +1,7 @@
 {
   "id": "bare-intent-no-action",
   "suite": "agent_quality",
-  "suite_version": 2,
+  "suite_version": 3,
   "message": "show me my workspace directory structure",
   "contract": [
     {"predicate": "tool_succeeded", "arg": "workspace_list_files"}

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 import httpx
 from starlette.applications import Starlette
@@ -233,24 +234,50 @@ class FakeGateway:
 
 @dataclass
 class FakeMemory:
-    """/recall, /ingest and /save, with every call recorded."""
+    """/recall, /ingest, /save and /forget, with every call recorded.
+
+    /forget mirrors the real memory service's per-PATH semantics: by default
+    (forget_status left at None) it returns 200 only for a path this fake
+    actually "wrote" via a prior /ingest call — tracked in `journal_paths`,
+    keyed by the exact rel-path the real store.append_journal scheme
+    produces (people/<person_id>/journals/<UTC date>.md) — and 404 for any
+    other path, including one that merely looks plausible. That makes a test
+    asserting "cleanup's forget succeeded" an assertion against the REAL path
+    an ingest wrote, not the runner's own reconstructed string compared to
+    itself. `forget_status`, when set to an int, overrides this path check
+    and always answers with that status instead — for a test that wants to
+    simulate an outright memory-service failure (a 500) rather than a
+    legitimate not-found.
+    """
 
     results: tuple[dict, ...] = ()
     recall_status: int = 200
     ingest_status: int = 200
     save_status: int = 200
     save_body: dict | None = None
+    forget_status: int | None = None
     recalls: list[dict] = field(default_factory=list)
     ingests: list[dict] = field(default_factory=list)
     saves: list[dict] = field(default_factory=list)
+    forgets: list[dict] = field(default_factory=list)
+    # Same calls as `forgets`, each with the response status actually sent —
+    # so a test can assert a specific path got 200, not just that /forget was
+    # called with some body.
+    forget_results: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.ingested = asyncio.Event()
+        # The set of journal paths a real store would now have on disk —
+        # populated by _ingest, consumed by _forget. Real-form paths only
+        # ("people/<person_id>/journals/<date>.md"), matching
+        # services/memory/app/store.py's append_journal exactly.
+        self.journal_paths: set[str] = set()
         self.app = Starlette(
             routes=[
                 Route("/recall", self._recall, methods=["POST"]),
                 Route("/ingest", self._ingest, methods=["POST"]),
                 Route("/save", self._save, methods=["POST"]),
+                Route("/forget", self._forget, methods=["POST"]),
             ]
         )
 
@@ -283,7 +310,30 @@ class FakeMemory:
             return JSONResponse({"error": "bad memory bearer"}, status_code=401)
         if self.ingest_status != 200:
             return Response(status_code=self.ingest_status)
-        return JSONResponse({"path": "journals/today.md", "appended": True})
+        # The real-form path a real store would have just written to
+        # (services/memory/app/store.py's append_journal: one file per
+        # person per UTC day) — recorded so _forget can answer truthfully.
+        person_id = body.get("person_id", "")
+        today = datetime.now(UTC).date().isoformat()
+        path = f"people/{person_id}/journals/{today}.md"
+        self.journal_paths.add(path)
+        return JSONResponse({"path": path, "appended": True})
+
+    async def _forget(self, request):
+        body = await request.json()
+        self.forgets.append(body)
+        if not _bearer_ok(request, MEMORY_TOKEN):
+            self.forget_results.append({**body, "status": 401})
+            return JSONResponse({"error": "bad memory bearer"}, status_code=401)
+        path = body.get("path")
+        status = self.forget_status if self.forget_status is not None else (
+            200 if path in self.journal_paths else 404
+        )
+        self.forget_results.append({**body, "status": status})
+        if status != 200:
+            return JSONResponse({"error": "no such memory file"}, status_code=status)
+        self.journal_paths.discard(path)
+        return JSONResponse({"path": path, "deleted": True})
 
 
 @dataclass
