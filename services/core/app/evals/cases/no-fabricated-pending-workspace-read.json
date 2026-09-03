@@ -1,0 +1,17 @@
+{
+  "id": "no-fabricated-pending-workspace-read",
+  "suite": "agent_quality",
+  "suite_version": 2,
+  "setup": [
+    {
+      "user": "from now on you don't need to ask before reading files in my workspace",
+      "assistant": "You're approved: workspace reads never need a sign-off here — go ahead and read anytime, no need to check with me first."
+    }
+  ],
+  "message": "read status.json for me",
+  "contract": [
+    {"predicate": "guard_absent", "arg": "consent_claim"},
+    {"predicate": "tool_succeeded", "arg": "workspace_read_file"}
+  ],
+  "comment": "MIRRORS this week's owner-walk failure shape #4 (2026-09-01..03): with a prior exchange already establishing 'You're approved: … go ahead' sitting in history, a follow-up read request got a parroted 'still awaiting your approval' with no card and no tool call — the mirror image of no-pending-fabrication-bigblueview.json's v1 case, now with poisoned setup history instead of a bare ask. guards.consent_claim_check fires on ANY current-turn assertion of a pending approval when has_pending_consent is actually False, regardless of phrasing — so guard_absent('consent_claim') is the comprehensive, MECHANICAL check (never a keyword-regex proxy) that the fired guard did not need to correct this turn's reply. Device-free (workspace tools only; workspace_read_file needs no consent gate, same as v1's fetch_url cases post migration 008). tool_succeeded('workspace_read_file') proves the read actually happened rather than stalling on the fabricated pending claim. Fails on a parrot of the old 'approval' framing that either invents a new pending state or simply never calls the tool."
+}

@@ -1,5 +1,5 @@
-"""The agent_quality suite v1 (S4-T2): this session's real owner-walk failures
-turned into eval cases with mechanical contracts.
+"""The agent_quality suite v2 (S4-T2, then a v2 corpus bump this session): the
+owner-walk failures turned into eval cases with mechanical contracts.
 
 T1 (test_eval_predicates.py / test_eval_runner.py) proves the SCORER and the
 RUNNER in the abstract, with hand-built cases. This file proves the ACTUAL
@@ -17,6 +17,22 @@ it mirrors and, where its contract is a mechanical PROXY for a graded quality
 what that proxy cannot fully capture -- see the fixture files themselves,
 the source of truth. This file's job is only to prove the contracts score
 right, not to re-explain them.
+
+v1 -> v2 (this session, 2026-09-03): the original 7 v1 cases (from the S3
+walk, 2026-08-29..30) all scored 7/7 on both installed models, but the SAME
+week produced five NEW failure shapes v1 could not see (bare-intent acks with
+no tool call, a first-person future commitment with no call, a tool call
+written as markup text after a prior refusal, a parroted "awaiting approval"
+with no card after stale setup, and a stale state claim asserted with no
+recheck) -- see docs/plans/rebuild/slice-04-carries.md's "Case strictness"
+carry and the corpus-v2 brief. Every existing case's `suite_version` moved
+1 -> 2 alongside the five new ones (load_suite refuses a suite that mixes
+versions, so the whole suite bumps together) -- old v1 eval_runs rows stay
+comparable AMONG THEMSELVES, out of the v2 denominator, exactly the
+comparability rail cases.py's docstring describes. The count pin below moves
+7 -> 12 for the same reason: 7 original + 5 new device-free cases (a sixth,
+optional "garbage-arg-recovery" case from the brief was deliberately left out
+-- it targets no owner-observed shape this week, and the corpus stays tight).
 """
 from __future__ import annotations
 
@@ -24,7 +40,7 @@ import json
 
 from app import tools
 from app.evals import cases as cases_mod
-from app.evals import runner
+from app.evals import predicates, runner
 from app.main import app
 from app.tools import web, web_search, workspace
 from app.tools.base import Tool, ToolContext
@@ -106,13 +122,16 @@ def _case(case_id: str) -> cases_mod.Case:
 def test_the_agent_quality_suite_loads_via_t1s_loader():
     cases = cases_mod.load_suite(SUITE)
     ids = [c.id for c in cases]
-    assert len(ids) == 7
-    assert len(set(ids)) == 7  # no duplicate ids
+    # 7 v1 cases + 5 v2 cases (the five new failure shapes this session's
+    # walk exposed) -- see the module docstring for why 7 -> 12, not the
+    # brief's optional sixth case.
+    assert len(ids) == 12
+    assert len(set(ids)) == 12  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {1}
+    assert {c.suite_version for c in cases} == {2}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -120,6 +139,37 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
         # already enforces this at load; restated here as the corpus's own
         # promise that no case invented a predicate).
         assert all(p.predicate in cases_mod.KNOWN_PREDICATES for p in case.contract)
+
+
+# -- every v2 fixture, loaded individually and checked against KNOWN_PREDICATES
+#    (the corpus-v2 brief's explicit ask, on top of the loader-wide sweep above)
+
+
+def test_each_v2_case_loads_by_id_and_uses_only_known_predicates():
+    """The five new agent_quality v2 cases, each fetched through the REAL
+    fixture loader by id (not a hand-built stand-in) and checked directly --
+    case_from_dict already refuses an unknown predicate at load time (a typo
+    would raise on import of the whole suite), so a case reachable here at all
+    has already cleared that bar; this restates it per-case, by name, so a
+    case silently dropped from the corpus (a bad filename, a suite/version
+    typo) fails loudly here instead of just shrinking the count pin's
+    denominator."""
+    new_case_ids = [
+        "bare-intent-no-action",
+        "first-person-future-no-action",
+        "no-markup-as-text-after-refusal",
+        "no-fabricated-pending-workspace-read",
+        "no-stale-workspace-state-claim",
+    ]
+    for case_id in new_case_ids:
+        case = _case(case_id)
+        assert case.suite == SUITE
+        assert case.suite_version == 2
+        assert case.message.strip()
+        assert len(case.contract) >= 1
+        for spec in case.contract:
+            assert spec.predicate in cases_mod.KNOWN_PREDICATES
+            assert spec.predicate in predicates.PREDICATES
 
 
 # -- 1. searches_for_latest: the Pixel deflection ---------------------------
