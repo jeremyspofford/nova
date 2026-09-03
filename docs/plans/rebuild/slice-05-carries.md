@@ -326,3 +326,53 @@ Carries from this wave:
 - "try again" → she checked (good) then ASKED which directory instead of
   acting on an explicit instruction — a deferral-by-question the deferral
   guard does not cover; unobserved cost, note only.
+
+## Public access wave (2026-09-03) — the owner on a device without Tailscale
+
+Need: reach Nova from a browser on a machine that cannot run Tailscale, with
+"an access token of some kind". Shipped (05a1c0c9 gate; ba8e7810 healthz +
+device-WS carve-out; 81a68e9e + ae0d7705 the markup-scan bound + its
+correction):
+- **Pre-auth token gate** in the web nginx (template + envsubst filtered to
+  `^NOVA_`): with `NOVA_PUBLIC_GATE_TOKEN` set, every browser-facing location
+  (SPA, assets, /api/*) is 401 with a neutral "Access" page unless cookie
+  `nova_gate` equals the token; `GET /gate?token=<T>` sets it (HttpOnly,
+  Secure, SameSite=Lax, 30d) and 302s home; blank token = gate off
+  (byte-equivalent to before). Pinned by apps/web/gate_test.sh (29 curl
+  checks against throwaway containers, in CI). Verified live on :3000 and
+  through Cloudflare's edge.
+- **Two deliberate carve-outs**, each mechanically justified: `/healthz`
+  (static "ok", self-only — the compose healthcheck now targets it; `GET /`
+  read UNHEALTHY behind the gate) and `location = /api/v1/devices/ws` (the
+  device socket is self-authenticating — core's ed25519 challenge — so the
+  cookie gate only locked out legitimate daemons: enabling the gate knocked
+  the owner's paired device OFFLINE because novad had been enrolled against
+  http://localhost:3000). Lesson: before gating an origin, enumerate its
+  NON-browser clients.
+- **Tunnel**: a cloudflared quick tunnel (no account) on the WSL host →
+  random `*.trycloudflare.com` URL; temporary, changes on restart. The
+  tailnet URL https://nova.tailba0abb.ts.net also serves v4 now (the old
+  nova4 tailscale node reconnected to nova_default) — interim for S5b.
+- **Markup-scan bound**: the quadratic on repeated unclosed openers is killed
+  by an O(n) closing-tag presence pre-check (7.7 s → 7 ms at 256 KB); the
+  first cut's small body caps silenced realistic large calls (a >4 KB
+  device_write_file markup call leaked as raw XML — the original bug) and
+  were replaced by a single 1 MiB defence-in-depth cap (200/300 KiB calls
+  recognised + stripped, no orphan wrapper tags).
+
+Carries:
+- Pairing a NEW device through the gated public origin is unsupported
+  (/api/v1/devices/enroll stays gated; pair via localhost/tailnet). S5b/S6
+  decide whether enroll joins the carve-outs (it is code-gated + rate-
+  limited by construction).
+- The login rate limiter is per-IP; behind a tunnel every visitor is a CF
+  edge IP → a global 5/15 min window (fails closed). Reading X-Forwarded-For
+  from a TRUSTED proxy only is the S5b fix.
+- The session cookie is still `secure=False`; works over HTTPS but should
+  derive Secure from X-Forwarded-Proto (S5b).
+- The quick tunnel is a process on the host, not a compose service: it dies
+  with the box and its URL rotates — S5b's tailscale service (+ Funnel for a
+  stable public hostname) is the durable shape; the gate stays in front.
+- The cap-raise commit (ae0d7705) shipped to core via a `--build`
+  dependency side effect before its re-review finished; use `--no-deps`
+  when redeploying one service.
