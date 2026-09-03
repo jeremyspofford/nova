@@ -248,7 +248,11 @@ async def test_the_redirects_closing_round_refuses_markup_and_persists_the_note(
     assert refused[0]["meta"]["parsed_from_markup"] is True
     assert refused[0]["meta"]["refused_redirect_closed"] is True
     assert refused[0]["meta"]["ok"] is False
-    assert "in a round with no tools" in refused[0]["meta"]["error"]
+    # BOTH facts, not one instead of the other: the round's own reason survives
+    # and the markup fact is appended to it.
+    assert chat.REDIRECT_CLOSED_REFUSAL in refused[0]["meta"]["error"]
+    assert "tool-call markup in your reply text" in refused[0]["meta"]["error"]
+    assert "device_run did not run" in refused[0]["meta"]["error"]
 
     stored = await _stored(pool)
     _no_markup(stored)
@@ -283,6 +287,10 @@ async def test_a_closed_round_whose_whole_reply_is_markup_answers_with_the_note(
     refused = [s for s in await _tool_spans(pool) if s["meta"].get("refused_markup")]
     assert [s["name"] for s in refused] == ["device_run"]
     assert refused[0]["meta"]["refused_pending_approval"] is True
+    # The round's own reason is what the model most needs; the markup fact is
+    # appended to it, never substituted for it.
+    assert "an approval is pending" in refused[0]["meta"]["error"]
+    assert "tool-call markup in your reply text" in refused[0]["meta"]["error"]
     _no_markup(await _stored(pool))
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
@@ -345,3 +353,181 @@ async def test_a_uuid_conversation_is_not_required_for_the_scan():
     """The scan is pure: it never touches the database, so it cannot fail a
     turn. (Guarded here because _persist_assistant now calls it on every write.)"""
     assert markup_calls.parse_markup_tool_calls(str(uuid.uuid4())).found is False
+
+
+# -- the adversarial review, through the real route (2026-09-03) -----------
+#
+# C1 was live and critical: with no exclusion for quotation, a reply SHOWING
+# what a tool call looks like WAS one. The repros below are the reviewer's,
+# executed end to end — the executor must not run, and the reply must survive
+# byte for byte, because a fence with its contents deleted is its own defect.
+
+FENCE = "Sure — here is what a call looks like:\n\n```xml\n{block}\n```\n\nThat is the shape."
+
+
+async def _stored_all(pool) -> list[str]:
+    rows = await pool.fetch(
+        "SELECT content FROM messages WHERE role = 'assistant' ORDER BY created_at"
+    )
+    return [r["content"] for r in rows]
+
+
+async def test_a_fenced_example_never_runs_and_is_stored_intact(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    spy = await _arm_probe(pool, monkeypatch)
+    reply = FENCE.format(block=PROBE_BLOCK)
+    gateway = ScriptedGateway(rounds=((text(reply),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, "what does a tool call look like?")
+
+    assert spy.calls == []  # the example is teaching, not calling
+    assert await _tool_spans(pool) == []
+    assert await _stored(pool) == reply  # fence contents preserved, byte for byte
+
+
+async def test_a_blockquoted_example_never_runs_and_is_stored_intact(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    spy = await _arm_probe(pool, monkeypatch)
+    quoted = "Like this:\n\n" + "\n".join(f"> {line}" for line in PROBE_BLOCK.splitlines())
+    gateway = ScriptedGateway(rounds=((text(quoted),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, "show me one")
+
+    assert spy.calls == []
+    assert await _stored(pool) == quoted
+
+
+async def test_a_fenced_hermes_example_never_runs(owner_client, pool, mount_peers):
+    """The reviewer's sharpest case: ["rm", "-rf", "/"] pulled out of an
+    explanation and dispatched."""
+    reply = (
+        "The other format looks like this:\n\n```\n"
+        '<tool_call>{"name": "device_run", "arguments": '
+        '{"device": "DELL-XPS-8950", "argv": ["rm", "-rf", "/"]}}</tool_call>\n```\n'
+    )
+    gateway = ScriptedGateway(rounds=((text(reply),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, "and the hermes format?")
+
+    assert await _tool_spans(pool) == []  # nothing was even attempted
+    assert await _stored(pool) == reply
+
+
+async def test_prose_explaining_the_format_is_stored_byte_for_byte(
+    owner_client, pool, mount_peers
+):
+    """I4. A block is removed only when it holds a call this can READ; an answer
+    about the tags keeps its middle, and gets no note, because nothing happened
+    that needs explaining."""
+    reply = (
+        "It opens with <function_calls>, nests <invoke name=…> for each call, and "
+        "closes with </function_calls>. The tag is `<function_calls>` and it "
+        "closes with `</function_calls>`."
+    )
+    gateway = ScriptedGateway(rounds=((text(reply),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, "how is a call written?")
+
+    assert await _stored(pool) == reply
+    assert await _tool_spans(pool) == []
+
+
+async def test_a_bare_tag_mention_keeps_its_tail(owner_client, pool, mount_peers):
+    """I5. The truncation rule is for a call cut off mid-emission, not for a
+    sentence that names a tag — this reply used to lose everything after it."""
+    reply = "It opens with <function_calls> and then the invokes follow, one per call."
+    gateway = ScriptedGateway(rounds=((text(reply),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, "how does it start?")
+
+    assert await _stored(pool) == reply
+
+
+async def test_a_nested_quoted_block_dispatches_nothing_and_is_refused(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """I3. The nested example made the non-greedy match close on the INNER tags:
+    a quoted `argv` replaced the real one and the call ran ok=True. A round whose
+    markup did not fully parse now dispatches NOTHING — every call it produced is
+    refused, with a stated reason, in the round that HAD tools."""
+    spy = await _arm_probe(pool, monkeypatch)
+    nested = (
+        f'<a:function_calls>\n<a:invoke name="{PROBE}">\n'
+        f'<a:parameter name="device">{DEVICE}</a:parameter>\n'
+        '<a:parameter name="note">as in <a:invoke name="other">'
+        '<a:parameter name="argv">["rm", "-rf", "/"]</a:parameter></a:invoke>'
+        "</a:parameter>\n"
+        '<a:parameter name="argv">["ok"]</a:parameter>\n'
+        "</a:invoke>\n</a:function_calls>"
+    )
+    gateway = ScriptedGateway(rounds=((text(nested),), (text("It would not run."),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client)
+
+    assert spy.calls == []  # nothing ran, least of all the quoted argv
+    spans = await _tool_spans(pool)
+    assert [s["name"] for s in spans] == [PROBE]
+    assert spans[0]["meta"]["refused_markup_unparsed"] is True
+    assert spans[0]["meta"]["ok"] is False
+    assert "could not be parsed" in spans[0]["meta"]["error"]
+    _no_markup(await _stored(pool))
+
+
+async def test_a_markup_call_that_RAN_is_never_reported_as_having_not_run(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """I2. The note used to be derived from refusals alone, so a markup call that
+    was dispatched and SUCCEEDED, followed by a round that said nothing, persisted
+    "[…it came out malformed, so nothing ran — ask again…]" — false twice, and an
+    invitation to run the side effect a second time. A turn like this now behaves
+    exactly like one whose call came off the wire and whose last round was silent:
+    no note, and the run is in the trace."""
+    spy = await _arm_probe(pool, monkeypatch)
+    gateway = ScriptedGateway(rounds=((text(PROBE_BLOCK),), (text(""),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+
+    assert spy.calls == [{"device": DEVICE, "argv": ARGV}]  # it really ran
+    for stored in await _stored_all(pool):
+        assert "nothing ran" not in stored
+        assert "malformed" not in stored
+        assert "ask again" not in stored
+    # The empty final round is judged by the empty-reply path, unchanged.
+    assert [f["error"] for f in sent if isinstance(f, dict) and "error" in f] == [
+        chat.EMPTY_REPLY
+    ]
+
+
+async def test_the_memory_ingest_never_carries_markup(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """M10. The persist boundary is not the only door: recall re-injects what was
+    ingested into later turns, in other conversations. The exchange handed to the
+    memory peer is the cleaned text."""
+    spy = await _arm_probe(pool, monkeypatch)
+    memory = FakeMemory()
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(f"Running it.\n\n{PROBE_BLOCK}"),),
+            (text("Three directories under your home."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=memory)
+
+    await _say(owner_client)
+    await chat.drain_background()
+
+    assert spy.calls == [{"device": DEVICE, "argv": ARGV}]
+    assert len(memory.ingests) == 1
+    ingested = memory.ingests[0]["exchange"]["assistant"]
+    _no_markup(ingested)
+    assert "Running it." in ingested

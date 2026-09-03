@@ -208,18 +208,6 @@ OUT_OF_ROUNDS_NUDGE = (
 )
 
 
-def markup_closed_refusal(name: str) -> str:
-    """The stated result for a call the model wrote as MARKUP in a round that
-    advertised no tools (the owner's walk, 2026-09-03 11:57 — see
-    app/markup_calls.py). It states both facts the model needs: what it wrote
-    was text and not a tool call, and this round had no tools to call anyway.
-    Derived from the call's own name, so it can never name the wrong tool."""
-    return (
-        f"{tools.ERROR_PREFIX}that was tool-call markup in your reply text, not a tool "
-        f"call: you tried to call {name} in a round with no tools, so nothing ran"
-    )
-
-
 # messages.kind (migration 014). 'plumbing' marks a row that exists so the
 # SYSTEM can resume a turn — the web's continuation message after an approve,
 # and a reply that is ONLY the note above — as opposed to something a person or
@@ -438,6 +426,11 @@ class ToolCall:
     # the flag only ever adds a fact to the span, so the trace says where the
     # call came from and the accommodation is never invisible.
     from_markup: bool = False
+    # The round's markup did not fully parse (a value that closed on a nested
+    # tag, a malformed JSON call). Nothing from such a round is dispatched: the
+    # review's repro assembled `argv` out of a QUOTED example and ran it, and a
+    # call built from two different tags is not the call the model asked for.
+    markup_unparsed: bool = False
 
     def as_openai(self) -> dict:
         return {
@@ -730,6 +723,11 @@ def without_markup(text: str) -> str:
     the day someone adds a fifth way for model text to reach the database it is
     still true. Nothing is dispatched from here — by this point the round is
     long over — so the note states exactly that.
+
+    NOT streamed: a record is never half-written, so the truncation rule that a
+    live round needs would only ever eat the tail of an honest sentence here
+    (the review's "it opens with <function_calls> and then…" lost its rest).
+    Complete, readable calls are removed; everything else is left alone.
     """
     scan = markup_calls.parse_markup_tool_calls(text)
     if not scan.found:
@@ -875,6 +873,17 @@ async def _dispatch_calls(
     card_raised = False
     for call in calls:
         emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
+        if call.markup_unparsed:
+            # Markup this round could not read fully. It is NOT dispatched, in
+            # the one place every dispatch goes through, so neither the turn loop
+            # nor a redirect can acquire a weaker path to it. Recorded as a
+            # refused span with a stated reason, exactly like a closed round's.
+            result = _refuse_markup_unparsed(turn, call)
+            emit(_frame({"activity": {"tool": call.name, "status": "error"}}))
+            messages.append(
+                {"role": "tool", "tool_call_id": call.id, "content": result}
+            )
+            continue
         result, ok, awaiting = await _run_tool(turn, tool_ctx, call)
         ran_tool = tools.REGISTRY.get(call.name)
         if ok and ran_tool is not None and ran_tool.ephemeral:
@@ -898,6 +907,32 @@ async def _dispatch_calls(
     return consents_emitted, ran_ephemeral, card_raised
 
 
+def markup_refusal_fact(call: ToolCall) -> str:
+    """What is true about a refused call the model wrote as MARKUP.
+
+    Derived from the call itself, so it can never name the wrong tool or the
+    wrong reason. It is APPENDED to the refusal the round already had (a card is
+    pending, the rounds ran out): the round's own reason is the one the model
+    most needs, and overwriting it — as the first cut of this did — cost a
+    card-pending round the words "an approval is pending"."""
+    if call.markup_unparsed:
+        return (
+            "and that was tool-call markup in your reply text which could not be "
+            f"parsed, so {call.name} did not run — re-issue it as a real tool call"
+        )
+    return (
+        "and that was tool-call markup in your reply text, not a tool call, so "
+        f"{call.name} did not run"
+    )
+
+
+def markup_unparsed_refusal(call: ToolCall) -> str:
+    """The whole refusal for markup that could not be read, in a round that had
+    tools. Nothing about the round is wrong — the CALL is — so this is the only
+    stated reason it gets."""
+    return f"{tools.ERROR_PREFIX}{markup_refusal_fact(call)[len('and '):]}"
+
+
 def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> str:
     """A tool call made in a CLOSED round: NOT dispatched. It is still recorded
     as a tool span — ok=False with the stated reason as `error` — so the trace
@@ -907,12 +942,16 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
     is pending, or the tool rounds ran out), so neither can quietly become a
     dispatch.
 
-    A call the model wrote as MARKUP in the reply text is refused here too, and
-    the stated reason names that: it wrote text, and the round had no tools. The
-    span carries `refused_markup`, which is what the turn derives its honest
-    note from — never the reply's prose."""
+    A call the model wrote as MARKUP in the reply text is refused here too. The
+    markup fact is APPENDED to the round's own reason, never substituted for it,
+    so a card-pending round still says an approval is pending. The span carries
+    `refused_markup` (a closed round) or `refused_markup_unparsed` (markup that
+    could not be read), which is what the turn derives its honest note from —
+    never the reply's prose."""
     if call.from_markup:
-        reason = markup_closed_refusal(call.name)
+        fact = markup_refusal_fact(call)
+        if fact not in reason:
+            reason = f"{reason} {fact}"
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"] = _span_arguments(call.arguments)
         span.meta["ok"] = False
@@ -921,7 +960,9 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
         span.meta[flag] = True
         if call.from_markup:
             span.meta["parsed_from_markup"] = True
-            span.meta["refused_markup"] = True
+            span.meta[
+                "refused_markup_unparsed" if call.markup_unparsed else "refused_markup"
+            ] = True
     return reason
 
 
@@ -935,20 +976,37 @@ def _refuse_out_of_rounds(turn: traces.Turn, call: ToolCall) -> str:
     return _refuse_call(turn, call, OUT_OF_ROUNDS_REFUSAL, "refused_out_of_rounds")
 
 
-def _refuse_redirect_closed(turn: traces.Turn, calls: Sequence[ToolCall]) -> list[str]:
+def _refuse_markup_unparsed(turn: traces.Turn, call: ToolCall) -> str:
+    """Markup that did not fully parse, refused in a round that HAD tools.
+
+    The parser reports doubt for the whole round, so this refuses every call that
+    round's markup produced — not just the one that looked wrong. The review's
+    repro is why: the nested block silently moved a quoted example's `argv` onto
+    a real call, so the call that "looked fine" was the dangerous one."""
+    return _refuse_call(
+        turn, call, markup_unparsed_refusal(call), "refused_markup_unparsed"
+    )
+
+
+def _refuse_redirect_closed(
+    turn: traces.Turn, calls: Sequence[ToolCall]
+) -> list[ToolCall]:
     """Every tool call a redirect made in a round that advertised no tools:
     refused and recorded, never dispatched, never silently dropped.
 
-    Returns the names of the refused calls that were written as MARKUP, so the
-    redirect can report an honest note for a round whose whole text was a tool
-    call it could not make — derived from what was actually refused."""
+    Returns the refused calls that were written as MARKUP, so the redirect can
+    report an honest note for a round whose whole text was a tool call it could
+    not make — derived from what was actually refused."""
     for call in calls:
         _refuse_call(turn, call, REDIRECT_CLOSED_REFUSAL, "refused_redirect_closed")
-    return [call.name for call in calls if call.from_markup]
+    return [call for call in calls if call.from_markup]
 
 
 def _markup_tool_calls(
-    parsed: Sequence[markup_calls.ParsedCall], existing: Sequence[ToolCall]
+    parsed: Sequence[markup_calls.ParsedCall],
+    existing: Sequence[ToolCall],
+    *,
+    unparsed: bool = False,
 ) -> list[ToolCall]:
     """Recovered markup calls as ordinary ToolCalls, minus any the round ALSO
     made properly on the wire.
@@ -988,7 +1046,15 @@ def _markup_tool_calls(
             candidate = f"markup_{position}_{suffix}"
         taken.add(candidate)
         out.append(
-            ToolCall(id=candidate, name=call.name, arguments=encoded, from_markup=True)
+            ToolCall(
+                id=candidate,
+                name=call.name,
+                arguments=encoded,
+                from_markup=True,
+                # The doubt belongs to the ROUND, not to one call: a scan that
+                # closed on the wrong tag can have moved arguments between them.
+                markup_unparsed=unparsed,
+            )
         )
     return out
 
@@ -1103,7 +1169,10 @@ async def _gateway_round(
         # closed round refuses them through _refuse_call like any other call it
         # cannot run.
         text = "".join(collected)
-        scan = markup_calls.parse_markup_tool_calls(text)
+        # streamed=True: a round's text really can stop mid-block, and half an
+        # emitted call is not prose. (The persist boundary passes False — a
+        # finished record is never partial, and the rule would eat a sentence.)
+        scan = markup_calls.parse_markup_tool_calls(text, streamed=True)
         if scan.found:
             text = scan.text
             span.meta["markup_calls"] = len(scan.calls)
@@ -1111,7 +1180,7 @@ async def _gateway_round(
                 # Markup too malformed to read: stripped, never dispatched, and
                 # said out loud in the span rather than silently dropped.
                 span.meta["markup_unparsed"] = True
-            calls.extend(_markup_tool_calls(scan.calls, calls))
+            calls.extend(_markup_tool_calls(scan.calls, calls, unparsed=scan.unparsed))
         span.meta["tool_calls"] = len(calls)
     return text, calls, failure
 
@@ -1532,12 +1601,16 @@ async def _claim_redirect(
     read_ephemeral = False
     # Tool calls this redirect wrote as MARKUP and had refused (a round with no
     # tools). Collected from the refusals themselves, never from the text.
-    markup_refused: list[str] = []
+    markup_refused: list[ToolCall] = []
 
     def _markup_note() -> str | None:
+        """The note the caller keeps — which true thing it says depends on WHY
+        the call was refused, exactly as in the turn loop."""
         if not markup_refused:
             return None
-        return markup_calls.no_tool_round_note(markup_refused)
+        if any(call.markup_unparsed for call in markup_refused):
+            return markup_calls.MALFORMED_MARKUP_NOTE
+        return markup_calls.no_tool_round_note([call.name for call in markup_refused])
 
     with turn.span("guard", claim_kind) as span:
         span.meta.update(span_meta)
@@ -1870,7 +1943,9 @@ async def _run_turn(
         # so the DURABLE text is cleaned here — once, over the whole turn. What
         # the watcher saw is unchanged; what the next turn READS never contains
         # a tool call written as text.
-        streamed_scan = markup_calls.parse_markup_tool_calls("".join(parts))
+        streamed_scan = markup_calls.parse_markup_tool_calls(
+            "".join(parts), streamed=True
+        )
         if streamed_scan.found:
             logger.info(
                 "chat turn %s: stripped tool-call markup from the reply text "
@@ -1880,12 +1955,25 @@ async def _run_turn(
                 streamed_scan.unparsed,
             )
             parts[:] = [streamed_scan.text] if streamed_scan.text else []
-        # Which of those calls were REFUSED because their round advertised no
-        # tools — read off the spans the refusals filed, never off the prose.
-        refused_markup = [
-            span.name
+        # What ACTUALLY became of this turn's markup calls — read off the spans
+        # they filed, never off the prose and never off the scan alone. All three
+        # outcomes are distinct facts, and the note below must not claim one when
+        # another is true: the review caught a successfully dispatched markup
+        # call being reported as "malformed, so nothing ran", which is false
+        # twice over and invites the operator to ask for a second execution.
+        markup_spans = [
+            span
             for span in turn.spans
-            if span.kind == "tool" and span.meta.get("refused_markup")
+            if span.kind == "tool" and span.meta.get("parsed_from_markup")
+        ]
+        markup_ran = [span.name for span in markup_spans if span.meta.get("ok")]
+        refused_markup = [
+            span.name for span in markup_spans if span.meta.get("refused_markup")
+        ]
+        unparsed_markup = [
+            span.name
+            for span in markup_spans
+            if span.meta.get("refused_markup_unparsed")
         ]
 
         if out_of_rounds:
@@ -1942,13 +2030,30 @@ async def _run_turn(
             backend_note = PENDING_APPROVAL_NOTE
             parts.append(PENDING_APPROVAL_NOTE)
             emit(_frame({"t": PENDING_APPROVAL_NOTE}))
-        elif streamed_scan.found and not "".join(parts).strip():
-            # The whole reply was a tool call written as text and there is
-            # nothing else to show. An empty reply would be an error frame, and
-            # the markup itself must never be the answer, so the turn says the
-            # true thing instead: nothing ran, ask again. A refused call NAMES
-            # itself (the span said so); markup too malformed to name one says
-            # only what is known.
+        elif (
+            streamed_scan.found
+            and not "".join(parts).strip()
+            and not markup_ran
+            # Exactly the two outcomes a note can honestly describe. A markup
+            # call that was DISPATCHED and merely failed already told the model
+            # why, in its tool result, like any call off the wire — it gets no
+            # note either, and the empty-reply path judges the turn.
+            and (refused_markup or unparsed_markup or streamed_scan.unparsed)
+        ):
+            # The whole reply was a tool call written as text, nothing ran, and
+            # there is nothing else to show. An empty reply would be an error
+            # frame and the markup itself must never be the answer, so the turn
+            # says the true thing instead. Which true thing depends on what the
+            # spans record: a call REFUSED for want of a tool round names itself
+            # and can simply be asked for again; markup that could not be READ
+            # says only that, because "no tool round left" would be a guess at
+            # why nothing ran.
+            #
+            # And when a markup call DID run (markup_ran), there is no note at
+            # all: the turn then behaves exactly like one whose tool call came
+            # off the wire and whose last round said nothing — the empty-reply
+            # path handles it, the same way, with the run visible in the trace.
+            # Any note here would either deny the run or invite it twice.
             backend_note = (
                 markup_calls.no_tool_round_note(refused_markup)
                 if refused_markup

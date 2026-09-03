@@ -27,6 +27,16 @@
 -- Nothing is guessed and nothing is deleted: these rows stay in the transcript
 -- the operator reads, exactly as before. Idempotent by construction (each
 -- UPDATE only touches kind = 'chat'), so re-running it changes nothing.
+--
+-- KNOWN AND ACCEPTED (review, 2026-09-03). The markup clause is deliberately
+-- coarser than chat.py's live parser, which masks fenced code, inline code and
+-- blockquotes: SQL cannot tell a real blob from a reply that EXPLAINED one, so
+-- an assistant message quoting `</function_calls>` is marked plumbing here.
+-- That costs one historical message its place in the model's context and
+-- nothing else — the row is still in the transcript. It also MISSES variants
+-- the parser would catch (a bare <invoke …> with no wrapper). Both are
+-- one-time under/over-inclusion over rows that already exist; every message
+-- written from now on is classified by the parser, not by this LIKE.
 UPDATE messages
    SET kind = 'plumbing'
  WHERE role = 'user'

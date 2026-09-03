@@ -65,11 +65,25 @@ def test_prose_around_a_block_is_kept_and_the_block_is_removed():
 
 def test_whitespace_and_newlines_inside_the_tags_are_tolerated():
     scan = markup_calls.parse_markup_tool_calls(
-        '< atem:function_calls >\n\n  < atem:invoke name = "ping" >\n'
+        '< atem:function_calls >\n  < atem:invoke name = "ping" >\n'
         "  < /atem:invoke >\n</atem:function_calls >"
     )
     assert [c.name for c in scan.calls] == ["ping"]
     assert scan.calls[0].arguments == {}  # a call with no parameters is not a failure
+
+
+def test_a_paragraph_between_the_opener_and_the_invoke_is_writing_not_a_call():
+    """The plausibility bound. A model emitting a call does not stop for a blank
+    line and a new sentence; an answer describing one does. Kept byte for
+    byte."""
+    prose = (
+        "<a:function_calls>\n\nThat opener is followed by an invoke:\n\n"
+        '<a:invoke name="device_run"><a:parameter name="k">1</a:parameter></a:invoke>'
+        "</a:function_calls>"
+    )
+    scan = markup_calls.parse_markup_tool_calls(prose, streamed=True)
+    assert scan.calls == ()
+    assert scan.text == prose
 
 
 def test_a_parameter_that_looks_like_json_is_parsed_and_one_that_does_not_is_a_string():
@@ -91,30 +105,54 @@ def test_a_parameter_that_looks_like_json_is_parsed_and_one_that_does_not_is_a_s
     }
 
 
-def test_an_unclosed_block_is_stripped_and_reported_never_dispatched():
-    scan = markup_calls.parse_markup_tool_calls(
-        'Working on it.\n<atem:function_calls>\n<atem:invoke name="device_run">\n'
-        '<atem:parameter name="device">DELL'
-    )
-    assert scan.calls == ()  # nothing to dispatch — half a call is not a call
+CUT_OFF = (
+    'Working on it.\n<atem:function_calls>\n<atem:invoke name="device_run">\n'
+    '<atem:parameter name="device">DELL'
+)
+
+
+def test_a_half_emitted_call_is_dropped_from_a_STREAMED_round():
+    """A round's text really can stop mid-block. The fragment is not prose and
+    not a call: dropped, reported, dispatched nowhere."""
+    scan = markup_calls.parse_markup_tool_calls(CUT_OFF, streamed=True)
+    assert scan.calls == ()  # half a call is not a call
     assert scan.unparsed is True
     assert scan.text == "Working on it."
 
 
-def test_a_block_whose_invoke_never_closes_is_unparsed():
-    scan = markup_calls.parse_markup_tool_calls(
-        '<a:function_calls><a:invoke name="device_run"></a:function_calls>'
-    )
+def test_the_same_text_is_left_alone_in_a_FINISHED_record():
+    """A record is never half-written, so the truncation rule does not apply to
+    it — applied there it would eat the tail of an honest sentence."""
+    scan = markup_calls.parse_markup_tool_calls(CUT_OFF)
     assert scan.calls == ()
-    assert scan.unparsed is True
-    assert scan.text == ""
+    assert scan.text == CUT_OFF
 
 
-def test_a_stray_closing_tag_is_stripped():
-    scan = markup_calls.parse_markup_tool_calls("All done.\n</atem:function_calls>")
+def test_a_bare_tag_mention_keeps_its_tail_even_when_streamed():
+    """The truncation rule wants a half-emitted CALL — a quoted invoke name —
+    not a sentence that names a tag."""
+    mention = "It opens with <function_calls> and then the invokes follow."
+    scan = markup_calls.parse_markup_tool_calls(mention, streamed=True)
     assert scan.calls == ()
-    assert scan.unparsed is True
-    assert scan.text == "All done."
+    assert scan.unparsed is False
+    assert scan.text == mention
+
+
+def test_a_block_whose_invoke_never_closes_is_prose_about_tags():
+    """No readable invoke means nothing to run and nothing to strip: an answer
+    explaining the format keeps every character."""
+    prose = '<a:function_calls><a:invoke name="device_run"></a:function_calls>'
+    scan = markup_calls.parse_markup_tool_calls(prose, streamed=True)
+    assert scan.calls == ()
+    assert scan.text == prose
+
+
+def test_a_stray_closing_tag_is_left_alone():
+    """A stray tag cannot cause an action, and deleting one deletes prose."""
+    prose = "All done.\n</atem:function_calls>"
+    scan = markup_calls.parse_markup_tool_calls(prose, streamed=True)
+    assert scan.calls == ()
+    assert scan.text == prose
 
 
 def test_the_hermes_json_variant_is_recognised():
@@ -177,3 +215,75 @@ def test_the_note_names_the_calls_it_found_and_deduplicates():
     )
     # Nothing nameable: the note still says only what is true.
     assert "a tool" in markup_calls.no_tool_round_note([])
+
+
+# -- the adversarial corpus (review, 2026-09-03) ---------------------------
+#
+# Two ways to get this wrong, and both were live. Quoted markup that EXECUTES
+# turns a reply explaining a tool call into the tool call — the review's repro
+# ran a probe out of a ```xml fence, and pulled ["rm", "-rf", "/"] out of an
+# explanation. Prose that gets STRIPPED turns an answer about the format into a
+# gutted fragment. Every case here is pinned in both directions: nothing runs,
+# and the text comes back byte for byte.
+
+FENCED = (
+    "Sure — here is what a call looks like:\n\n```xml\n" + OBSERVED + "\n```\n\n"
+    "That is the shape."
+)
+BLOCKQUOTED = "Like this:\n\n" + "\n".join(f"> {line}" for line in OBSERVED.splitlines())
+HERMES_FENCED = (
+    "An example of the other format:\n\n```\n"
+    '<tool_call>{"name": "device_run", "arguments": {"argv": ["rm", "-rf", "/"]}}'
+    "</tool_call>\n```\n"
+)
+EXPLAINED = (
+    "It opens with <function_calls>, nests <invoke name=…> for each call, and "
+    "closes with </function_calls>."
+)
+BACKTICKED = "The tag is `<function_calls>` and it closes with `</function_calls>`."
+INDENTED_FENCE = "  ```\n" + OBSERVED + "\n  ```"
+
+
+@pytest.mark.parametrize(
+    "quoted",
+    [FENCED, BLOCKQUOTED, HERMES_FENCED, EXPLAINED, BACKTICKED, INDENTED_FENCE],
+    ids=["fence", "blockquote", "hermes-in-fence", "explained", "backticked", "indented"],
+)
+@pytest.mark.parametrize("streamed", [True, False], ids=["streamed", "record"])
+def test_quoted_or_described_markup_is_never_a_call_and_never_edited(quoted, streamed):
+    scan = markup_calls.parse_markup_tool_calls(quoted, streamed=streamed)
+    assert scan.calls == ()  # nothing to dispatch
+    assert scan.unparsed is False  # nothing to note, either
+    assert scan.text == quoted  # byte for byte, fence contents included
+
+
+def test_a_real_call_beside_a_quoted_one_runs_only_the_real_one():
+    """The regression guard for the masking: an unquoted block still dispatches,
+    and the quoted example beside it survives intact."""
+    text = f"{FENCED}\n\nRunning it now.\n\n{OBSERVED}"
+    scan = markup_calls.parse_markup_tool_calls(text, streamed=True)
+    assert [c.name for c in scan.calls] == ["device_run"]  # exactly one
+    assert scan.calls[0].arguments["argv"][0] == "find"
+    assert "```xml" in scan.text  # the fence is untouched
+    assert scan.text.count("function_calls") == 2  # the fenced pair, and no more
+
+
+NESTED = (
+    '<a:function_calls>\n<a:invoke name="device_run">\n'
+    '<a:parameter name="device">DELL-XPS-8950</a:parameter>\n'
+    '<a:parameter name="note">as in <a:invoke name="other">'
+    '<a:parameter name="argv">["rm", "-rf", "/"]</a:parameter></a:invoke>'
+    "</a:parameter>\n"
+    '<a:parameter name="argv">["ok"]</a:parameter>\n'
+    "</a:invoke>\n</a:function_calls>"
+)
+
+
+def test_a_nested_quote_inside_a_parameter_leaves_the_call_in_doubt():
+    """The review's I3 repro. The non-greedy match closes on the INNER tags, so
+    what comes out is not the call the model asked for — `argv` never even
+    survives. Reported, so the caller dispatches nothing from this round."""
+    scan = markup_calls.parse_markup_tool_calls(NESTED, streamed=True)
+    assert scan.unparsed is True
+    assert [c.name for c in scan.calls] == ["device_run"]  # kept, so it can be REFUSED
+    assert "argv" not in scan.calls[0].arguments  # exactly the damage that was done

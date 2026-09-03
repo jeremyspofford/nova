@@ -102,17 +102,25 @@ async def test_the_backfill_respects_role_and_is_idempotent(pool, conversation):
     re-running changes nothing — every UPDATE only ever touches kind = 'chat'."""
     wrong_role_user = PENDING_APPROVAL_NOTE
     wrong_role_assistant = "You're approved: do the thing. Please go ahead now."
+    # A row the migration really DOES flip, so the second run has something to
+    # be idempotent ABOUT — without it the comparison passes over rows nothing
+    # ever touched, which proves nothing.
+    flipped = "You're approved: read the pricing page. Please go ahead now."
     await _insert(pool, conversation, "user", wrong_role_user)
     await _insert(pool, conversation, "assistant", wrong_role_assistant)
+    await _insert(pool, conversation, "user", flipped)
 
     sql = MIGRATION.read_text()
     await pool.execute(sql)
     first = await _kinds(pool)
+    assert first[flipped] == "plumbing"  # it moved
     assert first[wrong_role_user] == "chat"
     assert first[wrong_role_assistant] == "chat"
 
     await pool.execute(sql)
-    assert await _kinds(pool) == first
+    second = await _kinds(pool)
+    assert second == first
+    assert second[flipped] == "plumbing"  # and stayed moved
 
 
 async def test_the_hermes_markup_variant_is_backfilled_too(pool, conversation):
