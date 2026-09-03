@@ -747,6 +747,14 @@ BARE_INTENT_MUST_FIRE = [
     # the sentence count past the cap (M3, review of 70d7c54e) — the same
     # content as the owner's exact trace, just line-broken.
     ("newline_between_ack_and_lead", "Got it.\nChecking the workspace…"),
+    # run/look/get narrowed to a command-shaped object must STILL fire on one
+    # (re-review of 1f50b993, the idiom false-positive fix) — a pronoun, a
+    # "the/a <task noun>", or a recognizable command token, with or without a
+    # short trailing "now"/"for you".
+    ("ill_run_that_now", "I'll run that now."),
+    ("running_the_command_now", "Sure — running the command now."),
+    ("ill_run_a_quick_check", "I'll run a quick check."),
+    ("let_me_run_it", "Let me run it."),
 ]
 
 
@@ -798,6 +806,24 @@ BARE_INTENT_MUST_NOT_FIRE = [
         "I'll check — the workspace has 12 dirs: default, src, tests.",
     ),
     ("future_past_tense", "I checked the disk: 905 GiB free."),
+    # run/look/get collide hard with common non-tool English idioms — a
+    # generic short object after the bare verb reads as the idiom's own
+    # continuation, not a command (re-review of 1f50b993).
+    ("run_out_of_context", "I'm going to run out of context soon."),
+    ("run_out_of_time", "I'll run out of time soon."),
+    ("run_late", "I'm going to run late."),
+    ("run_to_the_store", "I'm going to run to the store."),
+    ("look_forward_to_it", "I'll look forward to it."),
+    ("look_after_it", "I'll look after it."),
+    ("get_over_it", "I'll get over it."),
+    ("get_back_to_you", "I'll get back to you."),
+    ("get_back_to_you_shortly", "I'll get back to you shortly."),
+    # "see" is dropped from the general future-modal verb set outright — no
+    # command-shaped use of it is worth the idiom surface ("see about that",
+    # "see to it", "we'll see"), so both a hedge-shaped and a plain social use
+    # miss by construction, not by a narrow-object carve-out.
+    ("see_about_that", "I'll see about that."),
+    ("see_you_at_5", "I'll see you at 5."),
     # the guard's own frames must never trip it (self-reference)
     ("deferral_note", "Doing that now instead of just saying I would."),
     ("bare_intent_honest_note", "[I said I'd check but did not — ask again and I'll do it]"),

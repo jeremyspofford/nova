@@ -1506,9 +1506,57 @@ _BARE_INTENT_OBJECT = r"(?:\s+[A-Za-z][\w'-]*){0,5}"
 _BARE_INTENT_FUTURE_MODAL = (
     r"i['’]ll|i\s+will|i['’]m\s+going\s+to|i\s+am\s+going\s+to|i['’]m\s+gonna"
 )
+# check/fetch/find/pull/list/read/grab/"take a look (at)"/"dig into"/
+# investigate/verify/confirm are all low-idiom-risk: a short generic object
+# after any of them reads as an action, not a figure of speech, so they share
+# the general _BARE_INTENT_OBJECT bound. "look" only joins this set in its
+# into/at/up form for the same reason ("look into X", "look at X", "look up
+# X" are unambiguous); its BARE form is idiom-prone (see below) and excluded
+# here on purpose. "run", bare "look", "get" and "see" are excluded outright
+# — each collides hard with a common non-tool English idiom when only a short
+# generic object follows ("run out of context", "run late", "run to the
+# store", "look forward to it", "look after it", "get back to you", "get over
+# it", "see about that", "see you at 5") — precision-first, a bare intent on
+# one of these would push the retry nudge on a sentence that promised no tool
+# at all (adversarial review of 1f50b993). "see" has no command-shaped use
+# worth the idiom surface, so it is dropped outright rather than narrowed;
+# run/look/get get their OWN narrow branches below instead of a blanket ban.
 _BARE_INTENT_FUTURE_VERB = (
-    r"check|look(?:\s+(?:into|at|up))?|run|fetch|find|see|get|pull|list|read"
+    r"check|look\s+(?:into|at|up)|fetch|find|pull|list|read"
     r"|grab|take\s+a\s+look(?:\s+at)?|dig\s+into|investigate|verify|confirm"
+)
+# The narrow "command-shaped object" run/look/get are restricted to: a
+# placeholder pronoun, "the/a <task noun>", or a recognizable shell command
+# token — never a generic word, which is exactly what let an idiom's own
+# continuation ("out of", "forward to", "back to", …) read as an object.
+_BARE_INTENT_COMMAND_OBJECT = (
+    r"that|it|this"
+    r"|the\s+(?:command|check|script|scan|query|search|listing|tool|report|results?)"
+    r"|a\s+(?:command|check|scan|query|script|quick\s+check)"
+    r"|(?:ls|find|df|du|ps|top|grep|netstat|ping|whoami|pwd|uname|git|docker)"
+)
+_BARE_INTENT_COMMAND_TAIL = r"(?:\s+(?:now|right\s+away|right\s+now|for\s+you))?"
+# Each verb's own idiom heads, barred by a negative lookahead the moment they
+# follow the bare verb — the exact words the reviewer's false positives used.
+_BARE_INTENT_RUN_IDIOM = (
+    r"out\s+of|late\b|to\b|into\b|over\b|through\b|by\b|off\b|away\b|down\b|up\b|for\b"
+)
+_BARE_INTENT_LOOK_IDIOM = r"forward\s+to|after\b|around\b|like\b|down\s+on\b|up\s+to\b"
+_BARE_INTENT_GET_IDIOM = (
+    r"back\s+to|over\b|along\b|away\b|down\b|through\b|by\b|off\b|up\b"
+    r"|around\s+to\b|out\b|to\b"
+)
+_BARE_INTENT_RUN_BRANCH = (
+    rf"run(?!\s+(?:{_BARE_INTENT_RUN_IDIOM}))\s+(?:{_BARE_INTENT_COMMAND_OBJECT})"
+    rf"{_BARE_INTENT_COMMAND_TAIL}"
+)
+_BARE_INTENT_LOOK_BARE_BRANCH = (
+    rf"look(?!\s+(?:{_BARE_INTENT_LOOK_IDIOM}))\s+(?:{_BARE_INTENT_COMMAND_OBJECT})"
+    rf"{_BARE_INTENT_COMMAND_TAIL}"
+)
+_BARE_INTENT_GET_BRANCH = (
+    rf"get(?!\s+(?:{_BARE_INTENT_GET_IDIOM}))\s+(?:{_BARE_INTENT_COMMAND_OBJECT})"
+    rf"{_BARE_INTENT_COMMAND_TAIL}"
 )
 _BARE_INTENT_LEAD = (
     rf"(?:checking|running|fetching|looking\s+into){_BARE_INTENT_OBJECT}"
@@ -1520,6 +1568,9 @@ _BARE_INTENT_LEAD = (
     r"|working\s+on\s+it"
     r"|i['’]ll\s+get\s+right\s+on\s+that"
     rf"|(?:{_BARE_INTENT_FUTURE_MODAL})\s+(?:{_BARE_INTENT_FUTURE_VERB}){_BARE_INTENT_OBJECT}"
+    rf"|(?:{_BARE_INTENT_FUTURE_MODAL})\s+(?:{_BARE_INTENT_RUN_BRANCH})"
+    rf"|(?:{_BARE_INTENT_FUTURE_MODAL})\s+(?:{_BARE_INTENT_LOOK_BARE_BRANCH})"
+    rf"|(?:{_BARE_INTENT_FUTURE_MODAL})\s+(?:{_BARE_INTENT_GET_BRANCH})"
 )
 # The whole reply, ack optional, lead mandatory, then only trailing
 # punctuation/ellipsis — used with fullmatch, so anything past the bounded
