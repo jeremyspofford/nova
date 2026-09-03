@@ -46,6 +46,7 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 # Successful spans of these tools ground each kind of claim. The names come
@@ -1147,4 +1148,197 @@ def deferral_check(
                 continue  # the reply said "let me search" and actually searched
             phrase = clause[lead.start() : m.end()].strip()
             return DeferralClaim(tool=tool, action_phrase=action_phrase, phrase=phrase[:80])
+    return None
+
+
+# -- the live-state claim guard --------------------------------------------
+#
+# The fifth sibling, for the class the owner's device walk hit (2026-09-02
+# 23:51): he said "try again"; the turn made ZERO tool calls; the reply was
+# "Looks like the device is still offline. Could you confirm it's on and
+# connected…" — a claim about the LIVE state of a paired machine, parroted from
+# an earlier (then-true) "offline" reply in the history. The device was online.
+# No existing guard covers it: it is not a fabricated pending approval, not a
+# completed-action claim with a file/url target, and not a capability denial —
+# so the turn shipped, and was INGESTED, putting a falsehood in the journal.
+#
+# state_claim_check(reply_text, spans, device_names) fires ONLY when the reply
+# ASSERTS the CURRENT connectivity/availability state of a PAIRED device AND no
+# successful device tool span ran this turn. Both halves are mechanical:
+#
+#   * `device_names` is DERIVED at the call site from the live registry
+#     (devices.list_devices), never a list kept here — a household with no
+#     paired devices can have no such claim, so the guard never fires there, and
+#     pairing a machine arms it by itself.
+#   * Backing is any successful span whose tool name starts with `device_`. That
+#     is the naming of every device tool in the registry (app/tools/devices.py),
+#     so a device tool shipped tomorrow backs the claim the day it lands rather
+#     than the day someone remembers to add it to a set here.
+#
+# Built to the family's two rules: PURE (text + spans + the names; no model,
+# network or clock) and PRECISION-first (a wrongly-corrected honest reply makes
+# the guard the liar, worse than a missed lie). The precision cuts:
+#
+#   * PRESENT tense only. A past report ("the device was offline earlier") uses
+#     a past copula and never matches, and a prior-time marker anywhere in the
+#     clause suppresses it outright.
+#   * No CONDITIONALS or INTENT. "If the device is offline I'll wake it", "let
+#     me check whether the machine is online" — a hedge/subordinator or a
+#     check/verify/confirm verb before the assertion means nothing is being
+#     asserted about the present.
+#   * No QUESTIONS and no REPORTED speech ("you said the device is offline"),
+#     via the same _clauses/_REPORTED machinery the other guards use.
+#   * The SUBJECT must be a device: a bare device noun ("the device", "your
+#     machine") or a paired device's own name. A bare pronoun is never enough.
+
+# The stated correction. MECHANISM-NEUTRAL and honest: it says only what is
+# mechanically true (no device tool ran this turn), never why, and never what
+# the state actually is — the guard has not checked either.
+STATE_CLAIM_CORRECTION = (
+    "Correction: I did not actually check the device this turn — I have no "
+    "record of doing so."
+)
+
+# Every device tool is named device_* — the prefix IS the derivation (see the
+# section header), which is why this is a prefix and not a frozenset.
+_DEVICE_SPAN_PREFIX = "device_"
+
+# A bare device noun, and the determiners that may head it or a device NAME.
+_DEVICE_NOUN = r"(?:devices?|machines?|computers?|laptops?|desktops?|pcs?|boxes?)"
+_DEVICE_DET = r"(?:the|your|my|that|this)"
+# PRESENT-tense copulas only. "was"/"were" are deliberately absent: a past report
+# is not a claim about now, and leaving them out is the whole past-tense cut.
+# The present perfect forms ("has gone offline", "has been unreachable") DO
+# assert a current state, so they are in.
+_PRESENT_COPULA = (
+    r"(?:is|are|appears\s+to\s+be|appears|seems\s+to\s+be|seems|looks|remains"
+    r"|stays|reads\s+as|shows\s+as"
+    r"|(?:has|have)\s+(?:gone|been|become|dropped))"
+)
+# Adverbs that may sit between the copula and the state word, "not" included: a
+# negated state ("the device is not connected") is just as much an unchecked
+# claim about now as the positive one, so it must NOT suppress.
+_STATE_ADVERB = (
+    r"(?:still|currently|now|again|apparently|probably|likely|definitely"
+    r"|no\s+longer|back|not|already|actually|indeed)"
+)
+# The connectivity/availability states themselves.
+_STATE_WORD = (
+    r"(?:offline|online|disconnected|connected|unreachable|reachable|unavailable"
+    r"|available|stale|down|up|responding|responsive|awake|asleep|powered\s+on"
+    r"|powered\s+off|out\s+of\s+contact)"
+)
+# A hedge/subordinator BEFORE the assertion — nothing is being asserted about
+# the present ("if the device is offline…", "once the machine is online…").
+_STATE_HEDGE = re.compile(
+    r"\b(?:if|whether|unless|in\s+case|assuming|suppose|supposing|maybe|perhaps"
+    r"|possibly|might|may|could|would|should|once|when|until|before|after"
+    r"|either)\b",
+    re.I,
+)
+# An INTENT verb before the assertion — the reply is proposing to establish the
+# state, not stating it ("let me check the device is online", "can you confirm
+# the machine is connected").
+_STATE_INTENT = re.compile(
+    r"\b(?:check|checking|verify|verifying|confirm|confirming|see|test|testing"
+    r"|determine|determining|find\s+out|ping|pinging)\b",
+    re.I,
+)
+
+
+@dataclass(frozen=True)
+class StateClaim:
+    """An unchecked assertion about a paired device's CURRENT state.
+
+    `device` is the device reference the reply used (what the redirect nudge
+    names back), `phrase` the matched assertion for the guard span, and `text`
+    the stated correction — the same shape the other guards' Correction carries,
+    so the turn's composition reads it identically.
+    """
+
+    device: str
+    phrase: str
+    text: str = STATE_CLAIM_CORRECTION
+
+
+@lru_cache(maxsize=64)
+def _state_patterns(names: tuple[str, ...]) -> tuple[re.Pattern[str], re.Pattern[str]]:
+    """(current-state assertion, last-seen assertion) for one set of paired
+    names. Cached on the names tuple: the pattern is a pure function of the live
+    registry, and a household's device list changes rarely.
+    """
+    named = "|".join(re.escape(name) for name in names)
+    subject = (
+        rf"(?P<dev>{_DEVICE_DET}\s+{_DEVICE_NOUN}"
+        rf"|(?:{_DEVICE_DET}\s+)?(?:{named}))"
+    )
+    assertion = re.compile(
+        rf"\b{subject}"
+        rf"(?:\s+{_PRESENT_COPULA}|['’]s)"
+        rf"(?:\s+{_STATE_ADVERB})*"
+        rf"\s+{_STATE_WORD}\b",
+        re.I,
+    )
+    # "last seen …" read as a CURRENT staleness report. Its own branch because
+    # the phrase is inherently past-referring — the prior-time suppressor that
+    # protects the copula branch would eat every one of these.
+    last_seen = re.compile(
+        rf"\b{subject}\s+(?:was\s+|is\s+|has\s+been\s+)?last\s+seen\b", re.I
+    )
+    return assertion, last_seen
+
+
+def _checked_a_device(spans: Sequence[Any]) -> bool:
+    """Did a device tool actually SUCCEED this turn? The same `_successful`
+    filter every other guard uses, narrowed by the device_* naming."""
+    return any(
+        str(getattr(span, "name", "") or "").startswith(_DEVICE_SPAN_PREFIX)
+        for span in _successful(spans)
+    )
+
+
+def _state_prefix_blocks(before: str) -> bool:
+    """A hedge, subordinator or intent verb before the assertion means the
+    clause proposes/qualifies the state rather than asserting it."""
+    return _STATE_HEDGE.search(before) is not None or _STATE_INTENT.search(before) is not None
+
+
+def state_claim_check(
+    reply_text: str, spans: Sequence[Any], device_names: Sequence[str]
+) -> StateClaim | None:
+    """Contradict a live-device-state claim no device check backs this turn.
+
+    Returns a StateClaim when the reply asserts the CURRENT connectivity or
+    availability of a paired device and NO successful device_* span ran this
+    turn; None otherwise — an honest reply backed by a real check, a past/
+    hedged/questioned/reported form, or a household with nothing paired. Pure
+    and precision-first (see the section header). Derived from `device_names`:
+    with no paired devices there is no such claim to make, so the guard is
+    silent by construction rather than by a special case.
+    """
+    if not reply_text or not reply_text.strip():
+        return None
+    names = tuple(sorted({str(name).strip() for name in device_names if str(name).strip()}))
+    if not names:
+        return None
+    if _checked_a_device(spans):
+        # A real check happened: whatever the reply says about the device is
+        # backed by a span, and this guard has nothing to say about accuracy.
+        return None
+    assertion, last_seen = _state_patterns(names)
+    for clause, is_question in _clauses(reply_text):
+        if is_question:
+            continue  # a question asserts no state ("is the device online?")
+        if _REPORTED.search(clause) is not None:
+            continue  # "you said the device is offline" — someone else's claim
+        m = assertion.search(clause)
+        if m is not None and not _state_prefix_blocks(clause[: m.start()]):
+            if _PRIOR_TIME.search(clause) is None:
+                return StateClaim(
+                    device=m.group("dev").strip(),
+                    phrase=m.group(0).strip()[:80],
+                )
+        s = last_seen.search(clause)
+        if s is not None and not _state_prefix_blocks(clause[: s.start()]):
+            return StateClaim(device=s.group("dev").strip(), phrase=s.group(0).strip()[:80])
     return None

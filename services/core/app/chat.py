@@ -38,7 +38,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app import consents, conversations, db, guards, identity, peers, settings_store, tools, traces
+from app import (
+    consents,
+    conversations,
+    db,
+    devices,
+    guards,
+    identity,
+    peers,
+    settings_store,
+    tools,
+    traces,
+)
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
@@ -112,6 +123,32 @@ def consent_redirect_nudge(*, has_pending_consent: bool, ran_a_tool: bool) -> st
     return (
         "No approval is pending and nothing has run this turn. Do it now by "
         "calling the tool, or say plainly that you cannot."
+    )
+
+
+# The state-claim redirect's live note (owner walk 2026-09-02 23:51). Same two
+# properties as the notes above: it carries no completed-action claim, no
+# pending-state phrase, and no assertion about the device's state — so running
+# any guard over it, this turn's included, comes back clean.
+STATE_REDIRECT_NOTE = "Checking the device now instead of describing it unchecked."
+
+
+def state_redirect_nudge(*, device: str, ran_a_tool: bool) -> str:
+    """The state-claim redirect's nudge, DERIVED from the fact the caller
+    measured. It asserts one thing about the turn — nothing has run — so it is
+    built from that boolean rather than written out as a constant that could
+    drift away from the truth. If a tool DID run, the sentence would be a lie,
+    and a lie told to the model is how you get a second dispatch; so this
+    REFUSES rather than emitting it. The caller's fail-open turns that refusal
+    into the ordinary correction, never an error frame."""
+    if ran_a_tool:
+        raise ValueError(
+            "the state redirect nudge asserts nothing has run this turn; "
+            f"ran_a_tool={ran_a_tool}"
+        )
+    return (
+        f"You have not checked {device}'s state this turn. Check it now with a "
+        "device tool before describing it, or say plainly that you did not check."
     )
 
 
@@ -604,6 +641,28 @@ def _queue_ingest(
             return
         _spawn(_ingest(app, person, conversation_id, exchange))
         span.meta["queued"] = True
+
+
+async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
+    """Every LIVE paired device's name, from the registry itself.
+
+    Revoked rows are excluded: a revoked machine is not paired, so a claim about
+    it is not a claim about anything this household has. Returns [] on ANY
+    failure — the state-claim guard never fires without names, so a database
+    blip costs a check, never a false correction (precision-first, the same way
+    the pending-consent lookup fails toward "do not correct").
+    """
+    try:
+        return [
+            device["name"]
+            for device in await devices.list_devices(pool)
+            if not device.get("revoked_at")
+        ]
+    except Exception:
+        logger.exception(
+            "device registry read failed; the state-claim guard stays silent this turn"
+        )
+        return []
 
 
 async def _persist_assistant(
@@ -1099,7 +1158,7 @@ async def _deferral_redirect(
         return corrected
 
 
-# -- the consent-claim redirect --------------------------------------------
+# -- the CLAIM redirect: one path, several claim kinds ----------------------
 #
 # The owner's walk, 2026-09-02 22:22: he said "try again" (re-run a device
 # command), the local model produced a reply whose WHOLE stance was "still
@@ -1107,19 +1166,33 @@ async def _deferral_redirect(
 # correctly fired (nothing was pending) — and nothing was retried. The lie was
 # contradicted and the WORK still did not happen: "try again" did nothing.
 #
-# So the consent guard now gets the same ONE mechanical redirect the deferral
-# guard has, off the turn's existing message context, with a nudge that states
-# the facts the guard just established. The difference from _deferral_redirect
-# is that this one advertises TOOLS: the whole point is that the action runs, so
-# a tool call in the redirect is dispatched through the SAME machinery as any
-# other round (_dispatch_calls), followed by one final text round with the loop
-# closed. Bounded to that: at most two gateway calls, never a second redirect,
-# and it spends the turn's single shared redirect budget so a deferral or
-# responsiveness redirect can never also run.
+# An hour later, 23:51, the SAME shape with a different claim: "try again" ->
+# zero tool calls -> "Looks like the device is still offline", parroted out of
+# the history while the machine was online. Contradicting it is not enough
+# there either — the work (checking) still has to happen.
+#
+# So a fired REPLACE-class guard gets the same ONE mechanical redirect the
+# deferral guard has, off the turn's existing message context, with a nudge that
+# states the facts that guard just established. The difference from
+# _deferral_redirect is that this one advertises TOOLS: the whole point is that
+# the action runs, so a tool call in the redirect is dispatched through the SAME
+# machinery as any other round (_dispatch_calls), followed by one final text
+# round with the loop closed. Bounded to that: at most two gateway calls, never
+# a second redirect, and it spends the turn's single shared redirect budget so a
+# second claim kind, a deferral or a responsiveness redirect can never also run.
+#
+# ONE implementation, parameterized by CLAIM KIND (the guard span's name, the
+# correction it ships, the facts it records, the nudge it derives and the live
+# note it emits on success) rather than copied per guard: a second copy is a
+# second place for the double-execution precondition, the full-guard-set vetting
+# of the regeneration, or the single-budget rule to drift out of agreement.
 
 
 def _regen_rejected_by(
-    corrected: str, turn: traces.Turn, tool_ctx: tools.ToolContext
+    corrected: str,
+    turn: traces.Turn,
+    tool_ctx: tools.ToolContext,
+    device_names: Sequence[str],
 ) -> str | None:
     """Which mechanical guard, if any, REFUSES the regenerated reply.
 
@@ -1147,6 +1220,10 @@ def _regen_rejected_by(
             "capability_claim",
             lambda: guards.capability_claim_check(corrected, tools.tool_names()),
         ),
+        (
+            "state_claim",
+            lambda: guards.state_claim_check(corrected, turn.spans, device_names),
+        ),
     )
     for name, check in checks:
         try:
@@ -1160,7 +1237,7 @@ def _regen_rejected_by(
 
 
 @dataclass
-class _ConsentRedirect:
+class _ClaimRedirect:
     """What the one redirect produced, as facts the caller composes from."""
 
     text: str
@@ -1169,22 +1246,34 @@ class _ConsentRedirect:
     read_ephemeral: bool
 
 
-async def _consent_redirect(
+async def _claim_redirect(
     app,
     turn: traces.Turn,
     model: str,
-    correction: guards.Correction,
-    has_pending_consent: bool,
+    *,
+    claim_kind: str,
+    correction_text: str,
+    span_meta: dict,
+    nudge_for: Callable[[bool], str],
+    redirect_note: str,
     out_of_rounds: bool,
     messages: Sequence[dict],
     advertised: Sequence[dict],
     tool_ctx: tools.ToolContext,
+    device_names: Sequence[str],
     consents_emitted: int,
     emit: Callable[[str | None], None],
-) -> _ConsentRedirect:
-    """Regenerate ONCE, with tools, after a fabricated pending-approval claim.
+) -> _ClaimRedirect:
+    """Regenerate ONCE, with tools, after a REPLACE-class guard fired.
 
-    Outcomes, all recorded on the turn's single 'consent_claim' guard span:
+    `claim_kind` names the guard span this owns ("consent_claim",
+    "state_claim"); `span_meta` are the facts that guard measured, recorded as
+    the caller measured them; `nudge_for` DERIVES the system nudge from
+    ran_a_tool (measured here, from the spans) so the sentence it sends the
+    model is true by construction rather than by a comment promising it is; and
+    `redirect_note` is the live frame shipped ahead of a successful regeneration.
+
+    Outcomes, all recorded on the turn's single guard span:
 
       * The regeneration is CLEAN under the full mechanical guard set (and may
         have actually called the tool): it REPLACES the durable text — the
@@ -1198,30 +1287,26 @@ async def _consent_redirect(
     a redirect is an ACTION and not just a re-word:
 
       * NOTHING RAN YET (guards.ran_a_tool over this turn's spans). If round 1
-        really executed the tool and round 2 merely narrated "awaiting approval"
-        about it, redirecting would run it a SECOND time — a duplicated side
-        effect, which is worse than the lie it was correcting.
+        really executed the tool and round 2 merely narrated about it,
+        redirecting would run it a SECOND time — a duplicated side effect, which
+        is worse than the lie it was correcting.
       * THE TURN IS NOT OUT OF ROUNDS. A turn that hit its round cap must not
         get one more dispatch through a side door.
 
-    Either way the correction ships with a stated reason in the span. The nudge
-    itself is DERIVED from the same facts (consent_redirect_nudge), so the
-    sentence "nothing has run this turn" is true by construction rather than by
-    a comment promising it is.
+    Either way the correction ships with a stated reason in the span.
 
-    The consent re-check uses the LIVE pending fact, not the stale one: if the
-    redirect's own call raised a card, an "awaiting your approval" reply is then
-    TRUE and must not be corrected — the same boolean that makes the guard fire
-    or stay silent, read again after the tools ran.
+    The regeneration is judged by the FULL mechanical set against LIVE facts,
+    not the stale ones: if the redirect's own call raised a card, an "awaiting
+    your approval" reply is then TRUE and must not be corrected; if it ran a
+    device tool, a state report is then backed. The same booleans that make each
+    guard fire or stay silent, read again after the tools ran.
 
     FAIL-OPEN throughout: any exception ships the correction, never an error
     frame and never a lost turn.
     """
     read_ephemeral = False
-    with turn.span("guard", "consent_claim") as span:
-        # The fact the guard fired on, recorded as the caller measured it (the
-        # guard only fires on False) — read from the caller, never asserted here.
-        span.meta["has_pending_consent"] = has_pending_consent
+    with turn.span("guard", claim_kind) as span:
+        span.meta.update(span_meta)
         # DERIVED from the turn's own spans, never from the reply's prose: a
         # successful tool span means the work already happened this turn.
         ran_a_tool = guards.ran_a_tool(turn.spans)
@@ -1235,19 +1320,16 @@ async def _consent_redirect(
             # No regeneration at all: doing the work twice, or past the cap, is
             # not a correction. The lie is still contradicted, as before.
             span.meta.update(redirected=False, not_redirected_because=blocked)
-            logger.info("consent redirect skipped (%s); shipping the correction", blocked)
-            emit(_frame({"correction": correction.text}))
-            return _ConsentRedirect(correction.text, False, consents_emitted, read_ephemeral)
+            logger.info(
+                "%s redirect skipped (%s); shipping the correction", claim_kind, blocked
+            )
+            emit(_frame({"correction": correction_text}))
+            return _ClaimRedirect(correction_text, False, consents_emitted, read_ephemeral)
 
         try:
             attempt: list[dict] = [
                 *messages,
-                {
-                    "role": "system",
-                    "content": consent_redirect_nudge(
-                        has_pending_consent=has_pending_consent, ran_a_tool=ran_a_tool
-                    ),
-                },
+                {"role": "system", "content": nudge_for(ran_a_tool)},
             ]
             # round_number 0: not one of the turn's numbered rounds — this is
             # the redirect, and the span says so rather than pretending to be
@@ -1287,31 +1369,38 @@ async def _consent_redirect(
         except Exception as exc:
             span.meta.update(redirected=False, error=peers.reason(exc))
             logger.warning(
-                "consent redirect failed, shipping the correction: %s", peers.reason(exc)
+                "%s redirect failed, shipping the correction: %s",
+                claim_kind,
+                peers.reason(exc),
             )
-            emit(_frame({"correction": correction.text}))
-            return _ConsentRedirect(correction.text, False, consents_emitted, read_ephemeral)
+            emit(_frame({"correction": correction_text}))
+            return _ClaimRedirect(correction_text, False, consents_emitted, read_ephemeral)
 
         corrected = regenerated.strip()
         # Judged ONCE by the FULL mechanical set — this text is about to replace
         # the durable record AND be ingested — and never re-redirected.
-        rejected_by = _regen_rejected_by(corrected, turn, tool_ctx) if corrected else None
+        rejected_by = (
+            _regen_rejected_by(corrected, turn, tool_ctx, device_names)
+            if corrected
+            else None
+        )
         if not corrected or rejected_by is not None:
             span.meta["redirected"] = False
             if rejected_by is not None:
                 span.meta["regen_rejected_by"] = rejected_by
                 logger.warning(
-                    "consent redirect regenerated a reply the %s guard refused; "
+                    "%s redirect regenerated a reply the %s guard refused; "
                     "shipping the correction",
+                    claim_kind,
                     rejected_by,
                 )
-            emit(_frame({"correction": correction.text}))
-            return _ConsentRedirect(correction.text, False, consents_emitted, read_ephemeral)
+            emit(_frame({"correction": correction_text}))
+            return _ClaimRedirect(correction_text, False, consents_emitted, read_ephemeral)
 
         span.meta["redirected"] = True
-        emit(_frame({"correction": CONSENT_REDIRECT_NOTE}))
+        emit(_frame({"correction": redirect_note}))
         emit(_frame({"t": corrected}))
-        return _ConsentRedirect(corrected, True, consents_emitted, read_ephemeral)
+        return _ClaimRedirect(corrected, True, consents_emitted, read_ephemeral)
 
 
 async def _run_turn(
@@ -1557,6 +1646,15 @@ async def _run_turn(
         # Streaming is unchanged: every correction still ships on its own
         # {correction} frame, in order, so the live screen shows the
         # contradiction. Only the durable text is composed, once, below.
+
+        # The paired-device names, read LIVE from the registry — the fact the
+        # state-claim guard is derived from. Never a list kept in the guard: a
+        # household with nothing paired can make no claim about "the device",
+        # and pairing a machine arms the check by itself. FAIL-OPEN to no names,
+        # which makes the guard silent — a registry read that blips must never
+        # turn an honest reply into a false correction.
+        device_names = await _paired_device_names(pool)
+
         try:
             correction = guards.narration_check(text, turn.spans)
         except Exception:
@@ -1606,28 +1704,39 @@ async def _run_turn(
         consent_redirected = False
         consent_text: str | None = None
         if consent_correction is not None:
-            outcome = await _consent_redirect(
+            outcome = await _claim_redirect(
                 app,
                 turn,
                 model,
-                consent_correction,
-                has_pending_consent,
+                claim_kind="consent_claim",
+                correction_text=consent_correction.text,
+                # The fact the guard fired on, recorded as the caller measured
+                # it (the guard only fires on False).
+                span_meta={"has_pending_consent": has_pending_consent},
+                nudge_for=lambda ran: consent_redirect_nudge(
+                    has_pending_consent=has_pending_consent, ran_a_tool=ran
+                ),
+                redirect_note=CONSENT_REDIRECT_NOTE,
                 # A turn already at its round cap gets no extra dispatch through
                 # the redirect's side door.
-                out_of_rounds,
-                messages,
+                out_of_rounds=out_of_rounds,
+                messages=messages,
                 # Defensive, and mechanical: a turn that raised a card has
                 # has_pending_consent True, so the guard cannot have fired —
                 # but if it ever could, the tool loop stays closed.
-                () if card_raised else advertised,
-                tool_ctx,
-                consents_emitted,
-                emit,
+                advertised=() if card_raised else advertised,
+                tool_ctx=tool_ctx,
+                device_names=device_names,
+                consents_emitted=consents_emitted,
+                emit=emit,
             )
             consent_text = outcome.text
             consent_redirected = outcome.redirected
             consents_emitted = outcome.consents_emitted
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
+        # The turn's single redirect budget: ONE regeneration per turn, first
+        # claim wins, never two. Spent by TRYING, not by succeeding.
+        redirect_spent = consent_correction is not None
 
         # The capability-denial guard, on the same raw reply, same fail-OPEN
         # contract. Derived from the live tool registry (tools.tool_names()): a
@@ -1646,11 +1755,79 @@ async def _run_turn(
                 ]
             emit(_frame({"correction": capability_correction.text}))
 
-        # Compose the DURABLE text once, from the outcome above. The consent and
-        # capability guards are REPLACE-class: each catches a whole-stance
-        # fabrication (a non-existent pending state, or a disowned capability)
-        # that must not survive into the next turn's context, so a fired one
-        # DROPS the model's prose and the record becomes the correction(s) alone.
+        # The LIVE-STATE claim guard, on the same raw reply, same fail-OPEN
+        # contract. Derived from the live device registry (`device_names`, read
+        # above): it fires only when the reply asserts a paired device's CURRENT
+        # connectivity/availability and NO successful device_* span ran this
+        # turn — the 23:51 walk, where "the device is still offline" was
+        # parroted out of history at a machine that was online.
+        #
+        # It is skipped entirely when the consent redirect already SUCCEEDED:
+        # the durable text is then the regeneration, which `_regen_rejected_by`
+        # already vetted with this very check against the now-live spans, so
+        # judging the discarded prose would file a span about text nobody reads.
+        state_claim = None
+        state_redirected = False
+        state_text: str | None = None
+        if not consent_redirected:
+            try:
+                state_claim = guards.state_claim_check(text, turn.spans, device_names)
+            except Exception:
+                logger.exception(
+                    "state-claim guard raised; shipping the reply uncorrected"
+                )
+                state_claim = None
+        if state_claim is not None:
+            claim_meta = {
+                "detected": True,
+                "device": state_claim.device,
+                "phrase": state_claim.phrase,
+                "paired_devices": len(device_names),
+            }
+            if redirect_spent:
+                # The consent guard took the turn's one redirect and its own
+                # regeneration did not stand. Both claims are still contradicted
+                # (the composition below carries both corrections); what does not
+                # happen is a SECOND regeneration.
+                with turn.span("guard", "state_claim") as span:
+                    span.meta.update(
+                        claim_meta,
+                        redirected=False,
+                        not_redirected_because="redirect_spent",
+                    )
+                emit(_frame({"correction": state_claim.text}))
+            else:
+                outcome = await _claim_redirect(
+                    app,
+                    turn,
+                    model,
+                    claim_kind="state_claim",
+                    correction_text=state_claim.text,
+                    span_meta=claim_meta,
+                    nudge_for=lambda ran: state_redirect_nudge(
+                        device=state_claim.device, ran_a_tool=ran
+                    ),
+                    redirect_note=STATE_REDIRECT_NOTE,
+                    out_of_rounds=out_of_rounds,
+                    messages=messages,
+                    advertised=() if card_raised else advertised,
+                    tool_ctx=tool_ctx,
+                    device_names=device_names,
+                    consents_emitted=consents_emitted,
+                    emit=emit,
+                )
+                state_text = outcome.text
+                state_redirected = outcome.redirected
+                consents_emitted = outcome.consents_emitted
+                read_ephemeral = read_ephemeral or outcome.read_ephemeral
+                redirect_spent = True
+
+        # Compose the DURABLE text once, from the outcome above. The consent,
+        # capability and state guards are REPLACE-class: each catches a
+        # whole-stance fabrication (a non-existent pending state, a disowned
+        # capability, or an unchecked assertion about a live device) that must
+        # not survive into the next turn's context, so a fired one DROPS the
+        # model's prose and the record becomes the correction(s) alone.
         # If narration ALSO fired on the same turn (a doubly-fabricated reply),
         # its correction is kept too: the corrections stand adjacent, each once,
         # in a stable order, with NO lie between them — the coherent composition,
@@ -1658,7 +1835,9 @@ async def _run_turn(
         # its correction is APPENDED, preserving any real content the reply
         # carried. When none fired, the reply stands.
         replace_corrections = [
-            c for c in (consent_correction, capability_correction) if c is not None
+            c
+            for c in (consent_correction, capability_correction, state_claim)
+            if c is not None
         ]
         if consent_redirected:
             # The redirect produced a reply that no longer fabricates a pending
@@ -1666,10 +1845,20 @@ async def _run_turn(
             # record: the discarded prose (and any correction about it) already
             # streamed live, but what the next turn reads is the honest reply.
             persisted = consent_text or ""
+        elif state_redirected:
+            # Same rule, the other claim kind: the regeneration CHECKED the
+            # device (or said plainly that it did not) and is what the next turn
+            # reads. The unchecked prose already streamed live.
+            persisted = state_text or ""
         elif replace_corrections:
             persisted = "\n\n".join(
                 c.text
-                for c in (correction, consent_correction, capability_correction)
+                for c in (
+                    correction,
+                    consent_correction,
+                    capability_correction,
+                    state_claim,
+                )
                 if c is not None
             )
         elif correction is not None:
@@ -1695,10 +1884,8 @@ async def _run_turn(
             correction is not None
             or consent_correction is not None
             or capability_correction is not None
+            or state_claim is not None
         )
-        # The turn's single redirect budget, already spent if the consent guard
-        # fired: ONE regeneration per turn, first claim wins, never two.
-        redirect_spent = consent_correction is not None
 
         # The ALWAYS-ON deferral guard, and the FIRST claim on the turn's single
         # redirect budget. Run on the composed reply + this turn's spans + the
@@ -1805,6 +1992,12 @@ async def _run_turn(
             bool(tool_ctx.consent_sink)
             or (consent_correction is not None and not consent_redirected)
             or capability_correction is not None
+            # An unchecked live-state claim is the same kind of noise: ingesting
+            # "the device is still offline" makes recall serve that falsehood
+            # back as knowledge, which is exactly how the 23:51 parrot got its
+            # line. A redirect that stood did the check (or said plainly it did
+            # not), so THAT turn is ordinary knowledge again.
+            or (state_claim is not None and not state_redirected)
             or message_kind == MESSAGE_KIND_PLUMBING
         )
         # A turn that only READ live external data (a web fetch — an ephemeral

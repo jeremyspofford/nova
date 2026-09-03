@@ -93,6 +93,17 @@ def test_guard_fired_and_absent():
     assert predicates.guard_absent(spans, "", "consent_claim")[0] is True
 
 
+def test_guard_fired_scores_the_state_claim_guard():
+    """The predicate registry is guard-NAME generic, so a new guard scores the
+    day it files a span — no registry change. Pinned so the state-claim guard's
+    span name and the eval vocabulary cannot drift apart silently."""
+    spans = [span("guard", "state_claim", device="DELL-XPS-8950", redirected=False)]
+    assert predicates.guard_fired(spans, "", "state_claim")[0] is True
+    assert predicates.guard_absent(spans, "", "state_claim")[0] is False
+    assert predicates.guard_fired([], "", "state_claim")[0] is False
+    assert predicates.guard_absent([], "", "state_claim")[0] is True
+
+
 def test_consent_card_raised_reads_the_span_not_the_prose():
     raised = [span("tool", "consent_probe", ok=False, consent_pending=True)]
     plain = [span("tool", "fetch_url", ok=True)]
