@@ -18,37 +18,54 @@ four honesty guards pass it — and it was persisted as the assistant's reply.
 The operator saw a raw XML blob, and the NEXT turn reads it back out of history
 and learns to write more of them.
 
-This module is the mechanical answer, and it is a MODEL-FORMAT ACCOMMODATION,
-not a prompt: a model that speaks Claude-style XML (the "atem" prefix is a
-mangled "antml"; the same model has leaked `<atem:parameter …>` into a JSON
-argument value) is understood rather than asked to stop. Any namespace prefix
-is accepted, because the prefix is exactly the part these models get wrong.
+THE RULING (controller, 2026-09-03, after the third Critical in this class):
 
-TWO PRECISION RULES, both from the adversarial review of 2026-09-03, and both
-about the same danger from opposite sides. This code decides whether text
-becomes an ACTION and whether text survives as PROSE, so it must never:
+    TOOL-CALL MARKUP IN REPLY TEXT IS NEVER DISPATCHED, IN ANY ROUND.
 
-  * make quoted text cause an action. A reply that SHOWS what a tool call looks
-    like — in a fenced code block, an inline code span, a markdown blockquote —
-    is teaching, not calling. The review's repro ran `markup_probe` out of a
-    ```xml fence, and pulled ["rm", "-rf", "/"] out of an explanation. So every
-    region that is quotation BY CONSTRUCTION is masked before any tag is
-    matched, and text inside it is returned byte for byte.
-  * delete prose that was never a call. A block is removed only when it holds a
-    call this can actually READ; an answer explaining "<function_calls> … opens
-    it and </function_calls> closes it" keeps every character. Nothing is ever
-    stripped merely because it mentions a tag.
+Three attacks in a row broke the same half of the original design — the half
+that turned prose into an executable call. A ```xml fence ran the executor. A
+quoted block nested inside a parameter value moved ["rm","-rf","/"] onto a real
+call. Then, with quotation masked, a backticked `</invoke><invoke name="other">`
+BOUNDARY made the non-greedy match close on the wrong tag and absorb the next
+invoke's arguments — the same defect, arriving through the fix for the previous
+one. Every one of them was an argument-fidelity problem, and every one of them
+was only dangerous because something downstream would run the result.
+
+The other half never broke: strip the markup, refuse the call with a stated
+reason, leave an honest note. So that is now the whole design. What this module
+produces is a REFUSAL and a NAME, never an action. Argument text is parsed for
+one purpose — the refusal span records what the model appeared to be trying to
+do — and no code path may execute it. That makes argument fidelity a matter of
+record-keeping rather than of safety, which is exactly what the three repros
+proved it has to be.
+
+This is still a MODEL-FORMAT ACCOMMODATION, not a prompt: a model that speaks
+Claude-style XML (the "atem" prefix is a mangled "antml") is UNDERSTOOD — its
+call is named back to it with a stated, retryable reason — rather than left to
+have raw XML persisted as its answer. Any namespace prefix is accepted, because
+the prefix is exactly the part these models get wrong.
+
+PRECISION, which is now the same rule stated twice: prose cannot cause an
+action, and prose is never deleted.
+
+  * A reply that SHOWS what a call looks like — in a fenced code block, an
+    inline code span, a markdown blockquote — is teaching. Every region that is
+    quotation BY CONSTRUCTION is masked before any tag is matched, and its text
+    is returned byte for byte. With dispatch gone, a mask that fires wrongly can
+    only ever leave text inert, never run something.
+  * A block is stripped only when it holds an invoke this can READ. An answer
+    explaining "<function_calls> … opens it and </function_calls> closes it"
+    keeps every character, and so does anything too malformed to read: it cannot
+    act, so leaving it is strictly safer than editing prose.
 
 The rest of the contract:
 
   * PURE — no model, no network, no clock, no imports from the app. The same
     text always yields the same scan, so this can never itself become a source
     of narration, and chat.py can run it on every round for the price of one
-    substring search on the common (no-markup) path.
-  * Nothing is inferred. A block that cannot be read honestly is reported as
-    `unparsed`, and the caller DISPATCHES NOTHING from a round that carries one
-    — a half-read call is how the review got `argv` from a quoted example onto
-    a real call.
+    substring search on the common (no-markup) path. Every pattern is bounded:
+    a model stuck in a repetition loop must not be able to hang the event loop
+    (a 12,000-backtick run took 11.8s before the bounds below).
   * `streamed=True` is the only mode that will truncate. A round's text can stop
     mid-block, and half an emitted call is not prose; a finished record (the
     persist boundary, a redirect's reply) is never partial, so there the rule
@@ -86,12 +103,6 @@ _PARAM = re.compile(
 # The Hermes/Qwen JSON variant, which several local builds emit instead.
 _TOOL_CALL = re.compile(r"<\s*tool_call\s*>(?P<body>.*?)<\s*/\s*tool_call\s*>", re.S | re.I)
 
-# Any tag of the family, used ONLY to notice markup left over inside something
-# already being read — never to delete anything on its own. A stray tag cannot
-# cause an action, and deleting one deletes prose.
-_ANY_TAG = re.compile(
-    rf"<\s*/?\s*{_NS}(?:function_calls|invoke|parameter)\b|<\s*/?\s*tool_call\b", re.I
-)
 # An opening tag with no partner, and the shape that says a real call was being
 # emitted when the text stopped: a quoted name attribute, which prose ("nests
 # <invoke name=…>") does not have.
@@ -105,9 +116,15 @@ _MARKERS = ("function_calls", "invoke", "parameter", "tool_call")
 # Quotation BY CONSTRUCTION — masked before anything is matched.
 _FENCE_LINE = re.compile(r"(`{3,}|~{3,})")
 _QUOTE_LINE = re.compile(r"^[ \t]{0,3}>[^\n]*", re.M)
-# A code span, bounded by a matching backtick run and forbidden from crossing a
-# blank line: an unterminated backtick must not swallow the rest of the reply.
-_INLINE_CODE = re.compile(r"(?P<t>`+)(?:(?!\n[ \t]*\n).)+?(?P=t)", re.S)
+# A code span: a run of ONE to THREE backticks (every markdown flavour
+# recognises those), content that may not contain the delimiter itself and may
+# not cross a blank line, and a bounded length. Every bound is load-bearing —
+# the unbounded `+ … +? form was superlinear on a backtick run (8,000 backticks
+# took 3.5s and 12,000 took 11.8s, on the event loop), and a small model stuck
+# in a repetition loop produces exactly that.
+_INLINE_CODE = re.compile(
+    r"(?P<t>`{1,3})(?:(?!\n[ \t]*\n)(?!(?P=t)).){1,2000}(?P=t)", re.S
+)
 
 _PARAGRAPH_BREAK = re.compile(r"\n[ \t]*\n")
 _BLANK_RUN = re.compile(r"\n{3,}")
@@ -155,14 +172,14 @@ class ParsedCall:
 
 @dataclass(frozen=True)
 class MarkupScan:
-    """What one scan found: the calls, the text with the markup removed, and
-    whether anything was too malformed to READ.
+    """What one scan found: the calls the reply NAMED (never calls to run — see
+    the ruling above), the text with that markup removed, and whether something
+    was stripped that could not be read as a call at all.
 
-    `unparsed` is not advisory. A round whose markup did not fully parse
-    dispatches NOTHING (chat.py refuses every call it carried): the review's
-    nested-block repro parsed a quoted example's argv onto a real call and ran
-    it, and a call assembled out of two different tags is not the call the model
-    asked for.
+    `unparsed` now means exactly one thing: a fragment was removed and no name
+    came out of it — a stream cut mid-emission, or a `<tool_call>` whose JSON did
+    not parse. It selects which honest NOTE the turn leaves when the reply had
+    nothing else in it. It no longer gates dispatch, because nothing does.
     """
 
     calls: tuple[ParsedCall, ...]
@@ -250,50 +267,39 @@ def _value(raw: str) -> object:
     return text
 
 
-def _call_from_invoke(
-    match: re.Match, text: str, masked: str
-) -> tuple[ParsedCall, bool]:
-    """(the call, whether reading it left any doubt).
+def _call_from_invoke(match: re.Match, text: str, masked: str) -> ParsedCall:
+    """The name the model wrote, and the best reading of what it wrote with it.
 
-    Doubt is never resolved by guessing. A parameter VALUE that contains another
-    tag means the non-greedy match closed on the wrong `</parameter>` — the
-    review's nested-quote repro, where a quoted example's argv replaced the real
-    one — and so does markup left in the body that no parameter accounted for.
-    Either way the call is returned (the caller refuses it, and says so, rather
-    than dropping it silently) with `doubt` set, and nothing it names will run.
+    FOR THE RECORD ONLY. Under the ruling nothing here is ever executed, so the
+    arguments exist to fill the refusal span — "this is what you appeared to be
+    trying to do" — and not to be run. That is deliberate: all three Criticals
+    were argument-FIDELITY defects (a quoted example's argv landing on a real
+    call, a backticked tag boundary absorbing the next invoke's parameters), and
+    they were only dangerous because something downstream would run the result.
+    Fidelity here is now a record-keeping concern, which is the only kind of
+    concern this can honestly meet.
     """
     name = text[match.start("name") : match.end("name")]
     body_start, body_end = match.span("body")
     arguments: dict[str, object] = {}
-    doubt = False
-    covered: list[tuple[int, int]] = []
     for param in _PARAM.finditer(masked, body_start, body_end):
-        raw = text[param.start("value") : param.end("value")]
-        if _ANY_TAG.search(masked, param.start("value"), param.end("value")):
-            doubt = True
-        arguments[text[param.start("key") : param.end("key")].strip()] = _value(raw)
-        covered.append(param.span())
-    residue = "".join(
-        masked[start:end]
-        for start, end in _gaps(body_start, body_end, covered)
-    )
-    if _ANY_TAG.search(residue):
-        doubt = True
+        key = text[param.start("key") : param.end("key")].strip()
+        arguments[key] = _value(text[param.start("value") : param.end("value")])
     if arguments:
-        return ParsedCall(name, arguments), doubt
-    # No parameter tags at all: either a no-argument call, or a model that put
-    # a JSON object in the body. Nothing is invented — an unreadable body
-    # travels on as a string and dispatch states why.
+        return ParsedCall(name, arguments)
+    # No parameter tags at all: either a no-argument call, or a model that put a
+    # JSON object in the body. Nothing is invented — an unreadable body travels
+    # on as a string, and the refusal names the tool either way.
     leftover = text[body_start:body_end].strip()
     if not leftover:
-        return ParsedCall(name, {}), doubt
+        return ParsedCall(name, {})
     if leftover[:1] == "{":
         try:
             parsed = json.loads(leftover)
         except json.JSONDecodeError:
-            return ParsedCall(name, leftover), doubt
-        return ParsedCall(name, parsed if isinstance(parsed, dict) else leftover), doubt
-    return ParsedCall(name, leftover), doubt
+            return ParsedCall(name, leftover)
+        return ParsedCall(name, parsed if isinstance(parsed, dict) else leftover)
+    return ParsedCall(name, leftover)
 
 
 def _gaps(start: int, end: int, taken: list[tuple[int, int]]):
@@ -313,11 +319,11 @@ def _gaps(start: int, end: int, taken: list[tuple[int, int]]):
 def parse_markup_tool_calls(text: str, *, streamed: bool = False) -> MarkupScan:
     """Scan one piece of model text for tool-call markup.
 
-    Returns the calls it recovered, the text with those calls removed, and
-    whether anything was left that could not be read honestly. Nothing here
-    decides what happens next: the caller dispatches (an open round, and only
-    when nothing was `unparsed`) or refuses (a closed round, or anything
-    unparsed), and either way the markup never survives into the durable record.
+    Returns the calls the text NAMED, the text with those calls removed, and
+    whether a fragment was removed that named nothing. Nothing here decides what
+    happens next, and under the ruling only one thing can: the caller REFUSES
+    every call named here, in every round, with a stated reason — and the markup
+    never survives into the durable record.
 
     `streamed` says the text may have stopped mid-emission. Only then is a
     half-emitted call — an unclosed opener with a quoted invoke name after it —
@@ -351,27 +357,15 @@ def parse_markup_tool_calls(text: str, *, streamed: bool = False) -> MarkupScan:
             # not a call: a model emitting one does not stop for a blank line
             # and a new sentence. The cheapest bound that separates the two.
             continue
-        block_doubt = False
         for invoke in invokes:
-            call, doubt = _call_from_invoke(invoke, text, masked)
-            calls.append(call)
-            block_doubt = block_doubt or doubt
-        residue = "".join(
-            masked[start:end]
-            for start, end in _gaps(body_start, body_end, [i.span() for i in invokes])
-        )
-        if _ANY_TAG.search(residue):
-            block_doubt = True
-        unparsed = unparsed or block_doubt
+            calls.append(_call_from_invoke(invoke, text, masked))
         removals.append(block.span())
 
     # A complete invoke outside any block is still unambiguously a call.
     for invoke in _INVOKE.finditer(masked):
         if _overlaps(invoke.span(), resolved):
             continue
-        call, doubt = _call_from_invoke(invoke, text, masked)
-        calls.append(call)
-        unparsed = unparsed or doubt
+        calls.append(_call_from_invoke(invoke, text, masked))
         removals.append(invoke.span())
         resolved.append(invoke.span())
 

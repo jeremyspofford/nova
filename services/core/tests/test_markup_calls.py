@@ -279,11 +279,68 @@ NESTED = (
 )
 
 
-def test_a_nested_quote_inside_a_parameter_leaves_the_call_in_doubt():
-    """The review's I3 repro. The non-greedy match closes on the INNER tags, so
-    what comes out is not the call the model asked for — `argv` never even
-    survives. Reported, so the caller dispatches nothing from this round."""
+def test_a_nested_quote_inside_a_parameter_is_named_but_never_trusted():
+    """The review's I3 repro, under the ruling. The non-greedy match still closes
+    on the INNER tags — `argv` does not survive — and that is now a matter of
+    RECORD ONLY: what comes out is a name to refuse, never a call to run. The
+    text is stripped either way, so no XML is stored."""
     scan = markup_calls.parse_markup_tool_calls(NESTED, streamed=True)
-    assert scan.unparsed is True
-    assert [c.name for c in scan.calls] == ["device_run"]  # kept, so it can be REFUSED
-    assert "argv" not in scan.calls[0].arguments  # exactly the damage that was done
+    assert [c.name for c in scan.calls] == ["device_run"]  # a name, to be refused
+    assert "argv" not in scan.calls[0].arguments  # the damage, harmless now
+    assert scan.text == ""
+
+
+# NEW-1, the review's third Critical and the one that ended the dispatch path.
+# A quotation that swallows a STRUCTURAL tag — the close of one invoke and the
+# open of the next, in backticks, a fence or a blockquote — makes the non-greedy
+# match close on the WRONG tag and absorb the following invoke's parameters. The
+# pre-mask parser read two calls; the masked one reads one call carrying the
+# second's argv, with nothing anywhere reporting doubt. No arrangement of tags
+# can be trusted to say what the model meant, which is why nothing runs.
+
+
+def _boundary_swallowed(open_quote: str, close_quote: str) -> str:
+    return (
+        '<a:function_calls>\n<a:invoke name="markup_probe">\n'
+        '<a:parameter name="device">DELL-XPS-8950</a:parameter>\n'
+        '<a:parameter name="argv">["ok"]</a:parameter>\n'
+        f'{open_quote}</a:invoke><a:invoke name="other">{close_quote}\n'
+        '<a:parameter name="argv">["rm", "-rf", "/"]</a:parameter>\n'
+        "</a:invoke>\n</a:function_calls>"
+    )
+
+
+BACKTICK_SWALLOWED = _boundary_swallowed("`", "`")
+FENCE_SWALLOWED = _boundary_swallowed("```\n", "\n```")
+QUOTE_SWALLOWED = _boundary_swallowed("> ", "")
+
+
+@pytest.mark.parametrize(
+    "repro",
+    [BACKTICK_SWALLOWED, FENCE_SWALLOWED, QUOTE_SWALLOWED],
+    ids=["backtick", "fence", "blockquote"],
+)
+def test_a_quote_swallowing_a_tag_boundary_produces_names_and_nothing_else(repro):
+    """Whatever the mask does to the boundary, the result is a set of NAMES: no
+    exception, no partial text left behind, and — the point — nothing that any
+    code path will execute."""
+    scan = markup_calls.parse_markup_tool_calls(repro, streamed=True)
+    assert all(isinstance(call.name, str) and call.name for call in scan.calls)
+    # Whatever it read, it read it as markup: no half-block survives as prose.
+    assert "function_calls" not in scan.text
+    assert "<a:invoke" not in scan.text
+
+
+def test_a_long_backtick_run_is_not_a_denial_of_service():
+    """NEW-2. The unbounded code-span pattern was superlinear: 8,000 backticks
+    took 3.5s and 12,000 took 11.8s, on the event loop — and a small model stuck
+    in a repetition loop emits exactly that. The delimiter is now 1-3 backticks
+    with a bounded span."""
+    import time
+
+    payload = "`" * 20000
+    started = time.perf_counter()
+    scan = markup_calls.parse_markup_tool_calls(payload + OBSERVED, streamed=True)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.05, f"took {elapsed:.3f}s"
+    assert isinstance(scan.text, str)
