@@ -24,10 +24,18 @@ Who calls this, and when:
     over a class: auto ("runs automatically"), consent ("needs my approval")
     or deny ("never"). Same table, same column, same one-transaction event as
     revoke — the kernel reads the row it edits. Not a second authorizer.
+  * `set_all_dispositions` — the operator, via autonomy_api.py's PUT
+    /api/v1/autonomy (no class segment), from the master control at the top
+    of Settings -> Autonomy. Every class to one disposition in ONE
+    transaction, touching — and recording — only the classes that were not
+    already there. Same row, same column, same event kind as set_disposition,
+    one event per changed class, sharing a `batch` id.
   * `state`/`graduation_runs` — read-only, for the Settings and governance
     surfaces.
 """
 from __future__ import annotations
+
+import uuid
 
 import asyncpg
 
@@ -39,6 +47,23 @@ GRADUATION_RUNS_SETTING = "autonomy.graduation_runs"
 # this is the first, so a typo is a stated ValueError rather than a postgres
 # constraint error the API has to decode).
 DISPOSITIONS = ("auto", "consent", "deny")
+
+# The one SELECT behind every "what is every class at right now" answer —
+# `state` (over the pool) and `set_all_dispositions` (inside its own
+# transaction, so the state it returns is the state it committed).
+_STATE_SQL = (
+    "SELECT action_class, risk_tier, disposition, earned, consecutive_successes, updated_at "
+    "FROM action_classes ORDER BY action_class"
+)
+
+
+def _check_disposition(disposition: str) -> None:
+    """The one refusal both operator writes share, so a typo is the same
+    stated ValueError whether one class or every class was being set."""
+    if disposition not in DISPOSITIONS:
+        raise ValueError(
+            f"disposition must be one of {', '.join(DISPOSITIONS)} — not {disposition!r}"
+        )
 
 
 async def graduation_runs(pool: asyncpg.Pool) -> int:
@@ -194,10 +219,7 @@ async def set_disposition(
     owner setting a class that does not exist is a typo to name, not a grant
     to invent. The API maps these to 400 and 404.
     """
-    if disposition not in DISPOSITIONS:
-        raise ValueError(
-            f"disposition must be one of {', '.join(DISPOSITIONS)} — not {disposition!r}"
-        )
+    _check_disposition(disposition)
     async with pool.acquire() as conn, conn.transaction():
         before = await conn.fetchrow(
             "SELECT disposition FROM action_classes WHERE action_class = $1 FOR UPDATE",
@@ -228,6 +250,73 @@ async def set_disposition(
     return _entry(row, threshold)
 
 
+async def set_all_dispositions(
+    pool: asyncpg.Pool, *, disposition: str, actor: str
+) -> tuple[list[dict], list[str]]:
+    """The owner sets EVERY class to `disposition` at once — the master
+    control at the top of Settings -> Autonomy.
+
+    Not a second authorizer, and not a loop over set_disposition either:
+      * ONE transaction. Every differing row is locked up front (SELECT ...
+        FOR UPDATE, which serialises against record_outcome's per-row lock
+        and against a concurrent per-class PUT), then written and recorded
+        one by one; a failure anywhere — a refused event write included —
+        rolls back every row, so the table never ends up half-set.
+      * Only what differs is touched. A class already at `disposition` gets
+        no write, no event and no streak reset: the ledger names exactly what
+        changed, and an EARNED auto stays earned under a bulk auto (decided
+        2026-09-03 — the owner's "everything auto" is not a reason to turn a
+        streak the class earned into a pin; set_disposition on that one class
+        still does, deliberately). A class that does change is written exactly
+        as set_disposition writes it: earned=false, streak 0.
+      * One AUTONOMY_DISPOSITION_SET event PER CHANGED CLASS, each carrying
+        the class in its own `action_class` column so the audit's per-class
+        filter (Governance, the row's "recent decisions" pane) still finds it,
+        plus `meta.batch` — one uuid4 shared by every event this call writes —
+        so the ledger can tell "the owner set 14 classes at once" from 14
+        separate decisions.
+
+    Returns (every class's state row, rendered inside the same transaction so
+    it is the state that committed; the names that changed, in action_class
+    order). Nothing differing is an honest (state, []) — not an error. A
+    disposition outside DISPOSITIONS is the same stated ValueError as
+    set_disposition's, raised before anything is opened.
+    """
+    _check_disposition(disposition)
+    batch = str(uuid.uuid4())
+    changed: list[str] = []
+    async with pool.acquire() as conn, conn.transaction():
+        differing = await conn.fetch(
+            "SELECT action_class, disposition FROM action_classes "
+            "WHERE disposition <> $1 ORDER BY action_class FOR UPDATE",
+            disposition,
+        )
+        for row in differing:
+            action_class = row["action_class"]
+            await conn.execute(
+                "UPDATE action_classes SET disposition = $2, earned = false, "
+                "consecutive_successes = 0, updated_at = now() WHERE action_class = $1",
+                action_class,
+                disposition,
+            )
+            await governance.record_event(
+                conn,
+                kind=governance.AUTONOMY_DISPOSITION_SET,
+                action_class=action_class,
+                actor=actor,
+                meta={
+                    "before": row["disposition"],
+                    "after": disposition,
+                    "action_class": action_class,
+                    "batch": batch,
+                },
+            )
+            changed.append(action_class)
+        threshold = await settings_store.read_value(conn, GRADUATION_RUNS_SETTING)
+        rows = await conn.fetch(_STATE_SQL)
+    return [_entry(row, threshold) for row in rows], changed
+
+
 def _entry(row: asyncpg.Record, threshold: int) -> dict:
     """One class as Settings -> Autonomy renders it — the same shape from
     `state` and from `set_disposition`, so the UI can echo a returned row into
@@ -250,8 +339,5 @@ async def state(pool: asyncpg.Pool) -> list[dict]:
     being a separate field, so the UI never has to fetch it twice or guess
     which N a given `consecutive_successes` is counting toward."""
     threshold = await graduation_runs(pool)
-    rows = await pool.fetch(
-        "SELECT action_class, risk_tier, disposition, earned, consecutive_successes, updated_at "
-        "FROM action_classes ORDER BY action_class"
-    )
+    rows = await pool.fetch(_STATE_SQL)
     return [_entry(row, threshold) for row in rows]

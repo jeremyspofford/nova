@@ -5,10 +5,12 @@ import {
   getAutonomyState as apiGetAutonomyState,
   getGovernanceEvents as apiGetGovernanceEvents,
   revokeAutonomy as apiRevokeAutonomy,
+  setAllDispositions as apiSetAllDispositions,
   setDisposition as apiSetDisposition,
   type AutonomyClass,
   type GovernanceEvent,
 } from '../../lib/api'
+import { masterDisposition, type MasterDisposition } from './autonomyFormat'
 
 /**
  * Settings -> Autonomy (S3-T3, Fix 2): every gateable action class, its
@@ -31,6 +33,24 @@ import {
  * already instructed; before this the only control was Revoke, and setting a
  * class open meant asking an engineer to edit the database.
  *
+ * Above the rows sits the MASTER control (2026-09-03, the owner's ask after
+ * facing 17 rows with 17 selects): one selector that sets every class at
+ * once — PUT /api/v1/autonomy with no class segment, ONE transaction in core
+ * that writes and records only the classes not already at the value. Its
+ * reading is DERIVED from the live rows (autonomyFormat.masterDisposition):
+ * the shared value when every class agrees, otherwise "Mixed" — an
+ * unselectable placeholder option, never a value the owner can send, and
+ * never something stored. After a master change the list is replaced
+ * wholesale from the response (the committed rows), and the per-class
+ * ledger cache is dropped — every changed class just gained an event.
+ *
+ * The per-class rows live behind a "Per-class (N)" disclosure that is
+ * COLLAPSED on every mount — a plain useState(false), no remembered
+ * preference — and rendered CONDITIONALLY (the same idiom AutonomyRow uses
+ * for its events pane), so a collapsed list is absent from the DOM, not
+ * merely squashed: ui/Section's collapsible mode keeps children mounted
+ * behind a CSS grid collapse, which is why it is not used for this.
+ *
  * Clicking a row expands its recent governance-ledger decisions, fetched
  * on demand (not eagerly for every class) via GET /api/v1/governance
  * filtered to that action_class.
@@ -42,6 +62,7 @@ interface AutonomyApi {
   getAutonomyState: typeof apiGetAutonomyState
   revokeAutonomy: typeof apiRevokeAutonomy
   setDisposition: typeof apiSetDisposition
+  setAllDispositions: typeof apiSetAllDispositions
   getGovernanceEvents: typeof apiGetGovernanceEvents
 }
 
@@ -49,6 +70,7 @@ const DEFAULT_API: AutonomyApi = {
   getAutonomyState: apiGetAutonomyState,
   revokeAutonomy: apiRevokeAutonomy,
   setDisposition: apiSetDisposition,
+  setAllDispositions: apiSetAllDispositions,
   getGovernanceEvents: apiGetGovernanceEvents,
 }
 
@@ -62,6 +84,9 @@ export const DISPOSITION_LABELS: Record<AutonomyClass['disposition'], string> = 
 const DISPOSITION_ITEMS = (Object.keys(DISPOSITION_LABELS) as AutonomyClass['disposition'][]).map(
   value => ({ value, label: DISPOSITION_LABELS[value] }),
 )
+
+/** The master selector's reading when the classes disagree — shown, never sent. */
+export const MIXED_LABEL = 'Mixed'
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -81,6 +106,10 @@ export function AutonomySection({ api = DEFAULT_API }: { api?: AutonomyApi } = {
   const [settingId, setSettingId] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [events, setEvents] = useState<Record<string, EventsState>>({})
+  const [settingAll, setSettingAll] = useState(false)
+  const [setAllError, setSetAllError] = useState<string | null>(null)
+  // Collapsed on EVERY mount: plain state, nothing remembered across visits.
+  const [showRows, setShowRows] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -148,6 +177,33 @@ export function AutonomySection({ api = DEFAULT_API }: { api?: AutonomyApi } = {
     [api],
   )
 
+  const handleSetAll = useCallback(
+    async (value: MasterDisposition) => {
+      // "Mixed" is a reading, not a value — a disabled option cannot be picked,
+      // so this only guards a synthetic event.
+      if (value === 'mixed') return
+      setSettingAll(true)
+      setSetAllError(null)
+      try {
+        // Replace the list with the rows the server committed — never the
+        // value the owner picked. A refused PUT leaves every row as it was.
+        const result = await api.setAllDispositions(value)
+        setClasses(result.classes)
+        // Every changed class just gained a ledger event; a cached "recent
+        // decisions" pane would now be stale, so it is refetched on next open.
+        setEvents({})
+        setExpanded(null)
+      } catch (err) {
+        setSetAllError(reasonOf(err))
+      } finally {
+        setSettingAll(false)
+      }
+    },
+    [api],
+  )
+
+  const master = classes ? masterDisposition(classes) : null
+
   return (
     <Section
       icon={Sparkles}
@@ -178,6 +234,14 @@ export function AutonomySection({ api = DEFAULT_API }: { api?: AutonomyApi } = {
           Could not change that class: {setError}
         </div>
       )}
+      {setAllError && (
+        <div
+          role="alert"
+          className="rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger"
+        >
+          Could not change every class: {setAllError}
+        </div>
+      )}
 
       {classes === null ? (
         !loadError && (
@@ -196,21 +260,68 @@ export function AutonomySection({ api = DEFAULT_API }: { api?: AutonomyApi } = {
           <p className="text-caption text-content-tertiary">
             Every change here is recorded in Governance.
           </p>
-          <div className="divide-y divide-border-subtle">
-            {classes.map(entry => (
-              <AutonomyRow
-                key={entry.action_class}
-                entry={entry}
-                expanded={expanded === entry.action_class}
-                eventsState={events[entry.action_class]}
-                revoking={revokingId === entry.action_class}
-                setting={settingId === entry.action_class}
-                onToggle={() => toggle(entry.action_class)}
-                onRevoke={() => handleRevoke(entry.action_class)}
-                onSetDisposition={disposition => handleSetDisposition(entry.action_class, disposition)}
-              />
-            ))}
+          <div className="flex items-center gap-3">
+            <div className="flex-1 min-w-0">
+              <p className="text-compact text-content-primary">All actions</p>
+              <p className="text-caption text-content-tertiary">
+                One setting for every class below.
+                {master === 'mixed' && ' "Mixed" means they currently differ.'}
+              </p>
+            </div>
+            <span className="w-44 shrink-0">
+              <Select
+                id="disposition-all"
+                aria-label="Disposition for every class"
+                value={master ?? ''}
+                disabled={settingAll}
+                onChange={e => handleSetAll(e.target.value as MasterDisposition)}
+              >
+                {/* A reading, not a choice: present only while the classes
+                    disagree, and never selectable — the owner can only move
+                    every class to one of the three real values. */}
+                {master === 'mixed' && (
+                  <option value="mixed" disabled>
+                    {MIXED_LABEL}
+                  </option>
+                )}
+                {DISPOSITION_ITEMS.map(item => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </Select>
+            </span>
           </div>
+          <button
+            type="button"
+            onClick={() => setShowRows(v => !v)}
+            aria-expanded={showRows}
+            className="flex items-center gap-2 text-compact text-content-secondary"
+          >
+            {showRows ? (
+              <ChevronDown size={14} className="shrink-0 text-content-tertiary" />
+            ) : (
+              <ChevronRight size={14} className="shrink-0 text-content-tertiary" />
+            )}
+            Per-class ({classes.length})
+          </button>
+          {showRows && (
+            <div className="divide-y divide-border-subtle">
+              {classes.map(entry => (
+                <AutonomyRow
+                  key={entry.action_class}
+                  entry={entry}
+                  expanded={expanded === entry.action_class}
+                  eventsState={events[entry.action_class]}
+                  revoking={revokingId === entry.action_class}
+                  setting={settingId === entry.action_class}
+                  onToggle={() => toggle(entry.action_class)}
+                  onRevoke={() => handleRevoke(entry.action_class)}
+                  onSetDisposition={disposition => handleSetDisposition(entry.action_class, disposition)}
+                />
+              ))}
+            </div>
+          )}
         </>
       )}
     </Section>

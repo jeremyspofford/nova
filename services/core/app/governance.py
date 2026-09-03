@@ -31,7 +31,13 @@ AUTONOMY_REVOKED = "autonomy.revoked"
 # The owner set a class's disposition by hand (autonomy.set_disposition):
 # meta {"before", "after", "action_class"}, actor = the person. Distinct from
 # promoted/demoted/revoked so the ledger reads "the owner decided", never "the
-# streak decided".
+# streak decided". When the owner set EVERY class at once
+# (autonomy.set_all_dispositions, the master control) the ledger still gets
+# one event PER CHANGED CLASS — each in its own action_class column, so the
+# per-class filters below keep finding it — and meta gains "batch": one uuid4
+# shared by every event that call wrote, which is how "14 classes set at once"
+# stays distinguishable from 14 separate decisions. Classes already at the
+# value write no event: the ledger names exactly what changed.
 AUTONOMY_DISPOSITION_SET = "autonomy.disposition_set"
 # Devices (slice 5). A paired machine's whole arc is readable here: which key
 # was bound to which name and on whose pairing code, every time its grants

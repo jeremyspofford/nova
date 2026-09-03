@@ -1,7 +1,8 @@
 """GET/POST/PUT /api/v1/autonomy — Settings -> Autonomy's read of every
 gateable action class's current disposition and graduation progress, the only
 route that revokes an earned promotion, and the owner's own disposition
-control.
+control — per class (PUT .../{action_class}) or every class at once (PUT
+/api/v1/autonomy, the master control).
 
 The handlers do nothing autonomy.py does not already do: GET is
 `autonomy.state` verbatim (the real stored counters — no fake numbers); POST
@@ -9,7 +10,9 @@ The handlers do nothing autonomy.py does not already do: GET is
 loop promoted (`earned=true`) — revoking a class that never graduated (or is
 already consent, or does not exist) changes nothing and is reported as a 404,
 never a silent success; PUT .../{action_class} is `autonomy.set_disposition`,
-which edits the row the kernel reads and records who did it. Same auth stance
+which edits the row the kernel reads and records who did it; PUT with no
+class segment is `autonomy.set_all_dispositions`, one transaction over every
+class that is not already there, one event per changed class. Same auth stance
 as every other route in core: identity.require_person (see consents_api.py's
 docstring on the missing operator-role gate — an S8 carry; until a role
 system exists, any person with a session may set a disposition, exactly as
@@ -54,6 +57,26 @@ async def revoke_autonomy(
             ),
         )
     return {"classes": await autonomy.state(pool)}
+
+
+@router.put("")
+async def set_all_dispositions(
+    body: DispositionBody, person: Person = Depends(identity.require_person)
+) -> dict:
+    """The owner sets EVERY class to auto / consent / deny at once — the
+    master control. One transaction in autonomy.set_all_dispositions; only
+    the classes not already at the value are written and recorded. Returns
+    every class's state row (the UI replaces its list wholesale) and the
+    names that changed — an empty `changed` is an honest no-op, not an
+    error. A bad value is a stated 400, same words as the per-class PUT."""
+    pool = await db.get_pool()
+    try:
+        classes, changed = await autonomy.set_all_dispositions(
+            pool, disposition=body.disposition, actor=str(person.id)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"classes": classes, "changed": changed}
 
 
 @router.put("/{action_class}")

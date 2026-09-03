@@ -27,6 +27,11 @@
  * once the controller rebuilds the stack. AutonomyRow carries no data-testid,
  * so its rows are located by the class name text they render (the shipped DOM),
  * per this suite's "read real selectors" precedent.
+ *
+ * Since 2026-09-03 the per-class rows sit behind a "Per-class (N)" disclosure
+ * that is collapsed on every mount and absent from the DOM until opened (the
+ * master control above it is what the owner sees first), so the walk expands
+ * it before looking for a row.
  */
 import { expect, test } from '@playwright/test'
 import { config } from '../lib/env'
@@ -75,6 +80,10 @@ test('autonomy + governance: the surfaces render and act on real policy state', 
 
     // ── Settings -> Autonomy renders both classes' real state ─────────────
     await page.goto('/settings')
+    // The rows are collapsed (and unmounted) on every load — open them.
+    const perClass = page.getByRole('button', { name: /^Per-class \(\d+\)$/ })
+    await expect(perClass).toHaveAttribute('aria-expanded', 'false')
+    await perClass.click()
     await expect(page.getByText(EARNED)).toBeVisible()
 
     // The earning class: consent, with its REAL progress toward graduation.

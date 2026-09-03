@@ -501,6 +501,21 @@ export async function setDisposition(
   return body.class
 }
 
+/** The owner sets EVERY class's disposition at once — PUT /autonomy, no
+ * class segment (the master control). One transaction in core: only the
+ * classes not already at `disposition` are written, one governance event
+ * each sharing a `meta.batch` id, so the ledger names exactly what changed.
+ * Returns every class's state row (replace the list wholesale — it is the
+ * state that committed) and the names that changed, empty when nothing
+ * differed. The server 400s an unknown disposition by name. */
+export async function setAllDispositions(
+  disposition: AutonomyClass['disposition'],
+): Promise<{ classes: AutonomyClass[]; changed: string[] }> {
+  return apiSend<{ classes: AutonomyClass[]; changed: string[] }>('/api/v1/autonomy', 'PUT', {
+    disposition,
+  })
+}
+
 /** Demotes an earned-auto class back to consent (a governance event); the
  * server 404s a class that never graduated rather than a silent no-op. */
 export async function revokeAutonomy(actionClass: string): Promise<AutonomyClass[]> {

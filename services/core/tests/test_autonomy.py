@@ -503,3 +503,219 @@ async def test_set_disposition_refuses_an_unknown_class_and_writes_nothing(pool)
     assert "no_such_class" in str(excinfo.value)
     assert await _row(pool, "no_such_class") is None  # never inserted
     assert await _of_kind(pool, governance.AUTONOMY_DISPOSITION_SET, "no_such_class") == []
+
+
+# -- set_all_dispositions: the master control ----------------------------------
+#
+# Every class to one value in ONE transaction, touching only the classes that
+# were not already there. Same row, same column, same event kind as
+# set_disposition — one event per changed class, sharing meta.batch.
+#
+# A bulk write reaches every row in action_classes — the migration seed the
+# kernel reads and every other test's leftovers included — and action_classes
+# is never truncated (conftest._TABLES). So each test here snapshots the whole
+# table first and puts it back afterwards, row for row; without that, one
+# set_all('auto') would silently rewrite device_run/fetch_url for every suite
+# that runs after this file.
+
+
+@pytest.fixture
+async def restored_action_classes(pool):
+    before = await pool.fetch(
+        "SELECT action_class, risk_tier, disposition, earned, consecutive_successes "
+        "FROM action_classes"
+    )
+    yield
+    for row in before:
+        await pool.execute(
+            "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
+            "consecutive_successes) VALUES ($1, $2, $3, $4, $5) "
+            "ON CONFLICT (action_class) DO UPDATE SET risk_tier = EXCLUDED.risk_tier, "
+            "disposition = EXCLUDED.disposition, earned = EXCLUDED.earned, "
+            "consecutive_successes = EXCLUDED.consecutive_successes, updated_at = now()",
+            row["action_class"],
+            row["risk_tier"],
+            row["disposition"],
+            row["earned"],
+            row["consecutive_successes"],
+        )
+    await pool.execute(
+        "DELETE FROM action_classes WHERE action_class <> ALL($1::text[])",
+        [row["action_class"] for row in before],
+    )
+
+
+async def _set_events(pool) -> list:
+    """Every disposition_set event in the (per-test truncated) ledger."""
+    events = await governance.recent_events(pool, limit=1000)
+    return [e for e in events if e["kind"] == governance.AUTONOMY_DISPOSITION_SET]
+
+
+async def test_set_all_flips_only_the_differing_classes_and_records_each_under_one_batch(
+    pool, restored_action_classes
+):
+    """Four seeded rows, one per situation: a consent class mid-streak, a
+    denied class, an operator-set auto, an EARNED auto. set_all('auto') writes
+    exactly the first two — the ledger gets one event each, sharing a batch id
+    — and leaves both autos untouched: no event, and the earned one is STILL
+    earned (a bulk auto is not a reason to turn a streak the class earned into
+    a pin; set_disposition on that one class does that, deliberately)."""
+    await _seed(pool, "all_consent", disposition="consent", consecutive_successes=3)
+    await _seed(pool, "all_deny", disposition="deny")
+    await _seed(pool, "all_auto_set", disposition="auto", earned=False)
+    await _seed(pool, "all_auto_earned", disposition="auto", earned=True)
+    before = await autonomy.state(pool)
+
+    state, changed = await autonomy.set_all_dispositions(pool, disposition="auto", actor="p-1")
+
+    # Only what differed changed — and everything that differed changed, in
+    # action_class order (as the locking SELECT walks them).
+    assert changed == sorted(e["action_class"] for e in before if e["disposition"] != "auto")
+    assert "all_consent" in changed and "all_deny" in changed
+    assert "all_auto_set" not in changed and "all_auto_earned" not in changed
+    assert all(entry["disposition"] == "auto" for entry in state)
+    assert state == await autonomy.state(pool)  # the returned state is the committed state
+
+    rows = {
+        n: await _row(pool, n)
+        for n in ("all_consent", "all_deny", "all_auto_set", "all_auto_earned")
+    }
+    assert (
+        rows["all_consent"]["disposition"],
+        rows["all_consent"]["earned"],
+        rows["all_consent"]["consecutive_successes"],
+    ) == ("auto", False, 0)
+    assert (rows["all_deny"]["disposition"], rows["all_deny"]["earned"]) == ("auto", False)
+    assert rows["all_auto_earned"]["earned"] is True  # untouched: still earned
+    assert rows["all_auto_set"]["earned"] is False
+
+    # One event per changed class, each in its OWN action_class column (so the
+    # per-class audit filter finds it), all sharing one batch id.
+    events = await _set_events(pool)
+    assert sorted(e["action_class"] for e in events) == sorted(changed)
+    assert len(events) == len(changed)
+    batches = {e["meta"]["batch"] for e in events}
+    assert len(batches) == 1
+    uuid.UUID(batches.pop())  # a real uuid4 string, not a placeholder
+    by_class = {e["action_class"]: e for e in events}
+    assert by_class["all_consent"]["meta"] == {
+        "before": "consent",
+        "after": "auto",
+        "action_class": "all_consent",
+        "batch": events[0]["meta"]["batch"],
+    }
+    assert by_class["all_deny"]["meta"]["before"] == "deny"
+    assert all(e["actor"] == "p-1" for e in events)
+    # The untouched autos have no event at all — the ledger names what changed.
+    assert await _of_kind(pool, governance.AUTONOMY_DISPOSITION_SET, "all_auto_earned") == []
+    assert await _of_kind(pool, governance.AUTONOMY_DISPOSITION_SET, "all_auto_set") == []
+
+
+async def test_set_all_is_one_transaction_a_failed_event_rolls_every_row_back(
+    pool, restored_action_classes, monkeypatch
+):
+    """Two consent classes (plus whatever else differs). If the SECOND event
+    write fails, the first class's row write — already executed on the same
+    connection — must roll back with it: no row changed, no event kept."""
+    await _seed(pool, "all_tx_a", disposition="consent", consecutive_successes=2)
+    await _seed(pool, "all_tx_b", disposition="consent", consecutive_successes=4)
+    real_record_event = governance.record_event
+    calls = 0
+
+    async def flaky_record_event(conn, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("ledger write refused")
+        await real_record_event(conn, **kwargs)
+
+    monkeypatch.setattr(governance, "record_event", flaky_record_event)
+
+    with pytest.raises(RuntimeError, match="ledger write refused"):
+        await autonomy.set_all_dispositions(pool, disposition="auto", actor="p")
+
+    assert calls == 2  # the second event is where it broke — after a first row write
+    a, b = await _row(pool, "all_tx_a"), await _row(pool, "all_tx_b")
+    assert (a["disposition"], a["consecutive_successes"]) == ("consent", 2)
+    assert (b["disposition"], b["consecutive_successes"]) == ("consent", 4)
+    assert await _set_events(pool) == []  # the first event rolled back with the rest
+    # Nothing at all moved: the whole table still reads as it was seeded.
+    assert not any(
+        entry["disposition"] == "auto" and entry["action_class"].startswith("all_tx_")
+        for entry in await autonomy.state(pool)
+    )
+
+
+async def test_set_all_with_nothing_to_change_writes_no_event_and_keeps_streaks_and_earned(
+    pool, restored_action_classes
+):
+    """A class already at the target is not touched: its streak survives the
+    first bulk write, and a second identical bulk write is an honest
+    (state, []) — no event, no reset. Contrast set_disposition, which resets
+    the streak and records an event even when the value is unchanged
+    (test_set_disposition_records_one_event_per_call_even_when_unchanged)."""
+    await _seed(pool, "all_keep_streak", disposition="consent", consecutive_successes=3)
+
+    _, first = await autonomy.set_all_dispositions(pool, disposition="consent", actor="p")
+    assert "all_keep_streak" not in first  # already consent — not this call's business
+    row = await _row(pool, "all_keep_streak")
+    assert row["consecutive_successes"] == 3  # streak kept
+    assert await _of_kind(pool, governance.AUTONOMY_DISPOSITION_SET, "all_keep_streak") == []
+    events_after_first = len(await _set_events(pool))
+
+    state, second = await autonomy.set_all_dispositions(pool, disposition="consent", actor="p")
+    assert second == []
+    assert all(entry["disposition"] == "consent" for entry in state)
+    assert len(await _set_events(pool)) == events_after_first  # not one more
+    row = await _row(pool, "all_keep_streak")
+    assert (row["disposition"], row["consecutive_successes"]) == ("consent", 3)
+
+
+async def test_set_all_refuses_an_unknown_disposition_in_set_dispositions_words_and_writes_nothing(
+    pool, restored_action_classes
+):
+    await _seed(pool, "all_bad", disposition="consent", consecutive_successes=2)
+    with pytest.raises(ValueError) as bulk:
+        await autonomy.set_all_dispositions(pool, disposition="always", actor="p")
+    with pytest.raises(ValueError) as single:
+        await autonomy.set_disposition(
+            pool, action_class="all_bad", disposition="always", actor="p"
+        )
+    assert "always" in str(bulk.value)
+    assert str(bulk.value) == str(single.value)  # the same refusal, not a second wording
+    row = await _row(pool, "all_bad")
+    assert (row["disposition"], row["consecutive_successes"]) == ("consent", 2)
+    assert await _set_events(pool) == []
+
+
+async def test_set_all_deny_refuses_every_class_at_the_kernel_and_auto_allows(
+    pool, restored_action_classes
+):
+    """Mirror of the per-class kernel test: the kernel reads the row. After a
+    bulk deny, authorize() DENIES a class by name; after a bulk auto it ALLOWS
+    untracked; after a bulk consent the card returns. No code here decided —
+    the rows did."""
+    await _seed(pool, "all_kernel", disposition="consent")
+    pid = await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('kern_all', 'owner') RETURNING id"
+    )
+    ctx = ToolContext(
+        app=None,
+        person=Person(id=pid, name="kern_all", role="owner"),
+        workspace_root=None,
+        conversation_id=None,
+    )
+
+    await autonomy.set_all_dispositions(pool, disposition="deny", actor="p")
+    decision = await policy.authorize(ctx, "all_kernel", {})
+    assert decision.outcome == policy.DENY
+    assert "all_kernel" in decision.reason
+
+    await autonomy.set_all_dispositions(pool, disposition="auto", actor="p")
+    decision = await policy.authorize(ctx, "all_kernel", {})
+    assert decision.outcome == policy.ALLOW
+    assert decision.track_outcome is False
+
+    await autonomy.set_all_dispositions(pool, disposition="consent", actor="p")
+    decision = await policy.authorize(ctx, "all_kernel", {})
+    assert decision.outcome == policy.REQUIRE_CONSENT

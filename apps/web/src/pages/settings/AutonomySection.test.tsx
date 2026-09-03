@@ -21,6 +21,7 @@ function renderSection(
     getAutonomyState: ReturnType<typeof vi.fn>
     revokeAutonomy: ReturnType<typeof vi.fn>
     setDisposition: ReturnType<typeof vi.fn>
+    setAllDispositions: ReturnType<typeof vi.fn>
     getGovernanceEvents: ReturnType<typeof vi.fn>
   }> = {},
 ) {
@@ -28,10 +29,22 @@ function renderSection(
     getAutonomyState: vi.fn(async () => [cls()]),
     revokeAutonomy: vi.fn(),
     setDisposition: vi.fn(),
+    setAllDispositions: vi.fn(),
     getGovernanceEvents: vi.fn(async () => [] as GovernanceEvent[]),
     ...api,
   }
   return { ...render(<AutonomySection api={full} />), api: full }
+}
+
+/** The "Per-class (N)" disclosure — collapsed on every mount, so a test that
+ * needs a row waits for the list to load, then opens it. */
+const perClassButton = () => screen.getByRole('button', { name: /^Per-class \(\d+\)$/ })
+const masterSelect = () =>
+  screen.getByRole('combobox', { name: /disposition for every class/i }) as HTMLSelectElement
+
+async function expandRows() {
+  await waitFor(() => perClassButton())
+  fireEvent.click(perClassButton())
 }
 
 describe('AutonomySection', () => {
@@ -44,6 +57,7 @@ describe('AutonomySection', () => {
     renderSection({
       getAutonomyState: vi.fn(async () => [cls({ consecutive_successes: 3, graduation_runs: 5 })]),
     })
+    await expandRows()
     await waitFor(() => expect(screen.getByText('fetch_url')).toBeTruthy())
     expect(screen.getByText(/3\s*\/\s*5/)).toBeTruthy()
     expect(screen.getByText(/consent/i)).toBeTruthy()
@@ -55,6 +69,7 @@ describe('AutonomySection', () => {
         cls({ disposition: 'auto', earned: true, consecutive_successes: 0 }),
       ]),
     })
+    await expandRows()
     await waitFor(() => expect(screen.getByRole('button', { name: /revoke/i })).toBeTruthy())
     expect(screen.queryByText(/\d\s*\/\s*5/)).toBeNull()
   })
@@ -65,6 +80,7 @@ describe('AutonomySection', () => {
         cls({ action_class: 'memory_save', disposition: 'auto', earned: false }),
       ]),
     })
+    await expandRows()
     await waitFor(() => expect(screen.getByText('memory_save')).toBeTruthy())
     expect(screen.queryByRole('button', { name: /revoke/i })).toBeNull()
   })
@@ -75,6 +91,7 @@ describe('AutonomySection', () => {
       getAutonomyState: vi.fn(async () => [cls({ disposition: 'auto', earned: true })]),
       revokeAutonomy: vi.fn(async () => [revoked]),
     })
+    await expandRows()
     await waitFor(() => screen.getByRole('button', { name: /revoke/i }))
 
     fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
@@ -91,6 +108,7 @@ describe('AutonomySection', () => {
         throw new Error('the server refused the turn (404)')
       }),
     })
+    await expandRows()
     await waitFor(() => screen.getByRole('button', { name: /revoke/i }))
 
     fireEvent.click(screen.getByRole('button', { name: /revoke/i }))
@@ -107,6 +125,7 @@ describe('AutonomySection', () => {
         cls({ action_class: 'memory_save', disposition: 'auto' }),
       ]),
     })
+    await expandRows()
     await waitFor(() => screen.getByText('device_run'))
     const select = screen.getByRole('combobox', { name: /disposition for device_run/i }) as HTMLSelectElement
     expect(select.value).toBe('consent')
@@ -130,6 +149,7 @@ describe('AutonomySection', () => {
       ]),
       setDisposition: vi.fn(async () => returned),
     })
+    await expandRows()
     await waitFor(() => screen.getByText('device_run'))
     expect(screen.getByText(/3\s*\/\s*5/)).toBeTruthy()
 
@@ -154,6 +174,7 @@ describe('AutonomySection', () => {
         throw new Error('the server refused the turn (404)')
       }),
     })
+    await expandRows()
     await waitFor(() => screen.getByText('fetch_url'))
 
     fireEvent.change(screen.getByRole('combobox', { name: /disposition for fetch_url/i }), {
@@ -190,6 +211,7 @@ describe('AutonomySection', () => {
     ]
     const getGovernanceEvents = vi.fn(async () => events)
     renderSection({ getGovernanceEvents })
+    await expandRows()
     await waitFor(() => screen.getByText('fetch_url'))
 
     fireEvent.click(screen.getByText('fetch_url'))
@@ -204,10 +226,153 @@ describe('AutonomySection', () => {
 
   it('a class with no recent decisions shows an EmptyState, not a blank space', async () => {
     renderSection({ getGovernanceEvents: vi.fn(async () => []) })
+    await expandRows()
     await waitFor(() => screen.getByText('fetch_url'))
 
     fireEvent.click(screen.getByText('fetch_url'))
 
     await waitFor(() => expect(screen.getByText(/no decisions/i)).toBeTruthy())
+  })
+
+  // ── the master control + the collapsed per-class disclosure ─────────────
+
+  it('renders the master control and keeps the per-class rows collapsed — absent from the DOM, not hidden', async () => {
+    const { api } = renderSection({
+      getAutonomyState: vi.fn(async () => [
+        cls({ action_class: 'fetch_url', disposition: 'consent' }),
+        cls({ action_class: 'memory_save', disposition: 'consent' }),
+      ]),
+    })
+    await waitFor(() => masterSelect())
+    // The count is derived from the rows that loaded, and the disclosure is shut.
+    expect(perClassButton().textContent).toContain('Per-class (2)')
+    expect(perClassButton().getAttribute('aria-expanded')).toBe('false')
+    // Not hidden by CSS — not rendered at all.
+    expect(screen.queryByText('fetch_url')).toBeNull()
+    expect(screen.queryByText('memory_save')).toBeNull()
+    expect(screen.queryByRole('combobox', { name: /disposition for fetch_url/i })).toBeNull()
+    // Merely rendering sends nothing.
+    expect(api.setAllDispositions).not.toHaveBeenCalled()
+    expect(api.setDisposition).not.toHaveBeenCalled()
+  })
+
+  it('expanding the disclosure shows the rows unchanged; collapsing removes them again', async () => {
+    renderSection({
+      getAutonomyState: vi.fn(async () => [
+        cls({ action_class: 'fetch_url', disposition: 'consent', consecutive_successes: 3 }),
+        cls({ action_class: 'memory_save', disposition: 'auto' }),
+      ]),
+    })
+    await expandRows()
+    expect(perClassButton().getAttribute('aria-expanded')).toBe('true')
+    expect(screen.getByText('fetch_url')).toBeTruthy()
+    expect(screen.getByText(/3\s*\/\s*5/)).toBeTruthy()
+    expect(
+      (screen.getByRole('combobox', { name: /disposition for memory_save/i }) as HTMLSelectElement).value,
+    ).toBe('auto')
+
+    fireEvent.click(perClassButton())
+    expect(perClassButton().getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('fetch_url')).toBeNull()
+  })
+
+  it('is collapsed again on every mount — nothing remembers it was opened', async () => {
+    const state = vi.fn(async () => [cls({ action_class: 'fetch_url' })])
+    const first = renderSection({ getAutonomyState: state })
+    await expandRows()
+    expect(screen.getByText('fetch_url')).toBeTruthy()
+    first.unmount()
+
+    renderSection({ getAutonomyState: state })
+    await waitFor(() => perClassButton())
+    expect(perClassButton().getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('fetch_url')).toBeNull()
+  })
+
+  it('the master shows the shared value when every class agrees, with no "Mixed" option', async () => {
+    renderSection({
+      getAutonomyState: vi.fn(async () => [
+        cls({ action_class: 'fetch_url', disposition: 'deny' }),
+        cls({ action_class: 'memory_save', disposition: 'deny' }),
+      ]),
+    })
+    await waitFor(() => masterSelect())
+    expect(masterSelect().value).toBe('deny')
+    const labels = Array.from(masterSelect().options).map(o => o.textContent)
+    expect(labels).toEqual(['Runs automatically', 'Needs my approval', 'Never'])
+  })
+
+  it('a mixed state shows "Mixed" as an unselectable placeholder, and rendering sends no PUT', async () => {
+    const { api } = renderSection({
+      getAutonomyState: vi.fn(async () => [
+        cls({ action_class: 'fetch_url', disposition: 'consent' }),
+        cls({ action_class: 'memory_save', disposition: 'auto' }),
+      ]),
+    })
+    await waitFor(() => masterSelect())
+    expect(masterSelect().value).toBe('mixed')
+    const mixed = Array.from(masterSelect().options).find(o => o.value === 'mixed')
+    expect(mixed?.textContent).toBe('Mixed')
+    expect(mixed?.disabled).toBe(true)
+    expect(screen.getByText(/currently differ/i)).toBeTruthy()
+    expect(api.setAllDispositions).not.toHaveBeenCalled()
+    expect(api.setDisposition).not.toHaveBeenCalled()
+  })
+
+  it('choosing a master value calls setAllDispositions ONCE and re-renders the returned classes, still collapsed', async () => {
+    const committed = [
+      cls({ action_class: 'fetch_url', disposition: 'auto', consecutive_successes: 0 }),
+      cls({ action_class: 'memory_save', disposition: 'auto' }),
+    ]
+    const { api } = renderSection({
+      getAutonomyState: vi.fn(async () => [
+        cls({ action_class: 'fetch_url', disposition: 'consent', consecutive_successes: 3 }),
+        cls({ action_class: 'memory_save', disposition: 'auto' }),
+      ]),
+      setAllDispositions: vi.fn(async () => ({ classes: committed, changed: ['fetch_url'] })),
+    })
+    await waitFor(() => masterSelect())
+    expect(masterSelect().value).toBe('mixed')
+
+    fireEvent.change(masterSelect(), { target: { value: 'auto' } })
+
+    await waitFor(() => expect(api.setAllDispositions).toHaveBeenCalledWith('auto'))
+    expect(api.setAllDispositions).toHaveBeenCalledTimes(1)
+    expect(api.setDisposition).not.toHaveBeenCalled() // one PUT, never N
+    // The master re-derives from the SERVER's rows: all auto, so no Mixed left.
+    await waitFor(() => expect(masterSelect().value).toBe('auto'))
+    expect(Array.from(masterSelect().options).some(o => o.value === 'mixed')).toBe(false)
+    // Still collapsed after the change.
+    expect(perClassButton().getAttribute('aria-expanded')).toBe('false')
+    expect(screen.queryByText('fetch_url')).toBeNull()
+    // And the rows, once opened, are the returned ones.
+    fireEvent.click(perClassButton())
+    expect(
+      (screen.getByRole('combobox', { name: /disposition for fetch_url/i }) as HTMLSelectElement).value,
+    ).toBe('auto')
+    expect(screen.queryByText(/3\s*\/\s*5/)).toBeNull()
+  })
+
+  it('a refused master change states the reason and leaves the master (and rows) as they were', async () => {
+    const { api } = renderSection({
+      getAutonomyState: vi.fn(async () => [
+        cls({ action_class: 'fetch_url', disposition: 'consent' }),
+        cls({ action_class: 'memory_save', disposition: 'consent' }),
+      ]),
+      setAllDispositions: vi.fn(async () => {
+        throw new Error('the server refused the turn (400)')
+      }),
+    })
+    await waitFor(() => masterSelect())
+
+    fireEvent.change(masterSelect(), { target: { value: 'deny' } })
+
+    await waitFor(() => expect(api.setAllDispositions).toHaveBeenCalledWith('deny'))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('400'))
+    expect(masterSelect().value).toBe('consent')
+    fireEvent.click(perClassButton())
+    expect(
+      (screen.getByRole('combobox', { name: /disposition for fetch_url/i }) as HTMLSelectElement).value,
+    ).toBe('consent')
   })
 })
