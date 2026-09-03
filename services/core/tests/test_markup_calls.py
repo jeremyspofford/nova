@@ -353,9 +353,20 @@ def test_a_long_backtick_run_is_not_a_denial_of_service():
 # bound: 8 KB 7.5ms, 32 KB 117ms, 41 KB crossed 200ms, 128 KB 1.9s, 256 KB
 # 7.7s. `_BLOCK`, `_INVOKE`, `_PARAM` and `_TOOL_CALL` carried the same
 # unbounded `.*?` body under re.S — every opener position re-scanned the
-# remainder looking for a closing tag that was never there. The fix is a
-# length-capped body PLUS a cheap presence check (does a closing tag for this
-# shape exist anywhere at all?) before the finditer loop runs.
+# remainder looking for a closing tag that was never there. The fix that
+# actually kills this is the presence pre-check (does a closing tag for this
+# shape exist anywhere in the text at all?) before the finditer loop runs; a
+# length cap on the body (`_MAX_BODY`) rides along as defense in depth for the
+# one shape the presence check can't help.
+#
+# The first cut of that cap (8,000/4,000/2,000 chars, sized to "a small call")
+# was itself a regression, caught in review: device_write_file allows up to
+# 256 KiB of file content in a single parameter, well past those caps, so a
+# markup call carrying real content silently stopped matching — `found=False`,
+# nothing stripped, raw XML persisted verbatim, the exact incident this module
+# exists to prevent. `_MAX_BODY` is now 1 MiB, and the tests below pin both
+# properties the cap has to hold at once: pathologically fast on garbage, and
+# still correct on a large REAL call.
 
 
 def test_a_repeated_unclosed_opener_does_not_go_quadratic():
@@ -393,8 +404,74 @@ def test_a_long_run_of_complete_blocks_is_still_fast_and_still_correct():
     assert elapsed < 0.05, f"took {elapsed:.3f}s"
     # Every block is complete and distinct, so every one of them is read: the
     # bound only caps how far a match can look, and none of these bodies come
-    # close to the 8,000/4,000/2,000-char caps.
+    # close to the 1 MiB cap.
     assert len(scan.calls) == unit_count
     assert [c.name for c in scan.calls] == ["device_run"] * unit_count
     assert [c.arguments["n"] for c in scan.calls] == [str(i) for i in range(unit_count)]
     assert scan.text == ""
+
+
+def _write_file_block(content: str) -> str:
+    return (
+        '<atem:function_calls>\n'
+        '<atem:invoke name="device_write_file">\n'
+        '<atem:parameter name="device">DELL-XPS-8950</atem:parameter>\n'
+        '<atem:parameter name="path">notes.txt</atem:parameter>\n'
+        f'<atem:parameter name="content">{content}</atem:parameter>\n'
+        '</atem:invoke>\n'
+        '</atem:function_calls>'
+    )
+
+
+@pytest.mark.parametrize(
+    "kib",
+    [200, 300],  # 300 KiB is over device_write_file's own 256 KiB cap — the
+    # TOOL refuses that later; recognizing and stripping it is this module's
+    # only job, so both sizes must come out the same way.
+    ids=["under-tool-cap", "over-tool-cap"],
+)
+def test_a_large_real_call_is_still_recognised_and_stripped(kib):
+    """The regression the review caught: a cap sized to 'a small call' stops
+    matching a legitimate large one, which leaves the raw XML unstripped and
+    persisted — the exact incident this module exists to prevent. content is
+    plain text, not JSON, so its length round-trips exactly."""
+    import time
+
+    content = "A" * (kib * 1024)
+    block = _write_file_block(content)
+    started = time.perf_counter()
+    scan = markup_calls.parse_markup_tool_calls(block)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.05, f"took {elapsed:.3f}s"
+    assert scan.found is True
+    assert len(scan.calls) == 1
+    call = scan.calls[0]
+    assert call.name == "device_write_file"
+    assert call.arguments["content"] == content
+    assert len(call.arguments["content"]) == kib * 1024
+    assert scan.text == ""  # the markup was the whole reply; nothing survives it
+
+
+def test_a_block_over_the_old_cap_leaves_no_orphan_wrapper_tags():
+    """The other half of the same regression: a block whose TOTAL exceeds the
+    old 8,000-char cap but whose individual invokes are each smaller used to
+    fail to match as one block, leaving `<a:function_calls>` /
+    `</a:function_calls>` standing as visible debris even when every invoke
+    inside it was read correctly. 3 invokes x ~3,500 chars clears 8,000 total
+    while each stays under the old per-invoke cap too, so this pins the fix at
+    the block level specifically."""
+    value = "C" * 3500
+    text = (
+        "<a:function_calls>"
+        + "".join(
+            f'<a:invoke name="{name}"><a:parameter name="v">{value}</a:parameter></a:invoke>'
+            for name in ("one", "two", "three")
+        )
+        + "</a:function_calls>"
+    )
+    assert len(text) > 8000
+    scan = markup_calls.parse_markup_tool_calls(text)
+    assert [c.name for c in scan.calls] == ["one", "two", "three"]
+    assert scan.text == ""
+    assert "function_calls" not in scan.text
+    assert "<a:invoke" not in scan.text

@@ -63,19 +63,23 @@ The rest of the contract:
   * PURE — no model, no network, no clock, no imports from the app. The same
     text always yields the same scan, so this can never itself become a source
     of narration, and chat.py can run it on every round for the price of one
-    substring search on the common (no-markup) path. Every body group is
-    length-capped (8,000 chars for a block, 4,000 for an invoke or a
-    `tool_call` payload, 2,000 for a parameter value — sized to any realistic
-    call), AND every opener's finditer loop is skipped outright unless a
-    matching closing tag exists somewhere in the text at all, so a model stuck
-    in a repetition loop pays for one presence check, never one failed body
-    match per opener. Both bounds are load-bearing: a 12,000-backtick run took
-    11.8s before the code-span bound (see `_INLINE_CODE` below), and
+    substring search on the common (no-markup) path. Every opener's finditer
+    loop is skipped outright unless a matching closing tag exists somewhere in
+    the text at all — a model stuck in a repetition loop pays for one O(n)
+    presence check, never one failed body match per opener — and every body
+    group also carries a 1 MiB length cap (`_MAX_BODY`) as defense in depth
+    for the one shape the presence check cannot help: many fake openers ahead
+    of one real closer far down the text. The cap sits well above any
+    realistic call — device_write_file alone allows up to 256 KiB of file
+    content in a single parameter — because a cap sized to "a small call"
+    (the first cut here was 8,000/4,000/2,000 chars) stops matching a
+    legitimate large one, which leaves ITS raw XML unstripped and persisted
+    verbatim: the exact incident this module exists to prevent.
     `'<atem:function_calls>\n<atem:invoke name="device_run">\n' * n` — a
     repeated UNCLOSED opener, exactly what a small model in a repetition loop
-    emits — went quadratic (4x cost per 2x input) before the bounds above:
-    32 KB 117ms, 128 KB 1.9s, 256 KB 7.7s. With both in place the same 256 KB
-    input scans in under a millisecond.
+    emits — went quadratic (4x cost per 2x input) before the presence check:
+    32 KB 117ms, 128 KB 1.9s, 256 KB 7.7s. With the check in place the same
+    256 KB input scans in single-digit milliseconds, cap size notwithstanding.
   * `streamed=True` is the only mode that will truncate. A round's text can stop
     mid-block, and half an emitted call is not prose; a finished record (the
     persist boundary, a redirect's reply) is never partial, so there the rule
@@ -94,41 +98,50 @@ _NS = r"(?:[A-Za-z_][\w.\-]*:)?"
 # A tool name, shaped like a real one. `name="the tool you want"` is prose.
 _NAME = r"[A-Za-z_][\w.\-]*"
 
+# The upper bound on any one body/value group. This is DEFENSE IN DEPTH, not
+# the thing that kills the quadratic (the presence pre-check below is) — it
+# exists for the shape the pre-check cannot help: many fake openers followed
+# eventually by one real closer far down the text, where each failed attempt
+# still costs up to this many characters. It must therefore sit above any
+# realistic call: device_write_file alone carries up to 256 KiB of file
+# content (app/tools/devices.py WRITE_FILE_CAP_KIB) as a single parameter
+# value, so a cap sized to "a small tool call" — the first cut here was
+# 8,000/4,000/2,000 — silently stops matching a legitimate large call, which
+# leaves the raw XML unstripped and persisted verbatim: the exact incident
+# this module exists to prevent, reintroduced by the DoS fix. 1 MiB clears
+# that with room to spare while still bounding a single failed attempt.
+_MAX_BODY = 1024 * 1024
+
 # The whole block. Non-greedy body, DOTALL, and the closing tag's prefix is not
 # required to match the opener's: a model that mangles the prefix once mangles
 # it twice, differently.
-#
-# Every body is length-capped — {0,N}? instead of *? — so a failed match from
-# one opener costs at most N, not "the rest of the text". Uncapped, a repeated
-# UNCLOSED opener (a small model stuck in a repetition loop, exactly the
-# owner's trace) makes finditer retry the same failing scan from every opener
-# position and goes QUADRATIC: 32 KB took 117ms, 256 KB took 7.7s. N is sized
-# to any realistic call, well past what any real invocation needs.
 _BLOCK = re.compile(
-    rf"<\s*{_NS}function_calls\s*>(?P<body>.{{0,8000}}?)<\s*/\s*{_NS}function_calls\s*>",
+    rf"<\s*{_NS}function_calls\s*>(?P<body>.{{0,{_MAX_BODY}}}?)<\s*/\s*{_NS}function_calls\s*>",
     re.S | re.I,
 )
 _INVOKE = re.compile(
     rf"<\s*{_NS}invoke\s+name\s*=\s*(?P<q>[\"'])(?P<name>{_NAME})(?P=q)\s*>"
-    rf"(?P<body>.{{0,4000}}?)<\s*/\s*{_NS}invoke\s*>",
+    rf"(?P<body>.{{0,{_MAX_BODY}}}?)<\s*/\s*{_NS}invoke\s*>",
     re.S | re.I,
 )
 _PARAM = re.compile(
     rf"<\s*{_NS}parameter\s+name\s*=\s*(?P<q>[\"'])(?P<key>[^\"'<>]+)(?P=q)\s*>"
-    rf"(?P<value>.{{0,2000}}?)<\s*/\s*{_NS}parameter\s*>",
+    rf"(?P<value>.{{0,{_MAX_BODY}}}?)<\s*/\s*{_NS}parameter\s*>",
     re.S | re.I,
 )
 # The Hermes/Qwen JSON variant, which several local builds emit instead.
 _TOOL_CALL = re.compile(
-    r"<\s*tool_call\s*>(?P<body>.{0,4000}?)<\s*/\s*tool_call\s*>", re.S | re.I
+    rf"<\s*tool_call\s*>(?P<body>.{{0,{_MAX_BODY}}}?)<\s*/\s*tool_call\s*>", re.S | re.I
 )
 
-# The cheap linear pre-check: does a closing tag for this shape exist ANYWHERE
-# in the text at all? If not, no opener of that shape can ever complete a
-# match, so the finditer loop below is skipped rather than attempted once per
-# opener. This is what actually kills the quadratic case above — the body
-# bound alone still costs O(openers x bound); this makes a text with zero
-# closers cost one O(n) search, full stop.
+# The cheap linear pre-check that actually kills the quadratic: does a closing
+# tag for this shape exist ANYWHERE in the text at all? If not, no opener of
+# that shape can ever complete a match, so the finditer loop below is skipped
+# rather than attempted once per opener — a text with zero closers (a small
+# model stuck in a repetition loop, exactly the owner's trace) costs one O(n)
+# search, full stop, regardless of _MAX_BODY. Measured: 256 KB of repeated
+# unclosed openers went from 7.7s (unbounded body, no pre-check) to under
+# 10ms with this check alone.
 _CLOSE_FUNCTION_CALLS = re.compile(rf"<\s*/\s*{_NS}function_calls\s*>", re.I)
 _CLOSE_INVOKE = re.compile(rf"<\s*/\s*{_NS}invoke\s*>", re.I)
 _CLOSE_TOOL_CALL = re.compile(r"<\s*/\s*tool_call\s*>", re.I)
