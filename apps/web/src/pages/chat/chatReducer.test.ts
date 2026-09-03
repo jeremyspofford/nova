@@ -381,6 +381,28 @@ describe('chatReducer — live tool activity in the pending bubble', () => {
     expect(messages(state)[1].activity).toEqual({ tool: 'workspace_read_file', status: 'error' })
   })
 
+  it('an error frame carrying a reason puts it on the marker unchanged', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'device_run', status: 'start' },
+    })
+    state = chatReducer(state, {
+      type: 'event',
+      event: {
+        type: 'activity',
+        tool: 'device_run',
+        status: 'error',
+        reason: 'could not run tree: executable file not found in $PATH',
+      },
+    })
+    expect(messages(state)[1].activity).toEqual({
+      tool: 'device_run',
+      status: 'error',
+      reason: 'could not run tree: executable file not found in $PATH',
+    })
+  })
+
   it('a second call in the same round replaces the marker, one at a time', () => {
     let state = started()
     for (const status of ['start', 'ok'] as const) {

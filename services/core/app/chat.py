@@ -3,7 +3,22 @@
 Frame contract (each line is `data: <json>`):
     {"meta": {conversation_id, model, turn_id}}   exactly once, first
     {"t": "<delta>"}                              zero or more
-    {"activity": {"tool", "status"}}              zero or more, while tools run
+    {"activity": {"tool", "status", "reason"?}}   zero or more, while tools run
+                                                   — `reason` is present ONLY on
+                                                   status "error", and only when
+                                                   the call itself stated one: the
+                                                   ERROR_PREFIX-stripped head of
+                                                   its result (see
+                                                   _activity_reason), truncated to
+                                                   ACTIVITY_REASON_LIMIT chars. A
+                                                   pending card is "awaiting", not
+                                                   "error" (see _run_tool) and
+                                                   never carries a reason — it is
+                                                   not a failure. Without a
+                                                   reason, the UI cannot tell a
+                                                   stated tool failure from a turn
+                                                   cut off mid-call, so it must
+                                                   not claim either happened.
     {"consent": {<card_spec>}}                    zero or more, when the policy
                                                    kernel raises an approval card
                                                    this turn (see app/consents.py's
@@ -324,6 +339,48 @@ def _as_uuid(value: str | None) -> uuid.UUID | None:
 
 def _frame(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
+
+
+# The cap on an activity frame's `reason` (see the frame contract docstring):
+# long enough to carry a stated error head, short enough that one runaway
+# tool result cannot bloat the SSE stream or dominate the chat tile.
+ACTIVITY_REASON_LIMIT = 160
+
+
+def _activity_reason(result: str) -> str | None:
+    """The short, stated head of a tool's own error text — never invented.
+
+    `result` is what dispatch() (or a closed-round refusal built the same
+    way) actually returned, always prefixed with tools.ERROR_PREFIX on a
+    failure. That prefix is stripped here — the UI shows the reason itself,
+    not the internal marker — and the remainder is capped at
+    ACTIVITY_REASON_LIMIT chars so the frame stays a HEAD, not the whole
+    result the span already carries in full. Returns None only if the
+    stated text is empty, so a caller never attaches an empty `reason` key.
+    """
+    text = result[len(tools.ERROR_PREFIX) :] if result.startswith(tools.ERROR_PREFIX) else result
+    text = text.strip()
+    if not text:
+        return None
+    if len(text) > ACTIVITY_REASON_LIMIT:
+        text = text[: ACTIVITY_REASON_LIMIT - 1].rstrip() + "…"
+    return text
+
+
+def _activity_frame(tool: str, status: str, result: str | None = None) -> str:
+    """The `{"activity": ...}` SSE frame for one tool call's status change.
+
+    `reason` is attached only when status == "error" and the call actually
+    stated one (see _activity_reason) — never on "start"/"ok", and never on
+    "awaiting": a pending card is not a failure (_run_tool's contract), so it
+    must not read as one just because a reason happened to be available.
+    """
+    activity: dict[str, str] = {"tool": tool, "status": status}
+    if status == "error" and result is not None:
+        reason = _activity_reason(result)
+        if reason is not None:
+            activity["reason"] = reason
+    return _frame({"activity": activity})
 
 
 def history_window(
@@ -914,7 +971,7 @@ async def _dispatch_calls(
     ran_ephemeral = False
     card_raised = False
     for call in calls:
-        emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
+        emit(_activity_frame(call.name, "start"))
         if call.from_markup:
             # THE RULING, enforced in the one place every dispatch goes through:
             # a tool call written as text is refused, never run — so neither the
@@ -922,7 +979,7 @@ async def _dispatch_calls(
             # future caller can either. Recorded as a refused span with a stated,
             # retryable reason, exactly like a closed round's refusal.
             result = _refuse_markup_as_text(turn, call)
-            emit(_frame({"activity": {"tool": call.name, "status": "error"}}))
+            emit(_activity_frame(call.name, "error", result))
             messages.append(
                 {"role": "tool", "tool_call_id": call.id, "content": result}
             )
@@ -935,7 +992,7 @@ async def _dispatch_calls(
         # ran) but the operator's decision is pending, so the live tile must
         # match the span rather than flashing a failure.
         status = "awaiting" if awaiting else ("ok" if ok else "error")
-        emit(_frame({"activity": {"tool": call.name, "status": status}}))
+        emit(_activity_frame(call.name, status, result))
         if awaiting:
             card_raised = True
         messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
@@ -1922,9 +1979,9 @@ async def _run_turn(
                     }
                 )
                 for call in calls:
-                    emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
+                    emit(_activity_frame(call.name, "start"))
                     result = _refuse_pending(turn, call)
-                    emit(_frame({"activity": {"tool": call.name, "status": "error"}}))
+                    emit(_activity_frame(call.name, "error", result))
                     messages.append(
                         {"role": "tool", "tool_call_id": call.id, "content": result}
                     )
@@ -2038,9 +2095,9 @@ async def _run_turn(
                     }
                 )
                 for call in final_calls:
-                    emit(_frame({"activity": {"tool": call.name, "status": "start"}}))
+                    emit(_activity_frame(call.name, "start"))
                     result = _refuse_out_of_rounds(turn, call)
-                    emit(_frame({"activity": {"tool": call.name, "status": "error"}}))
+                    emit(_activity_frame(call.name, "error", result))
                     messages.append(
                         {"role": "tool", "tool_call_id": call.id, "content": result}
                     )

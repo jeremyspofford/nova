@@ -147,6 +147,41 @@ describe('createSseParser', () => {
     ).toEqual([{ type: 'activity', tool: 'workspace_write_file', status: 'error' }])
   })
 
+  // The honesty fix, 2026-09-03: chat.py's activity 'error' frame can now
+  // carry a `reason` — the tool's own stated failure, never invented — so
+  // the UI can say what happened instead of the unbackable "did not
+  // finish". Optional even on an error status: a frame missing it (or with
+  // a non-string value) still parses as a normal, reason-less activity
+  // event, not a shape violation — only `tool`/`status` are load-bearing.
+  it('carries the optional reason on an error activity frame', () => {
+    expect(
+      parseAll([
+        'data: {"activity":{"tool":"device_run","status":"error","reason":"could not run tree: executable file not found in $PATH"}}\n\n',
+      ]),
+    ).toEqual([
+      {
+        type: 'activity',
+        tool: 'device_run',
+        status: 'error',
+        reason: 'could not run tree: executable file not found in $PATH',
+      },
+    ])
+  })
+
+  it('an activity frame with no reason parses with none, not an empty string', () => {
+    const [event] = parseAll([
+      'data: {"activity":{"tool":"workspace_write_file","status":"error"}}\n\n',
+    ])
+    expect(event).toEqual({ type: 'activity', tool: 'workspace_write_file', status: 'error' })
+    expect((event as { reason?: string }).reason).toBeUndefined()
+  })
+
+  it('ignores a non-string reason rather than erroring the whole frame', () => {
+    expect(
+      parseAll(['data: {"activity":{"tool":"get_time","status":"error","reason":42}}\n\n']),
+    ).toEqual([{ type: 'activity', tool: 'get_time', status: 'error' }])
+  })
+
   it('errors an activity frame missing tool or status rather than dropping it silently', () => {
     expect(parseAll(['data: {"activity":{"status":"start"}}\n\n'])[0].type).toBe('error')
     expect(parseAll(['data: {"activity":{"tool":"get_time"}}\n\n'])[0].type).toBe('error')

@@ -15,11 +15,14 @@ import type { StreamEvent } from '../../lib/streamChat'
  * through here — 'ok' resolves the call cleanly and clears this back to
  * null instead of being a status worth showing), kept as `string` rather
  * than a narrower literal so an unrecognised value still renders as
- * something rather than being cast into a lie. Never persisted:
- * reconciling from fetched history always starts a row at `null` (see
- * `message()` below), because the durable record of what ran is the
- * Activity page, not the chat transcript. */
-export type ActivityMarker = { tool: string; status: string } | null
+ * something rather than being cast into a lie. `reason`, when the server
+ * stated one on an 'error' status, is what lets the bubble say WHAT failed
+ * instead of the unbackable claim that the call "did not finish" — a tool
+ * that raised a stated refusal finished; it just didn't succeed. Never
+ * persisted: reconciling from fetched history always starts a row at
+ * `null` (see `message()` below), because the durable record of what ran
+ * is the Activity page, not the chat transcript. */
+export type ActivityMarker = { tool: string; status: string; reason?: string } | null
 
 export type MessageRow = {
   kind: 'message'
@@ -157,7 +160,10 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
         // happened, because a call that resolved cleanly is not something
         // the pending bubble needs to keep saying. 'start' and 'error' are
         // the two states someone reading the bubble actually needs.
-        activity: event.status === 'ok' ? null : { tool: event.tool, status: event.status },
+        activity:
+          event.status === 'ok'
+            ? null
+            : { tool: event.tool, status: event.status, reason: event.reason },
       }))
 
     case 'consent': {

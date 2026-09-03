@@ -3,13 +3,25 @@ import { AlertTriangle, Loader2, Unplug } from 'lucide-react'
 import type { ErrorRow, MessageRow } from './chatReducer'
 
 /**
- * The tool loop's transient progress line — {"activity":{tool,status}}
- * frames (chat.py, forward-compat'd by streamChat.ts) turned into a
- * subtle, in-place indicator on the bubble that is still streaming. It is
- * never the durable record: nothing here is persisted, and the Activity
- * page (task 3's other half) is where a tool call's actual result lives
- * after the fact. 'ok' never reaches this component at all — the reducer
- * clears the marker back to null the moment a call resolves cleanly.
+ * The tool loop's transient progress line — {"activity":{tool,status,
+ * reason?}} frames (chat.py, forward-compat'd by streamChat.ts) turned
+ * into a subtle, in-place indicator on the bubble that is still streaming.
+ * It is never the durable record: nothing here is persisted, and the
+ * Activity page (task 3's other half) is where a tool call's actual result
+ * lives after the fact. 'ok' never reaches this component at all — the
+ * reducer clears the marker back to null the moment a call resolves
+ * cleanly.
+ *
+ * An 'error' status here is a call that FINISHED with a stated failure —
+ * dispatch() never lets an executor throw past it (app/tools/__init__.py).
+ * "did not finish" was a claim this line could not back: the owner's walk
+ * 2026-09-02 hit a `device_run tree` refusal ("executable file not found in
+ * $PATH") that the model then adapted around and succeeded past, while this
+ * line still said the tool never finished. So: show the tool's own stated
+ * reason when the frame carries one, and fall back to the honest, unspecific
+ * "failed" — never "did not finish", which claims a cut-off this status
+ * never represents (a genuinely interrupted stream is the separate
+ * `row.interrupted` case below, driven by the `interrupted` StreamEvent).
  */
 function ActivityLine({ activity }: { activity: NonNullable<MessageRow['activity']> }) {
   const failed = activity.status === 'error'
@@ -25,7 +37,11 @@ function ActivityLine({ activity }: { activity: NonNullable<MessageRow['activity
       ) : (
         <Loader2 size={12} className="shrink-0 animate-spin" />
       )}
-      {failed ? `${activity.tool} did not finish` : `using ${activity.tool}…`}
+      {failed
+        ? activity.reason
+          ? `${activity.tool}: ${activity.reason}`
+          : `${activity.tool} failed`
+        : `using ${activity.tool}…`}
     </p>
   )
 }

@@ -116,6 +116,12 @@ def activities(sent: list) -> list[tuple[str, str]]:
     return [(f["activity"]["tool"], f["activity"]["status"]) for f in sent if "activity" in f]
 
 
+def activity_frames(sent: list, status: str) -> list[dict]:
+    """Every activity payload with the given status, in order — used to
+    inspect fields `activities()` above collapses away, like `reason`."""
+    return [f["activity"] for f in sent if "activity" in f and f["activity"]["status"] == status]
+
+
 def texts(sent: list) -> list[str]:
     return [f["t"] for f in sent if isinstance(f, dict) and "t" in f]
 
@@ -369,8 +375,66 @@ async def test_a_failing_tool_is_an_error_activity_and_a_stated_result(
     result = gateway.payloads[1]["messages"][-1]["content"]
     assert result.startswith("Error: ")
     assert "outside the workspace" in result
+    # The error activity frame states WHY, ERROR_PREFIX stripped — never
+    # invented, and never present on the "start" frame beside it.
+    assert activity_frames(sent, "error")[0]["reason"] == result.removeprefix("Error: ")
+    assert "reason" not in activity_frames(sent, "start")[0]
     # A tool that failed does not fail the turn: she gets to say so.
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+
+async def test_a_stated_tool_failure_carries_its_reason_on_the_error_activity(
+    monkeypatch, owner_client, pool, mount_peers, workspace
+):
+    """The owner's walk, 2026-09-02 23:52: device_run tree raised a stated
+    ToolFailure ("executable file not found in $PATH") — the call FINISHED,
+    it just refused — and the model adapted, ran `find` instead, and
+    succeeded. The chat UI still said "device_run did not finish": the
+    activity frame's status alone cannot distinguish a stated failure from a
+    turn cut off mid-call. This pins the fix at its source — the frame
+    itself — with a fake tool standing in for device_run so the test does
+    not also depend on its consent gate (migration 012: device_run's own
+    disposition is 'consent', which would turn this into an 'awaiting'
+    frame instead of the 'error' one under test)."""
+
+    async def raise_tree_not_found(args: dict, ctx: tools.ToolContext) -> str:
+        raise tools.ToolFailure("could not run tree: executable file not found in $PATH")
+
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "fake_device_run",
+        tools.Tool(
+            name="fake_device_run",
+            description="d",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            executor=raise_tree_not_found,
+        ),
+    )
+    await pool.execute(
+        "INSERT INTO action_classes (action_class, risk_tier, disposition) "
+        "VALUES ('fake_device_run', 'test', 'auto') ON CONFLICT (action_class) DO NOTHING"
+    )
+    gateway = ScriptedGateway(
+        rounds=(
+            (whole_call("c1", "fake_device_run", {}),),
+            (text("that didn't work, let me try something else"),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+
+    assert activities(sent) == [
+        ("fake_device_run", "start"),
+        ("fake_device_run", "error"),
+    ]
+    assert activity_frames(sent, "error")[0] == {
+        "tool": "fake_device_run",
+        "status": "error",
+        "reason": "could not run tree: executable file not found in $PATH",
+    }
+    result = gateway.payloads[1]["messages"][-1]["content"]
+    assert result == "Error: could not run tree: executable file not found in $PATH"
 
 
 async def test_a_tool_that_does_not_exist_is_refused_by_name(

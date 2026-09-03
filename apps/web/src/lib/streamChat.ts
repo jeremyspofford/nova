@@ -28,8 +28,14 @@
  *
  * `activity` (S2 task 2/3) is exactly the frame type that comment used to
  * gesture at as a hypothetical: `{"activity":{"tool":"<name>","status":
- * "start"|"ok"|"error"}}`, sent once per tool call while a round's tools
- * run. It graduates from "unknown, tolerated" to "known, understood" here.
+ * "start"|"ok"|"error","reason"?:"<stated head>"}}`, sent once per tool
+ * call while a round's tools run. It graduates from "unknown, tolerated"
+ * to "known, understood" here. `reason` (added alongside the honesty fix
+ * for MessageBubble's "did not finish" mislabel) is present only on some
+ * "error" frames — the ERROR_PREFIX-stripped head of what the tool itself
+ * stated (chat.py's `_activity_reason`) — and is optional even then: a
+ * frame with `tool`/`status` but no (or non-string) `reason` is still a
+ * perfectly valid, known frame, not a contract violation.
  *
  * `consent` (S3-T2) is the same graduation for the policy kernel's approval
  * cards: `{"consent": <card_spec>}`, sent once per card the funnel raises
@@ -51,7 +57,7 @@ export type StreamEvent =
   // start/ok/error) — kept as `string` rather than a narrower literal
   // union so a status this client has not seen yet is still a real event,
   // not a type error waiting to happen.
-  | { type: 'activity'; tool: string; status: string }
+  | { type: 'activity'; tool: string; status: string; reason?: string }
   | { type: 'consent'; card: ConsentCard }
   | { type: 'error'; reason: string }
   | { type: 'done' }
@@ -107,7 +113,18 @@ function frameToEvent(payload: string): StreamEvent | null {
   if (obj.activity !== null && typeof obj.activity === 'object') {
     const activity = obj.activity as Record<string, unknown>
     if (typeof activity.tool === 'string' && typeof activity.status === 'string') {
-      return { type: 'activity', tool: activity.tool, status: activity.status }
+      const event: Extract<StreamEvent, { type: 'activity' }> = {
+        type: 'activity',
+        tool: activity.tool,
+        status: activity.status,
+      }
+      // `reason` is optional even on the frame's own contract (chat.py only
+      // ever sends it on some "error" statuses) — a missing or wrong-typed
+      // `reason` is not a shape violation the way a missing tool/status is,
+      // it just means the event carries none, so the key is left off
+      // entirely rather than set to undefined.
+      if (typeof activity.reason === 'string') event.reason = activity.reason
+      return event
     }
     // Falls through to the generic "known key, wrong shape" refusal below
     // rather than being treated as an unknown frame — `activity` IS known,
