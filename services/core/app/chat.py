@@ -160,6 +160,18 @@ def _deferral_honest_note(action_phrase: str) -> str:
     )
 
 
+def _bare_intent_ran_but_unreported_note(ran_names: str) -> str:
+    """The truthful fallback when a bare-intent redirect's FIRST round really
+    dispatched a tool but the closing round's report did not survive (empty,
+    refused as markup, or rejected by the guard set). BARE_INTENT_HONEST_NOTE
+    says "did not" — a call that RAN is never reported as nothing ran, so this
+    names what actually happened instead (chat.py's bare-intent block)."""
+    return (
+        f"[I ran {ran_names} but could not report the result — "
+        "ask again and I'll tell you what happened]"
+    )
+
+
 def bare_intent_redirect_nudge(*, ran_a_tool: bool) -> str:
     """The bare-intent redirect's nudge. Fixed text — a bare intent names no
     specific tool, so there is nothing to derive a sentence from the way
@@ -2475,9 +2487,31 @@ async def _run_turn(
                 emit=emit,
             )
             bare_intent_redirected = outcome.redirected
-            persisted = outcome.text
             consents_emitted = outcome.consents_emitted
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
+
+            if not bare_intent_redirected and guards.ran_a_tool(turn.spans):
+                # The redirect's OWN first round actually dispatched a
+                # successful tool (bare_intent only ever fires when nothing
+                # had run yet, so any span here was created by this
+                # redirect) even though the closing round's report did not
+                # survive — empty, refused as markup, or rejected by the
+                # guard set. BARE_INTENT_HONEST_NOTE says "did not" and
+                # would then be a LIE: a call that RAN is never reported as
+                # nothing ran (the same rule the consent-wave's markup fix
+                # established). Name what actually ran instead.
+                ran_names = ", ".join(guards.successful_tool_names(turn.spans)) or "a tool"
+                persisted = _bare_intent_ran_but_unreported_note(ran_names)
+            else:
+                persisted = outcome.text
+            if outcome.markup_note:
+                # This block runs AFTER the turn's one shared backend-note
+                # append (the "compose the DURABLE text once" section,
+                # above) already ran, so setting `backend_note` alone would
+                # leave this note computed and never attached to anything —
+                # append it directly, here, the one place left that still
+                # writes `persisted`.
+                persisted = f"{persisted}\n\n{outcome.markup_note}"
             backend_note = backend_note or outcome.markup_note
             # Spent by TRYING, not by succeeding — same rule as consent/state.
             redirect_spent = True

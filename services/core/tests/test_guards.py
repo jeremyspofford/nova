@@ -733,6 +733,20 @@ BARE_INTENT_MUST_FIRE = [
     ("right_one_sec", "Right, one sec."),
     ("ok_let_me_find_that", "OK. Let me find that for you."),
     ("looking_into_it", "Looking into it…"),
+    # A general first-person future commitment to a verb deferral_check does
+    # not map to a tool — the owner's actual missed 15:06 reply, and the
+    # adversarial review's other misses (I1, review of 70d7c54e).
+    ("ill_check_the_disk_usage", "I'll check the disk usage for you."),
+    ("ill_look_into_that", "I'll look into that."),
+    ("em_dash_ack_running_now", "Sure — running that now."),
+    ("im_on_it", "I'm on it."),
+    ("on_it_with_address", "On it, boss."),
+    ("i_will_look_into_it_now", "I will look into it now."),
+    ("im_going_to_check_that", "I'm going to check that."),
+    # A bare newline instead of a space between ack and lead must not inflate
+    # the sentence count past the cap (M3, review of 70d7c54e) — the same
+    # content as the owner's exact trace, just line-broken.
+    ("newline_between_ack_and_lead", "Got it.\nChecking the workspace…"),
 ]
 
 
@@ -743,6 +757,18 @@ def test_bare_intent_must_fire_on_an_ack_and_go_with_no_tool_span(label, reply):
     claim = guards.bare_intent_check(reply, [])
     assert claim is not None, f"{label!r} should have fired but did not"
     assert claim.phrase
+
+
+@pytest.mark.parametrize(
+    "label,reply", BARE_INTENT_MUST_FIRE, ids=[c[0] for c in BARE_INTENT_MUST_FIRE]
+)
+def test_bare_intent_must_not_fire_with_a_successful_tool_span(label, reply):
+    """Every MUST-FIRE case is cleared by ANY real work this turn — unlike
+    deferral_check, a bare intent names no specific tool, so a successful span
+    of any kind backs it."""
+    assert guards.bare_intent_check(reply, [tool_span("device_list")]) is None, (
+        f"{label!r} should NOT have fired with a successful tool span"
+    )
 
 
 def test_bare_intent_fires_with_a_non_tool_span_present():
@@ -764,9 +790,22 @@ BARE_INTENT_MUST_NOT_FIRE = [
     ("hedge_would_you_like", "Would you like me to check the workspace?"),
     ("plain_answer", "The Pixel 10 has a 50-megapixel main camera."),
     ("too_long", "Checking the workspace to see what is in it and report back fully."),
+    # the general future-commitment lead must clear the same precision bar as
+    # every other shape (I1 negatives, review of 70d7c54e)
+    ("future_hedge_if_you_want", "I'll check that if you want."),
+    (
+        "future_content_a_listing",
+        "I'll check — the workspace has 12 dirs: default, src, tests.",
+    ),
+    ("future_past_tense", "I checked the disk: 905 GiB free."),
     # the guard's own frames must never trip it (self-reference)
     ("deferral_note", "Doing that now instead of just saying I would."),
     ("bare_intent_honest_note", "[I said I'd check but did not — ask again and I'll do it]"),
+    (
+        "bare_intent_ran_but_unreported_note",
+        "[I ran auto_list_workspace but could not report the result — "
+        "ask again and I'll tell you what happened]",
+    ),
 ]
 
 

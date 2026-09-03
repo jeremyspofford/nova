@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import json
 
-from app import chat, tools
+from app import chat, markup_calls, tools
 from app.tools import web
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
+from tests.test_markup_calls import OBSERVED
 
 pytestmark = requires_db
 
@@ -31,6 +32,10 @@ DONE = "[DONE]"
 FETCH_SCHEMA = next(t.parameters for t in web.TOOLS if t.name == "fetch_url")
 AUTO_ACTION = "auto_list_workspace"
 URL = "https://workspace.local/list"
+# The observed real-world XML block (tests/test_markup_calls.py), retargeted
+# at our own AUTO tool — parsing does not care whose schema it names, and this
+# is never dispatched anyway (a markup call is refused in every round).
+BARE_INTENT_MARKUP = OBSERVED.replace('name="device_run"', f'name="{AUTO_ACTION}"')
 
 
 class Spy:
@@ -306,3 +311,74 @@ async def test_a_detector_error_fails_open_and_ships_the_reply(
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
     assert await _deferral_spans(pool) == []
     assert not [f for f in sent if isinstance(f, dict) and "error" in f]
+
+
+async def test_the_bare_intent_redirects_closing_markup_never_reports_a_ran_tool_as_nothing(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The reviewer's exact repro (adversarial review of 70d7c54e, I2). Round 1
+    is a bare ack-and-go and calls nothing. The redirect's FIRST round (tools
+    advertised) actually dispatches the tool — the spy proves it ran — but the
+    CLOSING round (no tools by design) answers with nothing but markup, which
+    is refused and never dispatched. The durable text must name what ran; it
+    must NEVER say "did not" — that would report a call that RAN as if
+    nothing did (the same rule the markup-notes fix established for consent/
+    state — see tests/test_chat_markup.py)."""
+    spy = await _arm_auto_tool(pool, monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(BARE_INTENT),),
+            (auto_call("r1"),),
+            (text(BARE_INTENT_MARKUP),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client)
+
+    # The markup call was never dispatched — only the redirect's real call ran.
+    assert spy.calls == [{"url": URL}]
+
+    stored = await _stored_reply(pool)
+    assert "did not" not in stored
+    assert chat.BARE_INTENT_HONEST_NOTE not in stored
+    assert AUTO_ACTION in stored
+    assert "I ran" in stored
+    # The markup note is not dropped either — it reaches the durable text even
+    # though this block runs after the turn's one shared backend-note append.
+    assert markup_calls.no_tool_round_note([AUTO_ACTION]) in stored
+
+    spans = await _deferral_spans(pool)
+    assert len(spans) == 1
+    assert spans[0]["meta"]["kind"] == "bare_intent"
+    assert spans[0]["meta"]["redirected"] is False
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+
+async def test_an_overlapping_commitment_phrase_stays_with_deferral_only(
+    owner_client, pool, mount_peers
+):
+    """'Let me look it up.' independently matches BOTH deferral_check (a
+    first-person modal lead mapped to the registered web_search tool) and
+    bare_intent_check (the same phrase is also a bare 'let me look' lead with
+    no tool span). Mutual exclusion is the caller's job: deferral_check runs
+    first and, since it fires, bare_intent_check is never even evaluated — so
+    there is exactly ONE 'deferral' guard span (the commitment kind, no
+    meta.kind at all), one redirect, never two."""
+    corrected = "The Pixel 10 has a 50-megapixel main camera with strong low-light."
+    gateway = ScriptedGateway(
+        rounds=((text("Let me look it up."),), (text(corrected),))
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "what's the latest with the pixel?")
+
+    assert gateway.calls == 2  # the reply, then ONE redirect — never a second
+    spans = await _deferral_spans(pool)
+    assert len(spans) == 1
+    assert "kind" not in spans[0]["meta"]  # the commitment form, not bare_intent
+    assert spans[0]["meta"]["action"] == "web_search"
+    assert spans[0]["meta"]["redirected"] is True
+    assert await _stored_reply(pool) == corrected
+    assert _corrections(sent) == [chat.DEFERRAL_NOTE]
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
