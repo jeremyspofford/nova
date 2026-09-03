@@ -48,9 +48,27 @@ eval_runs is WRITTEN here and read by no decision path (audit/reporting only,
 like the governance ledger): the turn path, the policy kernel and the guards
 never read it. suite_version is stored on every row so a score is only ever
 compared across runs of the same version.
+
+A SUITE RUN IS A JOB, AND ITS TRUTH IS A ROW (migration 016). Every suite run
+opens an eval_suite_runs row first (open_suite_run) and runs as run_suite_job:
+sweep orphaned scratch people, score each case, persist it WITH the run's id,
+then close the row 'done' / 'error' (+ why) / 'interrupted' with an ended_at —
+in a finally, shielded, so the row is closed no matter how the job ends. The
+row lives in the database, detached from any HTTP connection: a page that
+reloads, a PWA that backgrounds, a tab that closes, none of them cancels a
+case mid-LLM-call any more (evals_api spawns the job and answers 202 at once;
+the page is a viewer of the row). ONE run at a time is a database invariant
+(the partial unique index eval_suite_runs_one_running) — the GPU is shared,
+so a second suite interleaved on it is contention, not a measurement — and the
+sweep of orphaned scratch people at the start of a job is safe precisely
+because that invariant holds: there is no concurrent case whose scratch
+identity it could delete. A process that dies mid-run leaves a 'running' row
+no job holds; sweep_orphaned_suite_runs marks it 'interrupted' at the next
+startup (a fresh process runs no jobs by construction), one WARNING per row.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -112,10 +130,16 @@ class EvalRun:
     detail: dict[str, Any] = field(default_factory=dict)
     turn_id: uuid.UUID | None = None
     id: uuid.UUID | None = None  # set by persist_run
+    # The eval_suite_runs row this case was scored under — set by
+    # run_suite_job before persisting, so every row of a job carries its run.
+    # None only for a case scored outside a suite run (run_case called
+    # directly, as the runner tests do).
+    run_id: uuid.UUID | None = None
 
     def as_json(self) -> dict:
         return {
             "id": str(self.id) if self.id else None,
+            "run_id": str(self.run_id) if self.run_id else None,
             "case_id": self.case_id,
             "suite": self.suite,
             "suite_version": self.suite_version,
@@ -251,13 +275,16 @@ async def _cleanup_scratch_person(
 
 async def _sweep_orphan_scratch_people(pool: asyncpg.Pool) -> int:
     """Delete every guest person whose name starts with SCRATCH_PERSON_NAME —
-    run once at the START of a suite (never at core startup; this module has
-    no background process of its own). Closes two leaks _cleanup_scratch_person
-    alone cannot: a case whose process was killed mid-run before its `finally`
-    could fire (a crash orphan), and the legacy single shared `__eval_scratch__`
-    row some deployments still carry from before scratch identities were
-    per-case (starts_with('__eval_scratch__', '__eval_scratch__') is true, so
-    that exact name matches too). starts_with(), never LIKE, so the name's own
+    run once at the START of every suite job (never at core startup; this
+    module has no background process of its own). Safe to run there only
+    because ONE suite runs at a time (the eval_suite_runs_one_running index):
+    there is never a concurrent case whose live scratch identity this could
+    delete. Closes two leaks _cleanup_scratch_person alone cannot: a case
+    whose process was killed mid-run before its `finally` could fire (a crash
+    orphan), and the legacy single shared `__eval_scratch__` row some
+    deployments still carry from before scratch identities were per-case
+    (starts_with('__eval_scratch__', '__eval_scratch__') is true, so that
+    exact name matches too). starts_with(), never LIKE, so the name's own
     literal underscores are never read back as SQL wildcards."""
     rows = await pool.fetch(
         "DELETE FROM people WHERE role = $1 AND starts_with(name, $2) RETURNING id",
@@ -311,6 +338,29 @@ def _error_frame(frames: Sequence[Any]) -> str | None:
     return None
 
 
+async def _settle_turn_work(spawned_before: set[asyncio.Task]) -> None:
+    """Let the detached work the turn just fired land — its atomic trace close
+    and any queued memory ingest — before the turn's status is read and the
+    scratch person is torn down (the ingest must land before /forget, or
+    cleanup races it and the journal outlives its person).
+
+    NOT chat.drain_background(): a suite job is itself one of chat._BACKGROUND's
+    tasks (evals_api spawns it there, so shutdown drains it), and a task that
+    gathers the whole set gathers ITSELF — a deadlock, hit the first time the
+    job ran detached. So this waits only for the tasks that appeared since
+    `spawned_before` was taken (the turn's own close and ingest; loops, so
+    work those tasks fire in turn is waited for too) and never for the task
+    this code runs in."""
+    me = asyncio.current_task()
+    while True:
+        pending = [
+            t for t in chat._BACKGROUND if t not in spawned_before and t is not me and not t.done()
+        ]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) -> EvalRun:
     """Replay one case against `model` and score it. See the module docstring for
     the three enforced properties (scratch isolation, no leakage, ungradeable!=0)."""
@@ -324,6 +374,9 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # a run whose SETUP failed has no turn, so cleanup skips the ingest check.
     turn: traces.Turn | None = None
     result: EvalRun | None = None
+    # Bound here for the same reason: the finally's cleanup settles this
+    # turn's detached work first, and a setup-phase exit has no turn to settle.
+    spawned_before: set[asyncio.Task] | None = None
 
     # Everything from here on runs against this case's OWN fresh scratch
     # person — the finally below tears it down (person + its conversation +
@@ -378,6 +431,9 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
                 turn_id=turn.id,
             )
 
+        # What was already detached before this turn fired anything — so the
+        # settle below waits for THIS turn's close and ingest, not the world.
+        spawned_before = set(chat._BACKGROUND)
         try:
             await chat._run_turn(
                 app,
@@ -396,7 +452,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             # the turn); if something still escaped, that is an infra/harness
             # failure, so the run is UNGRADEABLE — never a fabricated fail.
             logger.exception("eval run_case: _run_turn raised for case %s", case.id)
-            await chat.drain_background()
+            await _settle_turn_work(spawned_before)
             result = _base(
                 None, True, {"reason": f"the turn raised — {type(exc).__name__}: {exc}"}
             )
@@ -404,7 +460,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             # Let the atomic trace close (and any queued ingest) land before
             # reading the turn's final status — close_turn is a background
             # task in _run_turn.
-            await chat.drain_background()
+            await _settle_turn_work(spawned_before)
             status = await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id)
 
             if status != "ok":
@@ -434,15 +490,35 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
                 result = _base(passed, False, detail)
         return result
     finally:
-        # drain_background() has already run on every path that reaches it
-        # (including the _run_turn-raised one), so any queued ingest has
-        # already landed — cleanup here never races it. A setup-phase
-        # exception means `turn` is still None; _cleanup_scratch_person
-        # handles that (no ingest span to check, nothing to forget beyond the
-        # two reconstructed candidate dates).
-        cleanup_warnings = await _cleanup_scratch_person(
-            app, pool, person, ingest_date_before, turn
-        )
+        # The cleanup must not race the turn's queued ingest (/forget before
+        # the journal is written leaves the journal behind). The settle above
+        # runs on the scored and the _run_turn-raised paths, but NOT on a
+        # cancellation landing between the reply and its ingest — so the
+        # cleanup task settles again itself, first thing: it is one of
+        # chat._BACKGROUND's tasks, which _settle_turn_work excludes as `me`,
+        # and on the paths already settled there is nothing pending, so this
+        # costs nothing. A setup-phase exception means `turn` is still None
+        # (and spawned_before too — the turn never fired anything);
+        # _cleanup_scratch_person handles that (no ingest span to check,
+        # nothing to forget beyond the two reconstructed candidate dates).
+        #
+        # The cleanup runs as its OWN task, shield-awaited, so it survives a
+        # cancellation of ANY kind — including the anyio-style one starlette
+        # and a shutdown deliver, which re-raises CancelledError at EVERY
+        # await of the cancelled task: an unshielded cleanup was cancelled at
+        # its first await (the /forget call), before DELETE FROM people, and
+        # the scratch person was orphaned (two such rows were found live).
+        # If this task is cancelled here, the CancelledError still propagates
+        # (never swallowed), while the cleanup task carries on detached in
+        # chat._BACKGROUND — which main.py's shutdown drains — so the DELETE
+        # lands regardless.
+        async def _settle_then_cleanup() -> list[str]:
+            if spawned_before is not None:
+                await _settle_turn_work(spawned_before)
+            return await _cleanup_scratch_person(app, pool, person, ingest_date_before, turn)
+
+        cleanup = chat._spawn(_settle_then_cleanup())
+        cleanup_warnings = await asyncio.shield(cleanup)
         # `result` is the SAME object already handed to the `return` above —
         # mutating its `detail` here still reaches the caller, since `finally`
         # runs after the return value is captured but before control actually
@@ -458,10 +534,10 @@ async def persist_run(pool: asyncpg.Pool, run: EvalRun) -> uuid.UUID:
     The table's CHECK constraint refuses a row where ungradeable disagrees with
     passed-IS-NULL, so a fake 0/false for an errored turn cannot be persisted
     even by a caller that got the pairing wrong."""
-    run_id = await pool.fetchval(
+    row_id = await pool.fetchval(
         "INSERT INTO eval_runs "
-        "(suite, suite_version, model, case_id, passed, ungradeable, detail, turn_id) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8) RETURNING id",
+        "(suite, suite_version, model, case_id, passed, ungradeable, detail, turn_id, run_id) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9) RETURNING id",
         run.suite,
         run.suite_version,
         run.model,
@@ -470,9 +546,253 @@ async def persist_run(pool: asyncpg.Pool, run: EvalRun) -> uuid.UUID:
         run.ungradeable,
         run.detail,
         run.turn_id,
+        run.run_id,
     )
-    run.id = run_id
-    return run_id
+    run.id = row_id
+    return row_id
+
+
+# -- suite runs: the job and its row (migration 016) ------------------------
+#
+# See the module docstring's "A SUITE RUN IS A JOB" paragraph. Everything that
+# WRITES eval_suite_runs lives here, next to the eval_runs writer, so the API
+# only ever reads rows and spawns jobs.
+
+SUITE_RUN_RUNNING = "running"
+SUITE_RUN_DONE = "done"
+SUITE_RUN_ERROR = "error"
+SUITE_RUN_INTERRUPTED = "interrupted"
+
+# The stated reason a swept row carries — the row's own `error` says what the
+# page shows, never a guess made at read time.
+INTERRUPTED_REASON = (
+    "the core process running this suite exited before every case finished"
+)
+
+# Suite-run ids THIS process is running, from open_suite_run to the close —
+# the eval counterpart of traces.INFLIGHT. sweep_orphaned_suite_runs excludes
+# it, derived from the live set: a caller that ever sweeps while a job is
+# live must not kill that job's row.
+RUNNING: set[uuid.UUID] = set()
+
+_SUITE_RUN_COLUMNS = (
+    "id, suite, suite_version, model, status, case_count, error, started_at, ended_at"
+)
+
+
+class SuiteRunActive(Exception):
+    """open_suite_run was refused: a run is already 'running'. The refusal is
+    postgres's (the partial unique index), never a check the caller could
+    skip; `active` is the running row as read back right after, or None in
+    the narrow window where it finished between the refusal and the read."""
+
+    def __init__(self, active: dict | None) -> None:
+        self.active = active
+        if active is None:
+            message = "a suite run was still running a moment ago — try again"
+        else:
+            message = (
+                f"a suite run is already running: {active['suite']} v"
+                f"{active['suite_version']} on {active['model']} (run {active['id']}) — "
+                "one runs at a time, the GPU is shared"
+            )
+        super().__init__(message)
+
+
+async def open_suite_run(
+    pool: asyncpg.Pool, suite: str, suite_version: int, model: str, case_count: int
+) -> dict:
+    """INSERT the 'running' row for a new suite run and return it. Raises
+    SuiteRunActive if one is already running — refused by the database
+    (eval_suite_runs_one_running), so two callers racing each other cannot
+    both get a row."""
+    try:
+        row = await pool.fetchrow(
+            "INSERT INTO eval_suite_runs (suite, suite_version, model, status, case_count) "
+            f"VALUES ($1, $2, $3, $4, $5) RETURNING {_SUITE_RUN_COLUMNS}",
+            suite,
+            suite_version,
+            model,
+            SUITE_RUN_RUNNING,
+            case_count,
+        )
+    except asyncpg.UniqueViolationError as exc:
+        if exc.constraint_name != "eval_suite_runs_one_running":
+            raise
+        raise SuiteRunActive(await active_suite_run(pool)) from exc
+    return dict(row)
+
+
+async def active_suite_run(pool: asyncpg.Pool) -> dict | None:
+    """The one 'running' row, or None. At most one exists (the index)."""
+    row = await pool.fetchrow(
+        f"SELECT {_SUITE_RUN_COLUMNS} FROM eval_suite_runs WHERE status = $1",
+        SUITE_RUN_RUNNING,
+    )
+    return dict(row) if row else None
+
+
+async def suite_run(pool: asyncpg.Pool, run_id: uuid.UUID) -> dict | None:
+    row = await pool.fetchrow(
+        f"SELECT {_SUITE_RUN_COLUMNS} FROM eval_suite_runs WHERE id = $1", run_id
+    )
+    return dict(row) if row else None
+
+
+async def latest_complete_suite_run(
+    pool: asyncpg.Pool, suite: str, suite_version: int, model: str
+) -> dict | None:
+    """The newest 'done' run for exactly this (suite, suite_version, model) —
+    the run whose cases the page shows as the stored results. Never a
+    'running', 'error' or 'interrupted' one: a partial run's fresh rows must
+    not blend with, or shadow, an older complete run's."""
+    row = await pool.fetchrow(
+        f"SELECT {_SUITE_RUN_COLUMNS} FROM eval_suite_runs "
+        "WHERE suite = $1 AND suite_version = $2 AND model = $3 AND status = $4 "
+        "ORDER BY started_at DESC, id DESC LIMIT 1",
+        suite,
+        suite_version,
+        model,
+        SUITE_RUN_DONE,
+    )
+    return dict(row) if row else None
+
+
+async def runs_in(pool: asyncpg.Pool, run_id: uuid.UUID) -> list[dict]:
+    """Every eval_runs row persisted under one suite run, in the order they
+    landed (the job runs cases sequentially, so this is suite order too)."""
+    rows = await pool.fetch(
+        "SELECT id, case_id, model, passed, ungradeable, detail, turn_id, created_at "
+        "FROM eval_runs WHERE run_id = $1 ORDER BY created_at ASC, id ASC",
+        run_id,
+    )
+    return [dict(row) for row in rows]
+
+
+async def close_suite_run(
+    pool: asyncpg.Pool, run_id: uuid.UUID, status: str, error: str | None
+) -> bool:
+    """Move a 'running' row to its terminal status with an ended_at. False if
+    the row was no longer 'running' (already swept as interrupted by another
+    process's startup, say) — logged, never silent, because the job's own
+    verdict then did not land on the record the page reads."""
+    tag = await pool.execute(
+        "UPDATE eval_suite_runs SET status = $2, error = $3, ended_at = now() "
+        "WHERE id = $1 AND status = $4",
+        run_id,
+        status,
+        error,
+        SUITE_RUN_RUNNING,
+    )
+    closed = tag == "UPDATE 1"
+    if not closed:
+        logger.warning(
+            "eval suite run %s was no longer 'running' when its job finished %s — "
+            "its verdict did not land on the record",
+            run_id,
+            status,
+        )
+    return closed
+
+
+async def sweep_orphaned_suite_runs(pool: asyncpg.Pool) -> list[uuid.UUID]:
+    """Mark every 'running' row no process is running as 'interrupted'; return
+    the ids. Called at startup (app/main.py's lifespan, beside
+    traces.sweep_orphaned_turns) when RUNNING is empty by construction — a
+    fresh process has opened nothing, so every 'running' row is an orphan of
+    the process that died mid-suite. The exclusion of RUNNING is still in the
+    query, derived from the live set. Idempotent. Every swept row is logged at
+    WARNING: a suite cut off by a restart is a fact the operator should see."""
+    rows = await pool.fetch(
+        "UPDATE eval_suite_runs SET status = $1, error = $2, ended_at = now() "
+        "WHERE status = $3 AND NOT (id = ANY($4::uuid[])) "
+        "RETURNING id, suite, suite_version, model, started_at",
+        SUITE_RUN_INTERRUPTED,
+        INTERRUPTED_REASON,
+        SUITE_RUN_RUNNING,
+        list(RUNNING),
+    )
+    for row in rows:
+        logger.warning(
+            "orphaned eval suite run %s (%s v%s on %s, started %s) closed as interrupted — "
+            "no process was running it",
+            row["id"],
+            row["suite"],
+            row["suite_version"],
+            row["model"],
+            row["started_at"].isoformat(),
+        )
+    return [row["id"] for row in rows]
+
+
+async def run_suite_job(
+    app,
+    pool: asyncpg.Pool,
+    run_id: uuid.UUID,
+    suite_cases: Sequence[cases_mod.Case],
+    model: str,
+) -> list[EvalRun]:
+    """The job behind one eval_suite_runs row (already 'running', from
+    open_suite_run): sweep orphaned scratch people, score every case
+    SEQUENTIALLY against the one chosen model, persist each row WITH run_id
+    as it lands, and close the row — 'done', or 'error' with the exception
+    stated, or 'interrupted' if this task is cancelled — in a finally, so the
+    record is never left 'running' by a job that stopped. Runs detached
+    (evals_api spawns it through chat._spawn, into the set main.py drains at
+    shutdown), so no HTTP connection's fate reaches it.
+
+    A case failure is never masked: run_case turns an errored turn into an
+    UNGRADEABLE row (persisted as such), and anything that still escapes it —
+    a harness failure — closes the run 'error' with the reason, leaving the
+    rows already persisted exactly as they landed."""
+    RUNNING.add(run_id)
+    runs: list[EvalRun] = []
+    status = SUITE_RUN_ERROR
+    error: str | None = None
+    try:
+        await _sweep_orphan_scratch_people(pool)
+        for case in suite_cases:
+            run = await run_case(app, pool, case, model)
+            run.run_id = run_id
+            await persist_run(pool, run)
+            runs.append(run)
+        status = SUITE_RUN_DONE
+    except asyncio.CancelledError:
+        status = SUITE_RUN_INTERRUPTED
+        error = (
+            f"the run was cancelled after {len(runs)} of {len(suite_cases)} case(s) — "
+            "the remaining cases never ran"
+        )
+        raise
+    except Exception as exc:
+        logger.exception("eval suite run %s failed", run_id)
+        error = f"the run failed after {len(runs)} case(s) — {type(exc).__name__}: {exc}"
+    except BaseException as exc:
+        # KeyboardInterrupt / SystemExit / GeneratorExit in the task: not a
+        # cancellation and not a failure the job can absorb, so it propagates
+        # — but the row still closes 'error' WITH the type stated, or the
+        # close would trip eval_suite_runs_error_states_why (a silent 'error'
+        # is refused by the table) and the row would sit 'running' until the
+        # next startup sweep.
+        error = (
+            f"the run stopped after {len(runs)} of {len(suite_cases)} case(s) — "
+            f"{type(exc).__name__}: {exc}"
+        )
+        raise
+    finally:
+        RUNNING.discard(run_id)
+        # The close as its own task, shield-awaited — same discipline as
+        # chat._run_turn's trace close: a cancellation delivered here cannot
+        # leave the row 'running' forever, and the close still lands (the task
+        # is in chat._BACKGROUND, drained at shutdown) while the CancelledError
+        # propagates. A close that itself fails is logged, never swallowed
+        # into a silent 'running'.
+        close = chat._spawn(close_suite_run(pool, run_id, status, error))
+        try:
+            await asyncio.shield(close)
+        except Exception:
+            logger.exception("could not close eval suite run %s", run_id)
+    return runs
 
 
 async def run_suite(
@@ -482,29 +802,23 @@ async def run_suite(
     model: str,
     *,
     cases: Sequence[cases_mod.Case] | None = None,
-    persist: bool = True,
 ) -> list[EvalRun]:
-    """Run every case of a suite against `model`, persisting each run.
+    """Run every case of a suite against `model` as ONE recorded suite run,
+    in-process: open the row, run the job to its close, return the runs.
 
-    The drive point T3 (and tests) call. `cases` overrides the git corpus (tests
-    pass an explicit list); otherwise the suite's fixtures are loaded — which
-    also pins that a suite never mixes versions (cases.load_suite raises). Cases
-    run SEQUENTIALLY against the one chosen model; multi-model sequencing with a
-    real unload between is a later tournament concern, out of T1's scope.
-
-    Sweeps orphaned scratch-person rows FIRST (see
-    _sweep_orphan_scratch_people) — a suite is the natural place for this,
-    never core startup, since it is the one call every real drive point
-    (T3, the DoD walk) actually makes."""
-    await _sweep_orphan_scratch_people(pool)
+    The direct drive point (the DoD walk, tests). `cases` overrides the git
+    corpus (tests pass an explicit list); otherwise the suite's fixtures are
+    loaded — which also pins that a suite never mixes versions
+    (cases.load_suite raises). Raises SuiteRunActive if another run holds the
+    one-at-a-time slot. The API does not call this: it opens the row itself
+    and spawns run_suite_job detached, answering before the first case."""
     suite_cases = list(cases) if cases is not None else cases_mod.load_suite(suite)
-    runs: list[EvalRun] = []
-    for case in suite_cases:
-        run = await run_case(app, pool, case, model)
-        if persist:
-            await persist_run(pool, run)
-        runs.append(run)
-    return runs
+    if not suite_cases:
+        return []
+    row = await open_suite_run(
+        pool, suite, suite_cases[0].suite_version, model, len(suite_cases)
+    )
+    return await run_suite_job(app, pool, row["id"], suite_cases, model)
 
 
 # -- audit/reporting reads (NOT a decision path) ---------------------------

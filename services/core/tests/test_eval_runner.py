@@ -14,17 +14,20 @@ read back only for reporting.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import UTC, datetime
 
+import anyio
 import asyncpg
 import pytest
 
 from app import chat, tools
 from app.evals import runner
 from app.evals.cases import Case, PredicateSpec
-from app.main import app
+from app.main import MIGRATIONS_DIR, app
+from app.migrations_runner import discover_migrations
 from app.tools import web
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
@@ -589,3 +592,255 @@ async def test_run_suite_persists_all_and_score_summary_excludes_ungradeable(poo
         "passed": 1,
         "pass_rate": 1.0,
     }
+
+
+# -- a suite run is a job with a row (migration 016) ------------------------
+
+
+def test_migration_016_is_discovered_after_the_eval_ledger_it_extends():
+    """016 adds eval_runs.run_id and the suite-run table it references, so it
+    can only ever run after 010 created eval_runs. Ordering, not position: a
+    later migration may follow."""
+    names = [p.name for p in discover_migrations(MIGRATIONS_DIR)]
+    assert "016_eval_suite_runs.sql" in names
+    assert names.index("010_eval_runs.sql") < names.index("016_eval_suite_runs.sql")
+
+
+async def test_run_suite_records_the_run_and_stamps_every_row_with_it(pool, mount_peers):
+    """run_suite is ONE recorded run: a 'running' row opened before the first
+    case, closed 'done' with an ended_at after the last, and every eval_runs
+    row it persisted carries that run's id — so the page can read a run as a
+    unit, never as latest-per-case across runs."""
+    gateway = ScriptedGateway(rounds=((text("VRAM answer."),), (text("second"),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    cases = [
+        _case([PredicateSpec("reply_matches", "VRAM")], cid="kv"),
+        _case([PredicateSpec("reply_matches", "second")], cid="two"),
+    ]
+    runs = await runner.run_suite(app, pool, "corpus", MODEL, cases=cases)
+
+    row = await pool.fetchrow("SELECT * FROM eval_suite_runs")
+    assert row["status"] == "done"
+    assert row["suite"] == "corpus" and row["suite_version"] == 1 and row["model"] == MODEL
+    assert row["case_count"] == 2
+    assert row["ended_at"] is not None and row["error"] is None
+    assert [r.run_id for r in runs] == [row["id"], row["id"]]
+    assert await pool.fetchval(
+        "SELECT count(*) FROM eval_runs WHERE run_id = $1", row["id"]
+    ) == 2
+    assert [r["case_id"] for r in await runner.runs_in(pool, row["id"])] == ["kv", "two"]
+    assert runner.RUNNING == set()  # released at the close
+
+
+async def test_a_second_suite_run_is_refused_by_the_database_while_one_runs(pool, mount_peers):
+    """One at a time is postgres's invariant (eval_suite_runs_one_running), not
+    a flag: with a 'running' row present, open_suite_run raises SuiteRunActive
+    naming it — for ANY model, the GPU being shared."""
+    mount_peers(gateway=ScriptedGateway(rounds=()), memory=FakeMemory())
+    held = await runner.open_suite_run(pool, "corpus", 1, MODEL, 1)
+
+    with pytest.raises(runner.SuiteRunActive) as refused:
+        await runner.open_suite_run(pool, "corpus", 1, "other:1b", 1)
+    assert refused.value.active["id"] == held["id"]
+    assert MODEL in str(refused.value) and str(held["id"]) in str(refused.value)
+    assert await pool.fetchval("SELECT count(*) FROM eval_suite_runs") == 1
+
+    await runner.close_suite_run(pool, held["id"], runner.SUITE_RUN_DONE, None)
+    after = await runner.open_suite_run(pool, "corpus", 1, "other:1b", 1)  # the slot is free
+    assert after["id"] != held["id"]
+    await runner.close_suite_run(pool, after["id"], runner.SUITE_RUN_DONE, None)
+
+
+async def test_a_harness_failure_closes_the_run_error_with_the_reason(
+    pool, mount_peers, monkeypatch
+):
+    """A case failure is never masked as success: when something escapes
+    run_case (a harness failure — here the scratch conversation create), the
+    row closes 'error' with the exception stated, the rows already persisted
+    stand, and nothing reads 'done'."""
+    gateway = ScriptedGateway(rounds=((text("VRAM answer."),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    real_create = runner._scratch_conversation
+    calls = 0
+
+    async def _second_case_explodes(pool, person):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("scratch conversation create exploded")
+        return await real_create(pool, person)
+
+    monkeypatch.setattr(runner, "_scratch_conversation", _second_case_explodes)
+    cases = [
+        _case([PredicateSpec("reply_matches", "VRAM")], cid="ok"),
+        _case([PredicateSpec("reply_matches", "never")], cid="boom"),
+    ]
+    row = await runner.open_suite_run(pool, "corpus", 1, MODEL, len(cases))
+    runs = await runner.run_suite_job(app, pool, row["id"], cases, MODEL)
+
+    assert [r.case_id for r in runs] == ["ok"]  # the first landed, the second never scored
+    after = await pool.fetchrow("SELECT status, error, ended_at FROM eval_suite_runs")
+    assert after["status"] == "error"
+    assert "scratch conversation create exploded" in after["error"]
+    assert after["ended_at"] is not None
+    assert await pool.fetchval("SELECT count(*) FROM eval_runs") == 1
+    assert runner.RUNNING == set()
+
+
+async def _until(predicate, *, what: str, timeout: float = 10.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not predicate():
+        if asyncio.get_running_loop().time() > deadline:
+            raise AssertionError(f"timed out after {timeout}s waiting for {what}")
+        await asyncio.sleep(0.02)
+
+
+async def _scratch_count(pool) -> int:
+    return await pool.fetchval(
+        "SELECT count(*) FROM people WHERE role = $1 AND starts_with(name, $2)",
+        runner.SCRATCH_PERSON_ROLE,
+        runner.SCRATCH_PERSON_NAME,
+    )
+
+
+async def test_a_cancellation_mid_turn_still_deletes_the_scratch_person(pool, mount_peers):
+    """The live leak: starlette/anyio cancellation re-raises CancelledError at
+    EVERY await of the cancelled task, so run_case's cleanup used to die at
+    its first await (the /forget call) before DELETE FROM people — two
+    orphaned scratch rows were found in the running stack. The cleanup is now
+    its own shielded task: the case is cancelled mid-LLM-call here (an anyio
+    cancel scope, the exact delivery shape), the CancelledError still
+    propagates, and once the detached work has drained NO scratch person
+    remains — a plain task.cancel() would not exercise this (it delivers
+    once, so an unshielded finally would run anyway)."""
+    hold = asyncio.Event()
+    gateway = ScriptedGateway(rounds=((text("never delivered"),),), hold=hold, hold_before=0)
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    case = _case([PredicateSpec("reply_matches", r"anything")], cid="cancelled")
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(runner.run_case, app, pool, case, MODEL)
+        await _until(lambda: gateway.calls >= 1, what="the turn to reach the gateway")
+        assert await _scratch_count(pool) == 1  # mid-turn: the scratch person exists
+        tg.cancel_scope.cancel()
+
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+    assert await _scratch_count(pool) == 0
+    hold.set()
+
+
+async def test_a_cancelled_suite_job_closes_its_row_interrupted_and_cleans_up(
+    pool, mount_peers
+):
+    """Same delivery shape at the JOB level: a cancelled run_suite_job still
+    closes its row — 'interrupted', with the count of cases that had landed
+    stated — and leaves no scratch person and no 'running' row behind."""
+    hold = asyncio.Event()
+    gateway = ScriptedGateway(
+        rounds=((text("one"),), (text("never delivered"),)), hold=hold, hold_before=1
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    cases = [
+        _case([PredicateSpec("reply_matches", "one")], cid="first"),
+        _case([PredicateSpec("reply_matches", "two")], cid="second"),
+    ]
+    row = await runner.open_suite_run(pool, "corpus", 1, MODEL, len(cases))
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(runner.run_suite_job, app, pool, row["id"], cases, MODEL)
+        await _until(lambda: gateway.calls >= 2, what="the second case to reach the gateway")
+        tg.cancel_scope.cancel()
+
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+    after = await pool.fetchrow("SELECT status, error, ended_at FROM eval_suite_runs")
+    assert after["status"] == "interrupted"
+    assert "1 of 2" in after["error"]
+    assert after["ended_at"] is not None
+    assert await pool.fetchval("SELECT count(*) FROM eval_runs WHERE run_id = $1", row["id"]) == 1
+    assert await _scratch_count(pool) == 0
+    assert runner.RUNNING == set()
+    hold.set()
+
+
+class _Halt(BaseException):
+    """Not an Exception and not a cancellation — the KeyboardInterrupt /
+    SystemExit shape, without pytest's own handling of those two."""
+
+
+async def test_a_base_exception_in_the_job_still_closes_the_row_error_with_the_type(
+    pool, mount_peers, monkeypatch
+):
+    """A BaseException that is neither Exception nor CancelledError propagates
+    out of run_suite_job — but the row must still close, and close 'error'
+    WITH a reason: the table refuses a silent 'error'
+    (eval_suite_runs_error_states_why), so a close with error=NULL would trip
+    the CHECK, be logged as "could not close", and leave the row 'running'
+    until the next startup sweep."""
+    gateway = ScriptedGateway(rounds=((text("VRAM answer."),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    async def _halt(pool, person):
+        raise _Halt("the process is going down")
+
+    monkeypatch.setattr(runner, "_scratch_conversation", _halt)
+    cases = [_case([PredicateSpec("reply_matches", "VRAM")], cid="never")]
+    row = await runner.open_suite_run(pool, "corpus", 1, MODEL, len(cases))
+
+    with pytest.raises(_Halt):
+        await runner.run_suite_job(app, pool, row["id"], cases, MODEL)
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+
+    after = await pool.fetchrow("SELECT status, error, ended_at FROM eval_suite_runs")
+    assert after["status"] == "error"
+    assert "_Halt" in after["error"] and "0 of 1" in after["error"]
+    assert after["ended_at"] is not None
+    assert await _scratch_count(pool) == 0
+    assert runner.RUNNING == set()
+
+
+class _HeldIngestMemory(FakeMemory):
+    """FakeMemory whose /ingest parks until released — so a test can place a
+    cancellation BETWEEN the reply and the ingest landing."""
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.ingest_reached = asyncio.Event()
+        self.release_ingest = asyncio.Event()
+
+    async def _ingest(self, request):
+        self.ingest_reached.set()
+        await self.release_ingest.wait()
+        return await super()._ingest(request)
+
+
+async def test_a_cancellation_between_the_reply_and_its_ingest_still_forgets_the_journal(
+    pool, mount_peers
+):
+    """The scored path settles the turn's queued ingest before cleanup; a
+    cancellation landing after the reply but before that settle skipped it,
+    so cleanup's /forget could run BEFORE the ingest wrote the journal — a
+    404 from /forget, then the write, and the scratch journal outlived its
+    person. The cleanup task now settles first itself, on every path: here
+    the ingest is parked, the case is cancelled, and /forget is not attempted
+    until the ingest has landed — then it finds the file (200) and no journal
+    remains."""
+    memory = _HeldIngestMemory()
+    gateway = ScriptedGateway(rounds=((text("VRAM answer."),),))
+    mount_peers(gateway=gateway, memory=memory)
+    case = _case([PredicateSpec("reply_matches", "VRAM")], cid="between")
+
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(runner.run_case, app, pool, case, MODEL)
+        await asyncio.wait_for(memory.ingest_reached.wait(), timeout=10)
+        tg.cancel_scope.cancel()
+
+    # The cleanup is detached now; give an unsettled one time to reach /forget.
+    await asyncio.sleep(0.2)
+    assert memory.forgets == []  # nothing forgotten while the ingest is still in flight
+
+    memory.release_ingest.set()
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+    assert [f["status"] for f in memory.forget_results] == [200]
+    assert memory.journal_paths == set()  # the journal did not outlive its person
+    assert await _scratch_count(pool) == 0

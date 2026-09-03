@@ -41,6 +41,7 @@ _TABLES = (
     "governance_events",
     "consents",
     "eval_runs",
+    "eval_suite_runs",
     "turn_spans",
     "turns",
     "messages",

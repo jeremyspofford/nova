@@ -29,6 +29,7 @@ from app import (
     traces,
     workspace_api,
 )
+from app.evals import runner as eval_runner
 from app.identity import identity_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
@@ -56,6 +57,11 @@ async def lifespan(app: FastAPI):
     # the process that died — closed as 'interrupted' here, before any request
     # can read it as pending (traces.sweep_orphaned_turns says why).
     await traces.sweep_orphaned_turns(pool)
+    # Same fact for eval suite runs: a fresh process runs no jobs, so every
+    # 'running' eval_suite_runs row is a suite the dead process was mid-way
+    # through — closed 'interrupted' here, before the page can read it as
+    # live (runner.sweep_orphaned_suite_runs says why).
+    await eval_runner.sweep_orphaned_suite_runs(pool)
     try:
         yield
     finally:

@@ -680,6 +680,8 @@ export interface EvalCaseResult {
   ungradeable: boolean
   detail: EvalCaseDetail
   turn_id: string | null
+  /** When the row was persisted — present on every stored case. */
+  created_at?: string
 }
 
 export interface EvalScoreSummary {
@@ -691,95 +693,86 @@ export interface EvalScoreSummary {
   pass_rate: number | null
 }
 
+/** One suite run's record (eval_suite_runs, migration 016): the server-side
+ * job's truth. `status` is the fact the page reads — 'running' while the job
+ * holds it, then exactly one of 'done' (every case scored), 'error' (the job
+ * failed; `error` says why) or 'interrupted' (the core process running it
+ * exited first; `error` says so). */
+export type EvalRunStatus = 'running' | 'done' | 'error' | 'interrupted'
+
+export interface EvalSuiteRun {
+  id: string
+  suite: string
+  suite_version: number
+  model: string
+  status: EvalRunStatus
+  case_count: number
+  error: string | null
+  started_at: string
+  ended_at: string | null
+}
+
 export interface EvalRunResult {
   suite: string
   suite_version: number
   model: string
+  /** The complete run these cases belong to — null when none has finished
+   * for this (suite, version, model), in which case `cases` is empty. */
+  run: EvalSuiteRun | null
   cases: EvalCaseResult[]
   summary: EvalScoreSummary
 }
 
 /**
- * The latest stored run per case for (suite, model) at the suite's CURRENT
- * version — so the page shows prior results without re-running, and only ever
- * within one suite_version. Empty `cases` with a null pass_rate is the honest
- * "no runs yet" state, never a 0/0 score.
+ * The latest COMPLETE run for (suite, model) at the suite's CURRENT version —
+ * so the page shows prior results without re-running, only ever within one
+ * suite_version, and never a partial (interrupted/errored) run's rows blended
+ * with an older complete one's. Empty `cases` with a null pass_rate is the
+ * honest "no finished run yet" state, never a 0/0 score.
  */
 export async function getEvalRuns(suite: string, model: string): Promise<EvalRunResult> {
   const params = new URLSearchParams({ suite, model })
   return apiGet<EvalRunResult>(`/api/v1/evals/runs?${params.toString()}`)
 }
 
+/** What POST /evals/run answers (202): the run's id to poll. */
+export interface EvalRunStarted {
+  run_id: string
+  status: 'running'
+  case_count: number
+  suite: string
+  suite_version: number
+  model: string
+}
+
 /**
- * POST /api/v1/evals/run — run the suite against the model through the REAL
- * funnel and stream the outcome. Each case is a real turn (the model loads,
- * tools run), so a suite takes MINUTES; the route streams newline-delimited
- * JSON — one `{case}` per finished case, then a final `{summary,…}` — over the
- * same createLineBuffer the model pull uses.
- *
- * `onCase` fires as each case lands so the page fills its table live with REAL
- * progress (a case genuinely finished), never a fabricated percentage. Resolves
- * with the completed run once the summary line arrives. An `{error}` line (an
- * infra/harness failure mid-run) is thrown, and a stream that ends with no
- * summary is thrown too — a truncated run must never read as a finished score.
+ * POST /api/v1/evals/run — start a suite run as a SERVER-SIDE job and return
+ * at once. The run's truth is its database row, detached from this request:
+ * reloading, closing the tab or backgrounding the PWA no longer cancels a case
+ * mid-turn. Poll `getEvalRun(run_id)` for progress. A 409 (an ApiError with
+ * status 409) means a run is already active — one runs at a time, the GPU is
+ * shared — and the page attaches to that run (getActiveEvalRun) instead of
+ * showing an error.
  */
-export async function runEvalSuite(
-  suite: string,
-  model: string,
-  onCase?: (result: EvalCaseResult) => void,
-  signal?: AbortSignal,
-): Promise<EvalRunResult> {
-  const response = await request('/api/v1/evals/run', {
-    method: 'POST',
-    body: JSON.stringify({ suite, model }),
-    signal,
-  })
-  if (!response.body) {
-    throw new ApiError(0, 'the server answered the run with no stream to read')
-  }
+export async function startEvalRun(suite: string, model: string): Promise<EvalRunStarted> {
+  return apiSend<EvalRunStarted>('/api/v1/evals/run', 'POST', { suite, model })
+}
 
-  const reader = response.body.getReader()
-  const decoder = new TextDecoder()
-  const lines = createLineBuffer()
-  const cases: EvalCaseResult[] = []
-  let summary: EvalScoreSummary | null = null
-  let suiteVersion = 0
+/** GET /api/v1/evals/runs/active — the running suite run, or null. Read on
+ * mount so navigating away and back re-attaches to the same run. */
+export async function getActiveEvalRun(): Promise<EvalSuiteRun | null> {
+  return apiGet<EvalSuiteRun | null>('/api/v1/evals/runs/active')
+}
 
-  const handle = (raw: string) => {
-    const line = raw.trim()
-    if (line === '') return
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(line)
-    } catch {
-      throw new ApiError(0, `unreadable run line: ${line.slice(0, 200)}`)
-    }
-    const obj = parsed as Record<string, unknown>
-    if (obj.error) throw new ApiError(0, String(obj.error))
-    if (obj.case) {
-      const result = obj.case as EvalCaseResult
-      cases.push(result)
-      onCase?.(result)
-    } else if (obj.summary) {
-      summary = obj.summary as EvalScoreSummary
-      suiteVersion = Number(obj.suite_version)
-    }
-  }
+/** One run's record: the row, the cases persisted so far (suite order), and a
+ * summary ONLY once status is 'done' — null otherwise, so a partial run is
+ * never read as a score. */
+export interface EvalRunRecord {
+  run: EvalSuiteRun
+  cases: EvalCaseResult[]
+  summary: EvalScoreSummary | null
+}
 
-  try {
-    for (;;) {
-      const { done, value } = await reader.read()
-      if (done) break
-      for (const raw of lines.push(decoder.decode(value, { stream: true }))) handle(raw)
-    }
-    for (const raw of lines.flush()) handle(raw)
-  } finally {
-    reader.cancel().catch(() => {})
-  }
-
-  const finalSummary = summary
-  if (finalSummary === null) {
-    throw new ApiError(0, 'the run ended before a summary — it did not finish')
-  }
-  return { suite, suite_version: suiteVersion, model, cases, summary: finalSummary }
+export async function getEvalRun(runId: string): Promise<EvalRunRecord> {
+  return apiGet<EvalRunRecord>(`/api/v1/evals/runs/${encodeURIComponent(runId)}`)
 }

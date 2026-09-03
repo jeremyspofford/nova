@@ -4,12 +4,16 @@ import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { Badge, Button, CopyableId, EmptyState, Select, Skeleton } from '../../components/ui'
 import {
+  ApiError,
+  getActiveEvalRun as apiGetActiveEvalRun,
+  getEvalRun as apiGetEvalRun,
   getEvalRuns as apiGetEvalRuns,
   getEvalSuites as apiGetEvalSuites,
   getInstalledModels as apiGetInstalledModels,
   getSuggestion as apiGetSuggestion,
-  runEvalSuite as apiRunEvalSuite,
+  startEvalRun as apiStartEvalRun,
   type EvalCaseResult,
+  type EvalRunRecord,
   type EvalRunResult,
   type EvalScoreSummary,
   type EvalSuite,
@@ -38,9 +42,24 @@ import {
  * denominator is the gradeable set), never scored 0. With no results yet the
  * page shows an empty state, never a 0/0 dressed up as a score.
  *
- * The run is long — a suite is minutes of real turns — so it STREAMS: the API's
- * `runEvalSuite` calls `onCase` as each case genuinely finishes, and the table
- * fills in live. The progress is real completion, never a fabricated percentage.
+ * A run is a SERVER-SIDE JOB and this page is a VIEWER of its record. `Run`
+ * POSTs once, gets the run's id back at once (202), and polls the record every
+ * `pollMs` until it is terminal; the banner's count is the cases the server
+ * has genuinely persisted, never a fabricated percentage. Because the truth is
+ * the record, not this component: on mount the page asks whether a run is
+ * active and re-attaches to it — navigating away and back, reloading, or a
+ * second tab all show the same run, with Run disabled — and a 409 from Run
+ * (one runs at a time; the GPU is shared) attaches to the active run instead
+ * of raising an error. A run that ended 'error' or 'interrupted' states why and
+ * shows its partial cases as a partial, never as a score.
+ *
+ * A failed READ of the record is not a finished run: the job is the server's
+ * and keeps going whether or not this page can reach it (a backgrounded PWA
+ * resuming, a network blip). So a poll that fails keeps watching — the failure
+ * is stated inline in the banner and the next tick is scheduled — and the page
+ * detaches only on a 404, the one answer that says the record itself is gone.
+ * Detaching on any error re-enabled Run over a live job: the exact state the
+ * server-side job was built to end.
  *
  * `api` is the dependency-injection seam every page here uses: production takes
  * the real client (DEFAULT_API), a test injects fakes.
@@ -48,7 +67,9 @@ import {
 export interface QualityApi {
   getEvalSuites: typeof apiGetEvalSuites
   getEvalRuns: typeof apiGetEvalRuns
-  runEvalSuite: typeof apiRunEvalSuite
+  startEvalRun: typeof apiStartEvalRun
+  getActiveEvalRun: typeof apiGetActiveEvalRun
+  getEvalRun: typeof apiGetEvalRun
   getInstalledModels: typeof apiGetInstalledModels
   getSuggestion: typeof apiGetSuggestion
 }
@@ -56,16 +77,44 @@ export interface QualityApi {
 const DEFAULT_API: QualityApi = {
   getEvalSuites: apiGetEvalSuites,
   getEvalRuns: apiGetEvalRuns,
-  runEvalSuite: apiRunEvalSuite,
+  startEvalRun: apiStartEvalRun,
+  getActiveEvalRun: apiGetActiveEvalRun,
+  getEvalRun: apiGetEvalRun,
   getInstalledModels: apiGetInstalledModels,
   getSuggestion: apiGetSuggestion,
 }
+
+/** How often the live record is re-read while a run is 'running'. */
+export const DEFAULT_POLL_MS = 2000
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-export function AIQualityPage({ api = DEFAULT_API }: { api?: QualityApi } = {}) {
+/** A finished record's stated reason for not being 'done'. */
+function endedReason(record: EvalRunRecord): string {
+  const { status, error } = record.run
+  if (error) return error
+  return status === 'interrupted'
+    ? 'the run was interrupted before every case finished'
+    : `the run ended with status ${status}`
+}
+
+function asStored(record: EvalRunRecord, summary: EvalScoreSummary): EvalRunResult {
+  return {
+    suite: record.run.suite,
+    suite_version: record.run.suite_version,
+    model: record.run.model,
+    run: record.run,
+    cases: record.cases,
+    summary,
+  }
+}
+
+export function AIQualityPage({
+  api = DEFAULT_API,
+  pollMs = DEFAULT_POLL_MS,
+}: { api?: QualityApi; pollMs?: number } = {}) {
   const [suites, setSuites] = useState<EvalSuite[] | null>(null)
   const [installed, setInstalled] = useState<string[] | null>(null)
   const [curated, setCurated] = useState<SuggestedModel[] | null>(null)
@@ -73,16 +122,24 @@ export function AIQualityPage({ api = DEFAULT_API }: { api?: QualityApi } = {}) 
   const [model, setModel] = useState('')
   const [loadError, setLoadError] = useState<string | null>(null)
 
-  // Prior stored results for the current (suite, model) — shown before a fresh run.
+  // Prior stored results for the current (suite, model) — the latest COMPLETE
+  // run — shown when nothing is running or just finished.
   const [prior, setPrior] = useState<EvalRunResult | null>(null)
   const [priorLoading, setPriorLoading] = useState(false)
   const [priorError, setPriorError] = useState<string | null>(null)
 
-  // A live or just-finished run, which takes precedence over the stored results.
-  const [running, setRunning] = useState(false)
-  const [liveCases, setLiveCases] = useState<EvalCaseResult[]>([])
-  const [runResult, setRunResult] = useState<EvalRunResult | null>(null)
+  // The run this page is watching: its id while polling, the record as last
+  // read, and — once terminal — the record it finished as. `attaching` is
+  // true until the mount-time "is a run active?" read answers, so a click
+  // cannot race it into a second POST.
+  const [attaching, setAttaching] = useState(true)
+  const [watching, setWatching] = useState<string | null>(null)
+  const [record, setRecord] = useState<EvalRunRecord | null>(null)
+  const [finished, setFinished] = useState<EvalRunRecord | null>(null)
   const [runError, setRunError] = useState<string | null>(null)
+  // The last poll's failure, while still watching — cleared by the next read
+  // that lands. Never a reason to stop watching (see the module comment).
+  const [pollError, setPollError] = useState<string | null>(null)
 
   // Suites + the model catalog, once. Each read degrades on its own — a failed
   // catalog fetch just leaves the model dropdown thinner (mergeModels still
@@ -112,6 +169,80 @@ export function AIQualityPage({ api = DEFAULT_API }: { api?: QualityApi } = {}) 
     }
   }, [api])
 
+  // Attach to whatever run is active, from the record — this is what makes
+  // navigating away and back (or a reload) show the same run rather than an
+  // enabled Run button over a job that is still going.
+  useEffect(() => {
+    let live = true
+    api
+      .getActiveEvalRun()
+      .then(active => {
+        if (!live) return
+        if (active) {
+          setSuite(active.suite)
+          setModel(active.model)
+          setWatching(active.id)
+        }
+      })
+      .catch(err => {
+        if (live) setRunError(`could not read whether a run is active — ${reasonOf(err)}`)
+      })
+      .finally(() => {
+        if (live) setAttaching(false)
+      })
+    return () => {
+      live = false
+    }
+  }, [api])
+
+  // Poll the watched run's record until it is terminal. Each read is the
+  // server's own row: the cases it has persisted so far, and a summary only
+  // once it is 'done'.
+  useEffect(() => {
+    if (watching === null) return
+    let live = true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = async () => {
+      let next: EvalRunRecord
+      try {
+        next = await api.getEvalRun(watching)
+      } catch (err) {
+        if (!live) return
+        if (err instanceof ApiError && err.status === 404) {
+          // The record itself is gone — there is nothing left to watch.
+          setRunError(`the run's record is gone — ${reasonOf(err)}`)
+          setPollError(null)
+          setWatching(null)
+          return
+        }
+        // Any other failure is this page's, not the run's: keep watching,
+        // say the read failed, and read again on the next tick.
+        setPollError(reasonOf(err))
+        timer = setTimeout(tick, pollMs)
+        return
+      }
+      if (!live) return
+      setPollError(null)
+      setRecord(next)
+      if (next.run.status === 'running') {
+        timer = setTimeout(tick, pollMs)
+        return
+      }
+      setWatching(null)
+      setFinished(next)
+      if (next.run.status === 'done' && next.summary) {
+        setPrior(asStored(next, next.summary)) // the fresh run becomes the stored view
+      } else {
+        setRunError(endedReason(next))
+      }
+    }
+    void tick()
+    return () => {
+      live = false
+      if (timer !== undefined) clearTimeout(timer)
+    }
+  }, [api, watching, pollMs])
+
   const merged = mergeModels(model, installed, curated)
 
   // Default the model to the first the catalog offers, once one arrives. The
@@ -122,10 +253,11 @@ export function AIQualityPage({ api = DEFAULT_API }: { api?: QualityApi } = {}) 
   }, [model, merged])
 
   // Load the stored results whenever the (suite, model) pair changes, and clear
-  // any run from the previous pair so a stale run never shows under a new model.
+  // any finished run from the previous pair so a stale run never shows under a
+  // new model. A run being WATCHED is not cleared — it is the server's, not
+  // this pair's.
   useEffect(() => {
-    setRunResult(null)
-    setLiveCases([])
+    setFinished(null)
     setRunError(null)
     if (!suite || !model) {
       setPrior(null)
@@ -153,29 +285,40 @@ export function AIQualityPage({ api = DEFAULT_API }: { api?: QualityApi } = {}) 
     }
   }, [api, suite, model])
 
+  const running = watching !== null
+
   const run = useCallback(async () => {
-    if (!suite || !model || running) return
-    setRunning(true)
+    if (!suite || !model || running || attaching) return
     setRunError(null)
-    setRunResult(null)
-    setLiveCases([])
+    setPollError(null)
+    setFinished(null)
+    setRecord(null)
     try {
-      const result = await api.runEvalSuite(suite, model, c =>
-        setLiveCases(prev => [...prev, c]),
-      )
-      setRunResult(result)
-      setPrior(result) // the fresh run becomes the stored view for this pair
+      const started = await api.startEvalRun(suite, model)
+      setWatching(started.run_id)
     } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        // One at a time: another tab, or an earlier click, holds the slot.
+        // That run is the fact — attach to it rather than report an error.
+        try {
+          const active = await api.getActiveEvalRun()
+          if (active) {
+            setSuite(active.suite)
+            setModel(active.model)
+            setWatching(active.id)
+            return
+          }
+        } catch {
+          // fall through to the refusal's own stated reason
+        }
+      }
       setRunError(reasonOf(err))
-    } finally {
-      setRunning(false)
     }
-  }, [api, suite, model, running])
+  }, [api, suite, model, running, attaching])
 
   const caseCount = suites?.find(s => s.suite === suite)?.case_count ?? null
-  const suiteVersion = suites?.find(s => s.suite === suite)?.suite_version ?? null
 
-  const canRun = Boolean(suite) && Boolean(model) && !running
+  const canRun = Boolean(suite) && Boolean(model) && !running && !attaching
 
   return (
     <div>
@@ -248,13 +391,14 @@ export function AIQualityPage({ api = DEFAULT_API }: { api?: QualityApi } = {}) 
 
       <Results
         running={running}
-        liveCases={liveCases}
+        record={record}
+        pollError={pollError}
+        finished={finished}
         caseCount={caseCount}
-        runResult={runResult}
         prior={prior}
         priorLoading={priorLoading}
         priorError={priorError}
-        suiteVersion={suiteVersion}
+        suite={suite}
         model={model}
       />
     </div>
@@ -263,29 +407,33 @@ export function AIQualityPage({ api = DEFAULT_API }: { api?: QualityApi } = {}) 
 
 function Results({
   running,
-  liveCases,
+  record,
+  pollError,
+  finished,
   caseCount,
-  runResult,
   prior,
   priorLoading,
   priorError,
-  suiteVersion,
+  suite,
   model,
 }: {
   running: boolean
-  liveCases: EvalCaseResult[]
+  record: EvalRunRecord | null
+  pollError: string | null
+  finished: EvalRunRecord | null
   caseCount: number | null
-  runResult: EvalRunResult | null
   prior: EvalRunResult | null
   priorLoading: boolean
   priorError: string | null
-  suiteVersion: number | null
+  suite: string
   model: string
 }) {
-  // A run in progress takes precedence: show the cases that have finished so
-  // far with an honest "still running" banner, and NO percentage yet — nothing
-  // is scored until every case has landed.
-  if (running || (liveCases.length > 0 && runResult === null)) {
+  // A run in progress takes precedence: the cases the server has persisted so
+  // far under an honest "still running" banner, and NO percentage yet —
+  // nothing is scored until every case has landed.
+  if (running) {
+    const done = record?.cases.length ?? 0
+    const total = record?.run.case_count ?? caseCount
     return (
       <div>
         <div
@@ -294,25 +442,48 @@ function Results({
         >
           <Loader2 className="h-4 w-4 animate-spin text-accent" />
           <span>
-            Running {model} on {liveCases.length}
-            {caseCount !== null ? ` of ${caseCount}` : ''} case
-            {caseCount === 1 ? '' : 's'}… this runs real turns and can take a few minutes.
+            Running {record?.run.model ?? model} on {record?.run.suite ?? suite}: {done}
+            {total !== null ? ` of ${total}` : ''} case{total === 1 ? '' : 's'} finished… this
+            runs real turns and can take a few minutes. It keeps running if you leave this page.
           </span>
         </div>
-        {liveCases.length > 0 && <CaseTable cases={liveCases} />}
+        {pollError && (
+          <div
+            data-testid="eval-poll-error"
+            className="mb-4 rounded-sm border border-warning/30 bg-warning-dim px-4 py-3 text-compact text-warning"
+          >
+            Could not read the run's record — {pollError}. The run keeps going on the server;
+            reading it again…
+          </div>
+        )}
+        {record && record.cases.length > 0 && <CaseTable cases={record.cases} />}
       </div>
     )
   }
 
-  // A just-finished run.
-  if (runResult !== null) {
+  // A run that finished while this page watched it.
+  if (finished !== null) {
+    if (finished.run.status === 'done' && finished.summary) {
+      return (
+        <div>
+          <ScoreHeader
+            summary={finished.summary}
+            caption={`Just now · ${finished.run.model} · ${finished.run.suite} v${finished.run.suite_version}`}
+          />
+          <CaseTable cases={finished.cases} />
+        </div>
+      )
+    }
+    // Ended without finishing: the cases that landed are shown as a PARTIAL —
+    // the reason is in the alert above — never rolled up into a score.
     return (
-      <div>
-        <ScoreHeader
-          summary={runResult.summary}
-          caption={`Just now · ${runResult.model} · ${runResult.suite} v${runResult.suite_version}`}
-        />
-        <CaseTable cases={runResult.cases} />
+      <div data-testid="eval-partial">
+        <div className="mb-4 text-compact text-content-tertiary">
+          {finished.cases.length} of {finished.run.case_count} case
+          {finished.run.case_count === 1 ? '' : 's'} finished before the run ended{' '}
+          {finished.run.status} — no score. Run again to score {finished.run.model}.
+        </div>
+        {finished.cases.length > 0 && <CaseTable cases={finished.cases} />}
       </div>
     )
   }
@@ -336,7 +507,7 @@ function Results({
     )
   }
 
-  // Stored results from an earlier run of this exact (suite, model).
+  // Stored results: the latest COMPLETE run of this exact (suite, model).
   if (prior !== null && prior.cases.length > 0) {
     return (
       <div>

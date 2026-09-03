@@ -339,7 +339,7 @@ else
     report 1 "published port + cookie + forged Tailscale-User-{Login,Name,Profile-Pic}: core sees NONE of them" "$body"
   fi
   # ...on the streaming and WS locations too (each has its own header set).
-  for path in "/api/v1/chat/stream" "/api/v1/models/pull" "/api/v1/evals/run" "/api/v1/devices/ws"; do
+  for path in "/api/v1/chat/stream" "/api/v1/models/pull" "/api/v1/devices/ws"; do
     body="$(curl -s -b "nova_gate=$TOKEN" -H "Tailscale-User-Login: forged@example.com" "$FWD_BASE$path")"
     if printf '%s' "$body" | grep -qx 'login='; then
       report 0 "published port + forged Tailscale-User-Login on $path: core sees no login"

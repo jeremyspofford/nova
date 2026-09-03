@@ -60,6 +60,36 @@ model) — the AI Quality page shows both scores without a re-run.
   it. Pinned in test_eval_runner.py: two cases run in sequence never share a
   person_id, neither collides with the owner, and cleanup runs (row deleted,
   forget attempted) on both the ok and the ungradeable path.
+- **A suite run is a server-side job, not a response body — CLOSED
+  2026-09-03:** POST /evals/run used to run every case INSIDE a streaming
+  response; starlette cancels that generator the moment the socket closes,
+  so a reload / tab close / backgrounded PWA killed the run mid-LLM-call
+  (turn closed 'error', remaining cases never ran, the scratch person's
+  cleanup was re-cancelled before its DELETE — two orphans found live), and
+  the remounted page's enabled Run button let a second suite interleave on
+  the same GPU. Migration 016 adds `eval_suite_runs` (status running | done
+  | error | interrupted, a partial unique index making ONE running run a
+  database invariant) and `eval_runs.run_id`; the API INSERTs the row,
+  spawns `runner.run_suite_job` detached (chat._spawn, drained at shutdown)
+  and answers 202; GET /runs/active and GET /runs/{id} are what the page
+  polls (summary only when 'done'); GET /runs?suite&model is the latest
+  COMPLETE run, never latest-per-case across runs; startup sweeps stale
+  'running' rows to 'interrupted' beside the turns sweep; run_case's
+  scratch cleanup is shield-awaited so any cancellation still deletes the
+  person. The dedicated nginx `/api/v1/evals/run` streaming location is
+  gone with the stream. Legacy pre-016 eval_runs rows belong to no run and
+  are no longer shown as "latest results" (a partial cannot be told from a
+  complete one, so none is promoted). Review fixes, same day: a failed poll
+  keeps the page watching (detach only on a 404 — any other error had
+  re-enabled Run over a live job); the cleanup task settles the turn's
+  queued ingest itself before /forget, so a cancel landing between the reply
+  and its ingest cannot leave the scratch journal behind; a BaseException in
+  the job still closes its row 'error' with the type stated. Open: lifespan
+  shutdown drains a running job unbounded (uvicorn's graceful timeout bounds
+  only connections), so a redeploy mid-suite holds the old container for the
+  full timeout and the row is still SIGKILLed to 'running' (swept
+  'interrupted' at the next start — truthful, just slow); a later cut cancels
+  the job at shutdown and drains only its close/cleanup tasks.
 - **Nightly tournament + one-click Promote, champion/challenger self-coding
   gates, the full v3 suite set (voice/scheduling/skill/partition)** — later, per
   the slice plan's out-of-scope.
