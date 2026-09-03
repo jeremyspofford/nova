@@ -90,13 +90,14 @@ async def _enroll(
     return device_id
 
 
-def _ctx(person, *, conversation_id=None, sink=None) -> ToolContext:
+def _ctx(person, *, conversation_id=None, sink=None, facts=None) -> ToolContext:
     return ToolContext(
         app=None,
         person=person,
         workspace_root=Path("/tmp"),
         conversation_id=conversation_id,
         consent_sink=sink,
+        facts_sink=facts,
     )
 
 
@@ -408,3 +409,85 @@ async def test_the_executor_keeps_its_own_checks_without_the_precheck(pool, monk
 async def test_the_executor_alone_still_refuses_an_unknown_device(pool):
     with pytest.raises(ToolFailure):
         await tools.REGISTRY["device_info"].executor({"device": "nobody"}, _ctx(None))
+
+
+# -- the facts channel: a refusal that DETERMINED connectivity says so ---------
+#
+# Review finding C1. The per-device layer is the ONE place core decides whether
+# a machine's socket is live, and it decides it just as much when it then
+# refuses. Downstream (the chat turn's state-claim guard) has to be able to tell
+# "it checked and the machine is offline" from "it never looked", and the only
+# honest way is a structured record written where the decision happens — never a
+# caller sniffing "not connected" out of a refusal string. Without it an honest
+# "I ran it and it came back not connected" is CORRECTED and REPLACED, which is
+# the worst thing that guard can do.
+
+
+async def test_an_offline_device_records_connected_false_before_refusing(pool):
+    """The device is not in the hub. The precheck refuses — and records the
+    connectivity it just determined, for the refusal path."""
+    await _enroll(pool, name="laptop", capabilities=["shell.exec"])
+    person = await _person(pool)
+    facts: list[dict] = []
+
+    result, ok = await tools.dispatch(
+        "device_run",
+        {"device": "laptop", "argv": ["ls"]},
+        _ctx(person, facts=facts),
+    )
+
+    assert ok is False
+    assert "not connected" in result
+    assert facts == [{"device": "laptop", "connected": False}]
+
+
+async def test_an_ungranted_call_on_a_CONNECTED_device_records_connected_true(pool):
+    """Connectivity PASSED and the grant check then refused. The fact was still
+    determined, so it is still recorded — that is what makes "the device is
+    online" a report of a real read rather than an unbacked claim."""
+    device_id = await _enroll(pool, name="laptop", capabilities=["system.info"])
+    devices_ws.hub.register(device_id, FakeWSConn())
+    person = await _person(pool)
+    facts: list[dict] = []
+
+    result, ok = await tools.dispatch(
+        "device_run",
+        {"device": "laptop", "argv": ["ls"]},
+        _ctx(person, facts=facts),
+    )
+
+    assert ok is False
+    assert "has not been granted shell.exec" in result
+    assert facts == [{"device": "laptop", "connected": True}]
+
+
+async def test_an_unknown_device_name_determines_nothing_and_records_nothing(pool):
+    """`_resolve` refuses BEFORE connectivity is looked at. Nothing was settled,
+    so nothing is recorded — and nothing downstream may treat it as a check."""
+    await _enroll(pool, name="laptop", capabilities=["shell.exec"])
+    person = await _person(pool)
+    facts: list[dict] = []
+
+    result, ok = await tools.dispatch(
+        "device_run",
+        {"device": "nope", "argv": ["ls"]},
+        _ctx(person, facts=facts),
+    )
+
+    assert ok is False
+    assert "no paired device named" in result
+    assert facts == []
+
+
+async def test_a_missing_facts_sink_changes_nothing(pool):
+    """The channel is optional: a caller that passes none still gets the same
+    refusal, and nothing raises."""
+    await _enroll(pool, name="laptop", capabilities=["shell.exec"])
+    person = await _person(pool)
+
+    result, ok = await tools.dispatch(
+        "device_run", {"device": "laptop", "argv": ["ls"]}, _ctx(person)
+    )
+
+    assert ok is False
+    assert "not connected" in result

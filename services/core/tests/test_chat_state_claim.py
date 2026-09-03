@@ -138,6 +138,30 @@ async def _arm_device_probe(pool, monkeypatch) -> DeviceSpy:
     return spy
 
 
+async def _arm_consent_device_tool(pool, monkeypatch) -> DeviceSpy:
+    """A private CONSENT-disposition device tool: calling it raises a card,
+    which closes the tool loop for the rest of the turn (review I2)."""
+    spy = DeviceSpy("never reached")
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "device_gate",
+        Tool(
+            "device_gate",
+            "A device action that needs approval.",
+            {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+            spy,
+        ),
+    )
+    await pool.execute(
+        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
+        "consecutive_successes) VALUES ($1, 'device', 'consent', false, 0) "
+        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'consent', "
+        "earned = false, consecutive_successes = 0, updated_at = now()",
+        "device_gate",
+    )
+    return spy
+
+
 # -- the headline: the claim fires, and the redirect actually checks --------
 
 
@@ -394,3 +418,138 @@ async def test_a_successful_consent_redirect_skips_the_state_guard_entirely(
     assert [s["name"] for s in await _guard_spans(pool)] == ["consent_claim"]
     assert await _stored(pool) == answer
     assert _corrections(sent) == [chat.CONSENT_REDIRECT_NOTE]
+
+
+# -- review C1: an offline device refuses every tool, and that IS a check ------
+
+
+async def test_a_refused_not_connected_call_backs_an_offline_report(
+    owner_client, pool, mount_peers
+):
+    """The guard's worst failure mode, closed. The device is paired and NOT in
+    the hub, so device_run refuses at the precheck ("not connected — its tile is
+    stale"): ok=False, but connectivity WAS determined. The model then honestly
+    reports the machine is offline. No guard may fire, no redirect may run, and
+    the true reply must persist verbatim — correcting it would make the guard
+    the liar in exactly the scenario it exists for."""
+    await _pair(pool)
+    honest = f"I ran the check and it came back not connected — {DEVICE} is offline."
+    gateway = ScriptedGateway(
+        rounds=(
+            (tool_call("d1", "device_run", {"device": DEVICE, "argv": ["ls"]}),),
+            (text(honest),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+
+    assert gateway.calls == 2  # no redirect: a third call would be a loud 500
+    # The refusal really happened, and it carried the structured fact.
+    span = await pool.fetchrow(
+        "SELECT name, meta FROM turn_spans WHERE kind = 'tool' ORDER BY started_at"
+    )
+    assert span["name"] == "device_run"
+    assert span["meta"]["ok"] is False
+    assert span["meta"]["facts"] == [{"device": DEVICE, "connected": False}]
+
+    assert [s["name"] for s in await _guard_spans(pool)] == []
+    assert _corrections(sent) == []
+    assert await _stored(pool) == honest
+
+
+async def test_a_no_such_device_refusal_still_leaves_the_claim_unchecked(
+    owner_client, pool, mount_peers
+):
+    """The other half: an unknown name refuses BEFORE connectivity is looked at,
+    so it settles nothing and backs nothing — the guard still fires."""
+    await _pair(pool)
+    gateway = ScriptedGateway(
+        rounds=(
+            (tool_call("d1", "device_run", {"device": "nope", "argv": ["ls"]}),),
+            (text(OWNER_CASE),),
+            (text("The device is still offline."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client)
+
+    span = await pool.fetchrow(
+        "SELECT meta FROM turn_spans WHERE kind = 'tool' ORDER BY started_at"
+    )
+    assert "facts" not in span["meta"]
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["state_claim"]
+    assert spans[0]["meta"]["redirected"] is False
+
+
+# -- review I2: no redirect, and no dispatch, once a card is up ----------------
+
+
+async def test_no_redirect_once_a_card_is_pending(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """A consent-tier call raises a card, which CLOSES the tool loop; the closed
+    narration round then asserts an unchecked device state. The state guard
+    fires — and must NOT redirect, because a redirect could dispatch work the
+    operator is still deciding about. The correction ships, the span says why,
+    and the spy proves nothing ever ran."""
+    spy = await _arm_consent_device_tool(pool, monkeypatch)
+    await _pair(pool)
+    gateway = ScriptedGateway(
+        rounds=(
+            (tool_call("c1", "device_gate", {}),),
+            (text(OWNER_CASE),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+
+    assert gateway.calls == 2  # no redirect round at all
+    assert spy.calls == []  # nothing dispatched, in the round OR a redirect
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["state_claim"]
+    assert spans[0]["meta"]["redirected"] is False
+    assert spans[0]["meta"]["not_redirected_because"] == "card_raised"
+    assert guards.STATE_CLAIM_CORRECTION in _corrections(sent)
+
+
+# -- review M5: a tool call in the redirect's CLOSING round is refused ---------
+
+
+async def test_a_tool_call_in_the_redirects_closing_round_is_refused(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """The redirect gets ONE attempt at the action. Its closing round advertises
+    no tools; a call it makes anyway used to be dropped silently. It is now
+    refused through the shared _refuse_call and recorded as a span, so the trace
+    shows the call and why it did not run — and the spy proves it ran once, not
+    twice."""
+    spy = await _arm_device_probe(pool, monkeypatch)
+    await _pair(pool)
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(OWNER_CASE),),
+            (tool_call("r1", "device_probe", {}),),
+            (tool_call("r2", "device_probe", {}),),  # the closing round asks again
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client)
+
+    assert spy.calls == [{}]  # dispatched exactly ONCE
+    refused = [
+        row
+        for row in await pool.fetch(
+            "SELECT name, meta FROM turn_spans WHERE kind = 'tool' ORDER BY started_at"
+        )
+        if row["meta"].get("refused_redirect_closed") is True
+    ]
+    assert len(refused) == 1
+    assert refused[0]["meta"]["ok"] is False
+    assert refused[0]["meta"]["error"] == chat.REDIRECT_CLOSED_REFUSAL
+    spans = await _guard_spans(pool)
+    assert spans[0]["meta"]["refused_calls"] == 1

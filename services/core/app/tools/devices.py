@@ -90,11 +90,23 @@ async def _resolve(pool, name: object):
     return row
 
 
-def _require_connected(row) -> None:
+def _require_connected(row, ctx: ToolContext | None = None) -> None:
     """Refuse unless the device's socket is live in the hub right now. The same
     words hub.command uses for a socket that is gone by the time it sends, so
-    the model reads one refusal for one fact whichever layer states it."""
-    if not devices_ws.hub.is_connected(row["id"]):
+    the model reads one refusal for one fact whichever layer states it.
+
+    This is also the ONE place core DETERMINES a device's connectivity, so it is
+    where that fact is recorded on `ctx.facts_sink` — for BOTH outcomes, before
+    the refusal is raised. A refusal is still a check: "I ran it and it came back
+    not connected" is a TRUE report of a live read, and without this record the
+    state-claim guard would correct it (a false correction of an honest reply is
+    the worst thing that guard can do). Structured, so nothing downstream ever
+    has to read a refusal string to learn what happened.
+    """
+    connected = devices_ws.hub.is_connected(row["id"])
+    if ctx is not None and ctx.facts_sink is not None:
+        ctx.facts_sink.append({"device": row["name"], "connected": connected})
+    if not connected:
         raise ToolFailure(
             f"device {row['name']!r} is not connected — its tile is stale; check it is "
             "powered on and online"
@@ -135,15 +147,23 @@ def _check_fs_path(row, path: object) -> str:
     )
 
 
-async def _admit(args: dict, capability: str, *, fs_path: bool = False):
+async def _admit(
+    args: dict, capability: str, *, ctx: ToolContext | None = None, fs_path: bool = False
+):
     """The per-device layer, in order: paired (not revoked) -> connected ->
     granted `capability` -> (fs tools) path inside a granted root. Returns
     (pool, row, normalized path or None) for an executor to send with; raises
     ToolFailure to refuse. This is the ONLY place the order lives, so the
-    precheck and the executor cannot drift apart."""
+    precheck and the executor cannot drift apart.
+
+    `ctx` is threaded through only so `_require_connected` can record the
+    connectivity it determined on the turn's facts_sink; nothing here reads it
+    to DECIDE anything. An unknown/revoked name refuses at `_resolve`, before
+    connectivity is looked at, so it records nothing — it determined nothing.
+    """
     pool = await db.get_pool()
     row = await _resolve(pool, args["device"])
-    _require_connected(row)
+    _require_connected(row, ctx)
     _require_grant(row, capability)
     path = _check_fs_path(row, args["path"]) if fs_path else None
     return pool, row, path
@@ -155,7 +175,7 @@ def _precheck(capability: str, *, fs_path: bool = False):
     docstring for why it runs here as well as in the executor."""
 
     async def precheck(args: dict, ctx: ToolContext) -> None:
-        await _admit(args, capability, fs_path=fs_path)
+        await _admit(args, capability, ctx=ctx, fs_path=fs_path)
 
     return precheck
 
@@ -217,38 +237,38 @@ async def device_list(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_info(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "system.info")
+    pool, row, _ = await _admit(args, "system.info", ctx=ctx)
     result = _require_ok(await _command(pool, row, "system.info", {}), row)
     detail = result.get("output") or "(the device returned no detail)"
     return f"{row['name']} system info:\n{detail}"
 
 
 async def device_list_files(args: dict, ctx: ToolContext) -> str:
-    pool, row, path = await _admit(args, "fs.list", fs_path=True)
+    pool, row, path = await _admit(args, "fs.list", ctx=ctx, fs_path=True)
     result = _require_ok(await _command(pool, row, "fs.list", {"path": path}), row)
     return f"{row['name']} {path}:\n{result.get('output') or '(empty)'}"
 
 
 async def device_read_file(args: dict, ctx: ToolContext) -> str:
-    pool, row, path = await _admit(args, "fs.read", fs_path=True)
+    pool, row, path = await _admit(args, "fs.read", ctx=ctx, fs_path=True)
     result = _require_ok(await _command(pool, row, "fs.read", {"path": path}), row)
     return f"{row['name']}:{path}\n{result.get('output') or '(empty file)'}"
 
 
 async def device_list_apps(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "apps.list")
+    pool, row, _ = await _admit(args, "apps.list", ctx=ctx)
     result = _require_ok(await _command(pool, row, "apps.list", {}), row)
     return f"Apps on {row['name']}:\n{result.get('output') or '(none reported)'}"
 
 
 async def device_notify(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "system.notify")
+    pool, row, _ = await _admit(args, "system.notify", ctx=ctx)
     _require_ok(await _command(pool, row, "system.notify", {"message": args["message"]}), row)
     return f"Sent a notification to {row['name']}."
 
 
 async def device_run(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "shell.exec")
+    pool, row, _ = await _admit(args, "shell.exec", ctx=ctx)
     argv = args["argv"]
     result = _require_ok(await _command(pool, row, "shell.exec", {"argv": argv}), row)
     exit_code = result.get("exit_code")
@@ -257,7 +277,7 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_write_file(args: dict, ctx: ToolContext) -> str:
-    pool, row, path = await _admit(args, "fs.write", fs_path=True)
+    pool, row, path = await _admit(args, "fs.write", ctx=ctx, fs_path=True)
     content = args["content"]
     if not isinstance(content, str):
         raise ToolFailure("the 'content' argument must be a string")
@@ -277,7 +297,7 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_launch_app(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "apps.launch")
+    pool, row, _ = await _admit(args, "apps.launch", ctx=ctx)
     _require_ok(await _command(pool, row, "apps.launch", {"app": args["app"]}), row)
     return f"Launched {args['app']} on {row['name']}."
 

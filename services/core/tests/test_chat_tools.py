@@ -555,6 +555,68 @@ async def test_a_tool_call_in_the_narration_round_is_refused_not_dispatched(
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
+async def test_a_replace_class_correction_cannot_swallow_the_cap_note(
+    owner_client, pool, mount_peers, workspace
+):
+    """Review I1: FIX A must not undo FIX B. The narration round answers with an
+    unchecked device-state claim, so the state guard fires and its correction
+    REPLACES the model's prose — which is right, but the cap note is the
+    BACKEND's record that the turn stopped early, not the model's prose, and it
+    must survive. Without this the operator cannot tell a capped turn from an
+    ordinary one."""
+    await pool.execute(
+        "INSERT INTO devices (name, platform, hostname, pubkey) "
+        "VALUES ('DELL-XPS-8950', 'linux', 'dell', $1)",
+        "a" * 64,
+    )
+    # A tool that does not exist: refused, so NOTHING ran successfully — the
+    # redirect is then blocked by the round cap itself, which is the precondition
+    # under test (a successful call would block it earlier, for another reason).
+    forever = (whole_call("c", "no_such_tool", {}),)
+    claim = "The device is still offline."
+    gateway = ScriptedGateway(rounds=(forever, forever, (text(claim),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await _set(owner_client, "agents.max_tool_rounds", 2)
+
+    sent = await _say(owner_client)
+
+    # No redirect: an out-of-rounds turn gets no extra dispatch.
+    assert gateway.calls == 3
+    guard_spans = [row for row in await _spans(pool, "guard")]
+    assert [row["name"] for row in guard_spans] == ["state_claim"]
+    assert guard_spans[0]["meta"]["not_redirected_because"] == "out_of_rounds"
+
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == (
+        "Correction: I did not actually check the device this turn — I have no "
+        "record of doing so.\n\n[stopped after 2 tool rounds without finishing]"
+    )
+    assert claim not in stored
+    assert texts(sent)[-1].endswith("[stopped after 2 tool rounds without finishing]")
+
+
+async def test_the_deferral_redirect_is_gated_on_the_round_cap(
+    owner_client, pool, mount_peers, workspace
+):
+    """Review M2: the deferral redirect was not gated on out_of_rounds, so a
+    capped narration that says "let me search" earned a fourth gateway call
+    whose nudge told the model to call a tool the capped round was not even
+    offered — and whose success path replaced (and so discarded) the cap note.
+    It is gated now: three gateway calls, no deferral span, note intact."""
+    forever = (whole_call("c", "get_time", {}),)
+    defer = "Let me search the web for the rest of that."
+    gateway = ScriptedGateway(rounds=(forever, forever, (text(defer),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await _set(owner_client, "agents.max_tool_rounds", 2)
+
+    await _say(owner_client)
+
+    assert gateway.calls == 3  # a fourth would be the deferral redirect
+    assert [row["name"] for row in await _spans(pool, "guard")] == []
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == f"{defer}\n\n[stopped after 2 tool rounds without finishing]"
+
+
 async def test_the_default_round_cap_is_six(owner_client):
     resp = await owner_client.get("/api/v1/settings")
     defs = {item["key"]: item for item in resp.json()["settings"]}

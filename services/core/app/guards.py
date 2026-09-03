@@ -1170,10 +1170,23 @@ def deferral_check(
 #     (devices.list_devices), never a list kept here — a household with no
 #     paired devices can have no such claim, so the guard never fires there, and
 #     pairing a machine arms it by itself.
-#   * Backing is any successful span whose tool name starts with `device_`. That
-#     is the naming of every device tool in the registry (app/tools/devices.py),
-#     so a device tool shipped tomorrow backs the claim the day it lands rather
-#     than the day someone remembers to add it to a set here.
+#   * Backing is any span whose tool name starts with `device_` that either
+#     SUCCEEDED or RECORDED a connectivity fact. That prefix is the naming of
+#     every device tool in the registry (app/tools/devices.py), so a device tool
+#     shipped tomorrow backs the claim the day it lands rather than the day
+#     someone remembers to add it to a set here.
+#
+#     The second half is the fix for the guard's worst failure mode, found in
+#     adversarial review: when the device really IS offline, EVERY device tool
+#     refuses at the precheck ("not connected — its tile is stale") with
+#     ok=False. A model that then honestly says "I ran it and it came back not
+#     connected — X is offline" would be corrected, its true reply REPLACED by
+#     "I did not actually check", systematically, in the exact scenario the
+#     guard exists for. A refusal that DETERMINED connectivity is a check. It is
+#     read from the structured fact the per-device layer records
+#     (ToolContext.facts_sink -> span.meta["facts"], each {"device", "connected"}),
+#     never by sniffing the refusal's prose. A refusal that determined nothing —
+#     "no paired device named X" — records nothing and backs nothing.
 #
 # Built to the family's two rules: PURE (text + spans + the names; no model,
 # network or clock) and PRECISION-first (a wrongly-corrected honest reply makes
@@ -1188,8 +1201,19 @@ def deferral_check(
 #     asserted about the present.
 #   * No QUESTIONS and no REPORTED speech ("you said the device is offline"),
 #     via the same _clauses/_REPORTED machinery the other guards use.
-#   * The SUBJECT must be a device: a bare device noun ("the device", "your
-#     machine") or a paired device's own name. A bare pronoun is never enough.
+#   * The SUBJECT must be a device THIS household has: a paired device's own
+#     name, or the one unambiguous vocabulary word "the/your/this/that device".
+#     Nothing else. Bare machine nouns (laptop, computer, machine, desktop, PC)
+#     were removed in review: with one machine paired they fired on "your laptop
+#     is probably asleep", which need not be about a paired device at all — and
+#     this guard REPLACES the reply it corrects, so a false positive costs more
+#     than any miss.
+#   * The STATE must be unambiguously about CONNECTIVITY. Polysemous words were
+#     removed in the same review: "up" (up to date), "down" (down for
+#     maintenance), "available" (available for pickup) and "connected" (connected
+#     to the projector) all produced REPLACE-class false positives. "connected"
+#     survives only in shapes that cannot be read another way (clause end, "right
+#     now", "again", "to the network").
 
 # The stated correction. MECHANISM-NEUTRAL and honest: it says only what is
 # mechanically true (no device tool ran this turn), never why, and never what
@@ -1203,9 +1227,13 @@ STATE_CLAIM_CORRECTION = (
 # section header), which is why this is a prefix and not a frozenset.
 _DEVICE_SPAN_PREFIX = "device_"
 
-# A bare device noun, and the determiners that may head it or a device NAME.
-_DEVICE_NOUN = r"(?:devices?|machines?|computers?|laptops?|desktops?|pcs?|boxes?)"
-_DEVICE_DET = r"(?:the|your|my|that|this)"
+# The ONLY bare noun that counts, and the determiners that may head it or a
+# device NAME. "device" alone, deliberately: it is the assistant's own word for
+# a paired machine (the tools, the settings page and the refusals all say
+# "device"), whereas laptop/computer/machine/desktop/PC are ordinary English
+# about any hardware — see the section header.
+_DEVICE_NOUN = r"(?:devices?)"
+_DEVICE_DET = r"(?:the|your|that|this)"
 # PRESENT-tense copulas only. "was"/"were" are deliberately absent: a past report
 # is not a claim about now, and leaving them out is the whole past-tense cut.
 # The present perfect forms ("has gone offline", "has been unreachable") DO
@@ -1222,11 +1250,16 @@ _STATE_ADVERB = (
     r"(?:still|currently|now|again|apparently|probably|likely|definitely"
     r"|no\s+longer|back|not|already|actually|indeed)"
 )
-# The connectivity/availability states themselves.
+# The states themselves — UNAMBIGUOUSLY about connectivity, and nothing else.
+# "connected" is the one word that needs a shape test rather than a ban: it is a
+# real connectivity state ("the device is connected.") and also an ordinary
+# transitive verb ("the device is connected to the projector"), so it counts
+# only at a clause end or in front of the few adverbials that can only mean the
+# link ("right now", "again", "to the network").
 _STATE_WORD = (
-    r"(?:offline|online|disconnected|connected|unreachable|reachable|unavailable"
-    r"|available|stale|down|up|responding|responsive|awake|asleep|powered\s+on"
-    r"|powered\s+off|out\s+of\s+contact)"
+    r"(?:offline|online|disconnected|unreachable|not\s+reachable|stale"
+    r"|out\s+of\s+contact|powered\s+(?:on|off)"
+    r"|connected(?=\s*(?:[.,;:!?)\]}]|$)|\s+(?:right\s+now|again|to\s+the\s+network)\b))"
 )
 # A hedge/subordinator BEFORE the assertion — nothing is being asserted about
 # the present ("if the device is offline…", "once the machine is online…").
@@ -1288,13 +1321,39 @@ def _state_patterns(names: tuple[str, ...]) -> tuple[re.Pattern[str], re.Pattern
     return assertion, last_seen
 
 
+def _determined_connectivity(span: Any) -> bool:
+    """True if this span carries a structured connectivity fact — the record the
+    per-device layer writes the moment it decides whether a machine's socket is
+    live, for BOTH outcomes (app/tools/base.py ToolContext.facts_sink). Read as
+    data, never as prose: no refusal string is ever inspected."""
+    facts = (getattr(span, "meta", None) or {}).get("facts")
+    if not isinstance(facts, list):
+        return False
+    return any(isinstance(fact, dict) and "connected" in fact for fact in facts)
+
+
 def _checked_a_device(spans: Sequence[Any]) -> bool:
-    """Did a device tool actually SUCCEED this turn? The same `_successful`
-    filter every other guard uses, narrowed by the device_* naming."""
-    return any(
-        str(getattr(span, "name", "") or "").startswith(_DEVICE_SPAN_PREFIX)
-        for span in _successful(spans)
-    )
+    """Did this turn actually LOOK at a device? Two ways, both mechanical:
+
+      * a successful device_* span (the ordinary case), or
+      * a device_* span that DETERMINED connectivity and then refused — an
+        offline machine refuses every device tool at the precheck, and that
+        refusal is exactly the check the reply is reporting (see the section
+        header; this is the guard's worst failure mode without it).
+
+    A device_* span that settled nothing — an unknown device name, a schema
+    refusal — backs nothing.
+    """
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        name = str(getattr(span, "name", "") or "")
+        if not name.startswith(_DEVICE_SPAN_PREFIX):
+            continue
+        meta = getattr(span, "meta", None) or {}
+        if meta.get("ok") is True or _determined_connectivity(span):
+            return True
+    return False
 
 
 def _state_prefix_blocks(before: str) -> bool:

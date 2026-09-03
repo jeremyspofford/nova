@@ -42,6 +42,18 @@ class ToolContext:
     `consent_sink`, when present, is the return channel for a raised card: the
     funnel appends each card_spec it raises so the caller (the chat loop / T2's
     inline card) can surface it without changing dispatch's (text, ok) result.
+
+    `facts_sink` is the same idiom for FACTS A CALL DETERMINED, whether or not
+    it then ran. It exists because a REFUSAL can settle a fact: a device tool
+    refused with "not connected — its tile is stale" has *established* that the
+    machine is offline, and a caller that reads only ok=True would treat the
+    honest reply "I checked and it is offline" as unbacked and correct a TRUE
+    sentence (the state-claim guard's worst failure mode). So the per-device
+    layer appends {"device": <name>, "connected": <bool>} the moment it decides
+    connectivity — True when the check passes, even if a later grant/path check
+    then refuses; False when it does not. A refusal that settles NOTHING (an
+    unknown device name) appends nothing. Structured, never prose: no caller
+    ever sniffs a refusal string.
     """
 
     app: Any
@@ -50,6 +62,7 @@ class ToolContext:
     agent: str = "chat"
     conversation_id: uuid.UUID | None = None
     consent_sink: list[dict] | None = None
+    facts_sink: list[dict] | None = None
 
 
 @dataclass(frozen=True)

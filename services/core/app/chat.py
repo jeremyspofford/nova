@@ -193,6 +193,13 @@ PENDING_APPROVAL_NOTE = "[waiting for your approval before continuing]"
 OUT_OF_ROUNDS_REFUSAL = (
     f"{tools.ERROR_PREFIX}out of tool rounds — answer with what you have"
 )
+# A tool call emitted in a redirect round that advertised NO tools. Like the two
+# above it is REFUSED, never dispatched: a redirect gets one attempt at the
+# action and then must speak, and a closing round that quietly ran a tool would
+# be a dispatch nobody authorised and nobody would ever read the result of.
+REDIRECT_CLOSED_REFUSAL = (
+    f"{tools.ERROR_PREFIX}the redirect's tool round is over — answer with what you have"
+)
 OUT_OF_ROUNDS_NUDGE = (
     "You have used every tool round for this turn and no further tool will run. "
     "Answer now with what the tool results above already give you, and say "
@@ -746,8 +753,16 @@ async def _run_tool(
     span records `consent_pending` and deliberately leaves `error` UNSET, so the
     Activity page renders it as pending, not as a red error (the funnel's own
     S3-T1 contract: REQUIRE_CONSENT → ok=False but not an Error).
+
+    Any FACTS the call determined (ToolContext.facts_sink) are copied onto the
+    span the same way — by diffing the sink across the call, never by reading
+    the result text. That is what lets a REFUSAL count as a real check: a device
+    tool refused with "not connected" established the machine is offline, and
+    the span carries `facts: [{"device": …, "connected": false}]` so a guard can
+    tell "it checked and reports offline" from "it never looked".
     """
     sink = ctx.consent_sink
+    facts = ctx.facts_sink
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"] = _span_arguments(call.arguments)
         # Pre-set, and overwritten the moment dispatch answers. A turn the
@@ -757,9 +772,14 @@ async def _run_tool(
         span.meta["ok"] = False
         span.meta["result_head"] = "(the turn ended before this call returned)"
         before = len(sink) if sink is not None else 0
+        facts_before = len(facts) if facts is not None else 0
         result, ok = await tools.dispatch(call.name, call.arguments, ctx)
         span.meta["ok"] = ok
         span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        if facts is not None and len(facts) > facts_before:
+            # Exactly what THIS call settled — the sink is append-only for the
+            # turn, so the slice beyond the mark is this call's own contribution.
+            span.meta["facts"] = list(facts[facts_before:])
         awaiting = sink is not None and len(sink) > before
         if awaiting:
             # A card is waiting on the operator — not an error. ok stays False
@@ -843,6 +863,13 @@ def _refuse_pending(turn: traces.Turn, call: ToolCall) -> str:
 def _refuse_out_of_rounds(turn: traces.Turn, call: ToolCall) -> str:
     """The out-of-rounds narration round's refusal."""
     return _refuse_call(turn, call, OUT_OF_ROUNDS_REFUSAL, "refused_out_of_rounds")
+
+
+def _refuse_redirect_closed(turn: traces.Turn, calls: Sequence[ToolCall]) -> None:
+    """Every tool call a redirect made in a round that advertised no tools:
+    refused and recorded, never dispatched, never silently dropped."""
+    for call in calls:
+        _refuse_call(turn, call, REDIRECT_CLOSED_REFUSAL, "refused_redirect_closed")
 
 
 # -- the opt-in responsiveness check ---------------------------------------
@@ -1291,6 +1318,7 @@ async def _claim_redirect(
     span_meta: dict,
     nudge_for: Callable[[bool], str],
     redirect_note: str,
+    card_raised: bool,
     out_of_rounds: bool,
     messages: Sequence[dict],
     advertised: Sequence[dict],
@@ -1318,15 +1346,27 @@ async def _claim_redirect(
         correction persists exactly as before, the turn stays plumbing (not
         ingested), and the span names the rejecting guard. redirected=False.
 
-    Two mechanical PRECONDITIONS, checked before anything is generated, because
+    Three mechanical PRECONDITIONS, checked before anything is generated, because
     a redirect is an ACTION and not just a re-word:
 
+      * NO CARD IS UP. Once a call has raised an approval card the tool loop is
+        CLOSED for the rest of the turn; a redirect that dispatched anything
+        after that would run work the operator is still deciding about. (The
+        consent guard cannot fire with a card up — has_pending_consent is then
+        True — but the STATE guard can: a closed narration round that says "the
+        device is offline" is exactly the shape, and review found this door open.)
       * NOTHING RAN YET (guards.ran_a_tool over this turn's spans). If round 1
         really executed the tool and round 2 merely narrated about it,
         redirecting would run it a SECOND time — a duplicated side effect, which
         is worse than the lie it was correcting.
       * THE TURN IS NOT OUT OF ROUNDS. A turn that hit its round cap must not
         get one more dispatch through a side door.
+
+    And inside the redirect the same rule holds mechanically rather than by
+    assumption: a tool call emitted in a round that advertised NO tools — the
+    closing round always, the first round if it was somehow opened closed — is
+    refused through the shared `_refuse_call` and recorded, never dispatched and
+    never silently dropped.
 
     Either way the correction ships with a stated reason in the span.
 
@@ -1347,9 +1387,13 @@ async def _claim_redirect(
         ran_a_tool = guards.ran_a_tool(turn.spans)
         span.meta["ran_a_tool"] = ran_a_tool
         blocked = (
-            "tools_already_ran"
-            if ran_a_tool
-            else ("out_of_rounds" if out_of_rounds else None)
+            "card_raised"
+            if card_raised
+            else (
+                "tools_already_ran"
+                if ran_a_tool
+                else ("out_of_rounds" if out_of_rounds else None)
+            )
         )
         if blocked is not None:
             # No regeneration at all: doing the work twice, or past the cap, is
@@ -1382,7 +1426,14 @@ async def _claim_redirect(
             if failure is not None:
                 raise GatewayFailure(failure)
             span.meta["redirect_tool_calls"] = len(calls)
-            if calls:
+            if calls and not advertised:
+                # The round advertised no tools and asked for one anyway: it is
+                # refused and recorded, exactly like the turn's own closed
+                # rounds. Nothing is dispatched, and the regenerated text still
+                # stands or falls on the guard vetting below.
+                span.meta["refused_calls"] = len(calls)
+                _refuse_redirect_closed(turn, calls)
+            elif calls:
                 attempt.append(
                     {
                         "role": "assistant",
@@ -1395,10 +1446,14 @@ async def _claim_redirect(
                 )
                 # One final round to say what happened, with the tool loop
                 # CLOSED (no tools advertised) — the redirect gets one attempt at
-                # the action, never a loop of its own.
-                regenerated, _more, failure = await _gateway_round(
+                # the action, never a loop of its own. A call it makes anyway is
+                # refused and recorded rather than dropped on the floor.
+                regenerated, more, failure = await _gateway_round(
                     app, turn, model, attempt, (), round_number=0, on_delta=None
                 )
+                if more:
+                    span.meta["refused_calls"] = len(more)
+                    _refuse_redirect_closed(turn, more)
                 if failure is not None:
                     raise GatewayFailure(failure)
         except Exception as exc:
@@ -1503,7 +1558,14 @@ async def _run_turn(
         # funnel appends a card_spec to it on REQUIRE_CONSENT, and the loop
         # below diffs it after each tool call to emit the {consent} frame.
         tool_ctx = tools.context_for(
-            app, person, conversation_id=conversation_id, consent_sink=[]
+            app,
+            person,
+            conversation_id=conversation_id,
+            consent_sink=[],
+            # The turn's own facts channel: a call that DETERMINED something
+            # (a device's connectivity) records it here even when it then
+            # refused, and _run_tool copies each call's slice onto its span.
+            facts_sink=[],
         )
         # How much of tool_ctx.consent_sink has already been streamed — a
         # count, not a "seen ids" set, because the sink is append-only for
@@ -1608,6 +1670,14 @@ async def _run_turn(
             emit(DONE_FRAME)
             return
 
+        # A note the BACKEND wrote about how the turn ended — the round cap, or a
+        # card left pending. It is not the model's prose and it is not a claim:
+        # it is the only record the operator has that the turn stopped early, so
+        # it must survive every REPLACE-class composition below (found in review:
+        # a state-claim correction on a capped turn silently swallowed the cap
+        # note, and a capped turn then read exactly like an ordinary one).
+        backend_note: str | None = None
+
         if out_of_rounds:
             # ONE final narration round, no tools advertised, with every
             # accumulated tool result still in `messages`: the answer the work
@@ -1650,10 +1720,8 @@ async def _run_turn(
                     messages.append(
                         {"role": "tool", "tool_call_id": call.id, "content": result}
                     )
-            note = (
-                f"[stopped after {rounds_allowed} tool rounds without finishing]"
-            )
-            note = f"\n\n{note}" if parts else note
+            backend_note = f"[stopped after {rounds_allowed} tool rounds without finishing]"
+            note = f"\n\n{backend_note}" if parts else backend_note
             parts.append(note)
             emit(_frame({"t": note}))
         elif card_raised and not "".join(parts).strip():
@@ -1661,6 +1729,7 @@ async def _run_turn(
             # tried more tools, or went quiet). The turn must still END, ok,
             # so the operator's decision lands on a finished turn — the note
             # states the one true thing about it.
+            backend_note = PENDING_APPROVAL_NOTE
             parts.append(PENDING_APPROVAL_NOTE)
             emit(_frame({"t": PENDING_APPROVAL_NOTE}))
 
@@ -1793,8 +1862,9 @@ async def _run_turn(
                     has_pending_consent=has_pending_consent, ran_a_tool=ran
                 ),
                 redirect_note=CONSENT_REDIRECT_NOTE,
-                # A turn already at its round cap gets no extra dispatch through
-                # the redirect's side door.
+                # A card up, or a turn already at its round cap, gets no extra
+                # dispatch through the redirect's side door.
+                card_raised=card_raised,
                 out_of_rounds=out_of_rounds,
                 messages=messages,
                 # Defensive, and mechanical: a turn that raised a card has
@@ -1884,6 +1954,7 @@ async def _run_turn(
                         device=state_claim.device, ran_a_tool=ran
                     ),
                     redirect_note=STATE_REDIRECT_NOTE,
+                    card_raised=card_raised,
                     out_of_rounds=out_of_rounds,
                     messages=messages,
                     advertised=() if card_raised else advertised,
@@ -1941,6 +2012,15 @@ async def _run_turn(
             persisted = f"{text}\n\n{correction.text}"
         else:
             persisted = text
+        # `text` carries the backend note, so the two branches above keep it by
+        # construction. The three that DROP the model's prose have to put it
+        # back — mechanically, off the same flag, never by looking for the note
+        # in the string.
+        prose_dropped = (
+            consent_redirected or state_redirected or bool(replace_corrections)
+        )
+        if backend_note is not None and prose_dropped:
+            persisted = f"{persisted}\n\n{backend_note}" if persisted else backend_note
 
         # The OPT-IN responsiveness check (agents.responsiveness_check, default
         # OFF): a SOFT, LLM-judged guard that catches a reply drifting off the
@@ -1978,7 +2058,17 @@ async def _run_turn(
             logger.exception("deferral guard raised; shipping the reply uncorrected")
             deferral = None
         deferral_fired = deferral is not None
-        if deferral is not None and not mechanical_guard_fired and not redirect_spent:
+        if (
+            deferral is not None
+            and not mechanical_guard_fired
+            and not redirect_spent
+            # Same rule as _claim_redirect: a turn at its round cap gets no
+            # extra gateway round with a "do it now" nudge. Found in review —
+            # the nudge would tell the model to call a tool the capped
+            # narration round was not even offered, and the redirect's success
+            # path would replace (and so discard) the cap note.
+            and not out_of_rounds
+        ):
             # ONE redirect: _deferral_redirect regenerates once (do it now), and
             # REPLACES persisted with the corrected reply — or, if it still
             # defers/errors, appends an honest note. Either way it consumes the

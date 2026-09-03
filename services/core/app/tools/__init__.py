@@ -66,12 +66,15 @@ def context_for(
     conversation_id: uuid.UUID | None = None,
     agent: str = "chat",
     consent_sink: list[dict] | None = None,
+    facts_sink: list[dict] | None = None,
 ) -> ToolContext:
     """The context a turn hands its tools. The workspace root is read from
     the environment once, here, so a single read decides the boundary for
     every filesystem call that turn makes. `conversation_id`/`agent` are what
     the policy kernel binds a raised consent to; `consent_sink`, when given,
-    collects any card the funnel raises this turn for the caller to surface."""
+    collects any card the funnel raises this turn for the caller to surface;
+    `facts_sink` collects the facts a call DETERMINED even when it refused (see
+    ToolContext)."""
     return ToolContext(
         app=app,
         person=person,
@@ -79,6 +82,7 @@ def context_for(
         agent=agent,
         conversation_id=conversation_id,
         consent_sink=consent_sink,
+        facts_sink=facts_sink,
     )
 
 

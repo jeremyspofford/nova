@@ -29,10 +29,19 @@ OWNER_CASE = (
 class Span:
     """The minimal span shape every guard reads: kind, name, meta.ok."""
 
-    def __init__(self, name: str, *, kind: str = "tool", ok: bool = True) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        kind: str = "tool",
+        ok: bool = True,
+        facts: list | None = None,
+    ) -> None:
         self.kind = kind
         self.name = name
-        self.meta = {"ok": ok}
+        self.meta: dict = {"ok": ok}
+        if facts is not None:
+            self.meta["facts"] = facts
 
 
 # -- MUST FIRE (no device span this turn) ----------------------------------
@@ -41,15 +50,17 @@ MUST_FIRE = [
     ("owner_exact_case", OWNER_CASE),
     ("bare_offline", "The device is offline."),
     ("named_device_offline", f"{DEVICE} is offline."),
-    ("named_with_determiner", f"The {DEVICE} is not responding."),
-    ("your_machine_unreachable", "Your machine is currently unreachable."),
+    ("named_with_determiner", f"The {DEVICE} is not connected."),
+    ("your_device_unreachable", "Your device is currently unreachable."),
     ("contraction_copula", "The device's offline right now."),
     ("present_perfect", "The device has gone offline."),
-    ("still_disconnected", "That computer is still disconnected."),
+    ("still_disconnected", "That device is still disconnected."),
+    ("no_longer_connected", "The device is no longer connected."),
+    ("not_reachable", "The device is not reachable."),
     ("last_seen_as_current", "The device was last seen three hours ago."),
     # A POSITIVE state is just as unchecked as a negative one.
     ("claims_it_is_online", "The device is online and connected."),
-    ("seems_to_be_down", "Your laptop seems to be down."),
+    ("connected_right_now", "This device is connected right now."),
 ]
 
 
@@ -97,6 +108,21 @@ MUST_NOT_FIRE = [
     ("prior_time_marker", "The device is offline as of an hour ago."),
     ("no_device_subject", "The connection is offline."),
     ("bare_pronoun_subject", "It's offline."),
+    # -- review I3: a bare machine noun need not be about a PAIRED device, and
+    # this guard REPLACES what it corrects, so the whole branch is gone.
+    ("bare_noun_laptop", "Your laptop is probably asleep."),
+    ("bare_noun_machine", "The machine is unreachable."),
+    ("bare_noun_computer", "The computer is powered off."),
+    ("bare_noun_desktop", "That desktop is offline."),
+    ("bare_noun_pc", "Your PC is disconnected."),
+    # -- review I4: polysemous state words. Each of these is ordinary English
+    # about something other than a socket, and each produced a REPLACE-class
+    # false positive before the state vocabulary was narrowed.
+    ("polysemous_up", "The device is up to date."),
+    ("polysemous_down", "The device is down for maintenance until Friday."),
+    ("polysemous_available", "The device is available for pickup."),
+    ("polysemous_connected_to", "The device is connected to the projector."),
+    ("polysemous_asleep", "The device is asleep on the couch, apparently."),
     ("ordinary_reply", "Here's the summary of your calendar for tomorrow."),
     (
         "general_capability",
@@ -112,6 +138,41 @@ def test_must_not_fire_on_replies_that_assert_no_current_state(label, reply):
     ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
 
 
+# The misses this precision buys, pinned so they are a CHOICE and not a
+# surprise. Every one of them is an unchecked claim the guard lets through; each
+# is here because the shape that would catch it also catches honest prose, and
+# this guard REPLACES the reply it corrects. If a future change makes one of
+# these fire, that is a deliberate move, not a bug fix — check what else it
+# starts firing on first.
+ACCEPTED_MISSES = [
+    ("polysemy_down_right_now", "The device is down right now."),
+    ("polysemy_up_right_now", "The device is up right now."),
+    ("bare_pronoun", "It's offline."),
+    ("no_state_word", "The device is back."),
+    ("plural_no_named_subject", "Both devices are offline."),
+    ("responding", "The device is not responding."),
+    ("noun_intent_trip", "I ran a check — the device is offline."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", ACCEPTED_MISSES, ids=[c[0] for c in ACCEPTED_MISSES]
+)
+def test_the_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [], NAMES) is None
+
+
+def test_no_bare_machine_noun_remains_in_the_subject_pattern():
+    """Review I3/M1: laptop/machine/computer/desktop/pc/box are gone, and with
+    them the `boxes?` alternative that never matched a bare "box" anyway. Pinned
+    against the pattern source so the branch cannot creep back in unnoticed."""
+    from app.guards import _DEVICE_NOUN
+
+    for noun in ("laptop", "machine", "computer", "desktop", "pc", "box"):
+        assert noun not in _DEVICE_NOUN.lower(), noun
+    assert "device" in _DEVICE_NOUN
+
+
 # -- edges the corpus does not name but precision demands ------------------
 
 
@@ -120,11 +181,49 @@ def test_an_empty_or_blank_reply_never_fires():
     assert guards.state_claim_check("   \n ", [], NAMES) is None
 
 
-def test_a_FAILED_device_span_does_not_back_the_claim():
-    """Backing is a SUCCESSFUL span. A device call that errored proves nothing
-    about the machine's state, so the claim is still unchecked."""
-    claim = guards.state_claim_check(OWNER_CASE, [Span("device_list", ok=False)], NAMES)
-    assert claim is not None
+# -- review C1: a REFUSAL that determined connectivity IS a check --------------
+#
+# PIN REPLACED (2026-09-03). The old pin asserted that any failed device span
+# backs nothing, and that was the wrong behaviour: when the device really is
+# offline EVERY device tool refuses at the precheck ("not connected — its tile
+# is stale") with ok=False, so an honest "I ran it and it came back not
+# connected — X is offline" was corrected and REPLACED by "I did not actually
+# check", systematically, in the exact scenario this guard exists for. Backing
+# now reads the structured fact the per-device layer records for both outcomes,
+# never the refusal's prose. The three cases below are what that means.
+
+
+def test_a_refusal_that_determined_connectivity_backs_the_claim():
+    """The reviewer's exact sequence: device_run refused not-connected, then the
+    model reports the machine is offline. It DID check. The guard must be
+    silent — correcting a true reply is the worst thing it can do."""
+    refused = Span("device_run", ok=False, facts=[{"device": DEVICE, "connected": False}])
+    reply = f"I ran the check and it came back not connected — {DEVICE} is offline."
+    assert guards.state_claim_check(reply, [refused], NAMES) is None
+
+
+def test_a_refusal_that_determined_nothing_still_backs_nothing():
+    """"no paired device named X" refuses BEFORE connectivity is looked at, so
+    it records no fact and settles nothing. The claim is still unchecked."""
+    refused = Span("device_run", ok=False)  # no facts recorded
+    assert guards.state_claim_check(OWNER_CASE, [refused], NAMES) is not None
+
+
+def test_a_not_granted_refusal_on_a_CONNECTED_device_backs_the_claim():
+    """The connectivity check PASSED and a later grant check refused. The fact
+    was still determined — connected=True — so "the device is online" is a
+    report of a real read."""
+    refused = Span("device_run", ok=False, facts=[{"device": DEVICE, "connected": True}])
+    assert guards.state_claim_check("The device is online.", [refused], NAMES) is None
+
+
+def test_a_failed_span_with_no_facts_and_a_malformed_facts_value_back_nothing():
+    """Fail-safe on the fact itself: a non-list, or entries without a
+    `connected` key, are not a connectivity determination."""
+    for meta in ({}, {"facts": "connected"}, {"facts": [{"device": DEVICE}]}):
+        span = Span("device_run", ok=False)
+        span.meta.update(meta)
+        assert guards.state_claim_check(OWNER_CASE, [span], NAMES) is not None
 
 
 def test_a_non_device_span_does_not_back_the_claim():
