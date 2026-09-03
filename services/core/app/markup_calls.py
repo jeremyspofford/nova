@@ -172,6 +172,14 @@ _CLOSE_TOOL_CALL = re.compile(r"<\s*/\s*tool_call\s*>", re.I)
 _OPENER = re.compile(rf"<\s*{_NS}(?:function_calls|invoke)\b|<\s*tool_call\s*>", re.I)
 _INVOKE_START = re.compile(rf"<\s*{_NS}invoke\s+name\s*=\s*[\"']{_NAME}", re.I)
 
+# The block opener ALONE — used to find a `<function_calls>` that never got a
+# closer inside the window (the window truncated its own closing tag, not
+# just a live stream). An invoke can be lexically complete — its OWN opener
+# and closer both inside the window — while still sitting inside such a
+# dangling wrapper; the free-invoke fallback below must not treat that as a
+# free-standing call (see its comment for why).
+_FUNCTION_CALLS_OPENER = re.compile(rf"<\s*{_NS}function_calls\s*>", re.I)
+
 # The cheap bail: no text can carry any of the shapes above without one of
 # these substrings, so ordinary prose costs one lowercase find and nothing else.
 _MARKERS = ("function_calls", "invoke", "parameter", "tool_call")
@@ -467,10 +475,34 @@ def parse_markup_tool_calls(text: str, *, streamed: bool = False) -> MarkupScan:
                 calls.append(_call_from_invoke(invoke, text, masked))
             _take(block.span(), removals)
 
-    # A complete invoke outside any block is still unambiguously a call.
+    # A `<function_calls>` opener the block loop above could NOT close inside
+    # the window: not a live stream cut (that is `streamed`'s job below), but
+    # the window's own truncation landing on THIS wrapper's closing tag. An
+    # invoke nested inside it can still be lexically complete on its own —
+    # its opener and closer both inside the window, only the wrapper's closer
+    # missing — and reading it as a free-standing call would half-strip: the
+    # invoke gone, the naked `<function_calls>` opener (and whatever fragment
+    # of its closer survives at the window edge) left behind as visible XML.
+    # `dangling_from` is the earliest such opener; nothing from there to the
+    # window's end may be read as free-standing.
+    dangling_from = min(
+        (
+            opener.start()
+            for opener in _FUNCTION_CALLS_OPENER.finditer(masked)
+            if not _overlaps(opener.span(), resolved)
+        ),
+        default=None,
+    )
+
+    # A complete invoke outside any block is still unambiguously a call —
+    # UNLESS it falls inside a dangling wrapper (see `dangling_from` above),
+    # in which case it is left exactly where it is: not extracted, not
+    # stripped, same as an invoke whose own closer is the one that straddles.
     if _CLOSE_INVOKE.search(masked):
         for invoke in _INVOKE.finditer(masked):
             if _overlaps(invoke.span(), resolved):
+                continue
+            if dangling_from is not None and dangling_from < invoke.start():
                 continue
             calls.append(_call_from_invoke(invoke, text, masked))
             _take(invoke.span(), removals)

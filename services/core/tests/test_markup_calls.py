@@ -545,3 +545,99 @@ def test_a_real_call_at_the_start_of_an_oversize_reply_is_still_stripped():
     # byte, not merely "look the same".
     assert scan.text.endswith(tail)
     assert len(scan.text) == len(tail)
+
+
+# -- NEW-5: a wrapper closer straddling the window must not half-strip -----
+#
+# Round 3 of review found the window itself creates a boundary the earlier
+# fixes didn't cover: a `<function_calls>` wrapper whose OWN closer lands
+# just past `_SCAN_WINDOW` is never resolved by the block loop (its closer
+# isn't inside the window), but an invoke nested inside it can still be
+# lexically complete — its own opener and closer both comfortably inside the
+# window. The "free invoke outside any block" fallback used to read that as
+# a free-standing call, stripping ONLY the invoke and leaving the naked
+# `<function_calls>` opener (and whatever survives of its truncated closer)
+# behind as visible XML — persisted verbatim by without_markup. The sibling
+# case (the INVOKE's own closer is the one that straddles) was always
+# correct: nothing matches, so nothing is touched. The fix makes this case
+# match that one exactly: nothing extracted, nothing stripped, unparsed=True.
+
+
+def _wrapped_invoke_straddling_window(offset: int, invoke: str) -> str:
+    """`offset` is measured against the wrapper's CLOSING tag: `offset <= 0`
+    means the closer's last character lands at-or-before the window edge
+    (fully inside); `offset > 0` shifts it partway or fully past the edge."""
+    opener = "<atem:function_calls>"
+    closer = "</atem:function_calls>"
+    head = opener + invoke
+    closer_end = _SCAN_WINDOW + offset
+    closer_start = closer_end - len(closer)
+    pad = "x" * (closer_start - len(head))
+    return head + pad + closer
+
+
+_STRADDLING_INVOKE = (
+    '<atem:invoke name="device_run">'
+    '<atem:parameter name="device">DELL-XPS-8950</atem:parameter>'
+    "</atem:invoke>"
+)
+
+
+@pytest.mark.parametrize("past_window", range(1, 11))
+def test_wrapper_closer_1_to_10_chars_past_the_window_is_left_intact(past_window):
+    """The reviewer's minimal repro, swept across the range they measured."""
+    text = _wrapped_invoke_straddling_window(past_window, _STRADDLING_INVOKE)
+    assert len(text) > _SCAN_WINDOW
+    scan = markup_calls.parse_markup_tool_calls(text)
+    assert scan.calls == ()
+    assert scan.unparsed is True
+    assert scan.text == text  # byte for byte — never half-stripped
+
+
+def test_a_realistic_write_file_call_whose_wrapper_closer_straddles_is_intact():
+    """The same defect, in the shape that actually reaches without_markup: a
+    device_write_file call with real (200 KiB) content, wrapper closer 3
+    chars past the window."""
+    content = "A" * (200 * 1024)
+    invoke = (
+        '<atem:invoke name="device_write_file">'
+        '<atem:parameter name="device">DELL-XPS-8950</atem:parameter>'
+        '<atem:parameter name="path">notes.txt</atem:parameter>'
+        f'<atem:parameter name="content">{content}</atem:parameter>'
+        "</atem:invoke>"
+    )
+    text = _wrapped_invoke_straddling_window(3, invoke)
+    assert len(text) > _SCAN_WINDOW
+    scan = markup_calls.parse_markup_tool_calls(text)
+    assert scan.calls == ()
+    assert scan.unparsed is True
+    assert scan.text == text
+
+
+@pytest.mark.parametrize("offset", [-2, -1, 0, 1, 2])
+def test_a_boundary_sweep_around_the_window_is_deterministic(offset):
+    """No crash at any offset, and the sign of `offset` alone decides the
+    outcome: <=0 (closer fully inside) parses clean, >0 (closer straddles or
+    lands fully past) leaves everything untouched."""
+    text = _wrapped_invoke_straddling_window(offset, _STRADDLING_INVOKE)
+    scan = markup_calls.parse_markup_tool_calls(text)
+    if offset <= 0:
+        assert [c.name for c in scan.calls] == ["device_run"]
+        assert scan.unparsed is False
+        assert "function_calls" not in scan.text
+    else:
+        assert scan.calls == ()
+        assert scan.unparsed is True
+        assert scan.text == text
+
+
+def test_a_free_invoke_with_no_wrapper_at_all_is_still_extracted():
+    """The fix must not touch the ordinary case: an invoke with no preceding
+    `<function_calls>` opener at all is exactly as free-standing as before."""
+    text = (
+        'Sure.\n<a:invoke name="device_run">'
+        '<a:parameter name="k">1</a:parameter></a:invoke>\nDone.'
+    )
+    scan = markup_calls.parse_markup_tool_calls(text)
+    assert [c.name for c in scan.calls] == ["device_run"]
+    assert scan.text == "Sure.\n\nDone."
