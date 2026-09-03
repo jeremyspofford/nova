@@ -81,15 +81,44 @@ else
   code="$(docker exec "$ON" nginx -t 2>&1)"; rc=$?
   [ "$rc" -eq 0 ] && report 0 "gate on: nginx -t" || report 1 "gate on: nginx -t" "$code"
 
-  for path in "/" "/api/v1/auth/state" "/assets/x.js" "/api/v1/devices/ws" "/health/live"; do
+  for path in "/" "/api/v1/auth/state" "/assets/x.js" "/health/live"; do
     code="$(status_of "$ON_BASE" "$path")"
     [ "$code" = "401" ] && report 0 "gate on, no cookie: $path -> 401" \
       || report 1 "gate on, no cookie: $path -> 401" "got $code"
   done
 
+  # /api/v1/devices/ws is the OTHER deliberate carve-out (see the nginx
+  # template's own comment on that location): a paired device sends no
+  # cookie, and the socket authenticates itself by ed25519 challenge, so
+  # gating it would only take real daemons offline. With no cookie at all it
+  # must NOT be blocked by the gate (not 401) — core is never started in
+  # this throwaway container, so "the gate let it through" shows up as a 502
+  # (nginx reached the proxy_pass and got nothing behind it), exactly like
+  # the other no-cookie-but-ungated proof used for /api/v1/auth/state below.
+  code="$(status_of "$ON_BASE" "/api/v1/devices/ws")"
+  [ "$code" != "401" ] && report 0 "gate on, no cookie: /api/v1/devices/ws is NOT gated (got $code, not 401)" \
+    || report 1 "gate on, no cookie: /api/v1/devices/ws is NOT gated (got $code, not 401)" "got 401, expected the gate to let this through"
+
   code="$(status_of "$ON_BASE" "/gate?token=$WRONG")"
   [ "$code" = "401" ] && report 0 "gate on: /gate?token=wrong -> 401" \
     || report 1 "gate on: /gate?token=wrong -> 401" "got $code"
+
+  # /healthz is the ONE ungated location — must answer 200 with no cookie at
+  # all, even while every other path 401s above. This is what Docker's
+  # compose healthcheck for `web` actually polls (deploy/docker-compose.yml).
+  code="$(status_of "$ON_BASE" "/healthz")"
+  [ "$code" = "200" ] && report 0 "gate on, no cookie: /healthz -> 200 (ungated liveness)" \
+    || report 1 "gate on, no cookie: /healthz -> 200 (ungated liveness)" "got $code"
+
+  body="$(curl -s "$ON_BASE/healthz")"
+  [ "$body" = "ok" ] && report 0 "gate on: /healthz body is 'ok'" \
+    || report 1 "gate on: /healthz body is 'ok'" "$(printf '%s' "$body" | head -c 80)"
+
+  HEALTHZ_HEADERS_ON="$(curl -s -D - -o /dev/null "$ON_BASE/healthz")"
+  case "$HEALTHZ_HEADERS_ON" in
+    *"Set-Cookie"*) report 1 "gate on: /healthz never sets a cookie" "$HEALTHZ_HEADERS_ON" ;;
+    *) report 0 "gate on: /healthz never sets a cookie" ;;
+  esac
 
   LOGIN_HEADERS="$(curl -s -D - -o /dev/null "$ON_BASE/gate?token=$TOKEN")"
   case "$LOGIN_HEADERS" in
@@ -166,6 +195,16 @@ else
   code="$(status_of "$OFF_BASE" "/gate?token=anything")"
   [ "$code" = "401" ] && report 0 "gate off: /gate login itself refuses (nothing to mint a cookie for)" \
     || report 1 "gate off: /gate login itself refuses (nothing to mint a cookie for)" "got $code"
+
+  code="$(status_of "$OFF_BASE" "/healthz")"
+  [ "$code" = "200" ] && report 0 "gate off: /healthz -> 200" \
+    || report 1 "gate off: /healthz -> 200" "got $code"
+
+  HEALTHZ_HEADERS_OFF="$(curl -s -D - -o /dev/null "$OFF_BASE/healthz")"
+  case "$HEALTHZ_HEADERS_OFF" in
+    *"Set-Cookie"*) report 1 "gate off: /healthz never sets a cookie" "$HEALTHZ_HEADERS_OFF" ;;
+    *) report 0 "gate off: /healthz never sets a cookie" ;;
+  esac
 
   # ── envsubst-filter proof ────────────────────────────────────────────
   # NGINX_ENVSUBST_FILTER=^NOVA_ must leave every nginx-native `$var` alone

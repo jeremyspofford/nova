@@ -121,9 +121,15 @@ services:
     depends_on:
       - core
     healthcheck:
-      # Self-only — this asks nginx for the app shell and touches no other
-      # service, so a red `web` means nginx, never core.
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      # Self-only, deliberately not `/` — `/` sits behind the pre-auth gate
+      # (nginx.conf.template), so with the gate on a plain `GET /` would 401
+      # and mark this container UNHEALTHY even though nginx is serving
+      # correctly, breaking install.sh's wait_for_health and the e2e
+      # waitForHealthy. `/healthz` is nginx's ONE ungated location — a
+      # static "ok" with no proxy_pass, so this still touches no other
+      # service and a red `web` still means nginx, never core, gate on or
+      # off.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
       interval: 5s
       timeout: 3s
       retries: 10

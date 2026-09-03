@@ -36,11 +36,15 @@
 # history the moment someone visits /gate?token=..., which is the other
 # reason this is meant to be temporary.
 #
-# novad (the paired-device daemon) does NOT send cookies — pairing or
-# connecting a device through a GATED public origin will not work, gate on
-# or off doesn't matter, it never carries the nova_gate cookie. Pair and
-# connect devices via the tailnet or localhost; this gate is for the browser
-# path only.
+# novad (the paired-device daemon) does NOT send cookies. PAIRING a device
+# (`/api/v1/devices/enroll`) still goes through the generic gated /api/
+# location below, so enrolling a new device through a GATED public origin
+# will not work, gate on or off doesn't matter; pair via the tailnet or
+# localhost instead. CONNECTING an already-paired device
+# (`/api/v1/devices/ws`) is the one exception — see that location's own
+# comment — it is carved out of the gate entirely because the socket
+# authenticates itself by ed25519 challenge, not by cookie, so gating it
+# would only take real daemons offline for no security benefit.
 
 # nginx's default map hash bucket is sized for short keys; a >=32-hex token
 # used as a literal map key is longer than that default and nginx refuses to
@@ -100,6 +104,27 @@ server {
     # `valid=` instead of 502ing until nginx is restarted.
     resolver 127.0.0.11 ipv6=off valid=10s;
 
+    # ── Ungated liveness ─────────────────────────────────────────────────
+    # Docker's own healthcheck (deploy/docker-compose.yml) has to be able to
+    # tell "nginx is up" apart from "the gate is blocking me" — otherwise
+    # turning the gate on marks `web` UNHEALTHY even though it's serving
+    # correctly, and install.sh's wait_for_health / the e2e waitForHealthy
+    # would spin forever waiting for a green status that fail-closed design
+    # makes impossible. This is the ONE location on this whole server
+    # without `include /etc/nginx/gate/gate_check.conf;` — deliberately: it
+    # is a static string with no proxy_pass, no upstream, and no app data,
+    # so leaving it ungated reveals nothing the gate exists to protect
+    # (compare the neutral 401 gate page, which also gives nothing away —
+    # this carve-out isn't even a downgrade from that). It must stay
+    # exactly that: self-only and static. Never point this at core or any
+    # other upstream — that would turn a harmless liveness ping into an
+    # ungated hole straight through the gate.
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
     # ── The gate itself ─────────────────────────────────────────────────
 
     # The static gate page. NOT behind $gate_block (that would recurse
@@ -124,18 +149,19 @@ server {
     }
 
     # Rail 12: `/health/live` flat and self-only on every service. web's own
-    # compose healthcheck already asks `/` (proving nginx serves the app
-    # shell), but the same flat path every other service answers on belongs
-    # here too rather than being the one service without it — self-only means
-    # nginx answers this itself, touching no upstream, so a red result here
-    # can only ever mean nginx.
+    # compose healthcheck asks `/healthz` above (deliberately ungated — see
+    # that location's comment), but the same flat path every other service
+    # answers on belongs here too rather than being the one service without
+    # it — self-only means nginx answers this itself, touching no upstream,
+    # so a red result here can only ever mean nginx.
     #
     # This location IS behind the gate like everything else on this origin
     # (fail-closed means no carve-outs) — which means when the gate is on,
-    # the web container's own Docker healthcheck (`GET /`, not this path,
-    # see deploy/docker-compose.yml) reports unhealthy while ungated visitors
-    # can't get in either, by design. That's a known, accepted side effect of
-    # turning the gate on against the running stack, not a defect here.
+    # this path 401s for ungated visitors same as any other. It is not what
+    # Docker's healthcheck polls (that's the ungated /healthz above,
+    # precisely because this one would false-negative the container the
+    # moment the gate is turned on) — this remains the general "ask nginx if
+    # it's alive" path for anything willing to authenticate first.
     location = /health/live {
         include /etc/nginx/gate/gate_check.conf;
         default_type application/json;
@@ -219,12 +245,26 @@ server {
     # resolver trick as the streams above, so a recreated core's new IP is
     # re-picked-up within `valid=` instead of 502ing until nginx restarts.
     #
-    # Gated like everything else — see the novad comment up top: a paired
-    # device sends no cookie, so this location 401s a device's connection
-    # attempt whenever the gate is on. Pair/connect over the tailnet or
-    # localhost instead.
+    # The SECOND deliberate carve-out from the gate (see /healthz above) —
+    # and this one is a correctness fix, not just a liveness convenience: a
+    # paired device sends no cookie, so gating this location 401s every
+    # daemon's connection attempt the instant the gate turns on, silently
+    # taking every paired device offline even though nothing about the
+    # daemon's own credentials changed. It doesn't need the gate: this
+    # socket is self-authenticating by construction, not by cookie — core
+    # challenges the connection with a nonce the device must sign with its
+    # pinned ed25519 key (see services/core/app/devices_ws.py), and a socket
+    # that can't produce a valid signature gets auth_error and is closed
+    # before it can do anything, gate or no gate. The gate protects the
+    # BROWSER surface (a session no one has proven ownership of yet); this
+    # endpoint already proves the caller mechanically, so the gate would add
+    # a second lock in front of one that already works and only serves to
+    # lock out legitimate daemons. Pairing (`/api/v1/devices/enroll`, which
+    # mints the key this challenge later checks) is NOT carved out — it
+    # stays behind the generic /api/ location's gate below, so enrolling a
+    # new device through a gated public origin remains unsupported; pair via
+    # the tailnet or localhost instead, same as ever.
     location = /api/v1/devices/ws {
-        include /etc/nginx/gate/gate_check.conf;
         set $core_upstream http://core:8000;
         proxy_pass $core_upstream$request_uri;
         proxy_http_version 1.1;
