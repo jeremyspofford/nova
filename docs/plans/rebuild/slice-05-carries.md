@@ -44,8 +44,13 @@ flip; the honest-OFFLINE half of (5): with novad stopped she checked
 said offline plainly, NO correction — then online again → real number; the
 listing: tree missing → honest refusal → adapted to find in one turn, no XML,
 no dangling intent. Not walked: revoke (6), kill-network staleness timing,
-apps.launch. Web label bug found: an errored tool activity renders as
-"<tool> did not finish" even when the tool finished with a stated refusal.
+apps.launch. Web label bug found and FIXED (30eecb60): the `{activity}` error frame now
+carries the tool's stated `reason` (≤160 chars, ERROR_PREFIX-stripped) and
+the bubble renders `<tool>: <reason>` / `<tool> failed`; "did not finish" is
+reserved for a genuinely interrupted stream. Carry: the generic "failed
+unexpectedly — <exc>" path now surfaces ≤160 chars of an exception to the
+browser — no credential-bearing tool exists yet; revisit when the secrets
+store lands.
 
 ### (original close-out note)
 The six DoD outcomes are proven MECHANICALLY end-to-end by test_devices_e2e.py
