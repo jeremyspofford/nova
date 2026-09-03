@@ -357,8 +357,15 @@ correction):
   by an O(n) closing-tag presence pre-check (7.7 s → 7 ms at 256 KB); the
   first cut's small body caps silenced realistic large calls (a >4 KB
   device_write_file markup call leaked as raw XML — the original bug) and
-  were replaced by a single 1 MiB defence-in-depth cap (200/300 KiB calls
-  recognised + stripped, no orphan wrapper tags).
+  were replaced by a 1 MiB body bound (200/300 KiB calls recognised +
+  stripped, no orphan wrapper tags) — which the next review showed was NOT a
+  bound either (33k fake openers with one closer >1 MiB away → 1.8 s, 40k →
+  47 s). The real bound (bc691e87): a HARD SCAN WINDOW — only the first 1 MiB
+  is ever matched, the remainder returned untouched and marked unparsed;
+  with window == body cap a closer inside the window is always reached on the
+  first attempt, so cost is O(window) by construction (100k openers / 5.4 MiB
+  → 29 ms). Lesson: a per-attempt cap is not a bound when the attempt COUNT
+  scales with input; bound the input.
 
 Carries:
 - Pairing a NEW device through the gated public origin is unsupported
