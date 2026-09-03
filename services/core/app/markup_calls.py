@@ -63,23 +63,39 @@ The rest of the contract:
   * PURE — no model, no network, no clock, no imports from the app. The same
     text always yields the same scan, so this can never itself become a source
     of narration, and chat.py can run it on every round for the price of one
-    substring search on the common (no-markup) path. Every opener's finditer
-    loop is skipped outright unless a matching closing tag exists somewhere in
-    the text at all — a model stuck in a repetition loop pays for one O(n)
-    presence check, never one failed body match per opener — and every body
-    group also carries a 1 MiB length cap (`_MAX_BODY`) as defense in depth
-    for the one shape the presence check cannot help: many fake openers ahead
-    of one real closer far down the text. The cap sits well above any
-    realistic call — device_write_file alone allows up to 256 KiB of file
-    content in a single parameter — because a cap sized to "a small call"
-    (the first cut here was 8,000/4,000/2,000 chars) stops matching a
-    legitimate large one, which leaves ITS raw XML unstripped and persisted
-    verbatim: the exact incident this module exists to prevent.
-    `'<atem:function_calls>\n<atem:invoke name="device_run">\n' * n` — a
-    repeated UNCLOSED opener, exactly what a small model in a repetition loop
-    emits — went quadratic (4x cost per 2x input) before the presence check:
-    32 KB 117ms, 128 KB 1.9s, 256 KB 7.7s. With the check in place the same
-    256 KB input scans in single-digit milliseconds, cap size notwithstanding.
+    substring search on the common (no-markup) path. Cost is O(`_SCAN_WINDOW`)
+    per scan BY CONSTRUCTION: only the first `_SCAN_WINDOW` (1 MiB) characters
+    of `text` are ever handed to a regex at all — the rest is never scanned,
+    never masked, never matched against, full stop. Within that window, every
+    opener's finditer loop is additionally skipped outright unless a matching
+    closing tag exists somewhere in the window — a model stuck in a repetition
+    loop with no real closer pays for one O(n) presence check, never one
+    failed body match per opener.
+
+    Both halves are load-bearing, and were found in that order. A body length
+    cap alone (the first cut here was 8,000/4,000/2,000 chars) is worse than
+    no cap: device_write_file allows up to 256 KiB of file content in a
+    single parameter, so a cap sized to "a small call" stops matching a
+    legitimate large one, leaving ITS raw XML unstripped and persisted
+    verbatim — the exact incident this module exists to prevent, reintroduced
+    by the first DoS fix. Raising the cap to cover any realistic call (1 MiB)
+    fixed that, but a cap with no window is still quadratic whenever the total
+    text is LONGER than the cap: with N fake openers ahead of one real closer
+    farther than the cap from the first opener, every opener up to that
+    distance re-fails a ~1 MiB scan — measured 33,000 openers (1.008 MiB)
+    1.8s, 34,000 8.3s, 40,000 47s. The window closes that: with the window
+    equal to the cap, no opener INSIDE the window can ever have a closer
+    farther away than the cap, so a real closer anywhere in the window is
+    always found on the first attempt (cost = actual distance, not the cap),
+    and `finditer` then resumes past the whole match — the failed-attempt
+    shape cannot occur at all. Text beyond the window is returned untouched,
+    and the scan is marked `unparsed` because nothing vouches for what is out
+    there. `'<atem:function_calls>\n<atem:invoke name="device_run">\n' * n` —
+    a repeated UNCLOSED opener, exactly what a small model in a repetition
+    loop emits — went quadratic (4x cost per 2x input) before the presence
+    check: 32 KB 117ms, 128 KB 1.9s, 256 KB 7.7s. With the window and the
+    check in place, 256 KB of it scans in single-digit milliseconds and a
+    200 KiB real device_write_file call is still recognised and stripped.
   * `streamed=True` is the only mode that will truncate. A round's text can stop
     mid-block, and half an emitted call is not prose; a finished record (the
     persist boundary, a redirect's reply) is never partial, so there the rule
@@ -98,50 +114,54 @@ _NS = r"(?:[A-Za-z_][\w.\-]*:)?"
 # A tool name, shaped like a real one. `name="the tool you want"` is prose.
 _NAME = r"[A-Za-z_][\w.\-]*"
 
-# The upper bound on any one body/value group. This is DEFENSE IN DEPTH, not
-# the thing that kills the quadratic (the presence pre-check below is) — it
-# exists for the shape the pre-check cannot help: many fake openers followed
-# eventually by one real closer far down the text, where each failed attempt
-# still costs up to this many characters. It must therefore sit above any
-# realistic call: device_write_file alone carries up to 256 KiB of file
-# content (app/tools/devices.py WRITE_FILE_CAP_KIB) as a single parameter
-# value, so a cap sized to "a small tool call" — the first cut here was
-# 8,000/4,000/2,000 — silently stops matching a legitimate large call, which
-# leaves the raw XML unstripped and persisted verbatim: the exact incident
-# this module exists to prevent, reintroduced by the DoS fix. 1 MiB clears
-# that with room to spare while still bounding a single failed attempt.
-_MAX_BODY = 1024 * 1024
+# THE bound, and the only one: how much of `text` a scan ever looks at, and
+# (as the same number) how much body any one block/invoke/parameter/tool_call
+# may span. `parse_markup_tool_calls` slices `text` down to this many
+# characters before anything else runs, so cost is O(_SCAN_WINDOW) by
+# construction — text past the window is never masked, never matched, never
+# touched. Reusing the same constant as the per-body quantifier bound is what
+# makes the window airtight: a closer anywhere INSIDE the window is, by
+# definition, never farther from any opener inside the window than the window
+# itself, so the bounded quantifier can never "run out of room" before
+# reaching a real closer that's actually there (see the module docstring for
+# the full argument and the measurements that forced it).
+#
+# Sized well above any realistic call: device_write_file alone carries up to
+# 256 KiB of file content (app/tools/devices.py WRITE_FILE_CAP_KIB) as a
+# single parameter value. A bound sized to "a small tool call" (the first cut
+# here was 8,000/4,000/2,000 chars) silently stops matching a legitimate large
+# call, which leaves the raw XML unstripped and persisted verbatim: the exact
+# incident this module exists to prevent.
+_SCAN_WINDOW = 1024 * 1024
 
 # The whole block. Non-greedy body, DOTALL, and the closing tag's prefix is not
 # required to match the opener's: a model that mangles the prefix once mangles
 # it twice, differently.
 _BLOCK = re.compile(
-    rf"<\s*{_NS}function_calls\s*>(?P<body>.{{0,{_MAX_BODY}}}?)<\s*/\s*{_NS}function_calls\s*>",
+    rf"<\s*{_NS}function_calls\s*>(?P<body>.{{0,{_SCAN_WINDOW}}}?)<\s*/\s*{_NS}function_calls\s*>",
     re.S | re.I,
 )
 _INVOKE = re.compile(
     rf"<\s*{_NS}invoke\s+name\s*=\s*(?P<q>[\"'])(?P<name>{_NAME})(?P=q)\s*>"
-    rf"(?P<body>.{{0,{_MAX_BODY}}}?)<\s*/\s*{_NS}invoke\s*>",
+    rf"(?P<body>.{{0,{_SCAN_WINDOW}}}?)<\s*/\s*{_NS}invoke\s*>",
     re.S | re.I,
 )
 _PARAM = re.compile(
     rf"<\s*{_NS}parameter\s+name\s*=\s*(?P<q>[\"'])(?P<key>[^\"'<>]+)(?P=q)\s*>"
-    rf"(?P<value>.{{0,{_MAX_BODY}}}?)<\s*/\s*{_NS}parameter\s*>",
+    rf"(?P<value>.{{0,{_SCAN_WINDOW}}}?)<\s*/\s*{_NS}parameter\s*>",
     re.S | re.I,
 )
 # The Hermes/Qwen JSON variant, which several local builds emit instead.
 _TOOL_CALL = re.compile(
-    rf"<\s*tool_call\s*>(?P<body>.{{0,{_MAX_BODY}}}?)<\s*/\s*tool_call\s*>", re.S | re.I
+    rf"<\s*tool_call\s*>(?P<body>.{{0,{_SCAN_WINDOW}}}?)<\s*/\s*tool_call\s*>", re.S | re.I
 )
 
-# The cheap linear pre-check that actually kills the quadratic: does a closing
-# tag for this shape exist ANYWHERE in the text at all? If not, no opener of
-# that shape can ever complete a match, so the finditer loop below is skipped
-# rather than attempted once per opener — a text with zero closers (a small
-# model stuck in a repetition loop, exactly the owner's trace) costs one O(n)
-# search, full stop, regardless of _MAX_BODY. Measured: 256 KB of repeated
-# unclosed openers went from 7.7s (unbounded body, no pre-check) to under
-# 10ms with this check alone.
+# The cheap linear pre-check that kills the quadratic WITHIN the window: does
+# a closing tag for this shape exist anywhere in the (already windowed) text
+# at all? If not, no opener of that shape can ever complete a match, so the
+# finditer loop below is skipped rather than attempted once per opener — a
+# window with zero closers (a small model stuck in a repetition loop, exactly
+# the owner's trace) costs one O(n) search, full stop.
 _CLOSE_FUNCTION_CALLS = re.compile(rf"<\s*/\s*{_NS}function_calls\s*>", re.I)
 _CLOSE_INVOKE = re.compile(rf"<\s*/\s*{_NS}invoke\s*>", re.I)
 _CLOSE_TOOL_CALL = re.compile(r"<\s*/\s*tool_call\s*>", re.I)
@@ -398,6 +418,11 @@ def parse_markup_tool_calls(text: str, *, streamed: bool = False) -> MarkupScan:
     `streamed` says the text may have stopped mid-emission. Only then is a
     half-emitted call — an unclosed opener with a quoted invoke name after it —
     dropped to the end of the text.
+
+    Only the first `_SCAN_WINDOW` characters of `text` are ever scanned — see
+    `_SCAN_WINDOW`'s comment for why that bounds cost by construction. Text
+    past the window is returned untouched and the scan is marked `unparsed`,
+    because nothing here looked at it and nothing may claim it is clean.
     """
     if not text:
         return _EMPTY
@@ -405,14 +430,18 @@ def parse_markup_tool_calls(text: str, *, streamed: bool = False) -> MarkupScan:
     if not any(marker in lowered for marker in _MARKERS):
         return MarkupScan((), text, False)
 
-    masked = _mask(text)
+    truncated = len(text) > _SCAN_WINDOW
+    window = text[:_SCAN_WINDOW] if truncated else text
+    beyond_window = text[_SCAN_WINDOW:] if truncated else ""
+
+    masked = _mask(window)
     calls: list[ParsedCall] = []
     removals: list[tuple[int, int]] = []
     # Regions a COMPLETE block accounted for, whether or not it was removed: a
     # block left standing because it is prose about tags must not then be read
     # again as a truncated call.
     resolved: list[tuple[int, int]] = []
-    unparsed = False
+    unparsed = truncated
 
     # Each loop below is skipped outright unless its closing tag exists
     # somewhere in the text at all: with none, no opener of that shape can
@@ -474,15 +503,15 @@ def parse_markup_tool_calls(text: str, *, streamed: bool = False) -> MarkupScan:
         for opener in _OPENER.finditer(masked):
             if _overlaps(opener.span(), resolved) or _overlaps(opener.span(), removals):
                 continue
-            tail = masked[opener.start() :]
-            emitted_call = _INVOKE_START.search(tail) is not None or (
-                tail.lower().startswith("<tool_call>")
-                and tail[len("<tool_call>") :].lstrip()[:1] == "{"
+            remainder = masked[opener.start() :]
+            emitted_call = _INVOKE_START.search(remainder) is not None or (
+                remainder.lower().startswith("<tool_call>")
+                and remainder[len("<tool_call>") :].lstrip()[:1] == "{"
             )
             if not emitted_call:
                 # A bare mention of a tag, not a call cut off mid-emission.
                 continue
-            removals.append((opener.start(), len(text)))
+            removals.append((opener.start(), len(window)))
             unparsed = True
             break
 
@@ -490,5 +519,9 @@ def parse_markup_tool_calls(text: str, *, streamed: bool = False) -> MarkupScan:
         # Nothing was a call. The text is returned EXACTLY as it came in —
         # precision over tidiness, and the reason a quoted example survives.
         return MarkupScan(tuple(calls), text, unparsed)
-    kept = "".join(text[start:end] for start, end in _gaps(0, len(text), removals))
-    return MarkupScan(tuple(calls), _BLANK_RUN.sub("\n\n", kept).strip(), unparsed)
+    # Rebuild only the window: `beyond_window` was never scanned, so it is
+    # appended raw rather than run through `_gaps`/the blank-run cleanup —
+    # "returned untouched" means untouched, not reprocessed.
+    kept = "".join(text[start:end] for start, end in _gaps(0, len(window), removals))
+    kept = _BLANK_RUN.sub("\n\n", kept).strip()
+    return MarkupScan(tuple(calls), kept + beyond_window, unparsed)

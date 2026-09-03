@@ -475,3 +475,73 @@ def test_a_block_over_the_old_cap_leaves_no_orphan_wrapper_tags():
     assert scan.text == ""
     assert "function_calls" not in scan.text
     assert "<a:invoke" not in scan.text
+
+
+# -- NEW-4: the body cap alone was still quadratic without a scan WINDOW ----
+#
+# Round 2 of review caught a second regression in the raised cap: with no cap
+# on the TOTAL text length, N fake openers ahead of one real closer farther
+# than the cap from the first opener still fails a ~1 MiB scan per opener —
+# measured 33,000 openers (1.008 MiB) 1.8s, 34,000 8.3s, 40,000 47s. Below
+# 1 MiB it looked fine only because the closer happened to be in reach.
+#
+# The fix is a hard scan window: only the first `_SCAN_WINDOW` characters of
+# `text` are ever handed to a regex. With the window equal to the cap, no
+# opener INSIDE the window can have a closer farther than the cap, so the
+# failed-attempt shape cannot occur — either a real closer is somewhere in the
+# window (found on the first attempt, cost = the real distance) or the
+# presence pre-check finds none and skips the loop outright. Text beyond the
+# window is never scanned: returned untouched, `unparsed=True` because
+# nothing here can vouch for what's out there.
+
+_SCAN_WINDOW = 1024 * 1024
+
+
+def _far_closer_payload(n_openers: int) -> str:
+    unit = '<atem:function_calls>\n<atem:invoke name="device_run">\n'
+    return unit * n_openers + "</atem:function_calls>"
+
+
+@pytest.mark.parametrize("n_openers", [33_000, 34_000, 40_000, 100_000])
+def test_many_fake_openers_ahead_of_one_far_closer_scans_fast(n_openers):
+    """The exact repro from review: real total length (1.78 MiB - 5.4 MiB
+    here) far exceeds the window, and the one real closer sits at the very
+    end — outside it. Nothing in the window can complete a match, so nothing
+    parses, but the scan itself must stay fast regardless of how large the
+    surrounding garbage grows."""
+    import time
+
+    text = _far_closer_payload(n_openers)
+    assert len(text) > _SCAN_WINDOW  # the closer really is outside the window
+    started = time.perf_counter()
+    scan = markup_calls.parse_markup_tool_calls(text, streamed=True)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.1, f"took {elapsed:.3f}s for {n_openers} openers"
+    # Correctness for what IS in-window: the closer is outside it, so there is
+    # nothing complete to read — no calls, and the text is flagged unparsed
+    # rather than silently claimed clean.
+    assert scan.calls == ()
+    assert scan.unparsed is True
+
+
+def test_a_real_call_at_the_start_of_an_oversize_reply_is_still_stripped():
+    """The companion case: the window must not cost correctness for a real
+    call that fits inside it, even when the reply as a whole is far bigger
+    than any tool call would ever be. 1.2 MiB total, the call in the first
+    few hundred bytes, everything after it inert filler."""
+    import time
+
+    tail = "x" * int(1.2 * 1024 * 1024)
+    text = f"{OBSERVED}\n\n{tail}"
+    assert len(text) > _SCAN_WINDOW
+    started = time.perf_counter()
+    scan = markup_calls.parse_markup_tool_calls(text)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.1, f"took {elapsed:.3f}s"
+    assert [c.name for c in scan.calls] == ["device_run"]
+    assert "atem" not in scan.text
+    assert "function_calls" not in scan.text
+    # The tail past the window was never scanned — it must survive byte for
+    # byte, not merely "look the same".
+    assert scan.text.endswith(tail)
+    assert len(scan.text) == len(tail)
