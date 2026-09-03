@@ -325,6 +325,7 @@ def test_a_quote_swallowing_a_tag_boundary_produces_names_and_nothing_else(repro
     exception, no partial text left behind, and — the point — nothing that any
     code path will execute."""
     scan = markup_calls.parse_markup_tool_calls(repro, streamed=True)
+    assert scan.calls  # the point of the repro: it DOES read as markup, not prose
     assert all(isinstance(call.name, str) and call.name for call in scan.calls)
     # Whatever it read, it read it as markup: no half-block survives as prose.
     assert "function_calls" not in scan.text
@@ -344,3 +345,56 @@ def test_a_long_backtick_run_is_not_a_denial_of_service():
     elapsed = time.perf_counter() - started
     assert elapsed < 0.05, f"took {elapsed:.3f}s"
     assert isinstance(scan.text, str)
+
+
+# -- NEW-3: a repeated UNCLOSED opener must not go quadratic ----------------
+#
+# The scan measured the same 4x-per-2x growth `_INLINE_CODE` had before its
+# bound: 8 KB 7.5ms, 32 KB 117ms, 41 KB crossed 200ms, 128 KB 1.9s, 256 KB
+# 7.7s. `_BLOCK`, `_INVOKE`, `_PARAM` and `_TOOL_CALL` carried the same
+# unbounded `.*?` body under re.S — every opener position re-scanned the
+# remainder looking for a closing tag that was never there. The fix is a
+# length-capped body PLUS a cheap presence check (does a closing tag for this
+# shape exist anywhere at all?) before the finditer loop runs.
+
+
+def test_a_repeated_unclosed_opener_does_not_go_quadratic():
+    """The exact repro: a small model stuck in a repetition loop, writing the
+    opener over and over with no closing tag anywhere. 256 KB of it must scan
+    in well under the 200ms line the unbounded version crossed at 41 KB."""
+    import time
+
+    unit = '<atem:function_calls>\n<atem:invoke name="device_run">\n'
+    payload = (unit * (256 * 1024 // len(unit) + 1))[: 256 * 1024]
+    started = time.perf_counter()
+    scan = markup_calls.parse_markup_tool_calls(payload, streamed=True)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.05, f"took {elapsed:.3f}s"
+    # No closing tag anywhere means nothing here is a complete, readable call.
+    assert scan.calls == ()
+
+
+def test_a_long_run_of_complete_blocks_is_still_fast_and_still_correct():
+    """The companion case: many COMPLETE blocks, not a repeated unclosed one.
+    The bound must not cost correctness — every call in a 256 KB run of valid,
+    distinct blocks is still recovered, in order, with its real argument."""
+    import time
+
+    unit_count = 2000
+    text = "".join(
+        f'<a:function_calls><a:invoke name="device_run">'
+        f'<a:parameter name="n">{i}</a:parameter></a:invoke></a:function_calls>'
+        for i in range(unit_count)
+    )
+    assert len(text) > 100_000  # comfortably in the same order as the repro
+    started = time.perf_counter()
+    scan = markup_calls.parse_markup_tool_calls(text)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.05, f"took {elapsed:.3f}s"
+    # Every block is complete and distinct, so every one of them is read: the
+    # bound only caps how far a match can look, and none of these bodies come
+    # close to the 8,000/4,000/2,000-char caps.
+    assert len(scan.calls) == unit_count
+    assert [c.name for c in scan.calls] == ["device_run"] * unit_count
+    assert [c.arguments["n"] for c in scan.calls] == [str(i) for i in range(unit_count)]
+    assert scan.text == ""

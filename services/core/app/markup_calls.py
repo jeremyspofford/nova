@@ -63,9 +63,19 @@ The rest of the contract:
   * PURE — no model, no network, no clock, no imports from the app. The same
     text always yields the same scan, so this can never itself become a source
     of narration, and chat.py can run it on every round for the price of one
-    substring search on the common (no-markup) path. Every pattern is bounded:
-    a model stuck in a repetition loop must not be able to hang the event loop
-    (a 12,000-backtick run took 11.8s before the bounds below).
+    substring search on the common (no-markup) path. Every body group is
+    length-capped (8,000 chars for a block, 4,000 for an invoke or a
+    `tool_call` payload, 2,000 for a parameter value — sized to any realistic
+    call), AND every opener's finditer loop is skipped outright unless a
+    matching closing tag exists somewhere in the text at all, so a model stuck
+    in a repetition loop pays for one presence check, never one failed body
+    match per opener. Both bounds are load-bearing: a 12,000-backtick run took
+    11.8s before the code-span bound (see `_INLINE_CODE` below), and
+    `'<atem:function_calls>\n<atem:invoke name="device_run">\n' * n` — a
+    repeated UNCLOSED opener, exactly what a small model in a repetition loop
+    emits — went quadratic (4x cost per 2x input) before the bounds above:
+    32 KB 117ms, 128 KB 1.9s, 256 KB 7.7s. With both in place the same 256 KB
+    input scans in under a millisecond.
   * `streamed=True` is the only mode that will truncate. A round's text can stop
     mid-block, and half an emitted call is not prose; a finished record (the
     persist boundary, a redirect's reply) is never partial, so there the rule
@@ -73,6 +83,7 @@ The rest of the contract:
 """
 from __future__ import annotations
 
+import bisect
 import json
 import re
 from dataclasses import dataclass
@@ -86,22 +97,41 @@ _NAME = r"[A-Za-z_][\w.\-]*"
 # The whole block. Non-greedy body, DOTALL, and the closing tag's prefix is not
 # required to match the opener's: a model that mangles the prefix once mangles
 # it twice, differently.
+#
+# Every body is length-capped — {0,N}? instead of *? — so a failed match from
+# one opener costs at most N, not "the rest of the text". Uncapped, a repeated
+# UNCLOSED opener (a small model stuck in a repetition loop, exactly the
+# owner's trace) makes finditer retry the same failing scan from every opener
+# position and goes QUADRATIC: 32 KB took 117ms, 256 KB took 7.7s. N is sized
+# to any realistic call, well past what any real invocation needs.
 _BLOCK = re.compile(
-    rf"<\s*{_NS}function_calls\s*>(?P<body>.*?)<\s*/\s*{_NS}function_calls\s*>",
+    rf"<\s*{_NS}function_calls\s*>(?P<body>.{{0,8000}}?)<\s*/\s*{_NS}function_calls\s*>",
     re.S | re.I,
 )
 _INVOKE = re.compile(
     rf"<\s*{_NS}invoke\s+name\s*=\s*(?P<q>[\"'])(?P<name>{_NAME})(?P=q)\s*>"
-    rf"(?P<body>.*?)<\s*/\s*{_NS}invoke\s*>",
+    rf"(?P<body>.{{0,4000}}?)<\s*/\s*{_NS}invoke\s*>",
     re.S | re.I,
 )
 _PARAM = re.compile(
     rf"<\s*{_NS}parameter\s+name\s*=\s*(?P<q>[\"'])(?P<key>[^\"'<>]+)(?P=q)\s*>"
-    rf"(?P<value>.*?)<\s*/\s*{_NS}parameter\s*>",
+    rf"(?P<value>.{{0,2000}}?)<\s*/\s*{_NS}parameter\s*>",
     re.S | re.I,
 )
 # The Hermes/Qwen JSON variant, which several local builds emit instead.
-_TOOL_CALL = re.compile(r"<\s*tool_call\s*>(?P<body>.*?)<\s*/\s*tool_call\s*>", re.S | re.I)
+_TOOL_CALL = re.compile(
+    r"<\s*tool_call\s*>(?P<body>.{0,4000}?)<\s*/\s*tool_call\s*>", re.S | re.I
+)
+
+# The cheap linear pre-check: does a closing tag for this shape exist ANYWHERE
+# in the text at all? If not, no opener of that shape can ever complete a
+# match, so the finditer loop below is skipped rather than attempted once per
+# opener. This is what actually kills the quadratic case above — the body
+# bound alone still costs O(openers x bound); this makes a text with zero
+# closers cost one O(n) search, full stop.
+_CLOSE_FUNCTION_CALLS = re.compile(rf"<\s*/\s*{_NS}function_calls\s*>", re.I)
+_CLOSE_INVOKE = re.compile(rf"<\s*/\s*{_NS}invoke\s*>", re.I)
+_CLOSE_TOOL_CALL = re.compile(r"<\s*/\s*tool_call\s*>", re.I)
 
 # An opening tag with no partner, and the shape that says a real call was being
 # emitted when the text stopped: a quoted name attribute, which prose ("nests
@@ -248,7 +278,34 @@ def _mask(text: str) -> str:
 
 
 def _overlaps(span: tuple[int, int], taken: list[tuple[int, int]]) -> bool:
-    return any(span[0] < end and start < span[1] for start, end in taken)
+    """Whether `span` overlaps any interval already recorded in `taken`.
+
+    `taken` is kept sorted by start and pairwise disjoint (every caller adds
+    to it through `_take`, never a bare `.append`), so only the interval
+    starting at-or-before `span` and the one starting after it can possibly
+    overlap — never the whole list. A many-block reply (thousands of short,
+    valid calls, each checked against every block already seen) made the old
+    O(len(taken)) linear scan, run once per candidate span, go quadratic:
+    2,000 blocks took 0.26s in this one check alone.
+    """
+    if not taken:
+        return False
+    start, end = span
+    index = bisect.bisect_left(taken, (start,))
+    if index < len(taken) and taken[index][0] < end:
+        return True
+    if index > 0 and taken[index - 1][1] > start:
+        return True
+    return False
+
+
+def _take(span: tuple[int, int], taken: list[tuple[int, int]]) -> None:
+    """Record `span` as taken, keeping `taken` sorted by start for `_overlaps`.
+    Every caller inserts spans in a mostly-increasing order already (blocks,
+    invokes and tool_calls are all found by scanning left to right), so this
+    insert is amortized O(1) in the common case and never worse than the
+    O(len(taken)) it replaces."""
+    bisect.insort_left(taken, span)
 
 
 # -- reading one call ------------------------------------------------------
@@ -344,52 +401,61 @@ def parse_markup_tool_calls(text: str, *, streamed: bool = False) -> MarkupScan:
     resolved: list[tuple[int, int]] = []
     unparsed = False
 
-    for block in _BLOCK.finditer(masked):
-        resolved.append(block.span())
-        body_start, body_end = block.span("body")
-        invokes = list(_INVOKE.finditer(masked, body_start, body_end))
-        if not invokes:
-            # A block with nothing readable in it is PROSE ABOUT TAGS — the
-            # answer explaining what a call looks like. Byte for byte.
-            continue
-        if _PARAGRAPH_BREAK.search(masked, body_start, invokes[0].start()):
-            # A paragraph between the opener and the first invoke is writing,
-            # not a call: a model emitting one does not stop for a blank line
-            # and a new sentence. The cheapest bound that separates the two.
-            continue
-        for invoke in invokes:
-            calls.append(_call_from_invoke(invoke, text, masked))
-        removals.append(block.span())
+    # Each loop below is skipped outright unless its closing tag exists
+    # somewhere in the text at all: with none, no opener of that shape can
+    # ever complete a match, so there is nothing the bounded body regex could
+    # find and the O(n) search below is strictly less work than even one
+    # failed attempt. This is what keeps a repeated UNCLOSED opener linear.
+    if _CLOSE_FUNCTION_CALLS.search(masked):
+        for block in _BLOCK.finditer(masked):
+            _take(block.span(), resolved)
+            body_start, body_end = block.span("body")
+            invokes = list(_INVOKE.finditer(masked, body_start, body_end))
+            if not invokes:
+                # A block with nothing readable in it is PROSE ABOUT TAGS — the
+                # answer explaining what a call looks like. Byte for byte.
+                continue
+            if _PARAGRAPH_BREAK.search(masked, body_start, invokes[0].start()):
+                # A paragraph between the opener and the first invoke is
+                # writing, not a call: a model emitting one does not stop for
+                # a blank line and a new sentence. The cheapest bound that
+                # separates the two.
+                continue
+            for invoke in invokes:
+                calls.append(_call_from_invoke(invoke, text, masked))
+            _take(block.span(), removals)
 
     # A complete invoke outside any block is still unambiguously a call.
-    for invoke in _INVOKE.finditer(masked):
-        if _overlaps(invoke.span(), resolved):
-            continue
-        calls.append(_call_from_invoke(invoke, text, masked))
-        removals.append(invoke.span())
-        resolved.append(invoke.span())
+    if _CLOSE_INVOKE.search(masked):
+        for invoke in _INVOKE.finditer(masked):
+            if _overlaps(invoke.span(), resolved):
+                continue
+            calls.append(_call_from_invoke(invoke, text, masked))
+            _take(invoke.span(), removals)
+            _take(invoke.span(), resolved)
 
-    for tool_call in _TOOL_CALL.finditer(masked):
-        if _overlaps(tool_call.span(), resolved):
-            continue
-        resolved.append(tool_call.span())
-        body = text[tool_call.start("body") : tool_call.end("body")].strip()
-        try:
-            payload = json.loads(body)
-        except json.JSONDecodeError:
-            unparsed = True
-            removals.append(tool_call.span())
-            continue
-        name = payload.get("name") if isinstance(payload, dict) else None
-        if not isinstance(name, str) or not name.strip():
-            unparsed = True
-            removals.append(tool_call.span())
-            continue
-        arguments = payload.get("arguments", {})
-        if not isinstance(arguments, (dict, str)):
-            arguments = {}
-        calls.append(ParsedCall(name.strip(), arguments))
-        removals.append(tool_call.span())
+    if _CLOSE_TOOL_CALL.search(masked):
+        for tool_call in _TOOL_CALL.finditer(masked):
+            if _overlaps(tool_call.span(), resolved):
+                continue
+            _take(tool_call.span(), resolved)
+            body = text[tool_call.start("body") : tool_call.end("body")].strip()
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                unparsed = True
+                _take(tool_call.span(), removals)
+                continue
+            name = payload.get("name") if isinstance(payload, dict) else None
+            if not isinstance(name, str) or not name.strip():
+                unparsed = True
+                _take(tool_call.span(), removals)
+                continue
+            arguments = payload.get("arguments", {})
+            if not isinstance(arguments, (dict, str)):
+                arguments = {}
+            calls.append(ParsedCall(name.strip(), arguments))
+            _take(tool_call.span(), removals)
 
     if streamed:
         for opener in _OPENER.finditer(masked):
