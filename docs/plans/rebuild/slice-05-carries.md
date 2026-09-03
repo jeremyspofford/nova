@@ -277,3 +277,52 @@ Carries from this wave:
   in v4 yet (the memory-surface slice's motivating carry). Mechanically
   neutralised: the guard refuses any unchecked state claim regardless of
   what recall surfaces.
+
+## Fourth post-close wave (2026-09-03) — a tool call written as TEXT became the reply
+
+Trace: the consent guard's retry worked (device_run tree → "not found",
+honest), then in the tool-less closing round the model wanted `find`, had no
+tool to call, and EMITTED THE CALL AS XML TEXT (`<atem:function_calls>…`); it
+passed all honesty guards (an attempted action is not a lie) and was
+persisted as the answer. The local model (muse-glimmer) speaks Claude-style
+XML tool syntax under pressure. Commits 966b08e3..0655ee1a (core 1039):
+- **Markup in reply text is never an answer**: a pure parser recognises
+  Claude-style `<P:function_calls>` blocks (any namespace) and Hermes
+  `<tool_call>{json}</tool_call>`; in every round the parsed calls are
+  REFUSED via the shared `_refuse_call` with a stated, retryable reason
+  ("you wrote a tool call as text — re-issue it as a tool call"), the markup
+  is stripped, an honest backend note survives REPLACE when nothing else
+  remains, and `_persist_assistant`/memory-ingest strip any unquoted
+  readable markup by construction. Quoted examples (fenced code, blockquote,
+  inline code) are masked and stored byte-for-byte.
+- **RULING (controller, 09-03): tool-call markup is NEVER DISPATCHED, in any
+  round.** The first cut parsed open-round markup into real calls; three
+  adversarial reviews in a row found a Critical in that half — a fenced
+  "here is what a call looks like" EXECUTED; a nested quoted block bled its
+  `argv` onto a live call; the fence/quote mask then blanked structural
+  tags out of the doubt check so `["rm","-rf","/"]` migrated between
+  invokes and ran. Each fix moved the hole; the refuse-and-note half held
+  under every attack. So the dispatch path was removed (one refusal line in
+  `_dispatch_calls`, the single place every call passes), the doubt/residue
+  machinery deleted, and "prose cannot cause an action" is now the same rule
+  as precision-first. See memory [[prose-never-causes-an-action]].
+- Migration 015 backfills pre-014 rows to plumbing (the continuation
+  template anchored both ends; the waiting-note; assistant rows carrying
+  markup) so the choreography and the stored XML reply stop poisoning
+  history. The inline-code regex was superlinear on a backtick run (12k →
+  11.8 s, event-loop blocking) — bounded to 1–3 backticks / 2,000 chars,
+  20k backticks pinned < 50 ms.
+
+Carries from this wave:
+- The live screen still streams the raw XML deltas before the scan runs;
+  only the durable record is clean (the same web gap as corrections not
+  rendering live — a new frame type the web honours, or buffering per round).
+- A block whose only invoke is unreadable, or a real block wholly inside an
+  unmatched backtick pair / unterminated fence, is left as inert text (an
+  XML fragment may show; it can never act).
+- Migration 015's markup clause can mark a prose mention of
+  `</function_calls>` as plumbing and misses bare-invoke/casing variants —
+  one-time, under-inclusive direction, stated in the SQL header.
+- "try again" → she checked (good) then ASKED which directory instead of
+  acting on an explicit instruction — a deferral-by-question the deferral
+  guard does not cover; unobserved cost, note only.
