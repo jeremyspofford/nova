@@ -35,7 +35,19 @@ Suites at close: core 794 / novad 47 (+ -race) / web 385, 0 skips; ruff + vet
 + gofmt clean; the committed envelope vectors + chain-hash vector + the DoD
 tripwire green.
 
-## The DoD — MET mechanically, PENDING the owner's live walk
+## The DoD — MET mechanically; LIVE WALK 2026-09-03 (owner, remote, local model)
+Walked from another machine over the tailnet/public gate: (2) default-grant
+refusal + grant flip — seen on day 1; (3) "how much disk is free" → 905.6 GiB
+real number via device_info; (4) device_run auto after the owner's disposition
+flip; the honest-OFFLINE half of (5): with novad stopped she checked
+(device_info refused not-connected, fact recorded), confirmed via device_list,
+said offline plainly, NO correction — then online again → real number; the
+listing: tree missing → honest refusal → adapted to find in one turn, no XML,
+no dangling intent. Not walked: revoke (6), kill-network staleness timing,
+apps.launch. Web label bug found: an errored tool activity renders as
+"<tool> did not finish" even when the tool finished with a stated refusal.
+
+### (original close-out note)
 The six DoD outcomes are proven MECHANICALLY end-to-end by test_devices_e2e.py
 (a fake device speaking the real protocol against serve(); a deny is asserted
 to leave ZERO command frames AND no device_audit row — the "Activity proves
