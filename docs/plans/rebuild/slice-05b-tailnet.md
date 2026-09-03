@@ -41,9 +41,10 @@ Funnel: ports 443/8443/10000, ACL `funnel` attr, a port is serve OR funnel.
 1. From a phone on the tailnet: open `https://nova.<tailnet>.ts.net` → login
    → chat; the device tile is green; no gate page (tailnet peers are exempt).
 2. Web recreated by ANY shape the operator actually uses — `up -d --build
-   --no-deps web`, a plain `up -d web`, a crash-restart — and the tailnet URL
-   keeps working with NO manual step. Pinned by a tailnet-free topology test
-   (T1) — the 09-03 stall class is removed by topology, not by a ritual.
+   --no-deps web`, a plain `up -d web`, `docker compose restart`, a crash-
+   restart — and the tailnet URL keeps working with NO manual step. Pinned by
+   a tailnet-free topology test (T1) — the 09-03 stall class is removed by
+   topology, not by a ritual.
 3. `docker restart <tailscale service>` → the serve mapping is still there
    and the service reports healthy only when it is (the wrapper applies it;
    the healthcheck reads `tailscale serve status`).
@@ -53,38 +54,44 @@ Funnel: ports 443/8443/10000, ACL `funnel` attr, a port is serve OR funnel.
 5. The public tunnel path still gates (token required); the tailnet path
    does not; localhost gates iff the token is set (unchanged).
 6. Stop the tailscale service → unreachable from the phone; localhost fine.
-7. Host/WSL restart → netns, web and tailscale all come back (docker retries
-   the namespace join with backoff — see it once).
+7. Host/WSL restart → web and tailscale both come back with their fixed
+   addresses (see it once).
 
-## Architecture (revised 2026-09-03 after design review)
-- **The pod shape, not a sidecar-joins-web.** A `service:` network mode
-  pins the joiner to ONE container id's sandbox: if the owner is recreated
-  or even restarted, the joiner keeps the torn-down namespace (lo only —
-  no uplink, no nginx) and never exits, so `restart:` never fires; compose
-  only re-hashes the joiner when it is in the converged set (never with
-  `--no-deps web`, never without the profile). That is the 09-03 stall in a
-  worse form. So: an UNPROFILED pause service **`netns`** (`alpine`, `sleep
-  infinity`, `restart: unless-stopped`) owns the network identity — `ports:
-  127.0.0.1:3000:8080` and `networks.default.aliases: [web]` so `http://web`
-  keeps resolving for e2e and in-network callers — and BOTH `web` and
-  `tailscale` run `network_mode: "service:netns"` (`depends_on: netns`).
-  web recreates/restarts and tailscale restarts are then independent in
-  either order; serve proxies `http://127.0.0.1:80` with no name to resolve.
-  A netns recreate (rare: port config) fails the joiners LOUDLY ("cannot
-  join network of a non running container") until a full `up` — an error,
-  not a stall. web keeps its own healthcheck (dials 127.0.0.1/healthz).
+## Architecture (revision 2, 2026-09-03 — after the T2 review MEASURED the pod shape's restart trap)
+- **Fixed addresses, no shared namespace.** Revision 1 used the pod shape (an
+  unprofiled pause container that web and the sidecar join). The T2 review
+  measured, in a throwaway pod on compose v5.3.0: `docker compose restart`
+  races the namespace join and web dies `Exited (128) cannot join network
+  namespace of a non running container` with NO restart-policy retry (that
+  is S1's committed DoD 2 command); `docker restart netns` strands web
+  (loopback only, published port gone) while its healthcheck stays GREEN;
+  `docker compose up -d` afterwards is a no-op. Any `service:`/pause shape
+  couples start ORDER — a class of trap, not one bug. So: the project network
+  declares its IPAM (`subnet 172.18.0.0/16`, `gateway 172.18.0.1` — the
+  values docker already assigned to nova_default — plus `ip_range
+  172.18.0.0/17` so dynamic allocation stays in the lower half) and web and
+  the sidecar get FIXED addresses in the upper half via `ipv4_address:
+  ${NOVA_WEB_ADDR:-172.18.128.10}` / `${NOVA_TAILSCALE_ADDR:-172.18.128.20}`
+  (.env.example documents both; one source). serve proxies
+  `http://${NOVA_WEB_ADDR}:80` — no name to resolve, an address that survives
+  every recreate; the sidecar is an ordinary container (userspace networking
+  exactly as the old lane ran for months; no tun/caps); no service joins
+  another; `compose restart`, `docker restart <anything>`, `--no-deps web`
+  and a daemon restart are all order-independent. Cost: declaring IPAM on an
+  existing network is a ONE-TIME `docker compose down && up` at deploy (the
+  T3 sitting; volumes persist; the old node is retired in the same sitting).
+  A web recreate keeps its address, so the serve proxy's pooled connection
+  dies with the old container (RST) and re-dials — the same unknown the pod
+  shape had, walked in DoD 2.
 - **The `tailscale` service** (profile `tailnet`, opt-in; image
-  `tailscale/tailscale:v1.102.3` pinned; `TS_HOSTNAME=${TAILNET_HOSTNAME:-nova}`
-  — `hostname:` is REJECTED with a shared namespace, and without it the node
-  would be named after a container id; TS_STATE_DIR on the NAMED VOLUME
-  `v4_tailscale`; TS_AUTH_ONCE=true; TS_AUTHKEY from .env, blank by default,
-  a NON-reusable key recommended since it lingers in .env; NO
-  `TS_SERVE_CONFIG` — one writer only, see next; the wrapper mounted from
-  the DIRECTORY `deploy/tailscale/`; `restart: unless-stopped`). Networking
-  mode decided AT BUILD: userspace first (no tun/caps; the old lane ran
-  userspace serve for months); if serve cannot bind/proxy in the shared
-  namespace, the official kernel shape (`TS_USERSPACE=false`, `/dev/net/tun`,
-  `cap_add: net_admin` — all allowed with `service:` mode).
+  `tailscale/tailscale:v1.102.3` pinned; `hostname: nova` is fine for an
+  ordinary container but the node name comes from
+  `TS_HOSTNAME=${TAILNET_HOSTNAME:-nova}` regardless; `ipv4_address:
+  ${NOVA_TAILSCALE_ADDR}`; TS_STATE_DIR on the NAMED VOLUME `v4_tailscale`;
+  TS_AUTH_ONCE=true; TS_USERSPACE=true; TS_AUTHKEY from .env, blank by
+  default, a NON-reusable key recommended since it lingers in .env; NO
+  `TS_SERVE_CONFIG` — one writer only, see next; the wrapper mounted from the
+  DIRECTORY `deploy/tailscale/`; `restart: unless-stopped`).
 - **Serve applied by US, verified, on every start.** containerboot's own
   TS_SERVE_CONFIG path clears-then-races (open upstream bug); with the CLI
   the config persists in the state store, and two writers would race, so the
@@ -95,22 +102,29 @@ Funnel: ports 443/8443/10000, ACL `funnel` attr, a port is serve OR funnel.
   there (e.g. HTTPS certs not enabled on the tailnet) — never reports success
   it did not check. A compose `healthcheck` reads the same two facts
   (Running + mapping present) so `compose ps` / install.sh are honest.
-- **One nginx server block, two listeners, listener-derived trust.**
-  `listen 127.0.0.1:80;` — loopback inside the shared namespace, so ONLY
-  netns/web/tailscale can reach it (a plain `listen 80` would be reachable by
-  every container on nova_default, which could forge the header) — and
-  `listen 8080;` (published as 127.0.0.1:3000; e2e/in-network callers use
-  `web:8080`). Maps on `$server_port`: `tailnet_peer = (port 80 &&
-  $http_tailscale_user_login != "")`; `gate_block = enabled && !cookie &&
-  !tailnet_peer`. On :80 the header is trustworthy because serve strips any
-  client copy and funnel never sets it; on :8080 (cloudflared forwards client
-  headers) identity headers are never consulted and not forwarded upstream
-  (tripwire grep of the rendered conf — nothing in core reads them until S8).
-  The `/api/v1/devices/ws` carve-out stays on BOTH listeners (same-host novad
-  → :8080 with no cookie; funnel novad → :80 with no header). Tagged tailnet
-  nodes carry no identity headers → they get the token gate (documented).
-  Enroll from the tailnet works because `/api/` on :80 with the header is
-  exempt — that is the mechanism, say so in README.
+- **One listener; trust derived from the SOURCE ADDRESS.** nginx keeps
+  `listen 80` (published `127.0.0.1:3000:80` as today; e2e and in-network
+  callers keep `web:80`). Maps: `$from_sidecar` = (`$remote_addr` ==
+  `${NOVA_TAILSCALE_ADDR}`, templated through the existing `^NOVA_` envsubst
+  — unset ⇒ nobody is trusted); `$tailnet_peer` = from_sidecar AND
+  `Tailscale-User-Login` present; `$gate_block` = enabled AND no cookie AND
+  NOT tailnet_peer. A source address on a docker bridge cannot be completed
+  as a TCP connection by another container (the handshake reply goes to the
+  real holder), so it is a fact, not a header. Identity headers are forwarded
+  upstream ONLY when `$from_sidecar` (empty `proxy_set_header` value removes
+  the client's copy elsewhere — nothing in core reads them until S8). On the
+  sidecar path the header is trustworthy because serve strips any client copy
+  and funnel never sets it: a funnel visitor arrives FROM the sidecar address
+  WITHOUT the header ⇒ gated. Published-port traffic arrives from the docker
+  gateway ⇒ never trusted (cloudflared forwards client headers). The
+  `/api/v1/devices/ws` and `/healthz` carve-outs are unchanged. Tagged
+  tailnet nodes carry no identity headers → they get the token gate
+  (documented). Enroll from the tailnet works because `/api/` from the
+  sidecar with the header is exempt — that is the mechanism, say so in
+  README. S8 carry: `core:8000` is on nova_default and published on
+  127.0.0.1:8000, so forged identity headers can reach core DIRECTLY; when
+  S8 reads them, core needs provenance (e.g. a per-deploy secret header nginx
+  adds only on the trusted path).
 - **Cookie `Secure` derived from the FORWARDED scheme, with one honest
   source.** nginx terminates no TLS, so `$scheme` is always `http` and
   `proxy_set_header X-Forwarded-Proto $scheme` would erase what serve /
@@ -142,58 +156,60 @@ Funnel: ports 443/8443/10000, ACL `funnel` attr, a port is serve OR funnel.
   catch a torn state file). Fallback: the owner mints a TS_AUTHKEY. The v3
   lane's `tailscale/serve.json`, its test and ROADMAP line are v3 debris —
   retired with the v3 tree, not here.
-- **Interim survives T2's deploy**: once nginx binds :80 to loopback the old
-  node's `http://web:80` route goes dark — at T2 deploy time re-point it
-  (`docker exec nova4-tailscale-1 tailscale serve --bg http://web:8080`) so
-  the phone keeps working until T3 replaces the node.
+- **Interim**: the old node keeps proxying `http://web:80` until T3 replaces
+  it; nothing in T2 changes web's port. The one-time network recreate at T3
+  disconnects the old node — it is retired in that sitting.
 - novad: `--server https://nova.<tailnet>.ts.net` for remote devices (serve
   handles the WS upgrade — verify in T3); the pairing modal already prints
   `window.location.origin`.
 
 ## Tasks (order: T2 → T1 → T3)
-- **T2 — Listeners, listener-derived gate, forwarded scheme (S–M; no tailnet
-  needed).** nginx.conf.template: one server block, `listen 127.0.0.1:80` +
-  `listen 8080`, the `$server_port`/identity-header maps, the `$fwd_proto`
-  map on every proxied location, WS carve-out on both listeners; web
-  Dockerfile EXPOSE 8080; compose: the `netns` pause service owning ports +
-  the `web` alias, web → `network_mode: service:netns` + depends_on (this is
-  T2 because the loopback :80 contract is what the sidecar targets);
-  tests/e2e/docker-compose.e2e.yml + e2e/conftest.py → `http://web:8080`;
-  gate_test.sh: `port_of`/`-p` → 8080, and the :80 matrix run INSIDE the
-  container (`docker exec … wget -S --header 'Tailscale-User-Login: a@b'
-  http://127.0.0.1/` → 200 ungated; without header → 401; forged header on
-  the published port from outside → 401; `http://$(hostname -i)/healthz` from
-  inside → REFUSED while 127.0.0.1 → 200, proving loopback-only); a rendered-
-  conf tripwire that :8080 forwards no `Tailscale-User-*`. identity.py +
-  auth_api test through the real route (TestClient + `X-Forwarded-Proto:
-  https` → `Secure` in Set-Cookie; without → not); the nginx half asserted in
-  the e2e job (runner → `:8080` with the header → login → Secure) or it is
-  vacuous. Deploy: hold until T1 is ready, then deploy T2+T1 together and
-  re-point the old node (above).
+- **T2 — Source-address gate, forwarded scheme, IPAM (S–M; no tailnet
+  needed).** nginx.conf.template: single `listen 80`, the `$from_sidecar` /
+  `$tailnet_peer` / `$gate_block` maps, identity headers forwarded only when
+  from_sidecar, the `$fwd_proto` map on every proxied location, carve-outs
+  unchanged; compose: declared IPAM (subnet/gateway as live, ip_range lower
+  half) + `ipv4_address` for web from `NOVA_WEB_ADDR`, `.env.example`
+  documents NOVA_WEB_ADDR / NOVA_TAILSCALE_ADDR, web's `environment` passes
+  NOVA_TAILSCALE_ADDR for envsubst; ports/e2e/Dockerfile stay on :80 (no
+  churn). gate_test.sh: a user-defined test network with a declared subnet; a
+  client container AT the trusted address with the header ⇒ 200 ungated;
+  the same client without the header ⇒ 401; a client at another address with
+  the header ⇒ 401; the published-port path with a forged header ⇒ 401;
+  unset NOVA_TAILSCALE_ADDR ⇒ nobody trusted; the upstream stub proves the
+  identity headers reach core only from the trusted address and
+  `X-Forwarded-Proto` https/HTTPS/absent/http map as expected. identity.py +
+  auth_api through the real route (TestClient + `X-Forwarded-Proto: https` →
+  `Secure` in Set-Cookie; without → not); the nginx→core Secure chain end to
+  end is asserted in the e2e job if it runs, else recorded as walked in DoD.
+  The `/gate` cookie's `Secure` derives from `$fwd_proto` too (consistency).
+  Deploy: hold until T1; the IPAM change needs the one-time down/up.
 - **T1 — The tailscale service (M).** FIRST commit: the tailnet-free topology
-  test — a throwaway compose project (`web: nginx:alpine`, `netns: alpine
-  sleep infinity`, a `sc: alpine sleep infinity` joiner with the plan's
-  network_mode), `up -d`, `up -d --no-deps --force-recreate web`, then
-  `docker exec sc wget -qO- http://127.0.0.1/` must succeed (this FAILS
-  under sidecar-joins-web and PASSES under the pod shape — it decides the
+  test — a throwaway compose project with declared IPAM, `web: nginx:alpine`
+  at a fixed address, and `sc: nginx:alpine` at another fixed address reverse-
+  proxying `http://<web addr>:80`; then `up -d --no-deps --force-recreate
+  web`, `docker compose restart`, `docker restart web`, and after EACH
+  `docker exec sc wget -qO- http://127.0.0.1/` must answer (the pod shape
+  FAILS the `compose restart` step; this shape passes — it decides the
   topology and is DoD 2's pin). Then: the compose service (profile, pinned
-  image, TS_HOSTNAME, state volume, TS_AUTH_ONCE, no TS_SERVE_CONFIG, the
-  directory-mounted wrapper, healthcheck, userspace-vs-kernel decided by a
-  real test), install.sh refuse/prompt/profile/health, `.env.example`,
-  README. CI stand-ins: run the wrapper against a fake `tailscale` on PATH
-  and assert it exits non-zero when `serve status` lacks the mapping; `docker
-  compose --profile tailnet create tailscale` with a dummy key (create, no
-  start — catches compose validation such as the hostname conflict);
-  `compose config` greps for the named volume + directory mount (tripwires).
-  "Restart the node → mapping present" needs a logged-in node: owner walk
-  (DoD 3), plus the healthcheck.
+  image, TS_HOSTNAME, fixed address, state volume, TS_AUTH_ONCE, userspace,
+  no TS_SERVE_CONFIG, the directory-mounted wrapper, healthcheck),
+  install.sh refuse/prompt/profile/health, `.env.example`, README. CI
+  stand-ins: run the wrapper against a fake `tailscale` on PATH and assert
+  it exits non-zero when `serve status` lacks the mapping; `docker compose
+  --profile tailnet create tailscale` with a dummy key (create, no start —
+  compose validation); `compose config` greps for the named volume, the
+  directory mount and both fixed addresses (tripwires). "Restart the node →
+  mapping present" needs a logged-in node: owner walk (DoD 3), plus the
+  healthcheck.
 - **T3 — Migrate the node + DoD walk (S, owner gate).** Stop old → copy state
-  → `--profile tailnet up` (T2+T1 deployed in the same sitting) → novad on
-  the WSL box keeps `127.0.0.1:3000`; remote novad → `--server https://nova.
-  <tailnet>.ts.net` (config edit or re-enroll — say which) → DoD 1–7 with the
-  owner on the phone: recreate web live (2), restart the node (3), pair the
-  laptop (4), tunnel gated / tailnet not (5), stop the service (6), and a
-  host restart when the owner is at the box (7).
+  → the one-time `docker compose down && up -d` (IPAM) with T2+T1 deployed →
+  `--profile tailnet` → novad on the WSL box keeps `127.0.0.1:3000`; remote
+  novad → `--server https://nova.<tailnet>.ts.net` (config edit or re-enroll
+  — say which) → DoD 1–7 with the owner on the phone: recreate web live (2),
+  restart the node (3), pair the laptop (4), tunnel gated / tailnet not, and
+  a forged `Tailscale-User-Login` at the funnel/tunnel URL ⇒ 401 (5), stop
+  the service (6), a host restart when the owner is at the box (7).
 
 ## Rails in force
 DERIVED NEVER HARDCODED (secure from the forwarded scheme; exemption from a
