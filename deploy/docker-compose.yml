@@ -216,6 +216,83 @@ services:
       retries: 12
       start_period: 20s
 
+  tailscale:
+    # Nova's own node on the owner's tailnet (S5b): ONE durable HTTPS origin,
+    # https://<TAILNET_HOSTNAME>.<tailnet>.ts.net, that serves the UI, the API
+    # and the device WebSocket to phones, laptops and remote novad daemons.
+    # Opt-in: `NOVA_TAILNET=1 ./install` turns the profile on, asks for the
+    # one thing only the owner holds (a TS_AUTHKEY, unless the state volume
+    # already carries a logged-in node), and writes COMPOSE_PROFILES so a
+    # bare `docker compose up -d` keeps converging it. install.sh REFUSES the
+    # profile up front when it cannot log the node in — an engine you cannot
+    # start is not an engine. See deploy/README.md, "Tailnet access".
+    #
+    # PINNED (2026-08-19 release). `latest` is what the old sidecar ran and
+    # what changed under it; bump deliberately.
+    image: tailscale/tailscale:v1.102.3
+    profiles: ["tailnet"]
+    restart: unless-stopped
+    # An ordinary container at a FIXED address — no tun device, no
+    # capabilities, no network namespace shared with anything (the pod shape
+    # was measured to strand web on `docker restart`; see the plan). The
+    # address is the one nginx trusts a Tailscale-User-* identity header
+    # from (web's NOVA_TAILSCALE_ADDR above must be the same value — one
+    # .env key feeds both). Userspace networking is what the old node ran
+    # for months.
+    networks:
+      default:
+        ipv4_address: ${NOVA_TAILSCALE_ADDR:-172.18.128.20}
+    hostname: ${TAILNET_HOSTNAME:-nova}
+    # tini as PID 1 so the wrapper is an ordinary child: signals reach its
+    # trap and containerboot's orphans get reaped.
+    init: true
+    environment:
+      # The node's name on the tailnet, i.e. the left-most label of the URL.
+      TS_HOSTNAME: ${TAILNET_HOSTNAME:-nova}
+      # Identity lives on the named volume below, so a restart, a recreate
+      # or an image bump keeps the same node (same MagicDNS name, same cert)
+      # without a new key: TS_AUTH_ONCE only logs in when that state is not
+      # already logged in.
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTH_ONCE: "true"
+      # Userspace (netstack) networking is also what lets `tailscale serve`
+      # proxy to a REMOTE target (web's address): in kernel mode without
+      # net_admin the CLI refuses a non-loopback target outright. Flipping
+      # this to false means adding /dev/net/tun + cap_add net_admin, or the
+      # mapping is never applied.
+      TS_USERSPACE: "true"
+      # Blank by default; install.sh asks for it (never generates one — only
+      # the owner can mint it, at https://login.tailscale.com/admin/settings/
+      # keys). It is used ONCE, on the first login, and then lingers in .env,
+      # which is why a non-reusable key is the recommendation.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      # Deliberately NO TS_SERVE_CONFIG: containerboot's serve path clears the
+      # config on every start and re-applies it through a racy watcher (open
+      # upstream bug). The serve mapping has ONE writer — tailscale/start.sh,
+      # on every start, verified — and it targets web's fixed address.
+      NOVA_WEB_ADDR: ${NOVA_WEB_ADDR:-172.18.128.10}
+    volumes:
+      - v4_tailscale:/var/lib/tailscale
+      # The DIRECTORY, read-only — never a single-file bind (a single-file
+      # mount resolves to a host inode at create time and dies with exit 127
+      # when Docker Desktop recycles its WSL mount; searxng above says why).
+      - ./tailscale:/config:ro
+    # `sh` explicitly, so the wrapper does not depend on an executable bit
+    # surviving the bind mount.
+    command: ["sh", "/config/start.sh"]
+    healthcheck:
+      # The SAME two facts the wrapper verifies, read from tailscaled each
+      # time (tailscale/serve_check.sh): BackendState Running, and the serve
+      # config mapping HTTPS 443 to http://$NOVA_WEB_ADDR:80. So `compose ps`
+      # and install.sh's health table say "healthy" only when a tailnet peer
+      # would actually get web — a green tailscale never means less than
+      # that. start_period covers the first login.
+      test: ["CMD", "sh", "/config/serve_check.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 4
+      start_period: 90s
+
 networks:
   # Declared so the project network's addressing is a fact of this file
   # rather than whatever docker handed out. The tailnet sidecar (S5b T1)
@@ -251,3 +328,13 @@ volumes:
   v4_memdata:
   v4_workspace:
   v4_ollama:
+  # The tailnet node's identity (tailscaled.state, certs, MagicDNS name).
+  # Compose names it <project>_v4_tailscale. Deliberately NOT `tailscale_state`:
+  # a volume of THAT name already exists under this project name
+  # (`nova_tailscale_state`, created by the v3 stack) and the old "nova" node
+  # — `nova4-tailscale-1`, still running — mounts it as its state dir
+  # (measured 2026-09-03). A v4 key of the same name would attach a second
+  # tailscaled to a live node key, and the two flap. The old node's state is
+  # MIGRATED into this volume at T3 with the old container stopped
+  # (deploy/README.md), never shared live.
+  v4_tailscale:

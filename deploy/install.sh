@@ -321,6 +321,300 @@ preflight() {
   decide_inference
 }
 
+# ---- tailnet ----------------------------------------------------------------
+
+# The `tailnet` profile (docker-compose.yml, service `tailscale`) puts Nova on
+# the owner's tailnet as its own node. Opt-in — `NOVA_TAILNET=1 ./install` —
+# and it needs the one input only the owner holds: a Tailscale auth key, or a
+# state volume that already carries a logged-in node (a re-install, or the
+# old node's state migrated in; deploy/README.md). Without either the
+# container would sit at NeedsLogin behind `restart: unless-stopped` and the
+# health table would count down to "unhealthy" on a service that was never
+# going to come up. An engine you cannot start is not an engine: refuse here,
+# before anything is pulled or built, and say what would make it start.
+#
+# Once on, the profile is written to COMPOSE_PROFILES in .env so a later bare
+# `docker compose up -d` converges the service too — and this script keeps
+# passing it explicitly, because a `--profile` flag on the command line
+# REPLACES the .env list rather than adding to it (measured, compose v5.3.0).
+TAILNET_ENABLED=0
+# The compose volume KEY that holds the node's identity (docker-compose.yml,
+# `volumes:`). Compose prefixes it with the project name; the real volume is
+# found by its compose labels below, never by assembling that name here.
+TAILSCALE_STATE_VOLUME_KEY="v4_tailscale"
+# Why the state-volume answer is what it is — printed with the decision.
+TAILNET_STATE_REASON=""
+
+# Is $1 in the comma-separated profile list $2?
+profile_listed() {
+  case ",$2," in
+    *",$1,"*) return 0 ;;
+  esac
+  return 1
+}
+
+# The list $2 with $1 added once (order kept) / removed.
+add_profile() {
+  if profile_listed "$1" "$2"; then
+    printf '%s' "$2"
+  elif [ -z "$2" ]; then
+    printf '%s' "$1"
+  else
+    printf '%s,%s' "$2" "$1"
+  fi
+}
+
+remove_profile() {
+  local out="" p OLDIFS="$IFS"
+  IFS=','
+  for p in $2; do
+    IFS="$OLDIFS"
+    if [ -n "$p" ] && [ "$p" != "$1" ]; then
+      out="${out:+$out,}$p"
+    fi
+    IFS=','
+  done
+  IFS="$OLDIFS"
+  printf '%s' "$out"
+}
+
+# THE SEAM (tailnet). What compose resolves this project to, with the
+# tailnet profile on — the ONE text the project name, the state volume's
+# full name and the sidecar's image are all read from (never assembled).
+# Captured whole rather than piped into an early-exiting reader, so nothing
+# upstream ever takes a SIGPIPE under pipefail.
+compose_config_text() {
+  docker compose "${COMPOSE_ARGS[@]}" --profile tailnet config 2>/dev/null
+}
+
+# Pure readers of that text (stdin), testable on fixtures.
+config_project_name() {
+  awk '!done && /^name: / { print $2; done = 1 }'
+}
+
+# The full volume name compose gives the key $1 (`name:` under that key in
+# the `volumes:` section — <project>_<key> unless the file says otherwise).
+config_volume_name() {
+  awk -v key="$1" '
+    /^volumes:/ { f = 1; next }
+    f && index($0, "  " key ":") == 1 { g = 1; next }
+    g && /^  [a-z]/ { g = 0 }
+    g && !done && /^ *name:/ { print $2; done = 1 }
+  '
+}
+
+# The image the service $1 runs.
+config_service_image() {
+  awk -v svc="$1" '
+    index($0, "  " svc ":") == 1 { f = 1; next }
+    f && /^  [a-z]/ { f = 0 }
+    f && !done && /^    image:/ { print $2; done = 1 }
+  '
+}
+
+# THE SEAM (tailnet). The volume compose created for this project and key,
+# found by the labels compose stamps on it. Empty when there is none.
+state_volume_by_label() {
+  docker volume ls -q \
+    --filter "label=com.docker.compose.project=$1" \
+    --filter "label=com.docker.compose.volume=$TAILSCALE_STATE_VOLUME_KEY" 2>/dev/null
+}
+
+# THE SEAM (tailnet). Does a volume of this exact name exist?
+state_volume_exists() {
+  docker volume inspect "$1" >/dev/null 2>&1
+}
+
+# THE SEAM (tailnet). Is tailscaled.state on the volume $1? Looked at through
+# a throwaway container of the sidecar's own image $2 (already needed, so
+# nothing extra is pulled). 0 yes, 1 no, anything else: docker itself failed.
+state_file_on_volume() {
+  docker run --rm -v "$1:/s:ro" --entrypoint sh "$2" -c 'test -f /s/tailscaled.state' \
+    >/dev/null 2>&1
+}
+
+compose_project_name() {
+  local cfg
+  cfg="$(compose_config_text)" || return 1
+  printf '%s\n' "$cfg" | config_project_name
+}
+
+# Does the node-state volume already hold a logged-in node? Read from the
+# volume itself, never from a name we remember.
+#   0 — yes; TAILNET_STATE_REASON says which volume
+#   1 — no (no volume yet, or no state file on it)
+#   2 — docker could not be asked
+tailscale_state_present() {
+  local cfg project vol image rc
+  if ! cfg="$(compose_config_text)" || [ -z "$cfg" ]; then
+    TAILNET_STATE_REASON="docker compose config could not be read"
+    return 2
+  fi
+  project="$(printf '%s\n' "$cfg" | config_project_name)"
+  if [ -z "$project" ]; then
+    TAILNET_STATE_REASON="compose reported no project name"
+    return 2
+  fi
+  vol="$(state_volume_by_label "$project")" || {
+    TAILNET_STATE_REASON="docker volume ls failed"
+    return 2
+  }
+  if [ -z "$vol" ]; then
+    # A volume made by hand — `docker volume create`, or `docker run -v
+    # <name>:/to` — carries NO compose labels, so the label lookup says
+    # "nothing" about a node someone just migrated in. Fall back to the NAME
+    # compose resolves for the key and look for that.
+    vol="$(printf '%s\n' "$cfg" | config_volume_name "$TAILSCALE_STATE_VOLUME_KEY")"
+    if [ -z "$vol" ]; then
+      TAILNET_STATE_REASON="compose names no $TAILSCALE_STATE_VOLUME_KEY volume"
+      return 2
+    fi
+    if ! state_volume_exists "$vol"; then
+      TAILNET_STATE_REASON="no $vol volume exists yet"
+      return 1
+    fi
+  fi
+  image="$(printf '%s\n' "$cfg" | config_service_image tailscale)"
+  if [ -z "$image" ]; then
+    TAILNET_STATE_REASON="compose names no image for the tailscale service"
+    return 2
+  fi
+  state_file_on_volume "$vol" "$image" && rc=0 || rc=$?
+  case "$rc" in
+    0) TAILNET_STATE_REASON="volume $vol already holds a node (tailscaled.state)"; return 0 ;;
+    1) TAILNET_STATE_REASON="volume $vol exists but holds no tailscaled.state"; return 1 ;;
+    *) TAILNET_STATE_REASON="volume $vol could not be read (docker run exit $rc)"; return 2 ;;
+  esac
+}
+
+# Separated so a test can drive the no-terminal path without closing its own
+# stdin.
+have_tty() {
+  [ -t 0 ]
+}
+
+# Ask on the terminal. Prints the answer, or $2 when the answer is blank; a
+# third argument means "secret" (not echoed).
+prompt_value() {
+  local label="$1" default="$2" answer
+  if [ -n "$default" ]; then
+    label="$label [$default]"
+  fi
+  if [ -n "${3:-}" ]; then
+    read -r -s -p "$label: " answer
+    printf '\n' >&2
+  else
+    read -r -p "$label: " answer
+  fi
+  printf '%s' "${answer:-$default}"
+}
+
+refuse_tailnet() {
+  log "ERROR: the tailnet profile was requested, but the node has no way to log in:"
+  log "       TS_AUTHKEY is blank in $ENV_FILE, and $TAILNET_STATE_REASON."
+  log ""
+  log "       Ways forward:"
+  log "         1. Mint an auth key at https://login.tailscale.com/admin/settings/keys"
+  log "            (it is used ONCE, on the first login; a NON-reusable key is the"
+  log "            recommendation, since it lingers in .env), put it in $ENV_FILE as"
+  log "              TS_AUTHKEY=tskey-auth-..."
+  log "            and re-run:  NOVA_TAILNET=1 ./install"
+  log "         2. Moving an existing node here instead: copy its state into the"
+  log "            volume first (deploy/README.md, \"Migrating an existing node\"),"
+  log "            then re-run."
+  log "         3. Leave the tailnet off:  ./install   (without NOVA_TAILNET)."
+  exit 1
+}
+
+decide_tailnet() {
+  local existing key hostname want=0 rc
+  existing="$(get_env_value COMPOSE_PROFILES)"
+  case "${NOVA_TAILNET:-}" in
+    1) want=1 ;;
+    0) want=0 ;;
+    "") if profile_listed tailnet "$existing"; then want=1; fi ;;
+    *) die "NOVA_TAILNET must be 1 or 0 (got '${NOVA_TAILNET}')" ;;
+  esac
+
+  if [ "$want" -eq 0 ]; then
+    if [ "${NOVA_TAILNET:-}" = "0" ] && profile_listed tailnet "$existing"; then
+      set_env_value COMPOSE_PROFILES "$(remove_profile tailnet "$existing")"
+      log "tailnet: profile removed from COMPOSE_PROFILES (NOVA_TAILNET=0). A running"
+      log "         tailscale container is left alone; stop it with:"
+      log "           docker compose -f $COMPOSE_FILE --profile tailnet stop tailscale"
+    else
+      log "tailnet: off (NOVA_TAILNET=1 ./install puts Nova on your tailnet — deploy/README.md)"
+    fi
+    return 0
+  fi
+
+  hostname="$(get_env_value TAILNET_HOSTNAME)"
+  if [ -z "$hostname" ]; then
+    if have_tty; then
+      hostname="$(prompt_value "Node name on the tailnet (the URL's first label)" nova)"
+    else
+      hostname=nova
+    fi
+  fi
+  # A DNS label, because it becomes one: lowercase letters, digits, hyphens.
+  case "$hostname" in
+    "" | *[!a-z0-9-]*)
+      die "TAILNET_HOSTNAME must be a DNS label (lowercase letters, digits and hyphens only), got '$hostname'"
+      ;;
+  esac
+  if [ "$hostname" != "$(get_env_value TAILNET_HOSTNAME)" ]; then
+    set_env_value TAILNET_HOSTNAME "$hostname"
+  fi
+
+  key="$(get_env_value TS_AUTHKEY)"
+  if [ -n "$key" ]; then
+    log "tailnet: TS_AUTHKEY is set (used once, on the node's first login)"
+  else
+    tailscale_state_present && rc=0 || rc=$?
+    case "$rc" in
+      0)
+        log "tailnet: no auth key needed — $TAILNET_STATE_REASON"
+        ;;
+      2)
+        log "ERROR: it could not be established whether the tailnet state volume already"
+        log "       holds a node: $TAILNET_STATE_REASON"
+        log "       Refusing rather than guessing — fix docker, or set TS_AUTHKEY in $ENV_FILE."
+        exit 1
+        ;;
+      *)
+        if have_tty; then
+          log "tailnet: $TAILNET_STATE_REASON, so an auth key is needed to join."
+          log "         Mint one at https://login.tailscale.com/admin/settings/keys — used once;"
+          log "         a NON-reusable key is recommended, since it lingers in $ENV_FILE."
+          key="$(prompt_value "TS_AUTHKEY (blank to abort)" "" secret)"
+          if [ -n "$key" ]; then
+            set_env_value TS_AUTHKEY "$key"
+            log "tailnet: TS_AUTHKEY saved to $ENV_FILE"
+          fi
+        fi
+        [ -n "$key" ] || refuse_tailnet
+        ;;
+    esac
+  fi
+
+  TAILNET_ENABLED=1
+  COMPOSE_ARGS=("${COMPOSE_ARGS[@]}" --profile tailnet)
+  HEALTH_CHECKED_SERVICES="$HEALTH_CHECKED_SERVICES tailscale"
+  set_env_value COMPOSE_PROFILES "$(add_profile tailnet "$existing")"
+  log "tailnet: on — node '$hostname'; COMPOSE_PROFILES in $ENV_FILE now carries the profile"
+}
+
+# THE SEAM (tailnet). The node's MagicDNS name, read from the running
+# sidecar (trailing dot stripped). Empty when it cannot be read.
+tailnet_dns_name() {
+  local status
+  # Captured first: a reader that exits after the first match would hand the
+  # writer a SIGPIPE, and under pipefail that reads as "could not be read".
+  status="$(docker compose "${COMPOSE_ARGS[@]}" exec -T tailscale tailscale status --json 2>/dev/null)" \
+    || return 1
+  printf '%s\n' "$status" | grep -o -m1 '"DNSName": *"[^"]*"' | sed 's/^[^:]*: *"//; s/\.\{0,1\}"$//'
+}
+
 # ---- hardware detect ------------------------------------------------------
 
 detect_ram_mb() {
@@ -549,17 +843,39 @@ cmd_install() {
   preflight
   detect_hardware
   generate_secrets
+  # After generate_secrets: it reads and writes .env. Still before anything is
+  # pulled, built or started.
+  decide_tailnet
   compose_up
   wait_for_health || true
   print_status
   local unhealthy
   unhealthy="$(unhealthy_services)"
   if [ -n "$unhealthy" ]; then
+    # The reason is in the container's log (the tailnet wrapper prints its
+    # login URL / why the mapping is missing there), so show it rather than
+    # send the operator to find it.
+    local svc
+    for svc in $unhealthy; do
+      log "---- last 20 log lines of $svc:"
+      docker compose "${COMPOSE_ARGS[@]}" logs --tail=20 --no-log-prefix "$svc" 2>&1 | sed 's/^/  /' >&2 || true
+    done
     die "unhealthy service(s):$unhealthy"
   fi
   log "Nova is up. Open http://127.0.0.1:3000 to finish setup."
   if [ "$BUNDLED_INFERENCE" -eq 0 ]; then
     log "No bundled engine is running — pick 'Remote endpoint' at the engine step."
+  fi
+  if [ "$TAILNET_ENABLED" -eq 1 ]; then
+    local dns
+    dns="$(tailnet_dns_name)" || dns=""
+    if [ -n "$dns" ]; then
+      log "On your tailnet: https://${dns}/ (tailnet peers skip the gate)."
+    else
+      # The service is healthy, so the name exists; only the read failed.
+      log "On your tailnet: the node's name could not be read just now — see"
+      log "  docker compose ${COMPOSE_ARGS[*]} exec tailscale tailscale status"
+    fi
   fi
 }
 

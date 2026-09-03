@@ -81,6 +81,11 @@ jobs:
       # owner-restart strand is reproduced as a negative control so the test
       # cannot pass vacuously. Throwaway compose projects on 10.98.x only.
       - run: bash ../../deploy/tailnet_topology_test.sh
+      # S5b's sidecar wrapper: containerboot in the background, serve applied
+      # by us and READ back — the cases run inside the real tailscale image
+      # against fake tailscale/containerboot binaries, plus a compose `create`
+      # of the service on a throwaway project (never started). Docker-backed.
+      - run: bash ../../deploy/tailscale/start_test.sh
 
   # The daemon is the first code that runs OUTSIDE the compose stack, and its
   # whole interop risk is one encoder that must be byte-identical to core's

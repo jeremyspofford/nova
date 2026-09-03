@@ -208,14 +208,49 @@ Funnel: ports 443/8443/10000, ACL `funnel` attr, a port is serve OR funnel.
   directory mount and both fixed addresses (tripwires). "Restart the node →
   mapping present" needs a logged-in node: owner walk (DoD 3), plus the
   healthcheck.
-- **T3 — Migrate the node + DoD walk (S, owner gate).** Stop old → copy state
-  → the one-time `docker compose down && up -d` (IPAM) with T2+T1 deployed →
-  `--profile tailnet` → novad on the WSL box keeps `127.0.0.1:3000`; remote
-  novad → `--server https://nova.<tailnet>.ts.net` (config edit or re-enroll
-  — say which) → DoD 1–7 with the owner on the phone: recreate web live (2),
-  restart the node (3), pair the laptop (4), tunnel gated / tailnet not, and
-  a forged `Tailscale-User-Login` at the funnel/tunnel URL ⇒ 401 (5), stop
-  the service (6), a host restart when the owner is at the box (7).
+- **T3 — Migrate the node + DoD walk (S, owner gate).** Measured 2026-09-03:
+  the owner's "nova" node state lives in the volume `nova_tailscale_state`
+  (the v3 stack's key, project name `nova` is shared by v3 and v4), mounted
+  by BOTH the running `nova4-tailscale-1` and the exited v3
+  `nova-tailscale-1`; the v4 service uses its own volume `nova_v4_tailscale`
+  so it never adopts a v3 identity by accident. Runbook, in order (operator
+  = Fable under the nova4 "drives the loop" amendment; the owner's only input
+  is consent — the tailnet URL goes dark for the minutes between step 1 and
+  step 5):
+  1. `docker stop nova4-tailscale-1` (releases the node key AND its
+     nova_default endpoint — a running foreign endpoint blocks the network
+     recreate).
+  2. `docker compose -f deploy/docker-compose.yml down` (v4 services only;
+     the v3 exited containers are orphans and stay), then `docker compose -f
+     deploy/docker-compose.yml --profile tailnet create tailscale` — creates
+     the LABELLED volume `nova_v4_tailscale` without starting anything (a
+     volume made by `docker run -v` is unlabeled and install.sh's identity
+     check would not see it — measured), then copy the node state: `docker
+     run --rm -v nova_tailscale_state:/from -v nova_v4_tailscale:/to
+     --entrypoint sh tailscale/tailscale:v1.102.3 -c 'cp -a /from/. /to/ &&
+     ls -la /to'` — same node key, same MagicDNS name, no new authkey; leave
+     the source volume alone.
+  3. `NOVA_TAILNET=1 ./install` (or `docker compose --profile tailnet up
+     -d`): the network is recreated with the declared IPAM, web at
+     NOVA_WEB_ADDR, the sidecar at NOVA_TAILSCALE_ADDR; install.sh's identity
+     check sees `tailscaled.state` in the volume and does not ask for a key.
+  4. Read the facts, never the log line: `docker compose ps` shows tailscale
+     healthy; `docker exec nova-tailscale-1 tailscale status --json` →
+     Self.DNSName is the old name; `tailscale serve status` shows
+     `http://<NOVA_WEB_ADDR>:80`.
+  5. Owner walk on the phone: DoD 1 (login, chat, green tile), 2 (recreate
+     web live: `up -d --build --no-deps web`), 3 (`docker restart
+     nova-tailscale-1`), 4 (pair the laptop from the tailnet origin; novad
+     `--server https://<node>.ts.net`), 5 (tunnel gated / tailnet not / a
+     forged `Tailscale-User-Login` at the tunnel URL ⇒ 401), 6 (stop the
+     service → phone unreachable, localhost fine), 7 (host restart when at
+     the box).
+  6. Retire: `docker rm nova4-tailscale-1` once the walk passes (its volume
+     stays as the v3 stack's; the v3 tree is retired wholesale later).
+  Rollback at any step: `docker compose down`, restore the compose file from
+  the previous commit, `docker start nova4-tailscale-1`, `docker network
+  connect nova_default nova4-tailscale-1`, `docker exec nova4-tailscale-1
+  tailscale serve --bg http://web:80`.
 
 ## Rails in force
 DERIVED NEVER HARDCODED (secure from the forwarded scheme; exemption from a

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# Tests for deploy/install.sh's inference decision.
+# Tests for deploy/install.sh's decisions: the inference one and the tailnet
+# one.
 #
 # install.sh guards its own entry point (`if [ "${BASH_SOURCE[0]}" = "$0" ]`),
-# so this file sources it to get the real functions and then stubs only the
-# two that touch the outside world — what holds the port, and whether an
-# ollama answers on it. Everything under test is the shipped code path.
+# so this file sources it to get the real functions and then stubs only what
+# touches the outside world — what holds the port, whether an ollama answers
+# on it, whether the tailnet state volume holds a node, the terminal.
+# Everything under test is the shipped code path.
 #
 # No docker, no network, no writes outside a temp dir:
 #     deploy/install_test.sh
@@ -399,6 +401,358 @@ expect_case "openssl present: preflight passes" "$(run_openssl_check 0)" 0 "open
 expect_case "openssl missing: refuses instead of failing later inside generate_secrets" \
   "$(run_openssl_check 1)" 1 "openssl not found"
 expect_case "openssl missing: states a remedy" "$(run_openssl_check 1)" 1 "install"
+
+
+# ── tailnet: the profile refuses an engine it cannot start ──────────────────
+# decide_tailnet runs for real against a temp .env. Stubbed are the three
+# seams that touch the outside world: the state volume
+# (tailscale_state_present), the terminal (have_tty) and the prompt
+# (prompt_value, which also records that it was asked). The wiring it leaves
+# behind — COMPOSE_ARGS, HEALTH_CHECKED_SERVICES — is written out by the same
+# shell that ran it, so a refusal (exit 1) leaves them empty here.
+#
+#   $1 NOVA_TAILNET value ("" = unset)
+#   $2 tailscale_state_present exit code (0 node present, 1 none, 2 no docker)
+#   $3 have_tty exit code (0 terminal, 1 none)
+#   $4 what the operator types at every prompt ("" = accept the default)
+#   $5 initial .env body (printf %b escapes)
+#   $6 "lowseams" to run the real tailscale_state_present over stubbed docker
+# Prints "<exit>|<COMPOSE_ARGS>|<HEALTH_CHECKED_SERVICES>|<.env with ; for
+# newlines>|<prompts asked>|<stderr>".
+# What `docker compose --profile tailnet config` prints, in miniature, with
+# decoys on every side of the lines the readers must pick out.
+FIXTURE_CFG='name: nova
+services:
+  core:
+    image: decoy/core:1
+  tailscale:
+    hostname: nova
+    image: tailscale/tailscale:v9.9.9
+  web:
+    image: decoy/web:1
+volumes:
+  v4_pgdata:
+    name: nova_v4_pgdata
+  v4_tailscale:
+    name: nova_v4_tailscale
+  v4_workspace:
+    name: nova_v4_workspace
+'
+run_tailnet() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "$5" > "$ENV_FILE"
+    STATE_RC="$2"
+    TTY_RC="$3"
+    PROMPT_ANSWER="$4"
+    if [ "${6:-}" = "lowseams" ]; then
+      # tailscale_state_present runs for REAL; what is stubbed is docker
+      # underneath it, in the migrated-node shape: compose resolves the
+      # names, the label lookup finds nothing, the volume exists by name
+      # and holds a state file.
+      compose_config_text() { printf '%s' "$FIXTURE_CFG"; }
+      state_volume_by_label() { printf ''; }
+      state_volume_exists() { return 0; }
+      state_file_on_volume() { return 0; }
+    else
+      tailscale_state_present() {
+        # Read by decide_tailnet in the sourced install.sh, not here.
+        # shellcheck disable=SC2034
+        TAILNET_STATE_REASON="stub: state volume answer $STATE_RC"
+        return "$STATE_RC"
+      }
+    fi
+    have_tty() { return "$TTY_RC"; }
+    prompt_value() {
+      printf 'PROMPTED[%s];' "$1" >> "$tmp/prompts"
+      printf '%s' "${PROMPT_ANSWER:-$2}"
+    }
+    if [ -n "$1" ]; then export NOVA_TAILNET="$1"; else unset NOVA_TAILNET; fi
+    (
+      decide_tailnet 2> "$tmp/err"
+      printf '%s' "${COMPOSE_ARGS[*]}" > "$tmp/args"
+      printf '%s' "$HEALTH_CHECKED_SERVICES" > "$tmp/health"
+    )
+    code=$?
+    printf '%s|%s|%s|%s|%s|%s' "$code" \
+      "$(cat "$tmp/args" 2>/dev/null)" \
+      "$(cat "$tmp/health" 2>/dev/null)" \
+      "$(tr '\n' ';' < "$ENV_FILE")" \
+      "$(cat "$tmp/prompts" 2>/dev/null)" \
+      "$(tr '\n' ' ' < "$tmp/err")"
+  )
+}
+
+# Field n (1-based) of a run_tailnet result.
+tn_field() {
+  printf '%s' "$1" | cut -d'|' -f"$2"
+}
+
+expect_tn() {
+  # $1 name  $2 result  $3 want exit  $4 field number  $5 needle ("" = any)
+  local name="$1" out="$2" want_code="$3" fno="$4" needle="$5"
+  local code text
+  code="$(tn_field "$out" 1)"
+  text="$(tn_field "$out" "$fno")"
+  if [ "$code" != "$want_code" ]; then
+    report 1 "$name" "exit $code, wanted $want_code — stderr: $(tn_field "$out" 6)"
+    return
+  fi
+  case "$text" in
+    *"$needle"*) report 0 "$name" ;;
+    *) report 1 "$name" "field $fno did not contain '$needle' — got: $text" ;;
+  esac
+}
+
+expect_tn_lacks() {
+  local name="$1" out="$2" fno="$3" needle="$4" text
+  text="$(tn_field "$out" "$fno")"
+  case "$text" in
+    *"$needle"*) report 1 "$name" "field $fno contained '$needle' — got: $text" ;;
+    *) report 0 "$name" ;;
+  esac
+}
+
+BASE_ENV='POSTGRES_PASSWORD=x\nTS_AUTHKEY=\nTAILNET_HOSTNAME=\nCOMPOSE_PROFILES=\n'
+
+# ── off is the default, and says how to turn it on ──────────────────────────
+TN_OFF="$(run_tailnet "" 1 1 "" "$BASE_ENV")"
+expect_tn "tailnet off by default" "$TN_OFF" 0 6 "tailnet: off"
+expect_tn "tailnet off: names the switch" "$TN_OFF" 0 6 "NOVA_TAILNET=1 ./install"
+expect_tn_lacks "tailnet off: no --profile tailnet" "$TN_OFF" 2 "tailnet"
+expect_tn_lacks "tailnet off: tailscale not health-checked" "$TN_OFF" 3 "tailscale"
+expect_tn_lacks "tailnet off: COMPOSE_PROFILES untouched" "$TN_OFF" 4 "COMPOSE_PROFILES=tailnet"
+expect_tn_lacks "tailnet off: nothing prompted (really)" "$TN_OFF" 5 "PROMPTED"
+
+# ── the refusal this exists for: no key, no node, no terminal ───────────────
+TN_REFUSE="$(run_tailnet 1 1 1 "" "$BASE_ENV")"
+expect_tn "no key, no node: refuses" "$TN_REFUSE" 1 6 "no way to log in"
+expect_tn "no key, no node: names TS_AUTHKEY" "$TN_REFUSE" 1 6 "TS_AUTHKEY is blank"
+expect_tn "no key, no node: says where a key comes from" "$TN_REFUSE" 1 6 \
+  "https://login.tailscale.com/admin/settings/keys"
+expect_tn "no key, no node: recommends a non-reusable key" "$TN_REFUSE" 1 6 "NON-reusable"
+expect_tn "no key, no node: offers the migration path" "$TN_REFUSE" 1 6 "Migrating an existing node"
+expect_tn "no key, no node: offers leaving it off" "$TN_REFUSE" 1 6 "Leave the tailnet off"
+expect_tn "no key, no node: the state reason is quoted" "$TN_REFUSE" 1 6 "state volume answer 1"
+expect_tn_lacks "no key, no node: nothing wired" "$TN_REFUSE" 2 "--profile tailnet"
+expect_tn_lacks "no key, no node: COMPOSE_PROFILES not written" "$TN_REFUSE" 4 "COMPOSE_PROFILES=tailnet"
+
+# ── a key in .env is enough ─────────────────────────────────────────────────
+TN_KEY="$(run_tailnet 1 1 1 "" 'POSTGRES_PASSWORD=x\nTS_AUTHKEY=tskey-auth-set\nCOMPOSE_PROFILES=\n')"
+expect_tn "key set: proceeds" "$TN_KEY" 0 6 "tailnet: on"
+expect_tn "key set: compose gets --profile tailnet" "$TN_KEY" 0 2 "--profile tailnet"
+expect_tn "key set: tailscale is health-checked" "$TN_KEY" 0 3 "tailscale"
+expect_tn "key set: COMPOSE_PROFILES=tailnet written to .env" "$TN_KEY" 0 4 "COMPOSE_PROFILES=tailnet;"
+expect_tn "key set: hostname defaults to nova without a terminal" "$TN_KEY" 0 4 "TAILNET_HOSTNAME=nova;"
+expect_tn "key set: the key is left as it was" "$TN_KEY" 0 4 "TS_AUTHKEY=tskey-auth-set;"
+expect_tn_lacks "key set: the key value is never logged" "$TN_KEY" 6 "tskey-auth-set"
+expect_tn_lacks "key set: no state-volume lookup was needed" "$TN_KEY" 6 "state volume answer"
+
+# ── a node already on the volume is enough (re-install, migrated node) ──────
+TN_NODE="$(run_tailnet 1 0 0 "" "$BASE_ENV")"
+expect_tn "node on the volume: proceeds without a key" "$TN_NODE" 0 6 "no auth key needed"
+expect_tn "node on the volume: the reason is quoted" "$TN_NODE" 0 6 "state volume answer 0"
+expect_tn "node on the volume: compose gets --profile tailnet" "$TN_NODE" 0 2 "--profile tailnet"
+expect_tn "node on the volume: hostname was asked (terminal present)" "$TN_NODE" 0 5 "PROMPTED[Node name"
+expect_tn_lacks "node on the volume: the key was NOT asked for" "$TN_NODE" 5 "TS_AUTHKEY"
+expect_tn "node on the volume: default hostname accepted" "$TN_NODE" 0 4 "TAILNET_HOSTNAME=nova;"
+
+# ── with a terminal, the key is asked for — and saved ───────────────────────
+TN_TYPED="$(run_tailnet 1 1 0 "tskey-auth-typed" 'TS_AUTHKEY=\nTAILNET_HOSTNAME=nova\nCOMPOSE_PROFILES=\n')"
+expect_tn "typed key: proceeds" "$TN_TYPED" 0 6 "TS_AUTHKEY saved"
+expect_tn "typed key: the key prompt was shown" "$TN_TYPED" 0 5 "PROMPTED[TS_AUTHKEY"
+expect_tn "typed key: saved to .env" "$TN_TYPED" 0 4 "TS_AUTHKEY=tskey-auth-typed;"
+expect_tn_lacks "typed key: the value is never logged" "$TN_TYPED" 6 "tskey-auth-typed"
+expect_tn "typed key: prompt explained the one-time key" "$TN_TYPED" 0 6 "NON-reusable key is recommended"
+
+# ── with a terminal but nothing typed: still a refusal, not a guess ─────────
+TN_BLANK="$(run_tailnet 1 1 0 "" 'TS_AUTHKEY=\nTAILNET_HOSTNAME=nova\nCOMPOSE_PROFILES=\n')"
+expect_tn "blank at the prompt: refuses" "$TN_BLANK" 1 6 "no way to log in"
+expect_tn_lacks "blank at the prompt: nothing wired" "$TN_BLANK" 2 "--profile tailnet"
+
+# ── a hostname typed at the prompt lands in .env ────────────────────────────
+TN_HOST="$(run_tailnet 1 1 0 "nova-lab" 'TS_AUTHKEY=tskey-auth-set\nTAILNET_HOSTNAME=\n')"
+expect_tn "typed hostname: saved" "$TN_HOST" 0 4 "TAILNET_HOSTNAME=nova-lab;"
+expect_tn "typed hostname: named in the decision" "$TN_HOST" 0 6 "node 'nova-lab'"
+TN_HOST_KEPT="$(run_tailnet 1 1 0 "ignored" 'TS_AUTHKEY=tskey-auth-set\nTAILNET_HOSTNAME=kept\n')"
+expect_tn "existing hostname: not asked again" "$TN_HOST_KEPT" 0 4 "TAILNET_HOSTNAME=kept;"
+expect_tn_lacks "existing hostname: no prompt" "$TN_HOST_KEPT" 5 "PROMPTED"
+
+# ── docker cannot be asked: its own answer, not "no node" ───────────────────
+TN_NODOCKER="$(run_tailnet 1 2 0 "would-be-typed" "$BASE_ENV")"
+expect_tn "docker error: refuses" "$TN_NODOCKER" 1 6 "could not be established"
+expect_tn "docker error: does not claim there is no node" "$TN_NODOCKER" 1 6 "Refusing rather than guessing"
+expect_tn_lacks "docker error: the key was not asked for" "$TN_NODOCKER" 5 "TS_AUTHKEY"
+
+# ── COMPOSE_PROFILES is merged, never clobbered or duplicated ───────────────
+TN_MERGE="$(run_tailnet 1 1 1 "" 'TS_AUTHKEY=tskey-auth-set\nCOMPOSE_PROFILES=inference\n')"
+expect_tn "existing profiles: tailnet appended" "$TN_MERGE" 0 4 "COMPOSE_PROFILES=inference,tailnet;"
+# The idempotent re-run: .env already says tailnet, NOVA_TAILNET unset, the
+# node is on the volume from last time.
+TN_RERUN="$(run_tailnet "" 0 1 "" 'TS_AUTHKEY=\nTAILNET_HOSTNAME=nova\nCOMPOSE_PROFILES=tailnet\n')"
+expect_tn "re-run: .env's profile turns it on without NOVA_TAILNET" "$TN_RERUN" 0 2 "--profile tailnet"
+expect_tn "re-run: no key needed (node on the volume)" "$TN_RERUN" 0 6 "no auth key needed"
+expect_tn "re-run: profile not duplicated" "$TN_RERUN" 0 4 "COMPOSE_PROFILES=tailnet;"
+expect_tn_lacks "re-run: profile not duplicated (really)" "$TN_RERUN" 4 "tailnet,tailnet"
+# A re-run whose node has since vanished must refuse again, not coast.
+TN_RERUN_GONE="$(run_tailnet "" 1 1 "" 'TS_AUTHKEY=\nTAILNET_HOSTNAME=nova\nCOMPOSE_PROFILES=tailnet\n')"
+expect_tn "re-run without a node or key: refuses" "$TN_RERUN_GONE" 1 6 "no way to log in"
+
+# ── NOVA_TAILNET=0 turns it off and un-writes the profile ──────────────────
+TN_OFF_SWITCH="$(run_tailnet 0 0 1 "" 'TS_AUTHKEY=tskey-auth-set\nCOMPOSE_PROFILES=inference,tailnet\n')"
+expect_tn "NOVA_TAILNET=0: off" "$TN_OFF_SWITCH" 0 6 "profile removed from COMPOSE_PROFILES"
+expect_tn "NOVA_TAILNET=0: other profiles kept" "$TN_OFF_SWITCH" 0 4 "COMPOSE_PROFILES=inference;"
+expect_tn_lacks "NOVA_TAILNET=0: not wired" "$TN_OFF_SWITCH" 2 "--profile tailnet"
+expect_tn "NOVA_TAILNET=0: says the container is left alone and how to stop it" "$TN_OFF_SWITCH" 0 6 \
+  "--profile tailnet stop tailscale"
+
+# ── garbage is refused, not treated as off ──────────────────────────────────
+expect_tn "NOVA_TAILNET=maybe: refused" "$(run_tailnet maybe 1 1 "" "$BASE_ENV")" 1 6 "must be 1 or 0"
+
+expect_str() {
+  if [ "$2" = "$3" ]; then report 0 "$1"; else report 1 "$1" "got '$2', wanted '$3'"; fi
+}
+# ── the hostname is a DNS label, typed or already in .env ───────────────────
+expect_tn "typed hostname with a space: refused" \
+  "$(run_tailnet 1 1 0 "Nova Lab" 'TS_AUTHKEY=tskey-auth-set\nTAILNET_HOSTNAME=\n')" 1 6 "must be a DNS label"
+expect_tn "bad hostname already in .env: refused" \
+  "$(run_tailnet 1 1 1 "" 'TS_AUTHKEY=tskey-auth-set\nTAILNET_HOSTNAME=Bad_Name\n')" 1 6 "must be a DNS label"
+expect_tn "hostname with digits and hyphens: accepted" \
+  "$(run_tailnet 1 1 0 "nova-2" 'TS_AUTHKEY=tskey-auth-set\nTAILNET_HOSTNAME=\n')" 0 4 "TAILNET_HOSTNAME=nova-2;"
+
+# ── the migrated node: found by the name compose resolves, not by label ─────
+# A volume created by hand (`docker run -v nova_v4_tailscale:/to`, the
+# migration recipe) carries NO compose labels, so the label lookup answers
+# "nothing". The fallback finds it by the name `compose config` resolves and
+# the node is accepted without a key. tailscale_state_present runs for real
+# here (see run_tailnet's lowseams mode).
+TN_MIGRATED="$(run_tailnet 1 1 0 "" "$BASE_ENV" lowseams)"
+expect_tn "migrated node (unlabelled volume): accepted without a key" "$TN_MIGRATED" 0 6 \
+  "no auth key needed — volume nova_v4_tailscale already holds a node"
+expect_tn "migrated node: wired" "$TN_MIGRATED" 0 2 "--profile tailnet"
+expect_tn_lacks "migrated node: the key was NOT asked for" "$TN_MIGRATED" 5 "TS_AUTHKEY"
+
+# tailscale_state_present on its own, over the four docker seams.
+#   $1 compose config text ("" = compose fails)   $2 label lookup stdout
+#   $3 state_volume_exists rc                       $4 state_file_on_volume rc
+# Prints "<rc>|<reason>|<volume looked in>|<image used>|<name existence asked>".
+run_state_present() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    CFG="$1"; LABEL_VOL="$2"; EXISTS_RC="$3"; FILE_RC="$4"
+    compose_config_text() { [ -n "$CFG" ] || return 1; printf '%s' "$CFG"; }
+    state_volume_by_label() { printf '%s' "$LABEL_VOL"; }
+    state_volume_exists() { ASKED_EXISTS="$1"; return "$EXISTS_RC"; }
+    state_file_on_volume() { ASKED_VOL="$1"; ASKED_IMAGE="$2"; return "$FILE_RC"; }
+    ASKED_VOL=""; ASKED_IMAGE=""; ASKED_EXISTS=""
+    tailscale_state_present; rc=$?
+    printf '%s|%s|%s|%s|%s' "$rc" "$TAILNET_STATE_REASON" "$ASKED_VOL" "$ASKED_IMAGE" "$ASKED_EXISTS"
+  )
+}
+expect_sp() {
+  # $1 name $2 result $3 want rc $4 field $5 needle
+  local name="$1" out="$2" want="$3" fno="$4" needle="$5" rc text
+  rc="$(tn_field "$out" 1)"; text="$(tn_field "$out" "$fno")"
+  if [ "$rc" != "$want" ]; then report 1 "$name" "rc $rc, wanted $want — $out"; return; fi
+  case "$text" in
+    *"$needle"*) report 0 "$name" ;;
+    *) report 1 "$name" "field $fno did not contain '$needle' — got: $out" ;;
+  esac
+}
+SP_LABEL="$(run_state_present "$FIXTURE_CFG" "nova_v4_tailscale" 0 0)"
+expect_sp "state: labelled volume with a state file → present" "$SP_LABEL" 0 2 "nova_v4_tailscale already holds a node"
+expect_sp "state: looked inside the labelled volume" "$SP_LABEL" 0 3 "nova_v4_tailscale"
+expect_sp "state: with the sidecar's image from compose config (not a decoy)" "$SP_LABEL" 0 4 "tailscale/tailscale:v9.9.9"
+expect_sp "state: no name fallback needed when the label finds it" "$SP_LABEL" 0 5 ""
+SP_NAME="$(run_state_present "$FIXTURE_CFG" "" 0 0)"
+expect_sp "state: unlabelled volume found by the resolved name → present" "$SP_NAME" 0 2 "nova_v4_tailscale already holds a node"
+expect_sp "state: the resolved name was what existence was asked about" "$SP_NAME" 0 5 "nova_v4_tailscale"
+expect_sp "state: resolved name exists, no state file → absent" \
+  "$(run_state_present "$FIXTURE_CFG" "" 0 1)" 1 2 "exists but holds no tailscaled.state"
+expect_sp "state: no volume by label or by name → absent, says the name" \
+  "$(run_state_present "$FIXTURE_CFG" "" 1 0)" 1 2 "no nova_v4_tailscale volume exists yet"
+expect_sp "state: docker run failure is not 'no node'" \
+  "$(run_state_present "$FIXTURE_CFG" "nova_v4_tailscale" 0 125)" 2 2 "could not be read (docker run exit 125)"
+expect_sp "state: compose config failing is its own answer" \
+  "$(run_state_present "" "" 0 0)" 2 2 "docker compose config could not be read"
+NO_VOL_CFG="$(printf '%s' "$FIXTURE_CFG" | grep -v 'v4_tailscale')"
+expect_sp "state: a compose file without the volume key is a config error, not 'no node'" \
+  "$(run_state_present "$NO_VOL_CFG" "" 0 0)" 2 2 "compose names no v4_tailscale volume"
+
+# The readers of `compose config` output, on the fixture with decoys.
+run_parse() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    printf '%s' "$FIXTURE_CFG" | "$@"
+  )
+}
+expect_str "config reader: project name" "$(run_parse config_project_name)" "nova"
+expect_str "config reader: the tailnet volume's resolved name" "$(run_parse config_volume_name v4_tailscale)" "nova_v4_tailscale"
+expect_str "config reader: a neighbouring volume is not confused with it" "$(run_parse config_volume_name v4_pgdata)" "nova_v4_pgdata"
+expect_str "config reader: an undeclared key yields nothing" "$(run_parse config_volume_name v4_nope)" ""
+expect_str "config reader: the tailscale service's image, not a decoy's" "$(run_parse config_service_image tailscale)" "tailscale/tailscale:v9.9.9"
+expect_str "config reader: another service's image" "$(run_parse config_service_image web)" "decoy/web:1"
+
+# ── the profile-list helpers, on their own ──────────────────────────────────
+run_profiles() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    "$@"
+  )
+}
+expect_str "add_profile to an empty list" "$(run_profiles add_profile tailnet "")" "tailnet"
+expect_str "add_profile appends" "$(run_profiles add_profile tailnet inference)" "inference,tailnet"
+expect_str "add_profile is idempotent" "$(run_profiles add_profile tailnet inference,tailnet)" "inference,tailnet"
+expect_str "remove_profile keeps the rest in order" \
+  "$(run_profiles remove_profile tailnet inference,tailnet,e2e)" "inference,e2e"
+expect_str "remove_profile from a list without it" "$(run_profiles remove_profile tailnet inference)" "inference"
+expect_str "remove_profile to empty" "$(run_profiles remove_profile tailnet tailnet)" ""
+if run_profiles profile_listed tailnet tailnet-x; then
+  report 1 "profile_listed does not prefix-match" "tailnet matched tailnet-x"
+else
+  report 0 "profile_listed does not prefix-match"
+fi
+
+# ── tripwires: the names install.sh relies on are the compose file's ────────
+# TAILSCALE_STATE_VOLUME_KEY must be a declared volume AND the one the
+# tailscale service mounts at its state dir; the profile must be `tailnet`.
+# Read from the compose file as text — no docker in this suite.
+VOL_KEY="$(run_profiles eval 'printf "%s" "$TAILSCALE_STATE_VOLUME_KEY"')"
+[ -n "$VOL_KEY" ] || report 1 "tripwire: install.sh names a state volume key" "TAILSCALE_STATE_VOLUME_KEY is empty"
+if grep -q "^  ${VOL_KEY}:" "$SCRIPT_DIR/docker-compose.yml"; then
+  report 0 "tripwire: $VOL_KEY is declared under volumes: in docker-compose.yml"
+else
+  report 1 "tripwire: $VOL_KEY is declared under volumes: in docker-compose.yml" "no '  $VOL_KEY:' line"
+fi
+if grep -q -- "- ${VOL_KEY}:/var/lib/tailscale" "$SCRIPT_DIR/docker-compose.yml"; then
+  report 0 "tripwire: the tailscale service mounts $VOL_KEY at /var/lib/tailscale"
+else
+  report 1 "tripwire: the tailscale service mounts $VOL_KEY at /var/lib/tailscale" "mount line not found"
+fi
+if grep -q 'profiles: \["tailnet"\]' "$SCRIPT_DIR/docker-compose.yml"; then
+  report 0 "tripwire: the compose profile is named tailnet"
+else
+  report 1 "tripwire: the compose profile is named tailnet" "no profiles: [\"tailnet\"] line"
+fi
+for key in TS_AUTHKEY TAILNET_HOSTNAME COMPOSE_PROFILES; do
+  if grep -q "^${key}=" "$SCRIPT_DIR/.env.example"; then
+    report 0 "tripwire: .env.example documents $key"
+  else
+    report 1 "tripwire: .env.example documents $key" "no '$key=' line"
+  fi
+done
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
