@@ -251,11 +251,16 @@ Carries from this wave:
   responding", "I ran a check — the device is offline" (intent token).
 - A device NAMED a common word ("office", "home") arms the guard on unrelated
   prose — semantic; a naming caveat for the pairing UI.
-- `facts_sink` is written in ONE place (`_require_connected`); a future path
-  that decides connectivity elsewhere (a direct hub.is_connected call) would
-  silently skip the record and reintroduce the Critical in narrower form —
-  add a source-scan tripwire (hub.is_connected appears only there), like the
-  D-012 pin.
+- (CLOSED same day, cc49d17a) `facts_sink` was written in one place; an AST
+  allow-list pin now walks app/ for every connectivity read (is_connected,
+  connected_ids, _conns.get) and requires each site to record or be a
+  documented reporter — mutation-tested (an unlisted call reddens it). It
+  immediately found the hub's send-time re-check recording nothing; fixed
+  (a socket dying between precheck and send now ends the span's facts on
+  connected:false). Also: the vacuous headline C1 test (its sentence carried
+  the intent verb "check") re-pointed so it discriminates; the doubled fact
+  on a fully successful call deduped (last-entry only, so real transitions
+  still record).
 - Device READ tools are ephemeral, so a state-claim redirect that succeeds via
   device_list/device_info is still not ingested (correct — "offline" must not
   become durable knowledge); only device_run/write/launch turns ingest.
