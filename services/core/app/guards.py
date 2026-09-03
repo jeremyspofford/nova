@@ -1401,3 +1401,119 @@ def state_claim_check(
         if s is not None and not _state_prefix_blocks(clause[: s.start()]):
             return StateClaim(device=s.group("dev").strip(), phrase=s.group(0).strip()[:80])
     return None
+
+
+# -- the BARE-INTENT deferral: an acknowledgment with nothing behind it -----
+#
+# Real trace, 2026-09-03 14:43 UTC, local model muse-glimmer: the user asked
+# "show me my workspace directory structure"; the ENTIRE reply was "Got it.
+# Checking the workspace…" with ZERO tool calls (tools advertised, the device
+# online and granted). No guard fired: deferral_check's commitment leads
+# ("I'll", "let me", "I'm going to") require a first-person MODAL, and a bare
+# present-progressive ack-and-go ("Checking…") names no such lead — it is
+# structurally invisible to the check that exists to catch exactly this class
+# of broken promise. The user got a promise and nothing else.
+#
+# bare_intent_check(reply_text, spans) fires ONLY when the ENTIRE trimmed
+# reply (after an optional one-word ack — "Got it.", "Sure.", "OK.", "Right.")
+# IS an intent-to-act phrase and nothing else, AND no successful tool span ran
+# this turn at all (guards.ran_a_tool — unlike deferral_check, a bare intent
+# names no specific tool, so ANY real work this turn backs it).
+#
+# "Nothing else" is enforced the same way the rest of this module enforces
+# precision — by ANCHORING the shape to the FULL string rather than guessing
+# at what counts as "content". The trailing object after an intent lead is
+# bounded to a handful of letter-led words, so a listing, a number, a second
+# clause, or an explanation simply does not fit inside the pattern: the
+# fullmatch fails and the guard stays silent by construction. There is no
+# separate "does this carry content" heuristic to keep in sync with the shape.
+#
+# Built to the family's two rules: PURE (text + spans; no model, network or
+# clock) and PRECISION-first (a wrongly-corrected honest reply is worse than a
+# missed one). Explicit exemptions, checked before the shape match:
+#
+#   * a QUESTION to the user ("Should I check the workspace?") — this guard
+#     never anchors on a modal lead the way deferral_check does, so most
+#     questions already fail the shape match on their own; the '?' check is
+#     the cheap, explicit backstop.
+#   * a HEDGE/OFFER ("I could check that if you want.") — the shared
+#     `_OFFER_MARKER` plus the bare modals (could/might/may/would) that never
+#     appear in a flat present-tense commitment.
+#   * a tool DID run this turn (`ran_a_tool`) — "Checking…" that goes on to
+#     narrate a real result is an honest, if terse, report, and the shape
+#     match would fail on the narration's content anyway.
+#
+# `phrase` is the only field: unlike DeferralClaim, a bare intent names no
+# specific tool ("Checking…" could be anything), so there is no `tool` /
+# `action_phrase` to carry — chat.py's redirect nudge and honest note for this
+# claim are fixed sentences, not built from one.
+
+_BARE_INTENT_MAX_WORDS = 15
+_BARE_INTENT_MAX_SENTENCES = 2
+
+# The optional one-word lead-in before the actual intent phrase.
+_BARE_INTENT_ACK = r"(?:got it|sure|okay|ok|right)[.,!]?\s+"
+# A short trailing object/complement, bounded so nothing large enough to BE
+# content can hide inside it. Object words must be letter-led, so a numeral
+# ("12") or anything glued to a colon simply cannot be consumed here — the
+# fullmatch below fails on the leftover rather than silently absorbing it.
+_BARE_INTENT_OBJECT = r"(?:\s+[A-Za-z][\w'-]*){0,5}"
+_BARE_INTENT_LEAD = (
+    rf"(?:checking|running|fetching|looking\s+into){_BARE_INTENT_OBJECT}"
+    r"|looking\s+that\s+up"
+    rf"|let\s+me\s+(?:check|look|see|run|find){_BARE_INTENT_OBJECT}"
+    r"|on\s+it"
+    r"|one\s+(?:moment|sec)"
+    r"|working\s+on\s+it"
+    r"|i['’]ll\s+get\s+right\s+on\s+that"
+)
+# The whole reply, ack optional, lead mandatory, then only trailing
+# punctuation/ellipsis — used with fullmatch, so anything past the bounded
+# object breaks the match.
+_BARE_INTENT_SHAPE = re.compile(
+    rf"(?:{_BARE_INTENT_ACK})?(?:{_BARE_INTENT_LEAD})[.!…]*", re.I
+)
+# A flat present-tense commitment is never a maybe — these modals, plus the
+# family's own _OFFER_MARKER, rule out a hedge/offer before the shape match.
+_BARE_INTENT_HEDGE = re.compile(r"\b(?:could|might|may|would)\b", re.I)
+
+
+@dataclass(frozen=True)
+class BareIntentClaim:
+    """An acknowledgment-only reply — an intent to act and nothing else — with
+    no successful tool span of any kind backing it this turn. `phrase` is the
+    matched text, for the guard span; see the section header for why there is
+    no `tool`/`action_phrase` the way DeferralClaim carries one."""
+
+    phrase: str
+
+
+def bare_intent_check(reply_text: str, spans: Sequence[Any]) -> BareIntentClaim | None:
+    """A reply that is ONLY an acknowledgment-and-intent, or None.
+
+    Returns a BareIntentClaim when the entire trimmed reply is a bare intent-
+    to-act phrase (see the section header for the exact shape) and no
+    successful tool span ran this turn; None otherwise — a reply that also
+    carries real content, a question, a hedge/offer, or a reply backed by a
+    real tool call of any kind. Pure and precision-first. Unlike
+    deferral_check this names no specific tool: ANY successful span this turn
+    clears it, because a bare "Checking…" makes no claim about WHICH tool
+    would satisfy it.
+    """
+    if not reply_text or not reply_text.strip():
+        return None
+    stripped = reply_text.strip()
+    if len(stripped.split()) > _BARE_INTENT_MAX_WORDS:
+        return None  # too long to be an ack-and-go — there is room for content
+    if len(_sentences(stripped)) > _BARE_INTENT_MAX_SENTENCES:
+        return None
+    if "?" in stripped:
+        return None  # a question to the user asserts no commitment
+    if _OFFER_MARKER.search(stripped) is not None or _BARE_INTENT_HEDGE.search(stripped):
+        return None  # "if you want", "could" — a hedge/offer, not a promise
+    if ran_a_tool(spans):
+        return None  # real work happened this turn — an honest terse report
+    normalized = " ".join(stripped.split())  # collapse newlines/runs of space
+    if _BARE_INTENT_SHAPE.fullmatch(normalized) is None:
+        return None
+    return BareIntentClaim(phrase=normalized[:80])

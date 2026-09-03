@@ -159,6 +159,33 @@ def _deferral_honest_note(action_phrase: str) -> str:
         "ask me again and I'll try."
     )
 
+
+def bare_intent_redirect_nudge(*, ran_a_tool: bool) -> str:
+    """The bare-intent redirect's nudge. Fixed text — a bare intent names no
+    specific tool, so there is nothing to derive a sentence from the way
+    consent/state's nudges do — but it still asserts the one fact
+    `_claim_redirect`'s own precondition already guarantees whenever this runs
+    (nothing has run yet), so, like those two, it REFUSES rather than emit a
+    lie if that precondition somehow did not hold."""
+    if ran_a_tool:
+        raise ValueError(
+            "the bare-intent redirect nudge asserts nothing has run this turn; "
+            f"ran_a_tool={ran_a_tool}"
+        )
+    return (
+        "You said you would do it but did not call any tool — do it now, or "
+        "say plainly why you cannot."
+    )
+
+
+# The backend note when a bare-intent redirect could not complete the action —
+# the fail-safe honest admission, same family as PENDING_APPROVAL_NOTE and the
+# round-cap note: bracketed backend prose, never the model's, and it REPLACES
+# the broken promise rather than being appended to it (the promise carried no
+# salvageable content). Rides `_claim_redirect`'s `correction_text`, so it is
+# exactly what persists whenever that redirect does not stand.
+BARE_INTENT_HONEST_NOTE = "[I said I'd check but did not — ask again and I'll do it]"
+
 # How much of a tool call lands in its span. The result head is the
 # Activity page's evidence that the call did what it says; the argument
 # head keeps a 256 KB file body out of the trace. Both are heads, and both
@@ -1477,7 +1504,10 @@ def _regen_rejected_by(
     Returns the NAME of the first guard that fires (checked cheapest-first, in
     the same order the turn runs them), or None when the regen is clean. Each
     check is fail-OPEN on its own: a guard that raises is logged and does not
-    reject, exactly as in the turn body.
+    reject, exactly as in the turn body. bare_intent is included so a regen
+    that itself came back as another bare ack-and-go ("Checking now…", no
+    call) is caught here too, whichever claim's redirect produced it — not
+    only the bare-intent redirect's own attempt.
     """
     checks: tuple[tuple[str, Callable[[], object | None]], ...] = (
         (
@@ -1493,6 +1523,7 @@ def _regen_rejected_by(
             "state_claim",
             lambda: guards.state_claim_check(corrected, turn.spans, device_names),
         ),
+        ("bare_intent", lambda: guards.bare_intent_check(corrected, turn.spans)),
     )
     for name, check in checks:
         try:
@@ -2367,7 +2398,22 @@ async def _run_turn(
         except Exception:
             logger.exception("deferral guard raised; shipping the reply uncorrected")
             deferral = None
-        deferral_fired = deferral is not None
+        # The SIXTH sibling: a BARE-INTENT reply ("Got it. Checking the
+        # workspace…") commits to nothing deferral_check can anchor on — no
+        # first-person modal lead — so it is checked only when the commitment
+        # form did NOT already fire. The two shapes can overlap on a phrase
+        # like "let me look it up", and must never both claim the turn's one
+        # redirect.
+        bare_intent = None
+        if deferral is None:
+            try:
+                bare_intent = guards.bare_intent_check(persisted, turn.spans)
+            except Exception:
+                logger.exception(
+                    "bare-intent guard raised; shipping the reply uncorrected"
+                )
+                bare_intent = None
+        deferral_fired = deferral is not None or bare_intent is not None
         if (
             deferral is not None
             and not mechanical_guard_fired
@@ -2386,6 +2432,55 @@ async def _run_turn(
             persisted = await _deferral_redirect(
                 app, turn, model, deferral, persisted, messages, emit
             )
+
+        # A bare-intent claim gets the SAME redirect shape as consent/state —
+        # a regeneration WITH TOOLS ADVERTISED, through `_claim_redirect` —
+        # never the commitment form's text-only one above: the whole point of
+        # "you did not call any tool" is that a tool CAN be called this time,
+        # dispatched through the ordinary round machinery, not merely
+        # re-worded. REPLACE-class like consent/state: the original
+        # "Checking…" carried nothing salvageable, so a successful regen or
+        # the honest backend note (BARE_INTENT_HONEST_NOTE) is the whole
+        # durable record either way — `_claim_redirect`'s own `.text` is
+        # already one or the other. Shares the guard span NAME "deferral"
+        # with the commitment form (same family, same live note); `kind` in
+        # its meta is what tells them apart.
+        bare_intent_redirected = False
+        if (
+            bare_intent is not None
+            and not mechanical_guard_fired
+            and not redirect_spent
+            and not out_of_rounds
+        ):
+            outcome = await _claim_redirect(
+                app,
+                turn,
+                model,
+                claim_kind="deferral",
+                correction_text=BARE_INTENT_HONEST_NOTE,
+                span_meta={
+                    "kind": "bare_intent",
+                    "detected": True,
+                    "phrase": bare_intent.phrase,
+                },
+                nudge_for=lambda ran: bare_intent_redirect_nudge(ran_a_tool=ran),
+                redirect_note=DEFERRAL_NOTE,
+                card_raised=card_raised,
+                out_of_rounds=out_of_rounds,
+                messages=messages,
+                advertised=() if card_raised else advertised,
+                tool_ctx=tool_ctx,
+                device_names=device_names,
+                consents_emitted=consents_emitted,
+                emit=emit,
+            )
+            bare_intent_redirected = outcome.redirected
+            persisted = outcome.text
+            consents_emitted = outcome.consents_emitted
+            read_ephemeral = read_ephemeral or outcome.read_ephemeral
+            backend_note = backend_note or outcome.markup_note
+            # Spent by TRYING, not by succeeding — same rule as consent/state.
+            redirect_spent = True
 
         # The OPT-IN responsiveness check (agents.responsiveness_check, default
         # OFF): a SOFT, LLM-judged guard that catches a reply drifting off the
@@ -2481,6 +2576,12 @@ async def _run_turn(
             # line. A redirect that stood did the check (or said plainly it did
             # not), so THAT turn is ordinary knowledge again.
             or (state_claim is not None and not state_redirected)
+            # A bare-intent claim that did not redirect is the same shape: the
+            # honest note ("I said I'd check but did not…") is choreography
+            # about the broken promise, not knowledge, so it must not recall
+            # back in as if it were an answer. A redirect that stood either
+            # ran a tool or said plainly it did not — ordinary knowledge again.
+            or (bare_intent is not None and not bare_intent_redirected)
             or message_kind == MESSAGE_KIND_PLUMBING
         )
         # A turn that only READ live external data (a web fetch — an ephemeral

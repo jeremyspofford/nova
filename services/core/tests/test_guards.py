@@ -702,3 +702,120 @@ def test_an_empty_reply_is_never_a_deferral():
 def test_the_deferral_matcher_never_raises_on_odd_input(reply):
     # We do not care about the verdict here — only that it returns cleanly.
     guards.deferral_check(reply, [], DEFERRAL_TOOLS)
+
+
+# -- the bare-intent guard: an acknowledgment with nothing behind it --------
+#
+# guards.bare_intent_check(reply, spans) is the sixth sibling — the same
+# broken-promise family as deferral_check, for the shape deferral_check
+# structurally cannot see: no first-person modal lead at all, just a bare
+# present-progressive or a stock ack-and-go ("Checking…", "On it."). The real
+# trace: user asked to see the workspace directory structure; the WHOLE reply
+# was "Got it. Checking the workspace…" with zero tool calls, tools
+# advertised, nothing wrong with the device. No existing guard caught it.
+
+# MUST FIRE: the entire trimmed reply IS the intent phrase (an optional
+# one-word ack, then a recognized lead, then only trailing punctuation) and no
+# tool ran this turn at all. The owner's exact case leads.
+BARE_INTENT_MUST_FIRE = [
+    ("owner_exact", "Got it. Checking the workspace…"),
+    ("checking_bare", "Checking the workspace..."),
+    ("checking_no_object", "Checking..."),
+    ("sure_on_it", "Sure. On it."),
+    ("working_on_it", "Working on it."),
+    ("one_moment", "One moment..."),
+    ("one_sec", "One sec."),
+    ("ill_get_right_on_that", "I'll get right on that."),
+    ("let_me_look_it_up", "Let me look it up."),
+    ("looking_that_up", "Looking that up..."),
+    ("running_the_tests", "Running the tests…"),
+    ("fetching_that_now", "Fetching that now…"),
+    ("right_one_sec", "Right, one sec."),
+    ("ok_let_me_find_that", "OK. Let me find that for you."),
+    ("looking_into_it", "Looking into it…"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", BARE_INTENT_MUST_FIRE, ids=[c[0] for c in BARE_INTENT_MUST_FIRE]
+)
+def test_bare_intent_must_fire_on_an_ack_and_go_with_no_tool_span(label, reply):
+    claim = guards.bare_intent_check(reply, [])
+    assert claim is not None, f"{label!r} should have fired but did not"
+    assert claim.phrase
+
+
+def test_bare_intent_fires_with_a_non_tool_span_present():
+    """An llm_call span (or any span that is not a successful TOOL span) does
+    not back the claim — only real work clears a bare intent."""
+    claim = guards.bare_intent_check("Checking the workspace…", [other_span()])
+    assert claim is not None
+
+
+# MUST NOT FIRE: real content beside the intent phrase, a question, a
+# hedge/offer, and the guard's own frames (self-reference).
+BARE_INTENT_MUST_NOT_FIRE = [
+    (
+        "content_a_listing",
+        "Checking the workspace… here are 12 directories: src, lib, docs.",
+    ),
+    ("question", "Should I check the workspace?"),
+    ("hedge_if_you_want", "I could check that if you want."),
+    ("hedge_would_you_like", "Would you like me to check the workspace?"),
+    ("plain_answer", "The Pixel 10 has a 50-megapixel main camera."),
+    ("too_long", "Checking the workspace to see what is in it and report back fully."),
+    # the guard's own frames must never trip it (self-reference)
+    ("deferral_note", "Doing that now instead of just saying I would."),
+    ("bare_intent_honest_note", "[I said I'd check but did not — ask again and I'll do it]"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", BARE_INTENT_MUST_NOT_FIRE, ids=[c[0] for c in BARE_INTENT_MUST_NOT_FIRE]
+)
+def test_bare_intent_must_not_fire(label, reply):
+    assert (
+        guards.bare_intent_check(reply, []) is None
+    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+
+
+def test_bare_intent_does_not_fire_when_any_tool_actually_ran():
+    """Unlike deferral_check, a bare intent names no specific tool, so ANY
+    successful tool span this turn clears it — the terse ack was followed by
+    real work, not a broken promise."""
+    reply = "Got it. Checking the workspace…"
+    assert guards.bare_intent_check(reply, [tool_span("device_list")]) is None
+
+
+def test_bare_intent_does_not_fire_when_the_matching_span_failed():
+    """A FAILED span is not real work — the promise is still unkept."""
+    reply = "Checking the workspace…"
+    assert guards.bare_intent_check(reply, [tool_span("device_list", ok=False)]) is not None
+
+
+def test_bare_intent_is_pure_same_inputs_same_verdict():
+    reply = "Got it. Checking the workspace…"
+    first = guards.bare_intent_check(reply, [])
+    second = guards.bare_intent_check(reply, [])
+    assert (first is None) == (second is None)
+    assert first.phrase == second.phrase
+
+
+def test_an_empty_reply_is_never_a_bare_intent():
+    assert guards.bare_intent_check("", []) is None
+    assert guards.bare_intent_check("   \n ", []) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Checking \\((((the [unbalanced",
+        "checking checking checking",
+        "检查 workspace 文件",  # non-ascii around a real phrase
+        "\n\n\n",
+        "Checking " + "the workspace " * 200,
+    ],
+)
+def test_the_bare_intent_matcher_never_raises_on_odd_input(reply):
+    # We do not care about the verdict here — only that it returns cleanly.
+    guards.bare_intent_check(reply, [])
