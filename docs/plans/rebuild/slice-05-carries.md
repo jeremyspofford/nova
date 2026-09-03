@@ -214,3 +214,61 @@ Carries from this wave:
   reads as guard latency in Activity; a separate redirect_ms meta would fix it.
 - Dead belt-and-braces loop after `assert memory.ingests == []` in
   test_chat_consent.py.
+
+## Third post-close wave (2026-09-02, later) — "still offline" with no check; the cap ate the answer
+
+Trace: "try again" → ZERO tool calls, the reply parroted an earlier (then-true)
+"offline" from history — a claim about LIVE state with no check this turn,
+and it was ingested. "The device is online." → she checked (tree not
+installed — honest), adapted to find (exit 0), then burned the 6-round cap on
+a leaked-XML device name + `which tree`; the reply was ONLY the cap note.
+Fixed in 29994e29 + 2bd4f981 + review-fix 0e689d53 (adversarial review: 1
+Critical + 4 Important, all executed repros; core 968):
+- **state_claim guard**: a claim about a paired device's live connectivity
+  ("the device is still offline", "<name> is online") with no device check
+  this turn is REPLACE-class with ONE guard-vetted retry (same generalized
+  `_claim_redirect`, one budget, gated on nothing-ran / not-out-of-rounds /
+  no card raised). Precision-first: subject = a paired NAME or "the/your/
+  this/that device" only (bare laptop/machine/computer nouns fired on ANY
+  computer — removed); state words narrowed to unambiguous connectivity
+  (up/down/available/"connected to the projector" were false positives —
+  removed; `connected` only at clause end/"right now"/"to the network").
+  **A refusal that DETERMINED connectivity is a check** (the Critical: when
+  the device is really offline every tool refuses "not connected", and the
+  honest "it's offline" was being corrected into a lie) — mechanically via
+  `ToolContext.facts_sink`: `_require_connected` records {device, connected}
+  for both outcomes, `_run_tool` copies it into span meta["facts"], the
+  guard reads it as data. Fired-and-not-redirected → never ingested.
+- **The round cap runs one tool-less narration round** so the answer the
+  work earned is delivered, then the note; backend notes survive any
+  REPLACE composition; the deferral redirect is gated on out_of_rounds;
+  tool calls in any closed round are refused with a span, never dropped.
+
+Carries from this wave:
+- Accepted misses, pinned as a deliberate list (ACCEPTED_MISSES in
+  test_state_guard.py): "it's offline" (bare pronoun), "the device is back",
+  "both devices are offline", "the device is down/up right now", "not
+  responding", "I ran a check — the device is offline" (intent token).
+- A device NAMED a common word ("office", "home") arms the guard on unrelated
+  prose — semantic; a naming caveat for the pairing UI.
+- `facts_sink` is written in ONE place (`_require_connected`); a future path
+  that decides connectivity elsewhere (a direct hub.is_connected call) would
+  silently skip the record and reintroduce the Critical in narrower form —
+  add a source-scan tripwire (hub.is_connected appears only there), like the
+  D-012 pin.
+- Device READ tools are ephemeral, so a state-claim redirect that succeeds via
+  device_list/device_info is still not ingested (correct — "offline" must not
+  become durable knowledge); only device_run/write/launch turns ingest.
+- The web drops `{correction}` SSE frames as an unknown type (ruling S2-R6),
+  so guard corrections reach the screen only via the persisted reconcile,
+  never live — the operator watches the wrong text stream and then flips.
+  Render correction frames (replace the streamed text) in a web polish pass.
+- The local model (muse-glimmer) keeps leaking `<atem:parameter …>` XML into
+  a JSON arg (refused cleanly, costs a round each time) and re-checks
+  (`which tree`) — model quality; measure it with the S4 harness; consider
+  agents.max_tool_rounds 6 → 8 for it (owner's dial).
+- One false "still offline" line from 23:51 was ingested into memory before
+  the guard existed; there is no operator surface to see or correct memory
+  in v4 yet (the memory-surface slice's motivating carry). Mechanically
+  neutralised: the guard refuses any unchecked state claim regardless of
+  what recall surfaces.
