@@ -3,7 +3,7 @@
 Real trace, 2026-09-03 14:43 UTC (local model muse-glimmer): the user asked
 "show me my workspace directory structure"; the ENTIRE reply was "Got it.
 Checking the workspace…" with ZERO tool calls (tools advertised, device
-online and granted). guards.deferral_check's commitment leads ("I'll", "let
+online). guards.deferral_check's commitment leads ("I'll", "let
 me", "I'm going to") require a first-person MODAL, and a bare
 present-progressive ack-and-go names no such lead — the promise shipped
 uncorrected and the turn ended.
@@ -85,17 +85,11 @@ def auto_call(call_id: str) -> dict:
 
 
 async def _arm_auto_tool(pool, monkeypatch) -> Spy:
-    """A private AUTO-disposition tool: the redirect's call must actually RUN,
-    raising no card. Mirrors test_chat_consent.py's _arm_auto_tool."""
+    """A private tool, registered and nothing else: in v4 that is all it takes
+    for the redirect's call to RUN. Mirrors test_chat_pending_claim.py's
+    _arm_auto_tool."""
     spy = Spy(result="default, src, tests, docs")
     monkeypatch.setitem(tools.REGISTRY, AUTO_ACTION, Tool(AUTO_ACTION, "d", FETCH_SCHEMA, spy))
-    await pool.execute(
-        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
-        "consecutive_successes) VALUES ($1, 'outward', 'auto', false, 0) "
-        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'auto', "
-        "earned = false, consecutive_successes = 0, updated_at = now()",
-        AUTO_ACTION,
-    )
     return spy
 
 

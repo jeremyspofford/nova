@@ -4,8 +4,8 @@ No test here touches the real network. web_search is exercised against a local
 ASGI SearXNG stand-in (fakes.FakeSearx) mounted by origin on the same by-URL
 transport map fetch_url's tests use — so the code under test is the real one
 (env read, request, JSON parse, formatting, caps), not a rehearsal of it. These
-run the EXECUTOR at its own layer; web_search is auto-tiered, so its journey
-through the policy gate in dispatch() is covered by the chat suites, not here.
+run the EXECUTOR at its own layer; its journey through dispatch() is covered
+by the chat suites, not here.
 
 The load-bearing property proved throughout: a search that FAILED (searxng
 down, non-200, or a 200 that is not JSON) comes back as a stated ToolFailure —

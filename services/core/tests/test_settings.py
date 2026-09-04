@@ -9,16 +9,18 @@ pytestmark = requires_db
 # vanish unnoticed. It moved from three to four in S2: the tool loop needs
 # a round cap the operator can see and change (agents.max_tool_rounds),
 # which is also the first "int" setting the registry has ever had. S3-T3
-# moves it to five: autonomy.graduation_runs is the N earned-autonomy
-# promotes a consent-tier class after (app/autonomy.py) — see test_autonomy.py.
+# moved it to five with autonomy.graduation_runs, the promotion threshold of
+# the earned-autonomy mechanism (both gone — see below).
 # S3 walk-fix round 9 makes it six: agents.responsiveness_check is the opt-in,
 # default-OFF, LLM-judged relevance guard — see test_chat_responsiveness.py.
+# No approvals (owner ruling 2026-09-03) takes it back to five: the graduation
+# setting has no reader — there is no earned autonomy, so nothing graduates.
+# Deliberate tripwire update, not a routing-around.
 KNOWN_KEYS = {
     "onboarding.completed",
     "chat.model",
     "appearance.default_preset",
     "agents.max_tool_rounds",
-    "autonomy.graduation_runs",
     "agents.responsiveness_check",
 }
 

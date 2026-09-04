@@ -20,9 +20,7 @@ in file order in a single worker.
 | 11 | `11-change-model.spec.ts` | S2e DoD item 1: pull a second curated model from Settings -> Models (T1's own pull control, not the wizard's), switch to it, and the very next chat turn's `chat-model` header names the new model — no restart, no reload. **Authored in S2e-T4, not yet run** — see below. |
 | 12 | `12-fit-render.spec.ts` | S2e DoD item 2: every curated model in Settings -> Models carries a fit verdict and a verified/estimated badge that matches `GET /api/v1/models/suggest` verbatim; a `wont_fit` model renders its warning as a `role=alert`, not just a colored badge. **Authored in S2e-T4, not yet run.** |
 | 13 | `13-re-run-onboarding.spec.ts` | S2e DoD item 3: "Re-run setup" in Settings clears `onboarding.completed` and lands on the wizard's resume shape (Hardware first) — never `CreateAccount`, so the owner account is provably not re-minted — then walks the wizard back to a finished `/chat`. Runs last on purpose (see the file header). **Authored in S2e-T4, not yet run.** |
-| 14 | `14-policy-card-ui.spec.ts` | S3 DoD items 1 & 4, the model-independent halves: a pending consent seeded straight into postgres renders on the Approvals page through the real `GET /api/v1/consents` — the same `ApprovalCard` the inline chat card uses — with the exact args summary and Approve/Deny; deciding needs auth (`401` with no session); Deny leaves the pending list and the stored row reads `denied`, in the governance audit; Approve flips it to `approved` (stored too) and it stays with a "Go ahead", because approving runs nothing at the kernel (ruling S3-R4). The model-driven inline-card-in-chat and approve-then-it-runs flows are the owner's live walk. **Authored in S3-T4, not yet run.** |
-| 15 | `15-autonomy-governance.spec.ts` | S3 DoD items 3 & 4, the model-independent halves: Settings → Autonomy shows each class's real disposition and, for a class still earning it, its real `consecutive_successes / graduation_runs` straight off `GET /api/v1/autonomy`; an earned-auto class offers Revoke, and revoking calls the API and returns the class to consent (a governance event, and the row loses its Revoke); the Governance page lists decisions newest-first off `GET /api/v1/governance`. Full model-driven graduation is the owner's live walk. **Authored in S3-T4, not yet run.** |
-| 16 | `16-devices.spec.ts` | S5 DoD items 1, 2 & 4, the parts that need no live daemon: the pairing modal mints a real code and shows the `novad enroll` one-liner for this origin; a paired device's tile liveness is DERIVED from `last_seen` (a fresh one reads "online", a never-seen one reads "never connected", never a green dot); the grants editor toggles a capability and the PUT lands in the `devices` row; a `device_run` consent card renders through the SAME `ApprovalCard` the inline chat card uses, and Deny (leaves the list, DB `denied`, in the governance audit) / Approve (`approved`, stays with "Go ahead") drive the exact same consent path a text turn does. Deterministic state seeded straight into postgres (`lib/devices.ts` + `lib/policy.ts`). Pairing a REAL machine and asking Nova to act on it (the daemon's own audit agreeing) is the owner's live walk. **Authored in S5-T5, not yet run.** |
+| 16 | `16-devices.spec.ts` | S5 DoD items 1, 2 & 5, the parts that need no live daemon: the pairing modal mints a real code and shows the `novad enroll` one-liner for this origin; a paired device's tile liveness is DERIVED from `last_seen` (a fresh one reads "online", a never-seen one reads "never connected", never a green dot); a tile offers exactly Rename and Revoke — no grants editor, because there is no grant (owner ruling 2026-09-03: pairing is the whole authorization, and `GET /api/v1/devices` carries identity + liveness and nothing to edit); revoking through the UI needs auth (`401` with no session), takes a confirm, stamps `devices.revoked_at` (read back from the row), flips the tile, and lands a `device.revoked` row in the governance ledger that the Governance page renders — a record of what happened, never a decision. Deterministic state seeded straight into postgres (`lib/devices.ts`). Pairing a REAL machine and asking Nova to act on it (the daemon's own audit agreeing) is the owner's live walk. **Authored in S5-T5 and re-authored 2026-09-03 with the approval system removed, not yet run.** |
 
 ## Scenarios 11-13 (S2e model & settings surface)
 
@@ -216,88 +214,31 @@ below is not a new E2E: the correction is proven mechanically there, and the
 model that fabricates readily (the 1.7B) is exercised in the owner's live
 walk.
 
-## S3 policy DoD walk
-
-Slice 3 (`docs/plans/rebuild/slice-03-policy.md`) is behaviour-changing, so its
-definition of done is walked live before it is the owner's daily driver. Two of
-its five items turn on the SERVING MODEL choosing to emit a `fetch_url` tool
-call — and the small curated model does that unreliably (the scenarios 9/10
-counts above are the same honesty problem). So the DoD is split deliberately
-between what is proven mechanically and what the owner walks:
-
-**Proven mechanically, model-independent (the regression gate):**
-
-* `services/core/tests/test_policy_e2e.py` — one test walks the ENTIRE DoD in
-  order through the real `dispatch → policy.authorize → consents → autonomy →
-  governance` stack with a spy executor, driving `dispatch()`,
-  `consents.decide()` and `autonomy.revoke()` directly: no consent → awaits
-  (executor untouched, `consent.raised`); deny → authorizes nothing, streak 0,
-  still awaits (`consent.decided{denied}`); approve + re-attempt → runs once and
-  burns (`consent.burned`), a second re-attempt does not double-spend and
-  re-raises; N approve+succeed cycles → promoted (`autonomy.promoted`), the next
-  call ALLOWs with no card; revoke → back to consent (`autonomy.revoked`), the
-  card returns; a promoted class that fails → demoted (`autonomy.demoted`); and
-  the governance audit holds a row of every kind, including `policy.denied`.
-  Every assertion reads the ledger and the tables, never a reply string.
-* Scenarios 14 and 15 above — the Approvals / Autonomy / Governance UI renders
-  and DECIDES real backend state (deterministic parts seeded straight into
-  postgres, then driven through the real authenticated API and UI).
-* DoD item 5 (a narration is mechanically corrected) — the honesty guard,
-  pinned by `test_guards.py` + `test_chat_honesty.py` (see the paragraph above).
-
-**The owner's live gate (behaviour-changing, run against the rebuilt stack):**
-
-* DoD item 1/2 — ask Nova to fetch a URL: an approval card appears INLINE in
-  chat (the `{consent}` SSE frame, model-driven), deny it → Activity proves no
-  `fetch_url` span ran and the turn states the refusal; approve a re-run → the
-  model re-attempts, the funnel burns the consent, the span appears and the
-  reply is honest.
-* DoD item 3 — repeat the fetch class to the graduation threshold with real
-  approvals until Settings → Autonomy shows it auto-runs and the next fetch
-  needs no card; revoke there → the card returns on the next fetch.
-* DoD item 5 — induce a narration on the 1.7B model and see the turn corrected.
-
-These are the model-driven flows above: they are the reason the slice is walked,
-not the reason a flaky assertion is written. The controller runs them after
-review; the mechanical suite is what guards against regression between walks.
-
-## Scenarios 14-15 (S3 policy kernel)
-
-Authored against slice-03-policy's shipped surfaces (`ConsentCardRow.tsx`,
-`ApprovalCard.tsx`, `ApprovalsPage.tsx`, `AutonomySection.tsx`,
-`GovernancePage.tsx`) by reading the actual components for real selectors —
-`data-testid="approval-card-<id>"` and `data-testid="governance-row-<id>"`
-where they exist, and the shipped DOM (the `AutonomyRow` carries no testid) for
-the autonomy rows — rather than guessed ones, but **not run**: at authoring time
-there was no rebuilt stack at `:3000` for a browser to exercise (the S3 UI post-
-dates the running containers). They run for the first time, in file order
-alongside 1-13, once the stack is rebuilt from this source. Both seed their
-deterministic state inside the postgres container over the docker socket
-(`lib/policy.ts`), the same place `lib/evidence.ts` READS the ledger, because
-postgres is deliberately not published outside the compose network. Treat a
-first run the way scenario 6 was treated after S2-T4: read what actually happens
-before trusting the selectors blind.
-
 ## Scenario 16 (S5 devices)
 
 Authored against slice-05-daemon's shipped T4 surface (`DevicesSection.tsx`,
-`devicesFormat.ts`) and the shared `ApprovalCard.tsx`, by reading the actual
-components for real selectors — the per-tile `data-testid="device-<id>"`, the
-`devices-skeleton` load state, and the `approval-card-<id>` the Approvals page
-already renders for every consent — rather than guessed ones, but **not run**:
-the real-stack testing policy forbids a throwaway isolated stack, and there was
-no rebuilt `:3000` at authoring time. It runs for the first time, in file order
-alongside 1-15, once the controller rebuilds the stack from this source. It
-needs no live novad — a paired+granted device and two pending `device_run`
-consents are seeded straight into the postgres container over the docker socket
-(`lib/devices.ts` for the device rows, `lib/policy.ts` for the consents), the
-same place `lib/evidence.ts` READS the ledger. The behaviour that DOES need a
-daemon — pairing a real machine with the printed code, and the model
-re-attempting an approved `device_run` so the daemon executes and its own audit
-agrees nothing ran on a deny — is the owner's live walk (the build / enroll /
-run commands are in `.superpowers/sdd/slice-05-daemon/task-5-report.md`). Treat
-a first run the way scenario 6 was treated after S2-T4: read what actually
-happens before trusting the selectors blind.
+`devicesFormat.ts`) and the Governance page (`GovernancePage.tsx`), by reading
+the actual components for real selectors — the per-tile
+`data-testid="device-<id>"`, the `devices-skeleton` load state, and the
+`governance-row-<id>` the ledger page renders for every event — rather than
+guessed ones, but **not run**: the real-stack testing policy forbids a
+throwaway isolated stack, and there was no rebuilt `:3000` at authoring time.
+It runs for the first time, in file order alongside 1-13, once the controller
+rebuilds the stack from this source. It needs no live novad — two paired
+devices are seeded straight into the postgres container over the docker socket
+(`lib/devices.ts`), the same place `lib/evidence.ts` READS the ledger. The
+behaviour that DOES need a daemon — pairing a real machine with the printed
+code, and Nova running a signed command on it so the daemon's own audit
+agrees — is the owner's live walk (the build / enroll / run commands are in
+`.superpowers/sdd/slice-05-daemon/task-5-report.md`). Treat a first run the
+way scenario 6 was treated after S2-T4: read what actually happens before
+trusting the selectors blind.
+
+Scenarios 14 and 15, and the consent half this scenario used to carry, were
+removed on 2026-09-03 with the approval system they exercised (owner ruling:
+v4 makes no authorization decisions — no consent cards, dispositions, earned
+autonomy or per-device grants). The S3 DoD's surviving item is the honesty
+guard, proven mechanically above; there is no approval flow left to walk.
 
 ## Re-running scenario 1
 

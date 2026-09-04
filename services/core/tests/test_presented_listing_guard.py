@@ -563,7 +563,7 @@ def test_the_correction_the_notes_and_the_nudge_trip_no_guard_of_their_own():
     ):
         assert check(text) is None
         assert guards.narration_check(text, []) is None
-        assert guards.consent_claim_check(text, has_pending_consent=False) is None
+        assert guards.consent_claim_check(text) is None
         assert guards.capability_claim_check(text, names) is None
         assert guards.deferral_check(text, [], names) is None
         assert guards.bare_intent_check(text, []) is None

@@ -1,19 +1,26 @@
 # Slice 5 — Agent daemon v1, Linux (novad)
 
+> **Amended 2026-09-03 (no approvals — see [no-approvals.md](no-approvals.md)):**
+> no dispositions, grants, fs_roots or deny-roots — a paired device runs
+> whatever core signs. Stays: WHO-verification (pairing code, pinned keys,
+> ed25519 envelope signature/expiry/one-use, verified on the device) and the
+> hash-chained audit. §Authority, §Capabilities, Rails and Out-of-scope are
+> rewritten in place below; the DoD and the task descriptions are left as
+> built and walked, with the removed parts named.
+
 Parent: the Master Roadmap (approved 2026-08-27), §S5 + §novad summary.
-Inputs: slice-03-carries.md (egress/action-class carries; daemon classes were
+Inputs: slice-03-carries.md (egress carries; the daemon capabilities were
 named S5's), slice-04-carries.md, rd6 owner directives (2026-08-30: web reads
-auto; zero-approvals trajectory with a gate kept for irreversible actions).
-Slice type: ADDITIVE. Size: L. Owner gate: the DoD walk is Jeremy's — pairing
-his own laptop — plus sign-off on the shipped dispositions (reads auto;
-`device_run`/`device_write_file`/`device_launch_app` consent-with-graduation).
+auto; zero-approvals trajectory — a gate was kept for irreversible actions
+at the time and struck 2026-09-03). Slice type: ADDITIVE. Size: L. Owner
+gate: the DoD walk is Jeremy's — pairing his own laptop.
 
 Goal: Nova can act on a paired computer. A pure-Go daemon (novad) enrolls with
 a pairing code, holds an outbound WSS to core, and executes only commands that
 arrive as ed25519 one-use signed envelopes — verified ON the device, so a
 compromised or confused core-adjacent component cannot puppet a machine, and
 the LLM never talks to the daemon at all (only core does, through the same
-kernel funnel as every other tool). First code that runs outside the compose
+dispatch funnel as every other tool). First code that runs outside the compose
 stack; the shape S6 ports to macOS/Windows.
 
 Frontier facts (verified 2026-08-31, never recited): Go stable = 1.27.0
@@ -23,6 +30,11 @@ crypto/ed25519 is stdlib; python verify via the `cryptography` package;
 lingering (`loginctl enable-linger`) is still how a user unit survives logout.
 
 ## Definition of done (operator-visible, walked live)
+
+(As written and walked. Removed 2026-09-03: item 2's default grant and its
+flip — a fresh device runs every capability; item 4's card / approve /
+graduate / revoke — the run just runs; item 6's ledger arc is now
+enrolled → revoked. Items 1, 3, 5 and the identity half of 6 stand.)
 
 1. Settings→Devices: generate a pairing code, run the printed enroll command
    on a machine, `novad run` — the device tile appears green with platform +
@@ -67,15 +79,18 @@ lingering (`loginctl enable-linger`) is still how a user unit survives logout.
   device_id == self, expiry (±120s skew, ~60s validity), envelope_id unseen
   (one-use; the seen-set only needs to span the validity window). Fail any →
   refuse + audit, never execute.
-- Local static deny-roots file (~/.config/novad/deny_roots; ships with
-  ~/.ssh, ~/.gnupg, novad's own config/state dirs): fs.* paths under a deny
-  root are refused ON DEVICE regardless of what core signed —
-  mechanical-over-prompts at the edge, and the daemon's key stays out of
-  reach even from a fully-trusted core.
-- Layered ahead of the envelope, in core: per-device capability grants
-  (default `["system.info"]`, operator-edited, read live per call) and
-  per-device fs root scopes; then the action-class kernel (D-012, untouched —
-  device tools are ordinary tools riding dispatch→authorize).
+- Nothing on the device second-guesses WHAT core asked for (amended
+  2026-09-03): the static deny-roots file S5 shipped is removed. A paired
+  daemon running as the owner's user reads and writes anything that user
+  can — its own key seed and audit file included. A rewrite of the audit is
+  DETECTED by the chain (`device.audit_break`), not prevented. That is the
+  ruling's accepted surface, stated to the owner.
+- Nothing in core decides WHETHER either (amended 2026-09-03): the
+  per-device capability grants, fs root scopes and the action-class kernel
+  that used to sit ahead of the envelope are gone; device tools ride the
+  same schema→executor dispatch as every other tool. The executor still
+  states when a call CANNOT run — unknown or revoked name, not connected, a
+  relative fs path — facts about identity and transport, not permission.
 
 ### Transport
 - Outbound WSS from the daemon; heartbeat frame every ~20s updates
@@ -98,20 +113,19 @@ lingering (`loginctl enable-linger`) is still how a user unit survives logout.
   reindexed.
 
 ### Capabilities v1 → core tools (9 new; registry pin moves 8→17)
-(Amended 2026-09-02 after the owner's first walk — a precheck layer now runs
-BEFORE the kernel, fs grants require a root, and the owner sets dispositions
-from Settings→Autonomy; see slice-05-carries.md §Post-close fix wave.)
-- auto: `device_list` (core DB read, no envelope), `device_info`
-  (system.info), `device_list_files` (fs.list), `device_read_file` (fs.read,
-  256 KiB cap, stated refusal beyond), `device_list_apps` (apps.list),
-  `device_notify` (system.notify).
-- consent, graduating via S3 earned autonomy: `device_run` (shell.exec,
-  ARGV-form only — argv: list[str], no shell string concatenation exists in
-  the path), `device_write_file` (fs.write), `device_launch_app`
-  (apps.launch). Consistent with rd6: reads never gate; the gate that
-  remains is exactly the irreversible set, and it erodes by graduation.
+(Amended 2026-09-03: every tool below runs when called — there is no
+auto/consent split, no disposition and no graduation. The 2026-09-02
+amendment that put a precheck ahead of the kernel is history; what survives
+of it is the executor's own cannot-run refusals. See slice-05-carries.md.)
+- `device_list` (core DB read, no envelope), `device_info` (system.info),
+  `device_list_files` (fs.list), `device_read_file` (fs.read, 256 KiB cap,
+  stated refusal beyond), `device_list_apps` (apps.list), `device_notify`
+  (system.notify), `device_run` (shell.exec, ARGV-form only — argv:
+  list[str], no shell string concatenation exists in the path),
+  `device_write_file` (fs.write, 256 KiB cap), `device_launch_app`
+  (apps.launch).
 - schema.py grows `items.type` validation so `argv` is checked element-wise
-  before the kernel ever sees the call.
+  before the executor ever sees the call.
 
 ## Tasks
 
@@ -179,31 +193,33 @@ from Settings→Autonomy; see slice-05-carries.md §Post-close fix wave.)
 
 ## Rails in force
 
-- D-012 ONE AUTHORIZER: device tools ride dispatch→authorize; zero new ALLOW
-  sites (the AST pin stays green or the slice is wrong).
-- MECHANICAL OVER PROMPTS, AT THE EDGE: signature + expiry + one-use +
-  deny-roots are code on the DEVICE; grants/roots are rows in core read per
-  call. No sentence anywhere asks the model to behave.
-- DERIVED, NEVER HARDCODED: tile state from last_seen; grants live per call;
-  advertised tools from the registry; pins moved deliberately, never routed
-  around (test-gate rail).
+- NO AUTHORIZER (amended 2026-09-03; was "D-012 ONE AUTHORIZER"): device
+  tools ride schema→executor dispatch like every other tool; there is no
+  ALLOW site because there is no decision — `test_no_approvals.py` pins that
+  nothing between the schema check and the executor is awaited.
+- MECHANICAL OVER PROMPTS, AT THE EDGE: signature + expiry + one-use are
+  code on the DEVICE and prove WHO signed a command; nothing on either side
+  decides WHAT may run. No sentence anywhere asks the model to behave.
+- DERIVED, NEVER HARDCODED: tile state from last_seen; advertised tools from
+  the registry; pins moved deliberately, never routed around (test-gate
+  rail).
 - NEVER REPORT SUCCESS UNCHECKED: only the device's result frame resolves a
   command; timeout/disconnect are stated failures; enrollment burns the code
   atomically; audit chain breaks are loud (no-fake-success).
 - OPERATOR-VISIBLE OUTCOMES: every command is a turn span AND a device-audit
-  row; deny provably leaves no wire traffic (the S3 "Activity proves nothing
-  ran" bar, extended to a second machine).
+  row; a stated cannot-run refusal (unpaired, offline) provably leaves no
+  wire traffic (the S3 "Activity proves nothing ran" bar, extended to a
+  second machine).
 
 ## Out of scope (named)
 
 macOS/Windows daemons, installers, signed self-update (S6). Bulk artifacts
 over authenticated HTTPS (roadmap transport rule stands; no v1 capability
 moves >256 KiB — the lane lands with the first capability that needs it).
-Voice assurance / role ceilings on device surfaces (S8 — same carry as the
-consent/autonomy routes). Per-device × per-class graduation (autonomy
-graduates the CLASS globally; fine at one device, revisit when a second
-enrolls — carry). Step-up/push confirmation (owner-deferred, S3 carries).
-Device dashboards beyond the Settings tiles.
+Voice assurance / role ceilings on device surfaces (S8 — identity, not
+approval). Device dashboards beyond the Settings tiles. Struck 2026-09-03
+(no approvals): per-device × per-class graduation and step-up/push
+confirmation — there is nothing to graduate and nothing to confirm.
 
 ## Process
 

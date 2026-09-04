@@ -50,15 +50,10 @@ KNOWN_PREDICATES = frozenset(
         "tool_not_called",
         "guard_fired",
         "guard_absent",
-        "consent_card_raised",
         "reply_matches",
         "reply_absent",
     }
 )
-
-# Predicates that carry no argument (everything else requires a non-empty arg:
-# a tool name, a guard name, or a regex).
-_ARGLESS_PREDICATES = frozenset({"consent_card_raised"})
 
 
 class CaseError(ValueError):
@@ -69,7 +64,8 @@ class CaseError(ValueError):
 class PredicateSpec:
     """One mechanical check in a contract. `predicate` names a function in
     predicates.py; `arg` is its parameter — a tool name, a guard name, or a
-    regex — or None for an argless predicate (consent_card_raised)."""
+    regex. Every predicate takes one (there is no argless predicate: the one
+    there was, consent_card_raised, left with the approval step it read)."""
 
     predicate: str
     arg: str | None = None
@@ -80,10 +76,7 @@ class PredicateSpec:
                 f"unknown predicate {self.predicate!r} — known: "
                 f"{', '.join(sorted(KNOWN_PREDICATES))}"
             )
-        argless = self.predicate in _ARGLESS_PREDICATES
-        if argless and self.arg is not None:
-            raise CaseError(f"predicate {self.predicate!r} takes no arg, got {self.arg!r}")
-        if not argless and not self.arg:
+        if not self.arg:
             raise CaseError(f"predicate {self.predicate!r} requires a non-empty arg")
 
     def as_json(self) -> dict:

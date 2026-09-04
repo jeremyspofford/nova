@@ -98,7 +98,7 @@ func cmdEnroll(argv []string) {
 		fail("could not generate a device key: %v", err)
 	}
 
-	reqBody, err := enrollBody(*code, hex.EncodeToString(pub), devName, hostname, paths.Home)
+	reqBody, err := enrollBody(*code, hex.EncodeToString(pub), devName, hostname)
 	if err != nil {
 		fail("could not build the enroll request: %v", err)
 	}
@@ -144,10 +144,6 @@ func cmdEnroll(argv []string) {
 	if err := config.Save(paths, cfg, priv); err != nil {
 		fail("could not save enrollment: %v", err)
 	}
-	// Create the deny-roots file with defaults now, so the operator sees it.
-	if _, err := config.LoadDenyRoots(paths); err != nil {
-		fail("could not initialise deny-roots: %v", err)
-	}
 
 	fmt.Printf("enrolled as %q (device %s)\n", ok.Name, ok.DeviceID)
 	fmt.Printf("core key pinned: %s…\n", shortKey(ok.CorePubKey))
@@ -155,19 +151,16 @@ func cmdEnroll(argv []string) {
 	fmt.Printf("\nnext: run `novad run` in a desktop session, or install the user service (see README).\n")
 }
 
-// enrollBody is the POST /api/v1/devices/enroll payload. home_dir is optional
-// and additive on core's side (an older core ignores it): it lets Settings ->
-// Devices suggest this machine's home directory as the first filesystem root,
-// so an fs.* grant is never saved rootless. It grants nothing by itself — core
-// stores it as a suggestion the operator accepts by adding it.
-func enrollBody(code, pubkeyHex, name, hostname, homeDir string) ([]byte, error) {
+// enrollBody is the POST /api/v1/devices/enroll payload: the pairing code and
+// the identity this machine will be known by. Nothing else travels — core has
+// no per-device settings to seed.
+func enrollBody(code, pubkeyHex, name, hostname string) ([]byte, error) {
 	return json.Marshal(map[string]string{
 		"code":     code,
 		"pubkey":   pubkeyHex,
 		"name":     name,
 		"platform": "linux",
 		"hostname": hostname,
-		"home_dir": homeDir,
 	})
 }
 
@@ -183,17 +176,13 @@ func cmdRun(argv []string) {
 	if err != nil {
 		fail("%v", err)
 	}
-	deny, err := config.LoadDenyRoots(paths)
-	if err != nil {
-		fail("could not load deny-roots: %v", err)
-	}
 	auditLog, err := audit.Open(paths.AuditFile)
 	if err != nil {
 		fail("could not open the audit log: %v", err)
 	}
 
 	logger := log.New(os.Stderr, "novad ", log.LstdFlags)
-	agent, err := client.New(cfg, priv, deny, auditLog, paths.Home, func(format string, a ...any) {
+	agent, err := client.New(cfg, priv, auditLog, paths.Home, func(format string, a ...any) {
 		logger.Printf(format, a...)
 	})
 	if err != nil {

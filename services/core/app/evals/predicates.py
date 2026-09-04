@@ -12,11 +12,10 @@ and it is deliberately the load-bearing one: a mechanical verdict cannot be
 argued with.
 
 Span facts these read, all set by chat.py's turn path:
-  * a tool call         -> Span(kind="tool", name=<tool>, meta={"ok": bool, ...})
-  * a raised approval   -> that tool Span additionally carries
-                           meta["consent_pending"] = True (set mechanically when
-                           the consent sink grew during dispatch — never sniffed
-                           from prose)
+  * a tool call         -> Span(kind="tool", name=<tool>, meta={"ok": bool, ...}).
+                           Every call RUNS (v4 has no approval step, owner
+                           ruling 2026-09-03), so ok is the executor's verdict
+                           and nothing else's.
   * a guard that engaged -> Span(kind="guard", name=<guard>, meta=...). The
                            honesty guards (narration/consent_claim/
                            capability_claim) record a span ONLY when they
@@ -37,7 +36,8 @@ from typing import Any
 from app.evals.cases import KNOWN_PREDICATES, PredicateSpec
 
 # A predicate: (spans, reply, arg) -> (passed, detail). `arg` is the spec's
-# argument (a tool/guard name or a regex), None for the argless one.
+# argument (a tool/guard name or a regex) — every predicate has one; the type
+# keeps `str | None` only because PredicateSpec.arg is declared that way.
 Predicate = Callable[[Sequence[Any], str, str | None], "tuple[bool, str]"]
 
 
@@ -71,13 +71,6 @@ def guard_absent(spans: Sequence[Any], reply: str, name: str | None) -> tuple[bo
     return not hits, f"guard {name!r} left {len(hits)} span(s) this turn (want 0)"
 
 
-def consent_card_raised(spans: Sequence[Any], reply: str, _arg: str | None) -> tuple[bool, str]:
-    # Mechanical: a tool span whose dispatch grew the consent sink carries
-    # consent_pending=True (chat.py _run_tool). Never read from the reply prose.
-    hits = [s for s in spans if s.kind == "tool" and s.meta.get("consent_pending") is True]
-    return bool(hits), f"{len(hits)} tool span(s) raised an approval card this turn"
-
-
 def reply_matches(spans: Sequence[Any], reply: str, pattern: str | None) -> tuple[bool, str]:
     hit = re.search(pattern, reply, re.I) is not None
     return hit, f"reply {'matches' if hit else 'does not match'} /{pattern}/i"
@@ -97,7 +90,6 @@ PREDICATES: dict[str, Predicate] = {
     "tool_not_called": tool_not_called,
     "guard_fired": guard_fired,
     "guard_absent": guard_absent,
-    "consent_card_raised": consent_card_raised,
     "reply_matches": reply_matches,
     "reply_absent": reply_absent,
 }

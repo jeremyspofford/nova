@@ -9,12 +9,12 @@ import {
 } from '../../lib/api'
 
 /**
- * The operator-visible governance audit (S3-T3, Fix 3) the DoD requires:
- * "every decision appears" — consent raised/decided/burned, every policy
- * denial, every autonomy promotion/demotion/revoke, newest-first, verbatim
- * off governance.py's ledger (services/core/app/governance_api.py). This
- * page reads only; nothing here decides anything (governance.py's own
- * docstring — it is the audit, not an authority).
+ * The operator-visible governance ledger: a record of what happened — a
+ * device enrolled, a device revoked, a replayed device audit chain that did
+ * not join up — newest-first, verbatim off governance.py's ledger
+ * (services/core/app/governance_api.py). Nothing in v4 decides whether Nova
+ * may act (owner ruling 2026-09-03), so nothing here is a decision: this page
+ * reads only, and the table it reads is the audit, never an authority.
  *
  * Pagination mirrors ActivityPage's: "load more" pages strictly older than
  * the last row's id (the server's cursor, not a client-side offset), and a
@@ -33,15 +33,13 @@ function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+// The kinds core writes (services/core/app/governance.py). Anything else —
+// a kind a future slice adds before this map learns it — renders neutral
+// rather than being hidden or crashing the page.
 const KIND_COLOR: Record<string, 'success' | 'danger' | 'accent' | 'neutral'> = {
-  'consent.raised': 'accent',
-  'consent.decided': 'accent',
-  'consent.burned': 'success',
-  'policy.denied': 'danger',
-  'autonomy.promoted': 'success',
-  'autonomy.demoted': 'danger',
-  'autonomy.revoked': 'danger',
-  'autonomy.disposition_set': 'accent',
+  'device.enrolled': 'success',
+  'device.revoked': 'danger',
+  'device.audit_break': 'danger',
 }
 
 export function GovernancePage({
@@ -95,7 +93,7 @@ export function GovernancePage({
     <div>
       <PageHeader
         title="Governance"
-        description="Every authorization decision Nova's policy kernel has made — consent, denial, and earned autonomy — newest first."
+        description="What happened to this instance's devices — every pairing, revoke, and audit-chain break — newest first."
       />
 
       {error && (
@@ -116,8 +114,8 @@ export function GovernancePage({
       ) : events.length === 0 ? (
         <EmptyState
           icon={ScrollText}
-          title="Nothing decided yet"
-          description="Every consent, denial, and autonomy promotion or revoke will appear here."
+          title="Nothing recorded yet"
+          description="Every device pairing, revoke, and audit-chain break will appear here."
         />
       ) : (
         <>
@@ -125,7 +123,7 @@ export function GovernancePage({
             <table className="w-full text-compact">
               <thead>
                 <tr className="bg-surface-elevated">
-                  {['Time', 'Decision', 'Action class', 'Actor'].map(heading => (
+                  {['Time', 'Event', 'Actor'].map(heading => (
                     <th
                       key={heading}
                       className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider sticky top-0 bg-surface-elevated"
@@ -145,9 +143,6 @@ export function GovernancePage({
                       <Badge size="sm" color={KIND_COLOR[event.kind] ?? 'neutral'}>
                         {event.kind}
                       </Badge>
-                    </td>
-                    <td className="px-4 py-2.5 font-mono text-caption text-content-secondary">
-                      {event.action_class ?? <span className="text-content-tertiary">—</span>}
                     </td>
                     <td className="px-4 py-2.5 font-mono text-caption text-content-secondary truncate max-w-[220px]">
                       {event.actor ?? <span className="text-content-tertiary">—</span>}

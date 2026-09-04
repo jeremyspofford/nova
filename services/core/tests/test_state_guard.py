@@ -190,8 +190,8 @@ def test_an_empty_or_blank_reply_never_fires():
 #
 # PIN REPLACED (2026-09-03). The old pin asserted that any failed device span
 # backs nothing, and that was the wrong behaviour: when the device really is
-# offline EVERY device tool refuses at the precheck ("not connected — its tile
-# is stale") with ok=False, so an honest "I ran it and it came back not
+# offline EVERY device tool refuses inside its executor's `_admit` ("not
+# connected — its tile is stale") with ok=False, so an honest "I ran it and it came back not
 # connected — X is offline" was corrected and REPLACED by "I did not actually
 # check", systematically, in the exact scenario this guard exists for. Backing
 # now reads the structured fact the per-device layer records for both outcomes,
@@ -227,10 +227,10 @@ def test_a_refusal_that_determined_nothing_still_backs_nothing():
     assert guards.state_claim_check(OWNER_CASE, [refused], NAMES) is not None
 
 
-def test_a_not_granted_refusal_on_a_CONNECTED_device_backs_the_claim():
-    """The connectivity check PASSED and a later grant check refused. The fact
-    was still determined — connected=True — so "the device is online" is a
-    report of a real read."""
+def test_a_later_refusal_on_a_CONNECTED_device_backs_the_claim():
+    """The connectivity check PASSED and a later refusal — the device answered
+    ok=false — failed the call. The fact was still determined — connected=True
+    — so "the device is online" is a report of a real read."""
     refused = Span("device_run", ok=False, facts=[{"device": DEVICE, "connected": True}])
     assert guards.state_claim_check("The device is online.", [refused], NAMES) is None
 
@@ -277,7 +277,7 @@ def test_the_correction_and_the_note_trip_no_guard_of_their_own():
     text = guards.STATE_CLAIM_CORRECTION
     assert guards.state_claim_check(text, [], NAMES) is None
     assert guards.narration_check(text, []) is None
-    assert guards.consent_claim_check(text, has_pending_consent=False) is None
+    assert guards.consent_claim_check(text) is None
     assert guards.capability_claim_check(text, ["fetch_url", "device_list"]) is None
     assert guards.deferral_check(text, [], ["fetch_url", "web_search"]) is None
     # 2026-09-03: the guard set grew a seventh sibling (presented_listing);
@@ -287,7 +287,7 @@ def test_the_correction_and_the_note_trip_no_guard_of_their_own():
     note = chat.STATE_REDIRECT_NOTE
     assert guards.state_claim_check(note, [], NAMES) is None
     assert guards.narration_check(note, []) is None
-    assert guards.consent_claim_check(note, has_pending_consent=False) is None
+    assert guards.consent_claim_check(note) is None
     assert guards.deferral_check(note, [], ["fetch_url", "web_search"]) is None
     assert guards.presented_listing_check(note, [], ["workspace_list_files"]) is None
 
@@ -306,8 +306,8 @@ def test_the_redirect_nudge_refuses_to_state_a_fact_that_is_not_true():
 
 # -- N3: every connectivity-determining call site is allow-listed -----------
 #
-# Mirrors the D-012 AST pin (test_policy.py's test_only_policy_constructs_an_
-# allow_decision): a regex over the source is too weak — it would have to be
+# Same shape as test_no_approvals.py's AST pins over app/tools/__init__.py: a
+# regex over the source is too weak — it would have to be
 # taught every alias and dotted spelling by hand — so this AST-walks every
 # *.py under app/ for the three call shapes that read a device's LIVE socket
 # state: `hub.is_connected(...)`, `.connected_ids(...)`, and
@@ -326,8 +326,8 @@ def test_the_redirect_nudge_refuses_to_state_a_fact_that_is_not_true():
 # staying invisible until a live walk hits it (the way `hub.command`'s own
 # re-check did — N3, 2026-09-03: it determined "not connected" and raised,
 # but recorded nothing, so a span already carrying a stale
-# facts=[{"connected": true}] from the precheck backed a refusal reporting
-# the opposite. Fixed by threading facts_sink into hub.command; this pin is
+# facts=[{"connected": true}] from `_admit` backed a refusal reporting the
+# opposite. Fixed by threading facts_sink into hub.command; this pin is
 # what keeps the next one from being silent too).
 
 _RECORDS = "records"
@@ -346,8 +346,8 @@ _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
     ),
     ("devices_ws.py", "Hub.command"): (
         _RECORDS,
-        "the not-connected re-check right before sending (the precheck's real "
-        "gap, N3): a socket gone or dead between precheck and send determines "
+        "the not-connected re-check right before sending (the gap `_admit` "
+        "cannot see, N3): a socket gone or dead between `_admit` and send determines "
         "connectivity=False here, and records it onto facts_sink when the "
         "caller threaded one through _command, so a span's facts end on the "
         "truth this refusal is actually reporting.",

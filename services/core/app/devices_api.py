@@ -1,4 +1,4 @@
-"""/api/v1/devices — mint a pairing code, enroll a machine, edit what it may do.
+"""/api/v1/devices — mint a pairing code, enroll a machine, rename or revoke it.
 
 Every route here is authenticated the way the rest of core is
 (identity.require_person — a session cookie or the service bearer) with ONE
@@ -20,6 +20,10 @@ Two consequences of that exception are handled here rather than assumed:
     address, so the limiter degrades to a global one. That is stricter, not
     weaker, and it is why X-Forwarded-For is NOT trusted here: a header the
     caller sets is a bypass, not an identity.
+
+There is no grants route. v4 makes no authorization decisions (owner ruling
+2026-09-03): a paired device runs whatever core signs, so the only things an
+operator edits here are a name and whether the pairing still stands.
 
 Handlers do nothing devices.py does not already do. Refusals are its
 DeviceRefused, re-stated with the status it chose, so the reason the operator
@@ -55,23 +59,13 @@ class EnrollBody(BaseModel):
     name: str = Field(min_length=1)
     platform: str = Field(min_length=1)
     hostname: str = Field(min_length=1)
-    # Optional and additive: novad sends os.UserHomeDir() so the grants editor
-    # can suggest it as the first fs root. An older daemon omits it; a value
-    # that is not an absolute path is ignored (devices.clean_home_dir), never
-    # a 422 — a machine that cannot name its home must still be able to pair.
-    home_dir: str | None = None
+    # No `extra='forbid'`: an older novad still sending `home_dir` (a field
+    # that died with the grants editor) is ignored, never 422'd — a machine
+    # running last week's daemon must still be able to pair.
 
 
 class RenameBody(BaseModel):
     name: str = Field(min_length=1)
-
-
-class GrantsBody(BaseModel):
-    # Deliberately loose types: devices.clean_capabilities / clean_fs_roots do
-    # the checking, so the operator reads "unknown capability 'fs.raed'"
-    # instead of a pydantic schema dump that never names the typo.
-    capabilities: list[str]
-    fs_roots: list[str]
 
 
 def _caller(request: Request) -> str:
@@ -123,7 +117,6 @@ async def enroll(request: Request, body: EnrollBody) -> dict:
             name=body.name,
             platform=body.platform,
             hostname=body.hostname,
-            home_dir=body.home_dir,
         )
     except devices.DeviceRefused as exc:
         if exc.status_code == 403:
@@ -157,28 +150,6 @@ async def rename_device(
         return {"device": await devices.rename(pool, device_id=device_id, name=body.name)}
     except devices.DeviceRefused as exc:
         raise _refuse(exc) from exc
-
-
-@router.put("/{device_id}/grants")
-async def set_grants(
-    device_id: uuid.UUID,
-    body: GrantsBody,
-    person: Person = Depends(identity.require_person),
-) -> dict:
-    """Replace this device's grants. The governance event records the before
-    and the after, and names the person who clicked it — not "the system"."""
-    pool = await db.get_pool()
-    try:
-        device = await devices.set_grants(
-            pool,
-            device_id=device_id,
-            capabilities=body.capabilities,
-            fs_roots=body.fs_roots,
-            actor=str(person.id),
-        )
-    except devices.DeviceRefused as exc:
-        raise _refuse(exc) from exc
-    return {"device": device}
 
 
 @router.post("/{device_id}/revoke")

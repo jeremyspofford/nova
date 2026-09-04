@@ -31,6 +31,10 @@ model) — the AI Quality page shows both scores without a re-run.
   contract's strictness, not only capability. The case still discriminates (the
   27B passed it), but a v2 corpus should split "did it use SOME real source" from
   "did it hit the exact URL". Cheap fixture edit.
+- **Corpus v5 — 2026-09-03 (no approvals):** `consent_card_raised` removed,
+  both pending-claim cases → `guard_absent(consent_claim)` + `tool_called`,
+  all 13 cases → suite_version 5 — see no-approvals.md and the
+  slice-04-evals.md header.
 - **Judged predicates deferred:** T1/T2 shipped MECHANICAL predicates only. The
   graded-quality cases (relevance, no-tangent — the iPhone-4 case) are PROXIES
   today (keyword regex). A different-model LLM judge (position-swapped) is the

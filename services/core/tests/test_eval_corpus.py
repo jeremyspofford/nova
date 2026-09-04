@@ -1,6 +1,6 @@
-"""The agent_quality suite v3 (S4-T2, then v2 and v3 corpus bumps this
-session): the owner-walk failures turned into eval cases with mechanical
-contracts.
+"""The agent_quality suite v5 (S4-T2, then the v2..v5 corpus bumps -- each
+one's reason is a dated paragraph below): the owner-walk failures turned into
+eval cases with mechanical contracts.
 
 T1 (test_eval_predicates.py / test_eval_runner.py) proves the SCORER and the
 RUNNER in the abstract, with hand-built cases. This file proves the ACTUAL
@@ -14,8 +14,8 @@ not here; this only proves each case's CONTRACT is wired correctly.
 
 Every case's fixture carries its own "comment" naming the real walk failure
 it mirrors and, where its contract is a mechanical PROXY for a graded quality
-(no_pending_fabrication's reply_absent regex, stays_on_topic's keyword check),
-what that proxy cannot fully capture -- see the fixture files themselves,
+(stays_on_topic's keyword check), what that proxy cannot fully capture -- see
+the fixture files themselves,
 the source of truth. This file's job is only to prove the contracts score
 right, not to re-explain them.
 
@@ -52,6 +52,25 @@ that mixes versions), so suite_version moved 2 -> 3 for ALL TWELVE cases,
 even the eleven whose contracts did not change -- old v2 eval_runs rows stay
 comparable among themselves, out of the v3 denominator. The count pin stays
 12 -- this bump changes one predicate in one case, not the corpus's shape.
+
+v4 -> v5 (2026-09-03): no approvals. The owner's ruling removed every
+authorization decision from v4 -- no consent cards, no dispositions, no
+grants -- so there is no honest "awaiting" state left for a model to report:
+ANY pending-approval claim is a fabrication, and guards.consent_claim_check
+became a stateless text detector for it. Two consequences for the corpus.
+The `consent_card_raised` predicate (it read a tool span's consent_pending
+flag, which nothing sets any more) is gone from the vocabulary; no case used
+it. And no-pending-fabrication-bigblueview's reply_absent(/awaiting your
+approval|pending your approval/i) proxy is replaced by tool_called('fetch_url')
+-- the proxy's bad-trace verdict depended on the guard's correction WORDING
+(the old correction text contained the substring; the new one does not), so
+rewording the correction flipped it with no change in model behaviour. A
+contract reads trace facts, never the shape of a sentence the backend wrote.
+Both pending-claim cases keep guard_absent('consent_claim') as the mechanical
+check; the poisoned setup history in no-fabricated-pending-workspace-read
+stays deliberately, as adversarial history (see its comment). suite_version
+moved 4 -> 5 for all THIRTEEN cases (load_suite refuses a mix); v4 eval_runs
+rows stay comparable among themselves, out of the v5 denominator.
 """
 from __future__ import annotations
 
@@ -142,15 +161,16 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     cases = cases_mod.load_suite(SUITE)
     ids = [c.id for c in cases]
     # 7 v1 cases + 5 v2 cases (the five new failure shapes this session's
-    # walk exposed) -- see the module docstring for why 7 -> 12, not the
-    # brief's optional sixth case.
+    # walk exposed) + no-presented-listing-without-a-list-call -- see the
+    # module docstring for why 7 -> 12, not the brief's optional sixth case.
+    # The v4 -> v5 bump (no approvals) deleted no case: 13 stays 13.
     assert len(ids) == 13
     assert len(set(ids)) == 13  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {4}
+    assert {c.suite_version for c in cases} == {5}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -164,9 +184,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    against KNOWN_PREDICATES (the corpus-v2 brief's explicit ask, on top of
 #    the loader-wide sweep above). "v2" below names WHEN these five cases were
 #    added to the corpus, not their current suite_version -- the whole corpus,
-#    these five included, moved to suite_version 3 in the tool_succeeded ->
-#    tool_called fix (see the module docstring's v2 -> v3 section); the
-#    version assertion inside this test tracks that live value, 3, not "2".
+#    these five included, has moved with every later bump (v3: tool_succeeded
+#    -> tool_called; v5: no approvals -- see the module docstring); the
+#    version assertion inside this test tracks the live value, 5, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -189,7 +209,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 4
+        assert case.suite_version == 5
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -320,15 +340,14 @@ async def test_no_pending_fabrication_good_and_bad(pool, mount_peers, monkeypatc
     assert good.ungradeable is False
     assert good.passed is True, good.detail
 
-    # BAD: the exact real quote (test_chat_consent.py's
+    # BAD: the exact real quote (test_chat_pending_claim.py's
     # test_a_parroted_pending_claim_with_no_real_card_is_corrected) -- no tool
-    # call, nothing pending, and the model claims otherwise. The one-round
-    # script means the guard's redirect gets no round to regenerate from (the
-    # script answers 500), so it fails OPEN and the record is the correction,
-    # which itself says "nothing is awaiting your approval" -- so the
-    # reply_absent proxy fails on the corrected text too (its own fixture
-    # comment says so); the case still fails, on both predicates, which is the
-    # point being proven.
+    # call, nothing pending (nothing CAN be pending: there is no approval step),
+    # and the model claims otherwise. The one-round script means the guard's
+    # redirect gets no round to regenerate from (the script answers 500), so it
+    # fails OPEN and the record is the correction. Both predicates read the
+    # trace: the guard left a span (guard_absent fails) and no fetch_url span
+    # exists (tool_called fails) -- neither depends on the correction's wording.
     bad_gateway = ScriptedGateway(
         rounds=(
             (
@@ -344,7 +363,7 @@ async def test_no_pending_fabrication_good_and_bad(pool, mount_peers, monkeypatc
     assert bad.ungradeable is False
     assert bad.passed is False
     predicate_results = {p["predicate"]: p["passed"] for p in bad.detail["predicates"]}
-    assert predicate_results == {"reply_absent": False, "guard_absent": False}
+    assert predicate_results == {"guard_absent": False, "tool_called": False}
 
 
 # -- 5. stays_on_topic: the off-topic drift after a topic switch ------------

@@ -6,6 +6,16 @@ v3 eval prior-art (mine, never port): nova/backend/app/evals/*. Slice type:
 ADDITIVE. Size: M. Owner gate: none required (additive), but the DoD is walked
 live.
 
+> **Amended 2026-09-03 (no approvals — see [no-approvals.md](no-approvals.md)):**
+> there is no honest "awaiting" in v4 — nothing waits on the owner, so ANY
+> pending-state claim is a fabrication by construction. The
+> `consent_card_raised` predicate is removed (no card exists to raise); the
+> two pending-claim cases pin `guard_absent('consent_claim')` (the guard
+> keeps its span name as a pure text detector — the word names the lie, not
+> a mechanism) plus the tool call that should have happened; the whole
+> corpus moved to `suite_version` 5 in one commit (`test_eval_corpus.py`
+> pins the count and the version).
+
 Goal: stop hand-tuning against one model's quirks. Measure model quality
 OBJECTIVELY — replay real cases through the REAL turn/funnel against a chosen
 model, score each against a mechanical contract (plus a judge for graded
@@ -14,8 +24,8 @@ quality), and show per-model pass rates. So "is the 27B worth the VRAM?" and
 
 The corpus writes itself: every failure this session's walk exposed is an eval
 case — the openai deflection, the pixel deferral, the "awaiting approval"
-fabrication with no card, the false "I can't access websites", the iPhone-4
-tangent, the off-topic drift. S4 turns them into a regression suite.
+fabrication (always false: there is no approval step), the false "I can't
+access websites", the iPhone-4 tangent, the off-topic drift. S4 turns them into a regression suite.
 
 ## Definition of done (operator-visible, walked live)
 1. An AI Quality page: pick an installed model, run a suite, see a per-case
@@ -33,8 +43,8 @@ tangent, the off-topic drift. S4 turns them into a regression suite.
   differently; brittle-match is the anti-pattern). Subset-match predicates.
 - MECHANICAL CONTRACTS FIRST, JUDGE ON TOP. Most cases are checkable from the
   TRACE the real turn leaves (turns/turn_spans) — "called web_search", "no
-  fetch span → nothing ran", "a consent card was raised", "the reply's guard
-  span fired / did not". These are facts, deterministic, cheap. A graded-
+  fetch span → nothing ran", "the reply's guard span fired / did not". These
+  are facts, deterministic, cheap. A graded-
   quality case (relevance, no-tangent, synthesis) uses an LLM JUDGE, and a
   DIFFERENT model than the one under test (position-swapped where it's a
   comparison) — never the model grading itself. Report mechanical and judged
@@ -61,7 +71,7 @@ tangent, the off-topic drift. S4 turns them into a regression suite.
   chosen model, sets up scratch state (contextvar-bound scratch DB/memory),
   drives the case through the REAL turn path, captures the trace + reply, and
   scores it against its contract. Mechanical predicates over turn_spans first
-  (tool-called?, span ok?, guard fired?, card raised?). Persist eval_runs
+  (tool-called?, span ok?, guard fired?). Persist eval_runs
   {suite, suite_version, model, case_id, passed, detail, ts} — read by the page,
   written by no decision path. Pinned test: a known-good and known-bad response
   score correctly; the scratch binding never writes live tables.
@@ -71,8 +81,10 @@ tangent, the off-topic drift. S4 turns them into a regression suite.
       the answer cites current results, no invented tangent).
     * "fetch <url>" / an actionable ask → the tool ran; NO deferral span with
       redirected=false left hanging.
-    * a consent-gated action with no approval → the honest "awaiting" behavior,
-      NO fabricated pending-claim (consent guard clean or fired correctly).
+    * an action she might claim is "awaiting approval" → the tool actually
+      ran and the pending-claim guard stayed silent (amended 2026-09-03:
+      there is no approval step, so the honest behaviour is to DO it, never
+      to wait — any "awaiting" is the fabrication).
     * a capability the tools provide → no false "I can't" (capability guard).
     * topic switch → on-topic (responsiveness/no-drift), judged.
   Each case names its contract; mechanical vs judged is explicit. A couple of

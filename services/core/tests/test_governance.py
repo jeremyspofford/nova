@@ -1,112 +1,92 @@
-"""The governance ledger: a row for every decision an operator must audit,
-none for a plain auto-allow, and each written with (or as) the fact it records.
+"""The governance ledger: a RECORD of what happened, never a gate.
+
+Two pins. An event written with the mutation it records reads back verbatim
+(the ledger is the operator's audit of device enrol/revoke/audit-break). And
+running a tool through dispatch writes NOTHING here — nothing in v4 decides
+whether Nova may act (owner ruling 2026-09-03), so there is no decision to
+record; the tool call's own record is its turn_span, written by the chat loop.
 """
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
-from app import consents, governance, policy
+from app import governance, tools
 from app.identity import Person
-from app.tools.base import ToolContext
+from app.tools.base import Tool, ToolContext, ToolFailure
 from tests.conftest import requires_db
 
 pytestmark = requires_db
 
-ARGS = {"url": "https://example.com/pricing"}
 
+async def test_record_event_round_trips_through_recent_events(pool):
+    device = uuid.uuid4()
+    async with pool.acquire() as conn, conn.transaction():
+        await governance.record_event(
+            conn,
+            kind=governance.DEVICE_ENROLLED,
+            actor="jeremy",
+            subject_ref=device,
+            meta={"name": "laptop", "pubkey": "ab" * 32},
+        )
+    # A standalone event (no mutation to share a transaction with) lands the
+    # same way — its writer opens the one transaction it needs, as
+    # devices_ws._audit_break does — and newest-first ordering holds.
+    async with pool.acquire() as conn, conn.transaction():
+        await governance.record_event(
+            conn, kind=governance.DEVICE_AUDIT_BREAK, subject_ref=device, meta={"seq": 3}
+        )
 
-async def _person(pool, role: str = "owner") -> Person:
-    pid = await pool.fetchval(
-        "INSERT INTO people (name, role) VALUES ($1, $2) RETURNING id", role, role
-    )
-    return Person(id=pid, name=role, role=role)
-
-
-def _ctx(person: Person | None) -> ToolContext:
-    from pathlib import Path
-
-    return ToolContext(app=None, person=person, workspace_root=Path("/tmp"))
-
-
-async def _of_kind(pool, kind: str) -> list:
-    return [e for e in await governance.recent_events(pool) if e["kind"] == kind]
-
-
-async def test_raising_a_consent_writes_a_raised_event_pointing_at_it(pool):
-    person = await _person(pool)
-    card = await consents.raise_consent(
-        pool,
-        action_class="fetch_url",
-        args=ARGS,
-        summary="s",
-        person_id=person.id,
-        agent="chat",
-        conversation_id=None,
-    )
     events = await governance.recent_events(pool)
-    raised = [e for e in events if e["kind"] == governance.CONSENT_RAISED]
-    assert len(raised) == 1
-    assert str(raised[0]["subject_ref"]) == card["consent_id"]
-    assert raised[0]["action_class"] == "fetch_url"
-    assert raised[0]["meta"]["args_hash"] == card["args_hash"]
+    assert [e["kind"] for e in events] == [
+        governance.DEVICE_AUDIT_BREAK,
+        governance.DEVICE_ENROLLED,
+    ]
+    enrolled = events[1]
+    assert enrolled["actor"] == "jeremy"
+    assert enrolled["subject_ref"] == device
+    assert enrolled["meta"] == {"name": "laptop", "pubkey": "ab" * 32}
+    assert enrolled["created_at"] is not None
+    assert events[0]["meta"] == {"seq": 3}
+    # The ledger row carries no decision column: there is no decision.
+    assert "action_class" not in dict(enrolled)
 
 
-async def test_deciding_writes_a_decided_event(pool):
-    person = await _person(pool)
-    card = await consents.raise_consent(
-        pool,
-        action_class="fetch_url",
-        args=ARGS,
-        summary="s",
-        person_id=person.id,
-        agent="chat",
-        conversation_id=None,
+async def test_dispatching_a_tool_writes_no_governance_row(pool, monkeypatch, tmp_path):
+    """dispatch reads no table and writes no row — a tool runs because it was
+    called. Both a success and a stated refusal leave the ledger exactly as it
+    was, so the ledger can never become a gate's log by accident."""
+    calls: list[dict] = []
+
+    async def runs(args: dict, ctx: ToolContext) -> str:
+        calls.append(args)
+        return "did the thing"
+
+    async def refuses(args: dict, ctx: ToolContext) -> str:
+        raise ToolFailure("the path is outside the workspace")
+
+    schema = {"type": "object", "properties": {}, "additionalProperties": False}
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "spy_ok",
+        Tool(name="spy_ok", description="d", parameters=schema, executor=runs),
     )
-    await consents.decide(
-        pool, consent_id=uuid.UUID(card["consent_id"]), approve=True, decided_by=person.id
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "spy_refuses",
+        Tool(name="spy_refuses", description="d", parameters=schema, executor=refuses),
     )
-    decided = await _of_kind(pool, governance.CONSENT_DECIDED)
-    assert len(decided) == 1
-    assert decided[0]["meta"]["decision"] == "approved"
-
-
-async def test_burning_writes_a_burned_event(pool):
-    person = await _person(pool)
-    card = await consents.raise_consent(
-        pool,
-        action_class="fetch_url",
-        args=ARGS,
-        summary="s",
-        person_id=person.id,
-        agent="chat",
-        conversation_id=None,
+    ctx = ToolContext(
+        app=None,
+        person=Person(id=uuid.uuid4(), name="jeremy", role="owner"),
+        workspace_root=Path(tmp_path),
     )
-    await consents.decide(
-        pool, consent_id=uuid.UUID(card["consent_id"]), approve=True, decided_by=person.id
-    )
-    await consents.validate_and_use(
-        pool,
-        action_class="fetch_url",
-        args_hash=consents.args_hash(ARGS),
-        person_id=person.id,
-        agent="chat",
-    )
-    burned = await _of_kind(pool, governance.CONSENT_BURNED)
-    assert len(burned) == 1
-    assert str(burned[0]["subject_ref"]) == card["consent_id"]
+    assert await pool.fetchval("SELECT count(*) FROM governance_events") == 0
 
+    result, ok = await tools.dispatch("spy_ok", "{}", ctx)
+    assert (result, ok) == ("did the thing", True)
+    assert calls == [{}]
+    result, ok = await tools.dispatch("spy_refuses", "{}", ctx)
+    assert (result, ok) == ("Error: the path is outside the workspace", False)
 
-async def test_a_denial_writes_a_policy_denied_event(pool):
-    person = await _person(pool)
-    await policy.authorize(_ctx(person), "made_up_tool", {"x": 1})
-    denied = await _of_kind(pool, governance.POLICY_DENIED)
-    assert len(denied) == 1
-    assert denied[0]["action_class"] == "made_up_tool"
-
-
-async def test_an_auto_allow_writes_no_governance_event(pool):
-    """The ledger is for gated decisions, not every read — an auto tool leaves
-    no row, so an audit is decisions, not noise."""
-    person = await _person(pool)
-    await policy.authorize(_ctx(person), "get_time", {})
     assert await pool.fetchval("SELECT count(*) FROM governance_events") == 0

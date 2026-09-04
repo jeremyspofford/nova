@@ -230,39 +230,6 @@ describe('ActivityPage — drill-in', () => {
   })
 })
 
-describe('ActivityPage — the awaiting-consent span state', () => {
-  it('renders a card-raising span as amber "Awaiting approval", never a red error', async () => {
-    const api = fakeApi([[turn({ id: 't1' })]], {
-      t1: detail({
-        spans: [
-          {
-            kind: 'tool',
-            name: 'fetch_url',
-            started_at: new Date().toISOString(),
-            duration_ms: 4,
-            // ok=false because nothing ran, but consent_pending marks it as
-            // waiting on the operator — not a failure, so `error` is unset.
-            meta: {
-              ok: false,
-              consent_pending: true,
-              args_redacted: { url: 'https://bigblueview.com' },
-              result_head: 'Awaiting your approval: Run fetch_url with url=https://bigblueview.com',
-            },
-          },
-        ],
-      }),
-    })
-    render(<ActivityPage api={api} />)
-    fireEvent.click(await screen.findByTestId('activity-row-t1'))
-    const panel = await screen.findByTestId('activity-detail-t1')
-
-    expect(await within(panel).findByText('Awaiting approval')).toBeDefined()
-    // Never the red error badge — an awaiting card is not a failed call.
-    expect(within(panel).queryByText('error')).toBeNull()
-    expect(within(panel).queryByText('ok')).toBeNull()
-  })
-})
-
 describe('ActivityPage — the workspace span-path link', () => {
   it('links a workspace_write_file span whose args survived as the object shape', async () => {
     const api = fakeApi([[turn({ id: 't1' })]], {

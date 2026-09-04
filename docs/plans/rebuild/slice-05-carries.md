@@ -6,6 +6,14 @@ paired machine. Authority leaves core only as ed25519 one-use signed envelopes
 verified ON the device; the LLM never talks to the daemon (only core does,
 through the same dispatch→policy.authorize funnel as every other tool).
 
+> **Removed 2026-09-03 (no approvals — see [no-approvals.md](no-approvals.md)):**
+> everything below that names dispositions, grants, fs_roots, deny-roots,
+> consent cards, the consent burn, `continuation_of`, the plumbing kind,
+> precheck-for-grants and owner disposition control is HISTORY — built,
+> walked, then removed by owner ruling. The waves are left as written (they
+> happened); each carries a dated line saying what of it survives. The
+> funnel is now schema→executor with nothing awaited between.
+
 ## Commits (SDD: 5 tasks, per-task review + fix loop, whole-branch final review)
 - **T1** device registry + pairing + ed25519 envelopes: 410b7f7a..bbbdc2c6
   (+ ruling R1 lint cleanup 120a5ed0). migration 011.
@@ -14,10 +22,15 @@ through the same dispatch→policy.authorize funnel as every other tool).
   send-failure). Tripwires moved deliberately: tool registry 8→17;
   action_classes now 6 device auto / 3 device consent (device_run,
   device_write_file, device_launch_app — the irreversible set).
+  (Removed 2026-09-03: `action_classes` dropped by migration 017; every
+  device tool runs.)
 - **T3** novad (Go): 812ab221..f8a2863a, fix 01b5de61 (refusal-audit + TOFU
   tripwires; astral test; utf8 truncation; mechanical read cap; symlinked
   deny-roots). Go 1.27, sole dep coder/websocket, byte-identical canonical
   encoder pinned against the committed fixture, hash-chained audit.
+  (Removed 2026-09-03: deny-roots — `internal/config/denyroots.go` and its
+  checks in caps/fs.go and caps/shell.go; the verifier, custody and audit
+  chain untouched.)
 - **T4** Settings→Devices web: 972db617..70029a11, fix 29e39b5e (device-scoped
   checkbox id — the cross-toggle bug; unmount tripwire; backend-matching `..`
   refusal; grant list no longer trimmed to the rendered set). Tile liveness
@@ -51,6 +64,9 @@ reserved for a genuinely interrupted stream. Carry: the generic "failed
 unexpectedly — <exc>" path now surfaces ≤160 chars of an exception to the
 browser — no credential-bearing tool exists yet; revisit when the secrets
 store lands.
+(Removed 2026-09-03: the default-grant refusal + grant flip (2) and the
+disposition flip (4) no longer exist — a fresh device runs every capability
+from the first turn; (3) and the honest-offline half of (5) stand as walked.)
 
 ### (original close-out note)
 The six DoD outcomes are proven MECHANICALLY end-to-end by test_devices_e2e.py
@@ -84,6 +100,9 @@ origin once the rebuilt web with the WS nginx location is deployed).
   (local access). The design is "lexical allow-boundary + deny backstop";
   making the device re-verify the resolved target is under a granted root would
   close it.
+  (Closed by removal 2026-09-03: fs_roots and deny-roots are both gone, so
+  there is no allow-boundary and no backstop — a paired daemon follows any
+  symlink the owner's user can. Moot, not fixed.)
 - **M5 — hub + enroll-limiter are in-memory process globals (whenever core
   scales out).** Correct for the pinned single-core household deployment; a
   multi-worker core would give N× hub registries and N× enroll budgets. Note it
@@ -182,6 +201,16 @@ Carries from this wave (all Minor, final-review-agreed):
 - Docs: slice-05-daemon.md's "per-device layer inside the executor" and "12
   migrations" are superseded by this section.
 
+Removed 2026-09-03 (no approvals): precheck-for-grants (e9afa46a —
+`Tool.precheck` deleted; what survives is the executor's own cannot-run
+refusals: unknown/revoked name, not connected, relative fs path),
+a-raised-card-closes-the-loop (1d1440ac — no card), fs-grants-need-a-root +
+`home_dir` (ad1adea6, migration 013 — column dropped by 017), owner
+disposition control (59608403 — `PUT /autonomy/{class}` and
+`autonomy.disposition_set` gone). Of this wave's carries: the 256 KiB cap
+and the lone-surrogate guard are now plain executor refusals with nothing
+behind them; the rest are moot.
+
 ## Second post-close wave (2026-09-02, later) — "try again" did nothing
 
 The owner's next exchange (local model): "try again" on a device command →
@@ -232,6 +261,16 @@ Carries from this wave:
 - Dead belt-and-braces loop after `assert memory.ingests == []` in
   test_chat_consent.py.
 
+Removed 2026-09-03 (no approvals): the live consent re-check in the regen
+guard set (`consent_claim_check` is stateless now — with no approval step,
+every current-tense "awaiting" is false by construction), `continuation_of`,
+the plumbing `messages.kind` (column dropped and its rows deleted by 017;
+`test_chat_consent.py` became `test_chat_pending_claim.py`). Kept: the fired
+guard's ONE retry, gated only on nothing-ran / not-out-of-rounds, as a pure
+fabrication catcher; the lesson that approval choreography in history
+poisons a small model — now moot by construction, since no choreography is
+ever written.
+
 ## Third post-close wave (2026-09-02, later) — "still offline" with no check; the cap ate the answer
 
 Trace: "try again" → ZERO tool calls, the reply parroted an earlier (then-true)
@@ -245,7 +284,8 @@ Critical + 4 Important, all executed repros; core 968):
   ("the device is still offline", "<name> is online") with no device check
   this turn is REPLACE-class with ONE guard-vetted retry (same generalized
   `_claim_redirect`, one budget, gated on nothing-ran / not-out-of-rounds /
-  no card raised). Precision-first: subject = a paired NAME or "the/your/
+  no card raised — the card leg removed 2026-09-03, no cards). Precision-
+  first: subject = a paired NAME or "the/your/
   this/that device" only (bare laptop/machine/computer nouns fired on ANY
   computer — removed); state words narrowed to unambiguous connectivity
   (up/down/available/"connected to the projector" were false positives —
@@ -329,6 +369,9 @@ XML tool syntax under pressure. Commits 966b08e3..0655ee1a (core 1039):
   history. The inline-code regex was superlinear on a backtick run (12k →
   11.8 s, event-loop blocking) — bounded to 1–3 backticks / 2,000 chars,
   20k backticks pinned < 50 ms.
+  (Amended 2026-09-03: migration 015's plumbing rows and the `kind` column
+  were removed by 017. The markup rule — prose never dispatches — is
+  untouched: it is an honesty control, not a gate.)
 
 Carries from this wave:
 - The live screen still streams the raw XML deltas before the scan runs;
@@ -414,7 +457,8 @@ walk's failures) is blind to this week's five shapes.
   stock ("On it", "One sec"), or first-person future ("I'll check/look
   into/run <object>") — with no successful tool span is a deferral: one
   guard-vetted retry with tools via the shared `_claim_redirect` (single
-  budget; gated on out_of_rounds/card_raised), else an honest note that
+  budget; gated on out_of_rounds/card_raised — the card leg removed
+  2026-09-03), else an honest note that
   NEVER says "did not" when the retry's tool actually ran (derived from
   spans: "[I ran <tool> but could not report…]"). Precision held under two
   adversarial rounds (hedges, questions, content-bearing, past tense) after
@@ -438,6 +482,10 @@ walk's failures) is blind to this week's five shapes.
   suite_version 3 (see docs/plans/rebuild/slice-04-carries.md and
   test_eval_corpus.py). The owner re-measures both models on v3 after the
   redeploy.
+  (Amended 2026-09-03: `guard_absent(consent_claim)` now means "she never
+  claimed to be waiting on anything" — there is nothing to wait on; the
+  `consent_card_raised` predicate is gone and the corpus moved to
+  suite_version 5 with the removal.)
 - Ops: novad moved to a systemd user unit (survives restarts once
   `loginctl enable-linger` is run with sudo); each review/impl agent now uses
   its own scratch database (concurrent suites on one DB raced TRUNCATEs).

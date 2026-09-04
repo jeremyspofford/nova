@@ -189,35 +189,15 @@ describe('createSseParser', () => {
     expect(parseAll(['data: {"activity":null}\n\n'])[0].type).toBe('error')
   })
 
-  // S3-T2's approval card: the policy kernel raises a consent this turn and
-  // chat.py streams its card_spec verbatim. S2-T1's forward-compat allowance
-  // is what let an older client silently ignore these before this client
-  // knew what they meant; now it graduates from unknown to known, same as
-  // `activity` did for S2's tool loop.
-  it('turns a consent frame into a consent event carrying the card', () => {
-    const card = {
-      consent_id: 'c-1',
-      action_class: 'fetch_url',
-      args_hash: 'deadbeef',
-      args: { url: 'https://example.com/pricing' },
-      summary: 'Run fetch_url with url=https://example.com/pricing',
-      status: 'pending',
-      conversation_id: 'conv-1',
-      requested_by: { person_id: 'p-1', agent: 'chat' },
-      created_at: '2026-08-30T00:00:00Z',
-      expires_at: '2026-08-31T00:00:00Z',
-    }
-    expect(parseAll([`data: {"consent":${JSON.stringify(card)}}\n\n`])).toEqual([
-      { type: 'consent', card },
-    ])
-  })
-
-  it('errors a consent frame missing consent_id, action_class or summary rather than dropping it', () => {
-    expect(parseAll(['data: {"consent":{"action_class":"fetch_url","summary":"x"}}\n\n'])[0].type).toBe(
-      'error',
-    )
-    expect(parseAll(['data: {"consent":"not an object"}\n\n'])[0].type).toBe('error')
-    expect(parseAll(['data: {"consent":null}\n\n'])[0].type).toBe('error')
+  it('a {"consent":…} frame is an unknown frame — ignored, never an event (no approvals)', () => {
+    // v4 has no approval cards (owner ruling 2026-09-03), so this client has
+    // no card path at all: a frame an older core might still send falls into
+    // the S2-R6 forward-compat allowance like any other key it has never
+    // heard of. Pinned so the card cannot quietly grow back as a "known"
+    // frame type without this test moving.
+    expect(
+      parseAll(['data: {"consent":{"consent_id":"c-1","action_class":"fetch_url","summary":"x"}}\n\n']),
+    ).toEqual([])
   })
 
   it('still errors malformed/non-JSON lines — the amendment only covers well-formed unknowns', () => {
@@ -268,38 +248,6 @@ describe('streamChat', () => {
     expect(seen!.url).toBe('/api/v1/chat/stream')
     expect(seen!.init.method).toBe('POST')
     expect(JSON.parse(String(seen!.init.body))).toEqual({ message: 'hey', conversation_id: 'c9' })
-  })
-
-  it('posts continuation_of when the message resumes an approved card', async () => {
-    // The plumbing marker (migration 014): a continuation sent after an
-    // approve names the consent it resumes, so core records that row as
-    // plumbing and later turns never read the choreography back.
-    let seen: { url: string; init: RequestInit } | null = null
-    const fetchImpl = async (url: string, init: RequestInit) => {
-      seen = { url, init }
-      return fakeResponse(['data: [DONE]\n\n'])
-    }
-    await collect(
-      streamChat(
-        { message: 'go ahead', conversationId: 'c9', continuationOf: 'consent-7' },
-        fetchImpl,
-      ),
-    )
-    expect(JSON.parse(String(seen!.init.body))).toEqual({
-      message: 'go ahead',
-      conversation_id: 'c9',
-      continuation_of: 'consent-7',
-    })
-  })
-
-  it('omits continuation_of from an ordinary send', async () => {
-    let seen: { url: string; init: RequestInit } | null = null
-    const fetchImpl = async (url: string, init: RequestInit) => {
-      seen = { url, init }
-      return fakeResponse(['data: [DONE]\n\n'])
-    }
-    await collect(streamChat({ message: 'hey' }, fetchImpl))
-    expect(JSON.parse(String(seen!.init.body))).toEqual({ message: 'hey' })
   })
 
   it('turns a refused request into a stated error, never silence', async () => {

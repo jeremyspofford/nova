@@ -48,54 +48,6 @@ export function deviceLiveness(device: Device, now: Date = new Date()): Liveness
 }
 
 /**
- * A stated refusal for an fs-root the operator is trying to add, or null if it
- * is acceptable. This is FAST FEEDBACK only — the backend refuses the same
- * inputs (non-absolute or `..`-containing, per devices.clean_fs_roots) — so it
- * never lets through something the PUT would then reject as a surprise.
- */
-export function fsRootRefusal(path: string): string | null {
-  const trimmed = path.trim()
-  if (trimmed === '') return 'Enter a path.'
-  if (!trimmed.startsWith('/')) {
-    return `A filesystem root must be an absolute path — "${trimmed}" does not start with "/".`
-  }
-  // Mirror the backend (services/core/app/devices.clean_fs_roots): a ".."
-  // path SEGMENT is refused, but ".." inside a name is not — so
-  // "/home/jeremy/my..project" is a real directory the backend accepts, and
-  // refusing it here would be a false refusal the operator can't act on.
-  if (trimmed.split('/').includes('..')) {
-    return `A filesystem root cannot contain a ".." path segment — give the real path.`
-  }
-  return null
-}
-
-/** The capabilities scoped to fs_roots — mirrors core's devices.FS_CAPABILITIES. */
-export const FS_CAPABILITIES: readonly string[] = ['fs.list', 'fs.read', 'fs.write']
-
-/**
- * A stated refusal for SAVING a grant whose fs.* capabilities have no root to
- * be scoped to, or null when the save is fine. Such a grant is dead on arrival
- * — it reads as granted here and refuses every call at the device — so core's
- * devices.set_grants refuses the combination (400) with these same words. This
- * is FAST FEEDBACK only: it never lets through a save the PUT would reject as
- * a surprise, and never blocks one it would accept. `homeDir` is the device's
- * reported home, suggested as the root the operator almost always wants.
- */
-export function grantsRefusal(
-  capabilities: Iterable<string>,
-  fsRoots: string[],
-  homeDir: string | null,
-): string | null {
-  const needing = Array.from(capabilities)
-    .filter(cap => FS_CAPABILITIES.includes(cap))
-    .sort()
-  if (needing.length === 0 || fsRoots.length > 0) return null
-  const verb = needing.length === 1 ? 'needs' : 'need'
-  const hint = homeDir ? `, e.g. ${homeDir}` : ' below'
-  return `${needing.join(', ')} ${verb} at least one filesystem root — add one${hint}`
-}
-
-/**
  * The enroll one-liner shown in the pairing modal (controller ruling R-pre2,
  * reconciled against T3's CLI: `novad enroll --server <url> --code <code>`).
  * `origin` is window.location.origin — the same single origin the phone uses.
@@ -103,36 +55,3 @@ export function grantsRefusal(
 export function enrollCommand(origin: string, code: string): string {
   return `novad enroll --server ${origin} --code ${code}`
 }
-
-export interface CapabilitySpec {
-  token: string
-  label: string
-}
-
-/**
- * The 8 grantable capabilities, in the plan's order and grouping. A fresh
- * device holds only `system.info`; everything else is the operator's to grant.
- * `fs.write` / `apps.launch` / `shell.exec` are the powerful (consent-gated in
- * core) set. Each carries a plain-language label; the raw token is rendered
- * alongside it so what is being granted is never hidden behind a friendly name.
- */
-export const CAPABILITY_GROUPS: { title: string; caps: CapabilitySpec[] }[] = [
-  {
-    title: 'Reads (safe)',
-    caps: [
-      { token: 'system.info', label: 'Read system info' },
-      { token: 'system.notify', label: 'Send a desktop notification' },
-      { token: 'fs.list', label: 'List files' },
-      { token: 'fs.read', label: 'Read files' },
-      { token: 'apps.list', label: 'List installed apps' },
-    ],
-  },
-  {
-    title: 'Actions (powerful)',
-    caps: [
-      { token: 'fs.write', label: 'Write files' },
-      { token: 'apps.launch', label: 'Launch an app' },
-      { token: 'shell.exec', label: 'Run a shell command' },
-    ],
-  },
-]

@@ -10,11 +10,11 @@ cannot produce the signature. Mechanical over prompts, at the edge.
 
 Three properties this module is responsible for, and one it is not:
 
-  * canonical() is byte-identical to app.consents.args_hash's
-    canonicalization (sorted keys, tight separators, default=str). One
-    canonical-JSON in this service; a second one would drift and drift
-    silently, since a mismatch shows up only as "the device refuses
-    everything".
+  * canonical() is the ONE canonical-JSON in this service (sorted keys,
+    tight separators, default=str); the device audit chain
+    (devices_ws.chain_hash) hashes over the same bytes. A second one would
+    drift and drift silently, since a mismatch shows up only as "the device
+    refuses everything".
   * sign()/verify() operate on those bytes and nothing else, so key order in
     a dict is irrelevant and any value change invalidates the signature.
     verify() answers False for garbage rather than raising: a refusal is a
@@ -23,10 +23,11 @@ Three properties this module is responsible for, and one it is not:
     isoformat — the daemon (Go) reads them as int64, and the only place that
     mismatch would surface is on someone else's machine.
 
-NOT this module's job: expiry, one-use replay defence and the deny-roots
-check. Those are the daemon's, deliberately — they must hold even against a
-core that has been talked into signing something, and a check that runs where
-the key already is proves nothing about the edge.
+NOT this module's job: expiry and one-use replay defence. Those are the
+daemon's, deliberately — they must hold even against a core that has been
+talked into signing something, and a check that runs where the key already is
+proves nothing about the edge. Together they prove WHO signed and that it is
+fresh; nothing on either side second-guesses WHAT was asked.
 
 tests/fixtures/envelope_vectors.json pins all of this across both languages:
 the python suite and the Go suite assert the same committed bytes, so a drift
@@ -57,9 +58,9 @@ ENVELOPE_TTL_SECONDS = 60
 def canonical(payload: dict[str, Any]) -> bytes:
     """The exact bytes that get signed.
 
-    Identical to consents.args_hash's json.dumps arguments, on purpose: this
-    service has ONE canonical form for "the same call", and both the consent
-    binding and the device envelope must agree on it.
+    json.dumps with sorted keys, tight separators and default=str — the ONE
+    canonical form in this service for "the same call"; the device audit chain
+    (devices_ws.chain_hash) hashes the same bytes, so both sides agree on it.
 
     Two choices here are load-bearing for the Go side and are pinned by the
     committed vectors: `ensure_ascii` stays at its default True (non-ASCII is

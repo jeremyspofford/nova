@@ -1,13 +1,12 @@
-"""GET /api/v1/governance — the operator-visible audit the DoD requires:
-every authorization decision, newest-first, verbatim off governance.py's
-ledger. Consent raised/decided/burned, every policy denial, every
-autonomy promotion/demotion/revoke — nothing here is derived or filtered by
-outcome, and nothing here decides anything: this is read by no decision path
-(governance.py's own docstring), it only reads one back.
+"""GET /api/v1/governance — the operator-visible audit: every governance event,
+newest-first, verbatim off governance.py's ledger. A device enrolled, revoked,
+or replaying an audit chain that did not join up — nothing here is derived or
+filtered by outcome, and nothing here decides anything: this is read by no
+decision path (governance.py's own docstring), it only reads one back.
 
-Same auth stance as activity.py/consents_api.py: identity.require_person,
-no separate operator-role gate (none exists anywhere in this service yet —
-see consents_api.py's docstring for why that is named, not silently assumed).
+Same auth stance as every route in core: identity.require_person, no separate
+operator-role gate (none exists anywhere in this service — see identity.py's
+docstring for why that is named, not silently assumed).
 """
 from __future__ import annotations
 
@@ -29,7 +28,6 @@ def _event_json(row: asyncpg.Record) -> dict:
     return {
         "id": str(row["id"]),
         "kind": row["kind"],
-        "action_class": row["action_class"],
         "actor": row["actor"],
         "subject_ref": str(row["subject_ref"]) if row["subject_ref"] else None,
         "meta": row["meta"],
@@ -41,7 +39,6 @@ def _event_json(row: asyncpg.Record) -> dict:
 async def list_governance_events(
     limit: int = Query(DEFAULT_LIMIT, ge=1),
     before: uuid.UUID | None = None,
-    action_class: str | None = None,
     _person: Person = Depends(identity.require_person),
 ) -> dict:
     pool = await db.get_pool()
@@ -66,6 +63,5 @@ async def list_governance_events(
         limit=capped,
         before_created_at=before_created_at,
         before_id=before,
-        action_class=action_class,
     )
     return {"events": [_event_json(row) for row in rows]}

@@ -9,9 +9,9 @@ internal/wire, and a changed byte has to redden something everywhere.
 
 What is pinned here:
 
-  * canonical() byte-matches consents.args_hash's canonicalization choices
-    (sorted keys, tight separators, default=str, ensure_ascii) — one
-    canonical-JSON in this service, not two that drift;
+  * canonical() is THE canonical JSON of this service (sorted keys, tight
+    separators, default=str, ensure_ascii), pinned against the committed
+    vectors alone — no second canonicalizer exists for it to agree with;
   * a signature is over those exact bytes, so reordering keys changes nothing
     and changing any value changes everything;
   * verify() answers False for tampering and for malformed input — it never
@@ -31,7 +31,6 @@ from pathlib import Path
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from app import envelopes
-from app.consents import args_hash
 
 VECTORS_PATH = Path(__file__).parent / "fixtures" / "envelope_vectors.json"
 
@@ -43,12 +42,15 @@ def _vectors() -> dict:
 # -- canonical bytes ---------------------------------------------------
 
 
-def test_canonical_matches_the_consent_hashes_canonicalization():
-    """One canonical-JSON in this service. If args_hash ever changes its
-    separators or sort, this test says so instead of two subsystems quietly
-    disagreeing about what "the same call" means."""
-    payload = {"b": 2, "a": {"z": [1, 2], "y": "x"}, "c": None}
-    assert hashlib.sha256(envelopes.canonical(payload)).hexdigest() == args_hash(payload)
+def test_canonical_hashes_to_the_committed_vectors_bytes():
+    """The one canonical-JSON in this service, pinned to the committed vectors
+    alone: hashing what canonical() emits for each vector's payload equals
+    hashing the vector's committed canonical string. A separators/sort change
+    in canonical() reddens this before any device silently refuses everything."""
+    for vector in _vectors()["vectors"]:
+        ours = hashlib.sha256(envelopes.canonical(vector["payload"])).hexdigest()
+        committed = hashlib.sha256(vector["canonical"].encode("utf-8")).hexdigest()
+        assert ours == committed, vector["note"]
 
 
 def test_canonical_is_key_order_independent():

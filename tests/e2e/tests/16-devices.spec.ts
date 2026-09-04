@@ -1,90 +1,69 @@
 /**
- * Scenario 16 — Settings → Devices renders, grants, and decides REAL state.
+ * Scenario 16 — Settings → Devices renders and acts on REAL device state.
  *
- * S5 DoD items 1, 2 and 4, the parts that do NOT depend on a live daemon. The
+ * S5 DoD items 1, 2 and 5, the parts that do NOT depend on a live daemon. The
  * behaviour-changing halves — pair a REAL machine with the printed code, ask
- * Nova "read that file on <device>" / "open Firefox on <device>", deny/approve
- * and watch the daemon's own audit agree — need a novad holding an
- * authenticated socket, which is the OWNER's live gate (a real daemon on
- * Jeremy's laptop, walked after review; the exact build/enroll/run commands are
- * in task-5-report.md §"How to run the live walk"). What this scenario proves
- * deterministically is that the WEB surface reads and acts on real backend
- * state:
+ * Nova "read that file on <device>" / "open Firefox on <device>" and watch the
+ * daemon's own audit agree — need a novad holding an authenticated socket,
+ * which is the OWNER's live gate (a real daemon on Jeremy's laptop, walked after
+ * review; the exact build/enroll/run commands are in task-5-report.md §"How to
+ * run the live walk"). What this scenario proves deterministically is that the
+ * WEB surface reads and acts on real backend state:
  *   - the pairing modal mints a real code and shows the enroll one-liner the
  *     owner runs on the device (DoD item 1);
  *   - a paired device's tile liveness is DERIVED from last_seen — a fresh
  *     heartbeat reads "online", a never-seen device reads "never connected",
  *     never a green dot (DoD items 1 & 5; the threshold logic is also pinned in
  *     T4's devicesFormat.test.ts);
- *   - the grants editor toggles a capability and the PUT lands in the database
- *     (DoD item 2 — grant it here and it flips live);
- *   - a device_run consent card renders on the Approvals page through the SAME
- *     ApprovalCard the inline chat card uses, and Deny / Approve drive the exact
- *     same consent path a text turn does (DoD item 4).
+ *   - a tile offers exactly rename and Revoke — there is NO grants editor,
+ *     because there is no grant: pairing is the whole authorization (owner
+ *     ruling 2026-09-03), and this is the line that reddens if one grows back;
+ *   - Revoke through the UI stamps the row (read back from the database), the
+ *     tile flips to "revoked" with its controls gone, and the Governance page
+ *     lists the `device.revoked` event — a RECORD of what happened, never a
+ *     decision (DoD item 2's surviving half).
  *
  * Deterministic state is seeded straight into the project's postgres over the
- * docker socket (lib/devices.ts for the device rows, lib/policy.ts for the
- * pending consents) — the same place lib/evidence.ts READS the ledger, because
- * postgres is not published outside the compose network. So this needs NO live
- * daemon.
+ * docker socket (lib/devices.ts) — the same place lib/evidence.ts READS the
+ * ledger, because postgres is not published outside the compose network. So
+ * this needs NO live daemon.
  *
  * **Authored in S5-T5 by reading the shipped components (DevicesSection.tsx,
- * devicesFormat.ts, ApprovalCard.tsx) for real selectors, NOT yet run** — the
- * real-stack policy forbids a throwaway isolated stack and there is no rebuilt
- * :3000 at authoring time. It runs for the first time, in file order alongside
- * 1-15, once the controller rebuilds the stack from this source. Treat a first
- * run the way scenario 6 was after S2-T4: read what actually happens before
- * trusting the selectors blind. Selectors reference the data-testids T4 shipped
- * on committed HEAD: `devices-skeleton`, the per-tile `device-<id>`, and the
- * shared `approval-card-<id>` (a rebuild serves committed source).
+ * devicesFormat.ts, GovernancePage.tsx) for real selectors, NOT yet run**; the
+ * consent half it used to carry was removed 2026-09-03 with the approval
+ * system, and the revoke walk was authored in its place the same way. It runs
+ * for the first time, in file order alongside 1-13, once the controller
+ * rebuilds the stack from this source. Treat a first run the way scenario 6 was
+ * after S2-T4: read what actually happens before trusting the selectors blind.
+ * Selectors reference the data-testids the shipped source carries:
+ * `devices-skeleton`, the per-tile `device-<id>`, and `governance-row-<id>`.
  */
 import { expect, request, test } from '@playwright/test'
 import { whoAmI } from '../lib/app'
 import { config } from '../lib/env'
-import { deviceCapabilities, deleteDevice, seedDevice } from '../lib/devices'
-import { consentStatus, deleteConsent, seedPendingConsent } from '../lib/policy'
+import { deleteDevice, deviceRevokedAt, seedDevice } from '../lib/devices'
 
 test.use({ storageState: config.storageStatePath })
 
 const ONLINE_DEVICE = 'workstation'
 const NEVER_DEVICE = 'spare-laptop'
-// Exactly what policy._summary() computes for a device_run of these args, so the
-// card the operator sees is the card the kernel would raise.
-const RUN_ARGS = { device: ONLINE_DEVICE, argv: ['firefox'] }
-const RUN_SUMMARY = `Run device_run with device=${ONLINE_DEVICE}, argv=["firefox"]`
 
-test('devices: the Settings section pairs, grants, and decides real device state', async ({
+test('devices: the Settings section pairs, shows, and revokes real device state', async ({
   page,
 }) => {
   const person = await whoAmI(page)
 
   // Two paired devices, seeded deterministically: one heartbeating (online), one
-  // never seen. The online one is granted system.info only (the roadmap default)
-  // so the grants editor has a capability to newly grant.
+  // never seen. Identity and liveness only — a device row carries no grant.
   const onlineId = await seedDevice({
     name: ONLINE_DEVICE,
     ownerPerson: person.id,
-    capabilities: ['system.info'],
     lastSeen: 'now',
   })
   const neverId = await seedDevice({
     name: NEVER_DEVICE,
     ownerPerson: person.id,
-    capabilities: ['system.info'],
     lastSeen: 'never',
-  })
-  // Two pending device_run cards (consent-tier): one to deny, one to approve.
-  const denyId = await seedPendingConsent({
-    actionClass: 'device_run',
-    personId: person.id,
-    args: RUN_ARGS,
-    summary: RUN_SUMMARY,
-  })
-  const approveId = await seedPendingConsent({
-    actionClass: 'device_run',
-    personId: person.id,
-    args: RUN_ARGS,
-    summary: RUN_SUMMARY,
   })
 
   try {
@@ -104,6 +83,26 @@ test('devices: the Settings section pairs, grants, and decides real device state
       'a never-seen device must not render as online (DoD item 5)',
     ).toHaveCount(0)
 
+    // ── no grants editor: pairing is the whole authorization ─────────────────
+    await expect(onlineTile.getByRole('button', { name: 'Rename' })).toBeVisible()
+    await expect(onlineTile.getByRole('button', { name: 'Revoke' })).toBeVisible()
+    await expect(
+      onlineTile.getByRole('button', { name: 'Grants' }),
+      'a paired device must not carry a grants control — there is no grant (owner ruling 2026-09-03)',
+    ).toHaveCount(0)
+    await expect(onlineTile.getByRole('checkbox')).toHaveCount(0)
+    // The API's own view agrees: the device carries identity + liveness, and no
+    // capability or root column survives for a UI to edit.
+    const listed = await page.request.get('/api/v1/devices')
+    expect(listed.ok(), `GET /api/v1/devices -> ${listed.status()}`).toBeTruthy()
+    const online = ((await listed.json()).devices as Array<Record<string, unknown>>).find(
+      d => d.id === onlineId,
+    )
+    expect(online, 'the seeded device vanished from GET /api/v1/devices').toBeDefined()
+    expect(Object.keys(online!).sort()).toEqual(
+      ['connected', 'enrolled_at', 'hostname', 'id', 'last_seen', 'name', 'platform', 'revoked_at'],
+    )
+
     // ── the pairing modal mints a real code + the enroll one-liner (DoD 1) ───
     await onlineTile.scrollIntoViewIfNeeded()
     await page.getByRole('button', { name: 'Pair a device' }).click()
@@ -115,104 +114,55 @@ test('devices: the Settings section pairs, grants, and decides real device state
     const oneLiner = modal.locator('code')
     await expect(oneLiner).toContainText(`novad enroll --server ${config.baseUrl}`)
     await expect(oneLiner).toContainText('--code ')
-    // Close the modal (its close refetches the list) before editing grants.
+    // Close the modal (its close refetches the list) before revoking.
     await page.keyboard.press('Escape')
     await expect(modal).toBeHidden()
 
-    // ── the grants editor grants a capability, and the PUT lands (DoD 2) ─────
-    await onlineTile.getByRole('button', { name: 'Grants' }).click()
-    // The fs.read box starts unchecked (default grant is system.info only);
-    // clicking its label (the input is sr-only) toggles it on for THIS tile.
-    await onlineTile.getByText('Read files (fs.read)').click()
-    // An fs.* grant needs a root — Save is refused (client-side, and by core)
-    // without one, so add the root the grant will be scoped to first.
-    await onlineTile.getByLabel('New filesystem root').fill('/tmp')
-    await onlineTile.getByRole('button', { name: 'Add root' }).click()
-    await onlineTile.getByRole('button', { name: 'Save' }).click()
-
-    // The edit hit the database, not just the DOM — read the row back.
-    await expect
-      .poll(async () => await deviceCapabilities(onlineId), {
-        message: 'granting fs.read in the editor did not reach the devices row',
-      })
-      .toContain('fs.read')
-    // The API's own view agrees (the kernel and tools read this live per call).
-    const afterGrant = await page.request.get('/api/v1/devices')
-    expect(afterGrant.ok(), `GET /api/v1/devices -> ${afterGrant.status()}`).toBeTruthy()
-    const granted = ((await afterGrant.json()).devices as Array<{ id: string; capabilities: string[] }>).find(
-      d => d.id === onlineId,
-    )
-    expect(granted, 'the granted device vanished from GET /api/v1/devices').toBeDefined()
-    expect(granted!.capabilities).toContain('fs.read')
-
-    // ── the device_run consent card renders and decides (DoD 4) ──────────────
-    await page.goto('/chat')
-    await expect(page.getByRole('heading', { name: 'Chat' })).toBeVisible()
-    await page.getByRole('link', { name: 'Approvals' }).first().click()
-    await expect(page).toHaveURL(/\/approvals$/)
-    await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible()
-
-    const denyCard = page.getByTestId(`approval-card-${denyId}`)
-    await expect(denyCard).toBeVisible()
-    // The card promises EXACTLY what will run — the summary and the action class,
-    // read verbatim off the seeded card (which is what the kernel would raise).
-    await expect(denyCard).toContainText(RUN_SUMMARY)
-    await expect(denyCard).toContainText('device_run')
-    await expect(denyCard.getByRole('button', { name: 'Approve' })).toBeVisible()
-    await expect(denyCard.getByRole('button', { name: 'Deny' })).toBeVisible()
-
-    // Deciding requires auth: no session cookie -> 401 (same route as text).
+    // ── revoke through the UI: the row is stamped, the tile flips, the ledger
+    //    records it (a record of what happened, never a gate) ─────────────────
+    // Revoking requires auth: no session cookie -> 401, and the row is untouched.
     const anon = await request.newContext({ baseURL: config.baseUrl })
-    const unauth = await anon.post(`/api/v1/consents/${denyId}/decide`, {
-      data: { decision: 'approve' },
-    })
+    const unauth = await anon.post(`/api/v1/devices/${neverId}/revoke`)
     expect(
       unauth.status(),
-      `an unauthenticated decide returned ${unauth.status()}, not 401`,
+      `an unauthenticated revoke returned ${unauth.status()}, not 401`,
     ).toBe(401)
     await anon.dispose()
-    expect(await consentStatus(denyId)).toBe('pending') // the refused call changed nothing
+    expect(await deviceRevokedAt(neverId), 'the refused revoke changed the row').toBe('')
 
-    // Deny through the UI: the card leaves the pending list and the DB says so.
-    await denyCard.getByRole('button', { name: 'Deny' }).click()
-    await expect(
-      page.getByTestId(`approval-card-${denyId}`),
-      'a denied device_run card must leave the pending list',
-    ).toHaveCount(0)
-    expect(
-      await consentStatus(denyId),
-      'the card was denied in the UI but the stored consent is not "denied"',
-    ).toBe('denied')
+    // One click asks for a confirm; the confirm is what calls the API.
+    await neverTile.getByRole('button', { name: 'Revoke' }).click()
+    expect(await deviceRevokedAt(neverId), 'a bare Revoke click must not revoke').toBe('')
+    await neverTile.getByRole('button', { name: 'Confirm revoke' }).click()
 
-    // The deny is in the operator's governance audit — the same ledger a text
-    // turn's deny lands in (DoD item 4 / item 6 audit).
-    const gov = await page.request.get('/api/v1/governance?action_class=device_run&limit=20')
+    // The tile flips to the revoked rendering and loses its controls; the
+    // database says so too (the edit hit the row, not just the DOM).
+    await expect(neverTile).toContainText('revoked')
+    await expect(neverTile.getByRole('button', { name: 'Revoke' })).toHaveCount(0)
+    await expect(neverTile.getByRole('button', { name: 'Rename' })).toHaveCount(0)
+    await expect
+      .poll(async () => await deviceRevokedAt(neverId), {
+        message: 'revoking in the UI did not stamp devices.revoked_at',
+      })
+      .not.toBe('')
+
+    // The revoke is in the operator's governance ledger — the same append-only
+    // record enrol writes to — with the device as its subject.
+    const gov = await page.request.get('/api/v1/governance?limit=20')
     expect(gov.ok(), `GET /api/v1/governance -> ${gov.status()}`).toBeTruthy()
-    const denied = (await gov.json()).events.filter(
-      (e: { kind: string; meta: Record<string, unknown> }) =>
-        e.kind === 'consent.decided' && e.meta?.decision === 'denied',
-    )
-    expect(denied.length, 'the deny produced no consent.decided{denied} event').toBeGreaterThan(0)
+    const revokedEvents = (
+      (await gov.json()).events as Array<{ id: string; kind: string; subject_ref: string | null }>
+    ).filter(e => e.kind === 'device.revoked' && e.subject_ref === neverId)
+    expect(revokedEvents.length, 'the revoke produced no device.revoked event').toBe(1)
 
-    // Approve through the UI: flips to 'approved', stays with a "Go ahead"
-    // (ruling S3-R4 — approving runs nothing; the re-attempt does, which for a
-    // device is the daemon actually executing, the owner's live gate).
-    await page.goto('/approvals')
-    await expect(page.getByRole('heading', { name: 'Approvals' })).toBeVisible()
-    const approveCard = page.getByTestId(`approval-card-${approveId}`)
-    await expect(approveCard).toBeVisible()
-    await approveCard.getByRole('button', { name: 'Approve' }).click()
-    await expect(approveCard.getByText('approved', { exact: true })).toBeVisible()
-    await expect(approveCard.getByRole('button', { name: 'Go ahead' })).toBeVisible()
-    expect(
-      await consentStatus(approveId),
-      'the card was approved in the UI but the stored consent is not "approved"',
-    ).toBe('approved')
-    // "Go ahead" is deliberately NOT clicked: it re-attempts device_run, which
-    // reaches a real daemon — the owner's live gate, not a deterministic assert.
+    // And the Governance page renders that row, verbatim, reachable by nav.
+    await page.getByRole('link', { name: 'Governance' }).first().click()
+    await expect(page).toHaveURL(/\/governance$/)
+    await expect(page.getByRole('heading', { name: 'Governance' })).toBeVisible()
+    const row = page.getByTestId(`governance-row-${revokedEvents[0].id}`)
+    await expect(row).toBeVisible()
+    await expect(row).toContainText('device.revoked')
   } finally {
-    await deleteConsent(denyId).catch(() => {})
-    await deleteConsent(approveId).catch(() => {})
     await deleteDevice(onlineId).catch(() => {})
     await deleteDevice(neverId).catch(() => {})
   }

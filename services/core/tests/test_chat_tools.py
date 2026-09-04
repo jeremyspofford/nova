@@ -393,9 +393,7 @@ async def test_a_stated_tool_failure_carries_its_reason_on_the_error_activity(
     activity frame's status alone cannot distinguish a stated failure from a
     turn cut off mid-call. This pins the fix at its source — the frame
     itself — with a fake tool standing in for device_run so the test does
-    not also depend on its consent gate (migration 012: device_run's own
-    disposition is 'consent', which would turn this into an 'awaiting'
-    frame instead of the 'error' one under test)."""
+    not also depend on a paired device."""
 
     async def raise_tree_not_found(args: dict, ctx: tools.ToolContext) -> str:
         raise tools.ToolFailure("could not run tree: executable file not found in $PATH")
@@ -409,10 +407,6 @@ async def test_a_stated_tool_failure_carries_its_reason_on_the_error_activity(
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             executor=raise_tree_not_found,
         ),
-    )
-    await pool.execute(
-        "INSERT INTO action_classes (action_class, risk_tier, disposition) "
-        "VALUES ('fake_device_run', 'test', 'auto') ON CONFLICT (action_class) DO NOTHING"
     )
     gateway = ScriptedGateway(
         rounds=(
@@ -891,10 +885,6 @@ async def test_a_tool_cut_off_mid_call_leaves_a_span_that_says_so(monkeypatch, t
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             executor=never_returns,
         ),
-    )
-    await pool.execute(
-        "INSERT INTO action_classes (action_class, risk_tier, disposition) "
-        "VALUES ('spy', 'test', 'auto') ON CONFLICT (action_class) DO NOTHING"
     )
     ctx = tools.ToolContext(app=None, person=None, workspace_root=tmp_path)
 

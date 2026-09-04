@@ -6,7 +6,7 @@ and executes only the commands that arrive as ed25519 one-use **signed
 envelopes** — every one verified *on this machine* before anything runs. A
 compromised or confused core-adjacent component cannot puppet the machine,
 because it cannot produce the signature. The LLM never talks to novad; only
-core does, through the same kernel funnel as every other tool.
+core does, through the same tool registry as every other tool.
 
 This is the first Nova code that runs **outside** the compose stack.
 
@@ -45,18 +45,13 @@ novad enroll --server https://your-nova-host --code A1B2C3D4 [--name laptop]
 this machine**, stored `0600`), sends only the public key, and on success pins
 core's public key. Re-enrolling is deliberate — it refuses to overwrite an
 existing enrollment without `--force`. A spent, expired, or wrong code is
-surfaced verbatim from the server.
-
-The enroll body (and, additively, every WS `auth` frame) also carries this
-user's home directory (`home_dir`). Core stores it so Settings → Devices can
-suggest it as the first filesystem root — an `fs.*` grant with no root is
-refused there as dead on arrival. It grants nothing by itself.
+surfaced verbatim from the server. The enroll body carries identity only:
+the code, the public key, the device name, platform and hostname.
 
 Custody, under `~/.config/novad/` (honors `XDG_CONFIG_HOME`):
 
 - `config.json` — device id, server, pinned core key.
 - `key` — the device private key (seed), `0600` in a `0700` dir.
-- `deny_roots` — the fs backstop (below), created with defaults on first run.
 
 The audit chain lives at `~/.local/state/novad/audit.jsonl`
 (honors `XDG_STATE_HOME`).
@@ -99,16 +94,20 @@ is not the same as holding an authenticated socket.
 
 ## What it can do
 
-Capabilities are gated in core (per-device grants, default `system.info` only)
-and again on the device (signature, expiry, one-use, deny-roots). The nine:
+Every command is verified on the device (signature, expiry, one-use) — that
+proves WHO signed it; nothing on the device second-guesses WHAT core asked
+for. There is no per-device grant, no path allow-list and no path blocklist: a
+paired device runs whatever core signs, as the user `novad` runs as, and that
+includes its own `key` and `audit.jsonl` (a rewritten audit chain is detected
+by core on the next replay, not prevented). The eight:
 
 | capability     | does                                                        |
 |----------------|-------------------------------------------------------------|
 | `system.info`  | disk free, memory, OS, hostname, uptime                     |
 | `system.notify`| a desktop notification (needs a session; see above)         |
-| `fs.list`      | list a directory (after the deny-root check)                |
+| `fs.list`      | list a directory                                            |
 | `fs.read`      | read a file, **256 KiB cap** — a larger file is refused, never truncated |
-| `fs.write`     | create/overwrite a file (after the deny-root check)         |
+| `fs.write`     | create/overwrite a file, **256 KiB cap** — larger content is refused, never partially written |
 | `apps.list`    | scan `.desktop` apps                                         |
 | `apps.launch`  | launch a `.desktop` app (needs a session; see above)        |
 | `shell.exec`   | run **argv** (no shell), 64 KiB output cap, honors a timeout |
@@ -121,22 +120,9 @@ user who wants a shell passes it explicitly, e.g.
 result — it is *not* the command's own success. A `shell.exec` that runs to
 completion is `ok:true` even on a nonzero exit; `exit_code` carries the
 command's result. `ok:false` is reserved for the daemon being *unable* to
-perform the capability at all (a deny-root hit, an over-cap read, an unstartable
-binary, a timeout, or notify with no backend) — and a refusal is still a result
-frame **and** an audit entry, never silent.
-
-## deny-roots — the on-device backstop
-
-`~/.config/novad/deny_roots` lists absolute paths (one per line) that every
-`fs.list/read/write` refuses, at or under, **regardless of what core signed**.
-It ships refusing `~/.ssh`, `~/.gnupg`, and novad's own config + state dirs — so
-a signed `fs.write` can never rewrite the device key or the audit log. The check
-resolves symlinks (nearest existing ancestor) and collapses `..`, so a
-symlinked parent or a `..`-escape into a protected path is caught. The daemon's
-own custody dirs are enforced even if you edit them out of the file.
-
-Core's `fs_roots` grant is the *allow*-boundary (checked server-side); deny-roots
-is the *refuse*-backstop that holds even against a fully trusted core.
+perform the capability at all (an unverifiable envelope, an over-cap read, an
+unstartable binary, a timeout, or notify with no backend) — and a refusal is
+still a result frame **and** an audit entry, never silent.
 
 ## Audit
 

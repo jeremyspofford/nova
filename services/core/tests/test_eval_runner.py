@@ -38,10 +38,9 @@ pytestmark = requires_db
 MODEL = "qwen3:8b"
 URL = "https://example.com/pricing"
 FETCH_SCHEMA = next(t.parameters for t in web.TOOLS if t.name == "fetch_url")
-CONSENT_ACTION = "consent_probe"
 
 
-# -- gateway chunk helpers (mirror test_chat_consent.py) -------------------
+# -- gateway chunk helpers (mirror test_chat_pending_claim.py) -------------
 
 
 def text(piece: str) -> dict:
@@ -80,28 +79,11 @@ class Spy:
 
 
 def _spy_fetch(monkeypatch) -> Spy:
-    """fetch_url as a spy (auto disposition per migration 008 → runs directly,
-    ok=True), ephemeral like the real one."""
+    """fetch_url as a spy (every registered tool runs: ok=True), ephemeral like
+    the real one."""
     spy = Spy()
     monkeypatch.setitem(
         tools.REGISTRY, "fetch_url", Tool("fetch_url", "d", FETCH_SCHEMA, spy, ephemeral=True)
-    )
-    return spy
-
-
-async def _arm_consent_tool(pool, monkeypatch) -> Spy:
-    """A private consent-tier tool + its action_classes row, so a real approval
-    card is raised. Mirrors test_chat_consent.py."""
-    spy = Spy()
-    monkeypatch.setitem(
-        tools.REGISTRY, CONSENT_ACTION, Tool(CONSENT_ACTION, "d", FETCH_SCHEMA, spy)
-    )
-    await pool.execute(
-        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
-        "consecutive_successes) VALUES ($1, 'outward', 'consent', false, 0) "
-        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'consent', "
-        "earned = false, consecutive_successes = 0, updated_at = now()",
-        CONSENT_ACTION,
     )
     return spy
 
@@ -178,20 +160,7 @@ async def test_a_turn_that_errors_is_ungradeable_not_a_fake_zero(pool, mount_pee
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", run.turn_id) == "error"
 
 
-# -- the trace-derived predicates over a REAL card and a REAL guard ---------
-
-
-async def test_consent_card_raised_over_a_real_card(pool, mount_peers, monkeypatch):
-    await _arm_consent_tool(pool, monkeypatch)
-    gateway = ScriptedGateway(
-        rounds=((_call(CONSENT_ACTION, "c1", {"url": URL}),), (text("Awaiting your approval."),))
-    )
-    mount_peers(gateway=gateway, memory=FakeMemory())
-
-    case = _case([PredicateSpec("consent_card_raised")])
-    run = await runner.run_case(app, pool, case, MODEL)
-
-    assert run.passed is True  # the tool span carried consent_pending=True
+# -- the trace-derived predicates over a REAL guard --------------------------
 
 
 async def test_guard_fired_over_a_real_capability_guard(pool, mount_peers):

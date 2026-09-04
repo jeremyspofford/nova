@@ -30,9 +30,6 @@ func shellExec(ctx context.Context, args map[string]any, d Deps) Outcome {
 
 	cwd := d.Home
 	if c, ok := strArg(args, "cwd"); ok && c != "" {
-		if refusal := denyCheck(d, c); refusal != nil {
-			return *refusal
-		}
 		cwd = c
 	}
 

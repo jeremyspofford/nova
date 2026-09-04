@@ -1,5 +1,39 @@
 # Slice 3 — Policy Kernel + Earned Autonomy + Honesty Guards
 
+> **SUPERSEDED 2026-09-03 (owner ruling — see
+> [no-approvals.md](no-approvals.md)):** the kernel's decisions, consents,
+> dispositions and earned autonomy are REMOVED — nothing Nova does waits on
+> the owner. What survives from S3: the honesty guard (§The honesty guard,
+> T4 — kept verbatim below) and the governance ledger as a RECORD (never
+> read by a decision path — already its stated rule; its writers are now
+> `device.enrolled` / `device.revoked` / `device.audit_break` only, and
+> `test_governance.py` pins that dispatching a tool writes no row). Every
+> other section below is the historical spec of what was built and then
+> removed; read it as history, never as a design to rebuild. The reverse
+> pin is `services/core/tests/test_no_approvals.py`.
+>
+> **Decision amendments (2026-09-03).** The register (`docs/DECISIONS.md`)
+> is untracked in the main repo and absent from this tree, so the amendments
+> are recorded here — the doc where D-012 was "made real" — until the owner
+> says where the register lives for v4:
+>
+> - **D-012** (policy decisions belong to the kernel) — Amended 2026-09-03:
+>   v4 makes NO authorization decisions — every registered tool runs. The
+>   surviving half is the prohibition: no module may refuse on the owner's
+>   behalf; a check may state a call CANNOT run (unpaired, offline,
+>   malformed) but never that it MAY not.
+> - **D-003** (autonomy is earned, per action class) — REVOKED for v4
+>   (owner, 2026-09-03): no approval default, no per-class promotion; Nova
+>   holds every capability from the first turn; the measure is her judgment
+>   under the eval harness, not the owner's clicks.
+> - **D-010** (hybrid principal model) — Strike the step-up sentence
+>   ("High-risk actions require step-up confirmation through an
+>   authenticated operator device/session"); keep the person-vs-credential
+>   split (that is authentication).
+> - **D-011** (voice assurance ceiling) — Strike "spend approval" /
+>   "deployment approval"; survives only as an identity-assurance ceiling if
+>   S8 lands.
+
 Parent: the Master Roadmap (approved 2026-08-27); inputs:
 docs/plans/rebuild/slice-02-carries.md (esp. the MANDATED guard family)
 and slice-01-carries.md. Slice type: BEHAVIOR-CHANGING (owner walks before

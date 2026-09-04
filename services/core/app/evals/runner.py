@@ -45,9 +45,9 @@ T3 — while activity.list_activity filters kind='eval' OUT of the operator's
 normal Activity feed, so an eval turn never surfaces as a chat turn.
 
 eval_runs is WRITTEN here and read by no decision path (audit/reporting only,
-like the governance ledger): the turn path, the policy kernel and the guards
-never read it. suite_version is stored on every row so a score is only ever
-compared across runs of the same version.
+like the governance ledger): the turn path and the guards never read it.
+suite_version is stored on every row so a score is only ever compared across
+runs of the same version.
 
 A SUITE RUN IS A JOB, AND ITS TRUTH IS A ROW (migration 016). Every suite run
 opens an eval_suite_runs row first (open_suite_run) and runs as run_suite_job:
@@ -824,7 +824,7 @@ async def run_suite(
 # -- audit/reporting reads (NOT a decision path) ---------------------------
 #
 # These read eval_runs for the page and the DoD walk only. Nothing in the turn
-# path, the policy kernel or the guards imports this module — the score measures,
+# path or the guards imports this module — the score measures,
 # it never decides (fitness measures, never declares).
 
 

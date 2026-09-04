@@ -57,17 +57,6 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         ),
     ),
     SettingDef(
-        key="autonomy.graduation_runs",
-        type="int",
-        default=5,
-        description=(
-            "Consecutive approved-and-succeeded runs of a consent-tier action "
-            "class before it is promoted to auto (ruling S3-R5). A failure or "
-            "an operator revoke resets the count and, for an earned class, "
-            "demotes it back to consent."
-        ),
-    ),
-    SettingDef(
         key="agents.responsiveness_check",
         type="bool",
         default=False,
@@ -130,9 +119,9 @@ async def read_values(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def read_value(pool: asyncpg.Pool | asyncpg.Connection, key: str) -> Any:
-    # Accepts a pool OR a live transaction connection: autonomy.record_outcome
-    # reads the graduation threshold on its own transaction's conn so the read
-    # sees the same snapshot as the row it just locked. Both expose .fetchrow.
+    # Accepts a pool OR a live transaction connection, so a caller inside its
+    # own transaction can read a setting on the same snapshot as the rows it
+    # holds. Both expose .fetchrow.
     definition = DEFS_BY_KEY[key]
     row = await pool.fetchrow("SELECT value FROM settings WHERE key = $1", key)
     return definition.default if row is None else row["value"]

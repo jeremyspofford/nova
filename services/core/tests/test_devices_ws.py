@@ -1,16 +1,23 @@
-"""The device socket, the hub, the audit chain, and the nine tools on the funnel.
+"""The device socket, the hub, the audit chain, and the nine tools on the wire.
 
-Every property slice 5's rails name is pinned here, and none by reading prose:
-the challenge authenticates (a bad signature is closed 4401, a revoked device is
-refused at the challenge), a command is answered only by the device's own result
-frame (a silent device is a stated timeout), a DENY leaves ZERO frames on the
-wire (the "Activity proves nothing ran" bar, on a second machine), the
-per-device grant and fs-root checks refuse before the wire, revoke kills the
-live socket, and a broken audit chain is a loud governance event that stores
-nothing past the break.
+Every property slice 5's rails still name after the no-approvals ruling
+(2026-09-03) is pinned here, and none by reading prose: the challenge
+authenticates (a bad signature is closed 4401, a revoked device is refused at
+the challenge), a command is answered only by the device's own result frame (a
+silent device is a stated timeout), every device tool — device_run included —
+reaches the wire signed with no card and no grant in the way, a relative path
+is refused before the wire (the one fs refusal left: a shape, not a boundary),
+revoke kills the live socket, and a broken audit chain is a loud governance
+event that stores nothing past the break.
+
+The facts channel is pinned here too (relocated from the precheck suite that
+died with the precheck): a device tool records {device, connected} the moment
+it determines connectivity, exactly once per call, for both outcomes — so the
+state-claim guard can tell "it checked and the machine is offline" from "it
+never looked" without sniffing a refusal string.
 
 The fake WS conn (tests/device_fakes.py) makes all of this testable with no
-socket; T5 grows it into the full fake device.
+socket; test_devices_e2e.py walks the whole lifecycle through it.
 """
 from __future__ import annotations
 
@@ -53,19 +60,7 @@ async def _person(pool, role: str = "adult") -> Person:
     return Person(id=pid, name=role, role=role)
 
 
-async def _conversation(pool, person: Person) -> uuid.UUID:
-    return await pool.fetchval(
-        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", person.id
-    )
-
-
-async def _enroll(
-    pool,
-    *,
-    name: str = "laptop",
-    capabilities: list[str] | None = None,
-    fs_roots: list[str] | None = None,
-) -> tuple[uuid.UUID, FakeDevice]:
+async def _enroll(pool, *, name: str = "laptop") -> tuple[uuid.UUID, FakeDevice]:
     device = FakeDevice()
     person = await _person(pool)
     code = await devices.mint_pairing_code(pool, created_by=person.id)
@@ -77,16 +72,7 @@ async def _enroll(
         platform="linux",
         hostname="host",
     )
-    device_id = uuid.UUID(result["device_id"])
-    if capabilities is not None or fs_roots is not None:
-        await devices.set_grants(
-            pool,
-            device_id=device_id,
-            capabilities=capabilities or [],
-            fs_roots=fs_roots or [],
-            actor=str(person.id),
-        )
-    return device_id, device
+    return uuid.UUID(result["device_id"]), device
 
 
 async def _connect(pool, **enroll_kw) -> tuple[uuid.UUID, FakeDevice, FakeWSConn, asyncio.Task]:
@@ -109,14 +95,12 @@ async def _close(conn: FakeWSConn, task: asyncio.Task) -> None:
     await asyncio.wait_for(task, 2)
 
 
-def _ctx(person: Person | None, *, conversation_id=None, sink=None) -> ToolContext:
-    return ToolContext(
-        app=None,
-        person=person,
-        workspace_root=Path("/tmp"),
-        conversation_id=conversation_id,
-        consent_sink=sink,
-    )
+def _ctx(person: Person | None, *, facts: list[dict] | None = None) -> ToolContext:
+    return ToolContext(app=None, person=person, workspace_root=Path("/tmp"), facts_sink=facts)
+
+
+def _command_frames(conn: FakeWSConn) -> list[dict]:
+    return [f for f in conn.sent if isinstance(f, dict) and f.get("type") == "command"]
 
 
 # -- the challenge -----------------------------------------------------------
@@ -193,12 +177,11 @@ async def test_a_revoked_device_cannot_authenticate(pool):
     assert not devices_ws.hub.is_connected(device_id)
 
 
-# -- the auth frame's optional home_dir ---------------------------------------
-
-
-async def _auth(pool, device_id, device, extra: dict) -> tuple[FakeWSConn, asyncio.Task, dict]:
-    """Drive serve() through the challenge with an auth frame carrying `extra`
-    keys; return the conn, the serve task and the frame core answered with."""
+async def test_an_auth_frame_with_unknown_keys_still_authenticates(pool):
+    """The frame contract ignores unknown keys. `home_dir` is the one an older
+    novad still sends (it died with the grants editor, 2026-09-03): nothing
+    reads it, and the socket authenticates on the signature alone."""
+    device_id, device = await _enroll(pool)
     conn = FakeWSConn()
     task = asyncio.create_task(devices_ws.serve(conn, pool))
     challenge = await asyncio.wait_for(conn.next_sent(), 2)
@@ -207,62 +190,14 @@ async def _auth(pool, device_id, device, extra: dict) -> tuple[FakeWSConn, async
             "type": "auth",
             "device_id": str(device_id),
             "sig": device.sign_nonce(challenge["nonce"]),
-            **extra,
+            "home_dir": "/home/jeremy",
+            "some_future_key": {"ignored": True},
         }
     )
-    reply = await asyncio.wait_for(conn.next_sent(), 2)
-    return conn, task, reply
-
-
-async def _stored_home(pool, device_id) -> str | None:
-    return await pool.fetchval("SELECT home_dir FROM devices WHERE id = $1", device_id)
-
-
-async def test_a_successful_auth_records_the_home_dir_the_device_reports(pool):
-    """An already-enrolled device (no home_dir on its row) reports one in its
-    auth frame — an ADDITIVE optional key — and core stores it on the row, so
-    the grants editor can suggest it without a re-pair."""
-    device_id, device = await _enroll(pool)
-    assert await _stored_home(pool, device_id) is None
-    conn, task, reply = await _auth(pool, device_id, device, {"home_dir": "/home/jeremy"})
-    assert reply["type"] == "ready"
-    assert await _stored_home(pool, device_id) == "/home/jeremy"
+    ready = await asyncio.wait_for(conn.next_sent(), 2)
+    assert ready["type"] == "ready"
+    assert devices_ws.hub.is_connected(device_id)
     await _close(conn, task)
-
-
-async def test_an_auth_frame_without_a_home_dir_leaves_the_stored_one_alone(pool):
-    device_id, device = await _enroll(pool)
-    await devices.record_home_dir(pool, device_id, "/home/jeremy")
-    conn, task, reply = await _auth(pool, device_id, device, {})
-    assert reply["type"] == "ready"
-    assert await _stored_home(pool, device_id) == "/home/jeremy"
-    await _close(conn, task)
-
-
-async def test_a_junk_home_dir_on_auth_is_ignored_and_auth_still_succeeds(pool):
-    """A daemon that cannot name its home is still a paired machine: junk is
-    dropped, never stored, and never a reason to refuse the socket."""
-    device_id, device = await _enroll(pool)
-    conn, task, reply = await _auth(pool, device_id, device, {"home_dir": "relative"})
-    assert reply["type"] == "ready"
-    assert await _stored_home(pool, device_id) is None
-    await _close(conn, task)
-
-
-async def test_a_failed_auth_records_no_home_dir(pool):
-    """The home_dir is stored only AFTER the challenge verifies — an
-    unauthenticated frame must not write anything onto a device row."""
-    device_id, _device = await _enroll(pool)
-    conn = FakeWSConn()
-    task = asyncio.create_task(devices_ws.serve(conn, pool))
-    await asyncio.wait_for(conn.next_sent(), 2)  # the challenge
-    conn.feed(
-        {"type": "auth", "device_id": str(device_id), "sig": "00" * 64, "home_dir": "/home/mallory"}
-    )
-    reply = await asyncio.wait_for(conn.next_sent(), 2)
-    assert reply["type"] == "auth_error"
-    await asyncio.wait_for(task, 2)
-    assert await _stored_home(pool, device_id) is None
 
 
 # -- heartbeat ---------------------------------------------------------------
@@ -286,7 +221,7 @@ async def test_heartbeat_updates_last_seen(pool):
 
 
 async def test_a_command_is_signed_by_core_and_answered_by_the_device(pool):
-    device_id, device, conn, task = await _connect(pool, capabilities=["system.info"])
+    device_id, device, conn, task = await _connect(pool)
     core_pubkey = await devices.core_public_key_hex(pool)
 
     async def run():
@@ -309,7 +244,7 @@ async def test_a_command_is_signed_by_core_and_answered_by_the_device(pool):
 
 
 async def test_a_silent_device_times_out_as_a_stated_refusal(pool):
-    device_id, _device, conn, task = await _connect(pool, capabilities=["system.info"])
+    device_id, _device, conn, task = await _connect(pool)
     with pytest.raises(devices.DeviceRefused) as exc:
         await devices_ws.hub.command(
             pool, device_id=device_id, name="laptop", capability="system.info", args={}, timeout=0.1
@@ -319,7 +254,7 @@ async def test_a_silent_device_times_out_as_a_stated_refusal(pool):
 
 
 async def test_a_command_to_a_disconnected_device_is_refused(pool):
-    device_id, _device = await _enroll(pool, capabilities=["system.info"])  # never joins the hub
+    device_id, _device = await _enroll(pool)  # never joins the hub
     with pytest.raises(devices.DeviceRefused) as exc:
         await devices_ws.hub.command(
             pool, device_id=device_id, name="laptop", capability="system.info", args={}, timeout=1
@@ -328,7 +263,7 @@ async def test_a_command_to_a_disconnected_device_is_refused(pool):
 
 
 async def test_a_command_to_a_revoked_device_is_refused(pool):
-    device_id, _device = await _enroll(pool, capabilities=["system.info"])
+    device_id, _device = await _enroll(pool)
     devices_ws.hub.register(device_id, FakeWSConn())  # even a "live" socket cannot save it
     await devices.revoke(pool, device_id=device_id, actor="tester")
     with pytest.raises(devices.DeviceRefused) as exc:
@@ -365,51 +300,24 @@ async def test_revoking_through_the_api_kills_the_live_socket(owner_client, pool
     assert not devices_ws.hub.is_connected(device_id)
 
 
-# -- the funnel: a DENY leaves zero frames -----------------------------------
+# -- every device tool reaches the wire signed: no card, no grant, no ledger row
 
 
-async def test_a_consent_gated_device_run_leaves_zero_frames_on_the_wire(pool):
-    device_id, _device = await _enroll(pool, name="laptop", capabilities=["shell.exec"])
-    conn = FakeWSConn()
-    devices_ws.hub.register(device_id, conn)  # the device IS connected...
-    person = await _person(pool)
-    conv = await _conversation(pool, person)
-    sink: list[dict] = []
-    result, ok = await tools.dispatch(
-        "device_run",
-        {"device": "laptop", "argv": ["rm", "-rf", "/tmp/x"]},
-        _ctx(person, conversation_id=conv, sink=sink),
-    )
-    assert ok is False
-    assert result.startswith("Awaiting your approval")  # gated, not run
-    assert conn.sent == []  # ...and NOTHING crossed the wire — the kernel refused first
-    assert len(sink) == 1 and sink[0]["action_class"] == "device_run"
-
-
-async def test_an_approved_device_run_reaches_the_wire_and_burns(pool):
-    from app import consents
-
-    device_id, device, conn, task = await _connect(pool, name="laptop", capabilities=["shell.exec"])
+async def test_a_device_run_reaches_the_wire_signed(pool):
+    """device_run was the consent-tier tool. It now runs like any other: a
+    fresh pairing, no grant, no card, no approval — one signed envelope on the
+    wire, the device's own result back, and NOTHING in the governance ledger
+    beyond the pairing itself (a ledger row here would be a gate recording a
+    decision, and there are no decisions)."""
+    device_id, device, conn, task = await _connect(pool, name="laptop")
     person = await _person(pool)
     args = {"device": "laptop", "argv": ["echo", "hi"]}
-    card = await consents.raise_consent(
-        pool,
-        action_class="device_run",
-        args=args,
-        summary="run echo",
-        person_id=person.id,
-        agent="chat",
-        conversation_id=None,
-    )
-    await consents.decide(
-        pool, consent_id=uuid.UUID(card["consent_id"]), approve=True, decided_by=person.id
-    )
-
     core_pubkey = await devices.core_public_key_hex(pool)
 
     async def answer():
         frame = await asyncio.wait_for(conn.next_sent(), 2)
         assert frame["type"] == "command" and frame["envelope"]["capability"] == "shell.exec"
+        assert frame["envelope"]["args"] == {"argv": ["echo", "hi"]}
         assert device.verify_command(core_pubkey, frame)
         conn.feed(device.result(frame["envelope"], ok=True, output="hi", exit_code=0))
 
@@ -418,84 +326,69 @@ async def test_an_approved_device_run_reaches_the_wire_and_burns(pool):
     await asyncio.wait_for(ans, 2)
     assert ok is True
     assert "exit 0" in result and "hi" in result
+    assert len(_command_frames(conn)) == 1
+    kinds = {
+        r["kind"]
+        for r in await pool.fetch(
+            "SELECT kind FROM governance_events WHERE subject_ref = $1", device_id
+        )
+    }
+    assert kinds == {governance.DEVICE_ENROLLED}
     await _close(conn, task)
 
 
-# -- the per-device grant and fs checks refuse before the wire ---------------
+# -- the fs path: absolute is the whole check, and it is normalized ----------
 
 
-async def test_a_capability_not_granted_is_refused_naming_settings(pool):
-    device_id, _device = await _enroll(pool, name="laptop", capabilities=["system.info"])
+async def test_a_relative_path_is_refused_before_the_wire(pool):
+    """The ONE filesystem refusal left. A relative path would resolve against
+    the daemon's cwd — a different file from the one asked for — so it cannot
+    be sent as asked. A shape check, not a boundary: it states the call CANNOT
+    run, never that it may not."""
+    device_id, _device = await _enroll(pool, name="laptop")
     conn = FakeWSConn()
-    devices_ws.hub.register(device_id, conn)
+    devices_ws.hub.register(device_id, conn)  # connected, so a leak WOULD show a frame
     person = await _person(pool)
     result, ok = await tools.dispatch(
-        "device_read_file", {"device": "laptop", "path": "/home/x"}, _ctx(person)
+        "device_read_file", {"device": "laptop", "path": "notes.txt"}, _ctx(person)
     )
     assert ok is False
     assert result.startswith("Error: ")
-    assert "fs.read" in result and "Settings" in result
-    assert conn.sent == []  # the grant check fired before hub.command
+    assert "must be absolute" in result
+    assert conn.sent == []  # refused before hub.command — nothing crossed the wire
 
 
-async def test_an_fs_path_outside_the_granted_roots_is_refused(pool):
-    device_id, _device = await _enroll(
-        pool, name="laptop", capabilities=["fs.read"], fs_roots=["/home/jeremy"]
-    )
-    conn = FakeWSConn()
-    devices_ws.hub.register(device_id, conn)
+async def test_a_dotdot_path_is_normalized_before_it_crosses_the_wire(pool):
+    """There is no root, so `/home/jeremy/../../etc/shadow` is not refused —
+    it is sent, as `/etc/shadow`. normpath runs so the daemon receives one
+    spelling of the path core signed for; this reddens if a refactor ever
+    ships the raw string."""
+    device_id, device, conn, task = await _connect(pool, name="laptop")
     person = await _person(pool)
-    result, ok = await tools.dispatch(
-        "device_read_file", {"device": "laptop", "path": "/etc/passwd"}, _ctx(person)
-    )
-    assert ok is False
-    assert "outside the roots" in result
-    assert conn.sent == []
 
+    async def answer():
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        assert frame["type"] == "command"
+        assert frame["envelope"]["capability"] == "fs.read"
+        assert frame["envelope"]["args"]["path"] == "/etc/shadow"
+        conn.feed(device.result(frame["envelope"], ok=True, output="root:x", exit_code=0))
 
-async def test_a_dotdot_path_escaping_the_root_is_refused(pool):
-    # normpath collapses the ".." to /etc/shadow, which is not under the granted
-    # root — this reddens if a refactor ever prefix-checks the raw string.
-    device_id, _device = await _enroll(
-        pool, name="laptop", capabilities=["fs.read"], fs_roots=["/home/jeremy"]
-    )
-    conn = FakeWSConn()
-    devices_ws.hub.register(device_id, conn)
-    person = await _person(pool)
+    ans = asyncio.create_task(answer())
     result, ok = await tools.dispatch(
         "device_read_file",
         {"device": "laptop", "path": "/home/jeremy/../../etc/shadow"},
         _ctx(person),
     )
-    assert ok is False
-    assert "outside the roots" in result
-    assert conn.sent == []  # never reached the wire
+    await asyncio.wait_for(ans, 2)
+    assert ok is True
+    assert "root:x" in result
+    await _close(conn, task)
 
 
-async def test_a_sibling_prefix_path_is_not_treated_as_inside_the_root(pool):
-    # The classic prefix trap: /home/jeremy-evil is NOT under /home/jeremy, even
-    # though the latter is a string prefix of the former. The "/" boundary in the
-    # check is what refuses it.
-    device_id, _device = await _enroll(
-        pool, name="laptop", capabilities=["fs.read"], fs_roots=["/home/jeremy"]
-    )
-    conn = FakeWSConn()
-    devices_ws.hub.register(device_id, conn)
-    person = await _person(pool)
-    result, ok = await tools.dispatch(
-        "device_read_file", {"device": "laptop", "path": "/home/jeremy-evil/x"}, _ctx(person)
-    )
-    assert ok is False
-    assert "outside the roots" in result
-    assert conn.sent == []
-
-
-async def test_the_exact_root_and_a_legitimate_child_reach_the_wire(pool):
-    # The other half of the prefix check: it must not OVER-refuse. The exact root
-    # and a real child both pass, and the normalized path is what crosses.
-    device_id, device, conn, task = await _connect(
-        pool, name="laptop", capabilities=["fs.list"], fs_roots=["/home/jeremy"]
-    )
+async def test_an_absolute_path_reaches_the_wire_normalized(pool):
+    # A plain absolute path crosses as given; one with a redundant "." segment
+    # proves normpath ran on the allowed path too, not only on a refused one.
+    device_id, device, conn, task = await _connect(pool, name="laptop")
     person = await _person(pool)
 
     async def answer_expecting(expected_path: str):
@@ -512,8 +405,6 @@ async def test_the_exact_root_and_a_legitimate_child_reach_the_wire(pool):
     await asyncio.wait_for(ans, 2)
     assert ok is True
 
-    # A child given with a redundant "." segment proves normpath ran on the
-    # allowed path too, not only the refused ones.
     ans2 = asyncio.create_task(answer_expecting("/home/jeremy/notes.txt"))
     _r2, ok2 = await tools.dispatch(
         "device_list_files", {"device": "laptop", "path": "/home/jeremy/./notes.txt"}, _ctx(person)
@@ -533,9 +424,7 @@ async def test_device_write_file_over_the_cap_is_refused_before_the_wire(pool):
     socket into a timeout (a hang, not a refusal). Nothing crosses the wire."""
     from app.tools import devices as device_tools
 
-    device_id, _device = await _enroll(
-        pool, name="laptop", capabilities=["fs.write"], fs_roots=["/home/jeremy"]
-    )
+    device_id, _device = await _enroll(pool, name="laptop")
     conn = FakeWSConn()
     devices_ws.hub.register(device_id, conn)  # connected, so a leak WOULD show a frame
     person = await _person(pool)
@@ -555,9 +444,7 @@ async def test_device_write_file_at_exactly_the_cap_reaches_the_wire(pool):
     crosses in a signed envelope — the cap refuses, it must not over-refuse."""
     from app.tools import devices as device_tools
 
-    device_id, device, conn, task = await _connect(
-        pool, name="laptop", capabilities=["fs.write"], fs_roots=["/home/jeremy"]
-    )
+    device_id, device, conn, task = await _connect(pool, name="laptop")
     person = await _person(pool)
     cap_bytes = device_tools.WRITE_FILE_CAP_KIB * 1024
     exact = "a" * cap_bytes
@@ -586,7 +473,7 @@ async def test_a_lone_surrogate_arg_is_refused_before_signing(pool):
     as an opaque "signature did not verify" at the daemon. No frame crosses."""
     from app.tools import devices as device_tools
 
-    device_id, _device = await _enroll(pool, name="laptop", capabilities=["system.notify"])
+    device_id, _device = await _enroll(pool, name="laptop")
     conn = FakeWSConn()
     devices_ws.hub.register(device_id, conn)  # connected, so a leak WOULD show a frame
     person = await _person(pool)
@@ -607,7 +494,7 @@ async def test_a_command_send_failure_is_the_same_stale_tile_refusal(pool):
         async def send(self, frame: dict) -> None:
             raise ConnectionResetError("socket went away mid-write")
 
-    device_id, _device = await _enroll(pool, name="laptop", capabilities=["system.info"])
+    device_id, _device = await _enroll(pool, name="laptop")
     devices_ws.hub.register(device_id, _DeadConn())
     person = await _person(pool)
     result, ok = await tools.dispatch("device_info", {"device": "laptop"}, _ctx(person))
@@ -617,7 +504,7 @@ async def test_a_command_send_failure_is_the_same_stale_tile_refusal(pool):
 
 
 async def test_a_disconnected_device_tool_is_a_stated_failure(pool):
-    await _enroll(pool, name="laptop", capabilities=["system.info"])  # paired, not connected
+    await _enroll(pool, name="laptop")  # paired, not connected
     person = await _person(pool)
     result, ok = await tools.dispatch("device_info", {"device": "laptop"}, _ctx(person))
     assert ok is False
@@ -625,7 +512,7 @@ async def test_a_disconnected_device_tool_is_a_stated_failure(pool):
 
 
 async def test_a_tool_for_a_revoked_device_is_refused_by_name(pool):
-    device_id, _device = await _enroll(pool, name="laptop", capabilities=["system.info"])
+    device_id, _device = await _enroll(pool, name="laptop")
     await devices.revoke(pool, device_id=device_id, actor="tester")
     person = await _person(pool)
     result, ok = await tools.dispatch("device_info", {"device": "laptop"}, _ctx(person))
@@ -634,9 +521,7 @@ async def test_a_tool_for_a_revoked_device_is_refused_by_name(pool):
 
 
 async def test_a_device_reporting_failure_is_not_dressed_as_success(pool):
-    device_id, device, conn, task = await _connect(
-        pool, name="laptop", capabilities=["system.info"]
-    )
+    device_id, device, conn, task = await _connect(pool, name="laptop")
     person = await _person(pool)
 
     async def answer():
@@ -673,29 +558,159 @@ async def test_device_list_derives_connected_from_hub_membership(pool):
     assert "offline" in lines["deskbox"]  # not in the hub -> offline
 
 
-# -- authorize precedes the executor, for a device tool ----------------------
+# -- the facts channel: a refusal that DETERMINED connectivity says so ---------
+#
+# Review finding C1. The per-device layer is the ONE place core decides whether
+# a machine's socket is live, and it decides it just as much when it then
+# refuses. Downstream (the chat turn's state-claim guard) has to be able to tell
+# "it checked and the machine is offline" from "it never looked", and the only
+# honest way is a structured record written where the decision happens — never a
+# caller sniffing "not connected" out of a refusal string. Without it an honest
+# "I ran it and it came back not connected" is CORRECTED and REPLACED, which is
+# the worst thing that guard can do.
 
 
-async def test_authorize_precedes_the_executor_for_device_tools(pool):
-    # An auto device tool still passes THROUGH the kernel: monkeypatching the
-    # authorizer to deny stops device_info before it ever resolves the device.
-    from app import policy
+async def test_an_offline_device_records_connected_false_before_refusing(pool):
+    """The device is not in the hub. The executor refuses — and records the
+    connectivity it just determined, for the refusal path."""
+    await _enroll(pool, name="laptop")
+    person = await _person(pool)
+    facts: list[dict] = []
 
-    device_id, _device = await _enroll(pool, name="laptop", capabilities=["system.info"])
+    result, ok = await tools.dispatch(
+        "device_run", {"device": "laptop", "argv": ["ls"]}, _ctx(person, facts=facts)
+    )
+
+    assert ok is False
+    assert "not connected" in result
+    assert facts == [{"device": "laptop", "connected": False}]
+
+
+async def test_an_unknown_device_name_determines_nothing_and_records_nothing(pool):
+    """`_resolve` refuses BEFORE connectivity is looked at. Nothing was settled,
+    so nothing is recorded — and nothing downstream may treat it as a check."""
+    await _enroll(pool, name="laptop")
+    person = await _person(pool)
+    facts: list[dict] = []
+
+    result, ok = await tools.dispatch(
+        "device_run", {"device": "nope", "argv": ["ls"]}, _ctx(person, facts=facts)
+    )
+
+    assert ok is False
+    assert "no paired device named" in result
+    assert facts == []
+
+
+async def test_a_successful_call_records_the_fact_exactly_once(pool):
+    """One call, one determination, one record. The chat loop slices the sink
+    per call to fill each span's `facts`, so a call that recorded twice would
+    be trace noise and a call that recorded nothing would look unchecked."""
+    device_id, _device = await _enroll(pool, name="laptop")
     conn = FakeWSConn()
     devices_ws.hub.register(device_id, conn)
     person = await _person(pool)
+    facts: list[dict] = []
 
-    async def deny(ctx, action_class, args):
-        return policy.Decision(outcome=policy.DENY, reason="kernel said no")
+    task = asyncio.create_task(
+        tools.dispatch("device_info", {"device": "laptop"}, _ctx(person, facts=facts))
+    )
+    frame = await asyncio.wait_for(conn.next_sent(), 2)
+    assert frame["type"] == "command"
+    envelope_id = frame["envelope"]["envelope_id"]
+    devices_ws.hub.resolve(
+        device_id,
+        envelope_id,
+        {
+            "type": "result",
+            "envelope_id": envelope_id,
+            "ok": True,
+            "output": "disk: 431 GiB free",
+            "exit_code": 0,
+            "error": None,
+        },
+    )
+    result, ok = await asyncio.wait_for(task, 2)
 
-    import unittest.mock as mock
+    assert ok is True and "disk: 431 GiB free" in result
+    assert facts == [{"device": "laptop", "connected": True}]  # exactly once
 
-    with mock.patch.object(policy, "authorize", deny):
-        result, ok = await tools.dispatch("device_info", {"device": "laptop"}, _ctx(person))
+
+async def test_two_calls_in_one_turn_each_record_their_own_fact(pool):
+    """The sink is per TURN; the chat loop takes the slice appended during each
+    call as that call's facts. Two calls on the same device must therefore each
+    leave a record, or the second span reads as never having looked."""
+    device_id, device, conn, task = await _connect(pool, name="laptop")
+    person = await _person(pool)
+    core_pubkey = await devices.core_public_key_hex(pool)
+    facts: list[dict] = []
+
+    async def answer():
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        assert frame["type"] == "command" and device.verify_command(core_pubkey, frame)
+        conn.feed(device.result(frame["envelope"], ok=True, output="ok", exit_code=0))
+
+    for _ in range(2):
+        ans = asyncio.create_task(answer())
+        _r, ok = await tools.dispatch(
+            "device_info", {"device": "laptop"}, _ctx(person, facts=facts)
+        )
+        await asyncio.wait_for(ans, 2)
+        assert ok is True
+
+    assert facts == [
+        {"device": "laptop", "connected": True},
+        {"device": "laptop", "connected": True},
+    ]
+    await _close(conn, task)
+
+
+async def test_a_missing_facts_sink_changes_nothing(pool):
+    """The channel is optional: a caller that passes none still gets the same
+    refusal, and nothing raises."""
+    await _enroll(pool, name="laptop")
+    person = await _person(pool)
+
+    result, ok = await tools.dispatch(
+        "device_run", {"device": "laptop", "argv": ["ls"]}, _ctx(person)
+    )
+
     assert ok is False
-    assert "kernel said no" in result
-    assert conn.sent == []  # the executor never ran
+    assert "not connected" in result
+
+
+async def test_a_device_gone_by_send_time_ends_the_facts_on_connected_false(
+    pool, monkeypatch
+):
+    """N3: `_require_connected` determines connectivity inside `_admit`, BEFORE
+    anything is sent, and never sees a socket that dies in the window between
+    that check and hub.command's actual write. hub.command has its OWN re-check
+    right before it sends, and with facts_sink threaded through it gets the
+    last word. Simulated by patching `Hub.is_connected` to always say True
+    (what `_admit` sees) while the device never actually joins `hub._conns`
+    (what hub.command's own check sees) — the same shape a real mid-flight
+    drop produces, without needing to win an actual race."""
+    await _enroll(pool, name="laptop")  # never joins the hub
+    monkeypatch.setattr(devices_ws.Hub, "is_connected", lambda self, device_id: True)
+    person = await _person(pool)
+    facts: list[dict] = []
+
+    result, ok = await tools.dispatch(
+        "device_info", {"device": "laptop"}, _ctx(person, facts=facts)
+    )
+
+    assert ok is False
+    assert "not connected" in result and "tile is stale" in result
+    # `_admit`'s stale read, then the truth.
+    assert facts == [
+        {"device": "laptop", "connected": True},
+        {"device": "laptop", "connected": False},
+    ]
+
+
+async def test_the_executor_alone_still_refuses_an_unknown_device(pool):
+    with pytest.raises(ToolFailure):
+        await tools.REGISTRY["device_info"].executor({"device": "nobody"}, _ctx(None))
 
 
 # -- the audit chain ---------------------------------------------------------

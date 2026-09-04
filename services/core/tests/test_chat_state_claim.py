@@ -117,6 +117,8 @@ class DeviceSpy:
 
 
 async def _arm_device_probe(pool, monkeypatch) -> DeviceSpy:
+    """A private device tool, registered and nothing else: in v4 that is all
+    it takes for a call to RUN (no row, no class, no disposition)."""
     spy = DeviceSpy(f"{DEVICE} is connected, last seen just now.")
     monkeypatch.setitem(
         tools.REGISTRY,
@@ -127,37 +129,6 @@ async def _arm_device_probe(pool, monkeypatch) -> DeviceSpy:
             {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
             spy,
         ),
-    )
-    await pool.execute(
-        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
-        "consecutive_successes) VALUES ($1, 'device', 'auto', false, 0) "
-        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'auto', "
-        "earned = false, consecutive_successes = 0, updated_at = now()",
-        "device_probe",
-    )
-    return spy
-
-
-async def _arm_consent_device_tool(pool, monkeypatch) -> DeviceSpy:
-    """A private CONSENT-disposition device tool: calling it raises a card,
-    which closes the tool loop for the rest of the turn (review I2)."""
-    spy = DeviceSpy("never reached")
-    monkeypatch.setitem(
-        tools.REGISTRY,
-        "device_gate",
-        Tool(
-            "device_gate",
-            "A device action that needs approval.",
-            {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
-            spy,
-        ),
-    )
-    await pool.execute(
-        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
-        "consecutive_successes) VALUES ($1, 'device', 'consent', false, 0) "
-        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'consent', "
-        "earned = false, consecutive_successes = 0, updated_at = now()",
-        "device_gate",
     )
     return spy
 
@@ -427,8 +398,8 @@ async def test_a_refused_not_connected_call_backs_an_offline_report(
     owner_client, pool, mount_peers
 ):
     """The guard's worst failure mode, closed. The device is paired and NOT in
-    the hub, so device_run refuses at the precheck ("not connected — its tile is
-    stale"): ok=False, but connectivity WAS determined. The model then honestly
+    the hub, so device_run refuses inside the executor's `_admit` ("not connected
+    — its tile is stale"): ok=False, but connectivity WAS determined. The model then honestly
     reports the machine is offline. No guard may fire, no redirect may run, and
     the true reply must persist verbatim — correcting it would make the guard
     the liar in exactly the scenario it exists for.
@@ -488,38 +459,6 @@ async def test_a_no_such_device_refusal_still_leaves_the_claim_unchecked(
     spans = await _guard_spans(pool)
     assert [s["name"] for s in spans] == ["state_claim"]
     assert spans[0]["meta"]["redirected"] is False
-
-
-# -- review I2: no redirect, and no dispatch, once a card is up ----------------
-
-
-async def test_no_redirect_once_a_card_is_pending(
-    owner_client, pool, mount_peers, monkeypatch
-):
-    """A consent-tier call raises a card, which CLOSES the tool loop; the closed
-    narration round then asserts an unchecked device state. The state guard
-    fires — and must NOT redirect, because a redirect could dispatch work the
-    operator is still deciding about. The correction ships, the span says why,
-    and the spy proves nothing ever ran."""
-    spy = await _arm_consent_device_tool(pool, monkeypatch)
-    await _pair(pool)
-    gateway = ScriptedGateway(
-        rounds=(
-            (tool_call("c1", "device_gate", {}),),
-            (text(OWNER_CASE),),
-        )
-    )
-    mount_peers(gateway=gateway, memory=FakeMemory())
-
-    sent = await _say(owner_client)
-
-    assert gateway.calls == 2  # no redirect round at all
-    assert spy.calls == []  # nothing dispatched, in the round OR a redirect
-    spans = await _guard_spans(pool)
-    assert [s["name"] for s in spans] == ["state_claim"]
-    assert spans[0]["meta"]["redirected"] is False
-    assert spans[0]["meta"]["not_redirected_because"] == "card_raised"
-    assert guards.STATE_CLAIM_CORRECTION in _corrections(sent)
 
 
 # -- review M5: a tool call in the redirect's CLOSING round is refused ---------

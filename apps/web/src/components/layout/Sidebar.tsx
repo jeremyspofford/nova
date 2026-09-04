@@ -4,7 +4,6 @@ import {
   Activity,
   FolderOpen,
   Settings,
-  ShieldCheck,
   ScrollText,
   Gauge,
   ChevronsLeft,
@@ -41,7 +40,6 @@ export const navSections: NavSection[] = [
   {
     label: 'System',
     items: [
-      { to: '/approvals', label: 'Approvals', icon: ShieldCheck, minRole: 'admin' },
       { to: '/governance', label: 'Governance', icon: ScrollText, minRole: 'admin' },
       { to: '/quality', label: 'AI Quality', icon: Gauge, minRole: 'admin' },
       { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },

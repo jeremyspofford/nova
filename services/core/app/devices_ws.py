@@ -1,13 +1,13 @@
 """The device socket: a WebSocket a paired machine holds open, and the hub that
 sends it signed commands and awaits real results.
 
-Nothing here decides WHO may call WHAT — that is the kernel (policy.authorize),
-which the device tools ride like every other tool. This module is the transport
-under those tools: it authenticates the socket, keeps the live registry the
-tools send through, and turns "accepted by transport" into "the device actually
-answered" — because only a `result` frame the device itself sent ever resolves a
-command. A timeout, a dropped socket, a revoked device: each is a stated
-DeviceRefused, never a guess that it worked.
+Nothing here decides anything: it authenticates the socket and carries signed
+commands. This module is the transport under the device tools: it proves WHO
+is on the other end, keeps the live registry the tools send through, and turns
+"accepted by transport" into "the device actually answered" — because only a
+`result` frame the device itself sent ever resolves a command. A timeout, a
+dropped socket, a revoked device: each is a stated DeviceRefused, never a guess
+that it worked.
 
 Four mechanical properties live here, and each is code, not a request:
 
@@ -59,13 +59,9 @@ NONCE_BYTES = 32
 #     auth_error {reason}                        then close 4401
 #     command    {envelope, sig}                  (envelopes.build / sign)
 #   device -> core
-#     auth       {device_id, sig: hex(sign(raw nonce)), home_dir?: str}
-#                home_dir is OPTIONAL and additive (novad ≥ this change sends
-#                os.UserHomeDir()): stored on the device row AFTER the
-#                signature verifies, so an already-enrolled device gets it on
-#                its next connect. It is a suggestion the grants editor offers
-#                as the first fs root — it never widens a grant by itself, and
-#                junk is dropped (devices.clean_home_dir), never a refusal.
+#     auth       {device_id, sig: hex(sign(raw nonce))}
+#                (an older novad also sends home_dir; it is one of the unknown
+#                keys ignored above — nothing reads it)
 #     heartbeat  {ts}                            -> devices.last_seen = now()
 #     result     {envelope_id, ok, output, exit_code, error}
 #     audit      {entries: [_ENTRY_KEYS...]}     (ingest_audit)
@@ -202,13 +198,14 @@ class Hub:
         socket raises DeviceRefused, which the tool restates as a ToolFailure.
 
         `facts_sink` (review N3) closes the one gap `_require_connected` cannot
-        see: it determines connectivity at the PRECHECK, but a socket can die in
-        the window between that and this actual send — a race the precheck
-        never observes. Both re-checks below ALSO determine connectivity (a
-        connected=False the caller did not already know), so both record it
-        here, the same {"device", "connected"} shape `_require_connected` uses,
-        so a span's `facts` ends on the truth the refusal is actually reporting
-        rather than staying stuck on the precheck's stale True."""
+        see: it determines connectivity inside the executor's `_admit`, but a
+        socket can die in the window between that and this actual send — a
+        race that check never observes. Both re-checks below ALSO determine
+        connectivity (a connected=False the caller did not already know), so
+        both record it here, the same {"device", "connected"} shape
+        `_require_connected` uses, so a span's `facts` ends on the truth the
+        refusal is actually reporting rather than staying stuck on the earlier
+        stale True."""
         did = str(device_id)
         row = await devices.get_live(pool, _as_uuid(device_id))
         if row is None:
@@ -286,8 +283,7 @@ async def authenticate(conn: object, pool) -> object | None:
     Sends the nonce and core's pubkey; the device must return a valid signature
     over the raw nonce with the key its live row pins. A revoked device has no
     live row, so this is where its reconnect is refused — by the absence of the
-    row, not a flag. The auth frame's optional `home_dir` (see the frame
-    contract above) is recorded only once the signature has verified."""
+    row, not a flag."""
     nonce = secrets.token_bytes(NONCE_BYTES)
     core_pubkey = await devices.core_public_key_hex(pool)
     await conn.send({"type": "challenge", "nonce": nonce.hex(), "core_pubkey": core_pubkey})
@@ -315,12 +311,6 @@ async def authenticate(conn: object, pool) -> object | None:
     if not isinstance(sig, str) or not verify_nonce(row["pubkey"], nonce, sig):
         await _auth_error(conn, "the challenge signature did not verify")
         return None
-
-    # Only past the signature: the frame is now the device's own word. The
-    # optional home_dir is stored for the grants editor to suggest; a frame
-    # without it (an older daemon) changes nothing.
-    if "home_dir" in frame:
-        await devices.record_home_dir(pool, device_id, frame.get("home_dir"))
 
     last_seq = await pool.fetchval(
         "SELECT max(seq) FROM device_audit WHERE device_id = $1", device_id
@@ -358,9 +348,12 @@ async def _audit_break(
         expected_prev,
         got_prev,
     )
-    await governance.append(
-        pool, kind=governance.DEVICE_AUDIT_BREAK, subject_ref=device_id, meta=meta
-    )
+    # A standalone event: the break records no state mutation of its own (the
+    # bad entry is NOT stored), so it opens its own transaction to be durable.
+    async with pool.acquire() as conn, conn.transaction():
+        await governance.record_event(
+            conn, kind=governance.DEVICE_AUDIT_BREAK, subject_ref=device_id, meta=meta
+        )
 
 
 async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:

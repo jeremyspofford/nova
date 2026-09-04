@@ -1,39 +1,27 @@
 """The nine device tools — ordinary tools that happen to reach a second machine.
 
-The model never talks to a daemon. It calls these like any other tool; they
-ride the one authorizer (dispatch -> policy.authorize) exactly as web_search
-does, and only AFTER the kernel allows does core sign an envelope and send it
-over the hub. There is no new authorizer here and there must never be — the
-kernel gates by action-class DISPOSITION (auto vs consent), read live from the
-seeded rows.
+The model never talks to a daemon. It calls these like any other tool, and what
+each envelope-backed tool establishes before it sends is a matter of FACT,
+never of permission (owner ruling 2026-09-03: v4 makes no authorization
+decisions). In order (`_admit`):
 
-What each envelope-backed tool adds, in code and before it ever sends, is the
-PER-DEVICE layer the kernel does not know about (`_admit`):
+  1. paired (identity) — resolve the device by name (get_live_by_name). A
+     revoked or unknown name is a stated ToolFailure naming the live devices,
+     never a silent no-op. Core signs only for a key it bound at pairing.
+  2. reachable (transport) — the device's socket is live in the hub. An
+     offline machine is the stated "not connected — its tile is stale" refusal.
+  3. for fs.* tools, the path is absolute, `posixpath.normpath`'d. A relative
+     path would resolve against the daemon's cwd, so it cannot be sent as
+     asked. This is a shape check, not a boundary: there are no filesystem
+     roots, and any absolute path is sent.
 
-  1. resolve the device by name (get_live_by_name) — a revoked or unknown name
-     is a stated ToolFailure naming the live devices, never a silent no-op;
-  2. the device is connected in the hub — an offline machine is the stated
-     "not connected — its tile is stale" refusal;
-  3. the live grant check — the capability this tool needs must be in the row's
-     granted `capabilities`, read fresh per call, else refuse naming Settings ->
-     Devices. This is the tool's OWN check, separate from the kernel's;
-  4. for fs.* tools, a path prefix check against the row's fs_roots — the grant
-     BOUNDARY. (The device enforces its own deny-roots regardless of what core
-     signed; that is the mechanical backstop, this is the boundary — both exist
-     by design.)
+Then core signs the envelope and sends it (`_command`), and only the device's
+own `result` frame comes back as success: a timeout, a dropped socket or a
+device-reported failure is a ToolFailure, so nothing reads as done that the
+device did not actually do. Every refusal above states that the call CANNOT
+run; none says it MAY not — there is no grant, no root, no card, and nothing
+here refuses on the owner's behalf.
 
-That layer runs TWICE per call, on purpose. First as the tool's `precheck`,
-which dispatch runs BEFORE policy.authorize: a call that can never execute is
-refused before the kernel can raise a card for it or burn an approval on it
-(the owner's walk approved a device_run that was then burned and refused as
-ungranted, and approved a card raised for a device name that was leaked XML).
-Then again inside the executor, AFTER the kernel allowed: a grant, a revoke or
-a disconnect can land between the two, and the executor is the last line
-before the wire. Neither run decides anything — both only refuse (D-012).
-
-Only then hub.command, and only the device's own `result` frame comes back as
-success: a timeout, a dropped socket or a device-reported failure is a
-ToolFailure, so nothing reads as done that the device did not actually do.
 Reads are ephemeral (a live point-in-time answer, like fetch_url); writes,
 launches and shell runs are not.
 """
@@ -103,19 +91,13 @@ def _require_connected(row, ctx: ToolContext | None = None) -> None:
     the worst thing that guard can do). Structured, so nothing downstream ever
     has to read a refusal string to learn what happened.
 
-    dispatch() runs this TWICE per call on a full success — once from the
-    tool's precheck, once from the executor's own `_admit` (module docstring)
-    — with the same ctx both times. Without a dedupe, a span's `facts` would
-    carry the identical {device, connected} twice for no reason. Comparing
-    only to the LAST entry already in the sink is enough: it collapses that
-    exact back-to-back repeat while still recording a REAL transition (e.g. a
-    later call on the same device that finds it gone).
+    Runs exactly once per call, so every call's span carries its own record —
+    the chat loop slices the sink per call, and a record suppressed here would
+    leave a later call on the same device looking unchecked.
     """
     connected = devices_ws.hub.is_connected(row["id"])
     if ctx is not None and ctx.facts_sink is not None:
-        fact = {"device": row["name"], "connected": connected}
-        if not ctx.facts_sink or ctx.facts_sink[-1] != fact:
-            ctx.facts_sink.append(fact)
+        ctx.facts_sink.append({"device": row["name"], "connected": connected})
     if not connected:
         raise ToolFailure(
             f"device {row['name']!r} is not connected — its tile is stale; check it is "
@@ -123,48 +105,22 @@ def _require_connected(row, ctx: ToolContext | None = None) -> None:
         )
 
 
-def _require_grant(row, capability: str) -> None:
-    """Refuse unless this device has been granted `capability`, read live off the
-    row. Separate from the kernel: the kernel decides the tool's disposition,
-    this decides whether THIS machine may do it."""
-    if capability not in (row["capabilities"] or []):
-        raise ToolFailure(
-            f"{row['name']} has not been granted {capability} — grant it in Settings → Devices"
-        )
-
-
-def _check_fs_path(row, path: object) -> str:
-    """The requested path must be absolute and lie under one of the device's
-    granted fs_roots. Lexical on purpose: the path names a file on the REMOTE
-    machine, so it cannot be resolved here — this is the grant boundary, and the
-    device's own deny-roots is the mechanical backstop. `..` collapses under
-    normpath so it cannot climb out of a root lexically."""
+def _check_fs_path(path: object) -> str:
+    """The requested path must be absolute; it is returned normalized. Lexical
+    on purpose: the path names a file on the REMOTE machine, so it cannot be
+    resolved here. A relative path would resolve against the daemon's cwd — a
+    different file from the one asked for — so it is refused as malformed.
+    `..` and `.` collapse under normpath so the daemon receives one spelling."""
     if not isinstance(path, str) or not path.startswith("/"):
         raise ToolFailure(f"path {path!r} must be absolute — start it with /")
-    normalized = posixpath.normpath(path)
-    roots = row["fs_roots"] or []
-    if not roots:
-        raise ToolFailure(
-            f"{row['name']} has no filesystem roots granted — add one in Settings → Devices"
-        )
-    for root in roots:
-        root_norm = posixpath.normpath(root)
-        if normalized == root_norm or normalized.startswith(root_norm.rstrip("/") + "/"):
-            return normalized
-    raise ToolFailure(
-        f"path {path!r} is outside the roots granted to {row['name']} "
-        f"({', '.join(roots)}) — widen them in Settings → Devices"
-    )
+    return posixpath.normpath(path)
 
 
-async def _admit(
-    args: dict, capability: str, *, ctx: ToolContext | None = None, fs_path: bool = False
-):
+async def _admit(args: dict, *, ctx: ToolContext | None = None, fs_path: bool = False):
     """The per-device layer, in order: paired (not revoked) -> connected ->
-    granted `capability` -> (fs tools) path inside a granted root. Returns
-    (pool, row, normalized path or None) for an executor to send with; raises
-    ToolFailure to refuse. This is the ONLY place the order lives, so the
-    precheck and the executor cannot drift apart.
+    (fs tools) absolute path. Returns (pool, row, normalized path or None) for
+    an executor to send with; raises ToolFailure to refuse. This is the ONLY
+    place the order lives.
 
     `ctx` is threaded through only so `_require_connected` can record the
     connectivity it determined on the turn's facts_sink; nothing here reads it
@@ -174,20 +130,8 @@ async def _admit(
     pool = await db.get_pool()
     row = await _resolve(pool, args["device"])
     _require_connected(row, ctx)
-    _require_grant(row, capability)
-    path = _check_fs_path(row, args["path"]) if fs_path else None
+    path = _check_fs_path(args["path"]) if fs_path else None
     return pool, row, path
-
-
-def _precheck(capability: str, *, fs_path: bool = False):
-    """The refusal-only hook dispatch runs BEFORE the kernel for one device
-    tool: `_admit` for its capability, result discarded. See the module
-    docstring for why it runs here as well as in the executor."""
-
-    async def precheck(args: dict, ctx: ToolContext) -> None:
-        await _admit(args, capability, ctx=ctx, fs_path=fs_path)
-
-    return precheck
 
 
 async def _command(
@@ -204,7 +148,7 @@ async def _command(
     mystery signature failure to the edge.
 
     `ctx` is threaded through only so hub.command can record the ONE gap
-    `_require_connected` cannot see: a device present at precheck time whose
+    `_require_connected` cannot see: a device present at `_admit` time whose
     socket is gone by the time this actually sends (review N3). Passing None
     is fine — every caller in this module has a ctx, but the sink is optional
     the same way `_require_connected`'s is."""
@@ -256,32 +200,32 @@ async def device_list(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_info(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "system.info", ctx=ctx)
+    pool, row, _ = await _admit(args, ctx=ctx)
     result = _require_ok(await _command(pool, row, "system.info", {}, ctx=ctx), row)
     detail = result.get("output") or "(the device returned no detail)"
     return f"{row['name']} system info:\n{detail}"
 
 
 async def device_list_files(args: dict, ctx: ToolContext) -> str:
-    pool, row, path = await _admit(args, "fs.list", ctx=ctx, fs_path=True)
+    pool, row, path = await _admit(args, ctx=ctx, fs_path=True)
     result = _require_ok(await _command(pool, row, "fs.list", {"path": path}, ctx=ctx), row)
     return f"{row['name']} {path}:\n{result.get('output') or '(empty)'}"
 
 
 async def device_read_file(args: dict, ctx: ToolContext) -> str:
-    pool, row, path = await _admit(args, "fs.read", ctx=ctx, fs_path=True)
+    pool, row, path = await _admit(args, ctx=ctx, fs_path=True)
     result = _require_ok(await _command(pool, row, "fs.read", {"path": path}, ctx=ctx), row)
     return f"{row['name']}:{path}\n{result.get('output') or '(empty file)'}"
 
 
 async def device_list_apps(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "apps.list", ctx=ctx)
+    pool, row, _ = await _admit(args, ctx=ctx)
     result = _require_ok(await _command(pool, row, "apps.list", {}, ctx=ctx), row)
     return f"Apps on {row['name']}:\n{result.get('output') or '(none reported)'}"
 
 
 async def device_notify(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "system.notify", ctx=ctx)
+    pool, row, _ = await _admit(args, ctx=ctx)
     _require_ok(
         await _command(pool, row, "system.notify", {"message": args["message"]}, ctx=ctx), row
     )
@@ -289,7 +233,7 @@ async def device_notify(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_run(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "shell.exec", ctx=ctx)
+    pool, row, _ = await _admit(args, ctx=ctx)
     argv = args["argv"]
     result = _require_ok(await _command(pool, row, "shell.exec", {"argv": argv}, ctx=ctx), row)
     exit_code = result.get("exit_code")
@@ -301,7 +245,7 @@ async def device_run(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_write_file(args: dict, ctx: ToolContext) -> str:
-    pool, row, path = await _admit(args, "fs.write", ctx=ctx, fs_path=True)
+    pool, row, path = await _admit(args, ctx=ctx, fs_path=True)
     content = args["content"]
     if not isinstance(content, str):
         raise ToolFailure("the 'content' argument must be a string")
@@ -321,7 +265,7 @@ async def device_write_file(args: dict, ctx: ToolContext) -> str:
 
 
 async def device_launch_app(args: dict, ctx: ToolContext) -> str:
-    pool, row, _ = await _admit(args, "apps.launch", ctx=ctx)
+    pool, row, _ = await _admit(args, ctx=ctx)
     _require_ok(await _command(pool, row, "apps.launch", {"app": args["app"]}, ctx=ctx), row)
     return f"Launched {args['app']} on {row['name']}."
 
@@ -355,14 +299,13 @@ TOOLS: tuple[Tool, ...] = (
         description="Report a paired device's OS, disk and memory summary.",
         parameters=_obj({"device": _DEVICE_ARG}, ["device"]),
         executor=device_info,
-        precheck=_precheck("system.info"),
         ephemeral=True,
     ),
     Tool(
         name="device_list_files",
         description=(
-            "List the contents of a directory on a paired device. The path must be "
-            "absolute and inside a folder that device has granted."
+            "List the contents of a directory on a paired device. Give an absolute path "
+            "on the device."
         ),
         parameters=_obj(
             {
@@ -372,15 +315,14 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path"],
         ),
         executor=device_list_files,
-        precheck=_precheck("fs.list", fs_path=True),
         ephemeral=True,
         result_kind=RESULT_KIND_LISTING,
     ),
     Tool(
         name="device_read_file",
         description=(
-            "Read a text file on a paired device. The path must be absolute and inside a "
-            f"granted folder; files larger than {READ_FILE_CAP_KIB} KiB are refused by the device."
+            "Read a text file on a paired device. Give an absolute path on the device; "
+            f"files larger than {READ_FILE_CAP_KIB} KiB are refused by the device."
         ),
         parameters=_obj(
             {
@@ -390,7 +332,6 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path"],
         ),
         executor=device_read_file,
-        precheck=_precheck("fs.read", fs_path=True),
         ephemeral=True,
     ),
     Tool(
@@ -398,7 +339,6 @@ TOOLS: tuple[Tool, ...] = (
         description="List the applications installed on a paired device.",
         parameters=_obj({"device": _DEVICE_ARG}, ["device"]),
         executor=device_list_apps,
-        precheck=_precheck("apps.list"),
         ephemeral=True,
         result_kind=RESULT_KIND_LISTING,
     ),
@@ -413,7 +353,6 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "message"],
         ),
         executor=device_notify,
-        precheck=_precheck("system.notify"),
         ephemeral=True,
     ),
     Tool(
@@ -435,14 +374,13 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "argv"],
         ),
         executor=device_run,
-        precheck=_precheck("shell.exec"),
         ephemeral=False,
     ),
     Tool(
         name="device_write_file",
         description=(
-            "Write a text file on a paired device. The path must be absolute and inside a "
-            f"granted folder; content larger than {WRITE_FILE_CAP_KIB} KiB is refused."
+            "Write a text file on a paired device. Give an absolute path on the device; "
+            f"content larger than {WRITE_FILE_CAP_KIB} KiB is refused."
         ),
         parameters=_obj(
             {
@@ -456,7 +394,6 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path", "content"],
         ),
         executor=device_write_file,
-        precheck=_precheck("fs.write", fs_path=True),
         ephemeral=False,
     ),
     Tool(
@@ -470,7 +407,6 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "app"],
         ),
         executor=device_launch_app,
-        precheck=_precheck("apps.launch"),
         ephemeral=False,
     ),
 )

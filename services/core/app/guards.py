@@ -667,38 +667,46 @@ def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
 
 # -- the pending-approval claim guard --------------------------------------
 #
-# A sibling of narration_check, for a lie the live walk caught: after the
-# operator DENIED a fetch, the model answered a follow-up by PARROTING the prior
-# turn's "that fetch is awaiting your approval" line — no tool call, no card,
-# nothing pending anywhere. The operator was stranded on an approval that did
-# not exist. The system prompt asking the model not to fake it is a request;
-# this is the line of code that refuses.
+# A sibling of narration_check, for a lie the live walk caught: the model
+# answered a follow-up by PARROTING an earlier turn's "that fetch is awaiting
+# your approval" line — no tool call, nothing pending anywhere — and the
+# operator was stranded waiting on a step that did not exist. The system prompt
+# telling the model there is no such step is a request; this is the line of
+# code that refuses.
 #
-# consent_claim_check(reply_text, has_pending_consent) fires ONLY when the reply
-# asserts a specific action is CURRENTLY awaiting / pending / blocked-on the
-# operator's approval AND has_pending_consent is False. `has_pending_consent` is
-# the mechanical fact the caller computes (a card raised THIS turn, or one still
-# pending in this conversation); when it is True the very same sentence is TRUE,
-# so the guard stays silent — the SAME words flip verdict on that one boolean.
+# There IS no approval step in v4 (owner ruling 2026-09-03): nothing Nova does
+# waits on the owner, so a reply asserting that an action is CURRENTLY awaiting
+# / pending / blocked-on / in need of the operator's approval is a fabrication
+# by construction. consent_claim_check(reply_text) is therefore a PURE TEXT
+# DETECTOR with no external fact to consult — no card, no consent table, no
+# disposition anywhere for it to read. The name is kept because it names the
+# LIE (the span vocabulary the evals and the Activity page read), not a
+# mechanism.
 #
-# It is built to narration_check's two rules: PURE (text + one boolean; no
-# model, network or clock, so it can never itself become a source of narration)
-# and PRECISION-first (a wrongly-corrected honest reply makes the guard itself
-# the liar, worse than a missed lie). It reuses _clauses so a question or an
-# offer ("Want me to fetch it?") is never read as an assertion, and every
-# trigger is a CURRENT-state phrase — future/conditional forms ("that would need
-# your approval", "I'd have to request approval", "I can ask for approval") use
-# other words and so never match.
-# MECHANISM-NEUTRAL on purpose. The old wording promised "I'll raise an
-# approval card you can approve or deny" — which is now often FALSE: the owner
-# can set an action class to 'auto' (autonomy.set_disposition), and then the
-# next attempt just RUNS, with no card anywhere. A correction that mis-states
-# how the system behaves is its own small lie, so this says only what is
-# mechanically true (nothing pending, nothing ran) and invites the retry
-# without promising which path it takes.
+# It is built to narration_check's two rules: PURE (text only; no model,
+# network or clock, so it can never itself become a source of narration) and
+# PRECISION-first (a wrongly-corrected honest reply makes the guard itself the
+# liar, worse than a missed lie). It reuses _clauses so a question or an offer
+# ("Want me to fetch it?") is never read as an assertion; a negation before the
+# state phrase ("nothing is pending your approval", "I don't need your
+# approval") keeps an honest report clean; and a future/conditional form ("that
+# would need your approval", "I'd have to request approval") never reaches the
+# current-state shapes. A GENERAL statement about a class of HER OWN actions
+# ("fetching URLs requires your approval in general") DOES fire: with no
+# approval step it is exactly as false as "that fetch is awaiting your
+# approval". But a statement RELAYED from the world — a third-party subject
+# ("the pull request needs your approval on GitHub"), or an approval line the
+# model is quoting or reporting ("the README states releases require your
+# approval") — is honest content, not a fabricated pending-claim, and is left
+# alone (the subject restriction and _reported_frame, the paste-exemption idea).
+#
+# The correction is MECHANISM-NEUTRAL and says only what is mechanically true:
+# there is no approval step, nothing is waiting on the operator, nothing ran.
+# It carries no pending-state phrase itself (pinned: every guard is clean over
+# its own correction) and invites the retry without describing a path.
 CONSENT_CLAIM_CORRECTION = (
-    "Correction: nothing is awaiting your approval and nothing has run. "
-    "Tell me again and I'll do it."
+    "Correction: there is no approval step — nothing is waiting on you and "
+    "nothing has run. Tell me again and I'll do it."
 )
 
 # Present/present-perfect state phrases asserting an action is blocked on the
@@ -714,21 +722,32 @@ _PENDING_STATE = re.compile(
     r"|queued\s+(?:\w+\s+){0,3}?for\s+(?:your\s+)?approval",
     re.I,
 )
-# "It/that/this needs|requires your approval" — a CURRENT blocked state tied to a
-# SPECIFIC action by its demonstrative subject. That subject is exactly what
-# separates it from the general capability statement ("Fetching external URLs
-# requires your approval") and from the conditional ("That WOULD need your
-# approval" — "would" breaks the it/that/this→needs adjacency), both of which
-# must stay clean.
+# "<subject> needs|requires your approval" — a CURRENT blocked state. The
+# SUBJECT is the anchor, and it must be HERS to assert: a demonstrative
+# (it/that/this) or a gerund/action phrase naming a class of Nova's own actions
+# ("fetching external URLs requires your approval", "running commands on the
+# device needs your OK"). A THIRD-PARTY subject read from the world ("the pull
+# request needs your approval on GitHub", "your expense report requires your
+# sign-off in Workday") is relayed content, NOT a fabricated pending-claim of
+# hers, so it is not swept in — the earlier form fired on ANY subject and so
+# REPLACED honest relayed reports, the worst failure a REPLACE-class guard can
+# have (precision-first, ruling S2d-R2). The operator-directed object (your /
+# the operator's / the owner's OK, approval, sign-off, go-ahead) is still
+# required, so some OTHER system's reviewers ("the PR needs approval from a
+# maintainer") never counted anyway. The conditional ("that WOULD need your
+# approval") is cut by the modal immediately before the verb (see _is_modal); a
+# negation anywhere before it ("I don't need your approval") by _has_negator;
+# and RELAYED content that happens to carry a demonstrative/gerund subject ("the
+# docs say: 'this requires your approval'", "according to the runbook, deploying
+# to production requires your approval") by the reporting-frame exemption
+# (_reported_frame) — the same idea as presented_listing's paste exemption.
 _NEEDS_APPROVAL = re.compile(
-    r"\b(?:it|that|this)\s+(?:still\s+|currently\s+)?"
-    r"(?:needs?|requires?)\s+(?:your\s+)?approval\b",
+    r"\b(?:it|that|this|\w+ing\b[^.?!]{0,60}?)\s+"
+    r"(?:still\s+|currently\s+)?(?P<verb>needs?|requires?)\s+"
+    r"(?:your\s+|the\s+(?:operator|owner)['’]?s\s+)"
+    r"(?:ok|okay|approval|sign-?off|go-?ahead)\b",
     re.I,
 )
-# A general-capability qualifier: "requires your approval IN GENERAL" is a fact
-# about a class of actions, not a claim that one is pending, so its clause never
-# fires.
-_IN_GENERAL = re.compile(r"\bin\s+general\b", re.I)
 # Words that, appearing before a state phrase, mean it is not a real current
 # pending state: a negation anywhere before it ("nothing is pending approval",
 # "not awaiting") or a future auxiliary immediately before it ("will BE waiting
@@ -737,7 +756,32 @@ _IN_GENERAL = re.compile(r"\bin\s+general\b", re.I)
 # its "can't" AFTER the trigger, and must still fire.
 _NEGATORS = frozenset({"no", "not", "never", "nothing", "none", "without"})
 _FUTURE_AUX = frozenset({"be", "been"})
-_WORD = re.compile(r"[A-Za-z']+")
+# A modal or infinitive marker right before "needs/requires" makes the clause a
+# conditional or a future ("that would need your approval", "it will require
+# your OK", "to need approval"), not a current blocked state.
+_MODAL_AUX = frozenset(
+    {"would", "could", "might", "may", "will", "shall", "should", "must", "can", "to"}
+)
+_WORD = re.compile(r"[A-Za-z'’]+")
+# A REPORTING FRAME leading a clause means the approval statement is RELAYED —
+# something says/said/emailed/states it, or it is quoted "according to" a
+# source. Content Nova is echoing from the world is not her own fabricated
+# pending-claim, so a demonstrative/gerund subject inside relayed text ("the
+# docs say: 'this requires your approval'") must NOT fire. A verbatim quote or a
+# label colon before the clause ("note:", a pasted line) carries the same
+# meaning. The double single-quote is deliberately NOT a delimiter here — an
+# apostrophe ("It's", "I've") would then read as a quote and silence an honest
+# fabrication. This mirrors presented_listing's paste exemption: text the model
+# is relaying is exempt; text it is asserting as its own is not.
+_REPORTING_FRAME = re.compile(
+    r"\b(?:says?|said|saying|states?|stated|stating"
+    r"|emails?|emailed|reads?|reading"
+    r"|wrote|writes?|written|reports?|reported|reporting"
+    r"|notes?|noted|noting|mentions?|mentioned"
+    r"|according\s+to)\b",
+    re.I,
+)
+_REPORT_DELIMITERS = (":", '"', "`", "“", "”")
 
 
 def _has_negator(before: str) -> bool:
@@ -754,38 +798,66 @@ def _last_word(before: str) -> str | None:
     return words[-1].lower() if words else None
 
 
-def _asserts_pending(clause: str) -> bool:
-    """True if this clause asserts a specific action is CURRENTLY blocked on the
-    operator's approval, with the precision guards that keep a future, negated,
-    or general form from counting."""
-    if _IN_GENERAL.search(clause):
+def _is_modal(word: str | None) -> bool:
+    """A modal/infinitive marker ("would", "will", "to", the contracted "'d" /
+    "'ll") — the word that turns "needs your approval" into a conditional."""
+    if word is None:
         return False
+    return word in _MODAL_AUX or word.endswith(("'d", "’d", "'ll", "’ll"))
+
+
+def _reported_frame(before: str) -> bool:
+    """True if the text up to a state phrase is a reporting frame — the approval
+    statement is RELAYED (a source says/said/emailed/states it, or it is quoted
+    'according to' something) or set off by a label colon or an opening quote.
+    Such a clause is content the model is echoing from the world, not its own
+    fabricated pending-claim, so it is exempt (the same idea as presented_listing's
+    paste exemption)."""
+    if _REPORTING_FRAME.search(before) is not None:
+        return True
+    return any(ch in before for ch in _REPORT_DELIMITERS)
+
+
+def _asserts_pending(clause: str) -> bool:
+    """True if this clause asserts an action is CURRENTLY blocked on, or in
+    need of, the operator's approval — with the precision guards that keep a
+    future, conditional, negated or RELAYED form from counting."""
     m = _PENDING_STATE.search(clause)
     if m is not None:
         before = clause[: m.start()]
-        if not _has_negator(before) and _last_word(before) not in _FUTURE_AUX:
+        if (
+            not _has_negator(before)
+            and _last_word(before) not in _FUTURE_AUX
+            and not _reported_frame(before)
+        ):
             return True
     n = _NEEDS_APPROVAL.search(clause)
-    if n is not None and not _has_negator(clause[: n.start()]):
-        return True
+    if n is not None:
+        # Up to the VERB, not the match start: the subject may be a long gerund
+        # phrase ("according to the runbook, deploying to production" — where
+        # "according" itself matches \w+ing), so a negation, a modal, or a
+        # reporting frame that sits in that phrase is only visible in the text
+        # before the verb.
+        before = clause[: n.start("verb")]
+        if (
+            not _has_negator(before)
+            and not _is_modal(_last_word(before))
+            and not _reported_frame(before)
+        ):
+            return True
     return False
 
 
-def consent_claim_check(reply_text: str, has_pending_consent: bool) -> Correction | None:
-    """Contradict a 'pending your approval' claim that no real consent backs.
+def consent_claim_check(reply_text: str) -> Correction | None:
+    """Contradict a 'pending your approval' claim — none can be true.
 
-    Returns a Correction when the reply asserts a specific action is CURRENTLY
-    awaiting/pending/blocked-on the operator's approval AND has_pending_consent
-    is False; None otherwise — an honest reply, a question/offer/future/general
-    form, or a card that really IS pending. Pure and precision-first (see the
-    section header). The caller fails OPEN and, on ANY doubt about whether a card
-    is pending (e.g. the lookup raised), passes has_pending_consent=True, so an
-    honest awaiting reply is never turned into a false correction.
+    Returns a Correction when the reply asserts an action is CURRENTLY
+    awaiting/pending/blocked-on the operator's approval, or that it needs the
+    operator's approval at all; None otherwise — an honest reply, a question or
+    offer, a negated report, or a future/conditional form. Pure and
+    precision-first (see the section header): it reads the text and nothing
+    else, because there is no approval state anywhere for it to read.
     """
-    if has_pending_consent:
-        # A card really is pending: the same sentence the guard would flag is
-        # then TRUE, so it must stay silent.
-        return None
     if not reply_text or not reply_text.strip():
         return None
     for clause, is_question in _clauses(reply_text):
@@ -799,9 +871,8 @@ def consent_claim_check(reply_text: str, has_pending_consent: bool) -> Correctio
 # -- the capability-claim guard --------------------------------------------
 #
 # A third sibling, for the class the live walk hit last: asked "what's the latest
-# from bigblueview.com?", the model CALLED fetch_url, the funnel raised a real
-# approval card and returned "Awaiting your approval" — and then the model
-# answered "I cannot access external websites or real-time data ... my
+# from bigblueview.com?", the model CALLED fetch_url — and then, in the same
+# turn, answered "I cannot access external websites or real-time data ... my
 # capabilities don't include web browsing." A FALSE CAPABILITY DENIAL: it denied
 # a tool (fetch_url) it had JUST exercised. narration_check is for fabricated
 # COMPLETED actions and consent_claim_check for fabricated PENDING states;
@@ -812,11 +883,11 @@ def consent_claim_check(reply_text: str, has_pending_consent: bool) -> Correctio
 # tool is ACTUALLY REGISTERED (present in available_tools). The map from a
 # capability phrase to the tool that provides it is the control's only knowledge,
 # and it is checked against the LIVE tool set the caller passes — never a
-# hardcoded belief about what exists (CLAUDE.md: "granting an MCP filesystem
-# server silences the filesystem check by itself"). If the satisfying tool is NOT
+# hardcoded belief about what exists (CLAUDE.md: "registering a tool in the
+# registry silences the matching capability check by itself"). If the satisfying tool is NOT
 # registered the denial is HONEST and the guard stays silent — the SAME sentence
 # flips verdict on that one membership test, which is the derived-not-hardcoded
-# property (mirroring consent_claim_check's has_pending toggle).
+# property (the same membership test the deferral guard reads).
 #
 # Built to the two family rules: PURE (text + the tool names; no model, network
 # or clock, so it can never itself narrate) and PRECISION-first (a wrongly-
@@ -932,12 +1003,7 @@ def _capability_correction_text(tools_named: Sequence[str]) -> str:
     lead and no pending-state phrase, so running any guard on it (self-reference)
     comes back clean."""
     listed = ", ".join(dict.fromkeys(tools_named))  # dedupe, preserve order
-    return (
-        f"Correction: I can do that — I have a tool for it ({listed}). "
-        "If it needs the operator's approval first, calling the tool raises an "
-        "approval card for them to approve; that request waiting on their OK is "
-        "not a limit on what I can do."
-    )
+    return f"Correction: I can do that — I have a tool for it ({listed})."
 
 
 def capability_claim_check(
@@ -1195,7 +1261,7 @@ def deferral_check(
 #
 #     The second half is the fix for the guard's worst failure mode, found in
 #     adversarial review: when the device really IS offline, EVERY device tool
-#     refuses at the precheck ("not connected — its tile is stale") with
+#     refuses before sending ("not connected — its tile is stale") with
 #     ok=False. A model that then honestly says "I ran it and it came back not
 #     connected — X is offline" would be corrected, its true reply REPLACED by
 #     "I did not actually check", systematically, in the exact scenario the
@@ -1354,7 +1420,7 @@ def _checked_a_device(spans: Sequence[Any]) -> bool:
 
       * a successful device_* span (the ordinary case), or
       * a device_* span that DETERMINED connectivity and then refused — an
-        offline machine refuses every device tool at the precheck, and that
+        offline machine refuses every device tool before sending, and that
         refusal is exactly the check the reply is reporting (see the section
         header; this is the guard's worst failure mode without it).
 
@@ -1425,7 +1491,7 @@ def state_claim_check(
 # Real trace, 2026-09-03 14:43 UTC, local model muse-glimmer: the user asked
 # "show me my workspace directory structure"; the ENTIRE reply was "Got it.
 # Checking the workspace…" with ZERO tool calls (tools advertised, the device
-# online and granted). No guard fired: deferral_check's commitment leads
+# online). No guard fired: deferral_check's commitment leads
 # ("I'll", "let me", "I'm going to") require a first-person MODAL mapped to a
 # REGISTERED search/fetch tool; a bare present-progressive ack-and-go
 # ("Checking…") names no such lead, and a general "I'll check the disk usage

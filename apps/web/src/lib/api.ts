@@ -9,12 +9,9 @@
  */
 import type { Role } from './roles'
 import type { Person } from './gate'
-import type { ConsentCard } from './consentCard'
 import { failureReason } from './streamChat'
 import { statedReason } from './statedReason'
 import { createLineBuffer } from './lineBuffer'
-
-export type { ConsentCard }
 
 /** The three backends core's PUT /inference/backend accepts. */
 export type EngineKind = 'ollama' | 'remote' | 'cloud'
@@ -316,37 +313,6 @@ export async function getActivity(
 export const getActivityTurn = (turnId: string) =>
   apiGet<ActivityTurnDetail>(`/api/v1/activity/${turnId}`)
 
-// ── consents (approval cards — services/core/app/consents_api.py) ───────
-
-/**
- * Pending approval cards. With no conversationId, every pending card across
- * every conversation (the Approvals page); with one, only that conversation's
- * (the inline card's reconciliation path, if a page ever needs it).
- */
-export async function getConsents(conversationId?: string): Promise<ConsentCard[]> {
-  const query = conversationId ? `?conversation_id=${encodeURIComponent(conversationId)}` : ''
-  const body = await apiGet<{ consents: ConsentCard[] }>(`/api/v1/consents${query}`)
-  return body.consents
-}
-
-/**
- * Approve or deny a card. Returns the updated card — status flipped, nothing
- * else: the kernel runs nothing at decide time (ruling S3-R4), so this alone
- * never makes the action happen. chat-store.tsx's decideConsent is what
- * layers the re-attempt continuation on top of this call.
- */
-export async function decideConsent(
-  consentId: string,
-  decision: 'approve' | 'deny',
-): Promise<ConsentCard> {
-  const body = await apiSend<{ consent: ConsentCard }>(
-    `/api/v1/consents/${consentId}/decide`,
-    'POST',
-    { decision },
-  )
-  return body.consent
-}
-
 // ── workspace files (read-only view over Nova's workspace volume) ───────
 
 export interface WorkspaceFileEntry {
@@ -460,101 +426,30 @@ export async function* pullModel(
   }
 }
 
-// ── earned autonomy (services/core/app/autonomy_api.py) ─────────────────
-
-/**
- * One action class's current disposition and graduation progress, verbatim
- * off autonomy.state() — `consecutive_successes`/`graduation_runs` are the
- * REAL stored counter and threshold, never computed or guessed client-side.
- */
-export interface AutonomyClass {
-  action_class: string
-  risk_tier: string
-  disposition: 'auto' | 'consent' | 'deny'
-  /** True only for a class THIS loop promoted — see services/core/app/
-   * autonomy.py's module docstring. Only an earned class can be revoked. */
-  earned: boolean
-  consecutive_successes: number
-  graduation_runs: number
-  updated_at: string
-}
-
-export async function getAutonomyState(): Promise<AutonomyClass[]> {
-  const body = await apiGet<{ classes: AutonomyClass[] }>('/api/v1/autonomy')
-  return body.classes
-}
-
-/** The owner sets a class's disposition by hand — PUT /autonomy/{class}.
- * Not an authorizer: core edits the action_classes row the kernel reads and
- * records who did it (governance `autonomy.disposition_set`). Returns that
- * class's state row, so the caller echoes it into the list it holds. The
- * server 400s an unknown disposition and 404s an unknown class, by name. */
-export async function setDisposition(
-  actionClass: string,
-  disposition: AutonomyClass['disposition'],
-): Promise<AutonomyClass> {
-  const body = await apiSend<{ class: AutonomyClass }>(
-    `/api/v1/autonomy/${encodeURIComponent(actionClass)}`,
-    'PUT',
-    { disposition },
-  )
-  return body.class
-}
-
-/** The owner sets EVERY class's disposition at once — PUT /autonomy, no
- * class segment (the master control). One transaction in core: only the
- * classes not already at `disposition` are written, one governance event
- * each sharing a `meta.batch` id, so the ledger names exactly what changed.
- * Returns every class's state row (replace the list wholesale — it is the
- * state that committed) and the names that changed, empty when nothing
- * differed. The server 400s an unknown disposition by name. */
-export async function setAllDispositions(
-  disposition: AutonomyClass['disposition'],
-): Promise<{ classes: AutonomyClass[]; changed: string[] }> {
-  return apiSend<{ classes: AutonomyClass[]; changed: string[] }>('/api/v1/autonomy', 'PUT', {
-    disposition,
-  })
-}
-
-/** Demotes an earned-auto class back to consent (a governance event); the
- * server 404s a class that never graduated rather than a silent no-op. */
-export async function revokeAutonomy(actionClass: string): Promise<AutonomyClass[]> {
-  const body = await apiSend<{ classes: AutonomyClass[] }>(
-    `/api/v1/autonomy/${encodeURIComponent(actionClass)}/revoke`,
-    'POST',
-  )
-  return body.classes
-}
-
 // ── devices (services/core/app/devices_api.py) ──────────────────────────
 
 /**
- * A machine paired to this Nova. `capabilities`/`fs_roots` are the live grant
- * (edited here, read per call by core). `last_seen` is core's clock at the last
- * heartbeat, or null before the first — the ONLY liveness fact the REST list
- * carries: `connected` is ALWAYS false on this route by design (only the
- * model-facing device_list tool overwrites it from live WS hub membership), so
- * the tile derives liveness from `last_seen` freshness, never from `connected`.
- * See pages/settings/devicesFormat.ts. A revoked device is still listed — a
- * machine that was revoked is part of what the operator needs to see.
+ * A machine paired to this Nova. Pairing is the whole of it: a paired device
+ * does everything the user novad runs as can do, and there is no per-device
+ * grant to edit (owner ruling 2026-09-03) — the only things an operator
+ * changes here are the name and whether the pairing still stands. `last_seen`
+ * is core's clock at the last heartbeat, or null before the first — the ONLY
+ * liveness fact the REST list carries: `connected` is ALWAYS false on this
+ * route by design (only the model-facing device_list tool overwrites it from
+ * live WS hub membership), so the tile derives liveness from `last_seen`
+ * freshness, never from `connected`. See pages/settings/devicesFormat.ts. A
+ * revoked device is still listed — a machine that was revoked is part of what
+ * the operator needs to see.
  */
 export interface Device {
   id: string
   name: string
   platform: string
   hostname: string
-  capabilities: string[]
-  fs_roots: string[]
   enrolled_at: string
   last_seen: string | null
   revoked_at: string | null
   connected: boolean
-  /** The home directory the daemon reported (enroll body, or its WS auth
-   * frame on a later connect); null until it has. The grants editor offers it
-   * as the suggested first fs root — it grants nothing by itself, and core
-   * refuses an fs.* grant with no root (devicesFormat.grantsRefusal mirrors
-   * that refusal for fast feedback). */
-  home_dir: string | null
 }
 
 /** A freshly minted pairing code — shown ONCE (core stores only its hash). */
@@ -581,20 +476,6 @@ export async function renameDevice(id: string, name: string): Promise<Device> {
   return body.device
 }
 
-/** PUT /devices/{id}/grants — the full capability + fs-root grant, replaced
- * wholesale (core validates the capability names and the absolute roots). */
-export async function setGrants(
-  id: string,
-  grants: { capabilities: string[]; fs_roots: string[] },
-): Promise<Device> {
-  const body = await apiSend<{ device: Device }>(
-    `/api/v1/devices/${encodeURIComponent(id)}/grants`,
-    'PUT',
-    grants,
-  )
-  return body.device
-}
-
 /** POST /devices/{id}/revoke — core also drops the device's live socket. */
 export async function revokeDevice(id: string): Promise<Device> {
   const body = await apiSend<{ device: Device }>(
@@ -606,12 +487,12 @@ export async function revokeDevice(id: string): Promise<Device> {
 
 // ── governance audit (services/core/app/governance_api.py) ──────────────
 
-/** One row of the append-only ledger: every decision, verbatim. Never
- * derived or filtered by this client — see governance.py's own docstring. */
+/** One row of the append-only ledger: what happened, verbatim — a record,
+ * never a decision. Never derived or filtered by this client — see
+ * governance.py's own docstring. */
 export interface GovernanceEvent {
   id: string
   kind: string
-  action_class: string | null
   actor: string | null
   subject_ref: string | null
   meta: Record<string, unknown>
@@ -621,12 +502,11 @@ export interface GovernanceEvent {
 export const GOVERNANCE_PAGE_SIZE = 50
 
 export async function getGovernanceEvents(
-  opts: { limit?: number; before?: string; actionClass?: string } = {},
+  opts: { limit?: number; before?: string } = {},
 ): Promise<GovernanceEvent[]> {
   const params = new URLSearchParams()
   params.set('limit', String(opts.limit ?? GOVERNANCE_PAGE_SIZE))
   if (opts.before) params.set('before', opts.before)
-  if (opts.actionClass) params.set('action_class', opts.actionClass)
   const body = await apiGet<{ events: GovernanceEvent[] }>(
     `/api/v1/governance?${params.toString()}`,
   )

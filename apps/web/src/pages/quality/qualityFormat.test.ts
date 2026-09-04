@@ -60,8 +60,10 @@ describe('predicateLabel', () => {
     expect(predicateLabel({ predicate: 'tool_called', arg: 'web_search', passed: true })).toBe(
       'tool_called(web_search)',
     )
-    expect(predicateLabel({ predicate: 'consent_card_raised', passed: true })).toBe(
-      'consent_card_raised',
+    // A stored result with no arg — only historical runs (suite_version <= 4)
+    // carry one; every live predicate takes an arg.
+    expect(predicateLabel({ predicate: 'legacy_predicate', passed: true })).toBe(
+      'legacy_predicate',
     )
   })
 })

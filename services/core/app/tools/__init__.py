@@ -2,11 +2,13 @@
 
 The registry is code, not configuration: a tool exists because a module in
 this package declares it, and there is no database row, no grant and no
-per-person allow-list in this slice. What contains the blast radius today
-is the toolset itself — a dedicated workspace volume, memory calls scoped
-to the turn's own person, and a fetch that cannot reach this machine or
-this network. The policy layer that decides WHO may call WHAT is a later
-slice, and it will wrap dispatch() rather than replace it.
+per-person allow-list — anywhere. Every registered tool runs for every turn
+that calls it (owner ruling 2026-09-03: v4 makes no authorization decisions;
+nothing here asks the owner or refuses on his behalf). What contains the blast
+radius is the toolset itself — a dedicated workspace volume, memory calls
+scoped to the turn's own person, a fetch that cannot reach this machine or
+this network, and device commands that only a paired, connected machine will
+verify and execute.
 
 dispatch() is the only entry point on purpose. Two properties hold there
 and nowhere else:
@@ -18,12 +20,17 @@ and nowhere else:
     refusal, an unreachable peer, a bug — becomes an `Error: ...` result
     plus ok=False, because the caller is a token stream and an exception
     there is a truncated reply with no reason in it.
+
+A refusal an executor states is a fact about whether the call CAN run (the
+path is outside the workspace, the device is offline, the fetch would reach
+this network) — never a judgment about whether it MAY. tests/test_no_approvals.py
+pins that dispatch awaits nothing but the executor and imports nothing outside
+this package: the day someone rebuilds a gate here, that suite is what refuses.
 """
 from __future__ import annotations
 
 import json
 import logging
-import uuid
 
 from app.tools import devices, memory_tools, schema, util, web, web_search, workspace
 from app.tools.base import ERROR_PREFIX, RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
@@ -68,29 +75,22 @@ def tool_names_by_result_kind(kind: str) -> list[str]:
     return sorted(name for name, tool in REGISTRY.items() if tool.result_kind == kind)
 
 
-def context_for(
-    app,
-    person,
-    *,
-    conversation_id: uuid.UUID | None = None,
-    agent: str = "chat",
-    consent_sink: list[dict] | None = None,
-    facts_sink: list[dict] | None = None,
-) -> ToolContext:
+def context_for(app, person, *, facts_sink: list[dict] | None = None) -> ToolContext:
     """The context a turn hands its tools. The workspace root is read from
     the environment once, here, so a single read decides the boundary for
-    every filesystem call that turn makes. `conversation_id`/`agent` are what
-    the policy kernel binds a raised consent to; `consent_sink`, when given,
-    collects any card the funnel raises this turn for the caller to surface;
-    `facts_sink` collects the facts a call DETERMINED even when it refused (see
-    ToolContext)."""
+    every filesystem call that turn makes. `facts_sink` collects the facts a
+    call DETERMINED even when it refused (see ToolContext).
+
+    `person` must be a real identity: every route resolves one before a turn
+    starts (identity.require_person) and the memory tools scope to it. A None
+    here is a caller bug stated at the call site, not a permission decision —
+    nothing downstream would refuse on its behalf."""
+    if person is None:
+        raise ValueError("context_for needs the turn's person — no route runs a turn without one")
     return ToolContext(
         app=app,
         person=person,
         workspace_root=workspace.root_from_env(),
-        agent=agent,
-        conversation_id=conversation_id,
-        consent_sink=consent_sink,
         facts_sink=facts_sink,
     )
 
@@ -149,17 +149,13 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
     a caller writing a span or an activity frame must not have to guess
     from prose whether the call worked.
 
-    The order inside is load-bearing and pinned by test_policy_funnel:
-    schema validation, then the tool's own `precheck` (if it has one), then
-    the policy kernel, then the executor. A precheck may ONLY refuse — it
-    raises ToolFailure to state why the call can never run (D-012: it adds a
-    refusal in front of the kernel; it never allows, and it never decides).
-    When it refuses, the kernel is NOT called: no consent card is raised, no
-    approval is burned, no governance row is written — the walk's "approved,
-    then burned, then refused as ungranted" defect cannot recur, because the
-    ungranted call never reaches the place that burns. Anything a precheck
-    raises that is NOT a ToolFailure is a bug and is the same fail-closed
-    refusal the executor path gives a bug: stated, never thrown.
+    The whole path is: registry lookup, argument parsing, schema validation,
+    executor. Nothing in between reads a table, asks anyone, or decides
+    whether the call may happen — a registered tool with valid arguments runs,
+    every time. The only things that stop a call are the ones that make it
+    impossible to run honestly (no such tool, arguments that do not match the
+    schema) and the executor's own stated refusals, and each of those comes
+    back as an `Error:` result the model can read.
     """
     tool = REGISTRY.get(name)
     if tool is None:
@@ -178,55 +174,6 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
     problem = schema.validate(tool.parameters, parsed)
     if problem is not None:
         return _retryable(problem), False
-
-    # The tool's own refusal-only precheck, BEFORE the kernel — see the
-    # docstring. A refusal here reaches the model as a stated `Error:` and
-    # nothing below runs; it can never let anything through that the kernel
-    # would have refused, because the kernel still runs on a pass.
-    if tool.precheck is not None:
-        try:
-            await tool.precheck(parsed, ctx)
-        except ToolFailure as exc:
-            return f"{ERROR_PREFIX}{exc}", False
-        except Exception as exc:
-            logger.exception("precheck for %s raised", name)
-            return (
-                f"{ERROR_PREFIX}{name} failed unexpectedly — {type(exc).__name__}: {exc}",
-                False,
-            )
-
-    # The policy gate (D-012): the executor below is reachable ONLY on an ALLOW
-    # from the one kernel. This wraps dispatch's schema/executor contract rather
-    # than replacing it — validation still runs first, and the (ok mechanical,
-    # no throw) guarantees still hold, including here: an authorizer that itself
-    # fails is a fail-closed stated refusal, never an exception into the stream.
-    from app import policy  # local import keeps the tools package import-cycle-free
-
-    try:
-        decision = await policy.authorize(ctx, name, parsed)
-    except Exception as exc:
-        logger.exception("authorizing %s failed", name)
-        return (
-            _retryable(f"could not authorize {name} — {type(exc).__name__}: {exc}"),
-            False,
-        )
-
-    if decision.outcome == policy.DENY:
-        # A stated refusal the model must relay, not retry: it starts with the
-        # error prefix so the transcript reads it as a refusal.
-        return f"{ERROR_PREFIX}{decision.reason}", False
-    if decision.outcome == policy.REQUIRE_CONSENT:
-        # NOT an error: the action is waiting on the operator, so the model
-        # should tell them, not loop retrying. The card is already persisted;
-        # the sink lets the caller surface it inline.
-        card = decision.card_spec or {}
-        if ctx.consent_sink is not None:
-            ctx.consent_sink.append(card)
-        return f"Awaiting your approval: {card.get('summary', name)}", False
-    if not decision.is_allow:
-        # An outcome this funnel does not know how to act on is refused, never
-        # run — the kernel gained a decision the executor path has not.
-        return _retryable(f"{name} was neither allowed nor refused cleanly"), False
 
     try:
         result = await tool.executor(parsed, ctx)
@@ -248,15 +195,5 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
             logger.error("tool %s returned an empty result", name)
             result = f"{ERROR_PREFIX}{name} returned an empty result, so nothing was confirmed"
             ok = False
-
-    if decision.track_outcome:
-        # Earned autonomy (S3-R5): policy.authorize marked this run — a
-        # burned consent, or an already-earned-auto class — as one to count.
-        # This is the ONLY place the run's real ok/fail reaches autonomy.py;
-        # the kernel decided beforehand, this never re-decides, only records.
-        from app import autonomy, db  # local import: same import-cycle reason as policy above
-
-        pool = await db.get_pool()
-        await autonomy.record_outcome(pool, action_class=name, succeeded=ok)
 
     return result, ok

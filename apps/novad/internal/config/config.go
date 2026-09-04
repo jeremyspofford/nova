@@ -1,8 +1,7 @@
-// Package config is the daemon's on-disk custody: the enrollment config, the
-// ed25519 private key (0600, in a 0700 dir), and the deny-roots backstop.
-// Nothing here trusts core — the deny-roots check refuses a signed fs.* target
-// under a protected root regardless of what core granted, so the daemon's own
-// key can never be rewritten by a command it was told to run.
+// Package config is the daemon's on-disk custody: the enrollment config and
+// the ed25519 private key (0600, in a 0700 dir). It holds the identity that
+// proves WHO signed a command; nothing here decides WHAT a verified command
+// may do.
 package config
 
 import (
@@ -25,15 +24,14 @@ type Config struct {
 
 // Paths resolves the daemon's file locations, honoring XDG_CONFIG_HOME and
 // XDG_STATE_HOME. The audit log lives in the state dir; the key and config in
-// the config dir. Both dirs are deny-rooted by default.
+// the config dir.
 type Paths struct {
-	ConfigDir     string
-	StateDir      string
-	ConfigFile    string
-	KeyFile       string
-	DenyRootsFile string
-	AuditFile     string
-	Home          string
+	ConfigDir  string
+	StateDir   string
+	ConfigFile string
+	KeyFile    string
+	AuditFile  string
+	Home       string
 }
 
 // DefaultPaths resolves the standard locations for the current user.
@@ -53,13 +51,12 @@ func DefaultPaths() (Paths, error) {
 	configDir := filepath.Join(configHome, "novad")
 	stateDir := filepath.Join(stateHome, "novad")
 	return Paths{
-		ConfigDir:     configDir,
-		StateDir:      stateDir,
-		ConfigFile:    filepath.Join(configDir, "config.json"),
-		KeyFile:       filepath.Join(configDir, "key"),
-		DenyRootsFile: filepath.Join(configDir, "deny_roots"),
-		AuditFile:     filepath.Join(stateDir, "audit.jsonl"),
-		Home:          home,
+		ConfigDir:  configDir,
+		StateDir:   stateDir,
+		ConfigFile: filepath.Join(configDir, "config.json"),
+		KeyFile:    filepath.Join(configDir, "key"),
+		AuditFile:  filepath.Join(stateDir, "audit.jsonl"),
+		Home:       home,
 	}, nil
 }
 

@@ -17,20 +17,13 @@ from app.identity import Person
 from app.main import app
 from app.tools.base import ToolContext
 from tests import fakes
-from tests.conftest import requires_db
 
-# dispatch() authorizes every call now; memory_search/memory_save/get_time are
-# all disposition=auto in the seeded action-class table, so the kernel needs a
-# live DB to read that seed and allow the executor. The pool fixture builds and
-# seeds it; the autouse dependency makes db.get_pool() resolve to it.
-pytestmark = requires_db
+# dispatch() consults no table and no grant (no approvals, 2026-09-03 —
+# tests/test_no_approvals.py pins it), so none of this needs a database: the
+# memory link is a local ASGI fake and get_time reads a clock. A test here that
+# starts needing the pool is a dispatch that reaches for a row again.
 
 PERSON = Person(id=uuid.uuid4(), name="jeremy", role="owner")
-
-
-@pytest.fixture(autouse=True)
-async def _authorized(pool):
-    return pool
 
 
 @pytest.fixture

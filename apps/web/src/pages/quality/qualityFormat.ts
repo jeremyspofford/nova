@@ -48,7 +48,8 @@ export function passRatePercent(summary: EvalScoreSummary): number | null {
 }
 
 /** One predicate rendered as "tool_called(web_search)" — WHAT the contract
- * checked. Argless predicates (e.g. consent_card_raised) show the name alone. */
+ * checked. Every live predicate takes an arg (corpus v5); a stored result with
+ * none (a historical run at suite_version <= 4) shows the name alone. */
 export function predicateLabel(p: EvalPredicateResult): string {
   return p.arg ? `${p.predicate}(${p.arg})` : p.predicate
 }

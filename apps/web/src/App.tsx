@@ -16,7 +16,6 @@ import { ChatPage } from './pages/chat/ChatPage'
 import { SettingsPage } from './pages/settings/SettingsPage'
 import { ActivityPage } from './pages/activity/ActivityPage'
 import { FilesPage } from './pages/files/FilesPage'
-import { ApprovalsPage } from './pages/approvals/ApprovalsPage'
 import { GovernancePage } from './pages/governance/GovernancePage'
 import { AIQualityPage } from './pages/quality/AIQualityPage'
 
@@ -70,7 +69,6 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
     <AppLayout fullWidth={fullWidth}>
       <Routes>
         <Route path="/chat" element={<ChatPage initialModel={chatModel} />} />
-        <Route path="/approvals" element={<ApprovalsPage />} />
         <Route path="/governance" element={<GovernancePage />} />
         <Route path="/quality" element={<AIQualityPage />} />
         <Route path="/activity" element={<ActivityPage />} />

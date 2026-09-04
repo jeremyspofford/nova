@@ -491,7 +491,7 @@ def test_a_first_person_claim_with_a_second_person_aside_still_flags():
         "Here is the content of the file:",
         "Here is the content I would write to the file:",
         "The draft note contains three sections you can review.",
-        "Here is what the file would contain once you approve.",
+        "Here is what the file would contain once you say go.",
     ],
 )
 def test_presenting_proposed_content_in_chat_is_not_a_claim(reply):

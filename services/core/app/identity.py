@@ -6,6 +6,11 @@ the one service a browser talks to, so it layers session cookies on top: a
 request carrying a live cookie IS that person, whatever the bearer link is
 configured to; anything else falls through to the bearer, which still
 refuses every request when SERVICE_TOKEN is unset.
+
+There is no separate operator-role gate anywhere in this service: every
+authenticated person sees every route (Person.role is carried, never
+branched on). That is named here rather than silently assumed, so a route
+that wants a narrower audience knows there is nothing to lean on yet.
 """
 from __future__ import annotations
 

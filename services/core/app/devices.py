@@ -1,8 +1,10 @@
-"""The device registry: key custody, pairing, grants, revoke.
+"""The device registry: key custody, pairing, revoke.
 
-A paired machine is a key core has bound to a name, plus the capabilities an
-operator granted that name. Nothing in this module asks anyone to behave; every
-property it holds is held by a statement:
+A paired machine is a key core has bound to a name — identity, and nothing
+more. v4 makes no authorization decisions (owner ruling 2026-09-03): there is
+no per-device capability list, no filesystem root and no grant here, and a
+paired device runs whatever core signs. Nothing in this module asks anyone to
+behave; every property it holds is held by a statement:
 
   * signing_key — core's ed25519 key, created ONCE and read forever after.
     Every enrolled device pins it at pairing, so regenerating it would silently
@@ -11,24 +13,14 @@ property it holds is held by a statement:
     racing the first call both end up with the key that is actually in the
     database rather than one of them holding a key nobody stored.
   * mint_pairing_code / enroll — the one unauthenticated write in core. The
-    code is shown once and stored hashed; the burn is the consents idiom, ONE
-    UPDATE whose WHERE clause (unused, unexpired, matching hash) is the whole
-    check. Enrollment and its governance event share a transaction, so a name
+    code is shown once and stored hashed; the burn is ONE UPDATE whose WHERE
+    clause (unused, unexpired, matching hash) is the whole check. It proves
+    WHO is pairing — the person who minted the code — never what the machine
+    may do. Enrollment and its governance event share a transaction, so a name
     collision rolls the burn back and the operator retries with the same code.
-  * set_grants — capabilities are checked against KNOWN_CAPABILITIES and
-    fs_roots against absoluteness before anything is written. A typo'd grant is
-    worse than a missing one: it reads as granted in Settings and refuses
-    forever at the device, with nothing anywhere naming the typo. The same
-    logic refuses an fs.* capability with NO root: that grant is dead on
-    arrival (every call refuses "no filesystem roots granted"), and the owner's
-    live walk hit exactly it. The refusal names the capability and suggests
-    the device's own home directory (`home_dir`, reported by the daemon) — a
-    suggestion the operator accepts by adding it, never a root granted by
-    itself, because a machine reporting its own home must not widen its own
-    grant.
-  * revoke — stamps revoked_at. get_live stops answering (which is how T2's hub
-    refuses the socket), rename and grants refuse, the name frees up, and the
-    row stays so the audit trail survives the grant.
+  * revoke — stamps revoked_at. get_live stops answering (which is how the
+    hub refuses the socket), rename refuses, the name frees up, and the row
+    stays so the audit trail survives the device.
 
 Refusals are raised as DeviceRefused carrying the reason and the status the API
 should state. They are deliberately exceptions rather than None returns: enroll
@@ -42,39 +34,11 @@ import hashlib
 import re
 import secrets
 import uuid
-from typing import Any
 
 import asyncpg
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from app import governance
-
-# The capabilities slice 5 defines. A grant may only name one of these — the
-# set is the contract between the operator's checkboxes (T4), core's tools (T2)
-# and the daemon's executors (T3), and a name outside it can only ever be a
-# typo, because the daemon has no code for it.
-KNOWN_CAPABILITIES = frozenset(
-    {
-        "system.info",
-        "system.notify",
-        "fs.read",
-        "fs.write",
-        "fs.list",
-        "shell.exec",
-        "apps.launch",
-        "apps.list",
-    }
-)
-
-# What a freshly paired machine may do: report on itself, nothing more. The
-# column default in migration 011 is the real enforcement; this constant exists
-# so the API and the tests can name it.
-DEFAULT_CAPABILITIES = ["system.info"]
-
-# The capabilities that are scoped to fs_roots (tools/devices.py prefix-checks
-# every path they touch against the roots). Granting one with no root is a grant
-# that can never be exercised, so set_grants refuses the combination.
-FS_CAPABILITIES = frozenset({"fs.list", "fs.read", "fs.write"})
 
 PAIRING_CODE_TTL_SECONDS = 10 * 60
 PAIRING_CODE_LENGTH = 8
@@ -85,10 +49,10 @@ PAIRING_CODE_ALPHABET = "23456789ABCDEFGHJKMNPQRSTUVWXYZ"
 _PUBKEY_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_NAME_LENGTH = 64
 
-# Refusing rename/grants on a revoked device is 409, not 410: the record is
-# still there and still listed (GET /devices shows it with revoked_at set), so
-# "Gone" would be a lie about the resource. The request conflicts with the
-# device's current state — which is exactly what 409 says.
+# Refusing a rename on a revoked device is 409, not 410: the record is still
+# there and still listed (GET /devices shows it with revoked_at set), so "Gone"
+# would be a lie about the resource. The request conflicts with the device's
+# current state — which is exactly what 409 says.
 _REVOKED_STATUS = 409
 
 
@@ -103,10 +67,11 @@ class DeviceRefused(Exception):
         self.status_code = status_code
 
 
-# The burn, lifted from consents.validate_and_use: the inner SELECT claims one
-# unused, unexpired, matching code with FOR UPDATE SKIP LOCKED (so two daemons
-# racing the same code take different rows or none), and the UPDATE spends it.
-# No row out means no valid code — nothing is spent and nothing is enrolled.
+# The burn: the inner SELECT claims one unused, unexpired, matching code with
+# FOR UPDATE SKIP LOCKED (so two daemons racing the same code take different
+# rows or none), and the UPDATE spends it. No row out means no valid code —
+# nothing is spent and nothing is enrolled. This is identity (which minted code
+# this machine holds), not permission: it decides who paired, never what runs.
 _BURN_CODE_SQL = """
 UPDATE pairing_codes SET used_at = now()
 WHERE id = (
@@ -121,14 +86,14 @@ RETURNING id, created_by
 """
 
 _INSERT_DEVICE_SQL = """
-INSERT INTO devices (name, platform, hostname, pubkey, owner_person, home_dir)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO devices (name, platform, hostname, pubkey, owner_person)
+VALUES ($1, $2, $3, $4, $5)
 RETURNING *
 """
 
 
 def device_spec(row: asyncpg.Record | dict) -> dict:
-    """The shape every device route returns and T4 renders.
+    """The shape every device route returns and the web tile renders.
 
     `connected` is included from day one so the web contract does not change
     under T4's feet when T2's hub lands. It is false here because it IS false:
@@ -141,16 +106,10 @@ def device_spec(row: asyncpg.Record | dict) -> dict:
         "name": row["name"],
         "platform": row["platform"],
         "hostname": row["hostname"],
-        "capabilities": row["capabilities"],
-        "fs_roots": row["fs_roots"],
         "enrolled_at": row["enrolled_at"].isoformat(),
         "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
         "revoked_at": row["revoked_at"].isoformat() if row["revoked_at"] else None,
         "connected": False,
-        # The home directory the daemon reported (enroll body, or its WS auth
-        # frame on a later connect) — null until it has. The grants editor
-        # offers it as the suggested first fs root; it grants nothing by itself.
-        "home_dir": row["home_dir"],
     }
 
 
@@ -226,20 +185,6 @@ def _clean_pubkey(pubkey: str) -> str:
     return candidate
 
 
-def clean_home_dir(home_dir: Any) -> str | None:
-    """The daemon's reported home, or None if it is not a path a grant could
-    use. It is quoted back to the operator as a suggested fs root, so it must
-    already be a root clean_fs_roots would accept (absolute, no `..` segment);
-    anything else is dropped rather than refused — a daemon that cannot name
-    its home is still a machine that can pair and connect."""
-    if not isinstance(home_dir, str):
-        return None
-    path = home_dir.strip()
-    if not path.startswith("/") or ".." in path.split("/"):
-        return None
-    return path.rstrip("/") or "/"
-
-
 def _clean_name(name: str) -> str:
     candidate = (name or "").strip()
     if not candidate:
@@ -257,14 +202,9 @@ async def enroll(
     name: str,
     platform: str,
     hostname: str,
-    home_dir: Any = None,
 ) -> dict:
     """Spend a pairing code to bind this key to this name, and hand back core's
     own key so each side has pinned the other.
-
-    `home_dir` is optional and additive (novad sends os.UserHomeDir(); an older
-    daemon sends nothing): kept only when clean_home_dir accepts it, ignored
-    otherwise, never a reason to refuse the pairing.
 
     Shape validation happens BEFORE the burn, so a mistyped key does not cost
     the operator their code. Everything after the burn shares one transaction
@@ -280,7 +220,6 @@ async def enroll(
     clean_name = _clean_name(name)
     clean_platform = (platform or "").strip() or "unknown"
     clean_hostname = (hostname or "").strip() or "unknown"
-    clean_home = clean_home_dir(home_dir)
     core_pubkey = await core_public_key_hex(pool)
 
     async with pool.acquire() as conn:
@@ -300,7 +239,6 @@ async def enroll(
                     clean_hostname,
                     clean_pubkey,
                     burned["created_by"],
-                    clean_home,
                 )
                 await governance.record_event(
                     conn,
@@ -312,7 +250,6 @@ async def enroll(
                         "platform": clean_platform,
                         "hostname": clean_hostname,
                         "pubkey": clean_pubkey,
-                        "capabilities": row["capabilities"],
                     },
                 )
         except asyncpg.UniqueViolationError as exc:
@@ -350,21 +287,6 @@ async def get_live_by_name(pool: asyncpg.Pool, name: str) -> asyncpg.Record | No
     )
 
 
-async def record_home_dir(pool: asyncpg.Pool, device_id: uuid.UUID, home_dir: Any) -> bool:
-    """Store the home directory a device reported in its WS auth frame, so a
-    machine enrolled before the field existed picks it up on its next connect.
-    True only when a usable path was actually written; junk writes nothing and
-    leaves whatever is stored alone. Called by devices_ws AFTER the challenge
-    verifies — an unauthenticated frame never reaches this."""
-    clean = clean_home_dir(home_dir)
-    if clean is None:
-        return False
-    tag = await pool.execute(
-        "UPDATE devices SET home_dir = $1 WHERE id = $2 AND revoked_at IS NULL", clean, device_id
-    )
-    return tag == "UPDATE 1"
-
-
 async def list_devices(pool: asyncpg.Pool) -> list[dict]:
     """Every device, revoked ones included and marked as such — a machine that
     was revoked is part of what the operator needs to see."""
@@ -390,8 +312,8 @@ async def _live_or_refuse(conn: asyncpg.Connection, device_id: uuid.UUID) -> asy
 
 async def rename(pool: asyncpg.Pool, *, device_id: uuid.UUID, name: str) -> dict:
     """Rename a live device. Writes no governance event on purpose: a label
-    change grants nothing, and a ledger that records every keystroke is one
-    nobody reads when a grant actually moves."""
+    change binds no key and revokes nothing, and a ledger that records every
+    keystroke is one nobody reads when a device actually pairs or goes."""
     clean = _clean_name(name)
     async with pool.acquire() as conn:
         try:
@@ -404,114 +326,6 @@ async def rename(pool: asyncpg.Pool, *, device_id: uuid.UUID, name: str) -> dict
             raise DeviceRefused(
                 f"a device named {clean!r} is already enrolled", status_code=409
             ) from exc
-    return device_spec(row)
-
-
-# -- grants ------------------------------------------------------------
-
-
-def clean_capabilities(capabilities: Any) -> list[str]:
-    """Sorted, deduplicated, and every name a known one.
-
-    Sorted so a before/after diff in the ledger is about what changed rather
-    than the order the checkboxes were clicked. The unknown-name refusal names
-    the offender: a typo'd capability reads as granted in Settings and refuses
-    forever at the device, and nothing else would ever say why."""
-    if not isinstance(capabilities, list) or any(not isinstance(c, str) for c in capabilities):
-        raise DeviceRefused("capabilities must be a list of capability names")
-    unknown = sorted(set(capabilities) - KNOWN_CAPABILITIES)
-    if unknown:
-        raise DeviceRefused(
-            f"unknown capability {', '.join(repr(u) for u in unknown)} — "
-            f"known capabilities are {', '.join(sorted(KNOWN_CAPABILITIES))}"
-        )
-    return sorted(set(capabilities))
-
-
-def clean_fs_roots(fs_roots: Any) -> list[str]:
-    """Absolute paths only, no traversal.
-
-    T2 authorises a filesystem call by prefix-checking the requested path
-    against these. A relative root, or one containing `..`, makes that check
-    decide nothing — so the refusal is here, where the root is written, not at
-    the call site where it would be a silent pass."""
-    if not isinstance(fs_roots, list) or any(not isinstance(p, str) for p in fs_roots):
-        raise DeviceRefused("fs_roots must be a list of absolute paths")
-    cleaned: list[str] = []
-    for raw in fs_roots:
-        path = raw.strip()
-        if not path.startswith("/"):
-            raise DeviceRefused(f"fs root {raw!r} is not an absolute path")
-        if ".." in path.split("/"):
-            raise DeviceRefused(f"fs root {raw!r} contains '..' — give the resolved path instead")
-        cleaned.append(path.rstrip("/") or "/")
-    return sorted(set(cleaned))
-
-
-def _require_a_root_for_fs(
-    capabilities: list[str], fs_roots: list[str], home_dir: str | None
-) -> None:
-    """Refuse an fs.* grant that has no root to be scoped to.
-
-    Such a grant reads as granted in Settings and refuses every call at the
-    device ("no filesystem roots granted") — the owner's live walk (2026-09-01)
-    granted fs.list with fs_roots=[] and every device_list_files call died on
-    it. The refusal names the capabilities that need a root and, when the
-    daemon has reported its home, suggests it: the one root the operator almost
-    always wants. It stays a suggestion — the operator adds it; nothing here
-    writes it."""
-    needing = sorted(set(capabilities) & FS_CAPABILITIES)
-    if not needing or fs_roots:
-        return
-    verb = "needs" if len(needing) == 1 else "need"
-    hint = f", e.g. {home_dir}" if home_dir else " in Settings -> Devices"
-    raise DeviceRefused(
-        f"{', '.join(needing)} {verb} at least one filesystem root — add one{hint}"
-    )
-
-
-async def set_grants(
-    pool: asyncpg.Pool,
-    *,
-    device_id: uuid.UUID,
-    capabilities: Any,
-    fs_roots: Any,
-    actor: str,
-) -> dict:
-    """Replace this device's grants wholesale, recording what they were.
-
-    Wholesale rather than add/remove because that is what the operator's editor
-    submits, and a partial update would leave "what does this machine have now"
-    answerable only by replaying a history. The before/after in the governance
-    event is what makes the change readable afterwards."""
-    clean_caps = clean_capabilities(capabilities)
-    clean_roots = clean_fs_roots(fs_roots)
-    async with pool.acquire() as conn, conn.transaction():
-        before = await _live_or_refuse(conn, device_id)
-        # Raised before the UPDATE and the event, inside the transaction: a
-        # refused grant leaves the row as it was and writes NO ledger row.
-        _require_a_root_for_fs(clean_caps, clean_roots, before["home_dir"])
-        row = await conn.fetchrow(
-            "UPDATE devices SET capabilities = $2::jsonb, fs_roots = $3::jsonb "
-            "WHERE id = $1 RETURNING *",
-            device_id,
-            clean_caps,
-            clean_roots,
-        )
-        await governance.record_event(
-            conn,
-            kind=governance.DEVICE_GRANTS_CHANGED,
-            actor=actor,
-            subject_ref=device_id,
-            meta={
-                "name": row["name"],
-                "before": {
-                    "capabilities": before["capabilities"],
-                    "fs_roots": before["fs_roots"],
-                },
-                "after": {"capabilities": clean_caps, "fs_roots": clean_roots},
-            },
-        )
     return device_spec(row)
 
 

@@ -57,11 +57,6 @@ vi.mock('../../lib/api', async importOriginal => {
       api_key: null,
     })),
     pullModel: vi.fn(),
-    // AutonomySection's own fetch on mount — not the concern of this test
-    // (its behavior is covered by AutonomySection.test.tsx), so this is
-    // stubbed quiet rather than hitting the real, unmocked network.
-    getAutonomyState: vi.fn(async () => []),
-    getGovernanceEvents: vi.fn(async () => []),
   }
 })
 

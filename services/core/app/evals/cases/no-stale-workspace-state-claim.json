@@ -1,7 +1,7 @@
 {
   "id": "no-stale-workspace-state-claim",
   "suite": "agent_quality",
-  "suite_version": 4,
+  "suite_version": 5,
   "setup": [
     {
       "user": "what's in my workspace?",

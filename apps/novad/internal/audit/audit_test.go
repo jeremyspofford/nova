@@ -63,7 +63,7 @@ func TestFirstEntryMatchesTheCommittedChainVector(t *testing.T) {
 func TestAppendPersistsExitCodeNullVsValue(t *testing.T) {
 	l := newLog(t)
 	// A refusal has no process exit — exit_code must be present as null.
-	e, err := l.Append(1756600000, "env-x", "fs.read", "refused: deny-root", false, nil)
+	e, err := l.Append(1756600000, "env-x", "fs.read", "refused: signature did not verify", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

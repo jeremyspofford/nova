@@ -12,8 +12,9 @@ from tests.conftest import requires_db
 pytestmark = requires_db
 
 
-async def _write(pool, kind: str, action_class: str, meta: dict | None = None) -> None:
-    await governance.append(pool, kind=kind, action_class=action_class, meta=meta or {})
+async def _write(pool, kind: str, tag: str) -> None:
+    async with pool.acquire() as conn, conn.transaction():
+        await governance.record_event(conn, kind=kind, meta={"tag": tag})
 
 
 async def test_the_route_needs_an_identity(client):
@@ -22,16 +23,18 @@ async def test_the_route_needs_an_identity(client):
 
 
 async def test_lists_events_newest_first(owner_client, pool):
-    await _write(pool, governance.POLICY_DENIED, "a")
-    await _write(pool, governance.POLICY_DENIED, "b")
-    await _write(pool, governance.POLICY_DENIED, "c")
+    await _write(pool, governance.DEVICE_REVOKED, "a")
+    await _write(pool, governance.DEVICE_REVOKED, "b")
+    await _write(pool, governance.DEVICE_REVOKED, "c")
 
     resp = await owner_client.get("/api/v1/governance")
     assert resp.status_code == 200
     events = resp.json()["events"]
-    assert [e["action_class"] for e in events] == ["c", "b", "a"]
-    assert all(e["kind"] == governance.POLICY_DENIED for e in events)
+    assert [e["meta"]["tag"] for e in events] == ["c", "b", "a"]
+    assert all(e["kind"] == governance.DEVICE_REVOKED for e in events)
     assert all(e["created_at"] for e in events)
+    # The row is a record, not a decision: no action-class column rides it.
+    assert set(events[0]) == {"id", "kind", "actor", "subject_ref", "meta", "created_at"}
 
 
 async def test_an_empty_ledger_lists_as_empty(owner_client):
@@ -40,20 +43,9 @@ async def test_an_empty_ledger_lists_as_empty(owner_client):
     assert resp.json() == {"events": []}
 
 
-async def test_filters_by_action_class(owner_client, pool):
-    await _write(pool, governance.POLICY_DENIED, "fetch_url")
-    await _write(pool, governance.POLICY_DENIED, "workspace_write_file")
-
-    resp = await owner_client.get("/api/v1/governance?action_class=fetch_url")
-    assert resp.status_code == 200
-    events = resp.json()["events"]
-    assert len(events) == 1
-    assert events[0]["action_class"] == "fetch_url"
-
-
 async def test_pagination_pages_strictly_older_than_the_cursor(owner_client, pool):
     for i in range(5):
-        await _write(pool, governance.POLICY_DENIED, f"class-{i}")
+        await _write(pool, governance.DEVICE_REVOKED, f"event-{i}")
 
     first = await owner_client.get("/api/v1/governance?limit=2")
     assert first.status_code == 200

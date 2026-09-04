@@ -50,7 +50,6 @@ func (f fatal) Unwrap() error { return f.err }
 type Agent struct {
 	cfg   config.Config
 	priv  ed25519.PrivateKey
-	deny  *config.DenyList
 	audit *audit.Log
 	deps  caps.Deps
 	wsURL string
@@ -66,7 +65,7 @@ type Agent struct {
 }
 
 // New assembles an agent from loaded custody. logf may be nil.
-func New(cfg config.Config, priv ed25519.PrivateKey, deny *config.DenyList, log *audit.Log, home string, logf func(string, ...any)) (*Agent, error) {
+func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home string, logf func(string, ...any)) (*Agent, error) {
 	wsURL, err := WSURL(cfg.Server)
 	if err != nil {
 		return nil, err
@@ -84,9 +83,8 @@ func New(cfg config.Config, priv ed25519.PrivateKey, deny *config.DenyList, log 
 	return &Agent{
 		cfg:      cfg,
 		priv:     priv,
-		deny:     deny,
 		audit:    log,
-		deps:     caps.Deps{Deny: deny, Home: home},
+		deps:     caps.Deps{Home: home},
 		wsURL:    wsURL,
 		logf:     logf,
 		verifier: verifier,
@@ -194,10 +192,6 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 		Type:     wire.TypeAuth,
 		DeviceID: a.cfg.DeviceID,
 		Sig:      hex.EncodeToString(sig),
-		// Additive: core stores it as the suggested first fs root once the
-		// signature verifies; a device enrolled before the field existed
-		// reports it here on its next connect. See wire.Auth.
-		HomeDir: a.deps.Home,
 	}); err != nil {
 		return fmt.Errorf("sending auth: %w", err)
 	}
@@ -209,8 +203,9 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 	switch t, _ := reply["type"].(string); t {
 	case wire.TypeAuthError:
 		reason, _ := reply["reason"].(string)
-		// Retryable: a revoked device keeps being refused here, correctly; it
-		// cannot get in, but a re-grant heals without a manual restart.
+		// Retryable: a revoked device keeps being refused here, correctly — it
+		// cannot get in — while a transient core-side refusal heals on the
+		// next attempt without a manual restart.
 		return fmt.Errorf("core refused auth: %s", reason)
 	case wire.TypeReady:
 		if err := a.replayAudit(hsCtx, c, reply["last_seq"]); err != nil {

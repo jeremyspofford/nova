@@ -46,8 +46,8 @@ RUN_SCHEMA = next(t.parameters for t in device_tools.TOOLS if t.name == "device_
 PROBE = "markup_probe"
 FABRICATION = "That's still awaiting your approval — I can't run it until you OK it."
 # The same block the model emitted, retargeted at the private probe tool, so a
-# dispatch test can prove the executor really ran without repointing the real
-# device_run action class (which other suites read).
+# dispatch test can prove the executor really ran without touching the real
+# device_run tool (which other suites read).
 PROBE_BLOCK = OBSERVED.replace('name="device_run"', f'name="{PROBE}"')
 
 
@@ -118,18 +118,12 @@ async def _llm_spans(pool) -> list:
 
 
 async def _arm_probe(pool, monkeypatch) -> Spy:
-    """A private AUTO-disposition tool with device_run's own schema: the markup
-    call must actually reach an executor, and the spy is the only proof that the
+    """A private tool with device_run's own schema, registered and nothing
+    else (v4 has no rows, classes or dispositions to seed): the markup call
+    must actually reach an executor, and the spy is the only proof that the
     real body ran."""
     spy = Spy()
     monkeypatch.setitem(tools.REGISTRY, PROBE, Tool(PROBE, "a probe", RUN_SCHEMA, spy))
-    await pool.execute(
-        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
-        "consecutive_successes) VALUES ($1, 'device', 'auto', false, 0) "
-        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'auto', "
-        "earned = false, consecutive_successes = 0, updated_at = now()",
-        PROBE,
-    )
     return spy
 
 
@@ -282,41 +276,6 @@ async def test_the_redirects_closing_round_refuses_markup_and_persists_the_note(
     _no_markup(stored)
     assert guards.CONSENT_CLAIM_CORRECTION in stored
     assert markup_calls.no_tool_round_note(["device_run"]) in stored
-
-
-async def test_a_closed_round_whose_whole_reply_is_markup_answers_with_the_note(
-    owner_client, pool, mount_peers, monkeypatch
-):
-    """The same rule in the turn's own closed round. A card is pending, so the
-    narration round advertises no tools; the model answers with markup alone.
-    Nothing is dispatched, the reply is never the XML, and the turn still ends
-    ok with a note the operator can act on."""
-    spy = await _arm_probe(pool, monkeypatch)
-    gateway = ScriptedGateway(
-        rounds=(
-            (real_call("c1", PROBE, {"device": DEVICE, "argv": ["tree"]}),),
-            (text(OBSERVED),),
-        )
-    )
-    mount_peers(gateway=gateway, memory=FakeMemory())
-    # The probe raises a card this time: the loop closes after round 1.
-    await pool.execute(
-        "UPDATE action_classes SET disposition = 'consent' WHERE action_class = $1",
-        PROBE,
-    )
-
-    await _say(owner_client)
-
-    assert spy.calls == []  # the card-raising call did not run, nor did the markup
-    refused = [s for s in await _tool_spans(pool) if s["meta"].get("refused_markup")]
-    assert [s["name"] for s in refused] == ["device_run"]
-    assert refused[0]["meta"]["refused_pending_approval"] is True
-    # The round's own reason is what the model most needs; the markup fact is
-    # appended to it, never substituted for it.
-    assert "an approval is pending" in refused[0]["meta"]["error"]
-    assert "tool-call markup in your reply text" in refused[0]["meta"]["error"]
-    _no_markup(await _stored(pool))
-    assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
 
 async def test_a_malformed_block_is_stripped_and_nothing_is_dispatched(

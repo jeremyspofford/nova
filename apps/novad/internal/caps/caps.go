@@ -4,16 +4,13 @@
 // result — it is NOT the command's own success. So a shell.exec that runs to
 // completion is ok:true even on a nonzero exit (exit_code carries that);
 // ok:false is reserved for the daemon being UNABLE to perform the capability
-// at all — a deny-root hit, an over-cap read, a launch that never started, a
-// timeout, or notify with no backend. Nothing is a shell string anywhere:
-// shell.exec is argv-only.
+// at all — an over-cap read, a launch that never started, a timeout, or notify
+// with no backend. Nothing is a shell string anywhere: shell.exec is argv-only.
 package caps
 
 import (
 	"context"
 	"fmt"
-
-	"novad/internal/config"
 )
 
 // Caps for the byte budgets in the plan. ReadCap and WriteCap share the same
@@ -36,10 +33,9 @@ type Outcome struct {
 	Error    string
 }
 
-// Deps are the ambient facts a handler needs: the deny-roots backstop and the
-// default working directory for shell.exec.
+// Deps are the ambient facts a handler needs: the default working directory
+// for shell.exec, which is also system.info's statfs target.
 type Deps struct {
-	Deny *config.DenyList
 	Home string
 }
 

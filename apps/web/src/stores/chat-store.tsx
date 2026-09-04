@@ -7,14 +7,7 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
-import {
-  clearConversation as apiClearConversation,
-  decideConsent as apiDecideConsent,
-  getActiveConversation as apiGetActiveConversation,
-  getMessages as apiGetMessages,
-} from '../lib/api'
-import type { ConsentCard } from '../lib/consentCard'
-import { continuationMessage } from '../lib/consentCard'
+import { clearConversation as apiClearConversation } from '../lib/api'
 import { matchCommand } from '../lib/commands'
 import { streamChat, type FetchLike } from '../lib/streamChat'
 import { chatReducer, emptyChat, type ChatState } from '../pages/chat/chatReducer'
@@ -58,13 +51,7 @@ const nextId = (prefix: string) => `${prefix}-${Date.now()}-${++seq}`
 
 interface ChatStore {
   state: ChatState
-  /**
-   * `continuationOf` is the consent_id a message RESUMES — passed by the two
-   * approve paths below, omitted by every ordinary send. It rides to core,
-   * which marks that row as plumbing so later turns never read the approval
-   * choreography back to the model; the visible transcript row is unchanged.
-   */
-  sendMessage: (text: string, continuationOf?: string) => void
+  sendMessage: (text: string) => void
   loadConversation: (
     conversationId: string,
     messages: { id: string; role: string; content: string }[],
@@ -92,37 +79,6 @@ interface ChatStore {
    */
   setModel: (model: string) => void
   /**
-   * S3-T2's approve→executor reconciliation (ruling S3-R4): the policy
-   * kernel never runs the gated action at decide time — only flips the
-   * consent's status. So this (a) calls the decide API and publishes the
-   * result onto any matching row in the transcript (chatReducer's
-   * 'consentDecided'), then (b) on a SUCCESSFUL APPROVE of a card tied to
-   * the conversation currently open here, fires a real continuation chat
-   * turn (the same sendMessage every other message uses — a traced turn,
-   * never a fake "it happened") so the model re-issues the same call and the
-   * funnel burns the now-approved consent. Deny never continues. A card
-   * belonging to some OTHER conversation, or an approve arriving while this
-   * store is already mid-turn, also never continues — there is nothing safe
-   * to send into a transcript that is not the one the card was raised in, or
-   * that is already busy with a turn of its own.
-   */
-  decideConsent: (card: ConsentCard, decision: 'approve' | 'deny') => Promise<ConsentCard>
-  /**
-   * S3-T3's folded fix (T2 review Important #2): decideConsent's own
-   * auto-continue only fires when the card's conversation is ALREADY the one
-   * open here and this store is idle — an approve from the Approvals page,
-   * or one decided while a turn was mid-stream, never gets that nudge, and
-   * without one the operator has no way to make Nova actually run the now-
-   * approved action. This is the explicit "go ahead": it makes sure the
-   * store's conversation matches the card's — fetching and reconciling the
-   * active conversation via `chatApi` first when it does not (or none is
-   * open at all) — then sends the SAME real continuation turn the auto-fire
-   * path sends. Throws (rather than silently doing nothing) when a turn is
-   * already streaming, since queuing behind it would send into whatever
-   * conversation that turn resolves to, not necessarily this card's.
-   */
-  resumeApprovedCard: (card: ConsentCard) => Promise<void>
-  /**
    * Clear the open conversation's transcript — the "Clear chat" button and the
    * `/clear` (alias `/reset`) slash command both land here. Aborts any turn in
    * flight, calls the clear API, and ONLY on its ok empties the store to the
@@ -134,23 +90,10 @@ interface ChatStore {
   clearChat: () => Promise<void>
 }
 
-/** The DI seam for the decide call — same idiom as `fetchImpl`: production
- * uses the real api.decideConsent, tests inject a spy. */
-interface ConsentsApi {
-  decideConsent: typeof apiDecideConsent
-}
-
-/** The DI seam for the clear-chat call — same idiom as `consentsApi`. */
+/** The DI seam for the clear-chat call — same idiom as `fetchImpl`: production
+ * uses the real api.clearConversation, tests inject a spy. */
 interface ConversationsApi {
   clearConversation: typeof apiClearConversation
-}
-
-/** The DI seam resumeApprovedCard uses to find/load the active conversation
- * when the card's is not already open here — same idiom as ChatPage's own
- * `api` prop, which reads these same two calls on mount. */
-interface ChatApi {
-  getActiveConversation: typeof apiGetActiveConversation
-  getMessages: typeof apiGetMessages
 }
 
 const ChatContext = createContext<ChatStore | null>(null)
@@ -159,8 +102,6 @@ export function ChatProvider({
   children,
   fetchImpl,
   personId = null,
-  consentsApi = { decideConsent: apiDecideConsent },
-  chatApi = { getActiveConversation: apiGetActiveConversation, getMessages: apiGetMessages },
   conversationsApi = { clearConversation: apiClearConversation },
 }: {
   children: ReactNode
@@ -168,10 +109,6 @@ export function ChatProvider({
   fetchImpl?: FetchLike
   /** The signed-in person's id, or null when signed out. */
   personId?: string | null
-  /** Test seam only — production always uses the real api.decideConsent. */
-  consentsApi?: ConsentsApi
-  /** Test seam only — production always uses the real conversation reads. */
-  chatApi?: ChatApi
   /** Test seam only — production always uses the real api.clearConversation. */
   conversationsApi?: ConversationsApi
 }) {
@@ -235,7 +172,7 @@ export function ChatProvider({
   }, [])
 
   const sendMessage = useCallback(
-    (text: string, continuationOf?: string) => {
+    (text: string) => {
       const command = matchCommand(text)
       if (command) {
         // A whole-message slash command (e.g. /clear, /help) is a command, not a
@@ -257,7 +194,7 @@ export function ChatProvider({
       ;(async () => {
         try {
           for await (const event of streamChat(
-            { message: text, conversationId, continuationOf, signal: controller.signal },
+            { message: text, conversationId, signal: controller.signal },
             fetchImpl,
           )) {
             // The identity effect above aborts the underlying request the
@@ -295,45 +232,6 @@ export function ChatProvider({
     dispatch({ type: 'modelSwitched', model })
   }, [])
 
-  const decideConsent = useCallback(
-    async (card: ConsentCard, decision: 'approve' | 'deny') => {
-      const updated = await consentsApi.decideConsent(card.consent_id, decision)
-      dispatch({ type: 'consentDecided', card: updated })
-      const sameConversation =
-        updated.conversation_id !== null &&
-        updated.conversation_id === stateRef.current.conversationId
-      if (decision === 'approve' && sameConversation && !stateRef.current.streaming) {
-        sendMessage(continuationMessage(updated), updated.consent_id)
-      }
-      return updated
-    },
-    [consentsApi, sendMessage],
-  )
-
-  const resumeApprovedCard = useCallback(
-    async (card: ConsentCard) => {
-      if (stateRef.current.streaming) {
-        // Sending now would queue behind whatever turn is already running,
-        // into whatever conversation THAT turn resolves to — not
-        // necessarily this card's. Refuse rather than guess.
-        throw new Error(
-          'a turn is already running in this chat — wait for it to finish, then try again',
-        )
-      }
-      if (card.conversation_id !== stateRef.current.conversationId) {
-        // Not (yet) the conversation open here — the Approvals-page case, or
-        // no conversation loaded in this tab at all. Fetch and reconcile the
-        // active one first, the same read ChatPage itself does on mount, so
-        // sendMessage below has real history to hang the continuation off.
-        const conversation = await chatApi.getActiveConversation()
-        const messages = await chatApi.getMessages(conversation.id)
-        loadConversation(conversation.id, messages)
-      }
-      sendMessage(continuationMessage(card), card.consent_id)
-    },
-    [chatApi, loadConversation, sendMessage],
-  )
-
   return (
     <ChatContext.Provider
       value={{
@@ -342,8 +240,6 @@ export function ChatProvider({
         loadConversation,
         resolveServerTurn,
         setModel,
-        decideConsent,
-        resumeApprovedCard,
         clearChat,
       }}
     >

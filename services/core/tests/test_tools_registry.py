@@ -16,7 +16,6 @@ import pytest
 
 from app import tools
 from app.tools.base import Tool, ToolContext, ToolFailure
-from tests.conftest import requires_db
 
 
 def _ctx(tmp_path: Path) -> ToolContext:
@@ -65,22 +64,6 @@ def spy(monkeypatch) -> Spy:
     return executor
 
 
-@pytest.fixture
-async def allow_spy(pool):
-    """dispatch() now authorizes before the executor. These tests inject test
-    tools ('spy_tool', 'no_args') that have no seeded action class, so the
-    kernel would deny them by default (fail-closed) — correct, but not the
-    property under test here (the schema/executor contract). Seed them auto so
-    the gate lets them through; a live DB is required, hence @requires_db on the
-    tests that use this."""
-    await pool.execute(
-        "INSERT INTO action_classes (action_class, risk_tier, disposition) "
-        "VALUES ('spy_tool', 'test', 'auto'), ('no_args', 'test', 'auto') "
-        "ON CONFLICT (action_class) DO NOTHING"
-    )
-    return pool
-
-
 # -- advertisement ---------------------------------------------------------
 
 
@@ -89,11 +72,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # so this pinned set moved from seven to eight. A tool appearing or vanishing
     # here without this line moving is a mistake the test is meant to catch.
     #
-    # Deliberate snapshot update (slice 5, T2 / migration 012): the nine device
-    # tools (tools/devices.py) joined the registry, so this pinned set moved from
-    # eight to SEVENTEEN. Each rides the same dispatch->authorize funnel as every
-    # other tool — no new authorizer — and each has an action-class row seeded by
-    # migration 012, so the "every registered tool has a row" tripwire stays green.
+    # Deliberate snapshot update (slice 5, T2): the nine device tools
+    # (tools/devices.py) joined the registry, so this pinned set moved from
+    # eight to SEVENTEEN. Each rides the same dispatch funnel as every other
+    # tool, and (no approvals, 2026-09-03) needs no row anywhere to run: a tool
+    # is in this set because a module declares it, and that is the whole test.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -131,23 +114,20 @@ def test_advertised_tools_are_openai_shaped_and_cover_the_registry():
 # -- the happy path --------------------------------------------------------
 
 
-@requires_db
-async def test_a_valid_call_reaches_the_executor_with_parsed_arguments(spy, allow_spy, tmp_path):
+async def test_a_valid_call_reaches_the_executor_with_parsed_arguments(spy, tmp_path):
     result, ok = await tools.dispatch("spy_tool", '{"path": "notes.md"}', _ctx(tmp_path))
     assert ok is True
     assert result == "did the thing"
     assert spy.calls == [{"path": "notes.md"}]
 
 
-@requires_db
-async def test_arguments_already_parsed_by_the_backend_are_accepted(spy, allow_spy, tmp_path):
+async def test_arguments_already_parsed_by_the_backend_are_accepted(spy, tmp_path):
     result, ok = await tools.dispatch("spy_tool", {"path": "notes.md"}, _ctx(tmp_path))
     assert ok is True
     assert spy.calls == [{"path": "notes.md"}]
 
 
-@requires_db
-async def test_an_empty_argument_string_means_no_arguments(monkeypatch, allow_spy, tmp_path):
+async def test_an_empty_argument_string_means_no_arguments(monkeypatch, tmp_path):
     executor = Spy()
     monkeypatch.setitem(
         tools.REGISTRY,
@@ -236,8 +216,7 @@ async def test_an_unknown_tool_name_is_refused_and_names_what_exists(tmp_path):
 # -- executors never throw -------------------------------------------------
 
 
-@requires_db
-async def test_a_stated_refusal_comes_back_as_an_error_result(monkeypatch, allow_spy, tmp_path):
+async def test_a_stated_refusal_comes_back_as_an_error_result(monkeypatch, tmp_path):
     executor = Spy(raises=ToolFailure("the path is outside the workspace"))
     monkeypatch.setitem(
         tools.REGISTRY,
@@ -249,10 +228,7 @@ async def test_a_stated_refusal_comes_back_as_an_error_result(monkeypatch, allow
     assert result == "Error: the path is outside the workspace"
 
 
-@requires_db
-async def test_an_unexpected_exception_is_wrapped_not_raised(
-    monkeypatch, allow_spy, tmp_path, caplog
-):
+async def test_an_unexpected_exception_is_wrapped_not_raised(monkeypatch, tmp_path, caplog):
     executor = Spy(raises=RuntimeError("disk on fire"))
     monkeypatch.setitem(
         tools.REGISTRY,
@@ -269,9 +245,8 @@ async def test_an_unexpected_exception_is_wrapped_not_raised(
     assert any("spy_tool" in record.message for record in caplog.records)
 
 
-@requires_db
 async def test_an_executor_returning_nothing_useful_is_still_a_stated_result(
-    monkeypatch, allow_spy, tmp_path
+    monkeypatch, tmp_path
 ):
     """A tool that answers with an empty string tells the model nothing —
     an empty tool result reads as success with no evidence."""

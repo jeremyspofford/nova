@@ -10,7 +10,7 @@ second click interleaved a second suite on the same GPU.
 
 Every route is authed the same way every route in core is
 (identity.require_person — a session cookie or the service bearer; there is no
-separate operator-role gate anywhere in this service yet, see consents_api.py's
+separate operator-role gate anywhere in this service yet, see identity.py's
 docstring on why that is named, not silently assumed).
 
   * GET  /api/v1/evals/suites             — every suite the git corpus defines

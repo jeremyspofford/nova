@@ -10,19 +10,14 @@ Frame contract (each line is `data: <json>`):
                                                    ERROR_PREFIX-stripped head of
                                                    its result (see
                                                    _activity_reason), truncated to
-                                                   ACTIVITY_REASON_LIMIT chars. A
-                                                   pending card is "awaiting", not
-                                                   "error" (see _run_tool) and
-                                                   never carries a reason — it is
-                                                   not a failure. Without a
-                                                   reason, the UI cannot tell a
-                                                   stated tool failure from a turn
-                                                   cut off mid-call, so it must
-                                                   not claim either happened.
-    {"consent": {<card_spec>}}                    zero or more, when the policy
-                                                   kernel raises an approval card
-                                                   this turn (see app/consents.py's
-                                                   card_spec and app/policy.py)
+                                                   ACTIVITY_REASON_LIMIT chars.
+                                                   Without a reason, the UI cannot
+                                                   tell a stated tool failure from
+                                                   a turn cut off mid-call, so it
+                                                   must not claim either happened.
+    {"correction": "<note>"}                      zero or more, when an honesty
+                                                   guard contradicts or redirects
+                                                   the reply (see app/guards.py)
     {"error": "<stated reason>"}                  at most one, on failure
     [DONE]                                        always last
 
@@ -31,6 +26,11 @@ registry, and whenever it answers with tool calls they are executed in the
 order it asked for, appended to the transcript, and the model is asked
 again. The loop is bounded by agents.max_tool_rounds and every exit is
 said out loud — a stated error, or a note that the rounds ran out.
+
+Nothing in the loop waits on anyone: a tool call runs the moment the model
+makes it (v4 makes no authorization decisions — owner ruling 2026-09-03), so
+there is no frame, no note and no round shape for "awaiting approval", and a
+reply that claims one is contradicted by guards.consent_claim_check.
 
 Recall is best-effort, the turn is not: a memory service that is down
 costs the turn its notes and nothing else. A gateway that fails is stated
@@ -54,7 +54,6 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app import (
-    consents,
     conversations,
     db,
     devices,
@@ -120,24 +119,26 @@ DEFERRAL_NOTE = "Doing that now instead of just saying I would."
 CONSENT_REDIRECT_NOTE = "Nothing was pending — doing it now instead of waiting."
 
 
-def consent_redirect_nudge(*, has_pending_consent: bool, ran_a_tool: bool) -> str:
-    """The redirect's nudge, DERIVED from the facts the caller measured.
+def consent_redirect_nudge(*, ran_a_tool: bool) -> str:
+    """The redirect's nudge, DERIVED from the fact the caller measured.
 
-    The sentence asserts two things about the turn — no approval is pending, and
-    nothing has run — so it is built from those two booleans rather than written
-    out as a constant that could drift away from the truth. If either fact does
-    not hold the sentence would be a lie, and a lie told to the model is how you
-    get the tool run a SECOND time (the double-execution the redirect is gated
-    against); so this REFUSES rather than emitting it. The caller's fail-open
-    turns that refusal into the ordinary correction, never an error frame.
+    The sentence asserts two things about the turn. That there is no approval
+    step is true by construction (v4 has none — owner ruling 2026-09-03). That
+    nothing has run is a measured fact, so it is built from that boolean rather
+    than written out as a constant that could drift away from the truth: if a
+    tool DID run the sentence would be a lie, and a lie told to the model is how
+    you get the tool run a SECOND time (the double-execution the redirect is
+    gated against); so this REFUSES rather than emitting it. The caller's
+    fail-open turns that refusal into the ordinary correction, never an error
+    frame.
     """
-    if has_pending_consent or ran_a_tool:
+    if ran_a_tool:
         raise ValueError(
-            "the redirect nudge asserts nothing is pending and nothing has run; "
-            f"has_pending_consent={has_pending_consent} ran_a_tool={ran_a_tool}"
+            "the redirect nudge asserts nothing has run this turn; "
+            f"ran_a_tool={ran_a_tool}"
         )
     return (
-        "No approval is pending and nothing has run this turn. Do it now by "
+        "There is no approval step and nothing has run this turn. Do it now by "
         "calling the tool, or say plainly that you cannot."
     )
 
@@ -251,8 +252,8 @@ def bare_intent_redirect_nudge(*, ran_a_tool: bool) -> str:
 
 
 # The backend note when a bare-intent redirect could not complete the action —
-# the fail-safe honest admission, same family as PENDING_APPROVAL_NOTE and the
-# round-cap note: bracketed backend prose, never the model's, and it REPLACES
+# the fail-safe honest admission, same family as the round-cap note: bracketed
+# backend prose, never the model's, and it REPLACES
 # the broken promise rather than being appended to it (the promise carried no
 # salvageable content). Rides `_claim_redirect`'s `correction_text`, so it is
 # exactly what persists whenever that redirect does not stand.
@@ -264,18 +265,6 @@ BARE_INTENT_HONEST_NOTE = "[I said I'd check but did not — ask again and I'll 
 # say how much they left out.
 SPAN_RESULT_HEAD_CHARS = 500
 
-# Once a round raises an approval card, the tool loop is CLOSED for the rest of
-# the turn (see _run_turn): the model gets one more gateway round, WITHOUT tools
-# advertised, to tell the user, and the turn ends. A tool call it emits anyway
-# in that round is never dispatched — it gets this stated result — and if it
-# said nothing at all in text, this note is the reply, so a turn with a card
-# pending always ENDS (status ok) instead of dying as an empty reply. Both are
-# mechanical facts about the turn (the sink is non-empty), never a claim.
-PENDING_APPROVAL_REFUSAL = (
-    f"{tools.ERROR_PREFIX}an approval is pending — tell the user and wait for it"
-)
-PENDING_APPROVAL_NOTE = "[waiting for your approval before continuing]"
-
 # The round cap must not SWALLOW an answer. The owner's walk, 2026-09-02 23:52:
 # the model ran device_run tree (honest "executable not found"), adapted to
 # device_run find (exit 0 — the listing he asked for came back), then which
@@ -283,9 +272,8 @@ PENDING_APPROVAL_NOTE = "[waiting for your approval before continuing]"
 # "[stopped after 6 tool rounds without finishing]": a successful result existed
 # and the user never saw it.
 #
-# So a capped turn gets ONE final NARRATION round — the same mechanism the
-# card-closes-the-loop round uses, no tools advertised — with every accumulated
-# tool result still in context, so the model answers with what it has. It is
+# So a capped turn gets ONE final NARRATION round — no tools advertised — with
+# every accumulated tool result still in context, so the model answers with what it has. It is
 # exactly one extra GATEWAY call and dispatches nothing, so the operator's cap
 # on TOOL rounds is honored to the letter; a call the model emits anyway is
 # refused with a stated result, never run. The note still lands after whatever
@@ -305,15 +293,6 @@ OUT_OF_ROUNDS_NUDGE = (
     "Answer now with what the tool results above already give you, and say "
     "plainly what is still unknown."
 )
-
-
-# messages.kind (migration 014). 'plumbing' marks a row that exists so the
-# SYSTEM can resume a turn — the web's continuation message after an approve,
-# and a reply that is ONLY the note above — as opposed to something a person or
-# Nova actually said. Plumbing rows stay in the transcript the operator reads;
-# they are simply never fed back to the model as history.
-MESSAGE_KIND_CHAT = "chat"
-MESSAGE_KIND_PLUMBING = "plumbing"
 SPAN_ARG_HEAD_CHARS = 200
 SPAN_ARGS_TOTAL_CHARS = 2000
 
@@ -332,17 +311,6 @@ class GatewayFailure(RuntimeError):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: uuid.UUID | None = None
-    # The consent this message is RESUMING (the web's continuation after an
-    # approve — chat-store.tsx). It marks the user row as plumbing so later
-    # turns never read the choreography back; see MESSAGE_KIND_* below. It is
-    # a HINT, never a permission: nothing about the turn changes, and a value
-    # that does not name a consent this person may resume is simply ignored.
-    #
-    # Typed `str`, not `uuid.UUID`, deliberately: a uuid field makes pydantic
-    # reject a malformed value with a 422 BEFORE the endpoint runs, which would
-    # cost the operator a whole turn over an optional hint. Parsed leniently
-    # below instead — unparseable means absent.
-    continuation_of: str | None = None
 
 
 # Detached work held so it can be awaited at shutdown instead of vanishing
@@ -364,22 +332,6 @@ async def drain_background() -> None:
     """Wait for everything fired and forgotten so far."""
     while _BACKGROUND:
         await asyncio.gather(*list(_BACKGROUND), return_exceptions=True)
-
-
-def _as_uuid(value: str | None) -> uuid.UUID | None:
-    """A uuid, or None — a malformed one is ABSENT, never an error.
-
-    continuation_of is an optional hint that can only ever remove a message from
-    future history. Refusing the turn over a bad one would cost the operator the
-    whole message to protect nothing.
-    """
-    if not value:
-        return None
-    try:
-        return uuid.UUID(value)
-    except (ValueError, AttributeError, TypeError):
-        logger.info("continuation_of was not a uuid; treating the message as chat")
-        return None
 
 
 def _frame(payload: dict) -> str:
@@ -416,9 +368,7 @@ def _activity_frame(tool: str, status: str, result: str | None = None) -> str:
     """The `{"activity": ...}` SSE frame for one tool call's status change.
 
     `reason` is attached only when status == "error" and the call actually
-    stated one (see _activity_reason) — never on "start"/"ok", and never on
-    "awaiting": a pending card is not a failure (_run_tool's contract), so it
-    must not read as one just because a reason happened to be available.
+    stated one (see _activity_reason) — never on "start"/"ok".
     """
     activity: dict[str, str] = {"tool": tool, "status": status}
     if status == "error" and result is not None:
@@ -435,22 +385,10 @@ def history_window(
 
     A message that would cross the budget is dropped entirely, and so is
     everything older — a half-quoted message is worse than an absent one.
-
-    PLUMBING rows never make it into a window. Approval choreography — the web's
-    "You're approved: …, please go ahead now" continuation, the "[waiting for
-    your approval before continuing]" note — is how the system resumes a turn,
-    not something the household said; replaying it teaches a small model to
-    pattern-complete "awaiting approval" instead of calling the tool (the
-    context-poisoning loop the owner's walk hit). The query below filters them
-    out too; this second check is what makes the property hold even if a caller
-    forgets the WHERE, and a row that never carried `kind` (an eval fixture, a
-    hand-built dict) counts as 'chat' exactly as the column default does.
     """
     kept: list[dict[str, str]] = []
     used = 0
     for row in newest_first:
-        if row.get("kind", MESSAGE_KIND_CHAT) == MESSAGE_KIND_PLUMBING:
-            continue
         cost = len(row["content"])
         if used + cost > budget:
             break
@@ -478,11 +416,10 @@ def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
         "After writing a file, read it back before you say it worked. "
         "When a tool answers with a line starting 'Error:', say plainly what failed "
         "and do not claim the work was done. "
-        "Some actions need the operator's approval first: when you call such a tool "
-        "the system shows them an approval card and the tool answers 'Awaiting your "
-        "approval'. That means your request is waiting for their OK, not that you are "
-        "unable to do it — say you've requested their approval, and never deny having "
-        "the capability. "
+        "There is no approval step: when you call a tool it runs in this turn. "
+        "Never say an action is awaiting or pending anyone's approval — do it now, "
+        "or say plainly why you cannot — and never deny having a capability you "
+        "have a tool for. "
         "A web fetch is a LIVE, point-in-time read. For anything time-sensitive — "
         "'the latest', current news, today's status — call fetch_url again to get "
         "fresh results; never answer with what an earlier fetch or a recalled note "
@@ -828,8 +765,8 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
     Revoked rows are excluded: a revoked machine is not paired, so a claim about
     it is not a claim about anything this household has. Returns [] on ANY
     failure — the state-claim guard never fires without names, so a database
-    blip costs a check, never a false correction (precision-first, the same way
-    the pending-consent lookup fails toward "do not correct").
+    blip costs a check, never a false correction (precision-first: doubt never
+    becomes a correction).
     """
     try:
         return [
@@ -851,7 +788,7 @@ def without_markup(text: str) -> str:
     contains UNQUOTED, READABLE tool-call markup. A raw `<atem:function_calls>`
     blob is not an answer — the operator reads XML instead of a reply, and worse,
     the next turn reads it back through history_window and learns to write more
-    of them (the very loop migration 015 has to back-fill out of the live DB).
+    of them.
 
     Two things are deliberately NOT covered by that sentence, and both are the
     precision rule rather than a gap. A QUOTED example — fenced, inline-coded or
@@ -891,64 +828,26 @@ def without_markup(text: str) -> str:
 
 
 async def _persist_assistant(
-    pool: asyncpg.Pool,
-    conversation_id: uuid.UUID,
-    text: str,
-    kind: str = MESSAGE_KIND_CHAT,
+    pool: asyncpg.Pool, conversation_id: uuid.UUID, text: str
 ) -> None:
     text = without_markup(text)
     await pool.execute(
-        "INSERT INTO messages (conversation_id, role, content, kind) "
-        "VALUES ($1, 'assistant', $2, $3)",
+        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'assistant', $2)",
         conversation_id,
         text,
-        kind,
-    )
-
-
-async def record_consent_resolution(
-    pool: asyncpg.Pool,
-    conversation_id: uuid.UUID | None,
-    summary: str,
-    decision: str,
-) -> None:
-    """Put a DECIDED consent back into its conversation as an assistant turn.
-
-    Called by the decide API (consents_api.py) so the message-format concern
-    lives in the chat layer and consents.py stays a pure policy primitive. Two
-    jobs, both from the live walk's third defect: (a) the operator sees the deny
-    in chat, and (b) — the load-bearing half — the resolution enters history, so
-    the model's NEXT turn no longer reads a stale "awaiting your approval" line
-    and re-narrates a pending state that no longer exists.
-
-    DENY only: an APPROVE is already covered by the continuation message the
-    client posts as a real turn (consentCard.ts continuationMessage), so posting
-    here too would double up. A null conversation_id (a card raised outside any
-    conversation) has nowhere to land, so this is a no-op rather than a crash.
-    """
-    if conversation_id is None or decision != "denied":
-        return
-    await _persist_assistant(
-        pool, conversation_id, f"The request to {summary} was denied — I won't do that."
     )
 
 
 async def _run_tool(
     turn: traces.Turn, ctx: tools.ToolContext, call: ToolCall
-) -> tuple[str, bool, bool]:
+) -> tuple[str, bool]:
     """One tool call, timed, recorded, and unable to raise.
 
     dispatch() decides ok; nothing here reads the result text to work out
     whether it worked, so the span and the activity frame say what actually
-    happened rather than what the prose looked like.
-
-    The third return value is `awaiting`: this call raised an approval card
-    (REQUIRE_CONSENT). It is detected MECHANICALLY — the consent_sink GREW during
-    dispatch — never by sniffing the result string (line 482's contract). An
-    awaiting call is ok=False because nothing ran, but it is NOT a failure: the
-    span records `consent_pending` and deliberately leaves `error` UNSET, so the
-    Activity page renders it as pending, not as a red error (the funnel's own
-    S3-T1 contract: REQUIRE_CONSENT → ok=False but not an Error).
+    happened rather than what the prose looked like. Nothing here waits on
+    anyone either: the call is dispatched the moment it is made (v4 has no
+    approval step), so every span is ok, or carries the stated error.
 
     Any FACTS the call determined (ToolContext.facts_sink) are copied onto the
     span the same way — by diffing the sink across the call, never by reading
@@ -957,15 +856,13 @@ async def _run_tool(
     the span carries `facts: [{"device": …, "connected": false}]` so a guard can
     tell "it checked and reports offline" from "it never looked".
     """
-    sink = ctx.consent_sink
     facts = ctx.facts_sink
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"] = _span_arguments(call.arguments)
         if call.from_markup:
             # Recovered from tool-call markup in the round's text rather than
-            # read off the wire. It still went through schema validation, the
-            # precheck and the policy kernel — the accommodation changes where
-            # the call was READ, never what it is allowed to do.
+            # read off the wire. It still goes through schema validation — the
+            # accommodation changes where the call was READ, never what it is.
             span.meta["parsed_from_markup"] = True
         # Pre-set, and overwritten the moment dispatch answers. A turn the
         # client abandons mid-call still files this span on the way out, and
@@ -973,7 +870,6 @@ async def _run_tool(
         # success.
         span.meta["ok"] = False
         span.meta["result_head"] = "(the turn ended before this call returned)"
-        before = len(sink) if sink is not None else 0
         facts_before = len(facts) if facts is not None else 0
         result, ok = await tools.dispatch(call.name, call.arguments, ctx)
         span.meta["ok"] = ok
@@ -982,14 +878,9 @@ async def _run_tool(
             # Exactly what THIS call settled — the sink is append-only for the
             # turn, so the slice beyond the mark is this call's own contribution.
             span.meta["facts"] = list(facts[facts_before:])
-        awaiting = sink is not None and len(sink) > before
-        if awaiting:
-            # A card is waiting on the operator — not an error. ok stays False
-            # (the executor never ran) but error is left unset on purpose.
-            span.meta["consent_pending"] = True
-        elif not ok:
+        if not ok:
             span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
-    return result, ok, awaiting
+    return result, ok
 
 
 async def _dispatch_calls(
@@ -998,23 +889,23 @@ async def _dispatch_calls(
     calls: Sequence[ToolCall],
     messages: list[dict],
     emit: Callable[[str | None], None],
-    consents_emitted: int,
-) -> tuple[int, bool, bool]:
+) -> bool:
     """Run one round's tool calls, append their results, stream what happened.
 
     Sequential, in the model's own order: concurrency is a later slice, and two
     tools writing the same file at once is not a problem worth having yet. The
-    turn loop and the consent redirect share this ONE implementation, so a call
-    made in a redirect is dispatched, recorded, framed and consent-gated exactly
-    like a call made in a normal round — there is no second, weaker path.
+    turn loop and the claim redirects share this ONE implementation, so a call
+    made in a redirect is dispatched, recorded and framed exactly like a call
+    made in a normal round — there is no second, weaker path. And every call
+    that reaches a tool RUNS: nothing here decides whether it may (v4 makes no
+    authorization decisions); the only call ever refused is one the model wrote
+    as text.
 
-    Returns (consents_emitted, ran_ephemeral, card_raised), each a MECHANICAL
-    fact about this batch: how much of the consent sink has now been streamed,
-    whether a successful call was an ephemeral (point-in-time) read, and whether
-    any call raised an approval card. The caller ORs the two flags into its own.
+    Returns `ran_ephemeral`, a MECHANICAL fact about this batch: whether a
+    successful call was an ephemeral (point-in-time) read. The caller ORs it
+    into its own.
     """
     ran_ephemeral = False
-    card_raised = False
     for call in calls:
         emit(_activity_frame(call.name, "start"))
         if call.from_markup:
@@ -1029,27 +920,13 @@ async def _dispatch_calls(
                 {"role": "tool", "tool_call_id": call.id, "content": result}
             )
             continue
-        result, ok, awaiting = await _run_tool(turn, tool_ctx, call)
+        result, ok = await _run_tool(turn, tool_ctx, call)
         ran_tool = tools.REGISTRY.get(call.name)
         if ok and ran_tool is not None and ran_tool.ephemeral:
             ran_ephemeral = True
-        # A card-raising call is "awaiting", not "error": ok is False (nothing
-        # ran) but the operator's decision is pending, so the live tile must
-        # match the span rather than flashing a failure.
-        status = "awaiting" if awaiting else ("ok" if ok else "error")
-        emit(_activity_frame(call.name, status, result))
-        if awaiting:
-            card_raised = True
+        emit(_activity_frame(call.name, "ok" if ok else "error", result))
         messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-        # One frame per card the policy kernel raised on THIS call — never more
-        # than once each, even if the same card gets appended again
-        # (raise_consent reuses an existing pending row, but the sink still
-        # records every dispatch that hit it): the slice beyond
-        # `consents_emitted` is exactly what is new since the last look.
-        for card in tool_ctx.consent_sink[consents_emitted:]:
-            emit(_frame({"consent": card}))
-        consents_emitted = len(tool_ctx.consent_sink)
-    return consents_emitted, ran_ephemeral, card_raised
+    return ran_ephemeral
 
 
 # The flag a markup refusal in an OPEN round files. It is also what tells
@@ -1076,9 +953,9 @@ def markup_as_text_refusal(name: str) -> str:
 def markup_refusal_fact(name: str) -> str:
     """The markup fact APPENDED to a CLOSED round's own refusal.
 
-    The round's own reason (a card is pending, the rounds ran out) is the one the
-    model most needs, and overwriting it — as the first cut of this did — cost a
-    card-pending round the words "an approval is pending". So both are said."""
+    The round's own reason (the rounds ran out, the redirect's tool round is
+    over) is the one the model most needs, and overwriting it — as the first cut
+    of this did — cost a closed round its own reason. So both are said."""
     return (
         "and that was tool-call markup in your reply text, not a tool call, so "
         f"{name} did not run"
@@ -1090,9 +967,9 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
     as a tool span — ok=False with the stated reason as `error` — so the trace
     shows the call the model made and why it did not run, rather than a silent
     drop (a reply is a claim, the span is the fact). Returns the stated result
-    the call is answered with. ONE implementation for both closed rounds (a card
-    is pending, or the tool rounds ran out), so neither can quietly become a
-    dispatch.
+    the call is answered with. ONE implementation for every closed round (the
+    tool rounds ran out, or a redirect's closing round), so none can quietly
+    become a dispatch.
 
     It is ALSO the only thing that ever happens to a tool call the model wrote as
     MARKUP in its reply text, in any round (the ruling — see app/markup_calls.py).
@@ -1101,9 +978,9 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
       * an OPEN round (MARKUP_AS_TEXT_FLAG) has no other reason to refuse, so the
         as-text sentence stands alone and is retryable;
       * a CLOSED round already has a reason, and the markup fact is APPENDED to
-        it — never substituted for it, or a card-pending round stops saying an
-        approval is pending. Its span also carries `refused_markup`, which is
-        what the turn derives its honest note from — never the reply's prose.
+        it — never substituted for it, or a capped round stops saying the rounds
+        ran out. Its span also carries `refused_markup`, which is what the turn
+        derives its honest note from — never the reply's prose.
     """
     closed_round = flag != MARKUP_AS_TEXT_FLAG
     if call.from_markup and closed_round:
@@ -1121,11 +998,6 @@ def _refuse_call(turn: traces.Turn, call: ToolCall, reason: str, flag: str) -> s
             if closed_round:
                 span.meta["refused_markup"] = True
     return reason
-
-
-def _refuse_pending(turn: traces.Turn, call: ToolCall) -> str:
-    """The card-pending closed round's refusal."""
-    return _refuse_call(turn, call, PENDING_APPROVAL_REFUSAL, "refused_pending_approval")
 
 
 def _refuse_out_of_rounds(turn: traces.Turn, call: ToolCall) -> str:
@@ -1199,7 +1071,7 @@ def _markup_tool_calls(
 #
 # A SOFT, LLM-JUDGED, OPT-IN quality guard — the first LLM-judgment control in a
 # guard family that is otherwise mechanical (narration/consent/capability derive
-# their verdict from spans/consent-state/the registry — facts). This one ASKS a
+# their verdict from spans/the text/the registry — facts). This one ASKS a
 # model "does this reply address the user's message?", a judgment that can be
 # wrong, so it is opt-in (default OFF), fail-OPEN (never breaks a turn), and
 # bounded (one redirect, no re-judge loop). It catches RELEVANCE drift — the
@@ -1220,7 +1092,7 @@ async def _gateway_round(
     """ONE gateway round: its text, the tool calls it asked for, a failure or None.
 
     The turn loop's own round, lifted out verbatim so it has exactly one
-    implementation — the loop below and the consent redirect (which must be able
+    implementation — the loop below and the claim redirect (which must be able
     to CALL TOOLS, unlike the text-only `_collect_completion`) run the same code,
     record the same `llm_call` span, and parse the same wire shapes. A gateway
     that refuses, or a transport that dies, is returned as a STATED reason rather
@@ -1629,10 +1501,7 @@ def _regen_rejected_by(
     listing guard exempts — lines the user pasted are theirs, not a claim.
     """
     checks: tuple[tuple[str, Callable[[], object | None]], ...] = (
-        (
-            "consent_claim",
-            lambda: guards.consent_claim_check(corrected, bool(tool_ctx.consent_sink)),
-        ),
+        ("consent_claim", lambda: guards.consent_claim_check(corrected)),
         ("narration", lambda: guards.narration_check(corrected, turn.spans)),
         (
             "capability_claim",
@@ -1670,7 +1539,6 @@ class _ClaimRedirect:
 
     text: str
     redirected: bool
-    consents_emitted: int
     read_ephemeral: bool
     # Set when a round of this redirect wrote a tool call as MARKUP and it was
     # refused (the round advertised no tools). A BACKEND note, like the round-cap
@@ -1690,14 +1558,12 @@ async def _claim_redirect(
     span_meta: dict,
     nudge_for: Callable[[bool], str],
     redirect_note: str,
-    card_raised: bool,
     out_of_rounds: bool,
     messages: Sequence[dict],
     advertised: Sequence[dict],
     tool_ctx: tools.ToolContext,
     device_names: Sequence[str],
     user_message: str,
-    consents_emitted: int,
     emit: Callable[[str | None], None],
 ) -> _ClaimRedirect:
     """Regenerate ONCE, with tools, after a REPLACE-class guard fired.
@@ -1720,15 +1586,9 @@ async def _claim_redirect(
         correction persists exactly as before, the turn stays plumbing (not
         ingested), and the span names the rejecting guard. redirected=False.
 
-    Three mechanical PRECONDITIONS, checked before anything is generated, because
+    Two mechanical PRECONDITIONS, checked before anything is generated, because
     a redirect is an ACTION and not just a re-word:
 
-      * NO CARD IS UP. Once a call has raised an approval card the tool loop is
-        CLOSED for the rest of the turn; a redirect that dispatched anything
-        after that would run work the operator is still deciding about. (The
-        consent guard cannot fire with a card up — has_pending_consent is then
-        True — but the STATE guard can: a closed narration round that says "the
-        device is offline" is exactly the shape, and review found this door open.)
       * NOTHING RAN YET (guards.ran_a_tool over this turn's spans). If round 1
         really executed the tool and round 2 merely narrated about it,
         redirecting would run it a SECOND time — a duplicated side effect, which
@@ -1745,10 +1605,9 @@ async def _claim_redirect(
     Either way the correction ships with a stated reason in the span.
 
     The regeneration is judged by the FULL mechanical set against LIVE facts,
-    not the stale ones: if the redirect's own call raised a card, an "awaiting
-    your approval" reply is then TRUE and must not be corrected; if it ran a
-    device tool, a state report is then backed. The same booleans that make each
-    guard fire or stay silent, read again after the tools ran.
+    not the stale ones: if the redirect's own call ran a device tool, a state
+    report is then backed; if it listed, a listing is. The same facts that make
+    each guard fire or stay silent, read again after the tools ran.
 
     FAIL-OPEN throughout: any exception ships the correction, never an error
     frame and never a lost turn.
@@ -1772,13 +1631,9 @@ async def _claim_redirect(
         ran_a_tool = guards.ran_a_tool(turn.spans)
         span.meta["ran_a_tool"] = ran_a_tool
         blocked = (
-            "card_raised"
-            if card_raised
-            else (
-                "tools_already_ran"
-                if ran_a_tool
-                else ("out_of_rounds" if out_of_rounds else None)
-            )
+            "tools_already_ran"
+            if ran_a_tool
+            else ("out_of_rounds" if out_of_rounds else None)
         )
         if blocked is not None:
             # No regeneration at all: doing the work twice, or past the cap, is
@@ -1789,11 +1644,7 @@ async def _claim_redirect(
             )
             emit(_frame({"correction": correction_text}))
             return _ClaimRedirect(
-                correction_text,
-                False,
-                consents_emitted,
-                read_ephemeral,
-                markup_note=_markup_note(),
+                correction_text, False, read_ephemeral, markup_note=_markup_note()
             )
 
         try:
@@ -1832,9 +1683,7 @@ async def _claim_redirect(
                         "tool_calls": [call.as_openai() for call in calls],
                     }
                 )
-                consents_emitted, read_ephemeral, _raised = await _dispatch_calls(
-                    turn, tool_ctx, calls, attempt, emit, consents_emitted
-                )
+                read_ephemeral = await _dispatch_calls(turn, tool_ctx, calls, attempt, emit)
                 # One final round to say what happened, with the tool loop
                 # CLOSED (no tools advertised) — the redirect gets one attempt at
                 # the action, never a loop of its own. A call it makes anyway is
@@ -1856,11 +1705,7 @@ async def _claim_redirect(
             )
             emit(_frame({"correction": correction_text}))
             return _ClaimRedirect(
-                correction_text,
-                False,
-                consents_emitted,
-                read_ephemeral,
-                markup_note=_markup_note(),
+                correction_text, False, read_ephemeral, markup_note=_markup_note()
             )
 
         if markup_refused:
@@ -1890,19 +1735,13 @@ async def _claim_redirect(
                 )
             emit(_frame({"correction": correction_text}))
             return _ClaimRedirect(
-                correction_text,
-                False,
-                consents_emitted,
-                read_ephemeral,
-                markup_note=_markup_note(),
+                correction_text, False, read_ephemeral, markup_note=_markup_note()
             )
 
         span.meta["redirected"] = True
         emit(_frame({"correction": redirect_note}))
         emit(_frame({"t": corrected}))
-        return _ClaimRedirect(
-            corrected, True, consents_emitted, read_ephemeral, markup_note=_markup_note()
-        )
+        return _ClaimRedirect(corrected, True, read_ephemeral, markup_note=_markup_note())
 
 
 async def _run_turn(
@@ -1916,8 +1755,6 @@ async def _run_turn(
     model: str,
     max_tool_rounds: int,
     emit: Callable[[str | None], None],
-    *,
-    message_kind: str = MESSAGE_KIND_CHAT,
 ) -> None:
     """The whole turn, run to completion regardless of who is still watching.
 
@@ -1963,26 +1800,14 @@ async def _run_turn(
         snippets = await _recall(app, turn, person, message)
         messages = base_messages(model, snippets, history, message)
         advertised = tools.advertised_tools()
-        # conversation_id rides the context so a consent the policy kernel
-        # raises this turn is bound to the conversation it was asked in, and
-        # renders inline where the operator can see it (a NULL conversation_id
-        # would hide the card). consent_sink is this turn's OWN list — the
-        # funnel appends a card_spec to it on REQUIRE_CONSENT, and the loop
-        # below diffs it after each tool call to emit the {consent} frame.
         tool_ctx = tools.context_for(
             app,
             person,
-            conversation_id=conversation_id,
-            consent_sink=[],
             # The turn's own facts channel: a call that DETERMINED something
             # (a device's connectivity) records it here even when it then
             # refused, and _run_tool copies each call's slice onto its span.
             facts_sink=[],
         )
-        # How much of tool_ctx.consent_sink has already been streamed — a
-        # count, not a "seen ids" set, because the sink is append-only for
-        # this turn and nothing upstream ever removes an entry from it.
-        consents_emitted = 0
         # Did this turn run an EPHEMERAL tool (a live, point-in-time read like a
         # web fetch)? Its result goes stale, so the turn is not ingested into
         # long-term memory — otherwise recall would serve the cached snapshot as
@@ -1997,14 +1822,6 @@ async def _run_turn(
         rounds_allowed = max(1, max_tool_rounds)
         failure: str | None = None
         out_of_rounds = False
-        # Set the moment any call this turn raises a card (awaiting=True). From
-        # then on the tool loop is CLOSED: the next gateway round is the LAST,
-        # made with NO tools advertised so the model has to answer in text,
-        # and a call it emits anyway is refused (never dispatched) and the
-        # turn ends. Mechanical, not a prompt: the owner's walk had the model
-        # wander through other tools to the round cap after a card, so his
-        # approve landed mid-stream and the web's auto-continue never fired.
-        card_raised = False
 
         def _stream_delta(delta: str) -> None:
             """Every content delta, live and accumulated: the turn's durable text
@@ -2018,7 +1835,7 @@ async def _run_turn(
                 turn,
                 model,
                 messages,
-                () if card_raised else advertised,
+                advertised,
                 round_number=round_number,
                 on_delta=_stream_delta,
             )
@@ -2026,26 +1843,6 @@ async def _run_turn(
             if failure is not None:
                 break
             if not calls:
-                break
-            if card_raised:
-                # The narration round asked for tools anyway. Nothing is
-                # dispatched: each call is answered with the stated pending
-                # result, recorded as a refused span, and the turn ends here
-                # — not at the round cap, and not with the cap's note.
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": round_text,
-                        "tool_calls": [call.as_openai() for call in calls],
-                    }
-                )
-                for call in calls:
-                    emit(_activity_frame(call.name, "start"))
-                    result = _refuse_pending(turn, call)
-                    emit(_activity_frame(call.name, "error", result))
-                    messages.append(
-                        {"role": "tool", "tool_call_id": call.id, "content": result}
-                    )
                 break
             if round_number == rounds_allowed:
                 out_of_rounds = True
@@ -2062,11 +1859,8 @@ async def _run_turn(
                     "tool_calls": [call.as_openai() for call in calls],
                 }
             )
-            consents_emitted, ran_ephemeral, raised = await _dispatch_calls(
-                turn, tool_ctx, calls, messages, emit, consents_emitted
-            )
+            ran_ephemeral = await _dispatch_calls(turn, tool_ctx, calls, messages, emit)
             read_ephemeral = read_ephemeral or ran_ephemeral
-            card_raised = card_raised or raised
 
         if failure is not None:
             stated = failure
@@ -2083,7 +1877,7 @@ async def _run_turn(
             return
 
         # A note the BACKEND wrote about how the turn ended — the round cap, or a
-        # card left pending. It is not the model's prose and it is not a claim:
+        # refused markup call. It is not the model's prose and it is not a claim:
         # it is the only record the operator has that the turn stopped early, so
         # it must survive every REPLACE-class composition below (found in review:
         # a state-claim correction on a capped turn silently swallowed the cap
@@ -2166,14 +1960,6 @@ async def _run_turn(
             note = f"\n\n{backend_note}" if parts else backend_note
             parts.append(note)
             emit(_frame({"t": note}))
-        elif card_raised and not "".join(parts).strip():
-            # A card is pending and the model said nothing in text (it only
-            # tried more tools, or went quiet). The turn must still END, ok,
-            # so the operator's decision lands on a finished turn — the note
-            # states the one true thing about it.
-            backend_note = PENDING_APPROVAL_NOTE
-            parts.append(PENDING_APPROVAL_NOTE)
-            emit(_frame({"t": PENDING_APPROVAL_NOTE}))
         elif (
             streamed_scan.found
             and not "".join(parts).strip()
@@ -2209,16 +1995,16 @@ async def _run_turn(
             emit(DONE_FRAME)
             return
 
-        # The honesty guards: a reply is a claim, the spans (and the consent
-        # state) are the fact. Both run on the model's ACTUAL streamed reply —
+        # The honesty guards: a reply is a claim, the spans are the fact. All
+        # of them run on the model's ACTUAL streamed reply —
         # `text` is left untouched between them so each judges what the model
         # really said, not a copy already carrying the other's correction (a
         # correction sentence names no file/url and no pending state, so the
         # verdicts are the same either way; reading the raw reply just keeps
         # that guarantee obvious). Each is PURE and fail-OPEN: a guard that
         # crashes logs and yields no correction, never an error frame and never
-        # a lost reply. Derived from the spans/consent state, never the prompt
-        # (the prompt's honesty line still stands; this is the enforcement).
+        # a lost reply. Derived from the spans and the live registry, never the
+        # prompt (the prompt's honesty line still stands; this is the enforcement).
         #
         # What a fired guard does to the DURABLE record (persist + ingest, i.e.
         # what the NEXT turn's history_window feeds back to the model) differs
@@ -2235,7 +2021,7 @@ async def _run_turn(
         #  * consent_claim_check catches a reply whose WHOLE stance is a
         #    fabricated pending state ("that fetch is awaiting your approval").
         #    Nothing there is salvageable — the entire message is predicated on
-        #    an approval that does not exist. Appending and persisting BOTH
+        #    an approval step that does not exist. Appending and persisting BOTH
         #    would feed the lie back through history_window and train the small
         #    model to pattern-complete "awaiting approval" next turn instead of
         #    calling the tool (the context-poisoning loop the owner's walk hit).
@@ -2279,28 +2065,10 @@ async def _run_turn(
                 span.meta["backing_span"] = False
             emit(_frame({"correction": correction.text}))
 
-        # The pending-approval fact is MECHANICAL — a card raised THIS turn (the
-        # sink is non-empty), or one still pending in this conversation. A
-        # lookup that RAISES fails toward has_pending=True, so a database blip
-        # never turns an honest awaiting reply into a false correction (that
-        # would make the guard the liar).
-        this_turn_raised_a_card = bool(tool_ctx.consent_sink)
-        if this_turn_raised_a_card:
-            has_pending_consent = True
-        else:
-            try:
-                has_pending_consent = bool(
-                    await consents.pending_for_conversation(pool, conversation_id)
-                )
-            except Exception:
-                logger.exception(
-                    "pending-consent lookup failed; treating the turn as having "
-                    "a pending card so an honest awaiting reply is not falsely "
-                    "corrected"
-                )
-                has_pending_consent = True
+        # The pending-approval guard consults NO state: there is no approval
+        # step, so a reply asserting one is a fabrication by construction.
         try:
-            consent_correction = guards.consent_claim_check(text, has_pending_consent)
+            consent_correction = guards.consent_claim_check(text)
         except Exception:
             logger.exception("consent-claim guard raised; shipping the reply uncorrected")
             consent_correction = None
@@ -2320,31 +2088,23 @@ async def _run_turn(
                 model,
                 claim_kind="consent_claim",
                 correction_text=consent_correction.text,
-                # The fact the guard fired on, recorded as the caller measured
-                # it (the guard only fires on False).
-                span_meta={"has_pending_consent": has_pending_consent},
-                nudge_for=lambda ran: consent_redirect_nudge(
-                    has_pending_consent=has_pending_consent, ran_a_tool=ran
-                ),
+                # The guard fired on the text alone — there is no external
+                # fact to record; the redirect records ran_a_tool itself.
+                span_meta={},
+                nudge_for=lambda ran: consent_redirect_nudge(ran_a_tool=ran),
                 redirect_note=CONSENT_REDIRECT_NOTE,
-                # A card up, or a turn already at its round cap, gets no extra
-                # dispatch through the redirect's side door.
-                card_raised=card_raised,
+                # A turn already at its round cap gets no extra dispatch
+                # through the redirect's side door.
                 out_of_rounds=out_of_rounds,
                 messages=messages,
-                # Defensive, and mechanical: a turn that raised a card has
-                # has_pending_consent True, so the guard cannot have fired —
-                # but if it ever could, the tool loop stays closed.
-                advertised=() if card_raised else advertised,
+                advertised=advertised,
                 tool_ctx=tool_ctx,
                 device_names=device_names,
                 user_message=message,
-                consents_emitted=consents_emitted,
                 emit=emit,
             )
             consent_text = outcome.text
             consent_redirected = outcome.redirected
-            consents_emitted = outcome.consents_emitted
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
             backend_note = backend_note or outcome.markup_note
         # The turn's single redirect budget: ONE regeneration per turn, first
@@ -2354,7 +2114,7 @@ async def _run_turn(
         # The capability-denial guard, on the same raw reply, same fail-OPEN
         # contract. Derived from the live tool registry (tools.tool_names()): a
         # denial is only false when its satisfying tool is actually available, so
-        # granting/removing a tool moves the verdict by itself.
+        # registering/removing a tool moves the verdict by itself.
         try:
             capability_correction = guards.capability_claim_check(text, tools.tool_names())
         except Exception:
@@ -2421,19 +2181,16 @@ async def _run_turn(
                         device=state_claim.device, ran_a_tool=ran
                     ),
                     redirect_note=STATE_REDIRECT_NOTE,
-                    card_raised=card_raised,
                     out_of_rounds=out_of_rounds,
                     messages=messages,
-                    advertised=() if card_raised else advertised,
+                    advertised=advertised,
                     tool_ctx=tool_ctx,
                     device_names=device_names,
                     user_message=message,
-                    consents_emitted=consents_emitted,
                     emit=emit,
                 )
                 state_text = outcome.text
                 state_redirected = outcome.redirected
-                consents_emitted = outcome.consents_emitted
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
                 backend_note = backend_note or outcome.markup_note
                 redirect_spent = True
@@ -2523,19 +2280,16 @@ async def _run_turn(
                     span_meta=listing_meta,
                     nudge_for=lambda ran: presented_listing_redirect_nudge(ran_a_tool=ran),
                     redirect_note=PRESENTED_LISTING_REDIRECT_NOTE,
-                    card_raised=card_raised,
                     out_of_rounds=out_of_rounds,
                     messages=messages,
-                    advertised=() if card_raised else advertised,
+                    advertised=advertised,
                     tool_ctx=tool_ctx,
                     device_names=device_names,
                     user_message=message,
-                    consents_emitted=consents_emitted,
                     emit=emit,
                 )
                 listing_text = outcome.text
                 listing_redirected = outcome.redirected
-                consents_emitted = outcome.consents_emitted
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
                 backend_note = backend_note or outcome.markup_note
                 redirect_spent = True
@@ -2721,18 +2475,15 @@ async def _run_turn(
                 },
                 nudge_for=lambda ran: bare_intent_redirect_nudge(ran_a_tool=ran),
                 redirect_note=DEFERRAL_NOTE,
-                card_raised=card_raised,
                 out_of_rounds=out_of_rounds,
                 messages=messages,
-                advertised=() if card_raised else advertised,
+                advertised=advertised,
                 tool_ctx=tool_ctx,
                 device_names=device_names,
                 user_message=message,
-                consents_emitted=consents_emitted,
                 emit=emit,
             )
             bare_intent_redirected = outcome.redirected
-            consents_emitted = outcome.consents_emitted
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
 
             if not bare_intent_redirected and guards.ran_a_tool(turn.spans):
@@ -2808,46 +2559,21 @@ async def _run_turn(
         # _collect_completion rather than a scanned round. A no-op on clean text.
         persisted = without_markup(persisted)
 
-        # A reply that is ONLY the pending-approval note is choreography: it says
-        # the turn ended with a card up, nothing more. Persisted so the operator
-        # sees it, marked so no later turn reads it back and learns to narrate a
-        # pending state. Compared to the exact constant — the note is generated
-        # HERE, so this is an identity check, never prose-sniffing.
-        await _persist_assistant(
-            pool,
-            conversation_id,
-            persisted,
-            MESSAGE_KIND_PLUMBING
-            if persisted.strip() == PENDING_APPROVAL_NOTE
-            else MESSAGE_KIND_CHAT,
-        )
+        await _persist_assistant(pool, conversation_id, persisted)
         # Memory hygiene: a guarded consent/capability turn is interaction
-        # PLUMBING, not knowledge. A turn that raised an approval card
-        # (consent_sink non-empty), that the consent guard had to correct, or
-        # that the capability guard had to correct is "awaiting approval" / "I
+        # PLUMBING, not knowledge. A turn the consent guard had to correct, or
+        # that the capability guard had to correct, is "awaiting approval" / "I
         # can't do that" noise; ingesting it makes /recall re-inject that noise
         # into later turns — even in other conversations, since memory is
         # per-person — which trains the model to narrate a pending state or
         # disown a tool instead of calling it (the cross-conversation poison the
         # owner's walk hit). The transcript still persists above; only the
-        # durable MEMORY must not carry it. Nothing is lost: the funnel raises a
-        # fresh card mechanically the next time the model calls the tool.
-        # A consent guard whose REDIRECT succeeded is the exception: the durable
-        # reply is then the regenerated one, which did the work instead of
-        # narrating a pending state, so it is ordinary knowledge again. (A card
-        # raised BY the redirect still lands in the sink and still marks the
-        # turn plumbing, through the first clause.)
-        #
-        # And a turn whose USER MESSAGE is plumbing is plumbing whatever else
-        # happens in it — including the happy path where the approved action
-        # runs cleanly and no new card is raised. Otherwise the ingest carries
-        # "You're approved: <summary>. Please go ahead now." into per-person
-        # memory, where recall re-injects the choreography into later turns in
-        # other conversations: exactly the poisoning the kind column exists to
-        # stop, arriving by the other door.
+        # durable MEMORY must not carry it. A consent guard whose REDIRECT
+        # succeeded is the exception: the durable reply is then the regenerated
+        # one, which did the work instead of narrating a pending state, so it is
+        # ordinary knowledge again.
         plumbing_turn = (
-            bool(tool_ctx.consent_sink)
-            or (consent_correction is not None and not consent_redirected)
+            (consent_correction is not None and not consent_redirected)
             or capability_correction is not None
             # An unchecked live-state claim is the same kind of noise: ingesting
             # "the device is still offline" makes recall serve that falsehood
@@ -2867,14 +2593,13 @@ async def _run_turn(
             # back in as if it were an answer. A redirect that stood either
             # ran a tool or said plainly it did not — ordinary knowledge again.
             or (bare_intent is not None and not bare_intent_redirected)
-            or message_kind == MESSAGE_KIND_PLUMBING
         )
         # A turn that only READ live external data (a web fetch — an ephemeral
         # tool) is a point-in-time snapshot, not durable knowledge. Ingesting it
         # makes recall serve a stale page as "the latest": the model regurgitates
         # the cached result instead of fetching again (byte-identical, same old
         # timestamp — the owner's walk caught exactly this). So skip it too; the
-        # next "what's the latest?" re-fetches and raises a fresh card.
+        # next "what's the latest?" re-fetches.
         if not plumbing_turn and not read_ephemeral:
             _queue_ingest(
                 app, turn, person, conversation_id, {"user": message, "assistant": persisted}
@@ -2930,65 +2655,24 @@ async def chat_stream(
     conversation = await conversations.resolve(pool, person, body.conversation_id)
     conversation_id = conversation["id"]
 
-    # A continuation the web sends after an approve is PLUMBING: the operator
-    # clicked Approve, and this message exists so the turn can resume. It is
-    # persisted and shown exactly like any other message — this turn even reads
-    # it as `message` below, so "go ahead" still works — but it is marked so
-    # LATER turns never read the choreography back (migration 014).
-    #
-    # VERIFIED against the consents table, never trusted: a continuation_of
-    # naming no real consent is ignored and the row is an ordinary 'chat'
-    # message. Fail-open by design — the flag only ever REMOVES a row from
-    # future history, so a lookup that cannot confirm it must not turn a real
-    # message into an error, and must not silently hide it either.
-    kind = MESSAGE_KIND_CHAT
-    resumed_id = _as_uuid(body.continuation_of)
-    if resumed_id is not None:
-        try:
-            # SCOPED, never a bare existence check: citing an id is a request to
-            # hide a message from every later history window, and every
-            # authenticated caller can list ids (GET /api/v1/consents). The card
-            # must be THIS conversation's, THIS person's, and APPROVED — the
-            # only state a continuation can honestly resume.
-            resumed = await consents.get_for_continuation(
-                pool,
-                resumed_id,
-                conversation_id=conversation_id,
-                person_id=person.id,
-            )
-        except Exception:
-            logger.exception(
-                "continuation_of lookup failed; persisting the message as ordinary chat"
-            )
-            resumed = None
-        if resumed is not None:
-            kind = MESSAGE_KIND_PLUMBING
-
     message_id = await pool.fetchval(
-        "INSERT INTO messages (conversation_id, role, content, kind) "
-        "VALUES ($1, 'user', $2, $3) RETURNING id",
+        "INSERT INTO messages (conversation_id, role, content) "
+        "VALUES ($1, 'user', $2) RETURNING id",
         conversation_id,
         message,
-        kind,
     )
     # user/assistant only, because that is all the messages table holds. A
     # turn's tool calls and their results live in that turn's transcript and
     # in its spans, and are deliberately not replayed into the next turn: a
     # follow-up like "add milk to that list" works because she reads the
     # file again, not because a stale copy of it is still in the prompt.
-    #
-    # And never a PLUMBING row: approval choreography is how the system resumes
-    # a turn, not conversation, and replaying it is what trains a small model to
-    # narrate "awaiting approval" instead of acting (history_window drops them
-    # too, so the property does not rest on this WHERE alone).
     history = history_window(
         await pool.fetch(
-            "SELECT role, content, kind FROM messages "
-            "WHERE conversation_id = $1 AND id <> $2 AND kind = $3 "
-            "ORDER BY created_at DESC, id DESC LIMIT $4",
+            "SELECT role, content FROM messages "
+            "WHERE conversation_id = $1 AND id <> $2 "
+            "ORDER BY created_at DESC, id DESC LIMIT $3",
             conversation_id,
             message_id,
-            MESSAGE_KIND_CHAT,
             HISTORY_MAX_MESSAGES,
         )
     )
@@ -3021,7 +2705,6 @@ async def chat_stream(
             model,
             max_tool_rounds,
             queue.put_nowait,
-            message_kind=kind,
         )
     )
 

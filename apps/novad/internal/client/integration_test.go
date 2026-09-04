@@ -32,10 +32,9 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 	const deviceID = "dev-integration-1"
 
 	type observed struct {
-		result  map[string]any
-		audits  []map[string]any
-		authOK  bool
-		homeDir string
+		result map[string]any
+		audits []map[string]any
+		authOK bool
 	}
 	obsCh := make(chan observed, 1)
 
@@ -65,7 +64,6 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 		sigHex, _ := auth["sig"].(string)
 		sig, _ := hex.DecodeString(sigHex)
 		obs.authOK = ed25519.Verify(devPub, nonce, sig)
-		obs.homeDir, _ = auth["home_dir"].(string)
 		if !obs.authOK {
 			_ = c.Close(4401, "bad auth")
 			obsCh <- obs
@@ -120,17 +118,12 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 		AuditFile: filepath.Join(home, ".local", "state", "novad", "audit.jsonl"),
 		Home:      home,
 	}
-	paths.DenyRootsFile = filepath.Join(paths.ConfigDir, "deny_roots")
-	deny, err := config.LoadDenyRoots(paths)
-	if err != nil {
-		t.Fatal(err)
-	}
 	auditLog, err := audit.Open(paths.AuditFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Config{DeviceID: deviceID, Name: "itest", Server: srv.URL, CorePubKey: hex.EncodeToString(corePub)}
-	agent, err := New(cfg, devPriv, deny, auditLog, home, nil)
+	agent, err := New(cfg, devPriv, auditLog, home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,11 +142,6 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 
 	if !obs.authOK {
 		t.Fatal("the device's challenge signature did not verify over the raw nonce")
-	}
-	// The auth frame's additive home_dir is the agent's home, verbatim — core
-	// stores it (after the signature verifies) as the suggested first fs root.
-	if obs.homeDir != home {
-		t.Errorf("auth frame home_dir = %q, want the agent's home %q", obs.homeDir, home)
 	}
 	if obs.result == nil {
 		t.Fatal("no result frame received")
@@ -204,17 +192,12 @@ func buildAgent(t *testing.T, serverURL, deviceID, corePubHex string, devPriv ed
 		AuditFile: filepath.Join(home, ".local", "state", "novad", "audit.jsonl"),
 		Home:      home,
 	}
-	paths.DenyRootsFile = filepath.Join(paths.ConfigDir, "deny_roots")
-	deny, err := config.LoadDenyRoots(paths)
-	if err != nil {
-		t.Fatal(err)
-	}
 	auditLog, err := audit.Open(paths.AuditFile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := config.Config{DeviceID: deviceID, Name: "itest", Server: serverURL, CorePubKey: corePubHex}
-	agent, err := New(cfg, devPriv, deny, auditLog, home, nil)
+	agent, err := New(cfg, devPriv, auditLog, home, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

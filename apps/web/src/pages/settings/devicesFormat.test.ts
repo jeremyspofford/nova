@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  ONLINE_THRESHOLD_SECONDS,
-  deviceLiveness,
-  fsRootRefusal,
-  grantsRefusal,
-  enrollCommand,
-  CAPABILITY_GROUPS,
-} from './devicesFormat'
+import { ONLINE_THRESHOLD_SECONDS, deviceLiveness, enrollCommand } from './devicesFormat'
 import type { Device } from '../../lib/api'
 
 function device(overrides: Partial<Device> = {}): Device {
@@ -15,14 +8,11 @@ function device(overrides: Partial<Device> = {}): Device {
     name: 'laptop',
     platform: 'linux',
     hostname: 'thinkpad',
-    capabilities: ['system.info'],
-    fs_roots: [],
     enrolled_at: '2026-08-30T00:00:00Z',
     last_seen: null,
     revoked_at: null,
     // Always false from the REST list by design — deviceLiveness must ignore it.
     connected: false,
-    home_dir: null,
     ...overrides,
   }
 }
@@ -75,77 +65,10 @@ describe('deviceLiveness — DERIVED from last_seen, never from `connected`', ()
   })
 })
 
-describe('fsRootRefusal — fast client-side feedback the backend also enforces', () => {
-  it('accepts an absolute path (null = no refusal)', () => {
-    expect(fsRootRefusal('/home/jeremy/projects')).toBeNull()
-  })
-
-  it('refuses a relative path with a stated reason', () => {
-    const reason = fsRootRefusal('projects/notes')
-    expect(reason).not.toBeNull()
-    expect(reason).toMatch(/absolute/i)
-  })
-
-  it('refuses an empty path', () => {
-    expect(fsRootRefusal('   ')).not.toBeNull()
-  })
-
-  it('refuses a ".." path SEGMENT but accepts ".." inside a name (mirrors the backend)', () => {
-    // A real ".." segment escapes the root — refused, like clean_fs_roots.
-    expect(fsRootRefusal('/home/jeremy/../etc')).toMatch(/\.\./)
-    // But ".." inside a directory NAME is a real path the backend accepts;
-    // refusing it here would be a false refusal.
-    expect(fsRootRefusal('/home/jeremy/my..project')).toBeNull()
-  })
-})
-
 describe('enrollCommand', () => {
   it('is the exact T3 CLI one-liner, with the origin and the code', () => {
     expect(enrollCommand('https://nova.example', 'A1B2C3D4')).toBe(
       'novad enroll --server https://nova.example --code A1B2C3D4',
     )
-  })
-})
-
-describe('CAPABILITY_GROUPS — the 8 known capabilities in order', () => {
-  it('groups reads then actions, all 8 tokens present with labels', () => {
-    const tokens = CAPABILITY_GROUPS.flatMap(g => g.caps.map(c => c.token))
-    expect(tokens).toEqual([
-      'system.info',
-      'system.notify',
-      'fs.list',
-      'fs.read',
-      'apps.list',
-      'fs.write',
-      'apps.launch',
-      'shell.exec',
-    ])
-    for (const group of CAPABILITY_GROUPS) {
-      for (const cap of group.caps) expect(cap.label.length).toBeGreaterThan(0)
-    }
-  })
-})
-
-describe('grantsRefusal — an fs.* grant with no root is dead on arrival (mirrors core)', () => {
-  it('refuses fs.list with no roots, naming the capability and suggesting the home', () => {
-    const refusal = grantsRefusal(['system.info', 'fs.list'], [], '/home/jeremy')
-    expect(refusal).toContain('fs.list')
-    expect(refusal).toContain('/home/jeremy')
-    expect(refusal).toMatch(/needs at least one filesystem root/)
-  })
-
-  it('names every fs capability that needs a root, sorted, with no suggestion when no home is known', () => {
-    const refusal = grantsRefusal(new Set(['fs.write', 'fs.read', 'shell.exec']), [], null)
-    expect(refusal).toMatch(/^fs\.read, fs\.write need at least one filesystem root/)
-    expect(refusal).not.toContain('e.g.')
-  })
-
-  it('is null when a root is present', () => {
-    expect(grantsRefusal(['fs.list', 'fs.read'], ['/home/jeremy'], '/home/jeremy')).toBeNull()
-  })
-
-  it('is null when no fs capability is granted, roots or not', () => {
-    expect(grantsRefusal(['system.info', 'shell.exec', 'apps.launch'], [], '/home/jeremy')).toBeNull()
-    expect(grantsRefusal([], [], null)).toBeNull()
   })
 })

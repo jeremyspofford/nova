@@ -8,29 +8,10 @@ import (
 	"strings"
 )
 
-// denyCheck runs the deny-roots backstop FIRST, before any fs syscall. This is
-// mechanical-over-prompts at the edge: it refuses regardless of what core
-// signed. A missing deny list is itself a refusal — the backstop is not
-// optional.
-func denyCheck(d Deps, path string) *Outcome {
-	if d.Deny == nil {
-		o := fail("fs is unavailable: the deny-roots backstop is not loaded")
-		return &o
-	}
-	if forbidden, reason := d.Deny.Forbids(path); forbidden {
-		o := fail("refused: %s", reason)
-		return &o
-	}
-	return nil
-}
-
 func fsList(args map[string]any, d Deps) Outcome {
 	path, ok := strArg(args, "path")
 	if !ok || path == "" {
 		return fail("fs.list needs a 'path'")
-	}
-	if refusal := denyCheck(d, path); refusal != nil {
-		return *refusal
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil {
@@ -57,9 +38,6 @@ func fsRead(args map[string]any, d Deps) Outcome {
 	path, ok := strArg(args, "path")
 	if !ok || path == "" {
 		return fail("fs.read needs a 'path'")
-	}
-	if refusal := denyCheck(d, path); refusal != nil {
-		return *refusal
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -98,9 +76,6 @@ func fsWrite(args map[string]any, d Deps) Outcome {
 	content, ok := strArg(args, "content")
 	if !ok {
 		return fail("fs.write needs 'content'")
-	}
-	if refusal := denyCheck(d, path); refusal != nil {
-		return *refusal
 	}
 	// The cap is MECHANICAL and defence-in-depth: the daemon refuses an oversize
 	// write even for a fully-verified, core-signed envelope (core caps it too).

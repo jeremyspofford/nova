@@ -1,7 +1,7 @@
 {
   "id": "stays-on-topic-pixel-after-openai",
   "suite": "agent_quality",
-  "suite_version": 4,
+  "suite_version": 5,
   "setup": [
     {
       "user": "what's the latest on openai?",

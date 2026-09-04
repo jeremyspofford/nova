@@ -7,7 +7,6 @@ import { getSettings, putSetting, settingValue, type SettingDef } from '../../li
 import { AppearanceSection } from './AppearanceSection'
 import { AccountSection } from './AccountSection'
 import { ModelsSection } from './ModelsSection'
-import { AutonomySection } from './AutonomySection'
 import { DevicesSection } from './DevicesSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
 
@@ -116,7 +115,6 @@ export function SettingsPage() {
               checked={responsivenessCheck}
               onChanged={value => updateSettingValue('agents.responsiveness_check', value)}
             />
-            <AutonomySection />
             <DevicesSection />
           </>
         )}

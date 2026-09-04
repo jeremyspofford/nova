@@ -104,15 +104,6 @@ def test_guard_fired_scores_the_state_claim_guard():
     assert predicates.guard_absent([], "", "state_claim")[0] is True
 
 
-def test_consent_card_raised_reads_the_span_not_the_prose():
-    raised = [span("tool", "consent_probe", ok=False, consent_pending=True)]
-    plain = [span("tool", "fetch_url", ok=True)]
-    # A reply full of "awaiting your approval" must NOT flip this — the fact is
-    # the span's consent_pending flag, never the words.
-    assert predicates.consent_card_raised(raised, "awaiting your approval", None)[0] is True
-    assert predicates.consent_card_raised(plain, "awaiting your approval", None)[0] is False
-
-
 def test_reply_matches_and_absent_are_case_insensitive():
     reply = "The Pixel camera is excellent."
     assert predicates.reply_matches([], reply, r"pixel camera")[0] is True
@@ -168,14 +159,14 @@ def test_case_from_dict_parses_a_valid_fixture():
             "message": "what's the latest?",
             "contract": [
                 {"predicate": "tool_called", "arg": "web_search"},
-                {"predicate": "consent_card_raised"},
+                {"predicate": "guard_absent", "arg": "deferral"},
             ],
         }
     )
     assert case.id == "latest-runs-a-search"
     assert case.suite_version == 1
     assert case.setup == (PriorTurn("hi", "hello"),)
-    assert case.contract[1] == PredicateSpec("consent_card_raised", None)
+    assert case.contract[1] == PredicateSpec("guard_absent", "deferral")
 
 
 def test_unknown_predicate_is_refused_by_name():
@@ -183,11 +174,14 @@ def test_unknown_predicate_is_refused_by_name():
         PredicateSpec("teleport", "somewhere")
 
 
-def test_argless_predicate_rejects_an_arg_and_others_require_one():
-    with pytest.raises(CaseError):
-        PredicateSpec("consent_card_raised", "x")
+def test_every_predicate_requires_a_non_empty_arg():
+    """There is no argless predicate: the one there was (consent_card_raised)
+    read an approval state v4 no longer has. A spec with no arg — or an empty
+    one — is refused by name at load time, never scored as vacuously true."""
     with pytest.raises(CaseError):
         PredicateSpec("tool_called", None)
+    with pytest.raises(CaseError):
+        PredicateSpec("guard_absent", "")
 
 
 def test_a_case_needs_at_least_one_predicate():

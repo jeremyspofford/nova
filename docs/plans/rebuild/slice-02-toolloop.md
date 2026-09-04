@@ -44,7 +44,10 @@ queued.
 ### T2 — Tool registry + ring-0 loop in core (L)
 - Code-defined tool registry (name, JSON schema, executor) — no DB, no
   grants yet (S3 brings the policy kernel; S2's blast radius is contained
-  by the toolset itself).
+  by the toolset itself). [Footnote 2026-09-03: "S3 brings the policy
+  kernel" → none, by owner ruling: every agent holds every tool, and "no
+  DB, no grants" is permanently true — the blast radius is what the tools
+  can reach and her judgment. See no-approvals.md.]
 - Toolset (exactly): `workspace_write_file`, `workspace_read_file`,
   `workspace_list_files` — all inside a new dedicated volume
   (v4_workspace) mounted at /data/workspace, path-guarded like memory's
@@ -90,7 +93,9 @@ queued.
 - Full DoD walk performed and evidenced; stack left running and healthy.
 
 ## Out of scope (named so nobody drifts)
-Policy kernel/consents (S3), any daemon capability, model/wizard surface
+Policy kernel/consents (S3) [footnote 2026-09-03: built in S3, removed by
+owner ruling — see no-approvals.md; it does not come back], any daemon
+capability, model/wizard surface
 changes (the model-and-engine slice carries those: SGLang onboarding, fit
 warnings, change-model UI, re-run onboarding, curated diversification),
 guard family beyond stated-error honesty (S3+), memory learning (S13).

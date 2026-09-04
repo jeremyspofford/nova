@@ -137,15 +137,9 @@ class Spy:
 
 
 async def _arm_auto(pool, monkeypatch, name: str, spy: Spy, **fields) -> Spy:
-    """A private AUTO-disposition tool, so its call really RUNS (no card)."""
+    """A private tool in the registry. Registering it is all it takes for its
+    call to RUN — there is no disposition row and no card (no approvals)."""
     monkeypatch.setitem(tools.REGISTRY, name, Tool(name, "d", NO_SCHEMA, spy, **fields))
-    await pool.execute(
-        "INSERT INTO action_classes (action_class, risk_tier, disposition, earned, "
-        "consecutive_successes) VALUES ($1, 'read', 'auto', false, 0) "
-        "ON CONFLICT (action_class) DO UPDATE SET disposition = 'auto', "
-        "earned = false, consecutive_successes = 0, updated_at = now()",
-        name,
-    )
     return spy
 
 

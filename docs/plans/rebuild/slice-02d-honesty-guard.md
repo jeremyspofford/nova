@@ -79,7 +79,9 @@ Mechanical, derived from spans, never LLM-judged; precision-first
 the same atomic trace close; comments self-contained; real-stack testing.
 
 ## Out of scope (S3 proper)
-The full policy kernel / consent / earned autonomy; capability/model/
+The full policy kernel / consent / earned autonomy [footnote 2026-09-03:
+built in S3, then removed by owner ruling — none of it comes back; the
+guard family is the whole control surface, see no-approvals.md]; capability/model/
 service claim verifiers beyond narration; forced-retry/regenerate (append-
 correction is this slice's mechanism — retry is a documented later
 enhancement).

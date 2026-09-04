@@ -28,18 +28,14 @@ BASE_URL = "http://test"
 OWNER = {"name": "jeremy", "password": "correct horse battery staple"}
 
 # Truncation order is child-before-parent so CASCADE never surprises us.
-# action_classes is deliberately NOT here: it carries the migration seed the
-# policy kernel reads, so it persists across tests like schema, not per-test
-# state. consents/governance_events ARE per-test state and are truncated.
-# core_signing_key is not here either, for the same reason and a sharper one:
-# it is created once per install and every enrolled device pins it, so it
-# behaves like schema. Tests that need it absent delete it themselves.
+# core_signing_key is deliberately NOT here: it is created once per install
+# and every enrolled device pins it, so it behaves like schema, not per-test
+# state. Tests that need it absent delete it themselves.
 _TABLES = (
     "device_audit",
     "devices",
     "pairing_codes",
     "governance_events",
-    "consents",
     "eval_runs",
     "eval_suite_runs",
     "turn_spans",
@@ -58,13 +54,11 @@ async def _build_schema() -> None:
     """Drop anything this suite owns, then migrate from empty."""
     conn = await asyncpg.connect(TEST_DSN)
     try:
-        # action_classes and core_signing_key are not in _TABLES (neither is
-        # ever per-test truncated) but must still be dropped for a clean
-        # re-migration, or migration 004's / 011's CREATE would collide with a
-        # leftover from a prior run.
+        # core_signing_key is not in _TABLES (never per-test truncated) but must
+        # still be dropped for a clean re-migration, or migration 011's CREATE
+        # would collide with a leftover from a prior run.
         await conn.execute(
-            f"DROP TABLE IF EXISTS {', '.join(_TABLES)}, action_classes, "
-            "core_signing_key CASCADE"
+            f"DROP TABLE IF EXISTS {', '.join(_TABLES)}, core_signing_key CASCADE"
         )
         await conn.execute("DROP TABLE IF EXISTS schema_migrations")
     finally:

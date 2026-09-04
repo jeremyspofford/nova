@@ -4,9 +4,8 @@ No test here touches the real network. The address guard is exercised directly,
 and the content behaviour runs the executor against a local ASGI fake mounted
 by origin — so the code under test is the real one (guard, redirect walk, byte
 cap, tag strip), not a rehearsal of it. These exercise the EXECUTOR at its own
-layer; fetch_url is consent-tiered, so its journey through the policy gate in
-dispatch() is covered by the funnel suite (test_policy_funnel.py), not here —
-running it through dispatch now would only ever return "awaiting approval".
+layer; its journey through dispatch() (name lookup, argument parse, schema
+check, run) is covered by the chat suites, not here.
 """
 from __future__ import annotations
 
@@ -46,8 +45,8 @@ def web_ctx(monkeypatch, tmp_path):
 
 async def _run(ctx, url: str) -> tuple[str, bool]:
     """Run the executor and adapt it to dispatch's (result, ok) shape — the
-    same shape the funnel produces, minus the policy gate this layer isn't
-    testing (a ToolFailure is a stated refusal; anything else propagates)."""
+    same shape dispatch produces, minus the parse/validate step this layer
+    isn't testing (a ToolFailure is a stated refusal; anything else propagates)."""
     try:
         return await web.fetch_url({"url": url}, ctx), True
     except ToolFailure as exc:

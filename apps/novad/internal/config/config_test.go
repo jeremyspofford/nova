@@ -12,13 +12,12 @@ func testPaths(t *testing.T) Paths {
 	t.Helper()
 	home := t.TempDir()
 	return Paths{
-		ConfigDir:     filepath.Join(home, ".config", "novad"),
-		StateDir:      filepath.Join(home, ".local", "state", "novad"),
-		ConfigFile:    filepath.Join(home, ".config", "novad", "config.json"),
-		KeyFile:       filepath.Join(home, ".config", "novad", "key"),
-		DenyRootsFile: filepath.Join(home, ".config", "novad", "deny_roots"),
-		AuditFile:     filepath.Join(home, ".local", "state", "novad", "audit.jsonl"),
-		Home:          home,
+		ConfigDir:  filepath.Join(home, ".config", "novad"),
+		StateDir:   filepath.Join(home, ".local", "state", "novad"),
+		ConfigFile: filepath.Join(home, ".config", "novad", "config.json"),
+		KeyFile:    filepath.Join(home, ".config", "novad", "key"),
+		AuditFile:  filepath.Join(home, ".local", "state", "novad", "audit.jsonl"),
+		Home:       home,
 	}
 }
 
@@ -77,121 +76,5 @@ func TestEnrolledReportsPresence(t *testing.T) {
 	}
 	if !p.Enrolled() {
 		t.Error("after Save the path should be enrolled")
-	}
-}
-
-func TestDenyRootsFileIsCreatedWithDefaults(t *testing.T) {
-	p := testPaths(t)
-	dl, err := LoadDenyRoots(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(p.DenyRootsFile); err != nil {
-		t.Errorf("deny_roots file was not created: %v", err)
-	}
-	// Every default must be present.
-	roots := map[string]bool{}
-	for _, r := range dl.Roots() {
-		roots[r] = true
-	}
-	for _, want := range DefaultDenyRoots(p) {
-		if !roots[want] {
-			t.Errorf("default deny root missing: %s", want)
-		}
-	}
-}
-
-func TestForbidsProtectsSshAndCustodyDirs(t *testing.T) {
-	p := testPaths(t)
-	dl, err := LoadDenyRoots(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cases := []struct {
-		path   string
-		forbid bool
-	}{
-		{filepath.Join(p.Home, ".ssh"), true},
-		{filepath.Join(p.Home, ".ssh", "id_ed25519"), true},
-		{filepath.Join(p.Home, ".gnupg", "secring.gpg"), true},
-		{p.KeyFile, true},   // under ConfigDir
-		{p.AuditFile, true}, // under StateDir
-		{filepath.Join(p.Home, "notes.txt"), false},
-		{filepath.Join(p.Home, ".ssh-notes"), false}, // sibling prefix, NOT under .ssh
-	}
-	for _, c := range cases {
-		got, reason := dl.Forbids(c.path)
-		if got != c.forbid {
-			t.Errorf("Forbids(%q) = %v (%s), want %v", c.path, got, reason, c.forbid)
-		}
-	}
-}
-
-func TestForbidsCatchesADotDotEscape(t *testing.T) {
-	p := testPaths(t)
-	dl, err := LoadDenyRoots(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// A path that lexically climbs back into ~/.ssh.
-	escape := filepath.Join(p.Home, "safe", "..", ".ssh", "id_ed25519")
-	if forbid, _ := dl.Forbids(escape); !forbid {
-		t.Errorf("a ..-escape into ~/.ssh must be refused: %s", escape)
-	}
-}
-
-// M4: a deny root can itself be a symlink. A target addressed via its REAL
-// resolved path must still be refused — the roots are resolved at load so the
-// check is symmetric with Forbids' target-side resolution.
-func TestForbidsResolvesASymlinkedDenyRoot(t *testing.T) {
-	p := testPaths(t)
-	real := filepath.Join(p.Home, "realsecrets")
-	if err := os.MkdirAll(real, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(p.Home, "secrets")
-	if err := os.Symlink(real, link); err != nil {
-		t.Fatal(err)
-	}
-	// deny_roots names the SYMLINK path.
-	if err := os.MkdirAll(p.ConfigDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(p.DenyRootsFile, []byte(link+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	dl, err := LoadDenyRoots(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Via the real resolved path:
-	if forbid, _ := dl.Forbids(filepath.Join(real, "id_ed25519")); !forbid {
-		t.Errorf("a target under the RESOLVED deny root must be refused: %s", real)
-	}
-	// And via the symlink path:
-	if forbid, _ := dl.Forbids(filepath.Join(link, "id_ed25519")); !forbid {
-		t.Errorf("a target under the symlink deny-root path must be refused: %s", link)
-	}
-}
-
-func TestForbidsCatchesASymlinkedParent(t *testing.T) {
-	p := testPaths(t)
-	dl, err := LoadDenyRoots(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Make ~/.ssh real, then a symlink ~/link -> ~/.ssh; a write to
-	// ~/link/authorized_keys must be refused via the resolved parent.
-	ssh := filepath.Join(p.Home, ".ssh")
-	if err := os.MkdirAll(ssh, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	link := filepath.Join(p.Home, "link")
-	if err := os.Symlink(ssh, link); err != nil {
-		t.Fatal(err)
-	}
-	target := filepath.Join(link, "authorized_keys") // does not exist yet
-	if forbid, reason := dl.Forbids(target); !forbid {
-		t.Errorf("a symlinked parent into ~/.ssh must be refused (%s): %s", reason, target)
 	}
 }

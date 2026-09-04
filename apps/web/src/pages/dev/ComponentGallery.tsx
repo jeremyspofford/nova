@@ -678,7 +678,7 @@ function CardGallery() {
             footer={
               <>
                 <Button variant="ghost" size="sm">Cancel</Button>
-                <Button size="sm">Approve</Button>
+                <Button size="sm">Confirm</Button>
               </>
             }
           >

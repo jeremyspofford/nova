@@ -239,9 +239,7 @@ async def test_clear_leaves_the_audit_trail_and_conversation_intact(owner_client
         "INSERT INTO turn_spans (turn_id, kind, name) VALUES ($1, 'tool', 'fetch_url')",
         turn_id,
     )
-    await pool.execute(
-        "INSERT INTO governance_events (kind, action_class) VALUES ('consent.raised', 'fetch_url')"
-    )
+    await pool.execute("INSERT INTO governance_events (kind) VALUES ('device.enrolled')")
 
     resp = await owner_client.post(f"/api/v1/conversations/{conversation}/clear")
     assert resp.status_code == 200

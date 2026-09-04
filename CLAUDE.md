@@ -56,20 +56,32 @@ model under social pressure answers from the conversation, not from its
 schema, and the prompt is where the pressure is. Both were good sentences.
 Neither was a control.
 
-What works instead, and is already load-bearing here: the consent burn
-(`consents.validate_and_use` — "validated mechanically, never by LLM
-judgment"), the narration detector, the capability-claim verifier, the
-protected-paths tripwire computed by the backend, the escalating-grants
-refusal, the tools_hash gate. Each is a fact the model cannot talk its way
-around.
+What works instead, and is already load-bearing here (v4): the honesty
+guards in `guards.py` (narration, pending-claim, capability, deferral,
+state, bare-intent, presented-listing), the markup strip at the persist
+boundary (prose never dispatches — `_refuse_call`, `without_markup`),
+ed25519 envelope verification on the device, the `Error:`-prefixed stated
+refusal a tool returns when a call CANNOT run, and the eval-corpus pins.
+Each is a fact the model cannot talk its way around.
+
+Owner ruling 2026-09-03 (docs/plans/rebuild/no-approvals.md): mechanical-
+over-prompts is about HONESTY controls — lines of code that catch HER
+lying. It is never a licence to build a gate that asks the owner or refuses
+on his behalf. v4 makes no authorization decisions: no consent cards, no
+dispositions, no earned autonomy, no per-agent or per-device grants, no
+fs_roots or deny-roots. A check may state that a call cannot run (unpaired,
+offline, malformed); it may never decide that it may not.
+`tests/test_no_approvals.py` is the line of code that refuses the day
+someone rebuilds one.
 
 Two corollaries:
 
 - **Derived, never hardcoded.** A check must read the live state, not a
-  list someone maintains. The capability verifier names the tool TOKENS
-  that satisfy each capability, so granting an MCP filesystem server
-  silences the filesystem check by itself. A control you have to delete the
-  day the feature lands is worse than no control.
+  list someone maintains. The capability guard takes the live tool list
+  (`capability_claim_check(reply, available_tools)`), so registering a tool
+  in the registry silences the matching capability check by itself. A
+  control you have to delete the day the feature lands is worse than no
+  control.
 - **State what is true, then check it anyway.** Prompts still carry the
   facts — the model does better work when told the truth. They are just
   never the last line of defence.
@@ -131,10 +143,13 @@ that *verifies* something, I should stop: that is a capability she is missing.
 
 1. **Name the gap.** Which tool does she lack?
 2. **Build it** — tool + executor + whatever sidecar it needs.
-3. **GRANT IT.** A tool is not a capability until an agent holds it. This was
-   missed FIVE times in one session (`service_logs`, `check_service_reachable`,
-   `answer_task`, `sandbox_check`, `review_code`) and every time the gap was
-   invisible from the code and obvious the moment she was asked to use it.
+3. **REGISTER IT.** (v3 said "GRANT IT"; v4 has no grants, by owner ruling
+   2026-09-03 — every tool in `tools.REGISTRY` is hers the moment it is
+   registered and advertised.) A tool is not a capability until it is in the
+   registry. In v3 this was missed FIVE times in one session (`service_logs`,
+   `check_service_reachable`, `answer_task`, `sandbox_check`, `review_code`)
+   and every time the gap was invisible from the code and obvious the moment
+   she was asked to use it.
 4. **Ask her to do the thing** — in chat, in her words, not by curling the
    route yourself. "I curled it and it works" proves nothing about her.
 5. **Read the trace.** `turn_spans` says what actually ran. A reply is a
@@ -154,9 +169,13 @@ that reads as success is worse than a crash.
 
 ### Pinned-expectation suites are tripwires, not obstacles
 
-Adding a tool turns `test_eval_grants`, `test_eval_servability` and the
-`reads_only` count red. That is them working. Update the snapshot
-deliberately, bump `suite_version`, and say in the commit why the number
+Adding a tool turns `test_tools_registry`'s pinned name set red; adding or
+re-pointing an eval case turns `test_eval_corpus`'s case count and
+`suite_version` pins red; rebuilding any approval shape (a gate module, a
+table dispatch consults, an await between the schema check and the
+executor, a "waiting on you" tool result) turns `test_no_approvals` red.
+That is them working. Update the snapshot deliberately, bump
+`suite_version` when the corpus moves, and say in the commit why the number
 moved — never route around them.
 
 ### Mechanical over prompts applies to ME
