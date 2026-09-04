@@ -580,16 +580,17 @@ def test_deferral_must_fire_when_the_tool_never_ran(label, reply, tool):
     assert deferred(correction) == tool
 
 
-# MUST NOT FIRE: an offer/question, a conditional, a non-tool "action", a
-# past/negated/other-subject form, a promise about an unmapped tool (memory /
-# workspace read), and the guard's own honest-note / note text.
+# MUST NOT FIRE (the COMMITMENT shape, no instruction in hand): a non-tool
+# "action", a past/negated/other-subject form, a promise about an unmapped tool
+# (memory / workspace read), and the guard's own honest-note / note text. The
+# five offer/question pins that used to lead this list ("Would you like me to
+# search for it?", "Should I look it up?", "Want me to check the web?", "I can
+# search if you'd like.", "I can now search if you want me to.") moved to
+# OFFER_MUST_FIRE below on the owner's ruling of 2026-09-03: behind an
+# instruction to do that very thing they are the instruction handed back, not
+# an offer — and with NO instruction behind them they are still clean, pinned
+# there as OFFER_GENUINE_WITHOUT_INSTRUCTION.
 DEFERRAL_MUST_NOT_FIRE = [
-    # offer / question — the operator has not accepted a commitment
-    ("question_would_you_like", "Would you like me to search for it?"),
-    ("question_should_i", "Should I look it up?"),
-    ("offer_want_me_to", "Want me to check the web?"),
-    ("conditional_if_youd_like", "I can search if you'd like."),
-    ("conditional_now_if_you_want", "I can now search if you want me to."),
     # a non-tool "action" — the verb maps to no registered tool
     ("let_me_think", "Let me think about that."),
     ("keep_in_mind", "I'll keep that in mind."),
@@ -600,6 +601,7 @@ DEFERRAL_MUST_NOT_FIRE = [
     ("other_subject_you", "You can search for it yourself."),
     ("negation_wont", "I won't search for that."),
     ("negation_will_not", "I will not search the web for that."),
+    ("negation_without", "I'll answer without searching the web."),
     # an unmapped tool: searching memory is memory_search, reading a file is a
     # workspace read — neither is a web_search / fetch_url deferral
     ("search_memory", "Let me search my memory for that."),
@@ -704,6 +706,557 @@ def test_the_deferral_matcher_never_raises_on_odd_input(reply):
     guards.deferral_check(reply, [], DEFERRAL_TOOLS)
 
 
+# -- the deferral guard's OFFER shape: the instruction handed back -----------
+#
+# Owner ruling 2026-09-03 (docs/plans/rebuild/no-approvals.md): there is no
+# approval step in v4, and he rejects per-command friction. An OFFER that
+# restates the action the user just instructed — "Want me to search the web
+# for that?" after "check the web for the latest pixel phone" — is not a
+# question he can answer with a click; it is the instruction handed back, and
+# deferral_check(reply, spans, tools, user_message=...) now fires on it (kind
+# "offer"). A GENUINE CLARIFYING QUESTION — which folder, which device, full
+# tree or top level, which of two tools — asks for a detail she is missing and
+# stays clean, as does an offer with no instruction behind it and an offer of
+# something OTHER than what was asked. As everywhere in this family the
+# must-NOT-fire pins are the load-bearing half: a guard that fires on an honest
+# clarifying question would be the friction it exists to remove.
+
+WEB_INSTRUCTION = "check the web for the latest pixel phone"
+
+
+def offered(claim) -> tuple[str, str] | None:
+    return (claim.kind, claim.tool) if claim is not None else None
+
+
+# MUST FIRE: (instruction, reply, tool) — the ruling's four exact pins lead,
+# then the five offer/question pins that DEFERRAL_MUST_NOT_FIRE used to hold,
+# each behind the instruction it hands back.
+OFFER_MUST_FIRE = [
+    ("ruling_web", WEB_INSTRUCTION, "Want me to search the web for that?", "web_search"),
+    (
+        "ruling_list",
+        "list my workspace files",
+        "I can list them if you'd like.",
+        "workspace_list_files",
+    ),
+    (
+        "ruling_device",
+        "how much disk is free on the dell?",
+        "Should I check the disk usage on the Dell?",
+        "device_info",
+    ),
+    (
+        "ruling_read",
+        "read config.json",
+        "Would you like me to open config.json?",
+        "workspace_read_file",
+    ),
+    # the five flipped pins (formerly DEFERRAL_MUST_NOT_FIRE's offer/question set)
+    (
+        "flipped_would_you_like",
+        WEB_INSTRUCTION,
+        "Would you like me to search for it?",
+        "web_search",
+    ),
+    ("flipped_should_i", WEB_INSTRUCTION, "Should I look it up?", "web_search"),
+    ("flipped_want_me_to", WEB_INSTRUCTION, "Want me to check the web?", "web_search"),
+    ("flipped_if_youd_like", WEB_INSTRUCTION, "I can search if you'd like.", "web_search"),
+    (
+        "flipped_now_if_you_want",
+        WEB_INSTRUCTION,
+        "I can now search if you want me to.",
+        "web_search",
+    ),
+    # the offer buried in otherwise-plausible prose is still the offer
+    (
+        "offer_after_stale_answer",
+        WEB_INSTRUCTION,
+        "The Pixel 9 launched last year. Want me to check the web for the newest one?",
+        "web_search",
+    ),
+    # a consent-gated commitment IS an offer ("if you want" gates nothing)
+    (
+        "ill_if_you_want",
+        "how much disk is free on the dell?",
+        "I'll check that if you want.",
+        "device_info",
+    ),
+    (
+        "could_if_you_want",
+        "how much disk is free on the dell?",
+        "I could check that if you want.",
+        "device_info",
+    ),
+    # "check the workspace" restates a listing instruction
+    (
+        "would_you_like_check_workspace",
+        "show me my workspace directory structure",
+        "Would you like me to check the workspace?",
+        "workspace_list_files",
+    ),
+    ("run_it", "run df -h on the dell", "Should I run it now?", "device_run"),
+    (
+        "yes_i_can_want_me_to",
+        "can you search the web for pixel news?",
+        "Yes — want me to search now?",
+        "web_search",
+    ),
+    (
+        "let_me_know_if",
+        "read config.json",
+        "Let me know if you want me to open it.",
+        "workspace_read_file",
+    ),
+    # a negated first clause does not hide the offer that follows it
+    (
+        "cant_find_then_offer",
+        WEB_INSTRUCTION,
+        "I can't find it in my notes, want me to search the web?",
+        "web_search",
+    ),
+    (
+        "do_you_want_me_to",
+        "read config.json",
+        "Do you want me to open config.json?",
+        "workspace_read_file",
+    ),
+    (
+        "whenever_you_want_me_to",
+        WEB_INSTRUCTION,
+        "Whenever you want me to search the web, just say.",
+        "web_search",
+    ),
+    # the STATEMENT form — no question mark, no offer marker — is the same
+    # instruction handed back (review of the offer shape, 2026-09-04)
+    ("statement_i_can", WEB_INSTRUCTION, "I can search the web for that.", "web_search"),
+    (
+        "statement_i_could_for_you",
+        "list my workspace files",
+        "I could list them for you.",
+        "workspace_list_files",
+    ),
+    (
+        "statement_happy_to_say_the_word",
+        WEB_INSTRUCTION,
+        "I'd be happy to search the web for that — just say the word.",
+        "web_search",
+    ),
+    (
+        "statement_happy_to_whenever",
+        "read config.json",
+        "Happy to open config.json whenever you're ready.",
+        "workspace_read_file",
+    ),
+    (
+        "statement_if_that_helps",
+        "read config.json",
+        "I can read config.json if that helps.",
+        "workspace_read_file",
+    ),
+    # "how about I" / "what if I" are offers, not wh-questions
+    ("how_about_i", WEB_INSTRUCTION, "How about I search the web for that?", "web_search"),
+    ("what_if_i", WEB_INSTRUCTION, "What if I search the web for you?", "web_search"),
+    # a CLOSED quote pair before the lead is her own sentence, not a relay
+    (
+        "closed_backticks_before_lead",
+        "read config.json",
+        "I found `config.json` — want me to open it?",
+        "workspace_read_file",
+    ),
+    (
+        "closed_curly_quotes_before_lead",
+        "how much disk is free on the dell?",
+        "Your note says “disk” — should I check the disk usage?",
+        "device_info",
+    ),
+    # a scope question that ALSO offers the instructed action fires, by the
+    # ruling's own definition; the bare scope question is pinned clean below
+    (
+        "scope_question_offering_the_action",
+        "list my workspace files",
+        "Do you want me to list hidden files too?",
+        "workspace_list_files",
+    ),
+    # the user side reads EVERY match of the phrase: a self-report of the action
+    # ahead of the real request does not hide it (confirmation review, 2026-09-04)
+    (
+        "self_report_then_request",
+        "I read config.json and it looks wrong — can you read config.json again?",
+        "Want me to open it?",
+        "workspace_read_file",
+    ),
+    # a request verb on his own subject keeps the request ("we should", "I said")
+    (
+        "we_should_check_the_web",
+        "we should check the web for the latest pixel",
+        "Want me to search the web?",
+        "web_search",
+    ),
+    (
+        "i_said_search_the_web",
+        "I said search the web for the latest pixel",
+        "Want me to search the web?",
+        "web_search",
+    ),
+    # "in my notes" past a coordinator belongs to the NEXT action, not the search
+    (
+        "search_web_and_save_in_notes",
+        "search the web for the latest pixel and save it in my notes",
+        "Want me to search the web?",
+        "web_search",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,instruction,reply,tool", OFFER_MUST_FIRE, ids=[c[0] for c in OFFER_MUST_FIRE]
+)
+def test_an_offer_restating_the_instruction_is_a_deferral(label, instruction, reply, tool):
+    claim = guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS, user_message=instruction)
+    assert claim is not None, f"{label!r} handed the instruction back and was not caught"
+    assert offered(claim) == ("offer", tool)
+    assert claim.action_phrase and claim.phrase
+
+
+# MUST NOT FIRE: (instruction, reply) — a clarifying question (a missing
+# parameter, a scope choice, which of two tools), an offer of something
+# DIFFERENT, casual chat, a negated or past-tense instruction, a relayed offer.
+OFFER_MUST_NOT_FIRE = [
+    # a missing PARAMETER: which folder / which device / which of two things
+    (
+        "which_directory",
+        "list my workspace files",
+        "Which directory should I list — the project or your home?",
+    ),
+    (
+        "full_tree_or_top_level",
+        "list my workspace files",
+        "Do you want the full tree or just the top level?",
+    ),
+    ("dell_or_laptop", "how much disk is free on the dell?", "Do you mean the Dell or the laptop?"),
+    ("web_or_notes", "look up the pixel news", "Search the web or your notes?"),
+    ("what_to_list", "list my workspace files", "What would you like me to list?"),
+    # an accepted KNOWN MISS, not a clarifying question: the instruction handed
+    # back beside a non-tool alternative. The blanket "or" cut cannot tell it
+    # from "the web or your notes?" without reading the alternative, and a
+    # clarifying question wrongly corrected is the worse failure — so it stays
+    # clean, deliberately. ("Want me to search the web for that, or is that
+    # not needed?" is the same known miss.)
+    (
+        "search_or_answer",
+        WEB_INSTRUCTION,
+        "Would you like me to search for it, or answer from what I know?",
+    ),
+    # a scope question with NO offered action in it (the same scope question
+    # that also offers the listing is pinned as a fire above)
+    ("include_hidden", "list my workspace files", "Do you want me to include hidden files?"),
+    ("include_subdirs", "list my workspace files", "Should I include subdirectories?"),
+    # the instruction RESTATED ("you want me to…") ahead of a clarifier is not
+    # an offer, with or without a question mark on the sentence
+    (
+        "restated_then_which",
+        WEB_INSTRUCTION,
+        "Got it — you want me to check the web for the latest Pixel. Which region?",
+    ),
+    (
+        "restated_then_scope",
+        "list my workspace files",
+        "Understood, you want me to list the workspace files. Top level or full tree?",
+    ),
+    (
+        "restated_but_missing",
+        "read config.json",
+        "I understand you want me to read config.json, but it doesn't exist. "
+        "Do you mean config.yaml?",
+    ),
+    (
+        "restated_dash_which",
+        WEB_INSTRUCTION,
+        "You want me to check the web for the latest Pixel — which region?",
+    ),
+    # a statement that is not an offer: negated, or a hypothetical that cannot
+    ("statement_cant", "read config.json", "I can't read config.json — it isn't in the workspace."),
+    ("what_if_i_cant", WEB_INSTRUCTION, "What if I can't find it?"),
+    # "without" between the lead and the action negates it: an answer that says
+    # it did NOT search hands nothing back (confirmation review, 2026-09-04)
+    (
+        "statement_without_searching",
+        WEB_INSTRUCTION,
+        "I can tell you the Pixel 10 launched in August without searching the web.",
+    ),
+    (
+        "statement_answer_without",
+        WEB_INSTRUCTION,
+        "I can answer that without searching the web: the Pixel 10 launched in August.",
+    ),
+    # an offer of something DIFFERENT from what was asked
+    ("extra_summarise", "read config.json", "Done. Want me to also summarise it?"),
+    (
+        "different_class",
+        "read config.json",
+        "It's not in the workspace. Want me to search the web for a sample config?",
+    ),
+    ("different_object", "how much disk is free on the dell?", "Should I check your calendar?"),
+    # casual chat, no instruction at all
+    ("joke", "tell me something funny", "Want to hear a joke?"),
+    ("unprompted_offer", "what do you think about the pixel?", "Want me to look up the pixel?"),
+    # a negated or past-tense "instruction" instructs nothing
+    (
+        "dont_search",
+        "don't search the web, just tell me what you know",
+        "Want me to search the web anyway?",
+    ),
+    ("did_you_search", "did you search the web?", "No — want me to search now?"),
+    ("no_searching_please", "No searching please, just answer", "Want me to search anyway?"),
+    # a MENTION of the action is not an instruction: his own report of doing
+    # it, a search in his notes (memory, not the web), a device resource in a
+    # statement that asks nothing
+    (
+        "user_reports_reading",
+        "I read config.json and it looks wrong",
+        "Want me to open it and take a look?",
+    ),
+    (
+        "user_reports_searching",
+        "I've been searching the web all day for this",
+        "Want me to search too?",
+    ),
+    (
+        "user_disk_statement",
+        "my disk usage on the dell has been high lately",
+        "Should I check it now?",
+    ),
+    # the accepted KNOWN MISS on that cut: a terse resource name with no
+    # question mark and no request word states, so it instructs nothing
+    ("user_terse_resource", "dell disk usage", "Should I check the disk usage on the Dell?"),
+    # a second verb coordinated with his report is still his report, whether or
+    # not the first verb is itself an action the table knows
+    (
+        "user_reports_coordinated",
+        "I listed the files and read config.json, both look wrong",
+        "Want me to read it?",
+    ),
+    (
+        "user_reports_two_reads",
+        "I read config.json and read the logs",
+        "Want me to open them?",
+    ),
+    (
+        "user_search_notes",
+        "search for the pixel in my notes",
+        "Want me to search the web instead?",
+    ),
+    # relayed, not made
+    (
+        "relayed_you_said",
+        "how much disk is free on the dell?",
+        "You said: should I check the disk usage?",
+    ),
+    ("relayed_unclosed_quote", "read config.json", 'Your note says "want me to open it?'),
+    # the guard family's own frames, with the instruction in hand
+    ("deferral_note", WEB_INSTRUCTION, "Doing that now instead of just saying I would."),
+    (
+        "honest_note_web",
+        WEB_INSTRUCTION,
+        "I said I'd search the web but couldn't complete it automatically — "
+        "ask me again and I'll try.",
+    ),
+    (
+        "offer_honest_note",
+        WEB_INSTRUCTION,
+        "I asked instead of doing it — there is no approval step. I did not search the web "
+        "this turn; ask me again and I'll try.",
+    ),
+    ("plain_answer", WEB_INSTRUCTION, "The Pixel 10 has a 50-megapixel main camera."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,instruction,reply", OFFER_MUST_NOT_FIRE, ids=[c[0] for c in OFFER_MUST_NOT_FIRE]
+)
+def test_a_clarifying_question_or_genuine_offer_is_not_a_deferral(label, instruction, reply):
+    assert (
+        guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS, user_message=instruction)
+        is None
+    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+
+
+# With NO instruction behind them, the five flipped pins are exactly what they
+# look like — a genuine offer — and the offer shape is inert (no user_message).
+OFFER_GENUINE_WITHOUT_INSTRUCTION = [
+    "Would you like me to search for it?",
+    "Should I look it up?",
+    "Want me to check the web?",
+    "I can search if you'd like.",
+    "I can now search if you want me to.",
+]
+
+
+@pytest.mark.parametrize("reply", OFFER_GENUINE_WITHOUT_INSTRUCTION)
+def test_an_offer_with_no_instruction_behind_it_is_genuine(reply):
+    assert guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS) is None
+    assert guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS, user_message="") is None
+    assert (
+        guards.deferral_check(
+            reply, [other_span()], DEFERRAL_TOOLS, user_message="thanks, that's all"
+        )
+        is None
+    )
+
+
+def test_an_offer_after_the_instructed_action_ran_is_extra_work():
+    """'After doing it' is read off the SPANS, never the word order: the same
+    'Done. Want me to…' fires with nothing run and is clean once a span of the
+    instructed class exists — successful or failed (a real attempt)."""
+    reply = "Done — 12 files. Want me to also list the files in src/?"
+    instruction = "list my workspace files"
+    assert offered(
+        guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS, user_message=instruction)
+    ) == ("offer", "workspace_list_files")
+    ran = [tool_span("workspace_list_files")]
+    assert guards.deferral_check(reply, ran, DEFERRAL_TOOLS, user_message=instruction) is None
+    tried = [tool_span("workspace_list_files", ok=False)]
+    assert guards.deferral_check(reply, tried, DEFERRAL_TOOLS, user_message=instruction) is None
+    retry = "The search failed. Should I search again?"
+    assert (
+        guards.deferral_check(
+            retry, [tool_span("web_search", ok=False)], DEFERRAL_TOOLS, user_message=WEB_INSTRUCTION
+        )
+        is None
+    )
+
+
+def test_a_refused_call_is_not_an_attempt():
+    """A call written as markup or made in a closed round is recorded as a
+    tool span (ok=False, `refused_*` in its meta) so the trace shows it — but
+    nothing ran, so 'want me to search?' behind it is still the instruction
+    handed back (and the redirect can regenerate with tools). A real failed
+    attempt (ok=False, no refusal flag) still clears the offer. Derived from
+    the flag chat._refuse_call writes, not a list of reasons."""
+    reply = "Want me to search the web for that?"
+
+    def refused(flag: str):
+        return SimpleNamespace(
+            kind="tool", name="web_search", meta={"ok": False, "error": "x", flag: True}
+        )
+
+    for flag in ("refused_markup_as_text", "refused_out_of_rounds", "refused_redirect_closed"):
+        claim = guards.deferral_check(
+            reply, [refused(flag)], DEFERRAL_TOOLS, user_message=WEB_INSTRUCTION
+        )
+        assert offered(claim) == ("offer", "web_search"), flag
+    failed = [tool_span("web_search", ok=False)]
+    assert (
+        guards.deferral_check(reply, failed, DEFERRAL_TOOLS, user_message=WEB_INSTRUCTION) is None
+    )
+
+
+def test_a_statement_form_offer_after_real_work_is_a_report():
+    """The statement form ("I can/could…") reaches the offer verdict only
+    while nothing ran successfully this turn: after real work the same words
+    are a report of what she found, and the offer after work is caught in its
+    question form by the span rule (precision-first — a report wrongly
+    corrected makes the guard the liar)."""
+    instruction = "read config.json"
+    report = "I could see config.json in the listing."
+    assert offered(
+        guards.deferral_check(report, [other_span()], DEFERRAL_TOOLS, user_message=instruction)
+    ) == ("offer", "workspace_read_file")
+    listed = [tool_span("workspace_list_files")]
+    assert guards.deferral_check(report, listed, DEFERRAL_TOOLS, user_message=instruction) is None
+    # the question form after the same work still fires — the span rule reads
+    # the INSTRUCTED class, and a listing is not a read
+    ask = "config.json is there. Want me to open it?"
+    assert offered(
+        guards.deferral_check(ask, listed, DEFERRAL_TOOLS, user_message=instruction)
+    ) == ("offer", "workspace_read_file")
+    # a mixed clause keeps the commitment shape (judged first)
+    mixed = "I can search the web, so I'll search the web now."
+    assert offered(
+        guards.deferral_check(mixed, [other_span()], DEFERRAL_TOOLS, user_message=WEB_INSTRUCTION)
+    ) == ("commitment", "web_search")
+
+
+def test_an_offer_after_some_other_tool_ran_still_fires():
+    """Only a span of the INSTRUCTED class is the attempt that clears the
+    offer; a memory search followed by 'want me to check the web?' is still
+    the web instruction handed back (chat.py then refuses the redirect on its
+    own tools-already-ran precondition and appends the note)."""
+    reply = "I found a note from March. Want me to check the web for newer info?"
+    claim = guards.deferral_check(
+        reply, [tool_span("memory_search")], DEFERRAL_TOOLS, user_message=WEB_INSTRUCTION
+    )
+    assert offered(claim) == ("offer", "web_search")
+
+
+def test_the_offer_verdict_is_derived_from_the_live_registry():
+    """The derived-not-hardcoded property: the same instruction and offer are a
+    deferral only while a tool of that class is registered, on BOTH sides."""
+    instruction, reply = "list my workspace files", "I can list them if you'd like."
+    assert offered(
+        guards.deferral_check(reply, [], ["workspace_list_files"], user_message=instruction)
+    ) == ("offer", "workspace_list_files")
+    assert offered(
+        guards.deferral_check(reply, [], ["device_list_files"], user_message=instruction)
+    ) == ("offer", "device_list_files")
+    assert guards.deferral_check(reply, [], ["web_search"], user_message=instruction) is None
+    assert guards.deferral_check(reply, [], [], user_message=instruction) is None
+
+
+def test_the_commitment_shape_is_unchanged_by_the_instruction():
+    """A first-person commitment fires as before (kind 'commitment', no
+    instruction needed), and the instruction does not widen it: a promise to
+    read a file is still bare_intent's shape, not this guard's."""
+    claim = guards.deferral_check(
+        "I'll search for the latest on that.", [other_span()], DEFERRAL_TOOLS
+    )
+    assert offered(claim) == ("commitment", "web_search")
+    with_instruction = guards.deferral_check(
+        "I'll search for the latest on that.",
+        [other_span()],
+        DEFERRAL_TOOLS,
+        user_message=WEB_INSTRUCTION,
+    )
+    assert offered(with_instruction) == ("commitment", "web_search")
+    assert (
+        guards.deferral_check(
+            "I'll read the file back to you.",
+            [other_span()],
+            DEFERRAL_TOOLS,
+            user_message="read config.json",
+        )
+        is None
+    )
+
+
+def test_the_offer_shape_is_pure_same_inputs_same_verdict():
+    args = ("Want me to search the web for that?", [other_span()], DEFERRAL_TOOLS)
+    first = guards.deferral_check(*args, user_message=WEB_INSTRUCTION)
+    second = guards.deferral_check(*args, user_message=WEB_INSTRUCTION)
+    assert first is not None and offered(first) == offered(second)
+    assert first.phrase == second.phrase
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "check \\((((the web [unbalanced",
+        "list list list",
+        "读取 config.json 文件",
+        "\n\n\n",
+        "read " + "config.json " * 200,
+        "",
+    ],
+)
+def test_the_offer_matcher_never_raises_on_odd_instructions(instruction):
+    guards.deferral_check(
+        "Want me to search the web for that?", [], DEFERRAL_TOOLS, user_message=instruction
+    )
+    guards.deferral_check(
+        "Should I open config.json?", [], DEFERRAL_TOOLS, user_message=instruction
+    )
+
+
 # -- the bare-intent guard: an acknowledgment with nothing behind it --------
 #
 # guards.bare_intent_check(reply, spans) is the sixth sibling — the same
@@ -755,6 +1308,12 @@ BARE_INTENT_MUST_FIRE = [
     ("running_the_command_now", "Sure — running the command now."),
     ("ill_run_a_quick_check", "I'll run a quick check."),
     ("let_me_run_it", "Let me run it."),
+    # A commitment gated on a consent that does not exist (owner ruling
+    # 2026-09-03: v4 has no approval step, so "if you want" gates nothing) is
+    # still an intent to act with nothing behind it. Formerly pinned clean as
+    # "future_hedge_if_you_want" on the shared _OFFER_MARKER exemption, which
+    # bare_intent no longer reads.
+    ("future_if_you_want", "I'll check that if you want."),
 ]
 
 
@@ -794,13 +1353,15 @@ BARE_INTENT_MUST_NOT_FIRE = [
         "Checking the workspace… here are 12 directories: src, lib, docs.",
     ),
     ("question", "Should I check the workspace?"),
+    # A bare modal ("could") or a question is never the ack-and-go SHAPE, with
+    # or without the offer marker bare_intent used to read — these two stayed
+    # clean HERE when the marker exemption went (owner ruling 2026-09-03);
+    # behind an instruction they are deferral_check's OFFER shape, which runs
+    # first in chat.py and is pinned in OFFER_MUST_FIRE above.
     ("hedge_if_you_want", "I could check that if you want."),
     ("hedge_would_you_like", "Would you like me to check the workspace?"),
     ("plain_answer", "The Pixel 10 has a 50-megapixel main camera."),
     ("too_long", "Checking the workspace to see what is in it and report back fully."),
-    # the general future-commitment lead must clear the same precision bar as
-    # every other shape (I1 negatives, review of 70d7c54e)
-    ("future_hedge_if_you_want", "I'll check that if you want."),
     (
         "future_content_a_listing",
         "I'll check — the workspace has 12 dirs: default, src, tests.",
@@ -839,9 +1400,9 @@ BARE_INTENT_MUST_NOT_FIRE = [
     "label,reply", BARE_INTENT_MUST_NOT_FIRE, ids=[c[0] for c in BARE_INTENT_MUST_NOT_FIRE]
 )
 def test_bare_intent_must_not_fire(label, reply):
-    assert (
-        guards.bare_intent_check(reply, []) is None
-    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    assert guards.bare_intent_check(reply, []) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
 
 
 def test_bare_intent_does_not_fire_when_any_tool_actually_ran():

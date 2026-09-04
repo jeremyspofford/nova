@@ -221,6 +221,42 @@ def _deferral_honest_note(action_phrase: str) -> str:
     )
 
 
+def _offer_honest_note(action_phrase: str) -> str:
+    """The truthful fallback when an OFFER-shape deferral (owner ruling
+    2026-09-03: "want me to?" for what he already instructed) could not be
+    redirected into the action — the redirect was refused (a tool had already
+    run, or the turn was out of rounds), errored, or regenerated a reply the
+    guards rejected. APPENDED, like the commitment shape's note: the offer sat
+    inside prose that may be honest content. Says only what is mechanically
+    true — nothing of the instructed class ran this turn, or the offer would
+    not have fired — and, like every note the turn ships, carries no completed
+    action, no pending state and no commitment the guard family could read."""
+    return (
+        f"I asked instead of doing it — there is no approval step. I did not "
+        f"{action_phrase} this turn; ask me again and I'll try."
+    )
+
+
+def offer_redirect_nudge(*, ran_a_tool: bool) -> str:
+    """The offer-shape deferral redirect's nudge (owner ruling 2026-09-03). It
+    tells her the truth the ruling established — there is no approval step, so
+    a "want me to?" for what she was told to do is not a question — and the
+    one thing she may still ask, the detail she is missing. Like its siblings
+    it asserts that nothing has run this turn, the fact `_claim_redirect`'s own
+    precondition guarantees whenever this runs, so it REFUSES rather than emit
+    a lie if that precondition somehow did not hold."""
+    if ran_a_tool:
+        raise ValueError(
+            "the offer redirect nudge asserts nothing has run this turn; "
+            f"ran_a_tool={ran_a_tool}"
+        )
+    return (
+        "You asked whether to do what the user already told you to do. There is "
+        "no approval step and nothing has run this turn — do it now by calling "
+        "the tool, or ask only for the detail you are missing."
+    )
+
+
 def _bare_intent_ran_but_unreported_note(ran_names: str) -> str:
     """The truthful fallback when a bare-intent redirect's FIRST round really
     dispatched a tool but the closing round's report did not survive (empty,
@@ -1369,6 +1405,7 @@ async def _deferral_redirect(
     reply: str,
     messages: Sequence[dict],
     emit: Callable[[str | None], None],
+    user_message: str = "",
 ) -> str:
     """Regenerate ONCE to actually do the promised action, or say so honestly.
 
@@ -1420,7 +1457,9 @@ async def _deferral_redirect(
         if corrected:
             try:
                 still_defers = (
-                    guards.deferral_check(corrected, turn.spans, tools.tool_names())
+                    guards.deferral_check(
+                        corrected, turn.spans, tools.tool_names(), user_message=user_message
+                    )
                     is not None
                 )
             except Exception:
@@ -1520,6 +1559,12 @@ def _regen_rejected_by(
                 user_message,
             ),
         ),
+        (
+            "deferral",
+            lambda: guards.deferral_check(
+                corrected, turn.spans, tools.tool_names(), user_message=user_message
+            ),
+        ),
         ("bare_intent", lambda: guards.bare_intent_check(corrected, turn.spans)),
     )
     for name, check in checks:
@@ -1607,7 +1652,10 @@ async def _claim_redirect(
     The regeneration is judged by the FULL mechanical set against LIVE facts,
     not the stale ones: if the redirect's own call ran a device tool, a state
     report is then backed; if it listed, a listing is. The same facts that make
-    each guard fire or stay silent, read again after the tools ran.
+    each guard fire or stay silent, read again after the tools ran. deferral is
+    in the set too (owner ruling 2026-09-03): a regeneration that promises the
+    tool again, or asks "want me to?" for the instructed action again, has not
+    done the thing and is refused by name.
 
     FAIL-OPEN throughout: any exception ships the correction, never an error
     frame and never a lost turn.
@@ -2404,7 +2452,9 @@ async def _run_turn(
         # re-introduce the very fabrication that guard just removed, and the
         # honesty correction outranks re-prompting a promise).
         try:
-            deferral = guards.deferral_check(persisted, turn.spans, tools.tool_names())
+            deferral = guards.deferral_check(
+                persisted, turn.spans, tools.tool_names(), user_message=message
+            )
         except Exception:
             logger.exception("deferral guard raised; shipping the reply uncorrected")
             deferral = None
@@ -2426,6 +2476,7 @@ async def _run_turn(
         deferral_fired = deferral is not None or bare_intent is not None
         if (
             deferral is not None
+            and deferral.kind == "commitment"
             and not mechanical_guard_fired
             and not redirect_spent
             # Same rule as _claim_redirect: a turn at its round cap gets no
@@ -2440,8 +2491,74 @@ async def _run_turn(
             # defers/errors, appends an honest note. Either way it consumes the
             # turn's one redirect, so the responsiveness check below is skipped.
             persisted = await _deferral_redirect(
-                app, turn, model, deferral, persisted, messages, emit
+                app, turn, model, deferral, persisted, messages, emit, user_message=message
             )
+
+        # The OFFER shape of the same guard (owner ruling 2026-09-03: "want me
+        # to?" for what he already instructed is the instruction handed back,
+        # and there is no approval step for it to wait on). It gets the SAME
+        # tools-advertised redirect as bare intent, through `_claim_redirect`
+        # — never the commitment shape's text-only one: the whole point of
+        # "do it now" is that the tool CAN be called this time, dispatched
+        # through the ordinary round machinery. Unlike bare intent the original
+        # reply may carry honest prose around the offer, so on a redirect that
+        # did not stand the honest note is APPENDED (as the commitment shape
+        # appends), not swapped in. Shares the guard span NAME "deferral" with
+        # the other two shapes; `kind` in its meta tells them apart.
+        offer_redirected = False
+        if (
+            deferral is not None
+            and deferral.kind == "offer"
+            and not mechanical_guard_fired
+            and not redirect_spent
+            and not out_of_rounds
+        ):
+            # Measured BEFORE the redirect: the offer shape can fire with some
+            # OTHER tool's span already on the turn (a memory search, then
+            # "want me to check the web?"), in which case _claim_redirect
+            # refuses to regenerate at all — so a successful span AFTER it is
+            # only the redirect's own work when there was none before.
+            ran_before = guards.ran_a_tool(turn.spans)
+            outcome = await _claim_redirect(
+                app,
+                turn,
+                model,
+                claim_kind="deferral",
+                correction_text=_offer_honest_note(deferral.action_phrase),
+                span_meta={
+                    "kind": "offer",
+                    "detected": True,
+                    "action": deferral.tool,
+                    "phrase": deferral.phrase,
+                },
+                nudge_for=lambda ran: offer_redirect_nudge(ran_a_tool=ran),
+                redirect_note=DEFERRAL_NOTE,
+                out_of_rounds=out_of_rounds,
+                messages=messages,
+                advertised=advertised,
+                tool_ctx=tool_ctx,
+                device_names=device_names,
+                user_message=message,
+                emit=emit,
+            )
+            offer_redirected = outcome.redirected
+            read_ephemeral = read_ephemeral or outcome.read_ephemeral
+            if offer_redirected:
+                persisted = outcome.text
+            elif not ran_before and guards.ran_a_tool(turn.spans):
+                # The redirect's own first round dispatched a successful tool
+                # but its report did not survive — the same rule as the
+                # bare-intent block: a call that RAN is never reported as
+                # nothing ran, so the note names what actually happened.
+                ran_names = ", ".join(guards.successful_tool_names(turn.spans)) or "a tool"
+                persisted = f"{persisted}\n\n{_bare_intent_ran_but_unreported_note(ran_names)}"
+            else:
+                persisted = f"{persisted}\n\n{outcome.text}"
+            if outcome.markup_note:
+                persisted = f"{persisted}\n\n{outcome.markup_note}"
+            backend_note = backend_note or outcome.markup_note
+            # Spent by TRYING, not by succeeding — same rule as consent/state.
+            redirect_spent = True
 
         # A bare-intent claim gets the SAME redirect shape as consent/state —
         # a regeneration WITH TOOLS ADVERTISED, through `_claim_redirect` —
@@ -2593,6 +2710,11 @@ async def _run_turn(
             # back in as if it were an answer. A redirect that stood either
             # ran a tool or said plainly it did not — ordinary knowledge again.
             or (bare_intent is not None and not bare_intent_redirected)
+            # An offer-shape deferral that did not redirect is the same shape
+            # again: "want me to?" plus the honest note is choreography about
+            # the instruction handed back, and recalling it later is how the
+            # habit gets reinforced. A redirect that stood did the work.
+            or (deferral is not None and deferral.kind == "offer" and not offer_redirected)
         )
         # A turn that only READ live external data (a web fetch — an ephemeral
         # tool) is a point-in-time snapshot, not durable knowledge. Ingesting it

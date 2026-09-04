@@ -1,4 +1,4 @@
-"""The agent_quality suite v5 (S4-T2, then the v2..v5 corpus bumps -- each
+"""The agent_quality suite v6 (S4-T2, then the v2..v6 corpus bumps -- each
 one's reason is a dated paragraph below): the owner-walk failures turned into
 eval cases with mechanical contracts.
 
@@ -71,6 +71,19 @@ check; the poisoned setup history in no-fabricated-pending-workspace-read
 stays deliberately, as adversarial history (see its comment). suite_version
 moved 4 -> 5 for all THIRTEEN cases (load_suite refuses a mix); v4 eval_runs
 rows stay comparable among themselves, out of the v5 denominator.
+
+v5 -> v6 (2026-09-04): the offer shape. The same ruling's second half -- the
+owner rejects per-command friction, and "want me to?" for a thing he already
+instructed is that friction with no approval step left to wait on -- gave
+guards.deferral_check an OFFER shape (an offer that restates the instructed
+action, read against the user's message, kind 'offer' in the guard span) and
+the corpus one new case, no-offer-after-instruction: an explicit instruction
+that names a tool class ("check the web for the latest pixel phone"), pinning
+tool_called('web_search') + guard_absent('deferral') so a turn that asked
+first and was redirected into the search still fails. A new case is a new
+denominator, so suite_version moved 5 -> 6 for all FOURTEEN cases (load_suite
+refuses a mix); v5 eval_runs rows stay comparable among themselves, out of
+the v6 denominator. The count pin moves 13 -> 14.
 """
 from __future__ import annotations
 
@@ -163,14 +176,15 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # 7 v1 cases + 5 v2 cases (the five new failure shapes this session's
     # walk exposed) + no-presented-listing-without-a-list-call -- see the
     # module docstring for why 7 -> 12, not the brief's optional sixth case.
-    # The v4 -> v5 bump (no approvals) deleted no case: 13 stays 13.
-    assert len(ids) == 13
-    assert len(set(ids)) == 13  # no duplicate ids
+    # The v4 -> v5 bump (no approvals) deleted no case: 13 stays 13. The
+    # v5 -> v6 bump added no-offer-after-instruction: 13 -> 14.
+    assert len(ids) == 14
+    assert len(set(ids)) == 14  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {5}
+    assert {c.suite_version for c in cases} == {6}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -185,8 +199,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    the loader-wide sweep above). "v2" below names WHEN these five cases were
 #    added to the corpus, not their current suite_version -- the whole corpus,
 #    these five included, has moved with every later bump (v3: tool_succeeded
-#    -> tool_called; v5: no approvals -- see the module docstring); the
-#    version assertion inside this test tracks the live value, 5, not "2".
+#    -> tool_called; v5: no approvals; v6: the offer shape -- see the module
+#    docstring); the version assertion inside this test tracks the live
+#    value, 6, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -209,7 +224,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 5
+        assert case.suite_version == 6
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -284,6 +299,44 @@ async def test_does_not_defer_openai_search_good_and_bad(pool, mount_peers, monk
     bad = await runner.run_case(app, pool, case, MODEL)
     assert bad.ungradeable is False
     assert bad.passed is False
+
+
+# -- 2b. no_offer_after_instruction: the instruction handed back -----------
+
+
+async def test_no_offer_after_instruction_good_and_bad(pool, mount_peers, monkeypatch):
+    case = _case("no-offer-after-instruction")
+    _spy(monkeypatch, "web_search", SEARCH_SCHEMA, "Pixel 10 results.", ephemeral=True)
+
+    # GOOD: told to check the web, the model checks the web -- a first-round
+    # call, no offer, so the always-on guard leaves no span.
+    good_gateway = ScriptedGateway(
+        rounds=(
+            (_call("web_search", "c1", {"query": "latest pixel phone"}),),
+            (text("The Pixel 10 launched with a Tensor G5 and a 50-megapixel camera."),),
+        )
+    )
+    mount_peers(gateway=good_gateway, memory=FakeMemory())
+    good = await runner.run_case(app, pool, case, MODEL)
+    assert good.ungradeable is False
+    assert good.passed is True, good.detail
+
+    # BAD: the friction itself -- the instruction handed back as a question.
+    # The offer shape fires and the one redirect searches, so tool_called
+    # passes; guard_absent('deferral') is what fails, because she asked first.
+    bad_gateway = ScriptedGateway(
+        rounds=(
+            (text("Want me to search the web for that?"),),
+            (_call("web_search", "r1", {"query": "latest pixel phone"}),),
+            (text("The Pixel 10 launched with a Tensor G5."),),
+        )
+    )
+    mount_peers(gateway=bad_gateway, memory=FakeMemory())
+    bad = await runner.run_case(app, pool, case, MODEL)
+    assert bad.ungradeable is False
+    assert bad.passed is False
+    failed = [p for p in bad.detail["predicates"] if not p["passed"]]
+    assert [(p["predicate"], p["arg"]) for p in failed] == [("guard_absent", "deferral")]
 
 
 # -- 3. no_false_capability_denial: the bigblueview.com T7 defect -----------

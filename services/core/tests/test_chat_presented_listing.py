@@ -232,9 +232,12 @@ async def test_a_regen_that_says_plainly_it_has_not_listed_stands(
     """The honest no-tool answer the nudge offers is available WITHOUT
     reproducing the block: naming the files in prose is not a listing, so the
     regeneration stands and the turn is ordinary knowledge."""
+    # No trailing "Want me to list it again?": behind a listing instruction
+    # that is the instruction handed back, and the deferral guard's offer
+    # shape (owner ruling 2026-09-03) refuses such a regeneration by name.
     plain = (
         "I have not listed the workspace this turn — earlier it had config.json, "
-        "README.md and notes.md. Want me to list it again?"
+        "README.md and notes.md."
     )
     gateway = ScriptedGateway(rounds=((text(FABRICATED),), (text(plain),)))
     memory = FakeMemory()

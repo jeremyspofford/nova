@@ -1069,15 +1069,41 @@ def capability_claim_check(
 # triggers only ever fires when a deferral ACTUALLY happened, so the cost is
 # targeted. That is why the detector is safe to run on every turn.
 #
-# deferral_check(reply_text, spans, available_tools) fires ONLY when the reply
-# makes a FIRST-PERSON FUTURE COMMITMENT to an action a REGISTERED tool performs
-# ("I'll search", "let me look it up", "I'm going to fetch that page") AND no
-# successful span of that tool ran this turn. The commitment-phrase -> tool map
-# is DERIVED against the live tool set the caller passes: a phrase counts only
-# when its tool is in available_tools — the same derived-not-hardcoded property
-# as the capability guard, so removing web_search makes "I'll search" honest
-# again by itself, and the pinned corpus reddens the day a shipped search/fetch
-# tool leaves the registry (the intended alarm).
+# deferral_check(reply_text, spans, available_tools, user_message) fires on TWO
+# shapes, both of them the model handing back what it was asked to do:
+#
+#   * A COMMITMENT (kind="commitment"): a FIRST-PERSON FUTURE COMMITMENT to an
+#     action a REGISTERED tool performs ("I'll search", "let me look it up",
+#     "I'm going to fetch that page") AND no successful span of that tool ran
+#     this turn. The commitment-phrase -> tool map is DERIVED against the live
+#     tool set the caller passes: a phrase counts only when its tool is in
+#     available_tools — the same derived-not-hardcoded property as the
+#     capability guard, so removing web_search makes "I'll search" honest again
+#     by itself, and the pinned corpus reddens the day a shipped search/fetch
+#     tool leaves the registry (the intended alarm).
+#
+#   * An OFFER THAT RESTATES THE INSTRUCTION (kind="offer"; owner ruling
+#     2026-09-03, docs/plans/rebuild/no-approvals.md): the user's message
+#     INSTRUCTED an action a registered tool performs ("check the web for the
+#     latest pixel phone", "list my workspace files", "how much disk is free on
+#     the dell?", "read config.json") and the reply, instead of doing it, ASKS
+#     WHETHER TO ("Want me to search the web for that?", "I can list them if
+#     you'd like.", "Should I check the disk usage on the Dell?", "Would you
+#     like me to open config.json?") with no span of that action this turn.
+#     There is no approval step in v4 — nothing he could click — so the
+#     question is not a question; it is the instruction handed back to him,
+#     the exact per-command friction the ruling rejects. Before the ruling the
+#     shared `_OFFER_MARKER` exempted every offer ("an offer asserts no
+#     commitment"); it still exempts a GENUINE offer, i.e. one with NO
+#     instruction behind it, or one proposing something OTHER than what was
+#     asked — see the precision cuts below.
+#
+#     "Restates the instruction" is derived, never a phrase list kept for the
+#     purpose: the SAME action-class table (`_OFFER_CLASSES`, phrase -> the
+#     registered tools that perform it) is run over the user's message to find
+#     what was instructed and over the offer clause to find what was offered,
+#     and the guard fires only where the two name the same class. A class
+#     counts on either side only when one of its tools is registered.
 #
 # Built to the family's two rules: PURE (text + spans + the tool names; no model,
 # network or clock, so it can never itself become a source of narration) and
@@ -1086,54 +1112,255 @@ def capability_claim_check(
 # clause/first-person/question machinery:
 #
 #   * The tool ACTUALLY RAN this turn (a matching successful span exists) — even
-#     when the reply also said "let me search" before showing the results.
-#   * An OFFER / question ("Want me to search?", "Should I look it up?", "I can
-#     search if you'd like") — a question clause, or an offer/conditional marker,
-#     asserts no commitment. (Same exemption as the deferral-guard lesson: a
-#     "want me to" is never read as an action.)
+#     when the reply also said "let me search" before showing the results. For
+#     the offer shape ANY span of the instructed class, failed included, is
+#     enough: an offer after a real attempt ("the search failed — should I try
+#     again?", "done — want me to also list src/?") is about what comes NEXT,
+#     not the instruction handed back. "After doing it" is read off the spans,
+#     never off the word order of the reply ("Done. Want me to…" with nothing
+#     run is still nothing run).
+#   * A commitment clause that is an OFFER / question ("Want me to search?",
+#     "Should I look it up?", "I can search if you'd like") asserts no
+#     commitment — it is judged as an offer instead, and an offer is a deferral
+#     ONLY when it restates an instruction (above). With no instruction behind
+#     it ("Want to hear a joke?", an unprompted "I can search the web if you
+#     like") it is exactly what it looks like, and never fires.
+#   * A CLARIFYING QUESTION is never an offer, even after an instruction: a
+#     clause led by a wh-word ("Which directory should I list — the project or
+#     your home?") asks for a MISSING PARAMETER; an alternative ("Do you want
+#     the full tree or just the top level?", "Do you mean the Dell or the
+#     laptop?", "Search the web or your notes?") asks for a SCOPE choice, and
+#     a question with no first-person offered action in it ("Do you mean…")
+#     offers nothing. Each is the one thing the ruling leaves her to ask.
+#     A scope question that ALSO offers the instructed action ("Do you want me
+#     to list hidden files too?", "Should I list the whole tree, including
+#     node_modules?") fires, by the ruling's own definition — it offers to
+#     perform what was instructed — while the same scope question with no
+#     offered action in it ("Do you want me to include hidden files?", "Should
+#     I include subdirectories?") stays clean. Accepted KNOWN MISSES on the
+#     same cut, precision-first: "Would you like me to search for it, or answer
+#     from what I know?" and "…, or is that not needed?" read as an alternative
+#     (the "or" cut has no way to tell a non-tool alternative from a second
+#     tool), and a bare "Should I go ahead?" / "Want me to?" / "Should I
+#     proceed?" names no action to derive.
+#   * The instruction RESTATED is not an offer: "Got it — you want me to check
+#     the web for the latest Pixel. Which region?" / "I understand you want me
+#     to read config.json, but it doesn't exist." carry the "want me to" marker
+#     with HIS subject in front of it and no interrogative/conditional before
+#     that subject ("do you want me to", "if you want me to" still offer).
+#     Accepted KNOWN MISSES on this cut, precision-first: a CONFIRMATION that
+#     puts a non-interrogative word, or nothing, before his subject — "Are you
+#     sure you want me to open config.json?", "So you want me to search the
+#     web?", "You'd want me to search the web first, right?" — reads as the
+#     restatement and stays clean, deliberately: the cut has no way to tell it
+#     from "Got it — you want me to…" without reading the whole sentence, and
+#     a restatement wrongly corrected is the worse failure.
+#   * An offer of a DIFFERENT action than the one instructed ("Done. Want me
+#     to also summarise it?") maps to no instructed class, so it is a genuine
+#     offer of extra work and stays clean.
+#   * A STATEMENT-form offer ("I can search the web for that.", "I could list
+#     them for you.", "Happy to open config.json whenever you're ready.") is
+#     the same instruction handed back without the question mark, and reaches
+#     the offer verdict too — only while NO tool ran successfully this turn:
+#     after real work a plain "I can/could…" reads as a report of what she
+#     found ("I could see config.json in the listing"), and the offer after
+#     work is caught in its question form ("want me to…") by the span rule
+#     above. A commitment in the same clause ("…so I'll search the web now")
+#     is judged as the commitment first, so nothing that fired before stops.
 #   * A non-tool "action" ("Let me think.", "I'll explain.", "I'll keep that in
 #     mind.") — the verb maps to no registered tool, so it is never a deferral.
 #   * Past / other-subject / negation ("I couldn't search", "you can search",
 #     "I won't search", "I will not search") — the commitment leads are
 #     first-person present/future, and a negation between the lead and the action
-#     drops the match, so none of these reach a fired verdict.
+#     drops the match, so none of these reach a fired verdict. On the USER side
+#     the same rule holds for what counts as an instruction: "don't search the
+#     web" instructs nothing, and "did you search the web?" asks about the past.
+#     A MENTION of the action is not an instruction either — the user side has
+#     a request frame: his own first-person report ("I read config.json and it
+#     looks wrong", "I've been searching the web all day") instructs nothing
+#     unless the subject carries a request verb ("I need you to…", "I want…",
+#     "I said…", "we should…"), and a second verb coordinated with that report
+#     ("I listed the files AND read config.json") is still his report — while
+#     every match of the phrase is read, so a mention never hides the request
+#     that follows it ("I read config.json and it looks wrong — can you read
+#     config.json again?" instructs); a search "in my notes" is memory_search,
+#     never the web, read to the end of its own coordination unit ("search the
+#     web for the pixel and save it in my notes" is a web search); and a
+#     device resource named in a plain statement ("my disk usage has been high
+#     lately") only instructs when the clause is a question or carries a
+#     request word (check/tell/show/how/what/can/please/need/want…) — the
+#     terse "dell disk usage" is the accepted KNOWN MISS on that cut.
 
-# Commitment-phrase -> (tool, human action phrase). The pattern is a GENERAL
-# future commitment to a class of action, never a specific completed one
-# (narration's job). Every alternative is anchored so an unrelated verb cannot be
-# swept in: web search phrases exclude a memory/notes object (that would be
-# memory_search, a different, unmapped tool), and the fetch verbs require a URL
-# or a page/link/site object (so "read the file" — a workspace read — is not a
+# An action class: the phrase that names an action, the registered tools that
+# perform it, and the human phrase the redirect nudge and honest note read out.
+# `restated` is the OFFER-side-only form of the same action whose object is a
+# pronoun standing in for the instruction's ("open it", "list them", "check
+# that") — it can only ever be read against an instruction that supplied the
+# object, so it is never used to detect an instruction.
+class _ActionClass(NamedTuple):
+    pattern: re.Pattern[str]
+    tools: tuple[str, ...]
+    action_phrase: str
+    restated: re.Pattern[str] | None = None
+
+    def registered_tool(self, registered: frozenset[str]) -> str | None:
+        """The first tool of this class in the live registry, or None — a class
+        with none registered is not an action she can take, on either side."""
+        for tool in self.tools:
+            if tool in registered:
+                return tool
+        return None
+
+
+# Commitment-phrase -> class. The pattern is a GENERAL future commitment to a
+# class of action, never a specific completed one (narration's job). Every
+# alternative is anchored so an unrelated verb cannot be swept in: web search
+# phrases exclude a memory/notes object (that would be memory_search, a
+# different, unmapped tool), and the fetch verbs require a URL or a
+# page/link/site object (so "read the file" — a workspace read — is not a
 # fetch). The action phrase is what the redirect nudge and the honest note read
 # out to the operator.
-_DEFERRAL_TOOLS: tuple[tuple[re.Pattern[str], str, str], ...] = (
-    (
-        re.compile(
-            r"\bweb\s+search\b"
-            # "search" for the public web, but NOT "search my/your/the memory|notes"
-            # (that is memory_search, which this guard does not map).
-            r"|\bsearch(?:ing|es)?\b(?!\s+(?:through\s+)?(?:my|your|our|the)\s+"
-            r"(?:memor(?:y|ies)|notes?))"
-            r"|\blook(?:ing)?\s+(?:it|that|this|them|these|those|him|her|up)\b"
-            r"|\bfind\s+(?:\w+\s+){0,4}?\bonline\b"
-            r"|\bcheck\s+(?:the\s+)?(?:web|internet)\b"
-            r"|\bgoogle\b",
-            re.I,
-        ),
-        "web_search",
-        "search the web",
+_WEB_SEARCH = _ActionClass(
+    re.compile(
+        r"\bweb\s+search\b"
+        # "search" for the public web, but NOT "search my/your/the memory|notes"
+        # (that is memory_search, which this guard does not map).
+        r"|\bsearch(?:ing|es)?\b(?!\s+(?:through\s+)?(?:my|your|our|the)\s+"
+        r"(?:memor(?:y|ies)|notes?))"
+        r"|\blook(?:ing)?\s+(?:it|that|this|them|these|those|him|her|up)\b"
+        r"|\bfind\s+(?:\w+\s+){0,4}?\bonline\b"
+        r"|\bcheck\s+(?:the\s+)?(?:web|internet)\b"
+        r"|\bgoogle\b",
+        re.I,
     ),
-    (
-        re.compile(
-            r"\b(?:fetch|retrieve|pull\s+up|pull|grab|load|open|read|visit|access"
-            r"|go\s+to|navigate\s+to)\b"
-            r"[^.?!]*?"  # a short bridge, bounded to the clause (no sentence ender)
-            r"(?:https?://\S+|\b(?:url|link|page|site|website|web\s*page)\b)",
-            re.I,
-        ),
-        "fetch_url",
-        "fetch that page",
+    ("web_search",),
+    "search the web",
+)
+_FETCH_VERB_ALTS = r"fetch|retrieve|pull\s+up|pull|grab|load|open|read|visit|access"
+_FETCH_URL = _ActionClass(
+    re.compile(
+        r"\b(?:" + _FETCH_VERB_ALTS + r"|go\s+to|navigate\s+to)\b"
+        r"[^.?!]*?"  # a short bridge, bounded to the clause (no sentence ender)
+        r"(?:https?://\S+|\b(?:url|link|page|site|website|web\s*page)\b)",
+        re.I,
     ),
+    ("fetch_url",),
+    "fetch that page",
+    restated=re.compile(
+        r"\b(?:" + _FETCH_VERB_ALTS + r")\s+(?:it|that|this|them|that\s+one)\b", re.I
+    ),
+)
+# The COMMITMENT shape maps only these two: a text-only "do it now" regeneration
+# (chat._deferral_redirect) is the whole recovery for a commitment, and every
+# other class of promise is caught by bare_intent_check with a tools-advertised
+# redirect. Widening this tuple widens the commitment shape; the offer shape
+# below reads the full class table.
+_DEFERRAL_TOOLS: tuple[_ActionClass, ...] = (_WEB_SEARCH, _FETCH_URL)
+
+# The classes an INSTRUCTION can name and an OFFER can restate — the ones the
+# ruling lists (web search / fetch, list / read files, run a command, check a
+# device), each anchored on an object that cannot be read another way, and
+# each counted only while one of its tools is registered.
+_FILE_PLACE = r"(?:workspace|folders?|director(?:y|ies)|dirs?|tree|repo(?:sitory)?)"
+_LIST_FILES = _ActionClass(
+    re.compile(
+        # "list my workspace files", "show me the directory structure", "ls the folder"
+        r"\b(?:list|ls|enumerate|show|display)\b(?:\s+(?:me|all|every|each|out|up))*"
+        r"(?:\s+(?:the|my|your|our|this|that|those|these|of|in|inside|under|current"
+        r"|whole|entire|full|top[- ]level))*"
+        r"(?:\s+[A-Za-z][\w'-]*){0,2}?"
+        r"\s+(?:them|files?|folders?|director(?:y|ies)|dirs?|contents?|tree|workspace"
+        r"|entries|structure|listing|layout)\b"
+        # "what's in my workspace?", "which files are in the folder"
+        r"|\bwhat(?:['’]s|\s+is|\s+are)\s+(?:in|inside|under)\s+(?:the|my|your|our)\s+"
+        + _FILE_PLACE
+        + r"|\b(?:files?|folders?)\s+(?:are\s+|is\s+)?(?:in|inside|under)\s+(?:the|my|your|our)\s+"
+        + _FILE_PLACE
+        # "check / look at / browse the workspace"
+        + r"|\b(?:check|look\s+(?:at|in|into|through)|inspect|scan|explore|browse|see)\s+"
+        r"(?:the|my|your|our)\s+" + _FILE_PLACE,
+        re.I,
+    ),
+    ("workspace_list_files", "device_list_files"),
+    "list the files",
+    restated=re.compile(r"\b(?:list|show|display)\s+(?:it|them|that|this|those|these)\b", re.I),
+)
+_FILE_NOUN = (
+    r"(?:files?|readme|config(?:uration)?|logs?|notes?|documents?|docs?|scripts?|manifest"
+    r"|changelog|license|makefile|dockerfile|env|settings|source|code)"
+)
+_READ_VERBS = (
+    r"(?:read|open|cat|show|display|print|view|check|look\s+at|pull\s+up|fetch|grab|load"
+    r"|see|inspect|review)"
+)
+_READ_FILE = _ActionClass(
+    re.compile(
+        r"\b" + _READ_VERBS + r"\b(?:\s+(?:me|up|out|into|through|over|at))*"
+        r"(?:\s+(?:the|my|your|our|this|that|those|these|its|a|an|whole|entire|full"
+        r"|current|latest|new|old))*"
+        r"(?:\s+[A-Za-z][\w'-]*){0,2}?"
+        r"\s+(?:" + _FILENAME_RE + r"|" + _FILE_NOUN + r")\b"
+        # "the files in my workspace" is a listing, not a read
+        r"(?!\s+(?:are\s+|is\s+)?(?:in|inside|under)\s+(?:the|my|your|our)\s+" + _FILE_PLACE + r")"
+        r"|\bwhat(?:['’]s|\s+is)\s+in\s+" + _FILENAME_RE + r"\b"
+        r"|\bcontents?\s+of\s+(?:the\s+|my\s+|your\s+)?" + _FILENAME_RE + r"\b",
+        re.I,
+    ),
+    ("workspace_read_file", "device_read_file"),
+    "read that file",
+    restated=re.compile(
+        r"\b" + _READ_VERBS + r"\s+(?:it|that|this|them|that\s+one|its\s+contents?"
+        r"|the\s+contents?|the\s+file)\b",
+        re.I,
+    ),
+)
+_RUN_COMMAND = _ActionClass(
+    re.compile(
+        r"\b(?:run|execute|exec|invoke)\b"
+        r"(?:\s+(?:the|a|an|this|that|my|your|our|quick|full|another|same))*"
+        r"(?:\s+(?:command|cmd|commands|script|scripts|check|scan|query|it|that|this|them)\b"
+        r"|\s+`[^`]+`"
+        r"|\s+(?:ls|find|df|du|ps|top|htop|grep|netstat|ss|ping|whoami|pwd|uname|git"
+        r"|docker|systemctl|uptime|free|cat|tail|head|lsblk|ip|ifconfig|nvidia-smi)\b)",
+        re.I,
+    ),
+    ("device_run",),
+    "run that command",
+)
+_RESOURCE = r"(?:disks?|storage|drives?|space|swap|gpu|vram|cpu|processor|ram|memory)"
+_CHECK_DEVICE = _ActionClass(
+    re.compile(
+        r"\b" + _RESOURCE + r"\s+(?:usage|use|space|free|left|remaining|available|load"
+        r"|utili[sz]ation|pressure|temp(?:erature)?|capacity|stats?|status)\b"
+        r"|\b(?:free|available|used|remaining|leftover)\s+" + _RESOURCE + r"\b"
+        r"|\bhow\s+(?:much|many)\s+(?:" + _RESOURCE + r"|free\s+space|space\s+is\s+left)\b"
+        r"|\b" + _RESOURCE + r"\s+(?:is|are|do\s+i\s+have|have\s+i\s+got|i\s+have|is\s+there"
+        r"|are\s+there)\s+(?:free|left|remaining|available|used|full)\b"
+        r"|\b(?:uptime|load\s+average|running\s+processes|system\s+(?:info|information"
+        r"|status|stats|load|health)|battery\s+(?:level|status|percentage|percent))\b"
+        r"|\b(?:cpu|gpu|system)\s+temp(?:erature)?s?\b"
+        r"|\bwhat(?:['’]s|\s+is)\s+running\s+on\b"
+        r"|\b(?:is|are)\s+(?:the\s+)?(?:disk|drive|storage)s?\s+full\b",
+        re.I,
+    ),
+    ("device_info", "device_run"),
+    "check the device",
+    # "check" with nothing but a pronoun / adverb behind it, up to the clause
+    # end or a conditional tail ("check that if you want") — "check your
+    # calendar" is a different action and does not match.
+    restated=re.compile(
+        r"\b(?:check|find\s+out|look\s+into|take\s+a\s+look)\b"
+        r"(?:\s+(?:it|that|this|them|for\s+you|now|right\s+now|again|myself|on\s+it))*"
+        r"\s*(?=[.!?…,;:—–-]|$|\s+(?:if|when|whenever|should|once)\b)",
+        re.I,
+    ),
+)
+_OFFER_CLASSES: tuple[_ActionClass, ...] = (
+    *_DEFERRAL_TOOLS,
+    _LIST_FILES,
+    _READ_FILE,
+    _RUN_COMMAND,
+    _CHECK_DEVICE,
 )
 
 # A first-person future-commitment lead — the action follows it. "I'll" REQUIRES
@@ -1156,7 +1383,9 @@ _COMMIT_LEAD = re.compile(
 )
 # An offer / conditional turns a commitment into a request the operator has not
 # accepted ("I can now search IF YOU'D LIKE", "WANT ME TO look it up?"). A clause
-# carrying one of these markers is never a deferral — same rule as a question.
+# carrying one of these markers is never a COMMITMENT — it is read as an OFFER,
+# and (owner ruling 2026-09-03) an offer is a deferral of its own kind when it
+# restates the action the user already instructed; see `_restated_offer`.
 _OFFER_MARKER = re.compile(
     r"\bif\s+you\b"
     r"|\bwould\s+you\s+like\b"
@@ -1167,22 +1396,148 @@ _OFFER_MARKER = re.compile(
     r"|\blet\s+me\s+know\s+if\b",
     re.I,
 )
+# The first-person OFFERED action's lead, inside an offer clause: "want me to
+# X", "should/shall/could/can I X", "I can/could X", "happy to X" — and every
+# commitment lead too, because inside an offer clause "I'll check that if you
+# want" is a commitment gated on a consent that does not exist. A clause with
+# no such lead ("Do you want the full tree or just the top level?", "Do you
+# mean the Dell?") offers no action of hers and is never a deferral.
+# The leads that make an offer WITHOUT a question mark or an offer marker: a
+# bare first-person modal ("I can/could X") or a willingness ("happy to X").
+# They are the statement-form half of `_OFFER_LEAD` below, and the ONLY thing
+# that lets a plain statement clause reach the offer verdict (deferral_check).
+_STATEMENT_OFFER = re.compile(
+    r"\bi\s+(?:can|could|would|might|may)\b"
+    r"(?:\s+(?:also|just|now|quickly|certainly|happily|gladly|always|easily|of\s+course))*"
+    r"|\bi['’]d\s+(?:be\s+)?(?:happy|glad)\s+to\b"
+    r"|\bi['’]m\s+(?:happy|glad)\s+to\b"
+    r"|\b(?:happy|glad)\s+to\b",
+    re.I,
+)
+_OFFER_LEAD = re.compile(
+    r"\b(?:want|like|need|wish|prefer)\s+me\s+to\b"
+    r"|\b(?:should|shall|could|can|may|might|would)\s+i\b"
+    r"|\b(?:how\s+about|what\s+if)\s+i\b"
+    r"|" + _STATEMENT_OFFER.pattern
+    + r"|" + _COMMIT_LEAD.pattern,
+    re.I,
+)
+# The "…me to" lead with HIS subject directly in front of it ("you want me to
+# read config.json") is the instruction restated, not offered — unless an
+# interrogative / conditional precedes that subject ("do you want me to",
+# "would you like me to", "if you want me to", "whenever you want me to"),
+# which is the offer again. Read off the words before the lead only.
+_ME_TO_LEAD = re.compile(r"\b(?:want|like|need|wish|prefer)\s+me\s+to\b", re.I)
+_SUBJECT_BEFORE_LEAD = re.compile(
+    r"(?<![\w'’])(?:you|you['’]d|you['’]re|he|she|they|we)\s+(?:\w+\s+){0,2}$", re.I
+)
+_INTERROGATIVE_BEFORE = re.compile(
+    r"\b(?:do|does|did|would|will|if|whether|unless|should|might|could|can|say|when"
+    r"|whenever)\s+(?:\w+\s+){0,3}$",
+    re.I,
+)
+# A clarifying question asks for a MISSING PARAMETER (a wh-lead: "which
+# directory should I list?") or a SCOPE choice (an alternative: "the full tree
+# or just the top level?", "the web or your notes?"). Either is the one thing
+# the ruling leaves her to ask, so an offer clause shaped like one never fires.
+_WH_LEAD = re.compile(
+    r"^\W*(?:(?:and|so|but|or|ok|okay|sure|also)\b[,:\s—–-]*)?"
+    r"(?:just\s+to\s+(?:confirm|check|clarify|be\s+sure)[,:\s—–-]*)?"
+    r"(?:which|what|where|who|whom|whose|how|when)\b(?!\s+(?:about|if)\b)",
+    re.I,
+)
+_ALTERNATIVE = re.compile(r"\bor\b", re.I)
 # A negation sitting BETWEEN the lead and the action un-commits it ("I will NOT
-# search", "I'll never fetch that page"); the more common "I won't"/"I can't"
-# never form a lead in the first place.
-_COMMIT_NEGATION = re.compile(r"\bnot\b|\bnever\b|n['’]t\b", re.I)
+# search", "I'll never fetch that page", "I can answer that WITHOUT searching
+# the web"); the more common "I won't"/"I can't" never form a lead in the first
+# place. Read only between lead and action, so "I'll search the web without
+# delay" keeps its commitment.
+_COMMIT_NEGATION = re.compile(r"\bnot\b|\bnever\b|n['’]t\b|\bwithout\b", re.I)
+# On the USER side, what stops an action phrase from being an instruction: a
+# negation before it ("don't search the web", "no need to list them", "instead
+# of reading it") and a question about the PAST ("did you search the web?").
+_USER_NEGATION = re.compile(
+    r"\b(?:don['’]t|do\s+not|never|no\s+need\s+to|without|instead\s+of|rather\s+than|not"
+    r"|didn['’]t|did\s+not|haven['’]t|have\s+not|can['’]t|cannot|couldn['’]t|won['’]t"
+    r"|shouldn['’]t|stop)\b"
+    # a bare "no" right before the action ("No searching please", "no more
+    # searching") — searched over the text BEFORE the match, so it anchors at
+    # that text's end rather than looking ahead at the action itself
+    r"|\bno\s+(?:\w+\s+)?$",
+    re.I,
+)
+# A MENTION is not an instruction. His own first-person report ("I read
+# config.json and it looks wrong", "I've been searching the web all day") sits
+# directly (0–2 words) before the action phrase, or one coordinated verb phrase
+# back from it ("I listed the files AND read config.json" — a few words, the
+# coordinator, at most one more), with no request verb on the subject; "I need
+# you to…", "I want…", "I'd like…", "I said…", "we should…" keep the request.
+_USER_SELF_REPORT = re.compile(
+    r"\b(?:i|i['’]ve|i['’]m|i['’]d|i['’]ll|we|we['’]ve|we['’]re)\b"
+    r"(?!\s+(?:need|want|would|like|wish|wonder|was\s+wondering|am\s+wondering"
+    r"|should|must|said|mean|meant|asked|told)\b)"
+    r"\s+(?:(?:\w+\s+){0,2}|(?:[\w.'’/-]+\s+){1,5}?(?:and|or)\s+(?:\w+\s+)?)$",
+    re.I,
+)
+# A search whose object lives "in my notes" is memory_search, not the web — the
+# class pattern already excludes the object right after "search"; this reads
+# the rest of the search's own coordination unit ("search for the pixel in my
+# notes"), cut at the first comma / "and" / "then" so "search the web for the
+# pixel AND save it in my notes" stays the web search it asks for.
+_NOTES_TAIL = re.compile(
+    r"\b(?:in|through|across|within)\s+(?:my|your|our|the)\s+(?:memor(?:y|ies)|notes?)\b",
+    re.I,
+)
+_COORD_BREAK = re.compile(r"[,;]|\b(?:and|then)\b", re.I)
+# A device RESOURCE named in a plain statement ("my disk usage on the dell has
+# been high lately") asks nothing; the noun-anchored device class instructs only
+# when the clause is a question or carries a request word. "is/are/do" are left
+# out on purpose — "the disk is full" is a statement, and "is the disk full?"
+# is a question by its mark.
+_REQUEST_FRAME = re.compile(
+    r"\b(?:check|tell|show|give|report|what|how|which|where|can|could|would|will"
+    r"|please|need|want)\b",
+    re.I,
+)
+_USER_PAST_QUERY = re.compile(
+    r"^\W*(?:did|have|has|had|were|was|when\s+did|why\s+did|how\s+did)\s+"
+    r"(?:you|it|that|she|he|they|nova)\b",
+    re.I,
+)
+# An offer that is RELAYED rather than made: reported speech before the lead
+# ("you asked: should I search?") or an opening quote. `_REPORTED` (a subject
+# plus a saying verb) rather than the pending guard's `_REPORTING_FRAME`, whose
+# bare "notes" would read "I can't find it in my notes, want me to search?" as
+# a report.
+_QUOTE_PAIRS = (('"', '"'), ("`", "`"), ("\u201c", "\u201d"))
+
+
+def _inside_quote(before: str) -> bool:
+    """True when the text before a lead opens a quote it never closes — the
+    lead sits inside reported text. Parity, not presence: a closed pair
+    ("I found `config.json` — want me to open it?") is her own sentence."""
+    for opener, closer in _QUOTE_PAIRS:
+        if opener == closer:
+            if before.count(opener) % 2:
+                return True
+        elif before.count(opener) > before.count(closer):
+            return True
+    return False
 
 
 @dataclass(frozen=True)
 class DeferralClaim:
     """A first-person future commitment to a registered tool action that never
-    ran this turn. `tool` is the registered tool that would satisfy it,
-    `action_phrase` the human phrase the redirect/honest-note read out, and
-    `phrase` the matched commitment text for the guard span."""
+    ran this turn, or an offer that hands the instructed action back instead
+    of doing it. `tool` is the registered tool that would satisfy it,
+    `action_phrase` the human phrase the redirect/honest-note read out,
+    `phrase` the matched text for the guard span, and `kind` which shape it
+    is — "commitment" or "offer"."""
 
     tool: str
     action_phrase: str
     phrase: str
+    kind: str = "commitment"
 
 
 def _tool_ran(tool: str, successful: Sequence[Any]) -> bool:
@@ -1191,38 +1546,153 @@ def _tool_ran(tool: str, successful: Sequence[Any]) -> bool:
     return any(getattr(span, "name", None) == tool for span in successful)
 
 
-def deferral_check(
-    reply_text: str, spans: Sequence[Any], available_tools: Sequence[str]
+def _attempted(cls: _ActionClass, spans: Sequence[Any]) -> bool:
+    """True if ANY tool span of this class — successful or not — was recorded
+    this turn. The offer shape's exemption: an offer after a real attempt at
+    the instructed action is about what comes next, not the instruction
+    handed back. Read off the spans, never off the reply's word order.
+
+    A REFUSED call is not an attempt: a call written as markup, or made in a
+    closed round, is recorded as a tool span (ok=False) so the trace shows it,
+    but nothing ran — and the redirect would happily regenerate it with tools.
+    Read from the flag the refusal itself writes (`refused_*` in the span's
+    meta, chat._refuse_call), never a list of reasons kept here."""
+    for span in spans:
+        if getattr(span, "kind", None) != "tool" or getattr(span, "name", None) not in cls.tools:
+            continue
+        meta = getattr(span, "meta", None) or {}
+        if any(str(key).startswith("refused") for key in meta):
+            continue
+        return True
+    return False
+
+
+def _instructed_classes(
+    user_message: str, registered: frozenset[str]
+) -> tuple[_ActionClass, ...]:
+    """The action classes the user's message INSTRUCTS, in table order — the
+    same class table read against his text, restricted to classes with a
+    registered tool (derived from the live registry, so a household without
+    a paired device is never 'instructed' to check one). A negated phrase
+    ("don't search the web") and a question about the past ("did you search
+    the web?") instruct nothing, and neither does a MENTION: his own report
+    of doing it ("I read config.json and it looks wrong"), a search in his
+    notes (memory, not the web), or a device resource named in a statement
+    that asks nothing ("my disk usage has been high lately"). Every match of
+    a phrase is read and the first to survive the cuts decides, so a mention
+    never hides the request after it ("I read config.json and it looks wrong
+    — can you read config.json again?" instructs the read)."""
+    if not user_message or not user_message.strip():
+        return ()
+    found: list[_ActionClass] = []
+    for clause, is_question in _clauses(user_message):
+        if _USER_PAST_QUERY.match(clause):
+            continue
+        for cls in _OFFER_CLASSES:
+            if cls in found or cls.registered_tool(registered) is None:
+                continue
+            if cls is _CHECK_DEVICE and not is_question and not _REQUEST_FRAME.search(clause):
+                continue  # "my disk usage has been high lately" states, asks nothing
+            for m in cls.pattern.finditer(clause):
+                before = clause[: m.start()]
+                if _USER_NEGATION.search(before) or _USER_SELF_REPORT.search(before):
+                    continue
+                tail = _COORD_BREAK.split(clause[m.end() :], 1)[0]
+                if cls is _WEB_SEARCH and _NOTES_TAIL.search(tail):
+                    continue  # "search for the pixel in my notes" — memory, not the web
+                found.append(cls)
+                break
+    return tuple(found)
+
+
+def _restated_offer(
+    clause: str,
+    instructed: Sequence[_ActionClass],
+    registered: frozenset[str],
+    spans: Sequence[Any],
 ) -> DeferralClaim | None:
-    """A first-person future commitment to a tool action that never ran, or None.
+    """The offer-shape verdict for one offer clause: a DeferralClaim when the
+    clause offers, in the first person, an action of a class the user already
+    instructed and nothing of that class was attempted this turn; None for a
+    clarifying question, an offer of something else, a negated or relayed
+    offer, or an offer after a real attempt."""
+    if _WH_LEAD.match(clause) or _ALTERNATIVE.search(clause):
+        return None  # asks for a parameter or a scope choice — hers to ask
+    for lead in _OFFER_LEAD.finditer(clause):
+        before = clause[: lead.start()]
+        if _REPORTED.search(before) or _inside_quote(before):
+            continue  # relayed ("you said: should I search?"), not her offer
+        if (
+            _ME_TO_LEAD.fullmatch(lead.group(0))
+            and _SUBJECT_BEFORE_LEAD.search(before)
+            and not _INTERROGATIVE_BEFORE.search(before)
+        ):
+            continue  # "you want me to read config.json" — his instruction, restated
+        for cls in instructed:
+            m = cls.pattern.search(clause, lead.end())
+            if m is None and cls.restated is not None:
+                m = cls.restated.search(clause, lead.end())
+            if m is None:
+                continue  # offers something else — a genuine offer
+            if _COMMIT_NEGATION.search(clause[lead.start() : m.start()]):
+                continue  # "I can't search" — no offer of the action
+            if _attempted(cls, spans):
+                continue  # the instructed thing ran (or was tried): extra work
+            tool = cls.registered_tool(registered)
+            if tool is None:
+                continue
+            phrase = clause[lead.start() : m.end()].strip()
+            return DeferralClaim(
+                tool=tool, action_phrase=cls.action_phrase, phrase=phrase[:80], kind="offer"
+            )
+    return None
+
+
+def deferral_check(
+    reply_text: str,
+    spans: Sequence[Any],
+    available_tools: Sequence[str],
+    user_message: str = "",
+) -> DeferralClaim | None:
+    """A first-person future commitment to a tool action that never ran, or an
+    offer that hands the instructed action back, or None.
 
     Returns a DeferralClaim when the reply commits to an action a REGISTERED tool
-    performs and no successful span of that tool ran this turn; None otherwise —
-    an honest reply, a reply whose tool actually ran, an offer/question/
-    conditional, a non-tool 'action', or a past/negated/other-subject form. Pure
-    and precision-first (see the section header). Derived from `available_tools`:
-    a commitment is only a deferral when its satisfying tool is in that set, so
-    the verdict reads the live registry, never a hardcoded list.
+    performs and no successful span of that tool ran this turn (kind
+    "commitment"), or when `user_message` instructed an action a registered tool
+    performs and the reply asks whether to do that same action instead of doing
+    it (kind "offer"); None otherwise — an honest reply, a reply whose tool
+    actually ran, a genuine offer or clarifying question, a non-tool 'action',
+    or a past/negated/other-subject form. Pure and precision-first (see the
+    section header). Derived from `available_tools`: a commitment or an offer is
+    only a deferral when its satisfying tool is in that set, so the verdict
+    reads the live registry, never a hardcoded list. With no `user_message`
+    the offer shape is inert: an offer with no instruction behind it is genuine.
     """
     if not reply_text or not reply_text.strip():
         return None
     registered = frozenset(available_tools)
     successful = _successful(spans)
+    instructed = _instructed_classes(user_message, registered)
     for clause, is_question in _clauses(reply_text):
-        if is_question:
-            continue  # a question/offer asserts no commitment
-        if _OFFER_MARKER.search(clause):
-            continue  # "if you'd like", "want me to" — an offer, not a promise
-        lead = _COMMIT_LEAD.search(clause)
-        if lead is None:
+        if is_question or _OFFER_MARKER.search(clause):
+            # A question/offer asserts no COMMITMENT ("if you'd like", "want me
+            # to") — but an offer to do what was just instructed is the
+            # instruction handed back (owner ruling 2026-09-03).
+            if instructed:
+                offer = _restated_offer(clause, instructed, registered, spans)
+                if offer is not None:
+                    return offer
             continue
-        for pattern, tool, action_phrase in _DEFERRAL_TOOLS:
-            if tool not in registered:
+        lead = _COMMIT_LEAD.search(clause)
+        for cls in _DEFERRAL_TOOLS if lead is not None else ():
+            tool = cls.registered_tool(registered)
+            if tool is None:
                 # No such tool -> a promise to do it is not a deferral this guard
                 # can act on (derived-not-hardcoded: the verdict follows the
                 # live registry).
                 continue
-            m = pattern.search(clause, lead.end())
+            m = cls.pattern.search(clause, lead.end())
             if m is None:
                 continue  # the action must come AFTER the commitment lead
             if _COMMIT_NEGATION.search(clause[lead.end() : m.start()]):
@@ -1230,7 +1700,16 @@ def deferral_check(
             if _tool_ran(tool, successful):
                 continue  # the reply said "let me search" and actually searched
             phrase = clause[lead.start() : m.end()].strip()
-            return DeferralClaim(tool=tool, action_phrase=action_phrase, phrase=phrase[:80])
+            return DeferralClaim(tool=tool, action_phrase=cls.action_phrase, phrase=phrase[:80])
+        # A STATEMENT-form offer ("I can search the web for that.") — the same
+        # instruction handed back without the question mark. Judged AFTER the
+        # commitment shape so a mixed clause keeps kind="commitment", and only
+        # while nothing ran successfully this turn (after real work a plain
+        # "I could…" is a report of what she found — see the section header).
+        if instructed and not successful and _STATEMENT_OFFER.search(clause):
+            offer = _restated_offer(clause, instructed, registered, spans)
+            if offer is not None:
+                return offer
     return None
 
 
@@ -1541,9 +2020,14 @@ def state_claim_check(
 #   * a QUESTION to the user ("Should I check the workspace?") — most
 #     questions already fail the shape match on their own (no lead reads as a
 #     question); the '?' check is the cheap, explicit backstop.
-#   * a HEDGE/OFFER ("I could check that if you want.", "I'll check that if
-#     you want.") — the shared `_OFFER_MARKER` plus the bare modals (could/
-#     might/may/would) that never appear in a flat present-tense commitment.
+#   * a HEDGE ("I could check that if you want.") — the bare modals (could/
+#     might/may/would) never appear in a flat present-tense commitment. The
+#     shared `_OFFER_MARKER` used to exempt a CONSENT-GATED commitment here too
+#     ("I'll check that if you want.") — no longer, by owner ruling 2026-09-03
+#     (docs/plans/rebuild/no-approvals.md): there is no approval step, so the
+#     "if you want" gates nothing and the whole reply is still an intent to act
+#     with nothing behind it. An offer that restates an instruction in a
+#     longer reply is deferral_check's offer shape, which runs first.
 #   * a tool DID run this turn (`ran_a_tool`) — "Checking…" that goes on to
 #     narrate a real result is an honest, if terse, report, and the shape
 #     match would fail on the narration's content anyway.
@@ -1688,8 +2172,8 @@ def bare_intent_check(reply_text: str, spans: Sequence[Any]) -> BareIntentClaim 
         return None
     if "?" in normalized:
         return None  # a question to the user asserts no commitment
-    if _OFFER_MARKER.search(normalized) is not None or _BARE_INTENT_HEDGE.search(normalized):
-        return None  # "if you want", "could" — a hedge/offer, not a promise
+    if _BARE_INTENT_HEDGE.search(normalized):
+        return None  # "could check" — a hedge, not a promise
     if ran_a_tool(spans):
         return None  # real work happened this turn — an honest terse report
     if _BARE_INTENT_SHAPE.fullmatch(normalized) is None:
