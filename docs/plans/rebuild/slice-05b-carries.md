@@ -81,3 +81,20 @@ word-split a `$VAR` holding a command — write compose commands out in full.
 - Compose `--profile` on the CLI REPLACES .env's COMPOSE_PROFILES (measured
   on 5.3.0) — install.sh passes `--profile tailnet` explicitly; operators
   should use plain `up -d`.
+
+## Addendum 2026-09-04 — ollama came back on CPU after T3
+
+The T3 `up` used a bare `-f deploy/docker-compose.yml`; the GPU reservation
+lives in the OVERLAY `deploy/docker-compose.gpu.yml` (install.sh merges it;
+a hand-run `up` did not). ollama started with `library=cpu`, qwen3.8:27b
+loaded 17 GB onto CPU, the next chat turn hit the 300 s gateway timeout and
+the owner saw "still responding" then nothing. Fix: `COMPOSE_FILE` in
+deploy/.env now lists BOTH files with ABSOLUTE paths — a relative
+`COMPOSE_FILE` resolves against the CURRENT DIRECTORY, and from the worktree
+root it loaded the v3 `docker-compose.yml` at the repo root ("no such
+service: gateway" was the only thing that stopped it). Deploy rule: run
+compose as `docker compose --project-directory deploy …` (or from deploy/)
+and never pass a bare `-f`; verify with `config --services` (8 v4 services)
+and `config | grep -A3 reservations` before any `up`. Tripwire being added
+to install.sh: after health, ollama's "inference compute" line must report
+the detected GPU library, else the install dies naming the overlay.
