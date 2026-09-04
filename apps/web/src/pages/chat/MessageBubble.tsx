@@ -1,5 +1,6 @@
 import { memo } from 'react'
 import { AlertTriangle, Loader2, Unplug } from 'lucide-react'
+import { Markdown } from '../../components/Markdown'
 import type { ErrorRow, MessageRow } from './chatReducer'
 
 /**
@@ -77,8 +78,18 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
         </div>
       </div>
       <div className="flex-1 min-w-0 pb-1">
-        <div className="text-body leading-relaxed text-content-primary whitespace-pre-wrap break-words">
-          {row.text ? row.text : row.streaming && !row.activity ? <LoadingDots /> : null}
+        {/* Her replies are GitHub-flavoured markdown (components/Markdown.tsx:
+            sanitised, raw HTML shown as text, never executed). The user's own
+            bubble above stays plain pre-wrap text — what the owner typed is
+            not markdown and must not be re-interpreted. `break-words` is what
+            keeps a long unbroken token (a URL, a hash) from widening the
+            column. */}
+        <div className="text-body leading-relaxed text-content-primary break-words">
+          {row.text ? (
+            <Markdown text={row.text} />
+          ) : row.streaming && !row.activity ? (
+            <LoadingDots />
+          ) : null}
         </div>
         {row.activity && <ActivityLine activity={row.activity} />}
         {/* A cut-off turn keeps whatever really arrived and says it was cut

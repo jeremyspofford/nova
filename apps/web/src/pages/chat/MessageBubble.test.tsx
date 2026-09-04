@@ -86,3 +86,89 @@ describe('MessageBubble — the live tool-call line', () => {
     expect(screen.queryByLabelText('waiting for the model')).toBeNull()
   })
 })
+
+function userRow(text: string): MessageRow {
+  return {
+    kind: 'message',
+    id: 'u1',
+    role: 'user',
+    text,
+    streaming: false,
+    interrupted: false,
+    activity: null,
+  }
+}
+
+describe('MessageBubble — her replies are markdown, the owner\'s are not', () => {
+  it('renders an assistant reply\'s markdown as elements', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          streaming: false,
+          text: '## Plan\n\n- **first** step\n- second\n\n```sh\nls -la\n```',
+        })}
+      />,
+    )
+    const bubble = screen.getByTestId('message-assistant')
+    expect(bubble.querySelector('h2')?.textContent).toBe('Plan')
+    expect(bubble.querySelectorAll('ul > li')).toHaveLength(2)
+    expect(bubble.querySelector('strong')?.textContent).toBe('first')
+    expect(bubble.querySelector('pre > code')?.textContent).toBe('ls -la\n')
+    // The asterisks and fence markers are consumed, not shown.
+    expect(bubble.textContent).not.toContain('**')
+    expect(bubble.textContent).not.toContain('```')
+  })
+
+  it('renders a partial stream with an unclosed fence as a code block, without throwing', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({ streaming: true, text: 'Try this:\n\n```\necho partial' })}
+      />,
+    )
+    const bubble = screen.getByTestId('message-assistant')
+    expect(bubble.querySelector('pre > code')?.textContent).toContain('echo partial')
+  })
+
+  it('never executes HTML the model wrote — it is shown as text, in the same reply markdown renders', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          streaming: false,
+          text: '**bold** <script>alert(1)</script> and <img src=x onerror=alert(1)>',
+        })}
+      />,
+    )
+    const bubble = screen.getByTestId('message-assistant')
+    // Markdown is on (so this is not the old pre-wrap div passing by accident)…
+    expect(bubble.querySelector('strong')?.textContent).toBe('bold')
+    // …and HTML is still text.
+    expect(bubble.querySelector('script')).toBeNull()
+    expect(bubble.querySelector('img')).toBeNull()
+    expect(bubble.textContent).toContain('<script>alert(1)</script>')
+    expect(bubble.textContent).toContain('<img src=x onerror=alert(1)>')
+  })
+
+  it('keeps the owner\'s own message as literal text — asterisks stay asterisks', () => {
+    render(<MessageBubble row={userRow('this is **not** markdown, `nor` this')} />)
+    const bubble = screen.getByTestId('message-user')
+    expect(bubble.textContent).toBe('this is **not** markdown, `nor` this')
+    expect(bubble.querySelector('strong')).toBeNull()
+    expect(bubble.querySelector('code')).toBeNull()
+    expect(bubble.querySelector('.whitespace-pre-wrap')).not.toBeNull()
+  })
+
+  it('still shows the tool line and the interrupted note beneath a markdown reply', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          streaming: false,
+          interrupted: true,
+          text: '- a\n- b',
+          activity: { tool: 'device_run', status: 'error', reason: 'no such file' },
+        })}
+      />,
+    )
+    expect(screen.getByTestId('activity-line').textContent).toBe('device_run: no such file')
+    expect(screen.getByText(/Interrupted — the connection dropped/)).toBeDefined()
+  })
+})

@@ -81,6 +81,27 @@ own request's header (the proxies overwrite it for real visitors, browsers
 never send it), and the worst a liar can do is give itself a Secure cookie
 its own browser drops.
 
+## Reply formatting
+
+Her replies render as GitHub-flavoured markdown (`src/components/Markdown.tsx`:
+`react-markdown` + `remark-gfm` + `remark-breaks`, pinned exact). Headings,
+lists, tables, fenced code, blockquotes and links all render; a single
+newline is a line break, as in a GitHub comment. What never happens: raw
+HTML in a reply is shown as escaped text (no `rehype-raw`, no
+`dangerouslySetInnerHTML`); a link whose scheme is not `https?`/`ircs?`/
+`mailto`/`xmpp` (`javascript:`, `data:`, `file:`, …) renders as plain text
+rather than an empty, still-clickable `<a>`; a markdown image becomes a link
+rather than an `<img>` the browser would fetch on draw (and inside a link it
+is just the link's text — never `<a>` in `<a>`); links open in a new tab with
+`rel="noopener noreferrer"` except same-document `#` links (footnotes), which
+stay put. Tables and code blocks scroll inside their own box, never the
+page. The parse runs behind `useDeferredValue`, so a burst of stream deltas
+coalesces into one re-parse instead of one per delta. The owner's own bubbles
+are plain pre-wrap text — what he typed is not markdown. No syntax
+highlighter: `rehype-highlight` was measured at +54 KB gzip on top of the
++49 KB the renderer itself costs (it imports all of lowlight's `common`
+grammars, unshakeably), so code blocks are plain monospace.
+
 ## Tests
 
 `gate_test.sh` builds the real image and runs the whole matrix against
