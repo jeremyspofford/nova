@@ -23,10 +23,21 @@ import { ErrorBubble, MessageBubble } from './MessageBubble'
  * turn lands, then resolves the finished reply into the store — so the
  * operator returns and the complete answer appears with no second refresh.
  *
+ * The poll runs for exactly as long as core says the turn is in flight. It
+ * used to give up after 300 s — "the gateway's read budget", the reasoning
+ * went — but a turn is not one gateway call: it is up to max_tool_rounds of
+ * them plus redirects, each with its own 300 s of allowed silence, and the
+ * poll's clock starts at the RELOAD, not at the send. A refresh a second
+ * after sending, followed by a 300 s timeout, had the poll giving up ~1 s
+ * before the turn closed, and the page went quiet with the turn's stated
+ * failure sitting unread in the database (the 2026-09-04 17:11 silence).
+ * pending_turn is derived from a set that dies with the core process, so it
+ * can never be true forever; the honest client reads it and does not guess.
+ *
  * `api` is a dependency-injection seam, the same idiom as ActivityPage's:
  * production uses the real client (the DEFAULT_API default); a test injects
- * fakes. `pollIntervalMs`/`maxPollMs` are injectable so a test can drive the
- * poll on real timers without waiting seconds.
+ * fakes. `pollIntervalMs` is injectable so a test can drive the poll on real
+ * timers without waiting seconds.
  */
 
 interface ChatApi {
@@ -39,25 +50,24 @@ const DEFAULT_API: ChatApi = {
   getMessages: apiGetMessages,
 }
 
-// How often to ask core whether the in-flight turn has landed, and how long
-// to keep asking before giving up and showing whatever is there. The ceiling
-// tracks core's own gateway read budget (GATEWAY_TIMEOUT read=300s) so the
-// poll never gives up before the turn itself possibly could.
+// How often to ask core whether the in-flight turn has landed. There is no
+// ceiling: the server's pending_turn is the fact, and the poll stops when it
+// says so or when this page unmounts (see the docstring above).
 const POLL_INTERVAL_MS = 1500
-const MAX_POLL_MS = 300_000
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+// How many consecutive failed pending_turn reads the page tolerates before it
+// stops asserting "still responding" — a claim it can no longer back.
+const MAX_POLL_FAILURES = 8
 
 export function ChatPage({
   initialModel,
   api = DEFAULT_API,
   pollIntervalMs = POLL_INTERVAL_MS,
-  maxPollMs = MAX_POLL_MS,
 }: {
   initialModel?: string
   api?: ChatApi
   pollIntervalMs?: number
-  maxPollMs?: number
 }) {
   const { state, sendMessage, loadConversation, resolveServerTurn, clearChat, setModel } =
     useChatStore()
@@ -110,8 +120,8 @@ export function ChatPage({
     })()
 
     async function pollForReply(conversationId: string): Promise<void> {
-      const deadline = Date.now() + maxPollMs
-      while (live && Date.now() < deadline) {
+      let fetchFailures = 0
+      while (live) {
         await sleep(pollIntervalMs)
         if (!live) return
         // The operator asked something new while we waited — their live turn
@@ -123,8 +133,22 @@ export function ChatPage({
         let active
         try {
           active = await api.getActiveConversation()
-        } catch {
+          fetchFailures = 0
+        } catch (err) {
           // A transient read failure is not a finished turn — keep polling.
+          // But "still responding" is a claim this page can only back while
+          // it can READ the fact; after MAX_POLL_FAILURES consecutive
+          // failures it stops claiming and says what it knows instead.
+          fetchFailures += 1
+          if (fetchFailures >= MAX_POLL_FAILURES) {
+            setResponding(false)
+            setLoadError(
+              `Nova's core could not be reached for ${fetchFailures} checks in a row` +
+                (err instanceof Error && err.message ? ` (${err.message})` : '') +
+                ' — the turn may still be running; reload to check.',
+            )
+            return
+          }
           continue
         }
         if (!live) return
@@ -143,15 +167,14 @@ export function ChatPage({
           return
         }
       }
-      // Gave up (deadline) or unmounted: clear the indicator. Whatever is in
-      // the store is shown; nothing is invented.
-      if (live) setResponding(false)
+      // Unmounted mid-poll: nothing to clear on a page that is gone, and
+      // nothing is invented.
     }
 
     return () => {
       live = false
     }
-  }, [api, loadConversation, resolveServerTurn, pollIntervalMs, maxPollMs])
+  }, [api, loadConversation, resolveServerTurn, pollIntervalMs])
 
   // Part C — land on the newest message when the conversation opens, when it
   // changes, and when the in-flight poll resolves. Keyed on those events

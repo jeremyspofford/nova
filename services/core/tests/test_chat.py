@@ -179,11 +179,19 @@ async def test_gateway_error_states_the_reason_and_marks_the_turn(
 
     turn = await pool.fetchrow("SELECT id, status FROM turns")
     assert turn["status"] == "error"
-    assert (await _spans(pool, turn["id"]))["llm_call"]["meta"]["error"]
+    llm = (await _spans(pool, turn["id"]))["llm_call"]["meta"]
+    assert llm["error"]
+    assert llm["error_class"] == "GatewayFailure"
+    assert llm["gateway_status"] == 500
 
-    # The user's message stays; nothing is invented for the assistant.
-    roles = [r["role"] for r in await pool.fetch("SELECT role FROM messages")]
-    assert roles == ["user"]
+    # The user's message stays, and the assistant row is the STATED failure —
+    # the same sentence the error frame carried — never an invented reply and
+    # never nothing (tests/test_chat_model_failure.py has the whole property).
+    rows = await pool.fetch("SELECT role, content FROM messages ORDER BY created_at")
+    assert [r["role"] for r in rows] == ["user", "assistant"]
+    assert rows[1]["content"] == sent[1]["error"]
+    assert "the gateway refused the request (500)" in rows[1]["content"]
+    assert "backend refused" in rows[1]["content"]
 
 
 async def test_an_empty_completion_is_an_error_not_a_silent_success(
@@ -194,10 +202,17 @@ async def test_an_empty_completion_is_an_error_not_a_silent_success(
 
     status, sent = await _say(owner_client)
     assert status == 200
-    assert sent[1] == {"error": "the model returned nothing"}
+    # An empty round is a stated failure with the stream's counted facts in
+    # it, not a bare "returned nothing" — and it is on record, so a reload
+    # shows it (the measured 2026-09-04 silence).
+    assert "error" in sent[1]
+    assert sent[1]["error"].startswith("I didn't get a response from qwen3:8b (ollama): ")
+    assert "no content and no tool calls" in sent[1]["error"]
     assert sent[-1] == DONE
 
-    assert [r["role"] for r in await pool.fetch("SELECT role FROM messages")] == ["user"]
+    rows = await pool.fetch("SELECT role, content FROM messages ORDER BY created_at")
+    assert [r["role"] for r in rows] == ["user", "assistant"]
+    assert rows[1]["content"] == sent[1]["error"]
     assert await pool.fetchval("SELECT status FROM turns") == "error"
 
 

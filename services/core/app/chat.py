@@ -18,7 +18,12 @@ Frame contract (each line is `data: <json>`):
     {"correction": "<note>"}                      zero or more, when an honesty
                                                    guard contradicts or redirects
                                                    the reply (see app/guards.py)
-    {"error": "<stated reason>"}                  at most one, on failure
+    {"error": "<stated reason>"}                  at most one, on failure — the
+                                                   SAME sentence the turn persists
+                                                   as its assistant message (see
+                                                   model_failure_statement), so a
+                                                   reload shows what the live
+                                                   error row said
     [DONE]                                        always last
 
 A turn is a loop, not a single call: the model is offered the tool
@@ -34,7 +39,11 @@ reply that claims one is contradicted by guards.consent_claim_check.
 
 Recall is best-effort, the turn is not: a memory service that is down
 costs the turn its notes and nothing else. A gateway that fails is stated
-in an error frame — never an empty success.
+in an error frame — never an empty success — AND as a persisted assistant
+message that names what happened, derived from the failed round's span
+(measured 2026-09-04 17:11: a 300 s silence from a 27B model loading on CPU
+ended a turn 'error' with no message at all; the chat showed "still
+responding…" for five minutes and then nothing).
 """
 from __future__ import annotations
 
@@ -42,6 +51,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -77,8 +87,37 @@ RECALL_TIMEOUT = httpx.Timeout(2.0)
 INGEST_TIMEOUT = httpx.Timeout(10.0)
 # No short read timeout on the completion: a long first token is the model
 # thinking, not a failure.
+#
+# What `read=300` MEANS (httpx semantics, checked 2026-09-04): it is PER READ,
+# not per response. The wait for the response headers is one read, and every
+# body chunk after that is another, each with its own fresh 300 s budget — so
+# a model that streams a token every few seconds is never cut off however long
+# its answer, and the only thing this declares dead is 300 s of SILENCE: no
+# headers yet, or no bytes since the last chunk. That is the right definition
+# of "dead" for a streaming call. What it also means is that a first token
+# slower than 300 s — a 27B model being loaded on CPU (measured 2026-09-04:
+# headers after 280 s, then nothing) — is indistinguishable from a hung
+# gateway, and the turn ends. The number stays; the turn now SAYS this
+# happened (model_failure_statement) instead of ending silently.
 GATEWAY_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=10.0, pool=5.0)
 EMPTY_REPLY = "the model returned nothing"
+# How much of a non-SSE line in the completion stream the llm_call span keeps
+# (see _gateway_round): a backend that writes a plain JSON error into a 200
+# stream used to be dropped without a trace, and this is the evidence.
+STRAY_LINE_HEAD_CHARS = 200
+# The `error_class` an llm_call span records for a round that produced nothing
+# at all — no content, no tool calls, no stated error — as opposed to a class
+# named after the exception that killed it.
+EMPTY_ROUND = "EmptyRound"
+# Which httpx timeout tripped, so the round can name the budget that expired
+# instead of an opaque class name. Checked most-specific first — the four are
+# siblings under httpx.TimeoutException, never each other's subclasses.
+_TIMEOUT_PHASES: tuple[tuple[type, str], ...] = (
+    (httpx.ConnectTimeout, "connect"),
+    (httpx.ReadTimeout, "read"),
+    (httpx.WriteTimeout, "write"),
+    (httpx.PoolTimeout, "pool"),
+)
 DONE_FRAME = "data: [DONE]\n\n"
 
 # The OPT-IN responsiveness check (agents.responsiveness_check, default False).
@@ -456,6 +495,10 @@ def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
         "Never say an action is awaiting or pending anyone's approval — do it now, "
         "or say plainly why you cannot — and never deny having a capability you "
         "have a tool for. "
+        "Put code, commands, command output, file listings and directory trees in "
+        "fenced code blocks: tag code and shell with the language (```python, "
+        "```bash) so it is highlighted, and tag listings and trees ```text so "
+        "their spacing survives. "
         "A web fetch is a LIVE, point-in-time read. For anything time-sensitive — "
         "'the latest', current news, today's status — call fetch_url again to get "
         "fresh results; never answer with what an earlier fetch or a recalled note "
@@ -737,6 +780,150 @@ def _bounded(redacted: object) -> object:
 def _mentions_tools(reason: str) -> bool:
     lowered = reason.lower()
     return any(marker in lowered for marker in _TOOL_SUPPORT_MARKERS)
+
+
+def _timeout_phase(exc: BaseException) -> str | None:
+    for cls, phase in _TIMEOUT_PHASES:
+        if isinstance(exc, cls):
+            return phase
+    return None
+
+
+def _transport_failure(exc: Exception) -> str:
+    """The stated reason for a round httpx could not complete.
+
+    A timeout names the budget that expired, read off GATEWAY_TIMEOUT itself
+    (the one the client was built with), so "300 s" in the sentence is the
+    configured number and not a copy of it. Anything else is the transport's
+    own words, prefixed so the reader knows which hop failed.
+    """
+    phase = _timeout_phase(exc)
+    if phase == "read":
+        return (
+            f"nothing arrived from the gateway for {GATEWAY_TIMEOUT.read:g} s "
+            f"(its read timeout — {peers.reason(exc)})"
+        )
+    if phase is not None:
+        budget = getattr(GATEWAY_TIMEOUT, phase)
+        return f"the gateway {phase} timeout of {budget:g} s expired ({peers.reason(exc)})"
+    return f"could not reach the gateway — {peers.reason(exc)}"
+
+
+def _empty_round_failure(
+    elapsed_s: float,
+    *,
+    saw_done: bool,
+    data_lines: int,
+    stray_lines: int,
+    stray_head: str | None,
+) -> str:
+    """The stated reason for a round that ended with nothing in it — every
+    clause a fact the stream loop counted, never a guess at why."""
+    facts = [
+        f"{data_lines} data line(s)",
+        "[DONE] seen" if saw_done else "[DONE] never sent",
+    ]
+    if stray_lines:
+        facts.append(f"{stray_lines} non-SSE line(s), the first: {stray_head!r}")
+    return (
+        f"the stream ended after {elapsed_s:.1f} s with no content and no tool "
+        f"calls ({', '.join(facts)})"
+    )
+
+
+def _last_llm_span(spans: Sequence[traces.Span]) -> traces.Span | None:
+    for span in reversed(spans):
+        if span.kind == "llm_call":
+            return span
+    return None
+
+
+def _tool_outcomes(spans: Sequence[traces.Span]) -> tuple[list[str], list[str]]:
+    """(tools that ran ok, tools that ran and stated a failure), by name, in
+    order, deduped — from the spans, never from any prose. A refused call (a
+    closed round, markup written as text) was never dispatched and is in
+    neither list: it did not run, so it is not something that "ran"."""
+    ran = guards.successful_tool_names(spans)
+    failed: list[str] = []
+    for span in spans:
+        if span.kind != "tool" or not span.name:
+            continue
+        meta = span.meta or {}
+        if meta.get("ok") is True or any(key.startswith("refused_") for key in meta):
+            continue
+        if span.name not in failed and span.name not in ran:
+            failed.append(span.name)
+    return ran, failed
+
+
+def _names(names: Sequence[str]) -> str:
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _ran_clause(spans: Sequence[traces.Span]) -> str:
+    """"Nothing was run." — or what did, DERIVED: a call that ran is never
+    reported as nothing ran (the rule every honest note in here follows)."""
+    ran, failed = _tool_outcomes(spans)
+    if not ran and not failed:
+        return "Nothing was run."
+    pieces = []
+    if ran:
+        pieces.append(f"{_names(ran)} ran")
+    if failed:
+        pieces.append(f"{_names(failed)} failed")
+    return f"Before that, {' and '.join(pieces)} — see Activity for the results."
+
+
+RETRY_HINT = "Try again, or check the model in Settings → Models."
+
+
+def model_failure_statement(
+    *, model: str, failure: str, spans: Sequence[traces.Span]
+) -> str:
+    """The assistant message a turn keeps when its model call did not answer.
+
+    Every clause is a fact the turn measured: the model from the setting the
+    turn ran under, the engine from the gateway's X-Nova-Served-By header (on
+    the llm_call span, when the gateway got far enough to send headers), the
+    round from that span, the reason from the exception or the stream shape
+    (`failure`, composed by _gateway_round), and "nothing was run" from the
+    tool spans. Never a generic "something went wrong": the sentence the owner
+    reads is the sentence the trace backs.
+
+    It is persisted as the turn's assistant row AND sent as the turn's error
+    frame, so the live error row and the reloaded transcript say the same
+    thing. It is NOT ingested into memory (a failed call is plumbing, not
+    knowledge — the same rule a guard correction follows) and it carries no
+    completed-action claim and no pending-state phrase.
+    """
+    llm = _last_llm_span(spans)
+    meta = llm.meta if llm is not None else {}
+    served_by = meta.get("served_by")
+    served_kind, _, served_model = (
+        served_by.partition(":") if isinstance(served_by, str) else ("", "", "")
+    )
+    # The served model name comes from the span when the setting is empty —
+    # the gateway told us what actually answered, so say that, not a label.
+    who = model or served_model or "the gateway's default model"
+    if served_kind:
+        who = f"{who} ({served_kind})"
+    round_number = meta.get("round")
+    where = ""
+    if isinstance(round_number, int) and round_number > 1:
+        where = f" in round {round_number}"
+    return (
+        f"I didn't get a response from {who}{where}: {failure}. "
+        f"{_ran_clause(spans)} {RETRY_HINT}"
+    )
+
+
+def turn_failure_statement(reason: str, spans: Sequence[traces.Span]) -> str:
+    """The message for a turn that died somewhere OTHER than the model call —
+    the unplanned exception path. The model may well have answered; what is
+    known is only that the turn failed, and what ran."""
+    return f"This turn failed before I could answer: {reason}. {_ran_clause(spans)} {RETRY_HINT}"
 
 
 # -- peers -----------------------------------------------------------------
@@ -1143,6 +1330,17 @@ async def _gateway_round(
     collected: list[str] = []
     buffer = ToolCallBuffer()
     failure: str | None = None
+    # The stream's SHAPE, counted as it arrives: a stream that ends without a
+    # [DONE] marker, or that carries lines which are not SSE data at all, is the
+    # only evidence an empty round leaves behind, and it goes on the span.
+    # (Measured 2026-09-04 17:11: headers after 280 s, then the stream ended at
+    # 300 s with zero data lines — and the span recorded nothing about it, so
+    # the trace said a round had run and said nothing about how it ended.)
+    saw_done = False
+    data_lines = 0
+    stray_lines = 0
+    stray_head: str | None = None
+    t0 = time.perf_counter()
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
         span.meta["round"] = round_number
@@ -1158,6 +1356,7 @@ async def _gateway_round(
                     if served_by:
                         span.meta["served_by"] = served_by
                     if response.status_code != 200:
+                        span.meta["gateway_status"] = response.status_code
                         detail = (await response.aread()).decode(errors="replace")[:400]
                         raise GatewayFailure(
                             f"the gateway refused the request "
@@ -1165,10 +1364,22 @@ async def _gateway_round(
                         )
                     async for line in response.aiter_lines():
                         line = line.strip()
-                        if not line.startswith("data:"):
+                        if not line or line.startswith(":"):
+                            # Frame separators and SSE comments (a proxy's
+                            # keep-alive) — not data, not evidence either.
                             continue
+                        if not line.startswith("data:"):
+                            # Not SSE. A backend that writes a plain JSON error
+                            # body into a 200 stream lands here; it used to be
+                            # dropped without a trace. Counted, first head kept.
+                            stray_lines += 1
+                            if stray_head is None:
+                                stray_head = line[:STRAY_LINE_HEAD_CHARS]
+                            continue
+                        data_lines += 1
                         data = line[len("data:") :].strip()
                         if data == "[DONE]":
+                            saw_done = True
                             break
                         try:
                             chunk = json.loads(data)
@@ -1195,9 +1406,18 @@ async def _gateway_round(
         except GatewayFailure as exc:
             failure = str(exc)
             span.meta["error"] = failure
+            span.meta["error_class"] = type(exc).__name__
         except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
-            failure = f"could not reach the gateway — {peers.reason(exc)}"
+            # The class AND the message, so the trace can tell a read timeout
+            # from a refused connection without parsing the sentence.
+            failure = _transport_failure(exc)
             span.meta["error"] = failure
+            span.meta["error_class"] = type(exc).__name__
+            phase = _timeout_phase(exc)
+            if phase is not None:
+                span.meta["timeout_phase"] = phase
+                span.meta["timeout_s"] = getattr(GATEWAY_TIMEOUT, phase)
+        elapsed_s = time.perf_counter() - t0
         calls = buffer.finished()
         # A round's content is scanned ONCE, here, so every round in the system
         # — the turn loop's, the out-of-rounds narration round, both of a
@@ -1225,6 +1445,32 @@ async def _gateway_round(
                 span.meta["markup_unparsed"] = True
             calls.extend(_markup_tool_calls(scan.calls, calls))
         span.meta["tool_calls"] = len(calls)
+        if failure is None and not collected and not calls:
+            # A round that produced NOTHING — no content, no tool calls, no
+            # stated error — is a failed round, said so here with the stream's
+            # counted facts, not an empty success for the caller to discover
+            # later (or, before this, never: the turn's floor caught only a
+            # whole-turn silence, and the span said nothing at all). Every
+            # caller already handles a stated failure: the turn loop ends the
+            # turn with the statement, the narration round fails open, a
+            # redirect ships its correction.
+            failure = _empty_round_failure(
+                elapsed_s,
+                saw_done=saw_done,
+                data_lines=data_lines,
+                stray_lines=stray_lines,
+                stray_head=stray_head,
+            )
+            span.meta["error"] = failure
+            span.meta["error_class"] = EMPTY_ROUND
+        if not saw_done or stray_lines:
+            # Only the unusual shapes are recorded — a clean stream is the
+            # norm and needs no row of counters saying so.
+            stream: dict[str, object] = {"done": saw_done, "data_lines": data_lines}
+            if stray_lines:
+                stream["stray_lines"] = stray_lines
+                stream["stray_head"] = stray_head
+            span.meta["stream"] = stream
     return text, calls, failure
 
 
@@ -1832,6 +2078,37 @@ async def _run_turn(
     # turn is still in flight; the finally below closes it as 'error' only if
     # the coroutine is torn down (e.g. at shutdown) before deciding.
     decided: str | None = None
+    # Whether an assistant row for this turn is on record — the ok reply or a
+    # failure statement. The unplanned-exception path below writes one only
+    # if none is, so a turn never gets two.
+    persisted_reply = False
+
+    async def _end_without_a_reply(stated: str) -> None:
+        """The turn's ONE exit for a model call that did not answer.
+
+        A turn that ends 'error' owes the owner a VISIBLE reply, not a blank:
+        before this, the failure went out as a live error frame and nothing
+        else, so a page that had been reloaded (or was polling pending_turn
+        after a hard refresh) saw the turn close and then found nothing in the
+        transcript. The statement is composed from the failed round's span
+        and the tool spans (model_failure_statement), persisted as the
+        assistant row FIRST — so if the database refuses it the unplanned
+        path below says so, and this turn never claims a record it does not
+        have — then sent as the error frame, the same words. Streamed prose
+        from the dead round (`parts`) is not the record: it was watched live,
+        but it is unguarded text from a call that did not finish, and the
+        next turn must not read it back as an answer. Not ingested: a failed
+        call is plumbing, not knowledge.
+        """
+        nonlocal decided, persisted_reply
+        statement = model_failure_statement(model=model, failure=stated, spans=turn.spans)
+        logger.warning("chat turn %s failed: %s", turn.id, stated)
+        decided = "error"
+        await _persist_assistant(pool, conversation_id, statement)
+        persisted_reply = True
+        emit(_frame({"error": statement}))
+        emit(DONE_FRAME)
+
     try:
         emit(
             _frame(
@@ -1912,16 +2189,20 @@ async def _run_turn(
 
         if failure is not None:
             stated = failure
-            if _mentions_tools(failure):
+            failed_round = _last_llm_span(turn.spans)
+            gateway_said_so = (
+                failed_round is not None
+                and failed_round.meta.get("error_class") == GatewayFailure.__name__
+            )
+            if gateway_said_so and _mentions_tools(failure):
                 # Layered in front of the backend's own words, never
                 # instead of them — and the turn still fails, because a
                 # silent retry without tools would leave her looking
-                # capable while having no hands at all.
+                # capable while having no hands at all. Only a reason the
+                # GATEWAY stated can be about tools: a timeout or an empty
+                # stream is composed here and mentions "tool calls" itself.
                 stated = f"the serving model/backend does not support tools — {failure}"
-            logger.warning("chat turn %s failed: %s", turn.id, stated)
-            decided = "error"
-            emit(_frame({"error": stated}))
-            emit(DONE_FRAME)
+            await _end_without_a_reply(stated)
             return
 
         # A note the BACKEND wrote about how the turn ended — the round cap, or a
@@ -2036,11 +2317,11 @@ async def _run_turn(
         if not text:
             # Zero deltas and no error at all: still a failure, said out loud.
             # The floor judges the whole turn, so a tool round that said
-            # nothing is fine as long as some round eventually did.
-            logger.warning("chat turn %s: %s", turn.id, EMPTY_REPLY)
-            decided = "error"
-            emit(_frame({"error": EMPTY_REPLY}))
-            emit(DONE_FRAME)
+            # nothing is fine as long as some round eventually did. Since an
+            # empty round is a stated failure in _gateway_round this is
+            # defence in depth — a turn whose every round produced something
+            # that was then stripped (markup) can still land here.
+            await _end_without_a_reply(EMPTY_REPLY)
             return
 
         # The honesty guards: a reply is a claim, the spans are the fact. All
@@ -2677,6 +2958,7 @@ async def _run_turn(
         persisted = without_markup(persisted)
 
         await _persist_assistant(pool, conversation_id, persisted)
+        persisted_reply = True
         # Memory hygiene: a guarded consent/capability turn is interaction
         # PLUMBING, not knowledge. A turn the consent guard had to correct, or
         # that the capability guard had to correct, is "awaiting approval" / "I
@@ -2737,7 +3019,17 @@ async def _run_turn(
         # turn simply runs on, which is the whole point of the slice.)
         logger.exception("chat turn %s failed unexpectedly", turn.id)
         decided = "error"
-        emit(_frame({"error": f"the turn failed — {peers.reason(exc)[:300]}"}))
+        reason = f"the turn failed — {peers.reason(exc)[:300]}"
+        if not persisted_reply:
+            # The same owed reply, best effort: if the database is what failed
+            # this fails too, and is LOGGED — never reported as recorded.
+            try:
+                await _persist_assistant(
+                    pool, conversation_id, turn_failure_statement(reason, turn.spans)
+                )
+            except Exception:
+                logger.exception("could not record the failure of turn %s", turn.id)
+        emit(_frame({"error": reason}))
         emit(DONE_FRAME)
     finally:
         # The atomic trace close, always — shielded so a cancellation during

@@ -145,6 +145,9 @@ def test_the_system_prompt_names_no_approval_step():
     family is clean over the sentence (it is what she reads every turn)."""
     prompt = chat.stable_system_prompt("m", tools.tool_names())
     assert "There is no approval step: when you call a tool it runs in this turn." in prompt
+    # Formatting is stated too (a request, never a control): fences with a
+    # language tag for code, ```text for listings and trees.
+    assert "fenced code blocks" in prompt and "```text" in prompt
     assert "Never say an action is awaiting or pending anyone's approval" in prompt
     # The old sentence, in every phrasing it had.
     for stale in (

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { ChatPage } from './ChatPage'
 import { ChatProvider } from '../../stores/chat-store'
 import type { ClearedConversation, Conversation, StoredMessage } from '../../lib/api'
@@ -41,7 +41,7 @@ function renderChat(api: {
 }) {
   return render(
     <ChatProvider fetchImpl={noopFetch}>
-      <ChatPage api={api} pollIntervalMs={5} maxPollMs={2000} />
+      <ChatPage api={api} pollIntervalMs={5} />
     </ChatProvider>,
   )
 }
@@ -139,6 +139,112 @@ describe('ChatPage — recovering a turn that finished server-side', () => {
   })
 })
 
+describe('ChatPage — a turn that ended in error shows the statement core persisted', () => {
+  // The 2026-09-04 17:11 silence, from the page's side: after a reload the
+  // poll ran, the turn ended 'error' with a stated failure persisted as its
+  // assistant row, and the page had to render it — not go quiet. Fake timers,
+  // because the turn outlives the 300 s ceiling the poll used to give up at:
+  // reverting to that ceiling makes this test fail, which is the point.
+  const STATEMENT =
+    "I didn't get a response from qwen3.8:27b (ollama): nothing arrived from the gateway " +
+    'for 300 s (its read timeout — ReadTimeout). Nothing was run. Try again, or check the ' +
+    'model in Settings → Models.'
+  const IN_FLIGHT_MS = 320_000
+
+  it('keeps polling for as long as core says the turn is in flight, then renders the statement', async () => {
+    vi.useFakeTimers()
+    try {
+      const start = Date.now()
+      const stillRunning = () => Date.now() - start < IN_FLIGHT_MS
+      const api = {
+        getActiveConversation: vi.fn(async () => conversation({ pending_turn: stillRunning() })),
+        getMessages: vi.fn(async () =>
+          stillRunning()
+            ? [stored('u1', 'user', 'list files in my workspace directory')]
+            : [
+                stored('u1', 'user', 'list files in my workspace directory'),
+                stored('a1', 'assistant', STATEMENT),
+              ],
+        ),
+      }
+
+      render(
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage api={api} />
+        </ChatProvider>,
+      )
+      // The mount load resolves: in flight, so the responding line is up.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(screen.getByTestId('chat-responding')).toBeDefined()
+
+      // 330 s later the turn has closed (at 320 s) and the poll has seen it.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(IN_FLIGHT_MS + 10_000)
+      })
+      expect(screen.getByText(/nothing arrived from the gateway for 300 s/)).toBeDefined()
+      expect(screen.queryByTestId('chat-responding')).toBeNull()
+      expect(assistantBubbles()).toHaveLength(1)
+      // It polled the whole way — never gave up and left the page quiet.
+      expect(api.getActiveConversation.mock.calls.length).toBeGreaterThan(IN_FLIGHT_MS / 1500 - 1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stops claiming "still responding" when core cannot be read, and says so', async () => {
+    // "Still responding" is a claim the page can only back while it can READ
+    // pending_turn. One good read, then core goes away: after a bounded run
+    // of failed checks the line must come down and the failure be stated —
+    // never an indicator asserting a fact nobody can see.
+    vi.useFakeTimers()
+    try {
+      let calls = 0
+      const api = {
+        getActiveConversation: vi.fn(async () => {
+          calls += 1
+          if (calls === 1) return conversation({ pending_turn: true })
+          throw new Error('connect ECONNREFUSED')
+        }),
+        getMessages: vi.fn(async () => [stored('u1', 'user', 'list files in my workspace directory')]),
+      }
+      render(
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage api={api} pollIntervalMs={5} />
+        </ChatProvider>,
+      )
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0)
+      })
+      expect(screen.getByTestId('chat-responding')).toBeDefined()
+
+      // A few failures are tolerated — still responding, no error yet.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5 * 3)
+      })
+      expect(screen.getByTestId('chat-responding')).toBeDefined()
+      expect(screen.queryByText(/could not be reached/)).toBeNull()
+
+      // Past the bound the claim comes down and the failure is stated.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5 * 20)
+      })
+      expect(screen.queryByTestId('chat-responding')).toBeNull()
+      expect(screen.getByText(/could not be reached for \d+ checks in a row/)).toBeDefined()
+      expect(screen.getByText(/ECONNREFUSED/)).toBeDefined()
+      // ...and it stopped polling: no unbounded retry loop behind the scenes.
+      const after = api.getActiveConversation.mock.calls.length
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5 * 20)
+      })
+      expect(api.getActiveConversation.mock.calls.length).toBe(after)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('ChatPage — Clear chat button (with a light confirm)', () => {
   function renderChatWithClear(
     api: {
@@ -149,7 +255,7 @@ describe('ChatPage — Clear chat button (with a light confirm)', () => {
   ) {
     return render(
       <ChatProvider fetchImpl={noopFetch} conversationsApi={{ clearConversation }}>
-        <ChatPage api={api} pollIntervalMs={5} maxPollMs={2000} />
+        <ChatPage api={api} pollIntervalMs={5} />
       </ChatProvider>,
     )
   }
