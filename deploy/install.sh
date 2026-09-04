@@ -2,6 +2,7 @@
 # Nova v4 installer. Idempotent: safe to re-run.
 # ./install.sh          preflight -> hardware detect -> secrets -> compose
 #                        up -d --build -> wait for health -> status table
+#                        -> ollama's own word on the GPU
 # ./install.sh update   stub — arrives in a later slice
 # bash 3.2 compatible (no associative arrays, no ${var,,}, no mapfile).
 set -euo pipefail
@@ -46,6 +47,12 @@ BUNDLED_INFERENCE=1
 # set that is not the one running. (Indexed arrays are bash 3.2; only
 # ASSOCIATIVE arrays are 4.0+, and there are none here.)
 COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+# Profiles an explicit off-switch turned off this run (NOVA_SKIP_INFERENCE=1,
+# NOVA_TAILNET=0), space-separated. record_compose_profiles takes each out of
+# COMPOSE_PROFILES in .env, so a later plain `docker compose up -d` does not
+# bring back an engine this run was told to leave off. Mere absence is not a
+# switch: only the explicit "off" un-writes.
+PROFILES_SWITCHED_OFF=""
 
 log() { printf '%s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
@@ -333,10 +340,11 @@ preflight() {
 # going to come up. An engine you cannot start is not an engine: refuse here,
 # before anything is pulled or built, and say what would make it start.
 #
-# Once on, the profile is written to COMPOSE_PROFILES in .env so a later bare
-# `docker compose up -d` converges the service too — and this script keeps
-# passing it explicitly, because a `--profile` flag on the command line
-# REPLACES the .env list rather than adding to it (measured, compose v5.3.0).
+# Once on, the profile reaches COMPOSE_PROFILES in .env (record_compose_profiles,
+# derived from the --profile args) so a later bare `docker compose up -d`
+# converges the service too — and this script keeps passing it explicitly,
+# because a `--profile` flag on the command line REPLACES the .env list rather
+# than adding to it (measured, compose v5.3.0).
 TAILNET_ENABLED=0
 # The compose volume KEY that holds the node's identity (docker-compose.yml,
 # `volumes:`). Compose prefixes it with the project name; the real volume is
@@ -538,10 +546,10 @@ decide_tailnet() {
 
   if [ "$want" -eq 0 ]; then
     if [ "${NOVA_TAILNET:-}" = "0" ] && profile_listed tailnet "$existing"; then
-      set_env_value COMPOSE_PROFILES "$(remove_profile tailnet "$existing")"
-      log "tailnet: profile removed from COMPOSE_PROFILES (NOVA_TAILNET=0). A running"
+      PROFILES_SWITCHED_OFF="$PROFILES_SWITCHED_OFF tailnet"
+      log "tailnet: the profile comes out of COMPOSE_PROFILES (NOVA_TAILNET=0). A running"
       log "         tailscale container is left alone; stop it with:"
-      log "           docker compose -f $COMPOSE_FILE --profile tailnet stop tailscale"
+      log "           docker compose --project-directory $DEPLOY_DIR --profile tailnet stop tailscale"
     else
       log "tailnet: off (NOVA_TAILNET=1 ./install puts Nova on your tailnet — deploy/README.md)"
     fi
@@ -600,8 +608,9 @@ decide_tailnet() {
   TAILNET_ENABLED=1
   COMPOSE_ARGS=("${COMPOSE_ARGS[@]}" --profile tailnet)
   HEALTH_CHECKED_SERVICES="$HEALTH_CHECKED_SERVICES tailscale"
-  set_env_value COMPOSE_PROFILES "$(add_profile tailnet "$existing")"
-  log "tailnet: on — node '$hostname'; COMPOSE_PROFILES in $ENV_FILE now carries the profile"
+  # COMPOSE_PROFILES in .env is written by record_compose_profiles, from the
+  # --profile args every decision left in COMPOSE_ARGS — one writer.
+  log "tailnet: on — node '$hostname'"
 }
 
 # THE SEAM (tailnet). The node's MagicDNS name, read from the running
@@ -666,9 +675,139 @@ detect_gpu_runtime() {
   fi
 }
 
+# ---- the GPU, as ollama itself reports it ---------------------------------
+#
+# Within seconds of starting, ollama logs one line per compute device:
+#   msg="inference compute" id=GPU-… library=CUDA … description="NVIDIA …"
+# or, when it found no usable GPU, exactly one:
+#   msg="inference compute" id=cpu library=cpu …
+# That line is the ONLY fact that says whether the GPU overlay reached the
+# container. Every healthcheck is green either way — ollama's own is
+# `ollama list`, which passes on the CPU. Measured 2026-09-04: the stack had
+# been brought up with a bare `docker compose -f docker-compose.yml up -d`,
+# the overlay was never merged, ollama logged library=cpu, loaded a 27B model
+# onto the CPU, and the owner's next chat turn hit the 300 s gateway timeout
+# with every row of the status table reading healthy. A green install that
+# has silently lost the GPU is the fallback-that-reads-as-success this script
+# exists to refuse — so after health, ollama's line is read and CUDA is
+# REQUIRED; a line that cannot be read is a refusal too, never a pass.
+
+# The device driver the overlay reserves (`driver: nvidia`), read from the
+# overlay rather than restated here.
+overlay_gpu_driver() {
+  awk '/^[[:space:]]*-[[:space:]]*driver:/ { sub(/.*driver:[[:space:]]*/, ""); print; exit }' \
+    "$GPU_COMPOSE_FILE"
+}
+
+# ONE place for "this device driver means ollama must log this library".
+# ollama calls its nvidia backend CUDA. A second vendor gets a second row here
+# and a second overlay; a driver with no row makes detect_hardware die rather
+# than check nothing.
+inference_library_for_driver() {
+  case "$1" in
+    nvidia) printf 'CUDA' ;;
+    *) return 1 ;;
+  esac
+}
+
+# What ollama's log must say — set by detect_hardware when the overlay is
+# merged. Empty means no GPU reached compose and the check is skipped, aloud.
+EXPECTED_INFERENCE_LIBRARY=""
+# How long after the health table to wait for the line. It normally appears
+# before the healthcheck ever goes green; device discovery can lag by seconds.
+INFERENCE_COMPUTE_TIMEOUT=60
+
+# THE SEAM (gpu). ollama's log as compose has it. Non-zero when docker could
+# not be asked.
+ollama_log_text() {
+  docker compose "${COMPOSE_ARGS[@]}" logs --no-log-prefix ollama 2>/dev/null
+}
+
+# Pure reader (stdin: that log). The LAST `inference compute` line — the one
+# from the most recent start: a GPU start logs only GPU lines and a CPU start
+# logs only the cpu line, so the last line is the current fact. Empty when
+# there is none.
+last_inference_compute_line() {
+  awk '/msg="inference compute"/ { line = $0 } END { if (line != "") print line }'
+}
+
+# Pure reader (stdin: one such line). Its library= value, quotes stripped.
+inference_compute_library() {
+  awk '{ for (i = 1; i <= NF; i++) if (index($i, "library=") == 1) { v = substr($i, 9); gsub(/"/, "", v); print v; exit } }'
+}
+
+lowercase() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
+# Runs after every service is healthy. Reads ollama's own compute line and
+# refuses unless it names the library the overlay implies. An unreadable log
+# is NOT a pass: an absent line, or docker unable to answer, dies too.
+check_inference_compute() {
+  if [ "$BUNDLED_INFERENCE" -ne 1 ]; then
+    return 0
+  fi
+  if [ -z "$EXPECTED_INFERENCE_LIBRARY" ]; then
+    log "gpu: no GPU overlay was merged, so ollama's compute library is not checked —"
+    log "     it runs on the CPU, as stated above"
+    return 0
+  fi
+  local started now text line lib reason=""
+  started="$(date +%s)"
+  while :; do
+    if text="$(ollama_log_text)"; then
+      line="$(printf '%s\n' "$text" | last_inference_compute_line)"
+      if [ -n "$line" ]; then
+        break
+      fi
+      reason="no 'inference compute' line in ollama's log yet"
+    else
+      reason="docker compose logs ollama failed"
+    fi
+    now="$(date +%s)"
+    if [ "$((now - started))" -ge "$INFERENCE_COMPUTE_TIMEOUT" ]; then
+      log "ERROR: could not read ollama's inference compute line within ${INFERENCE_COMPUTE_TIMEOUT}s"
+      log "       ($reason), so whether the GPU reached the container could not be"
+      log "       established. Refusing rather than guessing. Look yourself with:"
+      log "         docker compose ${COMPOSE_ARGS[*]} logs --no-log-prefix ollama | grep 'inference compute'"
+      exit 1
+    fi
+    sleep 2
+  done
+  lib="$(printf '%s\n' "$line" | inference_compute_library)"
+  if [ "$(lowercase "$lib")" = "$(lowercase "$EXPECTED_INFERENCE_LIBRARY")" ]; then
+    log "gpu: ollama reports library=$lib — the overlay reached the container"
+    log "     ($line)"
+    return 0
+  fi
+  log "ERROR: the bundled ollama came up WITHOUT the GPU. Its own log says:"
+  log "         $line"
+  log "       Expected library=$EXPECTED_INFERENCE_LIBRARY, read library=${lib:-<none>}. The GPU overlay"
+  log "         $GPU_COMPOSE_FILE"
+  log "       reserves the $(overlay_gpu_driver) device for this container, and it did not arrive."
+  log "       Every healthcheck is green either way ('ollama list' passes on the CPU), so"
+  log "       nothing else says so until a local model loads onto the CPU and the next"
+  log "       chat turn times out."
+  log ""
+  log "       Ways forward:"
+  log "         1. The container was created without the overlay (a bare"
+  log "            'docker compose -f docker-compose.yml up' drops it) and compose kept it."
+  log "            Recreate it with the overlay merged:"
+  log "              docker compose --project-directory $DEPLOY_DIR --profile inference up -d --force-recreate ollama"
+  log "            COMPOSE_FILE in $ENV_FILE lists both files, so no -f is needed — and"
+  log "            any -f REPLACES that list. Or simply re-run ./install."
+  log "         2. The runtime lost the card (driver update, WSL restart, toolkit removed):"
+  log "              nvidia-smi                      (does the host still see it?)"
+  log "              docker info | grep -i nvidia    (is the runtime still registered?)"
+  log "            Fix that, then re-run ./install."
+  log "         3. Meant to run without the bundled engine:  NOVA_SKIP_INFERENCE=1 ./install"
+  log "            and point the wizard's Remote endpoint at your own."
+  exit 1
+}
+
 detect_hardware() {
   mkdir -p "$DATA_DIR"
-  local gpus_json ram_mb disk_free_gb gpu_runtime
+  local gpus_json ram_mb disk_free_gb gpu_runtime driver
   gpus_json="$(detect_gpus_json)"
   ram_mb="$(detect_ram_mb)"
   disk_free_gb="$(detect_disk_free_gb "$REPO_ROOT")"
@@ -689,7 +828,11 @@ JSON
   # rather than silently running a "local model" on the CPU.
   if [ "$gpu_runtime" = "true" ]; then
     COMPOSE_ARGS=("${COMPOSE_ARGS[@]}" -f "$GPU_COMPOSE_FILE")
+    driver="$(overlay_gpu_driver)"
+    EXPECTED_INFERENCE_LIBRARY="$(inference_library_for_driver "$driver")" \
+      || die "$GPU_COMPOSE_FILE reserves driver '${driver:-<none found>}', which inference_library_for_driver does not map to an ollama library — add the row"
     log "gpu: NVIDIA container runtime present — bundled ollama gets the GPU"
+    log "     (checked after start: ollama's own log must say library=$EXPECTED_INFERENCE_LIBRARY)"
   elif [ "$gpus_json" != "[]" ]; then
     log "WARNING: a GPU was detected but docker has no NVIDIA runtime, so the bundled"
     log "         ollama will run on the CPU. Install the NVIDIA Container Toolkit"
@@ -705,6 +848,17 @@ JSON
   if [ "$BUNDLED_INFERENCE" -eq 1 ]; then
     COMPOSE_ARGS=("${COMPOSE_ARGS[@]}" --profile inference)
     HEALTH_CHECKED_SERVICES="$HEALTH_CHECKED_SERVICES ollama"
+  else
+    # BUNDLED_INFERENCE is 0 only by NOVA_SKIP_INFERENCE=1 (decide_inference
+    # exits on every other busy-port answer), so this is the explicit
+    # off-switch — mirrored on NOVA_TAILNET=0: the profile comes out of
+    # COMPOSE_PROFILES, the container is left alone, and the stop is named.
+    PROFILES_SWITCHED_OFF="$PROFILES_SWITCHED_OFF inference"
+    if profile_listed inference "$(get_env_value COMPOSE_PROFILES)"; then
+      log "inference: the profile comes out of COMPOSE_PROFILES (NOVA_SKIP_INFERENCE=1). A running"
+      log "           ollama container is left alone; stop it with:"
+      log "             docker compose --project-directory $DEPLOY_DIR --profile inference stop ollama"
+    fi
   fi
 }
 
@@ -770,6 +924,88 @@ generate_secrets() {
   # line that makes owner-only permissions true on every run, not just the
   # ones that happened to generate something.
   chmod 600 "$ENV_FILE"
+}
+
+# ---- the compose file set, made durable ------------------------------------
+#
+# Every `docker compose` call in THIS script passes its files with -f, so the
+# GPU overlay cannot be dropped here. A hand-run command afterwards can drop
+# it — and did (2026-09-04): a bare `-f docker-compose.yml up -d` recreated
+# ollama with no device request, and nothing turned red. So the same set is
+# written to COMPOSE_FILE in .env, where compose reads it whenever no -f is
+# given (a -f REPLACES the list, the same way --profile replaces
+# COMPOSE_PROFILES). ABSOLUTE paths: compose resolves a relative COMPOSE_FILE
+# entry from the shell's working directory, not from .env's — measured, from
+# the repo root a relative entry loaded the v3 docker-compose.yml.
+
+# The files this run passes with -f, in order, joined with compose's path
+# separator. Derived from COMPOSE_ARGS so the written list can never differ
+# from the one this script itself uses.
+compose_file_set() {
+  local out="" i=0 n="${#COMPOSE_ARGS[@]}"
+  while [ "$i" -lt "$n" ]; do
+    if [ "${COMPOSE_ARGS[$i]}" = "-f" ]; then
+      i=$((i + 1))
+      out="${out:+$out:}${COMPOSE_ARGS[$i]}"
+    fi
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
+record_compose_files() {
+  local files
+  files="$(compose_file_set)"
+  if [ "$(get_env_value COMPOSE_FILE)" = "$files" ]; then
+    log "compose: COMPOSE_FILE in $ENV_FILE already lists $files"
+  else
+    set_env_value COMPOSE_FILE "$files"
+    log "compose: COMPOSE_FILE in $ENV_FILE now lists $files"
+  fi
+  log "         (run compose from $DEPLOY_DIR, or with --project-directory $DEPLOY_DIR, and no -f)"
+}
+
+# The same for profiles: the property is that a plain `docker compose
+# --project-directory deploy up -d` after ANY install converges every service
+# the install started. So COMPOSE_PROFILES is derived from the --profile args
+# this run passes (the same way COMPOSE_FILE is from -f), merged into the
+# existing list with the tailnet helpers — order kept, never duplicated,
+# profiles this script does not manage left alone — minus whatever an
+# explicit off-switch turned off (PROFILES_SWITCHED_OFF).
+
+# The profiles this run passes with --profile, in order, comma-joined — the
+# shape COMPOSE_PROFILES takes.
+compose_profile_set() {
+  local out="" i=0 n="${#COMPOSE_ARGS[@]}"
+  while [ "$i" -lt "$n" ]; do
+    if [ "${COMPOSE_ARGS[$i]}" = "--profile" ]; then
+      i=$((i + 1))
+      out="$(add_profile "${COMPOSE_ARGS[$i]}" "$out")"
+    fi
+    i=$((i + 1))
+  done
+  printf '%s' "$out"
+}
+
+record_compose_profiles() {
+  local existing wanted p removed=""
+  existing="$(get_env_value COMPOSE_PROFILES)"
+  wanted="$existing"
+  for p in $PROFILES_SWITCHED_OFF; do
+    if profile_listed "$p" "$wanted"; then
+      wanted="$(remove_profile "$p" "$wanted")"
+      removed="$removed $p"
+    fi
+  done
+  for p in $(compose_profile_set | tr ',' ' '); do
+    wanted="$(add_profile "$p" "$wanted")"
+  done
+  if [ "$wanted" = "$existing" ]; then
+    log "compose: COMPOSE_PROFILES in $ENV_FILE already lists ${existing:-nothing}"
+  else
+    set_env_value COMPOSE_PROFILES "$wanted"
+    log "compose: COMPOSE_PROFILES in $ENV_FILE now lists ${wanted:-nothing}${removed:+ (removed:$removed)}"
+  fi
 }
 
 # ---- bring-up + status ----------------------------------------------------
@@ -846,6 +1082,11 @@ cmd_install() {
   # After generate_secrets: it reads and writes .env. Still before anything is
   # pulled, built or started.
   decide_tailnet
+  # Every -f and --profile is decided now. Write both to .env before anything
+  # is pulled, built or started, so a later hand-run compose command inherits
+  # exactly this run's set — and a refusal above leaves .env as it was.
+  record_compose_files
+  record_compose_profiles
   compose_up
   wait_for_health || true
   print_status
@@ -862,6 +1103,8 @@ cmd_install() {
     done
     die "unhealthy service(s):$unhealthy"
   fi
+  # Healthy is not the same as on the GPU. Read ollama's own word for it.
+  check_inference_compute
   log "Nova is up. Open http://127.0.0.1:3000 to finish setup."
   if [ "$BUNDLED_INFERENCE" -eq 0 ]; then
     log "No bundled engine is running — pick 'Remote endpoint' at the engine step."

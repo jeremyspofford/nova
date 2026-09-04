@@ -409,7 +409,8 @@ expect_case "openssl missing: states a remedy" "$(run_openssl_check 1)" 1 "insta
 # (tailscale_state_present), the terminal (have_tty) and the prompt
 # (prompt_value, which also records that it was asked). The wiring it leaves
 # behind — COMPOSE_ARGS, HEALTH_CHECKED_SERVICES — is written out by the same
-# shell that ran it, so a refusal (exit 1) leaves them empty here.
+# shell that ran it, so a refusal (exit 1) leaves them empty here. .env is
+# then written by record_compose_profiles, as cmd_install does.
 #
 #   $1 NOVA_TAILNET value ("" = unset)
 #   $2 tailscale_state_present exit code (0 node present, 1 none, 2 no docker)
@@ -476,6 +477,10 @@ run_tailnet() {
     if [ -n "$1" ]; then export NOVA_TAILNET="$1"; else unset NOVA_TAILNET; fi
     (
       decide_tailnet 2> "$tmp/err"
+      # The shipped sequence: cmd_install writes COMPOSE_PROFILES right after
+      # every --profile decision, from the one derived writer — a refusal
+      # above exits this subshell first and leaves .env untouched.
+      record_compose_profiles 2>> "$tmp/err"
       printf '%s' "${COMPOSE_ARGS[*]}" > "$tmp/args"
       printf '%s' "$HEALTH_CHECKED_SERVICES" > "$tmp/health"
     )
@@ -606,7 +611,8 @@ expect_tn "re-run without a node or key: refuses" "$TN_RERUN_GONE" 1 6 "no way t
 
 # ── NOVA_TAILNET=0 turns it off and un-writes the profile ──────────────────
 TN_OFF_SWITCH="$(run_tailnet 0 0 1 "" 'TS_AUTHKEY=tskey-auth-set\nCOMPOSE_PROFILES=inference,tailnet\n')"
-expect_tn "NOVA_TAILNET=0: off" "$TN_OFF_SWITCH" 0 6 "profile removed from COMPOSE_PROFILES"
+expect_tn "NOVA_TAILNET=0: off" "$TN_OFF_SWITCH" 0 6 "the profile comes out of COMPOSE_PROFILES (NOVA_TAILNET=0)"
+expect_tn "NOVA_TAILNET=0: the writer reports the removal" "$TN_OFF_SWITCH" 0 6 "now lists inference (removed: tailnet)"
 expect_tn "NOVA_TAILNET=0: other profiles kept" "$TN_OFF_SWITCH" 0 4 "COMPOSE_PROFILES=inference;"
 expect_tn_lacks "NOVA_TAILNET=0: not wired" "$TN_OFF_SWITCH" 2 "--profile tailnet"
 expect_tn "NOVA_TAILNET=0: says the container is left alone and how to stop it" "$TN_OFF_SWITCH" 0 6 \
@@ -753,6 +759,437 @@ for key in TS_AUTHKEY TAILNET_HOSTNAME COMPOSE_PROFILES; do
     report 1 "tripwire: .env.example documents $key" "no '$key=' line"
   fi
 done
+
+
+# ── gpu: ollama's own compute line is read, and cpu is a refusal ────────────
+# The defect (measured 2026-09-04): the stack came up without the GPU overlay,
+# ollama logged `inference compute id=cpu library=cpu`, a 27B model loaded
+# onto the CPU, and every healthcheck stayed green (`ollama list` passes on
+# the CPU) until the next chat turn hit the 300 s gateway timeout.
+# check_inference_compute runs for real here; stubbed is the one seam that
+# touches docker (ollama_log_text) and the wait bound (0, so an absent line
+# fails at once rather than after 60 s). Reverting the check — or making an
+# unreadable log return 0 — turns the refusal cases below into "ok", which is
+# the green-on-cpu this file exists to keep red.
+#
+#   $1 EXPECTED_INFERENCE_LIBRARY ("" = no overlay merged)
+#   $2 BUNDLED_INFERENCE
+#   $3 what `docker compose logs ollama` prints (printf %b escapes)
+#   $4 its exit code
+# Prints "<exit>|<stderr>".
+run_compute_check() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    LOG_TEXT="$3"; LOG_RC="$4"
+    ollama_log_text() { printf '%b' "$LOG_TEXT"; return "$LOG_RC"; }
+    # Read by the sourced install.sh, not by anything in this file.
+    # shellcheck disable=SC2034
+    EXPECTED_INFERENCE_LIBRARY="$1"
+    # shellcheck disable=SC2034
+    BUNDLED_INFERENCE="$2"
+    # shellcheck disable=SC2034
+    INFERENCE_COMPUTE_TIMEOUT=0
+    err="$(check_inference_compute 2>&1)"; code=$?
+    printf '%s|%s' "$code" "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+
+# The lines as ollama 0.33 prints them (the cpu one is the measured defect).
+CUDA_LINE='time=2026-09-04T18:02:11.000Z level=INFO source=types.go:60 msg="inference compute" id=GPU-2f1c library=CUDA compute=8.9 name=CUDA0 description="NVIDIA GeForce RTX 4090" total="23.9 GiB" available="22.5 GiB"'
+CPU_LINE='time=2026-09-04T18:02:11.000Z level=INFO source=types.go:60 msg="inference compute" id=cpu library=cpu compute="" name=cpu description=cpu total="62.7 GiB" available="55.1 GiB"'
+DECOY_LINE='time=2026-09-04T18:02:10.000Z level=INFO source=routes.go:1288 msg="Listening on [::]:11434 (version 0.33.1)"'
+
+GPU_OK="$(run_compute_check CUDA 1 "$DECOY_LINE\n$CUDA_LINE\n" 0)"
+expect_case "gpu: log says CUDA → passes" "$GPU_OK" 0 "library=CUDA"
+expect_case "gpu: the exact line read is printed" "$GPU_OK" 0 "id=GPU-2f1c"
+
+GPU_CPU="$(run_compute_check CUDA 1 "$DECOY_LINE\n$CPU_LINE\n" 0)"
+expect_case "gpu: log says cpu → refuses" "$GPU_CPU" 1 "came up WITHOUT the GPU"
+expect_case "gpu: cpu refusal names the overlay" "$GPU_CPU" 1 "docker-compose.gpu.yml"
+expect_case "gpu: cpu refusal quotes the exact fact read" "$GPU_CPU" 1 "id=cpu library=cpu"
+expect_case "gpu: cpu refusal says what was expected" "$GPU_CPU" 1 "Expected library=CUDA, read library=cpu"
+expect_case "gpu: cpu refusal gives the recreate command with the overlay" "$GPU_CPU" 1 \
+  "--project-directory $SCRIPT_DIR --profile inference up -d --force-recreate ollama"
+expect_case "gpu: cpu refusal says a -f replaces COMPOSE_FILE" "$GPU_CPU" 1 "any -f REPLACES that list"
+expect_case "gpu: cpu refusal offers the runtime checks" "$GPU_CPU" 1 "docker info | grep -i nvidia"
+expect_case "gpu: cpu refusal offers the skip flag" "$GPU_CPU" 1 "NOVA_SKIP_INFERENCE=1 ./install"
+
+# An unreadable log is a refusal, never a pass.
+GPU_NOLINE="$(run_compute_check CUDA 1 "$DECOY_LINE\n" 0)"
+expect_case "gpu: no compute line → refuses, does not claim to know" "$GPU_NOLINE" 1 \
+  "could not read ollama's inference compute line"
+expect_case "gpu: no compute line → says why" "$GPU_NOLINE" 1 "no 'inference compute' line in ollama's log yet"
+expect_case "gpu: no compute line → names the bound" "$GPU_NOLINE" 1 "within 0s"
+expect_case "gpu: empty log → refuses" "$(run_compute_check CUDA 1 "" 0)" 1 "could not read ollama's inference compute line"
+GPU_NODOCKER="$(run_compute_check CUDA 1 "$CUDA_LINE\n" 1)"
+expect_case "gpu: docker compose logs failing → refuses" "$GPU_NODOCKER" 1 "could not read ollama's inference compute line"
+expect_case "gpu: docker compose logs failing → says so" "$GPU_NODOCKER" 1 "docker compose logs ollama failed"
+
+# The LAST line is the current fact: a container's log spans its restarts.
+expect_case "gpu: cpu at an earlier start, CUDA at the latest → passes" \
+  "$(run_compute_check CUDA 1 "$CPU_LINE\n$DECOY_LINE\n$CUDA_LINE\n" 0)" 0 "library=CUDA"
+expect_case "gpu: CUDA at an earlier start, cpu at the latest → refuses" \
+  "$(run_compute_check CUDA 1 "$CUDA_LINE\n$DECOY_LINE\n$CPU_LINE\n" 0)" 1 "came up WITHOUT the GPU"
+expect_case "gpu: two cards, two CUDA lines → passes" \
+  "$(run_compute_check CUDA 1 "$CUDA_LINE\n${CUDA_LINE/GPU-2f1c/GPU-9a00}\n" 0)" 0 "library=CUDA"
+# Older ollama spells it library=cuda; the fact is the same, the case is not.
+expect_case "gpu: lowercase library=cuda (older ollama) → passes" \
+  "$(run_compute_check CUDA 1 "${CUDA_LINE/library=CUDA/library=cuda}\n" 0)" 0 "library=cuda"
+expect_case "gpu: some other backend → refuses and names it" \
+  "$(run_compute_check CUDA 1 "${CUDA_LINE/library=CUDA/library=ROCm}\n" 0)" 1 "read library=ROCm"
+
+# No overlay merged: the check is skipped, and says so — the log is not even read.
+NO_GPU="$(run_compute_check "" 1 "$CPU_LINE\n" 0)"
+expect_case "no gpu: check skipped with a note" "$NO_GPU" 0 "compute library is not checked"
+expect_case "no gpu: note says it runs on the CPU" "$NO_GPU" 0 "runs on the CPU"
+expect_case "no gpu: docker not needed (a failing seam is still a pass)" \
+  "$(run_compute_check "" 1 "" 2)" 0 "not checked"
+NO_BUNDLED="$(run_compute_check CUDA 0 "$CPU_LINE\n" 0)"
+expect_case "bundled off: nothing to check, no refusal" "$NO_BUNDLED" 0 ""
+case "${NO_BUNDLED#*|}" in
+  *ERROR*) report 1 "bundled off: no error printed" "$NO_BUNDLED" ;;
+  *) report 0 "bundled off: no error printed" ;;
+esac
+
+# The pure readers, on their own, against decoys.
+expect_str "compute reader: the last compute line, decoys ignored" \
+  "$(printf '%s\n%s\n%s\n%s\n' "$CPU_LINE" "$DECOY_LINE" "$CUDA_LINE" "$DECOY_LINE" | run_profiles last_inference_compute_line)" \
+  "$CUDA_LINE"
+expect_str "compute reader: no compute line yields nothing" \
+  "$(printf '%s\n' "$DECOY_LINE" | run_profiles last_inference_compute_line)" ""
+expect_str "library reader: CUDA" "$(printf '%s\n' "$CUDA_LINE" | run_profiles inference_compute_library)" "CUDA"
+expect_str "library reader: cpu" "$(printf '%s\n' "$CPU_LINE" | run_profiles inference_compute_library)" "cpu"
+expect_str "library reader: a quoted value is unquoted" \
+  "$(printf '%s\n' 'msg="inference compute" id=x library="CUDA" name=y' | run_profiles inference_compute_library)" "CUDA"
+
+# The mapping — ONE place — and the overlay it is keyed on.
+expect_str "mapping: nvidia → CUDA" "$(run_profiles inference_library_for_driver nvidia)" "CUDA"
+if run_profiles inference_library_for_driver something-else >/dev/null; then
+  report 1 "mapping: an unknown driver is refused, not mapped to nothing" "returned 0"
+else
+  report 0 "mapping: an unknown driver is refused, not mapped to nothing"
+fi
+OVERLAY_DRIVER="$(run_profiles overlay_gpu_driver)"
+expect_str "tripwire: docker-compose.gpu.yml reserves driver nvidia" "$OVERLAY_DRIVER" "nvidia"
+if run_profiles eval 'inference_library_for_driver "$(overlay_gpu_driver)"' >/dev/null; then
+  report 0 "tripwire: the mapping knows the overlay's driver"
+else
+  report 1 "tripwire: the mapping knows the overlay's driver" "driver '$OVERLAY_DRIVER' has no row"
+fi
+
+# ── gpu wiring + COMPOSE_FILE: the overlay decision reaches .env, absolute ──
+# detect_hardware and record_compose_files run for real; stubbed are the two
+# hardware seams. A relative COMPOSE_FILE is resolved by compose from the
+# shell's working directory (measured: from the repo root it loaded the v3
+# docker-compose.yml), so every entry written must be absolute — and the set
+# must be exactly the -f files this script itself passes.
+#   $1 detect_gpu_runtime output   $2 detect_gpus_json output   $3 initial .env
+# Prints "<COMPOSE_ARGS>|<EXPECTED_INFERENCE_LIBRARY>|<.env with ;>|<stderr>".
+run_gpu_wiring() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    DATA_DIR="$tmp"
+    # shellcheck disable=SC2034
+    HARDWARE_JSON="$tmp/hardware.json"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "$3" > "$ENV_FILE"
+    RUNTIME="$1"; GPUS="$2"
+    detect_gpu_runtime() { printf '%s' "$RUNTIME"; }
+    detect_gpus_json() { printf '%s' "$GPUS"; }
+    detect_hardware 2> "$tmp/err" >/dev/null
+    record_compose_files 2>> "$tmp/err" >/dev/null
+    printf '%s|%s|%s|%s' "${COMPOSE_ARGS[*]}" "$EXPECTED_INFERENCE_LIBRARY" \
+      "$(tr '\n' ';' < "$ENV_FILE")" "$(tr '\n' ' ' < "$tmp/err")"
+  )
+}
+# Field $3 of a run_gpu_wiring result contains $4 (no exit code to check:
+# field 1 is COMPOSE_ARGS).
+expect_gw() {
+  local name="$1" out="$2" fno="$3" needle="$4" text
+  text="$(tn_field "$out" "$fno")"
+  case "$text" in
+    *"$needle"*) report 0 "$name" ;;
+    *) report 1 "$name" "field $fno did not contain '$needle' — got: $text" ;;
+  esac
+}
+# The COMPOSE_FILE value in a run_gpu_wiring result.
+gw_compose_file() {
+  printf '%s' "$(tn_field "$1" 3)" | tr ';' '\n' | grep '^COMPOSE_FILE=' | cut -d'=' -f2-
+}
+# Every :-separated entry of $2 starts with a /.
+expect_all_absolute() {
+  local name="$1" list="$2" entry bad="" OLDIFS="$IFS"
+  IFS=':'
+  for entry in $list; do
+    case "$entry" in
+      /*) ;;
+      *) bad="$bad '$entry'" ;;
+    esac
+  done
+  IFS="$OLDIFS"
+  if [ -n "$list" ] && [ -z "$bad" ]; then report 0 "$name"; else report 1 "$name" "not absolute:${bad:- (empty list)}"; fi
+}
+# The number of $4 flags (default -f) in $2 equals the number of entries in
+# $3 (split on ':' or ',').
+expect_same_count() {
+  local name="$1" args="$2" list="$3" flag="${4:--f}" nf nl
+  nf="$(printf '%s\n' "$args" | tr ' ' '\n' | grep -c -- "^${flag}\$")"
+  nl="$(printf '%s\n' "$list" | tr ':,' '\n\n' | grep -c .)"
+  if [ "$nf" -eq "$nl" ] && [ "$nl" -gt 0 ]; then report 0 "$name"; else report 1 "$name" "$flag count $nf, entries $nl"; fi
+}
+# The value of key $3 in field $2 of a result whose .env is ;-joined.
+env_key_value() {
+  printf '%s' "$(tn_field "$1" "$2")" | tr ';' '\n' | grep "^$3=" | cut -d'=' -f2-
+}
+
+A_CARD='[{"name":"NVIDIA GeForce RTX 4090","vram_mb":24564}]'
+GW_ENV='POSTGRES_PASSWORD=x\nCOMPOSE_PROFILES=\n'
+
+GW_GPU="$(run_gpu_wiring true "$A_CARD" "$GW_ENV")"
+expect_gw "gpu wiring: compose gets the overlay" "$GW_GPU" 1 "-f $SCRIPT_DIR/docker-compose.gpu.yml"
+expect_str "gpu wiring: the expected library is CUDA" "$(tn_field "$GW_GPU" 2)" "CUDA"
+expect_str "gpu wiring: COMPOSE_FILE lists base then overlay, absolute" "$(gw_compose_file "$GW_GPU")" \
+  "$SCRIPT_DIR/docker-compose.yml:$SCRIPT_DIR/docker-compose.gpu.yml"
+expect_all_absolute "gpu wiring: every COMPOSE_FILE entry is absolute" "$(gw_compose_file "$GW_GPU")"
+expect_same_count "gpu wiring: COMPOSE_FILE has exactly the -f files" "$(tn_field "$GW_GPU" 1)" "$(gw_compose_file "$GW_GPU")"
+expect_gw "gpu wiring: other keys untouched" "$GW_GPU" 3 "POSTGRES_PASSWORD=x;"
+expect_gw "gpu wiring: says the check is coming" "$GW_GPU" 4 "must say library=CUDA"
+expect_gw "gpu wiring: says how to run compose afterwards" "$GW_GPU" 4 "--project-directory $SCRIPT_DIR"
+
+GW_NONE="$(run_gpu_wiring false "[]" "$GW_ENV")"
+expect_tn_lacks "no gpu wiring: no overlay" "$GW_NONE" 1 "docker-compose.gpu.yml"
+expect_str "no gpu wiring: no expected library" "$(tn_field "$GW_NONE" 2)" ""
+expect_str "no gpu wiring: COMPOSE_FILE is the base file alone, absolute" "$(gw_compose_file "$GW_NONE")" \
+  "$SCRIPT_DIR/docker-compose.yml"
+expect_all_absolute "no gpu wiring: the entry is absolute" "$(gw_compose_file "$GW_NONE")"
+expect_same_count "no gpu wiring: COMPOSE_FILE has exactly the -f files" "$(tn_field "$GW_NONE" 1)" "$(gw_compose_file "$GW_NONE")"
+
+# A card the runtime cannot hand over: warned, no overlay, no check.
+GW_TOOLKIT="$(run_gpu_wiring false "$A_CARD" "$GW_ENV")"
+expect_gw "gpu without runtime: warns about the toolkit" "$GW_TOOLKIT" 4 "docker has no NVIDIA runtime"
+expect_tn_lacks "gpu without runtime: no overlay" "$GW_TOOLKIT" 1 "docker-compose.gpu.yml"
+expect_str "gpu without runtime: no expected library" "$(tn_field "$GW_TOOLKIT" 2)" ""
+
+# A stale relative line — the shape that loaded the v3 file — is replaced, once.
+GW_STALE="$(run_gpu_wiring true "$A_CARD" 'COMPOSE_FILE=docker-compose.yml\nPOSTGRES_PASSWORD=x\n')"
+expect_str "stale COMPOSE_FILE: replaced with the absolute set" "$(gw_compose_file "$GW_STALE")" \
+  "$SCRIPT_DIR/docker-compose.yml:$SCRIPT_DIR/docker-compose.gpu.yml"
+expect_str "stale COMPOSE_FILE: exactly one line remains" \
+  "$(tn_field "$GW_STALE" 3 | tr ';' '\n' | grep -c '^COMPOSE_FILE=')" "1"
+expect_gw "stale COMPOSE_FILE: reported as rewritten" "$GW_STALE" 4 "now lists"
+# Already right: left alone, and said so.
+GW_SAME="$(run_gpu_wiring true "$A_CARD" "COMPOSE_FILE=$SCRIPT_DIR/docker-compose.yml:$SCRIPT_DIR/docker-compose.gpu.yml\n")"
+expect_gw "matching COMPOSE_FILE: left as it was" "$GW_SAME" 4 "already lists"
+expect_str "matching COMPOSE_FILE: still exactly one line" \
+  "$(tn_field "$GW_SAME" 3 | tr ';' '\n' | grep -c '^COMPOSE_FILE=')" "1"
+
+# ── the whole install path, with docker replaced by a shell function ────────
+# cmd_install runs for real — preflight, hardware, secrets, the file set, the
+# tailnet decision, up, the health wait, the status table — and only THEN the
+# compute check. `docker` is a function here, so every call the script makes
+# is answered from the case below and no daemon is touched. This proves the
+# check is REACHED from cmd_install after a green table, not only that the
+# function works alone: delete the call from cmd_install and the cpu case
+# below prints "Nova is up".
+#   $1 does `docker info` name the nvidia runtime (1/0)   $2 ollama's log
+# Prints "<exit>|<.env with ;>|<combined output>".
+run_install() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    DATA_DIR="$tmp"
+    # shellcheck disable=SC2034
+    HARDWARE_JSON="$tmp/hardware.json"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    # shellcheck disable=SC2034
+    ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+    # shellcheck disable=SC2034
+    INFERENCE_COMPUTE_TIMEOUT=0
+    NVIDIA="$1"; FAKE_LOG="$2"
+    docker() {
+      case "$*" in
+        info)
+          if [ "$NVIDIA" = 1 ]; then printf 'Runtimes: nvidia runc\n'; else printf 'Runtimes: runc\n'; fi ;;
+        "compose version") ;;
+        *" up -d --build") ;;
+        *" ps -q "*) printf 'cid\n' ;;
+        "inspect "*) printf 'healthy\n' ;;
+        *" logs --no-log-prefix ollama") printf '%b' "$FAKE_LOG" ;;
+        *) printf 'unexpected docker call: %s\n' "$*" >&2; return 1 ;;
+      esac
+    }
+    detect_gpus_json() { printf '[]'; }
+    detect_disk_free_gb() { printf '100'; }
+    port_holder() { printf ''; }
+    unset NOVA_TAILNET NOVA_SKIP_INFERENCE
+    out="$(cmd_install 2>&1)"; code=$?
+    printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" "$(printf '%s' "$out" | tr '\n' ' ')"
+  )
+}
+
+INST_OK="$(run_install 1 "$DECOY_LINE\n$CUDA_LINE\n")"
+expect_tn "install, gpu + CUDA: succeeds" "$INST_OK" 0 3 "Nova is up"
+expect_tn "install, gpu + CUDA: reports the fact read" "$INST_OK" 0 3 "ollama reports library=CUDA"
+expect_tn "install, gpu + CUDA: COMPOSE_FILE written with both absolute files" "$INST_OK" 0 2 \
+  "COMPOSE_FILE=$SCRIPT_DIR/docker-compose.yml:$SCRIPT_DIR/docker-compose.gpu.yml;"
+expect_tn "install, gpu + CUDA: secrets still generated" "$INST_OK" 0 2 "CORE_TOKEN="
+expect_tn "install, gpu + CUDA: COMPOSE_PROFILES lists inference" "$INST_OK" 0 2 "COMPOSE_PROFILES=inference;"
+
+INST_CPU="$(run_install 1 "$DECOY_LINE\n$CPU_LINE\n")"
+expect_tn "install, gpu + cpu: refuses after a green table" "$INST_CPU" 1 3 "came up WITHOUT the GPU"
+expect_tn "install, gpu + cpu: the table WAS green (the point)" "$INST_CPU" 1 3 "ollama     healthy"
+expect_tn "install, gpu + cpu: names the overlay" "$INST_CPU" 1 3 "docker-compose.gpu.yml"
+expect_tn_lacks "install, gpu + cpu: never says Nova is up" "$INST_CPU" 3 "Nova is up"
+
+INST_NOLINE="$(run_install 1 "$DECOY_LINE\n")"
+expect_tn "install, gpu + no line: refuses" "$INST_NOLINE" 1 3 "could not read ollama's inference compute line"
+expect_tn_lacks "install, gpu + no line: never says Nova is up" "$INST_NOLINE" 3 "Nova is up"
+
+INST_NOGPU="$(run_install 0 "$DECOY_LINE\n$CPU_LINE\n")"
+expect_tn "install, no gpu: succeeds" "$INST_NOGPU" 0 3 "Nova is up"
+expect_tn "install, no gpu: says the check was skipped" "$INST_NOGPU" 0 3 "compute library is not checked"
+expect_tn "install, no gpu: COMPOSE_FILE is the base file alone" "$INST_NOGPU" 0 2 "COMPOSE_FILE=$SCRIPT_DIR/docker-compose.yml;"
+# The VALUE, not the file: .env.example's comments name the overlay too.
+expect_str "install, no gpu: the COMPOSE_FILE value carries no overlay" \
+  "$(env_key_value "$INST_NOGPU" 2 COMPOSE_FILE)" "$SCRIPT_DIR/docker-compose.yml"
+
+# ── COMPOSE_PROFILES: derived from the --profile args, one writer ───────────
+# The property: after ANY install, a plain `docker compose --project-directory
+# deploy up -d` converges every service the install started. The list is
+# derived from the --profile args in COMPOSE_ARGS (as COMPOSE_FILE is from
+# -f), merged into the existing line with the tailnet helpers — order kept,
+# never duplicated, unmanaged profiles left alone — minus what an explicit
+# off-switch turned off. detect_hardware, decide_tailnet and both writers run
+# for real; stubbed are the hardware seams, the state volume and the terminal.
+#   $1 BUNDLED_INFERENCE   $2 NOVA_TAILNET ("" = unset)   $3 initial .env body
+# Prints "<exit>|<COMPOSE_ARGS>|<.env with ;>|<stderr>".
+run_profile_env() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    DATA_DIR="$tmp"
+    # shellcheck disable=SC2034
+    HARDWARE_JSON="$tmp/hardware.json"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "$3" > "$ENV_FILE"
+    # shellcheck disable=SC2034
+    BUNDLED_INFERENCE="$1"
+    detect_gpu_runtime() { printf 'false'; }
+    detect_gpus_json() { printf '[]'; }
+    tailscale_state_present() {
+      # shellcheck disable=SC2034
+      TAILNET_STATE_REASON="stub: no node"
+      return 1
+    }
+    have_tty() { return 1; }
+    if [ -n "$2" ]; then export NOVA_TAILNET="$2"; else unset NOVA_TAILNET; fi
+    (
+      detect_hardware 2> "$tmp/err" >/dev/null
+      decide_tailnet 2>> "$tmp/err"
+      record_compose_files 2>> "$tmp/err"
+      record_compose_profiles 2>> "$tmp/err"
+      printf '%s' "${COMPOSE_ARGS[*]}" > "$tmp/args"
+    )
+    code=$?
+    printf '%s|%s|%s|%s' "$code" "$(cat "$tmp/args" 2>/dev/null)" \
+      "$(tr '\n' ';' < "$ENV_FILE")" "$(tr '\n' ' ' < "$tmp/err")"
+  )
+}
+TN_ON_ENV='TS_AUTHKEY=tskey-auth-set\nTAILNET_HOSTNAME=nova\n'
+
+PE_ON="$(run_profile_env 1 "" 'COMPOSE_PROFILES=\n')"
+expect_tn "profiles: bundled inference ⇒ COMPOSE_PROFILES lists inference" "$PE_ON" 0 3 "COMPOSE_PROFILES=inference;"
+expect_tn "profiles: bundled inference ⇒ the writer says so" "$PE_ON" 0 4 "now lists inference"
+expect_same_count "profiles: exactly the --profile args" "$(tn_field "$PE_ON" 2)" "$(env_key_value "$PE_ON" 3 COMPOSE_PROFILES)" --profile
+
+PE_BOTH="$(run_profile_env 1 1 "${TN_ON_ENV}COMPOSE_PROFILES=\n")"
+expect_tn "profiles: inference + tailnet ⇒ both, in the order passed" "$PE_BOTH" 0 3 "COMPOSE_PROFILES=inference,tailnet;"
+expect_same_count "profiles: both ⇒ exactly the --profile args" "$(tn_field "$PE_BOTH" 2)" "$(env_key_value "$PE_BOTH" 3 COMPOSE_PROFILES)" --profile
+expect_tn_lacks "profiles: both ⇒ no duplicate" "$PE_BOTH" 3 "inference,inference"
+
+# Order-stable: an existing line keeps its order, the new profile is appended.
+PE_APPEND="$(run_profile_env 1 1 "${TN_ON_ENV}COMPOSE_PROFILES=tailnet\n")"
+expect_tn "profiles: existing tailnet ⇒ inference appended, order kept" "$PE_APPEND" 0 3 "COMPOSE_PROFILES=tailnet,inference;"
+expect_str "profiles: existing tailnet ⇒ exactly one line" \
+  "$(tn_field "$PE_APPEND" 3 | tr ';' '\n' | grep -c '^COMPOSE_PROFILES=')" "1"
+
+# A hand-written line that already says it all is left exactly as it is.
+PE_SAME="$(run_profile_env 1 1 "${TN_ON_ENV}COMPOSE_PROFILES=inference,tailnet\n")"
+expect_tn "profiles: hand-written inference,tailnet ⇒ already lists" "$PE_SAME" 0 4 "already lists inference,tailnet"
+expect_tn "profiles: hand-written inference,tailnet ⇒ unchanged" "$PE_SAME" 0 3 "COMPOSE_PROFILES=inference,tailnet;"
+PE_SAME_REV="$(run_profile_env 1 1 "${TN_ON_ENV}COMPOSE_PROFILES=tailnet,inference\n")"
+expect_tn "profiles: hand-written tailnet,inference ⇒ not reordered" "$PE_SAME_REV" 0 3 "COMPOSE_PROFILES=tailnet,inference;"
+expect_tn "profiles: hand-written tailnet,inference ⇒ already lists" "$PE_SAME_REV" 0 4 "already lists tailnet,inference"
+
+# The explicit off-switch takes the profile out — mirroring NOVA_TAILNET=0 —
+# and names the container it leaves running and how to stop it.
+PE_SKIP="$(run_profile_env 0 1 "${TN_ON_ENV}COMPOSE_PROFILES=inference,tailnet\n")"
+expect_tn "profiles: bundled off ⇒ inference absent, tailnet kept" "$PE_SKIP" 0 3 "COMPOSE_PROFILES=tailnet;"
+expect_tn "profiles: bundled off ⇒ says the profile comes out" "$PE_SKIP" 0 4 \
+  "inference: the profile comes out of COMPOSE_PROFILES (NOVA_SKIP_INFERENCE=1)"
+expect_tn "profiles: bundled off ⇒ names the stop" "$PE_SKIP" 0 4 "--profile inference stop ollama"
+expect_tn "profiles: bundled off ⇒ the writer reports the removal" "$PE_SKIP" 0 4 "(removed: inference)"
+expect_tn_lacks "profiles: bundled off ⇒ no --profile inference passed" "$PE_SKIP" 2 "--profile inference"
+# Never listed: nothing to take out, nothing to say about a container.
+PE_SKIP_NONE="$(run_profile_env 0 "" 'COMPOSE_PROFILES=\n')"
+expect_tn "profiles: bundled off, never listed ⇒ stays empty" "$PE_SKIP_NONE" 0 4 "already lists nothing"
+expect_tn_lacks "profiles: bundled off, never listed ⇒ inference absent" "$PE_SKIP_NONE" 3 "inference"
+expect_tn_lacks "profiles: bundled off, never listed ⇒ no stop advice" "$PE_SKIP_NONE" 4 "stop ollama"
+
+# Profiles this script does not manage are left where they are.
+PE_OTHER="$(run_profile_env 1 "" 'COMPOSE_PROFILES=e2e\n')"
+expect_tn "profiles: an unmanaged profile is kept, inference appended" "$PE_OTHER" 0 3 "COMPOSE_PROFILES=e2e,inference;"
+PE_BOTH_OFF="$(run_profile_env 0 0 'COMPOSE_PROFILES=inference,tailnet,e2e\n')"
+expect_tn "profiles: both off-switches ⇒ only the unmanaged one remains" "$PE_BOTH_OFF" 0 3 "COMPOSE_PROFILES=e2e;"
+expect_tn "profiles: both off-switches ⇒ both removals reported" "$PE_BOTH_OFF" 0 4 "(removed: inference tailnet)"
+
+# The reader of COMPOSE_ARGS, alone: order kept, duplicates folded.
+expect_str "compose_profile_set: --profile args in order, deduped" \
+  "$(run_profiles eval 'COMPOSE_ARGS=(-f a --profile inference -f b --profile tailnet --profile inference); compose_profile_set')" \
+  "inference,tailnet"
+expect_str "compose_profile_set: none passed ⇒ empty" \
+  "$(run_profiles eval 'COMPOSE_ARGS=(-f a -f b); compose_profile_set')" ""
+
+# ── tripwire: COMPOSE_FILE is documented, and NOT pre-seeded as a value ─────
+# An empty `COMPOSE_FILE=` makes compose resolve "" to the working directory
+# and fail ("read /: is a directory" — measured 2026-09-04), which would break
+# the bare `docker compose up` a hand-copied .env.example promises. So the key
+# is documented in comment lines and install.sh's set_env_value appends the
+# real, absolute line on install. That is why it is not in the value-line
+# loop above: for this key a `^COMPOSE_FILE=` line in the example is the bug.
+if grep -q '^# COMPOSE_FILE' "$SCRIPT_DIR/.env.example"; then
+  report 0 "tripwire: .env.example documents COMPOSE_FILE"
+else
+  report 1 "tripwire: .env.example documents COMPOSE_FILE" "no '# COMPOSE_FILE' comment line"
+fi
+if grep -q '^COMPOSE_FILE=' "$SCRIPT_DIR/.env.example"; then
+  report 1 "tripwire: .env.example has no COMPOSE_FILE= value line (an empty one breaks compose)" "found a value line"
+else
+  report 0 "tripwire: .env.example has no COMPOSE_FILE= value line (an empty one breaks compose)"
+fi
+if grep -q 'REPLACES' "$SCRIPT_DIR/.env.example" && grep -qi 'absolute' "$SCRIPT_DIR/.env.example"; then
+  report 0 "tripwire: .env.example states the two COMPOSE_FILE facts (-f replaces; absolute paths)"
+else
+  report 1 "tripwire: .env.example states the two COMPOSE_FILE facts (-f replaces; absolute paths)" "missing"
+fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

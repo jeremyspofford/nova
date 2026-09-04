@@ -22,12 +22,34 @@ Two optional profiles:
 - `tailnet` — Nova as a node on your tailnet (below). Off by default;
   `NOVA_TAILNET=1 ./install` turns it on.
 
-The installer passes the profiles it enables explicitly, and writes the
-`tailnet` one to `COMPOSE_PROFILES` in `.env` so a plain `docker compose up
--d` afterwards converges the same set. One compose fact to know: a
-`--profile X` flag on the command line REPLACES the `.env` list rather than
-adding to it — so after installing, prefer `docker compose up -d` with no
-flag, or re-run `./install`.
+The installer passes the profiles it enables explicitly, and writes every
+profile it started (`inference`, `tailnet`) to `COMPOSE_PROFILES` in `.env`
+— derived from the `--profile` flags it passed, so the two cannot disagree —
+so a plain `docker compose up -d` afterwards converges the same set; an
+explicit off-switch (`NOVA_SKIP_INFERENCE=1`, `NOVA_TAILNET=0`) takes its
+profile back out. One compose fact to know: a `--profile X` flag on the
+command line REPLACES the `.env` list rather than adding to it — so after
+installing, prefer `docker compose up -d` with no flag, or re-run
+`./install`.
+
+**The deploy rule (2026-09-04).** Run compose from this directory — `cd
+deploy && docker compose …`, or `docker compose --project-directory deploy …`
+from the repo root — and never with a bare `-f deploy/docker-compose.yml`.
+The installer writes `COMPOSE_FILE` to `deploy/.env` with ABSOLUTE paths:
+the base file, plus `docker-compose.gpu.yml` whenever docker has the NVIDIA
+runtime. Compose reads that list only when no `-f` is given (a `-f` REPLACES
+it, the way `--profile` replaces `COMPOSE_PROFILES`), and it resolves a
+relative entry from the shell's working directory rather than from `.env`'s —
+from the repo root a relative list loaded the v3 `docker-compose.yml`. Two
+facts say you got it right: `docker compose --project-directory deploy config
+--services` lists the v4 services (`core`, `gateway`, `memory`, … — v3's file
+has `backend` and `frontend` instead), and `docker compose --project-directory
+deploy logs --no-log-prefix ollama | grep 'inference compute'` says
+`library=CUDA`. The installer reads that second line itself after the health
+table and refuses to report success on anything else — including a line it
+cannot read — because every healthcheck is green either way (`ollama list`
+passes on the CPU) and a 27B model on the CPU only shows up as the next chat
+turn timing out, which is exactly what happened.
 
 ## Tailnet access
 

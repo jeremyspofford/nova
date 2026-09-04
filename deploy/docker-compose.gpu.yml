@@ -10,6 +10,15 @@
 #
 # Without this, a box with a 24 GB card runs its "local model" on the CPU and
 # nothing anywhere says so.
+#
+# Two things keep that from happening silently (2026-09-04, after it did):
+# install.sh writes this file into COMPOSE_FILE in .env — absolute paths — so
+# a plain `docker compose up` from deploy/ merges it too (a bare -f REPLACES
+# that list); and after the health table it reads ollama's own
+# `msg="inference compute"` line and refuses to report success unless it says
+# library=CUDA (check_inference_compute). A container that lost this
+# reservation is healthy by every check and only shows up as the next chat
+# turn timing out.
 
 services:
   ollama:
