@@ -31,6 +31,10 @@ export type MessageRow = {
   streaming: boolean
   interrupted: boolean
   activity: ActivityMarker
+  /** `provider:model` as the gateway stated it on this turn's trace (the
+   * `served_by` frame live, `served_by` on the fetched row after). null
+   * until stated — never the model setting, never a guess. */
+  servedBy: string | null
 }
 
 export type ErrorRow = {
@@ -54,19 +58,19 @@ export type ChatAction =
   | {
       type: 'loaded'
       conversationId: string
-      messages: { id: string; role: string; content: string }[]
+      messages: FetchedMessage[]
     }
   | { type: 'send'; userId: string; assistantId: string; text: string }
   | { type: 'event'; event: StreamEvent }
   | {
       type: 'reconcile'
       conversationId: string
-      messages: { id: string; role: string; content: string }[]
+      messages: FetchedMessage[]
     }
   | {
       type: 'pollResolved'
       conversationId: string
-      messages: { id: string; role: string; content: string }[]
+      messages: FetchedMessage[]
     }
   | { type: 'reset' }
   // Clear-chat (button or the /clear slash command): the operator emptied THIS
@@ -81,14 +85,31 @@ export type ChatAction =
   // reload naturally drops it, which is correct for ephemeral help text.
   | { type: 'localMessage'; id: string; text: string }
 
-export const NO_REPLY = 'the turn finished without a reply'
+/** What GET .../messages hands back (lib/api StoredMessage, minus the
+ * fields this reducer does not read). */
+export type FetchedMessage = {
+  id: string
+  role: string
+  content: string
+  served_by?: string | null
+}
+
+export const NO_REPLY = 'the turn finished without a reply' 
 
 export function emptyChat(): ChatState {
   return { rows: [], streaming: false, conversationId: null, model: null, pendingId: null }
 }
 
 function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role'] }): MessageRow {
-  return { kind: 'message', text: '', streaming: false, interrupted: false, activity: null, ...row }
+  return {
+    kind: 'message',
+    text: '',
+    streaming: false,
+    interrupted: false,
+    activity: null,
+    servedBy: null,
+    ...row,
+  }
 }
 
 function withPending(state: ChatState, apply: (row: MessageRow) => MessageRow): ChatState {
@@ -147,6 +168,10 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
             : { tool: event.tool, status: event.status, reason: event.reason },
       }))
 
+    case 'served':
+      if (state.pendingId === null) return state
+      return withPending(state, row => ({ ...row, servedBy: event.servedBy }))
+
     case 'error':
       if (state.pendingId === null) {
         return {
@@ -188,14 +213,19 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
 function fromFetchedMessages(
   state: ChatState,
   conversationId: string,
-  messages: { id: string; role: string; content: string }[],
+  messages: FetchedMessage[],
 ): ChatState {
   return {
     ...emptyChat(),
     conversationId,
     model: state.model,
     rows: messages.map(m =>
-      message({ id: m.id, role: m.role === 'user' ? 'user' : 'assistant', text: m.content }),
+      message({
+        id: m.id,
+        role: m.role === 'user' ? 'user' : 'assistant',
+        text: m.content,
+        servedBy: m.served_by ?? null,
+      }),
     ),
   }
 }

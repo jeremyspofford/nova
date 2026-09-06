@@ -50,6 +50,9 @@ export type StreamEvent =
   // not a type error waiting to happen.
   | { type: 'activity'; tool: string; status: string; reason?: string }
   | { type: 'error'; reason: string }
+  // {"served_by": "provider:model"} — who actually answered, as the gateway
+  // stated it on the llm_call span (S10-pre). Once per answered turn.
+  | { type: 'served'; servedBy: string }
   | { type: 'done' }
   | { type: 'interrupted'; reason: string }
 
@@ -73,7 +76,7 @@ export function failureReason(err: unknown): string {
 // the moment a newer server introduces one. A key IN this set with the
 // wrong shape (caught below, before this check ever runs) is still a
 // contract violation and still an error. (Ruling S2-R6, amending S1's R20.)
-const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity'])
+const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity', 'served_by'])
 
 function frameToEvent(payload: string): StreamEvent | null {
   if (payload === '[DONE]') return { type: 'done' }
@@ -91,6 +94,9 @@ function frameToEvent(payload: string): StreamEvent | null {
   const obj = data as Record<string, unknown>
   if (typeof obj.t === 'string') return { type: 'delta', text: obj.t }
   if (typeof obj.error === 'string') return { type: 'error', reason: obj.error }
+  if (typeof obj.served_by === 'string' && obj.served_by) {
+    return { type: 'served', servedBy: obj.served_by }
+  }
   if (obj.meta !== null && typeof obj.meta === 'object') {
     const meta = obj.meta as Record<string, unknown>
     return {

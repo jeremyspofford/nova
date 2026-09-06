@@ -1,0 +1,298 @@
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
+import { ProvidersSection, fillPlaceholders, formatContext, formatPrice } from './ProvidersSection'
+import type { Provider, ProviderListing, ProviderPreset } from '../../lib/api'
+
+function provider(overrides: Partial<Provider> = {}): Provider {
+  return {
+    name: 'openrouter',
+    adapter: 'openai-chat',
+    base_url: 'https://openrouter.ai/api/v1',
+    auth_shape: 'static-bearer',
+    api_key: '•••4242',
+    default_model: null,
+    model_note: null,
+    preset: 'openrouter',
+    builtin: false,
+    is_default: false,
+    verified_at: '2026-09-05T00:00:00Z',
+    listing: 'available',
+    listing_note: '431 models listed',
+    created_at: '2026-09-05T00:00:00Z',
+    updated_at: '2026-09-05T00:00:00Z',
+    ...overrides,
+  }
+}
+
+const OLLAMA = provider({
+  name: 'ollama',
+  adapter: 'ollama',
+  base_url: 'http://ollama:11434',
+  auth_shape: 'none',
+  api_key: null,
+  preset: null,
+  builtin: true,
+  is_default: true,
+})
+
+const PRESETS: ProviderPreset[] = [
+  {
+    name: 'openrouter',
+    label: 'OpenRouter',
+    adapter: 'openai-chat',
+    base_url: 'https://openrouter.ai/api/v1',
+    auth_shape: 'static-bearer',
+    docs_url: 'https://openrouter.ai/docs',
+    model_note: 'vendor/model ids',
+  },
+  {
+    name: 'azure-openai',
+    label: 'Azure OpenAI',
+    adapter: 'openai-chat',
+    base_url: 'https://{resource}.openai.azure.com/openai/v1',
+    auth_shape: 'api-key-header',
+    placeholders: ['resource'],
+  },
+]
+
+const LISTING: ProviderListing = {
+  source: 'openrouter',
+  fetched_at: '2026-09-05T12:00:00Z',
+  models: [
+    {
+      id: 'anthropic/claude-sonnet-5',
+      owned_by: 'openrouter',
+      name: 'Anthropic: Claude Sonnet 5',
+      context_length: 1_000_000,
+      pricing: { prompt: 0.000002, completion: 0.00001 },
+    },
+    { id: 'openai/gpt-x', owned_by: 'openrouter' },
+  ],
+}
+
+function renderSection(
+  api: Partial<{
+    getProviders: ReturnType<typeof vi.fn>
+    getProviderPresets: ReturnType<typeof vi.fn>
+    createProvider: ReturnType<typeof vi.fn>
+    deleteProvider: ReturnType<typeof vi.fn>
+    makeDefaultProvider: ReturnType<typeof vi.fn>
+    getProviderModels: ReturnType<typeof vi.fn>
+    putSetting: ReturnType<typeof vi.fn>
+  }> = {},
+  chatModel = 'qwen3:8b',
+) {
+  const full = {
+    getProviders: vi.fn(async () => [OLLAMA, provider()]),
+    getProviderPresets: vi.fn(async () => PRESETS),
+    createProvider: vi.fn(async (p: { name: string }) => provider({ name: p.name })),
+    deleteProvider: vi.fn(async (name: string) => ({ deleted: name })),
+    makeDefaultProvider: vi.fn(async (name: string) => provider({ name, is_default: true })),
+    getProviderModels: vi.fn(async () => LISTING),
+    putSetting: vi.fn(async () => undefined),
+    ...api,
+  }
+  const onModelChanged = vi.fn()
+  return {
+    ...render(<ProvidersSection chatModel={chatModel} onModelChanged={onModelChanged} api={full} />),
+    api: full,
+    onModelChanged,
+  }
+}
+
+describe('ProvidersSection — formatting helpers', () => {
+  it('prices are per million tokens and absent when the provider stated none', () => {
+    expect(formatPrice(LISTING.models[0])).toBe('$2 / $10 per 1M')
+    expect(formatPrice(LISTING.models[1])).toBeNull()
+  })
+
+  it('context length is human-sized and absent when unstated', () => {
+    expect(formatContext(LISTING.models[0])).toBe('1M ctx')
+    expect(formatContext({ id: 'x', owned_by: 'y', context_length: 128_000 })).toBe('128K ctx')
+    expect(formatContext(LISTING.models[1])).toBeNull()
+  })
+
+  it('placeholders fill from typed values and stay visible when unfilled', () => {
+    expect(
+      fillPlaceholders('https://{resource}.openai.azure.com/openai/v1', { resource: 'acme' }),
+    ).toBe('https://acme.openai.azure.com/openai/v1')
+    expect(fillPlaceholders('https://{region}.x', {})).toBe('https://{region}.x')
+  })
+})
+
+describe('ProvidersSection', () => {
+  it('lists every provider with its protocol, masked key and default marker', async () => {
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
+    const ollama = screen.getByTestId('provider-ollama')
+    expect(ollama.textContent).toContain('Bundled Ollama')
+    expect(ollama.textContent).toContain('default for bare model ids')
+    expect(within(ollama).queryByRole('button', { name: /remove ollama/i })).toBeNull()
+    const openrouter = screen.getByTestId('provider-openrouter')
+    expect(openrouter.textContent).toContain('•••4242')
+    expect(openrouter.textContent).toContain('OpenAI-compatible chat')
+    expect(within(openrouter).getByRole('button', { name: /remove openrouter/i })).toBeTruthy()
+  })
+
+  it('a failed load states the reason', async () => {
+    renderSection({
+      getProviders: vi.fn(async () => {
+        throw new Error('the gateway is unreachable — ConnectError')
+      }),
+    })
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toContain('the gateway is unreachable'),
+    )
+  })
+
+  it('adding from the OpenRouter preset sends the preset shape and shows the new row', async () => {
+    const { api } = renderSection()
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    expect((within(form).getByLabelText('Base URL') as HTMLInputElement).value).toBe(
+      'https://openrouter.ai/api/v1',
+    )
+    fireEvent.change(within(form).getByLabelText('API key'), { target: { value: 'sk-or-1' } })
+    fireEvent.submit(form)
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledTimes(1))
+    expect(api.createProvider.mock.calls[0][0]).toEqual({
+      name: 'openrouter',
+      adapter: 'openai-chat',
+      base_url: 'https://openrouter.ai/api/v1',
+      auth_shape: 'static-bearer',
+      api_key: 'sk-or-1',
+      preset: 'openrouter',
+      model_note: 'vendor/model ids',
+    })
+    await waitFor(() => expect(screen.queryByTestId('provider-form')).toBeNull())
+  })
+
+  it('a refused verify shows the provider\'s reason and keeps the form open', async () => {
+    const { api } = renderSection({
+      createProvider: vi.fn(async () => {
+        throw new Error("could not verify provider 'openrouter' — Invalid API key")
+      }),
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    fireEvent.change(within(form).getByLabelText('API key'), { target: { value: 'bad' } })
+    fireEvent.submit(form)
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalled())
+    await waitFor(() =>
+      expect(within(screen.getByTestId('provider-form')).getByRole('alert').textContent).toContain(
+        'Invalid API key',
+      ),
+    )
+  })
+
+  it('a preset with a placeholder cannot be saved until it is filled', async () => {
+    renderSection()
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: 'azure-openai' } })
+    const save = within(form).getByRole('button', { name: /verify and save/i }) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.change(within(form).getByLabelText('resource'), { target: { value: 'acme' } })
+    expect((within(form).getByLabelText('Base URL') as HTMLInputElement).value).toBe(
+      'https://acme.openai.azure.com/openai/v1',
+    )
+    fireEvent.change(within(form).getByLabelText('API key'), { target: { value: 'k' } })
+    expect(save.disabled).toBe(false)
+  })
+
+  it('opening a provider fetches its live listing, labelled, and Use switches the model', async () => {
+    const { api, onModelChanged } = renderSection()
+    await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('provider-openrouter')).getByRole('button', { name: 'openrouter' }))
+
+    await waitFor(() => expect(screen.getByTestId('model-anthropic/claude-sonnet-5')).toBeTruthy())
+    expect(api.getProviderModels).toHaveBeenCalledWith('openrouter')
+    const panel = screen.getByTestId('provider-models-openrouter')
+    expect(panel.textContent).toContain('2 models from openrouter')
+    const row = screen.getByTestId('model-anthropic/claude-sonnet-5')
+    expect(row.textContent).toContain('1M ctx')
+    expect(row.textContent).toContain('$2 / $10 per 1M')
+    // A model the provider stated nothing about shows no invented numbers.
+    expect(screen.getByTestId('model-openai/gpt-x').textContent).not.toContain('ctx')
+
+    fireEvent.click(within(row).getByRole('button', { name: /use anthropic\/claude-sonnet-5/i }))
+    await waitFor(() =>
+      expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'openrouter:anthropic/claude-sonnet-5'),
+    )
+    expect(onModelChanged).toHaveBeenCalledWith('openrouter:anthropic/claude-sonnet-5')
+  })
+
+  it('the current model is marked, not offered again', async () => {
+    renderSection({}, 'openrouter:anthropic/claude-sonnet-5')
+    await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('provider-openrouter')).getByRole('button', { name: 'openrouter' }))
+    await waitFor(() => expect(screen.getByTestId('model-anthropic/claude-sonnet-5')).toBeTruthy())
+    const row = screen.getByTestId('model-anthropic/claude-sonnet-5')
+    expect(row.textContent).toContain('current')
+    expect(within(row).queryByRole('button', { name: /use/i })).toBeNull()
+  })
+
+  it('a provider with no listing offers a typed model id instead of an empty list', async () => {
+    const { api, onModelChanged } = renderSection({
+      getProviders: vi.fn(async () => [
+        OLLAMA,
+        provider({ name: 'azure', listing: 'unavailable', model_note: 'deployment name' }),
+      ]),
+      getProviderModels: vi.fn(async () => {
+        throw new Error('https://x/models answered 404 — no model listing; type a model id')
+      }),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-azure')).toBeTruthy())
+    expect(screen.getByTestId('provider-azure').textContent).toContain('no model listing')
+    fireEvent.click(within(screen.getByTestId('provider-azure')).getByRole('button', { name: 'azure' }))
+    await waitFor(() => expect(screen.getByLabelText('Model id')).toBeTruthy())
+    expect(screen.queryByText(/models from/)).toBeNull()
+    fireEvent.change(screen.getByLabelText('Model id'), { target: { value: 'gpt-5-deploy' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Use' }))
+    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'azure:gpt-5-deploy'))
+    expect(onModelChanged).toHaveBeenCalledWith('azure:gpt-5-deploy')
+  })
+
+  it('a failed switch states the reason and does not report a change', async () => {
+    const { api, onModelChanged } = renderSection({
+      putSetting: vi.fn(async () => {
+        throw new Error('the server refused (500)')
+      }),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('provider-openrouter')).getByRole('button', { name: 'openrouter' }))
+    await waitFor(() => expect(screen.getByTestId('model-openai/gpt-x')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('model-openai/gpt-x')).getByRole('button', { name: /use/i }))
+    await waitFor(() => expect(api.putSetting).toHaveBeenCalled())
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('500'))
+    expect(onModelChanged).not.toHaveBeenCalled()
+  })
+
+  it('removing asks first, then deletes and drops the row', async () => {
+    const { api } = renderSection()
+    await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /remove openrouter/i }))
+    expect(api.deleteProvider).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(api.deleteProvider).toHaveBeenCalledWith('openrouter'))
+    await waitFor(() => expect(screen.queryByTestId('provider-openrouter')).toBeNull())
+  })
+
+  it('make default moves the marker only after the server said so', async () => {
+    const { api } = renderSection()
+    await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
+    fireEvent.click(
+      within(screen.getByTestId('provider-openrouter')).getByRole('button', { name: /make default/i }),
+    )
+    await waitFor(() => expect(api.makeDefaultProvider).toHaveBeenCalledWith('openrouter'))
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-openrouter').textContent).toContain('default for bare model ids'),
+    )
+    expect(screen.getByTestId('provider-ollama').textContent).not.toContain('default for bare model ids')
+  })
+})

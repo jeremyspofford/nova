@@ -87,5 +87,6 @@ async def test_put_cloud_success_masks_the_saved_key(client, pool, mount_backend
 
     assert resp.status_code == 200
     assert resp.json()["api_key"] == "•••9999"
-    row = await pool.fetchrow("SELECT api_key FROM backend_config WHERE id = 1")
+    row = await pool.fetchrow("SELECT api_key, is_default FROM providers WHERE name = 'cloud'")
     assert row["api_key"] == "sk-newkey9999"  # stored unmasked, only display is masked
+    assert row["is_default"] is True

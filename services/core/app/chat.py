@@ -1051,13 +1051,21 @@ def without_markup(text: str) -> str:
 
 
 async def _persist_assistant(
-    pool: asyncpg.Pool, conversation_id: uuid.UUID, text: str
+    pool: asyncpg.Pool,
+    conversation_id: uuid.UUID,
+    text: str,
+    turn_id: uuid.UUID | None = None,
 ) -> None:
+    """The assistant row, linked to the turn that produced it (S10-pre): the
+    link is what lets a transcript be badged from the trace rather than
+    from anything the reply says about itself."""
     text = without_markup(text)
     await pool.execute(
-        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'assistant', $2)",
+        "INSERT INTO messages (conversation_id, role, content, turn_id) "
+        "VALUES ($1, 'assistant', $2, $3)",
         conversation_id,
         text,
+        turn_id,
     )
 
 
@@ -2104,7 +2112,7 @@ async def _run_turn(
         statement = model_failure_statement(model=model, failure=stated, spans=turn.spans)
         logger.warning("chat turn %s failed: %s", turn.id, stated)
         decided = "error"
-        await _persist_assistant(pool, conversation_id, statement)
+        await _persist_assistant(pool, conversation_id, statement, turn.id)
         persisted_reply = True
         emit(_frame({"error": statement}))
         emit(DONE_FRAME)
@@ -2154,6 +2162,22 @@ async def _run_turn(
             parts.append(delta)
             emit(_frame({"t": delta}))
 
+        served_by_sent = False
+
+        def _emit_served_by() -> None:
+            """The `served_by` frame, once per turn, from the llm_call span —
+            the gateway's own X-Nova-Served-By header (`provider:model`), never
+            the setting the turn ran under and never anything the reply
+            claims. Sent only when the gateway actually stated it."""
+            nonlocal served_by_sent
+            if served_by_sent:
+                return
+            llm = _last_llm_span(turn.spans)
+            served_by = llm.meta.get("served_by") if llm is not None else None
+            if isinstance(served_by, str) and served_by:
+                served_by_sent = True
+                emit(_frame({"served_by": served_by}))
+
         for round_number in range(1, rounds_allowed + 1):
             round_text, calls, failure = await _gateway_round(
                 app,
@@ -2164,9 +2188,12 @@ async def _run_turn(
                 round_number=round_number,
                 on_delta=_stream_delta,
             )
-
             if failure is not None:
                 break
+            # A round that answered is badged with who answered it; a failed
+            # round's statement already names the engine (model_failure_
+            # statement), and the error frame stays where clients expect it.
+            _emit_served_by()
             if not calls:
                 break
             if round_number == rounds_allowed:
@@ -2957,7 +2984,7 @@ async def _run_turn(
         # _collect_completion rather than a scanned round. A no-op on clean text.
         persisted = without_markup(persisted)
 
-        await _persist_assistant(pool, conversation_id, persisted)
+        await _persist_assistant(pool, conversation_id, persisted, turn.id)
         persisted_reply = True
         # Memory hygiene: a guarded consent/capability turn is interaction
         # PLUMBING, not knowledge. A turn the consent guard had to correct, or
@@ -3025,7 +3052,7 @@ async def _run_turn(
             # this fails too, and is LOGGED — never reported as recorded.
             try:
                 await _persist_assistant(
-                    pool, conversation_id, turn_failure_statement(reason, turn.spans)
+                    pool, conversation_id, turn_failure_statement(reason, turn.spans), turn.id
                 )
             except Exception:
                 logger.exception("could not record the failure of turn %s", turn.id)

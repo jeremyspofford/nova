@@ -8,6 +8,7 @@ import { AppearanceSection } from './AppearanceSection'
 import { AccountSection } from './AccountSection'
 import { ModelsSection } from './ModelsSection'
 import { DevicesSection } from './DevicesSection'
+import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
 
 /**
@@ -110,6 +111,13 @@ export function SettingsPage() {
                 setModel(model)
               }}
               onRerunSetup={handleRerunSetup}
+            />
+            <ProvidersSection
+              chatModel={chatModel}
+              onModelChanged={model => {
+                updateSettingValue('chat.model', model)
+                setModel(model)
+              }}
             />
             <ResponseQualitySection
               checked={responsivenessCheck}

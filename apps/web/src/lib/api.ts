@@ -231,6 +231,11 @@ export interface StoredMessage {
   role: string
   content: string
   created_at: string
+  /** `provider:model` as the gateway stated it on this turn's llm_call span
+   * (S10-pre) — DERIVED from the trace server-side, never stored on the row.
+   * null for user rows, for rows older than the turn link, and for a turn
+   * whose gateway call never stated one. */
+  served_by?: string | null
 }
 
 export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
@@ -656,3 +661,98 @@ export interface EvalRunRecord {
 export async function getEvalRun(runId: string): Promise<EvalRunRecord> {
   return apiGet<EvalRunRecord>(`/api/v1/evals/runs/${encodeURIComponent(runId)}`)
 }
+
+// ── providers (S10-pre) ─────────────────────────────────────────────────
+
+/** The wire protocols a provider row can name. Vendors are not the unit;
+ * protocols are: everything OpenAI-shaped (OpenAI, OpenRouter, Groq, Azure
+ * v1, Bedrock, Gemini's compat layer, …) is `openai-chat`. */
+export type ProviderAdapter = 'ollama' | 'openai-chat' | 'anthropic-messages'
+export type ProviderAuthShape = 'none' | 'static-bearer' | 'api-key-header'
+export type ProviderListingState = 'available' | 'unavailable' | 'unknown'
+
+export interface Provider {
+  name: string
+  adapter: ProviderAdapter
+  base_url: string
+  auth_shape: ProviderAuthShape
+  /** Masked by the gateway; never the real key. */
+  api_key: string | null
+  default_model: string | null
+  model_note: string | null
+  preset: string | null
+  builtin: boolean
+  is_default: boolean
+  verified_at: string | null
+  listing: ProviderListingState
+  listing_note: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProviderWrite {
+  name?: string
+  adapter: ProviderAdapter
+  base_url: string
+  auth_shape: ProviderAuthShape
+  api_key?: string
+  default_model?: string
+  model_note?: string
+  preset?: string
+}
+
+export interface ProviderPreset {
+  name: string
+  label: string
+  adapter: ProviderAdapter
+  base_url: string
+  auth_shape: ProviderAuthShape
+  docs_url?: string
+  model_note?: string
+  quirks?: string
+  /** `{resource}`, `{region}` … the owner fills in before saving. */
+  placeholders?: string[]
+}
+
+export interface ProviderModel {
+  id: string
+  owned_by: string
+  name?: string
+  context_length?: number
+  /** USD per token, as the provider stated it. Absent when it stated none. */
+  pricing?: { prompt?: number; completion?: number }
+}
+
+/** A live listing — always labelled with where and when it came from. */
+export interface ProviderListing {
+  source: string
+  fetched_at: string
+  models: ProviderModel[]
+}
+
+export async function getProviders(): Promise<Provider[]> {
+  const body = await apiGet<{ providers: Provider[] }>('/api/v1/providers')
+  return body.providers
+}
+
+export async function getProviderPresets(): Promise<ProviderPreset[]> {
+  const body = await apiGet<{ presets: ProviderPreset[] }>('/api/v1/providers/presets')
+  return body.presets
+}
+
+/** The gateway verifies the provider live BEFORE saving; a 502 means the
+ * row never landed and the message is the provider's own reason. */
+export const createProvider = (provider: ProviderWrite & { name: string }) =>
+  apiSend<Provider>('/api/v1/providers', 'POST', provider)
+
+export const updateProvider = (name: string, patch: Partial<ProviderWrite>) =>
+  apiSend<Provider>(`/api/v1/providers/${encodeURIComponent(name)}`, 'PUT', patch)
+
+export const deleteProvider = (name: string) =>
+  apiSend<{ deleted: string }>(`/api/v1/providers/${encodeURIComponent(name)}`, 'DELETE')
+
+export const makeDefaultProvider = (name: string) =>
+  apiSend<Provider>(`/api/v1/providers/${encodeURIComponent(name)}/default`, 'PUT')
+
+export const getProviderModels = (name: string) =>
+  apiGet<ProviderListing>(`/api/v1/providers/${encodeURIComponent(name)}/models`)

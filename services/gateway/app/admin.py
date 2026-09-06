@@ -18,7 +18,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
-from app import backends, db
+from app import adapters, backends, db, providers
 from app import curated as curated_mod
 from app import fit as fit_mod
 from app import suggest as suggest_mod
@@ -366,10 +366,8 @@ async def probe(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="model is required")
 
     pool = await db.get_pool()
-    config = await backends.read_config(pool)
-    kind = config["kind"]
-    target_model = model or config.get("model") or ""
-    base_url = backends.resolve_base_url(config)
+    row, target_model = await providers.resolve(pool, model)
+    kind = backends.kind_of(row)
 
     ok = True
     error: str | None = None
@@ -377,39 +375,51 @@ async def probe(request: Request) -> dict:
     vram_mb: int | None = None
     started = time.monotonic()
 
-    if not base_url:
-        ok = False
-        error = f"no base URL configured for backend kind={kind}"
-    else:
-        client = backends.http_client(
-            request.app, PROBE_TIMEOUT, base_url=base_url, headers=backends.auth_headers(config)
-        )
-        try:
-            async with client as c:
-                resp = await c.post(
-                    "/v1/chat/completions",
-                    json={
-                        "model": target_model,
-                        "messages": [{"role": "user", "content": "hi"}],
-                        "max_tokens": 1,
-                        "stream": False,
-                    },
-                )
-                resp.raise_for_status()
-                latency_ms = int((time.monotonic() - started) * 1000)
-                # Only meaningful for a local ollama model — a remote/cloud
-                # backend consumes no VRAM on this host at all. Read AFTER
-                # the request answers (never before it too — see
-                # `_footprint_vram_mb`'s docstring for why a before/after
-                # delta was wrong).
-                if kind == "ollama":
-                    vram_mb = await _footprint_vram_mb()
-        except httpx.HTTPError as exc:
+    # The probe rides the SAME adapter a chat turn would — an Anthropic
+    # default is probed through the Messages API, an ollama default through
+    # its /v1 — so "the probe passed" means the chat path works, not that
+    # some other URL answered.
+    probe_body = {
+        "model": target_model,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1,
+        "stream": False,
+    }
+    try:
+        response = await adapters.for_row(row).completions(request, row, target_model, probe_body)
+        status = response.status_code
+        content = b""
+        iterator = getattr(response, "body_iterator", None)
+        if iterator is not None:
+            async for chunk in iterator:
+                content += chunk if isinstance(chunk, bytes) else str(chunk).encode()
+        else:
+            content = response.body
+        latency_ms = int((time.monotonic() - started) * 1000)
+        if status != 200:
             ok = False
-            error = backends.reason(exc)
-            latency_ms = int((time.monotonic() - started) * 1000)
+            error = f"HTTP {status}: {content.decode(errors='replace')[:400]}"
+        elif content.lstrip().startswith(b"data:") and b'"error"' in content:
+            # A stream that carried an OpenAI-shaped error chunk answered,
+            # but not with a completion.
+            ok = False
+            error = content.decode(errors="replace")[:400]
+        elif kind == "ollama":
+            # Only meaningful for a local ollama model — a remote/cloud
+            # backend consumes no VRAM on this host at all. Read AFTER the
+            # request answers (never a before/after delta — see
+            # `_footprint_vram_mb`'s docstring for why that was wrong).
+            vram_mb = await _footprint_vram_mb()
+    except adapters.ProviderRefused as exc:
+        ok = False
+        error = exc.detail
+        latency_ms = int((time.monotonic() - started) * 1000)
+    except httpx.HTTPError as exc:
+        ok = False
+        error = backends.reason(exc)
+        latency_ms = int((time.monotonic() - started) * 1000)
 
-    row = await pool.fetchrow(
+    row_out = await pool.fetchrow(
         "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
         "VALUES ($1, $2, $3, $4, $5, $6) "
         "RETURNING id, model, kind, ok, latency_ms, vram_mb, error, created_at",
@@ -420,7 +430,7 @@ async def probe(request: Request) -> dict:
         vram_mb,
         error,
     )
-    return dict(row)
+    return dict(row_out)
 
 
 @router.get("/backend")
@@ -444,3 +454,124 @@ async def put_backend(request: Request) -> dict:
     # Never log the payload itself — api_key lives in it.
     logger.info("backend config saved: kind=%s", saved["kind"])
     return backends.to_public(saved)
+
+
+# ── the provider registry (S10-pre) ──────────────────────────────────────
+
+
+def _provider_404(name: str) -> HTTPException:
+    return HTTPException(status_code=404, detail=f"no provider named {name!r}")
+
+
+async def _verify_or_502(app, name: str, shape: dict) -> dict:
+    """Run the adapter's verify-before-save; a refusal is a 502 with the
+    provider's own reason and NOTHING is written."""
+    row = dict(shape, name=name)
+    try:
+        result = await adapters.for_row(row).verify(app, row)
+    except adapters.ProviderRefused as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"could not verify provider {name!r} — {exc.detail}",
+        ) from exc
+    return dict(shape, listing=result.listing, listing_note=result.note)
+
+
+@router.get("/providers")
+async def list_providers() -> dict:
+    pool = await db.get_pool()
+    rows = await providers.list_rows(pool)
+    return {"providers": [providers.to_public(row) for row in rows]}
+
+
+@router.get("/providers/presets")
+async def provider_presets() -> dict:
+    return {"presets": providers.load_presets()}
+
+
+@router.post("/providers")
+async def create_provider(request: Request) -> dict:
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="request body must be a JSON object")
+    name = providers.validate_name(body.get("name"))
+    if name == "ollama":
+        raise HTTPException(status_code=409, detail="'ollama' is the builtin provider")
+    shape = providers.validate_shape(body)
+    shape = await _verify_or_502(request.app, name, shape)
+    pool = await db.get_pool()
+    saved = await providers.insert_row(pool, name, shape)
+    # Never log the payload itself — api_key lives in it.
+    logger.info("provider saved: name=%s adapter=%s", saved["name"], saved["adapter"])
+    return providers.to_public(saved)
+
+
+@router.get("/providers/{name}")
+async def get_provider(name: str) -> dict:
+    pool = await db.get_pool()
+    try:
+        return providers.to_public(await providers.get_row(pool, name))
+    except providers.UnknownProvider:
+        raise _provider_404(name) from None
+
+
+@router.put("/providers/{name}")
+async def update_provider(name: str, request: Request) -> dict:
+    body = await request.json()
+    pool = await db.get_pool()
+    try:
+        existing = await providers.get_row(pool, name)
+    except providers.UnknownProvider:
+        raise _provider_404(name) from None
+    if existing["builtin"]:
+        raise HTTPException(
+            status_code=400,
+            detail="the bundled ollama provider is configured by the install, not edited",
+        )
+    shape = providers.validate_shape(body, existing=existing)
+    shape = await _verify_or_502(request.app, name, shape)
+    saved = await providers.update_row(pool, name, shape)
+    logger.info("provider updated: name=%s adapter=%s", saved["name"], saved["adapter"])
+    return providers.to_public(saved)
+
+
+@router.delete("/providers/{name}")
+async def delete_provider(name: str) -> dict:
+    pool = await db.get_pool()
+    try:
+        await providers.delete_row(pool, name)
+    except providers.UnknownProvider:
+        raise _provider_404(name) from None
+    logger.info("provider deleted: name=%s", name)
+    return {"deleted": name}
+
+
+@router.put("/providers/{name}/default")
+async def make_default(name: str) -> dict:
+    pool = await db.get_pool()
+    try:
+        row = await providers.set_default(pool, name)
+    except providers.UnknownProvider:
+        raise _provider_404(name) from None
+    logger.info("default provider: %s", name)
+    return providers.to_public(row)
+
+
+@router.get("/providers/{name}/models")
+async def provider_models(name: str, request: Request) -> dict:
+    """The provider's LIVE model list, labelled with its source and fetch
+    time. What it learns about the listing is recorded on the row."""
+    pool = await db.get_pool()
+    try:
+        row = await providers.get_row(pool, name)
+    except providers.UnknownProvider:
+        raise _provider_404(name) from None
+    try:
+        listing = await adapters.for_row(row).list_models(request.app, row)
+    except adapters.ListingUnavailable as exc:
+        await providers.record_listing(pool, name, "unavailable", str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except adapters.ProviderRefused as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    await providers.record_listing(pool, name, "available", f"{len(listing.models)} models listed")
+    return listing.as_dict()

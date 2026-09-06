@@ -23,7 +23,7 @@ requires_db = pytest.mark.skipif(not TEST_DSN, reason=SKIP_REASON)
 SERVICE_TOKEN = "test-service-token"
 BASE_URL = "http://test"
 
-_TABLES = ("probes", "backend_config")
+_TABLES = ("probes", "providers")
 
 _schema_built = False
 
