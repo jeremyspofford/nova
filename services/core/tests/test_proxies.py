@@ -1,4 +1,5 @@
 """Wizard passthroughs — the browser only ever talks to core (ruling R8)."""
+
 from __future__ import annotations
 
 import httpx
@@ -31,6 +32,17 @@ ROUTES = [
     ("DELETE", "/api/v1/providers/openrouter", "/admin/providers/openrouter", None),
     ("PUT", "/api/v1/providers/openrouter/default", "/admin/providers/openrouter/default", None),
     ("GET", "/api/v1/providers/openrouter/models", "/admin/providers/openrouter/models", None),
+    # The model catalogue (S10a): Hugging Face search + repo quants, and a
+    # typed ref resolved live. GET /models/catalog itself is a real handler
+    # (it adds eval measurements) — pinned in test_models_catalog.py.
+    ("GET", "/api/v1/models/catalog/hf", "/admin/catalog/hf", None),
+    (
+        "GET",
+        "/api/v1/models/catalog/hf/unsloth/Qwen3-GGUF",
+        "/admin/catalog/hf/unsloth/Qwen3-GGUF",
+        None,
+    ),
+    ("GET", "/api/v1/models/catalog/resolve", "/admin/catalog/resolve", None),
 ]
 
 
@@ -83,9 +95,7 @@ async def test_pull_forwards_its_query_string_too(owner_client, mount_peers):
     gateway = FakeGateway()
     mount_peers(gateway=gateway)
 
-    resp = await owner_client.post(
-        f"/api/v1/models/pull?{RAW_QUERY}", json={"model": "qwen3:8b"}
-    )
+    resp = await owner_client.post(f"/api/v1/models/pull?{RAW_QUERY}", json={"model": "qwen3:8b"})
 
     assert resp.status_code == 200
     assert gateway.queries[-1] == RAW_QUERY.encode()
@@ -101,9 +111,7 @@ async def test_a_gateway_refusal_passes_through_with_its_reason(owner_client, mo
 
 
 async def test_pull_streams_the_gateways_progress_lines_through(owner_client, mount_peers):
-    gateway = FakeGateway(
-        pull_lines=('{"status":"pulling","completed":1}', '{"status":"success"}')
-    )
+    gateway = FakeGateway(pull_lines=('{"status":"pulling","completed":1}', '{"status":"success"}'))
     mount_peers(gateway=gateway)
 
     resp = await owner_client.post("/api/v1/models/pull", json={"model": "qwen3:8b"})

@@ -22,6 +22,7 @@ from app import (
     devices_ws,
     evals_api,
     governance_api,
+    models_catalog,
     proxies,
     settings_store,
     traces,
@@ -82,6 +83,7 @@ app.include_router(devices_api.router)
 app.include_router(devices_ws.router)
 app.include_router(evals_api.router)
 app.include_router(proxies.router)
+app.include_router(models_catalog.router)
 app.include_router(workspace_api.router)
 
 

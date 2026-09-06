@@ -182,6 +182,11 @@ class FakeGateway:
                 Route("/admin/providers/{name}", self._admin, methods=["GET", "PUT", "DELETE"]),
                 Route("/admin/providers/{name}/default", self._admin, methods=["PUT"]),
                 Route("/admin/providers/{name}/models", self._admin, methods=["GET"]),
+                # The model catalogue (S10a) — same echo, same record.
+                Route("/admin/catalog", self._admin, methods=["GET"]),
+                Route("/admin/catalog/hf", self._admin, methods=["GET"]),
+                Route("/admin/catalog/hf/{org}/{repo}", self._admin, methods=["GET"]),
+                Route("/admin/catalog/resolve", self._admin, methods=["GET"]),
             ]
         )
 

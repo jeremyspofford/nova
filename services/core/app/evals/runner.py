@@ -658,6 +658,49 @@ async def latest_complete_suite_run(
     return dict(row) if row else None
 
 
+async def latest_complete_suite_runs(
+    pool: asyncpg.Pool, suite: str, suite_version: int
+) -> list[dict]:
+    """The newest 'done' run for EVERY model at exactly this (suite,
+    suite_version) — one row per model. Same rule as the single-model
+    query: a 'running', 'error' or 'interrupted' run never stands in for a
+    complete one, and another version's run is another measurement."""
+    rows = await pool.fetch(
+        f"SELECT DISTINCT ON (model) {_SUITE_RUN_COLUMNS} FROM eval_suite_runs "
+        "WHERE suite = $1 AND suite_version = $2 AND status = $3 "
+        "ORDER BY model, started_at DESC, id DESC",
+        suite,
+        suite_version,
+        SUITE_RUN_DONE,
+    )
+    return [dict(row) for row in rows]
+
+
+async def measured_by_model(pool: asyncpg.Pool) -> dict[str, dict[str, dict]]:
+    """{model id as stored: {suite: measurement}} across every suite the
+    corpus defines, at each suite's CURRENT version — the only place a
+    'measured' suitability fact is minted. `pass_rate` is None (never 0)
+    when nothing in the run was gradeable, per `summarize`."""
+    from app.evals import cases as cases_mod
+
+    out: dict[str, dict[str, dict]] = {}
+    for suite in sorted({c.suite for c in cases_mod.load_cases()}):
+        suite_cases = cases_mod.load_suite(suite)
+        if not suite_cases:
+            continue
+        version = suite_cases[0].suite_version
+        for run in await latest_complete_suite_runs(pool, suite, version):
+            rows = await runs_in(pool, run["id"])
+            summary = summarize([(row["passed"], row["ungradeable"]) for row in rows])
+            out.setdefault(run["model"], {})[suite] = {
+                "suite_version": version,
+                "run_id": str(run["id"]),
+                "ended_at": run["ended_at"].isoformat() if run["ended_at"] else None,
+                **summary,
+            }
+    return out
+
+
 async def runs_in(pool: asyncpg.Pool, run_id: uuid.UUID) -> list[dict]:
     """Every eval_runs row persisted under one suite run, in the order they
     landed (the job runs cases sequentially, so this is suite order too)."""

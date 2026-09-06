@@ -106,6 +106,30 @@ async def suggest(request: Request) -> Response:
     return await _forward(request, "GET", "/admin/suggest")
 
 
+# ── the model catalogue (S10a): Hugging Face search, a repo's quants, a
+# typed ref resolved live — forwarded 1:1, query string byte-for-byte. The
+# catalogue itself (GET /models/catalog) is NOT a bare forward: core adds
+# the one fact only it holds (eval measurements) — see app/models_catalog.py.
+CATALOG_HF_TIMEOUT = httpx.Timeout(connect=5.0, read=25.0, write=5.0, pool=5.0)
+
+
+@router.get("/models/catalog/hf")
+async def catalog_hf(request: Request) -> Response:
+    return await _forward(request, "GET", "/admin/catalog/hf", timeout=CATALOG_HF_TIMEOUT)
+
+
+@router.get("/models/catalog/hf/{org}/{repo}")
+async def catalog_hf_repo(org: str, repo: str, request: Request) -> Response:
+    return await _forward(
+        request, "GET", f"/admin/catalog/hf/{org}/{repo}", timeout=CATALOG_HF_TIMEOUT
+    )
+
+
+@router.get("/models/catalog/resolve")
+async def catalog_resolve(request: Request) -> Response:
+    return await _forward(request, "GET", "/admin/catalog/resolve", timeout=CATALOG_HF_TIMEOUT)
+
+
 @router.post("/models/probe")
 async def probe(request: Request) -> Response:
     return await _forward(request, "POST", "/admin/probe", timeout=PROBE_TIMEOUT)
