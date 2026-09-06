@@ -19,7 +19,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
-from app import adapters, backends, db, providers
+from app import adapters, backends, catalog, db, hf_hub, ollama_registry, providers
 from app import curated as curated_mod
 from app import fit as fit_mod
 from app import pulls as pulls_mod
@@ -160,20 +160,29 @@ async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
     return {row["model"]: dict(row) for row in rows}
 
 
+async def _fit_context(app, pool) -> dict:
+    """The numbers every fit verdict is computed against — read ONCE per
+    request and shared by /admin/suggest and the catalogue, so the two can
+    never disagree about the same card."""
+    data, _note = _read_hardware()
+    config = await backends.read_config(pool)
+    free_gb, total_gb, reason = await _free_and_total_vram_gb(app, data, config)
+    return {"free_gb": free_gb, "total_gb": total_gb, "reason": reason}
+
+
 @router.get("/suggest")
 async def suggest_route(request: Request) -> dict:
     data, _note = _read_hardware()
     result = suggest_mod.suggest(data, curated_mod.load_curated())
 
     pool = await db.get_pool()
-    config = await backends.read_config(pool)
-    free_gb, total_gb, reason = await _free_and_total_vram_gb(request.app, data, config)
+    ctx = await _fit_context(request.app, pool)
     probes_by_model = await _latest_probes(pool, [m["slug"] for m in result["models"]])
 
     for model in result["models"]:
         needed_gb, source = fit_mod.needed_gb_for(model, probes_by_model.get(model["slug"]))
         model["fit"] = fit_mod.compute_fit(
-            needed_gb, free_gb, total_gb, source=source, reason=reason
+            needed_gb, ctx["free_gb"], ctx["total_gb"], source=source, reason=ctx["reason"]
         )
     return result
 
@@ -657,15 +666,112 @@ async def provider_models(name: str, request: Request) -> dict:
     except providers.UnknownProvider:
         raise _provider_404(name) from None
     try:
-        listing = await adapters.for_row(row).list_models(request.app, row)
+        listing = await _listing_for(request.app, pool, row)
+    except adapters.ListingUnavailable as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except adapters.ProviderRefused as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    return listing.as_dict()
+
+
+async def _listing_for(app, pool, row: dict) -> adapters.Listing:
+    """A provider's live listing, and what it learned recorded on the row —
+    the ONE path both /admin/providers/{name}/models and the catalogue use,
+    so the row's listing state is the same fact whichever asked. Raises the
+    adapter's own ListingUnavailable / ProviderRefused."""
+    name = row["name"]
+    try:
+        listing = await adapters.for_row(row).list_models(app, row)
     except adapters.ListingUnavailable as exc:
         await providers.record_listing(pool, name, "unavailable", str(exc))
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise
     except adapters.ProviderRefused as exc:
         # The row's listing claim is no longer known to hold — say so on it.
         await providers.record_listing(
             pool, name, "unknown", f"the last listing was refused ({exc.status}): {exc.detail}"
         )
-        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+        raise
     await providers.record_listing(pool, name, "available", f"{len(listing.models)} models listed")
-    return listing.as_dict()
+    return listing
+
+
+# ── the model catalogue (S10a) ────────────────────────────────────────────
+
+
+@router.get("/catalog")
+async def catalog_route(request: Request) -> dict:
+    """Every model Nova can run or reach, in one row shape, every fact
+    labelled with its source and fetch time (app/catalog.py)."""
+    pool = await db.get_pool()
+    return await catalog.build(
+        request.app, pool, fit_context=_fit_context, listing_for=_listing_for
+    )
+
+
+@router.get("/catalog/hf")
+async def catalog_hf(request: Request) -> dict:
+    """A page of Hugging Face GGUF repos as catalogue rows. A rate limit is
+    a 429 in the Hub's words with retry_after_s; a bad parameter is a 400."""
+    params = request.query_params
+    try:
+        limit = int(params.get("limit") or 30)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="limit must be an integer") from None
+    try:
+        page = await hf_hub.search(
+            request.app,
+            query=params.get("q") or "",
+            sort=params.get("sort") or "downloads",
+            cursor=params.get("cursor") or None,
+            limit=limit,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except hf_hub.RateLimited as exc:
+        raise HTTPException(
+            status_code=429, detail=exc.detail, headers={"Retry-After": str(exc.retry_after_s)}
+        ) from exc
+    except adapters.ProviderRefused as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    return {
+        "rows": catalog.hf_page_rows(page),
+        "next_cursor": page.next_cursor,
+        "fetched_at": page.fetched_at,
+        "cached": page.cached,
+        "budget": page.budget,
+    }
+
+
+@router.get("/catalog/hf/{org}/{repo}")
+async def catalog_hf_repo(org: str, repo: str, request: Request) -> dict:
+    """One Hub repo as a catalogue row with its `pull.quants` — the GGUF
+    files the repo actually lists, sized, the default marked."""
+    try:
+        org, repo = hf_hub.validate_repo_ref(org, repo)
+        detail = await hf_hub.repo_detail(request.app, org, repo)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except hf_hub.RateLimited as exc:
+        raise HTTPException(
+            status_code=429, detail=exc.detail, headers={"Retry-After": str(exc.retry_after_s)}
+        ) from exc
+    except adapters.ProviderRefused as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    return catalog.hf_repo_row(detail)
+
+
+@router.get("/catalog/resolve")
+async def catalog_resolve(request: Request) -> dict:
+    """What a typed ref (`qwen3:4b`, `user/name:tag`, `hf.co/org/repo[:q]`)
+    would pull, resolved live before any bytes move."""
+    model = request.query_params.get("model") or ""
+    try:
+        return await catalog.resolve_ref(request.app, model)
+    except (ValueError, ollama_registry.NotARegistryRef) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except hf_hub.RateLimited as exc:
+        raise HTTPException(
+            status_code=429, detail=exc.detail, headers={"Retry-After": str(exc.retry_after_s)}
+        ) from exc
+    except adapters.ProviderRefused as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
