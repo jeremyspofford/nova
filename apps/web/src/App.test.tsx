@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import App from './App'
 import * as ui from './components/ui'
+import { neutralPalettes } from './lib/color-palettes'
 
 type Route = { status?: number; body?: unknown; hold?: Promise<void> }
 
@@ -94,6 +95,59 @@ describe('App gate', () => {
     render(<App />)
     await waitFor(() => expect(screen.getByLabelText('Message Nova')).toBeDefined())
     expect(screen.getByText('qwen3:4b')).toBeDefined()
+  })
+
+  // appearance.default_preset used to be read only to be displayed; no
+  // browser ever started on it. The gate now hands it to the theme store.
+  it('starts a browser that has not chosen a theme on the instance default', async () => {
+    mockApi({
+      '/api/v1/auth/state': { body: { has_users: true } },
+      '/api/v1/auth/me': { body: { person: { id: 'p1', name: 'Ada', role: 'owner' } } },
+      '/api/v1/settings': {
+        body: {
+          settings: [
+            { key: 'onboarding.completed', type: 'bool', default: false, description: '', value: true },
+            { key: 'appearance.default_preset', type: 'str', default: 'nova', description: '', value: 'nebula' },
+          ],
+        },
+      },
+      '/api/v1/conversations/active': { body: { id: 'c1', title: null, created_at: '' } },
+      '/api/v1/conversations/c1/messages': { body: { messages: [] } },
+    })
+    render(<App />)
+    await waitFor(() => expect(screen.getByLabelText('Message Nova')).toBeDefined())
+    await waitFor(() =>
+      expect(document.getElementById('nova-theme-vars')!.textContent).toContain(`--neutral-950:${neutralPalettes.nebula[950]}`))
+    const stored = JSON.parse(localStorage.getItem('nova-appearance')!)
+    expect(stored.preset).toBe('nebula')
+    expect(stored.presetChosen).toBe(false)
+  })
+
+  it('reads a pre-redesign instance default as what replaced it, and leaves a chosen browser alone', async () => {
+    localStorage.setItem('nova-appearance', JSON.stringify({ modePreference: 'dark', preset: 'ember', presetChosen: true }))
+    mockApi({
+      '/api/v1/auth/state': { body: { has_users: true } },
+      '/api/v1/auth/me': { body: { person: { id: 'p1', name: 'Ada', role: 'owner' } } },
+      '/api/v1/settings': {
+        body: {
+          settings: [
+            { key: 'onboarding.completed', type: 'bool', default: false, description: '', value: true },
+            { key: 'appearance.default_preset', type: 'str', default: 'nova', description: '', value: 'ocean' },
+          ],
+        },
+      },
+      '/api/v1/conversations/active': { body: { id: 'c1', title: null, created_at: '' } },
+      '/api/v1/conversations/c1/messages': { body: { messages: [] } },
+    })
+    const { unmount } = render(<App />)
+    await waitFor(() => expect(screen.getByLabelText('Message Nova')).toBeDefined())
+    expect(JSON.parse(localStorage.getItem('nova-appearance')!).preset).toBe('ember')
+    unmount()
+
+    localStorage.clear()
+    render(<App />)
+    await waitFor(() => expect(screen.getByLabelText('Message Nova')).toBeDefined())
+    await waitFor(() => expect(JSON.parse(localStorage.getItem('nova-appearance')!).preset).toBe('slate'))
   })
 
   // The daily path for a returning owner. Between login() setting the person

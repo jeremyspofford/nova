@@ -6,7 +6,29 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <meta name="theme-color" content="#168e85" />
+    <meta name="theme-color" content="#0c0a09" />
+    <!-- The first frame, before React: read the saved mode and paint the
+         ground in it. Without this every load of a dark theme flashed white
+         until the theme store mounted. The store repaints with the real
+         palette a beat later; this only has to be the right SIDE of dark. -->
+    <script>
+      (function () {
+        var dark = true;
+        try {
+          var s = JSON.parse(localStorage.getItem('nova-appearance') || '{}');
+          var p = s.modePreference;
+          dark = p === 'light' ? false
+            : p === 'system' ? window.matchMedia('(prefers-color-scheme: dark)').matches
+            : true;
+        } catch (e) {}
+        var h = document.documentElement;
+        h.classList.toggle('dark', dark);
+        h.style.colorScheme = dark ? 'dark' : 'light';
+        h.style.backgroundColor = dark ? '#0c0a09' : '#fafaf9';
+        var m = document.querySelector('meta[name="theme-color"]');
+        if (m) m.setAttribute('content', dark ? '#0c0a09' : '#fafaf9');
+      })();
+    </script>
     <title>Nova</title>
   </head>
   <body class="antialiased">

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
-import { ThemeProvider } from './stores/theme-store'
+import { ThemeProvider, useTheme } from './stores/theme-store'
 import { ChatProvider } from './stores/chat-store'
 import { ToastProvider } from './components/ToastProvider'
 import { AuthProvider, useAuth } from './stores/auth-store'
@@ -9,6 +9,7 @@ import { AppLayout } from './components/layout/AppLayout'
 import { Button } from './components/ui'
 import { gateOutcome, type GateOutcome } from './lib/gate'
 import { getSettings, settingValue, type SettingDef } from './lib/api'
+import { DEFAULT_PRESET } from './lib/color-palettes'
 import ComponentGallery from './pages/dev/ComponentGallery'
 import { Login } from './pages/Login'
 import { OnboardingWizard } from './pages/onboarding/OnboardingWizard'
@@ -88,6 +89,7 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
  */
 function Gate() {
   const { user, hasUsers, ready, unreachable, refresh } = useAuth()
+  const { adoptInstanceDefault } = useTheme()
   // Keyed by person: "loaded" has to mean loaded FOR THIS PERSON, not loaded
   // at some point. Whoever the settings were read for is the only browser
   // they describe.
@@ -103,11 +105,15 @@ function Gate() {
     try {
       const defs = await getSettings()
       setSettings({ personId, defs })
+      // `appearance.default_preset` is what a browser that has never chosen
+      // starts on. It used to be read only to be displayed — no browser ever
+      // started on it.
+      adoptInstanceDefault(settingValue(defs, 'appearance.default_preset', DEFAULT_PRESET))
     } catch (err) {
       setSettings(null)
       setSettingsError(err instanceof Error ? err.message : String(err))
     }
-  }, [])
+  }, [adoptInstanceDefault])
 
   useEffect(() => {
     if (!user) {

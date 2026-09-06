@@ -62,7 +62,7 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
     return (
       <div className="flex justify-end" data-testid="message-user">
         <div className="max-w-[85%] md:max-w-[75%]">
-          <div className="glass-card text-content-primary whitespace-pre-wrap rounded-tl-2xl rounded-tr-sm rounded-br-2xl rounded-bl-2xl px-4 py-3 text-body leading-relaxed">
+          <div className="glass-card bg-surface-elevated border border-border dark:border-white/[0.08] text-content-primary whitespace-pre-wrap rounded-tl-2xl rounded-tr-sm rounded-br-2xl rounded-bl-2xl px-4 py-3 text-body leading-relaxed">
             {row.text}
           </div>
         </div>

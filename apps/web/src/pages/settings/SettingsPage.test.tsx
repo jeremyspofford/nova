@@ -5,7 +5,7 @@ import { ChatProvider } from '../../stores/chat-store'
 import { ChatPage } from '../chat/ChatPage'
 import { AuthProvider } from '../../stores/auth-store'
 import { ThemeProvider } from '../../stores/theme-store'
-import type { Conversation, StoredMessage } from '../../lib/api'
+import { getSettings, type Conversation, type StoredMessage } from '../../lib/api'
 
 /**
  * Slice 2f Fix A, end to end: a switch made in Settings->Models has to be
@@ -33,9 +33,9 @@ vi.mock('../../lib/api', async importOriginal => {
       {
         key: 'appearance.default_preset',
         type: 'str',
-        default: 'default',
+        default: 'nova',
         description: '',
-        value: 'default',
+        value: 'nova',
       },
     ]),
     putSetting: vi.fn(async () => {}),
@@ -114,5 +114,19 @@ describe('Settings -> Models switch is visible in both the list and chat (Fix A)
 
     // (b) The chat badge updates too — no message was ever sent.
     await waitFor(() => expect(screen.getByTestId('chat-model').textContent).toBe('qwen3:14b'))
+  })
+})
+
+
+describe('SettingsPage — the instance default theme', () => {
+  it('reads a pre-redesign stored key as the theme that replaced it', async () => {
+    vi.mocked(getSettings).mockResolvedValueOnce([
+      { key: 'chat.model', type: 'str', default: '', description: '', value: 'qwen3:8b' },
+      { key: 'appearance.default_preset', type: 'str', default: 'nova', description: '', value: 'ocean' },
+    ])
+    renderApp()
+    const slate = await screen.findByRole('radio', { name: 'Slate' })
+    await waitFor(() => expect(within(slate).getByText('Default')).toBeDefined())
+    expect(screen.queryByText('ocean')).toBeNull()
   })
 })

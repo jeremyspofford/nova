@@ -33,8 +33,9 @@ export default {
         },
         // Accent (preserves existing 50-950 scale)
         accent: {
-          DEFAULT: 'rgb(var(--accent-500) / <alpha-value>)',
-          hover: 'rgb(var(--accent-300) / <alpha-value>)',
+          // mode-aware: 500/300 on a dark ground, 700/800 on a light one (index.css)
+          DEFAULT: 'rgb(var(--accent-ui, var(--accent-500)) / <alpha-value>)',
+          hover: 'rgb(var(--accent-ui-hover, var(--accent-300)) / <alpha-value>)',
           muted: 'rgb(var(--accent-600) / <alpha-value>)',
           dim: 'rgb(var(--accent-500) / 0.12)',
           glow: 'rgb(var(--accent-500) / 0.06)',

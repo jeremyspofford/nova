@@ -67,6 +67,19 @@ export const accentPalettes: Record<string, ColorScale> = {
     900: '6 78 59',     950: '2 44 34',
   },
 
+  violet: {
+    50: '245 243 255', 100: '237 233 254', 200: '221 214 254',
+    300: '196 181 253', 400: '167 139 250', 500: '139 92 246',
+    600: '124 58 237',  700: '109 40 217',  800: '91 33 182',
+    900: '76 29 149',   950: '46 16 101',
+  },
+  amber: {
+    50: '255 251 235', 100: '254 243 199', 200: '253 230 138',
+    300: '252 211 77',  400: '251 191 36',  500: '245 158 11',
+    600: '217 119 6',   700: '180 83 9',    800: '146 64 14',
+    900: '120 53 15',   950: '69 26 3',
+  },
+
   // ── Community theme accents ──────────────────────────────────────────────
 
   'nord-frost': {
@@ -122,17 +135,41 @@ export const accentPalettes: Record<string, ColorScale> = {
 // ── Neutral palettes ─────────────────────────────────────────────────────────
 
 export const neutralPalettes: Record<string, ColorScale> = {
+  // The Nova set. Each is a whole neutral family with its own cast — warm,
+  // cool, violet, ember, paper — because a theme that only swaps the accent
+  // leaves nine tenths of the screen identical (the complaint that started
+  // the 2026-09 redesign). `stone` is the warm family from DESIGN.md; the
+  // previous entry under this name held a cool grey (800 = 36 36 44) that
+  // was neither stone nor anything else.
   stone: {
     50: '250 250 249', 100: '245 245 244', 200: '231 229 228',
     300: '214 211 209', 400: '168 162 158', 500: '120 113 108',
-    600: '87 83 78',    700: '68 64 60',    800: '36 36 44',
-    900: '18 18 24',    950: '8 8 12',
+    600: '87 83 78',    700: '68 64 60',    800: '41 37 36',
+    900: '28 25 23',    950: '12 10 9',
   },
   slate: {
-    50: '248 250 252', 100: '241 245 249', 200: '226 232 240',
-    300: '203 213 225', 400: '148 163 184', 500: '100 116 139',
-    600: '71 85 105',   700: '51 65 85',    800: '30 41 59',
-    900: '15 23 42',    950: '2 4 16',
+    50: '246 248 250',  100: '238 243 248', 200: '220 228 236',
+    300: '190 202 214', 400: '147 163 181', 500: '92 108 126',
+    600: '74 90 108',   700: '44 56 70',    800: '28 37 49',
+    900: '19 26 36',    950: '11 15 23',
+  },
+  nebula: {
+    50: '248 245 255',  100: '243 238 255', 200: '228 220 247',
+    300: '201 191 227', 400: '169 155 203', 500: '110 96 145',
+    600: '84 70 122',   700: '53 41 90',    800: '31 24 56',
+    900: '21 16 42',    950: '10 7 20',
+  },
+  ember: {
+    50: '253 249 243',  100: '251 244 234', 200: '240 228 211',
+    300: '214 196 172', 400: '184 158 128', 500: '122 100 78',
+    600: '100 82 62',   700: '67 48 28',    800: '38 26 16',
+    900: '25 18 12',    950: '11 8 6',
+  },
+  daylight: {
+    50: '244 241 234',  100: '236 231 221', 200: '214 207 194',
+    300: '190 182 170', 400: '133 124 114', 500: '95 87 79',
+    600: '75 68 61',    700: '58 52 47',    800: '41 37 34',
+    900: '28 25 23',    950: '18 16 14',
   },
   zinc: {
     50: '250 250 250', 100: '244 244 245', 200: '228 228 231',
@@ -204,8 +241,11 @@ export const neutralPalettes: Record<string, ColorScale> = {
 // Keyed by neutral palette name
 
 export const cardSurface: Record<string, { light: string; dark: string }> = {
-  stone:        { light: '255 255 255', dark: '22 22 28'  },
-  slate:        { light: '255 255 255', dark: '12 18 34'  },
+  stone:        { light: '255 255 255', dark: '33 30 28'  },
+  slate:        { light: '255 255 255', dark: '24 32 43'  },
+  nebula:       { light: '255 255 255', dark: '26 20 49'  },
+  ember:        { light: '255 255 255', dark: '31 22 14'  },
+  daylight:     { light: '252 250 246', dark: '33 30 28'  },
   zinc:         { light: '255 255 255', dark: '18 18 22'  },
   gray:         { light: '255 255 255', dark: '14 18 30'  },
   nord:         { light: '236 239 244', dark: '40 46 60'  },
@@ -222,30 +262,99 @@ export const cardSurface: Record<string, { light: string; dark: string }> = {
 
 export interface ThemePreset {
   label: string
+  /** One line for the picker: what the theme is, in the operator's terms. */
+  description: string
   accent: string
   neutral: string
-  preferredMode?: 'light' | 'dark'   // UI hint: which mode this preset is designed for
-  group: 'classic' | 'community'
+  /** A second accent family (its 950 tints the lower atmosphere in dark
+   *  mode, its 200 in light) — Nova's amber, per DESIGN.md. Absent = the
+   *  accent tints everything, which is how the community themes stay
+   *  faithful to their sources. */
+  secondary?: string
+  /** A theme that IS light or IS dark: picking it brings its mode along.
+   *  Absent = renders in whichever mode the operator has. */
+  preferredMode?: 'light' | 'dark'
+  group: 'nova' | 'community' | 'custom'
 }
 
+/** What every browser starts on until told otherwise. */
+export const DEFAULT_PRESET = 'nova'
+
 export const themePresets: Record<string, ThemePreset> = {
-  // Classic
-  default: { label: 'Default',  accent: 'teal',    neutral: 'stone', group: 'classic' },
-  ocean:   { label: 'Ocean',    accent: 'blue',    neutral: 'slate', group: 'classic' },
-  forest:  { label: 'Forest',   accent: 'emerald', neutral: 'stone', group: 'classic' },
-  sunset:  { label: 'Sunset',   accent: 'rose',    neutral: 'zinc',  group: 'classic' },
-  'tailwind-teal': { label: 'Teal (Tailwind)', accent: 'tailwind-teal', neutral: 'stone', group: 'classic' },
+  // The Nova set — five deliberately different hue families on the SAME
+  // chrome, so the choice reads at a glance.
+  nova: {
+    label: 'Nova', description: 'Teal on warm near-black; amber for attention.',
+    accent: 'teal', neutral: 'stone', secondary: 'amber', group: 'nova',
+  },
+  slate: {
+    label: 'Slate', description: 'Blue on cool slate — the workbench.',
+    accent: 'blue', neutral: 'slate', group: 'nova',
+  },
+  nebula: {
+    label: 'Nebula', description: 'Violet on deep indigo with a magenta glow.',
+    accent: 'violet', neutral: 'nebula', secondary: 'rose', group: 'nova',
+  },
+  ember: {
+    label: 'Ember', description: 'Amber on black, warm all the way down.',
+    accent: 'amber', neutral: 'ember', secondary: 'orange', preferredMode: 'dark', group: 'nova',
+  },
+  daylight: {
+    label: 'Daylight', description: 'Warm paper with the Nova teal — for a bright room.',
+    accent: 'teal', neutral: 'daylight', secondary: 'amber', preferredMode: 'light', group: 'nova',
+  },
 
   // Community
-  nord:           { label: 'Nord',             accent: 'nord-frost',      neutral: 'nord',         preferredMode: 'dark',  group: 'community' },
-  'ctp-mocha':    { label: 'Catppuccin Mocha', accent: 'ctp-blue',        neutral: 'ctp-mocha',    preferredMode: 'dark',  group: 'community' },
-  'ctp-latte':    { label: 'Catppuccin Latte', accent: 'ctp-latte-blue',  neutral: 'ctp-latte',    preferredMode: 'light', group: 'community' },
-  dracula:        { label: 'Dracula',          accent: 'dracula-purple',  neutral: 'dracula',      preferredMode: 'dark',  group: 'community' },
-  'tokyo-night':  { label: 'Tokyo Night',      accent: 'tokyo-blue',      neutral: 'tokyo-night',  preferredMode: 'dark',  group: 'community' },
-  gruvbox:        { label: 'Gruvbox',          accent: 'gruvbox-orange',  neutral: 'gruvbox',      preferredMode: 'dark',  group: 'community' },
-  'solarized-dark': { label: 'Solarized Dark', accent: 'solarized-cyan',  neutral: 'solarized',    preferredMode: 'dark',  group: 'community' },
-  'one-dark':     { label: 'One Dark',         accent: 'one-blue',        neutral: 'one-dark',     preferredMode: 'dark',  group: 'community' },
+  nord:           { label: 'Nord',             description: 'Arctic blues on a cool grey.',      accent: 'nord-frost',      neutral: 'nord',         preferredMode: 'dark',  group: 'community' },
+  'ctp-mocha':    { label: 'Catppuccin Mocha', description: 'Soft pastels on mocha.',           accent: 'ctp-blue',        neutral: 'ctp-mocha',    preferredMode: 'dark',  group: 'community' },
+  'ctp-latte':    { label: 'Catppuccin Latte', description: 'The light Catppuccin.',            accent: 'ctp-latte-blue',  neutral: 'ctp-latte',    preferredMode: 'light', group: 'community' },
+  dracula:        { label: 'Dracula',          description: 'Purple on a night-blue grey.',     accent: 'dracula-purple',  neutral: 'dracula',      preferredMode: 'dark',  group: 'community' },
+  'tokyo-night':  { label: 'Tokyo Night',      description: 'Neon blue on midnight.',           accent: 'tokyo-blue',      neutral: 'tokyo-night',  preferredMode: 'dark',  group: 'community' },
+  gruvbox:        { label: 'Gruvbox',          description: 'Retro orange on warm brown.',      accent: 'gruvbox-orange',  neutral: 'gruvbox',      preferredMode: 'dark',  group: 'community' },
+  'solarized-dark': { label: 'Solarized Dark', description: 'Cyan on deep sea green.',          accent: 'solarized-cyan',  neutral: 'solarized',    preferredMode: 'dark',  group: 'community' },
+  'one-dark':     { label: 'One Dark',         description: 'Editor blue on charcoal.',          accent: 'one-blue',        neutral: 'one-dark',     preferredMode: 'dark',  group: 'community' },
 
-  // Custom (always last)
-  custom:  { label: 'Custom', accent: 'teal', neutral: 'stone', group: 'classic' },
+  // Custom (always last): any accent on the Nova neutrals
+  custom: { label: 'Custom', description: 'Pick your own accent on the Nova neutrals.', accent: 'teal', neutral: 'stone', group: 'custom' },
+}
+
+/** Preset keys that existed before the 2026-09 redesign, mapped to what
+ *  replaced them, so a browser that stored one lands somewhere sensible
+ *  instead of on a key that no longer exists. */
+export const LEGACY_PRESETS: Record<string, string> = {
+  default: 'nova',
+  ocean: 'slate',
+  forest: 'nova',
+  sunset: 'ember',
+  'tailwind-teal': 'nova',
+}
+
+/** A preset key as stored anywhere (a browser, the instance setting),
+ *  whichever era wrote it: the key itself if it exists, its replacement if
+ *  it was retired, null if it never meant anything. */
+export function normalizePreset(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  // own keys only: 'constructor' is not a theme
+  if (Object.prototype.hasOwnProperty.call(themePresets, raw)) return raw
+  return Object.prototype.hasOwnProperty.call(LEGACY_PRESETS, raw) ? LEGACY_PRESETS[raw] : null
+}
+
+export interface ResolvedPalette {
+  accent: ColorScale
+  neutral: ColorScale
+  secondary: ColorScale
+  card: { light: string; dark: string }
+}
+
+/** The scales a preset paints with — one function, so the store and the
+ *  picker's swatches can never disagree about what a theme looks like. An
+ *  unknown preset resolves to Nova rather than to nothing. */
+export function resolvePalette(presetKey: string, customAccent = 'teal'): ResolvedPalette {
+  const preset = themePresets[normalizePreset(presetKey) ?? DEFAULT_PRESET]
+  const accentKey = preset.group === 'custom' ? customAccent : preset.accent
+  const accent = accentPalettes[accentKey] ?? accentPalettes.teal
+  const neutral = neutralPalettes[preset.neutral] ?? neutralPalettes.stone
+  const secondary = (preset.secondary && accentPalettes[preset.secondary]) || accent
+  const card = cardSurface[preset.neutral] ?? cardSurface.stone
+  return { accent, neutral, secondary, card }
 }

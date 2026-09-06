@@ -38,7 +38,7 @@ async def test_every_def_is_listed_with_its_default_when_unset(owner_client):
     assert items["onboarding.completed"]["default"] is False
     assert items["onboarding.completed"]["value"] is False
     assert items["chat.model"]["value"] == ""
-    assert items["appearance.default_preset"]["value"] == "default"
+    assert items["appearance.default_preset"]["value"] == "nova"
     # The responsiveness check is opt-in: it must default OFF and unset.
     assert items["agents.responsiveness_check"]["type"] == "bool"
     assert items["agents.responsiveness_check"]["default"] is False

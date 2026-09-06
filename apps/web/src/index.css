@@ -29,8 +29,16 @@ input[type="number"] {
   --accent-900: 16 77 72;
   --accent-950: 8 45 42;
 
-  /* card surface (light: white, dark: neutral-900) */
+  /* card surface (light: white, dark: a step above neutral-900) */
   --card: 255 255 255;
+
+  /* atmosphere: the deep end of the accent (and Nova's amber) tints the
+     dark ground, the pale end tints the light one. The theme store rewrites
+     these with the active preset's families — nothing below names a hue. */
+  --glow-1: 8 45 42;
+  --glow-2: 69 26 3;
+  --glow-1-light: 204 251 240;
+  --glow-2-light: 254 243 199;
 
   /* neutral: stone */
   --neutral-50:  250 250 249;
@@ -50,18 +58,23 @@ input[type="number"] {
 /* Light mode defaults */
 :root {
   --surface-root: var(--neutral-50);
-  --surface-default: 255 255 255;
+  --surface-default: var(--card, 255 255 255);
   --surface-card: var(--card, 255 255 255);
   --surface-card-hover: var(--neutral-100);
   --surface-elevated: var(--neutral-100);
-  --surface-input: 255 255 255;
+  --surface-input: var(--card, 255 255 255);
   --text-primary: var(--neutral-900);
   --text-secondary: var(--neutral-500);
   --text-tertiary: var(--neutral-400);
   --text-disabled: var(--neutral-300);
   --border-default: var(--neutral-200);
   --border-subtle: var(--neutral-100);
-  --border-focus: var(--accent-500);
+  --border-focus: var(--accent-700);
+  /* accent as TEXT and as a fill under white text: the 500 step that reads
+     on a dark ground is 2-3:1 on paper (teal 2.8, amber 2.1), so light mode
+     uses the 700 step (every family clears 4.5:1 there) and hovers darker */
+  --accent-ui: var(--accent-700);
+  --accent-ui-hover: var(--accent-800);
 }
 /* Dark mode */
 html.dark {
@@ -78,6 +91,8 @@ html.dark {
   --border-default: var(--neutral-800);
   --border-subtle: var(--neutral-800);
   --border-focus: var(--accent-400);
+  --accent-ui: var(--accent-500);
+  --accent-ui-hover: var(--accent-300);
 }
 
 @layer base {
@@ -85,15 +100,18 @@ html.dark {
     overscroll-behavior: none;
   }
   body {
-    background-color: rgb(var(--neutral-50));
+    background:
+      radial-gradient(ellipse at 15% 50%, rgb(var(--glow-1-light) / 0.18) 0%, transparent 50%),
+      radial-gradient(ellipse at 85% 20%, rgb(var(--glow-2-light) / 0.18) 0%, transparent 50%),
+      rgb(var(--neutral-50));
     color: rgb(var(--neutral-900));
   }
   .dark body,
   html.dark body {
     background:
-      radial-gradient(ellipse at 15% 50%, rgba(8, 45, 42, 0.4) 0%, transparent 50%),
-      radial-gradient(ellipse at 85% 20%, rgba(8, 45, 42, 0.3) 0%, transparent 50%),
-      radial-gradient(ellipse at 50% 100%, rgba(8, 45, 42, 0.2) 0%, transparent 50%),
+      radial-gradient(ellipse at 15% 50%, rgb(var(--glow-1) / 0.45) 0%, transparent 50%),
+      radial-gradient(ellipse at 85% 20%, rgb(var(--glow-1) / 0.3) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 100%, rgb(var(--glow-2) / 0.3) 0%, transparent 50%),
       rgb(var(--neutral-950));
     color: rgb(var(--neutral-200));
   }
@@ -118,7 +136,7 @@ html.dark {
 /* ── Liquid glass tiers (dark mode) ────────────────────────────────────── */
 
 html.dark .glass-card {
-  background: rgba(12, 10, 9, 0.70);
+  background: rgb(var(--neutral-950) / 0.70);
   backdrop-filter: blur(40px) saturate(1.4);
   -webkit-backdrop-filter: blur(40px) saturate(1.4);
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25),
@@ -126,14 +144,14 @@ html.dark .glass-card {
 }
 
 html.dark .glass-nav {
-  background: rgba(8, 45, 42, 0.30);
+  background: rgb(var(--glow-1) / 0.30);
   backdrop-filter: blur(40px) saturate(1.6);
   -webkit-backdrop-filter: blur(40px) saturate(1.6);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 html.dark .glass-overlay {
-  background: rgba(8, 45, 42, 0.30);
+  background: rgb(var(--glow-1) / 0.30);
   backdrop-filter: blur(60px) saturate(1.8);
   -webkit-backdrop-filter: blur(60px) saturate(1.8);
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5),
@@ -142,7 +160,7 @@ html.dark .glass-overlay {
 }
 
 html.dark .glass-surface {
-  background: rgba(12, 10, 9, 0.50);
+  background: rgb(var(--neutral-950) / 0.50);
   backdrop-filter: blur(20px) saturate(1.2);
   -webkit-backdrop-filter: blur(20px) saturate(1.2);
 }

@@ -5,6 +5,7 @@ import { useAuth } from '../../stores/auth-store'
 import { useChatStore } from '../../stores/chat-store'
 import { getSettings, putSetting, settingValue, type SettingDef } from '../../lib/api'
 import { AppearanceSection } from './AppearanceSection'
+import { DEFAULT_PRESET, normalizePreset } from '../../lib/color-palettes'
 import { AccountSection } from './AccountSection'
 import { ModelsSection } from './ModelsSection'
 import { DevicesSection } from './DevicesSection'
@@ -46,7 +47,12 @@ export function SettingsPage() {
       .catch(err => setError(err instanceof Error ? err.message : String(err)))
   }, [])
 
-  const storedPreset = settings ? settingValue(settings, 'appearance.default_preset', 'default') : null
+  // The instance may still hold a key from before the theme redesign
+  // ('default', 'ocean', …): read it as what replaced it, so the picker can
+  // mark a real card as the default instead of naming a theme that is gone.
+  const storedPreset = settings
+    ? normalizePreset(settingValue(settings, 'appearance.default_preset', DEFAULT_PRESET)) ?? DEFAULT_PRESET
+    : null
   const chatModel =
     chatState.model ?? (settings ? settingValue(settings, 'chat.model', '') : '')
   // Opt-in, default OFF — reflects the stored value, unset reads false.
@@ -94,7 +100,7 @@ export function SettingsPage() {
         ) : (
           <>
             <AppearanceSection
-              storedPreset={storedPreset ?? 'default'}
+              storedPreset={storedPreset ?? DEFAULT_PRESET}
               onStored={preset => updateSettingValue('appearance.default_preset', preset)}
             />
             <ModelsSection

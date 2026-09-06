@@ -201,6 +201,7 @@ A tiered glass-morphism system with escalating blur, saturation, and teal tintin
 | 2026-03-31 | Document liquid glass tier system | 5-tier glass system (surface/card/nav/overlay + HUD ambient) evolved organically. Teal-tinted glass on nav/overlay creates warmth; neutral glass on cards stays recessive. Brain HUD uses a custom denser tier for readability over 3D. |
 | 2026-07-09 | Add 2D "Graph" view (default) + debanded backdrop | The 3D views are striking but hard to read as an actual knowledge graph; a flat Obsidian-style force layout (`graph2d.ts`, d3-force) is the legible default with a hover spotlight. Backdrop banding on dark teal fixed with a smootherstep multi-stop ramp + film-grain dither rather than adding stops alone. (Category "group" hulls were tried and rejected — visually noisy.) Bundled / River explored as future views. |
 | 2026-07-10 | Brain de-cartoonification + soul anchor | Operator verdict: the views read as cartoonish. Fixes are physical, not decorative: halos earned by cognition instead of worn by default; gradient bowed edges; parallax round starfield; Singularity obeys occlusion/lensing with a blackbody teal↔gold disk ramp (candy violet/pink removed). `self/soul.md` pins identity at the graph origin with live drive/goal satellites — the brain revolves around who Nova is. Journals demoted to a secondary tier. |
+| 2026-09-06 | Themes are whole palettes, not accent swaps; Nova is the default | Every preset painted the same dark grey with a different accent and the same hard-coded teal atmosphere, so switching looked like nothing happened. A theme now sets the neutral family, the accent, a secondary family for the atmosphere, and the mode it is designed for; index.css derives every tint from those variables. Five house themes on deliberately different hue families (Nova, Slate, Nebula, Ember, Daylight); community themes kept. Design canvas: Nova Themes (claude.ai/code artifact, 2026-09-05). |
 
 ## Rebuild amendments (apps/web, v4)
 
@@ -214,3 +215,23 @@ A tiered glass-morphism system with escalating blur, saturation, and teal tintin
    being replaced — the v4 sidebar renders a plain rounded square with the
    letter "N" in the accent color as a placeholder until the brand pass
    lands.
+3. Themes (2026-09-06). `themePresets` is a registry of whole palettes:
+   `accent`, `neutral`, an optional `secondary` family whose deep end tints
+   the lower atmosphere (Nova: amber, per "Amber (Secondary)"), and an
+   optional `preferredMode` for a theme that IS light or dark. There is one
+   theme per browser, not one per mode — the mode says which end of the
+   palette is on screen. `nova` is the default everywhere (the store, the
+   `appearance.default_preset` setting, a fresh browser); the old `default`,
+   `ocean`, `forest`, `sunset` and `tailwind-teal` keys map onto the new set
+   via `LEGACY_PRESETS`. index.css names no hue: the ground, the glass tiers
+   and the atmosphere read `--neutral-*`, `--accent-*`, `--glow-1/2` and
+   `--glow-*-light`, which the store injects from `resolvePalette()`. The
+   picker's swatches paint from the same resolver.
+   Two rules the review added the same day: a theme with `preferredMode`
+   is a single-mode theme — the store refuses a mode change while it is
+   active and the picker disables the Mode control, so Daylight can never
+   come back dark; and `text-accent` / `bg-accent` read `--accent-ui`
+   (500 on a dark ground, 700 on a light one — teal-500 is 2.8:1 on paper,
+   amber-500 2.1:1). `color-palettes.test.ts` pins WCAG AA for secondary
+   and accent text on the ground, the card and the atmosphere's densest
+   point for all five built-in themes, and that index.css names no hue.

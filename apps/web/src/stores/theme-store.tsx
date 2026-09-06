@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react'
 import {
-  accentPalettes, neutralPalettes, themePresets, cardSurface,
+  accentPalettes, themePresets, resolvePalette, normalizePreset, DEFAULT_PRESET,
   type ColorScale,
 } from '../lib/color-palettes'
 
@@ -9,10 +9,13 @@ type ModePreference = 'light' | 'dark' | 'system'
 
 interface ThemeState {
   modePreference: ModePreference
-  lightPreset: string
-  darkPreset: string
-  customLightAccent: string
-  customDarkAccent: string
+  /** One theme for both modes. A theme is a whole palette — accent, neutral
+   *  family, atmosphere — and the mode says which end of it is on screen. */
+  preset: string
+  /** True once somebody in THIS browser picked a theme. Until then the
+   *  instance default (`appearance.default_preset`) is free to apply. */
+  presetChosen: boolean
+  customAccent: string
   fontScale: number
   timezone: string                        // IANA timezone (e.g. "America/New_York")
 }
@@ -21,22 +24,21 @@ interface ThemeStore {
   mode: Mode                              // resolved (never 'system')
   modePreference: ModePreference
   setModePreference: (p: ModePreference) => void
-  lightPreset: string
-  setLightPreset: (name: string) => void
-  darkPreset: string
-  setDarkPreset: (name: string) => void
-  customLightAccent: string
-  setCustomLightAccent: (name: string) => void
-  customDarkAccent: string
-  setCustomDarkAccent: (name: string) => void
+  preset: string
+  setPreset: (name: string) => void
+  presetChosen: boolean
+  /** The server's answer to "what does a browser that has never chosen start
+   *  on". Applies only while this browser has not chosen for itself. */
+  adoptInstanceDefault: (name: string) => void
+  customAccent: string
+  setCustomAccent: (name: string) => void
   fontScale: number
   setFontScale: (scale: number) => void
   timezone: string
   setTimezone: (tz: string) => void
-  activePreset: string                    // whichever of light/dark is active
 }
 
-const STORAGE_KEY = 'nova-appearance'
+export const STORAGE_KEY = 'nova-appearance'
 
 function getSystemMode(): Mode {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -53,33 +55,86 @@ function resolveMode(pref: ModePreference): Mode {
 function defaultState(): ThemeState {
   return {
     modePreference: 'dark',
-    lightPreset: 'default',
-    darkPreset: 'default',
-    customLightAccent: 'teal',
-    customDarkAccent: 'teal',
+    preset: DEFAULT_PRESET,
+    presetChosen: false,
+    customAccent: 'teal',
     fontScale: 1,
     timezone: getBrowserTimezone(),
   }
 }
 
+const knownPreset = normalizePreset
+
 function loadState(): ThemeState {
-  const raw = localStorage.getItem(STORAGE_KEY)
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw)
-      return {
-        modePreference: ['light', 'dark', 'system'].includes(parsed.modePreference)
-          ? parsed.modePreference : 'dark',
-        lightPreset: parsed.lightPreset || 'default',
-        darkPreset: parsed.darkPreset || 'default',
-        customLightAccent: parsed.customLightAccent || 'teal',
-        customDarkAccent: parsed.customDarkAccent || 'teal',
-        fontScale: typeof parsed.fontScale === 'number' ? parsed.fontScale : 1,
-        timezone: parsed.timezone || getBrowserTimezone(),
-      }
-    } catch { /* fall through */ }
+  const base = defaultState()
+  let raw: string | null = null
+  try { raw = localStorage.getItem(STORAGE_KEY) } catch { /* no storage: defaults */ }
+  if (!raw) return base
+  let parsed: Record<string, unknown>
+  try { parsed = JSON.parse(raw) } catch { return base }
+  if (!parsed || typeof parsed !== 'object') return base
+
+  const modePreference: ModePreference =
+    parsed.modePreference === 'light' || parsed.modePreference === 'system' ? parsed.modePreference : 'dark'
+
+  let preset = DEFAULT_PRESET
+  let presetChosen = false
+  if ('preset' in parsed) {
+    preset = knownPreset(parsed.preset) ?? DEFAULT_PRESET
+    presetChosen = parsed.presetChosen === true && knownPreset(parsed.preset) !== null
+  } else if ('darkPreset' in parsed || 'lightPreset' in parsed) {
+    // The pre-redesign shape kept one preset per mode. Keep the one that was
+    // on screen; a browser still on the old 'default' had not chosen, so the
+    // instance default may still apply to it.
+    const legacyKey = resolveMode(modePreference) === 'dark' ? parsed.darkPreset : parsed.lightPreset
+    preset = knownPreset(legacyKey) ?? DEFAULT_PRESET
+    presetChosen = typeof legacyKey === 'string' && legacyKey !== 'default' && knownPreset(legacyKey) !== null
   }
-  return defaultState()
+
+  const legacyAccent = resolveMode(modePreference) === 'dark' ? parsed.customDarkAccent : parsed.customLightAccent
+  const customAccentRaw = typeof parsed.customAccent === 'string' ? parsed.customAccent : legacyAccent
+  const customAccent = typeof customAccentRaw === 'string' && accentPalettes[customAccentRaw] ? customAccentRaw : 'teal'
+
+  // A theme that IS light or dark owns the mode; stored state cannot disagree.
+  const forcedMode = themePresets[preset]?.preferredMode
+  return {
+    modePreference: forcedMode ?? modePreference,
+    preset,
+    presetChosen,
+    customAccent,
+    fontScale: typeof parsed.fontScale === 'number' ? parsed.fontScale : 1,
+    timezone: typeof parsed.timezone === 'string' && parsed.timezone ? parsed.timezone : getBrowserTimezone(),
+  }
+}
+
+const scaleVars = (prefix: string, scale: ColorScale) =>
+  Object.entries(scale).map(([s, v]) => `--${prefix}-${s}:${v}`)
+
+/** The CSS custom properties one (preset, mode) paints with. Everything in
+ *  index.css that used to name a colour reads one of these instead, so a
+ *  theme changes the whole page — atmosphere, glass and scrollbars included
+ *  — and not only the elements that happen to say `accent`. */
+export function themeVariables(mode: Mode, preset: string, customAccent: string, fontScale: number): string {
+  const { accent, neutral, secondary, card } = resolvePalette(preset, customAccent)
+  return [
+    ...scaleVars('accent', accent),
+    ...scaleVars('neutral', neutral),
+    `--card:${mode === 'dark' ? card.dark : card.light}`,
+    // atmosphere: the two families' deep ends tint the dark ground, their
+    // palest step tints the light one (the 200 step darkened paper enough to
+    // take stone's secondary grey under 4.5:1 — color-palettes.test pins it)
+    `--glow-1:${accent[950]}`,
+    `--glow-2:${secondary[950]}`,
+    `--glow-1-light:${accent[100]}`,
+    `--glow-2-light:${secondary[100]}`,
+    `--font-scale:${fontScale}`,
+  ].join(';')
+}
+
+/** What the browser chrome (status bar, tab strip) is told the page is. */
+export function themeColor(mode: Mode, preset: string, customAccent: string): string {
+  const { neutral } = resolvePalette(preset, customAccent)
+  return `rgb(${mode === 'dark' ? neutral[950] : neutral[50]})`
 }
 
 /**
@@ -88,44 +143,24 @@ function loadState(): ThemeState {
  * over the :root defaults in index.css by source order (appended last).
  */
 function applyTheme(mode: Mode, state: ThemeState) {
-  document.documentElement.classList.toggle('dark', mode === 'dark')
-
-  const presetKey = mode === 'dark' ? state.darkPreset : state.lightPreset
-  const preset = themePresets[presetKey]
-
-  let accentKey: string
-  let neutralKey: string
-
-  if (presetKey === 'custom') {
-    accentKey = mode === 'dark' ? state.customDarkAccent : state.customLightAccent
-    neutralKey = 'stone'
-  } else if (preset) {
-    accentKey = preset.accent
-    neutralKey = preset.neutral
-  } else {
-    accentKey = 'teal'
-    neutralKey = 'stone'
-  }
-
-  const accent: ColorScale = accentPalettes[accentKey] ?? accentPalettes.teal
-  const neutral: ColorScale = neutralPalettes[neutralKey] ?? neutralPalettes.stone
-  const surfaces = cardSurface[neutralKey] ?? cardSurface.stone
-  const cardValue = mode === 'dark' ? surfaces.dark : surfaces.light
-
-  const vars = [
-    ...Object.entries(accent).map(([s, v]) => `--accent-${s}:${v}`),
-    ...Object.entries(neutral).map(([s, v]) => `--neutral-${s}:${v}`),
-    `--card:${cardValue}`,
-    `--font-scale:${state.fontScale}`,
-  ].join(';')
+  const root = document.documentElement
+  root.classList.toggle('dark', mode === 'dark')
+  // form controls, scrollbars and the caret follow the mode, not the OS
+  root.style.colorScheme = mode
+  // index.html painted the first frame's ground inline; repaint it in the
+  // real palette or the canvas behind the body keeps the load-time colour
+  root.style.backgroundColor = themeColor(mode, state.preset, state.customAccent)
 
   let el = document.getElementById('nova-theme-vars') as HTMLStyleElement | null
   if (!el) {
     el = document.createElement('style')
     el.id = 'nova-theme-vars'
   }
-  el.textContent = `:root{${vars}}`
+  el.textContent = `:root{${themeVariables(mode, state.preset, state.customAccent, state.fontScale)}}`
   document.head.appendChild(el)
+
+  const meta = document.querySelector('meta[name="theme-color"]')
+  if (meta) meta.setAttribute('content', themeColor(mode, state.preset, state.customAccent))
 }
 
 const ThemeContext = createContext<ThemeStore | null>(null)
@@ -154,31 +189,44 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   // Apply theme on mount and whenever state/resolved mode changes
   useEffect(() => {
     applyTheme(resolvedMode, state)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state))
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) } catch { /* private mode */ }
   }, [state, resolvedMode])
 
+  // A theme that IS light or dark keeps its mode — the control is disabled
+  // in the picker, and this is the line that holds when it is not.
   const setModePreference = useCallback((p: ModePreference) => {
-    setState(s => ({ ...s, modePreference: p }))
+    setState(s => (themePresets[s.preset]?.preferredMode ? s : { ...s, modePreference: p }))
   }, [])
 
-  const setLightPreset = useCallback((name: string) => {
-    if (!themePresets[name]) return
-    setState(s => ({ ...s, lightPreset: name }))
+  // A theme that IS light or IS dark brings its mode with it — choosing
+  // "Daylight" and getting a dark page would be the picker lying.
+  const withPreset = (s: ThemeState, name: string, chosen: boolean): ThemeState => {
+    const preferred = themePresets[name]?.preferredMode
+    return {
+      ...s,
+      preset: name,
+      presetChosen: chosen || s.presetChosen,
+      modePreference: preferred ?? s.modePreference,
+    }
+  }
+
+  const setPreset = useCallback((name: string) => {
+    const key = normalizePreset(name)
+    if (!key) return
+    setState(s => withPreset(s, key, true))
   }, [])
 
-  const setDarkPreset = useCallback((name: string) => {
-    if (!themePresets[name]) return
-    setState(s => ({ ...s, darkPreset: name }))
+  // The server may still hold a key from before the redesign ('default',
+  // 'ocean'); it means what replaced it, the same as in loadState.
+  const adoptInstanceDefault = useCallback((name: string) => {
+    const key = normalizePreset(name)
+    if (!key) return
+    setState(s => (s.presetChosen || s.preset === key ? s : withPreset(s, key, false)))
   }, [])
 
-  const setCustomLightAccent = useCallback((name: string) => {
+  const setCustomAccent = useCallback((name: string) => {
     if (!accentPalettes[name]) return
-    setState(s => ({ ...s, customLightAccent: name, lightPreset: 'custom' }))
-  }, [])
-
-  const setCustomDarkAccent = useCallback((name: string) => {
-    if (!accentPalettes[name]) return
-    setState(s => ({ ...s, customDarkAccent: name, darkPreset: 'custom' }))
+    setState(s => ({ ...withPreset(s, 'custom', true), customAccent: name }))
   }, [])
 
   const setFontScale = useCallback((scale: number) => {
@@ -189,26 +237,21 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, timezone: tz }))
   }, [])
 
-  const activePreset = resolvedMode === 'dark' ? state.darkPreset : state.lightPreset
-
   return (
     <ThemeContext.Provider value={{
       mode: resolvedMode,
       modePreference: state.modePreference,
       setModePreference,
-      lightPreset: state.lightPreset,
-      setLightPreset,
-      darkPreset: state.darkPreset,
-      setDarkPreset,
-      customLightAccent: state.customLightAccent,
-      setCustomLightAccent,
-      customDarkAccent: state.customDarkAccent,
-      setCustomDarkAccent,
+      preset: state.preset,
+      setPreset,
+      presetChosen: state.presetChosen,
+      adoptInstanceDefault,
+      customAccent: state.customAccent,
+      setCustomAccent,
       fontScale: state.fontScale,
       setFontScale,
       timezone: state.timezone,
       setTimezone,
-      activePreset,
     }}>
       {children}
     </ThemeContext.Provider>

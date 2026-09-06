@@ -43,8 +43,11 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
     SettingDef(
         key="appearance.default_preset",
         type="str",
-        default="default",
-        description="Theme preset the web app starts on.",
+        default="nova",
+        description=(
+            "Theme a browser that has never chosen one starts on. The web app "
+            "owns the list of themes; 'nova' is its default."
+        ),
     ),
     SettingDef(
         key="agents.max_tool_rounds",
