@@ -55,6 +55,10 @@ test('fresh install: wizard walk ends in a real streamed reply', async ({ page }
   await page.getByLabel('Confirm password').fill(config.ownerPassword)
   await page.getByRole('button', { name: 'Create account and continue' }).click()
 
+  // ── timezone (S9): the browser's zone is preselected; Continue writes it ──
+  await expect(page.getByRole('heading', { name: 'Where does Nova keep time?' })).toBeVisible()
+  await page.getByRole('button', { name: 'Continue' }).click()
+
   // ── hardware: the cards must carry what hardware.json actually says ─────
   await expect(page.getByRole('heading', { name: 'What this machine has' })).toBeVisible()
   const hardwareResponse = await page.request.get('/api/v1/system/hardware')

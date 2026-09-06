@@ -36,8 +36,10 @@ export default {
           // mode-aware: 500/300 on a dark ground, 700/800 on a light one (index.css)
           DEFAULT: 'rgb(var(--accent-ui, var(--accent-500)) / <alpha-value>)',
           hover: 'rgb(var(--accent-ui-hover, var(--accent-300)) / <alpha-value>)',
+          active: 'rgb(var(--accent-ui-active, var(--accent-400)) / <alpha-value>)',
           muted: 'rgb(var(--accent-600) / <alpha-value>)',
-          dim: 'rgb(var(--accent-500) / 0.12)',
+          // 0.08: at 0.12 the light accent text was 4.4:1 on Daylight's paper
+          dim: 'rgb(var(--accent-500) / 0.08)',
           glow: 'rgb(var(--accent-500) / 0.06)',
           50: 'rgb(var(--accent-50) / <alpha-value>)',
           100: 'rgb(var(--accent-100) / <alpha-value>)',
@@ -65,21 +67,24 @@ export default {
           900: 'rgb(var(--neutral-900) / <alpha-value>)',
           950: 'rgb(var(--neutral-950) / <alpha-value>)',
         },
-        // Status colors
+        // text ON an accent/status fill: near-black on the bright dark-mode
+        // steps, white on the deep light-mode ones (index.css)
+        'on-accent': 'rgb(var(--on-accent, 12 10 9) / <alpha-value>)',
+        // Status colors — fixed hues whose step follows the mode (index.css)
         success: {
-          DEFAULT: '#34d399',
+          DEFAULT: 'rgb(var(--status-success, 52 211 153) / <alpha-value>)',
           dim: 'rgba(52, 211, 153, 0.12)',
         },
         warning: {
-          DEFAULT: '#fbbf24',
+          DEFAULT: 'rgb(var(--status-warning, 251 191 36) / <alpha-value>)',
           dim: 'rgba(251, 191, 36, 0.12)',
         },
         danger: {
-          DEFAULT: '#f87171',
+          DEFAULT: 'rgb(var(--status-danger, 248 113 113) / <alpha-value>)',
           dim: 'rgba(248, 113, 113, 0.12)',
         },
         info: {
-          DEFAULT: '#60a5fa',
+          DEFAULT: 'rgb(var(--status-info, 96 165 250) / <alpha-value>)',
           dim: 'rgba(96, 165, 250, 0.12)',
         },
         // Backward compat

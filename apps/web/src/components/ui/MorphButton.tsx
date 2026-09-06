@@ -93,10 +93,10 @@ export function MorphButton(props: MorphButtonProps) {
       className={clsx(
         'w-11 h-11 rounded-full flex items-center justify-center transition-all duration-150 shrink-0',
         isStop
-          ? 'bg-danger text-white hover:bg-red-500'
+          ? 'bg-danger text-on-accent hover:brightness-110'
           : isConvStop
-            ? 'bg-amber-500 text-neutral-950 hover:bg-amber-400'
-            : 'bg-teal-500 hover:bg-teal-600 text-white shadow-[0_0_12px_rgba(25,168,158,0.3)] hover:shadow-[0_0_20px_rgba(25,168,158,0.4)]',
+            ? 'bg-warning text-on-accent hover:brightness-110'
+            : 'bg-accent hover:bg-accent-hover text-on-accent shadow-[0_0_12px_rgb(var(--accent-500)/0.3)] hover:shadow-[0_0_20px_rgb(var(--accent-500)/0.4)]',
         isTranscribing && 'opacity-40 cursor-wait',
       )}
     >

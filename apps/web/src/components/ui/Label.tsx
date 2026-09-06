@@ -1,6 +1,6 @@
 import clsx from 'clsx'
 
-const BASE = 'mb-1 block text-xs text-neutral-500 dark:text-neutral-400'
+const BASE = 'mb-1 block text-xs text-content-secondary'
 
 export function Label({
   className,

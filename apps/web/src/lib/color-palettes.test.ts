@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { accentPalettes, neutralPalettes, themePresets, resolvePalette, DEFAULT_PRESET } from './color-palettes'
+import { legibleTier, themeVariables, blendOver, TINT_ALPHA, STATUS_BASE, type StatusKey } from '../stores/theme-store'
 
 const SHADES = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950] as const
 
@@ -72,37 +73,115 @@ describe('every theme is legible in the mode(s) it renders', () => {
   // faithful to their sources (Catppuccin Latte's secondary grey is 2.8:1
   // there too), so they are listed, not pinned.
   const house = Object.entries(themePresets).filter(([, p]) => p.group === 'nova')
-  // the alpha the light atmosphere actually paints with — read from the
-  // stylesheet, so nobody can raise it without moving this number
   const css = readFileSync('src/index.css', 'utf8')
+  // the alphas the light atmosphere actually paints with — read from the
+  // stylesheet, so nobody can raise them without moving these numbers
   const glowAlpha = Number(css.match(/--glow-1-light\) \/ ([\d.]+)\)/)?.[1])
   const glow2Alpha = Number(css.match(/--glow-2-light\) \/ ([\d.]+)\)/)?.[1])
+  // the status steps index.css assigns per mode — fixed hues, so every
+  // family has to carry them
+  const STATUS_KEYS = Object.keys(STATUS_BASE.dark) as StatusKey[]
+  const status = (mode: 'dark' | 'light') => STATUS_KEYS.map(k => STATUS_BASE[mode][k])
+  it('the stylesheet fallbacks and tailwind tints agree with the store', () => {
+    for (const mode of ['dark', 'light'] as const) {
+      const block = mode === 'dark' ? css.slice(css.indexOf('html.dark {')) : css.slice(css.indexOf('/* Light mode defaults */'), css.indexOf('html.dark {'))
+      for (const k of STATUS_KEYS) expect(block).toContain(`--status-${k}: var(--tier-${k}, ${STATUS_BASE[mode][k]})`)
+    }
+    expect(dimAlpha).toBe(TINT_ALPHA.accentDim)
+    for (const d of statusDim) expect(d.alpha).toBe(TINT_ALPHA.statusDim)
+  })
+  // the same weighting the store uses for --neutral-450
+  const mid = (x: string, y: string) => x.split(' ').map((v, i) => Math.round(Number(v) * 0.7 + Number(y.split(' ')[i]) * 0.3)).join(' ')
+  const half = (x: string, y: string) => x.split(' ').map((v, i) => Math.round((Number(v) + Number(y.split(' ')[i])) / 2)).join(' ')
+  const WHITE = '255 255 255'
+  // the tints tailwind.config.js paints badges and the active nav with — read
+  // from the config so an alpha cannot move without moving these numbers
+  const tw = readFileSync('tailwind.config.js', 'utf8')
+  const dimAlpha = Number(tw.match(/dim: 'rgb\(var\(--accent-500\) \/ ([\d.]+)\)'/)?.[1])
+  const statusDim = ['success', 'warning', 'danger', 'info'].map(k => {
+    const m = tw.match(new RegExp(`${k}: \\{[^}]*dim: 'rgba\\((\\d+), (\\d+), (\\d+), ([\\d.]+)\\)'`))!
+    return { hue: `${m[1]} ${m[2]} ${m[3]}`, alpha: Number(m[4]) }
+  })
 
-  it.each(house)('%s: secondary text and accent text clear WCAG AA on the ground and the card', (key, p) => {
-    const { accent, neutral, card } = resolvePalette(key)
-    const modes = p.preferredMode ? [p.preferredMode] : ['dark', 'light']
+  it.each(house)('%s: every text tier, accent text and status text clear WCAG AA where they sit', (key, p) => {
+    const { accent, neutral, secondary, card } = resolvePalette(key)
+    const modes: ('dark' | 'light')[] = p.preferredMode ? [p.preferredMode] : ['dark', 'light']
     for (const mode of modes) {
-      if (mode === 'dark') {
-        // index.css dark: text-secondary = neutral-400, text-accent = accent-500 (--accent-ui)
-        expect(contrast(neutral[400], neutral[950]), `${key} dark secondary on root`).toBeGreaterThanOrEqual(4.5)
-        expect(contrast(neutral[400], card.dark), `${key} dark secondary on card`).toBeGreaterThanOrEqual(4.5)
-        expect(contrast(accent[500], neutral[950]), `${key} dark accent text on root`).toBeGreaterThanOrEqual(4.5)
-        expect(contrast(neutral[500], neutral[950]), `${key} dark tertiary on root`).toBeGreaterThanOrEqual(3)
-      } else {
-        // index.css light: text-secondary = neutral-500, text-accent = accent-700 (--accent-ui),
-        // the ground carries accent-100 at glowAlpha where the atmosphere is densest
+      const dark = mode === 'dark'
+      // index.css: the grounds text sits on
+      const root = dark ? neutral[950] : neutral[50]
+      const cardBg = dark ? card.dark : card.light
+      const elevated = dark ? neutral[800] : neutral[100]
+      const grounds: [string, string][] = [['root', root], ['card', cardBg], ['elevated', elevated]]
+      if (!dark) {
         expect(glowAlpha).toBeGreaterThan(0)
         expect(glow2Alpha).toBeGreaterThan(0)
-        const { secondary } = resolvePalette(key)
-        const glowCentre = blend(accent[100], neutral[50], glowAlpha)
-        const glow2Centre = blend(secondary[100], neutral[50], glow2Alpha)
-        expect(contrast(neutral[500], neutral[50]), `${key} light secondary on root`).toBeGreaterThanOrEqual(4.5)
-        expect(contrast(neutral[500], glowCentre), `${key} light secondary at the glow`).toBeGreaterThanOrEqual(4.5)
-        expect(contrast(neutral[500], glow2Centre), `${key} light secondary at the second glow`).toBeGreaterThanOrEqual(4.5)
-        expect(contrast(neutral[500], card.light), `${key} light secondary on card`).toBeGreaterThanOrEqual(4.5)
-        expect(contrast(accent[700], neutral[50]), `${key} light accent text on root`).toBeGreaterThanOrEqual(4.5)
-        expect(contrast('255 255 255', accent[700]), `${key} light white on accent fill`).toBeGreaterThanOrEqual(4.5)
-        expect(contrast(neutral[400], neutral[50]), `${key} light tertiary on root`).toBeGreaterThanOrEqual(2.3)
+        grounds.push(['glow', blend(accent[100], neutral[50], glowAlpha)], ['glow2', blend(secondary[100], neutral[50], glow2Alpha)])
+      }
+      // index.css text tiers
+      const secondaryText = dark ? neutral[400] : neutral[600]
+      const tertiaryText = dark ? mid(neutral[400], neutral[500]) : half(neutral[500], neutral[600])
+      const accentText = dark ? accent[400] : accent[700]
+      const onAccent = dark ? neutral[950] : WHITE
+      for (const [name, g] of grounds) {
+        expect(contrast(secondaryText, g), `${key} ${mode} secondary on ${name}`).toBeGreaterThanOrEqual(4.5)
+        expect(contrast(tertiaryText, g), `${key} ${mode} tertiary on ${name}`).toBeGreaterThanOrEqual(4.5)
+        expect(contrast(accentText, g), `${key} ${mode} accent text on ${name}`).toBeGreaterThanOrEqual(4.5)
+        for (const st of status(mode)) expect(contrast(st, g), `${key} ${mode} status ${st} on ${name}`).toBeGreaterThanOrEqual(4.5)
+      }
+      // active nav and accent badges: accent text on the accent-dim tint over the root and the card
+      expect(dimAlpha).toBeGreaterThan(0)
+      for (const [name, g] of [['root', root], ['card', cardBg]] as const) {
+        expect(contrast(accentText, blend(accent[500], g, dimAlpha)), `${key} ${mode} accent text on accent-dim over ${name}`).toBeGreaterThanOrEqual(4.5)
+        // status badges: the mode's status text on its fixed-hue dim tint
+        status(mode).forEach((st, i) => {
+          expect(contrast(st, blend(statusDim[i].hue, g, statusDim[i].alpha)), `${key} ${mode} status ${st} on its dim tint over ${name}`).toBeGreaterThanOrEqual(4.5)
+        })
+      }
+      // the store's tier derivation is a no-op here: built-in greys are
+      // legible by design, not by correction
+      const inputs = dark ? [neutral[950], cardBg, neutral[800]] : [neutral[50], cardBg, neutral[100]]
+      expect(legibleTier(secondaryText, inputs, dark ? 'light' : 'dark'), `${key} ${mode} secondary needs no nudge`).toBe(secondaryText)
+      expect(legibleTier(tertiaryText, inputs, dark ? 'light' : 'dark'), `${key} ${mode} tertiary needs no nudge`).toBe(tertiaryText)
+      const accentInputs = [...inputs, ...inputs.map(g => blendOver(accent[500], g, TINT_ALPHA.accentDim))]
+      expect(legibleTier(accentText, accentInputs, dark ? 'light' : 'dark'), `${key} ${mode} accent text needs no nudge`).toBe(accentText)
+      STATUS_KEYS.forEach(k => {
+        const stInputs = [...inputs, ...inputs.map(g => blendOver(STATUS_BASE.dark[k], g, TINT_ALPHA.statusDim))]
+        expect(legibleTier(STATUS_BASE[mode][k], stInputs, dark ? 'light' : 'dark'), `${key} ${mode} status ${k} needs no nudge`).toBe(STATUS_BASE[mode][k])
+      })
+      // code blocks are dark in both modes (.markdown-body pre) and their
+      // comment colour is the scale's light end (highlight.css)
+      const preBg = dark ? neutral[950] : neutral[900]
+      const commentText = dark ? neutral[400] : neutral[300]
+      expect(contrast(commentText, preBg), `${key} ${mode} code comment on the code block`).toBeGreaterThanOrEqual(4.5)
+      expect(contrast(neutral[200], preBg), `${key} ${mode} code text on the code block`).toBeGreaterThanOrEqual(4.5)
+      // fills carry their own text colour
+      expect(contrast(onAccent, accentText), `${key} ${mode} on-accent on the accent fill`).toBeGreaterThanOrEqual(4.5)
+      for (const st of status(mode)) expect(contrast(onAccent, st), `${key} ${mode} on-accent on status fill ${st}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+
+  it('every OTHER theme gets text tiers that read on its own grounds, derived', () => {
+    const others = Object.keys(themePresets).filter(k => themePresets[k].group !== 'nova')
+    for (const key of others) {
+      const modes: ('dark' | 'light')[] = themePresets[key].preferredMode ? [themePresets[key].preferredMode!] : ['dark', 'light']
+      for (const mode of modes) {
+        const { neutral, card } = resolvePalette(key, 'rose')
+        const vars = themeVariables(mode, key, 'rose', 1)
+        const tier = (name: string) => vars.match(new RegExp(`--tier-${name}:(\\d+ \\d+ \\d+)`))![1]
+        const grounds = mode === 'dark' ? [neutral[950], card.dark, neutral[800]] : [neutral[50], card.light, neutral[100]]
+        const { accent } = resolvePalette(key, 'rose')
+        for (const g of [...grounds, ...grounds.map(x => blendOver(accent[500], x, TINT_ALPHA.accentDim))]) {
+          expect(contrast(tier('accent'), g), `${key} ${mode} derived accent text`).toBeGreaterThanOrEqual(4.5)
+        }
+        for (const g of grounds) {
+          expect(contrast(tier('secondary'), g), `${key} ${mode} derived secondary`).toBeGreaterThanOrEqual(4.5)
+          expect(contrast(tier('tertiary'), g), `${key} ${mode} derived tertiary`).toBeGreaterThanOrEqual(4.5)
+          for (const k of STATUS_KEYS) {
+            expect(contrast(tier(k), g), `${key} ${mode} derived status ${k}`).toBeGreaterThanOrEqual(4.5)
+            expect(contrast(tier(k), blendOver(STATUS_BASE.dark[k], g, TINT_ALPHA.statusDim)), `${key} ${mode} derived status ${k} on its tint`).toBeGreaterThanOrEqual(4.5)
+          }
+        }
       }
     }
   })

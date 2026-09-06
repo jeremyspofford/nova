@@ -245,10 +245,14 @@ describe('App gate', () => {
     })
     fireEvent.click(screen.getByText('Create account and continue'))
 
-    // Registering makes the settings probe re-run. The wizard must advance to
-    // Hardware without being torn down: a remount would re-read has_users as
-    // true and drop the Account step out of the progress indicator, which is
-    // the only visible proof of whether this component survived.
+    // Registering makes the settings probe re-run. The wizard must advance
+    // without being torn down: a remount would re-read has_users as true and
+    // drop the Account step out of the progress indicator, which is the only
+    // visible proof of whether this component survived. Since S9 the step
+    // after Account is Timezone (its Continue writes nova.timezone through the
+    // same mocked /api/v1/settings route), then Hardware.
+    await waitFor(() => expect(screen.getByText('Where does Nova keep time?')).toBeDefined())
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }))
     await waitFor(() => expect(screen.getByText('What this machine has')).toBeDefined())
     expect(screen.queryByText('Welcome to Nova')).toBeNull()
     expect(screen.getByText('Account')).toBeDefined()

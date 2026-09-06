@@ -4,6 +4,7 @@ import { Skeleton } from '../../components/ui'
 import { useAuth } from '../../stores/auth-store'
 import { useChatStore } from '../../stores/chat-store'
 import { getSettings, putSetting, settingValue, type SettingDef } from '../../lib/api'
+import { GeneralSection } from './GeneralSection'
 import { AppearanceSection } from './AppearanceSection'
 import { DEFAULT_PRESET, normalizePreset } from '../../lib/color-palettes'
 import { AccountSection } from './AccountSection'
@@ -59,6 +60,13 @@ export function SettingsPage() {
   const responsivenessCheck = settings
     ? settingValue(settings, 'agents.responsiveness_check', false)
     : false
+  // nova.timezone (S9): the zone schedules are computed in. Its registry
+  // default counts as UNSET on the server (the timers tool refuses a clock
+  // time until it changes), so General is told when value === default.
+  // '' when this core does not expose the key yet.
+  const timezoneDef = settings?.find(s => s.key === 'nova.timezone')
+  const timezone = typeof timezoneDef?.value === 'string' ? timezoneDef.value : ''
+  const timezoneIsDefault = timezoneDef !== undefined && timezoneDef.value === timezoneDef.default
 
   /** Reflects a write this page already knows succeeded, without a second
    * GET /api/v1/settings round trip. */
@@ -99,6 +107,11 @@ export function SettingsPage() {
           <Skeleton lines={6} />
         ) : (
           <>
+            <GeneralSection
+              timezone={timezone}
+              timezoneIsDefault={timezoneIsDefault}
+              onChanged={zone => updateSettingValue('nova.timezone', zone)}
+            />
             <AppearanceSection
               storedPreset={storedPreset ?? DEFAULT_PRESET}
               onStored={preset => updateSettingValue('appearance.default_preset', preset)}

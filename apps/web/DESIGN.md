@@ -235,3 +235,23 @@ A tiered glass-morphism system with escalating blur, saturation, and teal tintin
    amber-500 2.1:1). `color-palettes.test.ts` pins WCAG AA for secondary
    and accent text on the ground, the card and the atmosphere's densest
    point for all five built-in themes, and that index.css names no hue.
+   Later the same day, after the operator found primary buttons painted
+   near-black on the dark light-mode accent: every fill carries its own
+   text colour — `text-on-accent` (`--on-accent`: neutral-950 on the bright
+   dark-mode steps, white on the deep light-mode ones) on primary and
+   danger buttons, the send button, the checkbox tick, the brand square.
+   `--accent-ui` is 400 in dark (this document's own rule), 700 in light,
+   with hover/active steps. Text tiers: dark secondary 400 / tertiary a
+   derived 450; light secondary 600 / tertiary a derived 550. Status
+   colours keep their hue but take the mode's step (`--status-*`: 400s on
+   dark, 700-800s on light). The avatar gradient follows the accent.
+   `tests/e2e/tests/10-theme-contrast.spec.ts` audits every visible text
+   element on the gallery, Settings, Chat, Activity and Governance in all
+   eight built-in theme/mode pairs against its composited background and
+   fails under WCAG AA; the stale gallery baselines were dropped to
+   regenerate.
+   The text tiers themselves are derived at apply time: the store emits
+   `--tier-secondary` / `--tier-tertiary`, each the palette's step nudged
+   toward white (dark) or black (light) until it clears AA on the ground,
+   the card and an input — a no-op for the five built-ins (pinned), the
+   thing that makes a community or custom palette read.

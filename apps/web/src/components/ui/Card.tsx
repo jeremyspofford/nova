@@ -33,7 +33,7 @@ export function Card({
         <div className="flex justify-between items-center px-5 py-3 border-b border-border-subtle">
           <span className="text-compact font-semibold text-content-primary">{header.title}</span>
           {header.action && (
-            <span className="text-caption text-accent-muted hover:text-accent cursor-pointer">
+            <span className="text-caption text-accent hover:text-accent-hover cursor-pointer">
               {header.action}
             </span>
           )}

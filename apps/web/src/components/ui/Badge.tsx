@@ -3,11 +3,13 @@ import type { SemanticColor } from '../../lib/design-tokens'
 
 const colorStyles: Record<SemanticColor, string> = {
   neutral: 'bg-neutral-200/60 text-neutral-700 dark:bg-neutral-700/60 dark:text-neutral-300',
-  accent: 'bg-accent-dim text-accent-700 dark:text-accent-400',
-  success: 'bg-success-dim text-emerald-700 dark:text-emerald-400',
-  warning: 'bg-warning-dim text-amber-700 dark:text-amber-400',
-  danger: 'bg-danger-dim text-red-700 dark:text-red-400',
-  info: 'bg-info-dim text-blue-700 dark:text-blue-400',
+  // status text takes the mode's step through the tokens (index.css), so a
+  // badge never has to know which ground it sits on
+  accent: 'bg-accent-dim text-accent',
+  success: 'bg-success-dim text-success',
+  warning: 'bg-warning-dim text-warning',
+  danger: 'bg-danger-dim text-danger',
+  info: 'bg-info-dim text-info',
 }
 
 const dotColors: Record<SemanticColor, string> = {
