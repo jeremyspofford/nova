@@ -26,7 +26,7 @@ from datetime import UTC, datetime
 import httpx
 
 from app.adapters.base import ProviderRefused, http_client, reason, refusal_detail
-from app.hf_hub import TTLCache
+from app.cache import TTLCache
 
 REGISTRY_BASE = "https://registry.ollama.ai"
 REGISTRY_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)

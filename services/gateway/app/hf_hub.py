@@ -26,12 +26,12 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
 from app.adapters.base import ProviderRefused, http_client, reason, refusal_detail
+from app.cache import TTLCache
 
 HF_BASE = "https://huggingface.co"
 HF_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
@@ -59,41 +59,6 @@ PART_RE = re.compile(r"-\d{5}-of-\d{5}$")
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-class TTLCache:
-    """A bounded, process-local cache whose hits keep their ORIGINAL
-    fetched_at. A stale answer that reads as fresh is a lie about when a
-    fact was true, so the fetch time travels with the value and the caller
-    marks the row `cached`. This is the plan's `cache.py` contract (T1
-    lands that module; when it does, only the import here moves)."""
-
-    def __init__(
-        self, ttl_s: float, *, max_entries: int = 256, clock: Callable[[], float] = time.monotonic
-    ) -> None:
-        self.ttl_s = ttl_s
-        self.max_entries = max_entries
-        self._clock = clock
-        self._entries: dict[Any, tuple[Any, str, float]] = {}
-
-    def get(self, key: Any) -> tuple[Any, str] | None:
-        entry = self._entries.get(key)
-        if entry is None:
-            return None
-        value, fetched_at, expires_at = entry
-        if self._clock() >= expires_at:
-            del self._entries[key]
-            return None
-        return value, fetched_at
-
-    def put(self, key: Any, value: Any, fetched_at: str) -> None:
-        if key not in self._entries and len(self._entries) >= self.max_entries:
-            # Oldest insertion goes first — dicts keep insertion order.
-            del self._entries[next(iter(self._entries))]
-        self._entries[key] = (value, fetched_at, self._clock() + self.ttl_s)
-
-    def clear(self) -> None:
-        self._entries.clear()
 
 
 class RateLimited(ProviderRefused):

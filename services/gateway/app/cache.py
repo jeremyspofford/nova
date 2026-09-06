@@ -63,10 +63,12 @@ class TTLCache:
             return None
         return value, fetched_at
 
-    def put(self, key: Hashable, value: Any) -> str:
+    def put(self, key: Hashable, value: Any, fetched_at: str | None = None) -> str:
         """Store `value` under `key` and return the `fetched_at` it was
-        stamped with — the caller labels its row with that same string."""
-        fetched_at = self._now_iso()
+        stamped with — the caller labels its row with that same string. A
+        caller that already stamped the value when the source answered
+        passes that stamp, so the cache never claims a later instant."""
+        fetched_at = fetched_at or self._now_iso()
         expires_at = None if self.ttl_s is None else self._clock() + self.ttl_s
         if key in self._entries:
             del self._entries[key]

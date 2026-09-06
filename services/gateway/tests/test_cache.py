@@ -114,3 +114,11 @@ def test_a_non_positive_ttl_is_refused_not_read_as_never(bad):
 def test_a_cache_with_no_room_is_refused():
     with pytest.raises(ValueError):
         TTLCache(ttl_s=None, max_entries=0)
+
+
+def test_put_keeps_a_stamp_the_caller_already_took():
+    """A source answered at T; the cache must not re-stamp the value at the
+    later instant it was stored — the fetch time travels with the value."""
+    cache = TTLCache(ttl_s=None)
+    assert cache.put("k", 1, "2026-09-06T12:00:00+00:00") == "2026-09-06T12:00:00+00:00"
+    assert cache.get("k") == (1, "2026-09-06T12:00:00+00:00")
