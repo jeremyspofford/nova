@@ -370,6 +370,10 @@ export interface PullLine {
   required_gb?: number
   free_gb?: number
   ok?: boolean
+  /** S10a: where the preflight size came from (`hf-hub` | `ollama-registry`). */
+  size_source?: string
+  /** S10a: what a typed ref resolved to before the pull. */
+  resolved?: { quant?: string; family?: string; params_b?: number }
 }
 
 /**
@@ -763,3 +767,123 @@ export const makeDefaultProvider = (name: string) =>
 
 export const getProviderModels = (name: string) =>
   apiGet<ProviderListing>(`/api/v1/providers/${encodeURIComponent(name)}/models`)
+
+// ── the model catalogue (S10a) ───────────────────────────────────────────
+
+/** How a fact is known. `declared` = the source stated it; `inferred` = a
+ * heuristic (name, tags), drawn dashed with a `?` and off by default in
+ * filters; `vetted` = a dated human annotation; `measured` = Nova ran it. */
+export type CatalogBasis = 'declared' | 'inferred' | 'vetted' | 'measured'
+
+export interface CatalogFact<T = unknown> {
+  value: T
+  basis: CatalogBasis
+  /** A key into the row's `sources[]`. */
+  source: string
+  note?: string
+  at?: string
+  detail?: Record<string, unknown>
+}
+
+export interface CatalogSource {
+  key: string
+  url?: string
+  fetched_at?: string
+  cached?: boolean
+  ok?: boolean
+  note?: string
+  rows?: number
+}
+
+export type CatalogKind = 'local' | 'cloud' | 'hub'
+export type CatalogAction = 'use' | 'pull' | 'probe' | 'check_update' | 'update'
+
+export interface CatalogRow {
+  /** provider:model — what Use writes to chat.model. */
+  id: string
+  provider: string
+  model: string
+  label: string
+  kind: CatalogKind
+  installed?: boolean
+  sources: CatalogSource[]
+  facts: Record<string, CatalogFact>
+  capabilities: Record<string, CatalogFact<boolean>>
+  /** One entry per (name, basis): keys are `name` or `name:basis` when two bases exist. */
+  suitability: Record<string, CatalogFact<number | boolean>>
+  fit?: ModelFit | null
+  probe?: { ok: boolean; latency_ms: number | null; vram_mb: number | null; created_at: string } | null
+  drift?: {
+    checked_at: string
+    installed_digest: string | null
+    upstream_digest: string | null
+    moved: boolean | null
+    basis: string
+    note?: string
+  } | null
+  pull?: { target: string; quants: PullOption[] } | null
+  actions: CatalogAction[]
+}
+
+export interface PullOption {
+  tag: string
+  filename: string
+  size_bytes: number
+  sha256?: string
+  is_default: boolean
+  mmproj_bytes?: number
+}
+
+export interface Catalog {
+  fetched_at: string
+  sources: CatalogSource[]
+  rows: CatalogRow[]
+}
+
+export interface HfPage {
+  rows: CatalogRow[]
+  next_cursor: string | null
+  fetched_at: string
+  cached: boolean
+  budget?: { remaining: number; resets_in_s: number }
+}
+
+/** What a typed ref (`qwen3:4b`, `hf.co/org/repo:Q4_K_M`) resolves to before a pull. */
+export interface ResolvedRef {
+  model: string
+  source: string
+  fetched_at: string
+  facts: Record<string, CatalogFact>
+  pull?: { target: string; quants: PullOption[] } | null
+  note?: string
+}
+
+export const getCatalog = () => apiGet<Catalog>('/api/v1/models/catalog')
+
+export function searchHf(query: string, sort = 'downloads', cursor?: string, limit = 30) {
+  const params = new URLSearchParams({ q: query, sort, limit: String(limit) })
+  if (cursor) params.set('cursor', cursor)
+  return apiGet<HfPage>(`/api/v1/models/catalog/hf?${params.toString()}`)
+}
+
+export const getHfRepo = (org: string, repo: string) =>
+  apiGet<CatalogRow>(`/api/v1/models/catalog/hf/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`)
+
+export const resolveModel = (model: string) =>
+  apiGet<ResolvedRef>(`/api/v1/models/catalog/resolve?model=${encodeURIComponent(model)}`)
+
+export interface ProbeResult {
+  id: number
+  model: string
+  kind: string
+  ok: boolean
+  latency_ms: number | null
+  vram_mb: number | null
+  error: string | null
+  created_at: string
+}
+
+/** POST /api/v1/models/probe — a real 1-token completion through the same
+ * adapter a turn uses; the gateway records the result in its probes table. */
+export const probeModel = (model: string) =>
+  apiSend<ProbeResult>('/api/v1/models/probe', 'POST', { model })

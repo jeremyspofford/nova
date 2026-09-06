@@ -25,6 +25,13 @@ import {
   ACCURACY_DISCLAIMER_CURRENT_IS_SMALLER,
 } from '../../lib/modelDisclaimer'
 import {
+  applyPullLine,
+  formatBytes,
+  initialPullState,
+  settlePull,
+  type PullState,
+} from '../../lib/pullStream'
+import {
   bareLocalModel,
   isSmallerTier,
   mergeModels,
@@ -69,24 +76,7 @@ function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-const STREAM_ENDED_QUIET =
-  'the download stream ended without ollama reporting success — the model is not confirmed installed'
 
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`
-  return `${(bytes / 1024).toFixed(0)} KB`
-}
-
-interface PullState {
-  slug: string
-  status: string
-  completed: number
-  total: number
-  preflight: string | null
-  error: string | null
-  done: boolean
-}
 
 function ErrorLine({ reason }: { reason: string }) {
   return (
@@ -294,62 +284,38 @@ export function ModelsSection({
     // Mechanical, not just the disabled button: ollama pulls one model at a
     // time, so a second start here would silently abort the first rather
     // than queue behind it.
-    if (pull !== null && !pull.done && !pull.error && pull.slug !== slug) return
+    if (pull !== null && !pull.done && !pull.error && pull.target !== slug) return
     pullAbort.current?.abort()
     const controller = new AbortController()
     pullAbort.current = controller
-    setPull({ slug, status: 'starting the download…', completed: 0, total: 0, preflight: null, error: null, done: false })
+    setPull(initialPullState(slug))
 
     void (async () => {
-      let sawSuccess = false
-      let failure: string | null = null
+      // The shared reducer (lib/pullStream) owns every rule: an error line
+      // wins, success is only the literal line, a quiet end is a stated
+      // failure. This loop only feeds it and reads the settled result.
+      let state = initialPullState(slug)
+      const publish = (next: PullState) => {
+        state = next
+        setPull(p => (p && p.target === slug ? next : p))
+      }
       try {
         for await (const line of api.pullModel(slug, controller.signal)) {
           if (controller.signal.aborted) return
-          applyPullLine(line)
-          if (line.error) {
-            failure = line.error
-            break
-          }
-          if (line.status === 'success') sawSuccess = true
+          publish(applyPullLine(state, line))
+          if (line.error) break
         }
       } catch (err) {
         if (controller.signal.aborted) return
-        failure = reasonOf(err)
+        publish({ ...state, error: reasonOf(err) })
       }
       if (controller.signal.aborted) return
-
-      if (failure) {
-        setPull(p => (p && p.slug === slug ? { ...p, error: failure } : p))
-        return
+      const settled = settlePull(state)
+      publish(settled)
+      if (settled.done) {
+        setInstalled(prev => (prev ? Array.from(new Set([...prev, slug])) : [slug]))
       }
-      if (!sawSuccess) {
-        setPull(p => (p && p.slug === slug ? { ...p, error: STREAM_ENDED_QUIET } : p))
-        return
-      }
-      setInstalled(prev => (prev ? Array.from(new Set([...prev, slug])) : [slug]))
-      setPull(p => (p && p.slug === slug ? { ...p, done: true } : p))
     })()
-
-    function applyPullLine(line: PullLine) {
-      setPull(p => {
-        if (!p || p.slug !== slug) return p
-        if (line.status === 'preflight') {
-          const note =
-            line.note ??
-            (line.ok === false
-              ? `${slug} needs about ${line.required_gb} GB and only ${line.free_gb} GB is free — the pull will probably fail.`
-              : `${line.required_gb} GB needed, ${line.free_gb} GB free.`)
-          return { ...p, preflight: note }
-        }
-        return {
-          ...p,
-          status: line.status ?? p.status,
-          total: typeof line.total === 'number' ? line.total : p.total,
-          completed: typeof line.completed === 'number' ? line.completed : p.completed,
-        }
-      })
-    }
   }
 
   const handleRerun = async () => {
@@ -456,9 +422,9 @@ export function ModelsSection({
                   key={model.slug}
                   model={model}
                   switching={switching === model.slug}
-                  pull={pull?.slug === model.slug ? pull : null}
+                  pull={pull?.target === model.slug ? pull : null}
                   pullBlocked={
-                    pull !== null && !pull.done && !pull.error && pull.slug !== model.slug
+                    pull !== null && !pull.done && !pull.error && pull.target !== model.slug
                   }
                   onSelect={() => handleSelect(model.slug)}
                   onPull={() => handlePull(model.slug)}

@@ -11,6 +11,7 @@ import {
   Trash2,
 } from 'lucide-react'
 import { formatRelativeTime } from '../activity/activityFormat'
+import { formatContext, formatPrice } from '../../lib/modelFormat'
 import {
   Badge,
   Button,
@@ -97,21 +98,9 @@ function reasonOf(err: unknown): string {
 const bannerClass =
   'rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
 
-/** USD per MILLION tokens from a per-token price — what people actually
- * compare — or nothing when the provider stated nothing. */
-export function formatPrice(model: ProviderModel): string | null {
-  const p = model.pricing
-  if (!p || (p.prompt === undefined && p.completion === undefined)) return null
-  const per = (v: number | undefined) =>
-    v === undefined ? '–' : `$${(v * 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-  return `${per(p.prompt)} / ${per(p.completion)} per 1M`
-}
-
-export function formatContext(model: ProviderModel): string | null {
-  if (!model.context_length) return null
-  const k = model.context_length / 1000
-  return k >= 1000 ? `${(k / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })}M ctx` : `${Math.round(k)}K ctx`
-}
+// The price/context formatters moved to lib/modelFormat (shared with the
+// Models catalogue); re-exported so this section's tests and imports hold.
+export { formatContext, formatPrice } from '../../lib/modelFormat'
 
 /** Fill a preset's `{placeholder}`s from what the owner typed. */
 export function fillPlaceholders(url: string, values: Record<string, string>): string {

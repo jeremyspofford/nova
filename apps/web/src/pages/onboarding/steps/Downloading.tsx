@@ -2,17 +2,10 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, Check, Loader2, RotateCcw } from 'lucide-react'
 import { Button, ProgressBar } from '../../../components/ui'
 import { pullModel, putSetting } from '../../../lib/api'
+import { STREAM_ENDED_QUIET, formatBytes, preflightNote } from '../../../lib/pullStream'
 
 type Phase = 'pulling' | 'done' | 'failed'
 
-const STREAM_ENDED_QUIET =
-  'the download stream ended without ollama reporting success — the model is not confirmed installed'
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(0)} MB`
-  return `${(bytes / 1024).toFixed(0)} KB`
-}
 
 /**
  * Pulls the weights and only then writes chat.model.
@@ -64,14 +57,7 @@ export function Downloading({
             break
           }
           if (line.status === 'preflight') {
-            if (line.note) setPreflight(line.note)
-            else if (line.ok === false) {
-              setPreflight(
-                `${model} needs about ${line.required_gb} GB and only ${line.free_gb} GB is free — the pull will probably fail.`,
-              )
-            } else {
-              setPreflight(`${line.required_gb} GB needed, ${line.free_gb} GB free.`)
-            }
+            setPreflight(preflightNote(line, model))
             continue
           }
           if (line.status) setStatus(line.status)
