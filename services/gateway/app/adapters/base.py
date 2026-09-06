@@ -77,6 +77,14 @@ class Adapter(Protocol):
     ) -> Response: ...
 
 
+def positive_int(value: object) -> int | None:
+    """`value` when it is a real positive int, else None. bool is an int
+    subclass, so a provider's `true` must not read as a count of 1."""
+    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+        return value
+    return None
+
+
 def reason(exc: Exception) -> str:
     """A short, honest description of why an outbound call failed."""
     text = str(exc).strip()
