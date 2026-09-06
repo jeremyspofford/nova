@@ -37,7 +37,7 @@ export function Login() {
     <div className="min-h-dvh flex items-center justify-center bg-surface-root dark:bg-transparent px-4">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8 gap-3">
-          <div className="h-10 w-10 rounded-lg bg-accent flex items-center justify-center text-white text-h3 font-semibold shadow-md dark:shadow-[0_0_20px_rgb(var(--accent-500)/0.3)]">
+          <div className="h-10 w-10 rounded-lg bg-accent flex items-center justify-center text-on-accent text-h3 font-semibold shadow-md dark:shadow-[0_0_20px_rgb(var(--accent-500)/0.3)]">
             N
           </div>
           <div className="text-center">

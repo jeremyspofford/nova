@@ -79,7 +79,7 @@ export function HardwareDetection({ onNext }: { onNext: () => void }) {
           state it and let setup continue. */}
       {hardware.note && (
         <div className="w-full max-w-sm rounded-lg bg-warning-dim border border-warning/20 p-3 mb-6">
-          <p className="text-compact text-amber-700 dark:text-amber-400 font-medium">
+          <p className="text-compact text-warning font-medium">
             {hardware.note}
           </p>
           <p className="text-caption text-content-secondary mt-1">
@@ -99,8 +99,8 @@ export function HardwareDetection({ onNext }: { onNext: () => void }) {
           <p
             className={`text-compact font-medium ${
               gpus.length
-                ? 'text-emerald-700 dark:text-emerald-400'
-                : 'text-amber-700 dark:text-amber-400'
+                ? 'text-success'
+                : 'text-warning'
             }`}
           >
             {gpus.length

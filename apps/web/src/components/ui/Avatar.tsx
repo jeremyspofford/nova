@@ -49,7 +49,9 @@ export function Avatar({
       ) : (
         <div
           className={clsx(
-            'inline-flex items-center justify-center bg-gradient-to-br from-indigo-500 to-purple-600 text-white font-medium',
+            // the theme's accent, not a fixed indigo: the one saturated block in the
+            // nav read as foreign on every non-violet theme
+            'inline-flex items-center justify-center bg-gradient-to-br from-accent-500 to-accent-700 text-white font-medium',
             sizeMap[size],
             roundedCls,
           )}

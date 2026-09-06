@@ -39,6 +39,8 @@ input[type="number"] {
   --glow-2: 69 26 3;
   --glow-1-light: 204 251 240;
   --glow-2-light: 254 243 199;
+  --neutral-450: 154 147 143;
+  --neutral-550: 104 98 93;
 
   /* neutral: stone */
   --neutral-50:  250 250 249;
@@ -63,18 +65,31 @@ input[type="number"] {
   --surface-card-hover: var(--neutral-100);
   --surface-elevated: var(--neutral-100);
   --surface-input: var(--card, 255 255 255);
+  /* Every text tier clears WCAG AA on the ground AND on a card in every
+     built-in theme (color-palettes.test.ts computes it): secondary is the
+     600 step, tertiary a derived 550 — the 400 that used to be tertiary was
+     2.4:1 on white, the 500 is 4.4:1 on an input. */
   --text-primary: var(--neutral-900);
-  --text-secondary: var(--neutral-500);
-  --text-tertiary: var(--neutral-400);
+  --text-secondary: var(--tier-secondary, var(--neutral-600));
+  --text-tertiary: var(--tier-tertiary, var(--neutral-550));
   --text-disabled: var(--neutral-300);
   --border-default: var(--neutral-200);
   --border-subtle: var(--neutral-100);
   --border-focus: var(--accent-700);
-  /* accent as TEXT and as a fill under white text: the 500 step that reads
-     on a dark ground is 2-3:1 on paper (teal 2.8, amber 2.1), so light mode
-     uses the 700 step (every family clears 4.5:1 there) and hovers darker */
-  --accent-ui: var(--accent-700);
+  /* accent as TEXT and as a FILL: the 500 step that reads on a dark ground
+     is 2-3:1 on paper (teal 2.8, amber 2.1), so light mode uses the 700 step
+     (every family clears 4.5:1 there), hovers 800, presses 900. */
+  --accent-ui: var(--tier-accent, var(--accent-700));
   --accent-ui-hover: var(--accent-800);
+  --accent-ui-active: var(--accent-900);
+  /* text ON an accent or status fill — white on the deep light-mode fills */
+  --on-accent: 255 255 255;
+  /* status colours: fixed hues, but the step follows the mode — the 400s
+     that read on black are 1.9-2.8:1 on white */
+  --status-success: var(--tier-success, 6 95 70);
+  --status-warning: var(--tier-warning, 146 64 14);
+  --status-danger: var(--tier-danger, 185 28 28);
+  --status-info: var(--tier-info, 29 78 216);
 }
 /* Dark mode */
 html.dark {
@@ -85,14 +100,25 @@ html.dark {
   --surface-elevated: var(--neutral-800);
   --surface-input: var(--neutral-900);
   --text-primary: var(--neutral-50);
-  --text-secondary: var(--neutral-400);
-  --text-tertiary: var(--neutral-500);
+  /* --tier-*: the store proves these against the ground, the card and an
+     input for the palette in play (a community grey that misses gets
+     nudged); the raw steps are the fallback */
+  --text-secondary: var(--tier-secondary, var(--neutral-400));
+  --text-tertiary: var(--tier-tertiary, var(--neutral-450));
   --text-disabled: var(--neutral-700);
   --border-default: var(--neutral-800);
   --border-subtle: var(--neutral-800);
   --border-focus: var(--accent-400);
-  --accent-ui: var(--accent-500);
+  /* DESIGN.md "Dark Mode Strategy": 400 for text in dark, not 500 — 500 on
+     the active-nav tint was 4.2:1 */
+  --accent-ui: var(--tier-accent, var(--accent-400));
   --accent-ui-hover: var(--accent-300);
+  --accent-ui-active: var(--accent-500);
+  --on-accent: var(--neutral-950);
+  --status-success: var(--tier-success, 52 211 153);
+  --status-warning: var(--tier-warning, 251 191 36);
+  --status-danger: var(--tier-danger, 248 113 113);
+  --status-info: var(--tier-info, 96 165 250);
 }
 
 @layer base {

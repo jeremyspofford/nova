@@ -33,8 +33,8 @@ function StepIndicator({ steps, current }: { steps: WizardStep[]; current: Wizar
                 aria-current={active ? 'step' : undefined}
                 className={clsx(
                   'w-8 h-8 rounded-full flex items-center justify-center text-caption font-medium transition-colors',
-                  done && 'bg-success text-white',
-                  active && 'bg-accent text-neutral-950',
+                  done && 'bg-success text-on-accent',
+                  active && 'bg-accent text-on-accent',
                   !done && !active &&
                     'bg-surface-elevated text-content-tertiary border border-border-subtle',
                 )}

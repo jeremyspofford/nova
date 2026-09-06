@@ -108,7 +108,7 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
         {/* A cut-off turn keeps whatever really arrived and says it was cut
             off — the alternative is a truncated answer that reads complete. */}
         {row.interrupted && (
-          <p className="mt-1.5 inline-flex items-center gap-1.5 text-caption text-amber-600 dark:text-amber-400">
+          <p className="mt-1.5 inline-flex items-center gap-1.5 text-caption text-warning">
             <Unplug size={12} className="shrink-0" />
             Interrupted — the connection dropped before this reply finished.
           </p>

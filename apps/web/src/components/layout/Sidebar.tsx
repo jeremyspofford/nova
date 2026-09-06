@@ -81,7 +81,7 @@ export function Sidebar({
     >
       {/* Logo — plain rounded square with the letter N, brand pass comes later */}
       <div className={clsx('flex items-center gap-2.5 px-3 h-14 shrink-0 cursor-pointer', collapsed && 'justify-center')} onClick={() => navigate('/chat')} title="Nova">
-        <div className="h-7 w-7 rounded-lg bg-accent flex items-center justify-center text-white text-compact font-semibold shrink-0 dark:shadow-[0_0_16px_rgb(var(--accent-500)/0.3)]">
+        <div className="h-7 w-7 rounded-lg bg-accent flex items-center justify-center text-on-accent text-compact font-semibold shrink-0 dark:shadow-[0_0_16px_rgb(var(--accent-500)/0.3)]">
           N
         </div>
         {!collapsed && (
@@ -140,7 +140,7 @@ export function Sidebar({
       {!collapsed && user && (
         <div className="px-2 pb-2">
           <div className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-caption font-medium shrink-0">
+            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-accent-500 to-accent-700 flex items-center justify-center text-white text-caption font-medium shrink-0">
               {getInitials(user.name)}
             </div>
             <div className="flex-1 min-w-0 text-left">

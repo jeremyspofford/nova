@@ -172,7 +172,7 @@ export function ChatInput({
             className={clsx(
               'flex items-center justify-center rounded-full h-9 w-9 transition-colors duration-fast',
               input.trim() && !disabled
-                ? 'bg-accent text-neutral-950 hover:bg-accent-hover'
+                ? 'bg-accent text-on-accent hover:bg-accent-hover'
                 : 'bg-surface-elevated text-content-tertiary cursor-not-allowed',
             )}
           >

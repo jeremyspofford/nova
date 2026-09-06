@@ -110,15 +110,88 @@ function loadState(): ThemeState {
 const scaleVars = (prefix: string, scale: ColorScale) =>
   Object.entries(scale).map(([s, v]) => `--${prefix}-${s}:${v}`)
 
+const triplet = (t: string) => t.split(' ').map(Number) as [number, number, number]
+const luminance = ([r, g, b]: [number, number, number]) => {
+  const ch = (c: number) => { const v = c / 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4 }
+  return 0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+}
+/** WCAG contrast ratio between two "r g b" triplets. */
+export function contrastRatio(a: string, b: string): number {
+  const [l1, l2] = [luminance(triplet(a)), luminance(triplet(b))].sort((x, y) => y - x)
+  return (l1 + 0.05) / (l2 + 0.05)
+}
+/** `top` at `alpha` over `under` — how tailwind's dim tints paint. */
+export function blendOver(top: string, under: string, alpha: number): string {
+  const t = triplet(top), u = triplet(under)
+  return t.map((v, i) => Math.round(v * alpha + u[i] * (1 - alpha))).join(' ')
+}
+/** The tint alphas tailwind.config.js paints with (accent.dim, *.dim) —
+ *  color-palettes.test.ts checks the config still says the same. */
+export const TINT_ALPHA = { accentDim: 0.08, statusDim: 0.12 } as const
+/** Status hues — fixed, but the step follows the mode: the 400s read on a
+ *  dark ground, the 700-800s on a light one. */
+export const STATUS_BASE = {
+  dark: { success: '52 211 153', warning: '251 191 36', danger: '248 113 113', info: '96 165 250' },
+  light: { success: '6 95 70', warning: '146 64 14', danger: '185 28 28', info: '29 78 216' },
+} as const
+export type StatusKey = keyof typeof STATUS_BASE.dark
+
+/**
+ * A text colour that reads on every ground it will sit on: `base` if it
+ * already does, otherwise `base` moved toward white (on a dark ground) or
+ * black (on a light one) in small steps until it clears `min` everywhere.
+ * The built-in palettes never need the move — color-palettes.test.ts pins
+ * that — so this exists for community and custom palettes, whose greys are
+ * whatever their sources chose (Catppuccin Latte's secondary is 4.4:1).
+ */
+export function legibleTier(base: string, grounds: string[], towards: 'light' | 'dark', min = 4.5): string {
+  let c = triplet(base)
+  for (let i = 0; i < 60; i++) {
+    const cur = c.join(' ')
+    if (grounds.every(g => contrastRatio(cur, g) >= min)) return cur
+    c = c.map(v => Math.round(towards === 'light' ? v + (255 - v) * 0.06 : v * 0.94)) as [number, number, number]
+  }
+  return c.join(' ')
+}
+
 /** The CSS custom properties one (preset, mode) paints with. Everything in
  *  index.css that used to name a colour reads one of these instead, so a
  *  theme changes the whole page — atmosphere, glass and scrollbars included
  *  — and not only the elements that happen to say `accent`. */
 export function themeVariables(mode: Mode, preset: string, customAccent: string, fontScale: number): string {
   const { accent, neutral, secondary, card } = resolvePalette(preset, customAccent)
+  // dark-mode tertiary text: a step between 400 and 500 (weighted toward
+  // 400), derived so every family gets one — 500 was 3.5:1 on a card, the
+  // midpoint 4.4:1 on an input; 400 is the secondary tier
+  const mid = (x: string, y: string) => x.split(' ').map((v, i) => Math.round(Number(v) * 0.7 + Number(y.split(' ')[i]) * 0.3)).join(' ')
+  // light-mode tertiary text: the midpoint of 500 and 600 (500 is 4.4:1 on an input)
+  const half = (x: string, y: string) => x.split(' ').map((v, i) => Math.round((Number(v) + Number(y.split(' ')[i])) / 2)).join(' ')
+  // the text tiers, proven against the ground, the card and an input in the
+  // mode about to paint (index.css reads --tier-*; the raw steps are the
+  // fallback the stylesheet carries)
+  const dark = mode === 'dark'
+  const grounds = dark ? [neutral[950], card.dark, neutral[800]] : [neutral[50], card.light, neutral[100]]
+  const towards = dark ? 'light' : 'dark'
+  const secondaryTier = legibleTier(dark ? neutral[400] : neutral[600], grounds, towards)
+  const tertiaryTier = legibleTier(dark ? mid(neutral[400], neutral[500]) : half(neutral[500], neutral[600]), grounds, towards)
+  // accent as text, also on its own dim tint (active nav, accent badges)
+  const cardBg = dark ? card.dark : card.light
+  const accentTier = legibleTier(dark ? accent[400] : accent[700],
+    [...grounds, ...grounds.map(g => blendOver(accent[500], g, TINT_ALPHA.accentDim))], towards)
+  // status text, also on its own dim tint (badges) over every ground — the
+  // tint is always the 400 hue
+  const statusTiers = (Object.keys(STATUS_BASE.dark) as StatusKey[]).map(k =>
+    `--tier-${k}:${legibleTier(STATUS_BASE[mode][k],
+      [...grounds, ...grounds.map(g => blendOver(STATUS_BASE.dark[k], g, TINT_ALPHA.statusDim))], towards)}`)
   return [
     ...scaleVars('accent', accent),
     ...scaleVars('neutral', neutral),
+    `--neutral-450:${mid(neutral[400], neutral[500])}`,
+    `--neutral-550:${half(neutral[500], neutral[600])}`,
+    `--tier-secondary:${secondaryTier}`,
+    `--tier-tertiary:${tertiaryTier}`,
+    `--tier-accent:${accentTier}`,
+    ...statusTiers,
     `--card:${mode === 'dark' ? card.dark : card.light}`,
     // atmosphere: the two families' deep ends tint the dark ground, their
     // palest step tints the light one (the 200 step darkened paper enough to

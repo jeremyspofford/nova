@@ -63,7 +63,7 @@ export function Checkbox({
         >
           {filled && (
             <svg
-              className="h-4 w-4 text-neutral-950"
+              className="h-4 w-4 text-on-accent"
               viewBox="0 0 16 16"
               fill="none"
               stroke="currentColor"

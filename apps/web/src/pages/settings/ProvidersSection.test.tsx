@@ -366,12 +366,12 @@ describe('ProvidersSection — the owner can see the verdict and find the models
       'Key verified 2m ago — 430 models listed; the listing is public, so the key was proven with a 1-token completion on x/y',
     )
     expect(el.className).toContain('text-success')
-    expect(el.className).not.toContain('amber')
+    expect(el.className).not.toContain('text-warning')
     // The bundled row is never verified through the registry: no invented line.
     expect(screen.queryByTestId('provider-status-ollama')).toBeNull()
   })
 
-  it('an unproven key is amber on key_proven=false regardless of the wording', async () => {
+  it('an unproven key is the warning colour on key_proven=false regardless of the wording', async () => {
     renderSection({
       getProviders: vi.fn(async () => [
         provider({ key_proven: false, verify_note: 'a 1-token test answered 402 (no credits)' }),
@@ -381,11 +381,11 @@ describe('ProvidersSection — the owner can see the verdict and find the models
     const el = screen.getByTestId('provider-status-openrouter')
     expect(el.textContent).toContain('Checked')
     expect(el.textContent).toContain('402')
-    expect(el.className).toContain('amber')
+    expect(el.className).toContain('text-warning')
     expect(el.className).not.toContain('text-success')
   })
 
-  it('a row whose key was never tested says so and is neither green nor amber', async () => {
+  it('a row whose key was never tested says so and is neither success nor warning', async () => {
     renderSection({
       getProviders: vi.fn(async () => [
         provider({ name: 'legacy', key_proven: null, verify_note: null }),
@@ -405,7 +405,7 @@ describe('ProvidersSection — the owner can see the verdict and find the models
       const el = screen.getByTestId(`provider-status-${name}`)
       expect(el.textContent.startsWith('Checked')).toBe(true)
       expect(el.className).not.toContain('text-success')
-      expect(el.className).not.toContain('amber')
+      expect(el.className).not.toContain('text-warning')
     }
   })
 

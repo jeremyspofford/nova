@@ -22,7 +22,10 @@
 
 .hljs-comment,
 .hljs-quote {
-  color: rgb(var(--neutral-400));
+  /* the block is dark in BOTH modes (.markdown-body pre: neutral-900 in
+     light, 950 in dark), so in light mode the comment needs the scale's
+     light end — Daylight's 400 was 4.3:1 on its own block */
+  color: rgb(var(--neutral-300));
   font-style: italic;
 }
 
@@ -114,4 +117,9 @@
 .hljs-deletion {
   color: theme('colors.danger.DEFAULT');
   background-color: theme('colors.danger.dim');
+}
+
+html.dark .hljs-comment,
+html.dark .hljs-quote {
+  color: rgb(var(--neutral-400));
 }
