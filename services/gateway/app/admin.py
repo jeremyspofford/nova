@@ -480,6 +480,9 @@ async def _verify_or_502(app, name: str, shape: dict) -> dict:
         listing_note=result.note,
         key_proven=result.key_proven,
         verify_note=result.note,
+        # verified_at is stamped ONLY here and in the wizard path — the two
+        # places a verify actually ran. A save with no verdict has none.
+        verified=True,
     )
 
 

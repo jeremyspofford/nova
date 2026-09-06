@@ -1004,3 +1004,91 @@ def test_cheapest_model_ranks_only_real_prices():
         )
         == "router"
     )
+
+
+# ── the review's second pass: a wrong-key check that decides nothing must not paint green ──
+
+
+async def test_a_rate_limited_wrong_key_check_never_proves_the_key(client, pool, mount_backend):
+    fake = FakeOpenAICompat(
+        models_body={"object": "list", "data": [{"id": "m"}]},
+        accepts_key="sk-real",
+        models_wrong_key_status=429,
+    )
+    mount_backend("http://ratelimited.test", fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "ratelimited",
+            "adapter": "openai-chat",
+            "base_url": "http://ratelimited.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-real",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["key_proven"] is None
+    assert "could not be determined" in resp.json()["verify_note"]
+    assert "429" in resp.json()["verify_note"]
+    assert not any(path == "/v1/chat/completions" for path, _ in fake.seen)
+
+
+async def test_anthropic_proves_the_key_only_when_its_listing_required_it(
+    client, pool, mount_backend
+):
+    fake = FakeAnthropic(accepts_key="sk-ant-real")
+    mount_backend("http://anthropic.test", fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "anthropic",
+            "adapter": "anthropic-messages",
+            "base_url": "http://anthropic.test/v1",
+            "auth_shape": "api-key-header",
+            "api_key": "sk-ant-real",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["key_proven"] is True
+    assert "the listing accepted the key" in resp.json()["verify_note"]
+    assert not any(path == "/v1/messages" for path, _ in fake.seen)
+
+
+async def test_an_anthropic_shaped_proxy_with_a_public_listing_gets_a_message_probe(
+    client, pool, mount_backend
+):
+    """A proxy whose /models is public proves nothing about the key; a
+    1-token message does. A wrong key is refused at save; a right one is
+    proven by the message, never by the vendor's name."""
+    fake = FakeAnthropic(accepts_key="sk-ant-real", models_public=True, blocks=("hi",))
+    mount_backend("http://anthproxy.test", fake.app)
+    body = {
+        "name": "anthproxy",
+        "adapter": "anthropic-messages",
+        "base_url": "http://anthproxy.test/v1",
+        "auth_shape": "api-key-header",
+        "api_key": "sk-ant-WRONG",
+    }
+    wrong = await client.post("/admin/providers", json=body)
+    assert wrong.status_code == 502
+    assert "refused on a test message" in wrong.json()["error"]
+    assert [r["name"] for r in await providers.list_rows(pool)] == ["ollama"]
+
+    right = await client.post("/admin/providers", json={**body, "api_key": "sk-ant-real"})
+    assert right.status_code == 200, right.text
+    assert right.json()["key_proven"] is True
+    assert "proven with a 1-token message" in right.json()["verify_note"]
+    probe = [b for path, b in fake.seen if path == "/v1/messages"][-1]
+    assert probe["max_tokens"] == 1
+
+
+async def test_a_save_without_a_verdict_has_no_verified_at(pool):
+    """The legacy save path with no verify run records NO verdict and NO
+    verified_at — the page then shows no status line, not a 'Checked'
+    that checked nothing."""
+    await backends.save_config(
+        pool, {"kind": "cloud", "url": "http://x.test", "api_key": "sk-x", "model": "m"}
+    )
+    row = await providers.get_row(pool, "cloud")
+    assert row["verified_at"] is None
+    assert row["key_proven"] is None and row["verify_note"] is None

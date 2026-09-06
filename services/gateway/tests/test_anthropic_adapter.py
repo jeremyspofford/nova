@@ -620,7 +620,11 @@ async def test_a_bare_anthropic_origin_is_normalised_to_its_v1_path(client, pool
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["base_url"] == "http://anthropic.test/v1"
-    assert fake.seen[-1][0] == "/v1/models"
+    # Every call went to the /v1 path (the listing, the wrong-key check, and
+    # — this fake accepts any key, so its listing reads as public — the
+    # 1-token message probe).
+    assert {path for path, _ in fake.seen} <= {"/v1/models", "/v1/messages"}
+    assert "/v1/models" in {path for path, _ in fake.seen}
 
 
 @requires_db

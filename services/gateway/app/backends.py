@@ -180,9 +180,12 @@ async def save_config(
                 listing_note=verdict.note,
                 key_proven=verdict.key_proven,
                 verify_note=verdict.note,
+                verified=True,
             )
         else:
-            shape.update(key_proven=None, verify_note=None)
+            # No verify ran: no verdict and NO verified_at — the page then
+            # shows no status line rather than a "Checked" nothing checked.
+            shape.update(key_proven=None, verify_note=None, verified=False)
         if existing is None:
             await providers.insert_row(pool, name, shape)
         else:

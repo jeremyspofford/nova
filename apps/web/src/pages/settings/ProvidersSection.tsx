@@ -248,7 +248,17 @@ export function ProvidersSection({
     try {
       const fresh = (await api.getProviders()).find(p => p.name === name)
       if (!fresh) return
-      setProviders(prev => (prev ?? []).map(p => (p.name === name ? { ...p, ...fresh } : p)))
+      // Only the fields a listing fetch can change. is_default is a
+      // cross-row invariant a concurrent Make default owns; spreading the
+      // whole snapshot could write a stale is_default back over it.
+      const { listing, listing_note, key_proven, verify_note, verified_at, updated_at } = fresh
+      setProviders(prev =>
+        (prev ?? []).map(p =>
+          p.name === name
+            ? { ...p, listing, listing_note, key_proven, verify_note, verified_at, updated_at }
+            : p,
+        ),
+      )
     } catch {
       // A failed refresh leaves the last server-returned row in place —
       // still the server's words, just older.
@@ -674,11 +684,7 @@ function ProviderRow({
           <span>
             {provider.key_proven === true ? 'Key verified' : 'Checked'}{' '}
             {formatRelativeTime(provider.verified_at)}
-            {provider.verify_note
-              ? ` — ${provider.verify_note}`
-              : provider.key_proven === null
-                ? ' — the key was not tested'
-                : ''}
+            {provider.verify_note ? ` — ${provider.verify_note}` : ''}
           </span>
         </p>
       )}

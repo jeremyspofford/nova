@@ -175,19 +175,29 @@ class OpenAIChat:
             raise ProviderRefused(502, f"{url}/models returned non-JSON: {exc}") from exc
         return Listing(source=row["name"], models=normalize_models(body, owned_by=row["name"]))
 
-    async def _listing_is_public(self, app, row: dict) -> bool:
-        """Does /models answer 200 to a key that is certainly wrong? Then a
-        200 with the real key proved nothing about the key (OpenRouter's
-        listing is public, for one)."""
+    async def _listing_is_public(self, app, row: dict) -> tuple[bool | None, str]:
+        """(is the listing public?, what decided it).
+
+        Re-asks /models with a key that is certainly wrong. A 401/403 means
+        the listing REQUIRES the key — so the real key's 200 was the provider
+        accepting it. A 200 means the listing is public and proved nothing
+        about the key. Anything else (429, 5xx, a transport error) decides
+        NOTHING: it is returned as None with the words, never read as either
+        answer (a rate-limited second call used to paint 'Key verified').
+        """
         probe_row = dict(row, api_key="nova-verify-this-key-is-wrong")
         url = base_url_of(row)
         client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=self.headers(probe_row))
         try:
             async with client as c:
                 resp = await c.get("/models")
-        except httpx.HTTPError:
-            return False
-        return resp.status_code == 200
+        except httpx.HTTPError as exc:
+            return None, f"the wrong-key check could not reach {url}/models — {reason(exc)}"
+        if resp.status_code == 200:
+            return True, "the listing answered 200 to a wrong key"
+        if resp.status_code in (401, 403):
+            return False, f"the listing refused a wrong key ({resp.status_code})"
+        return None, f"the wrong-key check answered {resp.status_code} ({refusal_detail(resp)})"
 
     async def _key_probe(self, app, row: dict, model: str) -> tuple[int, str, bool]:
         """A 1-token completion through the SAME code path a turn uses —
@@ -251,9 +261,17 @@ class OpenAIChat:
                 note=f"{note} — nothing to test the key on; the first chat turn will tell",
                 key_proven=None,
             )
-        if not await self._listing_is_public(app, row):
+        public, decided_by = await self._listing_is_public(app, row)
+        if public is False:
             return VerifyResult(
                 listing="available", note=f"{note}; the listing accepted the key", key_proven=True
+            )
+        if public is None:
+            return VerifyResult(
+                listing="available",
+                note=f"{note}; whether the listing is public could not be determined — "
+                f"{decided_by} — so the key is NOT proven; the first chat turn will tell",
+                key_proven=None,
             )
         model = cheapest_model(listing.models)
         try:

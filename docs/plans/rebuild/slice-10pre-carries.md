@@ -131,6 +131,20 @@ LESSON (again): a UI line that composes "success" from two server fields
 with different lifetimes is a claim the server never made. One field, one
 writer, one meaning.
 
+## Third wave (2026-09-06, the second refute pass — 5 findings, all fixed)
+
+The refuters of the second workflow hit a session limit, so its five
+lifecycle findings stand unrefuted and were fixed as T0 of S10a: the
+wrong-key `/models` check is THREE-valued (401/403 = requires the key;
+200 = public → probe; 429/5xx/transport = decides nothing → `key_proven`
+NULL with the words); the Anthropic adapter DERIVES publicness the same
+way instead of assuming its vendor's listing needs a key, and probes with a
+1-token message when public; a save that ran no verify stamps NO
+`verified_at` (so the page shows no status line rather than "Checked"
+nothing checked); the page prints only the server's words (no invented
+"the key was not tested"); the post-listing row refresh merges only the
+listing/verdict fields, never `is_default`. Gateway 211 / web 435.
+
 ## Owner-owed (the DoD walk)
 
 1. Settings → Providers → OpenRouter preset → key → list appears → Use one →
