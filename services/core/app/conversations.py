@@ -118,9 +118,16 @@ async def get_messages(
 ) -> dict:
     pool = await db.get_pool()
     await owned_conversation(pool, person, conversation_id)
+    # `served_by` is read off the turn's llm_call span (the gateway's own
+    # X-Nova-Served-By, `provider:model`) — the trace, never a stored claim.
+    # NULL for user rows, for rows older than migration 018, and for a turn
+    # whose gateway call never got far enough to state one.
     rows = await pool.fetch(
-        "SELECT id, role, content, created_at FROM messages "
-        "WHERE conversation_id = $1 ORDER BY created_at, id",
+        "SELECT m.id, m.role, m.content, m.created_at, "
+        "  (SELECT s.meta->>'served_by' FROM turn_spans s "
+        "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' AND s.meta ? 'served_by' "
+        "    ORDER BY s.started_at DESC LIMIT 1) AS served_by "
+        "FROM messages m WHERE m.conversation_id = $1 ORDER BY m.created_at, m.id",
         conversation_id,
     )
     return {
@@ -130,6 +137,7 @@ async def get_messages(
                 "role": row["role"],
                 "content": row["content"],
                 "created_at": row["created_at"].isoformat(),
+                "served_by": row["served_by"],
             }
             for row in rows
         ]

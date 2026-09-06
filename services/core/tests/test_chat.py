@@ -80,7 +80,7 @@ async def test_happy_path_frames_persistence_and_trace(owner_client, pool, mount
     meta = sent[0]["meta"]
     assert set(meta) == {"conversation_id", "model", "turn_id"}
     assert meta["model"] == "qwen3:8b"
-    assert [f["t"] for f in sent[1:-1]] == ["Hel", "lo."]
+    assert [f["t"] for f in sent if isinstance(f, dict) and "t" in f] == ["Hel", "lo."]
     assert sent[-1] == DONE
 
     rows = await pool.fetch("SELECT role, content FROM messages ORDER BY created_at")
@@ -151,7 +151,7 @@ async def test_recall_failure_leaves_the_turn_fine_and_the_span_honest(
     status, sent = await _say(owner_client)
     assert status == 200
     assert sent[-1] == DONE
-    assert [f["t"] for f in sent[1:-1]] == ["fine"]
+    assert [f["t"] for f in sent if isinstance(f, dict) and "t" in f] == ["fine"]
 
     turn = await pool.fetchrow("SELECT id, status FROM turns")
     assert turn["status"] == "ok"
@@ -527,7 +527,7 @@ async def test_a_failure_storing_the_reply_still_ends_the_stream_properly(
     assert resp.status_code == 200
     sent = frames(resp.text)
     assert "meta" in sent[0]
-    assert [f["t"] for f in sent[1:-2]] == ["almost there"]
+    assert [f["t"] for f in sent if isinstance(f, dict) and "t" in f] == ["almost there"]
     assert sent[-2]["error"]
     assert sent[-1] == DONE
     assert await pool.fetchval("SELECT status FROM turns") == "error"

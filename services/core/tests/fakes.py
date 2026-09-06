@@ -176,6 +176,12 @@ class FakeGateway:
                 # (services/gateway/app/data_plane.py), reused here since the
                 # fake only needs to echo admin_body and record the call.
                 Route("/v1/models", self._admin, methods=["GET"]),
+                # The provider registry (S10-pre) — same echo, same record.
+                Route("/admin/providers", self._admin, methods=["GET", "POST"]),
+                Route("/admin/providers/presets", self._admin, methods=["GET"]),
+                Route("/admin/providers/{name}", self._admin, methods=["GET", "PUT", "DELETE"]),
+                Route("/admin/providers/{name}/default", self._admin, methods=["PUT"]),
+                Route("/admin/providers/{name}/models", self._admin, methods=["GET"]),
             ]
         )
 

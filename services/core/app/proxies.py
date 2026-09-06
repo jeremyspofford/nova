@@ -131,6 +131,57 @@ async def put_backend(request: Request) -> Response:
     return await _forward(request, "PUT", "/admin/backend", timeout=BACKEND_PUT_TIMEOUT)
 
 
+# ── the provider registry (S10-pre) — forwarded 1:1, ruling R8 ───────────
+# Create/update run the gateway's verify-before-save (a live call to the
+# provider), so their read budget dominates a slow provider's listing.
+PROVIDER_WRITE_TIMEOUT = httpx.Timeout(connect=5.0, read=20.0, write=5.0, pool=5.0)
+PROVIDER_LISTING_TIMEOUT = httpx.Timeout(connect=5.0, read=20.0, write=5.0, pool=5.0)
+
+
+@router.get("/providers")
+async def list_providers(request: Request) -> Response:
+    return await _forward(request, "GET", "/admin/providers")
+
+
+@router.get("/providers/presets")
+async def provider_presets(request: Request) -> Response:
+    return await _forward(request, "GET", "/admin/providers/presets")
+
+
+@router.post("/providers")
+async def create_provider(request: Request) -> Response:
+    return await _forward(request, "POST", "/admin/providers", timeout=PROVIDER_WRITE_TIMEOUT)
+
+
+@router.get("/providers/{name}")
+async def get_provider(name: str, request: Request) -> Response:
+    return await _forward(request, "GET", f"/admin/providers/{name}")
+
+
+@router.put("/providers/{name}")
+async def update_provider(name: str, request: Request) -> Response:
+    return await _forward(
+        request, "PUT", f"/admin/providers/{name}", timeout=PROVIDER_WRITE_TIMEOUT
+    )
+
+
+@router.delete("/providers/{name}")
+async def delete_provider(name: str, request: Request) -> Response:
+    return await _forward(request, "DELETE", f"/admin/providers/{name}")
+
+
+@router.put("/providers/{name}/default")
+async def make_default_provider(name: str, request: Request) -> Response:
+    return await _forward(request, "PUT", f"/admin/providers/{name}/default")
+
+
+@router.get("/providers/{name}/models")
+async def provider_models(name: str, request: Request) -> Response:
+    return await _forward(
+        request, "GET", f"/admin/providers/{name}/models", timeout=PROVIDER_LISTING_TIMEOUT
+    )
+
+
 @router.post("/models/pull")
 async def pull(request: Request) -> StreamingResponse:
     """Streamed through as it arrives — progress the wizard can show."""

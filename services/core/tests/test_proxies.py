@@ -21,6 +21,16 @@ ROUTES = [
     # gateway's OpenAI-compat GET /v1/models, not an /admin/* route — the
     # browser still only ever reaches it through core (ruling R8).
     ("GET", "/api/v1/models", "/v1/models", None),
+    # The provider registry (S10-pre): Settings -> Providers reaches the
+    # gateway's /admin/providers surface only through core.
+    ("GET", "/api/v1/providers", "/admin/providers", None),
+    ("GET", "/api/v1/providers/presets", "/admin/providers/presets", None),
+    ("POST", "/api/v1/providers", "/admin/providers", {"name": "openrouter"}),
+    ("GET", "/api/v1/providers/openrouter", "/admin/providers/openrouter", None),
+    ("PUT", "/api/v1/providers/openrouter", "/admin/providers/openrouter", {"model_note": "x"}),
+    ("DELETE", "/api/v1/providers/openrouter", "/admin/providers/openrouter", None),
+    ("PUT", "/api/v1/providers/openrouter/default", "/admin/providers/openrouter/default", None),
+    ("GET", "/api/v1/providers/openrouter/models", "/admin/providers/openrouter/models", None),
 ]
 
 
