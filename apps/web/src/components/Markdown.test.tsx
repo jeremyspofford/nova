@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render } from '@testing-library/react'
+import { render, fireEvent, waitFor } from '@testing-library/react'
 import { Markdown } from './Markdown'
 
 // A wrapper around React's real `useDeferredValue` for the "parse is
@@ -238,5 +238,177 @@ describe('Markdown — streaming', () => {
       expect(deferred.calls).toHaveBeenLastCalledWith('one two')
       expect(view.container.querySelector('p')?.textContent).toBe('one two [deferred]')
     })
+  })
+})
+
+/** Token spans inside a fenced block (highlight.js classes are `hljs-<scope>`). */
+function tokens(c: HTMLElement) {
+  return c.querySelectorAll('pre > code span[class*="hljs-"]')
+}
+
+describe('Markdown — fenced code is syntax-highlighted', () => {
+  it('a ```python fence renders a <code> classed language-python + hljs with token spans', () => {
+    const body = 'def greet(name):\n    return f"hi {name}"'
+    const c = md('```python\n' + body + '\n```')
+    const code = c.querySelector('pre > code')
+    expect(code?.className).toMatch(/language-python/)
+    expect(code?.className).toMatch(/\bhljs\b/)
+    expect(tokens(c).length).toBeGreaterThan(0)
+    expect(c.querySelector('pre > code .hljs-keyword')?.textContent).toBe('def')
+    // Spans wrap the text; nothing is added, dropped or re-ordered.
+    expect(code?.textContent).toBe(body + '\n')
+  })
+
+  it.each([
+    ['python', 'def greet(name):\n    return f"hi {name}"\n\nimport os\nprint(greet("x"))'],
+    ['bash', '#!/bin/bash\nfor f in *.log; do\n  grep -c ERROR "$f" || echo "none"\ndone'],
+  ])('an untagged fence of obvious %s is NOT guessed at — verbatim, no spans, no hljs class', (_lang, body) => {
+    // Detection is off on purpose (see the header): the same detector that
+    // gets these right scores an `ls -la` listing as YAML and a Python file
+    // as CSS. The tag is hers to write; the renderer refuses to guess.
+    const c = md('```\n' + body + '\n```')
+    const code = c.querySelector('pre > code')
+    expect(code?.className ?? '').not.toMatch(/language-|\bhljs\b/)
+    expect(tokens(c)).toHaveLength(0)
+    expect(code?.textContent).toBe(body + '\n')
+    expect(c.querySelector('pre')?.className).toMatch(/font-mono/)
+  })
+
+  it.each([
+    [
+      'an `ls -la` listing',
+      'total 48\ndrwxr-xr-x 12 jeremy jeremy 4096 Sep  4 17:11 .\n-rw-r--r--  1 jeremy jeremy  120 Aug 30 10:00 add_numbers.py\ndrwxr-xr-x  3 jeremy jeremy 4096 Sep  2 12:00 nova',
+    ],
+    [
+      'a prose paragraph',
+      'Here is what I found in the workspace. There are eight directories and three files. The nova folder is the main project and dotfiles holds shell config.',
+    ],
+    [
+      'a log excerpt',
+      '2026-09-04 17:15:51 INFO core: the model returned nothing\n2026-09-04 17:16:11 ERROR gateway: empty stream after 280s',
+    ],
+  ])('%s in an untagged fence stays verbatim with no token spans', (_name, body) => {
+    // Each of these is what highlight.js auto-detection painted (YAML at
+    // relevance 3, Python at 2, YAML at 2) before detection was removed.
+    const c = md('```\n' + body + '\n```')
+    expect(c.querySelector('pre > code')?.textContent).toBe(body + '\n')
+    expect(tokens(c)).toHaveLength(0)
+  })
+
+  it.each(['text', 'plaintext', 'txt', 'TEXT'])(
+    'a ```%s fence has no token spans even when its body looks like code',
+    tag => {
+      const body = 'def f():\n    return 1'
+      const c = md('```' + tag + '\n' + body + '\n```')
+      const code = c.querySelector('pre > code')
+      expect(code?.textContent).toBe(body + '\n')
+      expect(tokens(c)).toHaveLength(0)
+      expect(code?.className).not.toMatch(/\bhljs\b/)
+      expect(c.querySelector('pre')?.className).toMatch(/font-mono/)
+    },
+  )
+
+  it('a fence tagged with a language that did not ship stays plain — no guessed colouring', () => {
+    const body = 'fn main() {\n    let x: i32 = 5;\n    println!("{}", x);\n}'
+    const c = md('```rust\n' + body + '\n```')
+    expect(c.querySelector('pre > code')?.textContent).toBe(body + '\n')
+    expect(tokens(c)).toHaveLength(0)
+  })
+
+  it('a directory tree stays verbatim — box-drawing characters and indentation intact', () => {
+    const tree = 'apps/\n├── web/\n│   ├── src/\n│   └── package.json\n└── core/\n    └── app/'
+    const c = md('```\n' + tree + '\n```')
+    expect(c.querySelector('pre > code')?.textContent).toBe(tree + '\n')
+    expect(tokens(c)).toHaveLength(0)
+  })
+
+  it('a ```html fence containing <script> renders escaped text, highlighted as markup, never a script element', () => {
+    const body = '<div class="x"><script>alert(1)</script></div>'
+    const c = md('```html\n' + body + '\n```')
+    expect(c.querySelector('script')).toBeNull()
+    expect(c.querySelector('div.x')).toBeNull()
+    expect(c.querySelector('pre > code')?.textContent).toBe(body + '\n')
+    expect(tokens(c).length).toBeGreaterThan(0)
+  })
+
+  it('a ```html fence with event handlers and a javascript: link yields text only — no img, a, svg, no attributes', () => {
+    const body = '<img src=x onerror=alert(1)>\n<a href="javascript:alert(1)">x</a>\n<svg onload=alert(1)></svg>'
+    const c = md('```html\n' + body + '\n```')
+    expect(c.querySelector('img, a, svg, script')).toBeNull()
+    expect(c.querySelector('pre > code')?.textContent).toBe(body + '\n')
+    expect(c.innerHTML).not.toMatch(/onerror=|onload=|href=/)
+    expect(tokens(c).length).toBeGreaterThan(0)
+  })
+
+  it('an untagged fence containing <script> is verbatim text and never a script element', () => {
+    const body = '<div class="x"><script>alert(1)</script></div>'
+    const c = md('```\n' + body + '\n```')
+    expect(c.querySelector('script')).toBeNull()
+    expect(c.querySelector('div.x')).toBeNull()
+    expect(c.querySelector('pre > code')?.textContent).toBe(body + '\n')
+    expect(tokens(c)).toHaveLength(0)
+  })
+
+  it('a tag is matched case-insensitively and read from the first word of the info string', () => {
+    expect(tokens(md('```PYTHON\ndef f(): pass\n```')).length).toBeGreaterThan(0)
+    expect(tokens(md('```sh\nls -la | grep nova\n```')).length).toBeGreaterThan(0)
+    const c = md('```python title=x.py\ndef f(): pass\n```')
+    expect(c.querySelector('pre > code')?.className).toMatch(/language-python/)
+    expect(tokens(c).length).toBeGreaterThan(0)
+  })
+
+  it('an unclosed, tagged fence mid-stream is highlighted from its first line', () => {
+    const c = md('Here is the file:\n\n```python\nprint("hi")\nfor i in')
+    expect(c.querySelector('pre > code')?.className).toMatch(/language-python/)
+    expect(tokens(c).length).toBeGreaterThan(0)
+  })
+
+  it('inline code is never highlighted and keeps its pill', () => {
+    const c = md('call `def f()` now')
+    const inline = c.querySelector('p > code')
+    expect(inline?.className).toMatch(/bg-surface-elevated/)
+    expect(inline?.className).toMatch(/font-mono/)
+    expect(inline?.querySelector('span')).toBeNull()
+  })
+})
+
+describe('Markdown — copy button on code blocks', () => {
+  // jsdom ships no Clipboard API, and neither does a plain-http LAN origin;
+  // each test pins the environment it needs rather than trusting jsdom's.
+  function withClipboard(value: unknown) {
+    Object.defineProperty(navigator, 'clipboard', { value, configurable: true })
+  }
+  afterEach(() => {
+    Reflect.deleteProperty(navigator, 'clipboard')
+  })
+
+  it('is absent without a clipboard API — a button that cannot copy is a decoy', () => {
+    withClipboard(undefined)
+    const c = md('```\nx = 1\n```')
+    expect(c.querySelector('pre')).not.toBeNull()
+    expect(c.querySelector('button')).toBeNull()
+  })
+
+  it('copies the block text and reports "copied" only once the write resolves', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined)
+    withClipboard({ writeText })
+    const c = md('```python\nprint("hi")\n```')
+    const button = c.querySelector('button[aria-label="Copy code"]')
+    expect(button).not.toBeNull()
+    expect(button?.getAttribute('data-state')).toBe('idle')
+    fireEvent.click(button!)
+    expect(writeText).toHaveBeenCalledWith('print("hi")\n')
+    await waitFor(() => expect(button?.getAttribute('data-state')).toBe('copied'))
+    expect(button?.getAttribute('aria-label')).toBe('Copied')
+  })
+
+  it('a rejected write reports "failed", never "copied"', async () => {
+    const writeText = vi.fn<(text: string) => Promise<void>>().mockRejectedValue(new Error('denied'))
+    withClipboard({ writeText })
+    const c = md('```\nx = 1\n```')
+    const button = c.querySelector('button[aria-label="Copy code"]')
+    fireEvent.click(button!)
+    await waitFor(() => expect(button?.getAttribute('data-state')).toBe('failed'))
+    expect(button?.getAttribute('aria-label')).toBe('Copy failed')
   })
 })

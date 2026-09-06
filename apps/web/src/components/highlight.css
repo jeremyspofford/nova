@@ -1,0 +1,117 @@
+/*
+ * Syntax-highlight theme for fenced code in her replies (components/Markdown.tsx).
+ *
+ * The classes come from highlight.js (via lowlight): `hljs-<scope>` on the
+ * first scope, then `<sub>_` for sub-scopes — `hljs-title function_`,
+ * `hljs-variable language_`, `hljs-meta prompt_`. The `.hljs` scope is the
+ * `<code>` element the plugin marks, so nothing here can leak onto an inline
+ * pill or a non-code element.
+ *
+ * One palette, not two: the block's ground is dark in BOTH themes — the `pre`
+ * override in Markdown.tsx is `bg-neutral-900 dark:bg-neutral-950` with
+ * `text-neutral-200`, following the app's `darkMode: 'class'` (`html.dark`)
+ * mechanism. The colours below are the app's own tokens read against that
+ * ground: the CSS custom properties `index.css` defines (`--accent-*`,
+ * `--neutral-*`) and the status colours `tailwind.config.js` defines
+ * (`theme()` resolves them at build time, so a palette change there lands
+ * here too). Contrast against neutral-900 (28 25 23): accent-300 ~11:1,
+ * success ~9:1, warning ~11:1, info ~7:1, neutral-400 ~6.5:1. A dark-mode
+ * override, if one is ever wanted, goes under `html.dark .hljs …` — same
+ * selector index.css uses for its tokens.
+ */
+
+.hljs-comment,
+.hljs-quote {
+  color: rgb(var(--neutral-400));
+  font-style: italic;
+}
+
+/* Keywords are the brand accent. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-template-tag,
+.hljs-doctag,
+.hljs-name,
+.hljs-meta .hljs-keyword {
+  color: rgb(var(--accent-300));
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string,
+.hljs-char.escape_ {
+  color: theme('colors.success.DEFAULT');
+}
+
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-variable.constant_ {
+  color: theme('colors.warning.DEFAULT');
+}
+
+.hljs-built_in,
+.hljs-type,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-selector-class,
+.hljs-selector-id,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-attr,
+.hljs-attribute,
+.hljs-property {
+  color: theme('colors.info.DEFAULT');
+}
+
+.hljs-title,
+.hljs-title.function_,
+.hljs-title.function_.invoke__,
+.hljs-section {
+  color: rgb(var(--neutral-50));
+  font-weight: 600;
+}
+
+/* Angle brackets in markup, decorators, shebangs, shell prompts: recede. */
+.hljs-tag,
+.hljs-meta,
+.hljs-meta .prompt_ {
+  color: rgb(var(--neutral-400));
+}
+
+.hljs-variable.language_ {
+  color: rgb(var(--accent-400));
+}
+
+/* Interpolation inside a string returns to the base colour. */
+.hljs-subst,
+.hljs-params,
+.hljs-punctuation,
+.hljs-operator {
+  color: inherit;
+}
+
+.hljs-code {
+  color: rgb(var(--accent-200));
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: 600;
+}
+
+/* diff: whole lines, so a background reads as a gutter would. */
+.hljs-addition {
+  color: theme('colors.success.DEFAULT');
+  background-color: theme('colors.success.dim');
+}
+
+.hljs-deletion {
+  color: theme('colors.danger.DEFAULT');
+  background-color: theme('colors.danger.dim');
+}

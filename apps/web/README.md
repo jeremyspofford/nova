@@ -97,10 +97,33 @@ is just the link's text — never `<a>` in `<a>`); links open in a new tab with
 stay put. Tables and code blocks scroll inside their own box, never the
 page. The parse runs behind `useDeferredValue`, so a burst of stream deltas
 coalesces into one re-parse instead of one per delta. The owner's own bubbles
-are plain pre-wrap text — what he typed is not markdown. No syntax
-highlighter: `rehype-highlight` was measured at +54 KB gzip on top of the
-+49 KB the renderer itself costs (it imports all of lowlight's `common`
-grammars, unshakeably), so code blocks are plain monospace.
+are plain pre-wrap text — what he typed is not markdown.
+
+Fenced code is syntax-highlighted (highlight.js grammars through `lowlight`,
+driven by a ~40-line rehype plugin in `Markdown.tsx`; palette in
+`src/components/highlight.css`, the app's own tokens on the block's dark
+ground, which is dark in both themes). Only the languages her tools return
+and the workspace holds are registered — bash/shell, python, typescript,
+javascript, json, yaml, go, sql, html/xml, css, markdown, diff, dockerfile,
+ini/toml, each imported by name from `highlight.js/lib/languages/*` so only
+those ship: +23.7 KB gzip JS, +0.5 KB CSS. `rehype-highlight` was rejected
+by measurement, not taste: it imports lowlight's 37-grammar `common` set as
+the default for its `languages` option, a bundler cannot shake it, and the
+same subset through it cost +54.5 KB. A fence tagged with a registered
+language (aliases and case included: `sh`, `py`, `ts`, `yml`, `TOML`, …)
+gets token spans; `text`/`plaintext`/`txt`, any language that did not ship,
+and an untagged fence all stay verbatim with no spans. Untagged blocks are
+not auto-detected, by measurement: highlight.js's guess is a relevance
+score, not a confidence — an `ls -la` listing scored YAML at 3 (42 spans over
+a directory listing), a prose paragraph Python at 2, and a real Python file
+CSS at 6 — so no floor separates code from listings, and a wrong colouring
+is worse than none. The tag is hers to write (her prompt states the fencing
+rule); the renderer refuses to guess. The spans are built from the
+code's text, so this adds no HTML path: a fence containing `<script>` renders
+those characters, coloured as markup, and never a script element. A copy
+button sits on each block only where `navigator.clipboard` exists (a secure
+context), and shows "copied" from the resolved write, "failed" from a
+rejected one.
 
 ## Tests
 
