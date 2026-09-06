@@ -1092,3 +1092,200 @@ async def test_a_save_without_a_verdict_has_no_verified_at(pool):
     row = await providers.get_row(pool, "cloud")
     assert row["verified_at"] is None
     assert row["key_proven"] is None and row["verify_note"] is None
+
+
+# ── S10a T1: what a listing DECLARES about a model ───────────────────────
+
+# Longer than the 500-character cap the row keeps.
+OPENROUTER_DESCRIPTION = (
+    "Qwen3-Coder-480B-A35B-Instruct is a Mixture-of-Experts code generation model "
+    "optimised for agentic coding tasks such as function calling, tool use and "
+    "long-context reasoning over repositories. "
+) * 4
+
+# One OpenRouter GET /api/v1/models row with the live keys verified
+# 2026-09-06: pricing as strings in USD per token, `architecture.
+# input_modalities`, `supported_parameters` (carrying `tools` when function
+# calling is supported), a `reasoning` object only on models that reason,
+# `benchmarks.artificial_analysis` (third-party), `top_provider.
+# max_completion_tokens`, `hugging_face_id`, `description`, `expiration_date`.
+OPENROUTER_LIVE_ROW = {
+    "id": "qwen/qwen3-coder",
+    "canonical_slug": "qwen/qwen3-coder-480b-a35b-07-25",
+    "hugging_face_id": "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+    "name": "Qwen: Qwen3 Coder",
+    "created": 1753230546,
+    "description": OPENROUTER_DESCRIPTION,
+    "context_length": 262144,
+    "architecture": {
+        "modality": "text+image->text",
+        "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
+        "tokenizer": "Qwen",
+        "instruct_type": None,
+    },
+    "pricing": {
+        "prompt": "0.00000022",
+        "completion": "0.00000095",
+        "request": "0",
+        "image": "0",
+        "web_search": "0",
+        "internal_reasoning": "0",
+    },
+    "top_provider": {
+        "context_length": 262144,
+        "max_completion_tokens": 66536,
+        "is_moderated": False,
+    },
+    "per_request_limits": None,
+    "supported_parameters": [
+        "max_tokens",
+        "temperature",
+        "tools",
+        "tool_choice",
+        "reasoning",
+        "include_reasoning",
+    ],
+    "reasoning": {
+        "mandatory": False,
+        "default_enabled": False,
+        "supported_efforts": ["low", "medium", "high"],
+        "default_effort": "medium",
+    },
+    "benchmarks": {
+        "artificial_analysis": {
+            "intelligence_index": 42.0,
+            "coding_index": 46.0,
+            "agentic_index": 33.5,
+        }
+    },
+    "expiration_date": "2027-01-01",
+}
+
+# A text-only row that carries the same keys as nulls and empties — the
+# shape OpenRouter's plain models have. Nothing new may appear on it.
+OPENROUTER_PLAIN_ROW = {
+    "id": "x/plain",
+    "name": "Plain",
+    "context_length": 8192,
+    "architecture": {
+        "modality": "text->text",
+        "input_modalities": ["text"],
+        "output_modalities": ["text"],
+        "tokenizer": "Other",
+    },
+    "pricing": {"prompt": "0", "completion": "0"},
+    "top_provider": {"context_length": 8192, "max_completion_tokens": None, "is_moderated": False},
+    "supported_parameters": ["max_tokens"],
+    "description": "",
+    "reasoning": None,
+    "benchmarks": {"artificial_analysis": {}},
+    "hugging_face_id": "",
+    "expiration_date": None,
+}
+
+LISTED = {"basis": "declared", "source": "provider-listing"}
+
+
+async def test_a_listing_row_carries_what_openrouter_declared_and_nothing_more(
+    client, mount_backend
+):
+    from app.adapters.openai_chat import listing_capabilities
+
+    fake = FakeOpenAICompat(
+        models_body={"object": "list", "data": [OPENROUTER_LIVE_ROW, OPENROUTER_PLAIN_ROW]},
+        accepts_key=SECRET,
+    )
+    mount_backend("http://openrouter.test", fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "openrouter",
+            "adapter": "openai-chat",
+            "base_url": "http://openrouter.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": SECRET,
+            "preset": "openrouter",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    body = (await client.get("/admin/providers/openrouter/models")).json()
+    rich, plain = body["models"]
+    assert rich == {
+        "id": "qwen/qwen3-coder",
+        "owned_by": "openrouter",
+        "name": "Qwen: Qwen3 Coder",
+        "context_length": 262144,
+        "pricing": {"prompt": 2.2e-07, "completion": 9.5e-07},
+        "max_output_tokens": 66536,
+        "input_modalities": ["text", "image"],
+        "supported_parameters": [
+            "max_tokens",
+            "temperature",
+            "tools",
+            "tool_choice",
+            "reasoning",
+            "include_reasoning",
+        ],
+        "reasoning": True,
+        "benchmarks": {"intelligence_index": 42.0, "coding_index": 46.0, "agentic_index": 33.5},
+        "hugging_face_id": "Qwen/Qwen3-Coder-480B-A35B-Instruct",
+        "description": OPENROUTER_DESCRIPTION[:500],
+        "expiration_date": "2027-01-01",
+    }
+    assert len(rich["description"]) == 500
+    # Nulls and empties are NOT facts: no output cap, no reasoning flag, no
+    # benchmarks, no description, no HF id on the plain row.
+    assert plain == {
+        "id": "x/plain",
+        "owned_by": "openrouter",
+        "name": "Plain",
+        "context_length": 8192,
+        "pricing": {"prompt": 0.0, "completion": 0.0},
+        "input_modalities": ["text"],
+        "supported_parameters": ["max_tokens"],
+    }
+
+    assert listing_capabilities(rich) == (
+        {
+            "tools": {"value": True, **LISTED, "note": "supported_parameters lists tools"},
+            "vision": {
+                "value": True,
+                **LISTED,
+                "note": "architecture.input_modalities lists image",
+            },
+            "thinking": {"value": True, **LISTED, "note": "the listing carries a reasoning object"},
+        },
+        {
+            "chat": {"value": True, **LISTED, "note": "a chat-completions listing"},
+            "coding": {
+                "value": 46.0,
+                **LISTED,
+                "note": "OpenRouter benchmarks.artificial_analysis.coding_index (third-party)",
+            },
+            "agentic": {
+                "value": 33.5,
+                **LISTED,
+                "note": "OpenRouter benchmarks.artificial_analysis.agentic_index (third-party)",
+            },
+            "reasoning": {
+                "value": 42.0,
+                **LISTED,
+                "note": (
+                    "OpenRouter benchmarks.artificial_analysis.intelligence_index (third-party)"
+                ),
+            },
+        },
+    )
+    # A plain listing row declares one thing: that it is a chat model.
+    assert listing_capabilities(plain) == (
+        {},
+        {"chat": {"value": True, **LISTED, "note": "a chat-completions listing"}},
+    )
+    # Audio rides the same modality list; a row that states nothing at all
+    # still says chat and nothing else.
+    audio, _ = listing_capabilities({"id": "a", "input_modalities": ["text", "audio"]})
+    assert set(audio) == {"audio"}
+    assert audio["audio"]["note"] == "architecture.input_modalities lists audio"
+    assert listing_capabilities({"id": "bare"})[0] == {}

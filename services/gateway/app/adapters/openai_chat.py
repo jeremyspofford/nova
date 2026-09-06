@@ -29,6 +29,7 @@ from app.adapters.base import (
     ProviderRefused,
     VerifyResult,
     http_client,
+    positive_int,
     reason,
     refusal_detail,
 )
@@ -81,11 +82,42 @@ def sse_error_chunk(message: str) -> bytes:
     return f"data: {json.dumps({'error': {'message': message}})}\n\n".encode()
 
 
+# OpenRouter's `benchmarks.artificial_analysis` indices (2026-09-06) — a
+# third party's numbers, relayed as such and never renamed into a verdict.
+_BENCHMARK_FIELDS = ("intelligence_index", "coding_index", "agentic_index")
+DESCRIPTION_CAP = 500
+LISTING_SOURCE = "provider-listing"
+
+
+def _str_list(value: object) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    items = [item for item in value if isinstance(item, str) and item]
+    return items or None
+
+
+def _stated_text(value: object, *, cap: int | None = None) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    return text[:cap] if cap else text
+
+
 def normalize_models(body: object, *, owned_by: str) -> list[dict]:
     """OpenAI's `{data: [{id, ...}]}` (and OpenRouter's richer rows) mapped to
     the one listing shape every provider reports: id, plus whatever
-    context/pricing facts the provider stated. Unknown facts are ABSENT,
-    never zero."""
+    context/pricing/capability facts the provider stated. Unknown facts
+    are ABSENT, never zero — a null `max_completion_tokens`, an empty
+    description or a missing `reasoning` object put nothing on the row.
+
+    OpenRouter's row keys (verified 2026-09-06) read here beyond id/name/
+    context_length/pricing: `top_provider.max_completion_tokens`,
+    `architecture.input_modalities`, `supported_parameters` (carries
+    `tools`/`tool_choice` when function calling is supported), a
+    `reasoning` object on models that reason, `benchmarks.
+    artificial_analysis.{intelligence,coding,agentic}_index`,
+    `hugging_face_id`, `description`, `expiration_date`.
+    """
     if not isinstance(body, dict):
         raise ProviderRefused(502, "the model listing was not a JSON object")
     data = body.get("data")
@@ -113,8 +145,88 @@ def normalize_models(body: object, *, owned_by: str) -> list[dict]:
                     continue
             if prices:
                 row["pricing"] = prices
+        top_provider = entry.get("top_provider")
+        if isinstance(top_provider, dict):
+            output_cap = positive_int(top_provider.get("max_completion_tokens"))
+            if output_cap is not None:
+                row["max_output_tokens"] = output_cap
+        architecture = entry.get("architecture")
+        if isinstance(architecture, dict):
+            modalities = _str_list(architecture.get("input_modalities"))
+            if modalities:
+                row["input_modalities"] = modalities
+        parameters = _str_list(entry.get("supported_parameters"))
+        if parameters:
+            row["supported_parameters"] = parameters
+        if isinstance(entry.get("reasoning"), dict):
+            row["reasoning"] = True
+        benchmarks = entry.get("benchmarks")
+        if isinstance(benchmarks, dict) and isinstance(benchmarks.get("artificial_analysis"), dict):
+            indices = {}
+            for field in _BENCHMARK_FIELDS:
+                value = benchmarks["artificial_analysis"].get(field)
+                if (
+                    isinstance(value, int | float)
+                    and not isinstance(value, bool)
+                    and math.isfinite(value)
+                ):
+                    indices[field] = float(value)
+            if indices:
+                row["benchmarks"] = indices
+        for key, cap in (
+            ("hugging_face_id", None),
+            ("description", DESCRIPTION_CAP),
+            ("expiration_date", None),
+        ):
+            text = _stated_text(entry.get(key), cap=cap)
+            if text is not None:
+                row[key] = text
         models.append(row)
     return models
+
+
+def _listed(value: object, note: str) -> dict:
+    return {"value": value, "basis": "declared", "source": LISTING_SOURCE, "note": note}
+
+
+def listing_capabilities(row: dict) -> tuple[dict, dict]:
+    """(capabilities, suitability) in the catalogue's fact shape from one
+    NORMALIZED listing row (`normalize_models` output).
+
+    Only what the row states, each entry saying which field said so:
+    tools ⇐ `supported_parameters` lists `tools`; vision/audio ⇐
+    `input_modalities`; thinking ⇐ the `reasoning` flag. Suitability:
+    every row of a chat-completions listing is declared a chat model; the
+    coding/agentic/reasoning numbers are OpenRouter's third-party
+    benchmark indices, relayed with that label and only when present. A
+    row that states none of it gets `chat` and nothing else — absence is
+    "not stated", never "no".
+    """
+    capabilities: dict = {}
+    parameters = row.get("supported_parameters") or []
+    if "tools" in parameters:
+        capabilities["tools"] = _listed(True, "supported_parameters lists tools")
+    modalities = row.get("input_modalities") or []
+    if "image" in modalities:
+        capabilities["vision"] = _listed(True, "architecture.input_modalities lists image")
+    if "audio" in modalities:
+        capabilities["audio"] = _listed(True, "architecture.input_modalities lists audio")
+    if row.get("reasoning") is True:
+        capabilities["thinking"] = _listed(True, "the listing carries a reasoning object")
+
+    suitability: dict = {"chat": _listed(True, "a chat-completions listing")}
+    benchmarks = row.get("benchmarks") or {}
+    for key, field in (
+        ("coding", "coding_index"),
+        ("agentic", "agentic_index"),
+        ("reasoning", "intelligence_index"),
+    ):
+        if field in benchmarks:
+            suitability[key] = _listed(
+                benchmarks[field],
+                f"OpenRouter benchmarks.artificial_analysis.{field} (third-party)",
+            )
+    return capabilities, suitability
 
 
 def _is_price(value: object) -> bool:
@@ -360,4 +472,11 @@ class OpenAIChat:
 
 ADAPTER = OpenAIChat()
 
-__all__ = ["ADAPTER", "OpenAIChat", "VERIFY_TIMEOUT", "normalize_models", "sse_error_chunk"]
+__all__ = [
+    "ADAPTER",
+    "OpenAIChat",
+    "VERIFY_TIMEOUT",
+    "listing_capabilities",
+    "normalize_models",
+    "sse_error_chunk",
+]

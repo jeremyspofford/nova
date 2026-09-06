@@ -76,6 +76,39 @@ def output_cap(provider: str, model: str) -> int | None:
     return _OUTPUT_CAPS.get((provider, model))
 
 
+# Which sub-object of a GET /v1/models row's `capabilities` states which
+# catalogue capability (live shape, verified 2026-09-06: image_input,
+# pdf_input, thinking{supported, types}, effort, structured_outputs, each
+# with a `supported` bool). Tools is NOT in the listing — no field states
+# it — so it is never emitted here: "not stated" is the truth, and a "no"
+# would be a guess.
+_LISTED_CAPABILITIES = (
+    ("vision", "image_input"),
+    ("thinking", "thinking"),
+    ("pdf", "pdf_input"),
+    ("structured_outputs", "structured_outputs"),
+)
+
+
+def declared_capabilities(capabilities: object) -> dict:
+    """The catalogue's capability entries a listing row's `capabilities`
+    object states, `{value: bool, basis: declared, source: provider-
+    listing}` each. Only keys whose `supported` is a real bool appear: a
+    stated `false` is a fact, a missing sub-object is not."""
+    out: dict = {}
+    if not isinstance(capabilities, dict):
+        return out
+    for key, field_name in _LISTED_CAPABILITIES:
+        sub = capabilities.get(field_name)
+        if isinstance(sub, dict) and isinstance(sub.get("supported"), bool):
+            out[key] = {
+                "value": sub["supported"],
+                "basis": "declared",
+                "source": "provider-listing",
+            }
+    return out
+
+
 _FINISH_REASONS = {
     "end_turn": "stop",
     "stop_sequence": "stop",
@@ -575,6 +608,9 @@ class AnthropicMessages:
                             if isinstance(entry.get("max_tokens"), int) and entry["max_tokens"] > 0:
                                 item["max_output_tokens"] = entry["max_tokens"]
                                 _OUTPUT_CAPS[(row["name"], item["id"])] = entry["max_tokens"]
+                            declared = declared_capabilities(entry.get("capabilities"))
+                            if declared:
+                                item["capabilities_declared"] = declared
                             models.append(item)
                     if not body.get("has_more") or not body.get("last_id"):
                         break

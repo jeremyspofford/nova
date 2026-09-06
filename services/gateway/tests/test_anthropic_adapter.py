@@ -11,7 +11,7 @@ import json
 
 from app.adapters import anthropic_messages as adapter
 from tests.conftest import requires_db
-from tests.fakes import FakeAnthropic
+from tests.fakes import ANTHROPIC_LIVE_CAPABILITIES, FakeAnthropic
 
 # ── request translation (pure) ───────────────────────────────────────────
 
@@ -708,3 +708,115 @@ async def test_the_listed_output_cap_clamps_a_later_completion(client, pool, mou
     )
     assert resp.status_code == 200, resp.text
     assert fake.seen[-1][1]["max_tokens"] == 4096
+
+
+# ── S10a T1: what the listing DECLARES about a model ─────────────────────
+
+LISTED = {"basis": "declared", "source": "provider-listing"}
+
+
+def test_declared_capabilities_reads_only_what_the_row_states():
+    assert adapter.declared_capabilities(ANTHROPIC_LIVE_CAPABILITIES) == {
+        "vision": {"value": True, **LISTED},
+        "thinking": {"value": True, **LISTED},
+        "pdf": {"value": True, **LISTED},
+        "structured_outputs": {"value": True, **LISTED},
+    }
+    # A stated "no" is a fact; a sub-object without `supported` states
+    # nothing; a field the reader does not know is left alone.
+    assert adapter.declared_capabilities(
+        {"image_input": {"supported": False}, "thinking": {}, "effort": {"supported": True}}
+    ) == {"vision": {"value": False, **LISTED}}
+    assert adapter.declared_capabilities(None) == {}
+    assert adapter.declared_capabilities({}) == {}
+    # No field in the listing states tool use: even a proxy inventing one
+    # would not make the reader emit it — "not stated" is the truth.
+    assert adapter.declared_capabilities({"tools": {"supported": True}}) == {}
+
+
+@requires_db
+async def test_the_listing_row_carries_declared_capabilities_and_never_a_tools_flag(
+    client, pool, mount_backend
+):
+    await _add_anthropic(client, mount_backend, FakeAnthropic())
+    body = (await client.get("/admin/providers/anthropic/models")).json()
+    assert body["models"][0] == {
+        "id": "claude-opus-5",
+        "owned_by": "anthropic",
+        "name": "Claude-Opus-5",
+        "capabilities_declared": {
+            "vision": {"value": True, **LISTED},
+            "thinking": {"value": True, **LISTED},
+            "pdf": {"value": True, **LISTED},
+            "structured_outputs": {"value": True, **LISTED},
+        },
+    }
+
+
+@requires_db
+async def test_a_row_without_a_capabilities_object_states_none(client, pool, mount_backend):
+    await _add_anthropic(client, mount_backend, FakeAnthropic(model_capabilities=None))
+    body = (await client.get("/admin/providers/anthropic/models")).json()
+    assert body["models"][0] == {
+        "id": "claude-opus-5",
+        "owned_by": "anthropic",
+        "name": "Claude-Opus-5",
+    }
+
+
+@requires_db
+async def test_the_full_live_row_shape_maps_context_output_cap_and_capabilities(
+    client, pool, mount_backend
+):
+    """The live GET /v1/models row (2026-09-06): id, display_name, created_at,
+    max_input_tokens, max_tokens, capabilities. No pricing and no tools flag
+    anywhere, so the listing row carries neither."""
+
+    class Live(FakeAnthropic):
+        async def _models(self, request):
+            await self._record(request)
+            from starlette.responses import JSONResponse
+
+            return JSONResponse(
+                {
+                    "data": [
+                        {
+                            "type": "model",
+                            "id": "claude-sonnet-5",
+                            "display_name": "Claude Sonnet 5",
+                            "created_at": "2026-05-01T00:00:00Z",
+                            "max_input_tokens": 1000000,
+                            "max_tokens": 64000,
+                            "capabilities": {
+                                "image_input": {"supported": True},
+                                "pdf_input": {"supported": False},
+                                "thinking": {
+                                    "supported": True,
+                                    "types": {"adaptive": True, "enabled": True},
+                                },
+                                "structured_outputs": {"supported": True},
+                            },
+                        }
+                    ],
+                    "has_more": False,
+                    "last_id": "claude-sonnet-5",
+                }
+            )
+
+    await _add_anthropic(client, mount_backend, Live(blocks=("hi",)))
+    body = (await client.get("/admin/providers/anthropic/models")).json()
+    assert body["models"] == [
+        {
+            "id": "claude-sonnet-5",
+            "owned_by": "anthropic",
+            "name": "Claude Sonnet 5",
+            "context_length": 1000000,
+            "max_output_tokens": 64000,
+            "capabilities_declared": {
+                "vision": {"value": True, **LISTED},
+                "thinking": {"value": True, **LISTED},
+                "pdf": {"value": False, **LISTED},
+                "structured_outputs": {"value": True, **LISTED},
+            },
+        }
+    ]
