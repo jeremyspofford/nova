@@ -15,6 +15,7 @@ from fastapi import HTTPException
 
 from app import providers
 from app.adapters import ProviderRefused, for_row, http_client, reason  # re-exported
+from app.adapters.base import VerifyResult
 
 KINDS = ("ollama", "remote", "cloud")
 
@@ -135,13 +136,15 @@ def _row_for(payload: dict) -> dict:
     }
 
 
-async def verify_live(app, payload: dict) -> None:
+async def verify_live(app, payload: dict) -> VerifyResult:
     """Raises VerificationFailed with a stated reason if the backend named
     in `payload` cannot be reached right now. Called before saving, never
-    after — a config that fails this check never lands."""
+    after — a config that fails this check never lands. Returns what was
+    proven, so the wizard's save carries the same verdict a registry save
+    does."""
     row = _row_for(payload)
     try:
-        await for_row(row).verify(app, row)
+        return await for_row(row).verify(app, row)
     except ProviderRefused as exc:
         raise VerificationFailed(
             f"could not verify the {payload['kind']} backend is live — {exc.detail}"
@@ -153,9 +156,13 @@ async def read_config(pool: asyncpg.Pool) -> dict:
     return legacy_view(await providers.default_row(pool))
 
 
-async def save_config(pool: asyncpg.Pool, payload: dict) -> dict:
+async def save_config(
+    pool: asyncpg.Pool, payload: dict, *, verdict: VerifyResult | None = None
+) -> dict:
     """Upsert the provider row an S1 payload describes and make it the
-    default. Returns the legacy view of what is now active."""
+    default. Returns the legacy view of what is now active. `verdict` is
+    what verify_live proved; without one the row records that nothing was
+    (key_proven NULL, no note) rather than a verdict it never had."""
     row = _row_for(payload)
     name = row["name"]
     if name == "ollama":
@@ -167,6 +174,15 @@ async def save_config(pool: asyncpg.Pool, payload: dict) -> dict:
         except providers.UnknownProvider:
             existing = None
         shape = providers.validate_shape(row, existing=existing)
+        if verdict is not None:
+            shape.update(
+                listing=verdict.listing,
+                listing_note=verdict.note,
+                key_proven=verdict.key_proven,
+                verify_note=verdict.note,
+            )
+        else:
+            shape.update(key_proven=None, verify_note=None)
         if existing is None:
             await providers.insert_row(pool, name, shape)
         else:

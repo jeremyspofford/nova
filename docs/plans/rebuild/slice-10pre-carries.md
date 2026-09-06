@@ -92,6 +92,45 @@ view cannot re-save a default provider whose base URL ends otherwise
 carry below; the badge subquery per message row stays (fine at chat
 sizes); a turn deleted by retention drops its badge (never invented).
 
+## Owner walk 2026-09-06 and the second fix wave
+
+Jeremy added his OpenRouter key and reported: "I don't know if it's
+working, nor can I see or select any models." The gateway had verified the
+key (a 1-token completion) and listed 430 models; the page showed neither
+a verdict nor an obvious way to open the list (the provider NAME was the
+click target). Fix 30443b5a: an explicit Show models / Hide models button
+(Pick a model when unlisted), a verdict line, the new row opens itself,
+and the key probe spends its token on the cheapest listed model.
+
+A 70-agent adversarial workflow (four lenses, two refuters per finding; 33
+raised, 21 survived) then found the fix's own critical: the verdict line
+read `listing_note`, which EVERY listing fetch rewrites — and the auto-open
+fetches within a second of the save — so "the key was proven…" became
+"430 models listed" on the server at once, and a refused-later key would
+have rendered a green "Verified". Also: amber-vs-green was a substring
+match on prose; a 404 listing painted green with the key never sent
+anywhere; `cheapest_model` ranked OpenRouter's `-1` router rows first
+(`openrouter/auto`, verified on the live list); a 200 carrying an SSE
+error frame counted as a proof; the wizard path saved no verdict.
+
+Second wave (gateway migration 004): the verdict is ITS OWN STATE —
+`key_proven` (true / false / NULL = never tested) + `verify_note`, written
+only by a save and never by `record_listing`; every adapter returns a
+structured `VerifyResult.key_proven` (Anthropic's listing needs the key →
+true; ollama → NULL; no listing → NULL and "the key was not tested");
+the probe requires a body with `choices` and no `error`; prices rank only
+when finite and > 0 for BOTH fields; the wizard's PUT stores the same
+verdict. Web: the line branches on `key_proven` ("Key verified" green /
+"Checked" amber or neutral), a separate amber line shows a refused
+listing, the row re-reads its server state after each listing fetch, and
+the copy no longer says "press Use" over an empty list. Suites: gateway
+207, web 432 (the refuted 12 were StrictMode double-fetch, taste, and
+already-handled cases — recorded in the workflow journal).
+
+LESSON (again): a UI line that composes "success" from two server fields
+with different lifetimes is a claim the server never made. One field, one
+writer, one meaning.
+
 ## Owner-owed (the DoD walk)
 
 1. Settings → Providers → OpenRouter preset → key → list appears → Use one →

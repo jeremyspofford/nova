@@ -691,20 +691,34 @@ async def test_a_public_listing_does_not_prove_the_key_so_a_completion_does(
 ):
     """OpenRouter's /models is public: a wrong key still lists 431 models.
     A save that read that as "verified" would land a row whose first turn
-    401s (rail 5). The proof is a 1-token completion on the first listed
-    model, through the same adapter a turn uses."""
+    401s (rail 5). The proof is a 1-token completion on the cheapest PRICED
+    model in the listing (first listed when nothing is priced), through the
+    same adapter a turn uses — and the verdict is a structured key_proven,
+    never prose a page has to parse."""
     fake = FakeOpenAICompat(
         models_body={
             "object": "list",
             "data": [
+                # OpenRouter's router rows publish -1 ("varies"): not a price,
+                # and the auto-router is the one place a probe must not go.
+                {"id": "openrouter/auto", "pricing": {"prompt": "-1", "completion": "-1"}},
+                # A free variant at 0 is not a price to rank by either.
+                {"id": "free/model:free", "pricing": {"prompt": "0", "completion": "0"}},
                 {
                     "id": "openai/gpt-flagship",
                     "pricing": {"prompt": "0.00001", "completion": "0.00005"},
+                },
+                # Cheapest prompt, dearest completion — sum is NOT the minimum.
+                {
+                    "id": "cheap-prompt/model",
+                    "pricing": {"prompt": "0.00000005", "completion": "0.00002"},
                 },
                 {
                     "id": "openai/gpt-x",
                     "pricing": {"prompt": "0.0000001", "completion": "0.0000004"},
                 },
+                # Cheapest completion, but no prompt price: not fully priced.
+                {"id": "half/priced", "pricing": {"completion": "0.0000001"}},
                 {"id": "unpriced/model"},
             ],
         },
@@ -730,9 +744,12 @@ async def test_a_public_listing_does_not_prove_the_key_so_a_completion_does(
     right = await client.post("/admin/providers", json={**body, "api_key": "sk-or-right"})
 
     assert right.status_code == 200, right.text
-    # The probe spends its token on the CHEAPEST priced model, not the first
-    # listed (OpenRouter lists its newest flagship first).
-    assert "proven with a 1-token completion on openai/gpt-x" in right.json()["listing_note"]
+    # The probe spends its token on the CHEAPEST fully-priced model by
+    # prompt+completion — not the first listed, not the -1 router, not the
+    # free row, not the cheapest-by-one-field row.
+    body = right.json()
+    assert body["key_proven"] is True
+    assert "proven with a 1-token completion on openai/gpt-x" in body["verify_note"]
     probe = [b for path, b in fake.seen if path == "/v1/chat/completions"][-1]
     assert probe["max_tokens"] == 1 and probe["model"] == "openai/gpt-x"
 
@@ -757,8 +774,9 @@ async def test_a_public_listing_with_an_unproven_key_says_so_on_the_row(
         },
     )
     assert resp.status_code == 200, resp.text
-    assert "NOT proven" in resp.json()["listing_note"]
-    assert "402" in resp.json()["listing_note"]
+    assert resp.json()["key_proven"] is False
+    assert "NOT proven" in resp.json()["verify_note"]
+    assert "402" in resp.json()["verify_note"]
 
 
 async def test_a_listing_that_needs_the_key_proves_it_without_a_completion(
@@ -779,7 +797,8 @@ async def test_a_listing_that_needs_the_key_proves_it_without_a_completion(
         },
     )
     assert resp.status_code == 200, resp.text
-    assert "the listing accepted the key" in resp.json()["listing_note"]
+    assert resp.json()["key_proven"] is True
+    assert "the listing accepted the key" in resp.json()["verify_note"]
     assert not any(path == "/v1/chat/completions" for path, _ in fake.seen)
 
 
@@ -847,3 +866,133 @@ async def test_a_refused_listing_is_recorded_on_the_row(client, pool, mount_back
     row = await providers.get_row(pool, "openrouter")
     assert row["listing"] == "unknown"
     assert "key revoked" in row["listing_note"]
+    # The save's verdict is a DIFFERENT fact and survives every listing
+    # fetch — the page paints "Verified" from these, never from listing_note.
+    assert row["key_proven"] is True
+    assert "the listing accepted the key" in row["verify_note"]
+    assert row["verified_at"] is not None
+
+
+# ── the verdict is its own state ─────────────────────────────────────────
+
+
+async def test_a_models_fetch_never_rewrites_the_saves_verdict(client, pool, mount_backend):
+    """The review's critical: the page's auto-open fetches the list right
+    after a save, and that fetch rewrites listing_note — so an unproven key
+    read as "3 models listed" a second later. key_proven / verify_note are
+    written by the save only."""
+    fake = FakeOpenAICompat(
+        models_body={"object": "list", "data": [{"id": "m"}]},
+        models_public=True,
+        completions_status=402,
+    )
+    mount_backend("http://broke2.test", fake.app)
+    saved = await client.post(
+        "/admin/providers",
+        json={
+            "name": "broke2",
+            "adapter": "openai-chat",
+            "base_url": "http://broke2.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-x",
+        },
+    )
+    assert saved.status_code == 200 and saved.json()["key_proven"] is False
+
+    listed = await client.get("/admin/providers/broke2/models")
+
+    assert listed.status_code == 200
+    row = (await client.get("/admin/providers/broke2")).json()
+    assert row["listing_note"] == "1 models listed"
+    assert row["key_proven"] is False
+    assert "NOT proven" in row["verify_note"]
+
+
+async def test_no_listing_means_the_key_was_not_tested_and_the_row_says_so(
+    client, pool, mount_backend
+):
+    fake = FakeOpenAICompat(models_status=404, models_body={"detail": "Not Found"})
+    mount_backend("http://manual2.test", fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "manual2",
+            "adapter": "openai-chat",
+            "base_url": "http://manual2.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-x",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["key_proven"] is None
+    assert "the key was not tested" in resp.json()["verify_note"]
+
+
+async def test_a_200_that_is_an_error_frame_does_not_prove_the_key(client, pool, mount_backend):
+    """The relay answers 200 and then writes an error frame when the
+    provider compresses despite being asked not to; a status alone would
+    read that as a completion."""
+    fake = FakeOpenAICompat(
+        models_body={"object": "list", "data": [{"id": "m"}]},
+        models_public=True,
+        completions_body={"error": {"message": "model overloaded"}},
+    )
+    mount_backend("http://flaky.test", fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "flaky",
+            "adapter": "openai-chat",
+            "base_url": "http://flaky.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-x",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["key_proven"] is False
+    assert "model overloaded" in resp.json()["verify_note"]
+
+
+async def test_the_wizard_path_records_the_same_verdict(client, pool, mount_backend):
+    fake = FakeOpenAICompat(accepts_key="sk-cloud1111")
+    mount_backend("http://cloudw.test", fake.app)
+    resp = await client.put(
+        "/admin/backend",
+        json={
+            "kind": "cloud",
+            "url": "http://cloudw.test",
+            "provider": "wizard",
+            "api_key": "sk-cloud1111",
+            "model": "m",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    row = await providers.get_row(pool, "wizard")
+    assert row["key_proven"] is True
+    assert "the listing accepted the key" in row["verify_note"]
+
+
+def test_cheapest_model_ranks_only_real_prices():
+    from app.adapters.openai_chat import cheapest_model
+
+    assert cheapest_model([{"id": "a"}, {"id": "b"}]) == "a"
+    assert (
+        cheapest_model(
+            [
+                {"id": "router", "pricing": {"prompt": -1, "completion": -1}},
+                {"id": "free", "pricing": {"prompt": 0, "completion": 0}},
+                {"id": "paid", "pricing": {"prompt": 1e-6, "completion": 2e-6}},
+            ]
+        )
+        == "paid"
+    )
+    # Nothing fully priced: the first listed, not the router.
+    assert (
+        cheapest_model(
+            [
+                {"id": "router", "pricing": {"prompt": -1, "completion": -1}},
+                {"id": "half", "pricing": {"completion": 1e-9}},
+            ]
+        )
+        == "router"
+    )

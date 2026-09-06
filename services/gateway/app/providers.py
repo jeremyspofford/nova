@@ -27,7 +27,8 @@ PRESETS_PATH = Path(__file__).resolve().parent / "providers_presets.json"
 
 _COLUMNS = (
     "name, adapter, base_url, auth_shape, api_key, default_model, model_note, preset, "
-    "builtin, is_default, verified_at, listing, listing_note, created_at, updated_at"
+    "builtin, is_default, verified_at, listing, listing_note, key_proven, verify_note, "
+    "created_at, updated_at"
 )
 _PUBLIC_FIELDS = (
     "name",
@@ -43,6 +44,8 @@ _PUBLIC_FIELDS = (
     "verified_at",
     "listing",
     "listing_note",
+    "key_proven",
+    "verify_note",
     "created_at",
     "updated_at",
 )
@@ -261,8 +264,9 @@ async def insert_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
     try:
         row = await pool.fetchrow(
             "INSERT INTO providers (name, adapter, base_url, auth_shape, api_key, "
-            "default_model, model_note, preset, verified_at, listing, listing_note) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10) "
+            "default_model, model_note, preset, verified_at, listing, listing_note, "
+            "key_proven, verify_note) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12) "
             f"RETURNING {_COLUMNS}",
             name,
             shape["adapter"],
@@ -274,6 +278,8 @@ async def insert_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
             shape.get("preset"),
             shape.get("listing", "unknown"),
             shape.get("listing_note"),
+            shape.get("key_proven"),
+            shape.get("verify_note"),
         )
     except asyncpg.UniqueViolationError as exc:
         raise HTTPException(
@@ -286,7 +292,8 @@ async def update_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
     row = await pool.fetchrow(
         "UPDATE providers SET adapter = $2, base_url = $3, auth_shape = $4, api_key = $5, "
         "default_model = $6, model_note = $7, preset = $8, verified_at = now(), "
-        "listing = $9, listing_note = $10, updated_at = now() "
+        "listing = $9, listing_note = $10, key_proven = $11, verify_note = $12, "
+        "updated_at = now() "
         f"WHERE name = $1 RETURNING {_COLUMNS}",
         name,
         shape["adapter"],
@@ -298,6 +305,8 @@ async def update_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
         shape.get("preset"),
         shape.get("listing", "unknown"),
         shape.get("listing_note"),
+        shape.get("key_proven"),
+        shape.get("verify_note"),
     )
     if row is None:
         raise UnknownProvider(name)
@@ -315,7 +324,9 @@ async def set_default_model(pool: asyncpg.Pool, name: str, model: str | None) ->
 
 async def record_listing(pool: asyncpg.Pool, name: str, state: str, note: str | None) -> None:
     """What a live listing just learned, on the row — DERIVED state the UI
-    reads, never something an owner maintains by hand."""
+    reads, never something an owner maintains by hand. Touches ONLY the
+    listing columns: the save's verdict (`key_proven`, `verify_note`,
+    `verified_at`) is a different fact and survives every listing fetch."""
     await pool.execute(
         "UPDATE providers SET listing = $2, listing_note = $3, updated_at = now() WHERE name = $1",
         name,

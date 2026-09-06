@@ -82,7 +82,9 @@ class Ollama:
             raise ProviderRefused(
                 502, f"could not verify the ollama backend is live — {reason(exc)}"
             ) from exc
-        return VerifyResult(listing="available", note="ollama answered /api/version")
+        return VerifyResult(
+            listing="available", note="ollama answered /api/version", key_proven=None
+        )
 
     async def completions(self, request: Request, row: dict, model: str, body: dict) -> Response:
         # Chat rides ollama's OpenAI-compatible surface at {OLLAMA_URL}/v1.

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 
 import httpx
 from fastapi import Request
@@ -116,17 +117,29 @@ def normalize_models(body: object, *, owned_by: str) -> list[dict]:
     return models
 
 
+def _is_price(value: object) -> bool:
+    """A price is a finite number greater than zero. OpenRouter publishes
+    `-1` on its router rows (`openrouter/auto` and kin) to mean "varies" and
+    `0` on free variants — neither is a price to rank by, and the auto
+    router is the one place a probe must not go (it picks a model itself)."""
+    return isinstance(value, int | float) and math.isfinite(value) and value > 0
+
+
 def cheapest_model(models: list[dict]) -> str:
     """The model id a key probe spends its one token on: the cheapest by the
-    provider's own stated prompt+completion price, else the first listed
-    (a listing with no prices gives nothing better to choose by). The first
-    listed on OpenRouter is its newest flagship — the wrong place to spend
-    even a token when the same list says which is cheapest."""
-    priced = [
-        (m["pricing"].get("prompt", 0.0) + m["pricing"].get("completion", 0.0), m["id"])
-        for m in models
-        if isinstance(m.get("pricing"), dict) and m.get("id")
-    ]
+    provider's own stated prompt+completion price, over rows that state
+    BOTH as real prices; else the first listed (a listing with no usable
+    prices gives nothing better to choose by). The first listed on
+    OpenRouter is its newest flagship — the wrong place to spend even a
+    token when the same list says which is cheapest."""
+    priced = []
+    for m in models:
+        pricing = m.get("pricing")
+        if not isinstance(pricing, dict) or not m.get("id"):
+            continue
+        prompt, completion = pricing.get("prompt"), pricing.get("completion")
+        if _is_price(prompt) and _is_price(completion):
+            priced.append((prompt + completion, m["id"]))
     if priced:
         return min(priced)[1]
     return models[0]["id"]
@@ -176,10 +189,13 @@ class OpenAIChat:
             return False
         return resp.status_code == 200
 
-    async def _key_probe(self, app, row: dict, model: str) -> tuple[int, str]:
+    async def _key_probe(self, app, row: dict, model: str) -> tuple[int, str, bool]:
         """A 1-token completion through the SAME code path a turn uses —
-        (status, the provider's words). The only way to prove a key when
-        the listing does not need one."""
+        (status, the provider's words, whether a COMPLETION came back). The
+        only way to prove a key when the listing does not need one. A 200
+        is not enough on its own: the relay answers 200 and then writes an
+        error frame when the provider compressed despite being asked not
+        to or the stream died — so the body has to hold `choices`."""
         response = await self._completions(
             app,
             row,
@@ -193,43 +209,71 @@ class OpenAIChat:
                 content += chunk if isinstance(chunk, bytes) else str(chunk).encode()
         else:
             content = response.body
-        return response.status_code, content.decode(errors="replace")[:400]
+        words = content.decode(errors="replace")[:400]
+        completed = False
+        if response.status_code == 200:
+            try:
+                parsed = json.loads(content)
+            except ValueError:
+                parsed = None
+            completed = (
+                isinstance(parsed, dict)
+                and isinstance(parsed.get("choices"), list)
+                and parsed.get("error") is None
+            )
+        return response.status_code, words, completed
 
     async def verify(self, app, row: dict) -> VerifyResult:
         """What a save must prove: the provider is reachable AND the key is
-        accepted. The listing call is the first probe (a 401/403 there is
-        the provider refusing the key); a 404/405 is recorded as
-        `unavailable` (reachable, no listing — model ids are typed). When
-        the listing answers 200 to a WRONG key too, it proved nothing about
-        the key, so a 1-token completion on the first listed model is the
-        proof — a refusal there refuses the save; any other failure is
-        stated on the row rather than read as success (rail 5)."""
+        accepted — reported as a structured `key_proven`, never as prose a
+        page has to parse. The listing call is the first probe (a 401/403
+        there is the provider refusing the key); a 404/405 is recorded as
+        `unavailable` (reachable, no listing — model ids are typed) and the
+        key is NOT tested, which is said. When the listing answers 200 to a
+        WRONG key too, it proved nothing about the key, so a 1-token
+        completion on the cheapest priced model in the listing is the proof
+        — a refusal there refuses the save; any other failure is stated on
+        the row rather than read as success (rail 5)."""
         try:
             listing = await self.list_models(app, row)
         except ListingUnavailable as exc:
-            return VerifyResult(listing="unavailable", note=str(exc))
+            return VerifyResult(
+                listing="unavailable",
+                note=f"{exc} — the key was not tested; the first chat turn will tell",
+                key_proven=None,
+            )
         note = f"{len(listing.models)} models listed"
-        if row.get("auth_shape") == "none" or not listing.models:
-            return VerifyResult(listing="available", note=note)
+        if row.get("auth_shape") == "none":
+            return VerifyResult(listing="available", note=note, key_proven=None)
+        if not listing.models:
+            return VerifyResult(
+                listing="available",
+                note=f"{note} — nothing to test the key on; the first chat turn will tell",
+                key_proven=None,
+            )
         if not await self._listing_is_public(app, row):
-            return VerifyResult(listing="available", note=f"{note}; the listing accepted the key")
+            return VerifyResult(
+                listing="available", note=f"{note}; the listing accepted the key", key_proven=True
+            )
         model = cheapest_model(listing.models)
         try:
-            status, words = await self._key_probe(app, row, model)
+            status, words, completed = await self._key_probe(app, row, model)
         except ProviderRefused as exc:
-            status, words = exc.status, exc.detail
+            status, words, completed = exc.status, exc.detail, False
         if status in (401, 403):
             raise ProviderRefused(status, f"the key was refused on a test completion — {words}")
-        if status == 200:
+        if completed:
             return VerifyResult(
                 listing="available",
                 note=f"{note}; the listing is public, so the key was proven with a 1-token "
                 f"completion on {model}",
+                key_proven=True,
             )
         return VerifyResult(
             listing="available",
             note=f"{note}; the listing is public and a 1-token test on {model} answered "
             f"{status} ({words}) — the key is NOT proven; the first chat turn will tell",
+            key_proven=False,
         )
 
     async def completions(self, request: Request, row: dict, model: str, body: dict) -> Response:

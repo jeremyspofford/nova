@@ -684,8 +684,15 @@ export interface Provider {
   builtin: boolean
   is_default: boolean
   verified_at: string | null
+  /** What the LAST model listing learned — rewritten by every listing fetch. */
   listing: ProviderListingState
   listing_note: string | null
+  /** The save's verdict on the KEY, written only by a save: true = accepted
+   * (the listing required it, or a 1-token completion came back as a
+   * completion); false = a completion was refused for a non-auth reason;
+   * null = never tested. `verify_note` says how, in the gateway's words. */
+  key_proven: boolean | null
+  verify_note: string | null
   created_at: string
   updated_at: string
 }

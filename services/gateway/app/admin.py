@@ -445,12 +445,12 @@ async def put_backend(request: Request) -> dict:
     body = await request.json()
     backends.validate_shape(body)
     try:
-        await backends.verify_live(request.app, body)
+        verdict = await backends.verify_live(request.app, body)
     except backends.VerificationFailed as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     pool = await db.get_pool()
-    saved = await backends.save_config(pool, body)
+    saved = await backends.save_config(pool, body, verdict=verdict)
     # Never log the payload itself — api_key lives in it.
     logger.info("backend config saved: kind=%s", saved["kind"])
     return backends.to_public(saved)
@@ -474,7 +474,13 @@ async def _verify_or_502(app, name: str, shape: dict) -> dict:
             status_code=502,
             detail=f"could not verify provider {name!r} — {exc.detail}",
         ) from exc
-    return dict(shape, listing=result.listing, listing_note=result.note)
+    return dict(
+        shape,
+        listing=result.listing,
+        listing_note=result.note,
+        key_proven=result.key_proven,
+        verify_note=result.note,
+    )
 
 
 async def _refuse_name_that_shadows_a_local_tag(app, pool, name: str) -> None:

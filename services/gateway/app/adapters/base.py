@@ -47,11 +47,20 @@ class Listing:
 
 @dataclass
 class VerifyResult:
-    """What a verify-before-save proved: the row's `listing` state and the
-    note that goes with it."""
+    """What a verify-before-save proved.
+
+    `listing` is what was learned about GET /models (available /
+    unavailable). `key_proven` is the verdict on the KEY, structured so no
+    caller has to read prose: True when the provider accepted it (the
+    listing required it, or a 1-token completion came back as a
+    completion), False when a completion was attempted and refused for a
+    reason other than auth, None when nothing could test it (no auth, no
+    listing, an empty listing). `note` says how, in words, for the owner.
+    """
 
     listing: str
     note: str | None = None
+    key_proven: bool | None = None
 
 
 class Adapter(Protocol):

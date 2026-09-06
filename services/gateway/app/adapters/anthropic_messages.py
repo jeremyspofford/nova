@@ -593,8 +593,18 @@ class AnthropicMessages:
         try:
             listing = await self.list_models(app, row)
         except ListingUnavailable as exc:
-            return VerifyResult(listing="unavailable", note=str(exc))
-        return VerifyResult(listing="available", note=f"{len(listing.models)} models listed")
+            return VerifyResult(
+                listing="unavailable",
+                note=f"{exc} — the key was not tested; the first chat turn will tell",
+                key_proven=None,
+            )
+        # Anthropic's /v1/models is behind x-api-key: a 200 listing IS the
+        # key being accepted.
+        return VerifyResult(
+            listing="available",
+            note=f"{len(listing.models)} models listed; the listing accepted the key",
+            key_proven=True,
+        )
 
     async def completions(self, request: Request, row: dict, model: str, body: dict) -> Response:
         url = base_url_of(row)

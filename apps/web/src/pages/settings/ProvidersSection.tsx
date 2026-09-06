@@ -238,6 +238,20 @@ export function ProvidersSection({
     }
   }
 
+  /** Re-read one row's server state after its listing was fetched (the
+   * fetch rewrites listing/listing_note server-side). Merges by name so a
+   * row the server knows and this page knows agree; never drops rows. */
+  const refreshRow = async (name: string) => {
+    try {
+      const fresh = (await api.getProviders()).find(p => p.name === name)
+      if (!fresh) return
+      setProviders(prev => (prev ?? []).map(p => (p.name === name ? { ...p, ...fresh } : p)))
+    } catch {
+      // A failed refresh leaves the last server-returned row in place —
+      // still the server's words, just older.
+    }
+  }
+
   const makeDefault = async (provider: Provider) => {
     setActionError(null)
     try {
@@ -281,6 +295,7 @@ export function ProvidersSection({
               onModelChanged={onModelChanged}
               onDelete={() => setPendingDelete(provider)}
               onMakeDefault={() => void makeDefault(provider)}
+              onListingFetched={() => void refreshRow(provider.name)}
               initiallyOpen={provider.name === justCreated}
             />
           ))}
@@ -464,6 +479,7 @@ function ProviderRow({
   onModelChanged,
   onDelete,
   onMakeDefault,
+  onListingFetched,
   initiallyOpen = false,
 }: {
   provider: Provider
@@ -472,6 +488,7 @@ function ProviderRow({
   onModelChanged: (model: string) => void
   onDelete: () => void
   onMakeDefault: () => void
+  onListingFetched: () => void
   initiallyOpen?: boolean
 }) {
   const [listing, setListing] = useState<ProviderListing | null>(null)
@@ -493,6 +510,9 @@ function ProviderRow({
       setListingError(reasonOf(err))
     } finally {
       setLoadingModels(false)
+      // The fetch just rewrote the row's listing state on the server; read
+      // it back rather than keep showing what the save said.
+      onListingFetched()
     }
   }
 
@@ -572,7 +592,13 @@ function ProviderRow({
             aria-controls={`provider-models-${provider.name}`}
             data-testid={`toggle-models-${provider.name}`}
           >
-            {open ? 'Hide models' : provider.listing === 'unavailable' ? 'Pick a model' : 'Show models'}
+            {open
+              ? provider.listing === 'unavailable' || listingError
+                ? 'Hide'
+                : 'Hide models'
+              : provider.listing === 'unavailable'
+                ? 'Pick a model'
+                : 'Show models'}
           </Button>
           {!provider.is_default && (
             <Button size="sm" variant="ghost" onClick={onMakeDefault}>
@@ -592,26 +618,49 @@ function ProviderRow({
           )}
         </span>
       </div>
-      {/* The save's verdict, in the gateway's words — what the owner most
-          needs right after pasting a key: was it accepted, and how do we
-          know. Absent (not invented) for the bundled row, which is never
-          verified through the registry. */}
+      {/* The save's verdict, in the gateway's words, branched on the
+          STRUCTURED key_proven — never on the wording of a note. Absent
+          (not invented) for the bundled row, which is never verified
+          through the registry. A row verified before the verdict existed
+          (verified_at set, key_proven null, no note) reads "Checked", not
+          "Verified": nothing proved the key. */}
       {provider.verified_at && (
         <p
           data-testid={`provider-status-${provider.name}`}
           className={`mt-1.5 inline-flex items-start gap-1.5 text-caption ${
-            provider.listing_note?.includes('NOT proven') ? 'text-amber-600 dark:text-amber-400' : 'text-success'
+            provider.key_proven === true
+              ? 'text-success'
+              : provider.key_proven === false
+                ? 'text-amber-600 dark:text-amber-400'
+                : 'text-content-tertiary'
           }`}
         >
-          {provider.listing_note?.includes('NOT proven') ? (
-            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-          ) : (
+          {provider.key_proven === true ? (
             <Check size={12} className="shrink-0 mt-0.5" />
-          )}
+          ) : provider.key_proven === false ? (
+            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+          ) : null}
           <span>
-            Verified {formatRelativeTime(provider.verified_at)}
-            {provider.listing_note ? ` — ${provider.listing_note}` : ''}
+            {provider.key_proven === true ? 'Key verified' : 'Checked'}{' '}
+            {formatRelativeTime(provider.verified_at)}
+            {provider.verify_note
+              ? ` — ${provider.verify_note}`
+              : provider.key_proven === null
+                ? ' — the key was not tested'
+                : ''}
           </span>
+        </p>
+      )}
+      {/* What the LAST listing fetch learned, when it is bad news: a
+          refused listing (a revoked key, say) is a fact the verdict above
+          cannot see. */}
+      {provider.listing === 'unknown' && provider.listing_note && (
+        <p
+          data-testid={`provider-listing-warning-${provider.name}`}
+          className="mt-1 inline-flex items-start gap-1.5 text-caption text-amber-600 dark:text-amber-400"
+        >
+          <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+          <span>{provider.listing_note}</span>
         </p>
       )}
       {provider.model_note && (
@@ -657,8 +706,8 @@ function ProviderRow({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-caption text-content-tertiary">
                   {listing.models.length} models from {listing.source}, fetched{' '}
-                  {new Date(listing.fetched_at).toLocaleTimeString()} — press Use to make one the
-                  chat model
+                  {new Date(listing.fetched_at).toLocaleTimeString()}
+                  {listing.models.length > 0 ? ' — press Use to make one the chat model' : ''}
                 </span>
                 <Button
                   size="sm"

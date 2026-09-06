@@ -18,6 +18,8 @@ function provider(overrides: Partial<Provider> = {}): Provider {
     verified_at: '2026-09-05T00:00:00Z',
     listing: 'available',
     listing_note: '431 models listed',
+    key_proven: true,
+    verify_note: '431 models listed; the listing accepted the key',
     created_at: '2026-09-05T00:00:00Z',
     updated_at: '2026-09-05T00:00:00Z',
     ...overrides,
@@ -37,6 +39,8 @@ const OLLAMA = provider({
   verified_at: null,
   listing: 'unknown',
   listing_note: null,
+  key_proven: null,
+  verify_note: null,
 })
 
 const PRESETS: ProviderPreset[] = [
@@ -150,7 +154,7 @@ describe('ProvidersSection', () => {
   })
 
   it('adding from the OpenRouter preset sends the preset shape and shows the new row', async () => {
-    const { api } = renderSection()
+    const { api } = renderSection({ getProviders: vi.fn(async () => [OLLAMA]) })
     await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
     const form = screen.getByTestId('provider-form')
@@ -175,6 +179,7 @@ describe('ProvidersSection', () => {
 
   it('a refused verify shows the provider\'s reason and keeps the form open', async () => {
     const { api } = renderSection({
+      getProviders: vi.fn(async () => [OLLAMA]),
       createProvider: vi.fn(async () => {
         throw new Error("could not verify provider 'openrouter' — Invalid API key")
       }),
@@ -194,7 +199,7 @@ describe('ProvidersSection', () => {
   })
 
   it('a preset with a placeholder cannot be saved until it is filled', async () => {
-    renderSection()
+    renderSection({ getProviders: vi.fn(async () => [OLLAMA]) })
     await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
     const form = screen.getByTestId('provider-form')
@@ -338,38 +343,98 @@ describe('ProvidersSection — the local row writes a qualified id too', () => {
 
 
 describe('ProvidersSection — the owner can see the verdict and find the models', () => {
-  it('a verified row states when it was verified and what the gateway proved', async () => {
+  it('a proven key reads "Key verified <when> — <how>", green, from the structured verdict', async () => {
     renderSection({
       getProviders: vi.fn(async () => [
         OLLAMA,
         provider({
           verified_at: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
-          listing_note:
+          key_proven: true,
+          verify_note:
             '430 models listed; the listing is public, so the key was proven with a 1-token completion on x/y',
+          // The listing has since been re-fetched and its note rewritten —
+          // the verdict must not read from it.
+          listing_note: '430 models listed',
         }),
       ]),
     })
     await waitFor(() => expect(screen.getByTestId('provider-status-openrouter')).toBeTruthy())
-    const status = screen.getByTestId('provider-status-openrouter').textContent ?? ''
-    expect(status).toMatch(/^Verified /)
-    expect(status).toContain('430 models listed')
-    expect(status).toContain('key was proven')
+    const el = screen.getByTestId('provider-status-openrouter')
+    expect(el.textContent).toBe(
+      'Key verified 2m ago — 430 models listed; the listing is public, so the key was proven with a 1-token completion on x/y',
+    )
+    expect(el.className).toContain('text-success')
+    expect(el.className).not.toContain('amber')
     // The bundled row is never verified through the registry: no invented line.
     expect(screen.queryByTestId('provider-status-ollama')).toBeNull()
   })
 
-  it('an unproven key is flagged, not shown as a plain success', async () => {
+  it('an unproven key is amber on key_proven=false regardless of the wording', async () => {
     renderSection({
       getProviders: vi.fn(async () => [
-        provider({
-          listing_note:
-            '3 models listed; the listing is public and a 1-token test on m answered 402 (no credits) — the key is NOT proven; the first chat turn will tell',
-        }),
+        provider({ key_proven: false, verify_note: 'a 1-token test answered 402 (no credits)' }),
       ]),
     })
     await waitFor(() => expect(screen.getByTestId('provider-status-openrouter')).toBeTruthy())
-    expect(screen.getByTestId('provider-status-openrouter').textContent).toContain('NOT proven')
-    expect(screen.getByTestId('provider-status-openrouter').className).toContain('amber')
+    const el = screen.getByTestId('provider-status-openrouter')
+    expect(el.textContent).toContain('Checked')
+    expect(el.textContent).toContain('402')
+    expect(el.className).toContain('amber')
+    expect(el.className).not.toContain('text-success')
+  })
+
+  it('a row whose key was never tested says so and is neither green nor amber', async () => {
+    renderSection({
+      getProviders: vi.fn(async () => [
+        provider({ name: 'legacy', key_proven: null, verify_note: null }),
+        provider({
+          name: 'azure',
+          listing: 'unavailable',
+          key_proven: null,
+          verify_note: 'x/models answered 404 — the key was not tested; the first chat turn will tell',
+        }),
+      ]),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-status-legacy')).toBeTruthy())
+    expect(screen.getByTestId('provider-status-legacy').textContent).toContain('the key was not tested')
+    for (const name of ['legacy', 'azure']) {
+      const el = screen.getByTestId(`provider-status-${name}`)
+      expect(el.textContent.startsWith('Checked')).toBe(true)
+      expect(el.className).not.toContain('text-success')
+      expect(el.className).not.toContain('amber')
+    }
+  })
+
+  it('a refused listing is shown as a warning beside a still-true verdict', async () => {
+    renderSection({
+      getProviders: vi.fn(async () => [
+        provider({
+          listing: 'unknown',
+          listing_note: 'the last listing was refused (401): key revoked',
+          key_proven: true,
+        }),
+      ]),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-listing-warning-openrouter')).toBeTruthy())
+    expect(screen.getByTestId('provider-listing-warning-openrouter').textContent).toContain('key revoked')
+    expect(screen.getByTestId('provider-status-openrouter').className).toContain('text-success')
+  })
+
+  it('after a listing fetch the row re-reads its server state', async () => {
+    const before = provider({ listing: 'available', listing_note: '431 models listed' })
+    const after = provider({ listing: 'unknown', listing_note: 'the last listing was refused (401): revoked' })
+    const getProviders = vi.fn(async () => [OLLAMA, before])
+    const { api } = renderSection({
+      getProviders,
+      getProviderModels: vi.fn(async () => {
+        getProviders.mockImplementation(async () => [OLLAMA, after])
+        throw new Error('the last listing was refused (401): revoked')
+      }),
+    })
+    await waitFor(() => expect(screen.getByTestId('toggle-models-openrouter')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('toggle-models-openrouter'))
+    await waitFor(() => expect(screen.getByTestId('provider-listing-warning-openrouter')).toBeTruthy())
+    expect(api.getProviders).toHaveBeenCalledTimes(2)
   })
 
   it('every row carries an explicit Show models control that opens the list', async () => {
@@ -406,5 +471,34 @@ describe('ProvidersSection — the owner can see the verdict and find the models
     expect(api.getProviderModels).toHaveBeenCalledWith('openrouter')
     await waitFor(() => expect(screen.getByTestId('model-openai/gpt-x')).toBeTruthy())
     expect(screen.getByTestId('toggle-models-openrouter').getAttribute('aria-expanded')).toBe('true')
+    // The verdict shown is the server's returned row, not the draft.
+    expect(screen.getByTestId('provider-status-openrouter').textContent).toContain(
+      'the listing accepted the key',
+    )
+  })
+
+  it('the panel never says press Use when there is nothing to use', async () => {
+    renderSection({
+      getProviderModels: vi.fn(async () => ({ source: 'openrouter', fetched_at: '2026-09-05T12:00:00Z', models: [] })),
+    })
+    await waitFor(() => expect(screen.getByTestId('toggle-models-openrouter')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('toggle-models-openrouter'))
+    await waitFor(() => expect(screen.getByTestId('provider-models-openrouter')).toBeTruthy())
+    const panel = screen.getByTestId('provider-models-openrouter').textContent ?? ''
+    expect(panel).toContain('listed no models')
+    expect(panel).not.toContain('press Use')
+  })
+
+  it('an unlisted provider\'s open button says Hide, not Hide models', async () => {
+    renderSection({
+      getProviders: vi.fn(async () => [provider({ name: 'azure', listing: 'unavailable' })]),
+      getProviderModels: vi.fn(async () => {
+        throw new Error('no model listing; type a model id')
+      }),
+    })
+    await waitFor(() => expect(screen.getByTestId('toggle-models-azure')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('toggle-models-azure'))
+    await waitFor(() => expect(screen.getByLabelText('Model id for azure')).toBeTruthy())
+    expect(screen.getByTestId('toggle-models-azure').textContent).toBe('Hide')
   })
 })
