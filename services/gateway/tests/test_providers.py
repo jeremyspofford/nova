@@ -694,7 +694,20 @@ async def test_a_public_listing_does_not_prove_the_key_so_a_completion_does(
     401s (rail 5). The proof is a 1-token completion on the first listed
     model, through the same adapter a turn uses."""
     fake = FakeOpenAICompat(
-        models_body={"object": "list", "data": [{"id": "openai/gpt-x"}]},
+        models_body={
+            "object": "list",
+            "data": [
+                {
+                    "id": "openai/gpt-flagship",
+                    "pricing": {"prompt": "0.00001", "completion": "0.00005"},
+                },
+                {
+                    "id": "openai/gpt-x",
+                    "pricing": {"prompt": "0.0000001", "completion": "0.0000004"},
+                },
+                {"id": "unpriced/model"},
+            ],
+        },
         models_public=True,
         accepts_key="sk-or-right",
     )
@@ -717,6 +730,8 @@ async def test_a_public_listing_does_not_prove_the_key_so_a_completion_does(
     right = await client.post("/admin/providers", json={**body, "api_key": "sk-or-right"})
 
     assert right.status_code == 200, right.text
+    # The probe spends its token on the CHEAPEST priced model, not the first
+    # listed (OpenRouter lists its newest flagship first).
     assert "proven with a 1-token completion on openai/gpt-x" in right.json()["listing_note"]
     probe = [b for path, b in fake.seen if path == "/v1/chat/completions"][-1]
     assert probe["max_tokens"] == 1 and probe["model"] == "openai/gpt-x"

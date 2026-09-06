@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Check, Cloud, ExternalLink, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Cloud,
+  ExternalLink,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react'
+import { formatRelativeTime } from '../activity/activityFormat'
 import {
   Badge,
   Button,
@@ -142,6 +153,10 @@ export function ProvidersSection({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<Provider | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  // The row the owner just added opens on its own, models loaded — the
+  // verdict of the save and the list to pick from are the next thing they
+  // need, not a name to discover is clickable.
+  const [justCreated, setJustCreated] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoadError(null)
@@ -199,6 +214,7 @@ export function ProvidersSection({
         model_note: selectedPreset?.model_note,
       })
       setProviders(prev => [...(prev ?? []), created])
+      setJustCreated(created.name)
       setDraft(EMPTY_DRAFT)
       setAdding(false)
     } catch (err) {
@@ -265,6 +281,7 @@ export function ProvidersSection({
               onModelChanged={onModelChanged}
               onDelete={() => setPendingDelete(provider)}
               onMakeDefault={() => void makeDefault(provider)}
+              initiallyOpen={provider.name === justCreated}
             />
           ))}
         </div>
@@ -447,6 +464,7 @@ function ProviderRow({
   onModelChanged,
   onDelete,
   onMakeDefault,
+  initiallyOpen = false,
 }: {
   provider: Provider
   chatModel: string
@@ -454,11 +472,12 @@ function ProviderRow({
   onModelChanged: (model: string) => void
   onDelete: () => void
   onMakeDefault: () => void
+  initiallyOpen?: boolean
 }) {
   const [listing, setListing] = useState<ProviderListing | null>(null)
   const [listingError, setListingError] = useState<string | null>(null)
   const [loadingModels, setLoadingModels] = useState(false)
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(Boolean(initiallyOpen))
   const [filter, setFilter] = useState('')
   const [manualModel, setManualModel] = useState('')
   const [switching, setSwitching] = useState<string | null>(null)
@@ -482,6 +501,12 @@ function ProviderRow({
     setOpen(next)
     if (next && listing === null && !loadingModels) void loadModels()
   }
+
+  // A row that starts open (the one just created) fetches its list at once.
+  useEffect(() => {
+    if (initiallyOpen) void loadModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const use = async (modelId: string) => {
     // ALWAYS qualified — including the bundled ollama (`ollama:qwen3:8b`). A
@@ -514,14 +539,7 @@ function ProviderRow({
   return (
     <div className="rounded-md border border-line p-3" data-testid={`provider-${provider.name}`}>
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          className="text-compact font-medium text-content-primary hover:underline"
-          onClick={toggle}
-          aria-expanded={open}
-        >
-          {provider.name}
-        </button>
+        <span className="text-compact font-medium text-content-primary">{provider.name}</span>
         <Badge size="sm" color="neutral">
           {ADAPTER_LABELS[provider.adapter]}
         </Badge>
@@ -543,6 +561,19 @@ function ProviderRow({
           {provider.api_key ? ` ${provider.api_key}` : ''}
         </span>
         <span className="ml-auto flex items-center gap-1">
+          {/* THE affordance: the model list is what a provider is for, and
+              nothing else on this row says it exists. */}
+          <Button
+            size="sm"
+            variant={open ? 'ghost' : 'secondary'}
+            icon={open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            onClick={toggle}
+            aria-expanded={open}
+            aria-controls={`provider-models-${provider.name}`}
+            data-testid={`toggle-models-${provider.name}`}
+          >
+            {open ? 'Hide models' : provider.listing === 'unavailable' ? 'Pick a model' : 'Show models'}
+          </Button>
           {!provider.is_default && (
             <Button size="sm" variant="ghost" onClick={onMakeDefault}>
               Make default
@@ -561,12 +592,38 @@ function ProviderRow({
           )}
         </span>
       </div>
+      {/* The save's verdict, in the gateway's words — what the owner most
+          needs right after pasting a key: was it accepted, and how do we
+          know. Absent (not invented) for the bundled row, which is never
+          verified through the registry. */}
+      {provider.verified_at && (
+        <p
+          data-testid={`provider-status-${provider.name}`}
+          className={`mt-1.5 inline-flex items-start gap-1.5 text-caption ${
+            provider.listing_note?.includes('NOT proven') ? 'text-amber-600 dark:text-amber-400' : 'text-success'
+          }`}
+        >
+          {provider.listing_note?.includes('NOT proven') ? (
+            <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+          ) : (
+            <Check size={12} className="shrink-0 mt-0.5" />
+          )}
+          <span>
+            Verified {formatRelativeTime(provider.verified_at)}
+            {provider.listing_note ? ` — ${provider.listing_note}` : ''}
+          </span>
+        </p>
+      )}
       {provider.model_note && (
         <p className="mt-1 text-caption text-content-tertiary">{provider.model_note}</p>
       )}
 
       {open && (
-        <div className="mt-3 space-y-2" data-testid={`provider-models-${provider.name}`}>
+        <div
+          className="mt-3 space-y-2"
+          id={`provider-models-${provider.name}`}
+          data-testid={`provider-models-${provider.name}`}
+        >
           {switchError && (
             <div role="alert" className={bannerClass}>
               {switchError}
@@ -600,7 +657,8 @@ function ProviderRow({
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-caption text-content-tertiary">
                   {listing.models.length} models from {listing.source}, fetched{' '}
-                  {new Date(listing.fetched_at).toLocaleTimeString()}
+                  {new Date(listing.fetched_at).toLocaleTimeString()} — press Use to make one the
+                  chat model
                 </span>
                 <Button
                   size="sm"

@@ -116,6 +116,22 @@ def normalize_models(body: object, *, owned_by: str) -> list[dict]:
     return models
 
 
+def cheapest_model(models: list[dict]) -> str:
+    """The model id a key probe spends its one token on: the cheapest by the
+    provider's own stated prompt+completion price, else the first listed
+    (a listing with no prices gives nothing better to choose by). The first
+    listed on OpenRouter is its newest flagship — the wrong place to spend
+    even a token when the same list says which is cheapest."""
+    priced = [
+        (m["pricing"].get("prompt", 0.0) + m["pricing"].get("completion", 0.0), m["id"])
+        for m in models
+        if isinstance(m.get("pricing"), dict) and m.get("id")
+    ]
+    if priced:
+        return min(priced)[1]
+    return models[0]["id"]
+
+
 class OpenAIChat:
     name = "openai-chat"
 
@@ -197,7 +213,7 @@ class OpenAIChat:
             return VerifyResult(listing="available", note=note)
         if not await self._listing_is_public(app, row):
             return VerifyResult(listing="available", note=f"{note}; the listing accepted the key")
-        model = listing.models[0]["id"]
+        model = cheapest_model(listing.models)
         try:
             status, words = await self._key_probe(app, row, model)
         except ProviderRefused as exc:

@@ -33,6 +33,10 @@ const OLLAMA = provider({
   preset: null,
   builtin: true,
   is_default: true,
+  // Never verified through the registry — the gateway seeds it.
+  verified_at: null,
+  listing: 'unknown',
+  listing_note: null,
 })
 
 const PRESETS: ProviderPreset[] = [
@@ -208,7 +212,7 @@ describe('ProvidersSection', () => {
   it('opening a provider fetches its live listing, labelled, and Use switches the model', async () => {
     const { api, onModelChanged } = renderSection()
     await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
-    fireEvent.click(within(screen.getByTestId('provider-openrouter')).getByRole('button', { name: 'openrouter' }))
+    fireEvent.click(screen.getByTestId('toggle-models-openrouter'))
 
     await waitFor(() => expect(screen.getByTestId('model-anthropic/claude-sonnet-5')).toBeTruthy())
     expect(api.getProviderModels).toHaveBeenCalledWith('openrouter')
@@ -230,7 +234,7 @@ describe('ProvidersSection', () => {
   it('the current model is marked, not offered again', async () => {
     renderSection({}, 'openrouter:anthropic/claude-sonnet-5')
     await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
-    fireEvent.click(within(screen.getByTestId('provider-openrouter')).getByRole('button', { name: 'openrouter' }))
+    fireEvent.click(screen.getByTestId('toggle-models-openrouter'))
     await waitFor(() => expect(screen.getByTestId('model-anthropic/claude-sonnet-5')).toBeTruthy())
     const row = screen.getByTestId('model-anthropic/claude-sonnet-5')
     expect(row.textContent).toContain('current')
@@ -249,7 +253,7 @@ describe('ProvidersSection', () => {
     })
     await waitFor(() => expect(screen.getByTestId('provider-azure')).toBeTruthy())
     expect(screen.getByTestId('provider-azure').textContent).toContain('no model listing')
-    fireEvent.click(within(screen.getByTestId('provider-azure')).getByRole('button', { name: 'azure' }))
+    fireEvent.click(screen.getByTestId('toggle-models-azure'))
     await waitFor(() => expect(screen.getByLabelText('Model id for azure')).toBeTruthy())
     expect(screen.queryByText(/models from/)).toBeNull()
     fireEvent.change(screen.getByLabelText('Model id for azure'), { target: { value: 'gpt-5-deploy' } })
@@ -265,7 +269,7 @@ describe('ProvidersSection', () => {
       }),
     })
     await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
-    fireEvent.click(within(screen.getByTestId('provider-openrouter')).getByRole('button', { name: 'openrouter' }))
+    fireEvent.click(screen.getByTestId('toggle-models-openrouter'))
     await waitFor(() => expect(screen.getByTestId('model-openai/gpt-x')).toBeTruthy())
     fireEvent.click(within(screen.getByTestId('model-openai/gpt-x')).getByRole('button', { name: /use/i }))
     await waitFor(() => expect(api.putSetting).toHaveBeenCalled())
@@ -308,7 +312,7 @@ describe('ProvidersSection — the local row writes a qualified id too', () => {
       })),
     })
     await waitFor(() => expect(screen.getByTestId('provider-ollama')).toBeTruthy())
-    fireEvent.click(within(screen.getByTestId('provider-ollama')).getByRole('button', { name: 'ollama' }))
+    fireEvent.click(screen.getByTestId('toggle-models-ollama'))
     await waitFor(() => expect(screen.getByTestId('model-qwen3:14b')).toBeTruthy())
     fireEvent.click(within(screen.getByTestId('model-qwen3:14b')).getByRole('button', { name: /use/i }))
     await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'ollama:qwen3:14b'))
@@ -327,7 +331,80 @@ describe('ProvidersSection — the local row writes a qualified id too', () => {
       'qwen3:8b',
     )
     await waitFor(() => expect(screen.getByTestId('provider-ollama')).toBeTruthy())
-    fireEvent.click(within(screen.getByTestId('provider-ollama')).getByRole('button', { name: 'ollama' }))
+    fireEvent.click(screen.getByTestId('toggle-models-ollama'))
     await waitFor(() => expect(screen.getByTestId('model-qwen3:8b').textContent).toContain('current'))
+  })
+})
+
+
+describe('ProvidersSection — the owner can see the verdict and find the models', () => {
+  it('a verified row states when it was verified and what the gateway proved', async () => {
+    renderSection({
+      getProviders: vi.fn(async () => [
+        OLLAMA,
+        provider({
+          verified_at: new Date(Date.now() - 2 * 60 * 1000).toISOString(),
+          listing_note:
+            '430 models listed; the listing is public, so the key was proven with a 1-token completion on x/y',
+        }),
+      ]),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-status-openrouter')).toBeTruthy())
+    const status = screen.getByTestId('provider-status-openrouter').textContent ?? ''
+    expect(status).toMatch(/^Verified /)
+    expect(status).toContain('430 models listed')
+    expect(status).toContain('key was proven')
+    // The bundled row is never verified through the registry: no invented line.
+    expect(screen.queryByTestId('provider-status-ollama')).toBeNull()
+  })
+
+  it('an unproven key is flagged, not shown as a plain success', async () => {
+    renderSection({
+      getProviders: vi.fn(async () => [
+        provider({
+          listing_note:
+            '3 models listed; the listing is public and a 1-token test on m answered 402 (no credits) — the key is NOT proven; the first chat turn will tell',
+        }),
+      ]),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-status-openrouter')).toBeTruthy())
+    expect(screen.getByTestId('provider-status-openrouter').textContent).toContain('NOT proven')
+    expect(screen.getByTestId('provider-status-openrouter').className).toContain('amber')
+  })
+
+  it('every row carries an explicit Show models control that opens the list', async () => {
+    const { api } = renderSection()
+    await waitFor(() => expect(screen.getByTestId('toggle-models-openrouter')).toBeTruthy())
+    const toggle = screen.getByTestId('toggle-models-openrouter')
+    expect(toggle.textContent).toContain('Show models')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(screen.getByTestId('provider-models-openrouter')).toBeTruthy())
+    expect(api.getProviderModels).toHaveBeenCalledWith('openrouter')
+    expect(screen.getByTestId('toggle-models-openrouter').textContent).toContain('Hide models')
+    expect(screen.getByTestId('provider-models-openrouter').textContent).toContain('press Use')
+  })
+
+  it('a provider with no listing says Pick a model instead of Show models', async () => {
+    renderSection({
+      getProviders: vi.fn(async () => [provider({ name: 'azure', listing: 'unavailable' })]),
+    })
+    await waitFor(() => expect(screen.getByTestId('toggle-models-azure')).toBeTruthy())
+    expect(screen.getByTestId('toggle-models-azure').textContent).toContain('Pick a model')
+  })
+
+  it('the row just added opens itself with its models loaded', async () => {
+    const { api } = renderSection({
+      getProviders: vi.fn(async () => [OLLAMA]),
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    fireEvent.change(within(form).getByLabelText('API key'), { target: { value: 'sk-or-1' } })
+    fireEvent.submit(form)
+    await waitFor(() => expect(screen.getByTestId('provider-models-openrouter')).toBeTruthy())
+    expect(api.getProviderModels).toHaveBeenCalledWith('openrouter')
+    await waitFor(() => expect(screen.getByTestId('model-openai/gpt-x')).toBeTruthy())
+    expect(screen.getByTestId('toggle-models-openrouter').getAttribute('aria-expanded')).toBe('true')
   })
 })
