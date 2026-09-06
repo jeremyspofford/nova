@@ -224,27 +224,240 @@ class FakeOpenAICompat:
     completions_body: dict = field(
         default_factory=lambda: {"choices": [{"message": {"content": "ok"}}]}
     )
+    deltas: tuple[str, ...] = ("ok",)
     seen_auth: list[str | None] = field(default_factory=list)
+    seen_headers: list[dict] = field(default_factory=list)
     seen: list[tuple[str, dict | None]] = field(default_factory=list)
+    # The URL prefix the fake serves under — `/v1` for most providers,
+    # `/openai/v1` for an Azure- or Bedrock-shaped one.
+    prefix: str = "/v1"
 
     def __post_init__(self) -> None:
         self.app = Starlette(
             routes=[
-                Route("/v1/models", self._models, methods=["GET"]),
-                Route("/v1/chat/completions", self._completions, methods=["POST"]),
+                Route(f"{self.prefix}/models", self._models, methods=["GET"]),
+                Route(f"{self.prefix}/chat/completions", self._completions, methods=["POST"]),
             ]
         )
 
-    async def _models(self, request):
+    def _note(self, request) -> None:
         self.seen_auth.append(request.headers.get("authorization"))
+        self.seen_headers.append({k.lower(): v for k, v in request.headers.items()})
+
+    async def _models(self, request):
+        self._note(request)
         self.seen.append((request.url.path, None))
         return JSONResponse(self.models_body, status_code=self.models_status)
 
     async def _completions(self, request):
         raw = await request.body()
         body = json.loads(raw) if raw else None
-        self.seen_auth.append(request.headers.get("authorization"))
+        self._note(request)
         self.seen.append((request.url.path, body))
         if self.completions_status != 200:
             return JSONResponse({"error": "refused"}, status_code=self.completions_status)
-        return JSONResponse(self.completions_body)
+        if not (body or {}).get("stream"):
+            return JSONResponse(self.completions_body)
+
+        async def stream():
+            for delta in self.deltas:
+                yield _sse({"choices": [{"delta": {"content": delta}}]})
+            yield "data: [DONE]\n\n"
+
+        return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+def _anthropic_sse(event: dict) -> str:
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+
+
+@dataclass
+class FakeAnthropic:
+    """Stands in for api.anthropic.com: POST /v1/messages (streamed with the
+    documented event sequence, or a whole message) and GET /v1/models
+    (paged). `blocks` is the content the fake "generates": a str is a text
+    block, a dict {name, input} is a tool_use block. Every request's
+    headers and body are recorded for the tests to read back."""
+
+    blocks: tuple = ("Hello",)
+    stop_reason: str = "end_turn"
+    input_tokens: int = 25
+    output_tokens: int = 12
+    status: int = 200
+    error_body: dict | None = None
+    # Emit an in-stream `error` event after this many blocks (None: never).
+    error_after: int | None = None
+    # End the stream WITHOUT message_stop (a dropped upstream).
+    truncate: bool = False
+    models: tuple[str, ...] = ("claude-opus-5", "claude-sonnet-5")
+    models_status: int = 200
+    page_size: int = 1000
+    seen: list[tuple[str, dict | None]] = field(default_factory=list)
+    seen_headers: list[dict] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.app = Starlette(
+            routes=[
+                Route("/v1/messages", self._messages, methods=["POST"]),
+                Route("/v1/models", self._models, methods=["GET"]),
+            ]
+        )
+
+    async def _record(self, request) -> dict | None:
+        raw = await request.body()
+        body = json.loads(raw) if raw else None
+        self.seen.append((request.url.path, body))
+        self.seen_headers.append({k.lower(): v for k, v in request.headers.items()})
+        return body
+
+    def _content_blocks(self) -> list[dict]:
+        out = []
+        for index, block in enumerate(self.blocks):
+            if isinstance(block, str):
+                out.append({"type": "text", "text": block})
+            else:
+                out.append(
+                    {
+                        "type": "tool_use",
+                        "id": f"toolu_{index:02d}",
+                        "name": block["name"],
+                        "input": block.get("input", {}),
+                    }
+                )
+        return out
+
+    async def _messages(self, request):
+        body = await self._record(request)
+        if self.status != 200:
+            return JSONResponse(
+                self.error_body
+                or {"type": "error", "error": {"type": "invalid_request_error", "message": "nope"}},
+                status_code=self.status,
+            )
+        model = (body or {}).get("model", "claude-fake")
+        if not (body or {}).get("stream"):
+            return JSONResponse(
+                {
+                    "id": "msg_fake",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": self._content_blocks(),
+                    "stop_reason": self.stop_reason,
+                    "stop_sequence": None,
+                    "usage": {
+                        "input_tokens": self.input_tokens,
+                        "output_tokens": self.output_tokens,
+                    },
+                }
+            )
+
+        async def stream():
+            yield _anthropic_sse(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": "msg_fake",
+                        "type": "message",
+                        "role": "assistant",
+                        "model": model,
+                        "content": [],
+                        "stop_reason": None,
+                        "usage": {"input_tokens": self.input_tokens, "output_tokens": 1},
+                    },
+                }
+            )
+            yield "event: ping\ndata: {\"type\": \"ping\"}\n\n"
+            for index, block in enumerate(self._content_blocks()):
+                if self.error_after is not None and index == self.error_after:
+                    yield _anthropic_sse(
+                        {
+                            "type": "error",
+                            "error": {"type": "overloaded_error", "message": "Overloaded"},
+                        }
+                    )
+                    return
+                if block["type"] == "text":
+                    yield _anthropic_sse(
+                        {
+                            "type": "content_block_start",
+                            "index": index,
+                            "content_block": {"type": "text", "text": ""},
+                        }
+                    )
+                    text = block["text"]
+                    for piece in (text[: len(text) // 2], text[len(text) // 2 :]):
+                        if piece:
+                            yield _anthropic_sse(
+                                {
+                                    "type": "content_block_delta",
+                                    "index": index,
+                                    "delta": {"type": "text_delta", "text": piece},
+                                }
+                            )
+                else:
+                    yield _anthropic_sse(
+                        {
+                            "type": "content_block_start",
+                            "index": index,
+                            "content_block": {
+                                "type": "tool_use",
+                                "id": block["id"],
+                                "name": block["name"],
+                                "input": {},
+                            },
+                        }
+                    )
+                    payload = json.dumps(block["input"])
+                    yield _anthropic_sse(
+                        {
+                            "type": "content_block_delta",
+                            "index": index,
+                            "delta": {"type": "input_json_delta", "partial_json": ""},
+                        }
+                    )
+                    for piece in (payload[: len(payload) // 2], payload[len(payload) // 2 :]):
+                        yield _anthropic_sse(
+                            {
+                                "type": "content_block_delta",
+                                "index": index,
+                                "delta": {"type": "input_json_delta", "partial_json": piece},
+                            }
+                        )
+                yield _anthropic_sse({"type": "content_block_stop", "index": index})
+            if self.truncate:
+                return
+            yield _anthropic_sse(
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": self.stop_reason, "stop_sequence": None},
+                    "usage": {"output_tokens": self.output_tokens},
+                }
+            )
+            yield _anthropic_sse({"type": "message_stop"})
+
+        return StreamingResponse(stream(), media_type="text/event-stream")
+
+    async def _models(self, request):
+        await self._record(request)
+        if self.models_status != 200:
+            return JSONResponse(
+                {
+                    "type": "error",
+                    "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+                },
+                status_code=self.models_status,
+            )
+        after = request.query_params.get("after_id")
+        ids = list(self.models)
+        start = ids.index(after) + 1 if after in ids else 0
+        page = ids[start : start + self.page_size]
+        has_more = start + self.page_size < len(ids)
+        return JSONResponse(
+            {
+                "data": [{"type": "model", "id": m, "display_name": m.title()} for m in page],
+                "has_more": has_more,
+                "first_id": page[0] if page else None,
+                "last_id": page[-1] if page else None,
+            }
+        )

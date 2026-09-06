@@ -1,116 +1,87 @@
-"""Resolves the single active backend and talks to it.
+"""The S1 "single backend" surface, kept as a VIEW over the provider registry.
 
-One row, one active backend (`kind` in ollama/remote/cloud) — S1 has no
-routing intelligence, so everything in this module answers "what one URL
-do we call, with what auth" and nothing more. Adding real routing (mode
-switch, hybrid escalation) is explicitly later work per the slice plan.
-
-Anthropic-native calls are also explicitly LATER work: S1's "cloud" kind
-means any OpenAI-compatible endpoint reached at {url}/v1/..., not a
-provider-specific adapter.
+`PUT /admin/backend` (the wizard's engine step) still takes S1's
+{kind: ollama|remote|cloud, url, provider, model, api_key} and
+`GET /admin/backend` still answers in that shape — but the truth underneath
+is `providers` (S10-pre): the kind is DERIVED from the default provider's
+row, and saving a kind upserts a provider row and makes it the default.
+Nothing here is a second store. The names below are the ones admin.py and
+the probe path call; the registry itself lives in app/providers.py.
 """
 from __future__ import annotations
 
-import os
-
 import asyncpg
-import httpx
 from fastapi import HTTPException
 
-KINDS = ("ollama", "remote", "cloud")
+from app import providers
+from app.adapters import ProviderRefused, for_row, http_client, reason  # re-exported
 
-_COLUMNS = "id, kind, url, provider, model, api_key, updated_at"
+KINDS = ("ollama", "remote", "cloud")
 
 
 class VerificationFailed(RuntimeError):
     """The backend did not answer a liveness check — the reason is the message."""
 
 
-def reason(exc: Exception) -> str:
-    """A short, honest description of why an outbound call failed."""
-    text = str(exc).strip()
-    return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+mask_api_key = providers.mask_api_key
 
 
-def _merge_headers_case_insensitively(
-    default: dict[str, str], override: dict[str, str] | None
-) -> dict[str, str]:
-    """`override` replaces `default` by header NAME, ignoring case — a plain
-    dict spread (`{**default, **override}`) is case-sensitive, so a caller
-    header spelled with different casing than a default rides alongside it
-    as a second header instead of genuinely overriding it."""
-    merged = dict(default)
-    for key, value in (override or {}).items():
-        for existing in [k for k in merged if k.lower() == key.lower()]:
-            del merged[existing]
-        merged[key] = value
-    return merged
+def kind_of(row: dict) -> str:
+    """S1's kind, derived from the row: the builtin ollama is `ollama`; an
+    OpenAI-shaped endpoint with no auth is `remote`; anything with a key is
+    `cloud`."""
+    if row["adapter"] == "ollama":
+        return "ollama"
+    if row.get("auth_shape") == "none":
+        return "remote"
+    return "cloud"
 
 
-def http_client(
-    app, timeout: httpx.Timeout, *, base_url: str, headers: dict[str, str] | None = None
-) -> httpx.AsyncClient:
-    """An httpx client for `base_url`.
-
-    Mirrors core's peers.client(): tests mount a local ASGI fake on
-    app.state.peer_transports keyed by base_url, so the exact client code
-    under test (headers, streaming, error handling) runs against it with
-    no socket anywhere. Nothing mounted means a real network transport.
-
-    Every call also declares Accept-Encoding: identity, overriding httpx's
-    own default ("gzip, deflate", sent unless told otherwise). data_plane.py
-    relays every byte a backend sends back completely as-is (aiter_raw())
-    and, on the branches where it cannot safely promise a caller-facing
-    Content-Encoding travels with them intact, drops that header rather
-    than trust it (see data_plane._STREAMING_EXCLUDE /
-    _BUFFERED_EXCLUDE) — both are only true at once if the backend is
-    never asked to compress the response in the first place. Without this,
-    a compressing backend's reply relays as still-compressed bytes with no
-    header saying so: core reads it line-by-line expecting SSE text, finds
-    none, and a real turn silently persists an empty assistant reply.
-    """
-    transports = getattr(app.state, "peer_transports", {})
-    merged_headers = _merge_headers_case_insensitively({"Accept-Encoding": "identity"}, headers)
-    return httpx.AsyncClient(
-        base_url=base_url,
-        timeout=timeout,
-        transport=transports.get(base_url),
-        headers=merged_headers,
-    )
+def _origin(base_url: str) -> str:
+    """S1 stored the ORIGIN and appended `/v1` itself; registry base URLs
+    include the version path. The legacy view hands back the origin so the
+    wizard sees what it typed and the probe path's `{url}/v1/...` joins
+    stay right."""
+    url = base_url.rstrip("/")
+    return url[: -len("/v1")] if url.endswith("/v1") else url
 
 
-def resolve_base_url(row: dict) -> str:
-    """Where to send this backend's calls.
-
-    ollama always resolves to the live OLLAMA_URL, never the stored
-    column — the bundled sidecar's address is a fact of this host's
-    compose file, not something a stale row should override.
-    """
-    if row["kind"] == "ollama":
-        return os.environ.get("OLLAMA_URL", "").rstrip("/")
-    return (row.get("url") or "").rstrip("/")
-
-
-def auth_headers(row: dict) -> dict[str, str]:
-    """Only cloud carries credentials — ollama and remote are unauthenticated
-    in S1 (remote has no api_key column at all)."""
-    if row["kind"] == "cloud" and row.get("api_key"):
-        return {"Authorization": f"Bearer {row['api_key']}"}
-    return {}
+def legacy_view(row: dict) -> dict:
+    """The default provider row in the S1 backend_config shape (unmasked —
+    callers that go over the wire use to_public)."""
+    return {
+        "kind": kind_of(row),
+        "url": _origin(providers.base_url_of(row)),
+        "provider": None if row["adapter"] == "ollama" else row["name"],
+        "model": row.get("default_model"),
+        "api_key": row.get("api_key"),
+        "adapter": row["adapter"],
+        "name": row["name"],
+        "updated_at": row.get("updated_at"),
+    }
 
 
-def mask_api_key(key: str | None) -> str | None:
-    if not key:
-        return None
-    tail = key[-4:] if len(key) >= 4 else key
-    return f"•••{tail}"
-
-
-def to_public(row: dict) -> dict:
-    """`row`, safe to return over the wire — the key is never unmasked."""
-    public = dict(row)
+def to_public(view: dict) -> dict:
+    public = dict(view)
     public["api_key"] = mask_api_key(public.get("api_key"))
+    stamp = public.get("updated_at")
+    if stamp is not None and not isinstance(stamp, str):
+        public["updated_at"] = stamp.isoformat()
     return public
+
+
+def resolve_base_url(view: dict) -> str:
+    """Where the default backend's calls go — the ollama kind always resolves
+    to the live OLLAMA_URL (never a stored column)."""
+    if view["kind"] == "ollama":
+        return providers.base_url_of({"adapter": "ollama"})
+    return (view.get("url") or "").rstrip("/")
+
+
+def auth_headers(view: dict) -> dict[str, str]:
+    if view["kind"] == "cloud" and view.get("api_key"):
+        return {"Authorization": f"Bearer {view['api_key']}"}
+    return {}
 
 
 def validate_shape(payload: dict) -> None:
@@ -130,76 +101,100 @@ def validate_shape(payload: dict) -> None:
             raise HTTPException(status_code=400, detail="model is required for kind=cloud")
 
 
+def _slug_for(payload: dict) -> str:
+    kind = payload["kind"]
+    if kind == "ollama":
+        return "ollama"
+    if kind == "remote":
+        return "remote"
+    raw = (payload.get("provider") or "cloud").strip().lower()
+    slug = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in raw).strip("-_")
+    if not slug or slug == "ollama" or not providers.NAME_RE.match(slug):
+        slug = "cloud"
+    return slug
+
+
+def _row_for(payload: dict) -> dict:
+    """The provider row an S1 payload describes. S1 URLs are the ORIGIN
+    (`https://host`); registry base URLs include the version path, the
+    OPENAI_BASE_URL convention — so `/v1` is appended, exactly as the
+    migration did for the row it converted."""
+    kind = payload["kind"]
+    if kind == "ollama":
+        return {"adapter": "ollama", "base_url": "", "auth_shape": "none", "name": "ollama"}
+    url = payload["url"].rstrip("/")
+    if not url.endswith("/v1"):
+        url = f"{url}/v1"
+    return {
+        "name": _slug_for(payload),
+        "adapter": "openai-chat",
+        "base_url": url,
+        "auth_shape": "static-bearer" if kind == "cloud" else "none",
+        "api_key": payload.get("api_key") if kind == "cloud" else None,
+        "default_model": payload.get("model"),
+    }
+
+
 async def verify_live(app, payload: dict) -> None:
     """Raises VerificationFailed with a stated reason if the backend named
-    in `payload` cannot be reached right now.
-
-    Called before saving, never after — a config that fails this check
-    never lands (PUT /admin/backend's contract).
-    """
-    kind = payload["kind"]
-    timeout = httpx.Timeout(5.0)
-    headers: dict[str, str] = {}
-    if kind == "ollama":
-        url = os.environ.get("OLLAMA_URL", "").rstrip("/")
-        if not url:
-            raise VerificationFailed("OLLAMA_URL is unset — cannot verify the ollama backend")
-        path = "/api/version"
-    elif kind == "remote":
-        url = payload["url"].rstrip("/")
-        path = "/v1/models"
-    else:
-        url = payload["url"].rstrip("/")
-        path = "/v1/models"
-        headers = {"Authorization": f"Bearer {payload['api_key']}"}
-
-    client = http_client(app, timeout, base_url=url, headers=headers)
+    in `payload` cannot be reached right now. Called before saving, never
+    after — a config that fails this check never lands."""
+    row = _row_for(payload)
     try:
-        async with client as c:
-            resp = await c.get(path)
-            resp.raise_for_status()
-    except httpx.HTTPError as exc:
+        await for_row(row).verify(app, row)
+    except ProviderRefused as exc:
         raise VerificationFailed(
-            f"could not verify the {kind} backend is live — {reason(exc)}"
+            f"could not verify the {payload['kind']} backend is live — {exc.detail}"
         ) from exc
 
 
 async def read_config(pool: asyncpg.Pool) -> dict:
-    """The active backend row — self-healing: if startup's ensure_default_row
-    never ran (or the row was somehow lost), this creates it rather than
-    surfacing a bug that looks like a missing backend."""
-    row = await pool.fetchrow(f"SELECT {_COLUMNS} FROM backend_config WHERE id = 1")
-    if row is None:
-        await ensure_default_row(pool)
-        row = await pool.fetchrow(f"SELECT {_COLUMNS} FROM backend_config WHERE id = 1")
-    return dict(row)
+    """The active backend in S1's shape, derived from the default provider."""
+    return legacy_view(await providers.default_row(pool))
 
 
 async def save_config(pool: asyncpg.Pool, payload: dict) -> dict:
-    row = await pool.fetchrow(
-        f"INSERT INTO backend_config (id, kind, url, provider, model, api_key, updated_at) "
-        f"VALUES (1, $1, $2, $3, $4, $5, now()) "
-        f"ON CONFLICT (id) DO UPDATE SET "
-        f"kind = EXCLUDED.kind, url = EXCLUDED.url, provider = EXCLUDED.provider, "
-        f"model = EXCLUDED.model, api_key = EXCLUDED.api_key, updated_at = now() "
-        f"RETURNING {_COLUMNS}",
-        payload["kind"],
-        payload.get("url"),
-        payload.get("provider"),
-        payload.get("model"),
-        payload.get("api_key"),
-    )
-    return dict(row)
+    """Upsert the provider row an S1 payload describes and make it the
+    default. Returns the legacy view of what is now active."""
+    row = _row_for(payload)
+    name = row["name"]
+    if name == "ollama":
+        await providers.ensure_builtin(pool)
+        await providers.set_default_model(pool, "ollama", payload.get("model"))
+    else:
+        try:
+            existing = await providers.get_row(pool, name)
+        except providers.UnknownProvider:
+            existing = None
+        shape = providers.validate_shape(row, existing=existing)
+        if existing is None:
+            await providers.insert_row(pool, name, shape)
+        else:
+            await providers.update_row(pool, name, shape)
+    active = await providers.set_default(pool, name)
+    return legacy_view(active)
 
 
 async def ensure_default_row(pool: asyncpg.Pool) -> None:
-    """The startup default: bundled ollama, at whatever OLLAMA_URL says.
+    """The startup seed, S1's name kept: the bundled ollama row exists and
+    something is the default."""
+    await providers.ensure_builtin(pool)
 
-    ON CONFLICT DO NOTHING, so this is a no-op every startup after an owner
-    has chosen a backend through PUT /admin/backend.
-    """
-    await pool.execute(
-        "INSERT INTO backend_config (id, kind, url) VALUES (1, 'ollama', $1) "
-        "ON CONFLICT (id) DO NOTHING",
-        os.environ.get("OLLAMA_URL", ""),
-    )
+
+__all__ = [
+    "KINDS",
+    "VerificationFailed",
+    "auth_headers",
+    "ensure_default_row",
+    "http_client",
+    "kind_of",
+    "legacy_view",
+    "mask_api_key",
+    "read_config",
+    "reason",
+    "resolve_base_url",
+    "save_config",
+    "to_public",
+    "validate_shape",
+    "verify_live",
+]

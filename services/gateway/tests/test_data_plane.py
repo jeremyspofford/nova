@@ -135,7 +135,11 @@ async def test_models_ollama_shape_is_mapped_to_openai_list(
     assert all(m["object"] == "model" for m in body["data"])
 
 
-async def test_models_remote_is_passthrough_verbatim(client, pool, mount_backend):
+async def test_models_remote_is_the_one_labelled_listing_shape(client, pool, mount_backend):
+    """S10-pre: every provider answers GET /v1/models in ONE shape — OpenAI's
+    list, each row naming who owns it, and the listing naming its source and
+    fetch time (never an unlabelled number). A remote row's own ids ride
+    through untouched."""
     fake = FakeOpenAICompat(models_body={"object": "list", "data": [{"id": "gpt-remote"}]})
     mount_backend("http://remote.test", fake.app)
     await backends.save_config(pool, {"kind": "remote", "url": "http://remote.test"})
@@ -143,7 +147,13 @@ async def test_models_remote_is_passthrough_verbatim(client, pool, mount_backend
     resp = await client.get("/v1/models")
 
     assert resp.status_code == 200
-    assert resp.json() == {"object": "list", "data": [{"id": "gpt-remote"}]}
+    body = resp.json()
+    assert body["object"] == "list"
+    assert body["source"] == "remote"
+    assert body["fetched_at"]
+    assert body["data"] == [
+        {"object": "model", "created": 0, "id": "gpt-remote", "owned_by": "remote"}
+    ]
     assert fake.seen_auth == [None]
 
 

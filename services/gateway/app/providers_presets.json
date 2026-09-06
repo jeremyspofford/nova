@@ -1,0 +1,147 @@
+[
+  {
+    "name": "openrouter",
+    "label": "OpenRouter",
+    "adapter": "openai-chat",
+    "base_url": "https://openrouter.ai/api/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://openrouter.ai/docs/quickstart",
+    "model_note": "Model ids are `vendor/model`, e.g. anthropic/claude-sonnet-5. One key reaches every vendor OpenRouter carries.",
+    "quirks": "The model list is public and includes per-token pricing and context length."
+  },
+  {
+    "name": "openai",
+    "label": "OpenAI",
+    "adapter": "openai-chat",
+    "base_url": "https://api.openai.com/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://platform.openai.com/docs/api-reference/chat",
+    "model_note": "Model ids as listed by /models.",
+    "quirks": "Nova targets Chat Completions, not the Responses API."
+  },
+  {
+    "name": "anthropic",
+    "label": "Anthropic",
+    "adapter": "anthropic-messages",
+    "base_url": "https://api.anthropic.com",
+    "auth_shape": "api-key-header",
+    "docs_url": "https://platform.claude.com/docs/en/api/messages",
+    "model_note": "Model ids as listed by /v1/models, e.g. claude-opus-5.",
+    "quirks": "Uses the native Messages API (Anthropic states its OpenAI-compatible layer is not production-ready)."
+  },
+  {
+    "name": "groq",
+    "label": "Groq",
+    "adapter": "openai-chat",
+    "base_url": "https://api.groq.com/openai/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://console.groq.com/docs/openai",
+    "model_note": "Model ids as listed by /models."
+  },
+  {
+    "name": "cerebras",
+    "label": "Cerebras",
+    "adapter": "openai-chat",
+    "base_url": "https://api.cerebras.ai/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://inference-docs.cerebras.ai/",
+    "model_note": "Model ids as listed by /models."
+  },
+  {
+    "name": "xai",
+    "label": "xAI (Grok)",
+    "adapter": "openai-chat",
+    "base_url": "https://api.x.ai/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://docs.x.ai/docs/overview",
+    "model_note": "Model ids as listed by /models."
+  },
+  {
+    "name": "mistral",
+    "label": "Mistral",
+    "adapter": "openai-chat",
+    "base_url": "https://api.mistral.ai/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://docs.mistral.ai/api/",
+    "model_note": "Model ids as listed by /models."
+  },
+  {
+    "name": "deepseek",
+    "label": "DeepSeek",
+    "adapter": "openai-chat",
+    "base_url": "https://api.deepseek.com/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://api-docs.deepseek.com/",
+    "model_note": "Model ids as listed by /models."
+  },
+  {
+    "name": "together",
+    "label": "Together",
+    "adapter": "openai-chat",
+    "base_url": "https://api.together.xyz/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://docs.together.ai/docs/openai-api-compatibility",
+    "model_note": "Model ids are namespaced paths, e.g. meta-llama/Llama-3.3-70B-Instruct-Turbo."
+  },
+  {
+    "name": "fireworks",
+    "label": "Fireworks",
+    "adapter": "openai-chat",
+    "base_url": "https://api.fireworks.ai/inference/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://docs.fireworks.ai/api-reference/introduction",
+    "model_note": "Model ids are namespaced paths, e.g. accounts/fireworks/models/llama-v3p3-70b-instruct."
+  },
+  {
+    "name": "dashscope-intl",
+    "label": "Qwen / DashScope (international)",
+    "adapter": "openai-chat",
+    "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope",
+    "model_note": "Model ids as listed by /models, e.g. qwen-plus.",
+    "quirks": "Keys are region-locked: an international key does not work on the China endpoint and vice versa."
+  },
+  {
+    "name": "dashscope-cn",
+    "label": "Qwen / DashScope (China)",
+    "adapter": "openai-chat",
+    "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope",
+    "model_note": "Model ids as listed by /models, e.g. qwen-plus.",
+    "quirks": "Keys are region-locked."
+  },
+  {
+    "name": "gemini",
+    "label": "Google Gemini (OpenAI-compatible)",
+    "adapter": "openai-chat",
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://ai.google.dev/gemini-api/docs/openai",
+    "model_note": "Model ids as listed by /models.",
+    "quirks": "Google states its OpenAI-compatible layer is in beta."
+  },
+  {
+    "name": "azure-openai",
+    "label": "Azure OpenAI (v1 API)",
+    "adapter": "openai-chat",
+    "base_url": "https://{resource}.openai.azure.com/openai/v1",
+    "auth_shape": "api-key-header",
+    "docs_url": "https://learn.microsoft.com/azure/foundry/openai/api-version-lifecycle",
+    "model_note": "The model id is your DEPLOYMENT name. The v1 API needs no api-version.",
+    "quirks": "Fill in {resource}. If /models is unavailable on your resource, type the deployment name by hand.",
+    "placeholders": ["resource"]
+  },
+  {
+    "name": "bedrock",
+    "label": "AWS Bedrock",
+    "adapter": "openai-chat",
+    "base_url": "https://bedrock-runtime.{region}.amazonaws.com/openai/v1",
+    "auth_shape": "static-bearer",
+    "docs_url": "https://docs.aws.amazon.com/bedrock/latest/userguide/inference-chat-completions-mantle.html",
+    "model_note": "The key is a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK). Model ids carry a vendor prefix, e.g. openai.gpt-oss-120b.",
+    "quirks": "Fill in {region}, e.g. us-east-1.",
+    "placeholders": ["region"]
+  }
+]
