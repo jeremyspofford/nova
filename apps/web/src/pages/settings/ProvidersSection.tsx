@@ -661,7 +661,7 @@ function ProviderRow({
             provider.key_proven === true
               ? 'text-success'
               : provider.key_proven === false
-                ? 'text-amber-600 dark:text-amber-400'
+                ? 'text-warning'
                 : 'text-content-tertiary'
           }`}
         >
@@ -683,7 +683,7 @@ function ProviderRow({
       {provider.listing === 'unknown' && provider.listing_note && (
         <p
           data-testid={`provider-listing-warning-${provider.name}`}
-          className="mt-1 inline-flex items-start gap-1.5 text-caption text-amber-600 dark:text-amber-400"
+          className="mt-1 inline-flex items-start gap-1.5 text-caption text-warning"
         >
           <AlertTriangle size={12} className="shrink-0 mt-0.5" />
           <span>{provider.listing_note}</span>

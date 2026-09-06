@@ -385,7 +385,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
                 data-basis={chip.basis}
                 className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
                   chip.basis === 'inferred'
-                    ? 'border border-dashed border-amber-500 text-amber-700 dark:text-amber-400'
+                    ? 'border border-dashed border-warning text-warning'
                     : 'bg-success-dim text-emerald-700 dark:text-emerald-400'
                 }`}
               >
@@ -412,7 +412,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
                 data-basis={fact.basis}
                 className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
                   fact.basis === 'inferred'
-                    ? 'border border-dashed border-amber-500 text-amber-700 dark:text-amber-400'
+                    ? 'border border-dashed border-warning text-warning'
                     : fact.basis === 'measured'
                       ? 'bg-info-dim text-blue-700 dark:text-blue-400'
                       : 'bg-neutral-200/60 text-neutral-700 dark:bg-neutral-700/60 dark:text-neutral-300'
