@@ -28,6 +28,7 @@ import {
   getProviders as apiGetProviders,
   makeDefaultProvider as apiMakeDefaultProvider,
   putSetting as apiPutSetting,
+  updateProvider as apiUpdateProvider,
   type Provider,
   type ProviderAdapter,
   type ProviderAuthShape,
@@ -57,6 +58,7 @@ interface ProvidersApi {
   getProviders: typeof apiGetProviders
   getProviderPresets: typeof apiGetProviderPresets
   createProvider: typeof apiCreateProvider
+  updateProvider: typeof apiUpdateProvider
   deleteProvider: typeof apiDeleteProvider
   makeDefaultProvider: typeof apiMakeDefaultProvider
   getProviderModels: typeof apiGetProviderModels
@@ -67,6 +69,7 @@ const DEFAULT_API: ProvidersApi = {
   getProviders: apiGetProviders,
   getProviderPresets: apiGetProviderPresets,
   createProvider: apiCreateProvider,
+  updateProvider: apiUpdateProvider,
   deleteProvider: apiDeleteProvider,
   makeDefaultProvider: apiMakeDefaultProvider,
   getProviderModels: apiGetProviderModels,
@@ -252,6 +255,19 @@ export function ProvidersSection({
     }
   }
 
+  /** Re-run verify-before-save on a row as it is (an empty update): the
+   * gateway re-proves the key and stores a fresh verdict. What a row saved
+   * before the verdict existed needs, and what a doubtful owner can press. */
+  const reverify = async (provider: Provider) => {
+    setActionError(null)
+    try {
+      const fresh = await api.updateProvider(provider.name, {})
+      setProviders(prev => (prev ?? []).map(p => (p.name === fresh.name ? fresh : p)))
+    } catch (err) {
+      setActionError(`could not re-verify ${provider.name} — ${reasonOf(err)}`)
+    }
+  }
+
   const makeDefault = async (provider: Provider) => {
     setActionError(null)
     try {
@@ -295,6 +311,7 @@ export function ProvidersSection({
               onModelChanged={onModelChanged}
               onDelete={() => setPendingDelete(provider)}
               onMakeDefault={() => void makeDefault(provider)}
+              onReverify={() => void reverify(provider)}
               onListingFetched={() => void refreshRow(provider.name)}
               initiallyOpen={provider.name === justCreated}
             />
@@ -479,6 +496,7 @@ function ProviderRow({
   onModelChanged,
   onDelete,
   onMakeDefault,
+  onReverify,
   onListingFetched,
   initiallyOpen = false,
 }: {
@@ -488,6 +506,7 @@ function ProviderRow({
   onModelChanged: (model: string) => void
   onDelete: () => void
   onMakeDefault: () => void
+  onReverify: () => void
   onListingFetched: () => void
   initiallyOpen?: boolean
 }) {
@@ -600,6 +619,18 @@ function ProviderRow({
                 ? 'Pick a model'
                 : 'Show models'}
           </Button>
+          {!provider.builtin && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<RefreshCw size={11} />}
+              onClick={onReverify}
+              aria-label={`re-verify ${provider.name}`}
+              title="Ask the gateway to prove the key again and record what it found"
+            >
+              Re-verify
+            </Button>
+          )}
           {!provider.is_default && (
             <Button size="sm" variant="ghost" onClick={onMakeDefault}>
               Make default

@@ -390,6 +390,14 @@ async def test_update_keeps_the_key_when_omitted_and_reverifies(client, pool, mo
     # Re-verified with the stored key (once at create, once now).
     assert fake.seen_auth.count(f"Bearer {SECRET}") == 2
 
+    # An EMPTY update is the page's Re-verify: nothing changes but the
+    # verdict, which is re-proven and re-stored.
+    empty = await client.put("/admin/providers/openrouter", json={})
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["key_proven"] is True
+    assert "accepted the key" in empty.json()["verify_note"]
+    assert fake.seen_auth.count(f"Bearer {SECRET}") == 3
+
 
 async def test_api_key_header_shape_sends_azures_header_not_a_bearer(client, mount_backend):
     fake = FakeOpenAICompat(

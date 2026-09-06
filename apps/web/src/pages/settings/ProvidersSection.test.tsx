@@ -83,6 +83,7 @@ function renderSection(
     getProviders: ReturnType<typeof vi.fn>
     getProviderPresets: ReturnType<typeof vi.fn>
     createProvider: ReturnType<typeof vi.fn>
+    updateProvider: ReturnType<typeof vi.fn>
     deleteProvider: ReturnType<typeof vi.fn>
     makeDefaultProvider: ReturnType<typeof vi.fn>
     getProviderModels: ReturnType<typeof vi.fn>
@@ -94,6 +95,7 @@ function renderSection(
     getProviders: vi.fn(async () => [OLLAMA, provider()]),
     getProviderPresets: vi.fn(async () => PRESETS),
     createProvider: vi.fn(async (p: { name: string }) => provider({ name: p.name })),
+    updateProvider: vi.fn(async (name: string) => provider({ name })),
     deleteProvider: vi.fn(async (name: string) => ({ deleted: name })),
     makeDefaultProvider: vi.fn(async (name: string) => provider({ name, is_default: true })),
     getProviderModels: vi.fn(async () => LISTING),
@@ -500,5 +502,43 @@ describe('ProvidersSection — the owner can see the verdict and find the models
     fireEvent.click(screen.getByTestId('toggle-models-azure'))
     await waitFor(() => expect(screen.getByLabelText('Model id for azure')).toBeTruthy())
     expect(screen.getByTestId('toggle-models-azure').textContent).toBe('Hide')
+  })
+})
+
+
+describe('ProvidersSection — Re-verify', () => {
+  it('a row saved before the verdict existed can be re-verified in place, key untouched', async () => {
+    const stale = provider({ key_proven: null, verify_note: null })
+    const proven = provider({
+      key_proven: true,
+      verify_note: '430 models listed; the listing is public, so the key was proven with a 1-token completion on a/b',
+    })
+    const { api } = renderSection({
+      getProviders: vi.fn(async () => [OLLAMA, stale]),
+      updateProvider: vi.fn(async () => proven),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-status-openrouter')).toBeTruthy())
+    expect(screen.getByTestId('provider-status-openrouter').textContent).toContain('the key was not tested')
+    fireEvent.click(screen.getByRole('button', { name: /re-verify openrouter/i }))
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-status-openrouter').textContent).toContain('key was proven'),
+    )
+    // An EMPTY update: the stored key is kept server-side, nothing is re-pasted.
+    expect(api.updateProvider).toHaveBeenCalledWith('openrouter', {})
+    expect(screen.getByTestId('provider-status-openrouter').className).toContain('text-success')
+    // The bundled row has nothing to re-verify.
+    expect(screen.queryByRole('button', { name: /re-verify ollama/i })).toBeNull()
+  })
+
+  it('a refused re-verify states the reason and leaves the row as it was', async () => {
+    renderSection({
+      updateProvider: vi.fn(async () => {
+        throw new Error("could not verify provider 'openrouter' — the key was refused on a test completion")
+      }),
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: /re-verify openrouter/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /re-verify openrouter/i }))
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('refused on a test completion'))
+    expect(screen.getByTestId('provider-status-openrouter').textContent).toContain('the listing accepted the key')
   })
 })
