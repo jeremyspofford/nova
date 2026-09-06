@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -21,6 +22,7 @@ from fastapi.responses import Response, StreamingResponse
 from app import adapters, backends, db, providers
 from app import curated as curated_mod
 from app import fit as fit_mod
+from app import pulls as pulls_mod
 from app import suggest as suggest_mod
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -176,91 +178,138 @@ async def suggest_route(request: Request) -> dict:
     return result
 
 
-def _preflight_line(model: str, curated_entries: list[dict]) -> dict:
-    """The pull stream's mandatory first line: a best-effort free-space
-    check, or an honest "we don't know" when the model's size is not in
-    the curated catalog — never a guess dressed up as a measurement."""
-    entry = next((e for e in curated_entries if e.get("slug") == model), None)
-    size_gb = entry.get("size_gb") if entry else None
-    if size_gb is None:
-        return {
-            "status": "preflight",
-            "note": f"model size for {model!r} is unknown — skipping the free-space check",
-        }
+# Pulls in flight, model string -> when it started (ISO). A second POST for
+# the same model while one streams is a 409 naming that time: ollama would
+# run two downloads against the same blobs and the second stream's progress
+# would be a story about the first. Process-local — this gateway is the one
+# thing that pulls into the bundled ollama — and cleared in the relay's
+# finally, so an aborted stream releases it too.
+_PULLS_IN_FLIGHT: dict[str, str] = {}
+
+
+async def _preflight_line(app, model: str) -> dict:
+    """The pull stream's mandatory first line: the download's size, DERIVED
+    live from the source ollama will pull from (`size_source` says which:
+    the registry manifest for a library tag, the Hugging Face sibling for
+    an hf.co ref — see app/pulls.py) against the models volume's free
+    space, or an honest note saying why it could not be sized. Never a
+    guess dressed up as a measurement, and never a stale curated number.
+    `required_gb` and `free_gb` are both GiB (the same unit, so `ok` is a
+    real comparison); `size_bytes` is the exact figure; `resolved` is what
+    the source stated of quant / family / params_b."""
+    sized = await pulls_mod.pull_size(app, model)
+    line: dict = {"status": "preflight"}
+    if sized["resolved"]:
+        line["resolved"] = sized["resolved"]
+    if sized["size_bytes"] is None:
+        line["note"] = f"{sized['note']}; skipping the free-space check"
+        return line
+    size_bytes = sized["size_bytes"]
     try:
         stat = os.statvfs(MODELS_DIR)
-        free_gb = (stat.f_bavail * stat.f_frsize) / (1024**3)
+        free_bytes = stat.f_bavail * stat.f_frsize
     except OSError as exc:
-        return {"status": "preflight", "note": f"could not check free space — {exc}"}
-    return {
-        "status": "preflight",
-        "required_gb": size_gb,
-        "free_gb": round(free_gb, 1),
-        "ok": free_gb >= size_gb,
-    }
+        line["note"] = f"could not check free space — {exc}"
+        line["size_bytes"] = size_bytes
+        line["size_source"] = sized["size_source"]
+        return line
+    line.update(
+        {
+            "required_gb": round(size_bytes / (1024**3), 2),
+            "free_gb": round(free_bytes / (1024**3), 1),
+            "ok": free_bytes >= size_bytes,
+            "size_bytes": size_bytes,
+            "size_source": sized["size_source"],
+        }
+    )
+    return line
 
 
 @router.post("/pull")
 async def pull(request: Request) -> Response:
     body = await request.json()
-    model = body.get("model")
+    model = body.get("model") if isinstance(body, dict) else None
     if not model:
         raise HTTPException(status_code=400, detail="model is required")
-
-    pool = await db.get_pool()
-    config = await backends.read_config(pool)
-    if config["kind"] != "ollama":
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "pull is only supported for the ollama backend "
-                f"(current backend: {config['kind']})"
-            ),
-        )
-
-    ollama_url = backends.resolve_base_url(config)
-    if not ollama_url:
-        raise HTTPException(status_code=502, detail="OLLAMA_URL is unset — cannot reach ollama")
-
-    client = backends.http_client(request.app, PULL_TIMEOUT, base_url=ollama_url)
     try:
-        upstream = await client.send(
-            client.build_request("POST", "/api/pull", json={"model": model}), stream=True
-        )
-    except httpx.HTTPError as exc:
-        await client.aclose()
+        model = pulls_mod.validate_model(model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    started_at = _PULLS_IN_FLIGHT.get(model)
+    if started_at is not None:
         raise HTTPException(
-            status_code=502, detail=f"could not reach ollama — {backends.reason(exc)}"
-        ) from exc
-
-    if upstream.status_code != 200:
-        content = await upstream.aread()
-        await upstream.aclose()
-        await client.aclose()
-        return Response(
-            content=content,
-            status_code=upstream.status_code,
-            media_type=upstream.headers.get("content-type"),
+            status_code=409,
+            detail=f"a pull of {model!r} has been in flight since {started_at} — "
+            "wait for it to finish",
         )
+    _PULLS_IN_FLIGHT[model] = datetime.now(UTC).isoformat()
+    # Until the relay takes over, this frame owns the release.
+    released = False
+    try:
+        pool = await db.get_pool()
+        config = await backends.read_config(pool)
+        if config["kind"] != "ollama":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "pull is only supported for the ollama backend "
+                    f"(current backend: {config['kind']})"
+                ),
+            )
 
-    preflight = _preflight_line(model, curated_mod.load_curated())
+        ollama_url = backends.resolve_base_url(config)
+        if not ollama_url:
+            raise HTTPException(
+                status_code=502, detail="OLLAMA_URL is unset — cannot reach ollama"
+            )
 
-    async def relay():
-        yield (json.dumps(preflight) + "\n").encode()
+        # Sized BEFORE the stream opens, so the first line is the size and
+        # the download never starts in the dark; bounded inside pull_size.
+        preflight = await _preflight_line(request.app, model)
+
+        client = backends.http_client(request.app, PULL_TIMEOUT, base_url=ollama_url)
         try:
-            async for chunk in upstream.aiter_raw():
-                yield chunk
+            upstream = await client.send(
+                client.build_request("POST", "/api/pull", json={"model": model}), stream=True
+            )
         except httpx.HTTPError as exc:
-            failure = backends.reason(exc)
-            logger.warning("model pull stream failed: %s", failure)
-            yield (json.dumps({"error": f"the pull stream failed — {failure}"}) + "\n").encode()
-        finally:
+            await client.aclose()
+            raise HTTPException(
+                status_code=502, detail=f"could not reach ollama — {backends.reason(exc)}"
+            ) from exc
+
+        if upstream.status_code != 200:
+            content = await upstream.aread()
             await upstream.aclose()
             await client.aclose()
+            return Response(
+                content=content,
+                status_code=upstream.status_code,
+                media_type=upstream.headers.get("content-type"),
+            )
 
-    return StreamingResponse(
-        relay(), media_type=upstream.headers.get("content-type") or "application/x-ndjson"
-    )
+        async def relay():
+            yield (json.dumps(preflight) + "\n").encode()
+            try:
+                async for chunk in upstream.aiter_raw():
+                    yield chunk
+            except httpx.HTTPError as exc:
+                failure = backends.reason(exc)
+                logger.warning("model pull stream failed: %s", failure)
+                yield (json.dumps({"error": f"the pull stream failed — {failure}"}) + "\n").encode()
+            finally:
+                await upstream.aclose()
+                await client.aclose()
+                _PULLS_IN_FLIGHT.pop(model, None)
+
+        released = True
+        return StreamingResponse(
+            relay(), media_type=upstream.headers.get("content-type") or "application/x-ndjson"
+        )
+    finally:
+        if not released:
+            _PULLS_IN_FLIGHT.pop(model, None)
 
 
 async def _nvidia_smi_used_mb() -> tuple[float | None, str | None]:

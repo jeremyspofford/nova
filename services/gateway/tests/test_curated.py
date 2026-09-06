@@ -13,10 +13,20 @@ a single family: gemma4:12b and llama3.1:8b were added at the 14b/8b tiers
 respectively, each verified the same way. `family` names a TIER BUCKET
 (the roadmap's size class), not a model vendor — more than one entry can
 now share a bucket, which is exactly the point.
+
+S10a (2026-09-06) demoted the file to the catalogue's VETTED layer. The
+pin moved deliberately: `use_cases` joined REQUIRED_FIELDS (a hand-set,
+dated pick from a fixed taxonomy) and `size_gb` left it (a pull is sized
+live from the registry manifest or the Hugging Face sibling — a typed
+number that outlived a re-pushed tag was a stale figure dressed as fact).
+The loader now refuses a file that breaks either rule.
 """
 from __future__ import annotations
 
+import json
 import re
+
+import pytest
 
 from app import curated
 
@@ -26,13 +36,26 @@ REQUIRED_FIELDS = {
     "family",
     "params_b",
     "min_vram_gb",
-    "size_gb",
     "note",
     "verify_at_walk",
     "verified_at",
     "verified_url",
+    "use_cases",
 }
 EXPECTED_FAMILIES = {"27b", "14b", "8b", "4b", "2b"}
+
+VALID_ENTRY = {
+    "slug": "x:1b",
+    "label": "X 1B",
+    "family": "8b",
+    "params_b": 1,
+    "min_vram_gb": 2,
+    "note": "test-only",
+    "use_cases": ["chat"],
+    "verify_at_walk": False,
+    "verified_at": "2026-09-06",
+    "verified_url": "https://ollama.com/library/x/tags",
+}
 
 
 def test_load_curated_covers_every_tier_family():
@@ -65,6 +88,36 @@ def test_every_entry_has_the_required_fields():
         assert REQUIRED_FIELDS <= set(entry)
 
 
+def test_use_cases_are_from_the_fixed_taxonomy():
+    """Every use case an entry claims is one of the nine the catalogue
+    filters on — a value outside the taxonomy would be a filter nothing
+    else can match — and each entry claims at least one, once."""
+    for entry in curated.load_curated():
+        use_cases = entry["use_cases"]
+        assert isinstance(use_cases, list) and use_cases, entry["slug"]
+        assert set(use_cases) <= set(curated.USE_CASES), entry["slug"]
+        assert len(set(use_cases)) == len(use_cases), entry["slug"]
+
+
+def test_vision_is_claimed_only_where_the_model_takes_image_input():
+    """The v3 editorial rule, kept: gemma4 is the one curated pick that
+    takes images; a Qwen3 text model claiming vision would be a lie the UI
+    turns into a filter match."""
+    by_slug = {e["slug"]: set(e["use_cases"]) for e in curated.load_curated()}
+    assert "vision" in by_slug["gemma4:12b"]
+    for slug, use_cases in by_slug.items():
+        if slug != "gemma4:12b":
+            assert "vision" not in use_cases, slug
+
+
+def test_no_entry_carries_a_typed_size_any_more():
+    """The size a pull needs is DERIVED live (registry manifest / Hugging
+    Face sibling); a number typed here would go stale the day a tag is
+    re-pushed and still read as a measurement."""
+    for entry in curated.load_curated():
+        assert "size_gb" not in entry, entry["slug"]
+
+
 def test_no_entry_still_carries_the_unverified_marker():
     for entry in curated.load_curated():
         assert entry["verify_at_walk"] is False, f"{entry['slug']} is still unverified"
@@ -91,5 +144,36 @@ def test_the_27b_entry_is_the_qwen38_pin_resolved():
 
 def test_load_curated_accepts_an_explicit_path(tmp_path):
     custom = tmp_path / "custom.json"
-    custom.write_text('[{"slug": "x", "family": "8b"}]')
-    assert curated.load_curated(custom) == [{"slug": "x", "family": "8b"}]
+    custom.write_text(json.dumps([VALID_ENTRY]))
+    assert curated.load_curated(custom) == [VALID_ENTRY]
+
+
+@pytest.mark.parametrize(
+    ("mutation", "words"),
+    [
+        (lambda e: e.pop("min_vram_gb"), "missing min_vram_gb"),
+        (lambda e: e.pop("use_cases"), "missing use_cases"),
+        (lambda e: e.update(use_cases=["chat", "gaming"]), "outside the taxonomy"),
+        (lambda e: e.update(use_cases=[]), "non-empty list"),
+        (lambda e: e.update(use_cases=["chat", "chat"]), "repeats"),
+        (lambda e: e.update(size_gb=1.2), "size_gb"),
+    ],
+)
+def test_the_loader_refuses_a_file_that_breaks_the_rules(tmp_path, mutation, words):
+    """A bad edit fails the first load, naming the entry and the rule —
+    never a filter on the Models page that silently matches nothing."""
+    entry = dict(VALID_ENTRY)
+    mutation(entry)
+    custom = tmp_path / "custom.json"
+    custom.write_text(json.dumps([entry]))
+    with pytest.raises(curated.CuratedInvalid) as exc:
+        curated.load_curated(custom)
+    assert words in str(exc.value)
+    assert "x:1b" in str(exc.value)
+
+
+def test_the_loader_refuses_a_duplicated_slug(tmp_path):
+    custom = tmp_path / "custom.json"
+    custom.write_text(json.dumps([VALID_ENTRY, VALID_ENTRY]))
+    with pytest.raises(curated.CuratedInvalid, match="more than once"):
+        curated.load_curated(custom)

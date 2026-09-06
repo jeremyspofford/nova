@@ -84,3 +84,18 @@ def mount_backend():
 
     yield _mount
     app.state.peer_transports = {}
+
+
+@pytest.fixture(autouse=True)
+def fresh_upstream_caches():
+    """S10a's live-source caches (Hub pages and details, registry
+    manifests) and the Hub request budget are process-local — cleared
+    around every test so a page one test fetched can never answer
+    another's assertion, and no test starts with a spent budget."""
+    from app import hf_hub, ollama_registry
+
+    hf_hub.clear()
+    ollama_registry.clear()
+    yield
+    hf_hub.clear()
+    ollama_registry.clear()

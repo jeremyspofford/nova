@@ -5,8 +5,8 @@
     "family": "27b",
     "params_b": 27,
     "min_vram_gb": 22,
-    "size_gb": 18.0,
     "note": "the top local pick; 256K context",
+    "use_cases": ["chat", "coding", "agentic", "reasoning", "long_context"],
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3.8/tags"
@@ -17,8 +17,8 @@
     "family": "14b",
     "params_b": 14,
     "min_vram_gb": 16,
-    "size_gb": 9.3,
     "note": "solid mid-tier local model",
+    "use_cases": ["chat", "coding", "reasoning"],
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3/tags"
@@ -29,8 +29,8 @@
     "family": "14b",
     "params_b": 12,
     "min_vram_gb": 16,
-    "size_gb": 7.6,
     "note": "Google's newest local model; 256K context — a non-Qwen alternative at this tier",
+    "use_cases": ["chat", "vision"],
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/gemma4/tags"
@@ -41,8 +41,8 @@
     "family": "8b",
     "params_b": 8,
     "min_vram_gb": 10,
-    "size_gb": 5.2,
     "note": "fast on modest GPUs",
+    "use_cases": ["chat", "coding"],
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3/tags"
@@ -53,8 +53,8 @@
     "family": "8b",
     "params_b": 8,
     "min_vram_gb": 10,
-    "size_gb": 4.9,
     "note": "Meta's widely-deployed 8B — a non-Qwen alternative at this tier",
+    "use_cases": ["chat"],
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/llama3.1/tags"
@@ -65,8 +65,8 @@
     "family": "4b",
     "params_b": 4,
     "min_vram_gb": 6,
-    "size_gb": 2.5,
     "note": "runs on small dedicated GPUs",
+    "use_cases": ["chat"],
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3/tags"
@@ -77,8 +77,8 @@
     "family": "2b",
     "params_b": 1.7,
     "min_vram_gb": 3,
-    "size_gb": 1.4,
     "note": "smallest local option, CPU-friendly",
+    "use_cases": ["chat"],
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3/tags"
