@@ -39,7 +39,58 @@ adapters), T3 edaa7d77 (core badge + passthroughs), T4 5a6af9b5 (web).
   placeholder presets cannot save unfilled, live listing with context/price
   only where stated, manual model id when unlisted, Use → `chat.model`,
   Remove with confirm, Make default) and the reply badge in the bubble.
-- Suites: gateway 186 (was 138), core 1367, web 396 (was 343), tsc clean.
+- Suites after the fix wave: gateway 202 (was 138), core 1367, web 422 (was 343),
+  tsc clean.
+
+## Review fix wave (2026-09-05, opus whole-branch adversarial review: SHIP WITH FIXES)
+
+Six findings fixed, all pinned by tests:
+
+1. **Anthropic request invariants.** The Messages API rejects a first
+   message that is not `user`, non-alternating roles, an empty array, and a
+   `tool_result` with no `tool_use` in the request — and core's history
+   window (8000 chars, newest-first, reversed) hands us an assistant row
+   first about half the time once a conversation is long enough. The
+   adapter now NORMALISES before sending (`normalize_messages`): leading
+   assistant dropped, consecutive same-role merged into one message of
+   blocks, orphan tool_results carried as text, an empty result refused
+   here as a 400 rather than sent. `FakeAnthropic` now enforces the same
+   rules, so the suite is load-bearing where it was not.
+2. **The key is proven, not just the listing reached.** OpenRouter's
+   `/models` is public, so a wrong key "verified". Verify now re-asks
+   `/models` with a certainly-wrong key; if that also answers 200 the
+   listing proved nothing, and a 1-token completion on the first listed
+   model — through the same adapter a turn uses — is the proof: 401/403
+   refuses the save, any other failure is stated on the row's
+   `listing_note` ("the key is NOT proven; the first chat turn will tell").
+3. **Every UI writes `ollama:<tag>`, never a bare id.** A bare id routes to
+   the DEFAULT provider, which this slice made movable; Settings → Models,
+   the chat ModelSelector and the Providers section all qualify now, and
+   "current" comparisons accept a pre-registry bare value. Display stays
+   the bare tag for local models.
+4. **A provider name that is a local tag's prefix is refused** (`mistral`
+   vs `mistral:7b`) — checked against what the bundled ollama LISTS at
+   create time; an unreadable listing refuses the check loudly.
+5. **Anthropic base URL includes `/v1`** like every other adapter (paths
+   are `/messages`, `/models`); a bare origin typed for that adapter gets
+   `/v1` appended; the form hint is adapter-specific.
+6. **Sampling params dropped with a note** (a 400 on current Claude models).
+
+Also: the listing's `max_tokens` (output cap) is remembered per model and
+clamps a later completion; a listing that pages past 20×1000 rows is
+refused rather than reported partial; `openrouter:` (a prefix and no
+model) is a 400, never routed elsewhere; a refused listing is recorded on
+the row (`listing=unknown` + the refusal); the caller's body is no longer
+mutated; the create route checks duplicates before any verify round-trip;
+the manual model-id input's label is unique per row.
+
+Not changed, by decision: `api_key: ""` on an update keeps the stored key
+(the form sends only changed fields; absent and empty both mean "keep");
+`backends._origin` still strips only a trailing `/v1`, so the S1 wizard
+view cannot re-save a default provider whose base URL ends otherwise
+(gemini's `/v1beta/openai`) — it fails loudly, and the wizard step is a
+carry below; the badge subquery per message row stays (fine at chat
+sizes); a turn deleted by retention drops its badge (never invented).
 
 ## Owner-owed (the DoD walk)
 

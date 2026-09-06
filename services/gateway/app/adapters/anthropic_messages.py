@@ -6,7 +6,9 @@ state it is "not production-ready" (no caching, tool schemas ignored). The
 Messages API wire shapes below were verified against the live docs on
 2026-09-05 (slice plan, frontier facts):
 
-  request   POST {base}/v1/messages, x-api-key + anthropic-version;
+  request   POST {base}/messages (base_url INCLUDES the version path, e.g.
+            https://api.anthropic.com/v1 — the same convention as every
+            other adapter), x-api-key + anthropic-version;
             max_tokens REQUIRED; `system` top-level; tools carry
             input_schema; assistant tool calls are tool_use blocks
             {id, name, input}; results go back as tool_result blocks
@@ -15,7 +17,16 @@ Messages API wire shapes below were verified against the live docs on
             → content_block_delta (text_delta | input_json_delta)
             → content_block_stop → message_delta (stop_reason, usage)
             → message_stop; plus ping and error events.
-  listing   GET {base}/v1/models?limit=…, paged by has_more/last_id.
+  listing   GET {base}/models?limit=…, paged by has_more/last_id; each
+            row's `max_tokens` (its output cap) is remembered so a
+            completion never asks for more than the model can give.
+
+The request is NORMALISED before it leaves (see normalize_messages): the
+API rejects a first message that is not `user`, rejects an empty messages
+array, and pairs every tool_result with an earlier tool_use — core's
+history window can hand us any of those shapes (a window that starts on an
+assistant row is the common one), so they are fixed here, and what was
+changed is said in the translation notes.
 
 Nothing here retries, falls back, or rephrases a refusal: a non-2xx is
 relayed with Anthropic's own status and message in the OpenAI error shape.
@@ -54,6 +65,16 @@ ANTHROPIC_VERSION = "2023-06-01"
 # non-streaming default), never a lowball.
 DEFAULT_MAX_TOKENS = 16000
 LISTING_PAGE = 1000
+
+# (provider name, model id) -> the model's output cap, as its /models row
+# stated it. Filled by list_models; read by completions to clamp
+# max_tokens. Process-local and DERIVED from the listing — never a table.
+_OUTPUT_CAPS: dict[tuple[str, str], int] = {}
+
+
+def output_cap(provider: str, model: str) -> int | None:
+    return _OUTPUT_CAPS.get((provider, model))
+
 
 _FINISH_REASONS = {
     "end_turn": "stop",
@@ -120,7 +141,73 @@ class Translation:
     notes: list[str] = field(default_factory=list)
 
 
-def to_messages_request(body: dict, model: str) -> Translation:
+def _blocks(content: object) -> list[dict]:
+    if isinstance(content, list):
+        return list(content)
+    return [{"type": "text", "text": str(content)}]
+
+
+def normalize_messages(messages: list[dict], notes: list[str]) -> list[dict]:
+    """The three invariants the Messages API enforces, made true here.
+
+    1. A `tool_result` must answer a `tool_use` the request itself carries.
+       An orphan (its call was in a row core's history window cut off, or a
+       result arrived before any call) is carried as plain text — the
+       content is kept, the pairing claim is not.
+    2. The first message is `user`: leading assistant rows (a history
+       window that opens on a reply) are dropped, and said.
+    3. Roles alternate: consecutive same-role messages are merged into one
+       message whose content is the concatenated blocks.
+    An empty result is a ProviderRefused(400) — a request that is certain
+    to be refused is never sent.
+    """
+    seen_tool_use: set[str] = set()
+    fixed: list[dict] = []
+    for message in messages:
+        role = message["role"]
+        content = message["content"]
+        if role == "assistant" and isinstance(content, list):
+            seen_tool_use.update(
+                str(block.get("id")) for block in content if block.get("type") == "tool_use"
+            )
+        if role == "user" and isinstance(content, list):
+            kept = []
+            for block in content:
+                orphan = block.get("tool_use_id") not in seen_tool_use
+                if block.get("type") == "tool_result" and orphan:
+                    notes.append(
+                        f"tool_result {block.get('tool_use_id')!r} has no tool_use in this "
+                        "request — carried as text"
+                    )
+                    kept.append(
+                        {
+                            "type": "text",
+                            "text": "[result of an earlier tool call]\n"
+                            + str(block.get("content") or ""),
+                        }
+                    )
+                else:
+                    kept.append(block)
+            content = kept
+        if not fixed and role != "user":
+            notes.append("dropped a leading assistant message — the first message must be user")
+            continue
+        if fixed and fixed[-1]["role"] == role:
+            merged = _blocks(fixed[-1]["content"]) + _blocks(content)
+            fixed[-1] = {"role": role, "content": merged}
+            notes.append(f"merged consecutive {role} messages")
+            continue
+        fixed.append({"role": role, "content": content})
+    if not fixed:
+        raise ProviderRefused(
+            400, "nothing to send — the conversation has no user message after normalisation"
+        )
+    return fixed
+
+
+def to_messages_request(
+    body: dict, model: str, *, output_cap: int | None = None
+) -> Translation:
     """The Messages API request for an OpenAI chat-completions `body`."""
     notes: list[str] = []
     system_parts: list[str] = []
@@ -184,12 +271,17 @@ def to_messages_request(body: dict, model: str) -> Translation:
         messages.append({"role": "user", "content": _text_of(content) or " "})
     flush_results()
 
+    messages = normalize_messages(messages, notes)
+    max_tokens = int(
+        body.get("max_tokens") or body.get("max_completion_tokens") or DEFAULT_MAX_TOKENS
+    )
+    if output_cap is not None and max_tokens > output_cap:
+        notes.append(f"max_tokens {max_tokens} clamped to the model's stated cap {output_cap}")
+        max_tokens = output_cap
     request: dict = {
         "model": model,
         "messages": messages,
-        "max_tokens": int(
-            body.get("max_tokens") or body.get("max_completion_tokens") or DEFAULT_MAX_TOKENS
-        ),
+        "max_tokens": max_tokens,
         "stream": bool(body.get("stream")),
     }
     if system_parts:
@@ -225,9 +317,14 @@ def to_messages_request(body: dict, model: str) -> Translation:
         # current models reject outright — left to `auto` and said so.
         notes.append(f"tool_choice {choice!r} is not forced on this adapter")
 
-    for key in ("temperature", "top_p", "top_k"):
-        if key in body and body[key] is not None:
-            request[key] = body[key]
+    # Sampling controls are REMOVED on current Claude models (a 400, not a
+    # warning). Core never sends them; a caller that does gets a note on the
+    # span, not a refused turn.
+    dropped = [key for key in ("temperature", "top_p", "top_k") if body.get(key) is not None]
+    if dropped:
+        notes.append(
+            "dropped sampling parameters not accepted by current models: " + ", ".join(dropped)
+        )
     stop = body.get("stop")
     if isinstance(stop, str):
         request["stop_sequences"] = [stop]
@@ -455,10 +552,10 @@ class AnthropicMessages:
                     params = {"limit": LISTING_PAGE}
                     if after:
                         params["after_id"] = after
-                    resp = await c.get("/v1/models", params=params)
+                    resp = await c.get("/models", params=params)
                     if resp.status_code in (404, 405):
                         raise ListingUnavailable(
-                            f"{url}/v1/models answered {resp.status_code} — no model listing"
+                            f"{url}/models answered {resp.status_code} — no model listing"
                         )
                     if resp.status_code != 200:
                         raise ProviderRefused(resp.status_code, refusal_detail(resp))
@@ -466,20 +563,28 @@ class AnthropicMessages:
                         body = resp.json()
                     except ValueError as exc:
                         raise ProviderRefused(
-                            502, f"{url}/v1/models returned non-JSON: {exc}"
+                            502, f"{url}/models returned non-JSON: {exc}"
                         ) from exc
                     for entry in body.get("data") or []:
                         if isinstance(entry, dict) and entry.get("id"):
                             item: dict = {"id": str(entry["id"]), "owned_by": row["name"]}
                             if entry.get("display_name"):
                                 item["name"] = str(entry["display_name"])
-                            for key in ("max_input_tokens",):
-                                if isinstance(entry.get(key), int):
-                                    item["context_length"] = entry[key]
+                            if isinstance(entry.get("max_input_tokens"), int):
+                                item["context_length"] = entry["max_input_tokens"]
+                            if isinstance(entry.get("max_tokens"), int) and entry["max_tokens"] > 0:
+                                item["max_output_tokens"] = entry["max_tokens"]
+                                _OUTPUT_CAPS[(row["name"], item["id"])] = entry["max_tokens"]
                             models.append(item)
                     if not body.get("has_more") or not body.get("last_id"):
                         break
                     after = str(body["last_id"])
+                else:
+                    raise ProviderRefused(
+                        502,
+                        f"{url}/models kept paging past {20 * LISTING_PAGE} rows — refusing to "
+                        "report a partial list as complete",
+                    )
         except httpx.HTTPError as exc:
             raise ProviderRefused(502, f"could not reach {url} — {reason(exc)}") from exc
         return Listing(source=row["name"], models=models)
@@ -495,7 +600,7 @@ class AnthropicMessages:
         url = base_url_of(row)
         if not url:
             raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
-        translation = to_messages_request(body, model)
+        translation = to_messages_request(body, model, output_cap=output_cap(row["name"], model))
         if translation.notes:
             logger.info("anthropic translation notes: %s", "; ".join(translation.notes))
         streaming = translation.body["stream"]
@@ -504,7 +609,7 @@ class AnthropicMessages:
         )
         try:
             upstream = await client.send(
-                client.build_request("POST", "/v1/messages", json=translation.body),
+                client.build_request("POST", "/messages", json=translation.body),
                 stream=True,
             )
         except httpx.HTTPError as exc:

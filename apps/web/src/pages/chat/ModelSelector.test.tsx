@@ -73,8 +73,8 @@ describe('ModelSelector', () => {
     await waitFor(() => expect(screen.getByTestId('chat-model-option-qwen3:14b')).toBeDefined())
     fireEvent.click(screen.getByTestId('chat-model-option-qwen3:14b'))
 
-    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'qwen3:14b'))
-    expect(onModelChanged).toHaveBeenCalledWith('qwen3:14b')
+    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'ollama:qwen3:14b'))
+    expect(onModelChanged).toHaveBeenCalledWith('ollama:qwen3:14b')
 
     // The parent reflects the change back down through the prop (chat-store's
     // setModel does this in the app); the selector then shows the new slug.

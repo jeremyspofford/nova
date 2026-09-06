@@ -477,6 +477,31 @@ async def _verify_or_502(app, name: str, shape: dict) -> dict:
     return dict(shape, listing=result.listing, listing_note=result.note)
 
 
+async def _refuse_name_that_shadows_a_local_tag(app, pool, name: str) -> None:
+    """A model id is split on its FIRST colon against the provider names, so
+    a provider called `mistral` would turn the local tag `mistral:7b` into
+    "model 7b on Mistral's cloud". Checked against what the bundled ollama
+    LISTS right now — derived, never a maintained list — and a listing that
+    cannot be read is a stated refusal, not a skipped check."""
+    builtin = await providers.get_row(pool, "ollama")
+    try:
+        listing = await adapters.for_row(builtin).list_models(app, builtin)
+    except adapters.ProviderRefused as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"cannot check {name!r} against the local model tags — {exc.detail}",
+        ) from exc
+    shadowed = sorted(
+        m["id"] for m in listing.models if m["id"].partition(":")[0] == name and ":" in m["id"]
+    )
+    if shadowed:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name!r} would shadow the local model tag(s) {', '.join(shadowed)} — "
+            f"a bare id like {shadowed[0]!r} would stop meaning the local model; pick another name",
+        )
+
+
 @router.get("/providers")
 async def list_providers() -> dict:
     pool = await db.get_pool()
@@ -497,9 +522,16 @@ async def create_provider(request: Request) -> dict:
     name = providers.validate_name(body.get("name"))
     if name == "ollama":
         raise HTTPException(status_code=409, detail="'ollama' is the builtin provider")
+    pool = await db.get_pool()
+    try:
+        await providers.get_row(pool, name)
+    except providers.UnknownProvider:
+        pass
+    else:
+        raise HTTPException(status_code=409, detail=f"a provider named {name!r} already exists")
+    await _refuse_name_that_shadows_a_local_tag(request.app, pool, name)
     shape = providers.validate_shape(body)
     shape = await _verify_or_502(request.app, name, shape)
-    pool = await db.get_pool()
     saved = await providers.insert_row(pool, name, shape)
     # Never log the payload itself — api_key lives in it.
     logger.info("provider saved: name=%s adapter=%s", saved["name"], saved["adapter"])
@@ -572,6 +604,10 @@ async def provider_models(name: str, request: Request) -> dict:
         await providers.record_listing(pool, name, "unavailable", str(exc))
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except adapters.ProviderRefused as exc:
+        # The row's listing claim is no longer known to hold — say so on it.
+        await providers.record_listing(
+            pool, name, "unknown", f"the last listing was refused ({exc.status}): {exc.detail}"
+        )
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
     await providers.record_listing(pool, name, "available", f"{len(listing.models)} models listed")
     return listing.as_dict()

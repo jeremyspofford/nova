@@ -146,28 +146,85 @@ class OpenAIChat:
             raise ProviderRefused(502, f"{url}/models returned non-JSON: {exc}") from exc
         return Listing(source=row["name"], models=normalize_models(body, owned_by=row["name"]))
 
+    async def _listing_is_public(self, app, row: dict) -> bool:
+        """Does /models answer 200 to a key that is certainly wrong? Then a
+        200 with the real key proved nothing about the key (OpenRouter's
+        listing is public, for one)."""
+        probe_row = dict(row, api_key="nova-verify-this-key-is-wrong")
+        url = base_url_of(row)
+        client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=self.headers(probe_row))
+        try:
+            async with client as c:
+                resp = await c.get("/models")
+        except httpx.HTTPError:
+            return False
+        return resp.status_code == 200
+
+    async def _key_probe(self, app, row: dict, model: str) -> tuple[int, str]:
+        """A 1-token completion through the SAME code path a turn uses —
+        (status, the provider's words). The only way to prove a key when
+        the listing does not need one."""
+        response = await self._completions(
+            app,
+            row,
+            model,
+            {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 1, "stream": False},
+        )
+        content = b""
+        iterator = getattr(response, "body_iterator", None)
+        if iterator is not None:
+            async for chunk in iterator:
+                content += chunk if isinstance(chunk, bytes) else str(chunk).encode()
+        else:
+            content = response.body
+        return response.status_code, content.decode(errors="replace")[:400]
+
     async def verify(self, app, row: dict) -> VerifyResult:
-        """The listing call where the provider has one. A 404/405 is
-        recorded as `unavailable` (reachable, no listing — model ids are
-        typed); a 401/403 is the provider refusing the key and the save
-        does not happen."""
+        """What a save must prove: the provider is reachable AND the key is
+        accepted. The listing call is the first probe (a 401/403 there is
+        the provider refusing the key); a 404/405 is recorded as
+        `unavailable` (reachable, no listing — model ids are typed). When
+        the listing answers 200 to a WRONG key too, it proved nothing about
+        the key, so a 1-token completion on the first listed model is the
+        proof — a refusal there refuses the save; any other failure is
+        stated on the row rather than read as success (rail 5)."""
         try:
             listing = await self.list_models(app, row)
         except ListingUnavailable as exc:
             return VerifyResult(listing="unavailable", note=str(exc))
+        note = f"{len(listing.models)} models listed"
+        if row.get("auth_shape") == "none" or not listing.models:
+            return VerifyResult(listing="available", note=note)
+        if not await self._listing_is_public(app, row):
+            return VerifyResult(listing="available", note=f"{note}; the listing accepted the key")
+        model = listing.models[0]["id"]
+        try:
+            status, words = await self._key_probe(app, row, model)
+        except ProviderRefused as exc:
+            status, words = exc.status, exc.detail
+        if status in (401, 403):
+            raise ProviderRefused(status, f"the key was refused on a test completion — {words}")
+        if status == 200:
+            return VerifyResult(
+                listing="available",
+                note=f"{note}; the listing is public, so the key was proven with a 1-token "
+                f"completion on {model}",
+            )
         return VerifyResult(
-            listing="available", note=f"{len(listing.models)} models listed"
+            listing="available",
+            note=f"{note}; the listing is public and a 1-token test on {model} answered "
+            f"{status} ({words}) — the key is NOT proven; the first chat turn will tell",
         )
 
     async def completions(self, request: Request, row: dict, model: str, body: dict) -> Response:
+        return await self._completions(request.app, row, model, body)
+
+    async def _completions(self, app, row: dict, model: str, body: dict) -> Response:
         url = base_url_of(row)
         if not url:
             raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
-        if model:
-            body["model"] = model
-        client = http_client(
-            request.app, COMPLETIONS_TIMEOUT, base_url=url, headers=self.headers(row)
-        )
+        body = dict(body, model=model) if model else dict(body)
+        client = http_client(app, COMPLETIONS_TIMEOUT, base_url=url, headers=self.headers(row))
         try:
             upstream = await client.send(
                 client.build_request("POST", "/chat/completions", json=body), stream=True

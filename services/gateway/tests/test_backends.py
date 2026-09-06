@@ -126,12 +126,15 @@ async def test_verify_live_remote_hits_v1_models():
 
 
 async def test_verify_live_cloud_sends_the_api_key():
-    fake = FakeOpenAICompat()
+    fake = FakeOpenAICompat(accepts_key="sk-secret")
     app = _app_with("http://cloud.test", fake.app)
     await backends.verify_live(
         app, {"kind": "cloud", "url": "http://cloud.test", "api_key": "sk-secret", "model": "m"}
     )
-    assert fake.seen_auth == ["Bearer sk-secret"]
+    # The real key, then the certainly-wrong key that learns whether the
+    # listing is public (S10-pre's key proof); this fake's listing is not, so
+    # nothing else was sent.
+    assert fake.seen_auth == ["Bearer sk-secret", "Bearer nova-verify-this-key-is-wrong"]
 
 
 async def test_verify_live_unreachable_is_stated():

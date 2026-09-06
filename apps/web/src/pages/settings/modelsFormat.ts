@@ -1,3 +1,22 @@
+/**
+ * Model ids are `provider:model` (S10-pre). The bundled ollama is the
+ * provider named `ollama`, so a local model is written `ollama:qwen3:8b` —
+ * NEVER bare: a bare id routes to whichever provider is currently the
+ * default, which Settings → Providers lets the owner move. The local
+ * catalogue still works in bare slugs, so these two are the seam.
+ */
+export const LOCAL_PROVIDER = 'ollama'
+
+export function qualifyLocalModel(slug: string): string {
+  return slug.startsWith(`${LOCAL_PROVIDER}:`) ? slug : `${LOCAL_PROVIDER}:${slug}`
+}
+
+/** The bare local slug of a chat model id, or the id unchanged when it names
+ * another provider (so it never matches a local row by accident). */
+export function bareLocalModel(model: string): string {
+  return model.startsWith(`${LOCAL_PROVIDER}:`) ? model.slice(LOCAL_PROVIDER.length + 1) : model
+}
+
 import type { ModelFit, SuggestedModel } from '../../lib/api'
 
 /**
@@ -51,7 +70,7 @@ export function mergeModels(
       minVramGb: c.min_vram_gb,
       installed: installedSet.has(c.slug),
       curated: true,
-      isCurrent: c.slug === chatModel,
+      isCurrent: c.slug === bareLocalModel(chatModel),
       fit: c.fit ?? null,
       paramsB: c.params_b,
     })
@@ -66,7 +85,7 @@ export function mergeModels(
       minVramGb: null,
       installed: true,
       curated: false,
-      isCurrent: slug === chatModel,
+      isCurrent: slug === bareLocalModel(chatModel),
       fit: null,
       paramsB: null,
     })

@@ -231,6 +231,11 @@ class FakeOpenAICompat:
     # The URL prefix the fake serves under — `/v1` for most providers,
     # `/openai/v1` for an Azure- or Bedrock-shaped one.
     prefix: str = "/v1"
+    # OpenRouter-shaped: /models answers 200 to ANY key (or none) …
+    models_public: bool = False
+    # … so only a completion can prove the key. When set, /chat/completions
+    # 401s unless the bearer matches.
+    accepts_key: str | None = None
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -244,9 +249,16 @@ class FakeOpenAICompat:
         self.seen_auth.append(request.headers.get("authorization"))
         self.seen_headers.append({k.lower(): v for k, v in request.headers.items()})
 
+    def _key_ok(self, request) -> bool:
+        if self.accepts_key is None:
+            return True
+        return request.headers.get("authorization") == f"Bearer {self.accepts_key}"
+
     async def _models(self, request):
         self._note(request)
         self.seen.append((request.url.path, None))
+        if not self.models_public and not self._key_ok(request):
+            return JSONResponse({"error": {"message": "Invalid API key"}}, status_code=401)
         return JSONResponse(self.models_body, status_code=self.models_status)
 
     async def _completions(self, request):
@@ -254,6 +266,10 @@ class FakeOpenAICompat:
         body = json.loads(raw) if raw else None
         self._note(request)
         self.seen.append((request.url.path, body))
+        if not self._key_ok(request):
+            return JSONResponse(
+                {"error": {"message": "User not found.", "code": 401}}, status_code=401
+            )
         if self.completions_status != 200:
             return JSONResponse({"error": "refused"}, status_code=self.completions_status)
         if not (body or {}).get("stream"):
@@ -326,8 +342,52 @@ class FakeAnthropic:
                 )
         return out
 
+    @staticmethod
+    def _invalid(body: dict | None) -> str | None:
+        """The Messages API's request rules this fake refuses like the real
+        one does: max_tokens present, a non-empty messages array whose first
+        role is user, roles alternating, and every tool_result answering a
+        tool_use earlier in the same request."""
+        if not body or not isinstance(body.get("max_tokens"), int) or body["max_tokens"] < 1:
+            return "max_tokens: field required"
+        messages = body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            return "messages: at least one message is required"
+        if messages[0].get("role") != "user":
+            return "messages: first message must use the \"user\" role"
+        seen: set[str] = set()
+        last = None
+        for message in messages:
+            role = message.get("role")
+            if role == last:
+                return 'messages: roles must alternate between "user" and "assistant"'
+            last = role
+            content = message.get("content")
+            if isinstance(content, list):
+                for block in content:
+                    if role == "assistant" and block.get("type") == "tool_use":
+                        seen.add(str(block.get("id")))
+                    if role == "user" and block.get("type") == "tool_result":
+                        if str(block.get("tool_use_id")) not in seen:
+                            return (
+                                f"messages: tool_result {block.get('tool_use_id')!r} has no "
+                                "matching tool_use"
+                            )
+            elif isinstance(content, str) and not content:
+                return "messages: text content blocks must be non-empty"
+        for key in ("temperature", "top_p", "top_k"):
+            if key in body:
+                return f"{key}: not supported on this model"
+        return None
+
     async def _messages(self, request):
         body = await self._record(request)
+        invalid = self._invalid(body)
+        if invalid is not None:
+            return JSONResponse(
+                {"type": "error", "error": {"type": "invalid_request_error", "message": invalid}},
+                status_code=400,
+            )
         if self.status != 200:
             return JSONResponse(
                 self.error_body

@@ -86,6 +86,8 @@ class Ollama:
 
     async def completions(self, request: Request, row: dict, model: str, body: dict) -> Response:
         # Chat rides ollama's OpenAI-compatible surface at {OLLAMA_URL}/v1.
+        if not base_url_of(row):
+            raise ProviderRefused(502, "OLLAMA_URL is unset — cannot reach ollama")
         chat_row = dict(
             row, adapter="openai-chat", base_url=f"{base_url_of(row)}/v1", auth_shape="none"
         )

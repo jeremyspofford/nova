@@ -331,7 +331,11 @@ export function ProvidersSection({
           ))}
           <Input
             label="Base URL"
-            description="Includes the version path, e.g. https://openrouter.ai/api/v1"
+            description={
+              draft.adapter === 'anthropic-messages'
+                ? 'Includes the version path, e.g. https://api.anthropic.com/v1'
+                : 'Includes the version path, e.g. https://openrouter.ai/api/v1'
+            }
             value={draft.preset === CUSTOM ? draft.base_url : effectiveBaseUrl}
             onChange={e => setDraft(d => ({ ...d, base_url: e.target.value }))}
             readOnly={draft.preset !== CUSTOM}
@@ -480,9 +484,11 @@ function ProviderRow({
   }
 
   const use = async (modelId: string) => {
-    // The bundled ollama keeps its bare ids so the Models section's "Current"
-    // marker (which compares bare slugs) keeps agreeing with this one.
-    const qualified = provider.adapter === 'ollama' ? modelId : `${provider.name}:${modelId}`
+    // ALWAYS qualified — including the bundled ollama (`ollama:qwen3:8b`). A
+    // bare id routes to whichever provider is the default, and this very
+    // section lets the owner move the default; a bare local id written here
+    // would silently start going to the cloud the moment they did.
+    const qualified = `${provider.name}:${modelId}`
     setSwitching(modelId)
     setSwitchError(null)
     try {
@@ -495,8 +501,11 @@ function ProviderRow({
     }
   }
 
+  // A bare chat.model (written before S10-pre) still means the local
+  // provider, so the ollama row recognises it as current.
   const isCurrent = (modelId: string) =>
-    chatModel === (provider.adapter === 'ollama' ? modelId : `${provider.name}:${modelId}`)
+    chatModel === `${provider.name}:${modelId}` ||
+    (provider.adapter === 'ollama' && chatModel === modelId)
 
   const visible = (listing?.models ?? []).filter(
     m => !filter || m.id.toLowerCase().includes(filter.toLowerCase()) || m.name?.toLowerCase().includes(filter.toLowerCase()),
@@ -575,7 +584,7 @@ function ProviderRow({
                 }}
               >
                 <Input
-                  label="Model id"
+                  label={`Model id for ${provider.name}`}
                   value={manualModel}
                   onChange={e => setManualModel(e.target.value)}
                   placeholder={provider.model_note ?? 'model id'}

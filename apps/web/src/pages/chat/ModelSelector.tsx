@@ -8,7 +8,7 @@ import {
   type SuggestedModel,
 } from '../../lib/api'
 import { ACCURACY_DISCLAIMER_SHORT } from '../../lib/modelDisclaimer'
-import { isSmallerTier, mergeModels } from '../settings/modelsFormat'
+import { bareLocalModel, isSmallerTier, mergeModels, qualifyLocalModel } from '../settings/modelsFormat'
 
 /**
  * A compact, inline model switcher for the chat input row — the same catalog
@@ -102,13 +102,13 @@ export function ModelSelector({
 
   const choose = async (slug: string) => {
     setOpen(false)
-    if (slug === currentModel) return
+    if (slug === bareLocalModel(currentModel)) return
     setError(null)
     setSwitching(true)
     try {
-      await api.putSetting('chat.model', slug)
+      await api.putSetting('chat.model', qualifyLocalModel(slug))
       // Reflected only now the server confirmed the write — never optimistically.
-      onModelChanged(slug)
+      onModelChanged(qualifyLocalModel(slug))
     } catch (err) {
       setError(reasonOf(err))
     } finally {
@@ -134,7 +134,7 @@ export function ModelSelector({
             Settings<->chat bridge test and the e2e change-model spec both
             assert with toHaveText(slug). */}
         <span data-testid="chat-model" className="font-mono truncate max-w-[10rem]">
-          {currentModel || 'Select a model'}
+          {currentModel ? bareLocalModel(currentModel) : 'Select a model'}
         </span>
         <ChevronDown
           size={13}
@@ -156,16 +156,16 @@ export function ModelSelector({
                   key={model.slug}
                   type="button"
                   role="option"
-                  aria-selected={model.slug === currentModel}
+                  aria-selected={model.slug === bareLocalModel(currentModel)}
                   data-testid={`chat-model-option-${model.slug}`}
                   onClick={() => choose(model.slug)}
                   className={clsx(
                     'flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-compact hover:bg-surface-card-hover transition-colors duration-fast',
-                    model.slug === currentModel ? 'text-accent' : 'text-content-primary',
+                    model.slug === bareLocalModel(currentModel) ? 'text-accent' : 'text-content-primary',
                   )}
                 >
                   <span className="font-mono truncate">{model.slug}</span>
-                  {model.slug === currentModel && <Check size={13} className="shrink-0" />}
+                  {model.slug === bareLocalModel(currentModel) && <Check size={13} className="shrink-0" />}
                 </button>
               ))
             )}

@@ -83,15 +83,18 @@ def test_a_tool_round_trip_becomes_tool_use_and_one_tool_result_user_message():
             {"type": "tool_use", "id": "toolu_b", "name": "read_file", "input": {"path": "b"}},
         ],
     }
-    # BOTH results in ONE user message — the documented shape.
+    # BOTH results in ONE user message — the documented shape — and the user
+    # text that follows them is merged into the same message (roles must
+    # alternate; a second consecutive user message is a 400).
     assert out["messages"][2] == {
         "role": "user",
         "content": [
             {"type": "tool_result", "tool_use_id": "toolu_a", "content": "A!"},
             {"type": "tool_result", "tool_use_id": "toolu_b", "content": '{"text": "B!"}'},
+            {"type": "text", "text": "thanks"},
         ],
     }
-    assert out["messages"][3] == {"role": "user", "content": "thanks"}
+    assert len(out["messages"]) == 3
     assert out["tools"] == [
         {
             "name": "read_file",
@@ -105,6 +108,7 @@ def test_a_tool_round_trip_becomes_tool_use_and_one_tool_result_user_message():
 def test_unparsable_arguments_are_kept_not_dropped_and_forced_tool_choice_is_noted():
     body = {
         "messages": [
+            {"role": "user", "content": "go"},
             {
                 "role": "assistant",
                 "tool_calls": [{"id": "t", "function": {"name": "x", "arguments": "{not json"}}],
@@ -113,16 +117,17 @@ def test_unparsable_arguments_are_kept_not_dropped_and_forced_tool_choice_is_not
         "tool_choice": "required",
     }
     translation = adapter.to_messages_request(body, "m")
-    assert translation.body["messages"][0]["content"][0]["input"] == {"_raw": "{not json"}
+    assert translation.body["messages"][1]["content"][0]["input"] == {"_raw": "{not json"}
     assert "tool_choice" not in translation.body
     assert any("tool_choice" in note for note in translation.notes)
 
 
 def test_tool_choice_auto_and_none_map_and_stop_becomes_stop_sequences():
-    auto = adapter.to_messages_request({"messages": [], "tool_choice": "auto"}, "m").body
+    user = [{"role": "user", "content": "x"}]
+    auto = adapter.to_messages_request({"messages": user, "tool_choice": "auto"}, "m").body
     assert auto["tool_choice"] == {"type": "auto"}
     none = adapter.to_messages_request(
-        {"messages": [], "tool_choice": "none", "stop": "END"}, "m"
+        {"messages": user, "tool_choice": "none", "stop": "END"}, "m"
     ).body
     assert none["tool_choice"] == {"type": "none"}
     assert none["stop_sequences"] == ["END"]
@@ -134,6 +139,100 @@ def test_an_empty_assistant_turn_is_dropped_with_a_note():
     )
     assert translation.body["messages"] == [{"role": "user", "content": "a"}]
     assert "dropped an empty assistant message" in translation.notes
+
+
+# ── the Messages API's request rules, made true before sending ──────────
+
+
+def test_a_history_window_that_opens_on_a_reply_drops_the_leading_assistant():
+    """core's history_window can hand us an assistant row first — the API
+    refuses a request whose first message is not `user`."""
+    translation = adapter.to_messages_request(
+        {
+            "messages": [
+                {"role": "system", "content": "sys"},
+                {"role": "assistant", "content": "earlier reply"},
+                {"role": "user", "content": "next question"},
+            ]
+        },
+        "m",
+    )
+    assert [m["role"] for m in translation.body["messages"]] == ["user"]
+    assert any("leading assistant" in n for n in translation.notes)
+
+
+def test_consecutive_same_role_messages_merge_so_roles_alternate():
+    """An empty assistant reply between two user turns (a markup-only reply
+    persisted as "") used to leave [user, user] — a 400."""
+    translation = adapter.to_messages_request(
+        {
+            "messages": [
+                {"role": "user", "content": "one"},
+                {"role": "assistant", "content": ""},
+                {"role": "user", "content": "two"},
+                {"role": "assistant", "content": "reply"},
+                {"role": "assistant", "content": "again"},
+                {"role": "user", "content": "three"},
+            ]
+        },
+        "m",
+    )
+    msgs = translation.body["messages"]
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert msgs[0]["content"] == [{"type": "text", "text": "one"}, {"type": "text", "text": "two"}]
+    assert msgs[1]["content"] == [
+        {"type": "text", "text": "reply"},
+        {"type": "text", "text": "again"},
+    ]
+
+
+def test_an_orphan_tool_result_is_carried_as_text_not_sent_as_a_pairing_claim():
+    translation = adapter.to_messages_request(
+        {
+            "messages": [
+                {"role": "tool", "tool_call_id": "toolu_gone", "content": "42"},
+                {"role": "user", "content": "go on"},
+            ]
+        },
+        "m",
+    )
+    msgs = translation.body["messages"]
+    assert [m["role"] for m in msgs] == ["user"]
+    assert msgs[0]["content"] == [
+        {"type": "text", "text": "[result of an earlier tool call]\n42"},
+        {"type": "text", "text": "go on"},
+    ]
+    assert not any(b.get("type") == "tool_result" for b in msgs[0]["content"])
+
+
+def test_a_request_with_no_user_message_is_refused_here_not_sent():
+    import pytest
+
+    from app.adapters.base import ProviderRefused
+
+    with pytest.raises(ProviderRefused) as excinfo:
+        adapter.to_messages_request({"messages": [{"role": "system", "content": "only"}]}, "m")
+    assert excinfo.value.status == 400
+
+
+def test_sampling_parameters_are_dropped_with_a_note_never_sent():
+    translation = adapter.to_messages_request(
+        {"messages": [{"role": "user", "content": "x"}], "temperature": 0.7, "top_p": 0.9}, "m"
+    )
+    assert "temperature" not in translation.body and "top_p" not in translation.body
+    assert any("temperature, top_p" in n for n in translation.notes)
+
+
+def test_max_tokens_is_clamped_to_the_models_stated_output_cap():
+    translation = adapter.to_messages_request(
+        {"messages": [{"role": "user", "content": "x"}]}, "old-haiku", output_cap=4096
+    )
+    assert translation.body["max_tokens"] == 4096
+    assert any("clamped" in n for n in translation.notes)
+    untouched = adapter.to_messages_request(
+        {"messages": [{"role": "user", "content": "x"}], "max_tokens": 100}, "m", output_cap=4096
+    )
+    assert untouched.body["max_tokens"] == 100
 
 
 # ── response translation (pure) ──────────────────────────────────────────
@@ -311,14 +410,22 @@ def _sse_payloads(raw: bytes) -> list:
     return out
 
 
-async def _add_anthropic(client, mount_backend, fake: FakeAnthropic):
+async def _add_anthropic(client, mount_backend, fake: FakeAnthropic, monkeypatch=None):
     mount_backend("http://anthropic.test", fake.app)
+    # Creating a provider checks its name against the local tags (see
+    # admin._refuse_name_that_shadows_a_local_tag), so ollama must answer.
+    import os
+
+    from tests.fakes import FakeOllama
+
+    os.environ["OLLAMA_URL"] = "http://ollama.test"
+    mount_backend("http://ollama.test", FakeOllama().app)
     resp = await client.post(
         "/admin/providers",
         json={
             "name": "anthropic",
             "adapter": "anthropic-messages",
-            "base_url": "http://anthropic.test",
+            "base_url": "http://anthropic.test/v1",
             "auth_shape": "api-key-header",
             "api_key": "sk-ant-4321",
         },
@@ -422,7 +529,11 @@ async def test_an_in_stream_error_event_becomes_the_openai_error_chunk(client, p
 
     resp = await client.post(
         "/v1/chat/completions",
-        json={"model": "anthropic:claude-opus-5", "messages": [], "stream": True},
+        json={
+            "model": "anthropic:claude-opus-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
     )
 
     frames = _sse_payloads(resp.content)
@@ -440,7 +551,11 @@ async def test_a_stream_that_ends_without_message_stop_says_so(client, pool, mou
 
     resp = await client.post(
         "/v1/chat/completions",
-        json={"model": "anthropic:claude-opus-5", "messages": [], "stream": True},
+        json={
+            "model": "anthropic:claude-opus-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
     )
 
     frames = _sse_payloads(resp.content)
@@ -466,7 +581,11 @@ async def test_anthropics_refusal_is_relayed_with_its_status_and_message(
 
     resp = await client.post(
         "/v1/chat/completions",
-        json={"model": "anthropic:claude-opus-5", "messages": [], "stream": True},
+        json={
+            "model": "anthropic:claude-opus-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": True,
+        },
     )
 
     assert resp.status_code == 400
@@ -474,3 +593,114 @@ async def test_anthropics_refusal_is_relayed_with_its_status_and_message(
     assert resp.json() == {
         "error": {"message": "max_tokens: must be positive", "type": "invalid_request_error"}
     }
+
+
+@requires_db
+async def test_a_bare_anthropic_origin_is_normalised_to_its_v1_path(client, pool, mount_backend):
+    """The form's convention is 'base URL includes the version path'; a bare
+    origin typed for Anthropic gets /v1 appended rather than saving a row
+    whose every call would 404."""
+    fake = FakeAnthropic()
+    mount_backend("http://anthropic.test", fake.app)
+    import os
+
+    from tests.fakes import FakeOllama
+
+    os.environ["OLLAMA_URL"] = "http://ollama.test"
+    mount_backend("http://ollama.test", FakeOllama().app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "anthropic",
+            "adapter": "anthropic-messages",
+            "base_url": "http://anthropic.test",
+            "auth_shape": "api-key-header",
+            "api_key": "sk-ant-1",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["base_url"] == "http://anthropic.test/v1"
+    assert fake.seen[-1][0] == "/v1/models"
+
+
+@requires_db
+async def test_a_listing_that_never_stops_paging_is_refused_not_reported_partial(
+    client, pool, mount_backend
+):
+    import os
+
+    from tests.fakes import FakeOllama
+
+    class Endless(FakeAnthropic):
+        async def _models(self, request):
+            await self._record(request)
+            after = request.query_params.get("after_id") or "m0"
+            nxt = f"m{int(after[1:]) + 1}"
+            from starlette.responses import JSONResponse
+
+            return JSONResponse(
+                {"data": [{"id": nxt}], "has_more": True, "first_id": nxt, "last_id": nxt}
+            )
+
+    fake = Endless()
+    mount_backend("http://anthropic.test", fake.app)
+    os.environ["OLLAMA_URL"] = "http://ollama.test"
+    mount_backend("http://ollama.test", FakeOllama().app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "anthropic",
+            "adapter": "anthropic-messages",
+            "base_url": "http://anthropic.test/v1",
+            "auth_shape": "api-key-header",
+            "api_key": "sk-ant-1",
+        },
+    )
+    assert resp.status_code == 502
+    assert "partial list" in resp.json()["error"]
+
+
+@requires_db
+async def test_the_listed_output_cap_clamps_a_later_completion(client, pool, mount_backend):
+    import os
+
+    from tests.fakes import FakeOllama
+
+    class Capped(FakeAnthropic):
+        async def _models(self, request):
+            await self._record(request)
+            from starlette.responses import JSONResponse
+
+            return JSONResponse(
+                {
+                    "data": [{"id": "old-haiku", "display_name": "Old", "max_tokens": 4096}],
+                    "has_more": False,
+                    "last_id": "old-haiku",
+                }
+            )
+
+    fake = Capped(blocks=("hi",))
+    mount_backend("http://anthropic.test", fake.app)
+    os.environ["OLLAMA_URL"] = "http://ollama.test"
+    mount_backend("http://ollama.test", FakeOllama().app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "anthropic",
+            "adapter": "anthropic-messages",
+            "base_url": "http://anthropic.test/v1",
+            "auth_shape": "api-key-header",
+            "api_key": "sk-ant-1",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "anthropic:old-haiku",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": False,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert fake.seen[-1][1]["max_tokens"] == 4096

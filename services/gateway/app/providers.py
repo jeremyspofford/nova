@@ -13,6 +13,7 @@ import json
 import os
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import asyncpg
 from fastapi import HTTPException
@@ -150,6 +151,10 @@ def validate_shape(payload: dict, *, existing: dict | None = None) -> dict:
                 status_code=400,
                 detail=f"base_url still carries a placeholder to fill in — {base_url!r}",
             )
+        if adapter == "anthropic-messages" and not urlsplit(base_url).path.strip("/"):
+            # Every adapter's base URL includes the version path; a bare
+            # origin for Anthropic means its one public version.
+            base_url = f"{base_url}/v1"
         merged["base_url"] = base_url
     if auth_shape != "none" and not merged.get("api_key"):
         raise HTTPException(
@@ -173,7 +178,9 @@ def split_model_id(model: str, names: set[str]) -> tuple[str | None, str]:
     colon — leaves the whole string as the model for the default provider.
     """
     prefix, colon, rest = model.partition(":")
-    if colon and prefix in names and rest:
+    if colon and prefix in names:
+        # `openrouter:` names a provider and no model — returned as-is so the
+        # caller refuses it; it must never fall through to another provider.
         return prefix, rest
     return None, model
 
@@ -241,6 +248,12 @@ async def resolve(pool: asyncpg.Pool, model: str | None) -> tuple[dict, str]:
     name, bare = split_model_id(model, set(by_name))
     if name is None:
         return default, bare
+    if not bare:
+        raise HTTPException(
+            status_code=400,
+            detail=f"model id {model!r} names provider {name!r} but no model — "
+            f"write it as {name}:<model>",
+        )
     return by_name[name], bare
 
 
@@ -304,7 +317,7 @@ async def record_listing(pool: asyncpg.Pool, name: str, state: str, note: str | 
     """What a live listing just learned, on the row — DERIVED state the UI
     reads, never something an owner maintains by hand."""
     await pool.execute(
-        "UPDATE providers SET listing = $2, listing_note = $3 WHERE name = $1",
+        "UPDATE providers SET listing = $2, listing_note = $3, updated_at = now() WHERE name = $1",
         name,
         state,
         note,

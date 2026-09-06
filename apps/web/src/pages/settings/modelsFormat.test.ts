@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isSmallerTier, mergeModels } from './modelsFormat'
+import { isSmallerTier, mergeModels, bareLocalModel, qualifyLocalModel } from './modelsFormat'
 import type { ModelFit, SuggestedModel } from '../../lib/api'
 
 function curated(overrides: Partial<SuggestedModel> = {}): SuggestedModel {
@@ -132,5 +132,27 @@ describe('isSmallerTier', () => {
     )
     expect(isSmallerTier(merged, 'qwen3:8b-a')).toBe(false)
     expect(isSmallerTier(merged, 'qwen3:8b-b')).toBe(false)
+  })
+})
+
+
+describe('local model ids are provider-qualified (S10-pre)', () => {
+  it('qualifies a bare local slug once and leaves a qualified one alone', () => {
+    expect(qualifyLocalModel('qwen3:8b')).toBe('ollama:qwen3:8b')
+    expect(qualifyLocalModel('ollama:qwen3:8b')).toBe('ollama:qwen3:8b')
+  })
+
+  it('bares only the local provider; another provider\'s id never matches a local row', () => {
+    expect(bareLocalModel('ollama:qwen3:8b')).toBe('qwen3:8b')
+    expect(bareLocalModel('qwen3:8b')).toBe('qwen3:8b')
+    expect(bareLocalModel('openrouter:qwen/qwen3-8b')).toBe('openrouter:qwen/qwen3-8b')
+  })
+
+  it('mergeModels marks the current model whether chat.model is bare or qualified', () => {
+    const curated = [{ slug: 'qwen3:8b', name: 'Qwen', size_gb: 5, tier: 'mid' }] as never
+    const bare = mergeModels('qwen3:8b', ['qwen3:8b'], curated)
+    const qualified = mergeModels('ollama:qwen3:8b', ['qwen3:8b'], curated)
+    expect(bare.find(m => m.slug === 'qwen3:8b')?.isCurrent).toBe(true)
+    expect(qualified.find(m => m.slug === 'qwen3:8b')?.isCurrent).toBe(true)
   })
 })

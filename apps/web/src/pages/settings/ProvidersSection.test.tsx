@@ -250,9 +250,9 @@ describe('ProvidersSection', () => {
     await waitFor(() => expect(screen.getByTestId('provider-azure')).toBeTruthy())
     expect(screen.getByTestId('provider-azure').textContent).toContain('no model listing')
     fireEvent.click(within(screen.getByTestId('provider-azure')).getByRole('button', { name: 'azure' }))
-    await waitFor(() => expect(screen.getByLabelText('Model id')).toBeTruthy())
+    await waitFor(() => expect(screen.getByLabelText('Model id for azure')).toBeTruthy())
     expect(screen.queryByText(/models from/)).toBeNull()
-    fireEvent.change(screen.getByLabelText('Model id'), { target: { value: 'gpt-5-deploy' } })
+    fireEvent.change(screen.getByLabelText('Model id for azure'), { target: { value: 'gpt-5-deploy' } })
     fireEvent.click(screen.getByRole('button', { name: 'Use' }))
     await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'azure:gpt-5-deploy'))
     expect(onModelChanged).toHaveBeenCalledWith('azure:gpt-5-deploy')
@@ -294,5 +294,40 @@ describe('ProvidersSection', () => {
       expect(screen.getByTestId('provider-openrouter').textContent).toContain('default for bare model ids'),
     )
     expect(screen.getByTestId('provider-ollama').textContent).not.toContain('default for bare model ids')
+  })
+})
+
+
+describe('ProvidersSection — the local row writes a qualified id too', () => {
+  it('Use on the bundled ollama row writes ollama:<model>, never a bare id', async () => {
+    const { api, onModelChanged } = renderSection({
+      getProviderModels: vi.fn(async () => ({
+        source: 'ollama',
+        fetched_at: '2026-09-05T12:00:00Z',
+        models: [{ id: 'qwen3:14b', owned_by: 'ollama' }],
+      })),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-ollama')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('provider-ollama')).getByRole('button', { name: 'ollama' }))
+    await waitFor(() => expect(screen.getByTestId('model-qwen3:14b')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('model-qwen3:14b')).getByRole('button', { name: /use/i }))
+    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'ollama:qwen3:14b'))
+    expect(onModelChanged).toHaveBeenCalledWith('ollama:qwen3:14b')
+  })
+
+  it('a bare chat.model written before the registry still reads as current on the ollama row', async () => {
+    renderSection(
+      {
+        getProviderModels: vi.fn(async () => ({
+          source: 'ollama',
+          fetched_at: '2026-09-05T12:00:00Z',
+          models: [{ id: 'qwen3:8b', owned_by: 'ollama' }],
+        })),
+      },
+      'qwen3:8b',
+    )
+    await waitFor(() => expect(screen.getByTestId('provider-ollama')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('provider-ollama')).getByRole('button', { name: 'ollama' }))
+    await waitFor(() => expect(screen.getByTestId('model-qwen3:8b').textContent).toContain('current'))
   })
 })

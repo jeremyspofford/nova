@@ -34,6 +34,18 @@ def _sse_payloads(raw: bytes) -> list:
     return out
 
 
+@pytest.fixture(autouse=True)
+def local_tags(monkeypatch, mount_backend):
+    """Creating a provider checks its name against the tags the bundled
+    ollama lists (a name that is a tag's prefix would hijack the tag), so
+    every test here has an ollama that answers. Returned so a test can put
+    a specific tag in it."""
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(tags=("qwen3:8b", "qwen3.8:27b"))
+    mount_backend("http://ollama.test", fake.app)
+    return fake
+
+
 async def _add_openrouter(client, mount_backend, *, name="openrouter", key=SECRET):
     fake = FakeOpenAICompat(
         models_body={
@@ -49,6 +61,9 @@ async def _add_openrouter(client, mount_backend, *, name="openrouter", key=SECRE
             ],
         },
         deltas=("Hi", " there"),
+        # A listing that NEEDS the key — the public-listing case (the real
+        # OpenRouter) has its own tests below.
+        accepts_key=key,
     )
     mount_backend(f"http://{name}.test", fake.app)
     resp = await client.post(
@@ -79,8 +94,9 @@ def test_split_model_id_only_honours_a_registered_prefix():
     assert providers.split_model_id("qwen3.8:27b", names) == (None, "qwen3.8:27b")
     assert providers.split_model_id("ollama:qwen3.8:27b", names) == ("ollama", "qwen3.8:27b")
     assert providers.split_model_id("plain", names) == (None, "plain")
-    # A prefix with nothing after it is not a model id.
-    assert providers.split_model_id("openrouter:", names) == (None, "openrouter:")
+    # A prefix with nothing after it names the provider and no model — handed
+    # back as such so resolve() refuses it instead of routing elsewhere.
+    assert providers.split_model_id("openrouter:", names) == ("openrouter", "")
 
 
 @pytest.mark.parametrize(
@@ -168,8 +184,11 @@ async def test_create_lists_and_gets_a_provider_with_the_key_masked(client, pool
     assert created["listing"] == "available"
     assert "2 models" in created["listing_note"]
     assert created["verified_at"]
-    # verify-before-save sent the key to the provider, exactly once.
-    assert fake.seen_auth == [f"Bearer {SECRET}"]
+    # verify-before-save sent the real key to the provider once, then a key
+    # that is certainly wrong to learn whether the listing is public — and
+    # this fake's listing is not, so no completion probe followed.
+    assert fake.seen_auth == [f"Bearer {SECRET}", "Bearer nova-verify-this-key-is-wrong"]
+    assert not any(path == "/v1/chat/completions" for path, _ in fake.seen)
 
     listed = (await client.get("/admin/providers")).json()["providers"]
     assert [p["name"] for p in listed] == ["ollama", "openrouter"]
@@ -294,11 +313,9 @@ async def test_live_listing_is_labelled_and_carries_context_and_price(client, mo
 
 
 async def test_chat_routes_by_prefix_and_badges_the_canonical_identity(
-    client, pool, mount_backend, monkeypatch
+    client, pool, mount_backend, local_tags
 ):
-    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
-    ollama = FakeOllama(deltas=("lo", "cal"))
-    mount_backend("http://ollama.test", ollama.app)
+    ollama = local_tags
     fake, _ = await _add_openrouter(client, mount_backend)
 
     cloud = await client.post(
@@ -327,13 +344,12 @@ async def test_chat_routes_by_prefix_and_badges_the_canonical_identity(
 
 
 async def test_a_failing_provider_answers_with_its_own_status_never_another_providers_reply(
-    client, pool, mount_backend, monkeypatch
+    client, pool, mount_backend, local_tags
 ):
     """Rail 20: no silent substitution. A cloud provider that refuses is
     relayed as its refusal — the request is never re-sent to ollama."""
-    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
-    ollama = FakeOllama()
-    mount_backend("http://ollama.test", ollama.app)
+    ollama = local_tags
+    ollama.seen.clear()
     fake, _ = await _add_openrouter(client, mount_backend)
     fake.completions_status = 402
 
@@ -344,7 +360,9 @@ async def test_a_failing_provider_answers_with_its_own_status_never_another_prov
 
     assert resp.status_code == 402
     assert resp.headers["x-nova-served-by"] == "openrouter:anthropic/claude-sonnet-5"
-    assert ollama.seen == []
+    # ollama saw the name check's /api/tags read at create time and nothing
+    # else — never this turn's completion.
+    assert [path for path, _ in ollama.seen if path != "/api/tags"] == []
 
 
 async def test_delete_refuses_the_builtin_and_the_default_then_deletes(client, pool, mount_backend):
@@ -369,8 +387,8 @@ async def test_update_keeps_the_key_when_omitted_and_reverifies(client, pool, mo
     assert resp.status_code == 200, resp.text
     assert resp.json()["model_note"] == "vendor/model ids"
     assert (await providers.get_row(pool, "openrouter"))["api_key"] == SECRET
-    # Re-verified with the stored key.
-    assert fake.seen_auth[-1] == f"Bearer {SECRET}"
+    # Re-verified with the stored key (once at create, once now).
+    assert fake.seen_auth.count(f"Bearer {SECRET}") == 2
 
 
 async def test_api_key_header_shape_sends_azures_header_not_a_bearer(client, mount_backend):
@@ -493,9 +511,9 @@ async def test_put_backend_cloud_upserts_a_provider_and_makes_it_default(
 
     # And back to ollama: the cloud row stays registered, ollama is default.
     back = await client.put("/admin/backend", json={"kind": "ollama"})
-    assert back.status_code == 502 or back.status_code == 200  # depends on OLLAMA_URL fake
+    assert back.status_code == 200, back.text
     names = {r["name"]: r["is_default"] for r in await providers.list_rows(pool)}
-    assert "my-cloud" in names
+    assert names == {"ollama": True, "my-cloud": False}
 
 
 async def test_get_backend_is_derived_from_the_default_row(client, pool, mount_backend):
@@ -663,3 +681,154 @@ async def test_backends_kind_is_derived_not_stored():
         backends.kind_of({"adapter": "anthropic-messages", "auth_shape": "api-key-header"})
         == "cloud"
     )
+
+
+# ── the key must be PROVEN, not just the listing reached ─────────────────
+
+
+async def test_a_public_listing_does_not_prove_the_key_so_a_completion_does(
+    client, pool, mount_backend
+):
+    """OpenRouter's /models is public: a wrong key still lists 431 models.
+    A save that read that as "verified" would land a row whose first turn
+    401s (rail 5). The proof is a 1-token completion on the first listed
+    model, through the same adapter a turn uses."""
+    fake = FakeOpenAICompat(
+        models_body={"object": "list", "data": [{"id": "openai/gpt-x"}]},
+        models_public=True,
+        accepts_key="sk-or-right",
+    )
+    mount_backend("http://public.test", fake.app)
+    body = {
+        "name": "public",
+        "adapter": "openai-chat",
+        "base_url": "http://public.test/v1",
+        "auth_shape": "static-bearer",
+        "api_key": "sk-or-WRONG",
+    }
+
+    wrong = await client.post("/admin/providers", json=body)
+
+    assert wrong.status_code == 502
+    assert "refused on a test completion" in wrong.json()["error"]
+    assert "User not found" in wrong.json()["error"]
+    assert [r["name"] for r in await providers.list_rows(pool)] == ["ollama"]
+
+    right = await client.post("/admin/providers", json={**body, "api_key": "sk-or-right"})
+
+    assert right.status_code == 200, right.text
+    assert "proven with a 1-token completion on openai/gpt-x" in right.json()["listing_note"]
+    probe = [b for path, b in fake.seen if path == "/v1/chat/completions"][-1]
+    assert probe["max_tokens"] == 1 and probe["model"] == "openai/gpt-x"
+
+
+async def test_a_public_listing_with_an_unproven_key_says_so_on_the_row(
+    client, pool, mount_backend
+):
+    fake = FakeOpenAICompat(
+        models_body={"object": "list", "data": [{"id": "m"}]},
+        models_public=True,
+        completions_status=402,
+    )
+    mount_backend("http://broke.test", fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "broke",
+            "adapter": "openai-chat",
+            "base_url": "http://broke.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-x",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert "NOT proven" in resp.json()["listing_note"]
+    assert "402" in resp.json()["listing_note"]
+
+
+async def test_a_listing_that_needs_the_key_proves_it_without_a_completion(
+    client, pool, mount_backend
+):
+    fake = FakeOpenAICompat(
+        models_body={"object": "list", "data": [{"id": "m"}]}, accepts_key="sk-strict"
+    )
+    mount_backend("http://strict.test", fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "strict",
+            "adapter": "openai-chat",
+            "base_url": "http://strict.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-strict",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert "the listing accepted the key" in resp.json()["listing_note"]
+    assert not any(path == "/v1/chat/completions" for path, _ in fake.seen)
+
+
+# ── names, prefixes, and what a bare id means ────────────────────────────
+
+
+async def test_a_name_that_is_a_local_tags_prefix_is_refused(
+    client, pool, mount_backend, local_tags
+):
+    local_tags.tags = ("mistral:7b", "qwen3:8b")
+    fake = FakeOpenAICompat()
+    mount_backend("http://mistral.test", fake.app)
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "mistral",
+            "adapter": "openai-chat",
+            "base_url": "http://mistral.test/v1",
+            "auth_shape": "none",
+        },
+    )
+    assert resp.status_code == 409
+    assert "mistral:7b" in resp.json()["error"]
+    # Refused BEFORE any verify round-trip reached the provider.
+    assert fake.seen == []
+
+
+async def test_an_unreadable_local_listing_refuses_the_name_check_loudly(
+    client, pool, mount_backend, local_tags, monkeypatch
+):
+    monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:1")
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "x",
+            "adapter": "openai-chat",
+            "base_url": "http://x.test/v1",
+            "auth_shape": "none",
+        },
+    )
+    assert resp.status_code == 502
+    assert "cannot check 'x' against the local model tags" in resp.json()["error"]
+
+
+async def test_a_provider_prefix_with_no_model_is_a_400_never_another_provider(
+    client, pool, mount_backend, local_tags
+):
+    await _add_openrouter(client, mount_backend)
+    resp = await client.post(
+        "/v1/chat/completions", json={"model": "openrouter:", "messages": [], "stream": True}
+    )
+    assert resp.status_code == 400
+    assert "openrouter:<model>" in resp.json()["error"]
+    assert [path for path, _ in local_tags.seen if path != "/api/tags"] == []
+
+
+async def test_a_refused_listing_is_recorded_on_the_row(client, pool, mount_backend):
+    fake, _ = await _add_openrouter(client, mount_backend)
+    fake.models_status = 401
+    fake.models_body = {"error": {"message": "key revoked"}}
+
+    resp = await client.get("/admin/providers/openrouter/models")
+
+    assert resp.status_code == 401
+    row = await providers.get_row(pool, "openrouter")
+    assert row["listing"] == "unknown"
+    assert "key revoked" in row["listing_note"]

@@ -24,7 +24,13 @@ import {
   ACCURACY_DISCLAIMER,
   ACCURACY_DISCLAIMER_CURRENT_IS_SMALLER,
 } from '../../lib/modelDisclaimer'
-import { isSmallerTier, mergeModels, type MergedModel } from './modelsFormat'
+import {
+  bareLocalModel,
+  isSmallerTier,
+  mergeModels,
+  qualifyLocalModel,
+  type MergedModel,
+} from './modelsFormat'
 
 /**
  * `api` is a dependency-injection seam, the same idiom as ActivityPage's and
@@ -275,8 +281,8 @@ export function ModelsSection({
     setSwitchError(null)
     setSwitching(slug)
     try {
-      await api.putSetting('chat.model', slug)
-      onModelChanged(slug)
+      await api.putSetting('chat.model', qualifyLocalModel(slug))
+      onModelChanged(qualifyLocalModel(slug))
     } catch (err) {
       setSwitchError(reasonOf(err))
     } finally {
@@ -404,7 +410,7 @@ export function ModelsSection({
               data-testid="current-chat-model"
               className="text-compact font-mono font-medium text-content-primary"
             >
-              {chatModel || 'not set'}
+              {chatModel ? bareLocalModel(chatModel) : 'not set'}
             </p>
           </div>
 
