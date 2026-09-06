@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 import httpx
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 
@@ -225,6 +225,11 @@ class FakeOllama:
     # explicit list lets a test say exactly what's resident, including
     # more than one model or none at all.
     ps_models: list[dict] | None = None
+    # When set, /api/pull emits every line but the last, then waits for the
+    # event before finishing — the only way a test can observe a pull that
+    # is genuinely still in flight (the ASGI test transport buffers a whole
+    # response, so an ungated stream is over before the client sees it).
+    pull_gate: asyncio.Event | None = None
     seen: list[tuple[str, dict | None]] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -321,7 +326,9 @@ class FakeOllama:
             return JSONResponse({"error": "model not found"}, status_code=self.pull_status)
 
         async def lines():
-            for line in self.pull_lines:
+            for index, line in enumerate(self.pull_lines):
+                if self.pull_gate is not None and index == len(self.pull_lines) - 1:
+                    await self.pull_gate.wait()
                 yield f"{line}\n"
 
         return StreamingResponse(lines(), media_type="application/x-ndjson")
@@ -704,3 +711,149 @@ class FakeAnthropic:
                 "last_id": page[-1] if page else None,
             }
         )
+
+
+# ── S10a: the two upstream catalogues a pull is sized from ────────────────
+
+
+@dataclass
+class FakeHFHub:
+    """Stands in for huggingface.co's Hub API, in the shapes verified live on
+    2026-09-06: GET /api/models (a JSON list, paged by an opaque `cursor`
+    query param advertised in the response's `Link: <url>; rel="next"`
+    header) and GET /api/models/{org}/{repo}?blobs=true (the detail body,
+    `siblings` included). Page N of `pages` is served for cursor
+    "cursor-N" (page 0 for no cursor); `status` forces a non-200 on the
+    listing (a 429 with `headers` like Retry-After / ratelimit). Every
+    request's path and RAW query string is recorded, so a test can pin the
+    exact query the client builds."""
+
+    pages: tuple[list[dict], ...] = ([],)
+    repos: dict[str, dict] = field(default_factory=dict)
+    # "org/repo" -> (status, body) for a detail the Hub refuses (gated, private).
+    refusals: dict[str, tuple[int, dict]] = field(default_factory=dict)
+    status: int = 200
+    headers: dict[str, str] = field(default_factory=dict)
+    delay_s: float = 0.0
+    seen: list[tuple[str, str]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.app = Starlette(
+            routes=[
+                Route("/api/models", self._search, methods=["GET"]),
+                Route("/api/models/{org}/{repo}", self._detail, methods=["GET"]),
+            ]
+        )
+
+    async def _record(self, request) -> None:
+        self.seen.append((request.url.path, request.url.query))
+        if self.delay_s:
+            await asyncio.sleep(self.delay_s)
+
+    async def _search(self, request):
+        await self._record(request)
+        if self.status != 200:
+            return JSONResponse(
+                {"error": "Too Many Requests"}, status_code=self.status, headers=self.headers
+            )
+        cursor = request.query_params.get("cursor")
+        index = int(cursor.removeprefix("cursor-")) if cursor else 0
+        page = list(self.pages[index]) if index < len(self.pages) else []
+        headers = {}
+        if index + 1 < len(self.pages):
+            rest = "&".join(
+                f"{k}={v}" for k, v in request.query_params.multi_items() if k != "cursor"
+            )
+            headers["Link"] = (
+                f"<https://huggingface.co/api/models?{rest}&cursor=cursor-{index + 1}>; "
+                'rel="next"'
+            )
+        return JSONResponse(page, headers=headers)
+
+    async def _detail(self, request):
+        await self._record(request)
+        if self.status != 200:  # a rate limit covers every /api call alike
+            return JSONResponse(
+                {"error": "Too Many Requests"}, status_code=self.status, headers=self.headers
+            )
+        key = f"{request.path_params['org']}/{request.path_params['repo']}"
+        if key in self.refusals:
+            status, body = self.refusals[key]
+            return JSONResponse(body, status_code=status)
+        if key not in self.repos:
+            return JSONResponse({"error": "Repository not found"}, status_code=404)
+        return JSONResponse(self.repos[key])
+
+
+@dataclass
+class FakeOllamaRegistry:
+    """Stands in for registry.ollama.ai, as verified live on 2026-09-06:
+    GET /v2/{ns}/{name}/manifests/{tag} answers the manifest as text/plain
+    with a Docker-Content-Digest header, GET /v2/{ns}/{name}/blobs/{digest}
+    answers the config blob, and anything unknown is a registry-shaped 404.
+    Keys of `manifests` and `digests` are "ns/name/tag"; keys of `blobs`
+    are digests."""
+
+    manifests: dict[str, dict] = field(default_factory=dict)
+    blobs: dict[str, dict] = field(default_factory=dict)
+    digests: dict[str, str] = field(default_factory=dict)
+    status: int | None = None  # force every answer to this status
+    # The live registry (2026-09-06) answers a blob GET with a 307 to its
+    # blob store on another host; the store route below plays that host.
+    redirect_blobs: bool = False
+    delay_s: float = 0.0
+    seen: list[tuple[str, dict[str, str]]] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.app = Starlette(
+            routes=[
+                Route("/v2/{ns}/{name}/manifests/{tag}", self._manifest, methods=["GET"]),
+                Route("/v2/{ns}/{name}/blobs/{digest}", self._blob, methods=["GET"]),
+                Route("/store/{digest}", self._store, methods=["GET"]),
+            ]
+        )
+
+    async def _record(self, request) -> None:
+        self.seen.append((request.url.path, {k.lower(): v for k, v in request.headers.items()}))
+        if self.delay_s:
+            await asyncio.sleep(self.delay_s)
+
+    @staticmethod
+    def _not_found(code: str):
+        return JSONResponse(
+            {"errors": [{"code": code, "message": code.lower().replace("_", " ")}]},
+            status_code=404,
+        )
+
+    async def _manifest(self, request):
+        await self._record(request)
+        if self.status is not None:
+            return JSONResponse({"errors": [{"code": "FORCED"}]}, status_code=self.status)
+        p = request.path_params
+        key = f"{p['ns']}/{p['name']}/{p['tag']}"
+        if key not in self.manifests:
+            return self._not_found("MANIFEST_UNKNOWN")
+        headers = {}
+        if key in self.digests:
+            headers["Docker-Content-Digest"] = self.digests[key]
+        return Response(json.dumps(self.manifests[key]), media_type="text/plain", headers=headers)
+
+    async def _blob(self, request):
+        await self._record(request)
+        if self.status is not None:
+            return JSONResponse({"errors": [{"code": "FORCED"}]}, status_code=self.status)
+        digest = request.path_params["digest"]
+        if digest not in self.blobs:
+            return self._not_found("BLOB_UNKNOWN")
+        if self.redirect_blobs:
+            return Response(
+                status_code=307, headers={"Location": f"https://blobs.test/store/{digest}"}
+            )
+        return Response(json.dumps(self.blobs[digest]), media_type="application/octet-stream")
+
+    async def _store(self, request):
+        await self._record(request)
+        digest = request.path_params["digest"]
+        if digest not in self.blobs:
+            return Response(status_code=404)
+        return Response(json.dumps(self.blobs[digest]), media_type="application/octet-stream")
