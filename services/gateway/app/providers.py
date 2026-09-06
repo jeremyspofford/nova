@@ -266,7 +266,8 @@ async def insert_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
             "INSERT INTO providers (name, adapter, base_url, auth_shape, api_key, "
             "default_model, model_note, preset, verified_at, listing, listing_note, "
             "key_proven, verify_note) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), $9, $10, $11, $12) "
+            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, "
+            "CASE WHEN $13 THEN now() ELSE NULL END, $9, $10, $11, $12) "
             f"RETURNING {_COLUMNS}",
             name,
             shape["adapter"],
@@ -280,6 +281,7 @@ async def insert_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
             shape.get("listing_note"),
             shape.get("key_proven"),
             shape.get("verify_note"),
+            bool(shape.get("verified")),
         )
     except asyncpg.UniqueViolationError as exc:
         raise HTTPException(
@@ -291,7 +293,8 @@ async def insert_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
 async def update_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
     row = await pool.fetchrow(
         "UPDATE providers SET adapter = $2, base_url = $3, auth_shape = $4, api_key = $5, "
-        "default_model = $6, model_note = $7, preset = $8, verified_at = now(), "
+        "default_model = $6, model_note = $7, preset = $8, "
+        "verified_at = CASE WHEN $13 THEN now() ELSE verified_at END, "
         "listing = $9, listing_note = $10, key_proven = $11, verify_note = $12, "
         "updated_at = now() "
         f"WHERE name = $1 RETURNING {_COLUMNS}",
@@ -307,6 +310,7 @@ async def update_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
         shape.get("listing_note"),
         shape.get("key_proven"),
         shape.get("verify_note"),
+        bool(shape.get("verified")),
     )
     if row is None:
         raise UnknownProvider(name)

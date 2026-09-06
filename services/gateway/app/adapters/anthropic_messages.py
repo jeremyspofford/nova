@@ -598,15 +598,101 @@ class AnthropicMessages:
                 note=f"{exc} — the key was not tested; the first chat turn will tell",
                 key_proven=None,
             )
-        # Anthropic's /v1/models is behind x-api-key: a 200 listing IS the
-        # key being accepted.
+        note = f"{len(listing.models)} models listed"
+        if not listing.models:
+            return VerifyResult(
+                listing="available",
+                note=f"{note} — nothing to test the key on; the first chat turn will tell",
+                key_proven=None,
+            )
+        # DERIVED, never assumed from the vendor's name: api.anthropic.com's
+        # /v1/models is behind x-api-key, but this adapter takes any base URL
+        # (a proxy's listing may be public). Re-ask with a wrong key.
+        public, decided_by = await self._listing_is_public(app, row)
+        if public is False:
+            return VerifyResult(
+                listing="available", note=f"{note}; the listing accepted the key", key_proven=True
+            )
+        if public is None:
+            return VerifyResult(
+                listing="available",
+                note=f"{note}; whether the listing is public could not be determined — "
+                f"{decided_by} — so the key is NOT proven; the first chat turn will tell",
+                key_proven=None,
+            )
+        model = listing.models[0]["id"]
+        status, words, completed = await self._key_probe(app, row, model)
+        if status in (401, 403):
+            raise ProviderRefused(status, f"the key was refused on a test message — {words}")
+        if completed:
+            return VerifyResult(
+                listing="available",
+                note=f"{note}; the listing is public, so the key was proven with a 1-token "
+                f"message on {model}",
+                key_proven=True,
+            )
         return VerifyResult(
             listing="available",
-            note=f"{len(listing.models)} models listed; the listing accepted the key",
-            key_proven=True,
+            note=f"{note}; the listing is public and a 1-token test on {model} answered "
+            f"{status} ({words}) — the key is NOT proven; the first chat turn will tell",
+            key_proven=False,
         )
 
+    async def _listing_is_public(self, app, row: dict) -> tuple[bool | None, str]:
+        """Same three-valued check as openai-chat (see there): 401/403 to a
+        wrong key = the listing requires the key; 200 = public; anything
+        else decides nothing."""
+        probe_row = dict(row, api_key="nova-verify-this-key-is-wrong")
+        url = base_url_of(row)
+        client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=self.headers(probe_row))
+        try:
+            async with client as c:
+                resp = await c.get("/models", params={"limit": 1})
+        except httpx.HTTPError as exc:
+            return None, f"the wrong-key check could not reach {url}/models — {reason(exc)}"
+        if resp.status_code == 200:
+            return True, "the listing answered 200 to a wrong key"
+        if resp.status_code in (401, 403):
+            return False, f"the listing refused a wrong key ({resp.status_code})"
+        return None, f"the wrong-key check answered {resp.status_code} ({refusal_detail(resp)})"
+
+    async def _key_probe(self, app, row: dict, model: str) -> tuple[int, str, bool]:
+        """A 1-token message through the SAME translation a turn uses —
+        (status, the provider's words, whether a completion came back)."""
+        try:
+            response = await self._completions_app(
+                app,
+                row,
+                model,
+                {"messages": [{"role": "user", "content": "hi"}], "max_tokens": 1, "stream": False},
+            )
+        except ProviderRefused as exc:
+            return exc.status, exc.detail, False
+        content = b""
+        iterator = getattr(response, "body_iterator", None)
+        if iterator is not None:
+            async for chunk in iterator:
+                content += chunk if isinstance(chunk, bytes) else str(chunk).encode()
+        else:
+            content = response.body
+        words = content.decode(errors="replace")[:400]
+        completed = False
+        if response.status_code == 200:
+            try:
+                parsed = json.loads(content)
+            except ValueError:
+                parsed = None
+            completed = (
+                isinstance(parsed, dict)
+                and isinstance(parsed.get("choices"), list)
+                and parsed.get("error") is None
+            )
+        return response.status_code, words, completed
+
     async def completions(self, request: Request, row: dict, model: str, body: dict) -> Response:
+        return await self._completions_app(request.app, row, model, body)
+
+    async def _completions_app(self, app, row: dict, model: str, body: dict) -> Response:
         url = base_url_of(row)
         if not url:
             raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
@@ -614,9 +700,7 @@ class AnthropicMessages:
         if translation.notes:
             logger.info("anthropic translation notes: %s", "; ".join(translation.notes))
         streaming = translation.body["stream"]
-        client = http_client(
-            request.app, COMPLETIONS_TIMEOUT, base_url=url, headers=self.headers(row)
-        )
+        client = http_client(app, COMPLETIONS_TIMEOUT, base_url=url, headers=self.headers(row))
         try:
             upstream = await client.send(
                 client.build_request("POST", "/messages", json=translation.body),

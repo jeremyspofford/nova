@@ -236,6 +236,9 @@ class FakeOpenAICompat:
     # … so only a completion can prove the key. When set, /chat/completions
     # 401s unless the bearer matches.
     accepts_key: str | None = None
+    # What a WRONG key gets on /models when the listing is not public —
+    # 401 normally; 429 models a provider that rate-limits the second call.
+    models_wrong_key_status: int = 401
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -258,7 +261,9 @@ class FakeOpenAICompat:
         self._note(request)
         self.seen.append((request.url.path, None))
         if not self.models_public and not self._key_ok(request):
-            return JSONResponse({"error": {"message": "Invalid API key"}}, status_code=401)
+            return JSONResponse(
+                {"error": {"message": "Invalid API key"}}, status_code=self.models_wrong_key_status
+            )
         return JSONResponse(self.models_body, status_code=self.models_status)
 
     async def _completions(self, request):
@@ -308,6 +313,14 @@ class FakeAnthropic:
     models: tuple[str, ...] = ("claude-opus-5", "claude-sonnet-5")
     models_status: int = 200
     page_size: int = 1000
+    # api.anthropic.com's /v1/models is behind x-api-key; a proxy's may be
+    # public. `accepts_key` None = any key is fine (the pre-existing tests'
+    # shape); set it and /v1/models (unless public) and /v1/messages 401
+    # any other key. `models_wrong_key_status` overrides what a wrong key
+    # gets on /v1/models (e.g. 429) when the listing is not public.
+    accepts_key: str | None = None
+    models_public: bool = False
+    models_wrong_key_status: int = 401
     seen: list[tuple[str, dict | None]] = field(default_factory=list)
     seen_headers: list[dict] = field(default_factory=list)
 
@@ -380,8 +393,21 @@ class FakeAnthropic:
                 return f"{key}: not supported on this model"
         return None
 
+    def _key_ok(self, request) -> bool:
+        if self.accepts_key is None:
+            return True
+        return request.headers.get("x-api-key") == self.accepts_key
+
     async def _messages(self, request):
         body = await self._record(request)
+        if not self._key_ok(request):
+            return JSONResponse(
+                {
+                    "type": "error",
+                    "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+                },
+                status_code=401,
+            )
         invalid = self._invalid(body)
         if invalid is not None:
             return JSONResponse(
@@ -500,6 +526,14 @@ class FakeAnthropic:
 
     async def _models(self, request):
         await self._record(request)
+        if not self.models_public and not self._key_ok(request):
+            return JSONResponse(
+                {
+                    "type": "error",
+                    "error": {"type": "authentication_error", "message": "invalid x-api-key"},
+                },
+                status_code=self.models_wrong_key_status,
+            )
         if self.models_status != 200:
             return JSONResponse(
                 {

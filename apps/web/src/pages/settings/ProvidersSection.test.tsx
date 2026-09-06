@@ -398,7 +398,9 @@ describe('ProvidersSection — the owner can see the verdict and find the models
       ]),
     })
     await waitFor(() => expect(screen.getByTestId('provider-status-legacy')).toBeTruthy())
-    expect(screen.getByTestId('provider-status-legacy').textContent).toContain('the key was not tested')
+    // A row with no server verdict text gets NO clause — nothing invented.
+    expect(screen.getByTestId('provider-status-legacy').textContent).toMatch(/^Checked \S+ ago$|^Checked just now$/)
+    expect(screen.getByTestId('provider-status-azure').textContent).toContain('the key was not tested')
     for (const name of ['legacy', 'azure']) {
       const el = screen.getByTestId(`provider-status-${name}`)
       expect(el.textContent.startsWith('Checked')).toBe(true)
@@ -518,7 +520,7 @@ describe('ProvidersSection — Re-verify', () => {
       updateProvider: vi.fn(async () => proven),
     })
     await waitFor(() => expect(screen.getByTestId('provider-status-openrouter')).toBeTruthy())
-    expect(screen.getByTestId('provider-status-openrouter').textContent).toContain('the key was not tested')
+    expect(screen.getByTestId('provider-status-openrouter').textContent).toMatch(/^Checked /)
     fireEvent.click(screen.getByRole('button', { name: /re-verify openrouter/i }))
     await waitFor(() =>
       expect(screen.getByTestId('provider-status-openrouter').textContent).toContain('key was proven'),
@@ -540,5 +542,36 @@ describe('ProvidersSection — Re-verify', () => {
     fireEvent.click(screen.getByRole('button', { name: /re-verify openrouter/i }))
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('refused on a test completion'))
     expect(screen.getByTestId('provider-status-openrouter').textContent).toContain('the listing accepted the key')
+  })
+})
+
+
+describe('ProvidersSection — a listing refresh never touches another row\'s default', () => {
+  it('merges only the listing and verdict fields, not is_default', async () => {
+    const stale = provider({ is_default: true })
+    const other = provider({ name: 'other', is_default: false })
+    const getProviders = vi.fn(async () => [OLLAMA, stale, other])
+    const { api } = renderSection({
+      getProviders,
+      makeDefaultProvider: vi.fn(async () => provider({ name: 'other', is_default: true })),
+      getProviderModels: vi.fn(async () => {
+        // The snapshot the refresh will read still says openrouter is default.
+        getProviders.mockImplementation(async () => [
+          OLLAMA,
+          provider({ is_default: true, listing_note: 'refreshed' }),
+          other,
+        ])
+        return LISTING
+      }),
+    })
+    await waitFor(() => expect(screen.getByTestId('toggle-models-openrouter')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('toggle-models-openrouter'))
+    fireEvent.click(within(screen.getByTestId('provider-other')).getByRole('button', { name: /make default/i }))
+    await waitFor(() => expect(api.makeDefaultProvider).toHaveBeenCalledWith('other'))
+    await waitFor(() => expect(api.getProviders).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect(screen.getByTestId('provider-other').textContent).toContain('default for bare model ids'),
+    )
+    expect(screen.getByTestId('provider-openrouter').textContent).not.toContain('default for bare model ids')
   })
 })
