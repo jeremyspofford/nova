@@ -7,8 +7,7 @@ import {
   ScrollText,
   Gauge,
   ChevronsLeft,
-  ChevronsRight,
-} from 'lucide-react'
+  ChevronsRight, Boxes } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -44,6 +43,7 @@ export const navSections: NavSection[] = [
       { to: '/quality', label: 'AI Quality', icon: Gauge, minRole: 'admin' },
       { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },
       { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
+      { to: '/models', label: 'Models', icon: Boxes, minRole: 'admin' },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
     ],
   },

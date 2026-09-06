@@ -798,7 +798,7 @@ export interface CatalogSource {
 export type CatalogKind = 'local' | 'cloud' | 'hub'
 export type CatalogAction = 'use' | 'pull' | 'probe' | 'check_update' | 'update'
 
-export interface CatalogRow {
+export type CatalogRow = {
   /** provider:model — what Use writes to chat.model. */
   id: string
   provider: string

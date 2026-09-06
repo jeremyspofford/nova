@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link, useInRouterContext } from 'react-router-dom'
 import { AlertTriangle, Check, Cloud, Cpu, Download, Info, RefreshCw, Server } from 'lucide-react'
 import {
   Badge,
@@ -227,6 +228,9 @@ export function ModelsSection({
   onRerunSetup: () => Promise<void>
   api?: ModelsApi
 }) {
+  // A Link needs a Router; this section is also rendered bare in its own
+  // tests and the gallery, where a plain anchor is the honest fallback.
+  const inRouter = useInRouterContext()
   const [installed, setInstalled] = useState<string[] | null>(null)
   const [installedError, setInstalledError] = useState<string | null>(null)
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null)
@@ -380,6 +384,20 @@ export function ModelsSection({
             </p>
           </div>
 
+          <p className="text-caption text-content-tertiary" data-testid="models-catalog-link">
+            Browse every model Nova can run or reach, pull from Hugging Face, and pick by size,
+            price or capability in{' '}
+            {inRouter ? (
+              <Link to="/models" className="text-accent hover:underline">
+                Models
+              </Link>
+            ) : (
+              <a href="/models" className="text-accent hover:underline">
+                Models
+              </a>
+            )}
+            .
+          </p>
           {/* Honest, qualitative accuracy disclaimer (S3 walk-fix round 12) —
               no invented number, just the trade-off stated plainly. Emphasized
               (info -> warning tone, one extra sentence) when the model in use

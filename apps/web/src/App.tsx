@@ -15,6 +15,7 @@ import { Login } from './pages/Login'
 import { OnboardingWizard } from './pages/onboarding/OnboardingWizard'
 import { ChatPage } from './pages/chat/ChatPage'
 import { SettingsPage } from './pages/settings/SettingsPage'
+import { ModelsPage } from './pages/models/ModelsPage'
 import { ActivityPage } from './pages/activity/ActivityPage'
 import { FilesPage } from './pages/files/FilesPage'
 import { GovernancePage } from './pages/governance/GovernancePage'
@@ -74,6 +75,7 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         <Route path="/quality" element={<AIQualityPage />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/files" element={<FilesRoute />} />
+        <Route path="/models" element={<ModelsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/dev/components" element={<ComponentGallery />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
