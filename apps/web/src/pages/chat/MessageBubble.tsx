@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { AlertTriangle, Loader2, Unplug } from 'lucide-react'
+import { AlertTriangle, Cpu, Loader2, Unplug } from 'lucide-react'
 import { Markdown } from '../../components/Markdown'
 import type { ErrorRow, MessageRow } from './chatReducer'
 
@@ -92,6 +92,19 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
           ) : null}
         </div>
         {row.activity && <ActivityLine activity={row.activity} />}
+        {/* Who answered — `provider:model` as the gateway stated it on this
+            turn's trace (S10-pre). Absent, never invented, when the turn is
+            still streaming its first round or the server stated none. */}
+        {row.servedBy && (
+          <p
+            data-testid="served-by"
+            title="the provider and model that produced this reply, as recorded on the turn's trace"
+            className="mt-1.5 inline-flex items-center gap-1.5 text-micro text-content-tertiary font-mono"
+          >
+            <Cpu size={11} className="shrink-0" />
+            {row.servedBy}
+          </p>
+        )}
         {/* A cut-off turn keeps whatever really arrived and says it was cut
             off — the alternative is a truncated answer that reads complete. */}
         {row.interrupted && (

@@ -283,3 +283,18 @@ describe('streamChat', () => {
     expect(events[0].type === 'error' && events[0].reason).toContain('Failed to fetch')
   })
 })
+
+
+describe('createSseParser — the served_by frame (S10-pre)', () => {
+  it('turns {"served_by": "provider:model"} into a served event', () => {
+    expect(parseAll(['data: {"served_by": "openrouter:anthropic/claude-sonnet-5"}\n\n'])).toEqual([
+      { type: 'served', servedBy: 'openrouter:anthropic/claude-sonnet-5' },
+    ])
+  })
+
+  it('an empty or non-string served_by is a contract violation, not a badge', () => {
+    const events = parseAll(['data: {"served_by": 7}\n\n'])
+    expect(events).toHaveLength(1)
+    expect(events[0].type).toBe('error')
+  })
+})

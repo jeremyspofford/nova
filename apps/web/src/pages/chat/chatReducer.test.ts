@@ -520,3 +520,42 @@ describe('chatReducer — a Settings model switch (modelSwitched)', () => {
     expect(state.streaming).toBe(true)
   })
 })
+
+
+describe('chatReducer — who answered (S10-pre)', () => {
+  it('a served_by event badges the pending row and nothing else', () => {
+    let state = started()
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'hi' } })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'served', servedBy: 'openrouter:anthropic/claude-sonnet-5' },
+    })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    expect(messages(state).map(m => [m.role, m.servedBy])).toEqual([
+      ['user', null],
+      ['assistant', 'openrouter:anthropic/claude-sonnet-5'],
+    ])
+  })
+
+  it('a row starts with no badge and a served event outside a turn is ignored', () => {
+    const state = chatReducer(emptyChat(), {
+      type: 'event',
+      event: { type: 'served', servedBy: 'ollama:qwen3:8b' },
+    })
+    expect(state.rows).toEqual([])
+    expect(messages(started()).every(m => m.servedBy === null)).toBe(true)
+  })
+
+  it('fetched history carries the server-derived badge, null when it stated none', () => {
+    const state = chatReducer(emptyChat(), {
+      type: 'loaded',
+      conversationId: 'c1',
+      messages: [
+        { id: 'm1', role: 'user', content: 'hi', served_by: null },
+        { id: 'm2', role: 'assistant', content: 'hello', served_by: 'anthropic:claude-opus-5' },
+        { id: 'm3', role: 'assistant', content: 'older row' },
+      ],
+    })
+    expect(messages(state).map(m => m.servedBy)).toEqual([null, 'anthropic:claude-opus-5', null])
+  })
+})

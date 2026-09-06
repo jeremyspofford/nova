@@ -12,6 +12,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     streaming: true,
     interrupted: false,
     activity: null,
+    servedBy: null,
     ...overrides,
   }
 }
@@ -93,6 +94,7 @@ function userRow(text: string): MessageRow {
     id: 'u1',
     role: 'user',
     text,
+    servedBy: null,
     streaming: false,
     interrupted: false,
     activity: null,
@@ -170,5 +172,22 @@ describe('MessageBubble — her replies are markdown, the owner\'s are not', () 
     )
     expect(screen.getByTestId('activity-line').textContent).toBe('device_run: no such file')
     expect(screen.getByText(/Interrupted — the connection dropped/)).toBeDefined()
+  })
+})
+
+
+describe('MessageBubble — who answered (S10-pre)', () => {
+  it('shows no badge until the server stated one', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false })} />)
+    expect(screen.queryByTestId('served-by')).toBeNull()
+  })
+
+  it('shows provider:model exactly as stated', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({ text: 'hi', streaming: false, servedBy: 'anthropic:claude-opus-5' })}
+      />,
+    )
+    expect(screen.getByTestId('served-by').textContent).toBe('anthropic:claude-opus-5')
   })
 })
