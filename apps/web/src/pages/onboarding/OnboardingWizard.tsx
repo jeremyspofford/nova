@@ -13,6 +13,7 @@ import {
 } from './steps'
 import { Welcome } from './steps/Welcome'
 import { CreateAccount } from './steps/CreateAccount'
+import { Timezone } from './steps/Timezone'
 import { HardwareDetection } from './steps/HardwareDetection'
 import { ChooseEngine } from './steps/ChooseEngine'
 import { PickModel } from './steps/PickModel'
@@ -126,6 +127,7 @@ export function OnboardingWizard({ onCompleted }: { onCompleted: () => void }) {
             <Welcome onNext={goNext} onSkip={() => setStep('ready')} />
           )}
           {step === 'account' && <CreateAccount onNext={goNext} />}
+          {step === 'timezone' && <Timezone onNext={goNext} />}
           {step === 'hardware' && <HardwareDetection onNext={goNext} />}
           {step === 'engine' && (
             <ChooseEngine onChosen={handleEngineChosen} onBack={goBack} />

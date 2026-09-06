@@ -10,6 +10,7 @@
 export type WizardStep =
   | 'welcome'
   | 'account'
+  | 'timezone'
   | 'hardware'
   | 'engine'
   | 'model'
@@ -24,6 +25,7 @@ import type { EngineKind } from '../../lib/api'
 const STEP_ORDER: WizardStep[] = [
   'welcome',
   'account',
+  'timezone',
   'hardware',
   'engine',
   'model',
@@ -34,6 +36,7 @@ const STEP_ORDER: WizardStep[] = [
 export const STEP_LABELS: Record<WizardStep, string> = {
   welcome: 'Welcome',
   account: 'Account',
+  timezone: 'Timezone',
   hardware: 'Hardware',
   engine: 'Engine',
   model: 'Model',
@@ -51,6 +54,11 @@ export function wizardSteps({
   return STEP_ORDER.filter(step => {
     // The account step mints the FIRST owner and nothing else.
     if (step === 'account') return !hasUsers
+    // The timezone is set right after the account, on the fresh run only. A
+    // returning run lands on Hardware (initialStep) and nothing reaches back
+    // to it, so listing it would paint a done-mark for a step that never ran.
+    // Settings → General is where a returning owner changes it.
+    if (step === 'timezone') return !hasUsers
     // Only the bundled ollama pulls weights; a remote or cloud endpoint
     // already has its model.
     if (step === 'downloading') return engine !== 'remote' && engine !== 'cloud'

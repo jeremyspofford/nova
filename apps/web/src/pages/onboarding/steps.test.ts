@@ -4,8 +4,19 @@ import { wizardSteps, initialStep, nextStep, prevStep, STEP_LABELS } from './ste
 describe('wizardSteps', () => {
   it('is the full run on a fresh instance', () => {
     expect(wizardSteps({ hasUsers: false, engine: null })).toEqual([
-      'welcome', 'account', 'hardware', 'engine', 'model', 'downloading', 'ready',
+      'welcome', 'account', 'timezone', 'hardware', 'engine', 'model', 'downloading', 'ready',
     ])
+  })
+
+  it('puts the timezone step right after the account step (S9: set during onboarding)', () => {
+    const steps = wizardSteps({ hasUsers: false, engine: null })
+    expect(steps.indexOf('timezone')).toBe(steps.indexOf('account') + 1)
+  })
+
+  it('hides the timezone step on a returning run — Settings → General is the re-run path', () => {
+    // A returning run starts at Hardware and never reaches back, so listing
+    // it would show a done-mark for a step that did not run.
+    expect(wizardSteps({ hasUsers: true, engine: null })).not.toContain('timezone')
   })
 
   it('hides CreateAccount once this instance has an owner', () => {
@@ -30,6 +41,7 @@ describe('wizardSteps', () => {
     for (const step of wizardSteps({ hasUsers: false, engine: null })) {
       expect(STEP_LABELS[step]).toBeTruthy()
     }
+    expect(STEP_LABELS.timezone).toBe('Timezone')
   })
 })
 
@@ -72,12 +84,20 @@ describe('nextStep / prevStep', () => {
 
   it('jumps over a hidden step going forward', () => {
     expect(nextStep(cloud, 'model')).toBe('ready')
+    // Account and timezone are both hidden on a returning run.
     expect(nextStep(returning, 'welcome')).toBe('hardware')
   })
 
   it('jumps over a hidden step going back', () => {
     expect(prevStep(cloud, 'ready')).toBe('model')
     expect(prevStep(returning, 'hardware')).toBe('welcome')
+  })
+
+  it('has the one-shot account step directly behind timezone on the only run that shows it', () => {
+    // Why the Timezone step renders no Back: core registers an owner once,
+    // so there is nothing to go back TO — and no other run lists the step.
+    expect(prevStep(ollama, 'timezone')).toBe('account')
+    expect(prevStep(returning, 'timezone')).toBeNull()
   })
 
   it('has nowhere to go past the ends', () => {
