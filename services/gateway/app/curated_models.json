@@ -6,7 +6,14 @@
     "params_b": 27,
     "min_vram_gb": 22,
     "note": "the top local pick; 256K context",
-    "use_cases": ["chat", "coding", "agentic", "reasoning", "long_context"],
+    "use_cases": [
+      "chat",
+      "coding",
+      "agentic",
+      "reasoning",
+      "long_context"
+    ],
+    "use_cases_verified_at": "2026-09-06",
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3.8/tags"
@@ -18,7 +25,12 @@
     "params_b": 14,
     "min_vram_gb": 16,
     "note": "solid mid-tier local model",
-    "use_cases": ["chat", "coding", "reasoning"],
+    "use_cases": [
+      "chat",
+      "coding",
+      "reasoning"
+    ],
+    "use_cases_verified_at": "2026-09-06",
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3/tags"
@@ -29,8 +41,12 @@
     "family": "14b",
     "params_b": 12,
     "min_vram_gb": 16,
-    "note": "Google's newest local model; 256K context — a non-Qwen alternative at this tier",
-    "use_cases": ["chat", "vision"],
+    "note": "Google's newest local model; 256K context \u2014 a non-Qwen alternative at this tier",
+    "use_cases": [
+      "chat",
+      "vision"
+    ],
+    "use_cases_verified_at": "2026-09-06",
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/gemma4/tags"
@@ -42,7 +58,11 @@
     "params_b": 8,
     "min_vram_gb": 10,
     "note": "fast on modest GPUs",
-    "use_cases": ["chat", "coding"],
+    "use_cases": [
+      "chat",
+      "coding"
+    ],
+    "use_cases_verified_at": "2026-09-06",
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3/tags"
@@ -53,8 +73,11 @@
     "family": "8b",
     "params_b": 8,
     "min_vram_gb": 10,
-    "note": "Meta's widely-deployed 8B — a non-Qwen alternative at this tier",
-    "use_cases": ["chat"],
+    "note": "Meta's widely-deployed 8B \u2014 a non-Qwen alternative at this tier",
+    "use_cases": [
+      "chat"
+    ],
+    "use_cases_verified_at": "2026-09-06",
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/llama3.1/tags"
@@ -66,7 +89,10 @@
     "params_b": 4,
     "min_vram_gb": 6,
     "note": "runs on small dedicated GPUs",
-    "use_cases": ["chat"],
+    "use_cases": [
+      "chat"
+    ],
+    "use_cases_verified_at": "2026-09-06",
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3/tags"
@@ -78,7 +104,10 @@
     "params_b": 1.7,
     "min_vram_gb": 3,
     "note": "smallest local option, CPU-friendly",
-    "use_cases": ["chat"],
+    "use_cases": [
+      "chat"
+    ],
+    "use_cases_verified_at": "2026-09-06",
     "verify_at_walk": false,
     "verified_at": "2026-08-29",
     "verified_url": "https://ollama.com/library/qwen3/tags"

@@ -15,9 +15,11 @@ sibling (app/pulls.py), and a typed number that outlived a re-pushed tag
 was exactly the stale-but-confident figure that rule exists to kill. The
 loader refuses a file that breaks either rule, so it cannot ship.
 """
+
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 CURATED_PATH = Path(__file__).resolve().parent / "curated_models.json"
@@ -44,6 +46,7 @@ REQUIRED_FIELDS = (
     "verified_at",
     "verified_url",
     "use_cases",
+    "use_cases_verified_at",
 )
 # Fields the file once carried and must not again, with the reason.
 RETIRED_FIELDS = {
@@ -88,6 +91,12 @@ def validate_curated(entries) -> list[dict]:
             )
         if len(set(use_cases)) != len(use_cases):
             raise CuratedInvalid(f"curated entry {slug!r} repeats a use case")
+        at = entry.get("use_cases_verified_at")
+        if not isinstance(at, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", at):
+            raise CuratedInvalid(
+                f"curated entry {slug!r}: use_cases_verified_at must be a YYYY-MM-DD date "
+                "(the use_cases are a dated, hand-set fact of their own)"
+            )
     return entries
 
 

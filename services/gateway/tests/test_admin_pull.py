@@ -8,6 +8,7 @@ The first line's contract from S1 holds: `status: preflight`, then either
 `size_bytes` and `resolved` beside them. Every pull is sized upstream
 before it starts, so this module mounts both upstream fakes for every
 test — no test here can reach the real internet whichever ref it pulls."""
+
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +28,11 @@ MANIFEST = {
     "schemaVersion": 2,
     "config": {"digest": CONFIG_DIGEST, "size": 487},
     "layers": [
-        {"mediaType": "application/vnd.ollama.image.model", "digest": "sha256:a", "size": 5225374496},  # noqa: E501
+        {
+            "mediaType": "application/vnd.ollama.image.model",
+            "digest": "sha256:a",
+            "size": 5225374496,
+        },  # noqa: E501
         {"mediaType": "application/vnd.ollama.image.template", "digest": "sha256:b", "size": 1574},
         {"mediaType": "application/vnd.ollama.image.license", "digest": "sha256:c", "size": 11343},
         {"mediaType": "application/vnd.ollama.image.params", "digest": "sha256:d", "size": 96},
@@ -105,9 +110,7 @@ async def test_pull_is_refused_for_a_non_ollama_backend(client, pool):
     assert "ollama" in resp.json()["error"].lower()
 
 
-async def test_pull_streams_ollamas_progress_lines_through_after_a_preflight_line(
-    client, ollama
-):
+async def test_pull_streams_ollamas_progress_lines_through_after_a_preflight_line(client, ollama):
     resp = await client.post("/admin/pull", json={"model": "qwen3:8b"})
 
     assert resp.status_code == 200
@@ -332,21 +335,24 @@ async def test_a_second_pull_of_the_same_model_while_one_streams_is_a_409(
 
     first = asyncio.create_task(client.post("/admin/pull", json={"model": "qwen3:8b"}))
     for _ in range(500):
-        if fake.seen and "qwen3:8b" in admin._PULLS_IN_FLIGHT:
+        if fake.seen and "library/qwen3:8b" in admin._PULLS_IN_FLIGHT:
             break
         await asyncio.sleep(0.01)
-    assert "qwen3:8b" in admin._PULLS_IN_FLIGHT
+    assert "library/qwen3:8b" in admin._PULLS_IN_FLIGHT, "keyed on the CANONICAL ref"
 
     second = await client.post("/admin/pull", json={"model": "qwen3:8b"})
     assert second.status_code == 409
     assert "'qwen3:8b' has been in flight since 20" in second.json()["error"]
+    # The same download spelled another way is the same pull.
+    spelled = await client.post("/admin/pull", json={"model": "library/qwen3:8b"})
+    assert spelled.status_code == 409
     assert len([p for p, _ in fake.seen if p == "/api/pull"]) == 1, "never reached ollama"
 
     gate.set()
     resp = await first
     assert resp.status_code == 200
     assert _lines(resp.content)[-1] == {"status": "success"}
-    assert "qwen3:8b" not in admin._PULLS_IN_FLIGHT
+    assert admin._PULLS_IN_FLIGHT == {}
 
     again = await client.post("/admin/pull", json={"model": "qwen3:8b"})
     assert again.status_code == 200
@@ -363,3 +369,35 @@ async def test_a_pull_ollama_refuses_releases_the_in_flight_slot(
 
     assert resp.status_code == 404
     assert admin._PULLS_IN_FLIGHT == {}
+
+
+def test_canonical_ref_folds_the_spellings_of_one_download_together():
+    """`qwen3:8b`, `library/qwen3:8b` and `qwen3:8b` with the default tag
+    spelled are one registry download; a Hub ref is case-insensitive and
+    its default quant is named, since ollama pulls the same Q4_K_M whether
+    or not it is typed."""
+    assert pulls.canonical_ref("qwen3:8b") == "library/qwen3:8b"
+    assert pulls.canonical_ref("library/qwen3:8b") == "library/qwen3:8b"
+    assert pulls.canonical_ref("qwen3") == "library/qwen3:latest"
+    assert pulls.canonical_ref("someone/model:tag") == "someone/model:tag"
+    assert pulls.canonical_ref(f"hf.co/{REPO}") == pulls.canonical_ref(f"HF.co/{REPO}:Q4_K_M")
+    assert pulls.canonical_ref(f"hf.co/{REPO}:Q8_0") != pulls.canonical_ref(f"hf.co/{REPO}")
+    assert pulls.canonical_ref("ghcr.io/x/y:1") == "ghcr.io/x/y:1"
+
+
+async def test_an_unreadable_registry_config_is_said_on_the_preflight_line(
+    client, ollama, upstreams
+):
+    """The manifest still sizes the pull; quant/family/params are unstated
+    and the line SAYS why, rather than an empty `resolved` reading as
+    'nothing to resolve'."""
+    ollama_registry.clear()  # the config is content-addressed; an earlier test cached it
+    upstreams.registry.blobs = {}
+
+    resp = await client.post("/admin/pull", json={"model": "qwen3:8b"})
+
+    line = _lines(resp.content)[0]
+    assert line["status"] == "preflight" and line["size_source"] == pulls.SOURCE_REGISTRY
+    assert "resolved" not in line
+    assert "config blob could not be read" in line["note"]
+    assert _lines(resp.content)[-1] == {"status": "success"}

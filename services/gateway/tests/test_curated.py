@@ -21,6 +21,7 @@ live from the registry manifest or the Hugging Face sibling — a typed
 number that outlived a re-pushed tag was a stale figure dressed as fact).
 The loader now refuses a file that breaks either rule.
 """
+
 from __future__ import annotations
 
 import json
@@ -41,6 +42,7 @@ REQUIRED_FIELDS = {
     "verified_at",
     "verified_url",
     "use_cases",
+    "use_cases_verified_at",
 }
 EXPECTED_FAMILIES = {"27b", "14b", "8b", "4b", "2b"}
 
@@ -52,6 +54,7 @@ VALID_ENTRY = {
     "min_vram_gb": 2,
     "note": "test-only",
     "use_cases": ["chat"],
+    "use_cases_verified_at": "2026-09-06",
     "verify_at_walk": False,
     "verified_at": "2026-09-06",
     "verified_url": "https://ollama.com/library/x/tags",

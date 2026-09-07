@@ -2,6 +2,7 @@
 wired through the real route — hardware.json, ollama's live /api/ps, and
 the probes table all have to agree with what app/fit.py computes.
 """
+
 from __future__ import annotations
 
 from app import admin, backends
@@ -112,6 +113,7 @@ async def test_a_model_bigger_than_the_whole_card_still_wont_fit_even_after_evic
             "min_vram_gb": 40,
             "note": "test-only fixture",
             "use_cases": ["chat"],
+            "use_cases_verified_at": "2026-09-06",
             "verify_at_walk": False,
             "verified_at": "2026-08-29",
             "verified_url": "https://ollama.com/library/huge/tags",
@@ -180,9 +182,7 @@ async def test_a_failed_probe_row_never_overrides_the_estimate(
     assert fit["needed_gb"] == round(9508 / 1024, 1)
 
 
-async def test_no_gpu_detected_is_unknown_for_every_model(
-    client, pool, monkeypatch, tmp_path
-):
+async def test_no_gpu_detected_is_unknown_for_every_model(client, pool, monkeypatch, tmp_path):
     monkeypatch.setattr(admin, "HARDWARE_PATH", tmp_path / "nonexistent.json")
 
     resp = await client.get("/admin/suggest")
@@ -195,9 +195,7 @@ async def test_no_gpu_detected_is_unknown_for_every_model(
         assert "no GPU" in model["fit"]["reason"]
 
 
-async def test_non_ollama_backend_is_unknown_but_states_why(
-    client, pool, monkeypatch, tmp_path
-):
+async def test_non_ollama_backend_is_unknown_but_states_why(client, pool, monkeypatch, tmp_path):
     _write_hardware(monkeypatch, tmp_path, 24576)
     await backends.save_config(pool, {"kind": "remote", "url": "http://remote.test"})
 
@@ -210,9 +208,7 @@ async def test_non_ollama_backend_is_unknown_but_states_why(
     assert "remote" in fit["reason"]
 
 
-async def test_ollama_url_unset_is_unknown_but_states_why(
-    client, pool, monkeypatch, tmp_path
-):
+async def test_ollama_url_unset_is_unknown_but_states_why(client, pool, monkeypatch, tmp_path):
     _write_hardware(monkeypatch, tmp_path, 24576)
     monkeypatch.delenv("OLLAMA_URL", raising=False)
     await backends.save_config(pool, {"kind": "ollama"})
@@ -224,9 +220,7 @@ async def test_ollama_url_unset_is_unknown_but_states_why(
     assert "OLLAMA_URL" in fit["reason"]
 
 
-async def test_ollama_unreachable_is_unknown_but_states_why(
-    client, pool, monkeypatch, tmp_path
-):
+async def test_ollama_unreachable_is_unknown_but_states_why(client, pool, monkeypatch, tmp_path):
     _write_hardware(monkeypatch, tmp_path, 24576)
     monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:1")
     await backends.save_config(pool, {"kind": "ollama"})

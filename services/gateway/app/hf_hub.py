@@ -16,6 +16,7 @@ Hub's own Retry-After — never retried silently, never masked as "no
 results". Search pages are cached 60 s, repo details 10 min; a cached
 answer keeps its ORIGINAL fetched_at and is marked cached.
 """
+
 from __future__ import annotations
 
 import math
@@ -32,6 +33,7 @@ import httpx
 
 from app.adapters.base import ProviderRefused, http_client, reason, refusal_detail
 from app.cache import TTLCache
+from app.catalog_row import base_row
 
 HF_BASE = "https://huggingface.co"
 HF_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
@@ -177,9 +179,7 @@ def _validate_search(query: str, sort: str, cursor: str | None, limit: int) -> N
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= PAGE_LIMIT_MAX:
         raise ValueError(f"limit must be an integer from 1 to {PAGE_LIMIT_MAX} — got {limit!r}")
     if cursor is not None and (not isinstance(cursor, str) or not CURSOR_RE.match(cursor)):
-        raise ValueError(
-            "cursor must be the opaque token a previous page returned as next_cursor"
-        )
+        raise ValueError("cursor must be the opaque token a previous page returned as next_cursor")
 
 
 def query_params(query: str, sort: str, cursor: str | None, limit: int) -> list[tuple[str, str]]:
@@ -553,20 +553,16 @@ def to_catalog_row(
             True, basis="inferred", source="name", note=f"name matches /{CODING_NAME_PATTERN}/i"
         )
 
-    row = {
-        "id": f"ollama:{model}",
-        "provider": "ollama",
-        "model": model,
-        "label": repo_id.rpartition("/")[2],
-        "kind": "hub",
-        "installed": False,
-        "sources": [
-            {"key": SOURCE_KEY, "url": SOURCE_URL, "fetched_at": fetched_at, "cached": cached}
-        ],
-        "facts": facts,
-        "capabilities": capabilities,
-        "suitability": suitability,
-    }
+    row = base_row(f"ollama:{model}", "ollama", model, repo_id.rpartition("/")[2], "hub")
+    # The Hub cannot know what THIS host has installed: `installed` stays
+    # None here and the catalogue routes derive it from ollama's own tags.
+    row["sources"] = [
+        {"key": SOURCE_KEY, "url": SOURCE_URL, "fetched_at": fetched_at, "cached": cached}
+    ]
+    row["facts"] = facts
+    row["capabilities"] = capabilities
+    row["suitability"] = suitability
+    row["actions"] = ["pull"]
     if quants is not None:
         row["pull"] = {"target": model, "quants": quants}
     return row

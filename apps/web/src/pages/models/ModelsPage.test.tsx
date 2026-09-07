@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { ModelsPage } from './ModelsPage'
+import { ModelsPage, listsInstalled } from './ModelsPage'
 import { ChatProvider } from '../../stores/chat-store'
 import type { Catalog, CatalogRow, HfPage, PullLine, ResolvedRef, SettingDef } from '../../lib/api'
 
@@ -194,23 +194,151 @@ describe('ModelsPage', () => {
     expect(api.pullModel.mock.calls[0][0]).toBe('hf.co/unsloth/Qwen3-Coder-GGUF:Q8_0')
   })
 
-  it('a pull that saw the success line re-reads the catalogue; a quiet stream is a stated failure', async () => {
+  it('a pull that saw the success line re-reads the catalogue and says installed only when it lists the model', async () => {
+    const { api } = renderPage()
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' })).toBeTruthy())
+    // The re-read after the pull lists the model as installed.
+    api.getCatalog.mockResolvedValue({ ...CATALOG, rows: [INSTALLED, { ...AVAILABLE, installed: true, actions: ['use', 'probe'] }, CLOUD] })
+    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    await waitFor(() => expect(screen.getByTestId('pull-panel').textContent).toContain('installed'))
+    expect(screen.getByTestId('pull-panel').textContent).toContain('size from registry.ollama.ai')
+    expect(api.getCatalog).toHaveBeenCalledTimes(2)
+    // Installed now lists it — the CATALOGUE's word, not the stream's.
+    fireEvent.click(screen.getByRole('button', { name: /^Installed/ }))
+    await waitFor(() => expect(screen.getByText('Qwen3 4B')).toBeTruthy())
+  })
+
+  it('a quiet stream is a stated failure and the catalogue is not re-read', async () => {
+    const { api } = renderPage({ pullModel: vi.fn(() => lines([{ status: 'pulling manifest' }])) })
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    await waitFor(() =>
+      expect(screen.getByTestId('pull-panel').textContent).toContain('ended without ollama reporting success'),
+    )
+    expect(api.getCatalog).toHaveBeenCalledTimes(1)
+  })
+
+  it('a success line the re-read catalogue does not confirm is a stated failure, never "installed"', async () => {
     const { api } = renderPage()
     await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
     await waitFor(() => expect(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
-    await waitFor(() => expect(screen.getByTestId('pull-panel').textContent).toContain('installed'))
-    expect(screen.getByTestId('pull-panel').textContent).toContain('size from registry.ollama.ai')
+    await waitFor(() =>
+      expect(screen.getByTestId('pull-panel').textContent).toContain('does not list qwen3:4b as installed'),
+    )
+    expect(screen.getByTestId('pull-panel').textContent).not.toContain('qwen3:4binstalled')
     expect(api.getCatalog).toHaveBeenCalledTimes(2)
 
-    api.pullModel.mockImplementation(() => lines([{ status: 'pulling manifest' }]))
+    // A re-read that fails is stated too.
+    api.getCatalog.mockRejectedValue(new Error('gateway down'))
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
     fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
-    await waitFor(() =>
-      expect(screen.getByTestId('pull-panel').textContent).toContain('ended without ollama reporting success'),
-    )
-    expect(api.getCatalog).toHaveBeenCalledTimes(2)
+    await waitFor(() => expect(screen.getByTestId('pull-panel').textContent).toContain('could not be re-read'))
+  })
+
+  it('listsInstalled matches the bare tag, its :latest form, and only installed local rows', () => {
+    const cat = { ...CATALOG, rows: [{ ...AVAILABLE, installed: true }, row({ id: 'ollama:gemma', model: 'gemma:latest', installed: true })] }
+    expect(listsInstalled(cat, 'qwen3:4b')).toBe(true)
+    expect(listsInstalled(cat, 'gemma')).toBe(true)
+    expect(listsInstalled(CATALOG, 'qwen3:4b')).toBe(false)
+    expect(listsInstalled({ ...CATALOG, rows: [row({ id: 'openrouter:qwen3:4b', installed: true })] }, 'qwen3:4b')).toBe(false)
+  })
+
+  it('Cancel aborts the stream: no catalogue re-read, no "installed", and a new pull can start', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => {
+      release = resolve
+    })
+    const { api } = renderPage({
+      pullModel: vi.fn(async function* () {
+        yield { status: 'preflight', required_gb: 2.5, free_gb: 100, ok: true }
+        yield { status: 'pulling sha256:ab', total: 1000, completed: 100 }
+        await gate
+        yield { status: 'success' }
+      }),
+    })
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    await waitFor(() => expect(screen.getByTestId('pull-panel').textContent).toContain('pulling sha256:ab'))
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.getByTestId('pull-panel').textContent).toContain('cancelled'))
+    release()
+    await new Promise(r => setTimeout(r, 20))
+    expect(screen.getByTestId('pull-panel').textContent).not.toContain('installed')
+    expect(api.getCatalog).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    await waitFor(() => expect(api.pullModel).toHaveBeenCalledTimes(2))
+  })
+
+  it('Use that the server rejects leaves the row uncurrent and states the reason', async () => {
+    const { api } = renderPage({ putSetting: vi.fn(async () => { throw new Error('settings write refused (503)') }) })
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Cloud/ }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'use openrouter:openai/gpt-x' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'use openrouter:openai/gpt-x' }))
+    await waitFor(() => expect(screen.getAllByRole('alert').some(a => a.textContent?.includes('settings write refused (503)'))).toBe(true))
+    expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'openrouter:openai/gpt-x')
+    expect(screen.queryByText('current')).toBeNull()
+    expect(screen.getByRole('button', { name: 'use openrouter:openai/gpt-x' })).toBeTruthy()
+  })
+
+  it('a slow earlier search cannot overwrite a newer one, and switching tabs does not re-search', async () => {
+    let resolveFirst: (page: HfPage) => void = () => {}
+    const first = new Promise<HfPage>(resolve => {
+      resolveFirst = resolve
+    })
+    const later: HfPage = {
+      rows: [row({ id: 'ollama:hf.co/org/Later-GGUF', label: 'Later-GGUF', kind: 'hub', installed: false, actions: ['pull'] })],
+      next_cursor: null,
+      fetched_at: '2026-09-06T12:00:00Z',
+      cached: false,
+    }
+    const searchHf = vi.fn((q: string) => (q === 'qwen coder' ? first : Promise.resolve(later)))
+    const { api } = renderPage({ searchHf })
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
+    fireEvent.change(screen.getByPlaceholderText('e.g. qwen coder'), { target: { value: 'qwen coder' } })
+    await waitFor(() => expect(searchHf).toHaveBeenCalledWith('qwen coder', 'downloads', undefined))
+    fireEvent.change(screen.getByPlaceholderText('e.g. qwen coder'), { target: { value: 'qwen later' } })
+    await waitFor(() => expect(screen.getByText('Later-GGUF')).toBeTruthy())
+    resolveFirst({ rows: [HUB], next_cursor: null, fetched_at: '2026-09-06T12:00:00Z', cached: false })
+    await new Promise(r => setTimeout(r, 20))
+    expect(screen.queryByText('Qwen3-Coder-GGUF')).toBeNull()
+    expect(screen.getByText('Later-GGUF')).toBeTruthy()
+    const calls = api.searchHf.mock.calls.length
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
+    await new Promise(r => setTimeout(r, 20))
+    expect(api.searchHf.mock.calls.length).toBe(calls)
+  })
+
+  it('a row whose source omitted actions renders with no buttons instead of throwing', async () => {
+    const bare = { ...CLOUD, id: 'openrouter:bare/row', label: 'Bare Row', actions: undefined as unknown as CatalogRow['actions'] }
+    renderPage({ getCatalog: vi.fn(async () => ({ ...CATALOG, rows: [INSTALLED, bare] })) })
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Cloud/ }))
+    await waitFor(() => expect(screen.getByText('Bare Row')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'use openrouter:bare/row' })).toBeNull()
+  })
+
+  it('an installed Hub repo is not offered again under Available', async () => {
+    const held = { ...HUB, installed: true, note: 'installed as hf.co/unsloth/Qwen3-Coder-GGUF:Q4_K_M' }
+    renderPage({ searchHf: vi.fn(async () => ({ rows: [held], next_cursor: null, fetched_at: '2026-09-06T12:00:00Z', cached: false })) })
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
+    fireEvent.change(screen.getByPlaceholderText('e.g. qwen coder'), { target: { value: 'qwen coder' } })
+    await new Promise(r => setTimeout(r, 20))
+    expect(screen.queryByText('Qwen3-Coder-GGUF')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }))
+    await waitFor(() => expect(screen.getByText('Qwen3-Coder-GGUF')).toBeTruthy())
   })
 
   it('pull by name resolves live before pulling, and a refusal is the gateway\'s words', async () => {

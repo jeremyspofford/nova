@@ -26,6 +26,8 @@ import {
   resolveModel as apiResolveModel,
   searchHf as apiSearchHf,
   settingValue,
+  type Catalog,
+  type CatalogAction,
   type CatalogRow,
   type HfPage,
   type PullOption,
@@ -97,6 +99,20 @@ function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+/** A row's actions, tolerating a source that omitted the list: no action is
+ * offered, and the table never throws on the row. */
+function actionsOf(row: CatalogRow): CatalogAction[] {
+  return Array.isArray(row.actions) ? row.actions : []
+}
+
+/** Does the re-read catalogue list `target` as installed on the bundled
+ * ollama? A pull of `qwen3:4b` shows up as `ollama:qwen3:4b`; a pull of a
+ * bare `qwen3` as `qwen3:latest`. */
+export function listsInstalled(cat: Catalog, target: string): boolean {
+  const wanted = new Set([target, `${target}:latest`])
+  return cat.rows.some(r => r.kind === 'local' && r.installed === true && r.provider === 'ollama' && wanted.has(r.model))
+}
+
 const bannerClass = 'rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
 
 const TABS: { id: CatalogTab; label: string }[] = [
@@ -151,18 +167,28 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   const pullAbort = useRef<AbortController | null>(null)
   const [quantOptions, setQuantOptions] = useState<Record<string, PullOption[] | 'loading' | string>>({})
 
-  const chatModel = chatState.model ?? settingModel
+  // The persisted setting is the fact; the chat store's value is a cache of
+  // it that may be stale (a switch made elsewhere) — it only fills in
+  // before the settings have loaded.
+  const chatModel = settingModel || chatState.model || ''
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (): Promise<Catalog | null> => {
     setLoadError(null)
     try {
       const [cat, settings] = await Promise.all([api.getCatalog(), api.getSettings()])
       setCatalog(cat)
       setSettingModel(settingValue(settings, 'chat.model', ''))
+      return cat
     } catch (err) {
       setLoadError(reasonOf(err))
+      return null
     }
   }, [api])
+
+  // Answers arriving out of order (a slow first query landing after a
+  // fast second) must not overwrite the newer list: every search takes a
+  // sequence number and only the newest one may publish.
+  const searchSeq = useRef(0)
 
   useEffect(() => {
     void load()
@@ -170,30 +196,36 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
 
   const search = useCallback(
     async (query: string, sortKey: string, cursor?: string) => {
+      const seq = ++searchSeq.current
       setHfLoading(true)
       setHfError(null)
       try {
         const page = await api.searchHf(query, sortKey, cursor)
+        if (seq !== searchSeq.current) return
         setHfPage(page)
         setHfRows(prev => (cursor ? [...prev, ...page.rows] : page.rows))
       } catch (err) {
+        if (seq !== searchSeq.current) return
         setHfError(reasonOf(err))
       } finally {
-        setHfLoading(false)
+        if (seq === searchSeq.current) setHfLoading(false)
       }
     },
     [api],
   )
 
+  // Keyed on the query and sort only: switching tabs does not re-spend a
+  // Hub call (the results simply show on the tabs that list hub rows).
   useEffect(() => {
-    if (facets.tab !== 'available' && facets.tab !== 'all') return
     if (hfQuery.trim().length < 2) {
+      searchSeq.current += 1
       setHfRows([])
       setHfPage(null)
+      setHfLoading(false)
       return
     }
     void search(hfQuery.trim(), hfSort)
-  }, [hfQuery, hfSort, facets.tab, search])
+  }, [hfQuery, hfSort, search])
 
   const allRows = useMemo(() => {
     const base = catalog?.rows ?? []
@@ -270,18 +302,31 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       }
       if (controller.signal.aborted) return
       const settled = settlePull(state)
-      publish(settled)
-      if (settled.done) {
-        // Installed is what the catalogue says after the pull, never what
-        // the stream said.
-        await load()
+      if (!settled.done) {
+        publish(settled)
+        return
       }
+      // ollama said success; installed is what the CATALOGUE says after the
+      // pull, so the panel says "checking" until the re-read lists it.
+      publish({ ...state, status: 'ollama reported success — checking the catalogue…' })
+      const fresh = await load()
+      if (controller.signal.aborted) return
+      if (fresh === null) {
+        publish({ ...state, error: `ollama reported success but the catalogue could not be re-read — ${target} is not confirmed installed` })
+        return
+      }
+      if (!listsInstalled(fresh, target)) {
+        publish({ ...state, error: `ollama reported success but the catalogue does not list ${target} as installed` })
+        return
+      }
+      publish(settled)
     })()
   }
 
   const loadQuants = async (row: CatalogRow) => {
     const parts = hfParts(row.model)
     if (!parts) return
+    if (Array.isArray(quantOptions[row.id])) return // already listed; a re-open is not a re-fetch
     setQuantOptions(prev => ({ ...prev, [row.id]: 'loading' }))
     try {
       const detail = await api.getHfRepo(parts[0], parts[1])
@@ -384,9 +429,11 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
                 title={`${chip.basis}${chip.note ? ` — ${chip.note}` : ''}`}
                 data-basis={chip.basis}
                 className={`inline-flex h-5 items-center rounded-sm px-1.5 text-micro ${
-                  chip.basis === 'inferred'
-                    ? 'border border-dashed border-warning text-warning'
-                    : 'bg-success-dim text-emerald-700 dark:text-emerald-400'
+                  !chip.value
+                    ? 'border border-line text-content-tertiary line-through'
+                    : chip.basis === 'inferred'
+                      ? 'border border-dashed border-warning text-warning'
+                      : 'bg-success-dim text-emerald-700 dark:text-emerald-400'
                 }`}
               >
                 {chip.label}
@@ -435,12 +482,12 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       header: '',
       render: row => (
         <div className="flex flex-wrap items-center gap-1 justify-end">
-          {row.actions.includes('use') && !isCurrent(row, chatModel) && (
+          {actionsOf(row).includes('use') && !isCurrent(row, chatModel) && (
             <Button size="sm" loading={switching === row.id} onClick={() => void use(row)} aria-label={`use ${row.id}`}>
               Use
             </Button>
           )}
-          {row.actions.includes('pull') && row.kind === 'hub' && (
+          {actionsOf(row).includes('pull') && row.kind === 'hub' && (
             <Popover
               trigger={
                 <Button
@@ -457,7 +504,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
               <QuantMenu options={quantOptions[row.id]} onPick={tag => startPull(`${row.model}:${tag}`)} />
             </Popover>
           )}
-          {row.actions.includes('pull') && row.kind !== 'hub' && (
+          {actionsOf(row).includes('pull') && row.kind !== 'hub' && (
             <Button
               size="sm"
               variant="secondary"
@@ -468,7 +515,7 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
               Pull
             </Button>
           )}
-          {row.actions.includes('probe') && (
+          {actionsOf(row).includes('probe') && (
             <Button
               size="sm"
               variant="ghost"

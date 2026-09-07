@@ -11,6 +11,7 @@ alongside it). Whatever cannot be sized says WHY — never a stale number
 dressed as a measurement. The metadata fetch is bounded so it can delay a
 pull's first line by at most METADATA_BUDGET_S; a timeout is stated too.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -40,6 +41,22 @@ def validate_model(model) -> str:
             f"(letters, digits, '.', '_', '-', '/') — got {model!r}"
         )
     return model
+
+
+def canonical_ref(model: str) -> str:
+    """One key per download, however the ref was spelled: a Hub ref lower-
+    cased with its quant (the default named as such, since ollama pulls the
+    same Q4_K_M for `hf.co/o/r` and `hf.co/o/r:Q4_K_M`), a registry ref as
+    `namespace/name:tag` with the library namespace and `latest` made
+    explicit. `validate_model` runs first."""
+    if is_hub_ref(model):
+        org, repo, quant = split_hub_ref(model)
+        return f"hf.co/{org}/{repo}:{quant or hf_hub.DEFAULT_QUANT}".lower()
+    try:
+        ref = ollama_registry.split_ref(model)
+    except (ollama_registry.NotARegistryRef, ValueError):
+        return model  # another registry's ref: ollama decides; the string is the key
+    return f"{ref.namespace}/{ref.name}:{ref.tag}"
 
 
 def is_hub_ref(model: str) -> bool:
@@ -146,13 +163,19 @@ async def _registry_size(app, model: str) -> dict:
     except ProviderRefused as exc:
         return _unknown(model, exc.detail)
     resolved: dict = {}
-    if parsed.config_digest:
+    note = None
+    if not parsed.config_digest:
+        note = "the manifest states no config digest — quant, family and params unstated"
+    else:
         try:
             cfg = await ollama_registry.config(app, model, parsed.config_digest)
         except (ProviderRefused, ValueError) as exc:
-            # The size is still the manifest's; only quant/family/params are
-            # unstated, and their absence from `resolved` says so.
+            # The size is still the manifest's; quant/family/params are
+            # unstated, and the preflight line SAYS so rather than leaving
+            # an empty `resolved` to be read as "nothing to resolve".
             logger.warning("registry config for %s unreadable: %s", model, exc)
+            detail = exc.detail if isinstance(exc, ProviderRefused) else str(exc)
+            note = f"the registry's config blob could not be read — {detail}"
         else:
             facts = ollama_registry.manifest_to_facts(parsed, cfg)
             resolved = {
@@ -162,5 +185,5 @@ async def _registry_size(app, model: str) -> dict:
         "size_bytes": parsed.total_bytes,
         "size_source": SOURCE_REGISTRY,
         "resolved": resolved,
-        "note": None,
+        "note": note,
     }

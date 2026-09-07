@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -45,10 +46,11 @@ def measured_for(row: dict, measured: dict[str, dict[str, dict]]) -> dict[str, d
     return found
 
 
-def decorate(body: dict, measured: dict[str, dict[str, dict]]) -> dict:
+def decorate(body: dict, measured: dict[str, dict[str, dict]], *, read_at: str) -> dict:
     """Add `suitability.<suite>` (basis measured, source core-evals) to
     every row a measurement names. Rows without one are untouched — an
-    unmeasured model is absent, never 0."""
+    unmeasured model is absent, never 0. `read_at` is when eval_runs was
+    read: the source entry carries it like every other source's fetch."""
     rows = body.get("rows")
     if not isinstance(rows, list):
         return body
@@ -65,7 +67,9 @@ def decorate(body: dict, measured: dict[str, dict[str, dict]]) -> dict:
         if isinstance(sources, list) and not any(
             isinstance(s, dict) and s.get("key") == MEASURED_SOURCE for s in sources
         ):
-            sources.append({"key": MEASURED_SOURCE, "url": "core eval_runs"})
+            sources.append(
+                {"key": MEASURED_SOURCE, "url": "core eval_runs", "fetched_at": read_at}
+            )
         for suite, entry in entries.items():
             suitability[suite] = {
                 "value": entry["pass_rate"],
@@ -122,4 +126,8 @@ async def catalog(request: Request) -> Response:
         raise HTTPException(status_code=502, detail="the gateway's catalogue was not an object")
     pool = await db.get_pool()
     measured = await runner.measured_by_model(pool)
-    return Response(content=json.dumps(decorate(body, measured)), media_type="application/json")
+    read_at = datetime.now(UTC).isoformat()
+    return Response(
+        content=json.dumps(decorate(body, measured, read_at=read_at)),
+        media_type="application/json",
+    )

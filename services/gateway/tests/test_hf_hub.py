@@ -5,6 +5,7 @@ No socket anywhere: FakeHFHub is mounted by origin on the real app, so
 the exact query string, pagination and refusal handling under test are
 the real client's. The fixture rows and sibling lists below are the live
 shapes, trimmed."""
+
 from __future__ import annotations
 
 import pytest
@@ -219,9 +220,7 @@ async def test_a_429_without_retry_after_reads_the_ratelimit_header_then_the_win
     assert exc.value.retry_after_s == hf_hub.BUDGET_WINDOW_S
 
 
-async def test_the_local_budget_refuses_the_call_that_would_overrun_the_window(
-    hub, monkeypatch
-):
+async def test_the_local_budget_refuses_the_call_that_would_overrun_the_window(hub, monkeypatch):
     """The Hub's quota is 500 per 300 s per IP — the household's IP. The
     call that would be the 501st is refused HERE, before it leaves, with
     the wait; once the window slides past the oldest call, it goes."""
@@ -407,7 +406,8 @@ def test_to_catalog_row_labels_declared_facts_and_inferred_guesses():
     assert row["model"] == "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
     assert row["label"] == "Qwen3-Coder-30B-A3B-Instruct-GGUF"
     assert row["kind"] == "hub"
-    assert row["installed"] is False
+    assert row["installed"] is None, "the Hub cannot know what THIS host has installed"
+    assert row["actions"] == ["pull"] and row["pull"] is None and row["note"] is None
     assert row["sources"] == [
         {
             "key": "hf-hub",
@@ -444,7 +444,7 @@ def test_to_catalog_row_labels_declared_facts_and_inferred_guesses():
             "note": "name matches /coder|code(?!x)|codestral|starcoder|devstral/i",
         }
     }
-    assert "pull" not in row
+    assert row["pull"] is None  # present (the page dereferences it), unfilled until detail
 
 
 def test_to_catalog_row_keeps_gated_verbatim_and_infers_vision_from_the_pipeline_tag():

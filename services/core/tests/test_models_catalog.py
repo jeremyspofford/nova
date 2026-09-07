@@ -100,8 +100,12 @@ def test_decorate_leaves_unmeasured_rows_untouched_and_never_writes_zero():
                 }
             }
         },
+        read_at="2026-09-07T00:00:00+00:00",
     )
     measured_row = out["rows"][0]["suitability"][SUITE]
+    # The source entry is stamped like every other source's fetch.
+    evals_source = next(s for s in out["rows"][0]["sources"] if s["key"] == "core-evals")
+    assert evals_source["fetched_at"] == "2026-09-07T00:00:00+00:00"
     assert measured_row["value"] is None
     assert measured_row["basis"] == "measured"
     assert "no gradeable case" in measured_row["note"]

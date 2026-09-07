@@ -159,8 +159,15 @@ describe('catalogFormat — current and labels', () => {
     expect(tagLabel('chat', { value: true, basis: 'vetted', source: 'curated', at: '2026-08-29T00:00:00Z' })).toBe('chat ✓ 2026-08-29')
     expect(tagLabel('agent_quality', { value: 0.857, basis: 'measured', source: 'core-evals' })).toBe('agent_quality 86% ●')
     expect(capabilityChips(HUB)).toEqual([
-      { key: 'tools', label: 'tools?', basis: 'inferred', note: 'chat_template mentions tools' },
+      { key: 'tools', label: 'tools?', basis: 'inferred', note: 'chat_template mentions tools', value: true },
     ])
     expect(capabilityChips(LOCAL).map(c => c.label)).toEqual(['tools', 'thinking'])
+    // A stated false is a fact and renders; an absent key is not a denial.
+    const denied = row({
+      id: 'openrouter:x/y',
+      capabilities: { tools: { value: false, basis: 'declared', source: 'provider-listing' } },
+    })
+    expect(capabilityChips(denied).map(c => [c.label, c.value])).toEqual([['no tools', false]])
+    expect(capabilityChips(row({ id: 'openrouter:x/z' }))).toEqual([])
   })
 })

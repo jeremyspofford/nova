@@ -9,6 +9,7 @@ Chat is a pure passthrough: no retries, no fallback, no routing. The
 provider's bytes are relayed exactly, including how it fails. The one thing
 added is the auth header the row asks for.
 """
+
 from __future__ import annotations
 
 import json
@@ -155,6 +156,9 @@ def normalize_models(body: object, *, owned_by: str) -> list[dict]:
             modalities = _str_list(architecture.get("input_modalities"))
             if modalities:
                 row["input_modalities"] = modalities
+            outputs = _str_list(architecture.get("output_modalities"))
+            if outputs:
+                row["output_modalities"] = outputs
         parameters = _str_list(entry.get("supported_parameters"))
         if parameters:
             row["supported_parameters"] = parameters
@@ -214,7 +218,16 @@ def listing_capabilities(row: dict) -> tuple[dict, dict]:
     if row.get("reasoning") is True:
         capabilities["thinking"] = _listed(True, "the listing carries a reasoning object")
 
-    suitability: dict = {"chat": _listed(True, "a chat-completions listing")}
+    # `chat` only when the row itself says it produces text: OpenRouter-
+    # shaped rows carry output_modalities / supported_parameters; a plain
+    # /models listing (OpenAI's lists whisper, tts and embeddings alongside)
+    # states nothing about chat, and nothing is what the row gets.
+    suitability: dict = {}
+    output_modalities = row.get("output_modalities")
+    if isinstance(output_modalities, list) and "text" in output_modalities:
+        suitability["chat"] = _listed(True, "architecture.output_modalities lists text")
+    elif isinstance(row.get("supported_parameters"), list) and row["supported_parameters"]:
+        suitability["chat"] = _listed(True, "supported_parameters are stated (a chat model)")
     benchmarks = row.get("benchmarks") or {}
     for key, field in (
         ("coding", "coding_index"),

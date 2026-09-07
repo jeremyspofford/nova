@@ -1220,6 +1220,7 @@ async def test_a_listing_row_carries_what_openrouter_declared_and_nothing_more(
         "pricing": {"prompt": 2.2e-07, "completion": 9.5e-07},
         "max_output_tokens": 66536,
         "input_modalities": ["text", "image"],
+        "output_modalities": ["text"],
         "supported_parameters": [
             "max_tokens",
             "temperature",
@@ -1244,6 +1245,7 @@ async def test_a_listing_row_carries_what_openrouter_declared_and_nothing_more(
         "context_length": 8192,
         "pricing": {"prompt": 0.0, "completion": 0.0},
         "input_modalities": ["text"],
+        "output_modalities": ["text"],
         "supported_parameters": ["max_tokens"],
     }
 
@@ -1258,7 +1260,11 @@ async def test_a_listing_row_carries_what_openrouter_declared_and_nothing_more(
             "thinking": {"value": True, **LISTED, "note": "the listing carries a reasoning object"},
         },
         {
-            "chat": {"value": True, **LISTED, "note": "a chat-completions listing"},
+            "chat": {
+                "value": True,
+                **LISTED,
+                "note": "architecture.output_modalities lists text",
+            },
             "coding": {
                 "value": 46.0,
                 **LISTED,
@@ -1278,10 +1284,16 @@ async def test_a_listing_row_carries_what_openrouter_declared_and_nothing_more(
             },
         },
     )
-    # A plain listing row declares one thing: that it is a chat model.
+    # A plain OpenRouter row still states text output — that is its chat claim.
     assert listing_capabilities(plain) == (
         {},
-        {"chat": {"value": True, **LISTED, "note": "a chat-completions listing"}},
+        {
+            "chat": {
+                "value": True,
+                **LISTED,
+                "note": "architecture.output_modalities lists text",
+            }
+        },
     )
     # Audio rides the same modality list; a row that states nothing at all
     # still says chat and nothing else.
@@ -1289,3 +1301,18 @@ async def test_a_listing_row_carries_what_openrouter_declared_and_nothing_more(
     assert set(audio) == {"audio"}
     assert audio["audio"]["note"] == "architecture.input_modalities lists audio"
     assert listing_capabilities({"id": "bare"})[0] == {}
+
+
+def test_a_bare_models_row_states_nothing_about_chat():
+    """OpenAI's /v1/models lists whisper, tts and embedding models beside
+    the chat ones with no field telling them apart: a row that states
+    neither output modalities nor supported parameters gets NO chat entry
+    (absent, never a claim), while stated parameters alone are enough."""
+    from app.adapters.openai_chat import listing_capabilities
+
+    bare = {"id": "whisper-1", "owned_by": "openai"}
+    assert listing_capabilities(bare) == ({}, {})
+    parameters_only = {"id": "x/m", "supported_parameters": ["max_tokens"]}
+    _, suitability = listing_capabilities(parameters_only)
+    assert suitability["chat"]["value"] is True
+    assert suitability["chat"]["note"] == "supported_parameters are stated (a chat model)"

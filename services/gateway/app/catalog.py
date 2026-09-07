@@ -31,30 +31,11 @@ from app.adapters import (
     ollama,
     openai_chat,
 )
+from app.catalog_row import BASES, ROW_KEYS, base_row, fact  # noqa: F401 — the shared shape
 
 logger = logging.getLogger("gateway")
 
-ROW_KEYS = frozenset(
-    {
-        "id",
-        "provider",
-        "model",
-        "label",
-        "kind",
-        "installed",
-        "note",
-        "sources",
-        "facts",
-        "capabilities",
-        "suitability",
-        "fit",
-        "probe",
-        "drift",
-        "pull",
-        "actions",
-    }
-)
-BASES = frozenset({"declared", "inferred", "vetted", "measured"})
+_base_row = base_row
 
 SOURCE_TAGS = "ollama-tags"
 SOURCE_SHOW = ollama.SHOW_SOURCE
@@ -68,33 +49,6 @@ CODING_NAME_RE = re.compile(hf_hub.CODING_NAME_PATTERN, re.IGNORECASE)
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
-
-
-def fact(value, basis: str, source: str, **extra) -> dict:
-    entry = {"value": value, "basis": basis, "source": source}
-    entry.update({k: v for k, v in extra.items() if v is not None})
-    return entry
-
-
-def _base_row(id_: str, provider: str, model: str, label: str, kind: str) -> dict:
-    return {
-        "id": id_,
-        "provider": provider,
-        "model": model,
-        "label": label,
-        "kind": kind,
-        "installed": None,
-        "note": None,
-        "sources": [],
-        "facts": {},
-        "capabilities": {},
-        "suitability": {},
-        "fit": None,
-        "probe": None,
-        "drift": None,
-        "pull": None,
-        "actions": [],
-    }
 
 
 def _coding_inferred(name: str) -> dict | None:
@@ -116,11 +70,16 @@ def _put_suitability(suitability: dict, name: str, entry: dict) -> None:
 # ── local rows ────────────────────────────────────────────────────────────
 
 
+def _iso(value) -> str | None:
+    return value.isoformat() if hasattr(value, "isoformat") else value
+
+
 def local_row(
     tags_row: dict,
     shown: dict | None,
     curated_entry: dict | None,
     probe_row: dict | None,
+    fit_probe: dict | None,
     fit_ctx: dict,
     *,
     tags_fetched_at: str,
@@ -140,6 +99,8 @@ def local_row(
     if tags_row.get("modified_at"):
         facts["modified_at"] = fact(tags_row["modified_at"], "declared", SOURCE_TAGS)
     if shown is not None:
+        if shown.get("note"):
+            row["note"] = f"/api/show failed — {shown['note']}"
         row["sources"].append(
             {
                 "key": SOURCE_SHOW,
@@ -181,14 +142,17 @@ def local_row(
         row["sources"].append(
             {"key": SOURCE_PROBE, "url": "gateway probes", "fetched_at": row["probe"]["created_at"]}
         )
-        if probe_row.get("vram_mb") is not None:
-            facts["vram_gb"] = fact(
-                round(probe_row["vram_mb"] / 1024, 1),
-                "measured",
-                SOURCE_PROBE,
-                at=row["probe"]["created_at"],
-            )
-    row["fit"] = _fit_for(curated_entry, probe_row, fit_ctx)
+    # The measured VRAM fact is the newest READING (the probe fit reads — the
+    # same query /admin/suggest uses), dated by that probe, even when a newer
+    # OK probe without a reading is the row's probe block above.
+    if fit_probe is not None and fit_probe.get("vram_mb") is not None:
+        facts["vram_gb"] = fact(
+            round(fit_probe["vram_mb"] / 1024, 1),
+            "measured",
+            SOURCE_PROBE,
+            at=_iso(fit_probe.get("created_at")),
+        )
+    row["fit"] = _fit_for(curated_entry, fit_probe, fit_ctx)
     row["actions"] = ["use", "probe"]
     return row
 
@@ -211,18 +175,26 @@ def _annotate(row: dict, entry: dict | None) -> None:
     if not entry:
         return
     at = entry.get("verified_at")
+    # The slug was checked against the library on `verified_at`; the
+    # use_cases were written on `use_cases_verified_at` — two facts, two
+    # dates, and a tag never wears the other's.
+    use_cases_at = entry.get("use_cases_verified_at")
     row["sources"].append({"key": SOURCE_CURATED, "url": "curated_models.json", "verified_at": at})
     if entry.get("label"):
         row["label"] = entry["label"]
     if entry.get("note"):
-        row["note"] = entry["note"]
+        # A failure note already on the row (an /api/show that did not
+        # answer) stays in front; the vetted note follows it.
+        row["note"] = f"{row['note']} · {entry['note']}" if row["note"] else entry["note"]
     facts = row["facts"]
     if "params_b" not in facts and isinstance(entry.get("params_b"), int | float):
         facts["params_b"] = fact(float(entry["params_b"]), "vetted", SOURCE_CURATED, at=at)
     if "vram_gb" not in facts and isinstance(entry.get("min_vram_gb"), int | float):
         facts["vram_gb"] = fact(float(entry["min_vram_gb"]), "vetted", SOURCE_CURATED, at=at)
     for use in entry.get("use_cases") or []:
-        _put_suitability(row["suitability"], use, fact(True, "vetted", SOURCE_CURATED, at=at))
+        _put_suitability(
+            row["suitability"], use, fact(True, "vetted", SOURCE_CURATED, at=use_cases_at)
+        )
 
 
 def _fit_for(curated_entry: dict | None, probe_row: dict | None, fit_ctx: dict) -> dict:
@@ -300,24 +272,49 @@ def cloud_row(provider_row: dict, model: dict, fetched_at: str, *, cached: bool 
 
 
 async def _probes_by_model(pool, names: list[str]) -> dict[str, dict]:
-    """The newest OK probe row per name — with latency and time, for the
-    row's `probe` block (admin._latest_probes keeps vram only, for fit)."""
+    """The newest OK probe of the BUNDLED ollama per name (kind='ollama' —
+    a second ollama host registered as a provider probes the same bare tag
+    and must not lend its numbers to the local row), with latency and time
+    for the row's `probe` block. Fit does NOT read this: it reads
+    admin._latest_probes (newest with a VRAM reading), the same query
+    /admin/suggest uses, so the two verdicts agree by construction."""
     if not names:
         return {}
     rows = await pool.fetch(
         "SELECT DISTINCT ON (model) model, vram_mb, latency_ms, created_at FROM probes "
-        "WHERE model = ANY($1) AND ok = true "
+        "WHERE model = ANY($1) AND ok = true AND kind = 'ollama' "
         "ORDER BY model, created_at DESC",
         names,
     )
     return {row["model"]: dict(row) for row in rows}
 
 
-async def build(app, pool, *, fit_context: Callable, listing_for: Callable) -> dict:
-    """The whole catalogue. `fit_context(app, pool)` and
-    `listing_for(app, pool, row)` are admin.py's own helpers, passed in so
-    this module owns no HTTP and the numbers agree with /admin/suggest by
-    construction."""
+SHOW_DEADLINE_S = 15.0
+
+
+def _show_timed_out(names: list[str]) -> dict[str, dict]:
+    note = f"/api/show did not answer within {SHOW_DEADLINE_S:g} s"
+    return {
+        name: {"facts": {}, "capabilities": {}, "fetched_at": _now(), "cached": False, "note": note}
+        for name in names
+    }
+
+
+async def build(
+    app,
+    pool,
+    *,
+    fit_context: Callable,
+    listing_for: Callable,
+    latest_probes: Callable,
+) -> dict:
+    """The whole catalogue. `fit_context(app, pool)`, `listing_for(app,
+    pool, row)` and `latest_probes(pool, names)` are admin.py's own helpers,
+    passed in so this module owns no HTTP and the numbers agree with
+    /admin/suggest by construction. The local section (tags + show) and the
+    provider listings run CONCURRENTLY, and the show fan-out is bounded by
+    SHOW_DEADLINE_S — a stalled ollama yields rows with /api/tags facts and
+    a stated note, never a page that times out at core."""
     fetched_at = _now()
     sources: list[dict] = []
     rows: list[dict] = []
@@ -325,91 +322,81 @@ async def build(app, pool, *, fit_context: Callable, listing_for: Callable) -> d
     by_slug = {entry["slug"]: entry for entry in curated}
     fit_ctx = await fit_context(app, pool)
 
-    builtin = await providers.get_row(pool, "ollama")
-    base_url = providers.base_url_of(builtin)
-    installed_names: set[str] = set()
-    try:
-        tags = await ollama.ADAPTER.list_models(app, builtin)
-    except ProviderRefused as exc:
-        sources.append(
-            {"key": "ollama", "ok": False, "rows": 0, "note": exc.detail, "fetched_at": fetched_at}
-        )
-    else:
-        shown = await ollama.facts_for_installed(app, base_url, tags.models)
+    async def local_section() -> tuple[list[dict], list[dict], set[str]]:
+        builtin = await providers.get_row(pool, "ollama")
+        base_url = providers.base_url_of(builtin)
+        try:
+            tags = await ollama.ADAPTER.list_models(app, builtin)
+        except ProviderRefused as exc:
+            failed_source = {"key": "ollama", "ok": False, "rows": 0, "note": exc.detail}
+            return [{**failed_source, "fetched_at": fetched_at}], [], set()
         names = [m["id"] for m in tags.models]
-        probes = await _probes_by_model(pool, names)
-        for tags_row in tags.models:
-            name = tags_row["id"]
-            installed_names.add(name)
-            rows.append(
-                local_row(
-                    tags_row,
-                    shown.get(name),
-                    by_slug.get(name),
-                    probes.get(name),
-                    fit_ctx,
-                    tags_fetched_at=tags.fetched_at,
-                )
+        note = None
+        try:
+            shown = await asyncio.wait_for(
+                ollama.facts_for_installed(app, base_url, tags.models), SHOW_DEADLINE_S
             )
+        except TimeoutError:
+            shown = _show_timed_out(names)
+            note = f"/api/show did not answer within {SHOW_DEADLINE_S:g} s — /api/tags facts only"
+        probe_blocks = await _probes_by_model(pool, names)
+        fit_probes = await latest_probes(pool, names)
+        local_rows = [
+            local_row(
+                tags_row,
+                shown.get(tags_row["id"]),
+                by_slug.get(tags_row["id"]),
+                probe_blocks.get(tags_row["id"]),
+                fit_probes.get(tags_row["id"]),
+                fit_ctx,
+                tags_fetched_at=tags.fetched_at,
+            )
+            for tags_row in tags.models
+        ]
         failed = sum(1 for v in shown.values() if v.get("note"))
-        sources.append(
-            {
-                "key": "ollama",
-                "ok": True,
-                "rows": len(tags.models),
-                "fetched_at": tags.fetched_at,
-                **({"note": f"/api/show failed for {failed} model(s)"} if failed else {}),
-            }
+        if failed and note is None:
+            note = f"/api/show failed for {failed} model(s)"
+        source = {"key": "ollama", "ok": True, "rows": len(tags.models)}
+        source["fetched_at"] = tags.fetched_at
+        if note:
+            source["note"] = note
+        return [source], local_rows, set(names)
+
+    async def one(provider_row: dict) -> tuple[dict, list[dict]]:
+        name = provider_row["name"]
+        failed = {"key": name, "ok": False, "rows": 0, "fetched_at": fetched_at}
+        try:
+            listing = await listing_for(app, pool, provider_row)
+        except ListingUnavailable as exc:
+            return {**failed, "note": str(exc)}, []
+        except ProviderRefused as exc:
+            return {**failed, "note": exc.detail}, []
+        except Exception as exc:  # a bug or a DB error: NAMED, never an anonymous "provider"
+            logger.exception("catalogue: provider %s raised", name)
+            return {**failed, "note": f"the listing raised — {adapters.reason(exc)}"}, []
+        return (
+            {"key": name, "ok": True, "rows": len(listing.models)}
+            | {"fetched_at": listing.fetched_at},
+            [cloud_row(provider_row, m, listing.fetched_at) for m in listing.models],
         )
 
-    library = [entry for entry in curated if entry["slug"] not in installed_names]
-    probes = await _probes_by_model(pool, [entry["slug"] for entry in library])
+    provider_rows = [r for r in await providers.list_rows(pool) if not r["builtin"]]
+    local, *provider_results = await asyncio.gather(
+        local_section(), *(one(r) for r in provider_rows)
+    )
+    local_sources, local_rows, installed_tags = local
+    sources.extend(local_sources)
+    rows.extend(local_rows)
+
+    library = [entry for entry in curated if entry["slug"] not in installed_tags]
+    fit_probes = await latest_probes(pool, [entry["slug"] for entry in library])
     for entry in library:
-        rows.append(library_row(entry, fit_ctx, probes.get(entry["slug"])))
+        rows.append(library_row(entry, fit_ctx, fit_probes.get(entry["slug"])))
     sources.append(
         {"key": SOURCE_CURATED, "ok": True, "rows": len(library), "url": "curated_models.json"}
     )
 
-    provider_rows = [r for r in await providers.list_rows(pool) if not r["builtin"]]
-
-    async def one(provider_row: dict) -> tuple[dict, list[dict]]:
-        name = provider_row["name"]
-        try:
-            listing = await listing_for(app, pool, provider_row)
-        except ListingUnavailable as exc:
-            return {
-                "key": name,
-                "ok": False,
-                "rows": 0,
-                "note": str(exc),
-                "fetched_at": fetched_at,
-            }, []
-        except ProviderRefused as exc:
-            return {
-                "key": name,
-                "ok": False,
-                "rows": 0,
-                "note": exc.detail,
-                "fetched_at": fetched_at,
-            }, []
-        return (
-            {
-                "key": name,
-                "ok": True,
-                "rows": len(listing.models),
-                "fetched_at": listing.fetched_at,
-            },
-            [cloud_row(provider_row, m, listing.fetched_at) for m in listing.models],
-        )
-
-    for result in await asyncio.gather(*(one(r) for r in provider_rows), return_exceptions=True):
-        if isinstance(result, BaseException):
-            logger.exception("catalogue: a provider listing raised", exc_info=result)
-            sources.append(
-                {"key": "provider", "ok": False, "rows": 0, "note": adapters.reason(result)}
-            )
-            continue
-        source, provider_models = result
+    for source, provider_models in provider_results:
         sources.append(source)
         rows.extend(provider_models)
 
@@ -419,15 +406,51 @@ async def build(app, pool, *, fit_context: Callable, listing_for: Callable) -> d
 # ── Hugging Face and the registry, as rows ────────────────────────────────
 
 
-def hf_page_rows(page: hf_hub.HfPage) -> list[dict]:
-    return [
+def hf_page_rows(page: hf_hub.HfPage, installed_names: set[str] | None) -> list[dict]:
+    rows = [
         hf_hub.to_catalog_row(entry, page.fetched_at, cached=page.cached) for entry in page.rows
     ]
+    for row in rows:
+        mark_hub_installed(row, installed_names)
+    return rows
 
 
-def hf_repo_row(repo: hf_hub.HfRepo) -> dict:
+def hf_repo_row(repo: hf_hub.HfRepo, installed_names: set[str] | None) -> dict:
     quants = hf_hub.quants_of(repo.siblings)
-    return hf_hub.to_catalog_row(repo.data, repo.fetched_at, cached=repo.cached, quants=quants)
+    # A detail body without `id` still maps under the ref that was asked for.
+    row = hf_hub.to_catalog_row(
+        {**repo.data, "id": repo.id}, repo.fetched_at, cached=repo.cached, quants=quants
+    )
+    mark_hub_installed(row, installed_names)
+    return row
+
+
+def mark_hub_installed(row: dict, installed_names: set[str] | None) -> None:
+    """`installed` on a Hub row is THIS host's fact, never the Hub's: True
+    when ollama's own tags list the repo under any quant (`hf.co/org/repo:
+    Q4_K_M`), naming the installed tag(s); False when the tags were read
+    and the repo is not among them; None (unstated) when they could not be
+    read."""
+    if installed_names is None:
+        return
+    prefix = f"{row['model']}:"
+    hits = sorted(n for n in installed_names if n == row["model"] or n.startswith(prefix))
+    if hits:
+        row["installed"] = True
+        row["note"] = "installed as " + ", ".join(hits)
+    else:
+        row["installed"] = False
+
+
+async def installed_names(app, pool) -> set[str] | None:
+    """What the bundled ollama lists right now, or None when it could not be
+    asked — the caller then leaves `installed` unstated rather than False."""
+    try:
+        builtin = await providers.get_row(pool, "ollama")
+        listing = await ollama.ADAPTER.list_models(app, builtin)
+    except (ProviderRefused, providers.UnknownProvider):
+        return None
+    return {m["id"] for m in listing.models}
 
 
 async def resolve_ref(app, model: str) -> dict:
@@ -437,7 +460,7 @@ async def resolve_ref(app, model: str) -> dict:
     if pulls.is_hub_ref(model):
         org, repo, quant = pulls.split_hub_ref(model)
         detail = await hf_hub.repo_detail(app, org, repo)
-        row = hf_repo_row(detail)
+        row = hf_repo_row(detail, None)  # a preview: installed is the catalogue's to say
         note = None
         if quant and not hf_hub.find_quant(row["pull"]["quants"], quant):
             note = f"{org}/{repo} has no quant {quant!r}; available: " + ", ".join(
@@ -452,13 +475,16 @@ async def resolve_ref(app, model: str) -> dict:
             **({"note": note} if note else {}),
         }
     manifest = await ollama_registry.manifest(app, model)
-    try:
-        cfg = await ollama_registry.config(app, model, manifest.config_digest)
-    except ProviderRefused as exc:
-        cfg = None
-        cfg_note = f"the registry's config blob could not be read — {exc.detail}"
+    cfg = None
+    cfg_note = None
+    if not manifest.config_digest:
+        cfg_note = "the manifest states no config digest — quant, family and params unstated"
     else:
-        cfg_note = None
+        try:
+            cfg = await ollama_registry.config(app, model, manifest.config_digest)
+        except (ProviderRefused, ValueError) as exc:
+            detail = exc.detail if isinstance(exc, ProviderRefused) else str(exc)
+            cfg_note = f"the registry's config blob could not be read — {detail}"
     facts = ollama_registry.manifest_to_facts(manifest, cfg)
     return {
         "model": model,

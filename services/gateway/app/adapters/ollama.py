@@ -17,6 +17,7 @@ Live shapes, verified 2026-09-06:
                   namespaced by general.architecture) — license (text),
                   modelfile, template, parameters}
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -113,9 +114,7 @@ async def show(app, base_url: str, name: str) -> dict:
         async with client as c:
             resp = await c.post("/api/show", json={"model": name})
     except httpx.HTTPError as exc:
-        raise ProviderRefused(
-            502, f"could not reach ollama at {base_url} — {reason(exc)}"
-        ) from exc
+        raise ProviderRefused(502, f"could not reach ollama at {base_url} — {reason(exc)}") from exc
     if resp.status_code != 200:
         raise ProviderRefused(resp.status_code, refusal_detail(resp))
     try:
@@ -306,6 +305,8 @@ class Ollama:
             raise ProviderRefused(
                 502, f"ollama returned a non-JSON /api/tags response: {exc}"
             ) from exc
+        if not isinstance(tags, dict):
+            raise ProviderRefused(502, "ollama answered /api/tags with something not an object")
         return Listing(source=row["name"], models=tags_to_models(tags))
 
     async def verify(self, app, row: dict) -> VerifyResult:

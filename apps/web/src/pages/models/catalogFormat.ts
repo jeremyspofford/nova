@@ -91,7 +91,9 @@ function inTab(row: CatalogRow, tab: CatalogTab): boolean {
     case 'installed':
       return row.kind === 'local' && row.installed === true
     case 'available':
-      return (row.kind === 'local' && row.installed !== true) || row.kind === 'hub'
+      // A hub repo the host already holds is listed by its INSTALLED row
+      // (hf.co/org/repo:Q4_K_M under Installed), not offered again here.
+      return row.installed !== true && (row.kind === 'local' || row.kind === 'hub')
     case 'cloud':
       return row.kind === 'cloud'
     case 'all':
@@ -221,14 +223,18 @@ export function tagLabel(name: string, fact: CatalogFact<number | boolean>): str
 }
 
 /** The capability chips a row shows — declared and inferred, each marked. */
-export function capabilityChips(row: CatalogRow): { key: string; label: string; basis: CatalogBasis; note?: string }[] {
-  return Object.entries(row.capabilities)
-    .filter(([, fact]) => fact.value === true)
+/** One chip per stated capability. A stated `false` is a fact too ("no
+ * tools", declared by the source) and renders; an ABSENT key is not a
+ * denial and renders nothing. */
+export function capabilityChips(row: CatalogRow): { key: string; label: string; basis: CatalogBasis; note?: string; value: boolean }[] {
+  return Object.entries(row.capabilities ?? {})
+    .filter(([, fact]) => fact.value === true || fact.value === false)
     .map(([key, fact]) => ({
       key,
-      label: fact.basis === 'inferred' ? `${key}?` : key,
+      label: fact.value === false ? `no ${key}` : fact.basis === 'inferred' ? `${key}?` : key,
       basis: fact.basis,
       note: fact.note,
+      value: fact.value === true,
     }))
 }
 

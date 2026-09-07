@@ -5,6 +5,7 @@ Paths are pinned by SDD ledger Ruling R8 — core calls these exact routes
 and forwards nothing but the body, so none of them takes a query
 parameter in S1.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -17,7 +18,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app import adapters, backends, catalog, db, hf_hub, ollama_registry, providers
 from app import curated as curated_mod
@@ -132,9 +133,13 @@ async def _free_and_total_vram_gb(
     if total_gb is None:
         return None, None, "no GPU detected on this host"
     if config["kind"] != "ollama":
-        return None, total_gb, (
-            f"the active backend is {config['kind']}, not local ollama — "
-            "free VRAM isn't observable"
+        return (
+            None,
+            total_gb,
+            (
+                f"the active backend is {config['kind']}, not local ollama — "
+                "free VRAM isn't observable"
+            ),
         )
     base_url = backends.resolve_base_url(config)
     if not base_url:
@@ -152,8 +157,8 @@ async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
     if not slugs:
         return {}
     rows = await pool.fetch(
-        "SELECT DISTINCT ON (model) model, vram_mb FROM probes "
-        "WHERE model = ANY($1) AND ok = true AND vram_mb IS NOT NULL "
+        "SELECT DISTINCT ON (model) model, vram_mb, created_at FROM probes "
+        "WHERE model = ANY($1) AND ok = true AND vram_mb IS NOT NULL AND kind = 'ollama' "
         "ORDER BY model, created_at DESC",
         slugs,
     )
@@ -214,14 +219,20 @@ async def _preflight_line(app, model: str) -> dict:
         line["note"] = f"{sized['note']}; skipping the free-space check"
         return line
     size_bytes = sized["size_bytes"]
+    # A sized pull can still carry the source's own note (the registry's
+    # config blob unreadable, say); it is kept, never overwritten below.
+    notes = [sized["note"]] if sized.get("note") else []
     try:
         stat = os.statvfs(MODELS_DIR)
         free_bytes = stat.f_bavail * stat.f_frsize
     except OSError as exc:
-        line["note"] = f"could not check free space — {exc}"
+        notes.append(f"could not check free space — {exc}")
+        line["note"] = "; ".join(notes)
         line["size_bytes"] = size_bytes
         line["size_source"] = sized["size_source"]
         return line
+    if notes:
+        line["note"] = "; ".join(notes)
     line.update(
         {
             "required_gb": round(size_bytes / (1024**3), 2),
@@ -245,14 +256,15 @@ async def pull(request: Request) -> Response:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    started_at = _PULLS_IN_FLIGHT.get(model)
+    key = pulls_mod.canonical_ref(model)
+    started_at = _PULLS_IN_FLIGHT.get(key)
     if started_at is not None:
         raise HTTPException(
             status_code=409,
             detail=f"a pull of {model!r} has been in flight since {started_at} — "
             "wait for it to finish",
         )
-    _PULLS_IN_FLIGHT[model] = datetime.now(UTC).isoformat()
+    _PULLS_IN_FLIGHT[key] = datetime.now(UTC).isoformat()
     # Until the relay takes over, this frame owns the release.
     released = False
     try:
@@ -269,9 +281,7 @@ async def pull(request: Request) -> Response:
 
         ollama_url = backends.resolve_base_url(config)
         if not ollama_url:
-            raise HTTPException(
-                status_code=502, detail="OLLAMA_URL is unset — cannot reach ollama"
-            )
+            raise HTTPException(status_code=502, detail="OLLAMA_URL is unset — cannot reach ollama")
 
         # Sized BEFORE the stream opens, so the first line is the size and
         # the download never starts in the dark; bounded inside pull_size.
@@ -310,7 +320,7 @@ async def pull(request: Request) -> Response:
             finally:
                 await upstream.aclose()
                 await client.aclose()
-                _PULLS_IN_FLIGHT.pop(model, None)
+                _PULLS_IN_FLIGHT.pop(key, None)
 
         released = True
         return StreamingResponse(
@@ -318,7 +328,7 @@ async def pull(request: Request) -> Response:
         )
     finally:
         if not released:
-            _PULLS_IN_FLIGHT.pop(model, None)
+            _PULLS_IN_FLIGHT.pop(key, None)
 
 
 async def _nvidia_smi_used_mb() -> tuple[float | None, str | None]:
@@ -357,9 +367,7 @@ async def _nvidia_smi_used_mb() -> tuple[float | None, str | None]:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(), timeout=NVIDIA_SMI_TIMEOUT_S
-        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=NVIDIA_SMI_TIMEOUT_S)
     except (OSError, TimeoutError) as exc:
         return None, f"nvidia-smi could not be run — {exc}"
     if proc.returncode != 0:
@@ -704,7 +712,21 @@ async def catalog_route(request: Request) -> dict:
     labelled with its source and fetch time (app/catalog.py)."""
     pool = await db.get_pool()
     return await catalog.build(
-        request.app, pool, fit_context=_fit_context, listing_for=_listing_for
+        request.app,
+        pool,
+        fit_context=_fit_context,
+        listing_for=_listing_for,
+        latest_probes=_latest_probes,
+    )
+
+
+def _rate_limited(exc: hf_hub.RateLimited) -> JSONResponse:
+    """A 429 whose BODY carries retry_after_s: core forwards bodies, not
+    headers, so the page would otherwise see the words without the time."""
+    return JSONResponse(
+        status_code=429,
+        content={"error": exc.detail, "retry_after_s": exc.retry_after_s},
+        headers={"Retry-After": str(exc.retry_after_s)},
     )
 
 
@@ -728,13 +750,12 @@ async def catalog_hf(request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except hf_hub.RateLimited as exc:
-        raise HTTPException(
-            status_code=429, detail=exc.detail, headers={"Retry-After": str(exc.retry_after_s)}
-        ) from exc
+        return _rate_limited(exc)
     except adapters.ProviderRefused as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    installed = await catalog.installed_names(request.app, await db.get_pool())
     return {
-        "rows": catalog.hf_page_rows(page),
+        "rows": catalog.hf_page_rows(page, installed),
         "next_cursor": page.next_cursor,
         "fetched_at": page.fetched_at,
         "cached": page.cached,
@@ -752,12 +773,11 @@ async def catalog_hf_repo(org: str, repo: str, request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except hf_hub.RateLimited as exc:
-        raise HTTPException(
-            status_code=429, detail=exc.detail, headers={"Retry-After": str(exc.retry_after_s)}
-        ) from exc
+        return _rate_limited(exc)
     except adapters.ProviderRefused as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
-    return catalog.hf_repo_row(detail)
+    installed = await catalog.installed_names(request.app, await db.get_pool())
+    return catalog.hf_repo_row(detail, installed)
 
 
 @router.get("/catalog/resolve")
@@ -770,8 +790,6 @@ async def catalog_resolve(request: Request) -> dict:
     except (ValueError, ollama_registry.NotARegistryRef) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except hf_hub.RateLimited as exc:
-        raise HTTPException(
-            status_code=429, detail=exc.detail, headers={"Retry-After": str(exc.retry_after_s)}
-        ) from exc
+        return _rate_limited(exc)
     except adapters.ProviderRefused as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
