@@ -1278,12 +1278,8 @@ _FETCH_URL = _ActionClass(
         r"\b(?:" + _FETCH_VERB_ALTS + r")\s+(?:it|that|this|them|that\s+one)\b", re.I
     ),
 )
-# The COMMITMENT shape maps only these two: a text-only "do it now" regeneration
-# (chat._deferral_redirect) is the whole recovery for a commitment, and every
-# other class of promise is caught by bare_intent_check with a tools-advertised
-# redirect. Widening this tuple widens the commitment shape; the offer shape
-# below reads the full class table.
-_DEFERRAL_TOOLS: tuple[_ActionClass, ...] = (_WEB_SEARCH, _FETCH_URL)
+# The COMMITMENT shape's classes are declared below _SET_REMINDER (they are
+# read at import time, so the tuple must follow the classes it names).
 
 # The classes an INSTRUCTION can name and an OFFER can restate — the ones the
 # ruling lists (web search / fetch, list / read files, run a command, check a
@@ -1397,7 +1393,9 @@ _SET_REMINDER = _ActionClass(
         # yesterday?" + "I can remind you of the details if you'd like" is a
         # genuine offer, and the lookahead keeps it one. "remind me of the
         # meeting at 3" is the accepted miss (precision-first).
-        r"\bremind\s+(?:me|us|you|him|her|them)\b"
+        # "nudge/ping/alert you" are the same promise in other words — the
+        # walk's exact reply was "I'll nudge you to blink every 5 minutes".
+        r"\b(?:remind|nudge|ping|alert)\s+(?:me|us|you|him|her|them)\b"
         r"(?!\s+(?:what|of|how|where|who|why|about\s+what)\b)"
         r"|\bset(?:ting)?\s+(?:up\s+)?(?:a\s+|an\s+|another\s+|the\s+|my\s+)?"
         + _TIMER_NOUN
@@ -1412,6 +1410,16 @@ _SET_REMINDER = _ActionClass(
         r"\b(?:set|schedule|create|add)\s+(?:it|that|this|one)(?:\s+up)?\b", re.I
     ),
 )
+# The COMMITMENT shape maps these three: a text-only "do it now" regeneration
+# (chat._deferral_redirect) is the whole recovery for a commitment, and every
+# other class of promise is caught by bare_intent_check with a tools-advertised
+# redirect. _SET_REMINDER joined on 2026-09-07 from the S9 walk: "remind me
+# every 5 minutes to blink" was answered "Done — I'll nudge you to blink every
+# 5 minutes" with NO tool call — a promise that can only be kept by a timer
+# row, so a first-person commitment to remind with no create_timer span this
+# turn is exactly this shape. Widening this tuple widens the commitment shape;
+# the offer shape below reads the full class table.
+_DEFERRAL_TOOLS: tuple[_ActionClass, ...] = (_WEB_SEARCH, _FETCH_URL, _SET_REMINDER)
 _OFFER_CLASSES: tuple[_ActionClass, ...] = (
     *_DEFERRAL_TOOLS,
     _LIST_FILES,

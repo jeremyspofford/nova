@@ -558,6 +558,18 @@ def deferred(correction) -> str | None:
 # MUST FIRE: a first-person future commitment to a registered tool action, with
 # no successful span of that tool this turn. The owner's exact case leads.
 DEFERRAL_MUST_FIRE = [
+    # The S9 walk (2026-09-07 15:16 UTC): "remind me every 5 minutes to blink"
+    # → this exact reply, ZERO tool calls, no guard fired. A promise to remind
+    # can only be kept by a timer row, so with no create_timer span it is a
+    # deferral in every sense the owner cares about.
+    (
+        "owner_reminder_hollow_promise",
+        "Done — I'll nudge you to blink every 5 minutes. It'll pop up here in this chat "
+        "and as a device notification each time.",
+        "create_timer",
+    ),
+    ("ill_remind_you_at", "I'll remind you at 7 tomorrow morning.", "create_timer"),
+    ("let_me_set_a_timer", "Let me set a timer for that.", "create_timer"),
     ("owner_web_search", "I'll perform a web search for the latest Pixel news.", "web_search"),
     ("ill_search", "I'll search for the latest on that.", "web_search"),
     ("let_me_look_it_up", "Let me look it up.", "web_search"),
@@ -591,6 +603,11 @@ def test_deferral_must_fire_when_the_tool_never_ran(label, reply, tool):
 # an offer — and with NO instruction behind them they are still clean, pinned
 # there as OFFER_GENUINE_WITHOUT_INSTRUCTION.
 DEFERRAL_MUST_NOT_FIRE = [
+    # Reminder-class near-misses: recall is memory, not a timer; a negated or
+    # conditional promise commits to nothing; an offer is the offer shape's.
+    ("remind_you_what_recall", "I'll remind you what we discussed yesterday: the deadline."),
+    ("wont_remind_again", "I won't remind you again unless you ask."),
+    ("remind_offer_conditional", "I can remind you of the details if you'd like."),
     # a non-tool "action" — the verb maps to no registered tool
     ("let_me_think", "Let me think about that."),
     ("keep_in_mind", "I'll keep that in mind."),
@@ -639,6 +656,20 @@ def test_deferral_does_not_fire_when_the_tool_actually_ran():
     reply = "Let me search the web — here is what I found."
     spans = [tool_span("web_search")]
     assert guards.deferral_check(reply, spans, DEFERRAL_TOOLS) is None
+
+
+def test_a_reminder_promise_backed_by_a_create_timer_span_is_honest():
+    """The S9 walk's reply with the row actually written: "Done — I'll nudge
+    you…" after a successful create_timer is a true report of a timer that
+    exists, and the guard stays silent. Without the span (DEFERRAL_MUST_FIRE)
+    the same words are a hollow promise."""
+    reply = (
+        "Done — I'll nudge you to blink every 5 minutes. It'll pop up here in this chat "
+        "and as a device notification each time."
+    )
+    assert guards.deferral_check(reply, [tool_span("create_timer")], DEFERRAL_TOOLS) is None
+    claim = guards.deferral_check(reply, [tool_span("create_timer", ok=False)], DEFERRAL_TOOLS)
+    assert claim is not None and claim.tool == "create_timer" and claim.kind == "commitment"
 
 
 def test_deferral_fires_when_the_matching_span_failed():
