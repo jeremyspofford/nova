@@ -2057,8 +2057,15 @@ async def _run_turn(
     model: str,
     max_tool_rounds: int,
     emit: Callable[[str | None], None],
+    *,
+    ingest: bool = True,
 ) -> None:
     """The whole turn, run to completion regardless of who is still watching.
+
+    `ingest=False` (S9) skips the memory ingest and nothing else: a scheduled
+    timer's instruction rides as the model's message and must not be written
+    into memory as something he said today, every day. Chat and the eval
+    runner leave it at the default.
 
     This is the ONLY writer of the assistant message and the ONLY caller of
     close_turn for this turn. It is spawned as a detached background task, so
@@ -3031,7 +3038,7 @@ async def _run_turn(
         # the cached result instead of fetching again (byte-identical, same old
         # timestamp — the owner's walk caught exactly this). So skip it too; the
         # next "what's the latest?" re-fetches.
-        if not plumbing_turn and not read_ephemeral:
+        if ingest and not plumbing_turn and not read_ephemeral:
             _queue_ingest(
                 app, turn, person, conversation_id, {"user": message, "assistant": persisted}
             )

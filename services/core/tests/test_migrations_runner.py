@@ -10,6 +10,7 @@ import asyncpg
 import pytest
 
 from app.migrations_runner import (
+    _CREATE_TRACKING_TABLE,
     MigrationOrderError,
     discover_migrations,
     plan_pending,
@@ -66,9 +67,37 @@ _SKIP_REASON = "TEST_DATABASE_URL not set — no dockerized postgres available f
 
 @pytest.fixture
 async def clean_schema_migrations():
+    """An empty tracking table for the test — and the REAL one back afterwards.
+
+    These tests record fake filenames (001_init / 002_second / 003_third) in the
+    shared test database's schema_migrations. Left there, any later suite that
+    runs core's real startup (main.lifespan -> run_migrations over the real
+    migrations dir) finds 002_core_schema.sql "unrecorded but numbered below the
+    highest applied migration (3)" and refuses to start. The two lifespan suites
+    that existed before S9 sort alphabetically BEFORE this file and never met
+    it; test_scheduler's lifespan test sorts after and did. So the rows the
+    real migrations recorded are snapshotted here and put back on teardown."""
+    conn = await asyncpg.connect(TEST_DSN)
+    try:
+        exists = await conn.fetchval("SELECT to_regclass('schema_migrations') IS NOT NULL")
+        snapshot = (
+            await conn.fetch("SELECT filename, applied_at FROM schema_migrations")
+            if exists
+            else None
+        )
+        await conn.execute("DROP TABLE IF EXISTS schema_migrations")
+    finally:
+        await conn.close()
+    yield
     conn = await asyncpg.connect(TEST_DSN)
     try:
         await conn.execute("DROP TABLE IF EXISTS schema_migrations")
+        if snapshot is not None:
+            await conn.execute(_CREATE_TRACKING_TABLE)
+            await conn.executemany(
+                "INSERT INTO schema_migrations (filename, applied_at) VALUES ($1, $2)",
+                [(row["filename"], row["applied_at"]) for row in snapshot],
+            )
     finally:
         await conn.close()
 

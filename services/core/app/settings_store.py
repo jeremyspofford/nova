@@ -7,8 +7,10 @@ becoming an invisible no-op setting.
 """
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import asyncpg
 from fastapi import APIRouter, HTTPException
@@ -25,6 +27,32 @@ class SettingDef:
     type: str  # one of _PYTHON_TYPES below
     default: Any
     description: str
+    # A check beyond the type, run by validated() after it: returns the problem
+    # in words, or None when the value is acceptable. Optional — most defs need
+    # only the type. Never serialized (def_json drops it).
+    validate: Callable[[Any], str | None] | None = None
+
+
+def _timezone_problem(value: Any) -> str | None:
+    """The zone must load: a misspelt zone stored here would make every
+    absolute-time timer compute in the wrong place, silently."""
+    if not isinstance(value, str) or not value.strip():
+        return "the timezone is empty — give an IANA zone name like America/New_York"
+    try:
+        ZoneInfo(value)
+    except Exception:  # ZoneInfoNotFoundError; ValueError for a path-shaped string
+        return f"{value!r} is not an IANA timezone (e.g. America/New_York, Europe/London, UTC)"
+    return None
+
+
+def def_json(definition: SettingDef) -> dict:
+    """The def as the API lists it — every field but the validate callable."""
+    return {
+        "key": definition.key,
+        "type": definition.type,
+        "default": definition.default,
+        "description": definition.description,
+    }
 
 
 SETTING_DEFS: tuple[SettingDef, ...] = (
@@ -80,6 +108,17 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
             "net, not a guarantee. Off by default."
         ),
     ),
+    SettingDef(
+        key="nova.timezone",
+        type="str",
+        default="UTC",
+        description=(
+            "The IANA timezone this household lives in (e.g. America/New_York). "
+            "Reminders and schedules at an absolute time are computed in it, and "
+            "get_time answers in it. Set during setup; change it here if you move."
+        ),
+        validate=_timezone_problem,
+    ),
 )
 
 DEFS_BY_KEY: dict[str, SettingDef] = {d.key: d for d in SETTING_DEFS}
@@ -111,6 +150,10 @@ def validated(key: str, value: Any) -> SettingDef:
                 f"got {type(value).__name__}: {value!r}"
             ),
         )
+    if definition.validate is not None:
+        problem = definition.validate(value)
+        if problem is not None:
+            raise HTTPException(status_code=400, detail=f"setting {key}: {problem}")
     return definition
 
 
@@ -133,7 +176,7 @@ async def read_value(pool: asyncpg.Pool | asyncpg.Connection, key: str) -> Any:
 @router.get("")
 async def list_settings() -> dict:
     values = await read_values(await db.get_pool())
-    return {"settings": [{**asdict(d), "value": values[d.key]} for d in SETTING_DEFS]}
+    return {"settings": [{**def_json(d), "value": values[d.key]} for d in SETTING_DEFS]}
 
 
 @router.put("")

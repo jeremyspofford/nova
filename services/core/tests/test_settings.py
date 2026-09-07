@@ -16,12 +16,16 @@ pytestmark = requires_db
 # No approvals (owner ruling 2026-09-03) takes it back to five: the graduation
 # setting has no reader — there is no earned autonomy, so nothing graduates.
 # Deliberate tripwire update, not a routing-around.
+# S9 (scheduling) makes it six again: nova.timezone is the one install-wide
+# IANA zone reminders and schedules at an absolute time are computed in — and
+# the first def to carry a `validate` hook (the zone must load), pinned below.
 KNOWN_KEYS = {
     "onboarding.completed",
     "chat.model",
     "appearance.default_preset",
     "agents.max_tool_rounds",
     "agents.responsiveness_check",
+    "nova.timezone",
 }
 
 
@@ -127,3 +131,48 @@ async def test_an_int_setting_refuses_a_string_and_a_float(owner_client):
             "/api/v1/settings", json={"key": "agents.max_tool_rounds", "value": value}
         )
         assert resp.status_code == 400, value
+
+
+# -- nova.timezone and the validate hook (S9) ---------------------------------------
+
+
+async def test_nova_timezone_defaults_to_utc_and_a_real_zone_round_trips(owner_client, pool):
+    items = await _by_key(owner_client)
+    assert items["nova.timezone"]["type"] == "str"
+    assert items["nova.timezone"]["default"] == "UTC"
+    assert items["nova.timezone"]["value"] == "UTC"
+    resp = await owner_client.put(
+        "/api/v1/settings", json={"key": "nova.timezone", "value": "America/New_York"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert await pool.fetchval(
+        "SELECT value FROM settings WHERE key = 'nova.timezone'"
+    ) == "America/New_York"
+    assert (await _by_key(owner_client))["nova.timezone"]["value"] == "America/New_York"
+
+
+async def test_nova_timezone_refuses_a_zone_that_does_not_load_by_name(owner_client, pool):
+    """The validate hook: the type is right (a string) and the value is still
+    refused, naming it — a misspelt zone stored here would move every
+    absolute-time timer without a word."""
+    for bad in ("Mars/Olympus", "america/new_york", "", "EST5EDT/../x"):
+        body = {"key": "nova.timezone", "value": bad}
+        resp = await owner_client.put("/api/v1/settings", json=body)
+        assert resp.status_code == 400, (bad, resp.text)
+        assert "nova.timezone" in resp.json()["error"]
+        if bad:
+            assert bad in resp.json()["error"]
+    assert await pool.fetchval("SELECT count(*) FROM settings") == 0
+
+
+async def test_the_validate_hook_runs_after_the_type_check(owner_client):
+    # A non-string never reaches the zone check: the type error is the one stated.
+    resp = await owner_client.put("/api/v1/settings", json={"key": "nova.timezone", "value": 5})
+    assert resp.status_code == 400
+    assert "expects str" in resp.json()["error"]
+    assert "IANA" not in resp.json()["error"]
+
+
+async def test_the_listing_carries_no_validate_callable(owner_client):
+    for item in (await _by_key(owner_client)).values():
+        assert set(item) == {"key", "type", "default", "description", "value"}

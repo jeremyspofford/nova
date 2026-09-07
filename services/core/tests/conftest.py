@@ -32,6 +32,8 @@ OWNER = {"name": "jeremy", "password": "correct horse battery staple"}
 # and every enrolled device pins it, so it behaves like schema, not per-test
 # state. Tests that need it absent delete it themselves.
 _TABLES = (
+    "timer_firings",
+    "timers",
     "device_audit",
     "devices",
     "pairing_codes",

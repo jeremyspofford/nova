@@ -357,6 +357,15 @@ _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
         "the ONE place core determines a device's connectivity during _admit; "
         "writes {device, connected} to ctx.facts_sink for BOTH outcomes.",
     ),
+    ("scheduler.py", "_connected_device_names"): (
+        _BOOKKEEPING,
+        "S9: reads connected_ids() only to pick which paired devices a REMINDER "
+        "is delivered to. Each target is then re-determined and RECORDED by "
+        "_require_connected inside the device_notify call the firing dispatches "
+        "through chat._run_tool, so the span carries the fact; the 'no paired "
+        "device was connected' note lands on the firing row for the Schedules "
+        "page, never in text a model produced or a guard reads.",
+    ),
     ("tools/devices.py", "device_list"): (
         _REPORTER,
         "reads connected_ids() to render each paired device's status and "
