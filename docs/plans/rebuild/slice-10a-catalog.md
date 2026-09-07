@@ -66,7 +66,7 @@ tree held another session's uncommitted edits).
   Pull by name resolved live. One pull at a time; installed is what the
   re-read catalogue says, never the stream. `lib/pullStream.ts` is the ONE
   pull reducer (Settings → Models and the wizard now share it).
-- Suites: gateway 376, core 1384, web 514, tsc clean.
+- Suites: gateway 386, core 1384, web 522, tsc clean (after the review wave).
 
 ## Verified live (2026-09-07, the real stack)
 
@@ -97,12 +97,32 @@ registry. Web bundle carries the page; tailnet 200.
 
 ## Carries
 
-- **Adversarial review did not run.** The four-lens refute workflow on this
-  branch hit the session token limit before any finder returned; the
-  gateway T1/T2 implementers' own reports and the suites are the only
-  review so far. Re-run `review-s10a-1-catalogue` (script saved under the
-  session's workflows) before the owner's walk, or walk first and review
-  after.
+- **Adversarial review: ran, fixed, deployed.** The first four-lens run
+  died on a session limit (0 findings is not a clean review — it was
+  re-run); the re-run confirmed 30 findings, 2 critical, and refuted 7.
+  The fix wave is commit 8622583c (gateway 386 / core 1384 / web 522,
+  deployed 2026-09-07 with `--force-recreate`; live: 438 rows all the same
+  16 keys, Hub rows with `actions` and `installed` derived from
+  /api/tags, vetted tags dated 2026-09-06, resolve and core forward 200).
+  Criticals: a Hub row lacked `actions`/`fit`/`probe`/`drift`/`note` and
+  threw in the table on the first live result (the one row shape now
+  lives in `app/catalog_row.py` and both the assembler and the Hub mapper
+  build from it; the shape pin is equality for every source); `installed`
+  was hardcoded False on Hub rows (now derived from the host's own tags,
+  None when ollama could not be asked). Majors: `chat` declared for every
+  listing row (now only where the row states text output or parameters);
+  probes unfiltered by kind and fit reading a different query than
+  suggest (both use `_latest_probes`, kind='ollama'); the pull panel
+  saying "installed" from the stream (it re-reads and checks the
+  catalogue lists the target); the page trusting the chat store over the
+  persisted setting. The minors are listed in the commit. Refuted, with
+  the run's reasons: preflight cache fetched_at, Cancel not re-checking,
+  the empty-quant repo, an unparseable Link header, the raw-string lock
+  (a separate finding, 27, moved the key to a canonical ref), Settings →
+  Models reading installed from the stream, the uuid tiebreak.
+- **Curated pin moved again:** `use_cases_verified_at` joined
+  REQUIRED_FIELDS — the use_cases are a dated fact of their own and no
+  longer borrow the slug's `verified_at`.
 - **rebuild/v4 merge pending.** The S9 session holds uncommitted edits in
   `.worktrees/v4` that overlap this branch's files (App.tsx, Sidebar.tsx,
   api.ts); `slice/s10a` already contains rebuild/v4's HEAD, so the merge is
