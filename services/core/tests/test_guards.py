@@ -658,6 +658,85 @@ def test_deferral_does_not_fire_when_the_tool_actually_ran():
     assert guards.deferral_check(reply, spans, DEFERRAL_TOOLS) is None
 
 
+# -- the COMPLETION shape (S9 walk 2026-09-07 15:2x UTC) ------------------------------
+# After the commitment shape learned "I'll nudge you", the SAME request produced
+# "Verified — your blink reminder is now running." — a present-tense claim that a
+# timer exists, zero tool calls. A timer exists only as a row create_timer wrote.
+COMPLETION_MUST_FIRE = [
+    (
+        "owner_verified_running",
+        "Verified — your blink reminder is now running. It'll fire every 5 minutes (next "
+        "one in a couple of minutes) and land here in chat plus as a notification on your "
+        "connected devices.",
+    ),
+    ("ive_set_a_reminder", "I've set a reminder for 7am tomorrow."),
+    ("i_set_up_the_timer", "I set up the daily timer for you."),
+    ("reminder_set_head", "Reminder set for 11:14 EDT — it will land here."),
+    ("timer_has_been_added", "The timer has been added and is live."),
+]
+COMPLETION_MUST_NOT_FIRE = [
+    ("no_reminder_is_set", "No reminder is set right now."),
+    ("isnt_running", "Your reminder isn't running any more."),
+    ("not_set_yet", "The timer is not set yet."),
+    ("second_person_can", "You can set a reminder by asking me to remind you."),
+    ("question", "Should I set a reminder for that?"),
+    ("quoted_relay", 'You said "the reminder is set" — I have no record of that.'),
+    ("couldnt_set", "I couldn't set the reminder — the time you gave has already passed."),
+    ("unrelated_running", "The build is now running on your laptop."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", COMPLETION_MUST_FIRE, ids=[c[0] for c in COMPLETION_MUST_FIRE]
+)
+def test_a_timer_completion_claim_with_no_timer_span_is_a_deferral(label, reply):
+    claim = guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS)
+    assert claim is not None, f"{label!r} claims a timer exists and nothing wrote one"
+    assert claim.kind == "completion" and claim.tool == "create_timer"
+
+
+@pytest.mark.parametrize(
+    "label,reply", COMPLETION_MUST_NOT_FIRE, ids=[c[0] for c in COMPLETION_MUST_NOT_FIRE]
+)
+def test_a_timer_completion_near_miss_stays_quiet(label, reply):
+    assert (
+        guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS) is None
+    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+
+
+@pytest.mark.parametrize("backing", ["create_timer", "list_timers", "cancel_timer"])
+def test_a_timer_completion_claim_is_backed_by_any_successful_timer_tool(backing):
+    reply = COMPLETION_MUST_FIRE[0][1]
+    assert guards.deferral_check(reply, [tool_span(backing)], DEFERRAL_TOOLS) is None
+    failed = guards.deferral_check(reply, [tool_span(backing, ok=False)], DEFERRAL_TOOLS)
+    assert failed is not None and failed.kind == "completion"
+
+
+def test_the_post_creation_confirmation_is_honest_only_with_the_row_behind_it():
+    """Moved out of OFFER_MUST_NOT_FIRE on 2026-09-07: "Reminder set for …" after
+    "remind me in two minutes" was pinned quiet with no span. That is exactly the
+    S9 walk's fabrication shape — the tool's own report words with no tool. With
+    the create_timer span it is the honest confirmation it looks like."""
+    instruction = "remind me in two minutes to stretch"
+    reply = "Reminder set for Sat 6 Sep 2026 14:32 EDT (in 2 minutes)."
+    backed = guards.deferral_check(
+        reply, [tool_span("create_timer")], DEFERRAL_TOOLS, user_message=instruction
+    )
+    assert backed is None
+    unbacked = guards.deferral_check(
+        reply, [other_span()], DEFERRAL_TOOLS, user_message=instruction
+    )
+    assert unbacked is not None and unbacked.kind == "completion"
+
+
+def test_a_timer_completion_claim_needs_create_timer_registered():
+    """Derived from the live registry: an instance without timer tools has
+    nothing to claim about, so the shape is inert there."""
+    reply = COMPLETION_MUST_FIRE[0][1]
+    without = [name for name in DEFERRAL_TOOLS if not name.endswith(("_timer", "_timers"))]
+    assert guards.deferral_check(reply, [other_span()], without) is None
+
+
 def test_a_reminder_promise_backed_by_a_create_timer_span_is_honest():
     """The S9 walk's reply with the row actually written: "Done — I'll nudge
     you…" after a successful create_timer is a true report of a timer that
@@ -1141,11 +1220,6 @@ OFFER_MUST_NOT_FIRE = [
     ("s9_negated_instruction", "don't remind me about the dentist", "Want me to set a reminder?"),
     ("s9_that_reminds_me", "that reminds me, what's the weather?", "Want me to set a reminder?"),
     ("s9_calendar_question", "what's on my schedule today?", "Want me to set a reminder?"),
-    (
-        "s9_confirmation",
-        "remind me in two minutes to stretch",
-        "Reminder set for Sat 6 Sep 2026 14:32 EDT (in 2 minutes).",
-    ),
     # "remind me what…" asks for RECALL, not a timer: an offer to look it up
     # is a genuine offer, never a create_timer instruction handed back.
     (

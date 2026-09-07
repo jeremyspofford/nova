@@ -296,6 +296,33 @@ def offer_redirect_nudge(*, ran_a_tool: bool) -> str:
     )
 
 
+def _completion_honest_note(action_phrase: str) -> str:
+    """The truthful fallback when a COMPLETION-shape deferral (S9 walk: "your
+    reminder is now running" with no timer tool span) could not be redirected
+    into the action. APPENDED like the offer shape's note. States only what is
+    mechanically true: no timer tool ran this turn, so nothing is set."""
+    return (
+        f"Correction: I said that was done, but I did not {action_phrase} this turn — "
+        "no timer exists for it. Ask me again and I'll set it."
+    )
+
+
+def completion_redirect_nudge(*, ran_a_tool: bool) -> str:
+    """The completion-shape redirect's nudge: the reply claimed a timer exists
+    while no timer tool ran, so nothing is set. Refuses to emit if its
+    precondition (nothing ran) did not hold, like its siblings."""
+    if ran_a_tool:
+        raise ValueError(
+            "the completion redirect nudge asserts nothing has run this turn; "
+            f"ran_a_tool={ran_a_tool}"
+        )
+    return (
+        "You reported a reminder or schedule as set, but no timer tool ran this turn, "
+        "so nothing is set. Do it now by calling create_timer (or list_timers to check "
+        "what exists), then report only what the tool returned."
+    )
+
+
 def _bare_intent_ran_but_unreported_note(ran_names: str) -> str:
     """The truthful fallback when a bare-intent redirect's FIRST round really
     dispatched a tool but the closing round's report did not survive (empty,
@@ -2820,10 +2847,14 @@ async def _run_turn(
         # did not stand the honest note is APPENDED (as the commitment shape
         # appends), not swapped in. Shares the guard span NAME "deferral" with
         # the other two shapes; `kind` in its meta tells them apart.
+        # The COMPLETION shape (S9 walk 2026-09-07: "your blink reminder is now
+        # running" with no timer tool span) takes the same tools-advertised
+        # redirect: the row can be written this time. Only the nudge and the
+        # honest note differ; `kind` in the span meta says which shape fired.
         offer_redirected = False
         if (
             deferral is not None
-            and deferral.kind == "offer"
+            and deferral.kind in ("offer", "completion")
             and not mechanical_guard_fired
             and not redirect_spent
             and not out_of_rounds
@@ -2839,14 +2870,22 @@ async def _run_turn(
                 turn,
                 model,
                 claim_kind="deferral",
-                correction_text=_offer_honest_note(deferral.action_phrase),
+                correction_text=(
+                    _completion_honest_note(deferral.action_phrase)
+                    if deferral.kind == "completion"
+                    else _offer_honest_note(deferral.action_phrase)
+                ),
                 span_meta={
-                    "kind": "offer",
+                    "kind": deferral.kind,
                     "detected": True,
                     "action": deferral.tool,
                     "phrase": deferral.phrase,
                 },
-                nudge_for=lambda ran: offer_redirect_nudge(ran_a_tool=ran),
+                nudge_for=(
+                    (lambda ran: completion_redirect_nudge(ran_a_tool=ran))
+                    if deferral.kind == "completion"
+                    else (lambda ran: offer_redirect_nudge(ran_a_tool=ran))
+                ),
                 redirect_note=DEFERRAL_NOTE,
                 out_of_rounds=out_of_rounds,
                 messages=messages,
@@ -3030,7 +3069,15 @@ async def _run_turn(
             # again: "want me to?" plus the honest note is choreography about
             # the instruction handed back, and recalling it later is how the
             # habit gets reinforced. A redirect that stood did the work.
-            or (deferral is not None and deferral.kind == "offer" and not offer_redirected)
+            # The completion shape is the worst of them: "your reminder is now
+            # running" with no row is a fabricated fact, and a recalled
+            # fabrication is how the next one gets its wording. A redirect that
+            # stood wrote the row (or said plainly it did not).
+            or (
+                deferral is not None
+                and deferral.kind in ("offer", "completion")
+                and not offer_redirected
+            )
         )
         # A turn that only READ live external data (a web fetch — an ephemeral
         # tool) is a point-in-time snapshot, not durable knowledge. Ingesting it

@@ -1404,7 +1404,11 @@ _SET_REMINDER = _ActionClass(
         r"(?:reminder|timer|task|turn|check|summary|report|message|instruction|run|job)s?\b",
         re.I,
     ),
-    ("create_timer",),
+    # create_timer is the tool an instruction/commitment of this class calls
+    # (registered_tool returns the first); the other two also COUNT as work
+    # of the class — after a real list_timers, "your reminder is running" is a
+    # report of what she read, not a fabrication.
+    ("create_timer", "list_timers", "cancel_timer"),
     "set the reminder",
     restated=re.compile(
         r"\b(?:set|schedule|create|add)\s+(?:it|that|this|one)(?:\s+up)?\b", re.I
@@ -1598,7 +1602,8 @@ class DeferralClaim:
     of doing it. `tool` is the registered tool that would satisfy it,
     `action_phrase` the human phrase the redirect/honest-note read out,
     `phrase` the matched text for the guard span, and `kind` which shape it
-    is — "commitment" or "offer"."""
+    is — "commitment", "offer", or "completion" (a present-tense claim that a
+    timer exists / is set with no timer tool span behind it, S9 walk)."""
 
     tool: str
     action_phrase: str
@@ -1714,6 +1719,67 @@ def _restated_offer(
     return None
 
 
+# -- the COMPLETION shape of the deferral guard (S9 walk, 2026-09-07) ------
+#
+# The third shape, for the second lie the S9 walk caught: asked "remind me every
+# 5 minutes to blink" (after the commitment shape had learned "I'll nudge you"),
+# the model answered "Verified — your blink reminder is now running. It'll fire
+# every 5 minutes…" with ZERO tool calls. No commitment lead ("I'll"), no
+# file/url verb for narration, no device for the state guard — a claim that a
+# TIMER EXISTS, in the present tense, with nothing behind it. A timer exists only
+# as a row create_timer wrote, so the claim is backed by exactly one thing: a
+# successful timer tool span THIS turn (create_timer wrote it; list_timers or
+# cancel_timer read the rows it is reporting on). Same rules as the family:
+# PURE, PRECISION-first — a question, a negation before the claim ("no reminder
+# is set", "isn't running"), a quoted/relayed line, or a second-person "you can
+# set a reminder" is never a claim; the recovery is the offer shape's redirect
+# WITH TOOLS ADVERTISED, so the row gets written this time.
+_TIMER_STATE_NOUN = r"(?:reminder|timer|alarm|nudge|schedule)s?"
+_TIMER_COMPLETION = re.compile(
+    # "your blink reminder is now running", "the timer has been set", "reminders are scheduled"
+    rf"\b{_TIMER_STATE_NOUN}\s+(?:is|are|was|were|has\s+been|have\s+been)\s+"
+    r"(?:now\s+|all\s+|already\s+|officially\s+)?"
+    r"(?:set|running|active|scheduled|in\s+place|live|saved|created|added|armed)\b"
+    # "I've set a reminder", "I set up a daily timer", "I just scheduled the nudge"
+    rf"|\bi(?:['’]ve|\s+have|\s+just|\s+went\s+ahead\s+and)?\s+"
+    r"(?:set|scheduled|created|added|saved|started|armed)\s+(?:up\s+)?"
+    rf"(?:a\s+|an\s+|the\s+|your\s+|that\s+|this\s+|another\s+)?(?:[\w-]+\s+){{0,2}}?{_TIMER_STATE_NOUN}\b"
+    # "Reminder set (id …)" / "Timer scheduled." at the head of a sentence — the
+    # tool's own report shape, which is exactly what a fabrication imitates
+    rf"|(?:^|[.!?—–:-]\s*){_TIMER_STATE_NOUN}\s+(?:set|scheduled|created|added|armed)\b",
+    re.I,
+)
+_COMPLETION_NEGATION = re.compile(
+    r"\bno\b|\bnot\b|\bnever\b|n['’]t\b|\bwithout\b|\bcan(?:not|['’]t)\b|\bunable\b", re.I
+)
+
+
+def _timer_completion(
+    clause: str, registered: frozenset[str], successful: Sequence[Any]
+) -> DeferralClaim | None:
+    """The completion-shape verdict for one non-question clause: a DeferralClaim
+    (kind "completion") when the clause asserts that a timer exists / is set /
+    is running and no timer tool ran successfully this turn; None otherwise."""
+    tool = _SET_REMINDER.registered_tool(registered)
+    if tool is None:
+        return None  # no timers on this instance — nothing to claim about
+    if any(_tool_ran(name, successful) for name in _SET_REMINDER.tools):
+        return None  # she wrote or read the rows this turn: a report, not a claim
+    for m in _TIMER_COMPLETION.finditer(clause):
+        before = clause[: m.start()]
+        if _REPORTED.search(before) or _inside_quote(before):
+            continue  # relayed or quoted, not her own assertion
+        if _COMPLETION_NEGATION.search(before):
+            continue  # "no reminder is set" / "I couldn't set the reminder"
+        return DeferralClaim(
+            tool=tool,
+            action_phrase=_SET_REMINDER.action_phrase,
+            phrase=clause[m.start() : m.end()].strip()[:80],
+            kind="completion",
+        )
+    return None
+
+
 def deferral_check(
     reply_text: str,
     spans: Sequence[Any],
@@ -1767,6 +1833,11 @@ def deferral_check(
                 continue  # the reply said "let me search" and actually searched
             phrase = clause[lead.start() : m.end()].strip()
             return DeferralClaim(tool=tool, action_phrase=cls.action_phrase, phrase=phrase[:80])
+        # The COMPLETION shape: "your reminder is now running" / "I've set a
+        # reminder" with no timer tool span this turn (see its section).
+        completion = _timer_completion(clause, registered, successful)
+        if completion is not None:
+            return completion
         # A STATEMENT-form offer ("I can search the web for that.") — the same
         # instruction handed back without the question mark. Judged AFTER the
         # commitment shape so a mixed clause keeps kind="commitment", and only
