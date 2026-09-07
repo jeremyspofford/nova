@@ -13,6 +13,9 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    # The lint CI runs (`uv run ruff check .`). Declared here so the runner
+    # has it — locally it resolved from the host PATH and CI had none.
+    "ruff==0.15.21",
     "pytest",
     "pytest-asyncio",
     "pyyaml>=6.0.3",
