@@ -236,6 +236,13 @@ export interface StoredMessage {
    * null for user rows, for rows older than the turn link, and for a turn
    * whose gateway call never stated one. */
   served_by?: string | null
+  /** `turns.kind` of the turn that wrote this row (S9) — 'chat' for an
+   * ordinary reply, 'reminder' / 'scheduled' for a row a timer firing
+   * landed here, DERIVED server-side from `messages.turn_id` the same way
+   * `served_by` is, never stored on the message. null for user rows and for
+   * rows older than the turn link. The chat bubble's "Reminder" /
+   * "Scheduled" label reads this and nothing else. */
+  turn_kind?: string | null
 }
 
 export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
@@ -516,6 +523,146 @@ export async function getGovernanceEvents(
     `/api/v1/governance?${params.toString()}`,
   )
   return body.events
+}
+
+// ── timers / schedules (services/core/app/timers_api.py, S9) ────────────
+
+/** A timer is a row; its kind says what a firing does. `reminder` — code
+ * delivers his words to chat and every connected paired device, no model.
+ * `scheduled` — an instruction run as a real model turn. `job` — a code
+ * handler bound by name (retention). Nothing here is a heartbeat. */
+export type TimerKind = 'reminder' | 'scheduled' | 'job'
+
+/** timer_firings.status — `running` while the firing holds it, then exactly
+ * one of ok / error / refused / interrupted (the CHECK constraint's set). A
+ * firing that could not verify its own outcome is `error` with a reason. */
+export type TimerFiringStatus = 'running' | 'ok' | 'error' | 'refused' | 'interrupted'
+
+export interface TimerLastFiring {
+  status: TimerFiringStatus
+  ended_at: string | null
+  reason: string | null
+}
+
+export interface Timer {
+  id: string
+  kind: TimerKind
+  title: string
+  /** reminder: {message, device?}; scheduled: {instruction}; job: {handler}. */
+  payload: Record<string, unknown>
+  /** The validated spec (app/schedule.py). Shown only through
+   * `schedule_words` — this client never recomputes a recurrence. */
+  schedule: Record<string, unknown>
+  /** `describe()`'s words, computed server-side by the SAME function her
+   * chat confirmation uses, so the page and her reply cannot disagree
+   * about one row. Rendered verbatim. */
+  schedule_words: string
+  /** IANA zone the spec is computed in. */
+  timezone: string
+  /** null = finished (a once that has fired) — never a flag that could drift. */
+  next_fire_at: string | null
+  paused_at: string | null
+  /** Set whenever paused_at is (DB CHECK): the owner's pause, or core's own
+   * "paused after 5 consecutive failures: <last reason>". */
+  paused_reason: string | null
+  consecutive_failures: number
+  created_via: 'chat' | 'page' | 'system'
+  created_at: string
+  /** The newest firing's outcome, or null when it has never fired. */
+  last_firing: TimerLastFiring | null
+}
+
+/** One channel's delivery verdict — `ok` only from the channel's own result
+ * (the chat row persisted; the device's own result frame), never assumed. */
+export interface TimerChannelDelivery {
+  ok: boolean
+  reason?: string
+}
+
+export interface TimerDeviceDelivery extends TimerChannelDelivery {
+  name: string
+}
+
+/** {"chat": {ok, reason?}, "devices": [{name, ok, reason?}], "note"?} — a
+ * reminder with no connected device has an EMPTY devices list and a stated
+ * note; that is a fact, not a failure. A job's delivery is {}. */
+export interface TimerDelivery {
+  chat?: TimerChannelDelivery
+  devices?: TimerDeviceDelivery[]
+  note?: string
+}
+
+export interface TimerFiring {
+  id: string
+  timer_id: string
+  /** The next_fire_at this firing was claimed at. */
+  scheduled_for: string
+  started_at: string
+  ended_at: string | null
+  status: TimerFiringStatus
+  reason: string | null
+  /** The turn this firing opened — every firing is a traced turn. */
+  turn_id: string | null
+  delivery: TimerDelivery
+}
+
+export const TIMERS_PAGE_SIZE = 50
+
+/** A page is the last one when it comes back shorter than the limit asked
+ * for — the same cursor contract as getActivity (cursor = the last row's id). */
+export async function listTimers(
+  opts: { limit?: number; before?: string } = {},
+): Promise<Timer[]> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? TIMERS_PAGE_SIZE))
+  if (opts.before) params.set('before', opts.before)
+  const body = await apiGet<{ timers: Timer[] }>(`/api/v1/timers?${params.toString()}`)
+  return body.timers
+}
+
+export async function listTimerFirings(
+  timerId: string,
+  opts: { limit?: number; before?: string } = {},
+): Promise<TimerFiring[]> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? TIMERS_PAGE_SIZE))
+  if (opts.before) params.set('before', opts.before)
+  const body = await apiGet<{ firings: TimerFiring[] }>(
+    `/api/v1/timers/${encodeURIComponent(timerId)}/firings?${params.toString()}`,
+  )
+  return body.firings
+}
+
+/** POST /timers/{id}/pause → the updated row. `reason` is what the row
+ * will say it was paused for; core records one either way (paused_reason
+ * is NOT NULL whenever paused_at is). */
+export const pauseTimer = (id: string, reason?: string) =>
+  apiSend<Timer>(
+    `/api/v1/timers/${encodeURIComponent(id)}/pause`,
+    'POST',
+    reason === undefined ? {} : { reason },
+  )
+
+/** POST /timers/{id}/resume → the updated row (a paused once still in the
+ * future keeps its instant; a repeat is recomputed from now, server-side). */
+export const resumeTimer = (id: string) =>
+  apiSend<Timer>(`/api/v1/timers/${encodeURIComponent(id)}/resume`, 'POST')
+
+/** POST /timers/{id}/fire — "Run now". Core sets next_fire_at = now() and
+ * runs one scheduler tick INLINE, so the answer is the firing row that tick
+ * produced (claim + run history included), not an acknowledgement. */
+export async function fireTimer(id: string): Promise<TimerFiring> {
+  const body = await apiSend<{ firing: TimerFiring }>(
+    `/api/v1/timers/${encodeURIComponent(id)}/fire`,
+    'POST',
+  )
+  return body.firing
+}
+
+/** DELETE /timers/{id} → 204, no body — so this reads nothing back; a
+ * non-2xx is thrown by `request` with core's stated reason. */
+export async function deleteTimer(id: string): Promise<void> {
+  await request(`/api/v1/timers/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
 
 // ── AI Quality / evals (services/core/app/evals_api.py) ─────────────────

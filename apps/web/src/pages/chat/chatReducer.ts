@@ -35,6 +35,13 @@ export type MessageRow = {
    * `served_by` frame live, `served_by` on the fetched row after). null
    * until stated — never the model setting, never a guess. */
   servedBy: string | null
+  /** `turns.kind` of the turn that wrote this row, as GET .../messages
+   * derived it (`turn_kind`, S9). A 'reminder' or 'scheduled' row earns the
+   * bubble's small label; everything else — 'chat', null (a user row, a
+   * pre-turn-link row), a kind this client has not met — shows none. Only
+   * ever set from a fetched row: a row this store streamed itself is a chat
+   * turn by construction and stays null. */
+  turnKind: string | null
 }
 
 export type ErrorRow = {
@@ -72,6 +79,16 @@ export type ChatAction =
       conversationId: string
       messages: FetchedMessage[]
     }
+  // The idle poll (S9): history fetched while NO turn was in flight, merged
+  // by id — see `mergeServerRows`. `observedRows` is `state.rows` as it was
+  // when the fetch was ISSUED; a transcript that moved in between makes the
+  // fetch stale, and the reducer drops it rather than guess.
+  | {
+      type: 'idlePolled'
+      conversationId: string
+      messages: FetchedMessage[]
+      observedRows: ChatRow[]
+    }
   | { type: 'reset' }
   // Clear-chat (button or the /clear slash command): the operator emptied THIS
   // conversation's transcript. Dispatched by chat-store.tsx only AFTER the clear
@@ -92,6 +109,7 @@ export type FetchedMessage = {
   role: string
   content: string
   served_by?: string | null
+  turn_kind?: string | null
 }
 
 export const NO_REPLY = 'the turn finished without a reply' 
@@ -108,6 +126,7 @@ function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role
     interrupted: false,
     activity: null,
     servedBy: null,
+    turnKind: null,
     ...row,
   }
 }
@@ -210,6 +229,19 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
   }
 }
 
+/** One persisted row as GET .../messages handed it back. Never streaming,
+ * never interrupted, no activity marker — the durable record of what ran is
+ * the Activity page, not the transcript (see ActivityMarker). */
+function serverRow(m: FetchedMessage): MessageRow {
+  return message({
+    id: m.id,
+    role: m.role === 'user' ? 'user' : 'assistant',
+    text: m.content,
+    servedBy: m.served_by ?? null,
+    turnKind: m.turn_kind ?? null,
+  })
+}
+
 function fromFetchedMessages(
   state: ChatState,
   conversationId: string,
@@ -219,15 +251,152 @@ function fromFetchedMessages(
     ...emptyChat(),
     conversationId,
     model: state.model,
-    rows: messages.map(m =>
-      message({
-        id: m.id,
-        role: m.role === 'user' ? 'user' : 'assistant',
-        text: m.content,
-        servedBy: m.served_by ?? null,
-      }),
-    ),
+    rows: messages.map(serverRow),
   }
+}
+
+/**
+ * A fetched assistant row that this store could have streamed itself. This
+ * store only ever opens chat turns (POST /chat/stream), so a row whose
+ * turn_kind names a DIFFERENT kind — a reminder, a scheduled turn — cannot be
+ * the persisted copy of a reply it streamed. A null kind (a row older than the
+ * turn link, or a core that has not learned to state one yet) is not evidence
+ * either way and is allowed through.
+ */
+function couldBeOurReply(row: MessageRow): boolean {
+  return row.role === 'assistant' && (row.turnKind === null || row.turnKind === 'chat')
+}
+
+/**
+ * Merge the server's transcript into the store's, by id, for the idle poll.
+ *
+ * The problem this solves: the store's rows are a MIX. Rows it loaded from the
+ * server carry server ids; rows it streamed itself carry client ids (`u-…`,
+ * `a-…`) the server never learns; error rows and /help notes exist only here.
+ * So neither "append every fetched id we don't hold" (would duplicate every
+ * live exchange) nor "replace with the fetch" (would erase a stated failure
+ * and the text of a send that never reached the server, 15 s after he read
+ * them) is honest.
+ *
+ * Instead the fetched list is the spine — the persisted truth, in order —
+ * and the store's rows are walked to decide what each one means against it:
+ *   - a row whose id IS in the spine is that spine row (nothing to do);
+ *   - a client user row is matched to the first unclaimed spine user row at or
+ *     after the cursor with the SAME text (core persists `message.strip()`
+ *     before the stream starts and ChatInput trims before sending, so equality
+ *     is exact); the client assistant row that follows it is the spine
+ *     assistant row right after — whose text may be the without_markup'd or
+ *     completed version, which is the version that is true — but never a row
+ *     whose kind says it was not a chat turn (`couldBeOurReply`);
+ *   - anything unmatched — an error row, a /help note, a send the server never
+ *     persisted and its partial reply — is a client-only row and is KEPT,
+ *     anchored after the spine row it followed.
+ * Spine rows nothing claimed — a reminder that fired, a scheduled turn's
+ * reply, a turn from another tab — are the new rows, and they land exactly
+ * where the server placed them. Nothing is ever shown twice: a spine row is
+ * emitted once, and a client row is either represented by its spine row or
+ * kept as itself, never both.
+ *
+ * Two things this deliberately lets go of, the same way `pollResolved` and
+ * `reconcile` do: a streamed row's `interrupted` marker (the spine row that
+ * replaces it is the persisted text, which is the truth, and carries no such
+ * flag), and a client-only assistant note (/help) that sits directly after a
+ * user row the server later answered — the reply that really ran takes its
+ * place, exactly as a reload would.
+ */
+function mergeServerRows(rows: ChatRow[], fetched: FetchedMessage[]): ChatRow[] {
+  const spine = fetched.map(serverRow)
+  const spineIndex = new Map(spine.map((row, i) => [row.id, i] as const))
+  const claimed = new Set<number>()
+  // Client-only rows, keyed by how many spine rows precede them.
+  const inserts = new Map<number, ChatRow[]>()
+  const keep = (cursor: number, row: ChatRow) => {
+    const bucket = inserts.get(cursor)
+    if (bucket) bucket.push(row)
+    else inserts.set(cursor, [row])
+  }
+  const firstUnclaimedUser = (from: number, text: string): number => {
+    const wanted = text.trim()
+    for (let j = from; j < spine.length; j++) {
+      const candidate = spine[j]
+      if (claimed.has(j) || candidate.role !== 'user') continue
+      if (candidate.text.trim() === wanted) return j
+    }
+    return -1
+  }
+
+  let cursor = 0
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
+    // The spine index this store row stands for: by id when the server
+    // handed it to us, by text for a user row we sent ourselves.
+    let resolved = -1
+    if (row.kind === 'message') {
+      const known = spineIndex.get(row.id)
+      if (known !== undefined) resolved = known
+      else if (row.role === 'user') resolved = firstUnclaimedUser(cursor, row.text)
+    }
+    if (resolved === -1) {
+      keep(cursor, row)
+      continue
+    }
+    claimed.add(resolved)
+    cursor = resolved + 1
+    // A client assistant row directly after a resolved USER row is that
+    // turn's reply. This holds whether the user row resolved by text (first
+    // poll after a live turn) or by id (a later poll: the user row was
+    // re-keyed on the first poll while the server still held no reply, and
+    // the reply it streamed stayed under its client id) — otherwise the
+    // reply core finished later would land as a SECOND assistant row.
+    if (spine[resolved].role !== 'user') continue
+    const next = rows[i + 1]
+    if (
+      next === undefined ||
+      next.kind !== 'message' ||
+      next.role !== 'assistant' ||
+      spineIndex.has(next.id)
+    ) {
+      continue
+    }
+    i += 1
+    const reply = spine[cursor]
+    if (reply !== undefined && !claimed.has(cursor) && couldBeOurReply(reply)) {
+      claimed.add(cursor)
+      cursor += 1
+    } else {
+      // The server holds no reply for this turn (yet, or ever): what really
+      // streamed here stays, after its user row.
+      keep(cursor, next)
+    }
+  }
+
+  const merged: ChatRow[] = []
+  for (let k = 0; k <= spine.length; k++) {
+    const bucket = inserts.get(k)
+    if (bucket) merged.push(...bucket)
+    if (k < spine.length) merged.push(spine[k])
+  }
+  return merged
+}
+
+/** Structurally the same transcript — so a poll that learned nothing new
+ * returns the SAME state object and nothing downstream re-renders. */
+function sameRows(a: ChatRow[], b: ChatRow[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((row, i) => {
+    const other = b[i]
+    if (row.kind !== other.kind || row.id !== other.id) return false
+    if (row.kind === 'error' || other.kind === 'error') {
+      return row.kind === 'error' && other.kind === 'error' && row.reason === other.reason
+    }
+    return (
+      row.text === other.text &&
+      row.servedBy === other.servedBy &&
+      row.turnKind === other.turnKind &&
+      row.streaming === other.streaming &&
+      row.interrupted === other.interrupted
+    )
+  })
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -273,6 +442,23 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (state.streaming) return state
       if (state.conversationId !== action.conversationId) return state
       return fromFetchedMessages(state, action.conversationId, action.messages)
+
+    case 'idlePolled':
+      // A live turn owns the transcript; the poll is not even issued while
+      // one streams, but a fetch that was in flight when a send began must
+      // not land either.
+      if (state.streaming) return state
+      // A stale poll naming a conversation we have since left.
+      if (state.conversationId !== action.conversationId) return state
+      // The transcript moved while this fetch was in flight — a send, a
+      // clear, a local note. What came back describes a server the store has
+      // since acted on (a clear it has emptied; a send it is about to see
+      // persisted), so it is dropped, never merged: the next poll asks again.
+      if (state.rows !== action.observedRows) return state
+      {
+        const merged = mergeServerRows(state.rows, action.messages)
+        return sameRows(merged, state.rows) ? state : { ...state, rows: merged }
+      }
 
     case 'reset':
       return emptyChat()

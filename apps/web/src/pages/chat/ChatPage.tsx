@@ -34,10 +34,18 @@ import { ErrorBubble, MessageBubble } from './MessageBubble'
  * pending_turn is derived from a set that dies with the core process, so it
  * can never be true forever; the honest client reads it and does not guess.
  *
+ * The scheduling slice (S9) adds a THIRD path, for rows this store never
+ * streamed and core never marks in flight: a reminder or scheduled turn that a
+ * timer firing lands in this conversation while the page is open. While
+ * nothing is in flight here — not streaming, not polling a pending turn — an
+ * idle poll asks core for the transcript every `idlePollMs` and merges what is
+ * new through the reducer's `idlePolled` (chatReducer.ts's mergeServerRows),
+ * so the reminder appears without a reload, once, in the place core put it.
+ *
  * `api` is a dependency-injection seam, the same idiom as ActivityPage's:
  * production uses the real client (the DEFAULT_API default); a test injects
- * fakes. `pollIntervalMs` is injectable so a test can drive the poll on real
- * timers without waiting seconds.
+ * fakes. `pollIntervalMs` and `idlePollMs` are injectable so a test can drive
+ * either poll on real timers without waiting seconds.
  */
 
 interface ChatApi {
@@ -55,6 +63,12 @@ const DEFAULT_API: ChatApi = {
 // says so or when this page unmounts (see the docstring above).
 const POLL_INTERVAL_MS = 1500
 
+// How often, while idle, to ask core whether a timer firing has landed a row
+// here (S9). The scheduler ticks once a minute, so 15 s is the same cadence
+// the Schedules and Devices pages refresh at — a reminder is seen within a
+// quarter of the tick that delivered it.
+const IDLE_POLL_MS = 15_000
+
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 // How many consecutive failed pending_turn reads the page tolerates before it
 // stops asserting "still responding" — a claim it can no longer back.
@@ -64,13 +78,22 @@ export function ChatPage({
   initialModel,
   api = DEFAULT_API,
   pollIntervalMs = POLL_INTERVAL_MS,
+  idlePollMs = IDLE_POLL_MS,
 }: {
   initialModel?: string
   api?: ChatApi
   pollIntervalMs?: number
+  idlePollMs?: number
 }) {
-  const { state, sendMessage, loadConversation, resolveServerTurn, clearChat, setModel } =
-    useChatStore()
+  const {
+    state,
+    sendMessage,
+    loadConversation,
+    resolveServerTurn,
+    syncFromServer,
+    clearChat,
+    setModel,
+  } = useChatStore()
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   // True while a turn that finished (or is finishing) server-side is being
@@ -175,6 +198,37 @@ export function ChatPage({
       live = false
     }
   }, [api, loadConversation, resolveServerTurn, pollIntervalMs])
+
+  // S9 — the idle poll. The interval EXISTS only while nothing is in flight
+  // here: history loaded, no pending-turn poll running, and `state.streaming`
+  // false — that flag is a dependency, so a send tears the interval down and
+  // 'done' brings it back; nothing ever polls under a live turn. A tick that
+  // finds a stream started since it was scheduled stands down (streamingRef);
+  // a fetch whose transcript moved while it was in flight is dropped by the
+  // reducer (observedRows — see chatReducer's `idlePolled`). A failed read is
+  // not new content: it is skipped and the next tick asks again — the poll
+  // makes no claim there is anything to retract.
+  const rowsRef = useRef(state.rows)
+  rowsRef.current = state.rows
+  useEffect(() => {
+    if (loading || responding || state.streaming || state.conversationId === null) return
+    const conversationId = state.conversationId
+    let live = true
+    const id = setInterval(() => {
+      if (streamingRef.current) return
+      const observedRows = rowsRef.current
+      api
+        .getMessages(conversationId)
+        .then(messages => {
+          if (live) syncFromServer(conversationId, messages, observedRows)
+        })
+        .catch(() => {})
+    }, idlePollMs)
+    return () => {
+      live = false
+      clearInterval(id)
+    }
+  }, [api, idlePollMs, loading, responding, state.streaming, state.conversationId, syncFromServer])
 
   // Part C — land on the newest message when the conversation opens, when it
   // changes, and when the in-flight poll resolves. Keyed on those events
