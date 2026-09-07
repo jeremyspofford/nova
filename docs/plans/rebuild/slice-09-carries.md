@@ -13,6 +13,23 @@ land.
   shown in core's words; App gate test and e2e 01-wizard click through the
   step. Web suite 558.
 
+- **T1 — core scheduler** (33c39ea6): timers/timer_firings, pure
+  schedule.py, SKIP LOCKED claim, three firing paths, nova.timezone + the
+  first SettingDef.validate hook, `_run_turn(ingest=)`. Core 1477.
+- **T4 — web** (1a947336): Schedules page, derived Reminder/Scheduled label,
+  chat idle poll with the spine merge, MobileNav parity pin. Web 563.
+- **T2 — her side** (this commit): create_timer / list_timers /
+  cancel_timer, capability + offer guard classes, corpus v7 (+2 cases,
+  16 total), get_time in the household zone. Reviewed twice; the guard
+  pattern's `for\b(?!\s+you\b)` residual and `about` as a tail landed with
+  the commit.
+- **T3 — API** (this commit): /api/v1/timers routes, `last_firing` derived in
+  the API layer, `turn_kind` on GET messages, nginx long-timeout location for
+  `/api/v1/timers/{id}/fire`, and the store fix the review reproduced:
+  `fire_now` re-dues a row only if `next_fire_at` is still the instant it
+  read, else returns the loop's firing — "Run now" during the loop's claim can
+  no longer fire the row twice (pinned with a held row lock).
+
 ## Owner-owed (the DoD walk)
 
 Filled in by T6.
@@ -55,3 +72,25 @@ Filled in by T6.
   turn's user row to its persisted copy by exact text (core persists
   `message.strip()`; ChatInput trims). Exposing `turn_id` per row would let it
   match by the SSE `meta.turnId` — an id, not an inference.
+- **The eval case is `remind-me-in-twenty-minutes`, not two.** The plan named
+  `remind-me-in-two-minutes`; the corpus case says "in 20 minutes" because an
+  eval turn creates a REAL timer row under the scratch person and the
+  in-process scheduler would fire a two-minute one before cleanup on a slow
+  run. Same contract (`tool_succeeded create_timer`); the plan's name is the
+  stale one.
+- **Timer row JSON carries `conversation_id`** (from T1's `timer_spec`); the
+  plan's field list omits it and the web type ignores it. Harmless; either
+  list it in the plan or drop it from the spec.
+- **`DEFAULT_PAUSE_REASON` is spelled twice** — `timers_api.py` (the server
+  default for body-less callers) and `SchedulesPage.tsx` `PAUSED_FROM_PAGE`
+  (the page always sends it). Identical strings today; one source would be
+  better — the page could send no body and let the server default speak.
+- **Serial firings, no per-firing bound.** `run_forever` runs claimed firings
+  one after another with no wall-clock cap; a scheduled turn that hangs on
+  the gateway delays every other timer until the gateway's own timeout.
+  Bound it (asyncio.wait_for around `_run_firing`, recorded as `error` with
+  the reason) when S11 adds more firing kinds.
+- **A scheduled firing cancelled mid-`_run_turn`** records the FIRING as
+  `interrupted` but `_run_turn`'s own shielded finally closes the TURN as
+  `error` (its `decided` is None on CancelledError). Chat's domain; align the
+  turn's close verdict when chat next touches that finally.

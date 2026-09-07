@@ -2,6 +2,7 @@
 by the rule, deleted for real; jobs come from JOBS and nowhere else."""
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -304,6 +305,47 @@ async def test_fire_now_on_a_paused_row_is_refused_with_the_pause_reason(pool):
         await timers.fire_now(pool, row["id"], app=app)
     assert excinfo.value.status_code == 409
     assert await pool.fetchval("SELECT count(*) FROM timer_firings") == 0
+
+
+async def test_fire_now_does_not_double_fire_a_row_another_tick_claimed_first(pool):
+    """The race the T3 review reproduced: a DUE row, the loop's tick claims it
+    (holding it FOR UPDATE) while "Run now" arrives. fire_now's re-due UPDATE
+    waits on the lock, then must see the row already moved and hand back the
+    loop's firing — never re-due it and run it a second time."""
+    person, conversation = await _person(pool)
+    row = await _reminder(pool, person, conversation)
+    past = datetime.now(UTC) - timedelta(minutes=1)
+    await pool.execute("UPDATE timers SET next_fire_at = $2 WHERE id = $1", row["id"], past)
+    row = await timers.get(pool, row["id"])
+    async with pool.acquire() as conn:
+        tr = conn.transaction()
+        await tr.start()
+        # The loop's claim, mid-transaction: the row is locked …
+        await conn.fetchrow("SELECT id FROM timers WHERE id = $1 FOR UPDATE", row["id"])
+        task = asyncio.create_task(timers.fire_now(pool, row["id"], app=app))
+        await asyncio.sleep(0.3)
+        assert not task.done()  # blocked on the row lock, as the real race is
+        # … its firing is opened for the instant we saw and the row advanced …
+        firing_id = await conn.fetchval(
+            "INSERT INTO timer_firings (timer_id, scheduled_for, status) "
+            "VALUES ($1, $2, 'running') RETURNING id",
+            row["id"],
+            row["next_fire_at"],
+        )
+        await conn.execute(
+            "UPDATE timers SET next_fire_at = NULL, updated_at = now() WHERE id = $1", row["id"]
+        )
+        await tr.commit()
+    firing = await task
+    assert firing["id"] == firing_id  # the loop's firing, not a second one
+    assert await pool.fetchval("SELECT count(*) FROM timer_firings") == 1
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM messages WHERE conversation_id = $1", conversation
+        )
+        == 0
+    )
+    assert (await timers.get(pool, row["id"]))["next_fire_at"] is None
 
 
 # -- firings_for -------------------------------------------------------------------------

@@ -122,12 +122,17 @@ async def get_messages(
     # X-Nova-Served-By, `provider:model`) — the trace, never a stored claim.
     # NULL for user rows, for rows older than migration 018, and for a turn
     # whose gateway call never got far enough to state one.
+    # `turn_kind` is the same derivation one join shorter: turns.kind via
+    # messages.turn_id, so the chat page's "Reminder" / "Scheduled" label on
+    # an assistant row comes from the turn that wrote it, never a stored
+    # label that could drift (S9). NULL for a row with no turn.
     rows = await pool.fetch(
-        "SELECT m.id, m.role, m.content, m.created_at, "
+        "SELECT m.id, m.role, m.content, m.created_at, t.kind AS turn_kind, "
         "  (SELECT s.meta->>'served_by' FROM turn_spans s "
         "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' AND s.meta ? 'served_by' "
         "    ORDER BY s.started_at DESC LIMIT 1) AS served_by "
-        "FROM messages m WHERE m.conversation_id = $1 ORDER BY m.created_at, m.id",
+        "FROM messages m LEFT JOIN turns t ON t.id = m.turn_id "
+        "WHERE m.conversation_id = $1 ORDER BY m.created_at, m.id",
         conversation_id,
     )
     return {
@@ -138,6 +143,7 @@ async def get_messages(
                 "content": row["content"],
                 "created_at": row["created_at"].isoformat(),
                 "served_by": row["served_by"],
+                "turn_kind": row["turn_kind"],
             }
             for row in rows
         ]

@@ -26,6 +26,7 @@ from app import (
     scheduler,
     settings_store,
     timers,
+    timers_api,
     traces,
     workspace_api,
 )
@@ -100,6 +101,7 @@ app.include_router(devices_ws.router)
 app.include_router(evals_api.router)
 app.include_router(proxies.router)
 app.include_router(workspace_api.router)
+app.include_router(timers_api.router)
 
 
 @app.exception_handler(StarletteHTTPException)

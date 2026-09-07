@@ -360,11 +360,33 @@ async def fire_now(pool: asyncpg.Pool, timer_id: uuid.UUID, *, app) -> asyncpg.R
             f"{row['title']!r} is paused ({row['paused_reason']}) — resume it to run it",
             status_code=409,
         )
+    # Conditional on the instant this call READ: if the loop's tick claimed the
+    # row in between (it holds the row FOR UPDATE while it advances
+    # next_fire_at, so this UPDATE waits for its commit and then re-checks the
+    # WHERE on the new version), zero rows match — re-dueing it anyway would
+    # fire the same row twice, once for each tick (DoD 5: nothing fires twice).
+    # Then the honest thing to hand back is the firing THAT tick opened for the
+    # instant we saw, not a second run.
     due_at = await pool.fetchval(
-        "UPDATE timers SET next_fire_at = now(), updated_at = now() WHERE id = $1 "
-        "RETURNING next_fire_at",
+        "UPDATE timers SET next_fire_at = now(), updated_at = now() "
+        "WHERE id = $1 AND next_fire_at IS NOT DISTINCT FROM $2 RETURNING next_fire_at",
         timer_id,
+        row["next_fire_at"],
     )
+    if due_at is None:
+        claimed = await pool.fetchrow(
+            f"SELECT {_FIRING_COLUMNS} FROM timer_firings "
+            f"WHERE timer_id = $1 AND scheduled_for = $2 ORDER BY started_at DESC LIMIT 1",
+            timer_id,
+            row["next_fire_at"],
+        )
+        if claimed is None:
+            raise TimerRefused(
+                f"{row['title']!r} was claimed by another tick as this ran and its firing "
+                "is not visible yet — check the Schedules page",
+                status_code=409,
+            )
+        return claimed
     await scheduler.tick_once(app, pool)
     firing = await pool.fetchrow(
         f"SELECT {_FIRING_COLUMNS} FROM timer_firings WHERE timer_id = $1 AND scheduled_for = $2 "
