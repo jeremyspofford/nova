@@ -905,6 +905,32 @@ OFFER_MUST_FIRE = [
         "Want me to search the web?",
         "web_search",
     ),
+    # S9: "remind me…" is an instruction create_timer performs; asking whether
+    # to set it is the instruction handed back (the plan's named example).
+    (
+        "s9_remind_me_want_me_to",
+        "remind me in two minutes to stretch",
+        "Want me to set a reminder?",
+        "create_timer",
+    ),
+    (
+        "s9_remind_me_should_i",
+        "remind me in two minutes to stretch",
+        "Should I remind you in two minutes?",
+        "create_timer",
+    ),
+    (
+        "s9_set_a_reminder_statement_offer",
+        "set a reminder for 7am tomorrow",
+        "I can set that up if you'd like.",
+        "create_timer",
+    ),
+    (
+        "s9_schedule_restated",
+        "every day at 7 schedule a summary of my calendar",
+        "Want me to schedule that?",
+        "create_timer",
+    ),
 ]
 
 
@@ -1068,6 +1094,39 @@ OFFER_MUST_NOT_FIRE = [
         "this turn; ask me again and I'll try.",
     ),
     ("plain_answer", WEB_INSTRUCTION, "The Pixel 10 has a 50-megapixel main camera."),
+    # S9 near-misses: a missing parameter or a scope choice is hers to ask; a
+    # negated instruction, a figurative "reminds me" and a calendar question
+    # instruct no timer; a confirmation after the fact offers nothing.
+    (
+        "s9_which_device",
+        "remind me in two minutes to stretch",
+        "Which device should I notify — the desktop or the laptop?",
+    ),
+    (
+        "s9_chat_or_notification",
+        "remind me in two minutes to stretch",
+        "Do you want it in chat or as a desktop notification?",
+    ),
+    ("s9_negated_instruction", "don't remind me about the dentist", "Want me to set a reminder?"),
+    ("s9_that_reminds_me", "that reminds me, what's the weather?", "Want me to set a reminder?"),
+    ("s9_calendar_question", "what's on my schedule today?", "Want me to set a reminder?"),
+    (
+        "s9_confirmation",
+        "remind me in two minutes to stretch",
+        "Reminder set for Sat 6 Sep 2026 14:32 EDT (in 2 minutes).",
+    ),
+    # "remind me what…" asks for RECALL, not a timer: an offer to look it up
+    # is a genuine offer, never a create_timer instruction handed back.
+    (
+        "s9_recall_is_not_a_timer",
+        "can you remind me what we discussed yesterday?",
+        "I can remind you of the details if you'd like — should I search my notes?",
+    ),
+    (
+        "s9_recall_of_is_not_a_timer",
+        "remind me of what I said about the garage",
+        "Want me to set a reminder?",
+    ),
 ]
 
 

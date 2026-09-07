@@ -971,6 +971,34 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "memory_search",
     ),
+    (
+        # S9: "I can't set reminders" / "I'm unable to remind you" / "scheduling
+        # tasks is not something I can do" — a denial of the ability itself. A
+        # SPECIFIC refused attempt keeps its honesty: "I can't set a reminder for
+        # a time that has already passed", "I can't set a reminder until a
+        # timezone is set for this instance" (the tools' own refusals, relayed),
+        # "I can't remind you of what you said" (a memory statement) are about
+        # one time, one condition or one thing — not the ability. ONE lookahead
+        # on all three alternatives drops a condition/target tail (until,
+        # unless, without, before, at, on, in, of, about, for <anything but
+        # "you"> — `for\b` so a quoted or parenthesised object after "for" is a
+        # tail like any other: "for 'stretch' until…" is a relay, not a denial);
+        # without it the guard would put "Correction: I can do that" under an
+        # honest sentence and become the liar. Precision-first: "I can't set a
+        # reminder for you" still fires; "I can't set reminders in this
+        # version" is the accepted miss. "yet" is NOT a tail: "I can't set
+        # reminders yet" is exactly the false denial of an unshipped feature.
+        re.compile(
+            r"(?:set(?:ting)?\s+(?:up\s+)?(?:a\s+|an\s+|any\s+)?(?:reminder|timer|alarm)s?"
+            r"|remind(?:ing)?\s+(?:you|people|anyone)"
+            r"|schedul(?:e|ing)\s+(?:a\s+|an\s+|any\s+)?"
+            r"(?:reminder|timer|task|turn|instruction|message|check|job|anything|things?)s?)\b"
+            r"(?!\s+(?:until|unless|without|before|at|on|in|of|about|for\b(?!\s+you\b)"
+            r"|that\s+(?:has|is|was)|which\s+(?:has|is|was))\b)",
+            re.I,
+        ),
+        "create_timer",
+    ),
 )
 
 # A first-person, PRESENT-tense inability lead — the capability denied follows
@@ -1355,12 +1383,42 @@ _CHECK_DEVICE = _ActionClass(
         re.I,
     ),
 )
+# S9: "remind me in two minutes to stretch" / "set a reminder for 7" / "schedule
+# a daily summary at 7" instruct create_timer; "Want me to set a reminder?",
+# "Should I remind you?", "I can schedule that if you'd like" hand it back.
+# `reminds` (as in "that reminds me") needs the bare verb plus an object pronoun
+# and so never matches; "schedule" alone ("what's on my schedule?") needs a
+# timer-shaped noun after it, so a calendar question is not an instruction here.
+_TIMER_NOUN = r"(?:reminder|timer|alarm)"
+_SET_REMINDER = _ActionClass(
+    re.compile(
+        # "remind me what/of/how/where/who/why/about what…" asks for RECALL (a
+        # memory search), not a timer: "can you remind me what we discussed
+        # yesterday?" + "I can remind you of the details if you'd like" is a
+        # genuine offer, and the lookahead keeps it one. "remind me of the
+        # meeting at 3" is the accepted miss (precision-first).
+        r"\bremind\s+(?:me|us|you|him|her|them)\b"
+        r"(?!\s+(?:what|of|how|where|who|why|about\s+what)\b)"
+        r"|\bset(?:ting)?\s+(?:up\s+)?(?:a\s+|an\s+|another\s+|the\s+|my\s+)?"
+        + _TIMER_NOUN
+        + r"s?\b"
+        r"|\bschedul(?:e|ing)\s+(?:a\s+|an\s+|another\s+|the\s+|my\s+)?(?:\w+\s+){0,2}?"
+        r"(?:reminder|timer|task|turn|check|summary|report|message|instruction|run|job)s?\b",
+        re.I,
+    ),
+    ("create_timer",),
+    "set the reminder",
+    restated=re.compile(
+        r"\b(?:set|schedule|create|add)\s+(?:it|that|this|one)(?:\s+up)?\b", re.I
+    ),
+)
 _OFFER_CLASSES: tuple[_ActionClass, ...] = (
     *_DEFERRAL_TOOLS,
     _LIST_FILES,
     _READ_FILE,
     _RUN_COMMAND,
     _CHECK_DEVICE,
+    _SET_REMINDER,
 )
 
 # A first-person future-commitment lead — the action follows it. "I'll" REQUIRES

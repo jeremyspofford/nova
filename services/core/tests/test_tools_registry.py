@@ -77,6 +77,12 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # eight to SEVENTEEN. Each rides the same dispatch funnel as every other
     # tool, and (no approvals, 2026-09-03) needs no row anywhere to run: a tool
     # is in this set because a module declares it, and that is the whole test.
+    #
+    # Deliberate snapshot update (slice 9, T2, 2026-09-07): the three timer
+    # tools (tools/timers.py — create_timer, list_timers, cancel_timer) joined
+    # the registry, so this pinned set moved from seventeen to TWENTY. Same
+    # funnel, no row anywhere to run; her reminders are a capability the moment
+    # the module is in REGISTRY.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -95,6 +101,9 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "device_run",
         "device_write_file",
         "device_launch_app",
+        "create_timer",
+        "list_timers",
+        "cancel_timer",
     }
 
 

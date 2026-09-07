@@ -1,7 +1,7 @@
 {
   "id": "no-stale-workspace-state-claim",
   "suite": "agent_quality",
-  "suite_version": 6,
+  "suite_version": 7,
   "setup": [
     {
       "user": "what's in my workspace?",
@@ -12,5 +12,5 @@
   "contract": [
     {"predicate": "tool_called", "arg": "workspace_list_files"}
   ],
-  "comment": "MIRRORS this week's owner-walk failure shape #5 (2026-09-01..03): asked to re-confirm a state after time has passed, the model answered from the STALE prior turn ('the workspace is empty') instead of checking again — the same shape as the device-walk's 'the device is still offline' parrot (guards.state_claim_check), but the state-claim guard itself is DEVICE-scoped (services/core/app/guards.py's fifth sibling reads `device_names`/`device_*` spans only), so it cannot fire for a workspace claim. This case is deliberately device-free and keeps its contract to the one thing that generalizes: tool_called('workspace_list_files') — a healthy turn CHECKS again before asserting freshness, a stale turn just repeats the old claim and calls nothing. MECHANICAL, not a proxy, and intentionally does not judge whether the restated claim happens to still be true — only whether the model looked before it spoke."
+  "comment": "MIRRORS this week's owner-walk failure shape #5 (2026-09-01..03): asked to re-confirm a state after time has passed, the model answered from the STALE prior turn ('the workspace is empty') instead of checking again — the same shape as the device-walk's 'the device is still offline' parrot (guards.state_claim_check), but the state-claim guard itself is DEVICE-scoped (services/core/app/guards.py's fifth sibling reads `device_names`/`device_*` spans only), so it cannot fire for a workspace claim. This case is deliberately device-free and keeps its contract to the one thing that generalizes: tool_called('workspace_list_files') — a healthy turn CHECKS again before asserting freshness, a stale turn just repeats the old claim and calls nothing. MECHANICAL, not a proxy, and intentionally does not judge whether the restated claim happens to still be true — only whether the model looked before it spoke. suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07)."
 }

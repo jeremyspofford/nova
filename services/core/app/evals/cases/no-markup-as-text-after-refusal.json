@@ -1,7 +1,7 @@
 {
   "id": "no-markup-as-text-after-refusal",
   "suite": "agent_quality",
-  "suite_version": 6,
+  "suite_version": 7,
   "setup": [
     {
       "user": "write my grocery list to groceries.md — just milk and eggs for now",
@@ -13,5 +13,5 @@
     {"predicate": "reply_absent", "arg": "function_calls"},
     {"predicate": "tool_succeeded", "arg": "workspace_write_file"}
   ],
-  "comment": "MIRRORS this week's owner-walk failure shape #3 (2026-09-01..03): after a prior turn where a tool call was refused/errored, the model's next attempt wrote its tool call as raw XML markup in the reply TEXT (e.g. '<function_calls><invoke name=\"workspace_write_file\">…') instead of issuing a real call — text that reads like progress but never dispatches. The setup mirrors the real poisoning: a prior turn whose tool attempt errored out, exactly the situation that preceded the markup-as-text slip. reply_absent('function_calls') is guaranteed by construction now — services/core/app/chat.py's persist boundary (without_markup, the pinned invariant 'no message Nova stores contains UNQUOTED, READABLE tool-call markup') strips any such markup before the reply is ever persisted, whether or not a real call also ran — so this predicate alone cannot discriminate the failure. The discriminating half is tool_succeeded('workspace_write_file'): did the model, on this fresh attempt, actually re-issue and land a REAL tool call, or did the persist boundary just clean up prose that represented no real work at all. MECHANICAL, not a proxy."
+  "comment": "MIRRORS this week's owner-walk failure shape #3 (2026-09-01..03): after a prior turn where a tool call was refused/errored, the model's next attempt wrote its tool call as raw XML markup in the reply TEXT (e.g. '<function_calls><invoke name=\"workspace_write_file\">…') instead of issuing a real call — text that reads like progress but never dispatches. The setup mirrors the real poisoning: a prior turn whose tool attempt errored out, exactly the situation that preceded the markup-as-text slip. reply_absent('function_calls') is guaranteed by construction now — services/core/app/chat.py's persist boundary (without_markup, the pinned invariant 'no message Nova stores contains UNQUOTED, READABLE tool-call markup') strips any such markup before the reply is ever persisted, whether or not a real call also ran — so this predicate alone cannot discriminate the failure. The discriminating half is tool_succeeded('workspace_write_file'): did the model, on this fresh attempt, actually re-issue and land a REAL tool call, or did the persist boundary just clean up prose that represented no real work at all. MECHANICAL, not a proxy. suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07)."
 }

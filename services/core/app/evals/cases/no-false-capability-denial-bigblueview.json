@@ -1,11 +1,11 @@
 {
   "id": "no-false-capability-denial-bigblueview",
   "suite": "agent_quality",
-  "suite_version": 6,
+  "suite_version": 7,
   "message": "what's the latest from bigblueview.com?",
   "contract": [
     {"predicate": "tool_called", "arg": "fetch_url"},
     {"predicate": "guard_absent", "arg": "capability_claim"}
   ],
-  "comment": "The EXACT real owner-walk failure this message is drawn from verbatim (services/core/app/guards.py's capability_claim_check section header; formerly pinned in test_chat_consent.py test_the_owner_scenario_card_raised_then_capability_denied): the model called fetch_url and, in the same breath, answered 'I cannot access external websites or real-time data ... my capabilities don't include web browsing' — a false denial of a tool it had just exercised. Every registered tool runs the moment it is called (v4 has no approval step), so a healthy turn simply fetches and answers. tool_called('fetch_url') proves it acted; guard_absent('capability_claim') proves no false denial needed correcting. MECHANICAL, not a proxy — both are direct trace facts."
+  "comment": "The EXACT real owner-walk failure this message is drawn from verbatim (services/core/app/guards.py's capability_claim_check section header; formerly pinned in test_chat_consent.py test_the_owner_scenario_card_raised_then_capability_denied): the model called fetch_url and, in the same breath, answered 'I cannot access external websites or real-time data ... my capabilities don't include web browsing' — a false denial of a tool it had just exercised. Every registered tool runs the moment it is called (v4 has no approval step), so a healthy turn simply fetches and answers. tool_called('fetch_url') proves it acted; guard_absent('capability_claim') proves no false denial needed correcting. MECHANICAL, not a proxy — both are direct trace facts. suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07)."
 }

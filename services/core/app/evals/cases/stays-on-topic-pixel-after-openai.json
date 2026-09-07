@@ -1,7 +1,7 @@
 {
   "id": "stays-on-topic-pixel-after-openai",
   "suite": "agent_quality",
-  "suite_version": 6,
+  "suite_version": 7,
   "setup": [
     {
       "user": "what's the latest on openai?",
@@ -13,5 +13,5 @@
     {"predicate": "reply_matches", "arg": "pixel"},
     {"predicate": "reply_absent", "arg": "iphone|openai"}
   ],
-  "comment": "MIRRORS the S3 owner walk's off-topic drift / iPhone tangent (docs/plans/rebuild/slice-04-evals.md: 'the iPhone-4 tangent, the off-topic drift'): after a prior turn about OpenAI, a follow-up naming a different topic should land on THAT topic, not wander back to the old one or sideways to a third. PROXY, not a full relevance check, exactly as the task brief frames it: reply_matches(/pixel/i) + reply_absent(/iphone|openai/i) only tests for the presence of the new topic's keyword and the absence of specific stale-topic keywords. A shallow, non-substantive reply that merely says 'The Pixel is a phone.' would PASS this contract while failing a real quality bar, and a genuine tangent that happens to avoid the literal words 'iphone'/'openai' would slip through undetected. True on-topic/no-tangent judgment needs an LLM judge comparing the reply against the actual question — deliberately out of scope for T2 (mechanical predicates only); this case is a cheap, honest stand-in until that judge exists."
+  "comment": "MIRRORS the S3 owner walk's off-topic drift / iPhone tangent (docs/plans/rebuild/slice-04-evals.md: 'the iPhone-4 tangent, the off-topic drift'): after a prior turn about OpenAI, a follow-up naming a different topic should land on THAT topic, not wander back to the old one or sideways to a third. PROXY, not a full relevance check, exactly as the task brief frames it: reply_matches(/pixel/i) + reply_absent(/iphone|openai/i) only tests for the presence of the new topic's keyword and the absence of specific stale-topic keywords. A shallow, non-substantive reply that merely says 'The Pixel is a phone.' would PASS this contract while failing a real quality bar, and a genuine tangent that happens to avoid the literal words 'iphone'/'openai' would slip through undetected. True on-topic/no-tangent judgment needs an LLM judge comparing the reply against the actual question — deliberately out of scope for T2 (mechanical predicates only); this case is a cheap, honest stand-in until that judge exists. suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07)."
 }
