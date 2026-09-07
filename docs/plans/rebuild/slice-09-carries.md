@@ -30,9 +30,51 @@ land.
   read, else returns the loop's firing — "Run now" during the loop's claim can
   no longer fire the row twice (pinned with a held row lock).
 
-## Owner-owed (the DoD walk)
+- **Walk fixes** (c8246509, 07dcb333): the deferral guard's commitment shape
+  gained the reminder class ("Done — I'll nudge you to blink every 5 minutes"
+  with no create_timer span, zero tool calls — the walk's real fabrication)
+  and a third shape, "completion" ("your reminder is now running" / "I've set
+  a reminder" with no timer tool span this turn), recovered through the
+  tools-advertised redirect. Live, minutes later: asked for the same reminder
+  again, the completion shape fired on "reminder is already running" (a claim
+  from history, no call), the redirect ran list_timers, and she answered that
+  one already exists.
 
-Filled in by T6.
+## The walk (T6, 2026-09-07, live stack, real Chromium, owner session)
+
+- **DoD 1 — walked.** Settings → General: UTC → America/New_York (the page,
+  then the server). Chat: "remind me in two minutes to stretch" → she
+  confirmed with the resolved time; 213 s later the "Reminder" bubble arrived
+  in the open chat with no reload. Schedules showed the finished once with its
+  firing: chat delivered; device DELL-XPS-8950 stated in its own words
+  (`notify-send failed … org.freedesktop.Notifications was not provided` —
+  WSLg has no notification server, see carries). Trace: a `reminder` turn with
+  a `device_notify` span, ok=false, the same error.
+- **DoD 2 — walked.** "every day at 7am tell me what today's date is" → a
+  daily `scheduled` timer (07:00 America/New_York). Run now → firing ok in
+  7 s; the reply landed in the chat labelled "Scheduled" with its served-by
+  badge; trace: `scheduled` turn with get_time and two llm_calls.
+- **DoD 3 — walked.** "remind me every 5 minutes to blink" → a 5-minute
+  repeat that fired at 15:30 and 15:35 UTC into the chat; paused from the
+  page at 15:39; its 15:40:02 fire passed with NO firing row (still 2); Resume
+  recomputed the next fire from now; Delete (confirmed) removed all three test
+  timers and their firings; the job row stayed.
+- **DoD 4 — half walked.** Settings → General live; the onboarding step is
+  pinned by the wizard's unit tests and the e2e 01-wizard click, not walked on
+  a fresh instance (no fresh owner can be minted on the live one).
+- **DoD 5 — walked light.** `docker compose restart core`: healthy, no
+  `running` firing left, firing count unchanged, the job's next fire
+  unchanged. The mid-firing cancel is pinned by test, not walked.
+- **Two guard gaps found and closed on the walk** (c8246509, 07dcb333) — see
+  "Walk fixes" above.
+
+## Owner-owed
+
+- Walk the onboarding Timezone step on a fresh install (or the e2e stack).
+- Decide on a notification server for the WSL box (`dunst`/`mako`) or wait
+  for S6's Windows daemon; until then reminders reach this box's chat only.
+- The chat now carries the walk's test messages (two reminder confirmations,
+  three fired reminders, one scheduled reply, one "already running").
 
 ## Carries
 
@@ -94,3 +136,19 @@ Filled in by T6.
   `interrupted` but `_run_turn`'s own shielded finally closes the TURN as
   `error` (its `decided` is None on CancelledError). Chat's domain; align the
   turn's close verdict when chat next touches that finally.
+- **Reading a trace: by turn id, never "latest spans".** While walking S9 I
+  declared a reply a fabrication from a span query ordered by time with a
+  LIMIT; the spans I read belonged to a different turn, and the reply in
+  question had a create_timer span behind it. The guard shape it prompted is
+  still correct (the pins prove the gap), but the event was misreported for
+  one commit message until the row-by-row check. Rule for the next walk:
+  `select … from turn_spans where turn_id = <the turn>`; the Activity page
+  does exactly this and is the better instrument.
+- **A repeat's early firings land in his chat.** The 5-minute blink reminder
+  fired twice (15:30, 15:35 UTC) into the owner's conversation during the walk
+  before it was paused. Working as designed; noted because the transcript now
+  carries two test reminders.
+- **No e2e spec landed.** The plan named `17-schedules.spec.ts`; the e2e suite
+  runs on the isolated stack, which was not brought up during T6, and an unrun
+  spec would be a claim. Write it with the next e2e run: list renders the
+  job row, pause flips the row to paused, Run now on the job returns a firing.
