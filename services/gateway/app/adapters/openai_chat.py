@@ -272,6 +272,50 @@ def cheapest_model(models: list[dict]) -> str:
     return models[0]["id"]
 
 
+OPENROUTER_HOSTS = frozenset({"openrouter.ai"})
+_USAGE_FIELDS = ("stream_options", "usage")
+
+
+def inject_usage(body: dict, base_url: str) -> tuple[dict, bool]:
+    """Ask the provider to state its usage: `stream_options.include_usage`
+    on a stream (OpenAI's and ollama's shape), and OpenRouter's own
+    `usage: {include: true}` so its `usage.cost` — the provider's OWN
+    reported cost — arrives too. Returns (body, whether anything was
+    added). A provider that rejects the fields is retried once without
+    them and remembered (providers.usage_supported)."""
+    out = dict(body)
+    added = False
+    if out.get("stream"):
+        options = dict(out.get("stream_options") or {})
+        if not options.get("include_usage"):
+            options["include_usage"] = True
+            out["stream_options"] = options
+            added = True
+    host = (httpx.URL(base_url).host or "").lower()
+    if host in OPENROUTER_HOSTS and not isinstance(out.get("usage"), dict):
+        out["usage"] = {"include": True}
+        added = True
+    return out, added
+
+
+def strip_usage(body: dict) -> dict:
+    return {k: v for k, v in body.items() if k not in _USAGE_FIELDS}
+
+
+def _refuses_usage_fields(content: bytes) -> bool:
+    text = content.decode(errors="replace").lower()
+    return any(field in text for field in _USAGE_FIELDS)
+
+
+async def _remember_usage_support(row: dict, supported: bool) -> None:
+    from app import db, providers
+
+    try:
+        await providers.record_usage_support(await db.get_pool(), row["name"], supported)
+    except Exception:  # a note about the wire, never a reason to fail the call
+        logger.warning("could not record usage_supported=%s for %s", supported, row["name"])
+
+
 class OpenAIChat:
     name = "openai-chat"
 
@@ -381,21 +425,28 @@ class OpenAIChat:
             )
         note = f"{len(listing.models)} models listed"
         if row.get("auth_shape") == "none":
-            return VerifyResult(listing="available", note=note, key_proven=None)
+            return VerifyResult(
+                listing="available", models=listing.models, note=note, key_proven=None
+            )
         if not listing.models:
             return VerifyResult(
                 listing="available",
+                models=listing.models,
                 note=f"{note} — nothing to test the key on; the first chat turn will tell",
                 key_proven=None,
             )
         public, decided_by = await self._listing_is_public(app, row)
         if public is False:
             return VerifyResult(
-                listing="available", note=f"{note}; the listing accepted the key", key_proven=True
+                listing="available",
+                models=listing.models,
+                note=f"{note}; the listing accepted the key",
+                key_proven=True,
             )
         if public is None:
             return VerifyResult(
                 listing="available",
+                models=listing.models,
                 note=f"{note}; whether the listing is public could not be determined — "
                 f"{decided_by} — so the key is NOT proven; the first chat turn will tell",
                 key_proven=None,
@@ -410,12 +461,14 @@ class OpenAIChat:
         if completed:
             return VerifyResult(
                 listing="available",
+                models=listing.models,
                 note=f"{note}; the listing is public, so the key was proven with a 1-token "
                 f"completion on {model}",
                 key_proven=True,
             )
         return VerifyResult(
             listing="available",
+            models=listing.models,
             note=f"{note}; the listing is public and a 1-token test on {model} answered "
             f"{status} ({words}) — the key is NOT proven; the first chat turn will tell",
             key_proven=False,
@@ -429,6 +482,9 @@ class OpenAIChat:
         if not url:
             raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
         body = dict(body, model=model) if model else dict(body)
+        asked_for_usage = False
+        if row.get("usage_supported") is not False:
+            body, asked_for_usage = inject_usage(body, url)
         client = http_client(app, COMPLETIONS_TIMEOUT, base_url=url, headers=self.headers(row))
         try:
             upstream = await client.send(
@@ -445,7 +501,22 @@ class OpenAIChat:
             headers = forwardable_headers(upstream.headers, exclude=_BUFFERED_EXCLUDE)
             await upstream.aclose()
             await client.aclose()
+            if (
+                asked_for_usage
+                and upstream.status_code == 400
+                and row.get("usage_supported") is None
+                and _refuses_usage_fields(content)
+            ):
+                # The provider rejected the usage request itself. Remember
+                # that on the row (its calls will be unmetered, said so) and
+                # send this one again without it — once, never a loop.
+                await _remember_usage_support(row, False)
+                return await self._completions(
+                    app, dict(row, usage_supported=False), model, strip_usage(body)
+                )
             return Response(content=content, status_code=upstream.status_code, headers=headers)
+        if asked_for_usage and row.get("usage_supported") is None:
+            await _remember_usage_support(row, True)
 
         # Every call asks for Accept-Encoding: identity so aiter_raw() can
         # relay wire bytes straight through as plain text. A provider that

@@ -325,7 +325,9 @@ async def test_chat_routes_by_prefix_and_badges_the_canonical_identity(
     assert cloud.status_code == 200
     assert cloud.headers["x-nova-served-by"] == "openrouter:anthropic/claude-sonnet-5"
     assert [
-        f["choices"][0]["delta"]["content"] for f in _sse_payloads(cloud.content) if f != "[DONE]"
+        f["choices"][0]["delta"]["content"]
+        for f in _sse_payloads(cloud.content)
+        if f != "[DONE]" and f.get("choices")
     ] == [
         "Hi",
         " there",

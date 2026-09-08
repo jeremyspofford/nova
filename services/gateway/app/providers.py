@@ -7,6 +7,7 @@ convenience that fills a form, never a gate. Model identity everywhere is
 contain one — the CHECK on the table pins it), so an ollama tag like
 `qwen3.8:27b` still reads as a bare model on the default provider.
 """
+
 from __future__ import annotations
 
 import json
@@ -28,6 +29,7 @@ PRESETS_PATH = Path(__file__).resolve().parent / "providers_presets.json"
 _COLUMNS = (
     "name, adapter, base_url, auth_shape, api_key, default_model, model_note, preset, "
     "builtin, is_default, verified_at, listing, listing_note, key_proven, verify_note, "
+    "usage_supported, local, "
     "created_at, updated_at"
 )
 _PUBLIC_FIELDS = (
@@ -42,6 +44,8 @@ _PUBLIC_FIELDS = (
     "builtin",
     "is_default",
     "verified_at",
+    "usage_supported",
+    "local",
     "listing",
     "listing_note",
     "key_proven",
@@ -222,8 +226,8 @@ async def ensure_builtin(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
-                "INSERT INTO providers (name, adapter, base_url, auth_shape, builtin, is_default) "
-                "VALUES ('ollama', 'ollama', '', 'none', true, "
+                "INSERT INTO providers (name, adapter, base_url, auth_shape, builtin, local, "
+                "is_default) VALUES ('ollama', 'ollama', '', 'none', true, true, "
                 "NOT EXISTS (SELECT 1 FROM providers WHERE is_default)) "
                 "ON CONFLICT (name) DO NOTHING"
             )
@@ -265,9 +269,9 @@ async def insert_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
         row = await pool.fetchrow(
             "INSERT INTO providers (name, adapter, base_url, auth_shape, api_key, "
             "default_model, model_note, preset, verified_at, listing, listing_note, "
-            "key_proven, verify_note) "
+            "key_proven, verify_note, local) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, "
-            "CASE WHEN $13 THEN now() ELSE NULL END, $9, $10, $11, $12) "
+            "CASE WHEN $13 THEN now() ELSE NULL END, $9, $10, $11, $12, $2 = 'ollama') "
             f"RETURNING {_COLUMNS}",
             name,
             shape["adapter"],
@@ -339,12 +343,20 @@ async def record_listing(pool: asyncpg.Pool, name: str, state: str, note: str | 
     )
 
 
+async def record_usage_support(pool: asyncpg.Pool, name: str, supported: bool) -> None:
+    """Whether the provider honoured `stream_options.include_usage` —
+    learned from the wire, touching only that column."""
+    await pool.execute(
+        "UPDATE providers SET usage_supported = $2, updated_at = now() WHERE name = $1",
+        name,
+        supported,
+    )
+
+
 async def delete_row(pool: asyncpg.Pool, name: str) -> None:
     row = await get_row(pool, name)
     if row["builtin"]:
-        raise HTTPException(
-            status_code=400, detail="the bundled ollama provider cannot be deleted"
-        )
+        raise HTTPException(status_code=400, detail="the bundled ollama provider cannot be deleted")
     if row["is_default"]:
         raise HTTPException(
             status_code=409,

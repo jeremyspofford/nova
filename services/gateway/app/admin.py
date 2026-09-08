@@ -14,13 +14,14 @@ import logging
 import os
 import time
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from app import adapters, backends, catalog, db, hf_hub, ollama_registry, providers
+from app import adapters, backends, catalog, db, hf_hub, ollama_registry, providers, usage
 from app import curated as curated_mod
 from app import fit as fit_mod
 from app import pulls as pulls_mod
@@ -452,6 +453,8 @@ async def probe(request: Request) -> dict:
         "max_tokens": 1,
         "stream": False,
     }
+    probe_content = b""
+    probe_status: int | None = None
     try:
         response = await adapters.for_row(row).completions(request, row, target_model, probe_body)
         status = response.status_code
@@ -462,6 +465,7 @@ async def probe(request: Request) -> dict:
                 content += chunk if isinstance(chunk, bytes) else str(chunk).encode()
         else:
             content = response.body
+        probe_content, probe_status = content, status
         latency_ms = int((time.monotonic() - started) * 1000)
         if status != 200:
             ok = False
@@ -486,6 +490,17 @@ async def probe(request: Request) -> dict:
         error = backends.reason(exc)
         latency_ms = int((time.monotonic() - started) * 1000)
 
+    # The probe is a call the provider served (or refused): a ledger row too.
+    await usage.record_probe(
+        pool,
+        row=row,
+        model=target_model,
+        status=probe_status if probe_status is not None else 502,
+        body=probe_content,
+        started=started,
+        purpose="probe",
+        error=error,
+    )
     row_out = await pool.fetchrow(
         "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
         "VALUES ($1, $2, $3, $4, $5, $6) "
@@ -530,6 +545,19 @@ def _provider_404(name: str) -> HTTPException:
     return HTTPException(status_code=404, detail=f"no provider named {name!r}")
 
 
+async def _record_prices_after_save(pool, saved: dict, shape: dict) -> None:
+    """The listing verify already fetched, priced and kept (S10): a chat
+    call is priced from stored rows and never fetches a listing itself.
+    No second call to the provider — the save's own listing is enough."""
+    models = shape.get("_listing_models")
+    if not models:
+        return
+    try:
+        await usage.record_listing_prices(pool, saved, models)
+    except Exception:  # noqa: BLE001 — stated on the page, never a save failure
+        logger.exception("could not record listing prices for %s", saved.get("name"))
+
+
 async def _verify_or_502(app, name: str, shape: dict) -> dict:
     """Run the adapter's verify-before-save; a refusal is a 502 with the
     provider's own reason and NOTHING is written."""
@@ -547,6 +575,7 @@ async def _verify_or_502(app, name: str, shape: dict) -> dict:
         listing_note=result.note,
         key_proven=result.key_proven,
         verify_note=result.note,
+        _listing_models=result.models,
         # verified_at is stamped ONLY here and in the wizard path — the two
         # places a verify actually ran. A save with no verdict has none.
         verified=True,
@@ -609,6 +638,14 @@ async def create_provider(request: Request) -> dict:
     shape = providers.validate_shape(body)
     shape = await _verify_or_502(request.app, name, shape)
     saved = await providers.insert_row(pool, name, shape)
+    await _record_prices_after_save(pool, saved, shape)
+    if saved.get("adapter") == "anthropic-messages":
+        # Its listing states no prices: the dated curated list is what
+        # prices its calls until the owner enters one.
+        try:
+            await usage.seed_curated_prices(pool)
+        except usage.CuratedPricesInvalid:
+            logger.exception("curated_prices.json is invalid — %s stays unpriced", name)
     # Never log the payload itself — api_key lives in it.
     logger.info("provider saved: name=%s adapter=%s", saved["name"], saved["adapter"])
     return providers.to_public(saved)
@@ -639,6 +676,7 @@ async def update_provider(name: str, request: Request) -> dict:
     shape = providers.validate_shape(body, existing=existing)
     shape = await _verify_or_502(request.app, name, shape)
     saved = await providers.update_row(pool, name, shape)
+    await _record_prices_after_save(pool, saved, shape)
     logger.info("provider updated: name=%s adapter=%s", saved["name"], saved["adapter"])
     return providers.to_public(saved)
 
@@ -701,10 +739,152 @@ async def _listing_for(app, pool, row: dict) -> adapters.Listing:
         )
         raise
     await providers.record_listing(pool, name, "available", f"{len(listing.models)} models listed")
+    # The listing's prices, kept: a chat call never fetches a listing to be priced.
+    try:
+        await usage.record_listing_prices(pool, row, listing.models)
+    except Exception:
+        logger.exception("could not record listing prices for %s", name)
     return listing
 
 
 # ── the model catalogue (S10a) ────────────────────────────────────────────
+
+
+# ── spend (S10) ────────────────────────────────────────────────────────────
+
+
+def _timezone_of(request: Request) -> str:
+    return usage.valid_timezone(request.headers.get(usage.HEADER_TIMEZONE))
+
+
+@router.get("/spend")
+async def spend_report(request: Request) -> dict:
+    """The ledger rolled up over a window (today | 7d | 30d | month) in the
+    owner's zone (`X-Nova-Timezone`; UTC when absent, and the answer says
+    which). Every dollar carries the basis it was recorded with."""
+    window = request.query_params.get("window") or "month"
+    try:
+        return await usage.report(await db.get_pool(), window, _timezone_of(request))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/spend/events")
+async def spend_events(request: Request) -> dict:
+    params = request.query_params
+    try:
+        limit = int(params.get("limit") or 50)
+        before = int(params["before"]) if params.get("before") else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="limit and before must be integers") from None
+    rows = await usage.events(
+        await db.get_pool(), limit=limit, before=before, provider=params.get("provider") or None
+    )
+    return {"events": rows, "ledger_write_failures": usage.WRITE_FAILURES}
+
+
+@router.get("/spend/caps")
+async def spend_caps(request: Request) -> dict:
+    pool = await db.get_pool()
+    limits = await usage.caps(pool)
+    since = usage.month_start(datetime.now(UTC), _timezone_of(request))
+    out = []
+    for provider_name, cap in sorted(limits.items()):
+        used = await usage.spent(
+            pool, None if provider_name == usage.TOTAL_CAP else provider_name, since
+        )
+        out.append(
+            {
+                "provider": provider_name,
+                "monthly_usd": float(cap) if cap is not None else None,
+                "spent_usd": float(used),
+                "remaining_usd": float(cap - used) if cap is not None else None,
+            }
+        )
+    return {"caps": out, "month_since": since.isoformat(), "timezone": _timezone_of(request)}
+
+
+@router.put("/spend/caps")
+async def put_spend_cap(request: Request) -> dict:
+    """{provider, monthly_usd | null}. '*' is the total across every cloud
+    provider; a local provider cannot be capped in USD (it has none)."""
+    body = await request.json() if await request.body() else {}
+    provider_name = body.get("provider") if isinstance(body, dict) else None
+    if not provider_name:
+        raise HTTPException(status_code=400, detail="provider is required ('*' for the total)")
+    pool = await db.get_pool()
+    if provider_name != usage.TOTAL_CAP:
+        try:
+            row = await providers.get_row(pool, provider_name)
+        except providers.UnknownProvider:
+            raise HTTPException(
+                status_code=404, detail=f"no provider named {provider_name!r}"
+            ) from None
+        if row.get("local"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"{provider_name!r} is local — GPU time is not capped in USD",
+            )
+    raw = body.get("monthly_usd")
+    if raw is None:
+        cap = None
+    else:
+        try:
+            cap = Decimal(str(raw))
+        except (ArithmeticError, ValueError):
+            raise HTTPException(
+                status_code=400, detail="monthly_usd must be a number or null"
+            ) from None
+        if cap < 0:
+            raise HTTPException(status_code=400, detail="monthly_usd must not be negative")
+    await usage.set_cap(pool, provider_name, cap)
+    logger.info("spend cap set: %s = %s", provider_name, cap)
+    return {"provider": provider_name, "monthly_usd": float(cap) if cap is not None else None}
+
+
+@router.get("/spend/prices")
+async def spend_prices() -> dict:
+    return {"prices": await usage.prices(await db.get_pool())}
+
+
+@router.put("/spend/prices")
+async def put_owner_price(request: Request) -> dict:
+    """{provider, model, prompt_usd_per_token, completion_usd_per_token} —
+    the owner's own price for a model whose listing states none. Wins over
+    listing and curated rows; said so wherever it is used."""
+    body = await request.json() if await request.body() else {}
+    if not isinstance(body, dict) or not body.get("provider") or not body.get("model"):
+        raise HTTPException(status_code=400, detail="provider and model are required")
+    pool = await db.get_pool()
+    try:
+        await providers.get_row(pool, body["provider"])
+    except providers.UnknownProvider:
+        raise HTTPException(
+            status_code=404, detail=f"no provider named {body['provider']!r}"
+        ) from None
+    try:
+        prompt = Decimal(str(body.get("prompt_usd_per_token")))
+        completion = Decimal(str(body.get("completion_usd_per_token")))
+    except (ArithmeticError, ValueError, TypeError):
+        raise HTTPException(
+            status_code=400, detail="prices must be numbers (USD per token)"
+        ) from None
+    if prompt < 0 or completion < 0:
+        raise HTTPException(status_code=400, detail="prices must not be negative")
+    await usage.set_owner_price(pool, body["provider"], body["model"], prompt, completion)
+    return {"provider": body["provider"], "model": body["model"], "basis": "owner"}
+
+
+@router.delete("/spend/prices")
+async def delete_owner_price(request: Request) -> dict:
+    provider_name = request.query_params.get("provider") or ""
+    model = request.query_params.get("model") or ""
+    if not provider_name or not model:
+        raise HTTPException(status_code=400, detail="provider and model are required")
+    removed = await usage.delete_owner_price(await db.get_pool(), provider_name, model)
+    if not removed:
+        raise HTTPException(status_code=404, detail="no owner price for that model")
+    return {"provider": provider_name, "model": model, "removed": True}
 
 
 @router.get("/catalog")

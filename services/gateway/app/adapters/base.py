@@ -61,6 +61,9 @@ class VerifyResult:
     listing: str
     note: str | None = None
     key_proven: bool | None = None
+    # The listing's rows when verify fetched one (S10 records their prices
+    # at save time without a second call).
+    models: list[dict] | None = None
 
 
 class Adapter(Protocol):

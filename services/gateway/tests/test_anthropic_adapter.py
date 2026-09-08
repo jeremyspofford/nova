@@ -39,7 +39,13 @@ def test_system_messages_fold_into_the_top_level_system_field():
         "stream": True,
     }
     out = adapter.to_messages_request(body, "claude-opus-5").body
-    assert out["system"] == "You are Nova.\n\nBe brief."
+    # S10: text BLOCKS, not one joined string — the first (core's stable
+    # prompt) carries the prompt-cache breakpoint; a later, volatile block
+    # (recall snippets) never invalidates it.
+    assert out["system"] == [
+        {"type": "text", "text": "You are Nova.", "cache_control": {"type": "ephemeral"}},
+        {"type": "text", "text": "Be brief."},
+    ]
     assert out["messages"] == [{"role": "user", "content": "hi"}]
     assert out["model"] == "claude-opus-5"
     assert out["stream"] is True
@@ -100,6 +106,8 @@ def test_a_tool_round_trip_becomes_tool_use_and_one_tool_result_user_message():
             "name": "read_file",
             "description": "Read a workspace file",
             "input_schema": TOOL["function"]["parameters"],
+            # S10: the last tool carries the prompt-cache breakpoint.
+            "cache_control": {"type": "ephemeral"},
         }
     ]
     assert out["max_tokens"] == 512
@@ -487,14 +495,31 @@ async def test_a_tool_calling_turn_streams_in_the_openai_shape_core_reads(
         -1
     ] == "tool_calls"
     usage = [f["usage"] for f in frames if f != "[DONE]" and f.get("usage")]
-    assert usage == [{"prompt_tokens": 100, "completion_tokens": 42, "total_tokens": 142}]
+    # The translator's own usage chunk, then S10's synthetic one (the same
+    # counts plus the price fields — no price row here, so cost is null).
+    assert usage[0] == {"prompt_tokens": 100, "completion_tokens": 42, "total_tokens": 142}
+    # An Anthropic provider is priced from the dated curated list the
+    # moment it is created: 100 × $5e-6 + 42 × $2.5e-5 = $0.00155.
+    assert usage[1] == {
+        **usage[1],
+        "prompt_tokens": 100,
+        "completion_tokens": 42,
+        "cost_usd": 0.00155,
+        "cost_basis": "curated-price",
+        "provider": "anthropic",
+        "metered": True,
+        "recorded": True,
+    }
+    assert frames[-1] == "[DONE]"
 
     # What Anthropic actually received: its own shapes, with the key in its header.
     path, sent = fake.seen[-1]
     assert path == "/v1/messages"
     assert sent["model"] == "claude-opus-5"
-    assert sent["system"] == "You are Nova."
+    assert sent["system"][0]["text"] == "You are Nova."
     assert sent["tools"][0]["input_schema"] == TOOL["function"]["parameters"]
+    # The tool list is the other stable prefix: its LAST entry carries the breakpoint.
+    assert sent["tools"][-1]["cache_control"] == {"type": "ephemeral"}
     assert sent["stream"] is True and sent["max_tokens"] == adapter.DEFAULT_MAX_TOKENS
     assert fake.seen_headers[-1]["x-api-key"] == "sk-ant-4321"
     assert "authorization" not in fake.seen_headers[-1]

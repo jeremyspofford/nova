@@ -216,6 +216,10 @@ class FakeOllama:
     pull_lines: tuple[str, ...] = ('{"status":"pulling"}', '{"status":"success"}')
     probe_status: int = 200
     probe_content: str = "hi there"
+    # ollama's /v1 states usage on the final chunk when asked (include_usage)
+    # and always on a non-stream answer.
+    prompt_tokens: int | None = 12
+    completion_tokens: int | None = 5
     vram_bytes: int | None = 5_000_000_000
     probe_model_name: str = "qwen3:8b"
     # /api/ps's resident-model list for the free-VRAM calc (app/fit.py via
@@ -306,15 +310,39 @@ class FakeOllama:
         if not (body or {}).get("stream"):
             if self.probe_status != 200:
                 return JSONResponse({"error": "probe refused"}, status_code=self.probe_status)
-            return JSONResponse(
-                {"choices": [{"message": {"role": "assistant", "content": self.probe_content}}]}
-            )
+            answer: dict = {
+                "choices": [{"message": {"role": "assistant", "content": self.probe_content}}]
+            }
+            if self.prompt_tokens is not None and self.completion_tokens is not None:
+                answer["usage"] = {
+                    "prompt_tokens": self.prompt_tokens,
+                    "completion_tokens": self.completion_tokens,
+                    "total_tokens": self.prompt_tokens + self.completion_tokens,
+                }
+            return JSONResponse(answer)
+
+        wants_usage = bool(((body or {}).get("stream_options") or {}).get("include_usage"))
 
         async def stream():
             for index, delta in enumerate(self.deltas):
                 yield _sse({"choices": [{"delta": {"content": delta}}]})
                 if self.fail_after is not None and index + 1 == self.fail_after:
                     raise RuntimeError("simulated ollama crash mid-stream")
+            if (
+                wants_usage
+                and self.prompt_tokens is not None
+                and self.completion_tokens is not None
+            ):
+                yield _sse(
+                    {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": self.prompt_tokens,
+                            "completion_tokens": self.completion_tokens,
+                            "total_tokens": self.prompt_tokens + self.completion_tokens,
+                        },
+                    }
+                )
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(stream(), media_type="text/event-stream")
@@ -366,6 +394,15 @@ class FakeOpenAICompat:
         default_factory=lambda: {"choices": [{"message": {"content": "ok"}}]}
     )
     deltas: tuple[str, ...] = ("ok",)
+    # S10 metering: emit a final `usage` chunk when the request asked for
+    # one (stream_options.include_usage) — the OpenAI/OpenRouter/ollama
+    # behaviour; `cost` is OpenRouter's `usage.cost`, emitted only when the
+    # request carried `usage: {include: true}`. `rejects_usage_fields`
+    # answers 400 naming the field, the way a strict proxy does.
+    prompt_tokens: int | None = 12
+    completion_tokens: int | None = 5
+    cost: float | None = None
+    rejects_usage_fields: bool = False
     seen_auth: list[str | None] = field(default_factory=list)
     seen_headers: list[dict] = field(default_factory=list)
     seen: list[tuple[str, dict | None]] = field(default_factory=list)
@@ -418,15 +455,39 @@ class FakeOpenAICompat:
             )
         if self.completions_status != 200:
             return JSONResponse({"error": "refused"}, status_code=self.completions_status)
-        if not (body or {}).get("stream"):
-            return JSONResponse(self.completions_body)
+        body = body or {}
+        if self.rejects_usage_fields and ("stream_options" in body or "usage" in body):
+            return JSONResponse(
+                {"error": {"message": "Unrecognized request argument supplied: stream_options"}},
+                status_code=400,
+            )
+        usage = self._usage(body)
+        if not body.get("stream"):
+            payload = dict(self.completions_body)
+            if usage is not None:
+                payload["usage"] = usage
+            return JSONResponse(payload)
 
         async def stream():
             for delta in self.deltas:
                 yield _sse({"choices": [{"delta": {"content": delta}}]})
+            if usage is not None and (body.get("stream_options") or {}).get("include_usage"):
+                yield _sse({"choices": [], "usage": usage})
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    def _usage(self, body: dict) -> dict | None:
+        if self.prompt_tokens is None or self.completion_tokens is None:
+            return None
+        usage: dict = {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.prompt_tokens + self.completion_tokens,
+        }
+        if self.cost is not None and (body.get("usage") or {}).get("include"):
+            usage["cost"] = self.cost
+        return usage
 
 
 def _anthropic_sse(event: dict) -> str:
@@ -458,6 +519,9 @@ class FakeAnthropic:
     stop_reason: str = "end_turn"
     input_tokens: int = 25
     output_tokens: int = 12
+    # Prompt-cache counts stated on message_start (S10); None = not stated.
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
     status: int = 200
     error_body: dict | None = None
     # Emit an in-stream `error` event after this many blocks (None: never).
@@ -557,6 +621,14 @@ class FakeAnthropic:
             return True
         return request.headers.get("x-api-key") == self.accepts_key
 
+    def _start_usage(self) -> dict:
+        usage: dict = {"input_tokens": self.input_tokens, "output_tokens": 1}
+        if self.cache_read_input_tokens is not None:
+            usage["cache_read_input_tokens"] = self.cache_read_input_tokens
+        if self.cache_creation_input_tokens is not None:
+            usage["cache_creation_input_tokens"] = self.cache_creation_input_tokens
+        return usage
+
     async def _messages(self, request):
         body = await self._record(request)
         if not self._key_ok(request):
@@ -590,10 +662,7 @@ class FakeAnthropic:
                     "content": self._content_blocks(),
                     "stop_reason": self.stop_reason,
                     "stop_sequence": None,
-                    "usage": {
-                        "input_tokens": self.input_tokens,
-                        "output_tokens": self.output_tokens,
-                    },
+                    "usage": {**self._start_usage(), "output_tokens": self.output_tokens},
                 }
             )
 
@@ -608,7 +677,7 @@ class FakeAnthropic:
                         "model": model,
                         "content": [],
                         "stop_reason": None,
-                        "usage": {"input_tokens": self.input_tokens, "output_tokens": 1},
+                        "usage": self._start_usage(),
                     },
                 }
             )

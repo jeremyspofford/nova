@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import admin, backends, data_plane, db
+from app import admin, backends, data_plane, db, usage
 from app.auth import bearer_auth_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
@@ -37,6 +37,7 @@ async def lifespan(app: FastAPI):
         raise
     pool = await db.init_pool()
     await backends.ensure_default_row(pool)
+    await usage.ensure_seed(pool)
     try:
         yield
     finally:

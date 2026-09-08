@@ -31,6 +31,7 @@ changed is said in the translation notes.
 Nothing here retries, falls back, or rephrases a refusal: a non-2xx is
 relayed with Anthropic's own status and message in the OpenAI error shape.
 """
+
 from __future__ import annotations
 
 import json
@@ -238,9 +239,7 @@ def normalize_messages(messages: list[dict], notes: list[str]) -> list[dict]:
     return fixed
 
 
-def to_messages_request(
-    body: dict, model: str, *, output_cap: int | None = None
-) -> Translation:
+def to_messages_request(body: dict, model: str, *, output_cap: int | None = None) -> Translation:
     """The Messages API request for an OpenAI chat-completions `body`."""
     notes: list[str] = []
     system_parts: list[str] = []
@@ -318,7 +317,13 @@ def to_messages_request(
         "stream": bool(body.get("stream")),
     }
     if system_parts:
-        request["system"] = "\n\n".join(system_parts)
+        # Text blocks, not one joined string: the FIRST block is core's
+        # stable prompt and carries the cache breakpoint; the volatile
+        # recall snippets ride in later blocks and never invalidate it.
+        request["system"] = [
+            {"type": "text", "text": part, **({"cache_control": CACHE_CONTROL} if i == 0 else {})}
+            for i, part in enumerate(system_parts)
+        ]
 
     tools = body.get("tools")
     if isinstance(tools, list) and tools:
@@ -331,13 +336,14 @@ def to_messages_request(
                 continue
             entry = {
                 "name": str(function["name"]),
-                "input_schema": function.get("parameters")
-                or {"type": "object", "properties": {}},
+                "input_schema": function.get("parameters") or {"type": "object", "properties": {}},
             }
             if function.get("description"):
                 entry["description"] = str(function["description"])
             translated.append(entry)
         if translated:
+            # The second breakpoint: the tool list is the other stable prefix.
+            translated[-1] = {**translated[-1], "cache_control": CACHE_CONTROL}
             request["tools"] = translated
 
     choice = body.get("tool_choice")
@@ -369,7 +375,18 @@ def to_messages_request(
 # ── response: Anthropic → OpenAI ──────────────────────────────────────────
 
 
-def _usage(input_tokens: int | None, output_tokens: int | None) -> dict:
+CACHE_CONTROL = {"type": "ephemeral"}
+
+
+def _usage(
+    input_tokens: int | None,
+    output_tokens: int | None,
+    cache_read: int | None = None,
+    cache_write: int | None = None,
+) -> dict:
+    """OpenAI-shaped usage. `input_tokens` is Anthropic's UNCACHED remainder
+    and stays `prompt_tokens` (what is billed at full price); the cache
+    reads and writes are their own fields, priced at their own rates."""
     usage: dict = {}
     if input_tokens is not None:
         usage["prompt_tokens"] = input_tokens
@@ -377,7 +394,20 @@ def _usage(input_tokens: int | None, output_tokens: int | None) -> dict:
         usage["completion_tokens"] = output_tokens
     if input_tokens is not None and output_tokens is not None:
         usage["total_tokens"] = input_tokens + output_tokens
+    if cache_read is not None:
+        usage["cache_read_tokens"] = cache_read
+    if cache_write is not None:
+        usage["cache_write_tokens"] = cache_write
     return usage
+
+
+def _cache_counts(usage: dict) -> tuple[int | None, int | None]:
+    read = usage.get("cache_read_input_tokens")
+    write = usage.get("cache_creation_input_tokens")
+    return (
+        read if isinstance(read, int) and not isinstance(read, bool) else None,
+        write if isinstance(write, int) and not isinstance(write, bool) else None,
+    )
 
 
 def _chunk(msg_id: str, model: str, delta: dict, finish_reason: str | None = None) -> bytes:
@@ -405,6 +435,8 @@ class StreamTranslator:
         self.msg_id = ""
         self.input_tokens: int | None = None
         self.output_tokens: int | None = None
+        self.cache_read: int | None = None
+        self.cache_write: int | None = None
         self._tool_index_by_block: dict[int, int] = {}
         self._tool_count = 0
         self.finished = False
@@ -422,6 +454,7 @@ class StreamTranslator:
                 self.input_tokens = usage["input_tokens"]
             if isinstance(usage.get("output_tokens"), int):
                 self.output_tokens = usage["output_tokens"]
+            self.cache_read, self.cache_write = _cache_counts(usage)
             out.append(_chunk(self.msg_id, self.model, {"role": "assistant", "content": ""}))
         elif kind == "content_block_start":
             block = event.get("content_block") or {}
@@ -463,11 +496,7 @@ class StreamTranslator:
                         _chunk(
                             self.msg_id,
                             self.model,
-                            {
-                                "tool_calls": [
-                                    {"index": index, "function": {"arguments": partial}}
-                                ]
-                            },
+                            {"tool_calls": [{"index": index, "function": {"arguments": partial}}]},
                         )
                     )
         elif kind == "message_delta":
@@ -483,7 +512,7 @@ class StreamTranslator:
                 self.finished = True
         elif kind == "message_stop":
             self.saw_message_stop = True
-            usage = _usage(self.input_tokens, self.output_tokens)
+            usage = _usage(self.input_tokens, self.output_tokens, self.cache_read, self.cache_write)
             if usage:
                 payload = {
                     "id": self.msg_id,
@@ -546,6 +575,7 @@ def to_chat_completion(message: dict, model: str) -> dict:
         "usage": _usage(
             usage.get("input_tokens") if isinstance(usage.get("input_tokens"), int) else None,
             usage.get("output_tokens") if isinstance(usage.get("output_tokens"), int) else None,
+            *_cache_counts(usage),
         ),
     }
 

@@ -1,0 +1,17 @@
+{
+  "verified_at": "2026-09-08",
+  "source": "https://www.anthropic.com/pricing (checked 2026-09-08 against the claude-api reference table dated 2026-06-24)",
+  "adapter": "anthropic-messages",
+  "note": "USD per token; cache read is a multiplier of the prompt price (0.1, 0.025 on Fable 5.1); cache write is 1.25 (the 5-minute TTL). A model absent here is unpriced until the owner enters a price.",
+  "models": [
+    {"model": "claude-fable-5-1", "prompt": 1e-05, "completion": 5e-05, "cache_read": 0.025, "cache_write": 1.25},
+    {"model": "claude-fable-5", "prompt": 1e-05, "completion": 5e-05, "cache_read": 0.1, "cache_write": 1.25},
+    {"model": "claude-opus-5", "prompt": 5e-06, "completion": 2.5e-05, "cache_read": 0.1, "cache_write": 1.25},
+    {"model": "claude-opus-4-8", "prompt": 5e-06, "completion": 2.5e-05, "cache_read": 0.1, "cache_write": 1.25},
+    {"model": "claude-opus-4-7", "prompt": 5e-06, "completion": 2.5e-05, "cache_read": 0.1, "cache_write": 1.25},
+    {"model": "claude-opus-4-6", "prompt": 5e-06, "completion": 2.5e-05, "cache_read": 0.1, "cache_write": 1.25},
+    {"model": "claude-sonnet-5", "prompt": 2e-06, "completion": 1e-05, "cache_read": 0.1, "cache_write": 1.25},
+    {"model": "claude-sonnet-4-6", "prompt": 3e-06, "completion": 1.5e-05, "cache_read": 0.1, "cache_write": 1.25},
+    {"model": "claude-haiku-4-5", "prompt": 1e-06, "completion": 5e-06, "cache_read": 0.1, "cache_write": 1.25}
+  ]
+}
