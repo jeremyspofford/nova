@@ -69,6 +69,18 @@ the database or a shared cache before any view could trust it.
   into a new row at creation, the column is what an agent actually runs
   with. Worth renaming the setting the next time settings move.
 
+## Seen in the walk, not fixed
+
+- **An agent reads its own error rows as current state.** After a cap
+  refusal was persisted as the agent's assistant row, the next `@coder`
+  turn (cap already raised, and the turn RAN — the trace shows the rounds)
+  answered "coder couldn't run it, its cap is $0.00 of $0.00": it read its
+  own earlier refusal in the history and reported it as now. The record is
+  true and the mechanism was right, so nothing lied; the model just failed
+  to notice the newer request superseded it. Same family as the v3
+  consent-loop poisoning. A fix would mark an agent's own stated-refusal
+  rows in the history it is handed, or leave them out of its window.
+
 ## Carried in from S10, still open
 
 - Merge `slice/s10` (and now `slice/s12`) into `rebuild/v4` once the S9

@@ -150,3 +150,58 @@ that row.
 - NOT moved, by design: `test_no_approvals` (all pins), `test_settings`
   KNOWN_KEYS, `test_eval_corpus` (16 ids, suite_version 7 — a delegation
   case needs a `setup.agents` fixture hook first; carried).
+
+## The live walk (2026-09-08), and the two things it caught
+
+Deployed from the branch's commits; migration 021 applied at core startup.
+Everything below was asked in chat, in her words, and read back from the
+trace and the tables — never from her reply.
+
+- She created `coder` herself from one sentence (one `create_agent` span,
+  ok), wrote its instructions, and the row, the folder, the `agent_coder`
+  route and the `agent.created` governance event were all there.
+- Delegation ran end to end: ONE `delegate_to_agent` span on her turn with
+  `meta.facts` naming the child turn and `files: ["haiku.md"]`; the child
+  turn (`kind agent`, `agent_coder`, `model ''`, the owner's `person_id`)
+  wrote the file and read it back; she relayed the haiku. Her page showed
+  the turn under Traces, the file under Artifacts, the brief and report
+  under Log.
+- `@coder read haiku.md back to me`: the user row stored verbatim, the
+  reply badged `coder` on reload, the ledger metering 7 rounds under
+  `agent_coder`, and the exchange in the AGENT's memory partition — not
+  the owner's.
+- A scheduled timer bound to `coder` fired as the agent and wrote the file;
+  the timer stayed the owner's.
+- Cap: at $0.00 the turn ended before any model round (the `agent_cap` span
+  is the ONLY span) with the statement persisted verbatim; raised to $5.00
+  it ran again.
+- Deleting the agent paused its bound timer with "paused: agent coder was
+  deleted", removed the route, left the folder and the log, and left the
+  seven earlier turns carrying `role agent_coder` with no name.
+- `@nobody` fell through to an ordinary Nova turn that said there is no
+  such agent, with no fabricated call.
+- Asked "what did coder do earlier?" after all of that, she recounted five
+  true things across a delegation, an `@` turn and a firing — and NO
+  delegation-claim correction fired. That exemption was a confirmed review
+  finding before the walk; the walk is where it was proven.
+
+**Two guard defects the walk caught, both fixed here:**
+
+1. **She disowned delegation.** Asked to hand the task to the agent she had
+   just created, she answered "that capability isn't in my toolset right
+   now" — with `delegate_to_agent` in her advertised list and the roster
+   line naming `coder` in the same prompt. The capability guard already
+   contradicts a false denial; its phrase table simply had no entry for the
+   five new tools. Added. The verdict still reads the live list the caller
+   was given, so the same sentence stays honest from an agent (whose subset
+   can never contain `delegate_to_agent`).
+2. **A scope limit read as a disowned capability.** "I can't write files
+   outside my folder" is TRUE — the tool exists and `_resolve_within`
+   refuses the path — and the guard was correcting it with "I can do that",
+   telling the owner the opposite of the fact and replacing the agent's
+   honest answer. Agents say that sentence constantly. A scope qualifier
+   right after the capability phrase now makes the denial honest; a bare
+   "I can't list files" is still corrected.
+
+Both are the founding rule in its mirror form: the prompt carried the
+truth and she contradicted it anyway, so the fix is a line of code.
