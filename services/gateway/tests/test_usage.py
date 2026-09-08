@@ -498,6 +498,16 @@ async def test_the_report_rolls_up_by_provider_model_purpose_person_and_day(clie
     assert report["by_person"][0]["key"] == ATTRIBUTION["X-Nova-Person"]
     assert report["by_model"][0]["key"] == "ollama:qwen3:8b"
     assert len(report["by_day"]) == 1 and report["by_day"][0]["calls"] == 3
+    # The day's bar is stacked by model.
+    assert report["by_day"][0]["models"] == [
+        {
+            "key": "ollama:qwen3:8b",
+            "local": True,
+            "usd": 0.0,
+            "calls": 3,
+            "gpu_seconds": report["by_day"][0]["gpu_seconds"],
+        }
+    ]
     bad = await client.get("/admin/spend?window=year")
     assert bad.status_code == 400
     events = (await client.get("/admin/spend/events?limit=2")).json()["events"]

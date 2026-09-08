@@ -40,8 +40,27 @@ const REPORT: SpendReport = {
     { key: 'p2', local: false, usd: 0, calls: 1, unmetered: 0, prompt_tokens: 0, completion_tokens: 0, gpu_seconds: 0, person: { name: '(no longer exists)', role: null } },
   ],
   by_day: [
-    { day: '2026-09-02', usd: 2.0, calls: 5, gpu_seconds: 0 },
-    { day: '2026-09-05', usd: 1.5, calls: 9, gpu_seconds: 750 },
+    {
+      day: '2026-09-02',
+      usd: 2.0,
+      calls: 5,
+      gpu_seconds: 0,
+      models: [
+        { key: 'openrouter:openai/gpt-x', local: false, usd: 1.5, calls: 2, gpu_seconds: 0 },
+        { key: 'anthropic:claude-opus-5', local: false, usd: 0.5, calls: 1, gpu_seconds: 0 },
+        { key: 'ollama:qwen3:8b', local: true, usd: 0, calls: 2, gpu_seconds: 0 },
+      ],
+    },
+    {
+      day: '2026-09-05',
+      usd: 1.5,
+      calls: 9,
+      gpu_seconds: 750,
+      models: [
+        { key: 'openrouter:openai/gpt-x', local: false, usd: 1.5, calls: 2, gpu_seconds: 0 },
+        { key: 'ollama:qwen3:8b', local: true, usd: 0, calls: 7, gpu_seconds: 750 },
+      ],
+    },
   ],
   unpriced: [{ provider: 'openrouter', model: 'gpt-free', calls: 1 }],
   recent_refusals: [{ at: '2026-09-07T10:00:00Z', provider: 'openrouter', model: 'gpt-x', status: 402, error: 'insufficient credits', purpose: 'chat' }],
@@ -85,12 +104,29 @@ describe('SpendPage', () => {
     expect(screen.getByText(/calls in flight are not yet counted/)).toBeTruthy()
   })
 
-  it('draws a bar per day of the window scaled to the largest day', async () => {
+  it('draws a bar per day, stacked by model with a key, in dollars by default and calls on demand', async () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('spend-days')).toBeTruthy())
     expect(screen.getByTestId('spend-day-2026-09-02').style.height).toBe('100%')
     expect(screen.getByTestId('spend-day-2026-09-05').style.height).toBe('75%')
     expect(screen.getByTestId('spend-day-2026-09-03').style.height).toBe('0%')
+    // Dollars: the two priced models are segments; the local one has none.
+    const seg = screen.getByTestId('spend-day-2026-09-02-openrouter:openai/gpt-x')
+    expect(seg.style.height).toBe('75%')
+    expect(screen.getByTestId('spend-day-2026-09-02-anthropic:claude-opus-5').style.height).toBe('25%')
+    expect(screen.queryByTestId('spend-day-2026-09-02-ollama:qwen3:8b')).toBeNull()
+    // The key: most used first, each with its colour; the local model says "no dollars".
+    const key = screen.getByTestId('spend-key')
+    const entries = Array.from(key.querySelectorAll('li[data-testid^="spend-key-"]')).map(li => li.getAttribute('data-testid'))
+    expect(entries).toEqual(['spend-key-openrouter:openai/gpt-x', 'spend-key-anthropic:claude-opus-5', 'spend-key-ollama:qwen3:8b'])
+    expect(screen.getByTestId('spend-key-ollama:qwen3:8b').textContent).toContain('local, no dollars')
+    const gptColour = seg.className
+    expect(screen.getByTestId('spend-key-openrouter:openai/gpt-x').querySelector('span')?.className).toContain(gptColour.split(' ').pop() ?? '')
+    // Calls: the local model appears, and the tallest day is the one with more calls.
+    fireEvent.click(screen.getByRole('button', { name: 'Calls' }))
+    expect(screen.getByTestId('spend-day-2026-09-05').style.height).toBe('100%')
+    expect(screen.getByTestId('spend-day-2026-09-05-ollama:qwen3:8b').style.height).toBe(`${(7 / 9) * 100}%`)
+    expect(screen.getByTestId('spend-key-ollama:qwen3:8b').textContent).toContain('9 calls')
   })
 
   it('a provider card shows month vs cap and saves a new cap through the API', async () => {

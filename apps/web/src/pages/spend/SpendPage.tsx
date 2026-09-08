@@ -17,7 +17,7 @@ import {
   type SpendWindow,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
-import { BASIS_WORDS, capPercent, dayBars, gpuMinutes, purposeLabel, tokens, usd } from './spendFormat'
+import { BASIS_WORDS, capPercent, dayBars, gpuMinutes, modelKey, purposeLabel, tokens, usd, type ChartMeasure } from './spendFormat'
 
 /**
  * Where the money goes, from the gateway's ledger: one row per model call,
@@ -63,6 +63,9 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
   const [caps, setCaps] = useState<SpendCap[]>([])
   const [prices, setPrices] = useState<SpendPrice[]>([])
   const [error, setError] = useState<string | null>(null)
+  // Dollars by default (this is the Spend page); calls so the local models,
+  // which never cost dollars, are visible in the same picture.
+  const [measure, setMeasure] = useState<ChartMeasure>('usd')
 
   const load = useCallback(async () => {
     setError(null)
@@ -82,7 +85,10 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
 
   const totals = report?.totals
   const bars = useMemo(() => (report ? dayBars(report) : []), [report])
-  const maxDay = Math.max(0, ...bars.map(b => b.usd))
+  const key = useMemo(() => modelKey(bars, measure), [bars, measure])
+  const colourOf = (model: string) => key.find(k => k.key === model)?.colour ?? 'bg-neutral-400'
+  const dayTotal = (b: (typeof bars)[number]) => (measure === 'usd' ? b.usd : b.calls)
+  const maxDay = Math.max(0, ...bars.map(dayTotal))
   const cloudProviders = (report?.by_provider ?? []).filter(p => !p.local)
   const localProviders = (report?.by_provider ?? []).filter(p => p.local)
   const totalCap = caps.find(c => c.provider === '*') ?? null
@@ -158,17 +164,48 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
           <p className="text-caption text-content-tertiary">{totals.in_flight_note}.</p>
 
           <section>
-            <h3 className="mb-2 text-compact font-medium text-content-primary">By day</h3>
-            <div className="flex h-32 items-end gap-1 border-b border-l border-line pl-1" data-testid="spend-days">
-              {bars.map(b => (
-                <div key={b.day} className="flex h-full flex-1 flex-col items-center justify-end" title={`${b.day}: ${usd(b.usd, 4)}, ${b.calls} calls, ${gpuMinutes(b.gpu_seconds)} local`}>
+            <div className="mb-2 flex flex-wrap items-center gap-3">
+              <h3 className="text-compact font-medium text-content-primary">By day, by model</h3>
+              <div className="flex gap-1" role="group" aria-label="chart measure">
+                <Button size="sm" variant={measure === 'usd' ? 'primary' : 'ghost'} onClick={() => setMeasure('usd')} aria-pressed={measure === 'usd'}>
+                  Dollars
+                </Button>
+                <Button size="sm" variant={measure === 'calls' ? 'primary' : 'ghost'} onClick={() => setMeasure('calls')} aria-pressed={measure === 'calls'}>
+                  Calls
+                </Button>
+              </div>
+              {measure === 'usd' && key.some(k => k.local) && (
+                <span className="text-caption text-content-tertiary">local models cost no dollars — switch to Calls to see them</span>
+              )}
+            </div>
+            <div className="flex h-40 items-end gap-1 border-b border-l border-line pl-1" data-testid="spend-days">
+              {bars.map(b => {
+                const total = dayTotal(b)
+                const height = maxDay > 0 ? Math.max(total > 0 ? 3 : 0, Math.round((total / maxDay) * 100)) : 0
+                return (
                   <div
-                    data-testid={`spend-day-${b.day}`}
-                    className="w-full max-w-[2rem] rounded-t-sm bg-accent"
-                    style={{ height: `${maxDay > 0 ? Math.max(b.usd > 0 ? 3 : 0, Math.round((b.usd / maxDay) * 100)) : 0}%` }}
-                  />
-                </div>
-              ))}
+                    key={b.day}
+                    className="flex h-full flex-1 flex-col items-center justify-end"
+                    title={`${b.day}: ${usd(b.usd, 4)}, ${b.calls} calls, ${gpuMinutes(b.gpu_seconds)} local`}
+                  >
+                    <div data-testid={`spend-day-${b.day}`} className="flex w-full max-w-[2rem] flex-col-reverse overflow-hidden rounded-t-sm" style={{ height: `${height}%` }}>
+                      {b.models
+                        .map(m => ({ ...m, share: measure === 'usd' ? m.usd : m.calls }))
+                        .filter(m => m.share > 0)
+                        .map(m => (
+                          <div
+                            key={m.key}
+                            data-testid={`spend-day-${b.day}-${m.key}`}
+                            data-model={m.key}
+                            className={`w-full ${colourOf(m.key)}`}
+                            style={{ height: `${total > 0 ? (m.share / total) * 100 : 0}%` }}
+                            title={`${m.key}: ${measure === 'usd' ? usd(m.usd, 4) : `${m.calls} calls`}${m.local ? ` (local, ${gpuMinutes(m.gpu_seconds)})` : ''}`}
+                          />
+                        ))}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
             <div className="mt-1 flex gap-1 pl-1 text-micro text-content-tertiary">
               {bars.map((b, i) => (
@@ -177,6 +214,20 @@ export function SpendPage({ api = DEFAULT_API }: { api?: SpendApi } = {}) {
                 </div>
               ))}
             </div>
+            {key.length > 0 && (
+              <ul className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-caption" data-testid="spend-key">
+                {key.map(k => (
+                  <li key={k.key} className="inline-flex items-center gap-1.5" data-testid={`spend-key-${k.key}`}>
+                    <span className={`inline-block h-2.5 w-2.5 rounded-sm ${k.colour}`} aria-hidden />
+                    <span className="font-mono">{k.key}</span>
+                    <span className="text-content-tertiary">
+                      {measure === 'usd' ? (k.local ? 'local, no dollars' : usd(k.total, 4)) : `${k.total} calls`}
+                    </span>
+                  </li>
+                ))}
+                {key.length > 8 && <li className="text-content-tertiary">more than eight models: colours repeat</li>}
+              </ul>
+            )}
           </section>
 
           <section>

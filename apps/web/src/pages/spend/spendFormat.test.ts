@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { capPercent, dayBars, gpuMinutes, purposeLabel, tokens, usd } from './spendFormat'
+import { capPercent, dayBars, gpuMinutes, modelKey, purposeLabel, tokens, usd } from './spendFormat'
 import type { SpendReport } from '../../lib/api'
 
 describe('spendFormat', () => {
@@ -28,15 +28,26 @@ describe('spendFormat', () => {
       since: '2026-09-01T00:00:00-06:00',
       until: '2026-09-04T10:00:00+00:00',
       by_day: [
-        { day: '2026-09-01', usd: 1, calls: 2, gpu_seconds: 0 },
-        { day: '2026-09-03', usd: 0, calls: 4, gpu_seconds: 120 },
+        { day: '2026-09-01', usd: 1, calls: 2, gpu_seconds: 0, models: [{ key: 'openrouter:x', local: false, usd: 1, calls: 2, gpu_seconds: 0 }] },
+        { day: '2026-09-03', usd: 0, calls: 4, gpu_seconds: 120, models: [{ key: 'ollama:q', local: true, usd: null, calls: 4, gpu_seconds: 120 }] },
       ],
     } as unknown as SpendReport
-    expect(dayBars(report)).toEqual([
-      { day: '2026-09-01', usd: 1, calls: 2, gpu_seconds: 0 },
-      { day: '2026-09-02', usd: 0, calls: 0, gpu_seconds: 0 },
-      { day: '2026-09-03', usd: 0, calls: 4, gpu_seconds: 120 },
-      { day: '2026-09-04', usd: 0, calls: 0, gpu_seconds: 0 },
+    const bars = dayBars(report)
+    expect(bars.map(b => [b.day, b.usd, b.calls, b.gpu_seconds])).toEqual([
+      ['2026-09-01', 1, 2, 0],
+      ['2026-09-02', 0, 0, 0],
+      ['2026-09-03', 0, 4, 120],
+      ['2026-09-04', 0, 0, 0],
+    ])
+    expect(bars[2].models).toEqual([{ key: 'ollama:q', local: true, usd: 0, calls: 4, gpu_seconds: 120 }])
+    // The key orders models by the measure and hands out colours in that order.
+    expect(modelKey(bars, 'usd').map(k => [k.key, k.total, k.colour])).toEqual([
+      ['openrouter:x', 1, 'bg-accent'],
+      ['ollama:q', 0, 'bg-info'],
+    ])
+    expect(modelKey(bars, 'calls').map(k => [k.key, k.total])).toEqual([
+      ['ollama:q', 4],
+      ['openrouter:x', 2],
     ])
   })
 

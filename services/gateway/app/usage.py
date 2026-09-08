@@ -924,6 +924,26 @@ async def report(pool: asyncpg.Pool, window: str, timezone: str) -> dict:
         *args,
         zone,
     )
+    by_day_model = await pool.fetch(
+        f"SELECT (at AT TIME ZONE $3)::date AS day, served_by AS key, bool_or(local) AS local, "
+        f"COALESCE(SUM(cost_usd), 0) AS usd, COUNT(*) AS calls, "
+        f"COALESCE(SUM(duration_ms) FILTER (WHERE local), 0) AS local_ms "
+        f"FROM usage_events WHERE {where} AND kind = 'completion' "
+        f"GROUP BY day, served_by ORDER BY day, usd DESC, calls DESC",
+        *args,
+        zone,
+    )
+    models_by_day: dict[str, list[dict]] = {}
+    for r in by_day_model:
+        models_by_day.setdefault(r["day"].isoformat(), []).append(
+            {
+                "key": r["key"],
+                "local": r["local"],
+                "usd": _num(r["usd"]),
+                "calls": r["calls"],
+                "gpu_seconds": round(r["local_ms"] / 1000, 1),
+            }
+        )
     unpriced = await pool.fetch(
         f"SELECT provider, model, COUNT(*) AS calls FROM usage_events "
         f"WHERE {where} AND kind = 'completion' AND NOT local AND cost_usd IS NULL AND metered "
@@ -966,6 +986,8 @@ async def report(pool: asyncpg.Pool, window: str, timezone: str) -> dict:
                 "usd": _num(r["usd"]),
                 "calls": r["calls"],
                 "gpu_seconds": round(r["local_ms"] / 1000, 1),
+                # Each model's share of the day (served_by), for a stacked bar.
+                "models": models_by_day.get(r["day"].isoformat(), []),
             }
             for r in by_day
         ],

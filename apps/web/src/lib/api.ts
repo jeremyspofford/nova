@@ -334,7 +334,14 @@ export interface SpendReport {
   by_purpose: SpendRollup[]
   by_role: SpendRollup[]
   by_person: SpendRollup[]
-  by_day: { day: string; usd: number | null; calls: number; gpu_seconds: number }[]
+  by_day: {
+    day: string
+    usd: number | null
+    calls: number
+    gpu_seconds: number
+    /** Each model's share of the day (served_by), for the stacked bar. */
+    models: { key: string; local: boolean; usd: number | null; calls: number; gpu_seconds: number }[]
+  }[]
   unpriced: { provider: string; model: string; calls: number }[]
   recent_refusals: { at: string; provider: string; model: string; status: number; error: string | null; purpose: string }[]
   caps: Record<string, number | null>
