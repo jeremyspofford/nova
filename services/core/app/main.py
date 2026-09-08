@@ -26,6 +26,7 @@ from app import (
     proxies,
     scheduler,
     settings_store,
+    spend_api,
     timers,
     timers_api,
     traces,
@@ -102,6 +103,7 @@ app.include_router(devices_ws.router)
 app.include_router(evals_api.router)
 app.include_router(proxies.router)
 app.include_router(models_catalog.router)
+app.include_router(spend_api.router)
 app.include_router(workspace_api.router)
 app.include_router(timers_api.router)
 

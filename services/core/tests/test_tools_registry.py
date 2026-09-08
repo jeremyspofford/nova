@@ -111,6 +111,8 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "model_check_update",
         "model_remove",
         # S9 (2026-09-07, merged 09-08): the timer tools. TWENTY-ONE -> TWENTY-FOUR.
+        # S10 (2026-09-08): the spend report. TWENTY-FOUR -> TWENTY-FIVE.
+        "spend_report",
         "create_timer",
         "list_timers",
         "cancel_timer",

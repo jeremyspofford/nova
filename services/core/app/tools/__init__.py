@@ -38,6 +38,7 @@ from app.tools import (
     memory_tools,
     models,
     schema,
+    spend,
     timers,
     util,
     web,
@@ -73,6 +74,7 @@ REGISTRY: dict[str, Tool] = {
         *devices.TOOLS,
         *models.TOOLS,
         *timers.TOOLS,
+        *spend.TOOLS,
     )
 }
 

@@ -4,6 +4,7 @@ is a 404, never a 403; every job is visible to every person; "Run now" runs
 the tick inline and hands back the firing row it actually produced; and the
 chat transcript labels a reminder row by its turn's kind, never a stored flag.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -136,9 +137,7 @@ async def test_every_route_needs_an_identity(client):
     assert (await client.delete(f"/api/v1/timers/{tid}")).status_code == 401
 
 
-async def test_a_row_is_the_stores_spec_plus_last_firing_null_before_any_firing(
-    owner_client, pool
-):
+async def test_a_row_is_the_stores_spec_plus_last_firing_null_before_any_firing(owner_client, pool):
     person, conversation = await _owner(pool)
     row = await _reminder(pool, person, conversation)
 
@@ -277,9 +276,7 @@ async def test_firings_page_newest_first_exhaust_and_refuse_a_foreign_cursor(own
     person, conversation = await _owner(pool)
     row = await _reminder(pool, person, conversation)
     other = await _reminder(pool, person, conversation, title="other")
-    ids = [
-        str(await _closed_firing(pool, row["id"], offset_secs=i)) for i in range(3)
-    ]
+    ids = [str(await _closed_firing(pool, row["id"], offset_secs=i)) for i in range(3)]
     foreign = await _closed_firing(pool, other["id"])
 
     first = await owner_client.get(f"/api/v1/timers/{row['id']}/firings?limit=2")
@@ -293,9 +290,7 @@ async def test_firings_page_newest_first_exhaust_and_refuse_a_foreign_cursor(own
         f"/api/v1/timers/{row['id']}/firings?limit=2&before={page[-1]['id']}"
     )
     assert [f["id"] for f in second.json()["firings"]] == [ids[0]]
-    third = await owner_client.get(
-        f"/api/v1/timers/{row['id']}/firings?limit=2&before={ids[0]}"
-    )
+    third = await owner_client.get(f"/api/v1/timers/{row['id']}/firings?limit=2&before={ids[0]}")
     assert third.json() == {"firings": []}
 
     # A cursor that is a real firing of ANOTHER timer is not a cursor into this one.
@@ -370,9 +365,10 @@ async def test_pause_without_a_reason_takes_the_pages_default_and_returns_the_ro
     assert set(body) == ROW_KEYS
     assert body["paused_at"] is not None
     assert body["paused_reason"] == DEFAULT_PAUSE_REASON
-    assert await pool.fetchval(
-        "SELECT paused_reason FROM timers WHERE id = $1", row["id"]
-    ) == DEFAULT_PAUSE_REASON
+    assert (
+        await pool.fetchval("SELECT paused_reason FROM timers WHERE id = $1", row["id"])
+        == DEFAULT_PAUSE_REASON
+    )
 
     # No body at all is the same as an empty one.
     other = await _reminder(pool, person, conversation, title="other")
@@ -456,8 +452,9 @@ async def test_fire_runs_the_tick_inline_and_returns_the_firing_it_produced(owne
     stored = await pool.fetchrow("SELECT * FROM timer_firings WHERE id = $1", firing["id"])
     assert stored is not None and stored["status"] == "ok"
     assert str(stored["turn_id"]) == firing["turn_id"]
-    turn = await pool.fetchrow("SELECT kind, status, conversation_id FROM turns WHERE id = $1",
-                               stored["turn_id"])
+    turn = await pool.fetchrow(
+        "SELECT kind, status, conversation_id FROM turns WHERE id = $1", stored["turn_id"]
+    )
     assert turn["kind"] == "reminder" and turn["status"] == "ok"
     assert turn["conversation_id"] == conversation
     message = await pool.fetchrow(
@@ -554,4 +551,13 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
         )
     }
     assert "turn_kind" not in columns
-    assert set(messages[0]) == {"id", "role", "content", "created_at", "served_by", "turn_kind"}
+    # S10 added cost_usd (the turn's cost from its spans; null when unpriced).
+    assert set(messages[0]) == {
+        "id",
+        "role",
+        "content",
+        "created_at",
+        "served_by",
+        "turn_kind",
+        "cost_usd",
+    }

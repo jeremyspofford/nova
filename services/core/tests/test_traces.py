@@ -1,5 +1,6 @@
 """The turn ledger writes once, completely, or not at all — and every turn
 reaches a terminal status, even when the process that ran it did not."""
+
 from __future__ import annotations
 
 import json
@@ -109,9 +110,7 @@ async def test_startup_sweeps_every_orphan_as_interrupted_and_nothing_else(pool,
 
         assert set(swept) == {orphan.id, stray.id}
         for turn_id in (orphan.id, stray.id):
-            row = await pool.fetchrow(
-                "SELECT status, ended_at FROM turns WHERE id = $1", turn_id
-            )
+            row = await pool.fetchrow("SELECT status, ended_at FROM turns WHERE id = $1", turn_id)
             assert row["status"] == "interrupted"
             assert row["ended_at"] is not None
         # Untouched: the live turn stays open, the finished one stays 'ok'.
@@ -174,3 +173,18 @@ def test_a_redeploy_waits_long_enough_for_a_turn_to_close_its_trace():
     core = compose["services"]["core"]
     assert "replicas" not in (core.get("deploy") or {}), core.get("deploy")
     assert "scale" not in core, core.get("scale")
+
+
+async def test_the_person_is_on_the_turn_and_survives_their_deletion(pool):
+    person = await pool.fetchrow(
+        "INSERT INTO people (name, role) VALUES ('scratch', 'guest') RETURNING id"
+    )
+    turn = await traces.open_turn(pool, person_id=person["id"], timezone="America/Denver")
+    assert turn.person_id == person["id"] and turn.timezone == "America/Denver"
+    await traces.close_turn(pool, turn, "ok")
+    assert (await pool.fetchval("SELECT person_id FROM turns WHERE id = $1", turn.id)) == person[
+        "id"
+    ]
+    await pool.execute("DELETE FROM people WHERE id = $1", person["id"])
+    # ON DELETE SET NULL: the turn (and its spend) outlives the scratch person.
+    assert (await pool.fetchval("SELECT person_id FROM turns WHERE id = $1", turn.id)) is None

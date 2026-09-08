@@ -45,6 +45,7 @@ message that names what happened, derived from the failed round's span
 ended a turn 'error' with no message at all; the chat showed "still
 responding…" for five minutes and then nothing).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -57,6 +58,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from urllib.parse import unquote
 
 import asyncpg
 import httpx
@@ -174,8 +176,7 @@ def consent_redirect_nudge(*, ran_a_tool: bool) -> str:
     """
     if ran_a_tool:
         raise ValueError(
-            "the redirect nudge asserts nothing has run this turn; "
-            f"ran_a_tool={ran_a_tool}"
+            f"the redirect nudge asserts nothing has run this turn; ran_a_tool={ran_a_tool}"
         )
     return (
         "There is no approval step and nothing has run this turn. Do it now by "
@@ -200,8 +201,7 @@ def state_redirect_nudge(*, device: str, ran_a_tool: bool) -> str:
     into the ordinary correction, never an error frame."""
     if ran_a_tool:
         raise ValueError(
-            "the state redirect nudge asserts nothing has run this turn; "
-            f"ran_a_tool={ran_a_tool}"
+            f"the state redirect nudge asserts nothing has run this turn; ran_a_tool={ran_a_tool}"
         )
     return (
         f"You have not checked {device}'s state this turn. Check it now with a "
@@ -249,8 +249,7 @@ def presented_listing_redirect_nudge(*, ran_a_tool: bool) -> str:
 # listing line, no completed-action claim and no pending-state phrase, so every
 # guard comes back clean over it (pinned in the guard suite).
 PRESENTED_LISTING_UNVERIFIED_NOTE = (
-    "[this listing is not backed by a recorded listing this turn — treat it as "
-    "unverified]"
+    "[this listing is not backed by a recorded listing this turn — treat it as unverified]"
 )
 
 
@@ -287,8 +286,7 @@ def offer_redirect_nudge(*, ran_a_tool: bool) -> str:
     a lie if that precondition somehow did not hold."""
     if ran_a_tool:
         raise ValueError(
-            "the offer redirect nudge asserts nothing has run this turn; "
-            f"ran_a_tool={ran_a_tool}"
+            f"the offer redirect nudge asserts nothing has run this turn; ran_a_tool={ran_a_tool}"
         )
     return (
         "You asked whether to do what the user already told you to do. There is "
@@ -381,9 +379,7 @@ SPAN_RESULT_HEAD_CHARS = 500
 # on TOOL rounds is honored to the letter; a call the model emits anyway is
 # refused with a stated result, never run. The note still lands after whatever
 # it says: the operator must still know the turn stopped early.
-OUT_OF_ROUNDS_REFUSAL = (
-    f"{tools.ERROR_PREFIX}out of tool rounds — answer with what you have"
-)
+OUT_OF_ROUNDS_REFUSAL = f"{tools.ERROR_PREFIX}out of tool rounds — answer with what you have"
 # A tool call emitted in a redirect round that advertised NO tools. Like the two
 # above it is REFUSED, never dispatched: a redirect gets one attempt at the
 # action and then must speak, and a closing round that quietly ran a tool would
@@ -867,6 +863,37 @@ def _empty_round_failure(
     )
 
 
+def turn_usage(spans: Sequence[traces.Span]) -> dict | None:
+    """The turn's cost summed over its llm_call spans — ONLY from what the
+    gateway stated on each (S10). None when no round carried usage. A round
+    with no cost keeps the sum honest: `priced_rounds` says how many of
+    `rounds` had a dollar figure, so a partial sum is never read as a whole."""
+    rounds = [s for s in spans if s.kind == "llm_call" and "metered" in s.meta]
+    if not rounds:
+        return None
+    cost = sum((s.meta["cost_usd"] for s in rounds if s.meta.get("cost_usd") is not None), 0.0)
+    priced = sum(1 for s in rounds if s.meta.get("cost_usd") is not None)
+    bases = sorted({s.meta["cost_basis"] for s in rounds if s.meta.get("cost_basis")})
+    return {
+        "rounds": len(rounds),
+        "priced_rounds": priced,
+        "cost_usd": round(cost, 6) if priced else None,
+        "cost_basis": bases,
+        "prompt_tokens": sum(s.meta.get("prompt_tokens") or 0 for s in rounds),
+        "completion_tokens": sum(s.meta.get("completion_tokens") or 0 for s in rounds),
+        "unmetered_rounds": sum(1 for s in rounds if not s.meta.get("metered")),
+        "local_rounds": sum(1 for s in rounds if s.meta.get("local")),
+        "unrecorded_rounds": sum(1 for s in rounds if s.meta.get("usage_recorded") is False),
+    }
+
+
+async def _owner_timezone(pool) -> str:
+    try:
+        return str(await settings_store.read_value(pool, "nova.timezone") or "UTC")
+    except Exception:  # noqa: BLE001 — a zone is a convenience; UTC is always a fact
+        return "UTC"
+
+
 def _last_llm_span(spans: Sequence[traces.Span]) -> traces.Span | None:
     for span in reversed(spans):
         if span.kind == "llm_call":
@@ -899,7 +926,7 @@ def _names(names: Sequence[str]) -> str:
 
 
 def _ran_clause(spans: Sequence[traces.Span]) -> str:
-    """"Nothing was run." — or what did, DERIVED: a call that ran is never
+    """ "Nothing was run." — or what did, DERIVED: a call that ran is never
     reported as nothing ran (the rule every honest note in here follows)."""
     ran, failed = _tool_outcomes(spans)
     if not ran and not failed:
@@ -915,9 +942,7 @@ def _ran_clause(spans: Sequence[traces.Span]) -> str:
 RETRY_HINT = "Try again, or check the model in Settings → Models."
 
 
-def model_failure_statement(
-    *, model: str, failure: str, spans: Sequence[traces.Span]
-) -> str:
+def model_failure_statement(*, model: str, failure: str, spans: Sequence[traces.Span]) -> str:
     """The assistant message a turn keeps when its model call did not answer.
 
     Every clause is a fact the turn measured: the model from the setting the
@@ -950,8 +975,7 @@ def model_failure_statement(
     if isinstance(round_number, int) and round_number > 1:
         where = f" in round {round_number}"
     return (
-        f"I didn't get a response from {who}{where}: {failure}. "
-        f"{_ran_clause(spans)} {RETRY_HINT}"
+        f"I didn't get a response from {who}{where}: {failure}. {_ran_clause(spans)} {RETRY_HINT}"
     )
 
 
@@ -1073,8 +1097,7 @@ def without_markup(text: str) -> str:
     if not scan.found:
         return text
     logger.warning(
-        "tool-call markup reached the record boundary (%d call(s), unparsed=%s); "
-        "stripping it",
+        "tool-call markup reached the record boundary (%d call(s), unparsed=%s); stripping it",
         len(scan.calls),
         scan.unparsed,
     )
@@ -1105,9 +1128,7 @@ async def _persist_assistant(
     )
 
 
-async def _run_tool(
-    turn: traces.Turn, ctx: tools.ToolContext, call: ToolCall
-) -> tuple[str, bool]:
+async def _run_tool(turn: traces.Turn, ctx: tools.ToolContext, call: ToolCall) -> tuple[str, bool]:
     """One tool call, timed, recorded, and unable to raise.
 
     dispatch() decides ok; nothing here reads the result text to work out
@@ -1183,9 +1204,7 @@ async def _dispatch_calls(
             # retryable reason, exactly like a closed round's refusal.
             result = _refuse_markup_as_text(turn, call)
             emit(_activity_frame(call.name, "error", result))
-            messages.append(
-                {"role": "tool", "tool_call_id": call.id, "content": result}
-            )
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             continue
         # The call's own progress channel: a frame per report, under this
         # call's name. Bound synchronously (no await joins the funnel).
@@ -1232,8 +1251,7 @@ def markup_refusal_fact(name: str) -> str:
     over) is the one the model most needs, and overwriting it — as the first cut
     of this did — cost a closed round its own reason. So both are said."""
     return (
-        "and that was tool-call markup in your reply text, not a tool call, so "
-        f"{name} did not run"
+        f"and that was tool-call markup in your reply text, not a tool call, so {name} did not run"
     )
 
 
@@ -1290,14 +1308,10 @@ def _refuse_markup_as_text(turn: traces.Turn, call: ToolCall) -> str:
     was an argument-fidelity defect that only mattered because something would
     run the result. Nothing runs it now. The model is told, by name, with the one
     thing it must do differently, and the turn gives it another round."""
-    return _refuse_call(
-        turn, call, markup_as_text_refusal(call.name), MARKUP_AS_TEXT_FLAG
-    )
+    return _refuse_call(turn, call, markup_as_text_refusal(call.name), MARKUP_AS_TEXT_FLAG)
 
 
-def _refuse_redirect_closed(
-    turn: traces.Turn, calls: Sequence[ToolCall]
-) -> list[ToolCall]:
+def _refuse_redirect_closed(turn: traces.Turn, calls: Sequence[ToolCall]) -> list[ToolCall]:
     """Every tool call a redirect made in a round that advertised no tools:
     refused and recorded, never dispatched, never silently dropped.
 
@@ -1336,9 +1350,7 @@ def _markup_tool_calls(
             suffix += 1
             candidate = f"markup_{position}_{suffix}"
         taken.add(candidate)
-        out.append(
-            ToolCall(id=candidate, name=call.name, arguments=encoded, from_markup=True)
-        )
+        out.append(ToolCall(id=candidate, name=call.name, arguments=encoded, from_markup=True))
     return out
 
 
@@ -1363,8 +1375,14 @@ async def _gateway_round(
     *,
     round_number: int,
     on_delta: Callable[[str], None] | None,
+    purpose: str | None = None,
+    role: str | None = None,
 ) -> tuple[str, list[ToolCall], str | None]:
     """ONE gateway round: its text, the tool calls it asked for, a failure or None.
+
+    `purpose` is what the gateway's ledger records this call as (S10);
+    it defaults to the turn's kind (chat / scheduled / eval). `role` names
+    the routing chain to walk (S10-2); None sends none.
 
     The turn loop's own round, lifted out verbatim so it has exactly one
     implementation — the loop below and the claim redirect (which must be able
@@ -1393,26 +1411,29 @@ async def _gateway_round(
     stray_lines = 0
     stray_head: str | None = None
     t0 = time.perf_counter()
+    purpose = purpose or _purpose_of(turn)
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
         span.meta["round"] = round_number
         span.meta["tools_advertised"] = bool(advertised)
+        span.meta["purpose"] = purpose
         try:
             async with peers.client(app, peers.GATEWAY, GATEWAY_TIMEOUT) as client:
                 async with client.stream(
                     "POST",
                     "/v1/chat/completions",
                     json=completion_payload(model, messages, advertised),
+                    headers=peers.attribution_headers(turn, purpose, role),
                 ) as response:
                     served_by = response.headers.get("x-nova-served-by")
                     if served_by:
                         span.meta["served_by"] = served_by
+                    _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         span.meta["gateway_status"] = response.status_code
                         detail = (await response.aread()).decode(errors="replace")[:400]
                         raise GatewayFailure(
-                            f"the gateway refused the request "
-                            f"({response.status_code}): {detail}"
+                            f"the gateway refused the request ({response.status_code}): {detail}"
                         )
                     async for line in response.aiter_lines():
                         line = line.strip()
@@ -1436,9 +1457,7 @@ async def _gateway_round(
                         try:
                             chunk = json.loads(data)
                         except json.JSONDecodeError:
-                            span.meta["malformed_chunks"] = (
-                                span.meta.get("malformed_chunks", 0) + 1
-                            )
+                            span.meta["malformed_chunks"] = span.meta.get("malformed_chunks", 0) + 1
                             continue
                         delta, usage, error, fragments = _chunk_parts(chunk)
                         if error is not None:
@@ -1446,9 +1465,7 @@ async def _gateway_round(
                         if usage is not None:
                             # Only what the gateway actually reported — a null
                             # token count is not a measurement.
-                            for field in ("prompt_tokens", "completion_tokens"):
-                                if usage.get(field) is not None:
-                                    span.meta[field] = usage[field]
+                            _note_usage(span, usage)
                         for fragment in fragments:
                             buffer.add(fragment)
                         if delta:
@@ -1526,8 +1543,58 @@ async def _gateway_round(
     return text, calls, failure
 
 
+# The usage fields the gateway's synthetic chunk states (S10) — copied onto
+# the llm_call span only when present; a null is not a measurement.
+_USAGE_FIELDS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "cost_usd",
+    "cost_basis",
+    "provider",
+    "local",
+    "metered",
+)
+
+
+def _note_usage(span, usage: dict) -> None:
+    for field in _USAGE_FIELDS:
+        if usage.get(field) is not None:
+            span.meta[field] = usage[field]
+    if usage.get("recorded") is False:
+        # The gateway could not write its ledger row: said on the span so
+        # the Activity page shows the gap instead of a silent under-count.
+        span.meta["usage_recorded"] = False
+
+
+def _note_route(span, header: str | None) -> None:
+    """The gateway's X-Nova-Route (S10-2): `role=…;link=N;reason=…`."""
+    if not header:
+        return
+    fields = dict(part.split("=", 1) for part in header.split(";") if "=" in part)
+    if fields.get("role"):
+        span.meta["route_role"] = fields["role"]
+    if fields.get("link", "").isdigit():
+        span.meta["route_link"] = int(fields["link"])
+    if fields.get("reason"):
+        span.meta["route_reason"] = unquote(fields["reason"])
+
+
+def _purpose_of(turn: traces.Turn) -> str:
+    """What the ledger records a turn's own rounds as: its kind."""
+    kind = getattr(turn, "kind", None)
+    return kind if isinstance(kind, str) and kind else "chat"
+
+
 async def _collect_completion(
-    app, model: str, messages: Sequence[dict], *, max_tokens: int | None = None
+    app,
+    turn: traces.Turn,
+    model: str,
+    messages: Sequence[dict],
+    *,
+    purpose: str,
+    max_tokens: int | None = None,
 ) -> str:
     """One non-tool gateway call, every content delta concatenated into a string.
 
@@ -1536,6 +1603,10 @@ async def _collect_completion(
     same peer client, bearer and SSE parsing as the turn's own rounds. Raises
     GatewayFailure/httpx errors on a bad round; the callers turn any raise into
     fail-open (ship the original reply), so this never has to swallow anything.
+
+    Records an `llm_call` span of its own with `purpose` (judge / redirect) —
+    S10: these calls cost money too, and before this they were the one
+    round nobody could see or attribute.
     """
     payload: dict = {"messages": list(messages), "stream": True}
     if model:
@@ -1545,36 +1616,56 @@ async def _collect_completion(
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
     collected: list[str] = []
-    async with peers.client(app, peers.GATEWAY, JUDGE_TIMEOUT) as client:
-        async with client.stream(
-            "POST", "/v1/chat/completions", json=payload
-        ) as response:
-            if response.status_code != 200:
-                detail = (await response.aread()).decode(errors="replace")[:200]
-                raise GatewayFailure(
-                    f"the gateway refused ({response.status_code}): {detail}"
-                )
-            async for line in response.aiter_lines():
-                line = line.strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:") :].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                delta, _usage, error, _fragments = _chunk_parts(chunk)
-                if error is not None:
-                    raise GatewayFailure(f"the gateway reported: {error}")
-                if delta:
-                    collected.append(delta)
+    with turn.span("llm_call", model or None) as span:
+        span.meta["model"] = model
+        span.meta["purpose"] = purpose
+        span.meta["tools_advertised"] = False
+        span.meta["ok"] = False
+        try:
+            async with peers.client(app, peers.GATEWAY, JUDGE_TIMEOUT) as client:
+                async with client.stream(
+                    "POST",
+                    "/v1/chat/completions",
+                    json=payload,
+                    headers=peers.attribution_headers(turn, purpose, "judge"),
+                ) as response:
+                    served_by = response.headers.get("x-nova-served-by")
+                    if served_by:
+                        span.meta["served_by"] = served_by
+                    _note_route(span, response.headers.get("x-nova-route"))
+                    if response.status_code != 200:
+                        detail = (await response.aread()).decode(errors="replace")[:200]
+                        span.meta["gateway_status"] = response.status_code
+                        raise GatewayFailure(
+                            f"the gateway refused ({response.status_code}): {detail}"
+                        )
+                    async for line in response.aiter_lines():
+                        line = line.strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[len("data:") :].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        delta, usage, error, _fragments = _chunk_parts(chunk)
+                        if usage is not None:
+                            _note_usage(span, usage)
+                        if error is not None:
+                            raise GatewayFailure(f"the gateway reported: {error}")
+                        if delta:
+                            collected.append(delta)
+        except Exception as exc:
+            span.meta["error"] = peers.reason(exc)[:400]
+            raise
+        span.meta["ok"] = True
     return "".join(collected)
 
 
 def _parse_verdict(raw: str) -> str | None:
-    """"on_topic" or "off_topic" from the judge's text, or None if neither is
+    """ "on_topic" or "off_topic" from the judge's text, or None if neither is
     there. None is the unparseable case, which the caller treats as on_topic
     (fail-open): a judge that did not answer clearly must never trigger a
     redirect."""
@@ -1584,7 +1675,7 @@ def _parse_verdict(raw: str) -> str | None:
     return "off_topic" if match.group(1).lower() == "off" else "on_topic"
 
 
-async def _judge_verdict(app, model: str, message: str, reply: str) -> str:
+async def _judge_verdict(app, turn: traces.Turn, model: str, message: str, reply: str) -> str:
     """The cheap judge call: does `reply` address `message`? on_topic/off_topic.
 
     Inputs are the pair alone, not the turn's history — the drift is visible from
@@ -1600,7 +1691,7 @@ async def _judge_verdict(app, model: str, message: str, reply: str) -> str:
         },
     ]
     raw = await _collect_completion(
-        app, model, judge_messages, max_tokens=JUDGE_MAX_TOKENS
+        app, turn, model, judge_messages, purpose="judge", max_tokens=JUDGE_MAX_TOKENS
     )
     return _parse_verdict(raw) or "on_topic"
 
@@ -1638,7 +1729,7 @@ async def _responsiveness_redirect(
     with turn.span("guard", "responsiveness") as span:
         span.meta["checked"] = True
         try:
-            verdict = await _judge_verdict(app, model, message, reply)
+            verdict = await _judge_verdict(app, turn, model, message, reply)
         except Exception as exc:
             span.meta.update(verdict="on_topic", redirected=False, error=peers.reason(exc))
             logger.warning(
@@ -1660,7 +1751,7 @@ async def _responsiveness_redirect(
         }
         try:
             corrected = (
-                await _collect_completion(app, model, [*messages, nudge])
+                await _collect_completion(app, turn, model, [*messages, nudge], purpose="redirect")
             ).strip()
         except Exception as exc:
             span.meta.update(redirected=False, error=peers.reason(exc))
@@ -1673,9 +1764,7 @@ async def _responsiveness_redirect(
             # A redirect that produced nothing is not a correction — keep the
             # original rather than persist an empty reply.
             span.meta["redirected"] = False
-            logger.warning(
-                "responsiveness redirect produced no text, shipping the original reply"
-            )
+            logger.warning("responsiveness redirect produced no text, shipping the original reply")
             return reply, False
 
         span.meta["redirected"] = True
@@ -1736,7 +1825,9 @@ async def _deferral_redirect(
             ),
         }
         try:
-            corrected = (await _collect_completion(app, model, [*messages, nudge])).strip()
+            corrected = (
+                await _collect_completion(app, turn, model, [*messages, nudge], purpose="redirect")
+            ).strip()
         except Exception as exc:
             span.meta.update(redirected=False, error=peers.reason(exc))
             logger.warning(
@@ -1761,9 +1852,7 @@ async def _deferral_redirect(
                     is not None
                 )
             except Exception:
-                logger.exception(
-                    "deferral re-check raised; treating the redirect as complete"
-                )
+                logger.exception("deferral re-check raised; treating the redirect as complete")
                 still_defers = False
         if not corrected or still_defers:
             span.meta["redirected"] = False
@@ -1870,9 +1959,7 @@ def _regen_rejected_by(
             if check() is not None:
                 return name
         except Exception:
-            logger.exception(
-                "%s re-check raised over the redirect; not rejecting on it", name
-            )
+            logger.exception("%s re-check raised over the redirect; not rejecting on it", name)
     return None
 
 
@@ -1977,17 +2064,13 @@ async def _claim_redirect(
         ran_a_tool = guards.ran_a_tool(turn.spans)
         span.meta["ran_a_tool"] = ran_a_tool
         blocked = (
-            "tools_already_ran"
-            if ran_a_tool
-            else ("out_of_rounds" if out_of_rounds else None)
+            "tools_already_ran" if ran_a_tool else ("out_of_rounds" if out_of_rounds else None)
         )
         if blocked is not None:
             # No regeneration at all: doing the work twice, or past the cap, is
             # not a correction. The lie is still contradicted, as before.
             span.meta.update(redirected=False, not_redirected_because=blocked)
-            logger.info(
-                "%s redirect skipped (%s); shipping the correction", claim_kind, blocked
-            )
+            logger.info("%s redirect skipped (%s); shipping the correction", claim_kind, blocked)
             emit(_frame({"correction": correction_text}))
             return _ClaimRedirect(
                 correction_text, False, read_ephemeral, markup_note=_markup_note()
@@ -2074,8 +2157,7 @@ async def _claim_redirect(
             if rejected_by is not None:
                 span.meta["regen_rejected_by"] = rejected_by
                 logger.warning(
-                    "%s redirect regenerated a reply the %s guard refused; "
-                    "shipping the correction",
+                    "%s redirect regenerated a reply the %s guard refused; shipping the correction",
                     claim_kind,
                     rejected_by,
                 )
@@ -2214,6 +2296,20 @@ async def _run_turn(
             emit(_frame({"t": delta}))
 
         served_by_sent = False
+        usage_sent = False
+
+        def _emit_usage() -> None:
+            """The turn's cost so far, once, summed over its llm_call spans
+            from what the gateway's ledger stated (S10): dollars with their
+            basis, tokens, and whether any round was local. Sent only when
+            at least one round carried usage."""
+            nonlocal usage_sent
+            if usage_sent:
+                return
+            summary = turn_usage(turn.spans)
+            if summary is not None:
+                usage_sent = True
+                emit(_frame({"usage": summary}))
 
         def _emit_served_by() -> None:
             """The `served_by` frame, once per turn, from the llm_call span —
@@ -2246,6 +2342,7 @@ async def _run_turn(
             # statement), and the error frame stays where clients expect it.
             _emit_served_by()
             if not calls:
+                _emit_usage()
                 break
             if round_number == rounds_allowed:
                 out_of_rounds = True
@@ -2297,9 +2394,7 @@ async def _run_turn(
         # so the DURABLE text is cleaned here — once, over the whole turn. What
         # the watcher saw is unchanged; what the next turn READS never contains
         # a tool call written as text.
-        streamed_scan = markup_calls.parse_markup_tool_calls(
-            "".join(parts), streamed=True
-        )
+        streamed_scan = markup_calls.parse_markup_tool_calls("".join(parts), streamed=True)
         if streamed_scan.found:
             logger.info(
                 "chat turn %s: stripped tool-call markup from the reply text "
@@ -2340,9 +2435,7 @@ async def _run_turn(
                 # FAIL-OPEN: a dead narration round costs the answer, never the
                 # turn. Whatever streamed before it died stays (it was watched
                 # live) and the note below still lands.
-                logger.warning(
-                    "the out-of-rounds narration round failed: %s", final_failure
-                )
+                logger.warning("the out-of-rounds narration round failed: %s", final_failure)
             elif final_calls:
                 # It asked for tools anyway. NOTHING is dispatched: each call is
                 # answered with the stated result and recorded as a refused span,
@@ -2360,9 +2453,7 @@ async def _run_turn(
                     emit(_activity_frame(call.name, "start"))
                     result = _refuse_out_of_rounds(turn, call)
                     emit(_activity_frame(call.name, "error", result))
-                    messages.append(
-                        {"role": "tool", "tool_call_id": call.id, "content": result}
-                    )
+                    messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             backend_note = f"[stopped after {rounds_allowed} tool rounds without finishing]"
             note = f"\n\n{backend_note}" if parts else backend_note
             parts.append(note)
@@ -2466,8 +2557,7 @@ async def _run_turn(
         if correction is not None:
             with turn.span("guard", "narration") as span:
                 span.meta["claims"] = [
-                    {"kind": claim.kind, "target": claim.target}
-                    for claim in correction.claims
+                    {"kind": claim.kind, "target": claim.target} for claim in correction.claims
                 ]
                 span.meta["backing_span"] = False
             emit(_frame({"correction": correction.text}))
@@ -2553,9 +2643,7 @@ async def _run_turn(
             try:
                 state_claim = guards.state_claim_check(text, turn.spans, device_names)
             except Exception:
-                logger.exception(
-                    "state-claim guard raised; shipping the reply uncorrected"
-                )
+                logger.exception("state-claim guard raised; shipping the reply uncorrected")
                 state_claim = None
         if state_claim is not None:
             claim_meta = {
@@ -2636,9 +2724,7 @@ async def _run_turn(
                     text, turn.spans, listing_tools, message
                 )
             except Exception:
-                logger.exception(
-                    "presented-listing guard raised; shipping the reply uncorrected"
-                )
+                logger.exception("presented-listing guard raised; shipping the reply uncorrected")
                 listing_claim = None
         if listing_claim is not None:
             listing_meta = {
@@ -2828,9 +2914,7 @@ async def _run_turn(
             try:
                 bare_intent = guards.bare_intent_check(persisted, turn.spans)
             except Exception:
-                logger.exception(
-                    "bare-intent guard raised; shipping the reply uncorrected"
-                )
+                logger.exception("bare-intent guard raised; shipping the reply uncorrected")
                 bare_intent = None
         deferral_fired = deferral is not None or bare_intent is not None
         if (
@@ -3191,7 +3275,13 @@ async def chat_stream(
 
     model = await settings_store.read_value(pool, "chat.model")
     max_tool_rounds = await settings_store.read_value(pool, "agents.max_tool_rounds")
-    turn = await traces.open_turn(pool, conversation_id=conversation_id, model=model)
+    turn = await traces.open_turn(
+        pool,
+        conversation_id=conversation_id,
+        model=model,
+        person_id=person.id,
+        timezone=await _owner_timezone(pool),
+    )
     # Registered the instant it exists (no await between): this process is
     # running it, which is what conversations.has_pending_turn reads —
     # discarded in _run_turn's finally, after the close, on every exit path.

@@ -172,6 +172,11 @@ class FakeGateway:
     seen: list[tuple[str, dict | None]] = field(default_factory=list)
     # Raw query strings as they arrived, to prove nothing was re-encoded.
     queries: list[bytes] = field(default_factory=list)
+    # S10: every request's headers (lower-cased), so a test can read the
+    # attribution core stamped (X-Nova-Purpose, -Role, -Turn-Id, -Person,
+    # -Timezone); `spend_body` is the ledger rollup /admin/spend serves.
+    seen_headers: list[dict[str, str]] = field(default_factory=list)
+    spend_body: dict | None = None
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -199,6 +204,10 @@ class FakeGateway:
                 Route("/admin/catalog/resolve", self._admin, methods=["GET"]),
                 Route("/admin/catalog/drift", self._admin, methods=["POST"]),
                 Route("/admin/models", self._admin, methods=["DELETE"]),
+                Route("/admin/spend", self._spend, methods=["GET"]),
+                Route("/admin/spend/events", self._admin, methods=["GET"]),
+                Route("/admin/spend/caps", self._admin, methods=["GET", "PUT"]),
+                Route("/admin/spend/prices", self._admin, methods=["GET", "PUT", "DELETE"]),
             ]
         )
 
@@ -207,7 +216,16 @@ class FakeGateway:
         body = json.loads(raw) if raw else None
         self.seen.append((request.url.path, body))
         self.queries.append(request.scope["query_string"])
+        self.seen_headers.append({k.lower(): v for k, v in request.headers.items()})
         return body
+
+    async def _spend(self, request):
+        if self.spend_body is None:
+            return await self._admin(request)
+        await self._record(request)
+        if not _bearer_ok(request, GATEWAY_TOKEN):
+            return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+        return JSONResponse(self.spend_body)
 
     async def _completions(self, request):
         await self._record(request)

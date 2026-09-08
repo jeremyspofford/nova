@@ -45,6 +45,14 @@ ROUTES = [
     ("GET", "/api/v1/models/catalog/resolve", "/admin/catalog/resolve", None),
     ("POST", "/api/v1/models/catalog/drift", "/admin/catalog/drift", {"model": "qwen3:8b"}),
     ("DELETE", "/api/v1/models", "/admin/models", None),
+    # S10: the ledger's events, caps and owner prices (GET /api/v1/spend
+    # itself is a real handler — test_spend_api.py).
+    ("GET", "/api/v1/spend/events", "/admin/spend/events", None),
+    ("GET", "/api/v1/spend/caps", "/admin/spend/caps", None),
+    ("PUT", "/api/v1/spend/caps", "/admin/spend/caps", {"provider": "*", "monthly_usd": 20}),
+    ("GET", "/api/v1/spend/prices", "/admin/spend/prices", None),
+    ("PUT", "/api/v1/spend/prices", "/admin/spend/prices", {"provider": "x", "model": "m"}),
+    ("DELETE", "/api/v1/spend/prices", "/admin/spend/prices", None),
 ]
 
 

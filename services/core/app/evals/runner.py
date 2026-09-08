@@ -66,6 +66,7 @@ identity it could delete. A process that dies mid-run leaves a 'running' row
 no job holds; sweep_orphaned_suite_runs marks it 'interrupted' at the next
 startup (a fresh process runs no jobs by construction), one WARNING per row.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -301,8 +302,7 @@ async def _scratch_conversation(pool: asyncpg.Pool, person: Person) -> uuid.UUID
     never picked up as anyone's active thread. One per run keeps runs from
     reading each other's history."""
     return await pool.fetchval(
-        "INSERT INTO conversations (person_id, title, active) VALUES ($1, $2, false) "
-        "RETURNING id",
+        "INSERT INTO conversations (person_id, title, active) VALUES ($1, $2, false) RETURNING id",
         person.id,
         "eval scratch",
     )
@@ -407,7 +407,11 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             max_tool_rounds = _DEFAULT_MAX_TOOL_ROUNDS
 
         turn = await traces.open_turn(
-            pool, kind=EVAL_TURN_KIND, conversation_id=conversation_id, model=model
+            pool,
+            kind=EVAL_TURN_KIND,
+            conversation_id=conversation_id,
+            model=model,
+            person_id=person.id,
         )
 
         frames: list[Any] = []
@@ -453,9 +457,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             # failure, so the run is UNGRADEABLE — never a fabricated fail.
             logger.exception("eval run_case: _run_turn raised for case %s", case.id)
             await _settle_turn_work(spawned_before)
-            result = _base(
-                None, True, {"reason": f"the turn raised — {type(exc).__name__}: {exc}"}
-            )
+            result = _base(None, True, {"reason": f"the turn raised — {type(exc).__name__}: {exc}"})
         else:
             # Let the atomic trace close (and any queued ingest) land before
             # reading the turn's final status — close_turn is a background
@@ -565,9 +567,7 @@ SUITE_RUN_INTERRUPTED = "interrupted"
 
 # The stated reason a swept row carries — the row's own `error` says what the
 # page shows, never a guess made at read time.
-INTERRUPTED_REASON = (
-    "the core process running this suite exited before every case finished"
-)
+INTERRUPTED_REASON = "the core process running this suite exited before every case finished"
 
 # Suite-run ids THIS process is running, from open_suite_run to the close —
 # the eval counterpart of traces.INFLIGHT. sweep_orphaned_suite_runs excludes
@@ -858,9 +858,7 @@ async def run_suite(
     suite_cases = list(cases) if cases is not None else cases_mod.load_suite(suite)
     if not suite_cases:
         return []
-    row = await open_suite_run(
-        pool, suite, suite_cases[0].suite_version, model, len(suite_cases)
-    )
+    row = await open_suite_run(pool, suite, suite_cases[0].suite_version, model, len(suite_cases))
     return await run_suite_job(app, pool, row["id"], suite_cases, model)
 
 
@@ -871,9 +869,7 @@ async def run_suite(
 # it never decides (fitness measures, never declares).
 
 
-async def runs_for(
-    pool: asyncpg.Pool, suite: str, suite_version: int, model: str
-) -> list[dict]:
+async def runs_for(pool: asyncpg.Pool, suite: str, suite_version: int, model: str) -> list[dict]:
     """Every run for exactly this (suite, suite_version, model), newest first.
     Scoped to one version on purpose: a score is only comparable within a
     version, so this never blends two."""

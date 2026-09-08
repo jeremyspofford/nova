@@ -5,6 +5,7 @@ model and backend calls arrive here and are forwarded 1:1 over core's
 gateway link. Nothing is interpreted on the way through — the gateway's
 status and body are the answer, including its refusals.
 """
+
 from __future__ import annotations
 
 import json
@@ -15,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from starlette.responses import Response
 
-from app import peers
+from app import db, peers, settings_store
 
 router = APIRouter(prefix="/api/v1", tags=["wizard"])
 logger = logging.getLogger("core")
@@ -63,6 +64,16 @@ def _forward_headers(request: Request) -> dict[str, str]:
     return {"content-type": content_type} if content_type else {}
 
 
+async def _timezone_header() -> dict[str, str]:
+    """The owner's zone on every gateway admin call (S10): the gateway keeps
+    no settings, and its monthly caps reset on THIS zone's first."""
+    try:
+        zone = await settings_store.read_value(await db.get_pool(), "nova.timezone")
+    except Exception:  # noqa: BLE001 — UTC is always a fact
+        zone = None
+    return {peers.HEADER_TIMEZONE: str(zone or "UTC")}
+
+
 def _target(request: Request, path: str) -> httpx.URL:
     """The gateway path with this request's query string, byte for byte.
 
@@ -83,7 +94,7 @@ async def _forward(
                 method,
                 _target(request, path),
                 content=body or None,
-                headers=_forward_headers(request),
+                headers={**_forward_headers(request), **(await _timezone_header())},
             )
     except httpx.ReadTimeout as exc:
         raise _timed_out(path, timeout) from exc
@@ -128,6 +139,39 @@ async def catalog_hf_repo(org: str, repo: str, request: Request) -> Response:
 @router.get("/models/catalog/resolve")
 async def catalog_resolve(request: Request) -> Response:
     return await _forward(request, "GET", "/admin/catalog/resolve", timeout=CATALOG_HF_TIMEOUT)
+
+
+# ── spend (S10): the ledger's rollups, events, caps and owner prices —
+# forwarded 1:1 with the owner's zone. GET /api/v1/spend itself is a real
+# handler in app/spend_api.py (it names the people).
+@router.get("/spend/events")
+async def spend_events(request: Request) -> Response:
+    return await _forward(request, "GET", "/admin/spend/events")
+
+
+@router.get("/spend/caps")
+async def spend_caps(request: Request) -> Response:
+    return await _forward(request, "GET", "/admin/spend/caps")
+
+
+@router.put("/spend/caps")
+async def put_spend_cap(request: Request) -> Response:
+    return await _forward(request, "PUT", "/admin/spend/caps")
+
+
+@router.get("/spend/prices")
+async def spend_prices(request: Request) -> Response:
+    return await _forward(request, "GET", "/admin/spend/prices")
+
+
+@router.put("/spend/prices")
+async def put_spend_price(request: Request) -> Response:
+    return await _forward(request, "PUT", "/admin/spend/prices")
+
+
+@router.delete("/spend/prices")
+async def delete_spend_price(request: Request) -> Response:
+    return await _forward(request, "DELETE", "/admin/spend/prices")
 
 
 @router.delete("/models")

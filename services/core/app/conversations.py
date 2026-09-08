@@ -1,4 +1,5 @@
 """Conversations and their messages — scoped to the person who owns them."""
+
 from __future__ import annotations
 
 import logging
@@ -130,7 +131,10 @@ async def get_messages(
         "SELECT m.id, m.role, m.content, m.created_at, t.kind AS turn_kind, "
         "  (SELECT s.meta->>'served_by' FROM turn_spans s "
         "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' AND s.meta ? 'served_by' "
-        "    ORDER BY s.started_at DESC LIMIT 1) AS served_by "
+        "    ORDER BY s.started_at DESC LIMIT 1) AS served_by, "
+        "  (SELECT SUM((s.meta->>'cost_usd')::numeric) FROM turn_spans s "
+        "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' "
+        "    AND s.meta->>'cost_usd' IS NOT NULL) AS cost_usd "
         "FROM messages m LEFT JOIN turns t ON t.id = m.turn_id "
         "WHERE m.conversation_id = $1 ORDER BY m.created_at, m.id",
         conversation_id,
@@ -144,6 +148,10 @@ async def get_messages(
                 "created_at": row["created_at"].isoformat(),
                 "served_by": row["served_by"],
                 "turn_kind": row["turn_kind"],
+                # S10: the turn's cost summed from its llm_call spans — the
+                # gateway's ledger figures, never a stored claim. NULL when
+                # no round was priced.
+                "cost_usd": float(row["cost_usd"]) if row["cost_usd"] is not None else None,
             }
             for row in rows
         ]

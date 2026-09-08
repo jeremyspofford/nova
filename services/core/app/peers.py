@@ -8,6 +8,7 @@ Tests mount local ASGI fakes on `app.state.peer_transports`, keyed by base
 URL, so the code path below is the one under test: same client, same
 header, same parsing.
 """
+
 from __future__ import annotations
 
 import os
@@ -58,3 +59,30 @@ def reason(exc: Exception) -> str:
     """A short, honest description of why a peer call failed."""
     text = str(exc).strip()
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
+
+
+# ── S10: attribution on every gateway completion ───────────────────────────
+#
+# The gateway meters every call; core says who asked and why. One helper so
+# the turn loop, the judge/redirect rounds, a scheduled turn and an eval all
+# stamp the same fields — a call with no headers is recorded by the gateway
+# as `unattributed`, which the Spend page names.
+HEADER_TURN = "X-Nova-Turn-Id"
+HEADER_PERSON = "X-Nova-Person"
+HEADER_PURPOSE = "X-Nova-Purpose"
+HEADER_ROLE = "X-Nova-Role"
+HEADER_TIMEZONE = "X-Nova-Timezone"
+
+
+def attribution_headers(turn, purpose: str, role: str | None = None) -> dict[str, str]:
+    headers = {
+        HEADER_TURN: str(turn.id),
+        HEADER_PURPOSE: purpose,
+        HEADER_TIMEZONE: getattr(turn, "timezone", None) or "UTC",
+    }
+    person_id = getattr(turn, "person_id", None)
+    if person_id is not None:
+        headers[HEADER_PERSON] = str(person_id)
+    if role:
+        headers[HEADER_ROLE] = role
+    return headers

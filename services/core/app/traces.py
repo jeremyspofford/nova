@@ -19,6 +19,7 @@ responding" for a day). Two facts close that gap mechanically:
     construction, and closes every leftover NULL row as 'interrupted' — so
     every turn reaches a terminal status even across process death.
 """
+
 from __future__ import annotations
 
 import logging
@@ -86,6 +87,11 @@ class Turn:
     started_at: datetime
     conversation_id: uuid.UUID | None = None
     model: str | None = None
+    # S10: who the turn ran for (attributed to every gateway call) and the
+    # owner's zone (so the gateway's monthly cap resets on THEIR first).
+    person_id: uuid.UUID | None = None
+    timezone: str = "UTC"
+    kind: str = "chat"
     spans: list[Span] = field(default_factory=list)
 
     def span(self, kind: str, name: str | None = None) -> SpanRecorder:
@@ -98,19 +104,25 @@ async def open_turn(
     kind: str = "chat",
     conversation_id: uuid.UUID | None = None,
     model: str | None = None,
+    person_id: uuid.UUID | None = None,
+    timezone: str = "UTC",
 ) -> Turn:
     row = await pool.fetchrow(
-        "INSERT INTO turns (kind, conversation_id, model) VALUES ($1, $2, $3) "
+        "INSERT INTO turns (kind, conversation_id, model, person_id) VALUES ($1, $2, $3, $4) "
         "RETURNING id, started_at",
         kind,
         conversation_id,
         model,
+        person_id,
     )
     return Turn(
         id=row["id"],
         started_at=row["started_at"],
         conversation_id=conversation_id,
         model=model,
+        person_id=person_id,
+        timezone=timezone,
+        kind=kind,
     )
 
 

@@ -17,6 +17,7 @@ skip or repeat whichever of them landed on a page boundary. id is not
 meaningful on its own — UUIDs are random — so it is only ever a tiebreaker
 alongside started_at, never a substitute for it.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -44,7 +45,7 @@ MAX_LIMIT = 200
 # indexed scan rather than a table scan.
 _TURN_SELECT = """
     SELECT
-        t.id, t.kind, t.model, t.status, t.started_at, t.conversation_id,
+        t.id, t.kind, t.model, t.status, t.started_at, t.conversation_id, t.person_id,
         CASE WHEN t.ended_at IS NULL THEN NULL
              ELSE (EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000)::bigint
         END AS duration_ms,
@@ -65,6 +66,7 @@ def _turn_json(row: asyncpg.Record) -> dict:
         "id": str(row["id"]),
         "kind": row["kind"],
         "model": row["model"],
+        "person_id": str(row["person_id"]) if row["person_id"] else None,
         # NULL passes straight through as JSON null. Coercing it to "ok" or
         # "error" here would be exactly the guess the ledger exists to
         # avoid — see the module docstring.
@@ -109,8 +111,7 @@ async def list_activity(
     # /activity/<id> to resolve for it.
     if before is None:
         rows = await pool.fetch(
-            f"{_TURN_SELECT} WHERE t.kind <> 'eval' ORDER BY t.started_at DESC, t.id DESC "
-            "LIMIT $1",
+            f"{_TURN_SELECT} WHERE t.kind <> 'eval' ORDER BY t.started_at DESC, t.id DESC LIMIT $1",
             capped,
         )
         return {"turns": [_turn_json(row) for row in rows]}

@@ -23,6 +23,7 @@ reason, never a model call.
 Nothing here asks anyone for anything (owner ruling 2026-09-03): the path from
 claim to run awaits only the work.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -148,7 +149,12 @@ async def _run_firing(
         if kind == "scheduled":
             model = await settings_store.read_value(pool, "chat.model")
         turn = await traces.open_turn(
-            pool, kind=kind, conversation_id=row["conversation_id"], model=model
+            pool,
+            kind=kind,
+            conversation_id=row["conversation_id"],
+            model=model,
+            person_id=row.get("person_id"),
+            timezone=await _owner_timezone(pool),
         )
         # Linked the moment the turn exists, so a firing cut off mid-run still
         # points at the trace of what it got done.
@@ -501,3 +507,10 @@ async def sweep_orphaned_firings(pool: asyncpg.Pool) -> list[uuid.UUID]:
             row["started_at"].isoformat(),
         )
     return [row["id"] for row in rows]
+
+
+async def _owner_timezone(pool) -> str:
+    try:
+        return str(await settings_store.read_value(pool, "nova.timezone") or "UTC")
+    except Exception:  # noqa: BLE001
+        return "UTC"
