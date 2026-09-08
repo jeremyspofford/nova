@@ -33,6 +33,19 @@ describe('MessageBubble — the live tool-call line', () => {
     expect(line.textContent).toContain('workspace_write_file')
   })
 
+  it('shows the tool\'s own progress words while a long call runs', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          activity: { tool: 'model_pull', status: 'progress', detail: 'pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)' },
+        })}
+      />,
+    )
+    const line = screen.getByTestId('activity-line')
+    expect(line.textContent).toContain('using model_pull… pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)')
+    expect(line.className).not.toMatch(/danger/)
+  })
+
   it('shows a stated failure when the tool errors, distinct from the running state', () => {
     render(
       <MessageBubble

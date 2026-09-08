@@ -287,7 +287,12 @@ def test_every_registry_tool_named_list_declares_the_listing_kind():
     *_list* tool shipped today declares; a new one must too, or this reddens."""
     named_list = sorted(name for name in tools.tool_names() if "list" in name)
     assert named_list, "no list tools registered?"
-    assert named_list == LISTING_TOOLS
+    # Every name-says-list tool declares. The declared set may be WIDER: a
+    # tool whose result is an enumeration without "list" in its name
+    # (S10a-3's model_catalog_search) declares the kind too, and that is
+    # the point of reading the declaration rather than the name.
+    assert set(named_list) <= set(LISTING_TOOLS)
+    assert set(LISTING_TOOLS) - set(named_list) == {"model_catalog_search"}
 
 
 # Review item 6: the paste exemption is by WHOLE token (or basename), the same

@@ -95,6 +95,10 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "device_run",
         "device_write_file",
         "device_launch_app",
+        # S10a-3 (2026-09-07): her model tools — the catalogue search and the
+        # pull into the bundled ollama (tools/models.py). SEVENTEEN -> NINETEEN.
+        "model_catalog_search",
+        "model_pull",
     }
 
 

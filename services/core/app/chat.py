@@ -48,6 +48,7 @@ responding…" for five minutes and then nothing).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import re
@@ -439,17 +440,23 @@ def _activity_reason(result: str) -> str | None:
     return text
 
 
-def _activity_frame(tool: str, status: str, result: str | None = None) -> str:
+def _activity_frame(
+    tool: str, status: str, result: str | None = None, *, detail: str | None = None
+) -> str:
     """The `{"activity": ...}` SSE frame for one tool call's status change.
 
     `reason` is attached only when status == "error" and the call actually
-    stated one (see _activity_reason) — never on "start"/"ok".
+    stated one (see _activity_reason) — never on "start"/"ok". `detail` is
+    attached only on "progress": the tool's own words about a long call
+    still running (a pull's percentage), capped like a reason.
     """
     activity: dict[str, str] = {"tool": tool, "status": status}
     if status == "error" and result is not None:
         reason = _activity_reason(result)
         if reason is not None:
             activity["reason"] = reason
+    if status == "progress" and detail:
+        activity["detail"] = detail.strip()[:ACTIVITY_REASON_LIMIT]
     return _frame({"activity": activity})
 
 
@@ -505,7 +512,9 @@ def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
         "said and present it as current. "
         "If a search's results do not actually answer the question, refine the query "
         "and search again — a couple of tries is fine — instead of asking the "
-        "operator to search or whether you should; just do it."
+        "operator to search or whether you should; just do it. "
+        "A model pull downloads gigabytes and reports progress as it runs; say what "
+        "was pulled only from the tool's own result line."
     )
 
 
@@ -1151,7 +1160,15 @@ async def _dispatch_calls(
                 {"role": "tool", "tool_call_id": call.id, "content": result}
             )
             continue
-        result, ok = await _run_tool(turn, tool_ctx, call)
+        # The call's own progress channel: a frame per report, under this
+        # call's name. Bound synchronously (no await joins the funnel).
+        call_ctx = dataclasses.replace(
+            tool_ctx,
+            progress=lambda detail, _name=call.name: emit(
+                _activity_frame(_name, "progress", detail=detail)
+            ),
+        )
+        result, ok = await _run_tool(turn, call_ctx, call)
         ran_tool = tools.REGISTRY.get(call.name)
         if ok and ran_tool is not None and ran_tool.ephemeral:
             ran_ephemeral = True

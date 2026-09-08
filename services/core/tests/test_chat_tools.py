@@ -1107,3 +1107,44 @@ def test_the_buffer_folds_a_whole_call_a_proxy_sent_twice():
     """The same non-streamed call relayed twice is one call, not two."""
     whole = _fragment(call_id="a", name="get_time", arguments="{}")
     assert _buffered(whole, dict(whole)) == [("a", "get_time", "{}")]
+
+
+async def test_a_tools_progress_reports_stream_as_progress_frames_with_detail(
+    owner_client, pool, mount_peers, workspace, monkeypatch
+):
+    """ToolContext.progress (S10a-3) is bound per call to an activity frame
+    with status 'progress' and the tool's own words in `detail` — a pull's
+    percentage moving in the bubble. Frames: start, progress…, ok."""
+    from app import tools
+    from app.tools.base import Tool
+
+    async def slow(args, ctx):
+        ctx.progress("pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)")
+        ctx.progress("pulling qwen3:4b — 100% (2.3 GB of 2.3 GB)")
+        return "Pulled ollama:qwen3:4b"
+
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "slow_tool",
+        Tool(name="slow_tool", description="x", parameters={"type": "object"}, executor=slow),
+    )
+    gateway = ScriptedGateway(
+        rounds=(
+            (*streamed_call(0, "c1", "slow_tool", {}),),
+            (text("Done — qwen3:4b is installed."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client)
+    assert activities(sent) == [
+        ("slow_tool", "start"),
+        ("slow_tool", "progress"),
+        ("slow_tool", "progress"),
+        ("slow_tool", "ok"),
+    ]
+    assert [f["detail"] for f in activity_frames(sent, "progress")] == [
+        "pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)",
+        "pulling qwen3:4b — 100% (2.3 GB of 2.3 GB)",
+    ]
+    assert "detail" not in activity_frames(sent, "start")[0]

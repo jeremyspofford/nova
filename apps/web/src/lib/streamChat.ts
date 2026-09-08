@@ -48,7 +48,10 @@ export type StreamEvent =
   // start/ok/error) — kept as `string` rather than a narrower literal
   // union so a status this client has not seen yet is still a real event,
   // not a type error waiting to happen.
-  | { type: 'activity'; tool: string; status: string; reason?: string }
+  // `detail` rides only a 'progress' status (S10a-3): the tool's own words
+  // about a long call still running ("pulling qwen3:4b — 42% (1.0 GB of
+  // 2.3 GB)"). Optional like `reason`.
+  | { type: 'activity'; tool: string; status: string; reason?: string; detail?: string }
   | { type: 'error'; reason: string }
   // {"served_by": "provider:model"} — who actually answered, as the gateway
   // stated it on the llm_call span (S10-pre). Once per answered turn.
@@ -120,6 +123,7 @@ function frameToEvent(payload: string): StreamEvent | null {
       // it just means the event carries none, so the key is left off
       // entirely rather than set to undefined.
       if (typeof activity.reason === 'string') event.reason = activity.reason
+      if (typeof activity.detail === 'string') event.detail = activity.detail
       return event
     }
     // Falls through to the generic "known key, wrong shape" refusal below

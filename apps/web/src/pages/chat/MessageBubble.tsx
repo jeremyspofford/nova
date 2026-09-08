@@ -42,7 +42,9 @@ function ActivityLine({ activity }: { activity: NonNullable<MessageRow['activity
         ? activity.reason
           ? `${activity.tool}: ${activity.reason}`
           : `${activity.tool} failed`
-        : `using ${activity.tool}…`}
+        : activity.status === 'progress' && activity.detail
+          ? `using ${activity.tool}… ${activity.detail}`
+          : `using ${activity.tool}…`}
     </p>
   )
 }

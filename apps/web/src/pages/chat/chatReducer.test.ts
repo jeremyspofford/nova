@@ -354,6 +354,29 @@ describe('chatReducer — live tool activity in the pending bubble', () => {
     expect(messages(state)[1].activity).toEqual({ tool: 'workspace_write_file', status: 'start' })
   })
 
+  it('a progress frame replaces the marker with the tool\'s own words, the latest winning', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'model_pull', status: 'start' },
+    })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'model_pull', status: 'progress', detail: 'pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)' },
+    })
+    expect(messages(state)[1].activity).toEqual({ tool: 'model_pull', status: 'progress', detail: 'pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)' })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'model_pull', status: 'progress', detail: 'pulling qwen3:4b — 100% (2.3 GB of 2.3 GB)' },
+    })
+    expect(messages(state)[1].activity?.detail).toBe('pulling qwen3:4b — 100% (2.3 GB of 2.3 GB)')
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'model_pull', status: 'ok' },
+    })
+    expect(messages(state)[1].activity).toBeNull()
+  })
+
   it('an ok frame clears the marker — the call resolved cleanly', () => {
     let state = started()
     state = chatReducer(state, {

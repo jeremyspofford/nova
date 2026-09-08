@@ -48,6 +48,11 @@ MUST_FIRE = [
     ("no_ability_to_fetch_urls", "I don't have the ability to fetch URLs.", "fetch_url"),
     ("cant_read_files", "I can't read files.", "workspace_read_file"),
     ("not_able_to_save_files", "I'm not able to save files.", "workspace_write_file"),
+    # S10a-3: her model tools.
+    ("cant_download_models", "I can't download models.", "model_pull"),
+    ("unable_to_install_a_model", "I'm unable to install a new model.", "model_pull"),
+    ("cant_search_for_models", "I can't search for models.", "model_catalog_search"),
+    ("cant_list_installed_models", "I cannot list the installed models.", "model_catalog_search"),
 ]
 
 

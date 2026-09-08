@@ -5,6 +5,7 @@ runs — same client, same bearer header, same SSE parsing — with no peer
 process anywhere. Both fakes refuse a request that arrives without the
 right bearer, so "core sends its token" is a tested fact.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -76,9 +77,7 @@ class StreamingASGITransport(httpx.AsyncBaseTransport):
         async def send(message) -> None:
             if message["type"] == "http.response.start":
                 head["status"] = message["status"]
-                head["headers"] = [
-                    (k.decode(), v.decode()) for k, v in message.get("headers", [])
-                ]
+                head["headers"] = [(k.decode(), v.decode()) for k, v in message.get("headers", [])]
                 started.set()
             elif message["type"] == "http.response.body":
                 chunk = message.get("body", b"")
@@ -115,6 +114,7 @@ class StreamingASGITransport(httpx.AsyncBaseTransport):
         return httpx.Response(
             head["status"], headers=head["headers"], content=stream(), request=request
         )
+
 
 GATEWAY_URL = "http://gateway.test"
 GATEWAY_TOKEN = "gateway-link-token"
@@ -157,6 +157,16 @@ class FakeGateway:
     # that happened to arrive before the client left.
     after_hold: tuple[str, ...] = ()
     admin_status: int = 200
+    # The model catalogue (S10a): when set, /admin/catalog answers this body
+    # and /admin/catalog/hf this page (with hf_status); when None they fall
+    # back to the admin echo above, as the proxy tests expect.
+    catalog_body: dict | None = None
+    hf_body: dict | None = None
+    hf_status: int = 200
+    # /admin/pull answers this status with `pull_body` instead of streaming
+    # when it is not 200 (the gateway's 400/404/409 refusals).
+    pull_status: int = 200
+    pull_body: dict | None = None
     admin_body: dict = field(default_factory=lambda: {"gpus": []})
     pull_lines: tuple[str, ...] = ('{"status":"pulling"}', '{"status":"success"}')
     seen: list[tuple[str, dict | None]] = field(default_factory=list)
@@ -183,8 +193,8 @@ class FakeGateway:
                 Route("/admin/providers/{name}/default", self._admin, methods=["PUT"]),
                 Route("/admin/providers/{name}/models", self._admin, methods=["GET"]),
                 # The model catalogue (S10a) — same echo, same record.
-                Route("/admin/catalog", self._admin, methods=["GET"]),
-                Route("/admin/catalog/hf", self._admin, methods=["GET"]),
+                Route("/admin/catalog", self._catalog, methods=["GET"]),
+                Route("/admin/catalog/hf", self._hf, methods=["GET"]),
                 Route("/admin/catalog/hf/{org}/{repo}", self._admin, methods=["GET"]),
                 Route("/admin/catalog/resolve", self._admin, methods=["GET"]),
             ]
@@ -202,9 +212,7 @@ class FakeGateway:
         if not _bearer_ok(request, GATEWAY_TOKEN):
             return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
         if self.status != 200:
-            return JSONResponse(
-                {"error": {"message": "backend refused"}}, status_code=self.status
-            )
+            return JSONResponse({"error": {"message": "backend refused"}}, status_code=self.status)
 
         async def stream():
             for delta in self.deltas:
@@ -231,10 +239,29 @@ class FakeGateway:
             return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
         return JSONResponse(self.admin_body, status_code=self.admin_status)
 
+    async def _catalog(self, request):
+        if self.catalog_body is None:
+            return await self._admin(request)
+        await self._record(request)
+        if not _bearer_ok(request, GATEWAY_TOKEN):
+            return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+        return JSONResponse(self.catalog_body)
+
+    async def _hf(self, request):
+        if self.hf_body is None:
+            return await self._admin(request)
+        await self._record(request)
+        if not _bearer_ok(request, GATEWAY_TOKEN):
+            return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+        return JSONResponse(self.hf_body, status_code=self.hf_status)
+
     async def _pull(self, request):
         await self._record(request)
         if not _bearer_ok(request, GATEWAY_TOKEN):
             return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+        if self.pull_status != 200:
+            body = self.pull_body or {"error": "refused"}
+            return JSONResponse(body, status_code=self.pull_status)
 
         async def lines():
             for line in self.pull_lines:
@@ -337,8 +364,10 @@ class FakeMemory:
             self.forget_results.append({**body, "status": 401})
             return JSONResponse({"error": "bad memory bearer"}, status_code=401)
         path = body.get("path")
-        status = self.forget_status if self.forget_status is not None else (
-            200 if path in self.journal_paths else 404
+        status = (
+            self.forget_status
+            if self.forget_status is not None
+            else (200 if path in self.journal_paths else 404)
         )
         self.forget_results.append({**body, "status": status})
         if status != 200:

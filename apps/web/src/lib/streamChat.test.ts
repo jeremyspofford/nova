@@ -153,6 +153,20 @@ describe('createSseParser', () => {
   // finish". Optional even on an error status: a frame missing it (or with
   // a non-string value) still parses as a normal, reason-less activity
   // event, not a shape violation — only `tool`/`status` are load-bearing.
+  it('carries the optional detail on a progress activity frame', () => {
+    expect(
+      parseAll([
+        'data: {"activity":{"tool":"model_pull","status":"progress","detail":"pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)"}}\n\n',
+      ]),
+    ).toEqual([
+      { type: 'activity', tool: 'model_pull', status: 'progress', detail: 'pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)' },
+    ])
+    // A non-string detail is simply absent, not a shape violation.
+    expect(parseAll(['data: {"activity":{"tool":"model_pull","status":"progress","detail":42}}\n\n'])).toEqual([
+      { type: 'activity', tool: 'model_pull', status: 'progress' },
+    ])
+  })
+
   it('carries the optional reason on an error activity frame', () => {
     expect(
       parseAll([

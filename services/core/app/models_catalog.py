@@ -46,6 +46,10 @@ def measured_for(row: dict, measured: dict[str, dict[str, dict]]) -> dict[str, d
     return found
 
 
+def now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
 def decorate(body: dict, measured: dict[str, dict[str, dict]], *, read_at: str) -> dict:
     """Add `suitability.<suite>` (basis measured, source core-evals) to
     every row a measurement names. Rows without one are untouched — an
@@ -126,8 +130,7 @@ async def catalog(request: Request) -> Response:
         raise HTTPException(status_code=502, detail="the gateway's catalogue was not an object")
     pool = await db.get_pool()
     measured = await runner.measured_by_model(pool)
-    read_at = datetime.now(UTC).isoformat()
     return Response(
-        content=json.dumps(decorate(body, measured, read_at=read_at)),
+        content=json.dumps(decorate(body, measured, read_at=now_iso())),
         media_type="application/json",
     )

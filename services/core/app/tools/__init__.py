@@ -32,7 +32,7 @@ from __future__ import annotations
 import json
 import logging
 
-from app.tools import devices, memory_tools, schema, util, web, web_search, workspace
+from app.tools import devices, memory_tools, models, schema, util, web, web_search, workspace
 from app.tools.base import ERROR_PREFIX, RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 __all__ = [
@@ -60,6 +60,7 @@ REGISTRY: dict[str, Tool] = {
         *web.TOOLS,
         *web_search.TOOLS,
         *devices.TOOLS,
+        *models.TOOLS,
     )
 }
 

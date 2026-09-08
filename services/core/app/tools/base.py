@@ -62,6 +62,11 @@ class ToolContext:
     person: Any
     workspace_root: Path
     facts_sink: list[dict] | None = None
+    # The OUTPUT channel for a long call's progress ("pulling qwen3:4b — 42%
+    # (2.1 of 4.9 GB)"): chat binds it per call to an activity frame with
+    # `detail`, so the bubble shows the download moving. None outside a turn.
+    # An output channel is not a principal a permission could bind to.
+    progress: Callable[[str], None] | None = None
 
 
 @dataclass(frozen=True)

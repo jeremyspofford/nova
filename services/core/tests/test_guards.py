@@ -20,12 +20,14 @@ from app import guards
 # a faithful stand-in for a traces.Span without the timing machinery.
 
 
-def tool_span(name: str, *, ok: bool = True, path=None, url=None):
+def tool_span(name: str, *, ok: bool = True, path=None, url=None, model=None):
     args: dict = {}
     if path is not None:
         args["path"] = path
     if url is not None:
         args["url"] = url
+    if model is not None:
+        args["model"] = model
     return SimpleNamespace(kind="tool", name=name, meta={"ok": ok, "args_redacted": args})
 
 
@@ -1445,3 +1447,38 @@ def test_an_empty_reply_is_never_a_bare_intent():
 def test_the_bare_intent_matcher_never_raises_on_odd_input(reply):
     # We do not care about the verdict here — only that it returns cleanly.
     guards.bare_intent_check(reply, [])
+
+
+# -- a pulled-model claim (S10a-3) ------------------------------------------
+
+
+def test_a_pulled_model_claim_with_no_pull_span_is_flagged():
+    for reply in (
+        "I pulled qwen3:4b and it is ready to use.",
+        "I've downloaded hf.co/unsloth/Qwen3-4B-GGUF:Q4_K_M for you.",
+        "Done. I have installed ollama:gemma4:12b.",
+    ):
+        correction = guards.narration_check(reply, [other_span()])
+        assert correction is not None, reply
+        assert kinds(correction) == ["pulled_model"], reply
+
+
+def test_a_pulled_model_claim_is_backed_by_a_pull_span_naming_that_model():
+    reply = "I pulled qwen3:4b and it is ready to use."
+    assert guards.narration_check(reply, [tool_span("model_pull", model="qwen3:4b")]) is None
+    # A pull of a DIFFERENT model does not back it.
+    wrong = guards.narration_check(reply, [tool_span("model_pull", model="qwen3:8b")])
+    assert wrong is not None and targets(wrong) == ["qwen3:4b"]
+    # A failed pull backs nothing.
+    failed = guards.narration_check(reply, [tool_span("model_pull", ok=False, model="qwen3:4b")])
+    assert failed is not None
+
+
+def test_ordinary_install_talk_without_a_model_reference_never_fires():
+    for reply in (
+        "I installed the update and everything looks fine.",
+        "You could pull qwen3:4b yourself with `ollama pull qwen3:4b`.",
+        "Did I pull qwen3:4b already?",
+        "The catalogue lists qwen3:4b as installed.",
+    ):
+        assert guards.narration_check(reply, [other_span()]) is None, reply

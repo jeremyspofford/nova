@@ -76,7 +76,16 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
     ctx = tools.context_for(None, _person(), facts_sink=[])
     assert ctx.facts_sink == []
     # The context carries no principal a permission could bind to.
-    assert set(ctx.__dataclass_fields__) == {"app", "person", "workspace_root", "facts_sink"}
+    # `progress` (S10a-3) is an OUTPUT channel a long call reports through —
+    # a pull's percentage into an activity frame. Like facts_sink it is not a
+    # principal a permission could bind to; nothing reads it to decide.
+    assert set(ctx.__dataclass_fields__) == {
+        "app",
+        "person",
+        "workspace_root",
+        "facts_sink",
+        "progress",
+    }
 
 
 def test_tool_carries_no_precheck_or_gate_field():

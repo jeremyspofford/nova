@@ -57,13 +57,27 @@ _WRITE_TOOLS = frozenset({"workspace_write_file", "memory_save"})
 _READ_TOOLS = frozenset({"workspace_read_file"})
 _CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
 _FETCH_TOOLS = frozenset({"fetch_url"})
+_PULL_TOOLS = frozenset({"model_pull"})
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
     "read_file": _READ_TOOLS,
     "file_contents": _CONTENT_TOOLS,
     "fetched_url": _FETCH_TOOLS,
+    "pulled_model": _PULL_TOOLS,
 }
+
+# "I pulled / downloaded / installed <model ref>": a completed-pull claim,
+# anchored on a MODEL REFERENCE token (name:tag, user/name:tag, hf.co/org/
+# repo[:quant], optionally ollama:-qualified) — never a bare noun, so "I
+# installed the update" is ordinary chat and never fires. Backed only by a
+# successful model_pull span whose `model` argument names that ref.
+_PULLED_MODEL = re.compile(
+    r"\bi(?:'ve|\s+have|\s+just|\s+have\s+just)?\s+(?:just\s+)?"
+    r"(?:pulled|downloaded|installed)\s+(?:the\s+)?(?:model\s+)?"
+    r"(?P<ref>(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+))",
+    re.I,
+)
 
 # The stated correction, appended to the reply and streamed as its own frame.
 # One sentence, the same for every claim kind: the operator's durable record
@@ -555,6 +569,10 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
     for cm in _CONTENT_CLAIM.finditer(clause):
         claims.append(("file_contents", cm.group(1), cm.group(0)))
 
+    # pulled a model: I + pulled/downloaded/installed + a model reference.
+    for pm in _PULLED_MODEL.finditer(clause):
+        claims.append(("pulled_model", _strip_trailing_punct(pm.group("ref")), pm.group(0)))
+
     return claims
 
 
@@ -615,6 +633,9 @@ def _target_of(span: Any) -> str | None:
     if span.name == "fetch_url":
         url = args.get("url")
         return url if isinstance(url, str) else None
+    if span.name == "model_pull":
+        model = args.get("model")
+        return model if isinstance(model, str) else None
     return None
 
 
@@ -970,6 +991,25 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
             re.I,
         ),
         "memory_search",
+    ),
+    (
+        re.compile(
+            r"(?:download|pull|install)(?:ing)?\s+"
+            r"(?:(?:a|new|local|any|other|another|more)\s+){0,2}"
+            r"(?:ai\s+|language\s+|llm\s+)?models?\b",
+            re.I,
+        ),
+        "model_pull",
+    ),
+    (
+        re.compile(
+            r"(?:search|browse|list|look\s+up)(?:ing)?\s+(?:for\s+)?"
+            r"(?:(?:the|available|local|installed|new|other|your|my|our)\s+){0,2}"
+            r"(?:ai\s+|language\s+|llm\s+)?models?\b"
+            r"|search(?:ing)?\s+hugging\s*face",
+            re.I,
+        ),
+        "model_catalog_search",
     ),
 )
 
@@ -1355,12 +1395,31 @@ _CHECK_DEVICE = _ActionClass(
         re.I,
     ),
 )
+# "pull / download / install <a model ref | the model>": her pull, anchored on a
+# model reference or the word model, so a URL/page fetch ("pull up the page",
+# _FETCH_URL) and a file read are never swept in.
+_MODEL_REF = r"(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+)"
+_PULL_MODEL = _ActionClass(
+    re.compile(
+        r"\b(?:pull|download|install|grab|get)\b(?:\s+(?:me|us|down))?"
+        r"(?:\s+(?:the|a|that|this|new|another|smaller|bigger|local))*"
+        r"\s+(?:" + _MODEL_REF + r"|(?:\w+\s+){0,2}?models?\b)",
+        re.I,
+    ),
+    ("model_pull",),
+    "pull the model",
+    restated=re.compile(
+        r"\b(?:pull|download|install)\s+(?:it|that|this|them|that\s+one|one)\b", re.I
+    ),
+)
+
 _OFFER_CLASSES: tuple[_ActionClass, ...] = (
     *_DEFERRAL_TOOLS,
     _LIST_FILES,
     _READ_FILE,
     _RUN_COMMAND,
     _CHECK_DEVICE,
+    _PULL_MODEL,
 )
 
 # A first-person future-commitment lead — the action follows it. "I'll" REQUIRES

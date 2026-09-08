@@ -21,7 +21,7 @@ import type { StreamEvent } from '../../lib/streamChat'
  * persisted: reconciling from fetched history always starts a row at
  * `null` (see `message()` below), because the durable record of what ran
  * is the Activity page, not the chat transcript. */
-export type ActivityMarker = { tool: string; status: string; reason?: string } | null
+export type ActivityMarker = { tool: string; status: string; reason?: string; detail?: string } | null
 
 export type MessageRow = {
   kind: 'message'
@@ -165,7 +165,14 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
         activity:
           event.status === 'ok'
             ? null
-            : { tool: event.tool, status: event.status, reason: event.reason },
+            : {
+                tool: event.tool,
+                status: event.status,
+                reason: event.reason,
+                // A progress frame carries the tool's own words; the marker
+                // is REPLACED each time so the bubble shows the latest.
+                ...(event.detail !== undefined ? { detail: event.detail } : {}),
+              },
       }))
 
     case 'served':
