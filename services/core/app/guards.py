@@ -1328,6 +1328,28 @@ _DENIAL_LEAD = re.compile(
 # "<capability> is not something I can do."
 _TRAILING_DENIAL = re.compile(r"\bis\s+not\s+something\s+i\s+can\s+do\b", re.I)
 
+# A SCOPE limit on the capability, not a denial of it (S12, 2026-09-08). An
+# agent is contained to its own folder, so "I can't write files outside my
+# folder" is TRUE — the tool exists and _resolve_within refuses the path.
+# Correcting it would tell the owner the agent can write anywhere, which is
+# the opposite of the fact, so a qualifier right after the capability phrase
+# makes the denial honest. Nova's root is contained too; this protects the
+# same sentence from her. Kept narrow and to the phrase's own tail so an
+# unrelated "except" elsewhere in the clause cannot excuse a real denial.
+_SCOPE_QUALIFIER = re.compile(
+    r"^\W*(?:"
+    r"outside|beyond|elsewhere|externally"
+    r"|(?:anywhere|any\s+place)\s+(?:else|other|except|but)"
+    r"|(?:other\s+than|except|besides|apart\s+from)\b"
+    r"|from\s+(?:the\s+)?(?:web|internet|external|outside|other|another|someone)"
+    r"|on\s+(?:the\s+)?(?:web|internet)"
+    r"|(?:in|on|for|of)\s+(?:someone|somebody|another|other|the\s+other)"
+    r"|not\s+in\s+(?:my|this)\b"
+    r")",
+    re.I,
+)
+_SCOPE_TAIL_CHARS = 40
+
 
 def _capability_correction_text(tools_named: Sequence[str]) -> str:
     """The stated correction: honest, and it NAMES the real tool(s) — derived
@@ -1372,7 +1394,11 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
                 # verb elsewhere in the clause from being swept in.
                 after_lead = lead is not None and m.start() >= lead.end()
                 before_trailing = trailing is not None and m.end() <= trailing.start()
-                if after_lead or before_trailing:
+                # A scope limit right after the phrase ("...files OUTSIDE my
+                # folder") is a true statement about containment, not a
+                # disowned capability.
+                scoped = _SCOPE_QUALIFIER.search(clause[m.end() : m.end() + _SCOPE_TAIL_CHARS])
+                if (after_lead or before_trailing) and scoped is None:
                     seen.add(tool)
                     denied.append((m.group(0).strip(), tool))
                     break

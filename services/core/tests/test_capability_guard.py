@@ -286,3 +286,38 @@ def test_the_agent_corrections_are_clean_over_themselves():
         correction = guards.capability_claim_check(reply, ALL_TOOLS)
         assert correction is not None
         assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
+
+
+# -- a scope limit is not a disowned capability (S12, 2026-09-08) -----------
+#
+# From the live walk: an agent is contained to its own folder, so "I can't
+# write files outside my folder" is TRUE — the tool exists and
+# _resolve_within refuses the path. Correcting it would tell the owner the
+# agent can write anywhere, which is the opposite of the fact. Nova's root
+# is contained too, so the same sentence is protected from her.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't list files outside my folder.",
+        "I cannot read files outside agents/coder/.",
+        "I can't write files anywhere except my own folder.",
+        "I can't search the web or list files from external sources.",
+        "I'm unable to read files from another person's workspace.",
+        "I can't write files elsewhere.",
+    ],
+)
+def test_a_scope_limit_on_a_capability_is_honest(reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't list files.",
+        "I can't write files.",
+        "I'm unable to read a file for you.",
+    ],
+)
+def test_a_bare_denial_of_a_held_capability_is_still_corrected(reply):
+    """The qualifier must excuse a SCOPE, never the capability itself."""
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is not None
