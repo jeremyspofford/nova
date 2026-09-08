@@ -50,7 +50,7 @@ def test_describe_reads_every_link_and_quotes_the_gateways_reason():
     assert "2. ollama:qwen3:8b: would serve" in text
     assert route.describe(
         {"role": "judge", "chain": [], "would_serve": None, "reason": "no chain"}
-    ).endswith("Nothing could serve: no chain")
+    ).startswith("Answer: nothing can serve the judge role right now — no chain.")
 
 
 async def test_the_tool_asks_the_gateway_with_the_role_and_model(pool, mount_peers, tmp_path):

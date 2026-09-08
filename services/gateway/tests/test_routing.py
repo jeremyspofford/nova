@@ -271,3 +271,16 @@ async def test_nothing_runnable_is_a_503_that_lists_every_verdict(client, pool, 
     assert "qwen3:4b is not installed" in resp.json()["error"]
     bad = await _chat(client, "vibes")
     assert bad.status_code == 400
+
+
+async def test_a_bare_local_pick_is_link_one_on_the_default_provider(client, pool, local):
+    """The owner's chat.model is a bare tag (`qwen3:8b`, no provider prefix)
+    — the same rule every request follows: a model on the default provider.
+    Live 2026-09-08 the walk once read it as 'names no registered provider'
+    and fell to the chain's first fallback; this pins the fix."""
+    await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:4b"]})
+    resp = await _chat(client, "chat", model="qwen3:8b")
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:8b"
+    assert resp.headers["x-nova-route"] == "role=chat;link=1"
+    assert local.seen[-1][1]["model"] == "qwen3:8b"

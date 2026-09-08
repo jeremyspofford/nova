@@ -218,6 +218,13 @@ async def judge_link(
 ) -> dict:
     """One link's live verdict: runnable, or why not — in words."""
     provider_name, model = providers.split_model_id(link, set(by_name))
+    if provider_name is None and model:
+        # A bare id is a model on the DEFAULT provider — the same rule
+        # providers.resolve applies to every request (a local tag like
+        # qwen3.8:27b has a colon of its own and no provider prefix).
+        default = next((r for r in by_name.values() if r.get("is_default")), None)
+        if default is not None:
+            provider_name = default["name"]
     if provider_name is None or not model:
         return {
             "id": link,

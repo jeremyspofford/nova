@@ -60,6 +60,7 @@ _CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
 _FETCH_TOOLS = frozenset({"fetch_url"})
 _PULL_TOOLS = frozenset({"model_pull"})
 _REMOVE_TOOLS = frozenset({"model_remove"})
+_SPEND_TOOLS = frozenset({"spend_report"})
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -68,7 +69,26 @@ _KIND_TOOLS: dict[str, frozenset[str]] = {
     "fetched_url": _FETCH_TOOLS,
     "pulled_model": _PULL_TOOLS,
     "removed_model": _REMOVE_TOOLS,
+    "stated_spend": _SPEND_TOOLS,
 }
+
+# A stated SPEND figure — "we spent $0.0005 today", "today's spend: $3.20",
+# "$12 spent on openrouter", "you've been charged $4" — with no spend_report
+# span this turn is a number nobody read from the ledger (S10, the walk of
+# 2026-09-08: the fallback model answered "$0.0005 on local models" from the
+# previous turn's memory, wrong on both counts). Anchored on a LEDGER word
+# (spent / spend / spending / charged / charges / bill) in the same clause
+# as a dollar figure; "cost" is deliberately absent — "opus costs $15 per
+# million tokens" is price talk, not a claim about the ledger.
+_SPEND_WORD = r"(?:spent|spend|spending|charged|charges?|bill(?:ed)?)"
+_STATED_SPEND = re.compile(
+    r"\b" + _SPEND_WORD + r"\b[^.?!\n]{0,80}?\$\s?\d"
+    r"|\$\s?\d[\d,.]*[^.?!\n]{0,80}?\b" + _SPEND_WORD + r"\b",
+    re.I,
+)
+SPEND_CORRECTION_TEXT = (
+    "Correction: I did not read the spend ledger this turn — that figure is not from the record."
+)
 
 # "I pulled / downloaded / installed <model ref>": a completed-pull claim,
 # anchored on a MODEL REFERENCE token (name:tag, user/name:tag, hf.co/org/
@@ -751,6 +771,11 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
     for cm in _CONTENT_CLAIM.finditer(clause):
         claims.append(("file_contents", cm.group(1), cm.group(0)))
 
+    # a spend figure with no ledger read behind it (target: the clause).
+    sm = _STATED_SPEND.search(clause)
+    if sm is not None:
+        claims.append(("stated_spend", None, sm.group(0)))
+
     # pulled a model: I + pulled/downloaded/installed + a model reference.
     for pm in _PULLED_MODEL.finditer(clause):
         claims.append(("pulled_model", _strip_trailing_punct(pm.group("ref")), pm.group(0)))
@@ -863,6 +888,8 @@ def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
                 unbacked.append(UnbackedClaim(kind=kind, target=target, phrase=phrase.strip()[:80]))
     if not unbacked:
         return None
+    if all(claim.kind == "stated_spend" for claim in unbacked):
+        return Correction(claims=tuple(unbacked), text=SPEND_CORRECTION_TEXT)
     return Correction(claims=tuple(unbacked))
 
 

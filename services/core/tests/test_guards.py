@@ -6,6 +6,7 @@ wrongly-corrected HONEST reply (ruling S2d-R2), so the negatives below are
 as load-bearing as the fabrications: every one of them MUST come back
 clean.
 """
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -646,9 +647,9 @@ DEFERRAL_MUST_NOT_FIRE = [
     "label,reply", DEFERRAL_MUST_NOT_FIRE, ids=[c[0] for c in DEFERRAL_MUST_NOT_FIRE]
 )
 def test_deferral_must_not_fire_on_honest_replies(label, reply):
-    assert (
-        guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS) is None
-    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    assert guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
 
 
 def test_deferral_does_not_fire_when_the_tool_actually_ran():
@@ -701,9 +702,9 @@ def test_a_timer_completion_claim_with_no_timer_span_is_a_deferral(label, reply)
     "label,reply", COMPLETION_MUST_NOT_FIRE, ids=[c[0] for c in COMPLETION_MUST_NOT_FIRE]
 )
 def test_a_timer_completion_near_miss_stays_quiet(label, reply):
-    assert (
-        guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS) is None
-    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    assert guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
 
 
 @pytest.mark.parametrize("backing", ["create_timer", "list_timers", "cancel_timer"])
@@ -1656,3 +1657,36 @@ def test_a_removed_model_claim_needs_a_remove_span_naming_that_model():
     wrong = guards.narration_check(reply, [tool_span("model_remove", model="qwen3:8b")])
     assert wrong is not None
     assert guards.narration_check("You could remove qwen3:4b yourself.", [other_span()]) is None
+
+
+# -- a stated spend figure (S10) --------------------------------------------
+
+
+def test_a_spend_figure_with_no_ledger_read_is_flagged_with_its_own_correction():
+    for reply in (
+        "Today's spend: $0.0005 total across 9 calls — all local models.",
+        "We spent $3.20 on openrouter this week.",
+        "You've been charged $12 so far this month.",
+        "$0.48 spent on gpt-oss today.",
+    ):
+        correction = guards.narration_check(reply, [other_span()])
+        assert correction is not None, reply
+        assert kinds(correction) == ["stated_spend"], reply
+        assert correction.text == guards.SPEND_CORRECTION_TEXT
+
+
+def test_a_spend_figure_backed_by_a_spend_report_span_is_honest():
+    reply = "Today's spend: $0.0005 across 9 calls, all of it on openrouter."
+    assert guards.narration_check(reply, [tool_span("spend_report")]) is None
+    failed = guards.narration_check(reply, [tool_span("spend_report", ok=False)])
+    assert failed is not None
+
+
+def test_price_talk_and_the_users_own_figures_are_not_spend_claims():
+    for reply in (
+        "Opus costs $15 per million output tokens.",
+        "The cap is $20 a month; nothing has been spent yet.",
+        "A 4090 costs about $1,600.",
+        "How much did we spend? Let me check.",
+    ):
+        assert guards.narration_check(reply, [other_span()]) is None, reply
