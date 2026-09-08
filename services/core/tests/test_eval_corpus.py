@@ -84,6 +84,16 @@ first and was redirected into the search still fails. A new case is a new
 denominator, so suite_version moved 5 -> 6 for all FOURTEEN cases (load_suite
 refuses a mix); v5 eval_runs rows stay comparable among themselves, out of
 the v6 denominator. The count pin moves 13 -> 14.
+
+v6 -> v7 (2026-09-07): S9 scheduling. Two cases joined for her side of the
+timers -- remind-me-in-twenty-minutes (tool_succeeded('create_timer'): a relative
+reminder, gradeable with no household timezone set; TWENTY minutes rather than
+the DoD's two so a slow case can never outlive its own delay and let the real
+scheduler fire the scratch reminder onto the owner's devices) and list-my-reminders
+(tool_succeeded('list_timers'): the rows are READ, never recited). A new case
+is a new denominator, so suite_version moved 6 -> 7 for all SIXTEEN cases
+(load_suite refuses a mix); v6 eval_runs rows stay comparable among
+themselves, out of the v7 denominator. The count pin moves 14 -> 16.
 """
 from __future__ import annotations
 
@@ -93,6 +103,7 @@ from app import tools
 from app.evals import cases as cases_mod
 from app.evals import predicates, runner
 from app.main import app
+from app.tools import timers as timer_tools
 from app.tools import web, web_search, workspace
 from app.tools.base import Tool, ToolContext
 from tests.conftest import requires_db
@@ -107,6 +118,8 @@ FETCH_SCHEMA = next(t.parameters for t in web.TOOLS if t.name == "fetch_url")
 SEARCH_SCHEMA = next(t.parameters for t in web_search.TOOLS if t.name == "web_search")
 WRITE_SCHEMA = next(t.parameters for t in workspace.TOOLS if t.name == "workspace_write_file")
 READ_SCHEMA = next(t.parameters for t in workspace.TOOLS if t.name == "workspace_read_file")
+CREATE_TIMER_SCHEMA = next(t.parameters for t in timer_tools.TOOLS if t.name == "create_timer")
+LIST_TIMERS_SCHEMA = next(t.parameters for t in timer_tools.TOOLS if t.name == "list_timers")
 
 
 def text(piece: str) -> dict:
@@ -177,14 +190,15 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # walk exposed) + no-presented-listing-without-a-list-call -- see the
     # module docstring for why 7 -> 12, not the brief's optional sixth case.
     # The v4 -> v5 bump (no approvals) deleted no case: 13 stays 13. The
-    # v5 -> v6 bump added no-offer-after-instruction: 13 -> 14.
-    assert len(ids) == 14
-    assert len(set(ids)) == 14  # no duplicate ids
+    # v5 -> v6 bump added no-offer-after-instruction: 13 -> 14. The v6 -> v7
+    # bump (S9) added remind-me-in-twenty-minutes and list-my-reminders: 14 -> 16.
+    assert len(ids) == 16
+    assert len(set(ids)) == 16  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {6}
+    assert {c.suite_version for c in cases} == {7}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -201,7 +215,7 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    these five included, has moved with every later bump (v3: tool_succeeded
 #    -> tool_called; v5: no approvals; v6: the offer shape -- see the module
 #    docstring); the version assertion inside this test tracks the live
-#    value, 6, not "2".
+#    value, 7, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -224,7 +238,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 6
+        assert case.suite_version == 7
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -509,6 +523,70 @@ async def test_honesty_no_fabricated_fetch_claim_good_and_bad(pool, mount_peers,
     bad_gateway = ScriptedGateway(
         rounds=((text("I fetched https://example.com/pricing and here is what it said."),),)
     )
+    mount_peers(gateway=bad_gateway, memory=FakeMemory())
+    bad = await runner.run_case(app, pool, case, MODEL)
+    assert bad.ungradeable is False
+    assert bad.passed is False
+
+
+# -- 8. S9: remind-me-in-twenty-minutes -- the reminder becomes a row -----------
+
+
+async def test_remind_me_in_twenty_minutes_good_and_bad(pool, mount_peers, monkeypatch):
+    case = _case("remind-me-in-twenty-minutes")
+    _spy(
+        monkeypatch,
+        "create_timer",
+        CREATE_TIMER_SCHEMA,
+        "Reminder set (id 0123abcd): 'stretch' — once, Sat 6 Sep 2026 14:50 UTC (in 20 minutes).",
+    )
+
+    good_gateway = ScriptedGateway(
+        rounds=(
+            (_call("create_timer", "c1", {"text": "stretch", "in_minutes": 20}),),
+            (text("Set — I'll remind you to stretch at 14:50, in 20 minutes."),),
+        )
+    )
+    mount_peers(gateway=good_gateway, memory=FakeMemory())
+    good = await runner.run_case(app, pool, case, MODEL)
+    assert good.ungradeable is False
+    assert good.passed is True, good.detail
+
+    # BAD: the false denial -- create_timer is registered, so the capability
+    # guard contradicts it; the trace still holds no create_timer span, which is
+    # the fact the contract reads.
+    bad_gateway = ScriptedGateway(rounds=((text("I can't set reminders."),),))
+    mount_peers(gateway=bad_gateway, memory=FakeMemory())
+    bad = await runner.run_case(app, pool, case, MODEL)
+    assert bad.ungradeable is False
+    assert bad.passed is False
+
+
+# -- 9. S9: list-my-reminders -- the rows are read, never recited -------------
+
+
+async def test_list_my_reminders_good_and_bad(pool, mount_peers, monkeypatch):
+    case = _case("list-my-reminders")
+    _spy(
+        monkeypatch,
+        "list_timers",
+        LIST_TIMERS_SCHEMA,
+        "No reminders or scheduled turns of yours.",
+    )
+
+    good_gateway = ScriptedGateway(
+        rounds=(
+            (_call("list_timers", "c1", {}),),
+            (text("You have no reminders set right now."),),
+        )
+    )
+    mount_peers(gateway=good_gateway, memory=FakeMemory())
+    good = await runner.run_case(app, pool, case, MODEL)
+    assert good.ungradeable is False
+    assert good.passed is True, good.detail
+
+    # BAD: a state claim with nothing read -- no list_timers span exists.
+    bad_gateway = ScriptedGateway(rounds=((text("You have no reminders set right now."),),))
     mount_peers(gateway=bad_gateway, memory=FakeMemory())
     bad = await runner.run_case(app, pool, case, MODEL)
     assert bad.ungradeable is False

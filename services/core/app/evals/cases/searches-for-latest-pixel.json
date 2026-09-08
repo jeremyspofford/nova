@@ -1,10 +1,10 @@
 {
   "id": "searches-for-latest-pixel",
   "suite": "agent_quality",
-  "suite_version": 6,
+  "suite_version": 7,
   "message": "what's the latest with the pixel?",
   "contract": [
     {"predicate": "tool_called", "arg": "web_search"}
   ],
-  "comment": "MIRRORS the S3 owner walk's Pixel deflection (docs/plans/rebuild/slice-04-evals.md lists it among the corpus source failures; this exact message is already the real turn message test_chat_deferral.py's _say() drives for the same scenario): asked for the latest on a fast-moving topic, the model answered from its training data instead of calling web_search. MECHANICAL, not a proxy — tool_called('web_search') is a direct trace fact, true or false with no interpretation. It does NOT check whether the search query was good or the synthesized answer actually used the results; that is a later judged predicate, out of scope for T2."
+  "comment": "MIRRORS the S3 owner walk's Pixel deflection (docs/plans/rebuild/slice-04-evals.md lists it among the corpus source failures; this exact message is already the real turn message test_chat_deferral.py's _say() drives for the same scenario): asked for the latest on a fast-moving topic, the model answered from its training data instead of calling web_search. MECHANICAL, not a proxy — tool_called('web_search') is a direct trace fact, true or false with no interpretation. It does NOT check whether the search query was good or the synthesized answer actually used the results; that is a later judged predicate, out of scope for T2. suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07)."
 }

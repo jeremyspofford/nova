@@ -10,7 +10,13 @@ import {
 import { clearConversation as apiClearConversation } from '../lib/api'
 import { matchCommand } from '../lib/commands'
 import { streamChat, type FetchLike } from '../lib/streamChat'
-import { chatReducer, emptyChat, type ChatState } from '../pages/chat/chatReducer'
+import {
+  chatReducer,
+  emptyChat,
+  type ChatRow,
+  type ChatState,
+  type FetchedMessage,
+} from '../pages/chat/chatReducer'
 
 /**
  * Chat-stream ownership, lifted out of ChatPage so a turn keeps running when
@@ -52,10 +58,7 @@ const nextId = (prefix: string) => `${prefix}-${Date.now()}-${++seq}`
 interface ChatStore {
   state: ChatState
   sendMessage: (text: string) => void
-  loadConversation: (
-    conversationId: string,
-    messages: { id: string; role: string; content: string }[],
-  ) => void
+  loadConversation: (conversationId: string, messages: FetchedMessage[]) => void
   /**
    * Resolve a turn that finished SERVER-SIDE — one this store never streamed
    * (the durable-turn case: a hard refresh mid-reply, so core finished the
@@ -67,9 +70,21 @@ interface ChatStore {
    * duplicate. The reducer still drops it if the store has since started its
    * own live turn or moved to another conversation.
    */
-  resolveServerTurn: (
+  resolveServerTurn: (conversationId: string, messages: FetchedMessage[]) => void
+  /**
+   * The idle poll's hand-off (S9): history fetched while NO turn was in
+   * flight, merged into the transcript by id (chatReducer's `idlePolled`) —
+   * rows the server has that this store does not (a reminder that fired, a
+   * scheduled turn's reply) appear in server order; rows this store streamed
+   * itself are recognised, never shown twice; client-only rows (a stated
+   * failure, a /help note) are kept. `observedRows` is the transcript as it
+   * was when the fetch was issued — if it moved in between, the reducer drops
+   * the result and the next poll asks again.
+   */
+  syncFromServer: (
     conversationId: string,
-    messages: { id: string; role: string; content: string }[],
+    messages: FetchedMessage[],
+    observedRows: ChatRow[],
   ) => void
   /**
    * Slice 2f Fix A: a successful Settings->Models switch calls this so the
@@ -214,16 +229,17 @@ export function ChatProvider({
     [fetchImpl, clearChat, appendLocalMessage],
   )
 
-  const loadConversation = useCallback(
-    (conversationId: string, messages: { id: string; role: string; content: string }[]) => {
-      dispatch({ type: 'reconcile', conversationId, messages })
-    },
-    [],
-  )
+  const loadConversation = useCallback((conversationId: string, messages: FetchedMessage[]) => {
+    dispatch({ type: 'reconcile', conversationId, messages })
+  }, [])
 
-  const resolveServerTurn = useCallback(
-    (conversationId: string, messages: { id: string; role: string; content: string }[]) => {
-      dispatch({ type: 'pollResolved', conversationId, messages })
+  const resolveServerTurn = useCallback((conversationId: string, messages: FetchedMessage[]) => {
+    dispatch({ type: 'pollResolved', conversationId, messages })
+  }, [])
+
+  const syncFromServer = useCallback(
+    (conversationId: string, messages: FetchedMessage[], observedRows: ChatRow[]) => {
+      dispatch({ type: 'idlePolled', conversationId, messages, observedRows })
     },
     [],
   )
@@ -239,6 +255,7 @@ export function ChatProvider({
         sendMessage,
         loadConversation,
         resolveServerTurn,
+        syncFromServer,
         setModel,
         clearChat,
       }}

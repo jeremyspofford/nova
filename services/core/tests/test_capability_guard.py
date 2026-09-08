@@ -9,6 +9,7 @@ Every case from the S3 walk-fix (T7) brief's calibration section is here, plus
 the registry TOGGLE proving the SAME sentence flips verdict on whether the
 satisfying tool is actually available — the derived-not-hardcoded property.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -61,6 +62,17 @@ MUST_FIRE = [
     ),
     ("cant_check_for_updates", "I can't check for updates to a model.", "model_check_update"),
     ("cant_update_models", "I cannot update models.", "model_check_update"),
+    # S9: the reminder tools are registered, so disowning them is a false denial.
+    ("cant_set_reminders", "I can't set reminders.", "create_timer"),
+    ("unable_to_remind_you", "I'm unable to remind you later.", "create_timer"),
+    # "yet" is a denial of an unshipped feature, not a condition on this call.
+    ("cant_set_reminders_yet", "I can't set reminders yet.", "create_timer"),
+    ("cant_set_reminder_for_you", "I can't set a reminder for you.", "create_timer"),
+    (
+        "scheduling_tasks_trailing_denial",
+        "Scheduling tasks is not something I can do.",
+        "create_timer",
+    ),
 ]
 
 
@@ -91,6 +103,38 @@ MUST_NOT_FIRE = [
     ("specific_404", "I couldn't fetch that page — it returned a 404."),
     ("specific_missing_file", "I can't find a file named report.md."),
     ("specific_url_didnt_load", "That URL didn't load."),
+    # S9: the store's own refusal, relayed — one time, not the ability.
+    (
+        "specific_reminder_in_the_past",
+        "I can't set a reminder for a time that has already passed.",
+    ),
+    ("specific_reminder_past_tense", "I couldn't set the reminder — the time had passed."),
+    # S9: the tools' own refusals RELAYED, and a memory statement — a
+    # condition/target tail on the ability phrase. A correction under any of
+    # these would make the guard the liar (review of T2, 2026-09-07).
+    (
+        "relayed_no_timezone_until",
+        "I can't set a reminder until a timezone is set for this instance — it is set in "
+        "Settings → General.",
+    ),
+    (
+        "relayed_no_timezone_absolute",
+        "I can't set a reminder at an absolute time yet: no timezone is set for this instance.",
+    ),
+    ("relayed_past_schedule", "I can't schedule anything for a time that has already passed."),
+    ("specific_reminder_yesterday", "I can't set a reminder for yesterday."),
+    (
+        "specific_reminder_quoted_object_relay",
+        "I can't set a reminder for 'stretch' until a timezone is set.",
+    ),
+    (
+        "remind_about_past_relay",
+        "I can't remind you about that — the time you gave has already passed.",
+    ),
+    (
+        "memory_not_a_timer",
+        "I can't remind you of what you said last week; my memory search found nothing.",
+    ),
     # A hedge / conditional / question describes what MIGHT or WOULD be, not what
     # is; a question asserts nothing at all.
     ("hedge_guarantee", "I can't guarantee that's accurate."),
@@ -103,9 +147,9 @@ MUST_NOT_FIRE = [
 
 @pytest.mark.parametrize("label,reply", MUST_NOT_FIRE, ids=[c[0] for c in MUST_NOT_FIRE])
 def test_must_not_fire_on_honest_replies(label, reply):
-    assert (
-        guards.capability_claim_check(reply, ALL_TOOLS) is None
-    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
 
 
 def test_the_correction_text_itself_never_fires():
@@ -152,9 +196,7 @@ def test_a_past_tense_or_other_subject_denial_is_not_a_capability_claim():
 
 def test_the_trailing_denial_form_fires():
     """'<capability> is not something I can do' — the capability comes first."""
-    correction = guards.capability_claim_check(
-        "Web browsing is not something I can do.", ALL_TOOLS
-    )
+    correction = guards.capability_claim_check("Web browsing is not something I can do.", ALL_TOOLS)
     assert correction is not None
     assert tgt(correction) == ["fetch_url"]
 

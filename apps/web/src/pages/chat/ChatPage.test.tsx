@@ -343,3 +343,133 @@ describe('ChatPage — Part C: opening the conversation lands on the newest mess
     await waitFor(() => expect(spy).toHaveBeenCalled())
   })
 })
+
+describe('ChatPage — the idle poll (S9): a firing that lands while he is looking', () => {
+  // A reminder's row is written by the scheduler, not streamed to this store,
+  // and core never marks it in flight — so neither the live stream nor the
+  // pending-turn poll can show it. The idle poll does: every idlePollMs while
+  // nothing is in flight, fetch the transcript and merge what is new.
+  function stored(id: string, role: string, content: string, turnKind?: string): StoredMessage {
+    return { id, role, content, created_at: '', turn_kind: turnKind }
+  }
+
+  function renderIdle(
+    api: {
+      getActiveConversation: () => Promise<Conversation>
+      getMessages: (id: string) => Promise<StoredMessage[]>
+    },
+    fetchImpl = noopFetch,
+  ) {
+    return render(
+      <ChatProvider fetchImpl={fetchImpl}>
+        <ChatPage api={api} pollIntervalMs={5} idlePollMs={5} />
+      </ChatProvider>,
+    )
+  }
+
+  it('appends a row that arrives on a later poll, labelled, exactly once — nothing already shown is duplicated', async () => {
+    // The reminder lands server-side when THIS test says so — a flag rather
+    // than a call count, so the assertions about the state before it are
+    // never racing a 5 ms poll.
+    let reminderLanded = false
+    const api = {
+      getActiveConversation: vi.fn(async () => conversation({ pending_turn: false })),
+      getMessages: vi.fn(async () => {
+        const history = [
+          stored('u1', 'user', 'remind me in two minutes to stretch', undefined),
+          stored('a1', 'assistant', 'Done — once, Sat 6 Sep 2026 14:32 EDT (in 2 minutes).', 'chat'),
+        ]
+        return reminderLanded
+          ? [...history, stored('r1', 'assistant', 'Reminder: stretch', 'reminder')]
+          : history
+      }),
+    }
+    renderIdle(api)
+
+    await screen.findByText(/once, Sat 6 Sep 2026/)
+    expect(assistantBubbles()).toHaveLength(1)
+
+    // Idle polls that learn nothing change nothing.
+    await waitFor(() => expect(api.getMessages.mock.calls.length).toBeGreaterThanOrEqual(3))
+    expect(assistantBubbles()).toHaveLength(1)
+    expect(screen.queryByTestId('turn-kind-label')).toBeNull()
+
+    // Now the reminder fires; the next poll brings it, with the label the
+    // row's kind earns.
+    reminderLanded = true
+    await screen.findByText('Reminder: stretch')
+    expect(screen.getByTestId('turn-kind-label').textContent).toBe('Reminder')
+
+    // Two assistant bubbles (the confirmation and the reminder), one user
+    // bubble — the rows the poll already knew were not added again.
+    expect(assistantBubbles()).toHaveLength(2)
+    expect(screen.getAllByTestId('message-user')).toHaveLength(1)
+
+    // ...and staying on the page keeps it that way: later polls that learn
+    // nothing new change nothing.
+    const callsAfterLanding = api.getMessages.mock.calls.length
+    await waitFor(() => expect(api.getMessages.mock.calls.length).toBeGreaterThan(callsAfterLanding + 1))
+    expect(assistantBubbles()).toHaveLength(2)
+  })
+
+  it('does not poll while a live turn streams, and resumes once it is over', async () => {
+    // A fetch whose stream never yields: the store stays `streaming` for as
+    // long as this test wants it to.
+    let release: () => void = () => {}
+    const held = new Promise<{ done: true }>(resolve => {
+      release = () => resolve({ done: true })
+    })
+    const hangingFetch = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => '',
+          body: { getReader: () => ({ read: () => held, cancel: async () => {} }) },
+        }) as unknown as Response,
+    )
+    const api = {
+      getActiveConversation: vi.fn(async () => conversation({ pending_turn: false })),
+      getMessages: vi.fn(async () => [stored('u1', 'user', 'hello'), stored('a1', 'assistant', 'hi')]),
+    }
+    const view = renderIdle(api, hangingFetch)
+    await screen.findByText('hi')
+
+    // Idle: the poll is running.
+    await waitFor(() => expect(api.getMessages.mock.calls.length).toBeGreaterThanOrEqual(3))
+
+    // The owner sends: the store streams, and the poll must stop.
+    const textarea = screen.getByLabelText('Message Nova')
+    fireEvent.change(textarea, { target: { value: 'and now?' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    await waitFor(() =>
+      expect(view.getByTestId('chat-page').getAttribute('data-streaming')).toBe('true'),
+    )
+    const callsWhenStreamingBegan = api.getMessages.mock.calls.length
+    await new Promise(resolve => setTimeout(resolve, 50))
+    // Allowing for one tick that was already scheduled when the send landed.
+    expect(api.getMessages.mock.calls.length).toBeLessThanOrEqual(callsWhenStreamingBegan + 1)
+
+    // The turn ends (the stream closes): polling resumes.
+    release()
+    await waitFor(() =>
+      expect(view.getByTestId('chat-page').getAttribute('data-streaming')).toBe('false'),
+    )
+    const callsAfterTurn = api.getMessages.mock.calls.length
+    await waitFor(() => expect(api.getMessages.mock.calls.length).toBeGreaterThan(callsAfterTurn + 1))
+  })
+
+  it('stops polling on unmount — the interval is cleared', async () => {
+    const api = {
+      getActiveConversation: vi.fn(async () => conversation({ pending_turn: false })),
+      getMessages: vi.fn(async () => [stored('u1', 'user', 'hello'), stored('a1', 'assistant', 'hi')]),
+    }
+    const { unmount } = renderIdle(api)
+    await waitFor(() => expect(api.getMessages.mock.calls.length).toBeGreaterThanOrEqual(3))
+    unmount()
+    const atUnmount = api.getMessages.mock.calls.length
+    await new Promise(resolve => setTimeout(resolve, 60))
+    expect(api.getMessages.mock.calls.length).toBe(atUnmount)
+  })
+})
+

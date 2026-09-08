@@ -6,6 +6,7 @@ arguments do not match the schema executes NOTHING, and an executor can
 never throw — every failure comes back as a stated Error result the model
 can read and retry from.
 """
+
 from __future__ import annotations
 
 import json
@@ -77,6 +78,12 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # eight to SEVENTEEN. Each rides the same dispatch funnel as every other
     # tool, and (no approvals, 2026-09-03) needs no row anywhere to run: a tool
     # is in this set because a module declares it, and that is the whole test.
+    #
+    # Deliberate snapshot update (slice 9, T2, 2026-09-07): the three timer
+    # tools (tools/timers.py — create_timer, list_timers, cancel_timer) joined
+    # the registry, so this pinned set moved from seventeen to TWENTY. Same
+    # funnel, no row anywhere to run; her reminders are a capability the moment
+    # the module is in REGISTRY.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -103,6 +110,10 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # NINETEEN -> TWENTY-ONE.
         "model_check_update",
         "model_remove",
+        # S9 (2026-09-07, merged 09-08): the timer tools. TWENTY-ONE -> TWENTY-FOUR.
+        "create_timer",
+        "list_timers",
+        "cancel_timer",
     }
 
 
@@ -253,9 +264,7 @@ async def test_an_unexpected_exception_is_wrapped_not_raised(monkeypatch, tmp_pa
     assert any("spy_tool" in record.message for record in caplog.records)
 
 
-async def test_an_executor_returning_nothing_useful_is_still_a_stated_result(
-    monkeypatch, tmp_path
-):
+async def test_an_executor_returning_nothing_useful_is_still_a_stated_result(monkeypatch, tmp_path):
     """A tool that answers with an empty string tells the model nothing —
     an empty tool result reads as success with no evidence."""
     executor = Spy(result="")

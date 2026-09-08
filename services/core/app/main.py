@@ -24,7 +24,10 @@ from app import (
     governance_api,
     models_catalog,
     proxies,
+    scheduler,
     settings_store,
+    timers,
+    timers_api,
     traces,
     workspace_api,
 )
@@ -61,9 +64,24 @@ async def lifespan(app: FastAPI):
     # through — closed 'interrupted' here, before the page can read it as
     # live (runner.sweep_orphaned_suite_runs says why).
     await eval_runner.sweep_orphaned_suite_runs(pool)
+    # And for timer firings: a 'running' firing row belongs to the process that
+    # died mid-firing — closed 'interrupted' with the reason before the first
+    # tick could read it as live (scheduler.sweep_orphaned_firings). Then the
+    # job rows JOBS names are seeded if missing, so the retention job exists on
+    # a fresh install without a migration seeding it.
+    await scheduler.sweep_orphaned_firings(pool)
+    await timers.ensure_jobs(pool)
+    # The scheduler loop is its OWN task, never one of chat._BACKGROUND: a
+    # forever task in that set would hang drain_background(). It is cancelled
+    # and awaited FIRST at shutdown, so no new firing starts while the detached
+    # work below is being drained.
+    ticker = asyncio.create_task(scheduler.run_forever(app, pool), name="scheduler")
+    app.state.scheduler_task = ticker
     try:
         yield
     finally:
+        ticker.cancel()
+        await asyncio.gather(ticker, return_exceptions=True)
         # Let detached work (in-flight turns that outlived their browser,
         # memory ingest, trace closes) finish before the pool it needs
         # disappears.
@@ -85,6 +103,7 @@ app.include_router(evals_api.router)
 app.include_router(proxies.router)
 app.include_router(models_catalog.router)
 app.include_router(workspace_api.router)
+app.include_router(timers_api.router)
 
 
 @app.exception_handler(StarletteHTTPException)

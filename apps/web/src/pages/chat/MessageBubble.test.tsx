@@ -13,6 +13,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     interrupted: false,
     activity: null,
     servedBy: null,
+    turnKind: null,
     ...overrides,
   }
 }
@@ -108,6 +109,7 @@ function userRow(text: string): MessageRow {
     role: 'user',
     text,
     servedBy: null,
+    turnKind: null,
     streaming: false,
     interrupted: false,
     activity: null,
@@ -202,5 +204,58 @@ describe('MessageBubble — who answered (S10-pre)', () => {
       />,
     )
     expect(screen.getByTestId('served-by').textContent).toBe('anthropic:claude-opus-5')
+  })
+})
+
+describe('MessageBubble — where a row came from, when it was not a chat turn (S9)', () => {
+  it('labels a row a reminder firing wrote "Reminder"', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({ text: 'Reminder: stretch', streaming: false, turnKind: 'reminder' })}
+      />,
+    )
+    expect(screen.getByTestId('turn-kind-label').textContent).toBe('Reminder')
+  })
+
+  it('labels a row a scheduled turn wrote "Scheduled"', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({ text: 'Your calendar today: …', streaming: false, turnKind: 'scheduled' })}
+      />,
+    )
+    expect(screen.getByTestId('turn-kind-label').textContent).toBe('Scheduled')
+  })
+
+  it('shows no label for an ordinary chat turn, or when the server stated no kind', () => {
+    const { unmount } = render(
+      <MessageBubble row={assistantRow({ text: 'hi', streaming: false, turnKind: 'chat' })} />,
+    )
+    expect(screen.queryByTestId('turn-kind-label')).toBeNull()
+    unmount()
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, turnKind: null })} />)
+    expect(screen.queryByTestId('turn-kind-label')).toBeNull()
+  })
+
+  // The label is DERIVED from turns.kind, never read off the text: a reply
+  // that merely says "Reminder:" is a chat turn claiming to be one.
+  it('never infers the label from the text — a chat reply that says "Reminder:" earns none', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({ text: 'Reminder: I am not a timer', streaming: false, turnKind: 'chat' })}
+      />,
+    )
+    expect(screen.queryByTestId('turn-kind-label')).toBeNull()
+  })
+
+  it('shows nothing for a kind this client has not met, rather than a guess', () => {
+    render(
+      <MessageBubble row={assistantRow({ text: 'x', streaming: false, turnKind: 'future-kind' })} />,
+    )
+    expect(screen.queryByTestId('turn-kind-label')).toBeNull()
+  })
+
+  it('never labels the owner\'s own bubble', () => {
+    render(<MessageBubble row={{ ...userRow('remind me'), turnKind: 'reminder' }} />)
+    expect(screen.queryByTestId('turn-kind-label')).toBeNull()
   })
 })

@@ -582,3 +582,230 @@ describe('chatReducer — who answered (S10-pre)', () => {
     expect(messages(state).map(m => m.servedBy)).toEqual([null, 'anthropic:claude-opus-5', null])
   })
 })
+
+describe('chatReducer — the idle poll merges the server transcript by id (S9)', () => {
+  // The store's rows are a MIX: server-id rows it loaded, client-id rows it
+  // streamed (`u-…`/`a-…`, ids the server never learns), and client-only rows
+  // (a stated failure, a /help note). The fetched list is the persisted truth
+  // in order. The merge must show every server row once, every client-only
+  // row once, and never a live exchange twice.
+  const server = (id: string, role: string, content: string, turn_kind?: string) => ({
+    id,
+    role,
+    content,
+    turn_kind,
+  })
+
+  function loaded(...messages: ReturnType<typeof server>[]): ChatState {
+    return chatReducer(emptyChat(), { type: 'loaded', conversationId: 'c1', messages })
+  }
+
+  function polled(state: ChatState, messages: ReturnType<typeof server>[], conversationId = 'c1') {
+    return chatReducer(state, {
+      type: 'idlePolled',
+      conversationId,
+      messages,
+      observedRows: state.rows,
+    })
+  }
+
+  /** A whole live exchange streamed through this store: client ids. */
+  function streamed(state: ChatState, userId: string, assistantId: string, ask: string, reply: string) {
+    let next = chatReducer(state, { type: 'send', userId, assistantId, text: ask })
+    next = chatReducer(next, { type: 'event', event: { type: 'delta', text: reply } })
+    return chatReducer(next, { type: 'event', event: { type: 'done' } })
+  }
+
+  it('appends a row the server has that the store does not — a reminder — where the server put it', () => {
+    const state = loaded(server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello'))
+    const next = polled(state, [
+      server('u1', 'user', 'hi'),
+      server('a1', 'assistant', 'hello'),
+      server('r1', 'assistant', 'Reminder: stretch', 'reminder'),
+    ])
+    expect(next.rows.map(r => r.id)).toEqual(['u1', 'a1', 'r1'])
+    const reminder = messages(next)[2]
+    expect(reminder.turnKind).toBe('reminder')
+    expect(reminder.text).toBe('Reminder: stretch')
+  })
+
+  it('returns the SAME state object when the poll learned nothing new', () => {
+    const state = loaded(server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello', 'chat'))
+    const next = polled(state, [server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello', 'chat')])
+    expect(next).toBe(state)
+  })
+
+  it('recognises a live exchange it streamed itself in the server rows — shown once, now under its server ids', () => {
+    let state = loaded(server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello'))
+    state = streamed(state, 'u-live', 'a-live', 'remind me in two minutes to stretch', 'Done — in 2 minutes.')
+    expect(state.rows.map(r => r.id)).toEqual(['u1', 'a1', 'u-live', 'a-live'])
+
+    const next = polled(state, [
+      server('u1', 'user', 'hi'),
+      server('a1', 'assistant', 'hello'),
+      server('u2', 'user', 'remind me in two minutes to stretch'),
+      server('a2', 'assistant', 'Done — in 2 minutes.', 'chat'),
+      server('r1', 'assistant', 'Reminder: stretch', 'reminder'),
+    ])
+    expect(next.rows.map(r => r.id)).toEqual(['u1', 'a1', 'u2', 'a2', 'r1'])
+    expect(messages(next).filter(m => m.role === 'assistant')).toHaveLength(3)
+    // A second poll with the same answer is a no-op.
+    expect(polled(next, [
+      server('u1', 'user', 'hi'),
+      server('a1', 'assistant', 'hello'),
+      server('u2', 'user', 'remind me in two minutes to stretch'),
+      server('a2', 'assistant', 'Done — in 2 minutes.', 'chat'),
+      server('r1', 'assistant', 'Reminder: stretch', 'reminder'),
+    ])).toBe(next)
+  })
+
+  it('takes the server\'s text for a reply it streamed — the persisted version is the true one', () => {
+    // Core strips tool-call markup at the persist boundary (without_markup),
+    // so the durable reply can be shorter than what streamed. Once the server
+    // has it, that is the row.
+    let state = loaded()
+    state = streamed(state, 'u-live', 'a-live', 'list files', 'Here: a.md <tool_call>…</tool_call>')
+    const next = polled(state, [
+      server('u1', 'user', 'list files'),
+      server('a1', 'assistant', 'Here: a.md', 'chat'),
+    ])
+    expect(messages(next).map(m => [m.id, m.text])).toEqual([
+      ['u1', 'list files'],
+      ['a1', 'Here: a.md'],
+    ])
+  })
+
+  it('keeps a stated failure and the text of a send the server never persisted, and still appends the reminder after them', () => {
+    let state = loaded(server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello'))
+    state = chatReducer(state, { type: 'send', userId: 'u-lost', assistantId: 'a-lost', text: 'are you there?' })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'error', reason: 'could not reach Nova — Failed to fetch' },
+    })
+    expect(state.rows.map(r => r.id)).toEqual(['u1', 'a1', 'u-lost', 'a-lost:error'])
+
+    // The server never saw that send; a reminder has since landed.
+    const next = polled(state, [
+      server('u1', 'user', 'hi'),
+      server('a1', 'assistant', 'hello'),
+      server('r1', 'assistant', 'Reminder: stretch', 'reminder'),
+    ])
+    expect(next.rows.map(r => r.id)).toEqual(['u1', 'a1', 'u-lost', 'a-lost:error', 'r1'])
+    expect(errors(next)[0].reason).toBe('could not reach Nova — Failed to fetch')
+  })
+
+  it('completes a partial reply from the server\'s row when core finished the turn, keeping the failure note', () => {
+    let state = loaded()
+    state = chatReducer(state, { type: 'send', userId: 'u-live', assistantId: 'a-live', text: 'tell me a story' })
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'Once upon' } })
+    state = chatReducer(state, { type: 'event', event: { type: 'error', reason: 'stream died' } })
+    expect(state.rows.map(r => r.id)).toEqual(['u-live', 'a-live', 'a-live:error'])
+
+    const next = polled(state, [
+      server('u1', 'user', 'tell me a story'),
+      server('a1', 'assistant', 'Once upon a time, the whole thing.', 'chat'),
+    ])
+    expect(next.rows.map(r => r.id)).toEqual(['u1', 'a1', 'a-live:error'])
+    expect(messages(next)[1].text).toBe('Once upon a time, the whole thing.')
+  })
+
+  it('claims the reply on a LATER poll when the first poll re-keyed the user row before core had finished the turn', () => {
+    let state = loaded()
+    state = chatReducer(state, { type: 'send', userId: 'u-live', assistantId: 'a-live', text: 'tell me a story' })
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'Once upon' } })
+    state = chatReducer(state, { type: 'event', event: { type: 'error', reason: 'stream died' } })
+
+    // Poll 1: the server has his message but no reply yet (the durable turn
+    // is still running). The user row is re-keyed; what streamed stays.
+    state = polled(state, [server('u1', 'user', 'tell me a story')])
+    expect(state.rows.map(r => r.id)).toEqual(['u1', 'a-live', 'a-live:error'])
+
+    // Poll 2: core finished the turn. The reply must COMPLETE the row that
+    // streamed, not land beside it as a second assistant bubble.
+    const next = polled(state, [
+      server('u1', 'user', 'tell me a story'),
+      server('a1', 'assistant', 'Once upon a time, the whole thing.', 'chat'),
+    ])
+    expect(next.rows.map(r => r.id)).toEqual(['u1', 'a1', 'a-live:error'])
+    expect(messages(next).filter(m => m.role === 'assistant')).toHaveLength(1)
+    expect(messages(next)[1].text).toBe('Once upon a time, the whole thing.')
+
+    // And a third identical poll learns nothing.
+    expect(polled(next, [
+      server('u1', 'user', 'tell me a story'),
+      server('a1', 'assistant', 'Once upon a time, the whole thing.', 'chat'),
+    ])).toBe(next)
+  })
+
+  it('never mistakes a reminder for the reply of a turn it streamed — the kind says it was not a chat turn', () => {
+    let state = loaded()
+    state = chatReducer(state, { type: 'send', userId: 'u-live', assistantId: 'a-live', text: 'hello?' })
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'partial' } })
+    state = chatReducer(state, { type: 'event', event: { type: 'error', reason: 'stream died' } })
+
+    // The server persisted his message, no reply, and then a reminder fired.
+    const next = polled(state, [
+      server('u1', 'user', 'hello?'),
+      server('r1', 'assistant', 'Reminder: stretch', 'reminder'),
+    ])
+    expect(next.rows.map(r => r.id)).toEqual(['u1', 'a-live', 'a-live:error', 'r1'])
+    expect(messages(next).find(m => m.id === 'a-live')?.text).toBe('partial')
+    expect(messages(next).find(m => m.id === 'r1')?.turnKind).toBe('reminder')
+  })
+
+  it('keeps a /help note where it was, with new server rows after it', () => {
+    let state = loaded(server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello'))
+    state = chatReducer(state, { type: 'localMessage', id: 'local-help', text: '/clear — …' })
+    const next = polled(state, [
+      server('u1', 'user', 'hi'),
+      server('a1', 'assistant', 'hello'),
+      server('r1', 'assistant', 'Reminder: stretch', 'reminder'),
+    ])
+    expect(next.rows.map(r => r.id)).toEqual(['u1', 'a1', 'local-help', 'r1'])
+  })
+
+  it('is dropped while a turn streams — the live turn owns the transcript', () => {
+    let state = loaded(server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello'))
+    state = chatReducer(state, { type: 'send', userId: 'u-live', assistantId: 'a-live', text: 'go' })
+    // `observedRows` is the CURRENT rows, so the staleness guard passes and
+    // only the streaming guard can drop this.
+    const next = chatReducer(state, {
+      type: 'idlePolled',
+      conversationId: 'c1',
+      messages: [server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello'), server('r1', 'assistant', 'R', 'reminder')],
+      observedRows: state.rows,
+    })
+    expect(next).toBe(state)
+  })
+
+  it('is dropped when it names a conversation the store has since left', () => {
+    const state = loaded(server('u1', 'user', 'hi'))
+    expect(polled(state, [server('u1', 'user', 'hi'), server('r1', 'assistant', 'R', 'reminder')], 'c-other')).toBe(state)
+  })
+
+  it('is dropped when the transcript moved while the fetch was in flight — a clear must stay cleared', () => {
+    let state = loaded(server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello'))
+    const observedAtIssue = state.rows
+    // The owner clears the chat while the fetch (issued against the old
+    // transcript) is still in flight...
+    state = chatReducer(state, { type: 'cleared', conversationId: 'c1' })
+    expect(state.rows).toEqual([])
+    // ...and the stale answer arrives. It must not resurrect the rows.
+    const next = chatReducer(state, {
+      type: 'idlePolled',
+      conversationId: 'c1',
+      messages: [server('u1', 'user', 'hi'), server('a1', 'assistant', 'hello')],
+      observedRows: observedAtIssue,
+    })
+    expect(next).toBe(state)
+    expect(next.rows).toEqual([])
+  })
+
+  it('loads turn_kind onto fetched rows and leaves it null on rows it streams itself', () => {
+    let state = loaded(server('r1', 'assistant', 'Reminder: stretch', 'reminder'))
+    expect(messages(state)[0].turnKind).toBe('reminder')
+    state = streamed(state, 'u-live', 'a-live', 'hi', 'hello')
+    expect(messages(state).slice(1).map(m => m.turnKind)).toEqual([null, null])
+  })
+})
+

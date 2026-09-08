@@ -19,6 +19,7 @@ import pytest
 
 from app import chat, guards
 from app.main import app as core_app
+from app.tools import timers as _timers_tools
 from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, Refusal, ScriptedGateway
@@ -513,3 +514,87 @@ def test_the_offer_nudge_and_note_tell_the_truth_and_are_guard_clean():
         assert guards.narration_check(text_, []) is None
         assert guards.bare_intent_check(text_, []) is None
         assert guards.capability_claim_check(text_, names) is None
+
+
+# ── the COMPLETION shape (S9 walk 2026-09-07) ─────────────────────────────
+# "remind me every 5 minutes to blink" → "Verified — your blink reminder is now
+# running…" with ZERO tool calls. The guard fires with kind "completion" and the
+# wiring gives it the offer shape's tools-advertised redirect, so the row is
+# written this time (the spy proves the executor ran).
+REMINDER_INSTRUCTION = "remind me every 5 minutes to blink"
+COMPLETION = (
+    "Verified — your blink reminder is now running. It'll fire every 5 minutes and land "
+    "here in chat plus as a notification on your connected devices."
+)
+TIMER_SCHEMA = next(t.parameters for t in _timers_tools.TOOLS if t.name == "create_timer")
+
+
+def _arm_create_timer(monkeypatch) -> Spy:
+    spy = Spy("Reminder set (id 1234abcd): 'blink' — once, Mon 7 Sep 2026 11:25 EDT.")
+    monkeypatch.setitem(
+        tools.REGISTRY, "create_timer", Tool("create_timer", "d", TIMER_SCHEMA, spy)
+    )
+    return spy
+
+
+def _timer_call(call_id: str) -> dict:
+    return call_delta(
+        0, call_id=call_id, name="create_timer", arguments={"text": "blink", "in_minutes": 5}
+    )
+
+
+async def test_a_completion_claim_with_no_timer_call_redirects_with_tools_and_the_tool_runs(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    spy = _arm_create_timer(monkeypatch)
+    done = "Set — I'll nudge you to blink in 5 minutes; it lands here and on your devices."
+    gateway = ScriptedGateway(
+        rounds=((text(COMPLETION),), (_timer_call("r1"),), (text(done),))
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, REMINDER_INSTRUCTION)
+
+    assert gateway.calls == 3  # the claim, ONE redirect round with tools, the closing round
+    assert spy.calls == [{"text": "blink", "in_minutes": 5}]
+    assert await _stored_reply(pool) == done
+    assert _corrections(sent) == [chat.DEFERRAL_NOTE]
+
+    spans = await _deferral_spans(pool)
+    assert len(spans) == 1
+    meta = spans[0]["meta"]
+    assert meta["kind"] == "completion"
+    assert meta["detected"] is True
+    assert meta["action"] == "create_timer"
+    assert meta["redirected"] is True
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+
+async def test_a_completion_regen_that_still_claims_appends_the_honest_note(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    _arm_create_timer(monkeypatch)
+    gateway = ScriptedGateway(
+        rounds=((text(COMPLETION),), (text("Your blink reminder is set and running."),))
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, REMINDER_INSTRUCTION)
+
+    assert gateway.calls == 2  # the claim, then the one redirect — never a third
+    note = chat._completion_honest_note("set the reminder")
+    assert await _stored_reply(pool) == f"{COMPLETION}\n\n{note}"
+    assert _corrections(sent) == [note]
+
+    spans = await _deferral_spans(pool)
+    assert len(spans) == 1
+    meta = spans[0]["meta"]
+    assert meta["kind"] == "completion"
+    assert meta["redirected"] is False
+    assert meta["regen_rejected_by"] == "deferral"
+    assert await pool.fetchval("SELECT status FROM turns") == "ok"
+
+    await chat.drain_background()
+    assert memory.ingests == []

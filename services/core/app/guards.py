@@ -41,6 +41,7 @@ one — a real span exists, but not for the thing it said it did. Leniency
 runs the other way: a span whose target cannot be read (a memory note, a
 flooded-and-clipped argument record) counts as backing any claim of its kind.
 """
+
 from __future__ import annotations
 
 import re
@@ -94,8 +95,7 @@ _REMOVED_MODEL = re.compile(
 # and screen both show the contradiction, and the claim's kind/target land in
 # the guard span rather than in prose.
 CORRECTION_TEXT = (
-    "Correction: I did not actually do that — there is no record of the "
-    "action this turn."
+    "Correction: I did not actually do that — there is no record of the action this turn."
 )
 
 # Completed fetch verbs, as whole tokens. "read" appears here and in the read
@@ -125,6 +125,7 @@ _TRAILING_PUNCT = ".,;:!?)]}'\"`"
 
 def _strip_trailing_punct(text: str) -> str:
     return text.rstrip(_TRAILING_PUNCT)
+
 
 # Presenting a NAMED file's contents as a DUMP: "<file> contains the following"
 # or "<file> says:/reads:". Only a content dump counts — a descriptive
@@ -175,8 +176,24 @@ _ADD_VERB_TOKENS = frozenset({"added", "appended"})
 # is how hedged/negated active forms are suppressed without a separate blocker.
 _FIRST_PERSON = frozenset({"i", "i've", "i'd", "i'm"})
 _SUBJECT_SKIP = frozenset(
-    {"have", "has", "had", "just", "already", "also", "then", "now", "finally",
-     "recently", "went", "ahead", "and", "or", "since", "personally"}
+    {
+        "have",
+        "has",
+        "had",
+        "just",
+        "already",
+        "also",
+        "then",
+        "now",
+        "finally",
+        "recently",
+        "went",
+        "ahead",
+        "and",
+        "or",
+        "since",
+        "personally",
+    }
 )
 
 # The filename is the object of a completed active verb only if it is reached
@@ -187,14 +204,71 @@ _SUBJECT_SKIP = frozenset(
 # a.md and b.md") continues the list; otherwise it breaks.
 _LIST_CONT = frozenset({"and", "or", ","})
 _STOP_WORDS = frozenset(
-    {"but", "nor", "so", "yet", "plus", "because", "which", "who", "that",
-     "whom", "whose", "where", "when", "while", "since", "if", "unless",
-     "though", "although", "whereas", "before", "after", "once", "until",
-     "is", "are", "was", "were", "be", "been", "am", "can", "could", "will",
-     "would", "shall", "should", "may", "might", "must", "has", "have", "had",
-     "do", "does", "did", "need", "needs", "want", "wants", "seems", "looks",
-     "remains", "becomes", "stays", "you", "you'll", "you've", "we", "we'll",
-     "they", "he", "she"}
+    {
+        "but",
+        "nor",
+        "so",
+        "yet",
+        "plus",
+        "because",
+        "which",
+        "who",
+        "that",
+        "whom",
+        "whose",
+        "where",
+        "when",
+        "while",
+        "since",
+        "if",
+        "unless",
+        "though",
+        "although",
+        "whereas",
+        "before",
+        "after",
+        "once",
+        "until",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "am",
+        "can",
+        "could",
+        "will",
+        "would",
+        "shall",
+        "should",
+        "may",
+        "might",
+        "must",
+        "has",
+        "have",
+        "had",
+        "do",
+        "does",
+        "did",
+        "need",
+        "needs",
+        "want",
+        "wants",
+        "seems",
+        "looks",
+        "remains",
+        "becomes",
+        "stays",
+        "you",
+        "you'll",
+        "you've",
+        "we",
+        "we'll",
+        "they",
+        "he",
+        "she",
+    }
 )
 _STOP_PUNCT = frozenset({";", ":", "-", "–", "—", "(", ")", "[", "]", "!", "?"})
 _OBJECT_MAX_TOKENS = 12
@@ -212,8 +286,24 @@ _IDENTITY_CONN = frozenset({"as", "called", "named", "titled", "labeled", "label
 # lie's exact shape. This is the ONLY place a bare file noun matters, and only
 # because a real filename is tied to it.
 _FILE_HEAD_NOUNS = frozenset(
-    {"file", "files", "document", "documents", "doc", "docs", "note", "notes",
-     "memo", "readme", "script", "scripts", "page", "pages", "copy", "version"}
+    {
+        "file",
+        "files",
+        "document",
+        "documents",
+        "doc",
+        "docs",
+        "note",
+        "notes",
+        "memo",
+        "readme",
+        "script",
+        "scripts",
+        "page",
+        "pages",
+        "copy",
+        "version",
+    }
 )
 # Aboutness / oblique connectors: the filename after one of these is the TOPIC.
 # "as" is IDENTITY (saved it AS report.md), never aboutness.
@@ -224,13 +314,64 @@ _ABOUTNESS = frozenset({"of", "about", "on", "for", "regarding", "concerning", "
 # that DOES fill the slot (so a later filename is oblique unless a
 # destination/identity connector re-ties it).
 _DETERMINER_ADJ = frozenset(
-    {"a", "an", "the", "this", "that", "these", "those", "my", "your", "his",
-     "her", "its", "our", "their", "one", "another", "some", "any", "no",
-     "each", "every", "new", "old", "updated", "revised", "final", "first",
-     "second", "third", "latest", "initial", "complete", "entire", "whole",
-     "same", "short", "small", "brief", "quick", "simple", "plain", "draft",
-     "up", "back", "down", "out", "over", "here", "there", "above", "below",
-     "just", "also", "now", "then", "brand"}
+    {
+        "a",
+        "an",
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        "my",
+        "your",
+        "his",
+        "her",
+        "its",
+        "our",
+        "their",
+        "one",
+        "another",
+        "some",
+        "any",
+        "no",
+        "each",
+        "every",
+        "new",
+        "old",
+        "updated",
+        "revised",
+        "final",
+        "first",
+        "second",
+        "third",
+        "latest",
+        "initial",
+        "complete",
+        "entire",
+        "whole",
+        "same",
+        "short",
+        "small",
+        "brief",
+        "quick",
+        "simple",
+        "plain",
+        "draft",
+        "up",
+        "back",
+        "down",
+        "out",
+        "over",
+        "here",
+        "there",
+        "above",
+        "below",
+        "just",
+        "also",
+        "now",
+        "then",
+        "brand",
+    }
 )
 # Prepositions and adverbs that can FOLLOW the verb's object without being the
 # noun it modifies — "created groceries.md WITH the items", "wrote deploy.sh
@@ -238,11 +379,42 @@ _DETERMINER_ADJ = frozenset(
 # filename followed by a bare content noun ("config.yaml parsing logic") does
 # not (it is a pre-nominal modifier).
 _PREP_ADVERB = frozenset(
-    {"with", "from", "by", "at", "in", "per", "via", "without", "within",
-     "after", "before", "during", "through", "under", "since", "until",
-     "against", "toward", "towards", "today", "tonight", "yesterday",
-     "tomorrow", "again", "once", "twice", "soon", "later", "earlier",
-     "still", "yet", "too", "instead", "successfully"}
+    {
+        "with",
+        "from",
+        "by",
+        "at",
+        "in",
+        "per",
+        "via",
+        "without",
+        "within",
+        "after",
+        "before",
+        "during",
+        "through",
+        "under",
+        "since",
+        "until",
+        "against",
+        "toward",
+        "towards",
+        "today",
+        "tonight",
+        "yesterday",
+        "tomorrow",
+        "again",
+        "once",
+        "twice",
+        "soon",
+        "later",
+        "earlier",
+        "still",
+        "yet",
+        "too",
+        "instead",
+        "successfully",
+    }
 )
 
 # The filename is the SUBJECT of a passive/content claim, so its truth is
@@ -664,9 +836,7 @@ def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
     # backed fetch is clean regardless of the sentence punctuation the URL
     # was written with ("…/data." vs the span's "…/data").
     needle = _strip_trailing_punct(target.strip()).rsplit("/", 1)[-1].lower()
-    return any(
-        needle in _strip_trailing_punct((t or "").strip()).lower() for t in span_targets
-    )
+    return any(needle in _strip_trailing_punct((t or "").strip()).lower() for t in span_targets)
 
 
 def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
@@ -690,9 +860,7 @@ def narration_check(reply_text: str, spans: Sequence[Any]) -> Correction | None:
                 continue
             seen.add(key)
             if not _backed(kind, target, successful):
-                unbacked.append(
-                    UnbackedClaim(kind=kind, target=target, phrase=phrase.strip()[:80])
-                )
+                unbacked.append(UnbackedClaim(kind=kind, target=target, phrase=phrase.strip()[:80]))
     if not unbacked:
         return None
     return Correction(claims=tuple(unbacked))
@@ -1040,6 +1208,34 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "model_check_update",
     ),
+    (
+        # S9: "I can't set reminders" / "I'm unable to remind you" / "scheduling
+        # tasks is not something I can do" — a denial of the ability itself. A
+        # SPECIFIC refused attempt keeps its honesty: "I can't set a reminder for
+        # a time that has already passed", "I can't set a reminder until a
+        # timezone is set for this instance" (the tools' own refusals, relayed),
+        # "I can't remind you of what you said" (a memory statement) are about
+        # one time, one condition or one thing — not the ability. ONE lookahead
+        # on all three alternatives drops a condition/target tail (until,
+        # unless, without, before, at, on, in, of, about, for <anything but
+        # "you"> — `for\b` so a quoted or parenthesised object after "for" is a
+        # tail like any other: "for 'stretch' until…" is a relay, not a denial);
+        # without it the guard would put "Correction: I can do that" under an
+        # honest sentence and become the liar. Precision-first: "I can't set a
+        # reminder for you" still fires; "I can't set reminders in this
+        # version" is the accepted miss. "yet" is NOT a tail: "I can't set
+        # reminders yet" is exactly the false denial of an unshipped feature.
+        re.compile(
+            r"(?:set(?:ting)?\s+(?:up\s+)?(?:a\s+|an\s+|any\s+)?(?:reminder|timer|alarm)s?"
+            r"|remind(?:ing)?\s+(?:you|people|anyone)"
+            r"|schedul(?:e|ing)\s+(?:a\s+|an\s+|any\s+)?"
+            r"(?:reminder|timer|task|turn|instruction|message|check|job|anything|things?)s?)\b"
+            r"(?!\s+(?:until|unless|without|before|at|on|in|of|about|for\b(?!\s+you\b)"
+            r"|that\s+(?:has|is|was)|which\s+(?:has|is|was))\b)",
+            re.I,
+        ),
+        "create_timer",
+    ),
 )
 
 # A first-person, PRESENT-tense inability lead — the capability denied follows
@@ -1075,9 +1271,7 @@ def _capability_correction_text(tools_named: Sequence[str]) -> str:
     return f"Correction: I can do that — I have a tool for it ({listed})."
 
 
-def capability_claim_check(
-    reply_text: str, available_tools: Sequence[str]
-) -> Correction | None:
+def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> Correction | None:
     """Contradict a first-person denial of a capability a registered tool holds.
 
     Returns a Correction naming the wrongly-disowned tool(s), or None when the
@@ -1260,6 +1454,7 @@ def capability_claim_check(
 #     request word (check/tell/show/how/what/can/please/need/want…) — the
 #     terse "dell disk usage" is the accepted KNOWN MISS on that cut.
 
+
 # An action class: the phrase that names an action, the registered tools that
 # perform it, and the human phrase the redirect nudge and honest note read out.
 # `restated` is the OFFER-side-only form of the same action whose object is a
@@ -1319,12 +1514,8 @@ _FETCH_URL = _ActionClass(
         r"\b(?:" + _FETCH_VERB_ALTS + r")\s+(?:it|that|this|them|that\s+one)\b", re.I
     ),
 )
-# The COMMITMENT shape maps only these two: a text-only "do it now" regeneration
-# (chat._deferral_redirect) is the whole recovery for a commitment, and every
-# other class of promise is caught by bare_intent_check with a tools-advertised
-# redirect. Widening this tuple widens the commitment shape; the offer shape
-# below reads the full class table.
-_DEFERRAL_TOOLS: tuple[_ActionClass, ...] = (_WEB_SEARCH, _FETCH_URL)
+# The COMMITMENT shape's classes are declared below _SET_REMINDER (they are
+# read at import time, so the tuple must follow the classes it names).
 
 # The classes an INSTRUCTION can name and an OFFER can restate — the ones the
 # ruling lists (web search / fetch, list / read files, run a command, check a
@@ -1442,6 +1633,49 @@ _PULL_MODEL = _ActionClass(
     ),
 )
 
+# S9: "remind me in two minutes to stretch" / "set a reminder for 7" / "schedule
+# a daily summary at 7" instruct create_timer; "Want me to set a reminder?",
+# "Should I remind you?", "I can schedule that if you'd like" hand it back.
+# `reminds` (as in "that reminds me") needs the bare verb plus an object pronoun
+# and so never matches; "schedule" alone ("what's on my schedule?") needs a
+# timer-shaped noun after it, so a calendar question is not an instruction here.
+_TIMER_NOUN = r"(?:reminder|timer|alarm)"
+_SET_REMINDER = _ActionClass(
+    re.compile(
+        # "remind me what/of/how/where/who/why/about what…" asks for RECALL (a
+        # memory search), not a timer: "can you remind me what we discussed
+        # yesterday?" + "I can remind you of the details if you'd like" is a
+        # genuine offer, and the lookahead keeps it one. "remind me of the
+        # meeting at 3" is the accepted miss (precision-first).
+        # "nudge/ping/alert you" are the same promise in other words — the
+        # walk's exact reply was "I'll nudge you to blink every 5 minutes".
+        r"\b(?:remind|nudge|ping|alert)\s+(?:me|us|you|him|her|them)\b"
+        r"(?!\s+(?:what|of|how|where|who|why|about\s+what)\b)"
+        r"|\bset(?:ting)?\s+(?:up\s+)?(?:a\s+|an\s+|another\s+|the\s+|my\s+)?"
+        + _TIMER_NOUN
+        + r"s?\b"
+        r"|\bschedul(?:e|ing)\s+(?:a\s+|an\s+|another\s+|the\s+|my\s+)?(?:\w+\s+){0,2}?"
+        r"(?:reminder|timer|task|turn|check|summary|report|message|instruction|run|job)s?\b",
+        re.I,
+    ),
+    # create_timer is the tool an instruction/commitment of this class calls
+    # (registered_tool returns the first); the other two also COUNT as work
+    # of the class — after a real list_timers, "your reminder is running" is a
+    # report of what she read, not a fabrication.
+    ("create_timer", "list_timers", "cancel_timer"),
+    "set the reminder",
+    restated=re.compile(r"\b(?:set|schedule|create|add)\s+(?:it|that|this|one)(?:\s+up)?\b", re.I),
+)
+# The COMMITMENT shape maps these three: a text-only "do it now" regeneration
+# (chat._deferral_redirect) is the whole recovery for a commitment, and every
+# other class of promise is caught by bare_intent_check with a tools-advertised
+# redirect. _SET_REMINDER joined on 2026-09-07 from the S9 walk: "remind me
+# every 5 minutes to blink" was answered "Done — I'll nudge you to blink every
+# 5 minutes" with NO tool call — a promise that can only be kept by a timer
+# row, so a first-person commitment to remind with no create_timer span this
+# turn is exactly this shape. Widening this tuple widens the commitment shape;
+# the offer shape below reads the full class table.
+_DEFERRAL_TOOLS: tuple[_ActionClass, ...] = (_WEB_SEARCH, _FETCH_URL, _SET_REMINDER)
 _OFFER_CLASSES: tuple[_ActionClass, ...] = (
     *_DEFERRAL_TOOLS,
     _LIST_FILES,
@@ -1449,6 +1683,7 @@ _OFFER_CLASSES: tuple[_ActionClass, ...] = (
     _RUN_COMMAND,
     _CHECK_DEVICE,
     _PULL_MODEL,
+    _SET_REMINDER,
 )
 
 # A first-person future-commitment lead — the action follows it. "I'll" REQUIRES
@@ -1506,8 +1741,7 @@ _OFFER_LEAD = re.compile(
     r"\b(?:want|like|need|wish|prefer)\s+me\s+to\b"
     r"|\b(?:should|shall|could|can|may|might|would)\s+i\b"
     r"|\b(?:how\s+about|what\s+if)\s+i\b"
-    r"|" + _STATEMENT_OFFER.pattern
-    + r"|" + _COMMIT_LEAD.pattern,
+    r"|" + _STATEMENT_OFFER.pattern + r"|" + _COMMIT_LEAD.pattern,
     re.I,
 )
 # The "…me to" lead with HIS subject directly in front of it ("you want me to
@@ -1620,7 +1854,8 @@ class DeferralClaim:
     of doing it. `tool` is the registered tool that would satisfy it,
     `action_phrase` the human phrase the redirect/honest-note read out,
     `phrase` the matched text for the guard span, and `kind` which shape it
-    is — "commitment" or "offer"."""
+    is — "commitment", "offer", or "completion" (a present-tense claim that a
+    timer exists / is set with no timer tool span behind it, S9 walk)."""
 
     tool: str
     action_phrase: str
@@ -1655,9 +1890,7 @@ def _attempted(cls: _ActionClass, spans: Sequence[Any]) -> bool:
     return False
 
 
-def _instructed_classes(
-    user_message: str, registered: frozenset[str]
-) -> tuple[_ActionClass, ...]:
+def _instructed_classes(user_message: str, registered: frozenset[str]) -> tuple[_ActionClass, ...]:
     """The action classes the user's message INSTRUCTS, in table order — the
     same class table read against his text, restricted to classes with a
     registered tool (derived from the live registry, so a household without
@@ -1736,6 +1969,67 @@ def _restated_offer(
     return None
 
 
+# -- the COMPLETION shape of the deferral guard (S9 walk, 2026-09-07) ------
+#
+# The third shape, for the second lie the S9 walk caught: asked "remind me every
+# 5 minutes to blink" (after the commitment shape had learned "I'll nudge you"),
+# the model answered "Verified — your blink reminder is now running. It'll fire
+# every 5 minutes…" with ZERO tool calls. No commitment lead ("I'll"), no
+# file/url verb for narration, no device for the state guard — a claim that a
+# TIMER EXISTS, in the present tense, with nothing behind it. A timer exists only
+# as a row create_timer wrote, so the claim is backed by exactly one thing: a
+# successful timer tool span THIS turn (create_timer wrote it; list_timers or
+# cancel_timer read the rows it is reporting on). Same rules as the family:
+# PURE, PRECISION-first — a question, a negation before the claim ("no reminder
+# is set", "isn't running"), a quoted/relayed line, or a second-person "you can
+# set a reminder" is never a claim; the recovery is the offer shape's redirect
+# WITH TOOLS ADVERTISED, so the row gets written this time.
+_TIMER_STATE_NOUN = r"(?:reminder|timer|alarm|nudge|schedule)s?"
+_TIMER_COMPLETION = re.compile(
+    # "your blink reminder is now running", "the timer has been set", "reminders are scheduled"
+    rf"\b{_TIMER_STATE_NOUN}\s+(?:is|are|was|were|has\s+been|have\s+been)\s+"
+    r"(?:now\s+|all\s+|already\s+|officially\s+)?"
+    r"(?:set|running|active|scheduled|in\s+place|live|saved|created|added|armed)\b"
+    # "I've set a reminder", "I set up a daily timer", "I just scheduled the nudge"
+    rf"|\bi(?:['’]ve|\s+have|\s+just|\s+went\s+ahead\s+and)?\s+"
+    r"(?:set|scheduled|created|added|saved|started|armed)\s+(?:up\s+)?"
+    rf"(?:a\s+|an\s+|the\s+|your\s+|that\s+|this\s+|another\s+)?(?:[\w-]+\s+){{0,2}}?{_TIMER_STATE_NOUN}\b"
+    # "Reminder set (id …)" / "Timer scheduled." at the head of a sentence — the
+    # tool's own report shape, which is exactly what a fabrication imitates
+    rf"|(?:^|[.!?—–:-]\s*){_TIMER_STATE_NOUN}\s+(?:set|scheduled|created|added|armed)\b",
+    re.I,
+)
+_COMPLETION_NEGATION = re.compile(
+    r"\bno\b|\bnot\b|\bnever\b|n['’]t\b|\bwithout\b|\bcan(?:not|['’]t)\b|\bunable\b", re.I
+)
+
+
+def _timer_completion(
+    clause: str, registered: frozenset[str], successful: Sequence[Any]
+) -> DeferralClaim | None:
+    """The completion-shape verdict for one non-question clause: a DeferralClaim
+    (kind "completion") when the clause asserts that a timer exists / is set /
+    is running and no timer tool ran successfully this turn; None otherwise."""
+    tool = _SET_REMINDER.registered_tool(registered)
+    if tool is None:
+        return None  # no timers on this instance — nothing to claim about
+    if any(_tool_ran(name, successful) for name in _SET_REMINDER.tools):
+        return None  # she wrote or read the rows this turn: a report, not a claim
+    for m in _TIMER_COMPLETION.finditer(clause):
+        before = clause[: m.start()]
+        if _REPORTED.search(before) or _inside_quote(before):
+            continue  # relayed or quoted, not her own assertion
+        if _COMPLETION_NEGATION.search(before):
+            continue  # "no reminder is set" / "I couldn't set the reminder"
+        return DeferralClaim(
+            tool=tool,
+            action_phrase=_SET_REMINDER.action_phrase,
+            phrase=clause[m.start() : m.end()].strip()[:80],
+            kind="completion",
+        )
+    return None
+
+
 def deferral_check(
     reply_text: str,
     spans: Sequence[Any],
@@ -1789,6 +2083,11 @@ def deferral_check(
                 continue  # the reply said "let me search" and actually searched
             phrase = clause[lead.start() : m.end()].strip()
             return DeferralClaim(tool=tool, action_phrase=cls.action_phrase, phrase=phrase[:80])
+        # The COMPLETION shape: "your reminder is now running" / "I've set a
+        # reminder" with no timer tool span this turn (see its section).
+        completion = _timer_completion(clause, registered, successful)
+        if completion is not None:
+            return completion
         # A STATEMENT-form offer ("I can search the web for that.") — the same
         # instruction handed back without the question mark. Judged AFTER the
         # commitment shape so a mixed clause keeps kind="commitment", and only
@@ -1869,8 +2168,7 @@ def deferral_check(
 # mechanically true (no device tool ran this turn), never why, and never what
 # the state actually is — the guard has not checked either.
 STATE_CLAIM_CORRECTION = (
-    "Correction: I did not actually check the device this turn — I have no "
-    "record of doing so."
+    "Correction: I did not actually check the device this turn — I have no record of doing so."
 )
 
 # Every device tool is named device_* — the prefix IS the derivation (see the
@@ -1965,9 +2263,7 @@ def _state_patterns(names: tuple[str, ...]) -> tuple[re.Pattern[str], re.Pattern
     # "last seen …" read as a CURRENT staleness report. Its own branch because
     # the phrase is inherently past-referring — the prior-time suppressor that
     # protects the copula branch would eat every one of these.
-    last_seen = re.compile(
-        rf"\b{subject}\s+(?:was\s+|is\s+|has\s+been\s+)?last\s+seen\b", re.I
-    )
+    last_seen = re.compile(rf"\b{subject}\s+(?:was\s+|is\s+|has\s+been\s+)?last\s+seen\b", re.I)
     return assertion, last_seen
 
 
@@ -2213,9 +2509,7 @@ _BARE_INTENT_LEAD = (
 # The whole reply, ack optional, lead mandatory, then only trailing
 # punctuation/ellipsis — used with fullmatch, so anything past the bounded
 # object breaks the match.
-_BARE_INTENT_SHAPE = re.compile(
-    rf"(?:{_BARE_INTENT_ACK})?(?:{_BARE_INTENT_LEAD})[.!…]*", re.I
-)
+_BARE_INTENT_SHAPE = re.compile(rf"(?:{_BARE_INTENT_ACK})?(?:{_BARE_INTENT_LEAD})[.!…]*", re.I)
 # A flat present-tense commitment is never a maybe — these modals, plus the
 # family's own _OFFER_MARKER, rule out a hedge/offer before the shape match.
 _BARE_INTENT_HEDGE = re.compile(r"\b(?:could|might|may|would)\b", re.I)

@@ -1,46 +1,24 @@
 import { useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import {
-  MessageSquare,
-  Ellipsis,
-  X,
-  Activity,
-  FolderOpen,
-  Settings,
-  Gauge,
-} from 'lucide-react'
+import { Ellipsis, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { useMobileNav } from '../../hooks/useMobileNav'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
+import { navSections, type NavItem, type NavSection } from './Sidebar'
 
-type NavItem = {
-  to: string
-  label: string
-  icon: typeof MessageSquare
-  minRole: Role
-  presetVisibility?: SurfacePreset[]
-}
-
-// S1 nav config mirrors Sidebar.tsx: Chat as the sole primary tab, Settings
-// tucked into "More". SURFACE_PRESET is hardcoded to 'advanced' until a
+// The nav config is Sidebar's, DERIVED rather than copied: the unlabelled
+// (Core) sections are the primary tabs, every labelled section is tucked
+// into "More" — the same entries in the same order by construction. The two
+// lists used to be hand-mirrored and had drifted once (Governance was
+// missing here until S9). SURFACE_PRESET is hardcoded to 'advanced' until a
 // real feature-flag source lands — see brief adaptation notes.
-const primaryTabs: NavItem[] = [
-  { to: '/chat', label: 'Chat', icon: MessageSquare, minRole: 'guest' },
-]
+export const primaryTabs: NavItem[] = navSections
+  .filter(section => section.label === undefined)
+  .flatMap(section => section.items)
 
-const moreItems: { label?: string; items: NavItem[] }[] = [
-  {
-    label: 'System',
-    items: [
-      { to: '/quality', label: 'AI Quality', icon: Gauge, minRole: 'admin' },
-      { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },
-      { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
-      { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
-    ],
-  },
-]
+export const moreItems: NavSection[] = navSections.filter(section => section.label !== undefined)
 
 const SURFACE_PRESET: SurfacePreset = 'advanced'
 

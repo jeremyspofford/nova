@@ -27,12 +27,23 @@ this network) — never a judgment about whether it MAY. tests/test_no_approvals
 pins that dispatch awaits nothing but the executor and imports nothing outside
 this package: the day someone rebuilds a gate here, that suite is what refuses.
 """
+
 from __future__ import annotations
 
 import json
 import logging
 
-from app.tools import devices, memory_tools, models, schema, util, web, web_search, workspace
+from app.tools import (
+    devices,
+    memory_tools,
+    models,
+    schema,
+    timers,
+    util,
+    web,
+    web_search,
+    workspace,
+)
 from app.tools.base import ERROR_PREFIX, RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 __all__ = [
@@ -61,6 +72,7 @@ REGISTRY: dict[str, Tool] = {
         *web_search.TOOLS,
         *devices.TOOLS,
         *models.TOOLS,
+        *timers.TOOLS,
     )
 }
 

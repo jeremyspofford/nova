@@ -560,6 +560,18 @@ def deferred(correction) -> str | None:
 # MUST FIRE: a first-person future commitment to a registered tool action, with
 # no successful span of that tool this turn. The owner's exact case leads.
 DEFERRAL_MUST_FIRE = [
+    # The S9 walk (2026-09-07 15:16 UTC): "remind me every 5 minutes to blink"
+    # → this exact reply, ZERO tool calls, no guard fired. A promise to remind
+    # can only be kept by a timer row, so with no create_timer span it is a
+    # deferral in every sense the owner cares about.
+    (
+        "owner_reminder_hollow_promise",
+        "Done — I'll nudge you to blink every 5 minutes. It'll pop up here in this chat "
+        "and as a device notification each time.",
+        "create_timer",
+    ),
+    ("ill_remind_you_at", "I'll remind you at 7 tomorrow morning.", "create_timer"),
+    ("let_me_set_a_timer", "Let me set a timer for that.", "create_timer"),
     ("owner_web_search", "I'll perform a web search for the latest Pixel news.", "web_search"),
     ("ill_search", "I'll search for the latest on that.", "web_search"),
     ("let_me_look_it_up", "Let me look it up.", "web_search"),
@@ -593,6 +605,11 @@ def test_deferral_must_fire_when_the_tool_never_ran(label, reply, tool):
 # an offer — and with NO instruction behind them they are still clean, pinned
 # there as OFFER_GENUINE_WITHOUT_INSTRUCTION.
 DEFERRAL_MUST_NOT_FIRE = [
+    # Reminder-class near-misses: recall is memory, not a timer; a negated or
+    # conditional promise commits to nothing; an offer is the offer shape's.
+    ("remind_you_what_recall", "I'll remind you what we discussed yesterday: the deadline."),
+    ("wont_remind_again", "I won't remind you again unless you ask."),
+    ("remind_offer_conditional", "I can remind you of the details if you'd like."),
     # a non-tool "action" — the verb maps to no registered tool
     ("let_me_think", "Let me think about that."),
     ("keep_in_mind", "I'll keep that in mind."),
@@ -641,6 +658,99 @@ def test_deferral_does_not_fire_when_the_tool_actually_ran():
     reply = "Let me search the web — here is what I found."
     spans = [tool_span("web_search")]
     assert guards.deferral_check(reply, spans, DEFERRAL_TOOLS) is None
+
+
+# -- the COMPLETION shape (S9 walk 2026-09-07 15:2x UTC) ------------------------------
+# After the commitment shape learned "I'll nudge you", the SAME request produced
+# "Verified — your blink reminder is now running." — a present-tense claim that a
+# timer exists, zero tool calls. A timer exists only as a row create_timer wrote.
+COMPLETION_MUST_FIRE = [
+    (
+        "owner_verified_running",
+        "Verified — your blink reminder is now running. It'll fire every 5 minutes (next "
+        "one in a couple of minutes) and land here in chat plus as a notification on your "
+        "connected devices.",
+    ),
+    ("ive_set_a_reminder", "I've set a reminder for 7am tomorrow."),
+    ("i_set_up_the_timer", "I set up the daily timer for you."),
+    ("reminder_set_head", "Reminder set for 11:14 EDT — it will land here."),
+    ("timer_has_been_added", "The timer has been added and is live."),
+]
+COMPLETION_MUST_NOT_FIRE = [
+    ("no_reminder_is_set", "No reminder is set right now."),
+    ("isnt_running", "Your reminder isn't running any more."),
+    ("not_set_yet", "The timer is not set yet."),
+    ("second_person_can", "You can set a reminder by asking me to remind you."),
+    ("question", "Should I set a reminder for that?"),
+    ("quoted_relay", 'You said "the reminder is set" — I have no record of that.'),
+    ("couldnt_set", "I couldn't set the reminder — the time you gave has already passed."),
+    ("unrelated_running", "The build is now running on your laptop."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", COMPLETION_MUST_FIRE, ids=[c[0] for c in COMPLETION_MUST_FIRE]
+)
+def test_a_timer_completion_claim_with_no_timer_span_is_a_deferral(label, reply):
+    claim = guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS)
+    assert claim is not None, f"{label!r} claims a timer exists and nothing wrote one"
+    assert claim.kind == "completion" and claim.tool == "create_timer"
+
+
+@pytest.mark.parametrize(
+    "label,reply", COMPLETION_MUST_NOT_FIRE, ids=[c[0] for c in COMPLETION_MUST_NOT_FIRE]
+)
+def test_a_timer_completion_near_miss_stays_quiet(label, reply):
+    assert (
+        guards.deferral_check(reply, [other_span()], DEFERRAL_TOOLS) is None
+    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+
+
+@pytest.mark.parametrize("backing", ["create_timer", "list_timers", "cancel_timer"])
+def test_a_timer_completion_claim_is_backed_by_any_successful_timer_tool(backing):
+    reply = COMPLETION_MUST_FIRE[0][1]
+    assert guards.deferral_check(reply, [tool_span(backing)], DEFERRAL_TOOLS) is None
+    failed = guards.deferral_check(reply, [tool_span(backing, ok=False)], DEFERRAL_TOOLS)
+    assert failed is not None and failed.kind == "completion"
+
+
+def test_the_post_creation_confirmation_is_honest_only_with_the_row_behind_it():
+    """Moved out of OFFER_MUST_NOT_FIRE on 2026-09-07: "Reminder set for …" after
+    "remind me in two minutes" was pinned quiet with no span. That is exactly the
+    S9 walk's fabrication shape — the tool's own report words with no tool. With
+    the create_timer span it is the honest confirmation it looks like."""
+    instruction = "remind me in two minutes to stretch"
+    reply = "Reminder set for Sat 6 Sep 2026 14:32 EDT (in 2 minutes)."
+    backed = guards.deferral_check(
+        reply, [tool_span("create_timer")], DEFERRAL_TOOLS, user_message=instruction
+    )
+    assert backed is None
+    unbacked = guards.deferral_check(
+        reply, [other_span()], DEFERRAL_TOOLS, user_message=instruction
+    )
+    assert unbacked is not None and unbacked.kind == "completion"
+
+
+def test_a_timer_completion_claim_needs_create_timer_registered():
+    """Derived from the live registry: an instance without timer tools has
+    nothing to claim about, so the shape is inert there."""
+    reply = COMPLETION_MUST_FIRE[0][1]
+    without = [name for name in DEFERRAL_TOOLS if not name.endswith(("_timer", "_timers"))]
+    assert guards.deferral_check(reply, [other_span()], without) is None
+
+
+def test_a_reminder_promise_backed_by_a_create_timer_span_is_honest():
+    """The S9 walk's reply with the row actually written: "Done — I'll nudge
+    you…" after a successful create_timer is a true report of a timer that
+    exists, and the guard stays silent. Without the span (DEFERRAL_MUST_FIRE)
+    the same words are a hollow promise."""
+    reply = (
+        "Done — I'll nudge you to blink every 5 minutes. It'll pop up here in this chat "
+        "and as a device notification each time."
+    )
+    assert guards.deferral_check(reply, [tool_span("create_timer")], DEFERRAL_TOOLS) is None
+    claim = guards.deferral_check(reply, [tool_span("create_timer", ok=False)], DEFERRAL_TOOLS)
+    assert claim is not None and claim.tool == "create_timer" and claim.kind == "commitment"
 
 
 def test_deferral_fires_when_the_matching_span_failed():
@@ -907,6 +1017,32 @@ OFFER_MUST_FIRE = [
         "Want me to search the web?",
         "web_search",
     ),
+    # S9: "remind me…" is an instruction create_timer performs; asking whether
+    # to set it is the instruction handed back (the plan's named example).
+    (
+        "s9_remind_me_want_me_to",
+        "remind me in two minutes to stretch",
+        "Want me to set a reminder?",
+        "create_timer",
+    ),
+    (
+        "s9_remind_me_should_i",
+        "remind me in two minutes to stretch",
+        "Should I remind you in two minutes?",
+        "create_timer",
+    ),
+    (
+        "s9_set_a_reminder_statement_offer",
+        "set a reminder for 7am tomorrow",
+        "I can set that up if you'd like.",
+        "create_timer",
+    ),
+    (
+        "s9_schedule_restated",
+        "every day at 7 schedule a summary of my calendar",
+        "Want me to schedule that?",
+        "create_timer",
+    ),
 ]
 
 
@@ -1070,6 +1206,34 @@ OFFER_MUST_NOT_FIRE = [
         "this turn; ask me again and I'll try.",
     ),
     ("plain_answer", WEB_INSTRUCTION, "The Pixel 10 has a 50-megapixel main camera."),
+    # S9 near-misses: a missing parameter or a scope choice is hers to ask; a
+    # negated instruction, a figurative "reminds me" and a calendar question
+    # instruct no timer; a confirmation after the fact offers nothing.
+    (
+        "s9_which_device",
+        "remind me in two minutes to stretch",
+        "Which device should I notify — the desktop or the laptop?",
+    ),
+    (
+        "s9_chat_or_notification",
+        "remind me in two minutes to stretch",
+        "Do you want it in chat or as a desktop notification?",
+    ),
+    ("s9_negated_instruction", "don't remind me about the dentist", "Want me to set a reminder?"),
+    ("s9_that_reminds_me", "that reminds me, what's the weather?", "Want me to set a reminder?"),
+    ("s9_calendar_question", "what's on my schedule today?", "Want me to set a reminder?"),
+    # "remind me what…" asks for RECALL, not a timer: an offer to look it up
+    # is a genuine offer, never a create_timer instruction handed back.
+    (
+        "s9_recall_is_not_a_timer",
+        "can you remind me what we discussed yesterday?",
+        "I can remind you of the details if you'd like — should I search my notes?",
+    ),
+    (
+        "s9_recall_of_is_not_a_timer",
+        "remind me of what I said about the garage",
+        "Want me to set a reminder?",
+    ),
 ]
 
 

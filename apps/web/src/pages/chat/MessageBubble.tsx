@@ -1,5 +1,5 @@
 import { memo } from 'react'
-import { AlertTriangle, Cpu, Loader2, Unplug } from 'lucide-react'
+import { AlertTriangle, BellRing, CalendarClock, Cpu, Loader2, Unplug } from 'lucide-react'
 import { Markdown } from '../../components/Markdown'
 import type { ErrorRow, MessageRow } from './chatReducer'
 
@@ -49,6 +49,35 @@ function ActivityLine({ activity }: { activity: NonNullable<MessageRow['activity
   )
 }
 
+/**
+ * The label an assistant row earns when a timer firing wrote it (S9): a
+ * `reminder` (code delivered his own words — no model) or a `scheduled` turn
+ * (an instruction she ran while nobody was watching). Keyed by `turns.kind`
+ * as GET .../messages derived it onto the row — never a stored flag, never
+ * inferred from the text, so a reply that merely SAYS "Reminder:" earns
+ * nothing, and a kind this map has not met ('chat', 'job', anything future)
+ * shows nothing rather than a guess.
+ */
+const TURN_KIND_LABEL: Record<string, { label: string; Icon: typeof BellRing }> = {
+  reminder: { label: 'Reminder', Icon: BellRing },
+  scheduled: { label: 'Scheduled', Icon: CalendarClock },
+}
+
+function TurnKindLabel({ kind }: { kind: string }) {
+  const entry = TURN_KIND_LABEL[kind]
+  if (!entry) return null
+  return (
+    <p
+      data-testid="turn-kind-label"
+      title={`this row was written by a ${kind} timer firing — see Schedules`}
+      className="mb-1 inline-flex items-center gap-1 text-micro font-medium uppercase tracking-wider text-accent"
+    >
+      <entry.Icon size={11} className="shrink-0" />
+      {entry.label}
+    </p>
+  )
+}
+
 function LoadingDots() {
   return (
     <span className="inline-flex items-center gap-1 py-1" aria-label="waiting for the model">
@@ -80,6 +109,7 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
         </div>
       </div>
       <div className="flex-1 min-w-0 pb-1">
+        {row.turnKind !== null && <TurnKindLabel kind={row.turnKind} />}
         {/* Her replies are GitHub-flavoured markdown (components/Markdown.tsx:
             sanitised, raw HTML shown as text, never executed). The user's own
             bubble above stays plain pre-wrap text — what the owner typed is

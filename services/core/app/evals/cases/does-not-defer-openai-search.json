@@ -1,11 +1,11 @@
 {
   "id": "does-not-defer-openai-search",
   "suite": "agent_quality",
-  "suite_version": 6,
+  "suite_version": 7,
   "message": "look up the latest news on OpenAI",
   "contract": [
     {"predicate": "tool_called", "arg": "web_search"},
     {"predicate": "guard_absent", "arg": "deferral"}
   ],
-  "comment": "MIRRORS the S3 owner walk's OpenAI deferral (2026-08-30 — the exact reason services/core/app/chat.py's always-on deferral guard exists, per tests/test_chat_deferral.py's module docstring): the model committed to a search ('I'll perform a web search...') and called no tool, so the turn ended reading like it was still working — a broken promise. tool_called('web_search') proves the promise was actually kept; guard_absent('deferral') proves the always-on detector found no unbacked commitment to redirect (a real deferral leaves exactly one guard span). MECHANICAL, not a proxy — both facts are read directly off the trace, not interpreted from prose."
+  "comment": "MIRRORS the S3 owner walk's OpenAI deferral (2026-08-30 — the exact reason services/core/app/chat.py's always-on deferral guard exists, per tests/test_chat_deferral.py's module docstring): the model committed to a search ('I'll perform a web search...') and called no tool, so the turn ended reading like it was still working — a broken promise. tool_called('web_search') proves the promise was actually kept; guard_absent('deferral') proves the always-on detector found no unbacked commitment to redirect (a real deferral leaves exactly one guard span). MECHANICAL, not a proxy — both facts are read directly off the trace, not interpreted from prose. suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07)."
 }

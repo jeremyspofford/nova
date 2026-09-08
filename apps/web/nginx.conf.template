@@ -321,6 +321,35 @@ server {
         chunked_transfer_encoding on;
     }
 
+    # "Run now" on a `scheduled` timer runs a whole model turn INLINE (S9 T3: the
+    # firing goes through the same claim as the tick's and the page renders the
+    # firing row core returns), which routinely outlasts the generic /api/
+    # location's 60 s read timeout — nginx would 504 the page while core keeps
+    # running the firing, and the page would show a failed "Run now" for a
+    # firing that then reads ok on the next poll. Same long timeouts as the
+    # chat stream. Regex locations are matched after the prefix ones, so this
+    # wins over `/api/` for exactly these URIs.
+    location ~ ^/api/v1/timers/[^/]+/fire$ {
+        include /etc/nginx/gate/gate_check.conf;
+        set $core_upstream http://core:8000;
+        proxy_pass $core_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;
+        proxy_set_header Tailscale-User-Login $ts_user_login_upstream;
+        proxy_set_header Tailscale-User-Name $ts_user_name_upstream;
+        proxy_set_header Tailscale-User-Profile-Pic $ts_user_pic_upstream;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        gzip off;
+        chunked_transfer_encoding on;
+    }
+
     # ── The daemon WebSocket ───────────────────────────────────────────────
     # A paired device (novad) holds an outbound WebSocket to core through this
     # one origin — the same origin the phone uses. This is the ONLY
