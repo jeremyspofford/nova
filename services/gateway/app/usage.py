@@ -593,6 +593,12 @@ async def record_probe(
 # ── caps ───────────────────────────────────────────────────────────────────
 
 
+def money(value: Decimal) -> str:
+    """Dollars in words: cents when there are any, four places for a
+    sub-cent figure (a $0.0005 cap must not read as $0.00)."""
+    return f"${value:.2f}" if value >= Decimal("0.01") or value == 0 else f"${value:.4f}"
+
+
 def month_start(now: datetime, timezone: str) -> datetime:
     """The first instant of the current month in the owner's zone."""
     zone = ZoneInfo(valid_timezone(timezone))
@@ -650,14 +656,14 @@ async def over_cap(pool: asyncpg.Pool, row: dict, timezone: str) -> str | None:
     if own is not None:
         used = await spent(pool, row["name"], since)
         if used >= own:
-            return f"{row['name']} over its monthly cap ${own:.2f} (spent ${used:.2f})"
+            return f"{row['name']} over its monthly cap {money(own)} (spent {money(used)})"
     total = limits.get(TOTAL_CAP)
     if total is not None:
         used_all = await spent(pool, None, since)
         if used_all >= total:
             return (
-                f"all cloud providers over the monthly total cap ${total:.2f} "
-                f"(spent ${used_all:.2f})"
+                f"all cloud providers over the monthly total cap {money(total)} "
+                f"(spent {money(used_all)})"
             )
     return None
 

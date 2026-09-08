@@ -22,7 +22,9 @@ BASIS_WORDS = {
 
 
 def _usd(value) -> str:
-    return f"${value:,.4f}" if isinstance(value, int | float) else "no dollar figure"
+    if not isinstance(value, int | float):
+        return "no dollar figure"
+    return f"${value:,.2f}" if value >= 0.01 or value == 0 else f"${value:,.4f}"
 
 
 def _minutes(seconds) -> str:
@@ -63,7 +65,7 @@ def describe(report: dict) -> str:
     month_cap = totals.get("month_cap_usd")
     if month_cap is not None:
         lines.append(
-            f"Monthly total cap ${month_cap:,.2f}: spent {_usd(totals.get('month_usd'))} "
+            f"Monthly total cap {_usd(month_cap)}: spent {_usd(totals.get('month_usd'))} "
             "this month."
         )
     providers = report.get("by_provider") or []
@@ -77,11 +79,13 @@ def describe(report: dict) -> str:
                 )
                 continue
             cap = p.get("cap_usd")
-            cap_words = (
-                f"; cap ${cap:,.2f}/month, ${p.get('remaining_usd') or 0:,.2f} left"
-                if cap is not None
-                else "; no cap"
-            )
+            remaining = p.get("remaining_usd")
+            if cap is None:
+                cap_words = "; no cap"
+            elif isinstance(remaining, int | float) and remaining <= 0:
+                cap_words = f"; cap {_usd(cap)}/month — OVER the cap, calls fall back"
+            else:
+                cap_words = f"; cap {_usd(cap)}/month, {_usd(remaining)} left"
             unmetered = f", {p['unmetered']} unmetered" if p.get("unmetered") else ""
             lines.append(
                 f"  - {p['provider']}: {_usd(p.get('usd'))} over {p.get('calls', 0)} calls"

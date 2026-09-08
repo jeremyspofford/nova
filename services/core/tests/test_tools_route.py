@@ -38,14 +38,16 @@ EXPLAIN = {
 
 def test_describe_reads_every_link_and_quotes_the_gateways_reason():
     text = route.describe(EXPLAIN)
-    assert text.splitlines()[0] == "Routing for the chat role, right now:"
+    # The answer first: a small model reads the top line and stops.
+    assert text.splitlines()[0] == (
+        "Answer: ollama:qwen3:8b serves the chat role right now because it " + FALLBACK + "."
+    )
+    assert text.splitlines()[1] == "The chat chain, link by link:"
     assert (
         "1. openrouter:gpt-x: skipped — over its cap "
         "(openrouter over its monthly cap $10.00 (spent $10.20))" in text
     )
     assert "2. ollama:qwen3:8b: would serve" in text
-    assert "Would serve: ollama:qwen3:8b (link 2)." in text
-    assert "Reason: fell back to link 2" in text
     assert route.describe(
         {"role": "judge", "chain": [], "would_serve": None, "reason": "no chain"}
     ).endswith("Nothing could serve: no chain")
@@ -56,8 +58,16 @@ async def test_the_tool_asks_the_gateway_with_the_role_and_model(pool, mount_pee
     mount_peers(gateway=gateway)
     ctx = ToolContext(app=app, person=None, workspace_root=tmp_path)
     text = await route.route_explain({"role": "chat", "model": "openrouter:gpt-x"}, ctx)
-    assert "Would serve: ollama:qwen3:8b" in text
+    assert "Answer: ollama:qwen3:8b serves the chat role" in text
     assert gateway.queries[-1] == b"role=chat&model=openrouter%3Agpt-x"
+    # No model named for chat: the tool reads chat.model itself — link 1 is
+    # the owner's pick, never left for her to remember.
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('chat.model', '\"openrouter:gpt-y\"'::jsonb) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+    )
+    await route.route_explain({"role": "chat"}, ctx)
+    assert gateway.queries[-1] == b"role=chat&model=openrouter%3Agpt-y"
     try:
         await route.route_explain({"role": "vibes"}, ctx)
     except ToolFailure as exc:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import httpx
 
-from app import peers
+from app import db, peers, settings_store
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 ROLES = ("chat", "scheduled", "judge", "coding", "vision")
@@ -19,7 +19,21 @@ EXPLAIN_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 def describe(body: dict) -> str:
     role = body.get("role")
     chain = body.get("chain") or []
-    lines = [f"Routing for the {role} role, right now:"]
+    serve = body.get("would_serve")
+    # The answer FIRST, in one sentence — a small model reads the top line
+    # and stops; the walk below is the evidence.
+    if serve and serve.get("reason"):
+        lines = [
+            f"Answer: {serve.get('served_by')} serves the {role} role right now because it "
+            f"{serve['reason']}."
+        ]
+    elif serve:
+        lines = [
+            f"Answer: {serve.get('served_by')} serves the {role} role right now (its first choice)."
+        ]
+    else:
+        lines = [f"Answer: nothing can serve the {role} role right now — {body.get('reason')}."]
+    lines.append(f"The {role} chain, link by link:")
     for v in chain:
         verdict = v.get("verdict")
         reason = v.get("reason")
@@ -35,13 +49,6 @@ def describe(body: dict) -> str:
         lines.append(
             f"  {v.get('link')}. {v.get('id')}: {state}" + (f" ({reason})" if reason else "")
         )
-    serve = body.get("would_serve")
-    if serve:
-        lines.append(f"Would serve: {serve.get('served_by')} (link {serve.get('link')}).")
-        if serve.get("reason"):
-            lines.append(f"Reason: {serve['reason']}")
-    else:
-        lines.append(f"Nothing could serve: {body.get('reason')}")
     return "\n".join(lines)
 
 
@@ -50,8 +57,17 @@ async def route_explain(args: dict, ctx: ToolContext) -> str:
     if role not in ROLES:
         raise ToolFailure(f"role must be one of {', '.join(ROLES)}")
     params = {"role": role}
-    if args.get("model"):
-        params["model"] = str(args["model"])
+    model = str(args.get("model") or "")
+    if not model and role == "chat":
+        # The chat chain's link 1 is the model picked in chat — read here,
+        # never left for her to remember to pass (the first live walk asked
+        # without it and was told about the fallbacks alone).
+        try:
+            model = str(await settings_store.read_value(await db.get_pool(), "chat.model") or "")
+        except Exception:  # noqa: BLE001 — the walk still answers, about the chain
+            model = ""
+    if model:
+        params["model"] = model
     try:
         async with peers.client(ctx.app, peers.GATEWAY, EXPLAIN_TIMEOUT) as client:
             resp = await client.get("/admin/route/explain", params=params)
