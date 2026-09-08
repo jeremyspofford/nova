@@ -43,6 +43,7 @@ ROUTES = [
         None,
     ),
     ("GET", "/api/v1/models/catalog/resolve", "/admin/catalog/resolve", None),
+    ("POST", "/api/v1/models/catalog/drift", "/admin/catalog/drift", {"model": "qwen3:8b"}),
 ]
 
 

@@ -32,7 +32,7 @@ const INSTALLED = row({
   capabilities: { tools: { value: true, basis: 'declared', source: 'ollama-show' } },
   suitability: { 'coding:inferred': { value: true, basis: 'inferred', source: 'name', note: 'name matches /coder/' } },
   fit: { verdict: 'comfortable', needed_gb: 10, free_gb: 24, total_gb: 24, source: 'estimated', reason: null },
-  actions: ['use', 'probe'],
+  actions: ['use', 'probe', 'check_update'],
 })
 const AVAILABLE = row({ id: 'ollama:qwen3:4b', label: 'Qwen3 4B', installed: false, actions: ['pull'] })
 const CLOUD = row({
@@ -75,7 +75,7 @@ async function* lines(items: PullLine[]) {
 }
 
 function renderPage(
-  api: Partial<Record<'getCatalog' | 'searchHf' | 'getHfRepo' | 'resolveModel' | 'probeModel' | 'pullModel' | 'putSetting' | 'getSettings', ReturnType<typeof vi.fn>>> = {},
+  api: Partial<Record<'getCatalog' | 'searchHf' | 'getHfRepo' | 'resolveModel' | 'probeModel' | 'pullModel' | 'putSetting' | 'getSettings' | 'checkDrift', ReturnType<typeof vi.fn>>> = {},
 ) {
   const full = {
     getCatalog: vi.fn(async () => CATALOG),
@@ -109,6 +109,15 @@ function renderPage(
     ),
     putSetting: vi.fn(async () => undefined),
     getSettings: vi.fn(async () => SETTINGS),
+    checkDrift: vi.fn(async () => ({
+      model: 'qwen3:8b',
+      checked_at: '2026-09-07T12:00:00Z',
+      installed_digest: 'sha256:' + 'a'.repeat(64),
+      upstream_digest: 'sha256:' + 'a'.repeat(64),
+      moved: false,
+      basis: 'weights-digest',
+      source: 'ollama-registry',
+    })),
     ...api,
   }
   return {
@@ -389,5 +398,54 @@ describe('ModelsPage', () => {
       }),
     })
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('the gateway is unreachable'))
+  })
+
+  it('Check for updates compares digests without pulling, and a moved source offers Update', async () => {
+    const { api } = renderPage()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'check updates ollama:qwen3:8b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'check updates ollama:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByTestId('drift-ollama:qwen3:8b').textContent).toContain('up to date'))
+    expect(api.checkDrift).toHaveBeenCalledWith('qwen3:8b')
+    expect(api.pullModel).not.toHaveBeenCalled()
+
+    api.checkDrift.mockResolvedValue({
+      model: 'qwen3:8b',
+      checked_at: '2026-09-07T12:00:00Z',
+      installed_digest: 'sha256:' + 'a'.repeat(64),
+      upstream_digest: 'sha256:' + 'b'.repeat(64),
+      moved: true,
+      basis: 'weights-digest',
+      source: 'ollama-registry',
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'check updates ollama:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByTestId('drift-ollama:qwen3:8b').textContent).toContain('update available'))
+    fireEvent.click(screen.getByRole('button', { name: 'update ollama:qwen3:8b' }))
+    await waitFor(() => expect(api.pullModel).toHaveBeenCalled())
+    expect(api.pullModel.mock.calls[0][0]).toBe('qwen3:8b')
+
+    api.checkDrift.mockResolvedValue({
+      model: 'qwen3:8b',
+      checked_at: '2026-09-07T12:00:00Z',
+      installed_digest: 'sha256:' + 'a'.repeat(64),
+      upstream_digest: null,
+      moved: null,
+      basis: 'weights-digest',
+      source: null,
+      note: 'the source could not be read — registry.ollama.ai timed out',
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    fireEvent.click(screen.getByRole('button', { name: 'check updates ollama:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByTestId('drift-ollama:qwen3:8b').textContent).toContain('could not tell: the source could not be read'))
+  })
+
+  it('a measured suitability tag links to the quality page', async () => {
+    const measured = {
+      ...INSTALLED,
+      suitability: { agent_quality: { value: 0.857, basis: 'measured', source: 'core-evals', at: '2026-09-04T00:00:00Z' } },
+    }
+    renderPage({ getCatalog: vi.fn(async () => ({ ...CATALOG, rows: [measured] })) })
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    const link = screen.getByRole('link', { name: /agent_quality 86%/ })
+    expect(link.getAttribute('href')).toBe('/quality')
   })
 })

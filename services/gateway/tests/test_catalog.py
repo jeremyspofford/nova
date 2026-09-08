@@ -111,7 +111,7 @@ async def test_installed_rows_carry_ollamas_own_facts_and_the_vetted_layer(clien
     vetted = [k for k, f in row["suitability"].items() if f["basis"] == "vetted"]
     assert vetted and all(row["suitability"][k]["at"] for k in vetted)
     assert row["label"] == "Qwen3 8B"
-    assert row["actions"] == ["use", "probe"]
+    assert row["actions"] == ["use", "probe", "check_update"]  # S10a-2: drift from the row
     assert row["fit"]["verdict"] in {"comfortable", "tight", "wont_fit", "unknown"}
     sources = {s["key"]: s for s in body["sources"]}
     assert sources["ollama"]["ok"] is True and sources["ollama"]["rows"] == 2
@@ -416,3 +416,90 @@ def test_curated_use_cases_are_from_the_fixed_taxonomy():
     for entry in curated_mod.load_curated():
         assert entry["use_cases"], entry["slug"]
         assert set(entry["use_cases"]) <= set(curated_mod.USE_CASES), entry["slug"]
+
+
+# ── drift (S10a-2): has the source moved since the pull? ───────────────────
+
+WEIGHTS_BLOB = "FROM /root/.ollama/models/blobs/sha256-" + "a" * 64 + "\n"
+
+
+def test_installed_weights_digest_reads_the_modelfiles_blob():
+    assert catalog.installed_weights_digest({"modelfile": WEIGHTS_BLOB}) == "sha256:" + "a" * 64
+    # A path the live stack writes (2026-09-07), a Windows-style path, upper-case hex.
+    assert (
+        catalog.installed_weights_digest(
+            {"modelfile": "# Modelfile\nFROM C:\\blobs\\sha256-" + "A" * 64 + "\nTEMPLATE x"}
+        )
+        == "sha256:" + "a" * 64
+    )
+    assert (
+        catalog.installed_weights_digest({"modelfile": "FROM /models/blobs/sha256-abc\n"}) is None
+    )
+    assert catalog.installed_weights_digest({}) is None
+
+
+async def test_drift_compares_the_installed_blob_with_the_registrys_model_layer(
+    client, local, mount_backend
+):
+    local.show["qwen3:8b"]["modelfile"] = WEIGHTS_BLOB
+    registry = FakeOllamaRegistry(manifests={"library/qwen3/8b": MANIFEST})
+    mount_backend(ollama_registry.REGISTRY_BASE, registry.app)
+
+    resp = await client.post("/admin/catalog/drift", json={"model": "qwen3:8b"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["moved"] is False and body["basis"] == "weights-digest"
+    assert body["installed_digest"] == body["upstream_digest"] == "sha256:" + "a" * 64
+    assert body["source"] == "ollama-registry" and "note" not in body
+    assert not any(p == "/api/pull" for p, _ in local.seen), "a check never pulls"
+
+    moved = {
+        **MANIFEST,
+        "layers": [
+            {**layer, "digest": "sha256:" + "b" * 64}
+            if layer["mediaType"].endswith(".model")
+            else layer
+            for layer in MANIFEST["layers"]
+        ],
+    }
+    registry.manifests["library/qwen3/8b"] = moved
+    ollama_registry.clear()
+    body = (await client.post("/admin/catalog/drift", json={"model": "qwen3:8b"})).json()
+    assert body["moved"] is True and body["upstream_digest"] == "sha256:" + "b" * 64
+
+
+async def test_drift_for_a_hub_pull_compares_the_ggufs_sha256(client, local, mount_backend):
+    repo = HUB_ENTRY["id"]
+    name = f"hf.co/{repo}:Q4_K_M"
+    local.tags = (name,)
+    quant = hf_hub.find_quant(hf_hub.quants_of(SIBLINGS), "Q4_K_M")
+    local.show[name] = {
+        **local.show.get("qwen3:8b", {}),
+        "modelfile": f"FROM /blobs/sha256-{quant['sha256']}\n",
+    }
+    mount_backend(hf_hub.HF_BASE, FakeHFHub(repos={repo: {**HUB_ENTRY, "siblings": SIBLINGS}}).app)
+
+    body = (await client.post("/admin/catalog/drift", json={"model": name})).json()
+
+    assert body["moved"] is False and body["source"] == "hf-hub"
+    assert body["installed_digest"] == f"sha256:{quant['sha256']}"
+
+
+async def test_drift_says_why_when_a_side_cannot_be_read(client, local, mount_backend, monkeypatch):
+    not_installed = await client.post("/admin/catalog/drift", json={"model": "nope:1b"})
+    assert not_installed.status_code == 404 and "not installed" in not_installed.json()["error"]
+
+    # The Modelfile names no blob: unstated, not "up to date".
+    body = (await client.post("/admin/catalog/drift", json={"model": "qwen3:8b"})).json()
+    assert body["moved"] is None and "states no weights blob" in body["note"]
+
+    # The registry is down: unstated, in its words.
+    local.show["qwen3:8b"]["modelfile"] = WEIGHTS_BLOB
+    monkeypatch.setattr(ollama_registry, "REGISTRY_BASE", "http://127.0.0.1:1")
+    body = (await client.post("/admin/catalog/drift", json={"model": "qwen3:8b"})).json()
+    assert body["moved"] is None and body["note"].startswith("the source could not be read")
+    assert body["installed_digest"] == "sha256:" + "a" * 64
+
+    bad = await client.post("/admin/catalog/drift", json={})
+    assert bad.status_code == 400

@@ -20,6 +20,7 @@ import {
   getCatalog as apiGetCatalog,
   getHfRepo as apiGetHfRepo,
   getSettings as apiGetSettings,
+  checkDrift as apiCheckDrift,
   probeModel as apiProbeModel,
   pullModel as apiPullModel,
   putSetting as apiPutSetting,
@@ -31,10 +32,12 @@ import {
   type CatalogRow,
   type HfPage,
   type PullOption,
+  type DriftResult,
   type ResolvedRef,
 } from '../../lib/api'
 import { formatContext, formatParams, formatPrice } from '../../lib/modelFormat'
 import { applyPullLine, formatBytes, initialPullState, settlePull, type PullState } from '../../lib/pullStream'
+import { Link } from 'react-router-dom'
 import { formatRelativeTime } from '../activity/activityFormat'
 import { useChatStore } from '../../stores/chat-store'
 import {
@@ -79,6 +82,7 @@ interface ModelsApi {
   getHfRepo: typeof apiGetHfRepo
   resolveModel: typeof apiResolveModel
   probeModel: typeof apiProbeModel
+  checkDrift: typeof apiCheckDrift
   pullModel: typeof apiPullModel
   putSetting: typeof apiPutSetting
   getSettings: typeof apiGetSettings
@@ -90,6 +94,7 @@ const DEFAULT_API: ModelsApi = {
   getHfRepo: apiGetHfRepo,
   resolveModel: apiResolveModel,
   probeModel: apiProbeModel,
+  checkDrift: apiCheckDrift,
   pullModel: apiPullModel,
   putSetting: apiPutSetting,
   getSettings: apiGetSettings,
@@ -147,6 +152,9 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   const [switching, setSwitching] = useState<string | null>(null)
   const [probing, setProbing] = useState<string | null>(null)
   const [probeNote, setProbeNote] = useState<Record<string, string>>({})
+  // Drift, per row: what the LAST check said (the catalogue rows carry
+  // null until S10a-2's check runs; it is opt-in, never on load).
+  const [drift, setDrift] = useState<Record<string, DriftResult | 'checking' | { error: string }>>({})
 
   // Hugging Face search (Available tab)
   const [hfQuery, setHfQuery] = useState('')
@@ -252,6 +260,16 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       setActionError(`could not switch to ${row.id} — ${reasonOf(err)}`)
     } finally {
       setSwitching(null)
+    }
+  }
+
+  const checkUpdate = async (row: CatalogRow) => {
+    setDrift(prev => ({ ...prev, [row.id]: 'checking' }))
+    try {
+      const result = await api.checkDrift(row.model)
+      setDrift(prev => ({ ...prev, [row.id]: result }))
+    } catch (err) {
+      setDrift(prev => ({ ...prev, [row.id]: { error: reasonOf(err) } }))
     }
   }
 
@@ -465,7 +483,13 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
                       : 'bg-neutral-200/60 text-neutral-700 dark:bg-neutral-700/60 dark:text-neutral-300'
                 }`}
               >
-                {tagLabel(key.split(':')[0], fact)}
+                {fact.basis === 'measured' ? (
+                  <Link to="/quality" className="underline decoration-dotted" title="measured by the quality suite — open the runs">
+                    {tagLabel(key.split(':')[0], fact)}
+                  </Link>
+                ) : (
+                  tagLabel(key.split(':')[0], fact)
+                )}
               </span>
             ))}
           </div>
@@ -528,10 +552,24 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
               Probe
             </Button>
           )}
+          {actionsOf(row).includes('check_update') && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<RefreshCw size={12} />}
+              loading={drift[row.id] === 'checking'}
+              onClick={() => void checkUpdate(row)}
+              aria-label={`check updates ${row.id}`}
+              title="compare the installed weights with what the source ships now — never pulls"
+            >
+              Check for updates
+            </Button>
+          )}
           <Button size="sm" variant="ghost" onClick={() => setDetails(row)} aria-label={`details ${row.id}`}>
             Details
           </Button>
           {probeNote[row.id] && <span className="text-caption text-content-tertiary">{probeNote[row.id]}</span>}
+          <DriftNote drift={drift[row.id]} onUpdate={() => startPull(row.model)} rowId={row.id} />
         </div>
       ),
     },
@@ -769,6 +807,36 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
         {details && <ModelDetails row={details} />}
       </Sheet>
     </div>
+  )
+}
+
+/** What the last update check said, in the server's terms: up to date, moved
+ * (with the one action that follows — a re-pull of the same name), or why it
+ * could not tell. Nothing here is composed from the stream or the row. */
+function DriftNote({ drift, onUpdate, rowId }: { drift: DriftResult | 'checking' | { error: string } | undefined; onUpdate: () => void; rowId: string }) {
+  if (drift === undefined || drift === 'checking') return null
+  if ('error' in drift) return <span className="text-caption text-danger" data-testid={`drift-${rowId}`}>{drift.error}</span>
+  if (drift.moved === true) {
+    return (
+      <span className="inline-flex items-center gap-1 text-caption text-warning" data-testid={`drift-${rowId}`}>
+        update available ({drift.source ?? 'source'} ships {drift.upstream_digest?.slice(0, 19)}…)
+        <Button size="sm" variant="secondary" icon={<Download size={12} />} onClick={onUpdate} aria-label={`update ${rowId}`}>
+          Update
+        </Button>
+      </span>
+    )
+  }
+  if (drift.moved === false) {
+    return (
+      <span className="text-caption text-content-tertiary" data-testid={`drift-${rowId}`}>
+        up to date · checked {formatRelativeTime(drift.checked_at)}
+      </span>
+    )
+  }
+  return (
+    <span className="text-caption text-content-tertiary" data-testid={`drift-${rowId}`}>
+      could not tell: {drift.note ?? 'no reason given'}
+    </span>
   )
 }
 

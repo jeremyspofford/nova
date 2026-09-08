@@ -153,7 +153,9 @@ def local_row(
             at=_iso(fit_probe.get("created_at")),
         )
     row["fit"] = _fit_for(curated_entry, fit_probe, fit_ctx)
-    row["actions"] = ["use", "probe"]
+    # check_update: an installed model can be compared against its source
+    # (POST /admin/catalog/drift) — the page derives the button from this.
+    row["actions"] = ["use", "probe", "check_update"]
     return row
 
 
@@ -494,3 +496,103 @@ async def resolve_ref(app, model: str) -> dict:
         "pull": None,
         **({"note": cfg_note} if cfg_note else {}),
     }
+
+
+# ── drift: has the source moved since this was pulled? ────────────────────
+
+WEIGHTS_FROM = re.compile(r"^FROM\s+\S*?sha256[-:]([0-9a-f]{64})\s*$", re.M | re.I)
+DRIFT_BASIS = "weights-digest"
+
+
+def installed_weights_digest(show: dict) -> str | None:
+    """The weights blob THIS install runs from, read off /api/show's own
+    Modelfile (`FROM /root/.ollama/models/blobs/sha256-<hex>`). Verified
+    2026-09-07 on the live stack: that hex equals the registry manifest's
+    `application/vnd.ollama.image.model` layer digest for a library tag,
+    and the GGUF's `lfs.sha256` for an hf.co pull — so it is the ONE value
+    comparable across all three, where the /api/tags digest (a manifest
+    hash) is not. None when the Modelfile states no blob."""
+    modelfile = show.get("modelfile")
+    if not isinstance(modelfile, str):
+        return None
+    match = WEIGHTS_FROM.search(modelfile)
+    return f"sha256:{match.group(1).lower()}" if match else None
+
+
+def _installed_name(tags_models: list[dict], model: str) -> str | None:
+    names = {m["id"] for m in tags_models}
+    for candidate in (model, f"{model}:latest"):
+        if candidate in names:
+            return candidate
+    return None
+
+
+async def _upstream_weights(app, name: str) -> tuple[str | None, str, str | None]:
+    """(digest, source key, note) for what the source ships NOW: the Hub
+    file's sha256 for an hf.co name (the installed quant, else ollama's
+    default), the registry manifest's model layer for a library tag."""
+    if pulls.is_hub_ref(name):
+        org, repo, quant = pulls.split_hub_ref(name)
+        detail = await hf_hub.repo_detail(app, org, repo)
+        quants = hf_hub.quants_of(detail.siblings)
+        wanted = quant or hf_hub.DEFAULT_QUANT
+        chosen = hf_hub.find_quant(quants, wanted)
+        if chosen is None:
+            return None, hf_hub.SOURCE_KEY, f"{org}/{repo} no longer lists a {wanted} file"
+        if not chosen.get("sha256"):
+            return None, hf_hub.SOURCE_KEY, f"the Hub states no sha256 for {chosen['filename']}"
+        return f"sha256:{chosen['sha256']}", hf_hub.SOURCE_KEY, None
+    manifest = await ollama_registry.manifest(app, name)
+    for layer in manifest.layers:
+        if layer.get("mediaType") == ollama_registry.MODEL_LAYER and layer.get("digest"):
+            return str(layer["digest"]).lower(), ollama_registry.SOURCE_KEY, None
+    return None, ollama_registry.SOURCE_KEY, "the registry manifest carries no model layer"
+
+
+async def check_drift(app, pool, model: str) -> dict:
+    """Has the source's weights blob changed since `model` was pulled?
+    Compares the installed Modelfile's blob digest with the source's
+    current one. NEVER pulls, never re-resolves the tag to another model:
+    `moved` is True/False only when both digests were read, else None with
+    the reason. The catalogue's `drift` block is exactly this shape."""
+    model = pulls.validate_model(model)
+    builtin = await providers.get_row(pool, "ollama")
+    listing = await ollama.ADAPTER.list_models(app, builtin)
+    name = _installed_name(listing.models, model)
+    if name is None:
+        raise NotInstalled(f"{model!r} is not installed on the bundled ollama")
+    checked_at = _now()
+    show = await ollama.show(app, providers.base_url_of(builtin), name)
+    installed = installed_weights_digest(show)
+    result = {
+        "model": name,
+        "checked_at": checked_at,
+        "installed_digest": installed,
+        "upstream_digest": None,
+        "moved": None,
+        "basis": DRIFT_BASIS,
+        "source": None,
+    }
+    if installed is None:
+        result["note"] = "ollama's Modelfile states no weights blob for this model"
+        return result
+    try:
+        upstream, source, note = await _upstream_weights(app, name)
+    except hf_hub.RateLimited as exc:  # a ProviderRefused too: named first
+        result["note"] = f"the source could not be read — {exc.detail}"
+        result["retry_after_s"] = exc.retry_after_s
+        return result
+    except ProviderRefused as exc:
+        result["note"] = f"the source could not be read — {exc.detail}"
+        return result
+    result["source"] = source
+    result["upstream_digest"] = upstream
+    if upstream is None:
+        result["note"] = note
+        return result
+    result["moved"] = upstream != installed
+    return result
+
+
+class NotInstalled(LookupError):
+    pass

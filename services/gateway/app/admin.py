@@ -780,6 +780,25 @@ async def catalog_hf_repo(org: str, repo: str, request: Request) -> dict:
     return catalog.hf_repo_row(detail, installed)
 
 
+@router.post("/catalog/drift")
+async def catalog_drift(request: Request) -> dict:
+    """Has the source moved since this model was pulled? Installed weights
+    digest vs the source's current one (app/catalog.py: check_drift).
+    Never pulls. `moved` is null with a note when a side could not be read."""
+    body = await request.json() if await request.body() else {}
+    model = body.get("model") if isinstance(body, dict) else None
+    if not model:
+        raise HTTPException(status_code=400, detail="model is required")
+    try:
+        return await catalog.check_drift(request.app, await db.get_pool(), model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except catalog.NotInstalled as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except adapters.ProviderRefused as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
 @router.get("/catalog/resolve")
 async def catalog_resolve(request: Request) -> dict:
     """What a typed ref (`qwen3:4b`, `user/name:tag`, `hf.co/org/repo[:q]`)

@@ -887,3 +887,9 @@ export interface ProbeResult {
  * adapter a turn uses; the gateway records the result in its probes table. */
 export const probeModel = (model: string) =>
   apiSend<ProbeResult>('/api/v1/models/probe', 'POST', { model })
+
+/** Has the source moved since this model was pulled? The installed weights
+ * digest against the registry's / the Hub's current one. Never pulls. */
+export type DriftResult = NonNullable<CatalogRow['drift']> & { model: string; source: string | null; retry_after_s?: number }
+export const checkDrift = (model: string) =>
+  apiSend<DriftResult>('/api/v1/models/catalog/drift', 'POST', { model })

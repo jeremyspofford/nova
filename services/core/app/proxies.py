@@ -130,6 +130,12 @@ async def catalog_resolve(request: Request) -> Response:
     return await _forward(request, "GET", "/admin/catalog/resolve", timeout=CATALOG_HF_TIMEOUT)
 
 
+@router.post("/models/catalog/drift")
+async def catalog_drift(request: Request) -> Response:
+    """Has the source moved since a model was pulled (S10a-2)? 1:1."""
+    return await _forward(request, "POST", "/admin/catalog/drift", timeout=CATALOG_HF_TIMEOUT)
+
+
 @router.post("/models/probe")
 async def probe(request: Request) -> Response:
     return await _forward(request, "POST", "/admin/probe", timeout=PROBE_TIMEOUT)
