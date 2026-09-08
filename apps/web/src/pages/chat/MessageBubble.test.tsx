@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { MessageBubble } from './MessageBubble'
-import type { MessageRow } from './chatReducer'
+import type { LiveDelegation, MessageRow } from './chatReducer'
 
 function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
   return {
@@ -16,6 +17,11 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     cost: null,
     routeReason: null,
     turnKind: null,
+    // S12: who wrote the row and what she delegated (pin moved 2026-09-08).
+    agent: null,
+    delegation: null,
+    delegationsDone: [],
+    delegations: [],
     ...overrides,
   }
 }
@@ -134,6 +140,10 @@ function userRow(text: string): MessageRow {
     streaming: false,
     interrupted: false,
     activity: null,
+    agent: null,
+    delegation: null,
+    delegationsDone: [],
+    delegations: [],
   }
 }
 
@@ -278,5 +288,184 @@ describe('MessageBubble — where a row came from, when it was not a chat turn (
   it('never labels the owner\'s own bubble', () => {
     render(<MessageBubble row={{ ...userRow('remind me'), turnKind: 'reminder' }} />)
     expect(screen.queryByTestId('turn-kind-label')).toBeNull()
+  })
+})
+
+describe('MessageBubble — a row an agent wrote (S12)', () => {
+  it('labels the row with the agent\'s name, linking to its page, and takes its initial for the avatar', () => {
+    render(<MessageBubble row={assistantRow({ text: 'fixed', streaming: false, agent: 'coder' })} />)
+    const label = screen.getByTestId('agent-label')
+    expect(label.textContent).toBe('coder')
+    const link = label.querySelector('a')
+    expect(link?.getAttribute('href')).toBe('/agents/coder')
+    expect(link?.getAttribute('title')).toBe('this reply was written by the agent coder — see /agents/coder')
+    expect(screen.getByTestId('assistant-avatar').textContent).toBe('C')
+  })
+
+  it('shows no label and the N avatar for Nova\'s own reply', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false })} />)
+    expect(screen.queryByTestId('agent-label')).toBeNull()
+    expect(screen.getByTestId('assistant-avatar').textContent).toBe('N')
+  })
+
+  it('is a router Link inside a Router, an anchor outside one — same href either way', () => {
+    render(
+      <MemoryRouter>
+        <MessageBubble row={assistantRow({ text: 'fixed', streaming: false, agent: 'coder' })} />
+      </MemoryRouter>,
+    )
+    expect(screen.getByTestId('agent-label').querySelector('a')?.getAttribute('href')).toBe('/agents/coder')
+  })
+
+  it('sits beside the turn-kind label when an agent\'s scheduled turn earns both', () => {
+    render(
+      <MessageBubble row={assistantRow({ text: 'report', streaming: false, agent: 'coder', turnKind: 'scheduled' })} />,
+    )
+    expect(screen.getByTestId('turn-kind-label').textContent).toBe('Scheduled')
+    expect(screen.getByTestId('agent-label').textContent).toBe('coder')
+  })
+
+  it('never labels the owner\'s own bubble, even for the @coder message that started the turn', () => {
+    render(<MessageBubble row={{ ...userRow('@coder fix the tests'), agent: 'coder' }} />)
+    expect(screen.queryByTestId('agent-label')).toBeNull()
+  })
+})
+
+describe('MessageBubble — the delegation line (S12)', () => {
+  const working = (overrides: Partial<LiveDelegation> = {}): LiveDelegation => ({
+    agent: 'coder',
+    turnId: 't-child',
+    steps: [
+      { step: 'start', status: 'start' },
+      { step: 'workspace_write_file', status: 'start' },
+      { step: 'workspace_write_file', status: 'ok' },
+    ],
+    dropped: 0,
+    status: 'working',
+    ...overrides,
+  })
+
+  it('while working: one collapsed line naming the agent and the step count; the steps only on expand', () => {
+    render(<MessageBubble row={assistantRow({ delegation: working() })} />)
+    expect(screen.getByTestId('delegation-line').getAttribute('data-status')).toBe('working')
+    expect(screen.getByTestId('delegation-headline').textContent).toBe('coder is working… (3 steps)')
+    expect(screen.queryByTestId('delegation-steps')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /coder is working/ }))
+    expect(screen.getAllByTestId('delegation-step').map(li => li.textContent)).toEqual([
+      'start · start',
+      'workspace_write_file · start',
+      'workspace_write_file · ok',
+    ])
+    expect(screen.queryByTestId('delegation-more')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: /coder is working/ }))
+    expect(screen.queryByTestId('delegation-steps')).toBeNull()
+  })
+
+  it('does not also show the delegate tool\'s own marker while the delegation works — one line, not two', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          activity: { tool: 'delegate_to_agent', status: 'progress', detail: 'coder is working…' },
+          delegation: working(),
+        })}
+      />,
+    )
+    expect(screen.queryByTestId('activity-line')).toBeNull()
+    expect(screen.getByTestId('delegation-line')).toBeDefined()
+    expect(screen.queryByLabelText('waiting for the model')).toBeNull()
+  })
+
+  it('counts the steps it stopped keeping, and says "and N more" when expanded', () => {
+    render(<MessageBubble row={assistantRow({ delegation: working({ dropped: 50 }) })} />)
+    expect(screen.getByTestId('delegation-headline').textContent).toBe('coder is working… (53 steps)')
+    fireEvent.click(screen.getByRole('button', { name: /coder is working/ }))
+    expect(screen.getByTestId('delegation-more').textContent).toBe('and 50 more')
+  })
+
+  it('finished ok: "coder finished", still expandable', () => {
+    render(<MessageBubble row={assistantRow({ text: 'done', streaming: false, delegation: working({ status: 'ok' }) })} />)
+    expect(screen.getByTestId('delegation-headline').textContent).toBe('coder finished')
+    expect(screen.getByTestId('delegation-line').className).not.toMatch(/danger/)
+    fireEvent.click(screen.getByRole('button', { name: /coder finished/ }))
+    expect(screen.getAllByTestId('delegation-step')).toHaveLength(3)
+  })
+
+  it('finished error: "coder did not finish", and the delegate tool\'s error marker still states its reason', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          text: 'coder could not',
+          streaming: false,
+          delegation: working({ status: 'error' }),
+          activity: { tool: 'delegate_to_agent', status: 'error', reason: 'agent coder did not finish — status error' },
+        })}
+      />,
+    )
+    expect(screen.getByTestId('delegation-headline').textContent).toBe('coder did not finish')
+    expect(screen.getByRole('button', { name: /coder did not finish/ }).className).toMatch(/danger/)
+    expect(screen.getByTestId('activity-line').textContent).toBe(
+      'delegate_to_agent: agent coder did not finish — status error',
+    )
+    fireEvent.click(screen.getByRole('button', { name: /coder did not finish/ }))
+    expect(screen.getAllByTestId('delegation-step')).toHaveLength(3)
+  })
+
+  it('cut off: says no result was stated, never "finished"', () => {
+    render(<MessageBubble row={assistantRow({ streaming: false, delegation: working({ status: 'interrupted' }) })} />)
+    const headline = screen.getByTestId('delegation-headline').textContent
+    expect(headline).toBe('coder — cut off before a result was stated')
+    expect(headline).not.toContain('finished')
+  })
+
+  it('an agent the relay has not named yet is "an agent", with no steps yet', () => {
+    render(<MessageBubble row={assistantRow({ delegation: working({ agent: null, steps: [] }) })} />)
+    expect(screen.getByTestId('delegation-headline').textContent).toBe('an agent is working… (0 steps)')
+    fireEvent.click(screen.getByRole('button', { name: /an agent is working/ }))
+    expect(screen.getByTestId('delegation-steps').textContent).toContain('no steps reported yet')
+  })
+
+  it('shows every delegation this row watched, the finished ones before the one in flight', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          delegationsDone: [working({ status: 'ok' })],
+          delegation: working({ agent: 'mailer', steps: [], status: 'working' }),
+        })}
+      />,
+    )
+    expect(screen.getAllByTestId('delegation-headline').map(h => h.textContent)).toEqual([
+      'coder finished',
+      'mailer is working… (0 steps)',
+    ])
+  })
+
+  it('after a reload: a chip per delegation — agent, status, file count — linking to the agent, no live line', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          text: 'I asked coder',
+          streaming: false,
+          delegations: [
+            { agent: 'coder', agent_turn_id: 't1', status: 'ok', files: ['agents/coder/a.md', 'agents/coder/b.md'] },
+            { agent: 'mailer', agent_turn_id: 't2', status: 'error', files: [] },
+            { agent: 'cook', agent_turn_id: 't3', status: 'interrupted', files: ['agents/cook/menu.md'] },
+          ],
+        })}
+      />,
+    )
+    const chips = screen.getAllByTestId('delegation-chip')
+    expect(chips.map(c => c.textContent)).toEqual([
+      'coder · ok · 2 files',
+      'mailer · error · 0 files',
+      'cook · interrupted · 1 file',
+    ])
+    expect(chips.map(c => c.getAttribute('href'))).toEqual(['/agents/coder', '/agents/mailer', '/agents/cook'])
+    expect(screen.queryByTestId('delegation-line')).toBeNull()
+  })
+
+  it('shows no delegation line or chip on an ordinary reply', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false })} />)
+    expect(screen.queryByTestId('delegation-line')).toBeNull()
+    expect(screen.queryByTestId('delegation-chips')).toBeNull()
   })
 })

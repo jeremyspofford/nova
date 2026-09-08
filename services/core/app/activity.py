@@ -43,9 +43,16 @@ MAX_LIMIT = 200
 # and would only get more wasteful as turn_spans grows. turn_spans_turn
 # (turn_id, started_at) — migration 002 — is what makes each lookup an
 # indexed scan rather than a table scan.
+#
+# S12: the agents join. `agent` is the NAME read off the agents row the
+# turn's agent_id points at — derived on every read, never a name stored on
+# the turn — so a deleted agent's turns come back with agent null (021 SETs
+# agent_id NULL) while `role`, the routing role the rounds actually walked,
+# stays as the turn recorded it. NULL role = Nova's own turn, routed by kind.
 _TURN_SELECT = """
     SELECT
         t.id, t.kind, t.model, t.status, t.started_at, t.conversation_id, t.person_id,
+        t.role, a.name AS agent,
         CASE WHEN t.ended_at IS NULL THEN NULL
              ELSE (EXTRACT(EPOCH FROM (t.ended_at - t.started_at)) * 1000)::bigint
         END AS duration_ms,
@@ -58,6 +65,7 @@ _TURN_SELECT = """
              FROM turn_spans WHERE turn_id = t.id), 0
         ) AS llm_round_count
     FROM turns t
+    LEFT JOIN agents a ON a.id = t.agent_id
 """
 
 
@@ -76,6 +84,11 @@ def _turn_json(row: asyncpg.Record) -> dict:
         "tool_call_count": row["tool_call_count"],
         "llm_round_count": row["llm_round_count"],
         "conversation_id": str(row["conversation_id"]) if row["conversation_id"] else None,
+        # S12: WHO did the work (an agent's name, null for Nova herself or a
+        # since-deleted agent — see _TURN_SELECT) and which routing role its
+        # gateway rounds walked (null = derived from kind, as before).
+        "agent": row["agent"],
+        "role": row["role"],
     }
 
 
@@ -96,6 +109,7 @@ def _span_json(row: asyncpg.Record) -> dict:
 async def list_activity(
     limit: int = Query(DEFAULT_LIMIT, ge=1),
     before: uuid.UUID | None = None,
+    agent: str | None = None,
     # Unused beyond the dependency itself: this view answers "what did
     # Nova do", not "what did I do", and is not scoped by who is asking —
     # requiring a Person here is only the same auth every other route has.
@@ -106,29 +120,40 @@ async def list_activity(
 
     # kind='eval' turns are the evals harness replaying a case against a model
     # (app/evals/runner.py); they are NOT something "Nova did" for the operator,
-    # so they are filtered out of this feed. The drill-in below is deliberately
+    # so they are filtered out of this feed. They are the ONLY kind filtered:
+    # an agent's turn (kind 'agent', S12) is work done for the operator and is
+    # listed, badged by the agents join. The drill-in below is deliberately
     # NOT filtered — an eval_runs row links to its turn's trace, and T3 needs
     # /activity/<id> to resolve for it.
-    if before is None:
-        rows = await pool.fetch(
-            f"{_TURN_SELECT} WHERE t.kind <> 'eval' ORDER BY t.started_at DESC, t.id DESC LIMIT $1",
-            capped,
-        )
-        return {"turns": [_turn_json(row) for row in rows]}
+    conditions = ["t.kind <> 'eval'"]
+    params: list = []
 
-    cursor = await pool.fetchrow("SELECT started_at FROM turns WHERE id = $1", before)
-    if cursor is None:
-        # A stale or invented cursor gets a clear refusal, never a silent
-        # "here is the whole list from the top" — that would look like a
-        # cursor working when it did not.
-        raise HTTPException(status_code=404, detail=f"no turn {before} to page before")
+    if agent is not None:
+        # S12: one agent's turns, matched on the agents row's name through
+        # the join — so a name no agent holds (a typo, or an agent deleted
+        # since, whose turns lost their agent_id) matches nothing and comes
+        # back as an EMPTY list, not a 404: "this agent has done nothing yet"
+        # is a true answer for a fresh agent's Traces tab, where a 404 would
+        # read as a broken page. A blank name is a name no agent can hold
+        # (021's CHECK) and is filtered the same way, never widened to all.
+        params.append(agent)
+        conditions.append(f"a.name = ${len(params)}")
 
+    if before is not None:
+        cursor = await pool.fetchrow("SELECT started_at FROM turns WHERE id = $1", before)
+        if cursor is None:
+            # A stale or invented cursor gets a clear refusal, never a silent
+            # "here is the whole list from the top" — that would look like a
+            # cursor working when it did not.
+            raise HTTPException(status_code=404, detail=f"no turn {before} to page before")
+        params.extend([cursor["started_at"], before])
+        conditions.append(f"(t.started_at, t.id) < (${len(params) - 1}, ${len(params)})")
+
+    params.append(capped)
     rows = await pool.fetch(
-        f"{_TURN_SELECT} WHERE (t.started_at, t.id) < ($1, $2) AND t.kind <> 'eval' "
-        "ORDER BY t.started_at DESC, t.id DESC LIMIT $3",
-        cursor["started_at"],
-        before,
-        capped,
+        f"{_TURN_SELECT} WHERE {' AND '.join(conditions)} "
+        f"ORDER BY t.started_at DESC, t.id DESC LIMIT ${len(params)}",
+        *params,
     )
     return {"turns": [_turn_json(row) for row in rows]}
 

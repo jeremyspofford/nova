@@ -1,4 +1,5 @@
 """Conversations belong to a person, and only to that person."""
+
 from __future__ import annotations
 
 import logging
@@ -87,9 +88,7 @@ async def test_a_turn_no_process_is_running_is_never_pending(owner_client, pool,
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id) is None
 
 
-async def test_startup_closes_an_orphan_before_anyone_can_read_it_as_pending(
-    owner_client, pool
-):
+async def test_startup_closes_an_orphan_before_anyone_can_read_it_as_pending(owner_client, pool):
     """The whole path, through the app's real lifespan: a NULL-status turn in
     the owner's active conversation left by a dead process is 'interrupted'
     once the app has started, and /conversations/active reports no pending
@@ -192,9 +191,7 @@ async def test_clear_needs_an_identity(client, pool):
     # Nothing was cleared — but there was nothing to clear; the point is the 401.
 
 
-async def test_clear_on_someone_elses_conversation_is_a_404_and_touches_nothing(
-    owner_client, pool
-):
+async def test_clear_on_someone_elses_conversation_is_a_404_and_touches_nothing(owner_client, pool):
     stranger = await pool.fetchval(
         "INSERT INTO people (name, role) VALUES ('stranger', 'adult') RETURNING id"
     )
@@ -255,11 +252,277 @@ async def test_clear_leaves_the_audit_trail_and_conversation_intact(owner_client
         "SELECT conversation_id FROM turns WHERE id = $1", turn_id
     )
     assert conversation_id is not None
-    span_count = await pool.fetchval(
-        "SELECT count(*) FROM turn_spans WHERE turn_id = $1", turn_id
-    )
+    span_count = await pool.fetchval("SELECT count(*) FROM turn_spans WHERE turn_id = $1", turn_id)
     assert span_count == 1
     assert await pool.fetchval("SELECT count(*) FROM governance_events") == 1
     assert (
         await pool.fetchval("SELECT count(*) FROM conversations WHERE id = $1", conversation)
     ) == 1
+
+
+# -- S12: a row says who wrote it and who was handed work ------------------
+#
+# Both keys are derived from the TRACE behind the row (the turns row via
+# messages.turn_id, the agents row via turns.agent_id, the delegate spans in
+# turn_spans) — never a label stored on the message, which could drift from
+# what actually ran. Pinned the way turn_kind and served_by are: by inserting
+# the ledger rows directly and reading the transcript back.
+
+MESSAGE_KEYS = {
+    "id",
+    "role",
+    "content",
+    "created_at",
+    "served_by",
+    "turn_kind",
+    "cost_usd",
+    "route_reason",
+    # S12 (2026-09-08): `agent` — the name of the agent whose turn wrote the
+    # row — and `delegations` — the agents Nova handed work to in that turn.
+    "agent",
+    "delegations",
+}
+
+
+async def _agent(pool, name: str = "coder") -> uuid.UUID:
+    return await pool.fetchval(
+        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
+        "VALUES ($1, 'writes code', 'be terse', ARRAY['workspace_write_file'], 8, 'page') "
+        "RETURNING id",
+        name,
+    )
+
+
+async def _turn(pool, conversation, *, agent_id=None, role=None, kind="chat") -> uuid.UUID:
+    return await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id, status, ended_at, agent_id, role) "
+        "VALUES ($1, $2, 'ok', now(), $3, $4) RETURNING id",
+        kind,
+        uuid.UUID(conversation),
+        agent_id,
+        role,
+    )
+
+
+async def _row(pool, conversation, role, content, turn_id=None, *, offset: int = 0) -> None:
+    await pool.execute(
+        "INSERT INTO messages (conversation_id, role, content, turn_id, created_at) "
+        "VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5))",
+        uuid.UUID(conversation),
+        role,
+        content,
+        turn_id,
+        offset,
+    )
+
+
+async def _delegate_span(pool, turn_id, *, offset: int, meta: dict) -> None:
+    await pool.execute(
+        "INSERT INTO turn_spans (turn_id, kind, name, started_at, meta) "
+        "VALUES ($1, 'tool', 'delegate_to_agent', now() + make_interval(secs => $2), $3::jsonb)",
+        turn_id,
+        offset,
+        meta,
+    )
+
+
+async def _messages(owner_client, conversation) -> list[dict]:
+    resp = await owner_client.get(f"/api/v1/conversations/{conversation}/messages")
+    assert resp.status_code == 200
+    return resp.json()["messages"]
+
+
+async def test_an_ordinary_nova_row_is_unchanged_but_for_agent_none_and_no_delegations(
+    owner_client, pool
+):
+    """The pin for every row that has nothing to do with agents: the same
+    keys as before plus the two new ones, and those read None / []."""
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+    turn = await _turn(pool, conversation)
+    await _row(pool, conversation, "user", "hi")
+    await _row(pool, conversation, "assistant", "hello", turn, offset=1)
+
+    user, nova = await _messages(owner_client, conversation)
+    assert set(user) == MESSAGE_KEYS
+    assert set(nova) == MESSAGE_KEYS
+    assert (user["agent"], user["delegations"]) == (None, [])
+    assert (nova["agent"], nova["delegations"]) == (None, [])
+    assert nova["turn_kind"] == "chat"
+
+    # Derived, never stored: messages carries no such column.
+    columns = {
+        r["column_name"]
+        for r in await pool.fetch(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'"
+        )
+    }
+    assert not {"agent", "delegations"} & columns
+
+
+async def test_an_agent_turns_row_carries_the_agents_name(owner_client, pool):
+    """The agents API reads an agent's log conversation through the same
+    rows: its report row names the agent (from turns.agent_id through the
+    agents row), the brief row — a user row with no turn — does not."""
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+    coder = await _agent(pool, "coder")
+    turn = await _turn(pool, conversation, agent_id=coder, role="agent_coder", kind="agent")
+    await _row(pool, conversation, "user", "Task: write hello.py")
+    await _row(pool, conversation, "assistant", "Wrote hello.py", turn, offset=1)
+
+    messages = await _messages(owner_client, conversation)
+    assert [(m["role"], m["agent"]) for m in messages] == [("user", None), ("assistant", "coder")]
+    assert messages[1]["turn_kind"] == "agent"
+    assert messages[1]["delegations"] == []
+
+
+async def test_a_deleted_agents_row_carries_none_not_a_remembered_name(owner_client, pool):
+    """021: turns.agent_id is ON DELETE SET NULL. The transcript loses the
+    name rather than inventing one; the ledger keeps the role text."""
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+    coder = await _agent(pool, "coder")
+    turn = await _turn(pool, conversation, agent_id=coder, role="agent_coder", kind="agent")
+    await _row(pool, conversation, "assistant", "Wrote hello.py", turn)
+    assert (await _messages(owner_client, conversation))[0]["agent"] == "coder"
+
+    await pool.execute("DELETE FROM agents WHERE id = $1", coder)
+
+    (row,) = await _messages(owner_client, conversation)
+    assert row["agent"] is None
+    assert row["turn_kind"] == "agent"
+    assert await pool.fetchval("SELECT role FROM turns WHERE id = $1", turn) == "agent_coder"
+
+
+async def test_delegations_derive_from_the_turns_delegate_spans(owner_client, pool):
+    """One entry per delegate_to_agent tool span on the row's turn, in the
+    order they ran: from meta.facts[0] when the run composed its result, else
+    from args_redacted.agent with status 'error' — a delegate span that never
+    got as far as facts is a failed hand-off, never a dropped one and never
+    an 'ok' guessed from silence. Other tool spans are not delegations."""
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+    turn = await _turn(pool, conversation)
+    await _row(pool, conversation, "user", "get coder to write hello.py and writer a draft")
+    await _row(
+        pool, conversation, "assistant", "coder wrote hello.py; writer failed", turn, offset=1
+    )
+
+    finished = str(uuid.uuid4())
+    errored = str(uuid.uuid4())
+    # 1. A run that finished: facts as the delegate tool files them.
+    await _delegate_span(
+        pool,
+        turn,
+        offset=0,
+        meta={
+            "ok": True,
+            "args_redacted": {"agent": "coder", "task": "write hello.py"},
+            "result_head": "[coder finished: status ok …]",
+            "facts": [
+                {
+                    "agent": "coder",
+                    "agent_turn_id": finished,
+                    "status": "ok",
+                    "files": ["agents/coder/hello.py", "agents/coder/notes/plan.md"],
+                    "rounds": 2,
+                    "calls_ok": 3,
+                    "calls_failed": 0,
+                }
+            ],
+        },
+    )
+    # 2. A call that never composed its result — no facts at all.
+    await _delegate_span(
+        pool,
+        turn,
+        offset=1,
+        meta={
+            "ok": False,
+            "args_redacted": {"agent": "writer", "task": "draft it"},
+            "result_head": "Error: no agent named writer — live agents: coder",
+            "error": "Error: no agent named writer — live agents: coder",
+        },
+    )
+    # 3. A run that finished in error, with facts (the child closed error).
+    await _delegate_span(
+        pool,
+        turn,
+        offset=2,
+        meta={
+            "ok": False,
+            "args_redacted": {"agent": "coder", "task": "again"},
+            "result_head": "Error: agent coder did not finish",
+            "facts": [
+                {
+                    "agent": "coder",
+                    "agent_turn_id": errored,
+                    "status": "error",
+                    "files": [],
+                    "rounds": 1,
+                    "calls_ok": 0,
+                    "calls_failed": 1,
+                }
+            ],
+        },
+    )
+    # 4. The known quirk: args_redacted degraded to a clipped STRING, no facts.
+    await _delegate_span(
+        pool,
+        turn,
+        offset=3,
+        meta={"ok": False, "args_redacted": "xxx… (+4800 more chars)", "result_head": "Error"},
+    )
+    # A tool span that is not a delegation, and a delegate span on ANOTHER
+    # turn — neither may show up on this row.
+    await pool.execute(
+        "INSERT INTO turn_spans (turn_id, kind, name, meta) VALUES ($1, 'tool', $2, $3::jsonb)",
+        turn,
+        "workspace_write_file",
+        {"ok": True, "args_redacted": {"path": "a.md"}, "facts": [{"agent": "nope"}]},
+    )
+    other = await _turn(pool, conversation)
+    await _delegate_span(
+        pool,
+        other,
+        offset=0,
+        meta={"ok": True, "facts": [{"agent": "coder", "agent_turn_id": "x", "status": "ok"}]},
+    )
+
+    user, nova = await _messages(owner_client, conversation)
+    assert user["delegations"] == []
+    assert nova["delegations"] == [
+        {
+            "agent": "coder",
+            "agent_turn_id": finished,
+            "status": "ok",
+            "files": ["agents/coder/hello.py", "agents/coder/notes/plan.md"],
+        },
+        {"agent": "writer", "agent_turn_id": None, "status": "error", "files": []},
+        {"agent": "coder", "agent_turn_id": errored, "status": "error", "files": []},
+        {"agent": None, "agent_turn_id": None, "status": "error", "files": []},
+    ]
+
+
+async def test_messages_json_reads_one_conversation_and_the_route_still_scopes(owner_client, pool):
+    """messages_json is the shared reader: it takes a conversation id and
+    returns its rows with NO ownership check — the agents API reads an
+    agent's log conversation (a household object, owned by whoever created
+    the agent) through it. The ROUTE keeps its scoping: the same conversation
+    is a 404 to anyone but its owner."""
+    from app import conversations
+
+    stranger = await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('stranger', 'adult') RETURNING id"
+    )
+    theirs = await pool.fetchval(
+        "INSERT INTO conversations (person_id, active, title) "
+        "VALUES ($1, false, 'agent:coder') RETURNING id",
+        stranger,
+    )
+    await pool.execute(
+        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', 'Task: x')",
+        theirs,
+    )
+
+    rows = await conversations.messages_json(pool, theirs)
+    assert [(r["role"], r["content"]) for r in rows] == [("user", "Task: x")]
+    assert set(rows[0]) == MESSAGE_KEYS
+    assert (await owner_client.get(f"/api/v1/conversations/{theirs}/messages")).status_code == 404

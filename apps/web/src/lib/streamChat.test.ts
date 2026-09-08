@@ -64,7 +64,9 @@ describe('createSseParser', () => {
         'data: [DONE]\n\n',
     ])
     expect(events).toEqual([
-      { type: 'meta', conversationId: 'c1', model: 'qwen3:4b', turnId: 't1' },
+      // `agent: null` — S12: the meta event always states who ran the
+      // turn; a frame without the key is Nova's (pin moved 2026-09-08).
+      { type: 'meta', conversationId: 'c1', model: 'qwen3:4b', turnId: 't1', agent: null },
       { type: 'delta', text: 'He' },
       { type: 'delta', text: 'llo' },
       { type: 'done' },
@@ -281,7 +283,8 @@ describe('streamChat', () => {
       ])
     const events = await collect(streamChat({ message: 'hello' }, fetchImpl))
     expect(events).toEqual([
-      { type: 'meta', conversationId: 'c1', model: 'm', turnId: 't1' },
+      // agent: null — the S12 meta shape (pin moved 2026-09-08).
+      { type: 'meta', conversationId: 'c1', model: 'm', turnId: 't1', agent: null },
       { type: 'delta', text: 'hi' },
       { type: 'done' },
     ])
@@ -345,5 +348,56 @@ describe('createSseParser — the served_by frame (S10-pre)', () => {
     const events = parseAll(['data: {"served_by": 7}\n\n'])
     expect(events).toHaveLength(1)
     expect(events[0].type).toBe('error')
+  })
+})
+
+describe('createSseParser — agents (S12): meta.agent and the delegation relay keys', () => {
+  it('meta carries the agent\'s name when the server stated one', () => {
+    expect(
+      parseAll(['data: {"meta":{"conversation_id":"c1","model":"","turn_id":"t1","agent":"coder"}}\n\n']),
+    ).toEqual([{ type: 'meta', conversationId: 'c1', model: '', turnId: 't1', agent: 'coder' }])
+  })
+
+  it('meta.agent is null when the key is absent (a core older than S12), null, or empty', () => {
+    expect(
+      parseAll(['data: {"meta":{"conversation_id":"c1","model":"m","turn_id":"t1"}}\n\n']),
+    ).toEqual([{ type: 'meta', conversationId: 'c1', model: 'm', turnId: 't1', agent: null }])
+    expect(
+      parseAll(['data: {"meta":{"conversation_id":"c1","model":"m","turn_id":"t1","agent":null}}\n\n']),
+    ).toEqual([{ type: 'meta', conversationId: 'c1', model: 'm', turnId: 't1', agent: null }])
+    expect(
+      parseAll(['data: {"meta":{"conversation_id":"c1","model":"m","turn_id":"t1","agent":""}}\n\n']),
+    ).toEqual([{ type: 'meta', conversationId: 'c1', model: 'm', turnId: 't1', agent: null }])
+  })
+
+  it('a delegate_to_agent progress frame carries the relay keys through, camel-cased', () => {
+    expect(
+      parseAll([
+        'data: {"activity":{"tool":"delegate_to_agent","status":"progress","detail":"coder is working…","agent":"coder","agent_turn_id":"t-child","step":"workspace_write_file","step_status":"ok"}}\n\n',
+      ]),
+    ).toEqual([
+      {
+        type: 'activity',
+        tool: 'delegate_to_agent',
+        status: 'progress',
+        detail: 'coder is working…',
+        agent: 'coder',
+        agentTurnId: 't-child',
+        step: 'workspace_write_file',
+        stepStatus: 'ok',
+      },
+    ])
+  })
+
+  it('a plain activity frame is byte-identical to before — no relay keys, not even undefined ones', () => {
+    const [event] = parseAll(['data: {"activity":{"tool":"get_time","status":"start"}}\n\n'])
+    expect(event).toEqual({ type: 'activity', tool: 'get_time', status: 'start' })
+    expect(Object.keys(event)).toEqual(['type', 'tool', 'status'])
+  })
+
+  it('a non-string relay key is simply absent, never a shape violation', () => {
+    expect(
+      parseAll(['data: {"activity":{"tool":"delegate_to_agent","status":"progress","step":7,"agent":null}}\n\n']),
+    ).toEqual([{ type: 'activity', tool: 'delegate_to_agent', status: 'progress' }])
   })
 })

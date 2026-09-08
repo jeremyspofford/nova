@@ -36,13 +36,23 @@
  * stated (chat.py's `_activity_reason`) — and is optional even then: a
  * frame with `tool`/`status` but no (or non-string) `reason` is still a
  * perfectly valid, known frame, not a contract violation.
+ *
+ * S12 (agents) widens two known frames without adding a key. `meta` gains
+ * `agent`: the agent's name when the whole turn runs as one (`@coder …`),
+ * null for Nova — and null when the key is absent, which is what a core
+ * older than S12 sends. A `progress` activity frame for the tool
+ * `delegate_to_agent` may carry `agent`, `agent_turn_id`, `step` (the
+ * child's tool name, or 'start') and `step_status` — the child turn's
+ * activity relayed through the parent's one activity line. All four are
+ * optional strings exactly like `detail`: present when the server stated
+ * them, left off the event otherwise, never a shape violation.
  */
 
 import { createLineBuffer } from './lineBuffer'
 import { statedReason } from './statedReason'
 
 export type StreamEvent =
-  | { type: 'meta'; conversationId: string; model: string; turnId: string }
+  | { type: 'meta'; conversationId: string; model: string; turnId: string; agent: string | null }
   | { type: 'delta'; text: string }
   // status is whatever the server actually sent (chat.py only ever sends
   // start/ok/error) — kept as `string` rather than a narrower literal
@@ -50,8 +60,20 @@ export type StreamEvent =
   // not a type error waiting to happen.
   // `detail` rides only a 'progress' status (S10a-3): the tool's own words
   // about a long call still running ("pulling qwen3:4b — 42% (1.0 GB of
-  // 2.3 GB)"). Optional like `reason`.
-  | { type: 'activity'; tool: string; status: string; reason?: string; detail?: string }
+  // 2.3 GB)"). Optional like `reason`. `agent`/`agentTurnId`/`step`/
+  // `stepStatus` ride a delegate_to_agent progress frame (S12) — see the
+  // file comment.
+  | {
+      type: 'activity'
+      tool: string
+      status: string
+      reason?: string
+      detail?: string
+      agent?: string
+      agentTurnId?: string
+      step?: string
+      stepStatus?: string
+    }
   | { type: 'error'; reason: string }
   // {"served_by": "provider:model"} — who actually answered, as the gateway
   // stated it on the llm_call span (S10-pre). Once per answered turn.
@@ -166,6 +188,11 @@ function frameToEvent(payload: string): StreamEvent | null {
       conversationId: String(meta.conversation_id ?? ''),
       model: String(meta.model ?? ''),
       turnId: String(meta.turn_id ?? ''),
+      // Who ran the turn (S12): an agent's name, or null for Nova. Absent
+      // (a core older than S12) reads as Nova too — the badge is only ever
+      // shown for a name the server actually stated. An empty string is no
+      // name at all, so it is null as well rather than a blank badge.
+      agent: typeof meta.agent === 'string' && meta.agent ? meta.agent : null,
     }
   }
   if (obj.activity !== null && typeof obj.activity === 'object') {
@@ -183,6 +210,13 @@ function frameToEvent(payload: string): StreamEvent | null {
       // entirely rather than set to undefined.
       if (typeof activity.reason === 'string') event.reason = activity.reason
       if (typeof activity.detail === 'string') event.detail = activity.detail
+      // The delegation relay keys (S12) — same rule: present only when the
+      // server stated them, so a plain activity event is byte-identical to
+      // what it was before these existed.
+      if (typeof activity.agent === 'string') event.agent = activity.agent
+      if (typeof activity.agent_turn_id === 'string') event.agentTurnId = activity.agent_turn_id
+      if (typeof activity.step === 'string') event.step = activity.step
+      if (typeof activity.step_status === 'string') event.stepStatus = activity.step_status
       return event
     }
     // Falls through to the generic "known key, wrong shape" refusal below

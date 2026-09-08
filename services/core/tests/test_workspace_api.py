@@ -13,6 +13,7 @@ activity.py's suite — workspace_api reads nothing from postgres — but they
 still go through `client`/`owner_client` for the same auth path every other
 route uses, per conftest.py.
 """
+
 from __future__ import annotations
 
 import re
@@ -311,3 +312,121 @@ def test_the_module_holds_no_write_statements():
     source = inspect.getsource(workspace_api)
     for verb in ("INSERT ", "UPDATE ", "DELETE ", "write_text(", "write_bytes(", "os.replace("):
         assert verb not in source, f"{verb!r} found in a module that must never write"
+
+
+# -- GET /files?prefix= (S12: one agent's folder) -----------------------------
+#
+# An agent works inside `agents/<name>/` under the same WORKSPACE_ROOT, and
+# its Artifacts tab lists only that folder. The prefix is a caller-supplied
+# path like any other here: it goes through the imported `_resolve_within`
+# and the walk through `iter_contained_files(root, base)`, so the containment
+# matrix is the one the tools are already proved against. The module stays
+# read-only — test_the_module_holds_no_write_statements above still greps it.
+
+
+def _seed_agent_folders(workspace) -> None:
+    (workspace / "agents" / "coder" / "notes").mkdir(parents=True)
+    (workspace / "agents" / "writer").mkdir(parents=True)
+    (workspace / "agents" / "coder" / "hello.py").write_text("print(1)\n", encoding="utf-8")
+    (workspace / "agents" / "coder" / "notes" / "plan.md").write_text("plan", encoding="utf-8")
+    (workspace / "agents" / "writer" / "draft.md").write_text("draft", encoding="utf-8")
+    (workspace / "groceries.md").write_text("milk", encoding="utf-8")
+
+
+ALL_SEEDED = {
+    "agents/coder/hello.py",
+    "agents/coder/notes/plan.md",
+    "agents/writer/draft.md",
+    "groceries.md",
+}
+
+
+async def _paths(owner_client, query: str = "") -> set[str]:
+    resp = await owner_client.get(f"/api/v1/workspace/files{query}")
+    assert resp.status_code == 200, resp.text
+    return {f["path"] for f in resp.json()["files"]}
+
+
+async def test_a_prefix_lists_only_the_files_under_that_folder(owner_client, workspace):
+    _seed_agent_folders(workspace)
+
+    resp = await owner_client.get("/api/v1/workspace/files?prefix=agents/coder/")
+    assert resp.status_code == 200
+    body = resp.json()
+    # Paths stay relative to the workspace ROOT, not the prefix, so each entry
+    # links to /file?path= unchanged.
+    assert {f["path"] for f in body["files"]} == {
+        "agents/coder/hello.py",
+        "agents/coder/notes/plan.md",
+    }
+    assert body["total"] == 2
+    assert body["truncated"] is False
+    # The sibling agent's file and the root-level file are not in it; the
+    # trailing slash is optional; unfiltered still lists everything.
+    assert await _paths(owner_client, "?prefix=agents/coder") == {
+        "agents/coder/hello.py",
+        "agents/coder/notes/plan.md",
+    }
+    assert await _paths(owner_client, "?prefix=agents/writer/") == {"agents/writer/draft.md"}
+    assert await _paths(owner_client) == ALL_SEEDED
+
+
+async def test_a_folder_that_does_not_exist_yet_lists_as_empty_not_an_error(
+    owner_client, workspace
+):
+    # A new agent has produced nothing: its folder may not even be there yet.
+    _seed_agent_folders(workspace)
+    resp = await owner_client.get("/api/v1/workspace/files?prefix=agents/newborn/")
+    assert resp.status_code == 200
+    assert resp.json() == {"files": [], "total": 0, "truncated": False}
+
+
+async def test_a_blank_prefix_is_the_whole_workspace(owner_client, workspace):
+    """The same reading the tool's list_files gives a blank path — no folder
+    named means no narrowing, not a refusal."""
+    _seed_agent_folders(workspace)
+    assert await _paths(owner_client, "?prefix=") == ALL_SEEDED
+    assert await _paths(owner_client, "?prefix=%20%20") == ALL_SEEDED
+
+
+PREFIX_ESCAPES = [
+    ("traversal", "../"),
+    ("nested traversal", "agents/../../"),
+    ("absolute", "/etc"),
+]
+
+
+@pytest.mark.parametrize(("label", "prefix"), PREFIX_ESCAPES, ids=[e[0] for e in PREFIX_ESCAPES])
+async def test_a_prefix_that_leaves_the_workspace_is_refused(
+    owner_client, workspace, label, prefix
+):
+    outside = workspace.parent / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("secret", encoding="utf-8")
+
+    resp = await owner_client.get(f"/api/v1/workspace/files?prefix={quote(prefix, safe='')}")
+    assert resp.status_code == 400
+    assert "workspace" in resp.json()["error"]
+    assert "secret" not in resp.text
+
+
+async def test_a_prefix_through_a_symlink_pointing_out_is_refused(owner_client, workspace):
+    outside = workspace.parent / "outside"
+    outside.mkdir()
+    (outside / "secret.md").write_text("secret", encoding="utf-8")
+    (workspace / "agents").mkdir()
+    (workspace / "agents" / "escape").symlink_to(outside)
+
+    resp = await owner_client.get("/api/v1/workspace/files?prefix=agents/escape/")
+    assert resp.status_code == 400
+    assert "secret" not in resp.text
+    # And the unprefixed walk never followed the link either (the existing
+    # symlink pin, re-stated for the folder shape).
+    assert await _paths(owner_client) == set()
+
+
+async def test_a_prefix_naming_a_file_is_a_named_400(owner_client, workspace):
+    _seed_agent_folders(workspace)
+    resp = await owner_client.get("/api/v1/workspace/files?prefix=groceries.md")
+    assert resp.status_code == 400
+    assert "not a folder" in resp.json()["error"]

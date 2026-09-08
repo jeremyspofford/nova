@@ -1690,3 +1690,289 @@ def test_price_talk_and_the_users_own_figures_are_not_spend_claims():
         "How much did we spend? Let me check.",
     ):
         assert guards.narration_check(reply, [other_span()]) is None, reply
+
+
+# -- the delegation-claim guard (S12): an agent credited with work that never ran --
+#
+# guards.delegation_claim_check(reply, spans, agent_names) is pure and
+# precision-first, the third-person mirror of narration_check: "coder wrote
+# hello.py" is invisible to the first-person walk-back, and S12 gives her a
+# roster of named agents to say exactly that about. Backing is a successful
+# delegate_to_agent span for that agent THIS turn, read from meta.facts[].agent
+# or args_redacted.agent. As everywhere in this file, the must-NOT-fire cases
+# carry as much weight as the fabrications.
+
+AGENTS = ["coder", "reviewer"]
+
+
+def delegate_span(agent: str, *, ok: bool = True, via: str = "both", refused: bool = False):
+    """A delegate_to_agent span as chat._run_tool records it: the executor's
+    facts on success AND failure, the call's own argument redacted. `via`
+    picks which of the two carries the agent name."""
+    meta: dict = {"ok": ok, "args_redacted": {"task": "write hello.py"}}
+    if via in ("facts", "both"):
+        meta["facts"] = [
+            {
+                "agent": agent,
+                "agent_turn_id": "9c0e4a7e-0000-4000-8000-000000000001",
+                "status": "ok" if ok else "error",
+                "files": ["hello.py"] if ok else [],
+                "rounds": 2,
+                "calls_ok": 1,
+                "calls_failed": 0 if ok else 1,
+            }
+        ]
+    if via in ("args", "both"):
+        meta["args_redacted"]["agent"] = agent
+    if refused:
+        meta["refused_markup"] = True
+    return SimpleNamespace(kind="tool", name="delegate_to_agent", meta=meta)
+
+
+def unbacked_text(agent: str) -> str:
+    return guards.DELEGATION_UNBACKED_CORRECTION.format(agent=agent)
+
+
+def failed_text(agent: str) -> str:
+    return guards.DELEGATION_FAILED_CORRECTION.format(agent=agent)
+
+
+@pytest.mark.parametrize(
+    "label, reply",
+    [
+        ("simple past", "coder wrote hello.py and pushed it."),
+        ("perfect", "coder has written hello.py for you."),
+        ("perfect with adverb", "Coder has already finished the refactor."),
+        ("passive by-name", "hello.py was written by coder."),
+        ("passive participle run", "The tests were run by coder and they pass."),
+        ("passive by the name", "The module was reviewed by the coder."),
+        ("report verb", "coder reported that all tests pass."),
+        ("found", "coder found the bug in the login flow."),
+        ("wrote nothing is still a run", "coder wrote nothing, the task was trivial."),
+        ("name in backticks", "`coder` built the parser."),
+        ("bold name", "**coder** fixed the failing test."),
+        ("agent prefix", "agent coder completed the task."),
+        ("clause end", "The docs were updated by coder"),
+    ],
+)
+def test_an_unbacked_agent_claim_is_flagged_in_each_verb_shape(label, reply):
+    claim = guards.delegation_claim_check(reply, [other_span()], AGENTS)
+    assert claim is not None, label
+    assert claim.agent == "coder", label
+    assert claim.backing == "none", label
+    assert claim.text == unbacked_text("coder"), label
+    assert claim.phrase and len(claim.phrase) <= 80
+
+
+def test_a_claim_backed_by_an_ok_delegate_span_with_facts_is_honest():
+    for reply in (
+        "coder wrote hello.py and pushed it.",
+        "hello.py was written by coder.",
+        "I asked coder to write it and it did.",
+        "coder finished: 2 tool rounds, 1 file written.",
+    ):
+        assert (
+            guards.delegation_claim_check(reply, [delegate_span("coder", via="facts")], AGENTS)
+            is None
+        ), reply
+
+
+def test_a_claim_backed_by_args_redacted_only_is_honest():
+    span = delegate_span("coder", via="args")
+    assert "facts" not in span.meta
+    assert guards.delegation_claim_check("coder wrote hello.py.", [span], AGENTS) is None
+
+
+def test_a_failed_delegate_span_yields_the_did_not_finish_correction():
+    claim = guards.delegation_claim_check(
+        "coder wrote hello.py and all tests pass.", [delegate_span("coder", ok=False)], AGENTS
+    )
+    assert claim is not None
+    assert claim.agent == "coder"
+    assert claim.backing == "failed"
+    assert claim.text == failed_text("coder")
+
+
+def test_an_acknowledged_failure_is_an_honest_report_not_a_completion_claim():
+    failed = [delegate_span("coder", ok=False)]
+    for reply in (
+        "coder ran but hit an error before it could finish.",
+        "coder finished with status error — nothing was written.",
+        "coder wrote hello.py, then its run ended in an error.",
+    ):
+        assert guards.delegation_claim_check(reply, failed, AGENTS) is None, reply
+    # With NO delegation at all the same sentences are fabrications: nothing ran.
+    for reply in (
+        "coder ran but hit an error before it could finish.",
+        "coder wrote hello.py, then its run ended in an error.",
+    ):
+        claim = guards.delegation_claim_check(reply, [other_span()], AGENTS)
+        assert claim is not None and claim.backing == "none", reply
+
+
+def test_a_refused_delegate_call_is_not_an_attempt():
+    claim = guards.delegation_claim_check(
+        "coder wrote hello.py.", [delegate_span("coder", ok=False, refused=True)], AGENTS
+    )
+    assert claim is not None and claim.backing == "none"
+
+
+def test_a_delegate_span_for_a_different_agent_backs_nothing():
+    claim = guards.delegation_claim_check(
+        "coder wrote hello.py.", [delegate_span("reviewer")], AGENTS
+    )
+    assert claim is not None and claim.agent == "coder" and claim.backing == "none"
+
+
+def test_a_delegate_span_whose_agent_cannot_be_read_backs_any_claim():
+    nameless = SimpleNamespace(
+        kind="tool", name="delegate_to_agent", meta={"ok": True, "args_redacted": "…clipped…"}
+    )
+    assert guards.delegation_claim_check("coder wrote hello.py.", [nameless], AGENTS) is None
+
+
+@pytest.mark.parametrize(
+    "label, reply",
+    [
+        ("prior time: yesterday", "coder wrote it yesterday, so it should already be there."),
+        ("prior time: last session", "coder built the parser in the previous session."),
+        ("prior time: earlier today", "The tests were run by coder earlier today."),
+        ("reported: the log says", "The log says coder wrote hello.py."),
+        ("reported: you mentioned", "You mentioned coder fixed the login bug."),
+        ("reported: according to", "According to the trace, coder ran three rounds."),
+        ("relayed quote", 'The commit line reads "coder fixed the parser".'),
+    ],
+)
+def test_a_prior_time_or_reported_frame_is_exempt(label, reply):
+    assert guards.delegation_claim_check(reply, [other_span()], AGENTS) is None, label
+
+
+@pytest.mark.parametrize(
+    "label, reply",
+    [
+        ("modal can", "coder can write that for you."),
+        ("modal will", "coder will write it once you confirm the path."),
+        ("negation did not", "coder did not write anything — I never delegated it."),
+        ("negation contraction", "coder didn't finish, so there is nothing to show."),
+        ("negation never", "coder never wrote hello.py."),
+        ("future ask", "I'll ask coder to write it."),
+        ("infinitive after ask", "I asked coder to read the config first."),
+        ("progressive", "coder is working on it right now."),
+        ("progressive perfect", "coder has been building the parser."),
+        ("question", "Should I ask coder to review it?"),
+        ("question mid-sentence", "coder wrote it, right?"),
+        ("passive future", "The tests will be run by coder."),
+        ("passive negation", "hello.py was not written by coder."),
+        ("passive progressive", "The module is being reviewed by coder."),
+        ("passive needs to be", "That needs to be reviewed by coder first."),
+        ("agent as patient: created", "coder was created with a $5 monthly cap."),
+        ("agent as patient: updated", "coder has been updated with the new tools."),
+        ("coordinated other subject", "I asked coder and wrote it myself."),
+        ("possessive", "coder's folder is agents/coder/."),
+        ("name after the verb", "I created coder with three tools."),
+        ("no agent name", "I wrote hello.py and the tests pass."),
+        ("verb too far", "coder has just now and finally written it."),
+        ("conditional", "If coder finished, the file would be there."),
+        ("temporal future", "Once coder has finished I'll relay its report."),
+        ("not sure", "I'm not sure coder finished."),
+        ("don't know whether", "I don't know whether coder wrote it."),
+        ("can't confirm passive", "I can't confirm hello.py was written by coder."),
+        ("hedging adverb", "coder probably wrote it."),
+        ("I think", "I think coder finished, but I have not checked."),
+    ],
+)
+def test_a_non_claim_shape_never_fires(label, reply):
+    assert guards.delegation_claim_check(reply, [other_span()], AGENTS) is None, label
+
+
+@pytest.mark.parametrize(
+    "label, reply",
+    [
+        ("fronted aside", "As requested, coder wrote hello.py."),
+        ("fronted conditional aside", "If you're wondering, coder finished the task."),
+        ("hedge in a later clause", "I'm not sure why, but coder finished early."),
+        ("label colon", "Update: coder built the parser."),
+    ],
+)
+def test_a_lead_before_the_comma_does_not_shelter_the_main_clause(label, reply):
+    claim = guards.delegation_claim_check(reply, [other_span()], AGENTS)
+    assert claim is not None and claim.agent == "coder" and claim.backing == "none", label
+
+
+def test_a_common_word_agent_name_only_matches_as_a_whole_word():
+    assert guards.delegation_claim_check("reviewers found three bugs.", [], AGENTS) is None
+    assert guards.delegation_claim_check("a reviewer found three bugs.", [], AGENTS) is None
+    assert guards.delegation_claim_check("The review found three bugs.", [], AGENTS) is None
+    claim = guards.delegation_claim_check("reviewer found three bugs.", [], AGENTS)
+    assert claim is not None and claim.agent == "reviewer" and claim.backing == "none"
+    assert claim.text == unbacked_text("reviewer")
+
+
+def test_an_empty_roster_is_always_silent():
+    for names in ([], (), ["", "  "]):
+        assert guards.delegation_claim_check("coder wrote hello.py.", [], names) is None
+
+
+def test_the_canonical_roster_name_is_used_never_the_replys_casing():
+    claim = guards.delegation_claim_check("CODER wrote hello.py.", [], ["Coder"])
+    assert claim is not None and claim.agent == "Coder"
+    assert claim.text == unbacked_text("Coder")
+
+
+def test_the_guard_is_clean_over_its_own_corrections():
+    for agent in AGENTS:
+        for text in (unbacked_text(agent), failed_text(agent)):
+            assert guards.delegation_claim_check(text, [], AGENTS) is None, text
+            assert (
+                guards.delegation_claim_check(text, [delegate_span(agent, ok=False)], AGENTS)
+                is None
+            )
+    # Appended after the reply that earned it, the correction adds no second claim.
+    reply = "coder wrote hello.py. " + unbacked_text("coder")
+    claim = guards.delegation_claim_check(reply, [], AGENTS)
+    assert claim is not None and claim.phrase.startswith("coder wrote hello.py")
+
+
+def test_two_agents_one_backed_flags_only_the_unbacked_one():
+    reply = "coder wrote hello.py and reviewer checked it."
+    claim = guards.delegation_claim_check(reply, [delegate_span("coder")], AGENTS)
+    assert claim is not None
+    assert claim.agent == "reviewer" and claim.backing == "none"
+    assert claim.text == unbacked_text("reviewer")
+    # The other way round.
+    claim = guards.delegation_claim_check(reply, [delegate_span("reviewer")], AGENTS)
+    assert claim is not None and claim.agent == "coder"
+    # Both backed: honest.
+    both = [delegate_span("coder"), delegate_span("reviewer")]
+    assert guards.delegation_claim_check(reply, both, AGENTS) is None
+
+
+def test_the_correction_text_helper_refuses_an_unknown_backing():
+    with pytest.raises(ValueError):
+        guards.delegation_correction_text("coder", "ok")
+
+
+def test_the_delegation_guard_is_pure_same_inputs_same_verdict():
+    reply = "coder wrote hello.py."
+    first = guards.delegation_claim_check(reply, [other_span()], AGENTS)
+    second = guards.delegation_claim_check(reply, [other_span()], AGENTS)
+    assert first == second
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "",
+        "   ",
+        "coder",
+        "by coder",
+        "written by",
+        "coder coder coder wrote wrote",
+        '"coder wrote it',
+        "…—;:!?()[]",
+        "coder wrote hello.py " * 200,
+    ],
+)
+def test_the_delegation_matcher_never_raises_on_odd_input(reply):
+    guards.delegation_claim_check(reply, [other_span(), delegate_span("coder", ok=False)], AGENTS)
+    guards.delegation_claim_check(reply, [], AGENTS)

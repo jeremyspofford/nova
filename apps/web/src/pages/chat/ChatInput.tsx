@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { ArrowUp } from 'lucide-react'
+import { ArrowUp, Bot } from 'lucide-react'
+import { listAgents as apiListAgents, type AgentSummary } from '../../lib/api'
 import { autocompleteMatches, matchCommand, type Command } from '../../lib/commands'
+import { completeMention, mentionMatches, mentionQuery } from '../../lib/mentions'
 
 /**
- * The chat composer: a textarea, a send button, and a slash-command
- * autocomplete. The autocomplete is a pure projection of the command registry
+ * The chat composer: a textarea, a send button, and two autocompletes. The
+ * slash-command one is a pure projection of the command registry
  * (lib/commands.ts) — the same list the whole-message parser and /help read —
  * so a command added there shows up here for free.
  *
@@ -16,13 +18,34 @@ import { autocompleteMatches, matchCommand, type Command } from '../../lib/comma
  * IS the whole command), Esc dismisses it, and clicking a row runs that command.
  * When it is closed, Enter behaves exactly as before — it sends — so Enter is
  * never hijacked away from sending an ordinary message.
+ *
+ * The `@` autocomplete (S12) offers the agents the same way, on a leading `@`
+ * token only (lib/mentions.ts — the same discipline). Its one difference:
+ * choosing an option — Enter, Tab, or a click — only ever COMPLETES the input
+ * to "@name " and never sends, because a mention is the start of a message,
+ * not a whole one. Who actually runs the turn is core's decision, made from
+ * the message it receives; the browser only offers names it read from
+ * GET /api/v1/agents, and if that read fails the menu simply never opens.
+ *
+ * `api` is a dependency-injection seam, the ChatPage/ActivityPage idiom:
+ * production uses the real client (the DEFAULT_API default); a test injects
+ * a fake roster.
  */
+
+interface ChatInputApi {
+  listAgents: typeof apiListAgents
+}
+
+const DEFAULT_API: ChatInputApi = { listAgents: apiListAgents }
+
 export function ChatInput({
   onSubmit,
   disabled,
+  api = DEFAULT_API,
 }: {
   onSubmit: (text: string) => void
   disabled: boolean
+  api?: ChatInputApi
 }) {
   const [input, setInput] = useState('')
   // Esc sets this to hide a dropdown that still has matches; any edit to the
@@ -31,10 +54,47 @@ export function ChatInput({
   const [highlight, setHighlight] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  // The roster the `@` menu offers (S12): asked for ONCE, the first time the
+  // input becomes a leading-@ token, and kept for the life of this composer.
+  // null until then — and null for good if the read failed, which is a menu
+  // that never opens, not an error to show: the browser only offers names,
+  // core decides who runs the turn ("@nobody hi" sends as an ordinary
+  // message and Nova says there is no such agent).
+  const [agents, setAgents] = useState<AgentSummary[] | null>(null)
+  const agentsAsked = useRef(false)
+  // Unmount guard for the roster read. Set true on every mount (not just
+  // declared true) so StrictMode's mount → cleanup → mount in dev does not
+  // leave it false for the composer's whole life.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+  const query = mentionQuery(input)
+  useEffect(() => {
+    if (query === null || agentsAsked.current) return
+    agentsAsked.current = true
+    api
+      .listAgents()
+      .then(list => {
+        if (mounted.current) setAgents(list)
+      })
+      .catch(() => {
+        /* the menu never opens — see above */
+      })
+  }, [query, api])
+
   const matches = autocompleteMatches(input)
+  const mentions = mentionMatches(query, agents)
+  // The two can never both have matches: an input starts with "/" or "@",
+  // not both.
   const showDropdown = !disabled && !dismissed && matches.length > 0
+  const showMentions = !disabled && !dismissed && mentions.length > 0
+  const optionCount = showDropdown ? matches.length : showMentions ? mentions.length : 0
   // Guard the index against a shrinking match list between renders.
-  const activeIndex = Math.min(highlight, Math.max(0, matches.length - 1))
+  const activeIndex = Math.min(highlight, Math.max(0, optionCount - 1))
 
   const resize = () => {
     const el = textareaRef.current
@@ -71,16 +131,22 @@ export function ChatInput({
     else changeInput(cmd.name)
   }
 
+  /** Enter/Tab/click on an agent: complete to "@name " — never send. The
+   * trailing space closes the token, so the menu stands down by itself. */
+  const chooseMention = (agent: AgentSummary) => {
+    changeInput(completeMention(agent.name))
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (showDropdown) {
+    if (showDropdown || showMentions) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        setHighlight(h => (Math.min(h, matches.length - 1) + 1) % matches.length)
+        setHighlight(h => (Math.min(h, optionCount - 1) + 1) % optionCount)
         return
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault()
-        setHighlight(h => (Math.min(h, matches.length - 1) - 1 + matches.length) % matches.length)
+        setHighlight(h => (Math.min(h, optionCount - 1) - 1 + optionCount) % optionCount)
         return
       }
       if (e.key === 'Escape') {
@@ -88,16 +154,24 @@ export function ChatInput({
         setDismissed(true)
         return
       }
-      if (e.key === 'Tab') {
-        // Tab completes without running, so it never accidentally clears a chat.
-        e.preventDefault()
-        changeInput(matches[activeIndex].name)
-        return
-      }
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault()
-        chooseFromKeyboard(matches[activeIndex])
-        return
+      if (showMentions) {
+        if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+          e.preventDefault()
+          chooseMention(mentions[activeIndex])
+          return
+        }
+      } else {
+        if (e.key === 'Tab') {
+          // Tab completes without running, so it never accidentally clears a chat.
+          e.preventDefault()
+          changeInput(matches[activeIndex].name)
+          return
+        }
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault()
+          chooseFromKeyboard(matches[activeIndex])
+          return
+        }
       }
     }
     // Dropdown closed: the ordinary composer behaviour, Enter sends.
@@ -107,14 +181,18 @@ export function ChatInput({
     }
   }
 
+  const menuClass =
+    'absolute bottom-full left-0 right-0 mb-2 z-50 max-h-60 overflow-y-auto custom-scrollbar rounded-2xl border border-border bg-surface-card shadow-lg py-1 glass-overlay dark:border-white/[0.10]'
+  const optionClass = (active: boolean) =>
+    clsx(
+      'flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left transition-colors duration-fast',
+      active ? 'bg-surface-card-hover' : 'hover:bg-surface-card-hover',
+    )
+
   return (
     <div className="relative">
       {showDropdown && (
-        <div
-          role="listbox"
-          data-testid="command-autocomplete"
-          className="absolute bottom-full left-0 right-0 mb-2 z-50 max-h-60 overflow-y-auto custom-scrollbar rounded-2xl border border-border bg-surface-card shadow-lg py-1 glass-overlay dark:border-white/[0.10]"
-        >
+        <div role="listbox" data-testid="command-autocomplete" className={menuClass}>
           {matches.map((cmd, i) => (
             <button
               key={cmd.name}
@@ -129,10 +207,7 @@ export function ChatInput({
                 submit(cmd.name)
               }}
               onMouseEnter={() => setHighlight(i)}
-              className={clsx(
-                'flex w-full flex-col items-start gap-0.5 px-3 py-1.5 text-left transition-colors duration-fast',
-                i === activeIndex ? 'bg-surface-card-hover' : 'hover:bg-surface-card-hover',
-              )}
+              className={optionClass(i === activeIndex)}
             >
               <span className="font-mono text-compact text-content-primary">
                 {cmd.name}
@@ -141,6 +216,33 @@ export function ChatInput({
                 )}
               </span>
               <span className="text-caption text-content-tertiary">{cmd.summary}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {showMentions && (
+        <div role="listbox" data-testid="mention-autocomplete" className={menuClass}>
+          {mentions.map((agent, i) => (
+            <button
+              key={agent.name}
+              type="button"
+              role="option"
+              aria-selected={i === activeIndex}
+              data-testid={`mention-option-${agent.name}`}
+              // Complete on pointer-down (before the textarea blurs) — the
+              // same as picking it with Enter. Never sends.
+              onMouseDown={e => {
+                e.preventDefault()
+                chooseMention(agent)
+              }}
+              onMouseEnter={() => setHighlight(i)}
+              className={optionClass(i === activeIndex)}
+            >
+              <span className="inline-flex items-center gap-1.5 font-mono text-compact text-content-primary">
+                <Bot size={12} className="shrink-0 text-accent" />@{agent.name}
+              </span>
+              <span className="text-caption text-content-tertiary">{agent.purpose}</span>
             </button>
           ))}
         </div>
@@ -158,7 +260,7 @@ export function ChatInput({
           value={input}
           onChange={e => changeInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Message Nova…  (type / for commands)"
+          placeholder="Message Nova…  (type / for commands, @ for an agent)"
           aria-label="Message Nova"
           rows={1}
           className="w-full bg-transparent resize-none text-content-primary placeholder:text-content-tertiary outline-none px-4 pt-4 pb-2"

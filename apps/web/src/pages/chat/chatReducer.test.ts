@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { chatReducer, emptyChat, type ChatState, type ChatRow } from './chatReducer'
+import type { StreamEvent } from '../../lib/streamChat'
+import { chatReducer, emptyChat, type ChatAction, type ChatState, type ChatRow } from './chatReducer'
 
 function started(): ChatState {
   return chatReducer(emptyChat(), {
@@ -55,11 +56,13 @@ describe('chatReducer — a healthy turn', () => {
     expect(state.streaming).toBe(true)
   })
 
+  // `agent: null` on every meta event below — S12: the meta event always
+  // states who ran the turn (type-level pin moved 2026-09-08).
   it('records the model and conversation from the meta frame', () => {
     let state = started()
     state = chatReducer(state, {
       type: 'event',
-      event: { type: 'meta', conversationId: 'c7', model: 'qwen3:4b', turnId: 't1' },
+      event: { type: 'meta', conversationId: 'c7', model: 'qwen3:4b', turnId: 't1', agent: null },
     })
     expect(state.model).toBe('qwen3:4b')
     expect(state.conversationId).toBe('c7')
@@ -74,7 +77,7 @@ describe('chatReducer — a healthy turn', () => {
     let state = started()
     state = chatReducer(state, {
       type: 'event',
-      event: { type: 'meta', conversationId: 'c7', model: 'qwen3:8b', turnId: 't1' },
+      event: { type: 'meta', conversationId: 'c7', model: 'qwen3:8b', turnId: 't1', agent: null },
     })
     expect(state.model).toBe('qwen3:8b')
 
@@ -87,7 +90,7 @@ describe('chatReducer — a healthy turn', () => {
     })
     state = chatReducer(state, {
       type: 'event',
-      event: { type: 'meta', conversationId: 'c7', model: 'qwen3:14b', turnId: 't2' },
+      event: { type: 'meta', conversationId: 'c7', model: 'qwen3:14b', turnId: 't2', agent: null },
     })
     expect(state.model).toBe('qwen3:14b')
   })
@@ -557,7 +560,7 @@ describe('chatReducer — a Settings model switch (modelSwitched)', () => {
     let state = started()
     state = chatReducer(state, {
       type: 'event',
-      event: { type: 'meta', conversationId: 'c1', model: 'qwen3:8b', turnId: 't1' },
+      event: { type: 'meta', conversationId: 'c1', model: 'qwen3:8b', turnId: 't1', agent: null },
     })
     expect(state.model).toBe('qwen3:8b')
 
@@ -839,3 +842,171 @@ describe('chatReducer — the idle poll merges the server transcript by id (S9)'
   })
 })
 
+
+describe('chatReducer — agents (S12): who wrote the row, and what she delegated', () => {
+  type Relay = Partial<Omit<Extract<StreamEvent, { type: 'activity' }>, 'type' | 'tool' | 'status'>>
+  const meta = (agent: string | null): ChatAction => ({
+    type: 'event',
+    event: { type: 'meta', conversationId: 'c1', model: '', turnId: 't1', agent },
+  })
+  const delegate = (status: string, extra: Relay = {}): ChatAction => ({
+    type: 'event',
+    event: { type: 'activity', tool: 'delegate_to_agent', status, ...extra },
+  })
+  const step = (step: string, stepStatus: string) =>
+    delegate('progress', { agent: 'coder', agentTurnId: 't-child', step, stepStatus, detail: 'coder is working…' })
+
+  it('the meta frame names the agent on the pending row; null is Nova', () => {
+    let state = chatReducer(started(), meta('coder'))
+    expect(messages(state).map(m => m.agent)).toEqual([null, 'coder'])
+    state = chatReducer(started(), meta(null))
+    expect(messages(state)[1].agent).toBeNull()
+  })
+
+  it('a row starts with no agent and no delegation, and a meta outside a turn names nothing', () => {
+    const fresh = messages(started())[1]
+    expect([fresh.agent, fresh.delegation, fresh.delegationsDone, fresh.delegations]).toEqual([null, null, [], []])
+    const state = chatReducer(emptyChat(), meta('coder'))
+    expect(state.rows).toEqual([])
+  })
+
+  it('start → 3 steps → ok builds the delegation and closes it ok', () => {
+    let state = started()
+    state = chatReducer(state, delegate('start'))
+    expect(messages(state)[1].delegation).toEqual({ agent: null, turnId: null, steps: [], dropped: 0, status: 'working' })
+    // The delegate tool's own start is a plain tool start on the marker too.
+    expect(messages(state)[1].activity).toEqual({ tool: 'delegate_to_agent', status: 'start' })
+    state = chatReducer(state, step('start', 'start'))
+    state = chatReducer(state, step('workspace_write_file', 'start'))
+    state = chatReducer(state, step('workspace_write_file', 'ok'))
+    expect(messages(state)[1].delegation).toEqual({
+      agent: 'coder',
+      turnId: 't-child',
+      steps: [
+        { step: 'start', status: 'start' },
+        { step: 'workspace_write_file', status: 'start' },
+        { step: 'workspace_write_file', status: 'ok' },
+      ],
+      dropped: 0,
+      status: 'working',
+    })
+    state = chatReducer(state, delegate('ok'))
+    expect(messages(state)[1].delegation?.status).toBe('ok')
+    expect(messages(state)[1].delegation?.steps).toHaveLength(3)
+    // ...and the tool's ok clears the transient marker, as for any tool.
+    expect(messages(state)[1].activity).toBeNull()
+  })
+
+  it('250 steps keeps the first 200 and counts the other 50 as dropped', () => {
+    let state = chatReducer(started(), delegate('start'))
+    for (let i = 0; i < 250; i++) state = chatReducer(state, step(`tool_${i}`, 'ok'))
+    const d = messages(state)[1].delegation
+    expect(d?.steps).toHaveLength(200)
+    expect(d?.steps[199].step).toBe('tool_199')
+    expect(d?.dropped).toBe(50)
+  })
+
+  it('the delegate tool\'s error frame closes the delegation as error, keeping its steps', () => {
+    let state = chatReducer(started(), delegate('start'))
+    state = chatReducer(state, step('fetch_url', 'error'))
+    state = chatReducer(state, delegate('error', { reason: 'agent coder did not finish — status error' }))
+    expect(messages(state)[1].delegation).toEqual({
+      agent: 'coder',
+      turnId: 't-child',
+      steps: [{ step: 'fetch_url', status: 'error' }],
+      dropped: 0,
+      status: 'error',
+    })
+    // The stated reason is on the marker, where the bubble reads it.
+    expect(messages(state)[1].activity?.reason).toBe('agent coder did not finish — status error')
+  })
+
+  it('a plain tool\'s activity never opens a delegation, and a step after a close changes nothing', () => {
+    let state = chatReducer(started(), { type: 'event', event: { type: 'activity', tool: 'get_time', status: 'start' } })
+    state = chatReducer(state, { type: 'event', event: { type: 'activity', tool: 'get_time', status: 'progress', step: 'x', stepStatus: 'ok' } })
+    expect(messages(state)[1].delegation).toBeNull()
+    state = chatReducer(state, delegate('ok'))
+    expect(messages(state)[1].delegation).toBeNull()
+    state = chatReducer(state, delegate('start'))
+    state = chatReducer(state, delegate('ok'))
+    const closed = messages(state)[1].delegation
+    state = chatReducer(state, step('late', 'ok'))
+    expect(messages(state)[1].delegation).toBe(closed)
+  })
+
+  it('a second start after a close opens a new delegation and keeps the finished one in order', () => {
+    let state = chatReducer(started(), delegate('start'))
+    state = chatReducer(state, step('a', 'ok'))
+    state = chatReducer(state, delegate('ok'))
+    state = chatReducer(state, delegate('start'))
+    state = chatReducer(state, delegate('progress', { agent: 'mailer', agentTurnId: 't2', step: 'b', stepStatus: 'ok' }))
+    const row = messages(state)[1]
+    expect(row.delegationsDone.map(d => [d.agent, d.status, d.steps.length])).toEqual([['coder', 'ok', 1]])
+    expect(row.delegation).toEqual({ agent: 'mailer', turnId: 't2', steps: [{ step: 'b', status: 'ok' }], dropped: 0, status: 'working' })
+  })
+
+  it('a delegation still open when the turn ends is marked interrupted — a result was never stated', () => {
+    let state = chatReducer(started(), { type: 'event', event: { type: 'delta', text: 'hmm' } })
+    state = chatReducer(state, delegate('start'))
+    state = chatReducer(state, step('a', 'start'))
+    const done = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    expect(messages(done)[1].delegation?.status).toBe('interrupted')
+    const dropped = chatReducer(state, { type: 'event', event: { type: 'interrupted', reason: 'socket hang up' } })
+    expect(messages(dropped)[1].delegation?.status).toBe('interrupted')
+    const failed = chatReducer(state, { type: 'event', event: { type: 'error', reason: 'stream died' } })
+    expect(messages(failed)[1].delegation?.status).toBe('interrupted')
+    // A closed one is left exactly as it closed.
+    const closedThenDone = chatReducer(chatReducer(state, delegate('ok')), { type: 'event', event: { type: 'done' } })
+    expect(messages(closedThenDone)[1].delegation?.status).toBe('ok')
+  })
+
+  it('fetched rows keep agent and delegations verbatim, null/empty when the server stated none', () => {
+    const state = chatReducer(emptyChat(), {
+      type: 'loaded',
+      conversationId: 'c1',
+      messages: [
+        { id: 'u1', role: 'user', content: '@coder fix it', agent: null, delegations: [] },
+        { id: 'a1', role: 'assistant', content: 'fixed', agent: 'coder', delegations: [] },
+        {
+          id: 'a2',
+          role: 'assistant',
+          content: 'I asked coder',
+          agent: null,
+          delegations: [{ agent: 'coder', agent_turn_id: 't-child', status: 'ok', files: ['agents/coder/notes.md'] }],
+        },
+        { id: 'a3', role: 'assistant', content: 'older core' },
+      ],
+    })
+    const rows = messages(state)
+    expect(rows.map(r => r.agent)).toEqual([null, 'coder', null, null])
+    expect(rows[2].delegations).toEqual([{ agent: 'coder', agent_turn_id: 't-child', status: 'ok', files: ['agents/coder/notes.md'] }])
+    expect(rows[3].delegations).toEqual([])
+    // A fetched row never carries a live delegation.
+    expect(rows.every(r => r.delegation === null && r.delegationsDone.length === 0)).toBe(true)
+  })
+
+  it('the idle poll sees an agent badge or a delegation the store lacks as news, and the same ones as none', () => {
+    const state = chatReducer(emptyChat(), {
+      type: 'loaded',
+      conversationId: 'c1',
+      messages: [{ id: 'u1', role: 'user', content: 'hi' }, { id: 'a1', role: 'assistant', content: 'ok', turn_kind: 'chat' }],
+    })
+    const same = chatReducer(state, {
+      type: 'idlePolled',
+      conversationId: 'c1',
+      messages: [{ id: 'u1', role: 'user', content: 'hi' }, { id: 'a1', role: 'assistant', content: 'ok', turn_kind: 'chat' }],
+      observedRows: state.rows,
+    })
+    expect(same).toBe(state)
+    const badged = chatReducer(state, {
+      type: 'idlePolled',
+      conversationId: 'c1',
+      messages: [
+        { id: 'u1', role: 'user', content: 'hi' },
+        { id: 'a1', role: 'assistant', content: 'ok', turn_kind: 'chat', agent: 'coder' },
+      ],
+      observedRows: state.rows,
+    })
+    expect(messages(badged)[1].agent).toBe('coder')
+  })
+})

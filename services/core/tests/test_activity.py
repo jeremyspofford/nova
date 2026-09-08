@@ -5,6 +5,7 @@ the API must report EXACTLY what is in the ledger: an unfinished turn's
 NULL status must reach the client as null, never coerced to ok/error, and
 a count the ledger has no evidence for must never be invented.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -323,3 +324,200 @@ async def test_the_clipped_string_shape_of_args_redacted_survives_verbatim(owner
     args = body["spans"][0]["meta"]["args_redacted"]
     assert isinstance(args, str)
     assert args == clipped
+
+
+# -- S12: agent + role on every row, ?agent=, kind 'agent' listed ---------
+#
+# `agent` is the NAME read off the agents row through turns.agent_id on
+# every read — a deleted agent's turns lose it (021 SET NULL) — and `role` is
+# the routing role the turn recorded. Neither is a stored label on the page.
+
+TURN_KEYS = {
+    "id",
+    "kind",
+    "model",
+    "person_id",
+    "status",
+    "started_at",
+    "duration_ms",
+    "tool_call_count",
+    "llm_round_count",
+    "conversation_id",
+    # S12 (2026-09-08): who did the work, and which routing role it walked.
+    "agent",
+    "role",
+}
+
+
+async def _agent(pool, name: str = "coder") -> uuid.UUID:
+    return await pool.fetchval(
+        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
+        "VALUES ($1, 'writes code', 'be terse', ARRAY['workspace_write_file'], 8, 'page') "
+        "RETURNING id",
+        name,
+    )
+
+
+async def _agent_turn_at(
+    pool, conversation, agent_id, *, started_offset_secs: float, role: str, kind: str = "agent"
+) -> uuid.UUID:
+    """An agent's own turn — kind 'agent', agent_id + role as traces.open_turn
+    records them — with an explicit started_at so ordering is deterministic."""
+    return await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id, model, started_at, agent_id, role) "
+        "VALUES ($1, $2, 'm', now() + make_interval(secs => $3), $4, $5) RETURNING id",
+        kind,
+        conversation,
+        started_offset_secs,
+        agent_id,
+        role,
+    )
+
+
+async def _listed(owner_client, query: str = "") -> list[dict]:
+    resp = await owner_client.get(f"/api/v1/activity{query}")
+    assert resp.status_code == 200
+    return resp.json()["turns"]
+
+
+async def test_a_row_carries_the_agents_name_and_the_turns_role(owner_client, pool):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    coder = await _agent(pool, "coder")
+    nova = await _turn_at(pool, conversation, started_offset_secs=0)
+    theirs = await _agent_turn_at(
+        pool, conversation, coder, started_offset_secs=1, role="agent_coder"
+    )
+    for t in (nova, theirs):
+        await _close(pool, t)
+
+    rows = await _listed(owner_client)
+    by_id = {r["id"]: r for r in rows}
+    assert set(by_id) == {str(nova), str(theirs)}
+    for row in rows:
+        assert set(row) == TURN_KEYS
+    # Nova's own turn: no agent, no role (routed by kind, as before).
+    assert (by_id[str(nova)]["agent"], by_id[str(nova)]["role"]) == (None, None)
+    assert (by_id[str(theirs)]["agent"], by_id[str(theirs)]["role"]) == ("coder", "agent_coder")
+    assert by_id[str(theirs)]["kind"] == "agent"
+
+    # The drill-in carries the same two keys.
+    body = (await owner_client.get(f"/api/v1/activity/{theirs}")).json()
+    assert set(body["turn"]) == TURN_KEYS
+    assert (body["turn"]["agent"], body["turn"]["role"]) == ("coder", "agent_coder")
+
+
+async def test_a_deleted_agents_turn_loses_the_name_and_keeps_the_role(owner_client, pool):
+    """021: turns.agent_id ON DELETE SET NULL — the ledger keeps the routing
+    role the rounds walked; the name is not remembered anywhere else, so the
+    row says null rather than a name that no longer exists."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    coder = await _agent(pool, "coder")
+    turn = await _agent_turn_at(
+        pool, conversation, coder, started_offset_secs=0, role="agent_coder"
+    )
+    await _close(pool, turn)
+    assert (await _listed(owner_client))[0]["agent"] == "coder"
+
+    await pool.execute("DELETE FROM agents WHERE id = $1", coder)
+
+    (row,) = await _listed(owner_client)
+    assert row["id"] == str(turn)
+    assert row["agent"] is None
+    assert row["role"] == "agent_coder"
+    # And it no longer answers to the name in the filter: the join is the
+    # only binding, and the join is gone.
+    assert await _listed(owner_client, "?agent=coder") == []
+
+
+async def test_the_agent_filter_lists_only_that_agents_turns(owner_client, pool):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    coder = await _agent(pool, "coder")
+    writer = await _agent(pool, "writer")
+    nova = await _turn_at(pool, conversation, started_offset_secs=0)
+    c1 = await _agent_turn_at(pool, conversation, coder, started_offset_secs=1, role="agent_coder")
+    w1 = await _agent_turn_at(
+        pool, conversation, writer, started_offset_secs=2, role="agent_writer"
+    )
+    c2 = await _agent_turn_at(pool, conversation, coder, started_offset_secs=3, role="agent_coder")
+    for t in (nova, c1, w1, c2):
+        await _close(pool, t)
+
+    assert [r["id"] for r in await _listed(owner_client, "?agent=coder")] == [str(c2), str(c1)]
+    assert [r["id"] for r in await _listed(owner_client, "?agent=writer")] == [str(w1)]
+    # Unfiltered, everything — the filter narrows, it never becomes the default.
+    assert [r["id"] for r in await _listed(owner_client)] == [
+        str(c2),
+        str(w1),
+        str(c1),
+        str(nova),
+    ]
+
+
+async def test_an_unknown_agent_name_is_an_empty_list_not_a_404(owner_client, pool):
+    """A fresh agent's Traces tab asks for turns it has not run yet; "nothing
+    yet" is the true answer, and a 404 would read as a broken page. A blank
+    name is a name no agent can hold and is filtered the same way — never
+    quietly widened to the whole feed."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    turn = await _turn_at(pool, conversation, started_offset_secs=0)
+    await _close(pool, turn)
+
+    resp = await owner_client.get("/api/v1/activity?agent=nobody")
+    assert resp.status_code == 200
+    assert resp.json() == {"turns": []}
+    assert await _listed(owner_client, "?agent=") == []
+    # The unfiltered feed still has the turn — nothing above was a 404 on data.
+    assert len(await _listed(owner_client)) == 1
+
+
+async def test_the_agent_filter_pages_with_the_cursor(owner_client, pool):
+    """The cursor and the filter compose: paging through one agent's turns
+    skips the other turns in between without gap or overlap."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    coder = await _agent(pool, "coder")
+    coders = []
+    for i in range(3):
+        nova = await _turn_at(pool, conversation, started_offset_secs=i * 10)
+        await _close(pool, nova)
+        c = await _agent_turn_at(
+            pool, conversation, coder, started_offset_secs=i * 10 + 5, role="agent_coder"
+        )
+        await _close(pool, c)
+        coders.append(str(c))
+    newest_first = list(reversed(coders))
+
+    first = await _listed(owner_client, "?agent=coder&limit=2")
+    assert [r["id"] for r in first] == newest_first[:2]
+    second = await _listed(owner_client, f"?agent=coder&limit=2&before={first[-1]['id']}")
+    assert [r["id"] for r in second] == newest_first[2:]
+    assert await _listed(owner_client, f"?agent=coder&limit=2&before={second[-1]['id']}") == []
+    # An invented cursor is still refused, filter or not.
+    resp = await owner_client.get(f"/api/v1/activity?agent=coder&before={uuid.uuid4()}")
+    assert resp.status_code == 404
+
+
+async def test_kind_agent_turns_are_listed_only_eval_is_filtered(owner_client, pool):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    coder = await _agent(pool, "coder")
+    chat = await _turn_at(pool, conversation, started_offset_secs=0)
+    agent = await _agent_turn_at(
+        pool, conversation, coder, started_offset_secs=1, role="agent_coder"
+    )
+    ev = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id, model, started_at) "
+        "VALUES ('eval', $1, 'm', now() + make_interval(secs => 2)) RETURNING id",
+        conversation,
+    )
+    for t in (chat, agent, ev):
+        await _close(pool, t)
+
+    listed = [(r["id"], r["kind"]) for r in await _listed(owner_client)]
+    assert listed == [(str(agent), "agent"), (str(chat), "chat")]
+    # The drill-in is deliberately unfiltered — an eval_runs row links here.
+    assert (await owner_client.get(f"/api/v1/activity/{ev}")).status_code == 200

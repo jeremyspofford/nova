@@ -1,7 +1,21 @@
-import { memo } from 'react'
-import { AlertTriangle, BellRing, CalendarClock, Cpu, Loader2, Unplug } from 'lucide-react'
+import { memo, useState, type ReactNode } from 'react'
+import { Link, useInRouterContext } from 'react-router-dom'
+import {
+  AlertTriangle,
+  BellRing,
+  Bot,
+  CalendarClock,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Cpu,
+  Loader2,
+  Unplug,
+} from 'lucide-react'
+import { Badge } from '../../components/ui'
 import { Markdown } from '../../components/Markdown'
-import type { ErrorRow, MessageRow } from './chatReducer'
+import type { Delegation } from '../../lib/api'
+import { DELEGATE_TOOL, type ErrorRow, type LiveDelegation, type MessageRow } from './chatReducer'
 
 /**
  * The tool loop's transient progress line — {"activity":{tool,status,
@@ -78,6 +92,179 @@ function TurnKindLabel({ kind }: { kind: string }) {
   )
 }
 
+/**
+ * A link to an agent's page. A Link needs a Router; this bubble is also
+ * rendered bare in its own tests, where a plain anchor is the honest
+ * fallback (the ModelsSection idiom).
+ */
+function AgentLink({
+  name,
+  title,
+  className,
+  testId,
+  children,
+}: {
+  name: string
+  title: string
+  className: string
+  testId?: string
+  children: ReactNode
+}) {
+  const inRouter = useInRouterContext()
+  const to = `/agents/${encodeURIComponent(name)}`
+  return inRouter ? (
+    <Link to={to} title={title} className={className} data-testid={testId}>
+      {children}
+    </Link>
+  ) : (
+    <a href={to} title={title} className={className} data-testid={testId}>
+      {children}
+    </a>
+  )
+}
+
+/**
+ * The label an assistant row earns when an AGENT wrote it (S12): an
+ * `@coder …` message runs the whole turn as the agent, and the row says so.
+ * Keyed by `row.agent` — the meta frame's `agent` live, the turn's
+ * `agent_id` joined to its name on a fetched row — never read off the
+ * text, so a reply that merely says "coder here" earns nothing. Sits beside
+ * TurnKindLabel; an agent's scheduled turn earns both.
+ */
+function AgentLabel({ name }: { name: string }) {
+  return (
+    <p
+      data-testid="agent-label"
+      className="mb-1 inline-flex items-center text-micro font-medium uppercase tracking-wider text-accent"
+    >
+      <AgentLink
+        name={name}
+        title={`this reply was written by the agent ${name} — see /agents/${name}`}
+        className="inline-flex items-center gap-1 hover:underline"
+      >
+        <Bot size={11} className="shrink-0" />
+        {name}
+      </AgentLink>
+    </p>
+  )
+}
+
+/** One relayed step's icon, in the activity marker's visual language: a
+ * spinner only for the step still running, a check or a warning for one
+ * the child stated a result for, a plain dot for anything else. */
+function StepIcon({ status, spinning }: { status: string; spinning: boolean }) {
+  if (status === 'error') return <AlertTriangle size={11} className="shrink-0" />
+  if (status === 'ok') return <Check size={11} className="shrink-0" />
+  if (spinning) return <Loader2 size={11} className="shrink-0 animate-spin" />
+  return <span aria-hidden="true" className="inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
+}
+
+/**
+ * A delegation as this store watched it (S12): one collapsed line — "coder
+ * is working… (n steps)" — that expands to the child turn's steps as the
+ * relay stated them. Finalised by the delegate tool's OWN ok/error frame,
+ * never by the child's prose; 'interrupted' is the store's finding that the
+ * turn ended with no result stated (see chatReducer's LiveDelegation).
+ * `count` includes the steps the row stopped keeping past the cap, so a
+ * long delegation still says how long it was.
+ */
+function DelegationLine({ delegation }: { delegation: LiveDelegation }) {
+  const [expanded, setExpanded] = useState(false)
+  const who = delegation.agent ?? 'an agent'
+  const count = delegation.steps.length + delegation.dropped
+  const working = delegation.status === 'working'
+  const failed = delegation.status === 'error' || delegation.status === 'interrupted'
+  const headline = working
+    ? `${who} is working… (${count} ${count === 1 ? 'step' : 'steps'})`
+    : delegation.status === 'ok'
+      ? `${who} finished`
+      : delegation.status === 'error'
+        ? `${who} did not finish`
+        : `${who} — cut off before a result was stated`
+  const last = delegation.steps.length - 1
+  return (
+    <div data-testid="delegation-line" data-status={delegation.status} className="mt-1.5 text-caption">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded(open => !open)}
+        className={`inline-flex items-center gap-1.5 transition-colors duration-fast hover:text-content-secondary ${
+          failed ? 'text-danger' : 'text-content-tertiary'
+        }`}
+      >
+        {expanded ? (
+          <ChevronDown size={12} className="shrink-0" />
+        ) : (
+          <ChevronRight size={12} className="shrink-0" />
+        )}
+        {working ? (
+          <Loader2 size={12} className="shrink-0 animate-spin" />
+        ) : failed ? (
+          <AlertTriangle size={12} className="shrink-0" />
+        ) : (
+          <Check size={12} className="shrink-0" />
+        )}
+        <span data-testid="delegation-headline">{headline}</span>
+      </button>
+      {expanded && (
+        <ul data-testid="delegation-steps" className="mt-1 ml-5 space-y-0.5">
+          {count === 0 && (
+            <li className="italic text-content-tertiary">
+              {working ? 'no steps reported yet' : 'no steps were reported'}
+            </li>
+          )}
+          {delegation.steps.map((s, i) => (
+            <li
+              key={i}
+              data-testid="delegation-step"
+              className={`flex items-center gap-1.5 ${
+                s.status === 'error' ? 'text-danger' : 'text-content-tertiary'
+              }`}
+            >
+              <StepIcon
+                status={s.status}
+                spinning={working && i === last && delegation.dropped === 0}
+              />
+              <span className="font-mono">{s.step}</span>
+              <span> · {s.status}</span>
+            </li>
+          ))}
+          {delegation.dropped > 0 && (
+            <li data-testid="delegation-more" className="text-content-tertiary">
+              and {delegation.dropped} more
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+const DELEGATION_CHIP_COLOR = { ok: 'success', error: 'danger', interrupted: 'warning' } as const
+
+/**
+ * A delegation as the ledger recorded it (S12) — what a reloaded page
+ * shows in place of the live line. `status` and the file count are derived
+ * from the child turn's spans (services/core), never from the agent's own
+ * report; the chip links to the agent's page, where the trace is.
+ */
+function DelegationChip({ delegation }: { delegation: Delegation }) {
+  const n = delegation.files.length
+  return (
+    <AgentLink
+      name={delegation.agent}
+      testId="delegation-chip"
+      title={`Nova delegated to ${delegation.agent} — child turn ${delegation.agent_turn_id}, see /agents/${delegation.agent}`}
+      className="inline-flex transition-opacity duration-fast hover:opacity-80"
+    >
+      <Badge size="sm" color={DELEGATION_CHIP_COLOR[delegation.status] ?? 'neutral'}>
+        <Bot size={10} className="shrink-0" />
+        {`${delegation.agent} · ${delegation.status} · ${n} ${n === 1 ? 'file' : 'files'}`}
+      </Badge>
+    </AgentLink>
+  )
+}
+
 function LoadingDots() {
   return (
     <span className="inline-flex items-center gap-1 py-1" aria-label="waiting for the model">
@@ -101,15 +288,40 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
     )
   }
 
+  // The avatar is the writer's initial: the agent's when one wrote the row
+  // (S12), Nova's N otherwise.
+  const initial = row.agent ? row.agent.charAt(0).toUpperCase() : 'N'
+  // Every delegation this store watched on this row, oldest first, the one
+  // in flight last. One list (not done + current separately) so a line's
+  // expanded state survives the moment its delegation closes and a new one
+  // opens after it.
+  const delegationLines = row.delegation
+    ? [...row.delegationsDone, row.delegation]
+    : row.delegationsDone
+  // While a delegation works, its own line already says what the delegate
+  // tool's marker would ("using delegate_to_agent… coder is working…") —
+  // one line, not two. An error marker still shows: it carries the reason.
+  const hideActivity =
+    row.activity?.tool === DELEGATE_TOOL && row.delegation?.status === 'working'
+
   return (
     <div className="flex gap-3 items-start" data-testid="message-assistant">
       <div className="shrink-0 mt-0.5">
-        <div className="h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold select-none bg-accent-dim text-accent">
-          N
+        <div
+          data-testid="assistant-avatar"
+          title={row.agent ? `agent ${row.agent}` : 'Nova'}
+          className="h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold select-none bg-accent-dim text-accent"
+        >
+          {initial}
         </div>
       </div>
       <div className="flex-1 min-w-0 pb-1">
-        {row.turnKind !== null && <TurnKindLabel kind={row.turnKind} />}
+        {(row.turnKind !== null || row.agent !== null) && (
+          <div className="flex flex-wrap items-center gap-x-2">
+            {row.turnKind !== null && <TurnKindLabel kind={row.turnKind} />}
+            {row.agent !== null && <AgentLabel name={row.agent} />}
+          </div>
+        )}
         {/* Her replies are GitHub-flavoured markdown (components/Markdown.tsx:
             sanitised, raw HTML shown as text, never executed). The user's own
             bubble above stays plain pre-wrap text — what the owner typed is
@@ -123,7 +335,17 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
             <LoadingDots />
           ) : null}
         </div>
-        {row.activity && <ActivityLine activity={row.activity} />}
+        {delegationLines.map((delegation, i) => (
+          <DelegationLine key={i} delegation={delegation} />
+        ))}
+        {row.delegations.length > 0 && (
+          <p data-testid="delegation-chips" className="mt-1.5 flex flex-wrap items-center gap-1.5">
+            {row.delegations.map(delegation => (
+              <DelegationChip key={delegation.agent_turn_id} delegation={delegation} />
+            ))}
+          </p>
+        )}
+        {row.activity && !hideActivity && <ActivityLine activity={row.activity} />}
         {/* Who answered — `provider:model` as the gateway stated it on this
             turn's trace (S10-pre). Absent, never invented, when the turn is
             still streaming its first round or the server stated none. */}

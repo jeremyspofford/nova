@@ -113,22 +113,75 @@ async def get_active(person: Person = Depends(identity.require_person)) -> dict:
     }
 
 
-@router.get("/{conversation_id}/messages")
-async def get_messages(
-    conversation_id: uuid.UUID, person: Person = Depends(identity.require_person)
-) -> dict:
-    pool = await db.get_pool()
-    await owned_conversation(pool, person, conversation_id)
-    # `served_by` is read off the turn's llm_call span (the gateway's own
-    # X-Nova-Served-By, `provider:model`) — the trace, never a stored claim.
-    # NULL for user rows, for rows older than migration 018, and for a turn
-    # whose gateway call never got far enough to state one.
-    # `turn_kind` is the same derivation one join shorter: turns.kind via
-    # messages.turn_id, so the chat page's "Reminder" / "Scheduled" label on
-    # an assistant row comes from the turn that wrote it, never a stored
-    # label that could drift (S9). NULL for a row with no turn.
+def _delegation_json(span: dict) -> dict:
+    """One delegate_to_agent span -> {agent, agent_turn_id, status, files}.
+
+    The delegate tool appends ONE facts dict to the turn's facts sink before it
+    decides ok, so meta.facts[0] is the run's own verified record — agent,
+    child turn id, status read back from the ledger, files derived from the
+    child's write spans — on success AND on failure. A delegate span with NO
+    facts is a call that never got as far as composing its result (a refused
+    argument, a crash before the child turn opened): the one thing it still
+    knows is who it was aimed at (args_redacted.agent), and its status is
+    'error' — never an 'ok' guessed from silence, and never dropped, or a
+    failed hand-off would vanish from the transcript on reload.
+    """
+    facts = span.get("facts")
+    fact = facts[0] if isinstance(facts, list) and facts and isinstance(facts[0], dict) else None
+    # args_redacted is polymorphic: an object normally, a clipped STRING when
+    # the model's arguments were oversized or unparseable (activity.py pins
+    # both shapes) — a string names no agent.
+    args = span.get("args")
+    aimed_at = args.get("agent") if isinstance(args, dict) else None
+    if not isinstance(aimed_at, str):
+        aimed_at = None
+    if fact is None:
+        return {"agent": aimed_at, "agent_turn_id": None, "status": "error", "files": []}
+    files = fact.get("files")
+    return {
+        "agent": fact.get("agent") or aimed_at,
+        "agent_turn_id": fact.get("agent_turn_id"),
+        # A facts dict without a status is a result that was never composed,
+        # the same silence as no facts at all.
+        "status": fact.get("status") or "error",
+        "files": [str(f) for f in files] if isinstance(files, list) else [],
+    }
+
+
+async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[dict]:
+    """The rows of ONE conversation, oldest first, as the chat page renders
+    them. No ownership check here — the caller scopes: get_messages proves the
+    requester owns the conversation first, and the agents API reads an agent's
+    log conversation through this (agents are household objects, so that read
+    is not person-scoped, like Activity).
+
+    Everything beyond the row's own columns is derived from the TRACE behind
+    it, never from a stored label that could drift:
+    `served_by` is read off the turn's llm_call span (the gateway's own
+    X-Nova-Served-By, `provider:model`). NULL for user rows, for rows older
+    than migration 018, and for a turn whose gateway call never got far enough
+    to state one.
+    `turn_kind` is the same derivation one join shorter: turns.kind via
+    messages.turn_id, so the chat page's "Reminder" / "Scheduled" label on an
+    assistant row comes from the turn that wrote it (S9). NULL for a row with
+    no turn.
+    `agent` (S12) is one join further: the agents row the turn's agent_id
+    points at, so an assistant row written by an agent's own turn carries its
+    name. None for a user row (it has no turn), for Nova's own turns
+    (agent_id NULL), and for a deleted agent's turns (agent_id SET NULL by
+    021 — the row keeps its role text in Activity, the transcript loses the
+    name rather than inventing one).
+    `delegations` (S12) is one entry per delegate_to_agent tool span on the
+    row's turn, so a reload can re-draw the chip for each agent Nova handed
+    work to in that turn — see _delegation_json for what each entry says.
+    """
+    # Function-local: app.agents imports app.tools, whose timers module
+    # imports this module at top level — the same one-way idiom
+    # tools/timers.py uses to reach agents.
+    from app import agents
+
     rows = await pool.fetch(
-        "SELECT m.id, m.role, m.content, m.created_at, t.kind AS turn_kind, "
+        "SELECT m.id, m.role, m.content, m.created_at, t.kind AS turn_kind, a.name AS agent, "
         "  (SELECT s.meta->>'served_by' FROM turn_spans s "
         "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' AND s.meta ? 'served_by' "
         "    ORDER BY s.started_at DESC LIMIT 1) AS served_by, "
@@ -137,31 +190,49 @@ async def get_messages(
         "    AND s.meta->>'cost_usd' IS NOT NULL) AS cost_usd, "
         "  (SELECT s.meta->>'route_reason' FROM turn_spans s "
         "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' AND s.meta ? 'route_reason' "
-        "    ORDER BY s.started_at DESC LIMIT 1) AS route_reason "
+        "    ORDER BY s.started_at DESC LIMIT 1) AS route_reason, "
+        # Every delegate span on the turn, in the order they ran, carrying just
+        # the two meta keys the entry is derived from. jsonb crosses the wire
+        # as python objects (db.py's codec), so this lands as a list of dicts.
+        "  (SELECT COALESCE(jsonb_agg(jsonb_build_object("
+        "      'facts', s.meta->'facts', 'args', s.meta->'args_redacted') "
+        "    ORDER BY s.started_at, s.id), '[]'::jsonb) FROM turn_spans s "
+        "    WHERE s.turn_id = m.turn_id AND s.kind = 'tool' AND s.name = $2) AS delegate_spans "
         "FROM messages m LEFT JOIN turns t ON t.id = m.turn_id "
+        "LEFT JOIN agents a ON a.id = t.agent_id "
         "WHERE m.conversation_id = $1 ORDER BY m.created_at, m.id",
         conversation_id,
+        agents.DELEGATE_TOOL,
     )
-    return {
-        "messages": [
-            {
-                "id": str(row["id"]),
-                "role": row["role"],
-                "content": row["content"],
-                "created_at": row["created_at"].isoformat(),
-                "served_by": row["served_by"],
-                "turn_kind": row["turn_kind"],
-                # S10: the turn's cost summed from its llm_call spans — the
-                # gateway's ledger figures, never a stored claim. NULL when
-                # no round was priced.
-                "cost_usd": float(row["cost_usd"]) if row["cost_usd"] is not None else None,
-                # S10-2: the gateway's stated reason when this turn's answer
-                # came from a fallback link; null when link 1 served.
-                "route_reason": row["route_reason"],
-            }
-            for row in rows
-        ]
-    }
+    return [
+        {
+            "id": str(row["id"]),
+            "role": row["role"],
+            "content": row["content"],
+            "created_at": row["created_at"].isoformat(),
+            "served_by": row["served_by"],
+            "turn_kind": row["turn_kind"],
+            # S10: the turn's cost summed from its llm_call spans — the
+            # gateway's ledger figures, never a stored claim. NULL when
+            # no round was priced.
+            "cost_usd": float(row["cost_usd"]) if row["cost_usd"] is not None else None,
+            # S10-2: the gateway's stated reason when this turn's answer
+            # came from a fallback link; null when link 1 served.
+            "route_reason": row["route_reason"],
+            "agent": row["agent"],
+            "delegations": [_delegation_json(span) for span in row["delegate_spans"]],
+        }
+        for row in rows
+    ]
+
+
+@router.get("/{conversation_id}/messages")
+async def get_messages(
+    conversation_id: uuid.UUID, person: Person = Depends(identity.require_person)
+) -> dict:
+    pool = await db.get_pool()
+    await owned_conversation(pool, person, conversation_id)
+    return {"messages": await messages_json(pool, conversation_id)}
 
 
 async def clear_messages(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> int:

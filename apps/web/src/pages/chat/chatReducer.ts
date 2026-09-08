@@ -1,3 +1,4 @@
+import type { Delegation } from '../../lib/api'
 import type { StreamEvent } from '../../lib/streamChat'
 
 /**
@@ -22,6 +23,35 @@ import type { StreamEvent } from '../../lib/streamChat'
  * `null` (see `message()` below), because the durable record of what ran
  * is the Activity page, not the chat transcript. */
 export type ActivityMarker = { tool: string; status: string; reason?: string; detail?: string } | null
+
+/** The tool whose activity frames open, feed and close a delegation. */
+export const DELEGATE_TOOL = 'delegate_to_agent'
+
+/** How many of a delegation's steps the row keeps; the rest are counted in
+ * `dropped`, never silently lost — a 500-step child turn still says how
+ * many steps it took, it just does not hold every row in memory. */
+export const MAX_DELEGATION_STEPS = 200
+
+/** A delegation as THIS store watched it happen (S12): built from the
+ * delegate_to_agent activity frames of a turn it streamed, so it is the
+ * live view — the child's steps as the relay stated them, capped. Never
+ * persisted: a fetched row carries `delegations` (the ledger's derived
+ * record, below) instead, and the two never coexist on one row.
+ *
+ * `agent` is null until a frame names it: the delegate tool's own `start`
+ * frame is a plain tool start (no agent), the name arrives on the first
+ * relayed progress frame. `status` is 'working' from that start until the
+ * tool's own ok/error frame closes it; 'interrupted' is this STORE's
+ * finding — the turn ended (done, error, dropped connection, or a second
+ * start) while the delegation was still open, so no result was ever
+ * stated. It is never a claim about what the child turn did. */
+export type LiveDelegation = {
+  agent: string | null
+  turnId: string | null
+  steps: { step: string; status: string }[]
+  dropped: number
+  status: 'working' | 'ok' | 'error' | 'interrupted'
+}
 
 export type MessageRow = {
   kind: 'message'
@@ -50,6 +80,22 @@ export type MessageRow = {
    * ever set from a fetched row: a row this store streamed itself is a chat
    * turn by construction and stays null. */
   turnKind: string | null
+  /** The agent that wrote this row (S12): the `meta` frame's `agent` live
+   * (an `@coder …` turn runs entirely as the agent), `agent` on the
+   * fetched row after. null for Nova's own replies and for user rows —
+   * never inferred from the text, never from what the owner typed. */
+  agent: string | null
+  /** The delegation in flight on this row, or the last one this store
+   * watched close (S12). One at a time: core dispatches calls
+   * sequentially, so a second `start` moves this into `delegationsDone`. */
+  delegation: LiveDelegation | null
+  /** Delegations this store watched to completion before a later one
+   * opened on the same row, in order. */
+  delegationsDone: LiveDelegation[]
+  /** The ledger's record of this row's delegations, verbatim from the
+   * fetched row (S12). Only ever set from a fetched row — a streamed row
+   * has the live `delegation` instead — and it is what survives a reload. */
+  delegations: Delegation[]
 }
 
 export type ErrorRow = {
@@ -120,9 +166,11 @@ export type FetchedMessage = {
   turn_kind?: string | null
   cost_usd?: number | null
   route_reason?: string | null
+  agent?: string | null
+  delegations?: Delegation[]
 }
 
-export const NO_REPLY = 'the turn finished without a reply' 
+export const NO_REPLY = 'the turn finished without a reply'
 
 export function emptyChat(): ChatState {
   return { rows: [], streaming: false, conversationId: null, model: null, pendingId: null }
@@ -139,8 +187,74 @@ function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role
     cost: null,
     routeReason: null,
     turnKind: null,
+    agent: null,
+    delegation: null,
+    delegationsDone: [],
+    delegations: [],
     ...row,
   }
+}
+
+type ActivityEvent = Extract<StreamEvent, { type: 'activity' }>
+
+/**
+ * The delegation state machine (S12), fed only delegate_to_agent frames.
+ *   start            → a new working delegation (whatever was open is done:
+ *                      closed as it was, or 'interrupted' if it never was)
+ *   progress + step  → append the step, or count it once the cap is hit;
+ *                      the first frame that names the agent/turn names it
+ *   ok / error       → close the open one with that status
+ * A close with nothing open, or a step after a close, changes nothing —
+ * there is no delegation for it to describe.
+ */
+function delegationAfter(
+  row: MessageRow,
+  event: ActivityEvent,
+): Pick<MessageRow, 'delegation' | 'delegationsDone'> {
+  const current = row.delegation
+  if (event.status === 'start') {
+    const done = current
+      ? [...row.delegationsDone, current.status === 'working' ? { ...current, status: 'interrupted' as const } : current]
+      : row.delegationsDone
+    return {
+      delegation: {
+        agent: event.agent ?? null,
+        turnId: event.agentTurnId ?? null,
+        steps: [],
+        dropped: 0,
+        status: 'working',
+      },
+      delegationsDone: done,
+    }
+  }
+  if (!current || current.status !== 'working') {
+    return { delegation: current, delegationsDone: row.delegationsDone }
+  }
+  if (event.status === 'ok' || event.status === 'error') {
+    return { delegation: { ...current, status: event.status }, delegationsDone: row.delegationsDone }
+  }
+  const named: LiveDelegation = {
+    ...current,
+    agent: current.agent ?? event.agent ?? null,
+    turnId: current.turnId ?? event.agentTurnId ?? null,
+  }
+  if (event.step === undefined) return { delegation: named, delegationsDone: row.delegationsDone }
+  const entry = { step: event.step, status: event.stepStatus ?? event.status }
+  return {
+    delegation:
+      named.steps.length < MAX_DELEGATION_STEPS
+        ? { ...named, steps: [...named.steps, entry] }
+        : { ...named, dropped: named.dropped + 1 },
+    delegationsDone: row.delegationsDone,
+  }
+}
+
+/** The turn is over. A delegation still 'working' never had its result
+ * stated — say so ('interrupted', this store's finding) rather than leave
+ * a spinner on a finished bubble. A closed one is left exactly as it is. */
+function settleDelegation(row: MessageRow): MessageRow {
+  if (!row.delegation || row.delegation.status !== 'working') return row
+  return { ...row, delegation: { ...row.delegation, status: 'interrupted' } }
 }
 
 function withPending(state: ChatState, apply: (row: MessageRow) => MessageRow): ChatState {
@@ -166,7 +280,7 @@ function replacePendingWithError(state: ChatState, reason: string): ChatState {
   const keptRows =
     pending && pending.text
       ? state.rows.map(row =>
-          row === pending ? { ...pending, streaming: false, activity: null } : row,
+          row === pending ? settleDelegation({ ...pending, streaming: false, activity: null }) : row,
         )
       : state.rows.filter(row => row !== pending)
   return { ...state, rows: [...keptRows, errorRow], streaming: false, pendingId: null }
@@ -174,12 +288,16 @@ function replacePendingWithError(state: ChatState, reason: string): ChatState {
 
 function applyEvent(state: ChatState, event: StreamEvent): ChatState {
   switch (event.type) {
-    case 'meta':
-      return {
+    case 'meta': {
+      const next = {
         ...state,
         conversationId: event.conversationId || state.conversationId,
         model: event.model || state.model,
       }
+      // Who is writing the pending row (S12): the agent the server named,
+      // or null for Nova. Set directly — the meta frame is the one fact.
+      return state.pendingId === null ? next : withPending(next, row => ({ ...row, agent: event.agent }))
+    }
 
     case 'delta':
       if (state.pendingId === null) return state
@@ -204,6 +322,9 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
                 // is REPLACED each time so the bubble shows the latest.
                 ...(event.detail !== undefined ? { detail: event.detail } : {}),
               },
+        // Only the delegate tool's frames touch the delegation (S12); every
+        // other tool's frames leave it exactly as it is.
+        ...(event.tool === DELEGATE_TOOL ? delegationAfter(row, event) : {}),
       }))
 
     case 'served':
@@ -238,7 +359,7 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
       // No text and no error frame: still a failure, said out loud.
       if (pending && !pending.text) return replacePendingWithError(state, NO_REPLY)
       return {
-        ...withPending(state, row => ({ ...row, streaming: false, activity: null })),
+        ...withPending(state, row => settleDelegation({ ...row, streaming: false, activity: null })),
         streaming: false,
         pendingId: null,
       }
@@ -247,12 +368,14 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
     case 'interrupted': {
       if (state.pendingId === null) return { ...state, streaming: false }
       return {
-        ...withPending(state, row => ({
-          ...row,
-          streaming: false,
-          interrupted: true,
-          activity: null,
-        })),
+        ...withPending(state, row =>
+          settleDelegation({
+            ...row,
+            streaming: false,
+            interrupted: true,
+            activity: null,
+          }),
+        ),
         streaming: false,
         pendingId: null,
       }
@@ -272,7 +395,21 @@ function serverRow(m: FetchedMessage): MessageRow {
     cost: typeof m.cost_usd === 'number' ? m.cost_usd : null,
     routeReason: typeof m.route_reason === 'string' ? m.route_reason : null,
     turnKind: m.turn_kind ?? null,
+    agent: typeof m.agent === 'string' && m.agent ? m.agent : null,
+    // Verbatim: the ledger's derived record is the chip's whole source.
+    delegations: Array.isArray(m.delegations) ? m.delegations : [],
   })
+}
+
+function sameDelegations(a: Delegation[], b: Delegation[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every(
+    (d, i) =>
+      d.agent === b[i].agent &&
+      d.agent_turn_id === b[i].agent_turn_id &&
+      d.status === b[i].status &&
+      d.files.length === b[i].files.length,
+  )
 }
 
 function fromFetchedMessages(
@@ -427,7 +564,9 @@ function sameRows(a: ChatRow[], b: ChatRow[]): boolean {
       row.servedBy === other.servedBy &&
       row.turnKind === other.turnKind &&
       row.streaming === other.streaming &&
-      row.interrupted === other.interrupted
+      row.interrupted === other.interrupted &&
+      row.agent === other.agent &&
+      sameDelegations(row.delegations, other.delegations)
     )
   })
 }

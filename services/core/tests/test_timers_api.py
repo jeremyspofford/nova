@@ -552,6 +552,10 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
     }
     assert "turn_kind" not in columns
     # S10 added cost_usd (the turn's cost from its spans; null when unpriced).
+    # S12 (2026-09-08) added agent (the agent that wrote the row, derived from
+    # turns.agent_id; null for Nova and for a deleted agent) and delegations
+    # (derived from the turn's delegate_to_agent spans) — trace-derived, like
+    # turn_kind, never stored on the message.
     assert set(messages[0]) == {
         "id",
         "role",
@@ -561,4 +565,6 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
         "turn_kind",
         "cost_usd",
         "route_reason",
+        "agent",
+        "delegations",
     }

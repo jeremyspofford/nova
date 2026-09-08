@@ -3003,3 +3003,448 @@ def presented_listing_check(
     if _listing_ran(spans, listing_tools):
         return None
     return PresentedListingClaim(entries=len(own), phrase=own[0].line[:80])
+
+
+# -- the delegation-claim guard (S12) ---------------------------------------
+#
+# The eighth sibling, for the hole every guard above shares: they read
+# FIRST-PERSON claims. narration_check walks back from a verb to "I" (an active
+# claim needs Nova as its subject, _first_person_subject) and drops anything
+# else as attributed to someone else — so "coder wrote hello.py", "reviewer
+# found three bugs", "the tests were run by coder" are invisible to it. S12
+# hands her exactly that vocabulary: a roster of named agents she delegates to
+# through delegate_to_agent. A model that narrates an agent's work it never
+# delegated, or whose run errored out, is fabricating by proxy — the same lie
+# as the kv_offloading one with the pronoun changed.
+#
+# delegation_claim_check(reply_text, spans, agent_names) fires when a
+# non-question clause credits a NAMED agent with a COMPLETED action and no
+# successful delegate_to_agent span for that agent ran this turn. Both halves
+# are mechanical and DERIVED, never kept here:
+#
+#   * `agent_names` is the LIVE roster the caller reads (agents.names(pool)).
+#     With no agents there is no such claim to make, so an empty roster returns
+#     None by construction (fail-open), and creating an agent arms the guard
+#     for its name by itself.
+#   * Backing is read off the spans. A delegate_to_agent span names the agent
+#     it ran in meta.facts[].agent (the executor's facts sink, copied on
+#     success AND failure) and in args_redacted.agent (the call's own
+#     argument); either counts. meta.ok True -> the run finished -> every
+#     claim about that agent this turn is backed (the tool result already
+#     states what it did, derived from the child's spans, and this guard does
+#     not second-guess it). ok False -> it ran and ended in an error -> "did
+#     not finish". No span -> nothing was delegated. A REFUSED call (markup,
+#     out of rounds — the refused_* flag chat._refuse_call writes) is not an
+#     attempt, the same reading as the deferral guard's _attempted. A span
+#     whose agent cannot be read (no facts, a flooded argument record) counts
+#     for every name — leniency runs toward not correcting, as in _target_of.
+#
+# Built to the family's two rules: PURE (text + spans + the names; no model,
+# network or clock) and PRECISION-first (a wrongly-corrected honest reply makes
+# the guard the liar — worse than a missed one, and this correction names an
+# agent). The claim shapes and the cuts that keep honest sentences clean:
+#
+#   * ACTIVE: the agent's NAME as a whole token (case-insensitive; "reviewers"
+#     never matches "reviewer", nor does the possessive "coder's"), followed
+#     within three tokens by a completed-action verb — the narration verb set
+#     plus the verbs a delegation report uses (finished, completed, found,
+#     searched, fetched, ran, built, fixed, tested, delivered, reported) — in
+#     the simple past or the perfect ("coder has written"). A modal or
+#     infinitive marker in between ("coder will write", "coder can write",
+#     "asked coder to read it"), a negation ("coder did not write", "coder
+#     never wrote"), or a passive auxiliary ("coder was created", "coder has
+#     been updated" — the agent is the PATIENT there, something Nova did TO it
+#     with the agent tools) means no completed action is credited to it. The
+#     window stops at a conjunction, a comma or stop punctuation, so a
+#     coordinated verb with a different subject ("I asked coder and wrote it
+#     myself") is never read as coder's. A progressive ("coder is working on
+#     it"), a future ("I'll ask coder to write it") and a base-form infinitive
+#     ("coder to review") never reach a listed verb form at all. An INDEFINITE
+#     determiner before the name ("a researcher found that…") makes it a
+#     common noun, not the agent. "coder wrote nothing" IS a claim: it credits
+#     a run that happened.
+#   * PASSIVE: a past participle followed within three tokens by "by <name>"
+#     ("was written by coder", "the tests were run by coder"), with no modal,
+#     negation or "being" in the three tokens before the participle ("will be
+#     reviewed by coder", "was not written by coder", "is being reviewed by
+#     coder" credit nothing completed).
+#   * A QUESTION ("should I ask coder to review it?") asserts nothing — the
+#     shared _clauses machinery. A PRIOR-TIME marker ("coder wrote it
+#     yesterday") or a REPORTED frame ("the log says coder wrote it", "you
+#     mentioned coder fixed it", "according to the trace, coder ran") in the
+#     clause, or a name inside an open double quote (a line she is relaying),
+#     places the action outside this turn and is exempt — the same _PRIOR_TIME
+#     and _REPORTED the other guards read. narration_check's
+#     _externally_attributed is deliberately NOT reused: its "by <not me>"
+#     clause would exempt the very passive shape this guard exists to read.
+#   * A HEDGE or a SUBORDINATE frame asserts no completion: a conditional or
+#     temporal lead before the name ("if coder finished, the file would be
+#     there", "once coder has finished I'll relay it", "I don't know whether
+#     coder wrote it"), an uncertainty lead ("I'm not sure coder finished",
+#     "I can't confirm hello.py was written by coder", "I think coder
+#     finished"), or a hedging adverb between name and verb ("coder probably
+#     wrote it"). The lead is read from the text before the name back to the
+#     last comma, so a fronted aside does not shelter the main clause ("As
+#     requested, coder wrote hello.py" and "If you're wondering, coder
+#     finished the task" still fire). Accepted KNOWN MISSES on this cut,
+#     precision-first: a past temporal clause ("after coder finished, I read
+#     it") and a hedged fabrication ("I think coder finished") stay clean —
+#     the confident form is what a fabricating model writes, and a hedged
+#     honest sentence wrongly corrected is the worse failure.
+#   * An HONEST FAILURE REPORT is not a claim of completion: when the only
+#     delegate span for the agent FAILED and the reply anywhere acknowledges a
+#     failure ("coder ran but hit an error", "coder finished with status
+#     error"), it is relaying the failure the tool result stated, and
+#     appending "coder did not finish" would contradict a true report. With NO
+#     span at all the same sentence is still a fabrication (nothing ran) and
+#     is flagged.
+#
+# APPEND-class like narration: the correction is added after the reply, never
+# replacing it — the operator sees what she claimed and the contradiction
+# beside it. Two corrections, each saying only what is mechanically true:
+# nothing was delegated (no span), or the run ended in an error (ok False).
+# The agent's canonical roster name is used, never the reply's casing. Both
+# are clean under this guard (pinned in test_guards.py). Wiring (the guard
+# span `delegation_claim` {agent, phrase, backing}, the correction frame, the
+# turn plumbing) is chat.py's, alongside narration.
+
+DELEGATE_TOOL_NAME = "delegate_to_agent"
+
+DELEGATION_UNBACKED_CORRECTION = (
+    "Correction: I did not hand anything to {agent} this turn — no delegation ran, "
+    "so nothing it 'did' happened. Tell me again and I'll delegate it."
+)
+DELEGATION_FAILED_CORRECTION = (
+    "Correction: {agent} did not finish that task (its run ended in an error), "
+    "so I cannot report it as done."
+)
+
+# Completed-action verbs an agent can be credited with: narration's own set
+# (created/wrote/written/saved/updated/appended/added/read/checked/reviewed/
+# opened/examined) plus what a delegation report says. Past or perfect forms
+# only — a base form ("write", "finish") is a future/infinitive and is absent.
+_DELEGATION_VERBS = _ACTION_VERB_TOKENS | frozenset(
+    {
+        "finished",
+        "completed",
+        "found",
+        "searched",
+        "fetched",
+        "ran",
+        "built",
+        "fixed",
+        "tested",
+        "delivered",
+        "reported",
+    }
+)
+# The participles that form the passive "<participle> by <name>". "wrote"/"ran"
+# are simple past only; "run" is the participle of "ran" ("the tests were run
+# by coder") and is the one form here with no active counterpart above.
+_DELEGATION_PARTICIPLES = (_DELEGATION_VERBS - frozenset({"wrote", "ran"})) | frozenset({"run"})
+# The verb must sit at one of the next three token positions after the name
+# ("coder has already written" fits; "coder has just now written" does not).
+_DELEGATION_WINDOW = 3
+# Between the name and its verb, any of these means the action is not a
+# completed one credited to the agent: a modal/infinitive marker (the shared
+# _MODAL_AUX, "to" included), a negation (the shared _NEGATORS), or a passive
+# auxiliary that makes the agent the patient ("coder was created").
+_PASSIVE_AUX = frozenset({"is", "are", "was", "were", "be", "been", "being", "get", "gets", "got"})
+# A hedging adverb between the name and its verb ("coder probably wrote it")
+# is a guess, not a report.
+_HEDGE_TOKENS = frozenset(
+    {
+        "probably",
+        "likely",
+        "maybe",
+        "perhaps",
+        "possibly",
+        "presumably",
+        "apparently",
+        "supposedly",
+        "seemingly",
+        "hopefully",
+    }
+)
+_ACTIVE_BLOCKERS = _MODAL_AUX | _NEGATORS | _PASSIVE_AUX | _HEDGE_TOKENS
+# A conditional/temporal subordinator or an uncertainty lead in the text
+# before the name (back to the last comma) — the clause supposes or doubts
+# the action rather than reporting it.
+_DELEGATION_HEDGE = re.compile(
+    r"\b(?:if|whether|unless|once|when(?:ever)?|until|while|after|before"
+    r"|assuming|suppos(?:e|ing)|provided"
+    r"|not\s+sure|unsure|uncertain|not\s+certain|unclear|doubt|no\s+idea"
+    r"|(?:can(?:no|['’])t|cannot|couldn['’]t|don['’]t|do\s+not|didn['’]t|did\s+not"
+    r"|won['’]t|will\s+not|haven['’]t|have\s+not)\s+(?:yet\s+)?"
+    r"(?:confirm|verify|tell|know|say|check|see)"
+    r"|i\s+(?:think|believe|assume|guess|expect|suspect|hope|imagine)"
+    r"|probably|likely|maybe|perhaps|possibly|presumably|apparently|supposedly"
+    r"|seemingly|hopefully)\b",
+    re.I,
+)
+# Before a passive participle the auxiliaries are what FORM the passive, so
+# only a modal, a negation or the progressive "being" block it.
+_PASSIVE_BLOCKERS = _MODAL_AUX | _NEGATORS | frozenset({"being"})
+# An indefinite determiner/quantifier before the name reads it as a common noun
+# ("a reviewer found…", "every coder knows…"), never as the named agent.
+_INDEFINITE = frozenset(
+    {
+        "a",
+        "an",
+        "one",
+        "some",
+        "any",
+        "every",
+        "each",
+        "another",
+        "many",
+        "several",
+        "few",
+        "most",
+        "all",
+        "no",
+        "two",
+        "three",
+        "four",
+        "five",
+    }
+)
+# "by the coder" / "by agent coder" still name the agent.
+_BY_NAME_SKIP = frozenset({"the", "agent"})
+_ACCORDING_TO = re.compile(r"\baccording\s+to\b", re.I)
+# What an honest failure report says, anywhere in the reply: with a FAILED
+# delegate span behind it, a clause crediting the agent is relaying the error
+# the tool result stated, not claiming completion.
+_FAILURE_ACK = re.compile(
+    r"\b(?:errors?|errored|fails?|failed|failures?|failing|crash(?:ed|es)?"
+    r"|couldn['’]t|could\s+not|didn['’]t|did\s+not|wasn['’]t\s+able|unable"
+    r"|incomplete|unfinished|interrupted|timed\s+out|timeouts?|aborted|gave\s+up"
+    r"|broke|exceptions?|traceback|stopped|halted|ran\s+into|hit\s+an?"
+    r"|problems?|issues?|trouble)\b",
+    re.I,
+)
+
+
+@dataclass(frozen=True)
+class DelegationClaim:
+    """A completed action credited to a named agent that no successful
+    delegate_to_agent span backs this turn.
+
+    `agent` is the canonical roster name, `phrase` the matched text for the
+    guard span, `backing` how the claim fails — "none" (no delegation ran for
+    that agent) or "failed" (its only run ended in an error) — and `text` the
+    stated correction, the same field the other claims carry so the turn's
+    composition reads it identically (APPEND-class, like narration)."""
+
+    agent: str
+    phrase: str
+    backing: str
+    text: str
+
+
+def delegation_correction_text(agent: str, backing: str) -> str:
+    """The stated correction for one unbacked delegation claim. `backing` is
+    "none" or "failed" — anything else is a programming error, not a verdict,
+    so it raises rather than picking a sentence that might not be true."""
+    if backing == "none":
+        return DELEGATION_UNBACKED_CORRECTION.format(agent=agent)
+    if backing == "failed":
+        return DELEGATION_FAILED_CORRECTION.format(agent=agent)
+    raise ValueError(f"delegation backing must be 'none' or 'failed', not {backing!r}")
+
+
+def _bare_token(token: str) -> str:
+    """Lower-cased, with the sentence punctuation the tokenizer glues onto a
+    word ("coder.", "wrote.") stripped, so a name or verb at a clause end
+    still compares whole-word."""
+    return token.rstrip(_TRAILING_PUNCT).lower()
+
+
+def _blocks(low: str, blockers: frozenset[str]) -> bool:
+    return low in blockers or low.endswith(("n't", "n’t"))
+
+
+def _hedged_before(clause: str, start: int) -> bool:
+    """True when the text before position `start`, back to the last comma,
+    carries a subordinator or an uncertainty lead — the clause supposes,
+    doubts or conditions the action instead of reporting it."""
+    segment = clause[:start].rsplit(",", 1)[-1]
+    return _DELEGATION_HEDGE.search(segment) is not None
+
+
+def _inside_double_quote(before: str) -> bool:
+    """True when the text before a token has an unclosed double quote — the
+    token is inside a line the model is relaying, not its own assertion.
+    Backticks are deliberately not quotes here: `coder` is how a model
+    formats a name, not how it quotes a log line."""
+    if before.count('"') % 2:
+        return True
+    return before.count("“") > before.count("”")
+
+
+def _delegated_agents(meta: dict) -> set[str]:
+    """The lower-cased agent names one delegate span records — from the
+    executor's facts and from the call's own argument; either is enough."""
+    names: set[str] = set()
+    facts = meta.get("facts")
+    if isinstance(facts, list):
+        for fact in facts:
+            if isinstance(fact, dict) and isinstance(fact.get("agent"), str):
+                names.add(fact["agent"].strip().lower())
+    args = meta.get("args_redacted")
+    if isinstance(args, dict) and isinstance(args.get("agent"), str):
+        names.add(args["agent"].strip().lower())
+    names.discard("")
+    return names
+
+
+def _delegation_backing(spans: Sequence[Any]) -> tuple[dict[str, str], str]:
+    """(per-agent backing, wildcard backing) read off the delegate spans.
+
+    Per agent: "ok" if any successful delegate span names it, else "failed"
+    if a failed (non-refused) one does. The wildcard is the same verdict for
+    a span whose agent cannot be read at all, applied to every name — a
+    delegation that ran but recorded no name backs any claim rather than
+    correcting one it cannot see (the _target_of leniency)."""
+    per_agent: dict[str, str] = {}
+    wildcard = "none"
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        if getattr(span, "name", None) != DELEGATE_TOOL_NAME:
+            continue
+        meta = getattr(span, "meta", None) or {}
+        if any(str(key).startswith("refused") for key in meta):
+            continue  # a refused call never ran: no delegation, no failure
+        verdict = "ok" if meta.get("ok") is True else "failed"
+        names = _delegated_agents(meta)
+        if not names:
+            if verdict == "ok" or wildcard == "none":
+                wildcard = verdict
+            continue
+        for name in names:
+            if verdict == "ok" or name not in per_agent:
+                per_agent[name] = verdict
+    return per_agent, wildcard
+
+
+def _backing_for(name: str, per_agent: dict[str, str], wildcard: str) -> str:
+    verdict = per_agent.get(name, "none")
+    if verdict == "ok" or wildcard == "ok":
+        return "ok"
+    if verdict == "failed" or wildcard == "failed":
+        return "failed"
+    return "none"
+
+
+def _delegation_claims(clause: str, names: dict[str, str]) -> list[tuple[int, str, str]]:
+    """Every completed action credited to a roster agent in one clause, as
+    (position, canonical name, phrase), in text order. Empty when the clause
+    places the action at another time or in someone else's mouth."""
+    if (
+        _PRIOR_TIME.search(clause) is not None
+        or _REPORTED.search(clause) is not None
+        or _ACCORDING_TO.search(clause) is not None
+    ):
+        return []
+    tokens = [(m.group(0), m.start(), m.end()) for m in _TOKEN.finditer(clause)]
+    bare = [_bare_token(raw) for raw, _, _ in tokens]
+    claims: list[tuple[int, str, str]] = []
+
+    def named_at(index: int) -> str | None:
+        """The canonical agent name if the token at `index` is a roster name
+        asserted in the model's own voice — not inside a relayed quote, not
+        behind an indefinite determiner, not under a hedge or a conditional
+        lead."""
+        canonical = names.get(bare[index])
+        if canonical is None:
+            return None
+        if _inside_double_quote(clause[: tokens[index][1]]):
+            return None
+        if _hedged_before(clause, tokens[index][1]):
+            return None
+        if index > 0 and bare[index - 1] in _INDEFINITE:
+            return None
+        return canonical
+
+    # ACTIVE: <name> [up to two tokens] <completed verb>.
+    for ni in range(len(tokens)):
+        canonical = named_at(ni)
+        if canonical is None:
+            continue
+        for j in range(ni + 1, min(ni + 1 + _DELEGATION_WINDOW, len(tokens))):
+            raw, low = tokens[j][0], bare[j]
+            if low in _DELEGATION_VERBS:
+                claims.append((tokens[ni][1], canonical, clause[tokens[ni][1] :].strip()))
+                break
+            if _blocks(low, _ACTIVE_BLOCKERS) or raw in _STOP_PUNCT or low in _LIST_CONT:
+                break
+
+    # PASSIVE: <participle> [up to two tokens] by [the|agent] <name>.
+    for pi in range(len(tokens)):
+        if bare[pi] not in _DELEGATION_PARTICIPLES:
+            continue
+        if any(_blocks(bare[k], _PASSIVE_BLOCKERS) for k in range(max(0, pi - 3), pi)):
+            continue
+        for j in range(pi + 1, min(pi + 1 + _DELEGATION_WINDOW, len(tokens))):
+            raw, low = tokens[j][0], bare[j]
+            if raw in _STOP_PUNCT or low in _LIST_CONT:
+                break
+            if low != "by":
+                continue
+            ni = j + 1
+            if ni < len(tokens) and bare[ni] in _BY_NAME_SKIP:
+                ni += 1
+            if ni < len(tokens):
+                canonical = named_at(ni)
+                if canonical is not None:
+                    phrase = _strip_trailing_punct(clause[tokens[pi][1] : tokens[ni][2]])
+                    claims.append((tokens[pi][1], canonical, phrase))
+            break
+
+    claims.sort(key=lambda claim: claim[0])
+    return claims
+
+
+def delegation_claim_check(
+    reply_text: str, spans: Sequence[Any], agent_names: Sequence[str]
+) -> DelegationClaim | None:
+    """Contradict a completed action credited to an agent that no successful
+    delegate_to_agent span backs this turn.
+
+    Returns a DelegationClaim for the FIRST such claim — backing "none" when
+    no delegation to that agent ran, "failed" when its only run ended in an
+    error — or None: an honest reply (the delegation ran and succeeded), a
+    question, a future/modal/negated/progressive form, an action placed at
+    another time or reported from elsewhere, an acknowledged failure, or a
+    household with no agents at all. Pure and precision-first (see the section
+    header). Derived from `agent_names`: with an empty roster there is no
+    agent to credit, so the guard is silent by construction (fail-open).
+    """
+    if not reply_text or not reply_text.strip():
+        return None
+    names: dict[str, str] = {}
+    for raw in agent_names:
+        name = str(raw).strip()
+        if name and name.lower() not in names:
+            names[name.lower()] = name
+    if not names:
+        return None
+    per_agent, wildcard = _delegation_backing(spans)
+    failure_acknowledged = _FAILURE_ACK.search(reply_text) is not None
+    for clause, is_question in _clauses(reply_text):
+        if is_question:
+            continue  # "should I ask coder to review it?" asserts nothing
+        for _position, agent, phrase in _delegation_claims(clause, names):
+            backing = _backing_for(agent.lower(), per_agent, wildcard)
+            if backing == "ok":
+                continue
+            if backing == "failed" and failure_acknowledged:
+                continue  # an honest report of the failure the tool stated
+            return DelegationClaim(
+                agent=agent,
+                phrase=phrase[:80],
+                backing=backing,
+                text=delegation_correction_text(agent, backing),
+            )
+    return None

@@ -18,6 +18,7 @@ pins this by grepping the module's own source for exactly those write
 verbs, so a future edit that adds one back fails loudly rather than
 quietly.
 """
+
 from __future__ import annotations
 
 import mimetypes
@@ -62,7 +63,8 @@ def _content_disposition(filename: str) -> str:
     ascii_name = filename.encode("ascii", "replace").decode("ascii")
     ascii_name = _UNSAFE_IN_QUOTED_ASCII.sub("_", ascii_name)
     encoded = quote(filename, safe="")
-    return f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded}'
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded}"
+
 
 # The listing cap protects the response size the same way the tool's
 # MAX_LIST_ENTRIES protects the model's context — a different number
@@ -99,9 +101,7 @@ def _existing_file_or_error(root: Path, path_param: str) -> Path:
     404 story either route tells."""
     target = _resolve_or_400(root, path_param)
     if target.is_dir():
-        raise HTTPException(
-            status_code=400, detail=f"{path_param!r} is a directory, not a file"
-        )
+        raise HTTPException(status_code=400, detail=f"{path_param!r} is a directory, not a file")
     if not target.is_file():
         raise HTTPException(
             status_code=404, detail=f"there is no file at {path_param!r} in the workspace"
@@ -110,14 +110,35 @@ def _existing_file_or_error(root: Path, path_param: str) -> Path:
 
 
 @router.get("/files")
-async def list_workspace_files(_person: Person = Depends(identity.require_person)) -> dict:
+async def list_workspace_files(
+    prefix: str | None = Query(None),
+    _person: Person = Depends(identity.require_person),
+) -> dict:
     root = root_from_env().resolve()
     if not root.is_dir():
         # Nothing has ever been written to the volume — an empty workspace,
         # not a broken one (same stance as the tool's list_files).
         return {"files": [], "total": 0, "truncated": False}
 
-    entries = [_entry(root, path) for path in iter_contained_files(root, root)]
+    # S12: `prefix` narrows the walk to one folder — an agent's
+    # `agents/<name>/` for its Artifacts tab. It goes through the SAME gate as
+    # every other caller-supplied path here (_resolve_within, imported), so a
+    # traversal, an absolute path or a symlink pointing out is the same stated
+    # 400 the /file route gives; and a blank prefix is the whole workspace,
+    # exactly as the tool's list_files reads a blank path. Entries stay
+    # relative to the ROOT, not the prefix, so each one links to /file?path=
+    # unchanged.
+    base = _resolve_or_400(root, prefix) if prefix and prefix.strip() else root
+    if not base.is_dir():
+        if base.exists():
+            raise HTTPException(status_code=400, detail=f"{prefix!r} is a file, not a folder")
+        # A folder that is not there is an EMPTY listing, not an error: a new
+        # agent has produced nothing yet, and its Artifacts tab must say
+        # "nothing yet" rather than "broken". (The root itself was checked
+        # above, so this is always a named sub-folder.)
+        return {"files": [], "total": 0, "truncated": False}
+
+    entries = [_entry(root, path) for path in iter_contained_files(root, base)]
     return {
         "files": entries[:MAX_LIST_ENTRIES],
         "total": len(entries),
