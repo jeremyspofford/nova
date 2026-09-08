@@ -105,9 +105,12 @@ role and rides the same chains).
 
 ## Carries
 
-- **Anthropic direct** has no provider on the live stack yet; the curated
-  prices seed on create. Verify `cache_read_tokens > 0` on a second turn
-  when one exists (the fake cannot model caching).
+- **Anthropic direct — VERIFIED 2026-09-08** once Jeremy added the key:
+  9 curated price rows seeded on create; two Haiku turns — the first
+  wrote 4,863 cache tokens ($0.0098 at the curated rate incl. the 1.25×
+  write), the second READ 4,863 cached ($0.0042): the cache breakpoint on
+  the stable system block works and costs less on the second turn; the
+  judge rounds priced too ($0.0001).
 - **True GPU seconds** (`/api/chat` durations) — `duration_ms` is wall
   time incl. model load, labelled so.
 - **Concurrent calls** can overshoot a cap by their own cost (stated on
