@@ -23,8 +23,7 @@ import logging
 
 import httpx
 
-from app import db, models_catalog, peers, settings_store
-from app.evals import runner
+from app import db, peers, settings_store
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 logger = logging.getLogger("core")
@@ -112,6 +111,12 @@ async def _get(ctx: ToolContext, path: str, params: dict | None = None) -> dict:
 async def _catalog(ctx: ToolContext) -> dict:
     """The catalogue with core's MEASURED layer joined in, exactly as
     GET /api/v1/models/catalog serves the page."""
+    # Imported here, not at module top: models_catalog -> evals.runner ->
+    # chat -> tools, and this module IS part of tools — a top-level import
+    # is a circular import the moment `app.tools` is imported first.
+    from app import models_catalog
+    from app.evals import runner
+
     body = await _get(ctx, "/admin/catalog")
     try:
         pool = await db.get_pool()

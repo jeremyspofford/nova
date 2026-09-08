@@ -264,3 +264,21 @@ async def test_an_executor_returning_nothing_useful_is_still_a_stated_result(
     assert ok is False
     assert result.startswith("Error: ")
     assert "spy_tool" in result
+
+
+def test_the_tools_package_imports_on_its_own():
+    """tools/models.py once imported models_catalog at module top, which
+    pulls chat, which pulls tools — fine when chat is imported first (the
+    app, the tests), a circular-import crash when `app.tools` is imported
+    first (a script, a shell). Import the package cold in a subprocess."""
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", "from app import tools; print(len(tools.REGISTRY))"],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == str(len(tools.REGISTRY))
