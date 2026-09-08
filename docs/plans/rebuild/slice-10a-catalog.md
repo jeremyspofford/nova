@@ -213,6 +213,10 @@ rendered probe and drift.
 Done: catalogue page (10a-1) · review wave · her search + pull tools
 (10a-3) · update check + Update (10a-2) · compare view · Details redesign
 · `model_remove` · `model_check_update` · Hub estimated sizes.
+· the benchmark block (2c2326ff: Intelligence / Coding / Agentic charts
+in Compare and behind a Benchmarks button, a Benchmarks column with the
+three scores; the intelligence index read out under its own name, no
+longer "reasoning" — live: 127 / 188 / 137 of 431 cloud rows carry them).
 Open: fold `slice/s10a` into `rebuild/v4` (a fast-forward, waiting on the
 S9 session's one uncommitted file in `.worktrees/v4`); scheduled drift
 checks (nothing runs on a timer yet — S9's scheduler is the natural
