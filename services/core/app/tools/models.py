@@ -496,6 +496,16 @@ async def model_pull(args: dict, ctx: ToolContext) -> str:
     saw_success = False
     preflight: str | None = None
     last_pct = -1
+    last_words: str | None = None
+
+    def report(words: str) -> None:
+        # Consecutive identical reports (a layer with no byte count yet
+        # repeats its status line) are one frame, not twenty.
+        nonlocal last_words
+        if progress is not None and words != last_words:
+            last_words = words
+            progress(words)
+
     try:
         async with _gateway(ctx, PULL_TIMEOUT) as client:
             async with client.stream("POST", "/admin/pull", json={"model": target}) as upstream:
@@ -521,8 +531,7 @@ async def model_pull(args: dict, ctx: ToolContext) -> str:
                                 f"{line.get('required_gb')} GB and only {line.get('free_gb')} GB "
                                 "is free on the models volume"
                             )
-                        if progress is not None:
-                            progress(f"pulling {target} — {preflight}")
+                        report(f"pulling {target} — {preflight}")
                         continue
                     if line.get("status") == "success":
                         saw_success = True
@@ -538,7 +547,7 @@ async def model_pull(args: dict, ctx: ToolContext) -> str:
                         # Throttled: a frame every 5 points, or on a status change.
                         if pct == -1 or pct - last_pct >= 5 or pct == 100:
                             last_pct = pct if pct >= 0 else last_pct
-                            progress(words)
+                            report(words)
     except httpx.TimeoutException as exc:
         raise ToolFailure(
             f"the pull stream went quiet for {PULL_TIMEOUT.read:g} s — {target} is not "
@@ -554,8 +563,7 @@ async def model_pull(args: dict, ctx: ToolContext) -> str:
         )
 
     # ollama said success. The catalogue is the fact.
-    if progress is not None:
-        progress(f"ollama reported success — checking the catalogue for {target}")
+    report(f"ollama reported success — checking the catalogue for {target}")
     catalog = await _catalog(ctx)
     row = _installed_row(catalog, target)
     if row is None:
@@ -632,8 +640,10 @@ TOOLS: tuple[Tool, ...] = (
                     "type": "number",
                     "minimum": 0,
                     "description": (
-                        "Only models whose stated size is at most this many GB (models with "
-                        "no stated size are left out and counted)."
+                        "Only models whose stated size is at most this many GB. Models with "
+                        "no stated size are left out and counted — Hugging Face search rows "
+                        "state no size until a quant is picked, so filter those by params "
+                        "instead."
                     ),
                 },
                 "min_context": {

@@ -301,6 +301,7 @@ async def test_a_confirmed_pull_reports_progress_and_states_what_the_catalogue_l
     fake.pull_lines = (
         '{"status":"preflight","required_gb":2.3,"free_gb":100,"ok":true,"size_bytes":2497293444,"size_source":"ollama-registry"}',
         '{"status":"pulling manifest"}',
+        '{"status":"pulling manifest"}',
         '{"status":"pulling sha256:2bfd","total":2497293444,"completed":249729345}',
         '{"status":"pulling sha256:2bfd","total":2497293444,"completed":274702278}',
         '{"status":"pulling sha256:2bfd","total":2497293444,"completed":1248646723}',
@@ -322,7 +323,7 @@ async def test_a_confirmed_pull_reports_progress_and_states_what_the_catalogue_l
     # Progress: the preflight, the 10% and 50% and 100% reports (11% skipped —
     # throttled to 5-point steps), then the catalogue check.
     assert reports[0] == "pulling qwen3:4b — 2.3 GB needed, 100 GB free (size from ollama-registry)"
-    assert "pulling manifest — qwen3:4b" in reports
+    assert reports.count("pulling manifest — qwen3:4b") == 1, "identical reports are one frame"
     percents = [r for r in reports if "%" in r]
     assert percents == [
         "pulling qwen3:4b — 10% (0.2 GB of 2.3 GB)",
