@@ -16,6 +16,7 @@ import { OnboardingWizard } from './pages/onboarding/OnboardingWizard'
 import { ChatPage } from './pages/chat/ChatPage'
 import { SettingsPage } from './pages/settings/SettingsPage'
 import { ModelsPage } from './pages/models/ModelsPage'
+import { SpendPage } from './pages/spend/SpendPage'
 import { ActivityPage } from './pages/activity/ActivityPage'
 import { FilesPage } from './pages/files/FilesPage'
 import { GovernancePage } from './pages/governance/GovernancePage'
@@ -78,6 +79,7 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/models" element={<ModelsPage />} />
+        <Route path="/spend" element={<SpendPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/dev/components" element={<ComponentGallery />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />

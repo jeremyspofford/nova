@@ -56,8 +56,24 @@ export type StreamEvent =
   // {"served_by": "provider:model"} — who actually answered, as the gateway
   // stated it on the llm_call span (S10-pre). Once per answered turn.
   | { type: 'served'; servedBy: string }
+  // {"usage": {...}} — the turn's cost summed over its rounds from what
+  // the gateway's ledger stated (S10). Once per turn, after served_by.
+  // cost_usd null when no round was priced; the counts say why.
+  | { type: 'usage'; usage: TurnUsage }
   | { type: 'done' }
   | { type: 'interrupted'; reason: string }
+
+export interface TurnUsage {
+  rounds: number
+  priced_rounds: number
+  cost_usd: number | null
+  cost_basis: string[]
+  prompt_tokens: number
+  completion_tokens: number
+  unmetered_rounds: number
+  local_rounds: number
+  unrecorded_rounds: number
+}
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>
 
@@ -79,7 +95,7 @@ export function failureReason(err: unknown): string {
 // the moment a newer server introduces one. A key IN this set with the
 // wrong shape (caught below, before this check ever runs) is still a
 // contract violation and still an error. (Ruling S2-R6, amending S1's R20.)
-const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity', 'served_by'])
+const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity', 'served_by', 'usage'])
 
 function frameToEvent(payload: string): StreamEvent | null {
   if (payload === '[DONE]') return { type: 'done' }
@@ -99,6 +115,25 @@ function frameToEvent(payload: string): StreamEvent | null {
   if (typeof obj.error === 'string') return { type: 'error', reason: obj.error }
   if (typeof obj.served_by === 'string' && obj.served_by) {
     return { type: 'served', servedBy: obj.served_by }
+  }
+  if (obj.usage !== null && typeof obj.usage === 'object') {
+    const u = obj.usage as Record<string, unknown>
+    if (typeof u.rounds === 'number') {
+      return {
+        type: 'usage',
+        usage: {
+          rounds: u.rounds,
+          priced_rounds: typeof u.priced_rounds === 'number' ? u.priced_rounds : 0,
+          cost_usd: typeof u.cost_usd === 'number' ? u.cost_usd : null,
+          cost_basis: Array.isArray(u.cost_basis) ? u.cost_basis.filter((b): b is string => typeof b === 'string') : [],
+          prompt_tokens: typeof u.prompt_tokens === 'number' ? u.prompt_tokens : 0,
+          completion_tokens: typeof u.completion_tokens === 'number' ? u.completion_tokens : 0,
+          unmetered_rounds: typeof u.unmetered_rounds === 'number' ? u.unmetered_rounds : 0,
+          local_rounds: typeof u.local_rounds === 'number' ? u.local_rounds : 0,
+          unrecorded_rounds: typeof u.unrecorded_rounds === 'number' ? u.unrecorded_rounds : 0,
+        },
+      }
+    }
   }
   if (obj.meta !== null && typeof obj.meta === 'object') {
     const meta = obj.meta as Record<string, unknown>

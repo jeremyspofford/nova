@@ -243,6 +243,10 @@ export interface StoredMessage {
    * rows older than the turn link. The chat bubble's "Reminder" /
    * "Scheduled" label reads this and nothing else. */
   turn_kind?: string | null
+  /** The turn's cost in USD summed from its llm_call spans (S10) — the
+   * gateway's ledger figures, never a stored claim. null when no round was
+   * priced (local, unmetered, or unpriced). */
+  cost_usd?: number | null
 }
 
 export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
@@ -272,6 +276,101 @@ export async function clearConversation(conversationId: string): Promise<Cleared
   return apiSend<ClearedConversation>(`/api/v1/conversations/${conversationId}/clear`, 'POST')
 }
 
+// ── spend (S10): the gateway's ledger, rolled up ────────────────────────
+
+export type SpendWindow = 'today' | '7d' | '30d' | 'month'
+
+export interface SpendRollup {
+  key: string | null
+  local: boolean
+  usd: number | null
+  calls: number
+  unmetered: number
+  prompt_tokens: number
+  completion_tokens: number
+  gpu_seconds: number
+  /** by_person only: named by core; null for a call with no person;
+   * "(no longer exists)" for a deleted one. */
+  person?: { name: string; role: string | null } | null
+  [key: string]: unknown
+}
+
+export interface SpendProvider {
+  provider: string
+  local: boolean
+  usd: number | null
+  calls: number
+  unmetered: number
+  refusals: number
+  gpu_seconds: number | null
+  month_usd: number | null
+  cap_usd: number | null
+  remaining_usd: number | null
+}
+
+export interface SpendReport {
+  window: SpendWindow
+  since: string
+  until: string
+  timezone: string
+  totals: {
+    usd: number | null
+    usd_by_basis: Record<string, number | null>
+    gpu_seconds: number
+    calls: number
+    unmetered: number
+    refusals: number
+    probes: number
+    ledger_write_failures: number
+    month_usd: number | null
+    month_cap_usd: number | null
+    in_flight_note: string
+  }
+  by_provider: SpendProvider[]
+  by_model: SpendRollup[]
+  by_purpose: SpendRollup[]
+  by_role: SpendRollup[]
+  by_person: SpendRollup[]
+  by_day: { day: string; usd: number | null; calls: number; gpu_seconds: number }[]
+  unpriced: { provider: string; model: string; calls: number }[]
+  recent_refusals: { at: string; provider: string; model: string; status: number; error: string | null; purpose: string }[]
+  caps: Record<string, number | null>
+}
+
+export interface SpendCap {
+  provider: string
+  monthly_usd: number | null
+  spent_usd: number
+  remaining_usd: number | null
+}
+
+export interface SpendPrice {
+  provider: string
+  model: string
+  basis: 'owner' | 'listing' | 'curated'
+  prompt_usd_per_token: number
+  completion_usd_per_token: number
+  cache_read_multiplier: number | null
+  cache_write_multiplier: number | null
+  verified_at: string
+  source: string | null
+}
+
+export const getSpend = (window: SpendWindow = 'month') => apiGet<SpendReport>(`/api/v1/spend?window=${window}`)
+export const getSpendCaps = () => apiGet<{ caps: SpendCap[]; month_since: string; timezone: string }>('/api/v1/spend/caps')
+export const putSpendCap = (provider: string, monthly_usd: number | null) =>
+  apiSend<{ provider: string; monthly_usd: number | null }>('/api/v1/spend/caps', 'PUT', { provider, monthly_usd })
+export const getSpendPrices = () => apiGet<{ prices: SpendPrice[] }>('/api/v1/spend/prices')
+export const putOwnerPrice = (provider: string, model: string, prompt_usd_per_token: number, completion_usd_per_token: number) =>
+  apiSend<{ provider: string; model: string; basis: 'owner' }>('/api/v1/spend/prices', 'PUT', {
+    provider,
+    model,
+    prompt_usd_per_token,
+    completion_usd_per_token,
+  })
+export const deleteOwnerPrice = (provider: string, model: string) =>
+  apiSend<{ removed: boolean }>(`/api/v1/spend/prices?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}`, 'DELETE')
+
 // ── activity (the turn ledger, read-only) ───────────────────────────────
 
 export interface ActivityTurn {
@@ -286,6 +385,8 @@ export interface ActivityTurn {
   tool_call_count: number
   llm_round_count: number
   conversation_id: string | null
+  /** Who the turn ran for (S10); null for rows older than the column. */
+  person_id?: string | null
 }
 
 export interface ActivitySpan {

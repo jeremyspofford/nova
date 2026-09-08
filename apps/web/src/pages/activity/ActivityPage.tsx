@@ -304,10 +304,18 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
     const model = span.meta.model
     const promptTokens = span.meta.prompt_tokens
     const completionTokens = span.meta.completion_tokens
+    const cacheRead = span.meta.cache_read_tokens
+    const cost = span.meta.cost_usd
+    const basis = span.meta.cost_basis
+    const purpose = span.meta.purpose
+    const local = span.meta.local === true
+    const metered = span.meta.metered
+    const unrecorded = span.meta.usage_recorded === false
     const error = typeof span.meta.error === 'string' ? span.meta.error : null
     return (
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-caption" data-testid="llm-call-span">
         <Badge size="sm">llm_call</Badge>
+        {typeof purpose === 'string' && purpose !== 'chat' && <Badge size="sm" color="neutral">{purpose}</Badge>}
         {typeof round === 'number' && <span>Round {round}</span>}
         {typeof model === 'string' && model && (
           <span className="font-mono text-content-secondary">{model}</span>
@@ -315,8 +323,22 @@ function SpanDetail({ span }: { span: ActivitySpan }) {
         {typeof promptTokens === 'number' && typeof completionTokens === 'number' && (
           <span className="font-mono text-content-tertiary">
             {promptTokens} in / {completionTokens} out
+            {typeof cacheRead === 'number' && cacheRead > 0 ? ` (${cacheRead} cached)` : ''}
           </span>
         )}
+        {/* S10: the cost as the gateway's ledger recorded it, with its basis;
+            a local round is GPU time, an unmetered one has no dollars. */}
+        {typeof cost === 'number' ? (
+          <span className="font-mono text-content-secondary" title={typeof basis === 'string' ? basis : undefined}>
+            ${cost < 0.01 ? cost.toFixed(4) : cost.toFixed(2)}
+            {typeof basis === 'string' ? ` (${basis})` : ''}
+          </span>
+        ) : local ? (
+          <span className="text-content-tertiary">local — GPU time, not money</span>
+        ) : metered === false ? (
+          <span className="text-content-tertiary">unmetered — no counts stated</span>
+        ) : null}
+        {unrecorded && <span className="text-warning">not recorded in the ledger</span>}
         {duration && <span className="font-mono text-content-tertiary">{duration}</span>}
         {error && <span className="text-danger">{error}</span>}
       </div>

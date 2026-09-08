@@ -135,6 +135,11 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
           >
             <Cpu size={11} className="shrink-0" />
             {row.servedBy}
+            {typeof row.cost === 'number' && (
+              <span data-testid="turn-cost" title="this turn's cost as the gateway's ledger recorded it (S10)">
+                · ${row.cost < 0.01 ? row.cost.toFixed(4) : row.cost.toFixed(2)}
+              </span>
+            )}
           </p>
         )}
         {/* A cut-off turn keeps whatever really arrived and says it was cut

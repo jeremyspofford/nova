@@ -377,6 +377,26 @@ describe('chatReducer — live tool activity in the pending bubble', () => {
     expect(messages(state)[1].activity).toBeNull()
   })
 
+  it('a usage frame puts the turn\'s cost on the pending row; null stays null', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: {
+        type: 'usage',
+        usage: { rounds: 1, priced_rounds: 1, cost_usd: 0.0013, cost_basis: ['provider-reported'], prompt_tokens: 1, completion_tokens: 1, unmetered_rounds: 0, local_rounds: 0, unrecorded_rounds: 0 },
+      },
+    })
+    expect(messages(state)[1].cost).toBe(0.0013)
+    state = chatReducer(state, {
+      type: 'event',
+      event: {
+        type: 'usage',
+        usage: { rounds: 1, priced_rounds: 0, cost_usd: null, cost_basis: [], prompt_tokens: 0, completion_tokens: 0, unmetered_rounds: 1, local_rounds: 1, unrecorded_rounds: 0 },
+      },
+    })
+    expect(messages(state)[1].cost).toBeNull()
+  })
+
   it('an ok frame clears the marker — the call resolved cleanly', () => {
     let state = started()
     state = chatReducer(state, {

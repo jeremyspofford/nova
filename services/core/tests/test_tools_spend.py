@@ -70,7 +70,8 @@ def test_describe_reads_every_number_out_with_its_basis():
         }
     )
     assert text.startswith(
-        "Spend for month (2026-09-01 to 2026-09-08, America/Denver): $3.5000 across 4 calls; 0.2 GPU-minutes (local time, not money)."
+        "Spend for month (2026-09-01 to 2026-09-08, America/Denver): $3.5000 across 4 calls; "
+        "0.2 GPU-minutes (local time, not money)."
     )
     assert "$3.5000 reported by the provider itself" in text
     assert "1 call(s) were unmetered" in text

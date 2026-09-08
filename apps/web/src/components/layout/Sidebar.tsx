@@ -1,14 +1,5 @@
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
-import {
-  MessageSquare,
-  Activity,
-  FolderOpen,
-  Settings,
-  ScrollText,
-  Gauge,
-  CalendarClock,
-  ChevronsLeft,
-  ChevronsRight, Boxes } from 'lucide-react'
+import { Activity, Boxes, CalendarClock, ChevronsLeft, ChevronsRight, Coins, FolderOpen, Gauge, MessageSquare, ScrollText, Settings } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -46,6 +37,7 @@ export const navSections: NavSection[] = [
       { to: '/schedules', label: 'Schedules', icon: CalendarClock, minRole: 'admin' },
       { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
       { to: '/models', label: 'Models', icon: Boxes, minRole: 'admin' },
+      { to: '/spend', label: 'Spend', icon: Coins, minRole: 'admin' },
       { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
     ],
   },

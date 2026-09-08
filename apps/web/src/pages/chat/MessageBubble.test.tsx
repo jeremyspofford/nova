@@ -13,6 +13,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     interrupted: false,
     activity: null,
     servedBy: null,
+    cost: null,
     turnKind: null,
     ...overrides,
   }
@@ -45,6 +46,14 @@ describe('MessageBubble — the live tool-call line', () => {
     const line = screen.getByTestId('activity-line')
     expect(line.textContent).toContain('using model_pull… pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)')
     expect(line.className).not.toMatch(/danger/)
+  })
+
+  it('shows the turn\'s cost beside who answered, and nothing when no round was priced', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: 'openrouter:openai/gpt-x', cost: 0.0013 })} />)
+    expect(screen.getByTestId('turn-cost').textContent).toContain('$0.0013')
+    render(<MessageBubble row={assistantRow({ id: 'a2', text: 'hi', streaming: false, servedBy: 'ollama:qwen3:8b', cost: null })} />)
+    expect(screen.getAllByTestId('served-by')).toHaveLength(2)
+    expect(screen.getAllByTestId('turn-cost')).toHaveLength(1)
   })
 
   it('shows a stated failure when the tool errors, distinct from the running state', () => {
@@ -109,6 +118,7 @@ function userRow(text: string): MessageRow {
     role: 'user',
     text,
     servedBy: null,
+    cost: null,
     turnKind: null,
     streaming: false,
     interrupted: false,

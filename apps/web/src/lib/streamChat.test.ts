@@ -153,6 +153,35 @@ describe('createSseParser', () => {
   // finish". Optional even on an error status: a frame missing it (or with
   // a non-string value) still parses as a normal, reason-less activity
   // event, not a shape violation — only `tool`/`status` are load-bearing.
+  it('turns a usage frame into a usage event, defaulting what the server left out', () => {
+    expect(
+      parseAll([
+        'data: {"usage":{"rounds":2,"priced_rounds":1,"cost_usd":0.0013,"cost_basis":["provider-reported"],"prompt_tokens":120,"completion_tokens":30,"unmetered_rounds":1,"local_rounds":0,"unrecorded_rounds":0}}\n\n',
+      ]),
+    ).toEqual([
+      {
+        type: 'usage',
+        usage: {
+          rounds: 2,
+          priced_rounds: 1,
+          cost_usd: 0.0013,
+          cost_basis: ['provider-reported'],
+          prompt_tokens: 120,
+          completion_tokens: 30,
+          unmetered_rounds: 1,
+          local_rounds: 0,
+          unrecorded_rounds: 0,
+        },
+      },
+    ])
+    expect(parseAll(['data: {"usage":{"rounds":1,"cost_usd":null}}\n\n'])).toEqual([
+      {
+        type: 'usage',
+        usage: { rounds: 1, priced_rounds: 0, cost_usd: null, cost_basis: [], prompt_tokens: 0, completion_tokens: 0, unmetered_rounds: 0, local_rounds: 0, unrecorded_rounds: 0 },
+      },
+    ])
+  })
+
   it('carries the optional detail on a progress activity frame', () => {
     expect(
       parseAll([
