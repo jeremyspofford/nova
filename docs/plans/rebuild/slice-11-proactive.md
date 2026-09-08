@@ -23,6 +23,17 @@ Asked four questions; his answers, verbatim in effect:
 4. **How do we stop it becoming noise?** "One digest a day, unless it's
    urgent."
 
+Four more, asked once the shape was on paper:
+
+5. **What may interrupt the digest?** The stack being down — and nothing
+   else. Not money, not her own broken work, not the fact that she changed
+   something. **The urgent list has exactly one entry.**
+6. **May it reach him at night?** Yes, any hour, because only that one
+   family can do it.
+7. **How often does she look?** Hourly.
+8. **Where does the digest land?** A chat message, plus an Inbox page with
+   mute and open-the-trace.
+
 Everything below follows from those four, plus the house rules: no
 approval gates ever (the 2026-09-03 ruling), mechanical over prompts,
 derived never hardcoded, never report success unchecked, no silent
@@ -33,9 +44,18 @@ fallback.
 "Unless it's urgent" cannot be a judgement she makes in the moment. A
 model asked "is this urgent?" will talk itself into yes, and the digest
 stops holding on the first bad night. So **urgency is a property of the
-CHECK, declared in code, never a word in a reply.** The stack being
-unreachable is urgent by its definition; spend at 80% of a cap is not.
-Nothing she writes can promote a finding to urgent.
+CHECK, declared in code, never a word in a reply.** Nothing she writes can
+promote a finding.
+
+Jeremy set the list, and it has ONE entry: **the stack being down.** A
+service unreachable, the database refusing, the chat model gone. Money
+over a cap waits for the digest. A scheduled task that paused itself waits
+for the digest. Her having changed something waits for the digest. Because
+that list is one item and is verified from a socket rather than a
+sentence, an urgent push may arrive at any hour — the volume is bounded by
+the list, not by a clock. A test asserts that exactly the stack family
+declares `urgent`, so adding a second one is a deliberate act with his
+name on it.
 
 The same rule settles the harder half. v3 shipped this engine and its
 noise half failed for one measured reason: the dedupe key was a hash of
@@ -81,8 +101,10 @@ firings history with per-channel delivery receipts, retention, and "Run
 now" on the Schedules page. `scheduler._run_firing` gains one branch.
 
 Two beats are seeded (the `timers.JOBS` one-row-per-handler idiom): a
-`watch` beat, hourly, that runs the checks and acts; and a `digest` beat,
-daily at an hour you set, that composes the one message. Both are ordinary
+`watch` beat, **hourly**, that runs the checks and acts; and a `digest`
+beat, daily at an hour you set, that composes the one message. Hourly is
+cheap because the fact checks are database and socket reads with no model
+call — the model is only asked when there is something to say. Both are ordinary
 rows you can pause, retime or delete.
 
 **A job handler cannot do this** — `_fire_job` calls `handler(pool)` with
@@ -126,9 +148,10 @@ repeat.
 
 ### Delivery: the ladder, and what "delivered" means
 
-The digest always writes a chat row — that rung is guaranteed and is what
-marks the firing ok. An urgent notice also calls `device_notify` on every
-connected paired device. Each rung reports separately with the vocabulary
+The digest always writes a chat row and an Inbox row — that rung is
+guaranteed and is what marks the firing ok. An urgent notice (the stack
+family only) also calls `device_notify` on every connected paired device,
+at whatever hour it happens. Each rung reports separately with the vocabulary
 the Schedules page already renders: `ok` only from the channel's own
 result frame, `failed` with the stated reason, and `stated` for "no paired
 device was connected". A beat that reached nobody at all is a FAILED beat.
