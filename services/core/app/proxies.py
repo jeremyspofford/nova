@@ -174,6 +174,27 @@ async def delete_spend_price(request: Request) -> Response:
     return await _forward(request, "DELETE", "/admin/spend/prices")
 
 
+# ── routing (S10-2): the role chains, the walk explained, the walls.
+@router.get("/routes")
+async def routes(request: Request) -> Response:
+    return await _forward(request, "GET", "/admin/routes")
+
+
+@router.put("/routes/{role}")
+async def put_route(role: str, request: Request) -> Response:
+    return await _forward(request, "PUT", f"/admin/routes/{role}")
+
+
+@router.get("/routes/explain")
+async def route_explain(request: Request) -> Response:
+    return await _forward(request, "GET", "/admin/route/explain", timeout=CATALOG_HF_TIMEOUT)
+
+
+@router.delete("/routes/walls/{provider}")
+async def clear_wall(provider: str, request: Request) -> Response:
+    return await _forward(request, "DELETE", f"/admin/routes/walls/{provider}")
+
+
 @router.delete("/models")
 async def remove_model(request: Request) -> Response:
     """Remove an installed model from the bundled ollama (`?model=`), verified

@@ -53,6 +53,11 @@ ROUTES = [
     ("GET", "/api/v1/spend/prices", "/admin/spend/prices", None),
     ("PUT", "/api/v1/spend/prices", "/admin/spend/prices", {"provider": "x", "model": "m"}),
     ("DELETE", "/api/v1/spend/prices", "/admin/spend/prices", None),
+    # S10-2: routing.
+    ("GET", "/api/v1/routes", "/admin/routes", None),
+    ("PUT", "/api/v1/routes/chat", "/admin/routes/chat", {"chain": ["ollama:qwen3:8b"]}),
+    ("GET", "/api/v1/routes/explain", "/admin/route/explain", None),
+    ("DELETE", "/api/v1/routes/walls/openrouter", "/admin/routes/walls/openrouter", None),
 ]
 
 

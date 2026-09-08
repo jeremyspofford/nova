@@ -134,7 +134,10 @@ async def get_messages(
         "    ORDER BY s.started_at DESC LIMIT 1) AS served_by, "
         "  (SELECT SUM((s.meta->>'cost_usd')::numeric) FROM turn_spans s "
         "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' "
-        "    AND s.meta->>'cost_usd' IS NOT NULL) AS cost_usd "
+        "    AND s.meta->>'cost_usd' IS NOT NULL) AS cost_usd, "
+        "  (SELECT s.meta->>'route_reason' FROM turn_spans s "
+        "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' AND s.meta ? 'route_reason' "
+        "    ORDER BY s.started_at DESC LIMIT 1) AS route_reason "
         "FROM messages m LEFT JOIN turns t ON t.id = m.turn_id "
         "WHERE m.conversation_id = $1 ORDER BY m.created_at, m.id",
         conversation_id,
@@ -152,6 +155,9 @@ async def get_messages(
                 # gateway's ledger figures, never a stored claim. NULL when
                 # no round was priced.
                 "cost_usd": float(row["cost_usd"]) if row["cost_usd"] is not None else None,
+                # S10-2: the gateway's stated reason when this turn's answer
+                # came from a fallback link; null when link 1 served.
+                "route_reason": row["route_reason"],
             }
             for row in rows
         ]

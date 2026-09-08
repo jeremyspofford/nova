@@ -537,7 +537,10 @@ def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
         "and search again — a couple of tries is fine — instead of asking the "
         "operator to search or whether you should; just do it. "
         "A model pull downloads gigabytes and reports progress as it runs; say what "
-        "was pulled only from the tool's own result line."
+        "was pulled only from the tool's own result line. "
+        "Which model answers is decided by the gateway's routing (a role's chain, "
+        "monthly caps, a provider that refused); when asked why a reply came from a "
+        "given model, use route_explain and quote its reason — never guess."
     )
 
 
@@ -970,6 +973,11 @@ def model_failure_statement(*, model: str, failure: str, spans: Sequence[traces.
     who = model or served_model or "the gateway's default model"
     if served_kind:
         who = f"{who} ({served_kind})"
+    route_reason = meta.get("route_reason")
+    if isinstance(route_reason, str) and route_reason:
+        # The gateway routed this round past its first link (S10-2): the
+        # statement names that too, in the gateway's words.
+        who = f"{who}, after the gateway {route_reason}"
     round_number = meta.get("round")
     where = ""
     if isinstance(round_number, int) and round_number > 1:
@@ -1412,6 +1420,7 @@ async def _gateway_round(
     stray_head: str | None = None
     t0 = time.perf_counter()
     purpose = purpose or _purpose_of(turn)
+    role = role if role is not None else _role_of(turn)
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
         span.meta["round"] = round_number
@@ -1585,6 +1594,17 @@ def _purpose_of(turn: traces.Turn) -> str:
     """What the ledger records a turn's own rounds as: its kind."""
     kind = getattr(turn, "kind", None)
     return kind if isinstance(kind, str) and kind else "chat"
+
+
+# The routing chain a turn's own rounds walk (S10-2): a chat turn the chat
+# chain, a scheduled turn the scheduled chain; an eval NAMES its model and
+# walks none — a measurement on a substituted model would be a lie about
+# which model was measured (rail 17).
+_ROLE_BY_KIND = {"chat": "chat", "scheduled": "scheduled"}
+
+
+def _role_of(turn: traces.Turn) -> str | None:
+    return _ROLE_BY_KIND.get(_purpose_of(turn))
 
 
 async def _collect_completion(
@@ -2297,6 +2317,34 @@ async def _run_turn(
 
         served_by_sent = False
         usage_sent = False
+        route_sent = False
+
+        def _emit_route() -> None:
+            """The `route` frame, once per turn, ONLY when the gateway served
+            from a link past the first (S10-2): who answered and the stated
+            reason, read off the llm_call span the gateway's X-Nova-Route
+            header landed on — never composed here."""
+            nonlocal route_sent
+            if route_sent:
+                return
+            llm = _last_llm_span(turn.spans)
+            if llm is None:
+                return
+            link = llm.meta.get("route_link")
+            if isinstance(link, int) and link > 1:
+                route_sent = True
+                emit(
+                    _frame(
+                        {
+                            "route": {
+                                "role": llm.meta.get("route_role"),
+                                "link": link,
+                                "reason": llm.meta.get("route_reason"),
+                                "served_by": llm.meta.get("served_by"),
+                            }
+                        }
+                    )
+                )
 
         def _emit_usage() -> None:
             """The turn's cost so far, once, summed over its llm_call spans
@@ -2341,6 +2389,7 @@ async def _run_turn(
             # round's statement already names the engine (model_failure_
             # statement), and the error frame stays where clients expect it.
             _emit_served_by()
+            _emit_route()
             if not calls:
                 _emit_usage()
                 break

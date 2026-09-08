@@ -56,7 +56,7 @@ async def test_a_round_is_attributed_and_its_cost_lands_on_the_span_and_the_stre
     assert headers["x-nova-turn-id"] == str(turn["id"])
     assert headers["x-nova-person"] == str(owner["id"]) == str(turn["person_id"])
     assert headers["x-nova-timezone"] == "America/Denver"
-    assert "x-nova-role" not in headers  # S10-2 adds the chain; S10-1 sends none
+    assert headers["x-nova-role"] == "chat"  # S10-2: a chat turn walks the chat chain
 
     # What the gateway said back, on the span — only what it stated.
     span = (await _spans(pool, turn["id"]))["llm_call"]

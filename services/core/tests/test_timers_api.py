@@ -560,4 +560,5 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
         "served_by",
         "turn_kind",
         "cost_usd",
+        "route_reason",
     }

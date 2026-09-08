@@ -37,6 +37,7 @@ from app.tools import (
     devices,
     memory_tools,
     models,
+    route,
     schema,
     spend,
     timers,
@@ -75,6 +76,7 @@ REGISTRY: dict[str, Tool] = {
         *models.TOOLS,
         *timers.TOOLS,
         *spend.TOOLS,
+        *route.TOOLS,
     )
 }
 

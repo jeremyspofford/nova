@@ -60,19 +60,23 @@ scratch isolation (rail 17) stands unchanged. This is read by no decision path
 — the score MEASURES a model, it never gates a turn (fitness measures, never
 declares).
 """
+
 from __future__ import annotations
 
 import logging
 import uuid
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from app import chat, db, identity
+from app import chat, db, identity, peers
 from app.evals import cases as cases_mod
 from app.evals import runner
 from app.identity import Person
+
+EXPLAIN_TIMEOUT = httpx.Timeout(connect=3.0, read=10.0, write=3.0, pool=3.0)
 
 router = APIRouter(prefix="/api/v1/evals", tags=["evals"])
 logger = logging.getLogger("core")
@@ -176,6 +180,31 @@ async def list_suites(_person: Person = Depends(identity.require_person)) -> dic
     return {"suites": entries}
 
 
+async def _refuse_if_unrunnable(app, model: str) -> None:
+    """Refuse before the act, at the SUITE level (S10-2): a suite on a
+    provider that is over its cap or walled would write one refusal row per
+    case and measure nothing. The gateway's explain walk decides; a
+    gateway that cannot be asked lets the run proceed (each case then
+    states its own failure)."""
+    try:
+        async with peers.client(app, peers.GATEWAY, EXPLAIN_TIMEOUT) as client:
+            resp = await client.get("/admin/route/explain", params={"role": "chat", "model": model})
+    except (httpx.HTTPError, peers.PeerUnconfigured):
+        return
+    if resp.status_code != 200:
+        return
+    try:
+        body = resp.json()
+    except ValueError:
+        return
+    first = next((v for v in body.get("chain") or [] if v.get("link") == 1), None)
+    if first and first.get("verdict") in ("over_cap", "walled"):
+        raise HTTPException(
+            status_code=402 if first["verdict"] == "over_cap" else 503,
+            detail=f"the suite was not started: {first.get('reason')}",
+        )
+
+
 @router.post("/run", status_code=202)
 async def start_suite_run(
     body: RunRequest,
@@ -187,12 +216,11 @@ async def start_suite_run(
     model = body.model.strip()
     if not model:
         raise HTTPException(status_code=400, detail="model is empty — nothing to run against")
+    await _refuse_if_unrunnable(request.app, model)
     suite_version = suite_cases[0].suite_version
 
     try:
-        row = await runner.open_suite_run(
-            pool, body.suite, suite_version, model, len(suite_cases)
-        )
+        row = await runner.open_suite_run(pool, body.suite, suite_version, model, len(suite_cases))
     except runner.SuiteRunActive as exc:
         # Refused by the database's one-at-a-time index, not by a flag: the
         # answer names the run that holds the slot so the page can attach to

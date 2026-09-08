@@ -177,6 +177,10 @@ class FakeGateway:
     # -Timezone); `spend_body` is the ledger rollup /admin/spend serves.
     seen_headers: list[dict[str, str]] = field(default_factory=list)
     spend_body: dict | None = None
+    # S10-2: what /admin/route/explain answers (None: the admin echo) and the
+    # X-Nova-Route header the completion carries (None: none).
+    explain_body: dict | None = None
+    route_header: str | None = None
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -208,6 +212,10 @@ class FakeGateway:
                 Route("/admin/spend/events", self._admin, methods=["GET"]),
                 Route("/admin/spend/caps", self._admin, methods=["GET", "PUT"]),
                 Route("/admin/spend/prices", self._admin, methods=["GET", "PUT", "DELETE"]),
+                Route("/admin/routes", self._admin, methods=["GET"]),
+                Route("/admin/routes/{role}", self._admin, methods=["PUT"]),
+                Route("/admin/route/explain", self._explain, methods=["GET"]),
+                Route("/admin/routes/walls/{provider}", self._admin, methods=["DELETE"]),
             ]
         )
 
@@ -218,6 +226,14 @@ class FakeGateway:
         self.queries.append(request.scope["query_string"])
         self.seen_headers.append({k.lower(): v for k, v in request.headers.items()})
         return body
+
+    async def _explain(self, request):
+        if self.explain_body is None:
+            return await self._admin(request)
+        await self._record(request)
+        if not _bearer_ok(request, GATEWAY_TOKEN):
+            return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+        return JSONResponse(self.explain_body)
 
     async def _spend(self, request):
         if self.spend_body is None:
@@ -247,11 +263,10 @@ class FakeGateway:
                 yield _sse({"choices": [], "usage": self.usage})
             yield "data: [DONE]\n\n"
 
-        return StreamingResponse(
-            stream(),
-            media_type="text/event-stream",
-            headers={"X-Nova-Served-By": self.served_by},
-        )
+        headers = {"X-Nova-Served-By": self.served_by}
+        if self.route_header is not None:
+            headers["X-Nova-Route"] = self.route_header
+        return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
 
     async def _admin(self, request):
         await self._record(request)
