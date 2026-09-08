@@ -1,6 +1,11 @@
 # Pinned so container labels/names are stable regardless of the checkout
 # directory — the inference-control sidecar targets this project by name.
-name: nova
+# v3's stack. The project name is DELIBERATELY not `nova`: the live v4 stack
+# (.worktrees/v4/deploy/docker-compose.yml) owns that name, and on 2026-09-07 a
+# `docker compose up -d backend` run from this directory reconciled the shared
+# project to THIS file — it stopped v4's postgres and stripped its network. A
+# distinct name is the line that refuses that, not a reminder.
+name: nova-v3
 
 services:
   postgres:
