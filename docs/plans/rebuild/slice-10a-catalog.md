@@ -194,12 +194,30 @@ rendered probe and drift.
   `lfs.sha256`.
 - **`quants_of` tag derivation** is a derived approximation of ollama's own
   tag matching (shared filename prefix snapped to a boundary); documented.
-- **S10a-2 and S10a-3 shipped** (above). Not built, named: a
-  `model_check_update` tool for her (the route exists; a tool is a small
-  follow-up), scheduled drift checks, `model_remove`.
-- **Hub search rows carry no size** until a quant is picked — her
-  `max_size_gb` and the page's size facet both count them out honestly;
-  a per-row default-quant size would cost one detail call per row.
+- **The follow-ups shipped 2026-09-07 (b162d289):** Compare (tick up to
+  five rows → a matrix with bars scaled to the largest compared value,
+  every cell keeping its basis); the Details sheet at half width, facts in
+  a two-column grid with the basis beneath; `model_remove` (gateway
+  DELETE /admin/models?model= re-reads /api/tags before it says removed;
+  the page asks first; her tool refuses the current chat model) and
+  `model_check_update` for her (registry 19 → 21); Hub search rows carry
+  an ESTIMATED size at Q4_K_M (4.85 bits/weight), basis inferred, drawn ≈
+  and dashed, left out of numeric facets unless "include inferred" is on.
+  Walked in her words (turn bfabbd09…): "is qwen3:8b up to date … and
+  remove the qwen2.5 coder" → one `model_check_update` span (up to date,
+  a3de86cd… both sides), one `model_remove` span (verified, 4 remain),
+  a reply that quoted both.
+
+## Task list for this goal (2026-09-07)
+
+Done: catalogue page (10a-1) · review wave · her search + pull tools
+(10a-3) · update check + Update (10a-2) · compare view · Details redesign
+· `model_remove` · `model_check_update` · Hub estimated sizes.
+Open: fold `slice/s10a` into `rebuild/v4` (a fast-forward, waiting on the
+S9 session's one uncommitted file in `.worktrees/v4`); scheduled drift
+checks (nothing runs on a timer yet — S9's scheduler is the natural
+home); a quality-suite run against the newly pulled models so the
+measured column has something to show for them.
 - The Settings → Models section still renders its cards (its e2e testids
   are pinned); shrinking it to current-model + link is a small follow-up.
 - Per-model tool advertising in core stays informational (S10).
