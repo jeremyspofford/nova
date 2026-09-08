@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Cpu, Info } from 'lucide-react'
 import clsx from 'clsx'
 import {
+  getCatalog as apiGetCatalog,
   getInstalledModels as apiGetInstalledModels,
   getSuggestion as apiGetSuggestion,
   putSetting as apiPutSetting,
+  type CatalogRow,
   type SuggestedModel,
 } from '../../lib/api'
 import { ACCURACY_DISCLAIMER_SHORT } from '../../lib/modelDisclaimer'
@@ -34,12 +36,28 @@ interface ModelSelectorApi {
   getInstalledModels: typeof apiGetInstalledModels
   getSuggestion: typeof apiGetSuggestion
   putSetting: typeof apiPutSetting
+  /** S10-2: the catalogue, for the cloud groups (one per provider). A test
+   * that omits it gets the local list alone, as before. */
+  getCatalog?: typeof apiGetCatalog
 }
 
 const DEFAULT_API: ModelSelectorApi = {
   getInstalledModels: apiGetInstalledModels,
   getSuggestion: apiGetSuggestion,
   putSetting: apiPutSetting,
+  getCatalog: apiGetCatalog,
+}
+
+/** Cloud rows grouped by provider, in the catalogue's order. */
+export function cloudGroups(rows: CatalogRow[]): { provider: string; rows: CatalogRow[] }[] {
+  const groups = new Map<string, CatalogRow[]>()
+  for (const row of rows) {
+    if (row.kind !== 'cloud') continue
+    const list = groups.get(row.provider) ?? []
+    list.push(row)
+    groups.set(row.provider, list)
+  }
+  return Array.from(groups, ([provider, rows]) => ({ provider, rows }))
 }
 
 function reasonOf(err: unknown): string {
@@ -57,6 +75,8 @@ export function ModelSelector({
 }) {
   const [installed, setInstalled] = useState<string[] | null>(null)
   const [curated, setCurated] = useState<SuggestedModel[] | null>(null)
+  const [cloud, setCloud] = useState<CatalogRow[]>([])
+  const [cloudFilter, setCloudFilter] = useState('')
   const [open, setOpen] = useState(false)
   const [switching, setSwitching] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -77,6 +97,12 @@ export function ModelSelector({
     api.getSuggestion().then(
       s => {
         if (!cancelled) setCurated(s.models)
+      },
+      () => {},
+    )
+    api.getCatalog?.().then(
+      cat => {
+        if (!cancelled) setCloud(cat.rows.filter(r => r.kind === 'cloud'))
       },
       () => {},
     )
@@ -116,6 +142,24 @@ export function ModelSelector({
     }
   }
 
+  // A cloud row's id is already `provider:model` — written as is.
+  const chooseCloud = async (id: string) => {
+    setOpen(false)
+    if (id === currentModel) return
+    setError(null)
+    setSwitching(true)
+    try {
+      await api.putSetting('chat.model', id)
+      onModelChanged(id)
+    } catch (err) {
+      setError(reasonOf(err))
+    } finally {
+      setSwitching(false)
+    }
+  }
+  const groups = cloudGroups(cloud)
+  const filter = cloudFilter.trim().toLowerCase()
+
   return (
     <div ref={rootRef} className="relative">
       <button
@@ -147,7 +191,10 @@ export function ModelSelector({
           data-testid="chat-model-menu"
           className="absolute bottom-full left-0 mb-1 z-50 min-w-[14rem] max-w-[20rem] rounded-lg border border-border bg-surface-card shadow-lg glass-overlay dark:border-white/[0.10]"
         >
-          <div role="listbox" className="max-h-60 overflow-y-auto custom-scrollbar py-1">
+          <div role="listbox" className="max-h-72 overflow-y-auto custom-scrollbar py-1">
+            {groups.length > 0 && (
+              <div className="px-3 pb-1 pt-1 text-micro font-semibold uppercase tracking-wider text-content-tertiary">Local</div>
+            )}
             {merged.length === 0 ? (
               <p className="px-3 py-2 text-caption text-content-tertiary">No models to show yet.</p>
             ) : (
@@ -169,6 +216,47 @@ export function ModelSelector({
                 </button>
               ))
             )}
+            {/* S10-2: every registered provider's models, grouped — the
+                catalogue's rows, ids already provider-qualified. */}
+            {groups.length > 0 && (
+              <div className="border-t border-border-subtle px-3 py-1.5">
+                <input
+                  type="text"
+                  value={cloudFilter}
+                  onChange={e => setCloudFilter(e.target.value)}
+                  placeholder="filter cloud models"
+                  aria-label="filter cloud models"
+                  className="w-full rounded-sm border border-border bg-surface px-2 py-1 text-micro"
+                />
+              </div>
+            )}
+            {groups.map(group => {
+              const rows = group.rows.filter(r => !filter || r.id.toLowerCase().includes(filter) || r.label.toLowerCase().includes(filter))
+              if (rows.length === 0) return null
+              return (
+                <div key={group.provider} data-testid={`chat-model-group-${group.provider}`}>
+                  <div className="px-3 pb-1 pt-2 text-micro font-semibold uppercase tracking-wider text-content-tertiary">{group.provider}</div>
+                  {rows.slice(0, 40).map(row => (
+                    <button
+                      key={row.id}
+                      type="button"
+                      role="option"
+                      aria-selected={row.id === currentModel}
+                      data-testid={`chat-model-option-${row.id}`}
+                      onClick={() => chooseCloud(row.id)}
+                      className={clsx(
+                        'flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-compact hover:bg-surface-card-hover transition-colors duration-fast',
+                        row.id === currentModel ? 'text-accent' : 'text-content-primary',
+                      )}
+                    >
+                      <span className="font-mono truncate">{row.model}</span>
+                      {row.id === currentModel && <Check size={13} className="shrink-0" />}
+                    </button>
+                  ))}
+                  {rows.length > 40 && <p className="px-3 py-1 text-micro text-content-tertiary">{rows.length - 40} more — filter to find them</p>}
+                </div>
+              )
+            })}
           </div>
 
           {/* Light affordance (S3 walk-fix round 12): one caption, only while

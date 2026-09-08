@@ -14,6 +14,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     activity: null,
     servedBy: null,
     cost: null,
+    routeReason: null,
     turnKind: null,
     ...overrides,
   }
@@ -54,6 +55,15 @@ describe('MessageBubble — the live tool-call line', () => {
     render(<MessageBubble row={assistantRow({ id: 'a2', text: 'hi', streaming: false, servedBy: 'ollama:qwen3:8b', cost: null })} />)
     expect(screen.getAllByTestId('served-by')).toHaveLength(2)
     expect(screen.getAllByTestId('turn-cost')).toHaveLength(1)
+  })
+
+  it('states a fallback in the gateway\'s own words when a later link answered', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({ text: 'hi', streaming: false, servedBy: 'ollama:qwen3:8b', routeReason: 'fell back to link 2 (ollama:qwen3:8b) — openrouter over its monthly cap $10.00' })}
+      />,
+    )
+    expect(screen.getByTestId('route-fallback').textContent).toContain('fell back to link 2')
   })
 
   it('shows a stated failure when the tool errors, distinct from the running state', () => {
@@ -119,6 +129,7 @@ function userRow(text: string): MessageRow {
     text,
     servedBy: null,
     cost: null,
+    routeReason: null,
     turnKind: null,
     streaming: false,
     interrupted: false,

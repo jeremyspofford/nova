@@ -127,4 +127,28 @@ describe('ModelSelector', () => {
     // qwen3:8b is the smaller of the two catalog entries (8B vs 14B).
     expect(note.className).toContain('text-warning')
   })
+
+  it('lists every provider\'s cloud models in their own group and writes the qualified id', async () => {
+    const api = {
+      getInstalledModels: vi.fn(async () => ['qwen3:8b']),
+      getSuggestion: vi.fn(async () => suggestion()),
+      putSetting: vi.fn(async () => undefined),
+      getCatalog: vi.fn(async () => ({
+        fetched_at: 't',
+        sources: [],
+        rows: [
+          { id: 'openrouter:openai/gpt-x', provider: 'openrouter', model: 'openai/gpt-x', label: 'GPT X', kind: 'cloud', sources: [], facts: {}, capabilities: {}, suitability: {}, actions: ['use'] },
+          { id: 'cerebras:llama', provider: 'cerebras', model: 'llama', label: 'llama', kind: 'cloud', sources: [], facts: {}, capabilities: {}, suitability: {}, actions: ['use'] },
+        ],
+      })),
+    }
+    const onModelChanged = vi.fn()
+    await renderSelector({ currentModel: 'qwen3:8b', onModelChanged, api: api as never })
+    fireEvent.click(screen.getByTestId('chat-model-trigger'))
+    await waitFor(() => expect(screen.getByTestId('chat-model-group-openrouter')).toBeDefined())
+    expect(screen.getByTestId('chat-model-group-cerebras')).toBeDefined()
+    fireEvent.click(screen.getByTestId('chat-model-option-openrouter:openai/gpt-x'))
+    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'openrouter:openai/gpt-x'))
+    expect(onModelChanged).toHaveBeenCalledWith('openrouter:openai/gpt-x')
+  })
 })

@@ -39,6 +39,10 @@ export type MessageRow = {
    * `cost_usd` on the fetched row. null until stated, and null when no
    * round was priced — a local or unmetered turn has no dollars. */
   cost: number | null
+  /** The gateway's stated reason when the answer came from a fallback
+   * link (S10-2): live from the `route` frame, `route_reason` on a
+   * fetched row. null when link 1 served. */
+  routeReason: string | null
   /** `turns.kind` of the turn that wrote this row, as GET .../messages
    * derived it (`turn_kind`, S9). A 'reminder' or 'scheduled' row earns the
    * bubble's small label; everything else — 'chat', null (a user row, a
@@ -115,6 +119,7 @@ export type FetchedMessage = {
   served_by?: string | null
   turn_kind?: string | null
   cost_usd?: number | null
+  route_reason?: string | null
 }
 
 export const NO_REPLY = 'the turn finished without a reply' 
@@ -132,6 +137,7 @@ function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role
     activity: null,
     servedBy: null,
     cost: null,
+    routeReason: null,
     turnKind: null,
     ...row,
   }
@@ -208,6 +214,14 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
       if (state.pendingId === null) return state
       return withPending(state, row => ({ ...row, cost: event.usage.cost_usd }))
 
+    case 'route':
+      if (state.pendingId === null) return state
+      return withPending(state, row => ({
+        ...row,
+        routeReason: event.route.reason,
+        servedBy: event.route.servedBy ?? row.servedBy,
+      }))
+
     case 'error':
       if (state.pendingId === null) {
         return {
@@ -256,6 +270,7 @@ function serverRow(m: FetchedMessage): MessageRow {
     text: m.content,
     servedBy: m.served_by ?? null,
     cost: typeof m.cost_usd === 'number' ? m.cost_usd : null,
+    routeReason: typeof m.route_reason === 'string' ? m.route_reason : null,
     turnKind: m.turn_kind ?? null,
   })
 }

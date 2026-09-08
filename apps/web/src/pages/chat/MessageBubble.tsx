@@ -142,6 +142,18 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
             )}
           </p>
         )}
+        {/* The gateway served this turn from a fallback link (S10-2, rail 20:
+            no silent fallback) — the reason is the gateway's own sentence. */}
+        {row.routeReason && (
+          <p
+            data-testid="route-fallback"
+            className="mt-1 inline-flex items-start gap-1.5 text-micro text-warning"
+            title="why this reply came from a different model than the first choice, as the gateway stated it"
+          >
+            <AlertTriangle size={11} className="mt-0.5 shrink-0" />
+            <span>{row.routeReason}</span>
+          </p>
+        )}
         {/* A cut-off turn keeps whatever really arrived and says it was cut
             off — the alternative is a truncated answer that reads complete. */}
         {row.interrupted && (

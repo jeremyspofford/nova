@@ -60,6 +60,9 @@ export type StreamEvent =
   // the gateway's ledger stated (S10). Once per turn, after served_by.
   // cost_usd null when no round was priced; the counts say why.
   | { type: 'usage'; usage: TurnUsage }
+  // {"route": {...}} — the gateway served this turn from a link PAST the
+  // first (S10-2): who answered and its stated reason. Sent only then.
+  | { type: 'route'; route: RouteMarker }
   | { type: 'done' }
   | { type: 'interrupted'; reason: string }
 
@@ -73,6 +76,13 @@ export interface TurnUsage {
   unmetered_rounds: number
   local_rounds: number
   unrecorded_rounds: number
+}
+
+export interface RouteMarker {
+  role: string | null
+  link: number
+  reason: string | null
+  servedBy: string | null
 }
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>
@@ -95,7 +105,7 @@ export function failureReason(err: unknown): string {
 // the moment a newer server introduces one. A key IN this set with the
 // wrong shape (caught below, before this check ever runs) is still a
 // contract violation and still an error. (Ruling S2-R6, amending S1's R20.)
-const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity', 'served_by', 'usage'])
+const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity', 'served_by', 'usage', 'route'])
 
 function frameToEvent(payload: string): StreamEvent | null {
   if (payload === '[DONE]') return { type: 'done' }
@@ -115,6 +125,20 @@ function frameToEvent(payload: string): StreamEvent | null {
   if (typeof obj.error === 'string') return { type: 'error', reason: obj.error }
   if (typeof obj.served_by === 'string' && obj.served_by) {
     return { type: 'served', servedBy: obj.served_by }
+  }
+  if (obj.route !== null && typeof obj.route === 'object') {
+    const r = obj.route as Record<string, unknown>
+    if (typeof r.link === 'number') {
+      return {
+        type: 'route',
+        route: {
+          role: typeof r.role === 'string' ? r.role : null,
+          link: r.link,
+          reason: typeof r.reason === 'string' ? r.reason : null,
+          servedBy: typeof r.served_by === 'string' ? r.served_by : null,
+        },
+      }
+    }
   }
   if (obj.usage !== null && typeof obj.usage === 'object') {
     const u = obj.usage as Record<string, unknown>

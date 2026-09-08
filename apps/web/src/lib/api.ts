@@ -247,6 +247,9 @@ export interface StoredMessage {
    * gateway's ledger figures, never a stored claim. null when no round was
    * priced (local, unmetered, or unpriced). */
   cost_usd?: number | null
+  /** The gateway's stated reason when this turn's answer came from a
+   * fallback link (S10-2); null when link 1 served. */
+  route_reason?: string | null
 }
 
 export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
@@ -370,6 +373,49 @@ export const putOwnerPrice = (provider: string, model: string, prompt_usd_per_to
   })
 export const deleteOwnerPrice = (provider: string, model: string) =>
   apiSend<{ removed: boolean }>(`/api/v1/spend/prices?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}`, 'DELETE')
+
+// ── routing (S10-2): the role chains, the walk explained, the walls ─────
+
+export type RouteRole = 'chat' | 'scheduled' | 'judge' | 'coding' | 'vision'
+
+export interface RouteVerdict {
+  link: number
+  id: string
+  provider?: string
+  model?: string
+  local?: boolean
+  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'unreachable' | 'unknown' | 'refused' | string
+  reason: string | null
+  walled_until?: string
+}
+
+export interface RouteExplain {
+  role: RouteRole
+  chain: RouteVerdict[]
+  would_serve: { role: string; link: number; reason: string | null; served_by: string; standby: boolean } | null
+  reason: string | null
+}
+
+export interface RouteWall {
+  provider: string
+  walled_until: string
+  reason: string
+  status: number
+  strikes: number
+}
+
+export interface Routes {
+  roles: { role: RouteRole; chain: string[]; reserved: boolean }[]
+  walls: RouteWall[]
+}
+
+export const getRoutes = () => apiGet<Routes>('/api/v1/routes')
+export const putRoute = (role: RouteRole, chain: string[]) =>
+  apiSend<{ role: RouteRole; chain: string[] }>(`/api/v1/routes/${role}`, 'PUT', { chain })
+export const explainRoute = (role: RouteRole, model?: string) =>
+  apiGet<RouteExplain>(`/api/v1/routes/explain?role=${role}${model ? `&model=${encodeURIComponent(model)}` : ''}`)
+export const clearWall = (provider: string) =>
+  apiSend<{ provider: string; cleared: boolean }>(`/api/v1/routes/walls/${encodeURIComponent(provider)}`, 'DELETE')
 
 // ── activity (the turn ledger, read-only) ───────────────────────────────
 

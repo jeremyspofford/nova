@@ -397,6 +397,16 @@ describe('chatReducer — live tool activity in the pending bubble', () => {
     expect(messages(state)[1].cost).toBeNull()
   })
 
+  it('a route frame keeps the gateway\'s reason and who answered on the pending row', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'route', route: { role: 'chat', link: 2, reason: 'fell back to link 2', servedBy: 'ollama:qwen3:8b' } },
+    })
+    expect(messages(state)[1].routeReason).toBe('fell back to link 2')
+    expect(messages(state)[1].servedBy).toBe('ollama:qwen3:8b')
+  })
+
   it('an ok frame clears the marker — the call resolved cleanly', () => {
     let state = started()
     state = chatReducer(state, {

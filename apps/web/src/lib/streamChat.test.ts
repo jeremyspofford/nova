@@ -153,6 +153,12 @@ describe('createSseParser', () => {
   // finish". Optional even on an error status: a frame missing it (or with
   // a non-string value) still parses as a normal, reason-less activity
   // event, not a shape violation — only `tool`/`status` are load-bearing.
+  it('turns a route frame into a route event', () => {
+    expect(
+      parseAll(['data: {"route":{"role":"chat","link":2,"reason":"fell back to link 2","served_by":"ollama:qwen3:8b"}}\n\n']),
+    ).toEqual([{ type: 'route', route: { role: 'chat', link: 2, reason: 'fell back to link 2', servedBy: 'ollama:qwen3:8b' } }])
+  })
+
   it('turns a usage frame into a usage event, defaulting what the server left out', () => {
     expect(
       parseAll([

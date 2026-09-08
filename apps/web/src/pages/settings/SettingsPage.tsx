@@ -12,6 +12,7 @@ import { ModelsSection } from './ModelsSection'
 import { DevicesSection } from './DevicesSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
+import { RoutingSection } from './RoutingSection'
 
 /**
  * The S1 settings shell: two sections and no tab machinery yet. The tabs and
@@ -138,6 +139,7 @@ export function SettingsPage() {
                 setModel(model)
               }}
             />
+            <RoutingSection chatModel={chatModel} />
             <ResponseQualitySection
               checked={responsivenessCheck}
               onChanged={value => updateSettingValue('agents.responsiveness_check', value)}
