@@ -21,7 +21,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from app import adapters, backends, catalog, db, hf_hub, ollama_registry, providers, usage
+from app import adapters, backends, catalog, db, hf_hub, ollama_registry, providers, routing, usage
 from app import curated as curated_mod
 from app import fit as fit_mod
 from app import pulls as pulls_mod
@@ -885,6 +885,75 @@ async def delete_owner_price(request: Request) -> dict:
     if not removed:
         raise HTTPException(status_code=404, detail="no owner price for that model")
     return {"provider": provider_name, "model": model, "removed": True}
+
+
+# ── routing (S10-2) ────────────────────────────────────────────────────────
+
+
+@router.get("/routes")
+async def get_routes(request: Request) -> dict:
+    pool = await db.get_pool()
+    chains = await routing.chains(pool)
+    walled = await routing.walls(pool)
+    return {
+        "roles": [
+            {
+                "role": role,
+                "chain": chains.get(role, []),
+                "reserved": role in routing.RESERVED_ROLES,
+            }
+            for role in routing.ROLES
+        ],
+        "walls": [{**w, "walled_until": w["walled_until"].isoformat()} for w in walled.values()],
+    }
+
+
+@router.put("/routes/{role}")
+async def put_route(role: str, request: Request) -> dict:
+    """{chain: [provider:model, ...]} — validated against the live provider
+    names before anything is stored; a bad link is refused by name."""
+    body = await request.json() if await request.body() else {}
+    pool = await db.get_pool()
+    names = {r["name"] for r in await providers.list_rows(pool)}
+    try:
+        chain = await routing.set_chain(
+            pool, role, body.get("chain") if isinstance(body, dict) else None, names
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info("route set: %s = %s", role, chain)
+    return {"role": role, "chain": chain}
+
+
+@router.get("/route/explain")
+async def route_explain(request: Request) -> dict:
+    """The walk a call with `?role=` (and optionally `?model=`, the explicit
+    pick) would take right now: every link's live verdict and what would
+    serve. Reads only; nothing is called, nothing is charged."""
+    role = request.query_params.get("role") or "chat"
+    try:
+        routing.validate_role(role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return await routing.explain(
+        request.app,
+        await db.get_pool(),
+        role=role,
+        requested=request.query_params.get("model") or None,
+        timezone=_timezone_of(request),
+        fit_context=_fit_context,
+        latest_probes=_latest_probes,
+    )
+
+
+@router.delete("/routes/walls/{provider}")
+async def clear_wall(provider: str) -> dict:
+    """The owner lifts a wall (an act, logged): the next call will try it."""
+    removed = await routing.clear_wall(await db.get_pool(), provider)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"{provider!r} is not walled")
+    logger.info("wall cleared by the owner: %s", provider)
+    return {"provider": provider, "cleared": True}
 
 
 @router.get("/catalog")

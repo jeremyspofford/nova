@@ -18,13 +18,14 @@ import time
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
-from app import adapters, db, providers, usage
+from app import adapters, db, providers, routing, usage
 from app.adapters import ListingUnavailable, ProviderRefused
 
 router = APIRouter(tags=["data-plane"])
 logger = logging.getLogger("gateway")
 
 SERVED_BY_HEADER = "X-Nova-Served-By"
+ROUTE_HEADER = "X-Nova-Route"
 
 
 def _served_by(row: dict, model: str) -> str:
@@ -44,13 +45,101 @@ async def chat_completions(request: Request) -> Response:
 
     pool = await db.get_pool()
     requested = body.get("model") if isinstance(body.get("model"), str) else None
-    row, model = await providers.resolve(pool, requested)
     attribution = usage.Attribution.from_headers(request.headers)
+    if attribution.role:
+        return await serve_by_role(request, pool, attribution.role, requested, body, attribution)
+    row, model = await providers.resolve(pool, requested)
+    # No role: the explicit model, as before — but a capped provider is
+    # refused BEFORE the call (rail 9), a 402 in words, never a substitute.
+    capped = await usage.over_cap(pool, row, attribution.timezone)
+    if capped:
+        await usage.record_probe(
+            pool,
+            row=row,
+            model=model,
+            status=402,
+            body=b"",
+            started=time.monotonic(),
+            purpose=attribution.purpose,
+            error=capped,
+        )
+        raise HTTPException(
+            status_code=402, detail=capped, headers={SERVED_BY_HEADER: _served_by(row, model)}
+        )
     return await serve_completion(request, pool, row, model, body, attribution)
 
 
+async def serve_by_role(
+    request: Request, pool, role: str, requested, body, attribution
+) -> Response:
+    """Walk the role's chain (app/routing.py). A link that REFUSES before
+    streaming is recorded, walled, and the next runnable link is tried in
+    this same request — the reply then states the fallback (rail 20)."""
+    from app import admin  # the fit context and probe query /admin/suggest uses
+
+    skip: set[str] = set()
+    try:
+        routing.validate_role(role)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    for _attempt in range(6):
+        try:
+            decision = await routing.resolve(
+                request.app,
+                pool,
+                role=role,
+                requested=requested,
+                timezone=attribution.timezone,
+                fit_context=admin._fit_context,
+                latest_probes=admin._latest_probes,
+                skip=skip,
+            )
+        except routing.NothingRunnable as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"{exc} — " + "; ".join(f"{v['id']}: {v['reason']}" for v in exc.verdicts),
+            ) from exc
+        try:
+            response = await serve_completion(
+                request,
+                pool,
+                decision.row,
+                decision.model,
+                body,
+                attribution,
+                route=decision.as_route(),
+            )
+        except HTTPException as exc:
+            if exc.status_code in routing.WALL_STATUSES or exc.status_code >= 500:
+                await routing.record_refusal(pool, decision.row, exc.status_code, str(exc.detail))
+                skip.add(f"{decision.row['name']}:{decision.model}")
+                continue
+            raise
+        if response.status_code in routing.WALL_STATUSES or response.status_code >= 500:
+            detail = ""
+            body_bytes = getattr(response, "body", b"")
+            if body_bytes:
+                detail = body_bytes.decode(errors="replace")[:200]
+            await routing.record_refusal(pool, decision.row, response.status_code, detail)
+            skip.add(f"{decision.row['name']}:{decision.model}")
+            continue
+        if response.status_code == 200 and not decision.row.get("local"):
+            await routing.note_success(pool, decision.row["name"])
+        response.headers[ROUTE_HEADER] = decision.header()
+        return response
+    raise HTTPException(
+        status_code=503, detail=f"every link in the {role!r} chain refused this request"
+    )
+
+
 async def serve_completion(
-    request: Request, pool, row: dict, model: str, body: dict, attribution
+    request: Request,
+    pool,
+    row: dict,
+    model: str,
+    body: dict,
+    attribution,
+    route: dict | None = None,
 ) -> Response:
     """One completion on `row`, METERED: the adapter's response passes
     through usage.observe, which reads the provider's usage off the
@@ -85,6 +174,7 @@ async def serve_completion(
         kind="completion",
         started=started,
         stream=bool(body.get("stream")),
+        route=route,
     )
     response.headers[SERVED_BY_HEADER] = served_by
     return response
