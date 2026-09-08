@@ -181,10 +181,15 @@ class FakeGateway:
     # X-Nova-Route header the completion carries (None: none).
     explain_body: dict | None = None
     route_header: str | None = None
+    # S11: the liveness path the real gateway serves (services/gateway/app/
+    # main.py). The stack checks probe it, so a test can make the peer answer
+    # something other than 200 without unmounting it.
+    health_status: int = 200
 
     def __post_init__(self) -> None:
         self.app = Starlette(
             routes=[
+                Route("/health/live", self._health, methods=["GET"]),
                 Route("/v1/chat/completions", self._completions, methods=["POST"]),
                 Route("/admin/hardware", self._admin, methods=["GET"]),
                 Route("/admin/suggest", self._admin, methods=["GET"]),
@@ -227,6 +232,11 @@ class FakeGateway:
         self.queries.append(request.scope["query_string"])
         self.seen_headers.append({k.lower(): v for k, v in request.headers.items()})
         return body
+
+    async def _health(self, request):
+        """Liveness, exactly as the real service serves it: no bearer needed
+        (it is not an admin route) and no body worth recording."""
+        return JSONResponse({"status": "live"}, status_code=self.health_status)
 
     async def _explain(self, request):
         if self.explain_body is None:
@@ -338,6 +348,9 @@ class FakeMemory:
     # so a test can assert a specific path got 200, not just that /forget was
     # called with some body.
     forget_results: list[dict] = field(default_factory=list)
+    # S11: the liveness path the real memory service serves (services/memory/
+    # app/main.py), probed by the stack checks.
+    health_status: int = 200
 
     def __post_init__(self) -> None:
         self.ingested = asyncio.Event()
@@ -348,12 +361,17 @@ class FakeMemory:
         self.journal_paths: set[str] = set()
         self.app = Starlette(
             routes=[
+                Route("/health/live", self._health, methods=["GET"]),
                 Route("/recall", self._recall, methods=["POST"]),
                 Route("/ingest", self._ingest, methods=["POST"]),
                 Route("/save", self._save, methods=["POST"]),
                 Route("/forget", self._forget, methods=["POST"]),
             ]
         )
+
+    async def _health(self, request):
+        """Liveness, as the real service serves it — no bearer, no body."""
+        return JSONResponse({"status": "live"}, status_code=self.health_status)
 
     async def _save(self, request):
         body = await request.json()

@@ -1,4 +1,5 @@
 """FastAPI entrypoint for the core service."""
+
 from __future__ import annotations
 
 import asyncio
@@ -16,6 +17,7 @@ from app import (
     activity,
     agents_api,
     auth_api,
+    beats,
     chat,
     conversations,
     db,
@@ -73,6 +75,11 @@ async def lifespan(app: FastAPI):
     # a fresh install without a migration seeding it.
     await scheduler.sweep_orphaned_firings(pool)
     await timers.ensure_jobs(pool)
+    # And the beat rows (S11), for the same reason and by the same read-back.
+    # A fresh install has no owner yet, so this one can honestly decline —
+    # scheduler.run_forever keeps asking on its own ticks until it takes, so a
+    # brand new box gets its beats without waiting for a restart.
+    await beats.ensure_beats(pool)
     # The scheduler loop is its OWN task, never one of chat._BACKGROUND: a
     # forever task in that set would hang drain_background(). It is cancelled
     # and awaited FIRST at shutdown, so no new firing starts while the detached

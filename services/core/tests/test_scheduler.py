@@ -16,7 +16,19 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-from app import agents, chat, db, devices, devices_ws, scheduler, timers, tools, traces
+from app import (
+    agents,
+    beats,
+    chat,
+    db,
+    devices,
+    devices_ws,
+    scheduler,
+    settings_store,
+    timers,
+    tools,
+    traces,
+)
 from app.identity import Person
 from app.main import app, lifespan
 from tests.conftest import TEST_DSN, requires_db
@@ -104,6 +116,15 @@ async def _job_row(pool, handler: str, *, next_fire_at: datetime, spec=None) -> 
 async def _firings(pool, timer_id):
     return await pool.fetch(
         "SELECT * FROM timer_firings WHERE timer_id = $1 ORDER BY started_at", timer_id
+    )
+
+
+async def _rounds_ceiling(pool, rounds: int) -> None:
+    """The live round ceiling, written the way the settings route writes it."""
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('agents.max_tool_rounds', $1::jsonb) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        rounds,
     )
 
 
@@ -832,10 +853,13 @@ async def test_startup_sweep_marks_every_running_firing_interrupted_with_the_rea
 async def test_lifespan_sweeps_seeds_and_runs_the_scheduler_cancelled_before_the_drain(
     pool, monkeypatch
 ):
-    """The app's real startup: the orphan sweep and ensure_jobs run, the loop
-    is a live task while the app is up, and at shutdown it is cancelled and
-    awaited BEFORE chat.drain_background — a forever task drained with the set
-    would hang shutdown."""
+    """The app's real startup: the orphan sweep, ensure_jobs AND ensure_beats
+    run, the loop is a live task while the app is up, and at shutdown it is
+    cancelled and awaited BEFORE chat.drain_background — a forever task drained
+    with the set would hang shutdown.
+
+    ensure_beats being CALLED here is the whole spine: without it no beat row
+    exists in a deployed build and nothing she watches ever runs."""
     person, conversation = await _owner(pool)
     row = await _reminder(pool, person, conversation)
     orphan = await pool.fetchval(
@@ -876,6 +900,14 @@ async def test_lifespan_sweeps_seeds_and_runs_the_scheduler_cancelled_before_the
             )
             == 1
         )
+        seeded = {
+            row["handler"]
+            for row in await pool.fetch(
+                "SELECT payload->>'handler' AS handler FROM timers WHERE kind = $1",
+                beats.BEAT_KIND,
+            )
+        }
+        assert seeded == set(beats.BEATS)
         task = app.state.scheduler_task
         assert isinstance(task, asyncio.Task) and not task.done()
         assert task.get_name() == "scheduler"
@@ -899,6 +931,10 @@ async def test_run_forever_logs_a_failing_tick_and_keeps_going(monkeypatch, capl
             raise RuntimeError("db hiccup")
         return []
 
+    async def already_seeded(pool_):
+        return True
+
+    monkeypatch.setattr(beats, "ensure_beats", already_seeded)
     monkeypatch.setattr(scheduler, "tick_once", failing_then_fine)
     with caplog.at_level(logging.ERROR, logger="core"):
         task = asyncio.create_task(scheduler.run_forever(app, None, interval_s=0.01))
@@ -910,6 +946,98 @@ async def test_run_forever_logs_a_failing_tick_and_keeps_going(monkeypatch, capl
         await asyncio.gather(task, return_exceptions=True)
     assert calls["n"] >= 2
     assert any("scheduler tick failed" in r.getMessage() for r in caplog.records)
+
+
+async def test_the_ticker_seeds_the_beats_after_registration_without_a_restart(pool, monkeypatch):
+    """A FRESH INSTALL has no owner when core starts, so main.lifespan's
+    ensure_beats honestly declines. Without a retry the beats would not exist
+    until someone restarted core — on a new box, "not until the stack is next
+    redeployed" — and she would watch nothing while looking perfectly healthy.
+    The loop asks again on its own ticks, which are exactly the moments the
+    answer could have changed."""
+    assert await beats.ensure_beats(pool) is False  # nobody has registered yet
+
+    ticks = asyncio.Event()
+    original_tick = scheduler.tick_once
+
+    async def counting_tick(app_, pool_, *, now=None):
+        ticks.set()
+        return await original_tick(app_, pool_, now=now)
+
+    monkeypatch.setattr(scheduler, "tick_once", counting_tick)
+    task = asyncio.create_task(scheduler.run_forever(app, pool, interval_s=0.01))
+    try:
+        await asyncio.wait_for(ticks.wait(), 5)
+        assert (
+            await pool.fetchval("SELECT count(*) FROM timers WHERE kind = $1", beats.BEAT_KIND) == 0
+        )
+        # He registers. No restart, no redeploy.
+        await pool.execute("INSERT INTO people (name, role) VALUES ('jeremy', 'owner')")
+        for _ in range(500):
+            seeded = await pool.fetchval(
+                "SELECT count(*) FROM timers WHERE kind = $1", beats.BEAT_KIND
+            )
+            if seeded == len(beats.BEATS):
+                break
+            await asyncio.sleep(0.01)
+        assert seeded == len(beats.BEATS)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_the_ticker_stops_asking_once_the_beats_are_rows(pool, monkeypatch):
+    """The read-back is what stops it: ensure_beats returns True only when
+    every beat was found as a row, and the loop asks until it does."""
+    await pool.execute("INSERT INTO people (name, role) VALUES ('jeremy', 'owner')")
+    asked = {"n": 0}
+    real = beats.ensure_beats
+
+    async def counting(pool_):
+        asked["n"] += 1
+        return await real(pool_)
+
+    monkeypatch.setattr(beats, "ensure_beats", counting)
+    task = asyncio.create_task(scheduler.run_forever(app, pool, interval_s=0.01))
+    try:
+        for _ in range(500):
+            if asked["n"] >= 1:
+                break
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.2)  # many more ticks go by
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert asked["n"] == 1, "the seed is asked for until it takes, then never again"
+
+
+async def test_a_seeding_failure_is_loud_and_never_stops_the_ticks(pool, monkeypatch, caplog):
+    """Seeding is not this loop's job. A database that will not answer it must
+    not hold up every reminder behind it — the failure is logged with its
+    reason and the tick runs anyway."""
+    ticks = {"n": 0}
+
+    async def explodes(pool_):
+        raise RuntimeError("the beats table is on fire")
+
+    async def counting_tick(app_, pool_, *, now=None):
+        ticks["n"] += 1
+        return []
+
+    monkeypatch.setattr(beats, "ensure_beats", explodes)
+    monkeypatch.setattr(scheduler, "tick_once", counting_tick)
+    with caplog.at_level(logging.ERROR, logger="core"):
+        task = asyncio.create_task(scheduler.run_forever(app, pool, interval_s=0.01))
+        try:
+            for _ in range(500):
+                if ticks["n"] >= 2:
+                    break
+                await asyncio.sleep(0.01)
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert ticks["n"] >= 2
+    assert any("the beats could not be seeded" in r.getMessage() for r in caplog.records)
 
 
 async def test_a_graceful_shutdown_mid_firing_closes_it_interrupted_and_counts_no_failure(
@@ -957,3 +1085,114 @@ def test_framed_instruction_names_the_timer_and_the_local_time():
         "watching. Local time now: Sun 6 Sep 2026 07:00 EDT.]\n\nread it"
     )
     assert json.dumps(framed)  # plain text, nothing a transport would choke on
+
+
+# -- the bound on one firing (the S9 carry) ---------------------------------------------------
+
+
+async def test_a_firing_that_passes_the_bound_is_stopped_and_says_so(pool, monkeypatch, caplog):
+    """Firings run one after another, so an unbounded run delays every timer
+    behind it until the process restarts. asyncio.wait_for cuts it, the firing
+    is an ERROR whose reason STATES the bound, and the turn is closed — reverting
+    the bound leaves this hanging for the length of the test's timeout."""
+    monkeypatch.setattr(scheduler, "FIRING_TIMEOUT_FLOOR_S", 0.05)
+    entered = asyncio.Event()
+
+    async def hangs(pool_) -> str:
+        entered.set()
+        await asyncio.sleep(30)
+        return "never reached"
+
+    monkeypatch.setitem(timers.JOBS, "hangs", hangs)
+    timer_id = await _job_row(pool, "hangs", next_fire_at=datetime(2031, 1, 1, tzinfo=UTC))
+    with caplog.at_level(logging.ERROR, logger="core"):
+        fired = await asyncio.wait_for(scheduler.tick_once(app, pool, now=LATER), 10)
+    assert len(fired) == 1
+    assert entered.is_set()  # it really started; this is a cut, not a refusal
+
+    (firing,) = await _firings(pool, timer_id)
+    assert firing["status"] == scheduler.FIRING_ERROR
+    assert firing["reason"] == scheduler.timeout_reason("job", 0.05)
+    assert "0.05 seconds" in firing["reason"] and "delay every timer behind it" in firing["reason"]
+    assert firing["ended_at"] is not None
+    assert await pool.fetchval(TURN_STATUS, firing["turn_id"]) == "error"
+    # An error, not an interruption: the timer did something wrong, so it counts
+    # toward the pause ceiling. A beat that hangs every hour is broken.
+    row = await timers.get(pool, timer_id)
+    assert row["consecutive_failures"] == 1
+    assert any(str(firing["id"]) in r.getMessage() for r in caplog.records)
+    assert scheduler.RUNNING == set()
+
+
+def test_the_bound_is_stated_in_words_from_the_bound_that_was_applied():
+    """The sentence carries the number that was actually used — passed in, not
+    read from a constant — so it can never describe a bound nobody applied. And
+    it says out loud that a cut is not proof of a hang: this bound is derived
+    from the live ceiling, so a run that reached it may have been legitimate."""
+    said = scheduler.timeout_reason("beat", 42)
+    assert "42 seconds" in said
+    assert said.startswith("this beat firing")
+    assert "legitimately long one that was cut" in said
+    assert "the turn's spans say which" in said
+
+
+async def test_the_bound_is_derived_from_the_live_ceiling_not_the_default(pool):
+    """The defect this closes: one constant computed from the DEFAULT round
+    ceiling bounded EVERY firing kind, so raising agents.max_tool_rounds — a
+    deliberate act — left a legitimate long turn to be cut, recorded an error
+    and charged one of the five failures that pause the row. Pinned against the
+    live setting, never a literal."""
+    await _rounds_ceiling(pool, 40)
+    rounds = int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
+    assert await scheduler.firing_timeout_s(pool, "scheduled") == rounds * chat.GATEWAY_TIMEOUT.read
+    # And it moves with the setting rather than with an edit here.
+    await _rounds_ceiling(pool, 12)
+    assert await scheduler.firing_timeout_s(pool, "scheduled") == 12 * chat.GATEWAY_TIMEOUT.read
+
+
+async def test_a_bound_agents_firing_is_bounded_by_that_agents_own_budget(pool, mount_peers, root):
+    """An agent-bound scheduled row runs the agent's rounds, so the bound is
+    the agent's — reading the setting instead would cut the very row whose
+    budget was widened on purpose."""
+    await _owner(pool)
+    await _rounds_ceiling(pool, 6)
+    agent = await _create_agent(pool, mount_peers, name="researcher", max_tool_rounds=30)
+    assert agent.max_tool_rounds == 30
+    assert await scheduler.firing_timeout_s(pool, "scheduled", agent) == (
+        30 * chat.GATEWAY_TIMEOUT.read
+    )
+
+
+async def test_a_firing_that_makes_no_model_call_gets_the_floor(pool):
+    """A reminder writes a chat row and a device frame; a job is database work.
+    Neither waits on a gateway round, so neither is bounded by one."""
+    await _rounds_ceiling(pool, 40)
+    assert await scheduler.firing_timeout_s(pool, "reminder") == scheduler.FIRING_TIMEOUT_FLOOR_S
+    assert await scheduler.firing_timeout_s(pool, "job") == scheduler.FIRING_TIMEOUT_FLOOR_S
+    # And the floor really is a floor: a tiny live ceiling cannot shrink a
+    # firing's budget below what its own work needs.
+    await _rounds_ceiling(pool, 1)
+    assert await scheduler.firing_timeout_s(pool, "beat") == scheduler.FIRING_TIMEOUT_FLOOR_S
+
+
+def test_the_kinds_bounded_by_the_round_ceiling_are_the_ones_that_run_a_model_turn():
+    assert set(scheduler.MODEL_TURN_KINDS) == {"scheduled", beats.BEAT_KIND}
+
+
+async def test_a_timeout_from_inside_the_run_is_not_reported_as_the_bound(pool, monkeypatch):
+    """The bound's sentence names a number. A TimeoutError that escapes the
+    work itself must not borrow those words — the firing would claim it ran
+    for 1800 seconds when it ran for none."""
+
+    async def times_out(pool_, row_, turn_):
+        raise TimeoutError("the search backend went quiet")
+
+    monkeypatch.setattr(scheduler, "_fire_job", times_out)
+    timer_id = await _job_row(pool, "retention", next_fire_at=datetime(2031, 1, 1, tzinfo=UTC))
+    await scheduler.tick_once(app, pool, now=LATER)
+    (firing,) = await _firings(pool, timer_id)
+    assert firing["status"] == scheduler.FIRING_ERROR
+    assert "a timeout inside the firing" in firing["reason"]
+    assert "the search backend went quiet" in firing["reason"]
+    assert firing["reason"] != scheduler.timeout_reason("job", scheduler.FIRING_TIMEOUT_FLOOR_S)
+    assert f"{scheduler.FIRING_TIMEOUT_FLOOR_S:g} seconds" not in firing["reason"]

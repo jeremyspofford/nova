@@ -32,6 +32,10 @@ OWNER = {"name": "jeremy", "password": "correct horse battery staple"}
 # and every enrolled device pins it, so it behaves like schema, not per-test
 # state. Tests that need it absent delete it themselves.
 _TABLES = (
+    # S11: notices references turns and timer_firings (both ON DELETE SET
+    # NULL), so it is a child of two tables further down this list and drops
+    # and truncates ahead of either.
+    "notices",
     "timer_firings",
     "timers",
     # S12: timers.agent_id references agents (RESTRICT), so agents goes after

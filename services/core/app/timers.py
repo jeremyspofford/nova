@@ -1,19 +1,21 @@
 """The timers store: rows, jobs, and the retention job.
 
 A TIMER is a row (migration 019); its kind is `reminder` (delivery is code),
-`scheduled` (an instruction run as a model turn) or `job` (a code handler bound
-by name in JOBS). Everything that WRITES `timers` lives here, so the API and
+`scheduled` (an instruction run as a model turn), `job` (a code handler bound
+by name in JOBS) or `beat` (S11's watch and digest, bound by name in
+app/beats.py). Everything that WRITES `timers` lives here, so the API and
 the tools only ever call these functions; the tick that runs them is
 app/scheduler.py.
 
 Two refusals here are about what a row CAN be, never about who may act:
 `create` refuses a spec that does not validate, a `once` already in the past,
-a zone that does not load, and kind `job` from anywhere — jobs are seeded by
-`ensure_jobs` from JOBS alone, so a handler that does not exist in code can
-never be a row. `TimerRefused` carries the words and the status the API should
-state (devices.DeviceRefused's shape). A third (S12): only a `scheduled` row
-can be bound to an agent (`create(agent_id=)`, `bind_agent`) — refused in words
-here before migration 021's CHECK would refuse it by constraint name.
+a zone that does not load, and every SEEDED_KINDS kind from anywhere — those
+rows are seeded from code alone, so a job handler or a beat that does not
+exist in code can never be a row. `TimerRefused` carries the words and the
+status the API should state (devices.DeviceRefused's shape). A third (S12):
+only a `scheduled` row can be bound to an agent (`create(agent_id=)`,
+`bind_agent`) — refused in words here before migration 021's CHECK would
+refuse it by constraint name.
 """
 
 from __future__ import annotations
@@ -32,8 +34,17 @@ from app.identity import Person
 
 logger = logging.getLogger("core")
 
-KINDS = ("reminder", "scheduled", "job")
 PERSON_KINDS = ("reminder", "scheduled")
+# The kinds CODE seeds, and where each row comes from. A person never creates
+# one: `create` refuses every key here by name, so a job handler or a beat that
+# does not exist in code can never become a row, and the refusal says where the
+# row does come from instead of merely declining. Derived — adding a seeded
+# kind here adds it to KINDS and to the refusal in one edit.
+SEEDED_KINDS: dict[str, str] = {
+    "job": "timers.JOBS, seeded by ensure_jobs at startup",
+    "beat": "app/beats.py, seeded by beats.ensure_beats at startup",
+}
+KINDS = PERSON_KINDS + tuple(SEEDED_KINDS)
 CREATED_VIA = ("chat", "page", "system")
 FAILURES_BEFORE_PAUSE = 5
 RETENTION_DAYS = 30
@@ -212,16 +223,17 @@ async def create(
     DATABASE clock (the same clock the tick claims against, so a "once" a
     second from now is due on the next tick and never lost between two
     clocks), and refuses a once already in the past — a row that would fire
-    the moment it was created is not what "at 14:32" asked for. Kind `job` is
-    refused from here: jobs are seeded by ensure_jobs from JOBS alone.
+    the moment it was created is not what "at 14:32" asked for. A SEEDED_KINDS
+    kind is refused from here: those rows come from code alone (JOBS via
+    ensure_jobs, the beats via beats.ensure_beats).
 
     `agent_id` (S12) binds a SCHEDULED row to the agent that runs it; any
     other kind is refused in words before the timers_agent_only_scheduled
     CHECK would refuse it by constraint name. An id naming no agent is a
     stated refusal too (the foreign key's violation, read and worded)."""
-    if kind == "job":
+    if kind in SEEDED_KINDS:
         raise TimerRefused(
-            "job timers are seeded from code (timers.JOBS) at startup, never created here"
+            f"{kind} timers are seeded from code — {SEEDED_KINDS[kind]} — never created here"
         )
     if kind not in PERSON_KINDS:
         raise TimerRefused(f"unknown timer kind {kind!r} — one of {', '.join(PERSON_KINDS)}")

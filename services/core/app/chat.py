@@ -1963,10 +1963,16 @@ def _purpose_of(turn: traces.Turn) -> str:
 
 
 # The routing chain a turn's own rounds walk (S10-2): a chat turn the chat
-# chain, a scheduled turn the scheduled chain; an eval NAMES its model and
-# walks none — a measurement on a substituted model would be a lie about
-# which model was measured (rail 17).
-_ROLE_BY_KIND = {"chat": "chat", "scheduled": "scheduled"}
+# chain, a scheduled turn the scheduled chain, a beat the beat chain; an eval
+# NAMES its model and walks none — a measurement on a substituted model would
+# be a lie about which model was measured (rail 17).
+#
+# A kind missing from here is not a neutral omission, which is why `beat` was
+# added the same day the kind was (S11-1): with no X-Nova-Role the gateway
+# serves the turn's explicit model with NO chain behind it and NO fallback
+# when that model is walled, and the ledger meters the spend under a NULL role
+# — so a beat's hourly cost would be invisible on the Spend page.
+_ROLE_BY_KIND = {"chat": "chat", "scheduled": "scheduled", "beat": "beat"}
 
 
 def _role_of(turn: traces.Turn) -> str | None:

@@ -21,7 +21,15 @@ runs the SAME funnel as that agent — its Person value, its persona, its round
 budget, its own routing role on the turn — and the reply still lands in the
 owner's conversation; a plain row's call is byte-for-byte what it was. A job
 runs the handler timers.JOBS names, under a `job` span; an unknown handler is
-a REFUSED firing and pauses the row with that reason, never a model call.
+a REFUSED firing and pauses the row with that reason, never a model call. A
+beat (S11) runs app/beats.py under a `beat` span — its turn is opened here like
+every other, but into the beats' OWN inactive conversation, so a beat that
+finds nothing says nothing where he would see it.
+
+Every per-kind run is bounded, and the bound is DERIVED per firing from the
+ceiling that firing actually runs under (firing_timeout_s). Firings run one
+after another, so one hung run would otherwise delay every timer behind it for
+as long as it hung (the S9 carry, taken now that a recurring beat exists).
 
 Nothing here asks anyone for anything (owner ruling 2026-09-03): the path from
 claim to run awaits only the work.
@@ -40,6 +48,7 @@ import asyncpg
 
 from app import (
     agents,
+    beats,
     chat,
     devices_ws,
     identity,
@@ -64,6 +73,17 @@ SHUTDOWN_REASON = "core shut down while this firing was running"
 # stated rather than assumed, because a firing that ran as Nova instead would
 # be a silent substitution of who did the work.
 AGENT_GONE_REASON = "the agent this timer was bound to no longer exists"
+# The floor under one firing's bound: what a firing that makes NO model call
+# gets. A reminder writes a chat row and one device frame; a job is database
+# work; the watch beat's checks are bounded one by one (checks.CHECK_DEADLINE_S)
+# and run concurrently. Ten minutes is far past all of them, and past it a
+# firing is not slow, it is stuck.
+FIRING_TIMEOUT_FLOOR_S = 600.0
+# The kinds that run a model turn, and so are bounded by the LIVE round ceiling
+# rather than the floor. A beat is here because the digest composes its message
+# with a model turn (S11-3) and the watch beat may act in one — a bound that
+# only fits today's check-reading beat would cut that the day it lands.
+MODEL_TURN_KINDS = ("scheduled", beats.BEAT_KIND)
 FIRING_OK, FIRING_ERROR, FIRING_REFUSED, FIRING_INTERRUPTED = (
     "ok",
     "error",
@@ -155,18 +175,90 @@ def _next_fire(row: asyncpg.Record, now: datetime) -> datetime | None:
 # -- one firing ----------------------------------------------------------------
 
 
+async def firing_timeout_s(
+    pool: asyncpg.Pool, kind: str, agent: agents.Agent | None = None
+) -> float:
+    """How long THIS firing may run before it is cut, derived from the ceiling
+    it actually runs under.
+
+    Two live numbers, never a literal: the gateway's own per-read silence
+    budget (chat.GATEWAY_TIMEOUT.read) and the round ceiling this firing runs
+    with — the agent's own row when one is bound, else the live
+    `agents.max_tool_rounds` setting. Their product is the longest a real turn
+    can take before its own timeouts end it.
+
+    This used to be one constant computed from the DEFAULT round ceiling, and
+    that was a bug with the owner's name on it: raising max_tool_rounds, or
+    binding a timer to an agent with a wider budget, is a deliberate act, and
+    the firing cut such a run off, recorded an error and spent one of the five
+    consecutive failures that pause the row. A ceiling he widened on purpose
+    now widens this with it.
+
+    A kind that makes no gateway rounds (reminder, job) gets the floor — its
+    work has budgets of its own and no round to wait on. A settings read that
+    fails is NOT swallowed into a default here: the exception travels, the
+    firing is recorded an error with the reason, and nobody is told a bound was
+    applied that was not.
+    """
+    rounds = 0
+    if kind in MODEL_TURN_KINDS:
+        rounds = (
+            agent.max_tool_rounds
+            if agent is not None
+            else int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
+        )
+    return max(FIRING_TIMEOUT_FLOOR_S, rounds * chat.GATEWAY_TIMEOUT.read)
+
+
+def timeout_reason(kind: str, bound_s: float) -> str:
+    """The words a cut-off firing carries. The number is the bound that was
+    actually applied to THAT firing, passed in rather than read from a
+    constant, so the sentence cannot describe a bound nobody used.
+
+    It says out loud that a cut is not proof of a hang: the bound is derived
+    from the live ceiling, so a run that reached it was either stuck or a long
+    legitimate turn — the spans of the turn it names are what settle which."""
+    return (
+        f"this {kind} firing was stopped after {bound_s:g} seconds — the bound on one "
+        "firing, so a run that hangs cannot delay every timer behind it. It is derived from "
+        "the live round ceiling, so a run this long was either stuck or a legitimately long "
+        "one that was cut: the turn's spans say which"
+    )
+
+
 async def _run_firing(
     app, pool: asyncpg.Pool, row: asyncpg.Record, firing_id: uuid.UUID, scheduled_for: datetime
 ) -> None:
     kind = row["kind"]
     RUNNING.add(firing_id)
     turn: traces.Turn | None = None
+    # Who closes the turn. chat._run_turn is the ONLY closer for a kind that
+    # goes through it, and closing twice would write the spans twice. A beat
+    # does not run a model turn yet, so the scheduler closes it — the day
+    # _watch calls _run_turn (S11-2), this line moves with it.
     scheduler_closes_turn = kind != "scheduled"
     outcome = Outcome(FIRING_ERROR, "the firing did not reach an outcome")
+    # The floor until the row's own ceiling is known (it is derived below, once
+    # any bound agent is loaded). Only the bound that was actually applied ever
+    # reaches timeout_reason, so this value can never appear in a sentence
+    # describing a cut that used a different one.
+    bound_s = FIRING_TIMEOUT_FLOOR_S
     try:
         model = None
         agent: agents.Agent | None = None
         agent_gone = False
+        conversation_id = row["conversation_id"]
+        if kind == beats.BEAT_KIND:
+            # DERIVED here, never read off the row: the beats' conversation is
+            # inactive so the chat page can never pick it up, and if it were
+            # deleted the row's column would be NULL (019's ON DELETE SET NULL)
+            # and the beat would write into nowhere. beat_conversation makes a
+            # new one and re-points the rows.
+            conversation_id = await beats.beat_conversation(pool)
+            # A beat's rounds ask for the chat model, exactly as a plain
+            # scheduled row does, so the gateway puts it at link 1 ahead of the
+            # `beat` chain (chat._ROLE_BY_KIND).
+            model = await settings_store.read_value(pool, "chat.model")
         if kind == "scheduled":
             if row["agent_id"] is None:
                 model = await settings_store.read_value(pool, "chat.model")
@@ -185,7 +277,7 @@ async def _run_firing(
         turn = await traces.open_turn(
             pool,
             kind=kind,
-            conversation_id=row["conversation_id"],
+            conversation_id=conversation_id,
             model=model,
             person_id=row.get("person_id"),
             timezone=await _owner_timezone(pool),
@@ -197,20 +289,41 @@ async def _run_firing(
         await pool.execute(
             "UPDATE timer_firings SET turn_id = $2 WHERE id = $1", firing_id, turn.id
         )
-        if kind == "reminder":
-            outcome = await _fire_reminder(app, pool, row, turn)
-        elif kind == "scheduled" and agent_gone:
-            outcome = Outcome(
-                FIRING_REFUSED,
-                AGENT_GONE_REASON,
-                {"chat": {"ok": False, "reason": AGENT_GONE_REASON}},
-            )
-        elif kind == "scheduled":
-            outcome = await _fire_scheduled(app, pool, row, turn, model, scheduled_for, agent)
-        elif kind == "job":
-            outcome = await _fire_job(pool, row, turn)
-        else:
-            outcome = Outcome(FIRING_REFUSED, f"no firing path for timer kind {kind!r}")
+
+        async def run() -> Outcome:
+            try:
+                if kind == "reminder":
+                    return await _fire_reminder(app, pool, row, turn)
+                if kind == "scheduled" and agent_gone:
+                    return Outcome(
+                        FIRING_REFUSED,
+                        AGENT_GONE_REASON,
+                        {"chat": {"ok": False, "reason": AGENT_GONE_REASON}},
+                    )
+                if kind == "scheduled":
+                    return await _fire_scheduled(app, pool, row, turn, model, scheduled_for, agent)
+                if kind == "job":
+                    return await _fire_job(pool, row, turn)
+                if kind == beats.BEAT_KIND:
+                    return await beats.run_beat(app, pool, row, firing_id, turn)
+                return Outcome(FIRING_REFUSED, f"no firing path for timer kind {kind!r}")
+            except TimeoutError as exc:
+                # A TimeoutError raised INSIDE the run is that code's own budget
+                # expiring, not this firing's bound. Re-labelled before it can
+                # cross the wait_for, so the bound's sentence — "stopped after N
+                # seconds" — can only ever describe the bound and never borrow
+                # its words for somebody else's timeout.
+                raise RuntimeError(f"a timeout inside the firing: {peers.reason(exc)}") from exc
+
+        # DERIVED from what this firing runs under — the bound agent's round
+        # budget, else the live setting — never from the default (see
+        # firing_timeout_s). Computed after the agent is loaded and before the
+        # run, so the number the cut states is the number that was applied.
+        bound_s = await firing_timeout_s(pool, kind, agent)
+        # The bound is around the RUN, not around the claim or the turn: a
+        # firing that is cut off still has its turn, its trace and its row to
+        # be closed by the finally below.
+        outcome = await asyncio.wait_for(run(), bound_s)
     except asyncio.CancelledError:
         # A graceful shutdown (lifespan cancels the ticker mid-firing) is not a
         # failure of the timer: the firing is closed `interrupted` with the
@@ -219,6 +332,17 @@ async def _run_firing(
         # Re-raised after the finally: the ticker still has to stop.
         outcome = Outcome(FIRING_INTERRUPTED, SHUTDOWN_REASON)
         raise
+    except TimeoutError:
+        # asyncio.wait_for's own, and only ever from the bound above: the run
+        # passed its derived bound and was cancelled so the timers behind it
+        # could go. Caught BEFORE Exception (TimeoutError is one) so the firing
+        # states the bound in words instead of an opaque class name, and it is
+        # an ERROR — five of these pause the row, which is right: a beat that
+        # hangs every hour is broken, not merely slow. The sentence says a cut
+        # may also be a legitimately long run, because this bound is derived
+        # from the live ceiling and only the spans can settle which it was.
+        outcome = Outcome(FIRING_ERROR, timeout_reason(kind, bound_s))
+        logger.error("timer %s firing %s: %s", row["id"], firing_id, outcome.reason)
     except Exception as exc:
         logger.exception("timer %s firing %s failed unexpectedly", row["id"], firing_id)
         outcome = Outcome(FIRING_ERROR, f"the firing failed — {peers.reason(exc)[:300]}")
@@ -528,9 +652,31 @@ async def run_forever(app, pool: asyncpg.Pool, interval_s: float = 60) -> None:
     """tick_once, sleep, repeat — every exception logged, never fatal. Owned by
     main.lifespan as its own task, NOT one of chat._BACKGROUND (a forever task
     in that set would hang drain_background); the lifespan cancels and awaits
-    it BEFORE the drain."""
+    it BEFORE the drain.
+
+    It also finishes the beats' seeding. main.lifespan seeds them at startup,
+    but a FRESH INSTALL has no owner row yet, so ensure_beats declines and says
+    so — and without a retry the beats would not exist until someone restarted
+    core, which on a new box means "not until the stack is next redeployed" and
+    is exactly the kind of gap that is invisible in the code and obvious the
+    moment she is asked to watch something. The retry lives HERE rather than in
+    the registration route because an owner row can appear more ways than one
+    (a restore, an operator INSERT, a re-registration), because a seeding
+    failure must not become a failed registration, and because a beat cannot
+    fire without this loop anyway: the ticks are exactly the moments the answer
+    could have changed. It asks until ensure_beats reads the rows back, then
+    stops asking.
+    """
+    beats_seeded = False
     while True:
         try:
+            if not beats_seeded:
+                # In its own try: seeding is not this loop's job, and a database
+                # that will not answer it must never stop the ticks behind it.
+                try:
+                    beats_seeded = await beats.ensure_beats(pool)
+                except Exception:
+                    logger.exception("the beats could not be seeded; the next tick tries again")
             await tick_once(app, pool)
         except Exception:
             logger.exception("scheduler tick failed; the next tick runs in %ss", interval_s)
