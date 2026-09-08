@@ -3017,27 +3017,57 @@ def presented_listing_check(
 # delegated, or whose run errored out, is fabricating by proxy — the same lie
 # as the kv_offloading one with the pronoun changed.
 #
-# delegation_claim_check(reply_text, spans, agent_names) fires when a
-# non-question clause credits a NAMED agent with a COMPLETED action and no
-# successful delegate_to_agent span for that agent ran this turn. Both halves
-# are mechanical and DERIVED, never kept here:
+# delegation_claim_check(reply_text, spans, agent_names, self_name=None) fires
+# when a non-question clause credits a NAMED agent with a COMPLETED action and
+# no successful delegate_to_agent span for that agent ran this turn. All three
+# inputs are mechanical and DERIVED, never kept here:
 #
-#   * `agent_names` is the LIVE roster the caller reads (agents.names(pool)).
-#     With no agents there is no such claim to make, so an empty roster returns
+#   * `agent_names` is the LIVE roster the caller reads (agents.names(pool),
+#     minus the agents this conversation has already shown to be real). With
+#     no agents there is no such claim to make, so an empty roster returns
 #     None by construction (fail-open), and creating an agent arms the guard
 #     for its name by itself.
-#   * Backing is read off the spans. A delegate_to_agent span names the agent
-#     it ran in meta.facts[].agent (the executor's facts sink, copied on
-#     success AND failure) and in args_redacted.agent (the call's own
-#     argument); either counts. meta.ok True -> the run finished -> every
-#     claim about that agent this turn is backed (the tool result already
-#     states what it did, derived from the child's spans, and this guard does
-#     not second-guess it). ok False -> it ran and ended in an error -> "did
-#     not finish". No span -> nothing was delegated. A REFUSED call (markup,
-#     out of rounds — the refused_* flag chat._refuse_call writes) is not an
-#     attempt, the same reading as the deferral guard's _attempted. A span
-#     whose agent cannot be read (no facts, a flooded argument record) counts
-#     for every name — leniency runs toward not correcting, as in _target_of.
+#   * Backing is read off the spans, in three verdicts. A delegate_to_agent
+#     span names the agent it ran in meta.facts[].agent (the executor's facts
+#     sink, written on success AND failure) and in args_redacted.agent (the
+#     call's own argument); either counts for a success.
+#       "ok"     — a span for that agent has meta.ok True: the run finished,
+#                  and the tool result already states what it did (derived
+#                  from the child's spans), so this guard does not second-
+#                  guess it.
+#       "failed" — a span for that agent is NOT ok AND its meta.facts holds an
+#                  entry for that agent carrying an `agent_turn_id`: a child
+#                  turn really ran and ended in an error -> "did not finish".
+#       "none"   — everything else, INCLUDING a call refused before any run.
+#                  agents.delegate files {"agent", "status": "refused",
+#                  "reason"} on the facts sink before it raises (unknown
+#                  agent, empty task; tools/agents.py files the same shape for
+#                  "an agent cannot delegate"), so the trace says a delegation
+#                  was REFUSED, never that one ran — and that entry carries no
+#                  agent_turn_id, which is exactly what separates a refusal
+#                  from a failure. Saying "{agent} did not finish" of a task
+#                  no agent ever received would itself be a fabrication
+#                  (2026-09-08). The refused_* flag chat._refuse_call writes
+#                  (markup, out of rounds) reads the same way, as in the
+#                  deferral guard's _attempted.
+#     A span whose agent cannot be read (no facts, a flooded argument record)
+#     counts for every name — leniency runs toward not correcting, as in
+#     _target_of.
+#   * `self_name` is the agent whose OWN turn this is (None on Nova's turn),
+#     and it names the one claim no delegate span can ever judge: an agent
+#     writing about ITSELF in the third person ("coder wrote hello.py" on
+#     coder's turn). An agent cannot delegate — tools/agents.py refuses — so
+#     no delegation will ever back that sentence, and reading it as one would
+#     append a correction that is nonsense on its face ("I did not hand
+#     anything to coder"). It is a NARRATION claim wearing a name, so it takes
+#     narration's rule: ANY successful tool span this turn backs it, nothing
+#     else does, and unbacked it earns DELEGATION_SELF_CORRECTION, which
+#     speaks in the first person because the agent IS the speaker. On an
+#     agent's turn a claim about ANOTHER agent is still a delegation claim,
+#     but its correction is DELEGATION_UNBACKED_CORRECTION_AGENT: Nova's text
+#     ends "Tell me again and I'll delegate it", and an agent promising that
+#     would be promising a call the tool refuses, so it names the path that
+#     does exist — ask Nova.
 #
 # Built to the family's two rules: PURE (text + spans + the names; no model,
 # network or clock) and PRECISION-first (a wrongly-corrected honest reply makes
@@ -3099,14 +3129,30 @@ def presented_listing_check(
 #     span at all the same sentence is still a fabrication (nothing ran) and
 #     is flagged.
 #
+# Accepted KNOWN MISSES, restated after the 2026-09-08 cuts, all
+# precision-first: (1) a hedged or past-temporal fabrication stays clean (the
+# cut above); (2) a SELF-claim is judged at narration's KIND-blind level — an
+# agent that really ran workspace_read_file and then writes "coder wrote
+# hello.py" is not corrected here, because any successful tool span backs a
+# self-claim (narration_check reads the first-person forms with its
+# target-aware rule; the third-person form has no target to check against a
+# roster name); (3) a failed run whose facts record lost its agent_turn_id (a
+# clipped or flooded meta) reads as "none" rather than "failed", so the
+# operator is told nothing was delegated when something was — the milder of
+# the two wrong sentences, and the only one that cannot promise a run that
+# never happened.
+#
 # APPEND-class like narration: the correction is added after the reply, never
 # replacing it — the operator sees what she claimed and the contradiction
-# beside it. Two corrections, each saying only what is mechanically true:
-# nothing was delegated (no span), or the run ended in an error (ok False).
-# The agent's canonical roster name is used, never the reply's casing. Both
-# are clean under this guard (pinned in test_guards.py). Wiring (the guard
-# span `delegation_claim` {agent, phrase, backing}, the correction frame, the
-# turn plumbing) is chat.py's, alongside narration.
+# beside it. Four corrections, each saying only what is mechanically true:
+# nothing was delegated (Nova's turn, and the agent-turn variant that points
+# at Nova instead of promising a delegation an agent cannot make), the run
+# ended in an error (ok False with a child turn behind it), or — for the
+# speaker's own name — no tool ran at all. The agent's canonical roster name
+# is used, never the reply's casing. All four are clean under this guard
+# (pinned in test_guards.py). Wiring (the guard span `delegation_claim`
+# {agent, phrase, backing}, the correction frame, the turn plumbing) is
+# chat.py's, alongside narration.
 
 DELEGATE_TOOL_NAME = "delegate_to_agent"
 
@@ -3117,6 +3163,19 @@ DELEGATION_UNBACKED_CORRECTION = (
 DELEGATION_FAILED_CORRECTION = (
     "Correction: {agent} did not finish that task (its run ended in an error), "
     "so I cannot report it as done."
+)
+# On an AGENT's own turn the same fabrication needs different words in both
+# directions (2026-09-08). About ITSELF the speaker IS the agent, so the
+# correction is first-person and says what narration says: no tool ran. About
+# ANOTHER agent, Nova's closing "Tell me again and I'll delegate it" would be a
+# promise tools/agents.py refuses — an agent cannot delegate — so this one
+# names the path that actually exists instead of offering one that does not.
+DELEGATION_SELF_CORRECTION = (
+    "Correction: I did not do that this turn — no tool ran, so nothing I 'did' happened."
+)
+DELEGATION_UNBACKED_CORRECTION_AGENT = (
+    "Correction: I did not hand anything to {agent} this turn — no delegation ran, "
+    "so nothing it 'did' happened. Ask Nova to delegate it."
 )
 
 # Completed-action verbs an agent can be credited with: narration's own set
@@ -3232,8 +3291,9 @@ class DelegationClaim:
 
     `agent` is the canonical roster name, `phrase` the matched text for the
     guard span, `backing` how the claim fails — "none" (no delegation ran for
-    that agent) or "failed" (its only run ended in an error) — and `text` the
-    stated correction, the same field the other claims carry so the turn's
+    that agent; on the SPEAKER's own name, no tool ran at all) or "failed" (a
+    run really started and ended in an error) — and `text` the stated
+    correction, the same field the other claims carry so the turn's
     composition reads it identically (APPEND-class, like narration)."""
 
     agent: str
@@ -3242,13 +3302,31 @@ class DelegationClaim:
     text: str
 
 
-def delegation_correction_text(agent: str, backing: str) -> str:
-    """The stated correction for one unbacked delegation claim. `backing` is
-    "none" or "failed" — anything else is a programming error, not a verdict,
-    so it raises rather than picking a sentence that might not be true."""
+def delegation_correction_text(
+    agent: str, backing: str, *, self: bool = False, on_agent_turn: bool = False
+) -> str:
+    """The stated correction for one unbacked delegation claim.
+
+    `backing` is "none" or "failed" — anything else is a programming error, not
+    a verdict, so it raises rather than picking a sentence that might not be
+    true. `self` says the claim is the speaking AGENT talking about ITSELF (no
+    delegation was ever involved, so the correction is narration's, in the
+    first person); `on_agent_turn` says an agent is speaking about ANOTHER
+    agent, where Nova's offer to delegate would be a promise the tool refuses.
+    """
     if backing == "none":
+        if self:
+            return DELEGATION_SELF_CORRECTION
+        if on_agent_turn:
+            return DELEGATION_UNBACKED_CORRECTION_AGENT.format(agent=agent)
         return DELEGATION_UNBACKED_CORRECTION.format(agent=agent)
     if backing == "failed":
+        if self:
+            # A self-claim's backing is binary — some tool ran this turn or
+            # none did — so "failed" is unreachable here, and printing "did not
+            # finish" would describe a delegation that never existed. Refuse
+            # rather than pick a sentence that is not true.
+            raise ValueError("a self delegation claim can only have backing 'none'")
         return DELEGATION_FAILED_CORRECTION.format(agent=agent)
     raise ValueError(f"delegation backing must be 'none' or 'failed', not {backing!r}")
 
@@ -3298,14 +3376,45 @@ def _delegated_agents(meta: dict) -> set[str]:
     return names
 
 
+def _child_turns_ran(meta: dict) -> tuple[set[str], bool]:
+    """(the agents whose CHILD TURN really ran, whether one ran under a name
+    that cannot be read) from one delegate span's facts.
+
+    The marker is `agent_turn_id`: the executor writes it on the facts entry
+    only once a child turn exists. A delegation refused BEFORE any run files
+    the same entry shape with status "refused" and no id — agents.delegate does
+    that before it raises (unknown agent, empty task), and tools/agents.py does
+    it for "an agent cannot delegate" — so this field is what separates "it ran
+    and errored" from "nothing ever ran"."""
+    ran: set[str] = set()
+    unnamed = False
+    facts = meta.get("facts")
+    if not isinstance(facts, list):
+        return ran, unnamed
+    for fact in facts:
+        if not isinstance(fact, dict) or not fact.get("agent_turn_id"):
+            continue
+        agent = fact.get("agent")
+        name = agent.strip().lower() if isinstance(agent, str) else ""
+        if name:
+            ran.add(name)
+        else:
+            unnamed = True
+    return ran, unnamed
+
+
 def _delegation_backing(spans: Sequence[Any]) -> tuple[dict[str, str], str]:
     """(per-agent backing, wildcard backing) read off the delegate spans.
 
-    Per agent: "ok" if any successful delegate span names it, else "failed"
-    if a failed (non-refused) one does. The wildcard is the same verdict for
-    a span whose agent cannot be read at all, applied to every name — a
-    delegation that ran but recorded no name backs any claim rather than
-    correcting one it cannot see (the _target_of leniency)."""
+    Per agent: "ok" if any successful delegate span names it; else "failed" if
+    a failed (non-refused) span records that its CHILD TURN ran — a facts entry
+    for that agent carrying an agent_turn_id; else nothing at all, which reads
+    as "none". A failed CALL is not a failed RUN (2026-09-08): a delegation
+    refused before it started never reached an agent, so "it did not finish"
+    would be a fabrication of ours about a run that never existed. The wildcard
+    is the same verdict for a span whose agent cannot be read at all, applied
+    to every name — a delegation that ran but recorded no name backs any claim
+    rather than correcting one it cannot see (the _target_of leniency)."""
     per_agent: dict[str, str] = {}
     wildcard = "none"
     for span in spans:
@@ -3316,15 +3425,19 @@ def _delegation_backing(spans: Sequence[Any]) -> tuple[dict[str, str], str]:
         meta = getattr(span, "meta", None) or {}
         if any(str(key).startswith("refused") for key in meta):
             continue  # a refused call never ran: no delegation, no failure
-        verdict = "ok" if meta.get("ok") is True else "failed"
-        names = _delegated_agents(meta)
-        if not names:
-            if verdict == "ok" or wildcard == "none":
-                wildcard = verdict
+        if meta.get("ok") is True:
+            names = _delegated_agents(meta)
+            if not names:
+                wildcard = "ok"  # an ok verdict always wins the wildcard
+                continue
+            for name in names:
+                per_agent[name] = "ok"
             continue
-        for name in names:
-            if verdict == "ok" or name not in per_agent:
-                per_agent[name] = verdict
+        ran, ran_unnamed = _child_turns_ran(meta)
+        if ran_unnamed and wildcard == "none":
+            wildcard = "failed"
+        for name in ran:
+            per_agent.setdefault(name, "failed")  # an earlier "ok" stands
     return per_agent, wildcard
 
 
@@ -3407,19 +3520,31 @@ def _delegation_claims(clause: str, names: dict[str, str]) -> list[tuple[int, st
 
 
 def delegation_claim_check(
-    reply_text: str, spans: Sequence[Any], agent_names: Sequence[str]
+    reply_text: str,
+    spans: Sequence[Any],
+    agent_names: Sequence[str],
+    *,
+    self_name: str | None = None,
 ) -> DelegationClaim | None:
     """Contradict a completed action credited to an agent that no successful
     delegate_to_agent span backs this turn.
 
     Returns a DelegationClaim for the FIRST such claim — backing "none" when
-    no delegation to that agent ran, "failed" when its only run ended in an
-    error — or None: an honest reply (the delegation ran and succeeded), a
+    no delegation to that agent ran, "failed" when a run started and ended in
+    an error — or None: an honest reply (the delegation ran and succeeded), a
     question, a future/modal/negated/progressive form, an action placed at
     another time or reported from elsewhere, an acknowledged failure, or a
     household with no agents at all. Pure and precision-first (see the section
     header). Derived from `agent_names`: with an empty roster there is no
     agent to credit, so the guard is silent by construction (fail-open).
+
+    `self_name` is the agent whose OWN turn this is (None on Nova's turn). A
+    claim about that name is the speaker describing ITSELF in the third
+    person: no delegation can back it (an agent cannot delegate), so it is
+    judged by narration's rule — any successful tool span this turn — and its
+    correction speaks in the first person. On an agent's turn a claim about
+    ANOTHER agent keeps the delegation reading but takes the correction that
+    points at Nova, because this speaker cannot promise a delegation.
     """
     if not reply_text or not reply_text.strip():
         return None
@@ -3428,23 +3553,39 @@ def delegation_claim_check(
         name = str(raw).strip()
         if name and name.lower() not in names:
             names[name.lower()] = name
+    speaker = str(self_name).strip() if self_name else ""
+    if speaker:
+        # The speaker's own name must be readable even if the caller's roster
+        # does not carry it: a self-claim is judged by this turn's tool spans,
+        # never by the roster, so it must not depend on the roster to be seen.
+        names.setdefault(speaker.lower(), speaker)
     if not names:
         return None
     per_agent, wildcard = _delegation_backing(spans)
+    # narration's rule for the self-claim: ANY successful tool span this turn.
+    self_backed = ran_a_tool(spans) if speaker else False
     failure_acknowledged = _FAILURE_ACK.search(reply_text) is not None
     for clause, is_question in _clauses(reply_text):
         if is_question:
             continue  # "should I ask coder to review it?" asserts nothing
         for _position, agent, phrase in _delegation_claims(clause, names):
-            backing = _backing_for(agent.lower(), per_agent, wildcard)
-            if backing == "ok":
-                continue
-            if backing == "failed" and failure_acknowledged:
-                continue  # an honest report of the failure the tool stated
+            is_self = bool(speaker) and agent.lower() == speaker.lower()
+            if is_self:
+                if self_backed:
+                    continue  # something really ran this turn
+                backing = "none"
+            else:
+                backing = _backing_for(agent.lower(), per_agent, wildcard)
+                if backing == "ok":
+                    continue
+                if backing == "failed" and failure_acknowledged:
+                    continue  # an honest report of the failure the tool stated
             return DelegationClaim(
                 agent=agent,
                 phrase=phrase[:80],
                 backing=backing,
-                text=delegation_correction_text(agent, backing),
+                text=delegation_correction_text(
+                    agent, backing, self=is_self, on_agent_turn=bool(speaker)
+                ),
             )
     return None

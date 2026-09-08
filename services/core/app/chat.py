@@ -543,6 +543,37 @@ def _activity_frame(
     return _frame({"activity": activity})
 
 
+def attributed_history(rows: Sequence, runner: str | None) -> list[dict[str, str]]:
+    """Transcript rows as the model that is about to answer should read them.
+
+    An assistant row an AGENT wrote — `agent` is the name joined from the
+    turn behind the row — is prefixed `[name] `, so a conversation that
+    mixed Nova and @coder reads as the conversation it was. A Nova row
+    (agent NULL) is byte-identical to its content; so is a deleted agent's
+    row (agent_id SET NULL by migration 021 — no name is invented for it); a
+    user row is never prefixed, whoever it addressed.
+
+    `runner` (S12, 2026-09-08) is WHOSE turn this is — the name of the agent
+    about to answer, None for Nova — and that agent's OWN rows lose the
+    prefix. Handing coder "[coder] I wrote hello.py" is handing it its own
+    words as somebody else's, and a model reading its history that way
+    starts writing about itself in the third person ("coder wrote
+    hello.py") — the very sentence the delegation guard then has to correct.
+    So the prefix marks OTHER speakers only: from an agent's seat its own
+    turns read first person and every other agent is named, and from Nova's
+    seat (runner None) every agent is named, exactly as before. The stored
+    rows are untouched: this is the copy handed to history_window, nothing
+    else.
+    """
+    out: list[dict[str, str]] = []
+    for row in rows:
+        content = row["content"]
+        if row["role"] == "assistant" and row["agent"] and row["agent"] != runner:
+            content = f"[{row['agent']}] {content}"
+        out.append({"role": row["role"], "content": content})
+    return out
+
+
 def history_window(
     newest_first: Sequence, budget: int = HISTORY_CHAR_BUDGET
 ) -> list[dict[str, str]]:
@@ -1238,6 +1269,107 @@ async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
             "device registry read failed; the state-claim guard stays silent this turn"
         )
         return []
+
+
+# The two exemption reads behind _agent_names, as ONE round trip. Each half
+# names an agent this conversation ALREADY has on record before this turn:
+# it wrote an assistant row here (an @mention ran it in this very
+# conversation), or an EARLIER turn of this conversation delegated to it and
+# that delegation succeeded. Both are read from the trace and the transcript,
+# never from a list: creating an agent arms the guard for its name, and the
+# first time that agent actually runs here it stops being a name she could
+# only have fabricated.
+#
+# The CURRENT turn is excluded from both halves ($2) on purpose: what THIS
+# turn did is the spans' business, and the spans are exactly what the guard
+# reads for backing. Excluding it also keeps the turn's own (unwritten)
+# assistant row out of the question entirely.
+_BACKED_AGENTS_SQL = """
+SELECT DISTINCT a.name AS name
+  FROM messages m
+  JOIN turns t ON t.id = m.turn_id
+  JOIN agents a ON a.id = t.agent_id
+ WHERE m.conversation_id = $1 AND m.role = 'assistant' AND t.id <> $2
+UNION
+SELECT DISTINCT s.meta->'args_redacted'->>'agent' AS name
+  FROM turn_spans s
+  JOIN turns t ON t.id = s.turn_id
+ WHERE t.conversation_id = $1
+   AND s.kind = 'tool'
+   AND s.name = $3
+   AND s.meta->>'ok' = 'true'
+   AND t.id <> $2
+"""
+
+
+async def _agent_names(
+    pool: asyncpg.Pool,
+    turn: traces.Turn,
+    persona: agents.Persona,
+    conversation_id: uuid.UUID,
+) -> list[str]:
+    """The roster the delegation-claim guard is derived from (S12): the
+    agents whose work THIS turn would have to have delegated for a claim
+    about them to be true — every agent's name, read LIVE from the table,
+    MINUS the ones this conversation already has on record.
+
+    The whole Turn is taken rather than just its id because it is used as
+    both — the id the exemption reads exclude, and the span sink a failed
+    read is filed on — and one value cannot disagree with itself: a caller
+    cannot file the failure on one turn while exempting against another.
+
+    Its own read, not the roster line's: the roster line is a prompt
+    SENTENCE read only for Nova (an agent's turn never reads it), and this
+    guard runs on every turn — an agent crediting another agent with work
+    is the same fabrication as Nova doing it. So one extra SELECT per turn,
+    beside the device-names read that feeds the state-claim guard.
+
+    WHY the exemption (2026-09-08, review finding): the guard's fact is a
+    successful delegate_to_agent span of THIS turn, which makes "coder wrote
+    hello.py" a fabrication the turn after coder really wrote it — @coder in
+    turn 1, Nova reporting it in turn 2, and the correction ("I did not hand
+    anything to coder this turn") is then itself the lie, about work the
+    operator watched happen. So an agent that has spoken in this
+    conversation, or that an earlier turn of it successfully delegated to,
+    is left out of the names the guard is given: precision-first, the family
+    rule — a missed fabrication costs a correction, a wrong correction costs
+    the truth. What is NOT exempted is a name that has never appeared here:
+    that claim is still contradicted.
+
+    An agent's OWN name is KEPT on its own turn (and kept whether or not the
+    exemption reads would have dropped it): the guard is told which name is
+    the speaker's (self_name) and answers it with the self correction —
+    "coder finished the tests", written by coder with no tool span behind
+    it, is a claim about work nothing shows happening, and narration's rule
+    is the right one for it.
+
+    FAIL-OPEN to no names — the guard is then silent, so a read that blips
+    costs a check, never a false correction — but never quiet: the failure
+    is filed on an `agent_names` span, which exists ONLY on failure (the
+    agent_roster idiom), so a turn that lost its roster is a turn with that
+    span, not a log line nobody reads. Either read failing is that case: a
+    roster with no exemptions applied would correct exactly the honest
+    reports this exemption exists for.
+    """
+    try:
+        names = await agents.names(pool)
+        backed = {
+            str(row["name"]).strip().lower()
+            for row in await pool.fetch(
+                _BACKED_AGENTS_SQL, conversation_id, turn.id, agents.DELEGATE_TOOL
+            )
+            if row["name"]
+        }
+    except Exception as exc:
+        with turn.span("agent_names") as span:
+            span.meta["error"] = peers.reason(exc)
+        logger.exception(
+            "the roster or this conversation's backed agents could not be read; "
+            "the delegation-claim guard stays silent this turn"
+        )
+        return []
+    own = persona.agent.name if persona.agent is not None else None
+    return [name for name in names if name == own or name.lower() not in backed]
 
 
 def without_markup(text: str) -> str:
@@ -2171,6 +2303,8 @@ def _regen_rejected_by(
     device_names: Sequence[str],
     user_message: str,
     persona: agents.Persona,
+    *,
+    agent_names: Sequence[str],
 ) -> str | None:
     """Which mechanical guard, if any, REFUSES the regenerated reply.
 
@@ -2197,10 +2331,30 @@ def _regen_rejected_by(
     or a shell run whose result is a listing) backs the listing the regen then
     presents; one that did not is refused by name. `user_message` is what the
     listing guard exempts — lines the user pasted are theirs, not a claim.
+    `agent_names` (S12) is the live roster the turn read once at its closer
+    (see _agent_names — already minus the agents this conversation has on
+    record), so a regeneration that credits "coder" with work no
+    delegate_to_agent span backs is refused by the same guard that would
+    have corrected the original reply — a lie about a helper is no better
+    for having been written on the second try. Whose reply it is comes from
+    `persona`, so the regeneration is judged by exactly the rule the
+    original was.
     """
     checks: tuple[tuple[str, Callable[[], object | None]], ...] = (
         ("consent_claim", lambda: guards.consent_claim_check(corrected)),
         ("narration", lambda: guards.narration_check(corrected, turn.spans)),
+        (
+            "delegation_claim",
+            lambda: guards.delegation_claim_check(
+                corrected,
+                turn.spans,
+                agent_names,
+                # Whose reply this is, DERIVED from the persona this vetting
+                # already judges the toolset by, never handed in beside it:
+                # two sources for one fact is two facts that can disagree.
+                self_name=persona.agent.name if persona.agent is not None else None,
+            ),
+        ),
         (
             "capability_claim",
             lambda: guards.capability_claim_check(corrected, persona.tool_names),
@@ -2262,6 +2416,7 @@ async def _claim_redirect(
     advertised: Sequence[dict],
     tool_ctx: tools.ToolContext,
     device_names: Sequence[str],
+    agent_names: Sequence[str],
     user_message: str,
     emit: Callable[[str | None], None],
     persona: agents.Persona,
@@ -2426,7 +2581,15 @@ async def _claim_redirect(
         # Judged ONCE by the FULL mechanical set — this text is about to replace
         # the durable record AND be ingested — and never re-redirected.
         rejected_by = (
-            _regen_rejected_by(corrected, turn, tool_ctx, device_names, user_message, persona)
+            _regen_rejected_by(
+                corrected,
+                turn,
+                tool_ctx,
+                device_names,
+                user_message,
+                persona,
+                agent_names=agent_names,
+            )
             if corrected
             else None
         )
@@ -2956,6 +3119,17 @@ async def _run_turn(
         # which makes the guard silent — a registry read that blips must never
         # turn an honest reply into a false correction.
         device_names = await _paired_device_names(pool)
+        # And the agents' names (S12), the same way — the fact the
+        # delegation-claim guard is derived from. Read once here and threaded
+        # into every redirect's vetting, exactly like device_names. The
+        # conversation and this turn's id go with it: which names are already
+        # backed is a fact about THIS conversation before THIS turn
+        # (see _agent_names).
+        agent_names = await _agent_names(pool, turn, persona, conversation_id)
+        # Whose turn this is, for the guard: an agent speaking of ITSELF in
+        # the third person is not a delegation claim (it cannot delegate) —
+        # it is narration, and gets narration's rule. None on Nova's turn.
+        self_name = persona.agent.name if persona.agent is not None else None
 
         try:
             correction = guards.narration_check(text, turn.spans)
@@ -2969,6 +3143,36 @@ async def _run_turn(
                 ]
                 span.meta["backing_span"] = False
             emit(_frame({"correction": correction.text}))
+
+        # The delegation-claim guard (S12): the third-person mirror of
+        # narration. "coder built the kitchen list" credits a NAMED agent
+        # with a completed action, which narration_check (first person only)
+        # cannot see; the fact it is checked against is a successful
+        # delegate_to_agent span for that agent THIS turn. Unbacked -> nothing
+        # was delegated; backed only by a failed run -> "did not finish".
+        # Same shape as narration in every other way: pure, fail-open, the
+        # correction APPENDED to the reply (the sentence beside it may be real
+        # content), and the turn is plumbing, never ingested — a recalled
+        # "coder built X" is how the next fabrication gets its wording.
+        # `self_name` (2026-09-08) tells it which of those names is the
+        # speaker: coder writing "coder finished the tests" delegated to
+        # nobody — it is narrating its own turn — so it is judged by
+        # narration's fact (did ANY tool run) and corrected in the first
+        # person, and an agent that credits ANOTHER agent is told what is
+        # true for an agent: it cannot delegate, so Nova has to.
+        try:
+            delegation_claim = guards.delegation_claim_check(
+                text, turn.spans, agent_names, self_name=self_name
+            )
+        except Exception:
+            logger.exception("delegation-claim guard raised; shipping the reply uncorrected")
+            delegation_claim = None
+        if delegation_claim is not None:
+            with turn.span("guard", "delegation_claim") as span:
+                span.meta["agent"] = delegation_claim.agent
+                span.meta["phrase"] = delegation_claim.phrase
+                span.meta["backing"] = delegation_claim.backing
+            emit(_frame({"correction": delegation_claim.text}))
 
         # The pending-approval guard consults NO state: there is no approval
         # step, so a reply asserting one is a fabrication by construction.
@@ -3005,6 +3209,7 @@ async def _run_turn(
                 advertised=advertised,
                 tool_ctx=tool_ctx,
                 device_names=device_names,
+                agent_names=agent_names,
                 user_message=message,
                 emit=emit,
                 persona=persona,
@@ -3094,6 +3299,7 @@ async def _run_turn(
                     advertised=advertised,
                     tool_ctx=tool_ctx,
                     device_names=device_names,
+                    agent_names=agent_names,
                     user_message=message,
                     emit=emit,
                     persona=persona,
@@ -3194,6 +3400,7 @@ async def _run_turn(
                     advertised=advertised,
                     tool_ctx=tool_ctx,
                     device_names=device_names,
+                    agent_names=agent_names,
                     user_message=message,
                     emit=emit,
                     persona=persona,
@@ -3251,6 +3458,7 @@ async def _run_turn(
                 c.text
                 for c in (
                     correction,
+                    delegation_claim,
                     consent_correction,
                     capability_correction,
                     state_claim,
@@ -3258,8 +3466,13 @@ async def _run_turn(
                 )
                 if c is not None
             )
-        elif correction is not None:
-            persisted = f"{text}\n\n{correction.text}"
+        elif correction is not None or delegation_claim is not None:
+            # The APPEND class: narration and its third-person mirror, the
+            # delegation claim (S12) — the prose stays, each correction
+            # follows it, once, in the order the guards ran.
+            persisted = "\n\n".join(
+                [text, *(c.text for c in (correction, delegation_claim) if c is not None)]
+            )
         else:
             persisted = text
         # `text` carries the backend note, so the two branches above keep it by
@@ -3299,6 +3512,7 @@ async def _run_turn(
         # the drift already streamed live but is not what the next turn reads.
         mechanical_guard_fired = (
             correction is not None
+            or delegation_claim is not None
             or consent_correction is not None
             or capability_correction is not None
             or state_claim is not None
@@ -3419,6 +3633,7 @@ async def _run_turn(
                 advertised=advertised,
                 tool_ctx=tool_ctx,
                 device_names=device_names,
+                agent_names=agent_names,
                 user_message=message,
                 emit=emit,
                 persona=persona,
@@ -3480,6 +3695,7 @@ async def _run_turn(
                 advertised=advertised,
                 tool_ctx=tool_ctx,
                 device_names=device_names,
+                agent_names=agent_names,
                 user_message=message,
                 emit=emit,
                 persona=persona,
@@ -3578,6 +3794,12 @@ async def _run_turn(
         plumbing_turn = (
             (consent_correction is not None and not consent_redirected)
             or capability_correction is not None
+            # A completed action credited to an agent that never ran (S12) is
+            # the same noise with a name on it: ingesting "coder built the
+            # list" beside its correction is how recall hands the next turn a
+            # helper's work to cite. Unlike narration there is no redirect
+            # here — the correction stands, and the turn is plumbing.
+            or delegation_claim is not None
             # An unchecked live-state claim is the same kind of noise: ingesting
             # "the device is still offline" makes recall serve that falsehood
             # back as knowledge, which is exactly how the 23:51 parrot got its
@@ -3690,30 +3912,67 @@ async def chat_stream(
         conversation_id,
         message,
     )
+    # S12: "@coder fix the tests" runs the WHOLE turn as coder, inside this
+    # conversation. The row above is what was said, verbatim; WHO answers is
+    # decided here by data — agents.mentioned is a leading @name that has a
+    # row. No such agent, or an @ anywhere else, is an ordinary Nova turn,
+    # byte for byte: she holds list_agents and her roster line, so "@nobody
+    # hi" gets "there is no agent named nobody" from her, never a fabricated
+    # call. On a match: its chain picks the model (model "" is the gateway
+    # default for the role the turn carries, agent_<name>), its row the
+    # rounds, and the funnel runs it as the agent's Person so the exchange
+    # lands in the AGENT's memory partition — while the turn stays the
+    # owner's (his conversation, his money via person_id, his Activity).
+    #
+    # Resolved BEFORE the history read (2026-09-08, review finding) because
+    # the history is written from the answering model's seat: who is
+    # answering has to be known before its transcript can be attributed.
+    agent = await agents.mentioned(pool, message)
+
     # user/assistant only, because that is all the messages table holds. A
     # turn's tool calls and their results live in that turn's transcript and
     # in its spans, and are deliberately not replayed into the next turn: a
     # follow-up like "add milk to that list" works because she reads the
     # file again, not because a stale copy of it is still in the prompt.
+    # S12: an assistant row an AGENT wrote is handed to the model as
+    # "[coder] …" (attributed_history) — derived from the turn behind the
+    # row, the get_messages idiom, never a stored label — EXCEPT the rows
+    # written by whoever is answering now, which are its own words and are
+    # handed back unlabelled. The rows themselves are untouched.
     history = history_window(
-        await pool.fetch(
-            "SELECT role, content FROM messages "
-            "WHERE conversation_id = $1 AND id <> $2 "
-            "ORDER BY created_at DESC, id DESC LIMIT $3",
-            conversation_id,
-            message_id,
-            HISTORY_MAX_MESSAGES,
+        attributed_history(
+            await pool.fetch(
+                "SELECT m.role, m.content, a.name AS agent FROM messages m "
+                "LEFT JOIN turns t ON t.id = m.turn_id "
+                "LEFT JOIN agents a ON a.id = t.agent_id "
+                "WHERE m.conversation_id = $1 AND m.id <> $2 "
+                "ORDER BY m.created_at DESC, m.id DESC LIMIT $3",
+                conversation_id,
+                message_id,
+                HISTORY_MAX_MESSAGES,
+            ),
+            None if agent is None else agent.name,
         )
     )
 
-    model = await settings_store.read_value(pool, "chat.model")
-    max_tool_rounds = await settings_store.read_value(pool, "agents.max_tool_rounds")
+    if agent is None:
+        model = await settings_store.read_value(pool, "chat.model")
+        max_tool_rounds = await settings_store.read_value(pool, "agents.max_tool_rounds")
+        runs_as = person
+        persona = None
+    else:
+        model = ""
+        max_tool_rounds = agent.max_tool_rounds
+        runs_as = agent.person()
+        persona = agents.persona_for(agent, owner_id=person.id)
     turn = await traces.open_turn(
         pool,
         conversation_id=conversation_id,
         model=model,
         person_id=person.id,
         timezone=await _owner_timezone(pool),
+        agent_id=None if agent is None else agent.id,
+        role=None if agent is None else agent.role,
     )
     # Registered the instant it exists (no await between): this process is
     # running it, which is what conversations.has_pending_turn reads —
@@ -3733,13 +3992,14 @@ async def chat_stream(
             request.app,
             pool,
             turn,
-            person,
+            runs_as,
             conversation_id,
             message,
             history,
             model,
             max_tool_rounds,
             queue.put_nowait,
+            persona=persona,
         )
     )
 

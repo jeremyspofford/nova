@@ -47,7 +47,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import governance, identity, peers, settings_store, spend_api, tools
+from app import governance, identity, peers, settings_store, spend_api, tools, traces
 from app.identity import Person
 from app.tools.base import ToolFailure
 from app.tools.spend import _usd
@@ -1120,3 +1120,608 @@ def refuse_person_write(ctx, what: str) -> None:
             f"{what} belongs to a person and an agent is not one — put it in your report and "
             "Nova will do it"
         )
+
+
+# ── the roster with state, derived (the page and list_agents share this) ──
+
+# The idle state, one object everything compares against.
+IDLE: dict = {"working": False, "doing": None, "since": None, "turn_id": None}
+
+
+async def bound_timers_for(
+    pool: asyncpg.Pool, ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, list[dict]]:
+    """bound_timers for every id in one query, same shape and order."""
+    bound: dict[uuid.UUID, list[dict]] = {agent_id: [] for agent_id in ids}
+    if not ids:
+        return bound
+    rows = await pool.fetch(
+        "SELECT agent_id, id, title FROM timers WHERE agent_id = ANY($1::uuid[]) "
+        "ORDER BY created_at, id",
+        list(ids),
+    )
+    for row in rows:
+        bound[row["agent_id"]].append({"id": str(row["id"]), "title": row["title"]})
+    return bound
+
+
+async def last_active(pool: asyncpg.Pool, ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, str | None]:
+    """The latest turns.started_at per agent, or None when it has never run."""
+    latest: dict[uuid.UUID, str | None] = dict.fromkeys(ids)
+    if not ids:
+        return latest
+    rows = await pool.fetch(
+        "SELECT agent_id, max(started_at) AS latest FROM turns "
+        "WHERE agent_id = ANY($1::uuid[]) GROUP BY agent_id",
+        list(ids),
+    )
+    for row in rows:
+        latest[row["agent_id"]] = row["latest"].isoformat()
+    return latest
+
+
+async def states(pool: asyncpg.Pool, ids: Sequence[uuid.UUID]) -> dict[uuid.UUID, dict]:
+    """Working or idle, per agent, DERIVED: an open turns row (status NULL)
+    of the agent's whose id THIS process is running right now — a key of
+    traces.DOING. A stored flag cannot carry liveness (it would still say
+    'thinking' a day after the process that set it died; the INFLIGHT
+    lesson), so the running ids are read once and handed to the query — an
+    open row no process is running (a leftover the startup sweep has not
+    reached, a close that failed) can never be reported as work in progress
+    — and the map is read again for the word, so a turn that finished
+    between the query and now reads idle, never 'None'."""
+    out: dict[uuid.UUID, dict] = {agent_id: dict(IDLE) for agent_id in ids}
+    running = list(traces.DOING)
+    if not ids or not running:
+        return out
+    rows = await pool.fetch(
+        "SELECT DISTINCT ON (agent_id) agent_id, id, started_at FROM turns "
+        "WHERE agent_id = ANY($1::uuid[]) AND status IS NULL AND id = ANY($2::uuid[]) "
+        "ORDER BY agent_id, started_at DESC, id DESC",
+        list(ids),
+        running,
+    )
+    for row in rows:
+        doing = traces.doing(row["id"])
+        if doing is None:
+            continue
+        out[row["agent_id"]] = {
+            "working": True,
+            "doing": doing,
+            "since": row["started_at"].isoformat(),
+            "turn_id": str(row["id"]),
+        }
+    return out
+
+
+async def spend_by_role(app, pool: asyncpg.Pool) -> tuple[dict[str, float], str | None]:
+    """The month's spend per routing role from the ONE ledger report the
+    Spend page and the cap check read, or ({}, why it could not be read). A
+    report with no by_role rollup counts as unreadable for the same reason a
+    failed one does: the figure would be a guess, and a guess of 0 reads as
+    a fact (an agent that ran nothing this month)."""
+    try:
+        report = await spend_api.report(app, pool, "month")
+    except Exception as exc:  # noqa: BLE001 — every failure shape is stated on the row
+        detail = getattr(exc, "detail", None) or str(exc) or type(exc).__name__
+        return {}, f"ledger unreadable — {detail}"
+    rows = report.get("by_role")
+    if not isinstance(rows, list):
+        return {}, "ledger unreadable — the gateway's report carries no by_role rollup"
+    by_role: dict[str, float] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("key"), str):
+            continue
+        usd = row.get("usd")
+        if isinstance(usd, int | float) and not isinstance(usd, bool):
+            by_role[row["key"]] = by_role.get(row["key"], 0.0) + float(usd)
+    return by_role, None
+
+
+def agent_json(
+    agent: Agent,
+    *,
+    bound_timers: list[dict],
+    last_active: str | None,
+    state: dict,
+    spent: float | None,
+    spend_note: str | None,
+) -> dict:
+    """One agent as the page and the roster tool both read it: the row's
+    own columns plus the derived facts handed in. Money is a float; the
+    reader formats it."""
+    return {
+        "id": str(agent.id),
+        "name": agent.name,
+        "purpose": agent.purpose,
+        "instructions": agent.instructions,
+        "tools": list(agent.tools),
+        "skills": skills_status(agent),
+        "unknown_tools": unknown_tools(agent),
+        "monthly_cap_usd": None if agent.monthly_cap_usd is None else float(agent.monthly_cap_usd),
+        "max_tool_rounds": agent.max_tool_rounds,
+        "read_shared_memory": agent.read_shared_memory,
+        "role": agent.role,
+        "folder": f"agents/{agent.name}/",
+        "log_conversation_id": (
+            None if agent.log_conversation_id is None else str(agent.log_conversation_id)
+        ),
+        "created_via": agent.created_via,
+        "created_at": agent.created_at.isoformat(),
+        "updated_at": agent.updated_at.isoformat(),
+        "bound_timers": bound_timers,
+        "spent_month_usd": spent,
+        "spend_note": spend_note,
+        "last_active": last_active,
+        "state": state,
+    }
+
+
+async def rows_with_state(pool: asyncpg.Pool, app, rows: Sequence[Agent]) -> list[dict]:
+    """The given agents with their derived facts: three batched reads over
+    exactly these ids and ONE ledger report shared by all of them. This is
+    the one derivation — the Agents page (agents_api) and Nova's list_agents
+    both come here, so a roster line and a page row can never disagree
+    about whether an agent is working or what it spent."""
+    ids = [agent.id for agent in rows]
+    bound = await bound_timers_for(pool, ids)
+    latest = await last_active(pool, ids)
+    live = await states(pool, ids)
+    by_role, note = await spend_by_role(app, pool)
+    return [
+        agent_json(
+            agent,
+            bound_timers=bound[agent.id],
+            last_active=latest[agent.id],
+            state=live[agent.id],
+            # A readable ledger with no row for the role: the agent spent
+            # nothing this month, a real 0. An unreadable one: null + why.
+            spent=None if note is not None else by_role.get(agent.role, 0.0),
+            spend_note=note,
+        )
+        for agent in rows
+    ]
+
+
+async def list_with_state(pool: asyncpg.Pool, app) -> list[dict]:
+    """Every agent, by name, with state and spend (rows_with_state)."""
+    return await rows_with_state(pool, app, await list_all(pool))
+
+
+# ── delegation: one agent turn run to completion inside Nova's ────────────
+
+
+def compose_brief(
+    agent: Agent,
+    task: str,
+    context: str | None,
+    deliverable: str | None,
+    *,
+    owner_name: str,
+) -> str:
+    """The message the agent's turn starts from — code-composed, never Nova's
+    prose, so the agent always knows who it works for, where its folder is,
+    how many rounds it has and what its report must contain. `context` and
+    `deliverable` are appended only when given."""
+    brief = (
+        f"[Task from Nova for agent {agent.name}. You work for {owner_name}; they are not in "
+        "this thread and will read Nova's relay of your report. Your workspace folder is "
+        f"agents/{agent.name}/ — every path you read or write is inside it. You have "
+        f"{agent.max_tool_rounds} tool rounds. When you finish, reply with a report: what you "
+        "did, what you found, every file you wrote (paths), and anything you could not do and "
+        f"why.]\n\nTask: {task.strip()}"
+    )
+    if context and context.strip():
+        brief += f"\n\nContext from Nova: {context.strip()}"
+    if deliverable and deliverable.strip():
+        brief += f"\n\nDeliverable: {deliverable.strip()}"
+    return brief
+
+
+# The tool whose successful spans say which files the agent wrote.
+WRITE_TOOL = "workspace_write_file"
+# How much of a failed call's stated error the result quotes.
+ERROR_HEAD_CHARS = 120
+# What chat._clip appends to a string it cut down to a head for the trace
+# (chat._redact clips every recorded argument past chat.SPAN_ARG_HEAD_CHARS).
+# A write span whose recorded `path` carries this marker holds the HEAD of a
+# path plus a character count — not a path — so it is counted as an
+# unreadable write rather than listed as a file the agent wrote; naming a
+# truncated path as a file written is the kind of unchecked claim this whole
+# result exists to prevent. Pinned against chat._clip itself in
+# test_tools_agents, so a change to the clipper's wording turns that pin red
+# instead of quietly letting a clipped path through. (2026-09-08)
+CLIP_MARKER = "… (+"
+
+
+@dataclass(frozen=True)
+class RunFacts:
+    """What the agent's turn DID, read off its trace and the database —
+    never off its words. `rounds` is how many gateway calls the turn made
+    (its llm_call spans); `priced_rounds` is how many of those the gateway
+    put a dollar figure on, so a `cost_usd` that covers only part of the run
+    can be stated as the part-sum it is. `files` are the paths of its
+    successful workspace_write_file spans (relative to its folder);
+    `unreadable_writes` counts successful writes whose path the trace record
+    could not carry (a clipped argument record), stated rather than dropped;
+    `cap_unreadable` is the reason the cap check fell open, when it did."""
+
+    agent: str
+    turn_id: uuid.UUID
+    status: str | None
+    rounds: int
+    calls_ok: int
+    calls_failed: int
+    seconds: float
+    cost_usd: float | None
+    priced_rounds: int
+    files: tuple[str, ...]
+    unreadable_writes: int
+    failed_calls: tuple[str, ...]
+    notes: tuple[str, ...]
+    cap_unreadable: str | None
+
+    def as_facts(self) -> dict:
+        """The structured record for the delegate span's meta.facts — what the
+        delegation guard and the transcript's delegation chip read."""
+        return {
+            "agent": self.agent,
+            "agent_turn_id": str(self.turn_id),
+            "status": self.status,
+            "files": list(self.files),
+            "rounds": self.rounds,
+            "calls_ok": self.calls_ok,
+            "calls_failed": self.calls_failed,
+        }
+
+    @property
+    def calls(self) -> int:
+        return self.calls_ok + self.calls_failed
+
+    def line(self) -> str:
+        """The facts in one line, for a failure text."""
+        return (
+            f"agent {self.agent} · turn {self.turn_id} · status {self.status or 'unknown'} · "
+            f"{_plural(self.rounds, 'round')} · {_plural(self.calls, 'call')} "
+            f"({self.calls_ok} ok, {self.calls_failed} failed) · files: "
+            f"{', '.join(self.files) or 'none'}"
+        )
+
+
+def _error_head(meta: dict) -> str:
+    text = str(meta.get("error") or meta.get("result_head") or "").strip()
+    if text.startswith(tools.ERROR_PREFIX):
+        text = text[len(tools.ERROR_PREFIX) :]
+    text = text.splitlines()[0] if text else "(no reason recorded)"
+    if len(text) > ERROR_HEAD_CHARS:
+        text = text[: ERROR_HEAD_CHARS - 1].rstrip() + "…"
+    return text
+
+
+def run_facts(
+    agent: Agent,
+    turn: traces.Turn,
+    *,
+    status: str | None,
+    seconds: float,
+    usage: dict | None,
+) -> RunFacts:
+    """Derive the facts from the turn's spans (still in memory after the
+    close) and the status read back from the database. `usage` is
+    chat.turn_usage(turn.spans) — the cost the gateway stated per round."""
+    # The rounds are the llm_call SPANS: one span is one gateway call, filed
+    # whether or not the gateway stated usage for it. turn_usage counts only
+    # the metered ones, so reading its `rounds` reported "1 round" for a turn
+    # that made two calls and priced one — a round that failed or came back
+    # unmetered vanished from the facts line. The span count is the fact; how
+    # much of it carried a price is said separately below. (2026-09-08)
+    rounds = sum(1 for s in turn.spans if s.kind == "llm_call")
+    priced_rounds = int(usage["priced_rounds"]) if usage else 0
+    calls_ok = calls_failed = unreadable = 0
+    files: list[str] = []
+    failed: list[str] = []
+    for span in turn.spans:
+        if span.kind != "tool":
+            continue
+        meta = span.meta or {}
+        if meta.get("ok") is True:
+            calls_ok += 1
+            if span.name == WRITE_TOOL:
+                args = meta.get("args_redacted")
+                path = args.get("path") if isinstance(args, dict) else None
+                # A clipped record is not a path (CLIP_MARKER above): its head
+                # names no file that exists, so it is counted, never listed.
+                if not isinstance(path, str) or not path.strip() or CLIP_MARKER in path:
+                    unreadable += 1
+                elif path not in files:
+                    files.append(path)
+        else:
+            calls_failed += 1
+            failed.append(f"{span.name} — {_error_head(meta)}")
+    notes = []
+    for span in turn.spans:
+        if span.kind == "guard":
+            fired = f"{agent.name}'s own turn recorded a {span.name} correction"
+            if (span.meta or {}).get("redirected") is True:
+                fired += " (its reply was regenerated)"
+            notes.append(fired)
+    cap_unreadable = None
+    for span in turn.spans:
+        if span.kind == "agent_cap":
+            ledger = str((span.meta or {}).get("ledger") or "")
+            if ledger.startswith("unreadable"):
+                cap_unreadable = ledger.partition(":")[2].strip() or "no reason recorded"
+    cost = usage.get("cost_usd") if usage else None
+    return RunFacts(
+        agent=agent.name,
+        turn_id=turn.id,
+        status=status,
+        rounds=rounds,
+        calls_ok=calls_ok,
+        calls_failed=calls_failed,
+        seconds=seconds,
+        cost_usd=None if cost is None else float(cost),
+        priced_rounds=priced_rounds,
+        files=tuple(files),
+        unreadable_writes=unreadable,
+        failed_calls=tuple(failed),
+        notes=tuple(notes),
+        cap_unreadable=cap_unreadable,
+    )
+
+
+def _seconds_words(seconds: float) -> str:
+    return f"{seconds:.1f} s" if seconds < 10 else f"{seconds:.0f} s"
+
+
+def _cost_words(facts: RunFacts) -> str:
+    """What the run cost, and how much of the run that figure covers.
+
+    The sum is over the rounds the gateway PRICED. When some round carried no
+    price (it failed, it ran on a local model, the gateway stated no usage),
+    the figure is a part-sum, and saying '$0.0032' flat would read as the
+    whole run's cost — so it is stated as what it is: '$0.0032 (1 of 2 rounds
+    priced)'. No price at all is 'unmetered'. (2026-09-08)
+    """
+    if facts.cost_usd is None:
+        return "unmetered"
+    if facts.priced_rounds < facts.rounds:
+        return (
+            f"{money(facts.cost_usd)} ({facts.priced_rounds} of "
+            f"{_plural(facts.rounds, 'round')} priced)"
+        )
+    return money(facts.cost_usd)
+
+
+def compose_result(facts: RunFacts, report: str) -> str:
+    """The delegate tool's result: the facts FIRST (a small model reads the
+    top line and stops), each derived from the trace, then the agent's own
+    report labelled as its words."""
+    cost = _cost_words(facts)
+    lines = [
+        f"[{facts.agent} finished: status {facts.status} · {_plural(facts.rounds, 'tool round')} · "
+        f"{_plural(facts.calls, 'call')} ({facts.calls_ok} ok, {facts.calls_failed} failed) · "
+        f"{_seconds_words(facts.seconds)} · {cost} · trace {facts.turn_id}]"
+    ]
+    written = f"Files written in agents/{facts.agent}/: {', '.join(facts.files) or 'none'}"
+    if facts.unreadable_writes:
+        written += (
+            f"; plus {_plural(facts.unreadable_writes, 'successful write')} whose path could "
+            "not be read from the trace"
+        )
+    lines.append(written)
+    if facts.failed_calls:
+        lines.append(f"Calls that failed: {'; '.join(facts.failed_calls)}")
+    if facts.notes:
+        lines.append(f"Notes: {'; '.join(facts.notes)}")
+    if facts.cap_unreadable is not None:
+        lines.append(
+            f"Cap: unchecked this run — the ledger could not be read ({facts.cap_unreadable})"
+        )
+    lines.append(f"--- {facts.agent}'s report (its words; only the facts above are verified) ---")
+    lines.append(report)
+    return "\n".join(lines)
+
+
+def delegation_refused(ctx, agent_name: str, reason: str) -> ToolFailure:
+    """File the refusal on the turn's facts, then hand back the failure for
+    the caller to raise.
+
+    A delegate call refused BEFORE any child turn opened — a name no agent
+    has, an empty task, an agent reaching for delegation, an agent deleted
+    mid-hand-over — must not read on the trace like a run that went wrong.
+    _run_tool copies the sink's new entries onto the delegate span on failure
+    as well as on success, so this entry is what the transcript's chip and
+    the delegation guard read: status 'refused' with the stated reason, i.e.
+    NOTHING RAN. With no entry at all the span carries only its error text,
+    and the chip falls back to status 'error' — a delegation that looks like
+    a child turn that failed. Every refusal-before-run writes this one shape,
+    tools/agents.py's own included. (2026-09-08)
+    """
+    sink = getattr(ctx, "facts_sink", None)
+    if sink is not None:
+        sink.append({"agent": agent_name, "status": "refused", "reason": reason})
+    return ToolFailure(reason)
+
+
+def _identity_or_refuse(ctx) -> Person:
+    person = getattr(ctx, "person", None)
+    if person is None or getattr(person, "id", None) is None:
+        raise ToolFailure(
+            "this turn has no identity, so the agent's work could not be attributed to anyone"
+        )
+    return person
+
+
+async def delegate(ctx, args: dict) -> str:
+    """Run one agent's turn to completion inside the calling turn and return
+    the facts plus its report. The agent's turn goes through the ONE funnel
+    (chat._run_turn with the agent's persona) — same guards, same persist,
+    same close — as a turn of kind 'agent' in the agent's own log
+    conversation, opened for the CALLER's person (his money) with the
+    agent's id and role (who did the work). Sequential by construction:
+    this awaits the whole child turn, so one delegation runs at a time.
+
+    Nothing here trusts the stream: the status and the report are read BACK
+    from the database once _run_turn returns, the files are the
+    paths of the child's successful write spans, and the facts are appended
+    to ctx.facts_sink BEFORE the ok/failed decision so the delegate span
+    carries them either way. The child's own frames never reach the caller's
+    stream: the translator turns them into progress reports (allow-listed
+    keys on the caller's own activity frame) and keeps the error statement
+    for the failure text.
+
+    `chat` is imported here and nowhere else in this module: chat imports
+    this module at its top, so a module-level import would be the cycle a
+    subprocess test pins against.
+    """
+    from app import chat, db
+
+    pool = await db.get_pool()
+    caller = _identity_or_refuse(ctx)
+    name = str(args.get("agent") or "").strip()
+    agent = await by_name(pool, name)
+    if agent is None:
+        raise delegation_refused(ctx, name, str(_no_such(name, await names(pool))))
+    task = args.get("task")
+    if not isinstance(task, str) or not task.strip():
+        raise delegation_refused(
+            ctx, agent.name, f"task is empty — say what {agent.name} should do"
+        )
+
+    log = await log_conversation(pool, agent)
+    brief = compose_brief(
+        agent, task, args.get("context"), args.get("deliverable"), owner_name=caller.name
+    )
+    # The child turn is opened BEFORE the brief is written, because that
+    # INSERT is what proves the agent still exists: turns.agent_id is a
+    # foreign key, so an agent deleted between the lookup above and here is
+    # refused by the database rather than run. The other order left a task
+    # row in the agent's log for a run that then never happened — a brief the
+    # Agents page shows as work handed over, with no turn behind it.
+    # (2026-09-08)
+    # Not added to traces.INFLIGHT: that set is the owner's pending-chat flag.
+    # DOING is written by the funnel itself.
+    try:
+        turn = await traces.open_turn(
+            pool,
+            kind="agent",
+            conversation_id=log,
+            model="",
+            person_id=caller.id,
+            timezone=await chat._owner_timezone(pool),
+            agent_id=agent.id,
+            role=agent.role,
+        )
+    except asyncpg.ForeignKeyViolationError as exc:
+        raise delegation_refused(
+            ctx, agent.name, f"agent {agent.name} was deleted while the task was being handed over"
+        ) from exc
+    # The brief is a user row in the agent's log conversation (the eval-runner
+    # idiom), so the agent's page reads task → report pairs.
+    await pool.execute(
+        "INSERT INTO messages (conversation_id, role, content) VALUES ($1, 'user', $2)", log, brief
+    )
+    progress = getattr(ctx, "progress", None)
+    error_statement: str | None = None
+
+    def translator(frame: str | None) -> None:
+        """The child's SSE frames → the caller's progress channel. `meta` and
+        `activity` become structured progress reports; `error` is kept for
+        the failure text; `t`, `served_by`, `usage`, `route`, `correction`
+        and the DONE/None sentinels are dropped — the facts come from the
+        spans, never from what was streamed."""
+        nonlocal error_statement
+        if not isinstance(frame, str):
+            return
+        payload = frame[len("data: ") :].strip() if frame.startswith("data: ") else frame.strip()
+        if not payload or payload == "[DONE]":
+            return
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+        if not isinstance(data, dict):
+            return
+        if "error" in data:
+            error_statement = str(data["error"])
+            return
+        if progress is None:
+            return
+        if "meta" in data:
+            progress(
+                {
+                    "detail": f"{agent.name} is working…",
+                    "agent": agent.name,
+                    "agent_turn_id": str(turn.id),
+                    "step": "start",
+                    "step_status": "start",
+                }
+            )
+        elif "activity" in data and isinstance(data["activity"], dict):
+            activity = data["activity"]
+            tool = str(activity.get("tool") or "")
+            step_status = str(activity.get("status") or "")
+            progress(
+                {
+                    "detail": f"{agent.name} · {tool} {step_status}".strip(),
+                    "agent": agent.name,
+                    "agent_turn_id": str(turn.id),
+                    "step": tool,
+                    "step_status": step_status,
+                }
+            )
+
+    await chat._run_turn(
+        ctx.app,
+        pool,
+        turn,
+        agent.person(),
+        log,
+        brief,
+        [],
+        "",
+        agent.max_tool_rounds,
+        translator,
+        ingest=False,
+        persona=persona_for(agent, owner_id=caller.id),
+    )
+    # No settle_detached here. _run_turn's own finally awaits the shielded
+    # close_turn before it returns, and ingest=False queues no ingest — so by
+    # this line the child's status and its assistant row are already on
+    # record, which is all the reads below need. settle_detached waits for
+    # EVERY task spawned into chat._BACKGROUND since the snapshot, and the
+    # snapshot cannot tell whose work that is: another conversation's chat
+    # turn, an eval suite job, a scheduled firing. Waiting on those stalled
+    # Nova's relay of this agent's report on work that has nothing to do with
+    # it. (2026-09-08)
+
+    # READ BACK, never from the stream: the status the close wrote and the
+    # assistant row the funnel persisted for this turn.
+    row = await pool.fetchrow(
+        "SELECT status, started_at, ended_at FROM turns WHERE id = $1", turn.id
+    )
+    status = row["status"] if row is not None else None
+    ended = row["ended_at"] if row is not None and row["ended_at"] is not None else None
+    started = row["started_at"] if row is not None else turn.started_at
+    seconds = ((ended or datetime.now(UTC)) - started).total_seconds()
+    report = await pool.fetchval(
+        "SELECT content FROM messages WHERE turn_id = $1 AND role = 'assistant' "
+        "ORDER BY created_at DESC LIMIT 1",
+        turn.id,
+    )
+    facts = run_facts(
+        agent, turn, status=status, seconds=seconds, usage=chat.turn_usage(turn.spans)
+    )
+    # BEFORE deciding ok: chat._run_tool copies the sink's new entries onto
+    # the delegate span on success AND failure.
+    sink = getattr(ctx, "facts_sink", None)
+    if sink is not None:
+        sink.append(facts.as_facts())
+    if status != "ok" or report is None:
+        if report is None and not error_statement:
+            why = "no report was persisted"
+        else:
+            why = error_statement or f"its turn closed with status {status or 'unknown'}"
+        raise ToolFailure(f"agent {agent.name} did not finish — {why} · {facts.line()}")
+    return compose_result(facts, report)

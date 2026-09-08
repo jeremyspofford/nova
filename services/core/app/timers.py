@@ -11,8 +11,11 @@ Two refusals here are about what a row CAN be, never about who may act:
 a zone that does not load, and kind `job` from anywhere — jobs are seeded by
 `ensure_jobs` from JOBS alone, so a handler that does not exist in code can
 never be a row. `TimerRefused` carries the words and the status the API should
-state (devices.DeviceRefused's shape).
+state (devices.DeviceRefused's shape). A third (S12): only a `scheduled` row
+can be bound to an agent (`create(agent_id=)`, `bind_agent`) — refused in words
+here before migration 021's CHECK would refuse it by constraint name.
 """
+
 from __future__ import annotations
 
 import logging
@@ -45,10 +48,13 @@ JOBS: dict[str, Callable[[asyncpg.Pool], Awaitable[str]]] = {}
 JOB_SCHEDULES: dict[str, dict] = {"retention": {"kind": "day", "at": "03:30"}}
 JOB_TITLES: dict[str, str] = {"retention": "Prune firing history older than 30 days"}
 
+# agent_id (migration 021, S12): WHO runs a scheduled row — NULL is Nova.
+# person_id stays the owner who set it, so list_for / owned / the Schedules
+# page are untouched by a binding; only the firing reads the other column.
 _COLUMNS = (
-    "id, person_id, kind, title, payload, schedule, timezone, conversation_id, next_fire_at, "
-    "paused_at, paused_reason, consecutive_failures, created_via, created_turn_id, "
-    "created_at, updated_at"
+    "id, person_id, agent_id, kind, title, payload, schedule, timezone, conversation_id, "
+    "next_fire_at, paused_at, paused_reason, consecutive_failures, created_via, "
+    "created_turn_id, created_at, updated_at"
 )
 _FIRING_COLUMNS = (
     "id, timer_id, scheduled_for, started_at, ended_at, status, reason, turn_id, delivery"
@@ -104,6 +110,11 @@ def timer_spec(row: asyncpg.Record) -> dict:
     return {
         "id": str(row["id"]),
         "kind": row["kind"],
+        # The agent this row runs as (null: Nova). The NAME is not here on
+        # purpose — it is a fact about the agents table, joined by whoever
+        # shows it (timers_api, the list tool), never a label stored on the
+        # timer that could outlive a rename or a delete.
+        "agent_id": str(row["agent_id"]) if row["agent_id"] else None,
         "title": row["title"],
         "payload": row["payload"],
         "schedule": row["schedule"],
@@ -193,6 +204,7 @@ async def create(
     conversation_id: uuid.UUID | None,
     created_via: str,
     created_turn_id: uuid.UUID | None = None,
+    agent_id: uuid.UUID | None = None,
 ) -> asyncpg.Record:
     """A reminder or scheduled timer for `person`, with its first fire computed.
 
@@ -201,7 +213,12 @@ async def create(
     second from now is due on the next tick and never lost between two
     clocks), and refuses a once already in the past — a row that would fire
     the moment it was created is not what "at 14:32" asked for. Kind `job` is
-    refused from here: jobs are seeded by ensure_jobs from JOBS alone."""
+    refused from here: jobs are seeded by ensure_jobs from JOBS alone.
+
+    `agent_id` (S12) binds a SCHEDULED row to the agent that runs it; any
+    other kind is refused in words before the timers_agent_only_scheduled
+    CHECK would refuse it by constraint name. An id naming no agent is a
+    stated refusal too (the foreign key's violation, read and worded)."""
     if kind == "job":
         raise TimerRefused(
             "job timers are seeded from code (timers.JOBS) at startup, never created here"
@@ -225,6 +242,8 @@ async def create(
         raise TimerRefused("a reminder needs the conversation it lands in")
     if kind == "scheduled" and conversation_id is None:
         raise TimerRefused("a scheduled timer needs the conversation its replies land in")
+    if agent_id is not None and kind != "scheduled":
+        raise TimerRefused(_agent_only_scheduled(kind))
 
     now = await pool.fetchval("SELECT now()")
     next_fire = schedule.next_after(clean_spec, now, zone)
@@ -234,21 +253,48 @@ async def create(
             f"{schedule.local_words(asked, zone)} is already in the past — a reminder cannot "
             "be set for a time that has gone"
         )
-    return await pool.fetchrow(
-        f"INSERT INTO timers (person_id, kind, title, payload, schedule, timezone, "
-        f"conversation_id, next_fire_at, created_via, created_turn_id) "
-        f"VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10) RETURNING {_COLUMNS}",
-        person.id,
-        kind,
-        clean_title,
-        clean_payload,
-        clean_spec,
-        zone,
-        conversation_id,
-        next_fire,
-        created_via,
-        created_turn_id,
-    )
+    try:
+        return await pool.fetchrow(
+            f"INSERT INTO timers (person_id, kind, title, payload, schedule, timezone, "
+            f"conversation_id, next_fire_at, created_via, created_turn_id, agent_id) "
+            f"VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8, $9, $10, $11) "
+            f"RETURNING {_COLUMNS}",
+            person.id,
+            kind,
+            clean_title,
+            clean_payload,
+            clean_spec,
+            zone,
+            conversation_id,
+            next_fire,
+            created_via,
+            created_turn_id,
+            agent_id,
+        )
+    except asyncpg.ForeignKeyViolationError as exc:
+        refused = _agent_gone(exc, agent_id)
+        if refused is None:
+            raise
+        raise refused from exc
+
+
+def _agent_only_scheduled(kind: str) -> str:
+    """The words for binding a row that is not a scheduled turn — stated
+    BEFORE postgres would state it as a constraint name."""
+    return f"only a scheduled turn can be bound to an agent — this is a {kind}"
+
+
+def _agent_gone(exc: asyncpg.ForeignKeyViolationError, agent_id) -> TimerRefused | None:
+    """A foreign-key violation on the agents reference, worded (the agent was
+    deleted between the caller's name lookup and this write); None for any
+    other foreign key, which is not this function's to explain — the caller
+    re-raises it as it was."""
+    if "agent" in (exc.constraint_name or ""):
+        return TimerRefused(
+            f"no agent with id {agent_id} exists — it may have just been deleted",
+            status_code=404,
+        )
+    return None
 
 
 async def get(pool: asyncpg.Pool, timer_id: uuid.UUID) -> asyncpg.Record | None:
@@ -351,6 +397,37 @@ async def resume(pool: asyncpg.Pool, timer_id: uuid.UUID) -> asyncpg.Record:
     )
 
 
+async def bind_agent(
+    pool: asyncpg.Pool, person: Person, timer_id: uuid.UUID, agent_id: uuid.UUID | None
+) -> asyncpg.Record:
+    """Bind the person's scheduled timer to the agent that will run it, or
+    unbind it (None) — the row as written. Scoped through `owned`, so an id
+    that is not this person's (or nobody's) is a 404 the way every other
+    per-timer write is; a row that is not a scheduled turn is refused in
+    words before the CHECK constraint would. person_id is untouched: the
+    owner who set it still owns it, sees it, cancels it."""
+    row = await owned(pool, person, timer_id)
+    if row["kind"] != "scheduled":
+        raise TimerRefused(_agent_only_scheduled(row["kind"]))
+    try:
+        updated = await pool.fetchrow(
+            f"UPDATE timers SET agent_id = $2, updated_at = now() WHERE id = $1 "
+            f"RETURNING {_COLUMNS}",
+            timer_id,
+            agent_id,
+        )
+    except asyncpg.ForeignKeyViolationError as exc:
+        refused = _agent_gone(exc, agent_id)
+        if refused is None:
+            raise
+        raise refused from exc
+    if updated is None:
+        # Deleted between the read above and this write: nothing was bound,
+        # and saying so beats handing back the stale row as if it were.
+        raise TimerRefused(f"no timer {timer_id}", status_code=404)
+    return updated
+
+
 async def delete(pool: asyncpg.Pool, timer_id: uuid.UUID) -> None:
     """Remove the row (its firings cascade). A missing id is a 404, so a delete
     never reports success over nothing."""
@@ -360,7 +437,7 @@ async def delete(pool: asyncpg.Pool, timer_id: uuid.UUID) -> None:
 
 
 async def fire_now(pool: asyncpg.Pool, timer_id: uuid.UUID, *, app) -> asyncpg.Record:
-    """"Run now": make the row due this instant, then run ONE tick, so the run
+    """ "Run now": make the row due this instant, then run ONE tick, so the run
     goes through the same claim and leaves the same firing row as any other.
     Returns that firing. A paused row is refused — the claim never picks a
     paused row up, so setting it due would do nothing and reading "ran" off

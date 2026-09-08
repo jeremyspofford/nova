@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { SchedulesPage } from './SchedulesPage'
-import type { Timer, TimerFiring } from '../../lib/api'
+import type { Agent, Timer, TimerFiring } from '../../lib/api'
+import { agentFixture } from '../agents/agentFixture'
 
 const inMinutes = (n: number) => new Date(Date.now() + n * 60_000).toISOString()
 
@@ -21,6 +22,8 @@ function timer(overrides: Partial<Timer> = {}): Timer {
     created_via: 'chat',
     created_at: new Date().toISOString(),
     last_firing: null,
+    // S12 (2026-09-08): who a scheduled row runs as; null = Nova.
+    agent: null,
     ...overrides,
   }
 }
@@ -43,8 +46,9 @@ function firing(overrides: Partial<TimerFiring> = {}): TimerFiring {
 
 /** Successive `listTimers` answers come from `pages` in order (the last one
  * repeats); firings are stubbed per timer id. Every mutation answers with a
- * plausible row unless a test overrides it. */
-function fakeApi(pages: Timer[][], firings: Record<string, TimerFiring[]> = {}) {
+ * plausible row unless a test overrides it. The roster (S12) is empty unless
+ * a test hands one in. */
+function fakeApi(pages: Timer[][], firings: Record<string, TimerFiring[]> = {}, agents: Agent[] = []) {
   let call = 0
   return {
     listTimers: vi.fn(async () => pages[Math.min(call++, pages.length - 1)]),
@@ -55,6 +59,8 @@ function fakeApi(pages: Timer[][], firings: Record<string, TimerFiring[]> = {}) 
     resumeTimer: vi.fn(async (id: string) => timer({ id, paused_at: null, paused_reason: null })),
     fireTimer: vi.fn(async (id: string) => firing({ id: `fired-${id}`, timer_id: id })),
     deleteTimer: vi.fn(async () => {}),
+    listAgents: vi.fn(async () => agents),
+    bindTimerAgent: vi.fn(async (id: string, agent: string | null) => timer({ id, agent })),
   }
 }
 
@@ -437,6 +443,108 @@ describe('SchedulesPage — drill-in: firings with per-channel delivery', () => 
     fireEvent.click(await screen.findByTestId('schedules-row-t1'))
     const detail = await screen.findByTestId('schedules-detail-t1')
     await within(detail).findByText(/Could not load firings: timer not found \(404\)/)
+  })
+})
+
+describe('SchedulesPage — runs as (S12): the agent a scheduled row fires as', () => {
+  const ROSTER = [agentFixture({ name: 'coder' }), agentFixture({ name: 'mailer' })]
+  const scheduled = (overrides: Partial<Timer> = {}) =>
+    timer({
+      id: 's1',
+      kind: 'scheduled',
+      title: 'nightly review',
+      payload: { instruction: 'review the day' },
+      schedule_words: 'every day at 23:00 America/New_York',
+      ...overrides,
+    })
+
+  it('a reminder and a job show an absence; only a scheduled row offers the select', async () => {
+    const api = fakeApi(
+      [[timer({ id: 'r1', kind: 'reminder' }), timer({ id: 'j1', kind: 'job', payload: { handler: 'retention' }, created_via: 'system' }), scheduled()]],
+      {},
+      ROSTER,
+    )
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const reminder = await screen.findByTestId('schedules-row-r1')
+    expect(within(reminder).getByTestId('runs-as').textContent).toBe('—')
+    expect(within(reminder).queryByRole('combobox')).toBeNull()
+    const job = screen.getByTestId('schedules-row-j1')
+    expect(within(job).queryByRole('combobox')).toBeNull()
+
+    const row = screen.getByTestId('schedules-row-s1')
+    const select = within(row).getByRole('combobox', { name: /runs as, for nightly review/i }) as HTMLSelectElement
+    // Unbound = Nova, and the options are Nova plus the live roster.
+    expect(select.value).toBe('')
+    expect(Array.from(select.options).map(o => o.textContent)).toEqual(['Nova', 'coder', 'mailer'])
+  })
+
+  it('a bound row shows its agent selected, and is offered even when the roster no longer lists it', async () => {
+    const api = fakeApi([[scheduled({ agent: 'gone' })]], {}, ROSTER)
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-s1')
+    const select = within(row).getByRole('combobox') as HTMLSelectElement
+    await waitFor(() => expect(select.options.length).toBe(4))
+    expect(select.value).toBe('gone')
+    expect(Array.from(select.options).map(o => o.value)).toEqual(['', 'coder', 'mailer', 'gone'])
+  })
+
+  it('choosing an agent calls the PUT, then re-reads the list and shows the row core lists', async () => {
+    const api = fakeApi([[scheduled({ agent: null })], [scheduled({ agent: 'coder' })]], {}, ROSTER)
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-s1')
+    const select = within(row).getByRole('combobox') as HTMLSelectElement
+    await waitFor(() => expect(select.options.length).toBe(3))
+
+    fireEvent.change(select, { target: { value: 'coder' } })
+    await waitFor(() => expect(api.bindTimerAgent).toHaveBeenCalledWith('s1', 'coder'))
+    await waitFor(() => expect(api.listTimers).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect((within(screen.getByTestId('schedules-row-s1')).getByRole('combobox') as HTMLSelectElement).value).toBe('coder'),
+    )
+    // The select never toggled the row open.
+    expect(screen.queryByTestId('schedules-detail-s1')).toBeNull()
+  })
+
+  it('choosing Nova unbinds — the API gets null, not an empty name', async () => {
+    const api = fakeApi([[scheduled({ agent: 'coder' })], [scheduled({ agent: null })]], {}, ROSTER)
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-s1')
+    const select = within(row).getByRole('combobox') as HTMLSelectElement
+    await waitFor(() => expect(select.options.length).toBe(3))
+    fireEvent.change(select, { target: { value: '' } })
+    await waitFor(() => expect(api.bindTimerAgent).toHaveBeenCalledWith('s1', null))
+    await waitFor(() =>
+      expect((within(screen.getByTestId('schedules-row-s1')).getByRole('combobox') as HTMLSelectElement).value).toBe(''),
+    )
+  })
+
+  it('a refused rebind states core\'s reason on the row and leaves the binding as it was', async () => {
+    const api = fakeApi([[scheduled({ agent: null })]], {}, ROSTER)
+    api.bindTimerAgent = vi.fn(async () => {
+      throw new Error('no agent named coder — the agents are: mailer')
+    })
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-s1')
+    const select = within(row).getByRole('combobox') as HTMLSelectElement
+    await waitFor(() => expect(select.options.length).toBe(3))
+    fireEvent.change(select, { target: { value: 'coder' } })
+    const note = await screen.findByTestId('schedules-note-s1')
+    expect(note.textContent).toContain('Could not rebind: no agent named coder — the agents are: mailer')
+    expect((within(screen.getByTestId('schedules-row-s1')).getByRole('combobox') as HTMLSelectElement).value).toBe('')
+  })
+
+  it('a roster that could not be read is said beneath the select, in core\'s words', async () => {
+    const api = fakeApi([[scheduled({ agent: 'coder' })]])
+    api.listAgents = vi.fn(async () => {
+      throw new Error('agents API not found (404)')
+    })
+    render(<SchedulesPage api={api} pollMs={NEVER} />)
+    const row = await screen.findByTestId('schedules-row-s1')
+    const warning = await within(row).findByTestId('agents-roster-error')
+    expect(warning.textContent).toContain('agents API not found (404)')
+    // The row's own agent is still offered and selected — never a value with no option.
+    const select = within(row).getByRole('combobox') as HTMLSelectElement
+    expect(select.value).toBe('coder')
   })
 })
 

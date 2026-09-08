@@ -4,13 +4,16 @@ import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { Badge, Button, ConfirmDialog, EmptyState, Skeleton } from '../../components/ui'
 import {
+  bindTimerAgent as apiBindTimerAgent,
   deleteTimer as apiDeleteTimer,
   fireTimer as apiFireTimer,
+  listAgents as apiListAgents,
   listTimerFirings as apiListTimerFirings,
   listTimers as apiListTimers,
   pauseTimer as apiPauseTimer,
   resumeTimer as apiResumeTimer,
   TIMERS_PAGE_SIZE,
+  type AgentSummary,
   type Timer,
   type TimerFiring,
 } from '../../lib/api'
@@ -59,6 +62,13 @@ import {
  * reminder's outcome, or a paused timer's next fire passing WITHOUT a firing
  * row appearing, is seen with no operator action.
  *
+ * "Runs as" (S12): a scheduled row fires as Nova or as one of the agents,
+ * the NAME core derived from `timers.agent_id` on read. Only a scheduled row
+ * can be rebound — a reminder is code and a job is a handler, neither runs
+ * a persona — so only those rows offer the select. A rebind is one PUT whose
+ * answer is the row as written, and the list is re-read after it so the
+ * column shows what the server then lists, never the option that was picked.
+ *
  * `api` is the same dependency-injection seam ActivityPage uses; `pageSize`
  * and `pollMs` are exposed so a test can drive both without 50 fake rows or
  * waiting seconds.
@@ -70,6 +80,8 @@ interface SchedulesApi {
   resumeTimer: typeof apiResumeTimer
   fireTimer: typeof apiFireTimer
   deleteTimer: typeof apiDeleteTimer
+  listAgents: typeof apiListAgents
+  bindTimerAgent: typeof apiBindTimerAgent
 }
 
 const DEFAULT_API: SchedulesApi = {
@@ -79,7 +91,13 @@ const DEFAULT_API: SchedulesApi = {
   resumeTimer: apiResumeTimer,
   fireTimer: apiFireTimer,
   deleteTimer: apiDeleteTimer,
+  listAgents: apiListAgents,
+  bindTimerAgent: apiBindTimerAgent,
 }
+
+/** The select's value for "Nova herself" — the API's null. An agent's name
+ * can never be empty (core's grammar), so the sentinel cannot collide. */
+const NOVA = ''
 
 const POLL_INTERVAL_MS = 15_000
 
@@ -101,7 +119,7 @@ type FiringsState =
       staleReason?: string
     }
 
-type RowAction = 'pause' | 'resume' | 'fire' | 'delete'
+type RowAction = 'pause' | 'resume' | 'fire' | 'delete' | 'rebind'
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -130,6 +148,11 @@ export function SchedulesPage({
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const [ranNow, setRanNow] = useState<Record<string, TimerFiring>>({})
   const [pendingDelete, setPendingDelete] = useState<Timer | null>(null)
+  // The roster the "runs as" select offers (S12) — read once on mount. A
+  // roster that could not be read leaves the select with only what the row
+  // already says and states why, rather than offering a list it invented.
+  const [agents, setAgents] = useState<AgentSummary[] | null>(null)
+  const [agentsError, setAgentsError] = useState<string | null>(null)
   // The list as currently shown, readable inside async callbacks without
   // re-subscribing them — the same idiom as ChatPage's streamingRef.
   const timersRef = useRef(timers)
@@ -185,6 +208,23 @@ export function SchedulesPage({
       live = false
     }
   }, [api, pageSize])
+
+  useEffect(() => {
+    let live = true
+    api.listAgents().then(
+      rows => {
+        if (!live) return
+        setAgents(rows)
+        setAgentsError(null)
+      },
+      err => {
+        if (live) setAgentsError(reasonOf(err))
+      },
+    )
+    return () => {
+      live = false
+    }
+  }, [api])
 
   // The light poll: the first page, and the expanded row's firings. A poll
   // failure keeps the last known list rather than wiping it — a transient
@@ -416,6 +456,17 @@ export function SchedulesPage({
     [api, runAction],
   )
 
+  /** Rebind which agent a scheduled row runs as (S12): the PUT, then the
+   * list re-read — the column shows the row core then lists. */
+  const rebind = useCallback(
+    (timer: Timer, agent: string | null) =>
+      runAction(timer, 'rebind', async () => {
+        await api.bindTimerAgent(timer.id, agent)
+        await refresh()
+      }),
+    [api, refresh, runAction],
+  )
+
   return (
     <div>
       <PageHeader
@@ -455,7 +506,7 @@ export function SchedulesPage({
             <table className="w-full text-compact">
               <thead>
                 <tr className="bg-surface-elevated">
-                  {['Kind', 'Schedule', 'Next fire', 'Status', 'Last outcome', ''].map((heading, i) => (
+                  {['Kind', 'Schedule', 'Runs as', 'Next fire', 'Status', 'Last outcome', ''].map((heading, i) => (
                     <th
                       key={i}
                       className="px-4 py-3 text-left text-caption font-medium text-content-tertiary uppercase tracking-wider sticky top-0 bg-surface-elevated"
@@ -475,11 +526,14 @@ export function SchedulesPage({
                     busy={busy[timer.id]}
                     rowError={rowErrors[timer.id]}
                     ranNow={ranNow[timer.id]}
+                    agents={agents}
+                    agentsError={agentsError}
                     onToggle={() => toggle(timer.id)}
                     onPause={() => void pause(timer)}
                     onResume={() => void resume(timer)}
                     onFire={() => void fire(timer)}
                     onDelete={() => setPendingDelete(timer)}
+                    onRebind={agent => void rebind(timer, agent)}
                     onLoadMoreFirings={() => loadMoreFirings(timer.id)}
                   />
                 ))}
@@ -517,11 +571,14 @@ function ScheduleRow({
   busy,
   rowError,
   ranNow,
+  agents,
+  agentsError,
   onToggle,
   onPause,
   onResume,
   onFire,
   onDelete,
+  onRebind,
   onLoadMoreFirings,
 }: {
   timer: Timer
@@ -530,11 +587,14 @@ function ScheduleRow({
   busy: RowAction | undefined
   rowError: string | undefined
   ranNow: TimerFiring | undefined
+  agents: AgentSummary[] | null
+  agentsError: string | null
   onToggle: () => void
   onPause: () => void
   onResume: () => void
   onFire: () => void
   onDelete: () => void
+  onRebind: (agent: string | null) => void
   onLoadMoreFirings: () => void
 }) {
   const kind = kindBadge(timer.kind)
@@ -564,6 +624,22 @@ function ScheduleRow({
           <div className="text-caption text-content-tertiary" data-testid="schedule-words">
             {timer.schedule_words}
           </div>
+        </td>
+        {/* Runs as (S12). The select never toggles the row. */}
+        <td className="px-4 py-2.5 whitespace-nowrap" onClick={e => e.stopPropagation()} data-testid="runs-as">
+          {timer.kind === 'scheduled' ? (
+            <RunsAsSelect
+              timer={timer}
+              agents={agents}
+              agentsError={agentsError}
+              busy={busy !== undefined}
+              onRebind={onRebind}
+            />
+          ) : (
+            <span className="text-content-tertiary" title="only a scheduled turn runs as an agent">
+              —
+            </span>
+          )}
         </td>
         <td className="px-4 py-2.5 whitespace-nowrap">
           {state.state === 'paused' ? (
@@ -668,7 +744,7 @@ function ScheduleRow({
       </tr>
       {(rowError || ranNow) && (
         <tr className="bg-surface-elevated/40" data-testid={`schedules-note-${timer.id}`}>
-          <td colSpan={6} className="px-6 py-2 text-caption">
+          <td colSpan={7} className="px-6 py-2 text-caption">
             {rowError && <p className="text-danger">{rowError}</p>}
             {ranNow && <RanNowLine firing={ranNow} />}
           </td>
@@ -676,7 +752,7 @@ function ScheduleRow({
       )}
       {expanded && (
         <tr data-testid={`schedules-detail-${timer.id}`} className="bg-surface-elevated/40">
-          <td colSpan={6} className="px-6 py-4">
+          <td colSpan={7} className="px-6 py-4">
             <div className="space-y-4">
               <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-caption">
                 <dt className="text-content-tertiary">Schedule</dt>
@@ -746,6 +822,54 @@ function ScheduleRow({
         </tr>
       )}
     </>
+  )
+}
+
+/**
+ * Who a scheduled row runs as, and the control to change it (S12). The
+ * options are Nova plus the live roster; the row's current agent is always
+ * offered even if the roster read failed or no longer lists it, so the select
+ * never shows a value it has no option for. A roster that could not be read
+ * is said beneath, in core's words.
+ */
+function RunsAsSelect({
+  timer,
+  agents,
+  agentsError,
+  busy,
+  onRebind,
+}: {
+  timer: Timer
+  agents: AgentSummary[] | null
+  agentsError: string | null
+  busy: boolean
+  onRebind: (agent: string | null) => void
+}) {
+  const names = (agents ?? []).map(a => a.name)
+  if (timer.agent !== null && !names.includes(timer.agent)) names.push(timer.agent)
+  return (
+    <span className="inline-flex flex-col gap-0.5">
+      <select
+        aria-label={`runs as, for ${timer.title}`}
+        data-testid={`runs-as-select-${timer.id}`}
+        className="h-7 rounded-sm border border-border bg-surface-input px-2 text-caption text-content-primary outline-none focus:border-border-focus focus:ring-2 focus:ring-accent-500/40 disabled:opacity-50"
+        value={timer.agent ?? NOVA}
+        disabled={busy}
+        onChange={e => onRebind(e.target.value === NOVA ? null : e.target.value)}
+      >
+        <option value={NOVA}>Nova</option>
+        {names.map(name => (
+          <option key={name} value={name}>
+            {name}
+          </option>
+        ))}
+      </select>
+      {agentsError && (
+        <span className="text-micro text-warning" data-testid="agents-roster-error">
+          roster unreadable — {agentsError}
+        </span>
+      )}
+    </span>
   )
 }
 

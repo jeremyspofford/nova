@@ -6,6 +6,15 @@ import {
   getWorkspaceFiles,
   getWorkspaceFile,
   workspaceRawUrl,
+  bindTimerAgent,
+  createAgent,
+  deleteAgent,
+  getAgent,
+  getAgentLog,
+  listAgents,
+  listSkills,
+  listTools,
+  updateAgent,
   type PullLine,
 } from './api'
 
@@ -137,6 +146,116 @@ describe('getWorkspaceFiles / getWorkspaceFile / workspaceRawUrl', () => {
 
   it('builds the raw download url with the path encoded', () => {
     expect(workspaceRawUrl('lists/a.md')).toBe('/api/v1/workspace/raw?path=lists%2Fa.md')
+  })
+
+  it('narrows the listing to a folder with ?prefix= when one is given (S12)', async () => {
+    stubJson({ files: [], total: 0, truncated: false })
+    await getWorkspaceFiles('agents/coder/')
+    const [url] = vi.mocked(fetch).mock.calls[0]
+    expect(url).toBe('/api/v1/workspace/files?prefix=agents%2Fcoder%2F')
+  })
+})
+
+describe('activity: the agent filter (S12)', () => {
+  function stubJson(body: unknown) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response),
+    )
+  }
+
+  it('sends ?agent= only when asked, beside the limit and cursor', async () => {
+    stubJson({ turns: [] })
+    await getActivity({ limit: 2, agent: 'coder', before: 'abc' })
+    const [url] = vi.mocked(fetch).mock.calls[0]
+    expect(url).toBe('/api/v1/activity?limit=2&before=abc&agent=coder')
+    stubJson({ turns: [] })
+    await getActivity({ limit: 2 })
+    expect(vi.mocked(fetch).mock.calls[0][0]).toBe('/api/v1/activity?limit=2')
+  })
+})
+
+describe('agents (S12): the routes and the bodies, verbatim', () => {
+  function stubJson(body: unknown, status = 200) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: status < 400,
+        status,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response),
+    )
+  }
+  const call = () => vi.mocked(fetch).mock.calls[0] as unknown as [string, RequestInit | undefined]
+
+  it('lists, reads, logs, tools and skills from their fixed paths, names encoded', async () => {
+    stubJson([])
+    await listAgents()
+    expect(call()[0]).toBe('/api/v1/agents')
+    stubJson({ name: 'a b' })
+    await getAgent('a b')
+    expect(call()[0]).toBe('/api/v1/agents/a%20b')
+    stubJson([])
+    await getAgentLog('coder')
+    expect(call()[0]).toBe('/api/v1/agents/coder/log')
+    stubJson([])
+    await listTools()
+    expect(call()[0]).toBe('/api/v1/tools')
+    stubJson([])
+    await listSkills()
+    expect(call()[0]).toBe('/api/v1/skills')
+  })
+
+  it('creates with a POST of the spec, updates with a PUT of the changes, deletes with DELETE', async () => {
+    const spec = { name: 'coder', purpose: 'p', instructions: 'i', tools: ['workspace_read_file'] }
+    stubJson({ ...spec, text: 'created', route: { registered: true, detail: 'ok' } }, 201)
+    await createAgent(spec)
+    let [url, init] = call()
+    expect(url).toBe('/api/v1/agents')
+    expect(init?.method).toBe('POST')
+    expect(JSON.parse(init?.body as string)).toEqual(spec)
+
+    stubJson({ name: 'coder', text: 'updated', route: { registered: true, detail: 'ok' } })
+    await updateAgent('coder', { purpose: 'q' })
+    ;[url, init] = call()
+    expect(url).toBe('/api/v1/agents/coder')
+    expect(init?.method).toBe('PUT')
+    expect(JSON.parse(init?.body as string)).toEqual({ purpose: 'q' })
+
+    const answer = { deleted: 'coder', paused_timers: [], route: { registered: true, detail: 'removed' }, remains: 'stays', text: 't' }
+    stubJson(answer)
+    expect(await deleteAgent('coder')).toEqual(answer)
+    ;[url, init] = call()
+    expect(url).toBe('/api/v1/agents/coder')
+    expect(init?.method).toBe('DELETE')
+  })
+
+  it('a refusal is thrown with the store\'s own words and status', async () => {
+    stubJson({ detail: "an agent's name is lowercase — 'Coder' is not" }, 400)
+    await expect(createAgent({ name: 'Coder', purpose: 'p', instructions: 'i', tools: [] })).rejects.toMatchObject({
+      status: 400,
+      message: expect.stringContaining("'Coder' is not"),
+    })
+  })
+
+  it('binds a timer to an agent with PUT {agent}, null to unbind', async () => {
+    stubJson({ id: 't1', agent: 'coder' })
+    await bindTimerAgent('t1', 'coder')
+    let [url, init] = call()
+    expect(url).toBe('/api/v1/timers/t1/agent')
+    expect(init?.method).toBe('PUT')
+    expect(JSON.parse(init?.body as string)).toEqual({ agent: 'coder' })
+
+    stubJson({ id: 't1', agent: null })
+    await bindTimerAgent('t1', null)
+    ;[url, init] = call()
+    expect(JSON.parse(init?.body as string)).toEqual({ agent: null })
   })
 
   it('encodes characters that would otherwise break the query string', () => {

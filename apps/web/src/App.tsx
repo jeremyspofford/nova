@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BrowserRouter, Navigate, Route, Routes, useLocation, useSearchParams } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { ThemeProvider, useTheme } from './stores/theme-store'
 import { ChatProvider } from './stores/chat-store'
@@ -22,6 +22,10 @@ import { FilesPage } from './pages/files/FilesPage'
 import { GovernancePage } from './pages/governance/GovernancePage'
 import { AIQualityPage } from './pages/quality/AIQualityPage'
 import { SchedulesPage } from './pages/schedules/SchedulesPage'
+import { AgentsPage } from './pages/agents/AgentsPage'
+import { AgentPage } from './pages/agents/AgentPage'
+import { deletedSummary } from './pages/agents/agentsFormat'
+import type { AgentDeleted } from './lib/api'
 
 function Centred({ children }: { children: React.ReactNode }) {
   return (
@@ -64,6 +68,31 @@ function FilesRoute() {
   return <FilesPage initialPath={searchParams.get('path')} />
 }
 
+/**
+ * The agents routes' seams (S12), the FilesRoute idiom: the pages read
+ * nothing from the router themselves. `/agents` takes the one-time notice an
+ * agent page hands over after a delete (the server's own summary of what was
+ * paused and what remains) off the navigation state; `/agents/:name` takes
+ * the name off the params and navigates back with that notice on a delete.
+ */
+function AgentsRoute() {
+  const location = useLocation()
+  const deleted = (location.state as { deleted?: AgentDeleted } | null)?.deleted
+  return <AgentsPage notice={deleted ? deletedSummary(deleted) : null} />
+}
+
+function AgentRoute() {
+  const { name } = useParams<{ name: string }>()
+  const navigate = useNavigate()
+  return (
+    <AgentPage
+      key={name}
+      name={name ?? ''}
+      onDeleted={result => navigate('/agents', { replace: true, state: { deleted: result } })}
+    />
+  )
+}
+
 function AppRoutes({ chatModel }: { chatModel: string }) {
   const location = useLocation()
   // Chat owns the whole viewport so its input can pin to the bottom — on a
@@ -77,6 +106,8 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         <Route path="/quality" element={<AIQualityPage />} />
         <Route path="/activity" element={<ActivityPage />} />
         <Route path="/schedules" element={<SchedulesPage />} />
+        <Route path="/agents" element={<AgentsRoute />} />
+        <Route path="/agents/:name" element={<AgentRoute />} />
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/spend" element={<SpendPage />} />

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { AgentSummary } from '../../lib/api'
+import type { Agent } from '../../lib/api'
+import { agentFixture } from '../agents/agentFixture'
 import { ChatInput } from './ChatInput'
 
 /**
@@ -116,12 +117,15 @@ describe('ChatInput — slash-command autocomplete', () => {
  * opens — no error UI, because the browser only offers; core decides.
  */
 
-const AGENTS: AgentSummary[] = [
-  { name: 'coder', purpose: 'writes and fixes code', role: 'agent_coder' },
-  { name: 'mailer', purpose: 'drafts email', role: 'agent_mailer' },
+// S12 (2026-09-08): `listAgents` answers the full Agent row now (the roster
+// page's shape); the menu still reads only the AgentSummary subset of it,
+// so the fixture carries the whole row and nothing else here moved.
+const AGENTS: Agent[] = [
+  agentFixture({ name: 'coder', purpose: 'writes and fixes code', role: 'agent_coder' }),
+  agentFixture({ name: 'mailer', purpose: 'drafts email', role: 'agent_mailer' }),
 ]
 
-function renderWithAgents(listAgents: () => Promise<AgentSummary[]> = async () => AGENTS) {
+function renderWithAgents(listAgents: () => Promise<Agent[]> = async () => AGENTS) {
   const onSubmit = vi.fn()
   const spy = vi.fn(listAgents)
   render(<ChatInput onSubmit={onSubmit} disabled={false} api={{ listAgents: spy }} />)

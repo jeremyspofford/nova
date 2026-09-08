@@ -28,6 +28,7 @@ What these pin, and why each is a pin and not a wish:
 from __future__ import annotations
 
 import ast
+import dataclasses
 import inspect
 import json
 import uuid
@@ -38,13 +39,14 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from app import agents, chat, conversations, scheduler, tools, traces
+from app import agents, chat, conversations, guards, scheduler, tools, traces
 from app.agents import Agent, AgentSpec
 from app.identity import Person
 from app.main import app
 from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway, FakeMemory, ScriptedGateway
+from tests.test_chat import _say, _set_model
 from tests.test_chat_presented_listing import FABRICATED
 from tests.test_chat_tools import text, whole_call
 
@@ -162,13 +164,17 @@ async def _agent_turn(
     return turn, frames
 
 
-async def _nova_turn(pool, owner: Person, message: str = "hello") -> tuple[traces.Turn, list]:
+async def _nova_turn(
+    pool, owner: Person, message: str = "hello", *, turn: traces.Turn | None = None
+) -> tuple[traces.Turn, list]:
     """A plain owner turn with NO persona kwarg — the path every caller that
-    has no agent takes."""
+    has no agent takes. `turn` (S12-3b) is a turn the test opened itself,
+    so spans can be filed on it before it runs."""
     conversation = await conversations.active_conversation(pool, owner)
-    turn = await traces.open_turn(
-        pool, conversation_id=conversation["id"], model=MODEL, person_id=owner.id
-    )
+    if turn is None:
+        turn = await traces.open_turn(
+            pool, conversation_id=conversation["id"], model=MODEL, person_id=owner.id
+        )
     frames: list = []
     before = set(chat._BACKGROUND)
     await chat._run_turn(
@@ -1008,3 +1014,444 @@ async def test_the_listing_guard_judges_an_agent_by_its_own_listing_tools(pool, 
     assert guard["meta"]["listing_tools"] == ["workspace_list_files"]
     assert guard["meta"]["redirected"] is False
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) == "ok"
+
+
+# ── the delegation-claim guard, wired (S12-3b) ─────────────────────────────
+#
+# guards.delegation_claim_check is pinned on its own in test_guards.py; what
+# these pin is the WIRING in chat._run_turn's closer: the roster is read
+# LIVE once per turn (agents.names), the check runs right after narration,
+# a fired one files the `delegation_claim` guard span {agent, phrase,
+# backing}, ships a {correction} frame, APPENDS the correction to the
+# durable reply (narration's class — the prose beside the claim may be
+# real), and marks the turn plumbing (never ingested); a backed claim is
+# left alone; a claim backed only by a FAILED run says "did not finish";
+# an agent's turn is checked the same way about OTHER agents (in the agent's
+# own words — it cannot delegate) and about itself by narration's rule; the
+# redirect vetting refuses a regeneration by the same guard; a roster read
+# that fails silences the guard and files an `agent_names` span, which a turn
+# whose roster WAS read never has. The names the guard is given are the
+# roster MINUS whoever this conversation already has on record (see the
+# section at the end of this file).
+# The delegate_to_agent tool itself is not what is under test here, so its
+# span is filed by hand exactly as chat._run_tool records one.
+
+CLAIM = "coder built the kitchen list."
+
+
+def _run_facts(agent: str, *, status: str) -> dict:
+    """The facts entry agents.delegate really appends for a run that HAPPENED,
+    built from the dataclass that writes it (RunFacts.as_facts) rather than
+    typed out here — so this suite's hand-filed spans cannot drift from the
+    real tool's. `agent_turn_id` is the key that matters (2026-09-08): it is
+    present exactly when a child turn actually opened, which is how a failed
+    RUN is told from a call refused before anything ran."""
+    # Every field named by the dataclass itself, so a field ADDED to RunFacts
+    # never breaks this double; only the four as_facts actually reads are
+    # given values.
+    fields = {f.name: None for f in dataclasses.fields(agents.RunFacts)}
+    fields.update(agent=agent, turn_id=uuid.uuid4(), status=status, files=())
+    return agents.RunFacts(**fields).as_facts()
+
+
+def _delegate_span(turn: traces.Turn, agent: str, *, ok: bool) -> None:
+    """A delegate_to_agent tool span as chat._run_tool records one — the
+    executor's facts on success AND failure, the call's own argument
+    redacted — filed on the turn before it runs, so the closer reads it off
+    turn.spans exactly as it would the real tool's."""
+    with turn.span("tool", agents.DELEGATE_TOOL) as span:
+        span.meta.update(
+            ok=ok,
+            args_redacted={"agent": agent, "task": "the kitchen list"},
+            facts=[_run_facts(agent, status="ok" if ok else "error")],
+        )
+
+
+def _refused_delegate_span(turn: traces.Turn, agent: str, reason: str) -> None:
+    """The span a delegation REFUSED before any turn opened leaves (2026-09-08):
+    agents.delegate pushes {agent, status: 'refused', reason} onto the facts
+    sink before raising, so the trace says a delegation was refused rather
+    than nothing at all. No `agent_turn_id`: nothing ran, so a claim about
+    that agent is unbacked, never "did not finish"."""
+    with turn.span("tool", agents.DELEGATE_TOOL) as span:
+        span.meta.update(
+            ok=False,
+            args_redacted={"agent": agent, "task": "the kitchen list"},
+            facts=[{"agent": agent, "status": "refused", "reason": reason}],
+        )
+
+
+async def _open_nova_turn(pool, owner: Person) -> traces.Turn:
+    conversation = await conversations.active_conversation(pool, owner)
+    return await traces.open_turn(
+        pool, conversation_id=conversation["id"], model=MODEL, person_id=owner.id
+    )
+
+
+def _guard_spans(spans: list) -> list[tuple[str, dict]]:
+    return [(s["name"], s["meta"]) for s in spans if s["kind"] == "guard"]
+
+
+def _corrections(frames: list) -> list[str]:
+    return [f["correction"] for f in _parsed(frames) if isinstance(f, dict) and "correction" in f]
+
+
+async def _status(pool, turn_id) -> str | None:
+    return await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id)
+
+
+async def test_an_unbacked_agent_claim_is_corrected_appended_and_not_ingested(
+    pool, mount_peers, root
+):
+    owner = await _owner(pool)
+    await _create(pool, mount_peers)
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(CLAIM),),)), memory=memory)
+
+    turn, frames = await _nova_turn(pool, owner, "is the kitchen list done?")
+
+    correction = guards.DELEGATION_UNBACKED_CORRECTION.format(agent="coder")
+    spans = await _spans(pool, turn.id)
+    assert _guard_spans(spans) == [
+        ("delegation_claim", {"agent": "coder", "phrase": CLAIM, "backing": "none"})
+    ]
+    # The roster WAS read: no agent_names span (it exists only on failure).
+    assert [s for s in spans if s["kind"] == "agent_names"] == []
+    # The correction ships on its own frame, after the prose it contradicts.
+    parsed = _parsed(frames)
+    assert _corrections(frames) == [correction]
+    assert parsed.index({"t": CLAIM}) < parsed.index({"correction": correction})
+    assert parsed[-1] == "[DONE]"
+    # APPENDED, never replaced: the durable record is what she said AND the
+    # contradiction — and the turn still closes ok (a correction is not a
+    # failure).
+    assert await _reply(pool, turn.id) == f"{CLAIM}\n\n{correction}"
+    assert await _status(pool, turn.id) == "ok"
+    # Plumbing: not ingested, and the trace says no ingest was even queued.
+    await chat.drain_background()
+    assert memory.ingests == []
+    assert [s for s in spans if s["kind"] == "memory_ingest"] == []
+
+
+async def test_a_backed_agent_claim_stands_and_is_ingested(pool, mount_peers, root):
+    owner = await _owner(pool)
+    await _create(pool, mount_peers)
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(CLAIM),),)), memory=memory)
+    turn = await _open_nova_turn(pool, owner)
+    _delegate_span(turn, "coder", ok=True)
+
+    turn, frames = await _nova_turn(pool, owner, "is the kitchen list done?", turn=turn)
+
+    spans = await _spans(pool, turn.id)
+    assert _guard_spans(spans) == []
+    assert _corrections(frames) == []
+    assert await _reply(pool, turn.id) == CLAIM
+    assert await _status(pool, turn.id) == "ok"
+    await chat.drain_background()
+    assert [i["exchange"]["assistant"] for i in memory.ingests] == [CLAIM]
+
+
+async def test_a_claim_backed_only_by_a_failed_run_says_did_not_finish(pool, mount_peers, root):
+    owner = await _owner(pool)
+    await _create(pool, mount_peers)
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(CLAIM),),)), memory=memory)
+    turn = await _open_nova_turn(pool, owner)
+    _delegate_span(turn, "coder", ok=False)
+
+    turn, frames = await _nova_turn(pool, owner, "is the kitchen list done?", turn=turn)
+
+    correction = guards.DELEGATION_FAILED_CORRECTION.format(agent="coder")
+    assert _guard_spans(await _spans(pool, turn.id)) == [
+        ("delegation_claim", {"agent": "coder", "phrase": CLAIM, "backing": "failed"})
+    ]
+    assert _corrections(frames) == [correction]
+    assert await _reply(pool, turn.id) == f"{CLAIM}\n\n{correction}"
+    assert await _status(pool, turn.id) == "ok"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+async def test_an_agents_turn_about_another_agent_gets_the_agent_correction(
+    pool, mount_peers, root
+):
+    """An agent crediting ANOTHER agent with work is the same fabrication as
+    Nova doing it, and is corrected on its own turn — even an @mention turn
+    that would otherwise ingest. The TEXT is the agent variant (pin moved
+    2026-09-08): Nova's "Tell me again and I'll delegate it" would be a
+    promise delegate_to_agent refuses an agent outright, so what coder is
+    made to say instead is what is true for it — it cannot delegate, so Nova
+    has to."""
+    owner = await _owner(pool)
+    coder = await _create(pool, mount_peers)
+    await _create(pool, mount_peers, name="writer")
+    about_writer = "writer finished the draft."
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(about_writer),),)), memory=memory)
+
+    turn, frames = await _agent_turn(pool, coder, owner, "how is the draft?", ingest=True)
+
+    correction = guards.DELEGATION_UNBACKED_CORRECTION_AGENT.format(agent="writer")
+    # Not Nova's text, and carrying none of its promise: an agent that says
+    # "tell me again and I'll delegate it" is promising a call the tool
+    # refuses it (tools/agents.AGENT_CANNOT_DELEGATE).
+    assert correction != guards.DELEGATION_UNBACKED_CORRECTION.format(agent="writer")
+    assert "I'll delegate it" not in correction and "I’ll delegate it" not in correction
+    assert _guard_spans(await _spans(pool, turn.id)) == [
+        ("delegation_claim", {"agent": "writer", "phrase": about_writer, "backing": "none"})
+    ]
+    assert _corrections(frames) == [correction]
+    assert await _reply(pool, turn.id) == f"{about_writer}\n\n{correction}"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+async def test_an_agents_turn_about_itself_is_judged_by_narrations_rule(pool, mount_peers, root):
+    """An agent writing its OWN name is not a delegation claim — it cannot
+    delegate, and "I did not hand anything to coder" written by coder would
+    be the lie. It is narration with the pronoun changed, so it is judged by
+    narration's fact: did ANY tool run this turn (pin moved 2026-09-08 —
+    this used to pass unchecked, which let "coder finished the tests" from a
+    turn that ran nothing stand as a record).
+
+    Unbacked it earns the self correction, in the first person, and the turn
+    is plumbing. With a tool actually run behind it, nothing fires and the
+    exchange is ingested like any other."""
+    owner = await _owner(pool)
+    coder = await _create(pool, mount_peers)
+    about_itself = "coder finished the tests."
+
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(about_itself),),)), memory=memory)
+    turn, frames = await _agent_turn(pool, coder, owner, "how are the tests?", ingest=True)
+
+    assert _guard_spans(await _spans(pool, turn.id)) == [
+        ("delegation_claim", {"agent": "coder", "phrase": about_itself, "backing": "none"})
+    ]
+    assert _corrections(frames) == [guards.DELEGATION_SELF_CORRECTION]
+    assert await _reply(pool, turn.id) == f"{about_itself}\n\n{guards.DELEGATION_SELF_CORRECTION}"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+    memory = FakeMemory()
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=((whole_call("c1", "get_time", {}),), (text(about_itself),))
+        ),
+        memory=memory,
+    )
+    turn, frames = await _agent_turn(pool, coder, owner, "how are the tests?", ingest=True)
+
+    # A tool really ran this turn — narration's fact, and so this guard's.
+    assert [
+        (s["name"], s["meta"]["ok"]) for s in await _spans(pool, turn.id) if s["kind"] == "tool"
+    ] == [("get_time", True)]
+    assert _guard_spans(await _spans(pool, turn.id)) == []
+    assert _corrections(frames) == []
+    assert await _reply(pool, turn.id) == about_itself
+    await chat.drain_background()
+    assert [i["exchange"]["assistant"] for i in memory.ingests] == [about_itself]
+
+
+async def test_a_roster_that_cannot_be_read_silences_the_guard_and_says_so(
+    pool, mount_peers, root, monkeypatch
+):
+    """Fail-open, never quiet: a names read that raises costs the turn its
+    delegation check (no names, no claim — precision-first) and files an
+    `agent_names` span saying why. The reply ships uncorrected and the turn
+    closes ok."""
+    owner = await _owner(pool)
+    await _create(pool, mount_peers)
+
+    async def broken(pool):
+        raise RuntimeError("agents table gone")
+
+    monkeypatch.setattr(agents, "names", broken)
+    mount_peers(gateway=ScriptedGateway(rounds=((text(CLAIM),),)), memory=FakeMemory())
+
+    turn, frames = await _nova_turn(pool, owner, "is the kitchen list done?")
+
+    spans = await _spans(pool, turn.id)
+    assert _guard_spans(spans) == []
+    (span,) = [s for s in spans if s["kind"] == "agent_names"]
+    assert span["meta"] == {"error": "RuntimeError: agents table gone"}
+    assert _corrections(frames) == []
+    assert await _reply(pool, turn.id) == CLAIM
+    assert await _status(pool, turn.id) == "ok"
+
+
+async def test_the_redirect_vetting_refuses_a_regeneration_that_credits_an_agent(pool, root):
+    """_regen_rejected_by carries the same check, fed the same live names,
+    right after narration and before the capability check — a lie about a
+    helper is no better for having been written on the second try; with no
+    roster there is no claim; a backed one passes."""
+    owner = await _owner(pool)
+    turn = await _open_nova_turn(pool, owner)
+    tool_ctx = tools.context_for(app, owner, facts_sink=[])
+    args = (CLAIM, turn, tool_ctx, [], "is it done?", agents.nova_persona())
+
+    assert chat._regen_rejected_by(*args, agent_names=["coder"]) == "delegation_claim"
+    assert chat._regen_rejected_by(*args, agent_names=[]) is None
+    _delegate_span(turn, "coder", ok=True)
+    assert chat._regen_rejected_by(*args, agent_names=["coder"]) is None
+
+    source = inspect.getsource(chat._regen_rejected_by)
+    assert (
+        source.index('"narration"')
+        < source.index('"delegation_claim"')
+        < source.index('"capability_claim"')
+    )
+
+
+# ── what this conversation already has on record (2026-09-08) ──────────────
+#
+# The review's finding on the guard's wiring: its fact is a successful
+# delegate_to_agent span of THIS turn, which made "coder wrote hello.py" a
+# fabrication the turn AFTER coder really wrote it — @coder in turn 1, Nova
+# reporting it in turn 2 — and the correction ("I did not hand anything to
+# coder this turn") was then itself the lie, about work the owner watched
+# happen. So chat._agent_names now hands the guard the roster MINUS the
+# agents this conversation already has on record before this turn: one that
+# wrote an assistant row here, and one an earlier turn of this conversation
+# successfully delegated to. Precision-first, the family rule.
+#
+# These run through the real POST /api/v1/chat/stream — the exemption is a
+# fact about a CONVERSATION across turns, and a helper that calls _run_turn
+# directly cannot show it.
+
+
+async def _last_chat_turn(pool):
+    return await pool.fetchval(
+        "SELECT id FROM turns WHERE kind = 'chat' ORDER BY started_at DESC LIMIT 1"
+    )
+
+
+async def test_an_agent_that_answered_here_backs_a_later_claim_about_it(
+    owner_client, pool, mount_peers, root
+):
+    """Turn 1: @coder writes hello.py for real, in the owner's conversation.
+    Turn 2: Nova reports it. Nothing was delegated in turn 2 — and nothing
+    needed to be: coder answered here, in front of him. No guard span, the
+    reply stands verbatim, and the turn is knowledge (ingested), not
+    plumbing."""
+    await _create(pool, mount_peers, tools=("workspace_write_file",))
+    await _set_model(owner_client)
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=(
+                (whole_call("c1", "workspace_write_file", {"path": "hello.py", "content": "x\n"}),),
+                (text("hello.py is in my folder now"),),
+            )
+        ),
+        memory=FakeMemory(),
+    )
+    assert (await _say(owner_client, "@coder write hello.py"))[0] == 200
+    assert (root / "agents" / "coder" / "hello.py").read_text(encoding="utf-8") == "x\n"
+
+    claim = "coder wrote hello.py in its folder."
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(claim),),)), memory=memory)
+    assert (await _say(owner_client, "is hello.py done?"))[0] == 200
+
+    turn_id = await _last_chat_turn(pool)
+    assert _guard_spans(await _spans(pool, turn_id)) == []
+    assert await _reply(pool, turn_id) == claim
+    assert await _status(pool, turn_id) == "ok"
+    await chat.drain_background()
+    assert [i["exchange"]["assistant"] for i in memory.ingests] == [claim]
+
+
+async def test_a_delegation_in_an_earlier_turn_backs_a_later_claim_about_it(
+    owner_client, pool, mount_peers, root
+):
+    """The same fact by the other route: turn 1 really delegates (the child's
+    turn runs in the AGENT's log conversation, so it leaves no assistant row
+    HERE — the successful delegate span of the earlier turn is what says it
+    happened). Turn 2's report of it is not corrected."""
+    await _create(pool, mount_peers)
+    await _set_model(owner_client)
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=(
+                (whole_call("n1", agents.DELEGATE_TOOL, {"agent": "coder", "task": "a haiku"}),),
+                (text("done"),),  # the child's own turn, in its log conversation
+                (text("coder has finished it."),),  # backed by the span of THIS turn
+            )
+        ),
+        memory=FakeMemory(),
+    )
+    assert (await _say(owner_client, "ask coder to write a haiku"))[0] == 200
+    first = await _last_chat_turn(pool)
+    (delegated,) = [
+        s for s in await _spans(pool, first) if s["kind"] == "tool" and s["meta"]["ok"] is True
+    ]
+    assert delegated["name"] == agents.DELEGATE_TOOL
+    assert _guard_spans(await _spans(pool, first)) == []
+
+    claim = "coder wrote haiku.md for you."
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(claim),),)), memory=memory)
+    assert (await _say(owner_client, "did coder do it?"))[0] == 200
+
+    turn_id = await _last_chat_turn(pool)
+    assert turn_id != first
+    assert _guard_spans(await _spans(pool, turn_id)) == []
+    assert await _reply(pool, turn_id) == claim
+    assert await _status(pool, turn_id) == "ok"
+    await chat.drain_background()
+    assert [i["exchange"]["assistant"] for i in memory.ingests] == [claim]
+
+
+async def test_a_claim_about_an_agent_that_never_appeared_here_is_still_corrected(
+    owner_client, pool, mount_peers, root
+):
+    """The exemption is per AGENT, not per conversation: in the very reply
+    where coder (which answered here) is left alone, writer — a name this
+    conversation has never seen run — is contradicted."""
+    await _create(pool, mount_peers)
+    await _create(pool, mount_peers, name="writer")
+    await _set_model(owner_client)
+    mount_peers(gateway=FakeGateway(deltas=("hello",)), memory=FakeMemory())
+    assert (await _say(owner_client, "@coder hi"))[0] == 200
+
+    claim = "coder read the notes. Writer finished the draft."
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(claim),),)), memory=memory)
+    assert (await _say(owner_client, "how is the draft?"))[0] == 200
+
+    turn_id = await _last_chat_turn(pool)
+    ((name, meta),) = _guard_spans(await _spans(pool, turn_id))
+    assert name == "delegation_claim"
+    assert (meta["agent"], meta["backing"]) == ("writer", "none")
+    assert meta["phrase"] in claim
+    correction = guards.DELEGATION_UNBACKED_CORRECTION.format(agent="writer")
+    assert await _reply(pool, turn_id) == f"{claim}\n\n{correction}"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+async def test_a_delegation_refused_before_it_ran_is_not_a_run_that_failed(pool, mount_peers, root):
+    """ "Did not finish" says a child turn ran and ended badly. A delegation
+    refused BEFORE anything ran — an unknown agent, an empty task, an agent
+    trying to delegate — is not that: its facts entry carries no
+    `agent_turn_id`, so the claim is unbacked and gets the unbacked
+    correction. The trace still says a delegation was refused (the span is
+    there, ok False), which is why the wiring has to tell the two apart."""
+    owner = await _owner(pool)
+    await _create(pool, mount_peers)
+    memory = FakeMemory()
+    mount_peers(gateway=ScriptedGateway(rounds=((text(CLAIM),),)), memory=memory)
+    turn = await _open_nova_turn(pool, owner)
+    _refused_delegate_span(turn, "coder", "task is empty — say what coder should do")
+
+    turn, frames = await _nova_turn(pool, owner, "is the kitchen list done?", turn=turn)
+
+    correction = guards.DELEGATION_UNBACKED_CORRECTION.format(agent="coder")
+    assert _guard_spans(await _spans(pool, turn.id)) == [
+        ("delegation_claim", {"agent": "coder", "phrase": CLAIM, "backing": "none"})
+    ]
+    assert _corrections(frames) == [correction]
+    assert await _reply(pool, turn.id) == f"{CLAIM}\n\n{correction}"
+    await chat.drain_background()
+    assert memory.ingests == []

@@ -23,7 +23,17 @@ Cursor paging is activity.py's idiom: newest-first, `before` is the last id of
 the previous page, and a cursor the server does not know is a 404 — never a
 silent restart from the top that would look like paging working when it did
 not.
+
+`agent` (S12) is the NAME of the agent a scheduled row runs as, or null: the
+row stores only agent_id, and the name is read from the agents table for the
+rows about to be returned (one batched query, like last_firing) — derived at
+read time, never a label on the timer that a delete could leave stale. The
+binding surface is `PUT /{id}/agent {agent: name | null}`: the name resolves
+through `agents.by_name` (unknown is a 404 naming the agents that exist), the
+kind rule is the store's own refusal (`timers.bind_agent`, a 400 in its words),
+and the answer is the row as written.
 """
+
 from __future__ import annotations
 
 import uuid
@@ -33,7 +43,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
-from app import db, identity, timers
+from app import agents, db, identity, timers
 from app.identity import Person
 from app.timers import TimerRefused
 
@@ -49,6 +59,12 @@ DEFAULT_PAUSE_REASON = "paused from the Schedules page"
 
 class PauseBody(BaseModel):
     reason: str | None = None
+
+
+class AgentBody(BaseModel):
+    # Required, nullable: null unbinds; a body without the key is a 422, so a
+    # client that forgot the field can never unbind by accident.
+    agent: str | None
 
 
 def _refused(exc: TimerRefused) -> HTTPException:
@@ -81,14 +97,36 @@ async def last_firings(
     return newest
 
 
-async def _timer_json(pool: asyncpg.Pool, row: asyncpg.Record) -> dict:
-    newest = await last_firings(pool, [row["id"]])
-    return {**timers.timer_spec(row), "last_firing": newest[row["id"]]}
+async def agent_names(
+    pool: asyncpg.Pool, agent_ids: Iterable[uuid.UUID | None]
+) -> dict[uuid.UUID, str]:
+    """The name of every agent among `agent_ids` (Nones skipped), one query
+    for the whole page. An id with no row is simply absent — under migration
+    021's ON DELETE RESTRICT that cannot happen, and if it ever did the
+    caller shows a null name beside the id rather than inventing one."""
+    ids = sorted({agent_id for agent_id in agent_ids if agent_id is not None}, key=str)
+    if not ids:
+        return {}
+    rows = await pool.fetch("SELECT id, name FROM agents WHERE id = ANY($1::uuid[])", ids)
+    return {row["id"]: row["name"] for row in rows}
 
 
 async def _timers_json(pool: asyncpg.Pool, rows: list[asyncpg.Record]) -> list[dict]:
     newest = await last_firings(pool, [row["id"] for row in rows])
-    return [{**timers.timer_spec(row), "last_firing": newest[row["id"]]} for row in rows]
+    names = await agent_names(pool, (row["agent_id"] for row in rows))
+    return [
+        {
+            **timers.timer_spec(row),
+            "agent": names.get(row["agent_id"]) if row["agent_id"] is not None else None,
+            "last_firing": newest[row["id"]],
+        }
+        for row in rows
+    ]
+
+
+async def _timer_json(pool: asyncpg.Pool, row: asyncpg.Record) -> dict:
+    (one,) = await _timers_json(pool, [row])
+    return one
 
 
 async def _owned(pool: asyncpg.Pool, person: Person, timer_id: uuid.UUID) -> asyncpg.Record:
@@ -173,13 +211,41 @@ async def resume_timer(
     return await _timer_json(pool, row)
 
 
+@router.put("/{timer_id}/agent")
+async def bind_timer_agent(
+    timer_id: uuid.UUID,
+    body: AgentBody,
+    person: Person = Depends(identity.require_person),
+) -> dict:
+    """Who RUNS this scheduled timer: an agent by name, or null for Nova.
+    The name is resolved against the agents table now (a 404 names what does
+    exist); the kind rule and the write are the store's (timers.bind_agent),
+    and the answer is the row it wrote, with the name read back."""
+    pool = await db.get_pool()
+    await _owned(pool, person, timer_id)
+    agent_id = None
+    if body.agent is not None:
+        name = body.agent.strip()
+        agent = await agents.by_name(pool, name)
+        if agent is None:
+            live = await agents.names(pool)
+            listed = f"the agents are: {', '.join(live)}" if live else "there are no agents"
+            raise HTTPException(status_code=404, detail=f"no agent named {name!r} — {listed}")
+        agent_id = agent.id
+    try:
+        row = await timers.bind_agent(pool, person, timer_id, agent_id)
+    except TimerRefused as exc:
+        raise _refused(exc) from exc
+    return await _timer_json(pool, row)
+
+
 @router.post("/{timer_id}/fire")
 async def fire_timer(
     timer_id: uuid.UUID,
     request: Request,
     person: Person = Depends(identity.require_person),
 ) -> dict:
-    """"Run now": the store makes the row due and runs ONE tick inline, so the
+    """ "Run now": the store makes the row due and runs ONE tick inline, so the
     run goes through the same claim and leaves the same firing row as any
     scheduled one — and that row, read back, is the answer. request.app is the
     FastAPI app a scheduled turn's seams (gateway, memory) hang off."""

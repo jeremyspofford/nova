@@ -1,6 +1,9 @@
 """The tick: a due row is claimed exactly once, every firing is a traced turn,
 delivery is a fact from the device's own frame, and the process's death is
-visible on the row it left running."""
+visible on the row it left running. S12: a scheduled row bound to an agent
+runs the agent's own funnel — its persona, its rounds, its role on the turn —
+and lands in the owner's conversation; a plain row's call is unchanged."""
+
 from __future__ import annotations
 
 import asyncio
@@ -8,16 +11,19 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import asyncpg
 import pytest
 
-from app import chat, db, devices, devices_ws, scheduler, timers, traces
+from app import agents, chat, db, devices, devices_ws, scheduler, timers, tools, traces
 from app.identity import Person
 from app.main import app, lifespan
 from tests.conftest import TEST_DSN, requires_db
 from tests.device_fakes import FakeDevice, FakeWSConn
-from tests.fakes import FakeMemory, Refusal, ScriptedGateway
+from tests.fakes import FakeGateway, FakeMemory, Refusal, ScriptedGateway
+from tests.test_chat_agents import SUBSET
+from tests.test_chat_agents import _create as _create_agent
 
 pytestmark = requires_db
 
@@ -115,7 +121,11 @@ async def _connect(pool, *, name: str) -> tuple[uuid.UUID, FakeDevice, FakeWSCon
     )
     code = await devices.mint_pairing_code(pool, created_by=creator)
     enrolled = await devices.enroll(
-        pool, code=code["code"], pubkey=device.pubkey_hex, name=name, platform="linux",
+        pool,
+        code=code["code"],
+        pubkey=device.pubkey_hex,
+        name=name,
+        platform="linux",
         hostname="host",
     )
     device.device_id = enrolled["device_id"]
@@ -182,7 +192,10 @@ async def test_a_reminder_notifies_every_connected_device_through_the_chats_own_
     await devices.enroll(
         pool,
         code=(await devices.mint_pairing_code(pool, created_by=person.id))["code"],
-        pubkey=FakeDevice().pubkey_hex, name="desktop", platform="linux", hostname="h",
+        pubkey=FakeDevice().pubkey_hex,
+        name="desktop",
+        platform="linux",
+        hostname="h",
     )
     try:
         fired, frame = await asyncio.gather(
@@ -214,7 +227,10 @@ async def test_a_named_device_that_is_offline_is_a_stated_delivery_failure_not_a
     await devices.enroll(
         pool,
         code=(await devices.mint_pairing_code(pool, created_by=person.id))["code"],
-        pubkey=FakeDevice().pubkey_hex, name="desktop", platform="linux", hostname="h",
+        pubkey=FakeDevice().pubkey_hex,
+        name="desktop",
+        platform="linux",
+        hostname="h",
     )
     row = await _reminder(pool, person, conversation, device="desktop")
     await scheduler.tick_once(app, pool, now=LATER)
@@ -263,14 +279,10 @@ async def test_a_reminder_whose_conversation_is_gone_still_reaches_the_devices_a
 
 
 async def _set_model(pool, model: str = MODEL) -> None:
-    await pool.execute(
-        "INSERT INTO settings (key, value) VALUES ('chat.model', $1::jsonb)", model
-    )
+    await pool.execute("INSERT INTO settings (key, value) VALUES ('chat.model', $1::jsonb)", model)
 
 
-async def test_a_due_scheduled_runs_a_real_turn_with_no_user_row_and_no_ingest(
-    pool, mount_peers
-):
+async def test_a_due_scheduled_runs_a_real_turn_with_no_user_row_and_no_ingest(pool, mount_peers):
     person, conversation = await _owner(pool)
     gateway = ScriptedGateway(rounds=((text("Your calendar is empty today."),),))
     memory = FakeMemory()
@@ -337,11 +349,225 @@ async def test_the_scheduled_turn_is_run_turn_called_with_ingest_false(
     await scheduler.tick_once(app, pool, now=row["next_fire_at"] + timedelta(minutes=1))
 
     (call,) = seen
+    # The plain pin (S12 kept it): no persona kwarg at all for a row nobody
+    # bound — a plain firing's call is byte-for-byte what it was.
     assert call["kwargs"] == {"ingest": False}
     _app, _pool, turn, who, conv, _message, history, model, _rounds, _emit = call["args"]
     assert who == person  # the timer's person, which for his timers is the owner
     assert conv == conversation and history == [] and model == MODEL
     assert turn.conversation_id == conversation
+
+
+# -- scheduled, bound to an agent (S12) ---------------------------------------------------
+
+
+@pytest.fixture
+def root(monkeypatch, tmp_path) -> Path:
+    """The WORKSPACE_ROOT agents.create makes agents/<name>/ under."""
+    root = tmp_path / "ws"
+    monkeypatch.setenv("WORKSPACE_ROOT", str(root))
+    return root
+
+
+async def _bound(pool, person, conversation, agent, *, instruction="append the date to log.md"):
+    return await timers.create(
+        pool,
+        person=person,
+        kind="scheduled",
+        title="log the date",
+        payload={"instruction": instruction},
+        spec={"kind": "day", "at": "07:00"},
+        tz=NY,
+        conversation_id=conversation,
+        created_via="chat",
+        agent_id=agent.id,
+    )
+
+
+async def test_an_agent_bound_firing_runs_as_the_agent_and_lands_in_the_owners_chat(
+    pool, mount_peers, root
+):
+    """No chat.model is set, and the firing still runs: the agent's turn
+    names no model and the gateway walks agent_coder's own chain. The turn
+    row says who did the work (agent_id, role) and whose money it is
+    (person_id: the owner); the request carries the agent's subset, its
+    block and its role; recall asks the agent's partition; nothing is
+    ingested; and the reply is one assistant row in the OWNER's conversation."""
+    person, conversation = await _owner(pool)
+    agent = await _create_agent(pool, mount_peers)
+    gateway = FakeGateway(deltas=("logged the date",))
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+    row = await _bound(pool, person, conversation, agent)
+
+    fired = await scheduler.tick_once(app, pool, now=row["next_fire_at"] + timedelta(minutes=1))
+    assert len(fired) == 1
+
+    rows = await pool.fetch(
+        "SELECT role, content, turn_id FROM messages WHERE conversation_id = $1", conversation
+    )
+    assert [(r["role"], r["content"]) for r in rows] == [("assistant", "logged the date")]
+    turn = await pool.fetchrow("SELECT * FROM turns WHERE id = $1", rows[0]["turn_id"])
+    assert turn["kind"] == "scheduled" and turn["status"] == "ok"
+    assert turn["agent_id"] == agent.id and turn["role"] == "agent_coder"
+    assert turn["person_id"] == person.id and turn["conversation_id"] == conversation
+    assert turn["model"] == ""  # no model named: the role's chain decides
+    assert turn["id"] not in traces.INFLIGHT
+
+    # The one completion request: the agent's subset and block, its role, the
+    # owner's id as the payer, the framed instruction, and NO model.
+    (path, payload), headers = next(
+        (seen, h)
+        for seen, h in zip(gateway.seen, gateway.seen_headers, strict=True)
+        if seen[0] == "/v1/chat/completions"
+    )
+    assert "model" not in payload
+    assert payload["tools"] == tools.advertised_tools(SUBSET)
+    assert "You are coder, an agent working for the household" in payload["messages"][0]["content"]
+    user_messages = [m for m in payload["messages"] if m["role"] == "user"]
+    assert len(user_messages) == 1
+    assert user_messages[0]["content"].startswith(
+        "[Scheduled turn — you set this up earlier as 'log the date'"
+    )
+    assert user_messages[0]["content"].endswith("\n\nappend the date to log.md")
+    assert headers["x-nova-role"] == "agent_coder"
+    assert headers["x-nova-person"] == str(person.id)
+    assert headers["x-nova-turn-id"] == str(turn["id"])
+
+    # Memory: the AGENT's partition is recalled (read_shared_memory is off),
+    # and nothing is ingested — a timer's instruction is not something he said.
+    await chat.drain_background()
+    assert [r["person_id"] for r in memory.recalls] == [str(agent.id)]
+    assert memory.ingests == []
+    spans = await _spans(pool, turn["id"])
+    assert {s["kind"] for s in spans} >= {"agent_cap", "memory_recall", "llm_call"}
+    assert "memory_ingest" not in {s["kind"] for s in spans}
+
+    (firing,) = await _firings(pool, row["id"])
+    assert firing["status"] == "ok" and firing["turn_id"] == turn["id"]
+    assert firing["delivery"] == {"chat": {"ok": True}}
+    after = await timers.get(pool, row["id"])
+    assert after["consecutive_failures"] == 0 and after["agent_id"] == agent.id
+
+
+async def test_a_bound_firings_run_turn_call_carries_the_persona_and_the_rows_rounds(
+    pool, mount_peers, monkeypatch, root
+):
+    """The agent case beside the plain pin below: the call differs in exactly
+    the persona kwarg, the agent's Person value, the row's round budget and
+    the empty model — the conversation, the empty history and ingest=False
+    are the same. The shared scope is derived from the row and the OWNER's id
+    (the timer's person), never handed in."""
+    person, conversation = await _owner(pool)
+    agent = await _create_agent(pool, mount_peers, max_tool_rounds=3, read_shared_memory=True)
+    mount_peers(gateway=FakeGateway(deltas=("ok",)), memory=FakeMemory())
+    await _set_model(pool)  # set, and still not named for the agent's turn
+    row = await _bound(pool, person, conversation, agent)
+    seen: list[dict] = []
+    original = chat._run_turn
+
+    async def spy(*args, **kwargs):
+        seen.append({"args": args, "kwargs": kwargs})
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(chat, "_run_turn", spy)
+    await scheduler.tick_once(app, pool, now=row["next_fire_at"] + timedelta(minutes=1))
+
+    (call,) = seen
+    assert set(call["kwargs"]) == {"ingest", "persona"}
+    assert call["kwargs"]["ingest"] is False
+    persona = call["kwargs"]["persona"]
+    assert isinstance(persona, agents.Persona)
+    assert persona.agent is not None and persona.agent.id == agent.id
+    assert persona.tool_names == SUBSET
+    assert persona.shared_person_id == person.id  # the timer's owner, from the row
+    assert persona.workspace_root == agents.folder_for(agent)
+    _app, _pool, turn, who, conv, _message, history, model, rounds, _emit = call["args"]
+    assert who == agent.person() and who.role == agents.AGENT_PERSON_ROLE
+    assert conv == conversation and history == [] and model == ""
+    assert rounds == 3 == agent.max_tool_rounds
+    assert turn.agent_id == agent.id and turn.role == agent.role
+    assert turn.person_id == person.id and turn.conversation_id == conversation
+    (firing,) = await _firings(pool, row["id"])
+    assert firing["status"] == "ok"
+
+
+async def test_a_capped_agents_firing_is_an_error_with_the_cap_statement(pool, mount_peers, root):
+    """The cap is _run_turn's own exit (test_chat_cap): the statement is
+    persisted as the assistant row in the owner's conversation, the turn
+    closes error, no completion is requested — and the firing records
+    FIRING_ERROR with that same statement, read back off the turn."""
+    person, conversation = await _owner(pool)
+    agent = await _create_agent(pool, mount_peers, monthly_cap_usd=20)
+    gateway = FakeGateway(
+        deltas=("must never stream",),
+        spend_body={
+            "window": "month",
+            "timezone": "UTC",
+            "totals": {"usd": 0},
+            "by_role": [{"key": "agent_coder", "local": False, "usd": 21.4, "calls": 3}],
+        },
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+    row = await _bound(pool, person, conversation, agent)
+
+    await scheduler.tick_once(app, pool, now=row["next_fire_at"] + timedelta(minutes=1))
+
+    statement = (
+        "agent coder is over its monthly cap ($21.40 of $20.00 this month) — raise it on the "
+        "Agents page"
+    )
+    (firing,) = await _firings(pool, row["id"])
+    assert firing["status"] == "error"
+    assert firing["reason"] == statement
+    assert firing["delivery"] == {"chat": {"ok": False, "reason": statement}}
+    rows = await pool.fetch(
+        "SELECT role, content FROM messages WHERE conversation_id = $1", conversation
+    )
+    assert [(r["role"], r["content"]) for r in rows] == [("assistant", statement)]
+    assert await pool.fetchval(TURN_STATUS, firing["turn_id"]) == "error"
+    turn = await pool.fetchrow("SELECT agent_id, role FROM turns WHERE id = $1", firing["turn_id"])
+    assert turn["agent_id"] == agent.id and turn["role"] == "agent_coder"
+    # Nothing was spent finding out, and nothing was recalled.
+    assert [path for path, _ in gateway.seen] == ["/admin/spend"]
+    assert memory.recalls == []
+    spans = await _spans(pool, firing["turn_id"])
+    assert [(s["kind"], s["name"]) for s in spans] == [("agent_cap", None)]
+    assert (await timers.get(pool, row["id"]))["consecutive_failures"] == 1
+
+
+async def test_a_bound_agent_that_vanished_is_a_refused_firing_never_novas_turn(
+    pool, mount_peers, monkeypatch, root
+):
+    """Unreachable while migration 021's RESTRICT holds (proved in
+    test_timers_api); stated anyway: the row's agent_id names no agent, so
+    the firing is REFUSED with the reason — never quietly run as Nova with
+    her whole toolset — and its turn is closed rather than left running."""
+    person, conversation = await _owner(pool)
+    agent = await _create_agent(pool, mount_peers)
+    gateway = FakeGateway(deltas=("must never stream",))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await _set_model(pool)
+    row = await _bound(pool, person, conversation, agent)
+
+    async def gone(pool_, agent_id):
+        return None
+
+    monkeypatch.setattr(agents, "by_id", gone)
+    await scheduler.tick_once(app, pool, now=row["next_fire_at"] + timedelta(minutes=1))
+
+    (firing,) = await _firings(pool, row["id"])
+    assert firing["status"] == "refused"
+    assert firing["reason"] == scheduler.AGENT_GONE_REASON
+    assert firing["delivery"]["chat"] == {"ok": False, "reason": scheduler.AGENT_GONE_REASON}
+    assert gateway.seen == []
+    assert await pool.fetchval("SELECT count(*) FROM messages") == 0
+    turn = await pool.fetchrow(
+        "SELECT status, agent_id, role FROM turns WHERE id = $1", firing["turn_id"]
+    )
+    assert turn["status"] == "error" and turn["agent_id"] is None and turn["role"] is None
+    assert (await timers.get(pool, row["id"]))["consecutive_failures"] == 1
 
 
 async def test_run_turn_ingests_by_default(pool, mount_peers, monkeypatch):
@@ -639,12 +865,17 @@ async def test_lifespan_sweeps_seeds_and_runs_the_scheduler_cancelled_before_the
     monkeypatch.setattr(chat, "drain_background", observing_drain)
 
     async with lifespan(app):
-        assert await pool.fetchval(
-            "SELECT status FROM timer_firings WHERE id = $1", orphan
-        ) == "interrupted"
-        assert await pool.fetchval(
-            "SELECT count(*) FROM timers WHERE kind = 'job' AND payload->>'handler' = 'retention'"
-        ) == 1
+        assert (
+            await pool.fetchval("SELECT status FROM timer_firings WHERE id = $1", orphan)
+            == "interrupted"
+        )
+        assert (
+            await pool.fetchval(
+                "SELECT count(*) FROM timers WHERE kind = 'job' "
+                "AND payload->>'handler' = 'retention'"
+            )
+            == 1
+        )
         task = app.state.scheduler_task
         assert isinstance(task, asyncio.Task) and not task.done()
         assert task.get_name() == "scheduler"

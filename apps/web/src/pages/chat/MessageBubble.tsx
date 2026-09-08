@@ -240,7 +240,12 @@ function DelegationLine({ delegation }: { delegation: LiveDelegation }) {
   )
 }
 
-const DELEGATION_CHIP_COLOR = { ok: 'success', error: 'danger', interrupted: 'warning' } as const
+const DELEGATION_CHIP_COLOR = {
+  ok: 'success',
+  error: 'danger',
+  interrupted: 'warning',
+  refused: 'warning',
+} as const
 
 /**
  * A delegation as the ledger recorded it (S12) — what a reloaded page

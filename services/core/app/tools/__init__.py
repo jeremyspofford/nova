@@ -36,6 +36,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from app.tools import (
+    agents,
     devices,
     memory_tools,
     models,
@@ -79,6 +80,9 @@ REGISTRY: dict[str, Tool] = {
         *timers.TOOLS,
         *spend.TOOLS,
         *route.TOOLS,
+        # S12: delegation and agent CRUD (tools/agents.py). Same funnel; the
+        # executors reach app.agents function-locally (see that module).
+        *agents.TOOLS,
     )
 }
 

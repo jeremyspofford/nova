@@ -95,6 +95,39 @@ describe('ActivityPage — the list', () => {
   })
 })
 
+describe('ActivityPage — an agent\'s turn (S12)', () => {
+  it('badges a turn that carries an agent with its name, and says the role it walked on expand', async () => {
+    const api = fakeApi(
+      [[turn({ id: 't1', kind: 'agent', agent: 'coder', role: 'agent_coder' }), turn({ id: 't2', kind: 'chat', agent: null, role: null })]],
+      { t1: detail({ turn: turn({ id: 't1', kind: 'agent', agent: 'coder', role: 'agent_coder' }) }), t2: detail() },
+    )
+    render(<ActivityPage api={api} />)
+    const agentRow = await screen.findByTestId('activity-row-t1')
+    expect(within(agentRow).getByTestId('agent-badge').textContent).toBe('coder')
+    expect(within(agentRow).getByText('agent')).toBeDefined()
+    // Nova's own turn carries no badge — nothing invented for a null agent.
+    expect(within(screen.getByTestId('activity-row-t2')).queryByTestId('agent-badge')).toBeNull()
+
+    fireEvent.click(agentRow)
+    const panel = await screen.findByTestId('activity-detail-t1')
+    expect(within(panel).getByTestId('turn-role').textContent).toContain('agent_coder')
+
+    fireEvent.click(screen.getByTestId('activity-row-t2'))
+    const nova = await screen.findByTestId('activity-detail-t2')
+    expect(within(nova).queryByTestId('turn-role')).toBeNull()
+  })
+
+  it('a row whose agent was deleted since keeps its role but shows no name it cannot back', async () => {
+    const api = fakeApi([[turn({ id: 't1', kind: 'agent', agent: null, role: 'agent_gone' })]], { t1: detail() })
+    render(<ActivityPage api={api} />)
+    const row = await screen.findByTestId('activity-row-t1')
+    expect(within(row).queryByTestId('agent-badge')).toBeNull()
+    fireEvent.click(row)
+    const panel = await screen.findByTestId('activity-detail-t1')
+    expect(within(panel).getByTestId('turn-role').textContent).toContain('agent_gone')
+  })
+})
+
 describe('ActivityPage — load more via the cursor', () => {
   it('fetches the next page using the last row as the cursor, and appends', async () => {
     const page1 = Array.from({ length: 2 }, (_, i) => turn({ id: `a${i}` }))

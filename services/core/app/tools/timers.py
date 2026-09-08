@@ -33,6 +33,7 @@ the Schedules page reads, so her reply and the page cannot disagree about one
 row. list_timers declares RESULT_KIND_LISTING so the presented-listing guard
 learns of it from the registry, never from a name.
 """
+
 from __future__ import annotations
 
 import re
@@ -138,7 +139,7 @@ def _short(timer_id: uuid.UUID) -> str:
 
 
 def _relative_spec(now: datetime, minutes: int, zone: str) -> tuple[dict, str]:
-    """"in N minutes" -> (a `once` at the local wall time N minutes from the
+    """ "in N minutes" -> (a `once` at the local wall time N minutes from the
     database clock, the zone that wall time is computed in), rounded UP to the
     minute so "in 2 minutes" is never one minute and a few seconds. Resolved
     HERE, once; the row holds the instant.
@@ -225,9 +226,7 @@ def _repeat_spec(repeat: Any) -> dict:
         spec = {"kind": every, "at": repeat["at"]}
         if every == "week":
             if "days" not in repeat:
-                raise ToolFailure(
-                    "repeat every=week needs 'days', a list like [\"mon\", \"wed\"]"
-                )
+                raise ToolFailure('repeat every=week needs \'days\', a list like ["mon", "wed"]')
             spec["days"] = repeat["days"]
         if every == "month":
             if "day" not in repeat:
@@ -251,9 +250,7 @@ async def _paired_device_or_refuse(pool: asyncpg.Pool, name: Any) -> None:
         return
     names = [
         r["name"]
-        for r in await pool.fetch(
-            "SELECT name FROM devices WHERE revoked_at IS NULL ORDER BY name"
-        )
+        for r in await pool.fetch("SELECT name FROM devices WHERE revoked_at IS NULL ORDER BY name")
     ]
     if not names:
         raise ToolFailure(
@@ -264,6 +261,20 @@ async def _paired_device_or_refuse(pool: asyncpg.Pool, name: Any) -> None:
         f"no paired device named {name!r} — paired devices are: "
         + ", ".join(repr(n) for n in names)
     )
+
+
+async def _agent_or_refuse(pool: asyncpg.Pool, name: str):
+    """The agent a scheduled turn will run AS, resolved by name against the
+    agents table NOW (agents.by_name) — the row the firing loads by id later.
+    Unknown is refused naming the agents that exist, read live, never a list
+    kept here."""
+    agents = _agents()
+    agent = await agents.by_name(pool, name.strip())
+    if agent is not None:
+        return agent
+    live = await agents.names(pool)
+    listed = f"the agents are: {', '.join(live)}" if live else "there are no agents"
+    raise ToolFailure(f"no agent named {name.strip()!r} — {listed}")
 
 
 def _title(text: str) -> str:
@@ -294,6 +305,20 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
             "device only applies to a reminder — a scheduled turn replies in chat, "
             "it does not notify a device"
         )
+    agent_name = args.get("agent")
+    if agent_name is not None:
+        if not isinstance(agent_name, str) or not agent_name.strip():
+            raise ToolFailure(
+                "agent is empty — name an agent (from list_agents), or omit it to run the "
+                "turn yourself"
+            )
+        if kind != "scheduled":
+            # The store refuses this too (before its CHECK); said here in the
+            # tool's own vocabulary so the model hears it beside `kind`.
+            raise ToolFailure(
+                "only a scheduled turn can be bound to an agent — a reminder is delivered by "
+                "code, not run as a turn"
+            )
 
     given = [name for name in ("in_minutes", "at", "repeat") if name in args]
     if len(given) != 1:
@@ -304,6 +329,7 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
         )
     if device is not None:
         await _paired_device_or_refuse(pool, device)
+    agent = await _agent_or_refuse(pool, agent_name) if agent_name is not None else None
     zone, zone_set = await household_timezone(pool)
     now = await pool.fetchval("SELECT now()")
     tz = zone
@@ -339,6 +365,7 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
             # Provenance would want the turn id; the context does not expose it
             # (see above), so it stays NULL rather than widening ToolContext.
             created_turn_id=None,
+            agent_id=None if agent is None else agent.id,
         )
     except store.TimerRefused as exc:
         raise ToolFailure(exc.reason) from exc
@@ -354,21 +381,48 @@ async def create_timer(args: dict, ctx: ToolContext) -> str:
             f"Reminder set (id {_short(row['id'])}): {row['title']!r} — {words}. "
             f"It will land {where}."
         )
+    # "runs as coder" is said from the row that was WRITTEN (its agent_id),
+    # named through the agent resolved above — never from the argument alone.
+    who = "Its" if row["agent_id"] is None else f"It runs as {agent.name}; its"
     return (
         f"Scheduled turn set (id {_short(row['id'])}): {row['title']!r} — {words}. "
-        f"Its reply will land in this chat."
+        f"{who} reply will land in this chat."
     )
 
 
 # -- list_timers ------------------------------------------------------------------
 
 
-def _line(row: asyncpg.Record) -> str:
+def _line(row: asyncpg.Record, runs_as: dict[uuid.UUID, str] | None = None) -> str:
+    """One listing line. `runs_as` is the agent name per agent_id, read from
+    the agents table by the caller (_agent_names); when it is given, a bound
+    row says who runs it. None (the agent's own bound listing, cancel's
+    candidates) states nothing about the binding rather than guessing."""
     spec = _store().timer_spec(row)
     line = f"- {_short(row['id'])} {row['kind']} {row['title']!r}: {spec['schedule_words']}"
+    if runs_as is not None and row["agent_id"] is not None:
+        name = runs_as.get(row["agent_id"])
+        # A bound id with no agents row cannot happen under migration 021's
+        # RESTRICT; if it ever did, the line says so instead of dropping it.
+        line += (
+            f" — runs as {name}"
+            if name is not None
+            else f" — runs as an agent that no longer exists ({_short(row['agent_id'])})"
+        )
     if row["paused_at"] is not None:
         line += f" — PAUSED: {row['paused_reason']}"
     return line
+
+
+async def _agent_names(pool: asyncpg.Pool, rows: list[asyncpg.Record]) -> dict[uuid.UUID, str]:
+    """The name of every agent the rows are bound to, in one query, read live
+    from the agents table — the listing's "runs as coder" is what the table
+    says now, never a label stored on the timer."""
+    ids = sorted({r["agent_id"] for r in rows if r["agent_id"] is not None}, key=str)
+    if not ids:
+        return {}
+    found = await pool.fetch("SELECT id, name FROM agents WHERE id = ANY($1::uuid[])", ids)
+    return {r["id"]: r["name"] for r in found}
 
 
 async def _visible(pool: asyncpg.Pool, person: Person) -> tuple[list[asyncpg.Record], int]:
@@ -411,11 +465,12 @@ async def list_timers(args: dict, ctx: ToolContext) -> str:
         return "No timers: nothing is scheduled and no reminder is set."
     own = [r for r in rows if r["kind"] != "job"]
     jobs = [r for r in rows if r["kind"] == "job"]
+    runs_as = await _agent_names(pool, own)
     lines: list[str] = []
     if own:
         noun = "timer" if len(own) == 1 else "timers"
         lines.append(f"{len(own)} {noun} of yours (id, kind, title, schedule):")
-        lines.extend(_line(r) for r in own)
+        lines.extend(_line(r, runs_as) for r in own)
     else:
         lines.append("No reminders or scheduled turns of yours.")
     if jobs:
@@ -475,9 +530,7 @@ async def cancel_timer(args: dict, ctx: ToolContext) -> str:
         raise ToolFailure(f"no timer of yours matches {key!r} — yours are: {listed}")
     if len(candidates) > 1:
         listed = "\n".join(_line(r) for r in candidates)
-        raise ToolFailure(
-            f"{key!r} matches {len(candidates)} timers — say which by id:\n{listed}"
-        )
+        raise ToolFailure(f"{key!r} matches {len(candidates)} timers — say which by id:\n{listed}")
     row = candidates[0]
     try:
         await store.delete(pool, row["id"])
@@ -507,8 +560,10 @@ TOOLS: tuple[Tool, ...] = (
             "in_minutes (relative: 'in 20 minutes'), at (an absolute local time) or repeat "
             "(recurring). A reminder delivers `text` verbatim into this chat and as a desktop "
             "notification; a scheduled timer runs `text` as an instruction for you at that "
-            "time and replies in this chat. Absolute and repeating times use the household "
-            "timezone (Settings → General); relative reminders need none."
+            "time and replies in this chat — or, with `agent`, as that agent (its tools, "
+            "its folder, its cap), still replying in this chat. Absolute and repeating "
+            "times use the household timezone (Settings → General); relative reminders "
+            "need none."
         ),
         parameters=_obj(
             {
@@ -556,6 +611,13 @@ TOOLS: tuple[Tool, ...] = (
                         "notify every connected paired device."
                     ),
                 },
+                "agent": {
+                    "type": "string",
+                    "description": (
+                        "Scheduled only: the agent (by name, as list_agents shows it) the "
+                        "turn runs as. Omit to run it yourself."
+                    ),
+                },
             },
             ["text"],
         ),
@@ -565,8 +627,9 @@ TOOLS: tuple[Tool, ...] = (
         name="list_timers",
         description=(
             "List this person's reminders and scheduled turns (and the system's housekeeping "
-            "jobs): id, kind, title, when each next fires, and whether it is paused. An agent "
-            "sees the scheduled turns bound to run as it. Takes no arguments."
+            "jobs): id, kind, title, when each next fires, which agent runs it (if any), and "
+            "whether it is paused. An agent sees the scheduled turns bound to run as it. "
+            "Takes no arguments."
         ),
         parameters=_obj({}, []),
         executor=list_timers,

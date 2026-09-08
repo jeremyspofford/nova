@@ -14,6 +14,7 @@ the guard derives from is proven here too: the SAME text flips verdict on a
 declared listing tool's span, on a span whose result is listing-SHAPED, and on
 the user having pasted it.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -195,9 +196,7 @@ LOOSE_MUST_NOT_BACK = [
 ]
 
 
-@pytest.mark.parametrize(
-    "label,head", LOOSE_MUST_NOT_BACK, ids=[c[0] for c in LOOSE_MUST_NOT_BACK]
-)
+@pytest.mark.parametrize("label,head", LOOSE_MUST_NOT_BACK, ids=[c[0] for c in LOOSE_MUST_NOT_BACK])
 def test_a_bare_word_run_in_a_page_or_file_backs_nothing(label, head):
     assert not guards.is_listing(head, strict=False), label
     for name in ("fetch_url", "workspace_read_file"):
@@ -292,7 +291,14 @@ def test_every_registry_tool_named_list_declares_the_listing_kind():
     # (S10a-3's model_catalog_search) declares the kind too, and that is
     # the point of reading the declaration rather than the name.
     assert set(named_list) <= set(LISTING_TOOLS)
-    assert set(LISTING_TOOLS) - set(named_list) == {"model_catalog_search"}
+    # S12 (2026-09-08) added the second such tool: delegate_to_agent's result
+    # enumerates the files the agent actually wrote (derived from its write
+    # spans, never from its report), so Nova relaying that list is presenting
+    # a BACKED listing and the guard must not correct her for it.
+    assert set(LISTING_TOOLS) - set(named_list) == {
+        "model_catalog_search",
+        "delegate_to_agent",
+    }
 
 
 # Review item 6: the paste exemption is by WHOLE token (or basename), the same
@@ -403,13 +409,11 @@ MUST_NOT_FIRE = [
     # first entry must not hide the plan marker.
     (
         "proposed_layout_fence_and_root",
-        "Proposed layout:\n```\nmyapp/\n├── src/\n│   └── main.py\n├── tests/\n"
-        "└── README.md\n```",
+        "Proposed layout:\n```\nmyapp/\n├── src/\n│   └── main.py\n├── tests/\n└── README.md\n```",
     ),
     (
         "typical_layout_fence_and_root",
-        "A typical FastAPI layout:\n```\napp/\n├── main.py\n├── routers/\n"
-        "└── models.py\n```",
+        "A typical FastAPI layout:\n```\napp/\n├── main.py\n├── routers/\n└── models.py\n```",
     ),
     (
         "plan_two_lines_back",
@@ -464,9 +468,9 @@ MUST_NOT_FIRE = [
 
 @pytest.mark.parametrize("label,reply", MUST_NOT_FIRE, ids=[c[0] for c in MUST_NOT_FIRE])
 def test_must_not_fire_on_replies_that_present_no_listing(label, reply):
-    assert (
-        check(reply) is None
-    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    assert check(reply) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
 
 
 # The misses this precision buys, pinned so they are a CHOICE and not a

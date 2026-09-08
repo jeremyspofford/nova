@@ -1,5 +1,5 @@
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
-import { Activity, Boxes, CalendarClock, ChevronsLeft, ChevronsRight, Coins, FolderOpen, Gauge, MessageSquare, ScrollText, Settings } from 'lucide-react'
+import { Activity, Bot, Boxes, CalendarClock, ChevronsLeft, ChevronsRight, Coins, FolderOpen, Gauge, MessageSquare, ScrollText, Settings } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -35,6 +35,10 @@ export const navSections: NavSection[] = [
       { to: '/quality', label: 'AI Quality', icon: Gauge, minRole: 'admin' },
       { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },
       { to: '/schedules', label: 'Schedules', icon: CalendarClock, minRole: 'admin' },
+      // S12: the agents the household runs — between what fires and what
+      // was written, since an agent is what the one does and what the other
+      // shows.
+      { to: '/agents', label: 'Agents', icon: Bot, minRole: 'admin' },
       { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
       { to: '/models', label: 'Models', icon: Boxes, minRole: 'admin' },
       { to: '/spend', label: 'Spend', icon: Coins, minRole: 'admin' },

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 
+import asyncpg
 import pytest
 from httpx import ASGITransport, AsyncClient
 
@@ -24,9 +25,15 @@ NY = "America/New_York"
 # Created for 2031 — create refuses a past once against the DB clock, and the
 # API's fire route makes the row due itself, so nothing here waits.
 FUTURE_ONCE = {"kind": "once", "at": "2031-06-01T09:00"}
+# 2026-09-08 (S12-4): the row gained `agent_id` (timers.agent_id, migration
+# 021 — who RUNS a scheduled row, null for Nova) and the API row `agent` (that
+# agent's NAME, read from the agents table at request time, never stored on
+# the timer). Fifteen keys became seventeen.
 ROW_KEYS = {
     "id",
     "kind",
+    "agent_id",
+    "agent",
     "title",
     "payload",
     "schedule",
@@ -135,6 +142,8 @@ async def test_every_route_needs_an_identity(client):
     assert (await client.post(f"/api/v1/timers/{tid}/resume")).status_code == 401
     assert (await client.post(f"/api/v1/timers/{tid}/fire")).status_code == 401
     assert (await client.delete(f"/api/v1/timers/{tid}")).status_code == 401
+    bind = await client.put(f"/api/v1/timers/{tid}/agent", json={"agent": None})
+    assert bind.status_code == 401
 
 
 async def test_a_row_is_the_stores_spec_plus_last_firing_null_before_any_firing(owner_client, pool):
@@ -157,6 +166,7 @@ async def test_a_row_is_the_stores_spec_plus_last_firing_null_before_any_firing(
     assert listed["consecutive_failures"] == 0
     assert listed["created_via"] == "chat"
     assert listed["last_firing"] is None  # never fired: null, not an invented outcome
+    assert listed["agent_id"] is None and listed["agent"] is None  # Nova runs it
 
 
 async def test_an_empty_list_is_empty(owner_client):
@@ -568,3 +578,214 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
         "agent",
         "delegations",
     }
+
+
+# -- runs as: agent_id on the row, the agent's NAME derived, PUT /agent ----------------
+
+
+async def _agent_row(pool, name: str = "coder") -> uuid.UUID:
+    """A minimal agents row (migration 021) — the binding target. Nothing
+    here needs the gateway route or the folder, so no agents.create."""
+    return await pool.fetchval(
+        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
+        "VALUES ($1, 'writes code', 'be terse', ARRAY['get_time'], 5, 'page') RETURNING id",
+        name,
+    )
+
+
+async def _scheduled(pool, person, conversation, *, title="nightly review", agent_id=None):
+    return await timers.create(
+        pool,
+        person=person,
+        kind="scheduled",
+        title=title,
+        payload={"instruction": "review the day's commits"},
+        spec={"kind": "day", "at": "07:00"},
+        tz=NY,
+        conversation_id=conversation,
+        created_via="chat",
+        agent_id=agent_id,
+    )
+
+
+async def test_the_store_round_trips_agent_id_and_refuses_binding_a_non_scheduled_row(
+    owner_client, pool
+):
+    """create(agent_id=) writes the column and every store read carries it
+    back (one projection, _COLUMNS); a reminder with an agent is refused in
+    the store's words BEFORE the CHECK constraint would name itself; an id
+    naming no agent is a stated 404, not a constraint dump; and the RESTRICT
+    is real — the agent cannot be deleted from under a bound row."""
+    person, conversation = await _owner(pool)
+    coder = await _agent_row(pool)
+
+    row = await _scheduled(pool, person, conversation, agent_id=coder)
+    assert row["agent_id"] == coder
+    assert (await timers.get(pool, row["id"]))["agent_id"] == coder
+    assert (await timers.owned(pool, person, row["id"]))["agent_id"] == coder
+    (listed,) = await timers.list_for(pool, person)
+    assert listed["agent_id"] == coder
+    assert [r["id"] for r in await timers.list_bound(pool, coder)] == [row["id"]]
+    paused = await timers.pause(pool, row["id"], reason="hold")
+    assert paused["agent_id"] == coder  # the RETURNING projection carries it too
+    assert timers.timer_spec(paused)["agent_id"] == str(coder)
+
+    with pytest.raises(timers.TimerRefused) as refused:
+        await timers.create(
+            pool,
+            person=person,
+            kind="reminder",
+            title="stretch",
+            payload={"message": "stretch", "device": None},
+            spec=FUTURE_ONCE,
+            tz=NY,
+            conversation_id=conversation,
+            created_via="chat",
+            agent_id=coder,
+        )
+    assert refused.value.reason == (
+        "only a scheduled turn can be bound to an agent — this is a reminder"
+    )
+    assert refused.value.status_code == 400
+    assert await pool.fetchval("SELECT count(*) FROM timers WHERE kind = 'reminder'") == 0
+
+    ghost = uuid.uuid4()
+    with pytest.raises(timers.TimerRefused) as refused:
+        await _scheduled(pool, person, conversation, title="ghost", agent_id=ghost)
+    assert refused.value.status_code == 404
+    assert refused.value.reason.startswith(f"no agent with id {ghost} exists")
+    assert await pool.fetchval("SELECT count(*) FROM timers WHERE title = 'ghost'") == 0
+
+    # Migration 021's ON DELETE RESTRICT: a bound agent cannot simply vanish.
+    with pytest.raises(asyncpg.ForeignKeyViolationError):
+        await pool.execute("DELETE FROM agents WHERE id = $1", coder)
+
+
+async def test_bind_agent_binds_unbinds_and_refuses_in_words(owner_client, pool):
+    person, conversation = await _owner(pool)
+    stranger, theirs = await _stranger(pool)
+    coder = await _agent_row(pool)
+    row = await _scheduled(pool, person, conversation)
+    assert row["agent_id"] is None
+
+    bound = await timers.bind_agent(pool, person, row["id"], coder)
+    assert bound["agent_id"] == coder
+    assert set(bound.keys()) == set(row.keys())  # the same projection as every read
+    assert (await timers.get(pool, row["id"]))["agent_id"] == coder
+    unbound = await timers.bind_agent(pool, person, row["id"], None)
+    assert unbound["agent_id"] is None
+    assert (await timers.get(pool, row["id"]))["agent_id"] is None
+
+    # Not a scheduled turn: the store's words, before postgres's CHECK.
+    reminder = await _reminder(pool, person, conversation)
+    with pytest.raises(timers.TimerRefused) as refused:
+        await timers.bind_agent(pool, person, reminder["id"], coder)
+    assert refused.value.status_code == 400
+    assert refused.value.reason == (
+        "only a scheduled turn can be bound to an agent — this is a reminder"
+    )
+    assert await timers.ensure_jobs(pool) == ["retention"]
+    job_id = await pool.fetchval("SELECT id FROM timers WHERE kind = 'job'")
+    with pytest.raises(timers.TimerRefused) as refused:
+        await timers.bind_agent(pool, person, job_id, coder)
+    assert refused.value.reason == "only a scheduled turn can be bound to an agent — this is a job"
+
+    # Someone else's, or nobody's: not found, never forbidden (owned's rule).
+    foreign = await _scheduled(pool, stranger, theirs, title="theirs")
+    for tid in (foreign["id"], uuid.uuid4()):
+        with pytest.raises(timers.TimerRefused) as refused:
+            await timers.bind_agent(pool, person, tid, coder)
+        assert refused.value.status_code == 404
+        assert refused.value.reason == f"no timer {tid} here"
+    assert (await timers.get(pool, foreign["id"]))["agent_id"] is None
+
+    # An agent id that names no row: the foreign key, worded.
+    ghost = uuid.uuid4()
+    with pytest.raises(timers.TimerRefused) as refused:
+        await timers.bind_agent(pool, person, row["id"], ghost)
+    assert refused.value.status_code == 404
+    assert refused.value.reason.startswith(f"no agent with id {ghost} exists")
+    assert (await timers.get(pool, row["id"]))["agent_id"] is None
+    assert (await timers.get(pool, reminder["id"]))["agent_id"] is None
+
+
+async def test_put_agent_binds_by_name_and_the_row_names_who_runs_it(owner_client, pool):
+    person, conversation = await _owner(pool)
+    coder = await _agent_row(pool)
+    row = await _scheduled(pool, person, conversation)
+
+    resp = await owner_client.put(f"/api/v1/timers/{row['id']}/agent", json={"agent": "coder"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == ROW_KEYS
+    assert body["agent"] == "coder" and body["agent_id"] == str(coder)
+    assert body["id"] == str(row["id"]) and body["kind"] == "scheduled"
+    # The answer is the row as written: the column says so.
+    assert await pool.fetchval("SELECT agent_id FROM timers WHERE id = $1", row["id"]) == coder
+    (listed,) = (await owner_client.get("/api/v1/timers")).json()["timers"]
+    assert listed["agent"] == "coder" and listed["agent_id"] == str(coder)
+
+    # The name is DERIVED at read time from the agents table, never stored on
+    # the timer: rename the agent and the row follows without a write.
+    await pool.execute("UPDATE agents SET name = 'reviewer' WHERE id = $1", coder)
+    (listed,) = (await owner_client.get("/api/v1/timers")).json()["timers"]
+    assert listed["agent"] == "reviewer" and listed["agent_id"] == str(coder)
+    columns = {
+        r["column_name"]
+        for r in await pool.fetch(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = 'timers'"
+        )
+    }
+    assert "agent_id" in columns and "agent" not in columns
+
+    # null unbinds; the row is Nova's again.
+    resp = await owner_client.put(f"/api/v1/timers/{row['id']}/agent", json={"agent": None})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["agent"] is None and resp.json()["agent_id"] is None
+    assert await pool.fetchval("SELECT agent_id FROM timers WHERE id = $1", row["id"]) is None
+
+    # A body without the key is a 422 — never an accidental unbind.
+    resp = await owner_client.put(f"/api/v1/timers/{row['id']}/agent", json={})
+    assert resp.status_code == 422
+
+
+async def test_put_agent_refusals_name_the_agents_the_kind_and_the_owner(owner_client, pool):
+    person, conversation = await _owner(pool)
+    stranger, theirs = await _stranger(pool)
+    coder = await _agent_row(pool)
+    row = await _scheduled(pool, person, conversation)
+    reminder = await _reminder(pool, person, conversation)
+    foreign = await _scheduled(pool, stranger, theirs, title="theirs")
+    assert await timers.ensure_jobs(pool) == ["retention"]
+    job_id = await pool.fetchval("SELECT id FROM timers WHERE kind = 'job'")
+
+    # An unknown name: 404, naming what exists (read live).
+    resp = await owner_client.put(f"/api/v1/timers/{row['id']}/agent", json={"agent": "nobody"})
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "no agent named 'nobody' — the agents are: coder"
+
+    # Not a scheduled turn: the store's 400, in its words.
+    resp = await owner_client.put(f"/api/v1/timers/{reminder['id']}/agent", json={"agent": "coder"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == (
+        "only a scheduled turn can be bound to an agent — this is a reminder"
+    )
+    resp = await owner_client.put(f"/api/v1/timers/{job_id}/agent", json={"agent": "coder"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "only a scheduled turn can be bound to an agent — this is a job"
+
+    # Someone else's timer is not found, never forbidden — and untouched.
+    resp = await owner_client.put(f"/api/v1/timers/{foreign['id']}/agent", json={"agent": "coder"})
+    assert resp.status_code == 404
+    assert resp.json()["error"] == f"no timer {foreign['id']} here"
+    resp = await owner_client.put(f"/api/v1/timers/{uuid.uuid4()}/agent", json={"agent": "coder"})
+    assert resp.status_code == 404
+
+    # Nothing above bound anything.
+    assert await pool.fetchval("SELECT count(*) FROM timers WHERE agent_id IS NOT NULL") == 0
+
+    # With no agents at all, the 404 says so instead of listing nothing.
+    await pool.execute("DELETE FROM agents WHERE id = $1", coder)
+    resp = await owner_client.put(f"/api/v1/timers/{row['id']}/agent", json={"agent": "coder"})
+    assert resp.status_code == 404
+    assert resp.json()["error"] == "no agent named 'coder' — there are no agents"

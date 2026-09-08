@@ -119,6 +119,16 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "create_timer",
         "list_timers",
         "cancel_timer",
+        # S12-3 (2026-09-08): her agent tools (tools/agents.py) — a delegation
+        # that runs an agent's turn to completion inside hers, and the four
+        # over the page's one writer (create/update/delete/list). TWENTY-SIX
+        # -> THIRTY-ONE. Same funnel, no row anywhere to run: an agent is hers
+        # to make and to hand work to the moment the module is in REGISTRY.
+        "delegate_to_agent",
+        "create_agent",
+        "update_agent",
+        "delete_agent",
+        "list_agents",
     }
 
 

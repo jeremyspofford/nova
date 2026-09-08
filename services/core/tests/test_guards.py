@@ -1694,34 +1694,49 @@ def test_price_talk_and_the_users_own_figures_are_not_spend_claims():
 
 # -- the delegation-claim guard (S12): an agent credited with work that never ran --
 #
-# guards.delegation_claim_check(reply, spans, agent_names) is pure and
-# precision-first, the third-person mirror of narration_check: "coder wrote
-# hello.py" is invisible to the first-person walk-back, and S12 gives her a
-# roster of named agents to say exactly that about. Backing is a successful
+# guards.delegation_claim_check(reply, spans, agent_names, self_name=None) is
+# pure and precision-first, the third-person mirror of narration_check: "coder
+# wrote hello.py" is invisible to the first-person walk-back, and S12 gives her
+# a roster of named agents to say exactly that about. Backing is a successful
 # delegate_to_agent span for that agent THIS turn, read from meta.facts[].agent
-# or args_redacted.agent. As everywhere in this file, the must-NOT-fire cases
-# carry as much weight as the fabrications.
+# or args_redacted.agent; a FAILED span counts as a run only when its facts
+# carry an agent_turn_id, because a delegation refused before any child turn
+# opened ran nothing at all. On an AGENT's own turn `self_name` names the
+# speaker: its claims about itself are narration (any successful tool span
+# backs them), and its claims about others must not promise a delegation it
+# cannot make. As everywhere in this file, the must-NOT-fire cases carry as
+# much weight as the fabrications.
 
 AGENTS = ["coder", "reviewer"]
 
 
-def delegate_span(agent: str, *, ok: bool = True, via: str = "both", refused: bool = False):
+def delegate_span(
+    agent: str,
+    *,
+    ok: bool = True,
+    via: str = "both",
+    refused: bool = False,
+    ran: bool = True,
+):
     """A delegate_to_agent span as chat._run_tool records it: the executor's
     facts on success AND failure, the call's own argument redacted. `via`
-    picks which of the two carries the agent name."""
+    picks which of the two carries the agent name. `ran` says whether a CHILD
+    TURN actually opened — agents.run_facts.as_facts carries its agent_turn_id
+    only then, and that field is what tells a failed RUN from a call that
+    never reached an agent (see refused_facts_span)."""
     meta: dict = {"ok": ok, "args_redacted": {"task": "write hello.py"}}
     if via in ("facts", "both"):
-        meta["facts"] = [
-            {
-                "agent": agent,
-                "agent_turn_id": "9c0e4a7e-0000-4000-8000-000000000001",
-                "status": "ok" if ok else "error",
-                "files": ["hello.py"] if ok else [],
-                "rounds": 2,
-                "calls_ok": 1,
-                "calls_failed": 0 if ok else 1,
-            }
-        ]
+        fact: dict = {
+            "agent": agent,
+            "status": "ok" if ok else "error",
+            "files": ["hello.py"] if ok else [],
+            "rounds": 2,
+            "calls_ok": 1,
+            "calls_failed": 0 if ok else 1,
+        }
+        if ran:
+            fact["agent_turn_id"] = "9c0e4a7e-0000-4000-8000-000000000001"
+        meta["facts"] = [fact]
     if via in ("args", "both"):
         meta["args_redacted"]["agent"] = agent
     if refused:
@@ -1729,8 +1744,28 @@ def delegate_span(agent: str, *, ok: bool = True, via: str = "both", refused: bo
     return SimpleNamespace(kind="tool", name="delegate_to_agent", meta=meta)
 
 
+def refused_facts_span(agent: str, reason: str = "there is no agent named that"):
+    """The span a delegation REFUSED BEFORE ANY RUN leaves: the tool failed, and
+    agents.delegation_refused filed {agent, status 'refused', reason} on the
+    facts sink — no agent_turn_id, because no child turn ever opened. Unknown
+    agent, empty task and 'an agent cannot delegate' all write this shape."""
+    return SimpleNamespace(
+        kind="tool",
+        name="delegate_to_agent",
+        meta={
+            "ok": False,
+            "args_redacted": {"agent": agent, "task": "write hello.py"},
+            "facts": [{"agent": agent, "status": "refused", "reason": reason}],
+        },
+    )
+
+
 def unbacked_text(agent: str) -> str:
     return guards.DELEGATION_UNBACKED_CORRECTION.format(agent=agent)
+
+
+def agent_turn_unbacked_text(agent: str) -> str:
+    return guards.DELEGATION_UNBACKED_CORRECTION_AGENT.format(agent=agent)
 
 
 def failed_text(agent: str) -> str:
@@ -1813,6 +1848,55 @@ def test_an_acknowledged_failure_is_an_honest_report_not_a_completion_claim():
 def test_a_refused_delegate_call_is_not_an_attempt():
     claim = guards.delegation_claim_check(
         "coder wrote hello.py.", [delegate_span("coder", ok=False, refused=True)], AGENTS
+    )
+    assert claim is not None and claim.backing == "none"
+
+
+# -- a failed CALL is only a failed RUN when a child turn opened (2026-09-08) --
+#
+# The pin moved here on 2026-09-08: before, ANY non-refused delegate span with
+# ok False read as "failed", so a delegation refused BEFORE any run (unknown
+# agent, empty task, an agent reaching for delegation) made the guard say
+# "{agent} did not finish that task (its run ended in an error)" about a task
+# no agent ever received — the guard fabricating in its own correction, the
+# worst failure a guard can have. The marker is agent_turn_id: the executor
+# writes it only once a child turn exists.
+
+
+def test_a_failed_call_that_opened_no_child_turn_is_not_a_failed_run():
+    """No agent_turn_id on the facts entry -> nothing ran -> backing 'none'."""
+    claim = guards.delegation_claim_check(
+        "coder wrote hello.py.", [delegate_span("coder", ok=False, ran=False)], AGENTS
+    )
+    assert claim is not None
+    assert claim.agent == "coder"
+    assert claim.backing == "none"
+    assert claim.text == unbacked_text("coder")
+
+
+def test_a_failed_run_with_a_child_turn_behind_it_is_a_failure():
+    """The same span WITH an agent_turn_id: a run really happened and errored."""
+    claim = guards.delegation_claim_check(
+        "coder wrote hello.py.", [delegate_span("coder", ok=False, ran=True)], AGENTS
+    )
+    assert claim is not None
+    assert claim.backing == "failed"
+    assert claim.text == failed_text("coder")
+
+
+def test_a_refused_facts_entry_reads_as_nothing_ran():
+    """agents.delegation_refused's shape — {agent, status 'refused', reason} —
+    is a refusal on the trace, never a run that failed."""
+    claim = guards.delegation_claim_check(
+        "coder wrote hello.py.", [refused_facts_span("coder")], AGENTS
+    )
+    assert claim is not None
+    assert claim.backing == "none"
+    assert claim.text == unbacked_text("coder")
+    # And the honest-failure exemption does not rescue it either: with nothing
+    # run, "coder ran but hit an error" is still a fabrication.
+    claim = guards.delegation_claim_check(
+        "coder ran but hit an error.", [refused_facts_span("coder")], AGENTS
     )
     assert claim is not None and claim.backing == "none"
 
@@ -1921,12 +2005,20 @@ def test_the_canonical_roster_name_is_used_never_the_replys_casing():
 
 def test_the_guard_is_clean_over_its_own_corrections():
     for agent in AGENTS:
-        for text in (unbacked_text(agent), failed_text(agent)):
+        for text in (
+            unbacked_text(agent),
+            failed_text(agent),
+            agent_turn_unbacked_text(agent),
+            guards.DELEGATION_SELF_CORRECTION,
+        ):
             assert guards.delegation_claim_check(text, [], AGENTS) is None, text
             assert (
                 guards.delegation_claim_check(text, [delegate_span(agent, ok=False)], AGENTS)
                 is None
             )
+            # And on an agent's own turn, where the speaker's own name is read
+            # by narration's rule with no tool span at all behind it.
+            assert guards.delegation_claim_check(text, [], AGENTS, self_name="coder") is None, text
     # Appended after the reply that earned it, the correction adds no second claim.
     reply = "coder wrote hello.py. " + unbacked_text("coder")
     claim = guards.delegation_claim_check(reply, [], AGENTS)
@@ -1947,9 +2039,92 @@ def test_two_agents_one_backed_flags_only_the_unbacked_one():
     assert guards.delegation_claim_check(reply, both, AGENTS) is None
 
 
+# -- the agent's OWN turn: self_name (2026-09-08) ---------------------------
+#
+# An agent cannot delegate (tools/agents.py refuses), so on its own turn no
+# delegate span will ever back "coder wrote hello.py" — and reading that as a
+# delegation would append "I did not hand anything to coder", nonsense from
+# coder's own mouth. A claim about the speaker is NARRATION wearing a name:
+# any successful tool span this turn backs it. A claim about ANOTHER agent
+# stays a delegation claim, but its correction cannot end "Tell me again and
+# I'll delegate it" — that is a promise the tool refuses.
+
+
+def test_a_self_claim_with_nothing_run_takes_the_first_person_correction():
+    claim = guards.delegation_claim_check(
+        "coder wrote hello.py.", [other_span()], AGENTS, self_name="coder"
+    )
+    assert claim is not None
+    assert claim.agent == "coder"
+    assert claim.backing == "none"
+    assert claim.text == guards.DELEGATION_SELF_CORRECTION
+
+
+def test_a_self_claim_is_backed_by_any_successful_tool_span():
+    """Narration's rule: the speaker really did something this turn."""
+    for span in (
+        tool_span("workspace_write_file", path="hello.py"),
+        tool_span("workspace_read_file", path="notes.md"),
+        tool_span("fetch_url", url="https://example.test/x"),
+    ):
+        assert (
+            guards.delegation_claim_check(
+                "coder wrote hello.py.", [span], AGENTS, self_name="coder"
+            )
+            is None
+        ), span.name
+    # A FAILED tool span is not a run that happened.
+    claim = guards.delegation_claim_check(
+        "coder wrote hello.py.",
+        [tool_span("workspace_write_file", ok=False, path="hello.py")],
+        AGENTS,
+        self_name="coder",
+    )
+    assert claim is not None and claim.text == guards.DELEGATION_SELF_CORRECTION
+
+
+def test_the_speaker_is_matched_whatever_the_casing_and_without_the_roster():
+    """self_name carries the speaker; the roster is not what makes it readable."""
+    claim = guards.delegation_claim_check(
+        "Coder wrote hello.py.", [other_span()], AGENTS, self_name="CODER"
+    )
+    assert claim is not None and claim.text == guards.DELEGATION_SELF_CORRECTION
+    # Even with the name absent from the roster the self-claim is still read.
+    claim = guards.delegation_claim_check(
+        "writer wrote hello.py.", [other_span()], AGENTS, self_name="writer"
+    )
+    assert claim is not None
+    assert claim.agent == "writer" and claim.text == guards.DELEGATION_SELF_CORRECTION
+
+
+def test_on_an_agent_turn_a_claim_about_another_agent_points_at_nova():
+    claim = guards.delegation_claim_check(
+        "reviewer checked hello.py.", [other_span()], AGENTS, self_name="coder"
+    )
+    assert claim is not None
+    assert claim.agent == "reviewer"
+    assert claim.backing == "none"
+    assert claim.text == agent_turn_unbacked_text("reviewer")
+    # The promise Nova can make ("I'll delegate it") is exactly what an agent
+    # must not make: it points at Nova instead.
+    assert claim.text.endswith("Ask Nova to delegate it.")
+    assert "I'll delegate it" not in claim.text
+
+
+def test_on_novas_turn_the_texts_are_unchanged():
+    """No self_name -> the Nova wording, byte for byte."""
+    claim = guards.delegation_claim_check("coder wrote hello.py.", [other_span()], AGENTS)
+    assert claim is not None and claim.text == unbacked_text("coder")
+    assert claim.text.endswith("Tell me again and I'll delegate it.")
+
+
 def test_the_correction_text_helper_refuses_an_unknown_backing():
     with pytest.raises(ValueError):
         guards.delegation_correction_text("coder", "ok")
+    # A self-claim is backed or it is not — "failed" would describe a
+    # delegation that never existed, so the helper refuses rather than guess.
+    with pytest.raises(ValueError):
+        guards.delegation_correction_text("coder", "failed", self=True)
 
 
 def test_the_delegation_guard_is_pure_same_inputs_same_verdict():
@@ -1976,3 +2151,5 @@ def test_the_delegation_guard_is_pure_same_inputs_same_verdict():
 def test_the_delegation_matcher_never_raises_on_odd_input(reply):
     guards.delegation_claim_check(reply, [other_span(), delegate_span("coder", ok=False)], AGENTS)
     guards.delegation_claim_check(reply, [], AGENTS)
+    guards.delegation_claim_check(reply, [refused_facts_span("coder")], AGENTS, self_name="coder")
+    guards.delegation_claim_check(reply, [], [], self_name="coder")

@@ -269,8 +269,12 @@ export interface StoredMessage {
  * from the agent's own report of what it did. */
 export interface Delegation {
   agent: string
-  agent_turn_id: string
-  status: 'ok' | 'error' | 'interrupted'
+  /** Null when the call was refused before any child turn ran. */
+  agent_turn_id: string | null
+  /** 'refused' = the delegate call never started a run (unknown agent,
+   * empty task, an agent trying to delegate) — a stated refusal, not a run
+   * that failed. */
+  status: 'ok' | 'error' | 'interrupted' | 'refused'
   files: string[]
 }
 
@@ -458,6 +462,8 @@ export async function deleteRoute(role: string): Promise<void> {
 
 // ── agents (S12): the live agents, each owning a derived routing role ───
 
+/** The three fields every consumer of the roster needs (the `@` menu, the
+ * Routing page's labels). A subset of `Agent`, so a full row satisfies it. */
 export interface AgentSummary {
   name: string
   purpose: string
@@ -465,7 +471,148 @@ export interface AgentSummary {
   role: string
 }
 
-export const listAgents = () => apiGet<AgentSummary[]>('/api/v1/agents')
+/** One skill the agent names, checked against `<root>/skills/` AT THE CALL —
+ * a file that has since gone is flagged (`present: false`), never dropped. */
+export interface AgentSkill {
+  name: string
+  present: boolean
+}
+
+/** Whether the agent is working RIGHT NOW, and on what — derived server-side
+ * from the process-local `traces.DOING` map, never a stored flag (a stored
+ * "working" would still say so a day after the process died). Idle is
+ * `working: false` with the rest null. */
+export interface AgentState {
+  working: boolean
+  doing: string | null
+  since: string | null
+  turn_id: string | null
+}
+
+/** A timer bound to the agent (`timers.agent_id`) — what a delete pauses. */
+export interface AgentTimerRef {
+  id: string
+  title: string
+}
+
+/** What the gateway did with the agent's `agent_<name>` role on a create,
+ * update or delete, in words fit to show. `registered` is true only when the
+ * gateway holds the state the call asked for. */
+export interface AgentRoute {
+  registered: boolean
+  detail: string
+}
+
+/**
+ * One agent as GET /api/v1/agents returns it (services/core/app/agents_api.py).
+ * The row's own columns plus the facts DERIVED at the request: `state`,
+ * `last_active`, `bound_timers`, `skills` (present or not), `unknown_tools`
+ * (subset entries naming no registered tool), and `spent_month_usd` from the
+ * gateway's ledger for the derived role — null with `spend_note` saying why
+ * when the ledger could not be read, NEVER shown as 0 (0 is a real figure).
+ */
+export interface Agent extends AgentSummary {
+  id: string
+  instructions: string
+  tools: string[]
+  skills: AgentSkill[]
+  unknown_tools: string[]
+  monthly_cap_usd: number | null
+  max_tool_rounds: number
+  read_shared_memory: boolean
+  /** `agents/<name>/` — the workspace folder its files live under. */
+  folder: string
+  /** null until the first delegation creates it — /log is then empty. */
+  log_conversation_id: string | null
+  created_via: string
+  created_at: string
+  updated_at: string
+  bound_timers: AgentTimerRef[]
+  spent_month_usd: number | null
+  spend_note: string | null
+  last_active: string | null
+  state: AgentState
+}
+
+/** POST /agents body — the AgentSpec fields by name. `name` is immutable
+ * after create (the store refuses a rename in its own words). */
+export interface AgentWrite {
+  name: string
+  purpose: string
+  instructions: string
+  tools: string[]
+  skills?: string[]
+  monthly_cap_usd?: number | null
+  max_tool_rounds?: number
+  read_shared_memory?: boolean
+  model_chain?: string[]
+}
+
+/** PUT /agents/{name} body — the subset being changed. */
+export type AgentChanges = Partial<Omit<AgentWrite, 'name'>>
+
+/** A create/update answers with the row read back after the commit, plus
+ * `text` — the sentence the store composed from what it READ BACK, the
+ * same one Nova's own tools return — and the gateway's route outcome. */
+export interface AgentSaved extends Agent {
+  text: string
+  route: AgentRoute
+}
+
+/** What DELETE /agents/{name} answers: which timers it paused
+ * (`already_paused` is null for one THIS delete paused, else the reason it
+ * already carried), the route outcome, and `remains` — the store's own
+ * sentence about what was left in place (folder, notes, log). */
+export interface AgentDeleted {
+  deleted: string
+  paused_timers: { id: string; title: string; already_paused: string | null }[]
+  route: AgentRoute
+  remains: string
+  text: string
+}
+
+/** One entry of the live tool registry (GET /api/v1/tools), in
+ * `tool_names()` order — the checkbox list the agent form offers. */
+export interface ToolInfo {
+  name: string
+  description: string
+  result_kind: string
+  ephemeral: boolean
+}
+
+/** One file under `<WORKSPACE_ROOT>/skills/` (GET /api/v1/skills). */
+export interface SkillInfo {
+  name: string
+  size: number
+  modified: string
+}
+
+export const listAgents = () => apiGet<Agent[]>('/api/v1/agents')
+
+/** A 404 (no agent by that name) is thrown by `request` with core's words. */
+export const getAgent = (name: string) =>
+  apiGet<Agent>(`/api/v1/agents/${encodeURIComponent(name)}`)
+
+/** A refusal (400) is the store's own sentence — shown verbatim in the form. */
+export const createAgent = (body: AgentWrite) =>
+  apiSend<AgentSaved>('/api/v1/agents', 'POST', body)
+
+export const updateAgent = (name: string, changes: AgentChanges) =>
+  apiSend<AgentSaved>(`/api/v1/agents/${encodeURIComponent(name)}`, 'PUT', changes)
+
+export const deleteAgent = (name: string) =>
+  apiSend<AgentDeleted>(`/api/v1/agents/${encodeURIComponent(name)}`, 'DELETE')
+
+/** The agent's log conversation — the briefs it was handed (user rows) and
+ * the reports it wrote (assistant rows), oldest first, in the chat
+ * transcript's own row shape. [] for an agent that has never been delegated
+ * to (its log conversation does not exist yet). */
+export const getAgentLog = (name: string) =>
+  apiGet<StoredMessage[]>(`/api/v1/agents/${encodeURIComponent(name)}/log`)
+
+export const listTools = () => apiGet<ToolInfo[]>('/api/v1/tools')
+
+export const listSkills = () => apiGet<SkillInfo[]>('/api/v1/skills')
 
 // ── activity (the turn ledger, read-only) ───────────────────────────────
 
@@ -483,6 +630,15 @@ export interface ActivityTurn {
   conversation_id: string | null
   /** Who the turn ran for (S10); null for rows older than the column. */
   person_id?: string | null
+  /** WHO did the work (S12): the agent's name read off the agents row the
+   * turn's agent_id points at — derived on every read, so a deleted agent's
+   * turns come back null. null for Nova's own turns. Absent on a core older
+   * than S12. */
+  agent?: string | null
+  /** The routing role the turn's gateway rounds walked (S12) — `agent_<name>`
+   * for an agent's turn, kept as the turn recorded it even after the agent
+   * is deleted; null = Nova's own turn, routed by kind. */
+  role?: string | null
 }
 
 export interface ActivitySpan {
@@ -510,11 +666,15 @@ export const ACTIVITY_PAGE_SIZE = 50
  * track than the rows it already fetched.
  */
 export async function getActivity(
-  opts: { limit?: number; before?: string } = {},
+  opts: { limit?: number; before?: string; agent?: string } = {},
 ): Promise<ActivityTurn[]> {
   const params = new URLSearchParams()
   params.set('limit', String(opts.limit ?? ACTIVITY_PAGE_SIZE))
   if (opts.before) params.set('before', opts.before)
+  // S12: one agent's turns, matched server-side on the agents row's name. A
+  // name no agent holds is an EMPTY list, not a 404 — a fresh agent's Traces
+  // tab has simply done nothing yet.
+  if (opts.agent !== undefined) params.set('agent', opts.agent)
   const body = await apiGet<{ turns: ActivityTurn[] }>(`/api/v1/activity?${params.toString()}`)
   return body.turns
 }
@@ -536,8 +696,17 @@ export interface WorkspaceFileListing {
   truncated: boolean
 }
 
-export const getWorkspaceFiles = () =>
-  apiGet<WorkspaceFileListing>('/api/v1/workspace/files')
+/** `prefix` (S12) narrows the walk to one folder — an agent's `agents/<name>/`
+ * for its Artifacts tab. It goes through core's same containment gate as
+ * every path; a folder that is not there yet is an EMPTY listing, not an
+ * error. Entries stay relative to the ROOT so each links to /file?path=
+ * unchanged. */
+export const getWorkspaceFiles = (prefix?: string) =>
+  apiGet<WorkspaceFileListing>(
+    prefix === undefined
+      ? '/api/v1/workspace/files'
+      : `/api/v1/workspace/files?prefix=${encodeURIComponent(prefix)}`,
+  )
 
 export interface WorkspaceFileDetail {
   path: string
@@ -771,6 +940,11 @@ export interface Timer {
   created_at: string
   /** The newest firing's outcome, or null when it has never fired. */
   last_firing: TimerLastFiring | null
+  /** S12: the agent a scheduled firing runs as (the agents row's NAME,
+   * derived from `timers.agent_id` on read), or null — Nova herself. A
+   * deleted agent SETs it null, so a firing never runs as a name no row
+   * holds. */
+  agent: string | null
 }
 
 /** One channel's delivery verdict — `ok` only from the channel's own result
@@ -865,6 +1039,15 @@ export async function fireTimer(id: string): Promise<TimerFiring> {
 export async function deleteTimer(id: string): Promise<void> {
   await request(`/api/v1/timers/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }
+
+/** PUT /timers/{id}/agent {agent} (S12) — rebind which agent a scheduled
+ * timer runs as; null = Nova herself. The answer is the row as written (the
+ * pause/resume idiom), and the Schedules page re-reads the list after it so
+ * the column only ever shows a binding the server confirmed. A refusal (an
+ * unknown name — the 404 names the agents that exist; a reminder or job row
+ * — the store's 400) is thrown by `request` with core's stated reason. */
+export const bindTimerAgent = (id: string, agent: string | null) =>
+  apiSend<Timer>(`/api/v1/timers/${encodeURIComponent(id)}/agent`, 'PUT', { agent })
 
 // ── AI Quality / evals (services/core/app/evals_api.py) ─────────────────
 

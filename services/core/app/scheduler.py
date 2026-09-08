@@ -16,9 +16,12 @@ real `device_notify` call through chat._run_tool, so its span, redaction and
 facts are exactly the chat's own and a delivery is `ok` only from the device's
 own result frame. A scheduled instruction runs through chat._run_turn with
 `ingest=False` — she must not remember the instruction as something he said
-today, every day. A job runs the handler timers.JOBS names, under a `job`
-span; an unknown handler is a REFUSED firing and pauses the row with that
-reason, never a model call.
+today, every day. A scheduled row bound to an agent (timers.agent_id, S12)
+runs the SAME funnel as that agent — its Person value, its persona, its round
+budget, its own routing role on the turn — and the reply still lands in the
+owner's conversation; a plain row's call is byte-for-byte what it was. A job
+runs the handler timers.JOBS names, under a `job` span; an unknown handler is
+a REFUSED firing and pauses the row with that reason, never a model call.
 
 Nothing here asks anyone for anything (owner ruling 2026-09-03): the path from
 claim to run awaits only the work.
@@ -35,7 +38,18 @@ from datetime import datetime
 
 import asyncpg
 
-from app import chat, devices_ws, identity, peers, schedule, settings_store, timers, tools, traces
+from app import (
+    agents,
+    chat,
+    devices_ws,
+    identity,
+    peers,
+    schedule,
+    settings_store,
+    timers,
+    tools,
+    traces,
+)
 from app.identity import Person
 
 logger = logging.getLogger("core")
@@ -45,6 +59,11 @@ CLAIM_LIMIT = 20
 INTERRUPTED_REASON = "core restarted while this firing was running"
 # The graceful path's words: lifespan cancelled the ticker while this ran.
 SHUTDOWN_REASON = "core shut down while this firing was running"
+# A scheduled row whose agent_id names no agents row. Unreachable while
+# migration 021's ON DELETE RESTRICT holds (agents.delete unbinds first);
+# stated rather than assumed, because a firing that ran as Nova instead would
+# be a silent substitution of who did the work.
+AGENT_GONE_REASON = "the agent this timer was bound to no longer exists"
 FIRING_OK, FIRING_ERROR, FIRING_REFUSED, FIRING_INTERRUPTED = (
     "ok",
     "error",
@@ -146,8 +165,23 @@ async def _run_firing(
     outcome = Outcome(FIRING_ERROR, "the firing did not reach an outcome")
     try:
         model = None
+        agent: agents.Agent | None = None
+        agent_gone = False
         if kind == "scheduled":
-            model = await settings_store.read_value(pool, "chat.model")
+            if row["agent_id"] is None:
+                model = await settings_store.read_value(pool, "chat.model")
+            else:
+                agent = await agents.by_id(pool, row["agent_id"])
+                agent_gone = agent is None
+                # An agent's rounds walk ITS routing role's chain. The gateway
+                # puts an explicit model at link 1 ahead of that chain
+                # (routing.resolve), so naming chat.model here would run the
+                # agent on Nova's model with its own chain as the fallback —
+                # the turn names none, as an @mention or a delegation does.
+                model = ""
+        # The turn says WHO does the work (agent_id, role) and whose money it
+        # is (person_id: the owner who set the timer) — an agent's turn is
+        # billed to him under its own role, exactly as a delegation is.
         turn = await traces.open_turn(
             pool,
             kind=kind,
@@ -155,6 +189,8 @@ async def _run_firing(
             model=model,
             person_id=row.get("person_id"),
             timezone=await _owner_timezone(pool),
+            agent_id=None if agent is None else agent.id,
+            role=None if agent is None else agent.role,
         )
         # Linked the moment the turn exists, so a firing cut off mid-run still
         # points at the trace of what it got done.
@@ -163,8 +199,14 @@ async def _run_firing(
         )
         if kind == "reminder":
             outcome = await _fire_reminder(app, pool, row, turn)
+        elif kind == "scheduled" and agent_gone:
+            outcome = Outcome(
+                FIRING_REFUSED,
+                AGENT_GONE_REASON,
+                {"chat": {"ok": False, "reason": AGENT_GONE_REASON}},
+            )
         elif kind == "scheduled":
-            outcome = await _fire_scheduled(app, pool, row, turn, model, scheduled_for)
+            outcome = await _fire_scheduled(app, pool, row, turn, model, scheduled_for, agent)
         elif kind == "job":
             outcome = await _fire_job(pool, row, turn)
         else:
@@ -373,6 +415,7 @@ async def _fire_scheduled(
     turn: traces.Turn,
     model: str,
     scheduled_for: datetime,
+    agent: agents.Agent | None = None,
 ) -> Outcome:
     """The instruction as a REAL turn through chat._run_turn: history=[], no
     user row, ingest=False. _run_turn is the only writer of the assistant row
@@ -382,7 +425,18 @@ async def _fire_scheduled(
 
     The turn runs as the timer's PERSON — for the owner's timers that is
     identity.owner; a timer another person set runs with their memory scope
-    and lands in their conversation, never the owner's."""
+    and lands in their conversation, never the owner's.
+
+    With `agent` (the row's agent_id, loaded by _run_firing) the turn runs AS
+    the agent and differs in exactly four places: the "no chat model" refusal
+    does not apply (the turn names no model and the gateway walks the agent's
+    own chain), the person is the agent's value (its memory partition, its
+    workspace principal), the round budget is the agent's row, and _run_turn
+    gets its persona (subset, block, folder, cap). Everything else — the
+    framed message, the owner's conversation, ingest=False, the read-back —
+    is the same line of code. A capped agent ends the turn through
+    _run_turn's own cap exit: the persisted statement is the error frame,
+    and this reads it back as the firing's reason."""
     delivery: dict = {"chat": {"ok": False}}
     if row["conversation_id"] is None:
         reason = "the conversation this timer replied into no longer exists"
@@ -393,7 +447,7 @@ async def _fire_scheduled(
         reason = "the person this timer belonged to no longer exists"
         delivery["chat"]["reason"] = reason
         return Outcome(FIRING_REFUSED, reason, delivery)
-    if not isinstance(model, str) or not model.strip():
+    if agent is None and (not isinstance(model, str) or not model.strip()):
         reason = "no chat model is set (Settings → Models), so the instruction cannot run"
         delivery["chat"]["reason"] = reason
         return Outcome(FIRING_REFUSED, reason, delivery)
@@ -404,7 +458,17 @@ async def _fire_scheduled(
         row["payload"]["instruction"],
         now_words=schedule.local_words(now, row["timezone"]),
     )
-    max_tool_rounds = int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
+    if agent is None:
+        max_tool_rounds = int(await settings_store.read_value(pool, "agents.max_tool_rounds"))
+        # A plain row's call is EXACTLY what it was before agents existed
+        # (pinned: kwargs == {"ingest": False}); persona rides only with one.
+        persona_kwargs: dict = {}
+    else:
+        person = agent.person()
+        max_tool_rounds = agent.max_tool_rounds
+        # The shared-memory scope is derived from the row inside persona_for
+        # from the OWNER's id — the timer's person, whose notes they are.
+        persona_kwargs = {"persona": agents.persona_for(agent, owner_id=row["person_id"])}
     frames: list = []
     spawned_before = set(chat._BACKGROUND)
     await chat._run_turn(
@@ -419,6 +483,7 @@ async def _fire_scheduled(
         max_tool_rounds,
         frames.append,
         ingest=False,
+        **persona_kwargs,
     )
     # The one settle helper, shared with delegation (S12) — see chat.settle_detached.
     await chat.settle_detached(spawned_before)

@@ -9,6 +9,7 @@ sentence the Schedules page reads off the row), the list is proved to be the
 person's own, and a cancel by an ambiguous title is proved to list the
 candidates rather than guess.
 """
+
 from __future__ import annotations
 
 import re
@@ -302,7 +303,7 @@ async def test_an_absolute_or_repeating_time_with_no_timezone_set_is_refused_ver
 
 
 async def test_a_stored_utc_counts_as_set(pool, tmp_path):
-    """"Set" means STORED, not "different from the default": a household that
+    """ "Set" means STORED, not "different from the default": a household that
     lives in UTC and said so during setup gets absolute times."""
     person, _ = await _person(pool)
     await _set_timezone(pool, "UTC")
@@ -519,9 +520,7 @@ async def test_every_repeat_cadence_round_trips_to_its_spec(pool, tmp_path):
 # -- list_timers ---------------------------------------------------------------------------
 
 
-async def test_list_shows_the_persons_own_timers_and_the_jobs_never_another_persons(
-    pool, tmp_path
-):
+async def test_list_shows_the_persons_own_timers_and_the_jobs_never_another_persons(pool, tmp_path):
     jeremy, _ = await _person(pool)
     other, _ = await _person(pool, name="kid", role="kid")
     await _create(_ctx(jeremy, tmp_path), text="stretch", in_minutes=2)
@@ -904,3 +903,163 @@ async def test_list_bound_is_the_store_projection_newest_first(pool, tmp_path):
     (owned,) = await timers.list_for(pool, owner, limit=1)
     assert list(rows[0].keys()) == list(owned.keys())
     assert await timers.list_bound(pool, uuid.uuid4()) == []
+
+
+# -- create_timer `agent`: a scheduled turn bound to the agent that runs it ------------
+
+
+async def test_create_timer_with_an_agent_binds_the_row_and_states_runs_as(pool, tmp_path):
+    """`agent` names who RUNS the scheduled turn: the row's agent_id is that
+    agent's id (resolved by name NOW, read by id at the firing), the sentence
+    says "runs as coder" from the row that was written, and the owner's list
+    shows it on the line — the name read from the agents table, never stored
+    on the timer. person_id stays the owner: it is still his row."""
+    owner, conversation = await _person(pool)
+    await _set_timezone(pool, NY)
+    coder = await _agent_row(pool)
+    ctx = _ctx(owner, tmp_path)
+
+    result, ok = await _create(
+        ctx,
+        text="review the diffs",
+        kind="scheduled",
+        repeat={"every": "day", "at": "07:00"},
+        agent="coder",
+    )
+    assert ok is True, result
+    (row,) = await _rows(pool, owner)
+    assert row["agent_id"] == coder and row["person_id"] == owner.id
+    assert row["kind"] == "scheduled" and row["conversation_id"] == conversation
+    words = timers.timer_spec(row)["schedule_words"]
+    assert result.startswith("Scheduled turn set (id ")
+    assert result.endswith(f"— {words}. It runs as coder; its reply will land in this chat.")
+
+    # A second, unbound scheduled turn: Nova's, and its sentence is unchanged.
+    result, ok = await _create(
+        ctx, text="summarise the day", kind="scheduled", repeat={"every": "day", "at": "18:00"}
+    )
+    assert ok is True, result
+    assert result.endswith(". Its reply will land in this chat.")
+
+    # The owner's listing says who runs each; the unbound one says nothing.
+    result, ok = await tools.dispatch("list_timers", "", ctx)
+    assert ok is True, result
+    assert result.startswith("2 timers of yours")
+    (bound_line,) = [line for line in result.splitlines() if "'review the diffs'" in line]
+    (plain_line,) = [line for line in result.splitlines() if "'summarise the day'" in line]
+    assert bound_line.endswith(f"{words} — runs as coder")
+    assert "runs as" not in plain_line
+
+    # The agent's own view lists it as bound to it (test above), with no
+    # "runs as" — every row there runs as the reader.
+    result, ok = await tools.dispatch("list_timers", "", _ctx(_agent_person(coder), tmp_path))
+    assert ok is True, result
+    assert result.startswith("timers bound to you:\n")
+    assert "'review the diffs'" in result and "runs as" not in result
+
+    # The name is read live: rename the agent and the listing follows.
+    await pool.execute("UPDATE agents SET name = 'reviewer' WHERE id = $1", coder)
+    result, ok = await tools.dispatch("list_timers", "", ctx)
+    assert ok is True
+    assert "— runs as reviewer" in result and "runs as coder" not in result
+
+
+def test_a_bound_row_whose_agent_is_gone_is_said_not_dropped():
+    """Unreachable under migration 021's RESTRICT; if a row ever carried an
+    agent_id with no agents row, the line states it rather than quietly
+    showing the row as Nova's."""
+    agent_id = uuid.uuid4()
+    row = {
+        "id": uuid.uuid4(),
+        "kind": "scheduled",
+        "agent_id": agent_id,
+        "title": "orphan",
+        "payload": {"instruction": "x"},
+        "schedule": {"kind": "day", "at": "07:00"},
+        "timezone": "UTC",
+        "conversation_id": None,
+        "next_fire_at": None,
+        "paused_at": None,
+        "paused_reason": None,
+        "consecutive_failures": 0,
+        "created_via": "chat",
+        "created_at": datetime(2031, 1, 1, tzinfo=UTC),
+    }
+    line = timer_tools._line(row, {})
+    assert line.endswith(f" — runs as an agent that no longer exists ({str(agent_id)[:8]})")
+    assert "runs as" not in timer_tools._line(row)  # no names given: nothing claimed
+
+
+@pytest.mark.parametrize(
+    "args,expected",
+    [
+        (
+            {
+                "text": "x",
+                "kind": "scheduled",
+                "repeat": {"every": "day", "at": "07:00"},
+                "agent": "nobody",
+            },
+            "Error: no agent named 'nobody' — the agents are: coder",
+        ),
+        (
+            {"text": "x", "in_minutes": 2, "agent": "coder"},
+            "Error: only a scheduled turn can be bound to an agent — a reminder is delivered by "
+            "code, not run as a turn",
+        ),
+        (
+            {"text": "x", "kind": "scheduled", "in_minutes": 2, "agent": "  "},
+            "Error: agent is empty — name an agent (from list_agents), or omit it to run the "
+            "turn yourself",
+        ),
+    ],
+    ids=["unknown_agent_names_the_live_ones", "reminder_cannot_be_bound", "empty_agent"],
+)
+async def test_each_agent_refusal_names_its_rule_and_writes_nothing(pool, tmp_path, args, expected):
+    owner, _ = await _person(pool)
+    await _set_timezone(pool, NY)
+    await _agent_row(pool)
+    result, ok = await _create(_ctx(owner, tmp_path), **args)
+    assert ok is False
+    assert result == expected
+    assert await _rows(pool, owner) == []
+
+
+async def test_an_unknown_agent_with_none_at_all_says_so(pool, tmp_path):
+    owner, _ = await _person(pool)
+    await _set_timezone(pool, NY)
+    result, ok = await _create(
+        _ctx(owner, tmp_path),
+        text="x",
+        kind="scheduled",
+        repeat={"every": "day", "at": "07:00"},
+        agent="coder",
+    )
+    assert ok is False
+    assert result == "Error: no agent named 'coder' — there are no agents"
+    assert await _rows(pool, owner) == []
+
+
+async def test_an_agent_turn_asking_for_an_agent_is_still_the_person_refusal_first(pool, tmp_path):
+    """refuse_person_write stays FIRST: an agent turn is refused before the
+    name is even resolved — an unknown name never reaches its own refusal."""
+    await _set_timezone(pool, NY)
+    before = await _counts(pool)
+    result, ok = await _create(
+        _ctx(_agent_person(), tmp_path),
+        text="x",
+        kind="scheduled",
+        repeat={"every": "day", "at": "07:00"},
+        agent="nobody",
+    )
+    assert ok is False
+    assert result == AGENT_REFUSAL
+    assert await _counts(pool) == before
+
+
+def test_create_timer_advertises_the_agent_argument():
+    """The model learns the field from the schema it is shown, not from prose."""
+    tool = tools.REGISTRY["create_timer"]
+    assert "agent" in tool.parameters["properties"]
+    assert tool.parameters["properties"]["agent"]["type"] == "string"
+    assert "agent" not in tool.parameters["required"]
