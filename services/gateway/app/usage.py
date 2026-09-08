@@ -123,6 +123,7 @@ class Captured:
     cache_read_tokens: int | None = None
     cache_write_tokens: int | None = None
     cost: Decimal | None = None  # the provider's OWN reported cost (OpenRouter)
+    byok: bool = False  # the cost is the upstream's charge on the owner's own key
     error: str | None = None
     malformed: int = 0
     saw_done: bool = False
@@ -154,7 +155,19 @@ class Captured:
             cached = details.get("cached_tokens")
             if isinstance(cached, int) and not isinstance(cached, bool) and cached >= 0:
                 self.cache_read_tokens = cached
+            written = details.get("cache_write_tokens")
+            if isinstance(written, int) and not isinstance(written, bool) and written > 0:
+                self.cache_write_tokens = written
         cost = usage.get("cost")
+        # OpenRouter with a BRING-YOUR-OWN-KEY provider (verified live
+        # 2026-09-08: is_byok true, cost 0, the real charge under
+        # cost_details.upstream_inference_cost, billed by the upstream on the
+        # owner's own key) — the upstream figure is the one that costs money.
+        if usage.get("is_byok") is True:
+            upstream = (usage.get("cost_details") or {}).get("upstream_inference_cost")
+            if isinstance(upstream, int | float) and not isinstance(upstream, bool):
+                cost = upstream
+                self.byok = True
         if isinstance(cost, int | float) and not isinstance(cost, bool) and cost >= 0:
             self.cost = Decimal(str(cost))
 

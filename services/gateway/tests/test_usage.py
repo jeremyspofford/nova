@@ -86,6 +86,37 @@ def test_parser_reads_openrouters_cost_and_cached_tokens_and_counts_malformed_fr
     assert c.malformed == 1 and c.error == "quota exceeded"
 
 
+def test_parser_reads_the_upstream_charge_on_a_byok_key():
+    """Verified live 2026-09-08: OpenRouter with a bring-your-own-key
+    provider reports `cost: 0` (nothing charged to OpenRouter credits) and
+    the real charge under cost_details.upstream_inference_cost — that is
+    the number that costs money, and the one recorded."""
+    p = usage.SseUsageParser()
+    p.feed(
+        _sse(
+            {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 72,
+                    "completion_tokens": 5,
+                    "cost": 0,
+                    "is_byok": True,
+                    "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+                    "cost_details": {"upstream_inference_cost": 6.9e-06},
+                },
+            }
+        )
+    )
+    assert p.captured.cost == Decimal("0.0000069") and p.captured.byok is True
+    assert p.captured.cache_write_tokens is None  # a zero write is not a write
+    # Without BYOK, OpenRouter's own cost stands — a real 0 on a free model included.
+    q = usage.SseUsageParser()
+    q.feed(
+        _sse({"usage": {"prompt_tokens": 1, "completion_tokens": 1, "cost": 0, "is_byok": False}})
+    )
+    assert q.captured.cost == Decimal("0") and q.captured.byok is False
+
+
 def test_parser_never_writes_a_zero_for_a_provider_that_stated_nothing():
     p = usage.SseUsageParser()
     p.feed(_sse({"choices": [{"delta": {"content": "hi"}}]}))
