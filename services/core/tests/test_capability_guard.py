@@ -224,3 +224,65 @@ def test_the_guard_is_pure_same_inputs_same_verdict():
 def test_the_matcher_never_raises_on_odd_input(reply):
     # We do not care about the verdict here — only that it returns cleanly.
     guards.capability_claim_check(reply, ALL_TOOLS)
+
+
+# -- the agent tools (S12, 2026-09-08) --------------------------------------
+#
+# Added from a live walk, not from imagination: asked to hand a task to the
+# agent she had just created, she answered "delegating to an agent needs a
+# delegate_to_agent tool, and that capability isn't in my toolset right now"
+# — with delegate_to_agent in her advertised list AND the roster line naming
+# the agent in the same prompt. The prompt carried the truth and she denied
+# it anyway, which is the whole reason this table exists beside the prompt.
+@pytest.mark.parametrize(
+    ("reply", "tool"),
+    [
+        (
+            "I can't do that one — delegating to an agent needs a tool, "
+            "so I can't hand off work to coder.",
+            "delegate_to_agent",
+        ),
+        ("I cannot delegate to an agent right now.", "delegate_to_agent"),
+        ("I'm unable to hand this off to coder.", "delegate_to_agent"),
+        ("I don't have the ability to create an agent.", "create_agent"),
+        ("I can't list your agents.", "list_agents"),
+        ("I am not able to delete an agent.", "delete_agent"),
+    ],
+)
+def test_a_denied_agent_capability_is_corrected_and_names_the_tool(reply, tool):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None, f"a false denial of {tool} must be corrected"
+    assert tool in tgt(correction)
+    assert tool in correction.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # Backed relays and offers assert no inability.
+        "I asked coder to write it and it did.",
+        "Want me to delegate that to coder?",
+        "I'll delegate it to coder and report back.",
+        # A specific failure, not a disowned capability.
+        "I couldn't delegate to coder — it is over its monthly cap.",
+    ],
+)
+def test_honest_delegation_sentences_are_left_alone(reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None
+
+
+def test_an_agent_denying_a_tool_outside_its_subset_is_honest():
+    """The symmetry the persona feed buys: the SAME sentence is a lie from
+    Nova (who holds the tool) and the truth from an agent (whose subset never
+    contains delegate_to_agent — agents.validate_spec refuses it), because the
+    verdict reads the live list the caller was actually given."""
+    subset = ["workspace_read_file", "workspace_write_file", "workspace_list_files"]
+    assert guards.capability_claim_check("I can't delegate to an agent.", subset) is None
+    assert guards.capability_claim_check("I can't delegate to an agent.", ALL_TOOLS) is not None
+
+
+def test_the_agent_corrections_are_clean_over_themselves():
+    for reply in ("I can't delegate to an agent.", "I can't create an agent."):
+        correction = guards.capability_claim_check(reply, ALL_TOOLS)
+        assert correction is not None
+        assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None

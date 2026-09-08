@@ -1263,6 +1263,47 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "create_timer",
     ),
+    # S12 (2026-09-08): the agent tools. Added the day the live walk caught
+    # her disowning delegation — her prompt listed delegate_to_agent AND the
+    # roster named coder, and she still answered "that capability isn't in my
+    # toolset", which is the whole reason a phrase table exists beside the
+    # prompt. "delegate" is anchored on an agent or a name so an ordinary
+    # "delegate that decision to you" is not swept in.
+    (
+        re.compile(
+            r"delegat(?:e|ing|ion)\s+(?:to\s+)?(?:an?\s+|the\s+)?agents?\b"
+            r"|delegat(?:e|ing)\s+(?:[\w'-]+\s+){0,3}?to\s+(?:an?\s+|the\s+)?"
+            r"(?:agent|[a-z][a-z_]{1,25})\b"
+            r"|hand(?:ing)?\s+(?:[\w'-]+\s+){0,3}?off\s+to\s+(?:an?\s+|the\s+)?"
+            r"(?:agent|[a-z][a-z_]{1,25})\b"
+            r"|hand(?:ing)?\s+off\s+(?:work|tasks?|it|this|that)\b"
+            r"|hand(?:ing)?\s+(?:[\w'-]+\s+){0,3}?to\s+(?:an?\s+|the\s+)?agents?\b",
+            re.I,
+        ),
+        "delegate_to_agent",
+    ),
+    (
+        re.compile(
+            r"(?:creat(?:e|ing)|mak(?:e|ing)|set(?:ting)?\s+up)\s+"
+            r"(?:a\s+|an\s+|new\s+|another\s+){0,2}agents?\b",
+            re.I,
+        ),
+        "create_agent",
+    ),
+    (
+        re.compile(
+            r"(?:list(?:ing)?|see|show(?:ing)?)\s+(?:my\s+|your\s+|the\s+)?agents?\b",
+            re.I,
+        ),
+        "list_agents",
+    ),
+    (
+        re.compile(
+            r"(?:delet(?:e|ing)|remov(?:e|ing))\s+(?:a\s+|an\s+|the\s+|my\s+){0,2}agents?\b",
+            re.I,
+        ),
+        "delete_agent",
+    ),
 )
 
 # A first-person, PRESENT-tense inability lead — the capability denied follows
