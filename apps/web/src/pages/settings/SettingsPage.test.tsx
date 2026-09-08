@@ -38,7 +38,9 @@ vi.mock('../../lib/api', async importOriginal => {
         value: 'nova',
       },
     ]),
-    putSetting: vi.fn(async () => {}),
+    // 2026-09-08 (S11): putSetting answers with what core stored — the
+    // fake echoes the write the way the real call does.
+    putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })),
     getInstalledModels: vi.fn(async () => ['qwen3:8b', 'qwen3:14b']),
     getSuggestion: vi.fn(async () => ({
       tier: '8-12B',
@@ -128,5 +130,57 @@ describe('SettingsPage — the instance default theme', () => {
     const slate = await screen.findByRole('radio', { name: 'Slate' })
     await waitFor(() => expect(within(slate).getByText('Default')).toBeDefined())
     expect(screen.queryByText('ocean')).toBeNull()
+  })
+})
+
+/**
+ * S11: the proactive settings are only configurable if the section is
+ * actually MOUNTED — a section that exists as a file and is never rendered
+ * leaves the slice unswitchable from the app, which is exactly the gap this
+ * work closed. It is mounted off the keys core reports, so a core that
+ * predates the slice draws no switch whose write it would refuse by name.
+ */
+describe('SettingsPage — the proactive section', () => {
+  const PROACTIVE = [
+    { key: 'chat.model', type: 'str', default: '', description: '', value: 'qwen3:8b' },
+    {
+      key: 'proactive.enabled',
+      type: 'bool',
+      default: false,
+      description: '',
+      value: true,
+    },
+    {
+      key: 'proactive.digest_at',
+      type: 'str',
+      default: '08:00',
+      description: '',
+      value: '07:15',
+    },
+    {
+      key: 'proactive.max_notices_per_day',
+      type: 'int',
+      default: 20,
+      description: '',
+      value: 12,
+    },
+  ] as const
+
+  it('renders the stored proactive settings when core exposes them', async () => {
+    vi.mocked(getSettings).mockResolvedValueOnce([...PROACTIVE])
+    renderApp()
+
+    const hour = (await screen.findByLabelText('Daily digest at')) as HTMLInputElement
+    expect(hour.value).toBe('07:15')
+    expect((screen.getByLabelText('Most findings in one digest') as HTMLInputElement).value).toBe('12')
+    expect(screen.queryByTestId('proactive-off')).toBeNull()
+  })
+
+  it('draws no proactive controls on a core that does not have the keys', async () => {
+    renderApp()
+
+    await screen.findByTestId('current-chat-model')
+    expect(screen.queryByLabelText('Daily digest at')).toBeNull()
+    expect(screen.queryByTestId('proactive-meaning')).toBeNull()
   })
 })

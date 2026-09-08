@@ -28,8 +28,11 @@ function fakeApi(overrides: { putFails?: boolean } = {}) {
   return {
     getInstalledModels: vi.fn(async () => ['qwen3:8b', 'qwen3:14b']),
     getSuggestion: vi.fn(async () => suggestion()),
-    putSetting: vi.fn(async () => {
+    // 2026-09-08 (S11): putSetting answers with what core stored — the
+    // fake echoes the write rather than returning nothing.
+    putSetting: vi.fn(async (key: string, value: boolean | string | number) => {
       if (overrides.putFails) throw new Error('settings write refused')
+      return { key, value }
     }),
   }
 }
@@ -132,7 +135,7 @@ describe('ModelSelector', () => {
     const api = {
       getInstalledModels: vi.fn(async () => ['qwen3:8b']),
       getSuggestion: vi.fn(async () => suggestion()),
-      putSetting: vi.fn(async () => undefined),
+      putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })),
       getCatalog: vi.fn(async () => ({
         fetched_at: 't',
         sources: [],

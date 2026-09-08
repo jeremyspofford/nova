@@ -51,6 +51,22 @@ logger = logging.getLogger("core")
 CHECK_DEADLINE_S = 60.0
 
 
+class NotDue(RuntimeError):  # noqa: N818 — a state, not an error condition
+    """This check has its own cadence and this is not its hour.
+
+    Distinct from CannotCheck on purpose. A check that COULD NOT look is a gap
+    in the hour's coverage and must stop the beat calling itself quiet; a check
+    that was NOT DUE has looked recently and its findings are still standing as
+    notices, so the hour has no gap. Collapsing the two would make "incomplete"
+    the normal state — review_commitments alone would make five hours in six
+    read as a failure — and a signal that is always on cannot report the real
+    outage it exists for.
+
+    It is still SAID: quiet() names every not-due check, so "not due" can never
+    be mistaken for "looked and found nothing".
+    """
+
+
 class CannotCheck(RuntimeError):
     """The probe could not be made at all, in words.
 
@@ -95,6 +111,10 @@ class CheckRun:
     ran: bool
     reason: str | None
     findings: tuple[Finding, ...] = ()
+    # False only for a check that was NOT DUE this hour (see NotDue). A
+    # not-due check leaves no gap — its findings are still standing as
+    # notices — so it does not stop the beat being quiet, but it is named.
+    due: bool = True
 
 
 @dataclass(frozen=True)
@@ -168,7 +188,17 @@ def quiet(runs: Sequence[CheckRun]) -> tuple[bool, str | None]:
     """
     if not runs:
         return False, "no check ran — nothing was checked"
-    unrun = [run for run in runs if not run.ran]
+    # A not-due check is NOT a gap: it looked recently and whatever it found is
+    # still standing as a notice, so it cannot make this hour incomplete. It is
+    # still named below, so "not due" is never read as "looked and found
+    # nothing". Without this split, review_commitments' six-hour cadence would
+    # make five hours in six report incomplete, and a real outage would then
+    # look exactly like an ordinary hour.
+    # getattr, because quiet() is duck-typed over anything CheckRun-shaped (the
+    # guards hand it hand-built runs): a run that does not say otherwise is
+    # DUE, so an unknown shape counts against quiet rather than excusing it.
+    unrun = [run for run in runs if not run.ran and getattr(run, "due", True)]
+    not_due = [run for run in runs if not run.ran and not getattr(run, "due", True)]
     found = [run for run in runs if run.findings]
     if not unrun and not found:
         return True, None
@@ -183,6 +213,11 @@ def quiet(runs: Sequence[CheckRun]) -> tuple[bool, str | None]:
         parts.append(
             f"{len(unrun)} check(s) could not run: "
             + "; ".join(f"{run.check} — {run.reason or 'no reason stated'}" for run in unrun)
+        )
+    if not_due:
+        parts.append(
+            f"{len(not_due)} check(s) were not due: "
+            + "; ".join(f"{run.check} — {run.reason or 'no reason stated'}" for run in not_due)
         )
     return False, ". ".join(parts)
 
@@ -280,6 +315,10 @@ async def _wrapped(check: Check, app, pool) -> CheckRun:
     try:
         raw = await asyncio.wait_for(check.run(app, pool), CHECK_DEADLINE_S)
         return CheckRun(check=check.name, ran=True, reason=None, findings=_declared(check, raw))
+    except NotDue as exc:
+        # Its own cadence said no. Not a gap in this hour — recorded and named,
+        # and deliberately NOT counted against quiet.
+        return CheckRun(check=check.name, ran=False, reason=_reason(exc), findings=(), due=False)
     except Exception as exc:  # noqa: BLE001 — every failure shape is stated, none escapes
         reason = _reason(exc)
         logger.warning("check %s could not run — %s", check.name, reason)
@@ -332,11 +371,16 @@ async def run_one(app, pool, name: str) -> CheckRun:
 # app.checks is what makes the registry complete — there is no separate "wire
 # it up" step to forget (the v3 lesson: a capability nobody registered is
 # invisible from the code and obvious the moment it is asked for).
-from app.checks import money, stack, work  # noqa: E402
+from app.checks import money, review, stack, work  # noqa: E402
 
 register_all(stack.CHECKS)
 register_all(work.CHECKS)
 register_all(money.CHECKS)
+# The fourth watch area, and the only family whose findings are a model's
+# claims rather than rows. It declares urgent=False and _declared above
+# overwrites every finding with that, so registering it cannot move the urgent
+# set — tests/test_checks.py pins that the stack family is still alone in it.
+register_all(review.CHECKS)
 
 __all__ = [
     "CHECK_DEADLINE_S",
@@ -351,6 +395,7 @@ __all__ = [
     "quiet",
     "register",
     "register_all",
+    "review",
     "run_all",
     "run_cache",
     "run_one",

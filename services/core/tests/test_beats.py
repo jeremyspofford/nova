@@ -103,6 +103,25 @@ def only(monkeypatch):
     return _use
 
 
+@pytest.fixture(autouse=True)
+async def _proactive_on(pool):
+    """Turn the engine ON for every test in this file that has a database.
+
+    S11-6 gave the engine a switch, `proactive.enabled`, and it ships FALSE:
+    the beats exist from the first tick and do nothing until he turns them on.
+    Every test below is about what a beat DOES once it is on, so each one turns
+    it on first — and the two tests that pin the switch itself (at the bottom
+    of this file) turn it back off explicitly, so the gate is proved by a test
+    that states it rather than by the absence of this fixture.
+
+    """
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ($1, 'true'::jsonb) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+        beats.ENABLED_KEY,
+    )
+
+
 async def _notices(pool):
     return await pool.fetch(
         "SELECT check_name, finding_key, fingerprint, state, repeats, cleared_at, turn_id, "
@@ -681,11 +700,21 @@ def test_the_beat_role_is_one_the_gateway_will_take():
     assert re.fullmatch(r"[a-z_]{1,32}", chat._ROLE_BY_KIND[beats.BEAT_TURN_KIND])
 
 
-def test_the_digest_setting_is_read_through_settings_store_the_moment_it_exists():
-    """Read defensively today, normally tomorrow: the def has not landed, and
-    the same key is what S11-6 will register."""
-    assert beats.DIGEST_AT_KEY not in settings_store.DEFS_BY_KEY
-    assert beats.DIGEST_AT_KEY.startswith("proactive.")
+def test_the_beats_three_settings_are_the_registry_own_defs():
+    """This pin used to say the defs had NOT landed (the beat read the table
+    directly while S11-6 was still to come). S11-6 registered all three, so it
+    moved deliberately: every key beats reads is a def, which is what makes
+    `read_value` return the def's default instead of KeyError, and what makes
+    the settings page able to show them at all."""
+    for key in (beats.DIGEST_AT_KEY, beats.ENABLED_KEY, beats.MAX_NOTICES_KEY):
+        assert key in settings_store.DEFS_BY_KEY, key
+        assert key.startswith("proactive.")
+    # The digest's hour is seeded from the def's own default, so the row and
+    # the settings page cannot start out disagreeing.
+    assert settings_store.DEFS_BY_KEY[beats.DIGEST_AT_KEY].default == beats.DEFAULT_DIGEST_AT
+    # And the two settings a write re-times the digest for are the two the
+    # firing is actually computed from.
+    assert beats.retimes_the_digest() == (beats.DIGEST_AT_KEY, "nova.timezone")
 
 
 def test_every_beat_has_a_title_and_a_runner():
@@ -1315,3 +1344,156 @@ def test_the_brief_is_rows_it_says_what_she_did_and_what_reached_nobody():
     # a partial view has to be able to say so.
     assert "NOT READ: the cleared notices could not be read — RuntimeError: boom" in brief
     assert brief.endswith(beats.DIGEST_ASK.format(name="jeremy"))
+
+
+# -- the switch (S11-6) -----------------------------------------------------------
+#
+# The engine ships OFF (`proactive.enabled`, default false — SETTING_DEFS says
+# so and tests/test_settings.py pins the default). A beat that fires while it is
+# off does NOTHING and says so on its firing: a stated fact about configuration,
+# never a decision about what she is allowed to do (owner ruling 2026-09-03).
+# The autouse fixture at the top of this file turns it on for every other test,
+# so these three are the only place it is off — and they say so out loud.
+
+
+async def _switch_off(pool) -> None:
+    await _setting(pool, beats.ENABLED_KEY, False)
+
+
+async def test_a_beat_that_fires_while_the_engine_is_off_does_nothing_and_says_so(pool, only):
+    """Nothing at all: no check run, no notice written, not even the beat's own
+    line in its own conversation. The firing is OK because the row did exactly
+    what the configuration says."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    beat_conversation = await beats.beat_conversation(pool)
+    await _switch_off(pool)
+
+    firing = await _run_beat(pool, beats.WATCH, now=LATER)
+
+    assert firing["status"] == scheduler.FIRING_OK
+    assert firing["reason"] == beats.PROACTIVE_OFF
+    assert firing["delivery"] == {"beat": beats.WATCH, "proactive": {"enabled": False}}
+    assert await _notices(pool) == [], "no check ran, so there was nothing to write down"
+    assert await _messages(pool, his_chat["id"]) == []
+    assert await _messages(pool, beat_conversation) == [], "not even its own line"
+    # The turn still exists and closed cleanly — the trace says a beat fired
+    # and why it did nothing, rather than leaving a hole in Activity.
+    assert firing["turn_id"] is not None
+    assert await pool.fetchval(TURN_STATUS, firing["turn_id"]) == "ok"
+    (span,) = await pool.fetch(
+        "SELECT name, meta FROM turn_spans WHERE turn_id = $1 AND kind = 'beat'",
+        firing["turn_id"],
+    )
+    assert span["name"] == beats.WATCH
+    assert span["meta"]["reason"] == beats.PROACTIVE_OFF
+
+
+async def test_the_switch_gates_the_digest_and_an_off_beat_never_walks_to_the_pause(
+    pool, only, mount_peers
+):
+    """Both beats, one line of code. And an off firing is OK, which is what
+    keeps `consecutive_failures` at zero: five refused firings would pause the
+    beats, and turning the setting on later would then do nothing at all."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    assert len(await _notices(pool)) == 1, "something is owed him before the switch goes off"
+
+    await _switch_off(pool)
+    gateway = FakeGateway(deltas=("this must never be composed",))
+    mount_peers(gateway=gateway)
+    for hour in range(1, 7):
+        firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=hour))
+        assert (firing["status"], firing["reason"]) == (
+            scheduler.FIRING_OK,
+            beats.PROACTIVE_OFF,
+        ), hour
+
+    assert gateway.seen == [], "no model is asked for words nobody will send"
+    assert await _messages(pool, his_chat["id"]) == []
+    assert [row["state"] for row in await _notices(pool)] == [notices.RAISED], "still owed"
+    digest = (await _beat_rows(pool))[beats.DIGEST]
+    assert digest["consecutive_failures"] == 0
+
+
+async def test_a_stored_switch_that_is_not_a_boolean_is_off_and_says_what_it_is(pool, only):
+    """Only JSON true is on. A string "true" written straight into the table is
+    off — and the firing SAYS that is what it found, because a value that reads
+    like yes and behaves like no is exactly what has to appear on the record."""
+    await _owner(pool)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _setting(pool, beats.ENABLED_KEY, "true")
+
+    firing = await _run_beat(pool, beats.WATCH, now=LATER)
+
+    assert firing["status"] == scheduler.FIRING_OK
+    assert firing["reason"].startswith(beats.PROACTIVE_OFF)
+    assert "'true'" in firing["reason"] and "neither true nor false" in firing["reason"]
+    assert await _notices(pool) == []
+
+
+async def test_the_digest_carries_at_most_the_days_ceiling_and_holds_the_rest(
+    pool, only, mount_peers
+):
+    """`proactive.max_notices_per_day` is the backstop under "one message a
+    day": a night when fifty things break still produces a message rather than
+    a log. What does not fit is HELD, not dropped — those rows are never marked
+    delivered, so they are still owed — and the count is on the firing, because
+    suppression here is countable or it is silence."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(
+        _check("work_thing", [_finding("timer_failing:1", failures=4)]),
+        _check("money_thing", [_finding("agent_over_cap:coder", spent_usd=41)]),
+    )
+    await beats.ensure_beats(pool)
+    await _setting(pool, beats.MAX_NOTICES_KEY, 1)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    assert len(await _notices(pool)) == 2
+
+    gateway = FakeGateway(deltas=("One thing is still standing.",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    assert firing["status"] == scheduler.FIRING_OK
+    assert firing["delivery"]["digest"]["notices"] == 1
+    assert firing["delivery"]["digest"]["held_back"] == 1
+    assert "STANDING (1)" in _brief(gateway), "the model is told about one, not two"
+    assert [row["content"] for row in await _messages(pool, his_chat["id"])] == [
+        "One thing is still standing."
+    ]
+    assert sorted(row["state"] for row in await _notices(pool)) == [
+        notices.DELIVERED,
+        notices.RAISED,
+    ]
+    assert len(await notices.deliverable(pool)) == 1, "what did not fit is owed tomorrow"
+
+
+async def test_a_ceiling_that_could_carry_nothing_is_said_out_loud_and_not_used(
+    pool, only, mount_peers, caplog
+):
+    """The settings def refuses 0 at the write; a 0 that reached the table
+    another way is refused here, in the log, and the def's own default stands.
+    A cap read literally would compose a message about nothing while the
+    notices piled up — a silence that looks exactly like a quiet day."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _setting(pool, beats.MAX_NOTICES_KEY, 0)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+
+    mount_peers(gateway=FakeGateway(deltas=("One thing is still standing.",)))
+    with caplog.at_level(logging.WARNING, logger="core"):
+        firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    assert firing["delivery"]["digest"]["notices"] == 1
+    assert "held_back" not in firing["delivery"]["digest"]
+    assert len(await _messages(pool, his_chat["id"])) == 1
+    assert any(beats.MAX_NOTICES_KEY in r.getMessage() for r in caplog.records)

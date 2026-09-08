@@ -113,8 +113,28 @@ export function settingValue<T>(settings: SettingDef[], key: string, fallback: T
   return found === undefined ? fallback : (found.value as T)
 }
 
-export async function putSetting(key: string, value: boolean | string | number): Promise<void> {
-  await apiSend('/api/v1/settings', 'PUT', { key, value })
+/**
+ * What PUT /api/v1/settings answers (2026-09-08, S11): the key and the value
+ * core ACTUALLY stored, and — for a setting whose write moves something
+ * server-side — the note saying what that move did.
+ *
+ * `value` is what came back, never what was sent: a page that renders the
+ * echo is showing storage, not its own optimism. `note` is core's own
+ * sentence (settings_store.write_setting → beats.retime_digest): where the
+ * digest beat landed, that it is paused, or why it could not be moved. It is
+ * absent for every other key, and it is words — never parsed, only shown.
+ */
+export interface SettingWritten {
+  key: string
+  value: unknown
+  note?: string
+}
+
+export async function putSetting(
+  key: string,
+  value: boolean | string | number,
+): Promise<SettingWritten> {
+  return apiSend<SettingWritten>('/api/v1/settings', 'PUT', { key, value })
 }
 
 // ── hardware, models, backend ───────────────────────────────────────────
@@ -900,8 +920,11 @@ export async function getGovernanceEvents(
 /** A timer is a row; its kind says what a firing does. `reminder` — code
  * delivers his words to chat and every connected paired device, no model.
  * `scheduled` — an instruction run as a real model turn. `job` — a code
- * handler bound by name (retention). Nothing here is a heartbeat. */
-export type TimerKind = 'reminder' | 'scheduled' | 'job'
+ * handler bound by name (retention). `beat` — S11's proactive engine: the
+ * hourly `watch` that runs the checks and the daily `digest` that composes
+ * the one message, each bound by `payload.handler` exactly as a job is.
+ * Nothing here is a heartbeat. */
+export type TimerKind = 'reminder' | 'scheduled' | 'job' | 'beat'
 
 /** timer_firings.status — `running` while the firing holds it, then exactly
  * one of ok / error / refused / interrupted (the CHECK constraint's set). A
@@ -1048,6 +1071,102 @@ export async function deleteTimer(id: string): Promise<void> {
  * — the store's 400) is thrown by `request` with core's stated reason. */
 export const bindTimerAgent = (id: string, agent: string | null) =>
   apiSend<Timer>(`/api/v1/timers/${encodeURIComponent(id)}/agent`, 'PUT', { agent })
+
+// ── notices / the Inbox (services/core/app/notices.py, S11) ─────────────
+
+/** What happened to one piece of news. `raised` — written down, nobody told
+ * yet; `delivered`/`failed` — the digest's chat rung reported, either way,
+ * with its evidence on the row; `seen` — he opened it; `muted` — he asked to
+ * stop hearing this until the facts change. None of the five is a permission:
+ * muting is a NOISE preference and `seen` is a read receipt (owner ruling
+ * 2026-09-03, services/core/app/notices.py). */
+export type NoticeState = 'raised' | 'delivered' | 'failed' | 'seen' | 'muted'
+
+/**
+ * One thing a check found, as core recorded it BEFORE anyone was told.
+ *
+ * Every field here is a fact core derived, and this client renders them as
+ * given: `facts` is what the fingerprint was computed from (never the model's
+ * sentence about them), `repeats` is a SIGHTING count and not a delivery
+ * count, and `cleared_at` is about the CONDITION — orthogonal to `state`,
+ * which is about the news. A cleared row still lists: "this was true and is
+ * not any more" is part of the record.
+ */
+export interface Notice {
+  id: string
+  /** The check that found it — the registry's own name, not a label. */
+  check_name: string
+  title: string
+  /** The derived facts the fingerprint was computed from. Shape is the
+   * check's own, so this client only ever displays it as key/value. */
+  facts: Record<string, unknown>
+  /** Declared by the CHECK in code (the stack family only). Nothing a model
+   * writes can promote a finding, so this is never inferred from words. */
+  urgent: boolean
+  acted: boolean
+  /** What she did about it, in her own words on the turn that did it. */
+  acted_note: string | null
+  /** The turn that acted — the trace is the account of the claim above. */
+  acted_turn_id: string | null
+  repeats: number
+  state: NoticeState
+  /** The delivery receipt, in the SAME shape a timer firing carries — core's
+   * delivery ladder builds the Schedules page's vocabulary on purpose (see
+   * services/core/app/delivery.py), so `deliveryLines` renders both. `{}`
+   * until a rung has actually reported. */
+  delivery: TimerDelivery
+  /** Why nobody was reached, when state is `failed`. */
+  failed_reason: string | null
+  first_seen_at: string
+  last_seen_at: string
+  /** When a check that RAN stopped finding these facts; null = still true. */
+  cleared_at: string | null
+  delivered_at: string | null
+  seen_at: string | null
+  muted_at: string | null
+}
+
+/** The Inbox's page. `unseen_count` is COUNTED BY THE SERVER over every row
+ * (notices.unseen_count), not over the page it happens to return — a badge
+ * derived from `notices` here would silently cap at the page size. */
+export interface NoticeListing {
+  notices: Notice[]
+  unseen_count: number
+}
+
+/** What the Inbox asks for in one read. Mirrors core's own default so the
+ * page's "these are the newest N" line and the server's page are the same
+ * number — the caller passes it explicitly rather than trusting the two to
+ * agree by coincidence. */
+export const NOTICES_PAGE_SIZE = 50
+
+export async function listNotices(opts: { limit?: number } = {}): Promise<NoticeListing> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? NOTICES_PAGE_SIZE))
+  return apiGet<NoticeListing>(`/api/v1/notices?${params.toString()}`)
+}
+
+/**
+ * PUT /notices/{id}/seen — the read receipt. This reads no answer back on
+ * purpose: the caller re-reads the listing after a write, so what is shown
+ * is the server's row rather than a locally patched copy (the roster idiom
+ * on the Agents page). A refusal — an id that names no row — is thrown by
+ * `request` with core's stated reason.
+ */
+export async function markNoticeSeen(id: string): Promise<void> {
+  await request(`/api/v1/notices/${encodeURIComponent(id)}/seen`, { method: 'PUT' })
+}
+
+/** PUT /notices/{id}/mute {muted} — silence this fingerprint, or let it
+ * speak again. A mute is a noise preference and nothing else: the row keeps
+ * standing, the checks keep folding onto it, and it never permits or forbids
+ * anything. Reads no answer back for the same reason `markNoticeSeen` does. */
+export async function muteNotice(id: string, muted: boolean): Promise<void> {
+  await request(`/api/v1/notices/${encodeURIComponent(id)}/mute`, {
+    method: 'PUT',
+    body: JSON.stringify({ muted }),
+  })
+}
 
 // ── AI Quality / evals (services/core/app/evals_api.py) ─────────────────
 

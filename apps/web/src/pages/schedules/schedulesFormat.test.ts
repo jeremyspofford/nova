@@ -6,15 +6,20 @@ import {
   formatNextFire,
   kindBadge,
   lastOutcome,
+  payloadLabel,
   payloadSummary,
   timerState,
 } from './schedulesFormat'
 
 describe('kindBadge', () => {
-  it('maps the three kinds and shows an unknown one verbatim, never hidden', () => {
+  // Pin moved 2026-09-08 (S11): migration 022 relaxed the kind CHECK to admit
+  // `beat`, so there are four kinds, not three — the two seeded beats used to
+  // fall through to the verbatim arm and read as neither.
+  it('maps the four kinds and shows an unknown one verbatim, never hidden', () => {
     expect(kindBadge('reminder')).toEqual({ label: 'reminder', color: 'accent' })
     expect(kindBadge('scheduled')).toEqual({ label: 'scheduled', color: 'info' })
     expect(kindBadge('job')).toEqual({ label: 'job', color: 'neutral' })
+    expect(kindBadge('beat')).toEqual({ label: 'beat', color: 'success' })
     expect(kindBadge('future')).toEqual({ label: 'future', color: 'neutral' })
   })
 })
@@ -152,10 +157,31 @@ describe('payloadSummary — what a firing does, from the payload', () => {
     expect(payloadSummary({ kind: 'job', payload: { handler: 'retention' } })).toBe('handler: retention')
   })
 
+  // S11 (2026-09-08): the two beats are bound by handler exactly as a job is,
+  // so the hourly watch and the daily digest are told apart on the page by
+  // what they do rather than by a title an owner can edit.
+  it('a beat shows which handler it runs — watch and digest are distinguishable', () => {
+    expect(payloadSummary({ kind: 'beat', payload: { handler: 'watch' } })).toBe('handler: watch')
+    expect(payloadSummary({ kind: 'beat', payload: { handler: 'digest' } })).toBe('handler: digest')
+  })
+
   it('a payload missing the field its kind promises is null, never an empty quote', () => {
     expect(payloadSummary({ kind: 'reminder', payload: {} })).toBeNull()
     expect(payloadSummary({ kind: 'scheduled', payload: { instruction: '' } })).toBeNull()
     expect(payloadSummary({ kind: 'job', payload: {} })).toBeNull()
+    expect(payloadSummary({ kind: 'beat', payload: {} })).toBeNull()
+  })
+})
+
+describe('payloadLabel — what the drill-in calls the summary', () => {
+  // S11 (2026-09-08): this used to be a ternary in the page that read "Job"
+  // for every kind it had not met, so both beats were labelled jobs.
+  it('names each kind, and an unmet one verbatim rather than as the nearest word', () => {
+    expect(payloadLabel('reminder')).toBe('Reminder')
+    expect(payloadLabel('scheduled')).toBe('Instruction')
+    expect(payloadLabel('job')).toBe('Job')
+    expect(payloadLabel('beat')).toBe('Beat')
+    expect(payloadLabel('future')).toBe('future')
   })
 })
 

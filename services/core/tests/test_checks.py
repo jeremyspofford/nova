@@ -925,3 +925,58 @@ async def test_a_day_the_ledger_skipped_inside_its_coverage_is_a_real_zero(pool,
     assert run.findings[0].facts["trailing_days"] == 7
     assert run.findings[0].facts["trailing_mean_usd"] == 0.4286
     assert run.findings[0].facts["multiple"] == 14.0
+
+
+# -- not due is not a gap (S11, 2026-09-08) --------------------------------
+#
+# review_commitments looks every six hours, so five hours in six it does not
+# run. Calling that "could not run" made INCOMPLETE the normal state, and a
+# signal that is always on cannot report the outage it exists for. A not-due
+# check leaves no gap — whatever it found last time is still standing as a
+# notice — so it does not stop a beat being quiet, and it is still named.
+def _run(name: str, *, ran: bool, due: bool = True, reason: str | None = None):
+    return checks.CheckRun(check=name, ran=ran, reason=reason, findings=(), due=due)
+
+
+def test_a_check_that_was_not_due_does_not_make_the_beat_incomplete():
+    quiet, why = checks.quiet(
+        [
+            _run("stack_gateway", ran=True),
+            _run("review_commitments", ran=False, due=False, reason="not due for another 4 hours"),
+        ]
+    )
+    assert quiet is True
+    assert why is None
+
+
+def test_a_check_that_could_not_run_still_makes_the_beat_incomplete():
+    quiet, why = checks.quiet(
+        [
+            _run("stack_gateway", ran=True),
+            _run("money_caps", ran=False, reason="the ledger did not answer"),
+        ]
+    )
+    assert quiet is False
+    assert "money_caps" in why and "the ledger did not answer" in why
+
+
+def test_a_not_due_check_is_named_when_the_beat_is_not_quiet_for_another_reason():
+    quiet, why = checks.quiet(
+        [
+            _run("money_caps", ran=False, reason="the ledger did not answer"),
+            _run("review_commitments", ran=False, due=False, reason="not due for another 4 hours"),
+        ]
+    )
+    assert quiet is False
+    # Both are said, and they are said as DIFFERENT things — "not due" must
+    # never read as "looked and found nothing", nor as a failure to look.
+    assert "could not run" in why
+    assert "not due" in why
+
+
+def test_a_hand_built_run_with_no_due_field_counts_against_quiet():
+    """quiet() is duck-typed; an unknown shape is DUE, never excused."""
+    import types
+
+    runs = [types.SimpleNamespace(check="mystery", ran=False, reason="who knows", findings=())]
+    assert checks.quiet(runs)[0] is False

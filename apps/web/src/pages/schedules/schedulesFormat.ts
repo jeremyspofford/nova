@@ -21,12 +21,16 @@ import type {
  * the browser's locale, and maps statuses to badges.
  */
 
-/** The three kinds (timers.kind CHECK). A kind this map has not met still
- * renders, verbatim and neutral, rather than being hidden. */
+/** The four kinds (timers.kind CHECK, relaxed by migration 022 to admit
+ * `beat`). A kind this map has not met still renders, verbatim and neutral,
+ * rather than being hidden. `beat` earns its own badge because the two
+ * seeded beats are ordinary timer rows an owner can pause, retime or run
+ * now, and reading them as "Job" hid what they were. */
 export function kindBadge(kind: TimerKind | string): { label: string; color: SemanticColor } {
   if (kind === 'reminder') return { label: 'reminder', color: 'accent' }
   if (kind === 'scheduled') return { label: 'scheduled', color: 'info' }
   if (kind === 'job') return { label: 'job', color: 'neutral' }
+  if (kind === 'beat') return { label: 'beat', color: 'success' }
   return { label: kind, color: 'neutral' }
 }
 
@@ -193,11 +197,28 @@ export function payloadSummary(timer: Pick<Timer, 'kind' | 'payload'>): string |
     const instruction = payload.instruction
     return typeof instruction === 'string' && instruction !== '' ? instruction : null
   }
-  if (timer.kind === 'job') {
+  // A job and a beat are bound the same way — by a handler name in the
+  // payload (`watch` or `digest` for the two beats) — so the two seeded beat
+  // rows are told apart by what they DO, not by a title someone can edit.
+  if (timer.kind === 'job' || timer.kind === 'beat') {
     const handler = payload.handler
     return typeof handler === 'string' && handler !== '' ? `handler: ${handler}` : null
   }
   return null
+}
+
+/**
+ * What the drill-in calls the summary above — one word per kind, derived
+ * here rather than as a ternary in the page, which read "Job" for anything
+ * it had not met and so labelled both beats as jobs. A kind this map has not
+ * met is named verbatim rather than filed under the nearest word.
+ */
+export function payloadLabel(kind: TimerKind | string): string {
+  if (kind === 'reminder') return 'Reminder'
+  if (kind === 'scheduled') return 'Instruction'
+  if (kind === 'job') return 'Job'
+  if (kind === 'beat') return 'Beat'
+  return kind
 }
 
 /** How long a firing ran, or null while it is still running (ended_at

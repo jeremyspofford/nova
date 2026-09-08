@@ -461,3 +461,54 @@ describe('ActivityPage — drill-in races', () => {
     expect(screen.getByTestId('activity-detail-b')).toBeDefined()
   })
 })
+
+// S11 (2026-09-08): the Inbox links one turn — "open the trace" behind a
+// claim she made — as /activity?turn=<id>. App.tsx reads the query param and
+// hands it here; the page reads nothing from the router itself, the same seam
+// FilesRoute uses for ?path=.
+describe('ActivityPage — a turn somebody linked to', () => {
+  it('opens the linked row on arrival and fetches its spans', async () => {
+    const api = fakeApi(
+      [[turn({ id: 't1' }), turn({ id: 't2', kind: 'beat' })]],
+      {
+        t2: detail({
+          turn: turn({ id: 't2', kind: 'beat' }),
+          spans: [
+            {
+              kind: 'tool',
+              name: 'restart_service',
+              started_at: new Date().toISOString(),
+              duration_ms: 40,
+              meta: { ok: true, args_redacted: { service: 'gateway' } },
+            },
+          ],
+        }),
+      },
+    )
+    render(<ActivityPage api={api} initialTurnId="t2" />)
+    expect(await screen.findByTestId('activity-detail-t2')).toBeDefined()
+    expect(api.getActivityTurn).toHaveBeenCalledWith('t2')
+    expect(within(screen.getByTestId('activity-detail-t2')).getByText('restart_service')).toBeDefined()
+    // Only the linked row opened.
+    expect(screen.queryByTestId('activity-detail-t1')).toBeNull()
+    expect(screen.queryByTestId('linked-turn-missing')).toBeNull()
+  })
+
+  // Silence would read as "that trace does not exist", which is a claim
+  // nobody checked — the row may simply be older than this page.
+  it('states a linked turn that is not on this page, and says whether more pages exist', async () => {
+    const { unmount } = render(
+      <ActivityPage api={fakeApi([[turn({ id: 't1' })]])} pageSize={1} initialTurnId="t9" />,
+    )
+    const missing = await screen.findByTestId('linked-turn-missing')
+    expect(missing.textContent).toContain('t9')
+    expect(missing.textContent).toContain('Load more')
+    unmount()
+
+    // A page shorter than the limit is the whole ledger, so the absence is
+    // final and says so.
+    render(<ActivityPage api={fakeApi([[turn({ id: 't1' })]])} pageSize={5} initialTurnId="t9" />)
+    const final = await screen.findByTestId('linked-turn-missing')
+    expect(final.textContent).toContain('no turn with that id is in it')
+  })
+})

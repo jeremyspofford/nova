@@ -26,6 +26,7 @@ import {
   formatNextFire,
   kindBadge,
   lastOutcome,
+  payloadLabel,
   payloadSummary,
   timerState,
 } from './schedulesFormat'
@@ -762,8 +763,8 @@ function ScheduleRow({
                 </dd>
                 {summary && (
                   <>
-                    <dt className="text-content-tertiary">
-                      {timer.kind === 'reminder' ? 'Reminder' : timer.kind === 'scheduled' ? 'Instruction' : 'Job'}
+                    <dt className="text-content-tertiary" data-testid="payload-label">
+                      {payloadLabel(timer.kind)}
                     </dt>
                     <dd className="text-content-secondary break-words">{summary}</dd>
                   </>

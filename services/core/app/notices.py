@@ -83,17 +83,29 @@ SEEN = "seen"
 MUTED = "muted"
 STATES = (RAISED, DELIVERED, FAILED, SEEN, MUTED)
 
-# What the digest still owes him. FAILED is in here on purpose: a delivery
-# that failed left nobody told, so a repeat of it is not a repeat — and since
-# a fold never moves a row back off `failed`, a query that read only `raised`
-# let ONE failed push suppress a still-true finding forever.
+# What the digest still owes him, as far as the STATE says. FAILED is in here
+# on purpose: a delivery that failed left nobody told, so a repeat of it is not
+# a repeat — and since a fold never moves a row back off `failed`, a query that
+# read only `raised` let ONE failed push suppress a still-true finding forever.
+# The state is only half of it: `deliverable` also requires the row to be
+# unread (_UNREAD), because a failed notice he has since opened in the Inbox
+# has reached him after all.
 DELIVERABLE_STATES = (RAISED, FAILED)
 
 # What the Inbox badge counts: news he has not read. DERIVED from
 # DELIVERABLE_STATES plus what landed and is waiting to be opened, so the
-# badge and the digest cannot drift apart. MUTED is absent because it is a
-# preference he already expressed, SEEN because he read it.
+# badge and the digest cannot drift apart — and both queries filter on the same
+# _UNREAD clause. MUTED is absent because it is a preference he already
+# expressed, SEEN because he read it.
 UNSEEN_STATES = (*DELIVERABLE_STATES, DELIVERED)
+
+# What "nobody has told him" is, in SQL, and the ONE place it is spelled: the
+# digest's query and the Inbox badge both read it, so the two can never drift
+# into disagreeing about whether he has read something. A notice he has SEEN is
+# no longer deliverable whatever its delivery state — a failed delivery he then
+# read in the Inbox has been told to him by his own eyes, and re-listing it in
+# tomorrow's digest would read as a repeat (owner-facing ruling, 2026-09-08).
+_UNREAD = "seen_at IS NULL"
 
 # A LIVE notice is one whose condition is still true. Every fold, every
 # clear and the digest's own query are scoped to these, because a cleared row
@@ -501,10 +513,15 @@ async def mark_seen(pool: asyncpg.Pool, notice_id: uuid.UUID) -> Notice:
     an explicit unmute clears one.
 
     A FAILED row also keeps its state, for the same shape of reason: `failed`
-    is the only record that nobody was TOLD, and him finding the row himself
-    in the Inbox does not make the push that never landed have landed. He was
-    still never told, so it stays deliverable and the state keeps saying why;
-    the read is recorded as `seen_at`, which is what the badge counts.
+    is the only record that nobody was TOLD by a channel, and him finding the
+    row himself in the Inbox does not make the push that never landed have
+    landed. The state therefore keeps saying so for as long as the row exists.
+
+    It does stop being DELIVERABLE, though, and that is not a contradiction:
+    the delivery failed and he read it anyway, so the news has reached him —
+    putting it in tomorrow's digest would read as a repeat. `deliverable`
+    filters on `seen_at IS NULL` for exactly that, and this timestamp is what
+    the badge counts too.
     """
     return await _update(
         pool,
@@ -560,19 +577,29 @@ async def deliverable(pool: asyncpg.Pool) -> list[Notice]:
     """Everything still true that he has not been told about, oldest first —
     what the digest composes from.
 
-    Two conditions, both load-bearing. `state` in DELIVERABLE_STATES, which
-    includes FAILED: a delivery that failed left nobody told, and since a
-    fold never moves a row back off `failed`, reading only `raised` here let
-    one failed push suppress a still-true finding forever. And `cleared_at IS
-    NULL`, because a condition that has finished is not a standing debt — the
-    fact that it cleared is the reconcile's return value, said once.
+    Three conditions, all load-bearing.
 
-    (This is the function beats/S11-3 calls; it was named `undelivered` while
-    it read only `raised`, which is the thing that was wrong with it.)
+    `state` in DELIVERABLE_STATES, which includes FAILED: a delivery that
+    failed left nobody told, and since a fold never moves a row back off
+    `failed`, reading only `raised` here let one failed push suppress a
+    still-true finding forever.
+
+    `cleared_at IS NULL`, because a condition that has finished is not a
+    standing debt — the fact that it cleared is the reconcile's return value,
+    said once.
+
+    And `seen_at IS NULL`: a notice the owner has SEEN is no longer
+    deliverable, whatever its delivery state. This is the one place the two
+    halves meet. `mark_seen` deliberately leaves a FAILED row in state `failed`
+    — that state is the only record that nobody was TOLD, and a read receipt
+    does not make a push that never landed have landed — but the receipt itself
+    is a fact about him: he read the row in the Inbox with his own eyes, so
+    listing it again in tomorrow's digest would read to him as a repeat. The
+    record of the failure stands on the row; the debt does not.
     """
     rows = await pool.fetch(
-        f"SELECT {_COLUMNS} FROM notices WHERE {_LIVE} AND state = ANY($1::text[]) "
-        f"ORDER BY first_seen_at",
+        f"SELECT {_COLUMNS} FROM notices WHERE {_LIVE} AND {_UNREAD} "
+        f"AND state = ANY($1::text[]) ORDER BY first_seen_at",
         list(DELIVERABLE_STATES),
     )
     return [Notice.from_row(row) for row in rows]
@@ -603,6 +630,6 @@ async def unseen_count(pool: asyncpg.Pool) -> int:
     told, and that it happened at all is the news.
     """
     return await pool.fetchval(
-        "SELECT count(*) FROM notices WHERE state = ANY($1::text[]) AND seen_at IS NULL",
+        f"SELECT count(*) FROM notices WHERE state = ANY($1::text[]) AND {_UNREAD}",
         list(UNSEEN_STATES),
     )

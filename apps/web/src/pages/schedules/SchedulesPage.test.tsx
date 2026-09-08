@@ -621,3 +621,49 @@ describe('SchedulesPage — the light poll', () => {
     expect(api.listTimers.mock.calls.length).toBe(atUnmount)
   })
 })
+
+// S11 (2026-09-08): the two beats are ordinary timer rows — pausable,
+// retimeable, "Run now"-able — so they list here like anything else. Before
+// this they fell through to the neutral arm and their drill-in called them
+// jobs, which made the hourly watch and the daily digest indistinguishable.
+describe('SchedulesPage — the beats', () => {
+  it('badges a beat as one and names which handler it runs', async () => {
+    render(
+      <SchedulesPage
+        api={fakeApi([
+          [
+            timer({
+              id: 'b1',
+              kind: 'beat',
+              title: 'Watch: run the checks every hour and act on what they find',
+              payload: { handler: 'watch' },
+              schedule_words: 'every hour at :05 America/New_York',
+              created_via: 'system',
+            }),
+            timer({
+              id: 'b2',
+              kind: 'beat',
+              title: 'Digest: one message a day about what she found',
+              payload: { handler: 'digest' },
+              schedule_words: 'every day at 08:00 America/New_York',
+              created_via: 'system',
+            }),
+          ],
+        ])}
+        pollMs={NEVER}
+      />,
+    )
+    const watch = await screen.findByTestId('schedules-row-b1')
+    expect(within(watch).getByText('beat')).toBeDefined()
+    expect(within(screen.getByTestId('schedules-row-b2')).getByText('beat')).toBeDefined()
+
+    fireEvent.click(watch)
+    const detail = await screen.findByTestId('schedules-detail-b1')
+    expect(within(detail).getByTestId('payload-label').textContent).toBe('Beat')
+    expect(within(detail).getByText('handler: watch')).toBeDefined()
+
+    fireEvent.click(screen.getByTestId('schedules-row-b2'))
+    const digest = await screen.findByTestId('schedules-detail-b2')
+    expect(within(digest).getByText('handler: digest')).toBeDefined()
+  })
+})

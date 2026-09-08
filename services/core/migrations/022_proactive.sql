@@ -108,6 +108,12 @@ CREATE UNIQUE INDEX notices_one_live_row_per_fingerprint
 -- The digest's query: everything still true that he has not been told about,
 -- INCLUDING a notice whose delivery failed — a repeat of something that never
 -- landed is not a repeat, so 'failed' is deliverable, not finished.
+--
+-- The query also requires seen_at IS NULL (a row he has read in the Inbox has
+-- reached him, whatever the delivery state says), which this predicate
+-- deliberately does NOT carry: a WIDER partial index still answers the
+-- narrower query — postgres filters the few read rows — while a predicate
+-- that matched exactly would have to be rebuilt every time that rule moves.
 CREATE INDEX notices_deliverable ON notices (first_seen_at)
     WHERE cleared_at IS NULL AND state IN ('raised', 'failed');
 CREATE INDEX notices_recent ON notices (last_seen_at DESC);

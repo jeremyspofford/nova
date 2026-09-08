@@ -7,14 +7,17 @@ import * as api from '../../../lib/api'
 // module. importOriginal keeps the rest of the module real.
 vi.mock('../../../lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../../lib/api')>()
-  return { ...actual, putSetting: vi.fn(async () => {}) }
+  // 2026-09-08 (S11): putSetting answers with what core stored (and, for
+  // the digest hour, a note) instead of nothing — the fake echoes the
+  // write the way the real call does.
+  return { ...actual, putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })) }
 })
 
 const putSetting = vi.mocked(api.putSetting)
 
 beforeEach(() => {
   putSetting.mockClear()
-  putSetting.mockResolvedValue(undefined)
+  putSetting.mockImplementation(async (key, value) => ({ key, value }))
 })
 
 // The zone the test process itself resolves — the step must preselect
@@ -65,9 +68,10 @@ describe('Timezone step — the instance zone, written before the wizard moves o
 
   it('writes nova.timezone on Continue and advances only once the write resolved', async () => {
     let resolveWrite!: () => void
+    // 2026-09-08 (S11): the write resolves with core's echo, not void.
     putSetting.mockReturnValueOnce(
-      new Promise<void>(resolve => {
-        resolveWrite = resolve
+      new Promise<api.SettingWritten>(resolve => {
+        resolveWrite = () => resolve({ key: 'nova.timezone', value: 'Europe/Oslo' })
       }),
     )
     const onNext = vi.fn()

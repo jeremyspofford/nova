@@ -614,9 +614,9 @@ async def test_a_failed_delivery_stays_deliverable_and_unread_through_folds(pool
 
 async def test_reading_a_failed_notice_does_not_erase_that_nobody_was_told(pool):
     """`failed` is the only record that the push never landed, and him finding
-    the row himself in the Inbox does not make it have landed. The read is
-    recorded as seen_at — that is what the badge counts — and the notice stays
-    owed."""
+    the row himself in the Inbox does not make it have landed: the state and
+    the reason stand. What the read DOES end is the debt — see the test
+    below."""
     notice, _ = await notices.record(
         pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
     )
@@ -627,7 +627,40 @@ async def test_reading_a_failed_notice_does_not_erase_that_nobody_was_told(pool)
     assert (seen.state, seen.failed_reason) == (notices.FAILED, "the gateway refused the push")
     assert seen.seen_at is not None
     assert await notices.unseen_count(pool) == 0
-    assert [n.id for n in await notices.deliverable(pool)] == [notice.id]
+    # Read back from the table: the row postgres holds says failed too.
+    row = await pool.fetchrow("SELECT state, failed_reason FROM notices WHERE id = $1", notice.id)
+    assert (row["state"], row["failed_reason"]) == (notices.FAILED, "the gateway refused the push")
+
+
+async def test_a_notice_he_has_read_is_no_longer_owed_and_an_unread_one_still_is(pool):
+    """The rule settled 2026-09-08, both ways in one test because the whole
+    value of it is the difference between the two rows.
+
+    A failed delivery he then READ in the Inbox has been told to him by his own
+    eyes; listing it again in tomorrow's digest would read to him as a repeat.
+    A failed delivery he has NOT read still reached nobody, and is still owed —
+    which is the older rule (`failed` is a deliverable state, not a finished
+    one) and must not be lost to this one."""
+    read, _ = await notices.record(pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None)
+    unread, _ = await notices.record(
+        pool, _finding(key="k2", facts={"a": 1}), check_name=QUIET, turn_id=None, firing_id=None
+    )
+    await notices.mark_failed(pool, read.id, "the gateway refused the push")
+    await notices.mark_failed(pool, unread.id, "no paired device was connected")
+    assert {n.id for n in await notices.deliverable(pool)} == {read.id, unread.id}
+
+    await notices.mark_seen(pool, read.id)
+
+    assert [n.id for n in await notices.deliverable(pool)] == [unread.id]
+    assert await notices.unseen_count(pool) == 1
+
+    # And a later sighting of the read one does not put it back: the fold bumps
+    # repeats and touches nothing else, so seen_at still stands.
+    folded, is_new = await notices.record(
+        pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
+    )
+    assert (is_new, folded.id, folded.repeats) == (False, read.id, 2)
+    assert [n.id for n in await notices.deliverable(pool)] == [unread.id]
 
 
 async def test_muting_and_unmuting_is_not_a_laundering_path_for_failed(pool):

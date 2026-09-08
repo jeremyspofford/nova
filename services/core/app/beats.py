@@ -107,13 +107,28 @@ BEAT_TITLES: dict[str, str] = {
 # would delay them all.
 WATCH_SCHEDULE = {"kind": "hour", "minute": 5}
 
-# The digest's hour. The setting does not exist yet (S11-6 adds it to
-# SETTING_DEFS with a validator that returns the problem in words), so it is
-# read defensively: through settings_store the moment the def lands, straight
-# off the table until then, and never trusted without validating it as a real
-# schedule.
+# The digest's hour. Read defensively — through settings_store when the def is
+# registered, straight off the table if it ever is not — and never trusted
+# without validating it as a real schedule.
 DIGEST_AT_KEY = "proactive.digest_at"
 DEFAULT_DIGEST_AT = "08:00"
+
+# The switch. It ships FALSE (SETTING_DEFS says so), and while it is false a
+# beat that fires does nothing and states that on its firing. This is a fact
+# about configuration, not a decision about what she may do: nothing here asks
+# anyone for anything, and the owner ruling of 2026-09-03 stands — the check
+# says the engine is off, never that a beat is not allowed to run.
+ENABLED_KEY = "proactive.enabled"
+PROACTIVE_OFF = (
+    "the proactive engine is off (proactive.enabled is false), so this beat ran nothing: no "
+    "check was made, nothing was recorded, nothing was cleared and nothing was delivered. "
+    "Turn the setting on and the next firing does the work."
+)
+
+# The backstop under "one message a day": the most findings one digest may
+# carry. What does not fit is HELD, never dropped — it is still deliverable and
+# the next digest owes it to him — and the count is recorded on the firing.
+MAX_NOTICES_KEY = "proactive.max_notices_per_day"
 
 # The title of the beats' own inactive conversation. It is how the row is found
 # again — a conversation has no other identity column, and an agent's log gets
@@ -359,6 +374,88 @@ async def ensure_beats(pool: asyncpg.Pool) -> bool:
     return True
 
 
+async def proactive_off(pool: asyncpg.Pool) -> str | None:
+    """None when the engine is ON; otherwise the words a firing states.
+
+    Only JSON `true` is on. Anything else — the default, an explicit false, or
+    a value someone wrote straight into the table that is not a boolean at all
+    — leaves the engine off, and the sentence SAYS which of those it was: a
+    stored "true" (the string) reading as off is exactly the kind of thing that
+    must appear on the firing rather than being quietly treated as either
+    answer.
+    """
+    value = await settings_store.read_value(pool, ENABLED_KEY)
+    if value is True:
+        return None
+    if value is False:
+        return PROACTIVE_OFF
+    return f"{PROACTIVE_OFF} (the stored value is {value!r}, which is neither true nor false)"
+
+
+def retimes_the_digest() -> tuple[str, str]:
+    """The settings the digest beat's next firing is computed FROM: the hour,
+    and the zone that hour is read on. `settings_store.write_setting` asks this
+    module rather than keeping its own copy of the list, so a key renamed here
+    moves the re-time with it.
+
+    A function rather than a constant because the zone's key lives in
+    app.tools.timers, which reaches app.timers -> app.scheduler -> this module:
+    the same call-time import idiom as _zone, one line lower down.
+    """
+    from app.tools.timers import TIMEZONE_KEY
+
+    return (DIGEST_AT_KEY, TIMEZONE_KEY)
+
+
+async def retime_digest(pool: asyncpg.Pool) -> str:
+    """Move the digest beat onto the hour the settings NOW say, and say where
+    it landed — in words read back from the row that was written.
+
+    This exists because `ensure_beats` leaves existing rows alone on purpose: a
+    seed that re-timed on every startup would undo a pause or a hand-set hour
+    at the next deploy. So the digest moves when one of `retimes_the_digest()`
+    is WRITTEN, from the route that writes it, and never by polling.
+
+    Nothing here raises for operator state. Three answers, each stating which
+    it was: the zone will not load (the hour would be a guess, so the row is
+    left exactly as it is); there is no digest row yet (a fresh install before
+    anyone registered — it is seeded with the new time at the next tick); or it
+    moved, and the sentence is `schedule.describe` over the stored row. A
+    PAUSED digest is re-timed and said to be paused: the pause is the
+    operator's and a setting write is not a resume.
+    """
+    zone = await _zone(pool)
+    if zone is None:
+        return (
+            "the digest was not re-timed: the stored timezone cannot be used (the log names "
+            "it), so its local hour would be a guess — fix nova.timezone and write the hour "
+            "again"
+        )
+    spec = await _digest_spec(pool)
+    now = await pool.fetchval("SELECT now()")
+    row = await pool.fetchrow(
+        "UPDATE timers SET schedule = $1::jsonb, timezone = $2, next_fire_at = $3, "
+        "updated_at = now() WHERE kind = $4 AND payload->>'handler' = $5 "
+        "RETURNING schedule, timezone, next_fire_at, paused_at",
+        spec,
+        zone,
+        schedule.next_after(spec, now, zone),
+        BEAT_KIND,
+        DIGEST,
+    )
+    if row is None:
+        return (
+            "there is no digest beat row yet, so nothing was re-timed — it is seeded with "
+            "this time the first time the scheduler can seed it"
+        )
+    # The words come from what postgres returned, not from what was sent: a
+    # re-time that says where the digest is must be reading the row it moved.
+    words = schedule.describe(row["schedule"], row["timezone"], row["next_fire_at"])
+    if row["paused_at"] is not None:
+        return f"the digest is {words}, but it is paused, so it does not fire until it is resumed"
+    return f"the digest is {words}"
+
+
 # -- one firing ---------------------------------------------------------------
 
 
@@ -380,6 +477,16 @@ async def run_beat(app, pool: asyncpg.Pool, row: asyncpg.Record, firing_id, turn
     in words, on the span as well as on the firing — the scheduler would
     otherwise be the only place that says what went wrong, and the trace is
     where anyone looks first.
+
+    The engine's switch is read HERE, where the work starts, so it gates both
+    beats through one line rather than each runner remembering to look. A beat
+    that fires while `proactive.enabled` is false does nothing at all and says
+    so, and the firing is OK: the row did exactly what the configuration says,
+    so it is not a failure and must not count toward the pause ceiling — five
+    quiet hours would otherwise pause the beats permanently and turning the
+    setting on would do nothing. Reading the switch inside the span means a
+    database that cannot answer becomes this firing's error, in words, rather
+    than a beat that silently decides it is off.
     """
     scheduler = _scheduler()
     payload = row["payload"]
@@ -390,7 +497,13 @@ async def run_beat(app, pool: asyncpg.Pool, row: asyncpg.Record, firing_id, turn
         return scheduler.Outcome(scheduler.FIRING_REFUSED, reason, {}, pause_reason=reason)
     with turn.span("beat", name) as span:
         try:
-            outcome = await runner(app, pool, turn, firing_id)
+            off = await proactive_off(pool)
+            if off is not None:
+                outcome = scheduler.Outcome(
+                    scheduler.FIRING_OK, off, {"beat": name, "proactive": {"enabled": False}}
+                )
+            else:
+                outcome = await runner(app, pool, turn, firing_id)
         except Exception as exc:  # noqa: BLE001 - the reason is the record
             reason = f"the {name} beat failed — {peers.reason(exc)[:300]}"
             span.meta["error"] = reason
@@ -1075,6 +1188,52 @@ def digest_brief(
     return "\n".join(lines)
 
 
+async def _notice_cap(pool: asyncpg.Pool) -> int:
+    """How many notices one digest may carry: the setting, or the def's own
+    default when the stored value cannot be used.
+
+    Same shape as _digest_spec one screen up — an operator value that will not
+    do is SAID in the log and the default stands. A cap of zero read literally
+    would compose a message about nothing while the notices piled up unread,
+    which looks exactly like a quiet day; the setting's own validator refuses
+    that at the write, and this is the second half of the same rule for a value
+    that reached the table another way.
+    """
+    definition = settings_store.DEFS_BY_KEY[MAX_NOTICES_KEY]
+    value = await settings_store.read_value(pool, MAX_NOTICES_KEY)
+    if type(value) is int:
+        problem = definition.validate(value)
+        if problem is None:
+            return value
+    else:
+        problem = f"it is a {type(value).__name__}, not a whole number"
+    logger.warning(
+        "%s is %r — %s; this digest carries at most %s",
+        MAX_NOTICES_KEY,
+        value,
+        problem,
+        definition.default,
+    )
+    return definition.default
+
+
+async def _owed_today(pool: asyncpg.Pool, notices) -> tuple[list, int]:
+    """What this digest reports, and how many findings it HELD BACK.
+
+    The backstop under "one message a day": a night when fifty things break
+    still produces a message rather than a log. Nothing is dropped — the rows
+    beyond the cap are not marked delivered, so they stay deliverable and the
+    next digest owes them to him — and the number is recorded on the firing,
+    because suppression here is countable or it is silence.
+
+    deliverable() is oldest first, so what is kept is what has been standing
+    longest and what waits is the newest.
+    """
+    owed = await notices.deliverable(pool)
+    cap = await _notice_cap(pool)
+    return owed[:cap], max(0, len(owed) - cap)
+
+
 async def _cleared_since(pool: asyncpg.Pool, firing_id) -> tuple[list, int]:
     """The notices whose condition ended since the last digest that REACHED
     him, most recent first, and how many more there were than the brief carries.
@@ -1273,6 +1432,11 @@ async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
     counted). Each fires as an APPENDED correction — the prose beside it may be
     perfectly true, and dropping it would cost him the message.
 
+    How many findings one message may carry is `proactive.max_notices_per_day`
+    (_owed_today): what does not fit is HELD, not dropped — those rows are
+    never marked delivered, so they are still owed tomorrow — and the count
+    goes on the firing.
+
     Finally the ladder: `delivery.deliver(urgent=False)`, which writes the chat
     row into his ACTIVE conversation and reads it back. `reached` is that row,
     and it is what decides whether every notice is marked delivered with the
@@ -1281,7 +1445,7 @@ async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
     """
     scheduler = _scheduler()
     _checks_module, notices = _proactive()
-    outstanding = await notices.deliverable(pool)
+    outstanding, held_back = await _owed_today(pool, notices)
     if not outstanding:
         rung, failure = await _say(pool, turn, DIGEST_NOTHING)
         record = {
@@ -1365,6 +1529,10 @@ async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
             "not_quiet": not_quiet,
         },
     }
+    if held_back:
+        # Only when the cap actually bit. The rows are untouched and still
+        # deliverable, so this counts what tomorrow still owes him.
+        record["digest"]["held_back"] = held_back
     if notes:
         record["digest"]["not_read"] = list(notes)
     if calls:

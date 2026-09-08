@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Cpu,
   Loader2,
+  Radar,
   Unplug,
 } from 'lucide-react'
 import { Badge } from '../../components/ui'
@@ -75,6 +76,10 @@ function ActivityLine({ activity }: { activity: NonNullable<MessageRow['activity
 const TURN_KIND_LABEL: Record<string, { label: string; Icon: typeof BellRing }> = {
   reminder: { label: 'Reminder', Icon: BellRing },
   scheduled: { label: 'Scheduled', Icon: CalendarClock },
+  // S11 (2026-09-08): a beat firing — her daily digest, or an urgent notice
+  // that could not wait for it. She wrote this row without being asked, so it
+  // says so rather than reading as an ordinary reply.
+  beat: { label: 'Noticed', Icon: Radar },
 }
 
 function TurnKindLabel({ kind }: { kind: string }) {

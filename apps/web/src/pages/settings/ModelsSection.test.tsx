@@ -80,7 +80,9 @@ function fakeApi({
       if (backendFails) throw new Error('backend unreachable')
       return backendConfig
     }),
-    putSetting: vi.fn(async () => {}),
+    // 2026-09-08 (S11): putSetting answers with what core stored — the
+    // fake echoes the write rather than returning nothing.
+    putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })),
     pullModel: vi.fn(() => linesOf(pullLines)),
   }
 }

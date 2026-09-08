@@ -22,6 +22,7 @@ import { FilesPage } from './pages/files/FilesPage'
 import { GovernancePage } from './pages/governance/GovernancePage'
 import { AIQualityPage } from './pages/quality/AIQualityPage'
 import { SchedulesPage } from './pages/schedules/SchedulesPage'
+import { InboxPage } from './pages/inbox/InboxPage'
 import { AgentsPage } from './pages/agents/AgentsPage'
 import { AgentPage } from './pages/agents/AgentPage'
 import { deletedSummary } from './pages/agents/agentsFormat'
@@ -69,6 +70,16 @@ function FilesRoute() {
 }
 
 /**
+ * The same seam for Activity (S11): `?turn=<id>` names one turn to open on
+ * arrival — how the Inbox's "open the trace" link reaches the spans behind a
+ * claim she made. The page reads nothing from the router itself.
+ */
+function ActivityRoute() {
+  const [searchParams] = useSearchParams()
+  return <ActivityPage initialTurnId={searchParams.get('turn')} />
+}
+
+/**
  * The agents routes' seams (S12), the FilesRoute idiom: the pages read
  * nothing from the router themselves. `/agents` takes the one-time notice an
  * agent page hands over after a delete (the server's own summary of what was
@@ -104,10 +115,11 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         <Route path="/chat" element={<ChatPage initialModel={chatModel} />} />
         <Route path="/governance" element={<GovernancePage />} />
         <Route path="/quality" element={<AIQualityPage />} />
-        <Route path="/activity" element={<ActivityPage />} />
+        <Route path="/activity" element={<ActivityRoute />} />
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/agents" element={<AgentsRoute />} />
         <Route path="/agents/:name" element={<AgentRoute />} />
+        <Route path="/inbox" element={<InboxPage />} />
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/spend" element={<SpendPage />} />

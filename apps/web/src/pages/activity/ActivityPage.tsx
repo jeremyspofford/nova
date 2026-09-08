@@ -44,11 +44,17 @@ function reasonOf(err: unknown): string {
 export function ActivityPage({
   api = DEFAULT_API,
   pageSize = ACTIVITY_PAGE_SIZE,
+  initialTurnId = null,
 }: {
   api?: ActivityApi
   /** Exposed so a test can exercise the "maybe more" boundary without 50
    * fake rows; production always uses the real page size. */
   pageSize?: number
+  /** S11: `?turn=<id>` off the URL — one turn somebody linked to (the
+   * Inbox's "open the trace"). Its row opens on arrival; if it is not in the
+   * page that loaded, that is STATED rather than left as a link that
+   * appeared to do nothing. */
+  initialTurnId?: string | null
 } = {}) {
   const [turns, setTurns] = useState<ActivityTurn[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -104,6 +110,22 @@ export function ActivityPage({
         </div>
       )}
 
+      {/* A link that named a turn this page has not loaded says so. Silence
+          there reads as "that trace does not exist", which is a claim nobody
+          checked — the row may simply be older than this page. */}
+      {initialTurnId !== null && turns !== null && !turns.some(t => t.id === initialTurnId) && (
+        <p
+          role="status"
+          data-testid="linked-turn-missing"
+          className="mb-6 rounded-sm border border-border bg-surface-elevated px-4 py-3 text-compact text-content-secondary"
+        >
+          Turn {initialTurnId} is not among the turns loaded here.{' '}
+          {exhausted
+            ? 'This is the whole ledger, so no turn with that id is in it.'
+            : 'Load more to reach it.'}
+        </p>
+      )}
+
       {turns === null ? (
         !error && <Skeleton lines={6} />
       ) : turns.length === 0 ? (
@@ -114,7 +136,11 @@ export function ActivityPage({
         />
       ) : (
         <>
-          <ActivityTable turns={turns} getActivityTurn={api.getActivityTurn} />
+          <ActivityTable
+            turns={turns}
+            getActivityTurn={api.getActivityTurn}
+            initialExpandedId={initialTurnId}
+          />
 
           {!exhausted && (
             <div className="flex justify-center mt-4">

@@ -1,9 +1,15 @@
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
-import { Activity, Bot, Boxes, CalendarClock, ChevronsLeft, ChevronsRight, Coins, FolderOpen, Gauge, MessageSquare, ScrollText, Settings } from 'lucide-react'
+import { Activity, Bot, Boxes, CalendarClock, ChevronsLeft, ChevronsRight, Coins, FolderOpen, Gauge, Inbox, MessageSquare, ScrollText, Settings } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
+import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
+
+/** The one count a nav entry can carry (S11). A KEY, not a number: this
+ * config is static and the count is live, read from the server by
+ * useUnseenNotices — a number stored here would be a client's guess. */
+export type NavBadge = 'unseen_notices'
 
 export type NavItem = {
   to: string
@@ -11,6 +17,7 @@ export type NavItem = {
   icon: typeof MessageSquare
   minRole: Role
   presetVisibility?: SurfacePreset[]
+  badge?: NavBadge
 }
 
 export type NavSection = {
@@ -39,6 +46,10 @@ export const navSections: NavSection[] = [
       // was written, since an agent is what the one does and what the other
       // shows.
       { to: '/agents', label: 'Agents', icon: Bot, minRole: 'admin' },
+      // S11: what she noticed without being asked, and what she did about
+      // it. Straight after Agents — the beats are the last thing that acts on
+      // its own, and this is the record of those actions.
+      { to: '/inbox', label: 'Inbox', icon: Inbox, minRole: 'admin', badge: 'unseen_notices' },
       { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
       { to: '/models', label: 'Models', icon: Boxes, minRole: 'admin' },
       { to: '/spend', label: 'Spend', icon: Coins, minRole: 'admin' },
@@ -48,6 +59,45 @@ export const navSections: NavSection[] = [
 ]
 
 const SURFACE_PRESET: SurfacePreset = 'advanced'
+
+/** A nav entry's count, drawn the same way on both surfaces (S11) so one
+ * entry cannot show two numbers. Only ever rendered for a count that came
+ * from the server — see navBadgeState. */
+export function NavCountBadge({ count, compact = false }: { count: number; compact?: boolean }) {
+  return (
+    <span
+      data-testid="nav-count-badge"
+      className={clsx(
+        'inline-flex items-center justify-center rounded-full bg-accent text-on-accent font-semibold tabular-nums',
+        compact ? 'h-3.5 min-w-3.5 px-1 text-[9px]' : 'h-4 min-w-4 px-1.5 text-micro',
+      )}
+    >
+      {count}
+    </span>
+  )
+}
+
+/**
+ * What a badged entry shows, and what it says about itself.
+ *
+ * `count` is only ever the server's — null means "not read yet, or the read
+ * failed", and both surfaces render nothing for null rather than a 0. That
+ * silence would read as "nothing is waiting", which is a success claim nobody
+ * checked, so an unreadable count is stated in the entry's own title instead.
+ */
+export function navBadgeState(
+  item: Pick<NavItem, 'badge'>,
+  unseen: { count: number | null; error: string | null },
+): { count: number | null; title: string | undefined } {
+  if (item.badge !== 'unseen_notices') return { count: null, title: undefined }
+  if (unseen.error !== null) {
+    return {
+      count: unseen.count,
+      title: `the unread count could not be read — ${unseen.error}`,
+    }
+  }
+  return { count: unseen.count, title: undefined }
+}
 
 function getInitials(name: string): string {
   const parts = name.trim().split(/\s+/)
@@ -65,6 +115,7 @@ export function Sidebar({
   const location = useLocation()
   const navigate = useNavigate()
   const { user } = useAuth()
+  const unseen = useUnseenNotices()
   const userRole: Role = user?.role ?? 'guest'
   const isActive = (to: string) => {
     return location.pathname === to
@@ -107,11 +158,12 @@ export function Sidebar({
                 {visibleItems.map(item => {
                   const Icon = item.icon
                   const active = isActive(item.to)
+                  const badge = navBadgeState(item, unseen)
                   return (
                     <NavLink
                       key={item.to}
                       to={item.to}
-                      title={collapsed ? item.label : undefined}
+                      title={badge.title ?? (collapsed ? item.label : undefined)}
                       className={clsx(
                         'relative flex items-center gap-2.5 rounded-md text-compact font-medium transition-colors duration-fast',
                         collapsed ? 'justify-center px-2 py-2' : 'px-2.5 py-2',
@@ -125,6 +177,11 @@ export function Sidebar({
                       )}
                       <Icon className="w-[18px] h-[18px] shrink-0" />
                       {!collapsed && <span className="truncate">{item.label}</span>}
+                      {badge.count !== null && badge.count > 0 && (
+                        <span className={clsx(collapsed ? 'absolute -top-0.5 right-0.5' : 'ml-auto')}>
+                          <NavCountBadge count={badge.count} compact={collapsed} />
+                        </span>
+                      )}
                     </NavLink>
                   )
                 })}

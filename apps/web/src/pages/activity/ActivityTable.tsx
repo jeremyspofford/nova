@@ -44,12 +44,19 @@ const HEADINGS = ['Time', 'Kind', 'Model', 'Status', 'Duration', 'Tools']
 export function ActivityTable({
   turns,
   getActivityTurn = apiGetActivityTurn,
+  initialExpandedId = null,
 }: {
   turns: ActivityTurn[]
   /** The drill-in fetch — the DI seam, so a page's fake api reaches here. */
   getActivityTurn?: typeof apiGetActivityTurn
+  /** S11: the row to open on arrival, for a link that names one turn (the
+   * Inbox's "open the trace"). Read once, when this table mounts — after
+   * that, which row is open is whatever the operator clicked. A turn id
+   * that is not in `turns` opens nothing; the CALLER is what says so, since
+   * only it knows whether more pages exist. */
+  initialExpandedId?: string | null
 }) {
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(initialExpandedId)
   const [details, setDetails] = useState<Record<string, DetailState>>({})
   // Which ids a fetch has actually SETTLED for — a ref, not derived from
   // `details`, so the effect below does not depend on state IT writes

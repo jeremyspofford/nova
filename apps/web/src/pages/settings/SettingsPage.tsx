@@ -13,6 +13,7 @@ import { DevicesSection } from './DevicesSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
 import { RoutingSection } from './RoutingSection'
+import { ProactiveSection } from './ProactiveSection'
 
 /**
  * The S1 settings shell: two sections and no tab machinery yet. The tabs and
@@ -68,6 +69,29 @@ export function SettingsPage() {
   const timezoneDef = settings?.find(s => s.key === 'nova.timezone')
   const timezone = typeof timezoneDef?.value === 'string' ? timezoneDef.value : ''
   const timezoneIsDefault = timezoneDef !== undefined && timezoneDef.value === timezoneDef.default
+
+  // S11: the three proactive settings, off the same one settings fetch. The
+  // section is mounted only when core exposes all three keys — a core that
+  // predates the slice cannot be configured, and defaults invented here would
+  // draw a switch whose write core refuses by name. Where a stored value is
+  // not the type the registry declares, the def's OWN default is shown rather
+  // than a number made up in the browser.
+  const defOf = (key: string) => settings?.find(s => s.key === key)
+  const enabledDef = defOf('proactive.enabled')
+  const digestDef = defOf('proactive.digest_at')
+  const maxNoticesDef = defOf('proactive.max_notices_per_day')
+  const proactive =
+    enabledDef && digestDef && maxNoticesDef
+      ? {
+          enabled: enabledDef.value === true,
+          digestAt:
+            typeof digestDef.value === 'string' ? digestDef.value : String(digestDef.default),
+          maxNoticesPerDay:
+            typeof maxNoticesDef.value === 'number'
+              ? maxNoticesDef.value
+              : Number(maxNoticesDef.default),
+        }
+      : null
 
   /** Reflects a write this page already knows succeeded, without a second
    * GET /api/v1/settings round trip. */
@@ -140,6 +164,16 @@ export function SettingsPage() {
               }}
             />
             <RoutingSection chatModel={chatModel} />
+            {proactive && (
+              <ProactiveSection
+                enabled={proactive.enabled}
+                digestAt={proactive.digestAt}
+                maxNoticesPerDay={proactive.maxNoticesPerDay}
+                // The value CORE stored, handed straight back into the one
+                // settings state this page renders from.
+                onChanged={(key, value) => updateSettingValue(key, value)}
+              />
+            )}
             <ResponseQualitySection
               checked={responsivenessCheck}
               onChanged={value => updateSettingValue('agents.responsiveness_check', value)}

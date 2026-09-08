@@ -5,8 +5,9 @@ import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { useMobileNav } from '../../hooks/useMobileNav'
+import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
-import { navSections, type NavItem, type NavSection } from './Sidebar'
+import { NavCountBadge, navBadgeState, navSections, type NavItem, type NavSection } from './Sidebar'
 
 // The nav config is Sidebar's, DERIVED rather than copied: the unlabelled
 // (Core) sections are the primary tabs, every labelled section is tucked
@@ -28,6 +29,9 @@ export function MobileNav() {
   const { user } = useAuth()
   const userRole: Role = user?.role ?? 'guest'
   const { hidden } = useMobileNav()
+  // The same server count the sidebar shows — one source, so the two
+  // surfaces over one nav config cannot disagree about what is waiting.
+  const unseen = useUnseenNotices()
 
   const isActive = (to: string) => {
     return location.pathname === to
@@ -107,10 +111,12 @@ export function MobileNav() {
                     {visibleItems.map(item => {
                       const Icon = item.icon
                       const active = isActive(item.to)
+                      const badge = navBadgeState(item, unseen)
                       return (
                         <NavLink
                           key={item.to}
                           to={item.to}
+                          title={badge.title}
                           onClick={() => setDrawerOpen(false)}
                           className={clsx(
                             'flex items-center gap-3 px-3 py-3 rounded-md text-body font-medium transition-colors duration-fast',
@@ -121,6 +127,11 @@ export function MobileNav() {
                         >
                           <Icon className="w-5 h-5 shrink-0" />
                           <span>{item.label}</span>
+                          {badge.count !== null && badge.count > 0 && (
+                            <span className="ml-auto">
+                              <NavCountBadge count={badge.count} />
+                            </span>
+                          )}
                         </NavLink>
                       )
                     })}

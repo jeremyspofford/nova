@@ -7,14 +7,17 @@ import * as api from '../../lib/api'
 // api module. importOriginal keeps the rest of the module real.
 vi.mock('../../lib/api', async importOriginal => {
   const actual = await importOriginal<typeof import('../../lib/api')>()
-  return { ...actual, putSetting: vi.fn(async () => {}) }
+  // 2026-09-08 (S11): putSetting answers with what core stored (and, for
+  // the digest hour, a note) instead of nothing — the fake echoes the
+  // write the way the real call does.
+  return { ...actual, putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })) }
 })
 
 const putSetting = vi.mocked(api.putSetting)
 
 beforeEach(() => {
   putSetting.mockClear()
-  putSetting.mockResolvedValue(undefined)
+  putSetting.mockImplementation(async (key, value) => ({ key, value }))
 })
 
 function select(): HTMLSelectElement {

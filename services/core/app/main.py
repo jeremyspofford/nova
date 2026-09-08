@@ -26,6 +26,7 @@ from app import (
     evals_api,
     governance_api,
     models_catalog,
+    notices_api,
     proxies,
     scheduler,
     settings_store,
@@ -115,6 +116,7 @@ app.include_router(spend_api.router)
 app.include_router(workspace_api.router)
 app.include_router(timers_api.router)
 app.include_router(agents_api.router)
+app.include_router(notices_api.router)
 
 
 @app.exception_handler(StarletteHTTPException)
