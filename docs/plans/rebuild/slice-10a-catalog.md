@@ -1,4 +1,4 @@
-# Slice 10a-1 — Model catalogue: close-out and carries
+# Slice 10a — Model catalogue: close-out and carries (10a-1, 10a-3, 10a-2)
 
 Plan: ~/.claude/plans/ethereal-cooking-dusk.md (approved 2026-09-06; the
 row shape, rails, sub-slices and DoD walk live there). Branch `slice/s10a`
@@ -81,6 +81,64 @@ coding marked inferred, budget 499/500, a next cursor. `GET /admin/
 catalog/resolve?model=qwen3:4b`: 2.50 GB, Q4_K_M, qwen3, 4.0B from the
 registry. Web bundle carries the page; tailnet 200.
 
+## S10a-3 — her tools (2026-09-07, commits 6e0a718a, 76483af4, 55b2a9bb)
+
+`services/core/app/tools/models.py`: `model_catalog_search` (the same
+gateway routes the page reads, core's measured layer joined; scope /
+capabilities / size / context / price / sort; every fact read out WITH its
+basis in words; a failed source named; a 429 or an unreachable gateway a
+stated failure) and `model_pull` (cloud ids refused before the gateway;
+preflight that does not fit → failure with the numbers; ollama's error
+line relayed; progress through the new `ToolContext.progress` channel →
+activity frames with `detail`, shown in the bubble as "using model_pull…
+pulling X — 42% (1.0 GB of 2.3 GB)"; SUCCESS only when the re-read
+catalogue lists the model; `set_as_chat_model` read back). Guards derived:
+capability phrases, a `_PULL_MODEL` offer class, a `pulled_model`
+narration claim backed only by a `model_pull` span naming the model.
+Registry pin 17 → 19; `ToolContext` field pin moved (an output channel is
+not a principal).
+
+**Walked live, in her words (owner session minted in nova_core; turn ids
+34b476d3…, 25eb2129…, ea2e4da4…):** "what models do we have installed and
+which can use tools?" → one `model_catalog_search` span, a four-row table
+with sizes and capabilities. "find a small coding model on Hugging Face
+under 3 GB that does tools, and pull it" → SIX search spans (she widened
+the query herself: coding → code → coder → qwen coder → starcoder →
+deepseek coder lite), then `model_pull hf.co/Qwen/Qwen2.5-Coder-1.5B-
+Instruct-GGUF` with 60 progress frames from the preflight (1.04 GB, size
+from hf-hub) to "checking the catalogue", the span's result line stating
+1.0 GB / Q4_K_M / 1.78B / digest 7d0404c7…, and a reply that quoted
+exactly that. "you also installed deepseek-coder:6.7b earlier, right?" →
+"No. You did not ask me to pull it, and I did not install it", a fresh
+search span, the five installed models listed. Two things the walk
+taught: a layer with no byte count repeated its status line into twenty
+identical frames (deduped), and `max_size_gb` dropped every Hub search
+row because Hub rows state no size until a quant is picked (counted
+honestly; the schema text now says to filter Hub rows by params). A
+circular import (`tools/models.py` → `models_catalog` → `evals.runner` →
+`chat` → `tools`) only showed when `app.tools` was imported FIRST — the
+deployed container's `python -c "from app import tools"` crashed while
+the app booted fine; lazy import + a cold-import subprocess test.
+
+## S10a-2 — drift, probe, measured (2026-09-07, commit 5c3057c1 +)
+
+`POST /admin/catalog/drift {model}`: the installed weights blob from
+/api/show's own Modelfile (`FROM …/blobs/sha256-<hex>`) against the
+source's current one — the registry manifest's `.model` layer for a
+library tag, the GGUF's `lfs.sha256` for an hf.co pull. **R1 answered on
+the live stack:** the three digests are the same value (qwen3:8b
+a3de86cd…, the Hub pull cc324af0…); the /api/tags digest is a manifest
+hash and is not comparable. `moved` true/false only when both sides were
+read, else null with the reason; never pulls. Live: qwen3:8b, qwen3.8:27b,
+muse-glimmer all `moved: false`; the Hub pull first answered "no longer
+lists a latest file" — ollama stores a quant-less Hub pull as `:latest`,
+which is the DEFAULT quant, not a file (fixed in the check and in the
+pull's canonical key). Page: Check for updates on installed rows (opt-in,
+never on load) → up to date / update available + Update (a re-pull of the
+same name) / could not tell: why; measured suitability tags link to
+/quality; Probe was already live from 10a-1; ModelDetails already
+rendered probe and drift.
+
 ## Owner-owed (the DoD walk, plan §Verification)
 
 1. `/models` → Installed → muse-glimmer with its facts labelled.
@@ -136,10 +194,12 @@ registry. Web bundle carries the page; tailnet 200.
   `lfs.sha256`.
 - **`quants_of` tag derivation** is a derived approximation of ollama's own
   tag matching (shared filename prefix snapped to a boundary); documented.
-- **S10a-2 / S10a-3** as planned: drift + Update, Probe from the row (the
-  route exists; the button is live), measured column surfaced with a link
-  to /quality, then `model_catalog_search` / `model_pull` for her with
-  progress frames.
+- **S10a-2 and S10a-3 shipped** (above). Not built, named: a
+  `model_check_update` tool for her (the route exists; a tool is a small
+  follow-up), scheduled drift checks, `model_remove`.
+- **Hub search rows carry no size** until a quant is picked — her
+  `max_size_gb` and the page's size facet both count them out honestly;
+  a per-row default-quant size would cost one detail call per row.
 - The Settings → Models section still renders its cards (its e2e testids
   are pinned); shrinking it to current-model + link is a small follow-up.
 - Per-model tool advertising in core stays informational (S10).

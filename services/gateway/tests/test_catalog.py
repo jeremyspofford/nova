@@ -485,6 +485,14 @@ async def test_drift_for_a_hub_pull_compares_the_ggufs_sha256(client, local, mou
     assert body["moved"] is False and body["source"] == "hf-hub"
     assert body["installed_digest"] == f"sha256:{quant['sha256']}"
 
+    # A pull typed without a quant is stored by ollama as `:latest` — that is
+    # the default quant (Q4_K_M), not a file called latest.
+    latest = f"hf.co/{repo}:latest"
+    local.tags = (latest,)
+    local.show[latest] = local.show[name]
+    body = (await client.post("/admin/catalog/drift", json={"model": latest})).json()
+    assert body["moved"] is False, body
+
 
 async def test_drift_says_why_when_a_side_cannot_be_read(client, local, mount_backend, monkeypatch):
     not_installed = await client.post("/admin/catalog/drift", json={"model": "nope:1b"})

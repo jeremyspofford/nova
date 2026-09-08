@@ -51,7 +51,9 @@ def canonical_ref(model: str) -> str:
     explicit. `validate_model` runs first."""
     if is_hub_ref(model):
         org, repo, quant = split_hub_ref(model)
-        return f"hf.co/{org}/{repo}:{quant or hf_hub.DEFAULT_QUANT}".lower()
+        if not quant or quant.lower() == "latest":  # ollama's name for the default pull
+            quant = hf_hub.DEFAULT_QUANT
+        return f"hf.co/{org}/{repo}:{quant}".lower()
     try:
         ref = ollama_registry.split_ref(model)
     except (ollama_registry.NotARegistryRef, ValueError):

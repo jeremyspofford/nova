@@ -383,6 +383,8 @@ def test_canonical_ref_folds_the_spellings_of_one_download_together():
     assert pulls.canonical_ref(f"hf.co/{REPO}") == pulls.canonical_ref(f"HF.co/{REPO}:Q4_K_M")
     assert pulls.canonical_ref(f"hf.co/{REPO}:Q8_0") != pulls.canonical_ref(f"hf.co/{REPO}")
     assert pulls.canonical_ref("ghcr.io/x/y:1") == "ghcr.io/x/y:1"
+    # ollama stores a quant-less Hub pull as `:latest`: the same download.
+    assert pulls.canonical_ref(f"hf.co/{REPO}:latest") == pulls.canonical_ref(f"hf.co/{REPO}")
 
 
 async def test_an_unreadable_registry_config_is_said_on_the_preflight_line(

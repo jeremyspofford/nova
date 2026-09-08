@@ -535,7 +535,9 @@ async def _upstream_weights(app, name: str) -> tuple[str | None, str, str | None
         org, repo, quant = pulls.split_hub_ref(name)
         detail = await hf_hub.repo_detail(app, org, repo)
         quants = hf_hub.quants_of(detail.siblings)
-        wanted = quant or hf_hub.DEFAULT_QUANT
+        # ollama stores a pull typed without a quant as `:latest` — that IS
+        # the default quant, not a file called latest (live, 2026-09-07).
+        wanted = quant if quant and quant.lower() != "latest" else hf_hub.DEFAULT_QUANT
         chosen = hf_hub.find_quant(quants, wanted)
         if chosen is None:
             return None, hf_hub.SOURCE_KEY, f"{org}/{repo} no longer lists a {wanted} file"
