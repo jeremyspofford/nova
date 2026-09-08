@@ -232,7 +232,9 @@ def listing_capabilities(row: dict) -> tuple[dict, dict]:
     for key, field in (
         ("coding", "coding_index"),
         ("agentic", "agentic_index"),
-        ("reasoning", "intelligence_index"),
+        # Artificial Analysis's Intelligence Index is a composite, not a
+        # reasoning measure: it is read out under its own name.
+        ("intelligence", "intelligence_index"),
     ):
         if field in benchmarks:
             suitability[key] = _listed(

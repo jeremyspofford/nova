@@ -20,6 +20,7 @@ export const SUITABILITY_KEYS = [
   'chat',
   'coding',
   'agentic',
+  'intelligence',
   'reasoning',
   'writing',
   'vision',
@@ -65,6 +66,8 @@ export type SortKey =
   | 'price_completion'
   | 'downloads'
   | 'coding'
+  | 'intelligence'
+  | 'agentic'
 
 export interface HiddenCounts {
   noSize: number
@@ -179,6 +182,18 @@ function sortValue(row: CatalogRow, key: SortKey): number | string | null {
       )
       return declared ? (declared.value as number) : null
     }
+    case 'intelligence': {
+      const declared = suitabilityEntries(row, 'intelligence').find(
+        e => e.basis !== 'inferred' && typeof e.value === 'number',
+      )
+      return declared ? (declared.value as number) : null
+    }
+    case 'agentic': {
+      const declared = suitabilityEntries(row, 'agentic').find(
+        e => e.basis !== 'inferred' && typeof e.value === 'number',
+      )
+      return declared ? (declared.value as number) : null
+    }
     default:
       return num(row, key)
   }
@@ -245,3 +260,22 @@ export function capabilityChips(row: CatalogRow): { key: string; label: string; 
 
 /** What the page says when a row states no capability at all. */
 export const NOT_STATED = 'not stated'
+
+
+/** The three third-party indices OpenRouter relays (Artificial Analysis),
+ * on a 0-100 scale, as the models' own benchmark block shows them. A
+ * numeric suitability entry under these names of ANY non-inferred basis
+ * counts; a boolean (an inferred "coding?") is not a score. */
+export const BENCHMARK_INDICES = [
+  { key: 'intelligence', label: 'Intelligence' },
+  { key: 'coding', label: 'Coding' },
+  { key: 'agentic', label: 'Agentic' },
+] as const
+export type BenchmarkKey = (typeof BENCHMARK_INDICES)[number]['key']
+
+export function benchmarkScore(row: CatalogRow, key: BenchmarkKey): CatalogFact<number> | null {
+  const facts = suitabilityEntries(row, key).filter(
+    (f): f is CatalogFact<number> => typeof f.value === 'number' && f.basis !== 'inferred' && f.basis !== 'measured',
+  )
+  return facts[0] ?? null
+}

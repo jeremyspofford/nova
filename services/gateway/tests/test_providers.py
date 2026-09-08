@@ -1275,7 +1275,7 @@ async def test_a_listing_row_carries_what_openrouter_declared_and_nothing_more(
                 **LISTED,
                 "note": "OpenRouter benchmarks.artificial_analysis.agentic_index (third-party)",
             },
-            "reasoning": {
+            "intelligence": {
                 "value": 42.0,
                 **LISTED,
                 "note": (

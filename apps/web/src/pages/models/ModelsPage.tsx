@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Boxes, Check, Columns3, Download, Gauge, RefreshCw, Search, Trash2 } from 'lucide-react'
+import { BarChart3, Boxes, Check, Columns3, Download, Gauge, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
 import {
   Badge,
@@ -44,10 +44,12 @@ import { Link } from 'react-router-dom'
 import { formatRelativeTime } from '../activity/activityFormat'
 import { useChatStore } from '../../stores/chat-store'
 import {
+  BENCHMARK_INDICES,
   CAPABILITY_KEYS,
   EMPTY_FACETS,
   SUITABILITY_KEYS,
   applyFacets,
+  benchmarkScore,
   capabilityChips,
   isCurrent,
   sortRows,
@@ -60,6 +62,7 @@ import {
 } from './catalogFormat'
 import { ModelDetails } from './ModelDetails'
 import { CompareView } from './CompareView'
+import { BenchmarkCharts } from './BenchmarkCharts'
 import { PullControl } from './PullControl'
 
 /**
@@ -107,6 +110,17 @@ const DEFAULT_API: ModelsApi = {
 }
 
 const COMPARE_MAX = 5
+const BENCH_MAX = 12
+const SHORT_INDEX: Record<string, string> = { intelligence: 'Int', coding: 'Cod', agentic: 'Agt' }
+
+/** The rows on screen that carry any index, best intelligence first, capped
+ * so the bars stay readable. */
+function benchmarkRows(rows: CatalogRow[]): CatalogRow[] {
+  return rows
+    .filter(r => BENCHMARK_INDICES.some(i => benchmarkScore(r, i.key) !== null))
+    .sort((a, b) => (benchmarkScore(b, 'intelligence')?.value ?? -1) - (benchmarkScore(a, 'intelligence')?.value ?? -1))
+    .slice(0, BENCH_MAX)
+}
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -167,6 +181,8 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   // stays readable), and whether the view is open.
   const [compareIds, setCompareIds] = useState<string[]>([])
   const [compareOpen, setCompareOpen] = useState(false)
+  // Benchmarks: the charts for the rows on screen that carry an index.
+  const [benchOpen, setBenchOpen] = useState(false)
   const [removing, setRemoving] = useState<CatalogRow | null>(null)
   const [removeBusy, setRemoveBusy] = useState(false)
 
@@ -525,6 +541,28 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       },
     },
     {
+      key: 'intelligence',
+      header: 'Benchmarks',
+      sortable: true,
+      render: row => {
+        const scores = BENCHMARK_INDICES.map(i => ({ ...i, score: benchmarkScore(row, i.key) }))
+        if (scores.every(s => s.score === null)) return <span className="text-content-tertiary">—</span>
+        return (
+          <div className="w-28 space-y-0.5" data-testid={`bench-cell-${row.id}`}>
+            {scores.map(s => (
+              <div key={s.key} className="flex items-center gap-1 text-micro" title={s.score ? `${s.label} ${Math.round(s.score.value)} — ${s.score.basis} · ${s.score.source}${s.score.note ? ` — ${s.score.note}` : ''}` : `${s.label}: no data`}>
+                <span className="w-7 text-content-tertiary">{SHORT_INDEX[s.key]}</span>
+                <div className="h-1.5 flex-1 rounded-full bg-neutral-200/60 dark:bg-neutral-700/60">
+                  {s.score && <div className="h-1.5 rounded-full bg-accent" style={{ width: `${Math.max(0, Math.min(100, s.score.value))}%` }} />}
+                </div>
+                <span className="w-6 text-right tabular-nums text-content-primary">{s.score ? Math.round(s.score.value) : '—'}</span>
+              </div>
+            ))}
+          </div>
+        )
+      },
+    },
+    {
       key: 'coding',
       header: 'Suitability',
       sortable: true,
@@ -674,6 +712,16 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
               title={compareIds.length < 2 ? `tick two or more rows to compare (up to ${COMPARE_MAX})` : 'side by side'}
             >
               Compare{compareIds.length > 0 ? ` (${compareIds.length})` : ''}
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<BarChart3 size={12} />}
+              onClick={() => setBenchOpen(true)}
+              aria-label="benchmark charts"
+              title="Intelligence, Coding and Agentic indices for the models on screen that carry them"
+            >
+              Benchmarks
             </Button>
             <Button size="sm" variant="ghost" icon={<RefreshCw size={12} />} onClick={() => void load()}>
               Refresh
@@ -896,12 +944,21 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       </Sheet>
 
       <Modal open={compareOpen} onClose={() => setCompareOpen(false)} size="xl" title={`Compare ${compareIds.length} models`}>
+        <div className="mb-6">
+          <h3 className="mb-3 text-compact font-medium text-content-primary">Benchmarks</h3>
+          <BenchmarkCharts rows={compareIds.map(id => allRows.find(r => r.id === id)).filter((r): r is CatalogRow => r !== undefined)} />
+        </div>
+        <h3 className="mb-3 text-compact font-medium text-content-primary">Every fact, side by side</h3>
         <CompareView rows={compareIds.map(id => allRows.find(r => r.id === id)).filter((r): r is CatalogRow => r !== undefined)} />
         <div className="mt-3 flex justify-end">
           <Button size="sm" variant="ghost" onClick={() => { setCompareIds([]); setCompareOpen(false) }}>
             Clear selection
           </Button>
         </div>
+      </Modal>
+
+      <Modal open={benchOpen} onClose={() => setBenchOpen(false)} size="xl" title="Benchmarks — the models on screen">
+        <BenchmarkCharts rows={benchmarkRows(sorted)} />
       </Modal>
 
       <ConfirmDialog

@@ -506,4 +506,23 @@ describe('ModelsPage', () => {
     const size = screen.getByText('≈ 16.8 GB')
     expect(size.getAttribute('data-basis')).toBe('inferred')
   })
+
+  it('the Benchmarks column shows the three indices on a row that carries them, and the charts button opens them', async () => {
+    const scored = {
+      ...CLOUD,
+      suitability: {
+        intelligence: { value: 53, basis: 'declared', source: 'provider-listing', note: 'third-party' },
+        coding: { value: 69, basis: 'declared', source: 'provider-listing', note: 'third-party' },
+        agentic: { value: 50, basis: 'declared', source: 'provider-listing', note: 'third-party' },
+      },
+    }
+    renderPage({ getCatalog: vi.fn(async () => ({ ...CATALOG, rows: [INSTALLED, scored] })) })
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Cloud/ }))
+    const cell = await screen.findByTestId('bench-cell-openrouter:openai/gpt-x')
+    expect(cell.textContent).toBe('Int53Cod69Agt50')
+    fireEvent.click(screen.getByRole('button', { name: 'benchmark charts' }))
+    await waitFor(() => expect(screen.getByTestId('benchmark-charts')).toBeTruthy())
+    expect(screen.getByTestId('bench-coding-openrouter:openai/gpt-x').style.height).toBe('69%')
+  })
 })

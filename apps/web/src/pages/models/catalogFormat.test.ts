@@ -3,6 +3,7 @@ import type { CatalogRow } from '../../lib/api'
 import {
   EMPTY_FACETS,
   applyFacets,
+  benchmarkScore,
   capabilityChips,
   isCurrent,
   sortRows,
@@ -184,5 +185,14 @@ describe('catalogFormat — current and labels', () => {
     const on = applyFacets([estimated, stated], { ...EMPTY_FACETS, tab: 'available', maxSizeGb: 3, includeInferred: true })
     expect(on.rows.map(r => r.id)).toEqual(['ollama:hf.co/o/r', 'ollama:x:1b'])
     expect(on.hidden.noSize).toBe(0)
+  })
+
+  it('a benchmark score is a numeric, non-inferred suitability entry under the index name', () => {
+    expect(benchmarkScore(CLOUD, 'coding')?.value).toBe(76.9)
+    expect(benchmarkScore(CLOUD, 'intelligence')).toBeNull()
+    expect(benchmarkScore(LOCAL, 'coding')).toBeNull() // inferred "coding?" is not a score
+    const scored = row({ id: 'openrouter:x/y', suitability: { intelligence: { value: 53, basis: 'declared', source: 'provider-listing' }, agentic: { value: 50, basis: 'declared', source: 'provider-listing' } } })
+    expect(sortRows([CLOUD, scored], 'intelligence', 'desc').map(r => r.id)).toEqual(['openrouter:x/y', CLOUD.id])
+    expect(sortRows([CLOUD, scored], 'agentic', 'asc').map(r => r.id)).toEqual(['openrouter:x/y', CLOUD.id])
   })
 })
