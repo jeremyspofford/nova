@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Boxes, Check, Download, Gauge, RefreshCw, Search } from 'lucide-react'
+import { Boxes, Check, Columns3, Download, Gauge, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { PageHeader } from '../../components/layout/PageHeader'
 import {
   Badge,
   Button,
   Checkbox,
+  ConfirmDialog,
   Input,
+  Modal,
   ModelFitNotice,
   Popover,
   SearchInput,
@@ -21,6 +23,7 @@ import {
   getHfRepo as apiGetHfRepo,
   getSettings as apiGetSettings,
   checkDrift as apiCheckDrift,
+  removeModel as apiRemoveModel,
   probeModel as apiProbeModel,
   pullModel as apiPullModel,
   putSetting as apiPutSetting,
@@ -56,6 +59,7 @@ import {
   type SortKey,
 } from './catalogFormat'
 import { ModelDetails } from './ModelDetails'
+import { CompareView } from './CompareView'
 import { PullControl } from './PullControl'
 
 /**
@@ -83,6 +87,7 @@ interface ModelsApi {
   resolveModel: typeof apiResolveModel
   probeModel: typeof apiProbeModel
   checkDrift: typeof apiCheckDrift
+  removeModel: typeof apiRemoveModel
   pullModel: typeof apiPullModel
   putSetting: typeof apiPutSetting
   getSettings: typeof apiGetSettings
@@ -95,10 +100,13 @@ const DEFAULT_API: ModelsApi = {
   resolveModel: apiResolveModel,
   probeModel: apiProbeModel,
   checkDrift: apiCheckDrift,
+  removeModel: apiRemoveModel,
   pullModel: apiPullModel,
   putSetting: apiPutSetting,
   getSettings: apiGetSettings,
 }
+
+const COMPARE_MAX = 5
 
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
@@ -155,6 +163,12 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   // Drift, per row: what the LAST check said (the catalogue rows carry
   // null until S10a-2's check runs; it is opt-in, never on load).
   const [drift, setDrift] = useState<Record<string, DriftResult | 'checking' | { error: string }>>({})
+  // Compare: the rows ticked for a side-by-side view (capped so the matrix
+  // stays readable), and whether the view is open.
+  const [compareIds, setCompareIds] = useState<string[]>([])
+  const [compareOpen, setCompareOpen] = useState(false)
+  const [removing, setRemoving] = useState<CatalogRow | null>(null)
+  const [removeBusy, setRemoveBusy] = useState(false)
 
   // Hugging Face search (Available tab)
   const [hfQuery, setHfQuery] = useState('')
@@ -260,6 +274,31 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       setActionError(`could not switch to ${row.id} — ${reasonOf(err)}`)
     } finally {
       setSwitching(null)
+    }
+  }
+
+  const toggleCompare = (row: CatalogRow, on: boolean) => {
+    setCompareIds(prev => {
+      if (!on) return prev.filter(id => id !== row.id)
+      if (prev.includes(row.id) || prev.length >= COMPARE_MAX) return prev
+      return [...prev, row.id]
+    })
+  }
+
+  const remove = async (row: CatalogRow) => {
+    setRemoveBusy(true)
+    setActionError(null)
+    try {
+      const result = await api.removeModel(row.model)
+      if (result.verified !== true) throw new Error(`the gateway did not verify the removal of ${row.model}`)
+      setRemoving(null)
+      // Installed is what the re-read catalogue says, never the 200.
+      await load()
+    } catch (err) {
+      setActionError(`could not remove ${row.id} — ${reasonOf(err)}`)
+      setRemoving(null)
+    } finally {
+      setRemoveBusy(false)
     }
   }
 
@@ -371,6 +410,19 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
 
   const columns: TableColumn<CatalogRow>[] = [
     {
+      key: 'compare',
+      header: '',
+      width: '2rem',
+      render: row => (
+        <Checkbox
+          checked={compareIds.includes(row.id)}
+          onChange={on => toggleCompare(row, on)}
+          aria-label={`compare ${row.id}`}
+          disabled={!compareIds.includes(row.id) && compareIds.length >= COMPARE_MAX}
+        />
+      ),
+    },
+    {
       key: 'name',
       header: 'Model',
       sortable: true,
@@ -401,9 +453,20 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
       header: 'Size',
       sortable: true,
       render: row => {
-        const bytes = row.facts.size_bytes?.value
+        const size = row.facts.size_bytes
         const params = row.facts.params_b?.value
-        if (typeof bytes === 'number') return formatBytes(bytes)
+        if (size && typeof size.value === 'number') {
+          if (size.basis === 'inferred') {
+            // An estimate at the default quant, drawn as one: dashed, ≈, the
+            // arithmetic in the title. Never the stated size.
+            return (
+              <span className="border-b border-dashed border-warning text-warning" title={size.note ?? 'inferred'} data-basis="inferred">
+                ≈ {formatBytes(size.value)}
+              </span>
+            )
+          }
+          return formatBytes(size.value)
+        }
         if (typeof params === 'number') return `${formatParams(params)} params`
         return row.kind === 'hub' ? 'pick a quant' : <span className="text-content-tertiary">not stated</span>
       },
@@ -568,6 +631,18 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
           <Button size="sm" variant="ghost" onClick={() => setDetails(row)} aria-label={`details ${row.id}`}>
             Details
           </Button>
+          {actionsOf(row).includes('remove') && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<Trash2 size={12} />}
+              onClick={() => setRemoving(row)}
+              aria-label={`remove ${row.id}`}
+              title="delete this model from the local ollama (verified against its own list)"
+            >
+              Remove
+            </Button>
+          )}
           {probeNote[row.id] && <span className="text-caption text-content-tertiary">{probeNote[row.id]}</span>}
           <DriftNote drift={drift[row.id]} onUpdate={() => startPull(row.model)} rowId={row.id} />
         </div>
@@ -588,9 +663,22 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
         title="Models"
         description="Every model Nova can run or reach, from live sources. Facts are labelled with where they came from; a dashed ? tag is inferred, not stated."
         actions={
-          <Button size="sm" variant="ghost" icon={<RefreshCw size={12} />} onClick={() => void load()}>
-            Refresh
-          </Button>
+          <>
+            <Button
+              size="sm"
+              variant={compareIds.length >= 2 ? 'primary' : 'ghost'}
+              icon={<Columns3 size={12} />}
+              disabled={compareIds.length < 2}
+              onClick={() => setCompareOpen(true)}
+              aria-label="compare selected"
+              title={compareIds.length < 2 ? `tick two or more rows to compare (up to ${COMPARE_MAX})` : 'side by side'}
+            >
+              Compare{compareIds.length > 0 ? ` (${compareIds.length})` : ''}
+            </Button>
+            <Button size="sm" variant="ghost" icon={<RefreshCw size={12} />} onClick={() => void load()}>
+              Refresh
+            </Button>
+          </>
         }
       />
 
@@ -803,9 +891,30 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
         />
       )}
 
-      <Sheet open={details !== null} onClose={() => setDetails(null)} title={details?.label ?? ''}>
+      <Sheet open={details !== null} onClose={() => setDetails(null)} title={details?.label ?? ''} width="half">
         {details && <ModelDetails row={details} />}
       </Sheet>
+
+      <Modal open={compareOpen} onClose={() => setCompareOpen(false)} size="xl" title={`Compare ${compareIds.length} models`}>
+        <CompareView rows={compareIds.map(id => allRows.find(r => r.id === id)).filter((r): r is CatalogRow => r !== undefined)} />
+        <div className="mt-3 flex justify-end">
+          <Button size="sm" variant="ghost" onClick={() => { setCompareIds([]); setCompareOpen(false) }}>
+            Clear selection
+          </Button>
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={removing !== null}
+        onClose={() => (removeBusy ? undefined : setRemoving(null))}
+        title={`Remove ${removing?.model ?? ''}?`}
+        description={`Deletes the model and its weights from the local ollama${removing?.facts.size_bytes && typeof removing.facts.size_bytes.value === 'number' ? ` (${formatBytes(removing.facts.size_bytes.value)})` : ''}. It can be pulled again later. Removal is verified against ollama's own list.`}
+        confirmLabel={removeBusy ? 'Removing…' : 'Remove'}
+        destructive
+        onConfirm={() => {
+          if (removing && !removeBusy) void remove(removing)
+        }}
+      />
     </div>
   )
 }

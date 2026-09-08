@@ -490,6 +490,87 @@ def _progress_words(target: str, line: dict) -> str:
     return f"{status} — {target}"
 
 
+async def _send(ctx: ToolContext, method: str, path: str, **kwargs) -> tuple[int, dict]:
+    """One gateway call whose body is JSON either way (a refusal carries
+    `error`); transport failures are stated ToolFailures."""
+    try:
+        async with _gateway(ctx, CATALOG_TIMEOUT) as client:
+            response = await client.request(method, path, **kwargs)
+    except httpx.TimeoutException as exc:
+        raise ToolFailure(
+            f"the model gateway did not answer {path} within {CATALOG_TIMEOUT.read:g} s"
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise ToolFailure(f"could not reach the model gateway — {peers.reason(exc)}") from exc
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    return response.status_code, body
+
+
+async def model_check_update(args: dict, ctx: ToolContext) -> str:
+    """Has the source moved since this model was pulled? The gateway
+    compares the installed weights digest with the source's current one
+    and never pulls; this reads the answer out in words."""
+    target = _target_of(str(args.get("model") or ""))
+    status, body = await _send(ctx, "POST", "/admin/catalog/drift", json={"model": target})
+    if status == 404:
+        raise ToolFailure(f"{target} is not installed — nothing to compare")
+    if status != 200:
+        raise ToolFailure(f"the update check was refused — {body.get('error') or status}")
+    name = body.get("model") or target
+    installed = str(body.get("installed_digest") or "")[:19]
+    upstream = str(body.get("upstream_digest") or "")[:19]
+    source = SOURCE_WORDS.get(str(body.get("source")), str(body.get("source")))
+    if body.get("moved") is True:
+        return (
+            f"{name} has moved upstream: this install runs {installed}…, {source} now ships "
+            f"{upstream}…. Nothing was downloaded — call model_pull with the same name to "
+            "update it."
+        )
+    if body.get("moved") is False:
+        return (
+            f"{name} is up to date: the installed weights ({installed}…) are what {source} "
+            f"ships now (checked {str(body.get('checked_at') or '')[:19]})."
+        )
+    note = body.get("note") or "no reason given"
+    wait = body.get("retry_after_s")
+    return (
+        f"Could not tell whether {name} has moved — {note}"
+        + (f" (retry in {wait} s)" if isinstance(wait, int | float) else "")
+        + ". Nothing was downloaded."
+    )
+
+
+async def model_remove(args: dict, ctx: ToolContext) -> str:
+    """Remove an installed model from the bundled ollama. The gateway
+    verifies against /api/tags before it says removed; the current chat
+    model is refused (a cannot: the next turn would have nothing to run)."""
+    target = _target_of(str(args.get("model") or ""))
+    pool = await db.get_pool()
+    current = await settings_store.read_value(pool, "chat.model")
+    bare = str(current or "").removeprefix(f"{LOCAL_PROVIDER}:")
+    if bare and bare in (target, f"{target}:latest") or target in (bare, f"{bare}:latest"):
+        raise ToolFailure(
+            f"{target} is the current chat model (chat.model = {current!r}) — switch to "
+            "another model first, then remove it"
+        )
+    status, body = await _send(ctx, "DELETE", "/admin/models", params={"model": target})
+    if status == 404:
+        raise ToolFailure(f"{target} is not installed — nothing to remove")
+    if status != 200:
+        raise ToolFailure(f"the removal failed — {body.get('error') or status}")
+    if body.get("verified") is not True:
+        raise ToolFailure(f"the gateway did not verify the removal of {target}: {body}")
+    return (
+        f"Removed {body.get('removed') or target} — verified against ollama's own list; "
+        f"{body.get('installed_now')} model(s) remain installed."
+    )
+
+
 async def model_pull(args: dict, ctx: ToolContext) -> str:
     target = _target_of(str(args.get("model") or ""))
     progress = ctx.progress
@@ -710,5 +791,45 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=model_pull,
+    ),
+    Tool(
+        name="model_check_update",
+        description=(
+            "Check whether an installed local model has a newer version at its source "
+            "(the ollama registry or Hugging Face) by comparing the installed weights "
+            "digest with what the source ships now. Never downloads anything; to update, "
+            "call model_pull with the same name afterwards."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "description": "An installed model, e.g. qwen3:8b or hf.co/org/repo:Q4_K_M.",
+                },
+            },
+            "required": ["model"],
+            "additionalProperties": False,
+        },
+        executor=model_check_update,
+        ephemeral=True,
+    ),
+    Tool(
+        name="model_remove",
+        description=(
+            "Remove an installed model from the local ollama, freeing its disk space. "
+            "Verified against ollama's own list before it is reported removed. The "
+            "current chat model cannot be removed — switch first. Cloud models are never "
+            "removed (there is nothing on disk)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "model": {"type": "string", "description": "The installed model to remove."},
+            },
+            "required": ["model"],
+            "additionalProperties": False,
+        },
+        executor=model_remove,
     ),
 )

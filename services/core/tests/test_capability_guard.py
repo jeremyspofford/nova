@@ -53,6 +53,14 @@ MUST_FIRE = [
     ("unable_to_install_a_model", "I'm unable to install a new model.", "model_pull"),
     ("cant_search_for_models", "I can't search for models.", "model_catalog_search"),
     ("cant_list_installed_models", "I cannot list the installed models.", "model_catalog_search"),
+    ("cant_remove_models", "I can't remove models.", "model_remove"),
+    (
+        "unable_to_delete_installed_model",
+        "I'm unable to delete an installed model.",
+        "model_remove",
+    ),
+    ("cant_check_for_updates", "I can't check for updates to a model.", "model_check_update"),
+    ("cant_update_models", "I cannot update models.", "model_check_update"),
 ]
 
 

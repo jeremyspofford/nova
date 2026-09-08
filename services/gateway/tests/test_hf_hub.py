@@ -419,6 +419,16 @@ def test_to_catalog_row_labels_declared_facts_and_inferred_guesses():
     declared = {"basis": "declared", "source": "hf-hub"}
     assert row["facts"] == {
         "params_b": {"value": 30.53, **declared},
+        # The follow-up (2026-09-07): a search row carries an ESTIMATED size at
+        # ollama's default quant, marked inferred with the arithmetic in its note.
+        "size_bytes": {
+            "value": 18510099340,
+            "basis": "inferred",
+            "source": "hf-hub",
+            "note": (
+                "≈ Q4_K_M at 4.85 bits/weight from 30.53B params — pick a quant for the stated size"
+            ),
+        },
         "context_length": {"value": 262144, **declared},
         "family": {"value": "qwen3moe", **declared},
         "downloads": {"value": 12639566, **declared},
@@ -465,7 +475,10 @@ def test_to_catalog_row_keeps_gated_verbatim_and_infers_vision_from_the_pipeline
 
 def test_to_catalog_row_states_nothing_the_hub_did_not():
     row = hf_hub.to_catalog_row(BASE_ROW, "t")
-    assert set(row["facts"]) == {"params_b", "family"}
+    # size_bytes is the one ESTIMATE a search row carries, and it says so.
+    assert set(row["facts"]) == {"params_b", "family", "size_bytes"}
+    assert row["facts"]["size_bytes"]["basis"] == "inferred"
+    assert "pick a quant for the stated size" in row["facts"]["size_bytes"]["note"]
     assert row["capabilities"] == {}
     assert row["suitability"] == {}
 

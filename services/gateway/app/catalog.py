@@ -155,7 +155,7 @@ def local_row(
     row["fit"] = _fit_for(curated_entry, fit_probe, fit_ctx)
     # check_update: an installed model can be compared against its source
     # (POST /admin/catalog/drift) — the page derives the button from this.
-    row["actions"] = ["use", "probe", "check_update"]
+    row["actions"] = ["use", "probe", "check_update", "remove"]
     return row
 
 
@@ -519,7 +519,8 @@ def installed_weights_digest(show: dict) -> str | None:
     return f"sha256:{match.group(1).lower()}" if match else None
 
 
-def _installed_name(tags_models: list[dict], model: str) -> str | None:
+def installed_name(tags_models: list[dict], model: str) -> str | None:
+    """The tag ollama lists for `model` (itself, or its `:latest` form)."""
     names = {m["id"] for m in tags_models}
     for candidate in (model, f"{model}:latest"):
         if candidate in names:
@@ -560,7 +561,7 @@ async def check_drift(app, pool, model: str) -> dict:
     model = pulls.validate_model(model)
     builtin = await providers.get_row(pool, "ollama")
     listing = await ollama.ADAPTER.list_models(app, builtin)
-    name = _installed_name(listing.models, model)
+    name = installed_name(listing.models, model)
     if name is None:
         raise NotInstalled(f"{model!r} is not installed on the bundled ollama")
     checked_at = _now()

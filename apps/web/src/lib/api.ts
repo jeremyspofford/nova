@@ -796,7 +796,7 @@ export interface CatalogSource {
 }
 
 export type CatalogKind = 'local' | 'cloud' | 'hub'
-export type CatalogAction = 'use' | 'pull' | 'probe' | 'check_update' | 'update'
+export type CatalogAction = 'use' | 'pull' | 'probe' | 'check_update' | 'update' | 'remove'
 
 export type CatalogRow = {
   /** provider:model — what Use writes to chat.model. */
@@ -811,6 +811,8 @@ export type CatalogRow = {
   capabilities: Record<string, CatalogFact<boolean>>
   /** One entry per (name, basis): keys are `name` or `name:basis` when two bases exist. */
   suitability: Record<string, CatalogFact<number | boolean>>
+  /** The vetted note, a failure note (a show that did not answer), or "installed as …" on a Hub row. */
+  note?: string | null
   fit?: ModelFit | null
   probe?: { ok: boolean; latency_ms: number | null; vram_mb: number | null; created_at: string } | null
   drift?: {
@@ -891,5 +893,13 @@ export const probeModel = (model: string) =>
 /** Has the source moved since this model was pulled? The installed weights
  * digest against the registry's / the Hub's current one. Never pulls. */
 export type DriftResult = NonNullable<CatalogRow['drift']> & { model: string; source: string | null; retry_after_s?: number }
+/** Remove an installed model from the bundled ollama; the gateway verifies
+ * against /api/tags before it says removed. */
+export const removeModel = (model: string) =>
+  apiSend<{ removed: string; verified: boolean; installed_now: number }>(
+    `/api/v1/models?model=${encodeURIComponent(model)}`,
+    'DELETE',
+  )
+
 export const checkDrift = (model: string) =>
   apiSend<DriftResult>('/api/v1/models/catalog/drift', 'POST', { model })

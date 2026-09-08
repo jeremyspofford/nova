@@ -73,9 +73,14 @@ export interface HiddenCounts {
   noPrice: number
 }
 
-function num(row: CatalogRow, key: string): number | null {
+/** A numeric fact's value — STATED only, unless inferred numbers were
+ * asked for. An estimate (a Hub row's ≈ size) is not a fact a filter may
+ * read by default; it counts as absent and is reported as such. */
+function num(row: CatalogRow, key: string, includeInferred = false): number | null {
   const fact = row.facts[key]
-  return fact && typeof fact.value === 'number' ? fact.value : null
+  if (!fact || typeof fact.value !== 'number') return null
+  if (fact.basis === 'inferred' && !includeInferred) return null
+  return fact.value
 }
 
 /** Every suitability entry for `name`, regardless of basis (the row keys
@@ -128,7 +133,7 @@ export function applyFacets(rows: CatalogRow[], facets: Facets): { rows: Catalog
       if (!entries.some(e => usable(e, facets.includeInferred))) return false
     }
     if (facets.maxSizeGb !== null) {
-      const bytes = num(row, 'size_bytes')
+      const bytes = num(row, 'size_bytes', facets.includeInferred)
       if (bytes === null) {
         hidden.noSize += 1
         return false
@@ -136,7 +141,7 @@ export function applyFacets(rows: CatalogRow[], facets: Facets): { rows: Catalog
       if (bytes > facets.maxSizeGb * 1024 ** 3) return false
     }
     if (facets.maxParamsB !== null) {
-      const params = num(row, 'params_b')
+      const params = num(row, 'params_b', facets.includeInferred)
       if (params === null) {
         hidden.noParams += 1
         return false
@@ -144,7 +149,7 @@ export function applyFacets(rows: CatalogRow[], facets: Facets): { rows: Catalog
       if (params > facets.maxParamsB) return false
     }
     if (facets.minContextK !== null) {
-      const ctx = num(row, 'context_length')
+      const ctx = num(row, 'context_length', facets.includeInferred)
       if (ctx === null) {
         hidden.noContext += 1
         return false
@@ -152,7 +157,7 @@ export function applyFacets(rows: CatalogRow[], facets: Facets): { rows: Catalog
       if (ctx < facets.minContextK * 1000) return false
     }
     if (facets.maxPricePerM !== null) {
-      const price = num(row, 'price_prompt')
+      const price = num(row, 'price_prompt', facets.includeInferred)
       if (price === null) {
         hidden.noPrice += 1
         return false

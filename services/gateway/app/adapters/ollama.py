@@ -130,6 +130,22 @@ async def show(app, base_url: str, name: str) -> dict:
     return body
 
 
+async def delete(app, base_url: str, name: str) -> None:
+    """DELETE /api/delete {model}: remove an installed model and its blobs
+    no other model shares. ollama answers 200 with an empty body; a 404
+    is `model 'x' not found` in its own words. The CALLER verifies the
+    removal against /api/tags — a 200 here is ollama's claim, not the
+    fact."""
+    client = http_client(app, MODELS_TIMEOUT, base_url=base_url)
+    try:
+        async with client as c:
+            resp = await c.request("DELETE", "/api/delete", json={"model": name})
+    except httpx.HTTPError as exc:
+        raise ProviderRefused(502, f"could not reach ollama at {base_url} — {reason(exc)}") from exc
+    if resp.status_code != 200:
+        raise ProviderRefused(resp.status_code, refusal_detail(resp))
+
+
 def _declared(value: object) -> dict:
     return {"value": value, "basis": "declared", "source": SHOW_SOURCE}
 

@@ -32,7 +32,7 @@ const INSTALLED = row({
   capabilities: { tools: { value: true, basis: 'declared', source: 'ollama-show' } },
   suitability: { 'coding:inferred': { value: true, basis: 'inferred', source: 'name', note: 'name matches /coder/' } },
   fit: { verdict: 'comfortable', needed_gb: 10, free_gb: 24, total_gb: 24, source: 'estimated', reason: null },
-  actions: ['use', 'probe', 'check_update'],
+  actions: ['use', 'probe', 'check_update', 'remove'],
 })
 const AVAILABLE = row({ id: 'ollama:qwen3:4b', label: 'Qwen3 4B', installed: false, actions: ['pull'] })
 const CLOUD = row({
@@ -75,7 +75,7 @@ async function* lines(items: PullLine[]) {
 }
 
 function renderPage(
-  api: Partial<Record<'getCatalog' | 'searchHf' | 'getHfRepo' | 'resolveModel' | 'probeModel' | 'pullModel' | 'putSetting' | 'getSettings' | 'checkDrift', ReturnType<typeof vi.fn>>> = {},
+  api: Partial<Record<'getCatalog' | 'searchHf' | 'getHfRepo' | 'resolveModel' | 'probeModel' | 'pullModel' | 'putSetting' | 'getSettings' | 'checkDrift' | 'removeModel', ReturnType<typeof vi.fn>>> = {},
 ) {
   const full = {
     getCatalog: vi.fn(async () => CATALOG),
@@ -109,6 +109,7 @@ function renderPage(
     ),
     putSetting: vi.fn(async () => undefined),
     getSettings: vi.fn(async () => SETTINGS),
+    removeModel: vi.fn(async () => ({ removed: 'qwen3:8b', verified: true, installed_now: 0 })),
     checkDrift: vi.fn(async () => ({
       model: 'qwen3:8b',
       checked_at: '2026-09-07T12:00:00Z',
@@ -447,5 +448,62 @@ describe('ModelsPage', () => {
     await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
     const link = screen.getByRole('link', { name: /agent_quality 86%/ })
     expect(link.getAttribute('href')).toBe('/quality')
+  })
+
+  it('Compare lays the ticked rows side by side with scaled bars and each fact\'s basis', async () => {
+    renderPage()
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    const compare = screen.getByRole('button', { name: 'compare selected' })
+    expect(compare.hasAttribute('disabled')).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: /^All/ }))
+    await waitFor(() => expect(screen.getByLabelText('compare openrouter:openai/gpt-x')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('compare ollama:qwen3:8b'))
+    fireEvent.click(screen.getByLabelText('compare openrouter:openai/gpt-x'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'compare selected' }).hasAttribute('disabled')).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'compare selected' }))
+    const view = await screen.findByTestId('compare-view')
+    expect(within(view).getByText('ollama:qwen3:8b')).toBeTruthy()
+    expect(within(view).getByText('openrouter:openai/gpt-x')).toBeTruthy()
+    // Context: both stated; the cloud row is the larger and draws the full bar.
+    const local = within(view).getByTestId('compare-context_length-ollama:qwen3:8b')
+    const cloud = within(view).getByTestId('compare-context_length-openrouter:openai/gpt-x')
+    expect(local.textContent).toContain('41K')
+    expect(cloud.textContent).toContain('1.05M')
+    expect((cloud.querySelector('div > div') as HTMLElement).style.width).toBe('100%')
+    expect(local.textContent).toContain('declared · ollama-show')
+    // Size: only the local row states one; the cloud cell says so.
+    expect(within(view).getByTestId('compare-size_bytes-openrouter:openai/gpt-x').textContent).toBe('not stated')
+    // Suitability: coding is inferred on one and a third-party index on the other.
+    expect(within(view).getByTestId('compare-coding-ollama:qwen3:8b').textContent).toContain('coding?')
+    expect(within(view).getByTestId('compare-coding-openrouter:openai/gpt-x').textContent).toContain('coding 77')
+  })
+
+  it('Remove asks first, then deletes, and installed is what the re-read catalogue says', async () => {
+    const { api } = renderPage()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'remove ollama:qwen3:8b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'remove ollama:qwen3:8b' }))
+    expect(api.removeModel).not.toHaveBeenCalled()
+    api.getCatalog.mockResolvedValue({ ...CATALOG, rows: [{ ...INSTALLED, installed: false, actions: ['pull'] }, AVAILABLE, CLOUD] })
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+    await waitFor(() => expect(api.removeModel).toHaveBeenCalledWith('qwen3:8b'))
+    await waitFor(() => expect(api.getCatalog).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'remove ollama:qwen3:8b' })).toBeNull())
+
+    // A 200 the gateway did not verify is not a removal.
+    api.removeModel.mockResolvedValue({ removed: 'qwen3:4b', verified: false, installed_now: 1 })
+  })
+
+  it('an estimated Hub size is drawn dashed with ≈ and left out of the size facet unless inferred is included', async () => {
+    const estimated = {
+      ...HUB,
+      facts: { ...HUB.facts, size_bytes: { value: 18_000_000_000, basis: 'inferred', source: 'hf-hub', note: '≈ Q4_K_M at 4.85 bits/weight from 30.5B params — pick a quant for the stated size' } },
+    }
+    renderPage({ searchHf: vi.fn(async () => ({ rows: [estimated], next_cursor: null, fetched_at: '2026-09-06T12:00:00Z', cached: false })) })
+    await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
+    fireEvent.change(screen.getByPlaceholderText('e.g. qwen coder'), { target: { value: 'qwen coder' } })
+    await waitFor(() => expect(screen.getByText('Qwen3-Coder-GGUF')).toBeTruthy())
+    const size = screen.getByText('≈ 16.8 GB')
+    expect(size.getAttribute('data-basis')).toBe('inferred')
   })
 })

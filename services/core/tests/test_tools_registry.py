@@ -99,6 +99,10 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # pull into the bundled ollama (tools/models.py). SEVENTEEN -> NINETEEN.
         "model_catalog_search",
         "model_pull",
+        # The follow-ups (2026-09-07): an update check and a verified remove.
+        # NINETEEN -> TWENTY-ONE.
+        "model_check_update",
+        "model_remove",
     }
 
 

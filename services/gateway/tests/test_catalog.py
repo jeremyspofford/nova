@@ -111,7 +111,8 @@ async def test_installed_rows_carry_ollamas_own_facts_and_the_vetted_layer(clien
     vetted = [k for k, f in row["suitability"].items() if f["basis"] == "vetted"]
     assert vetted and all(row["suitability"][k]["at"] for k in vetted)
     assert row["label"] == "Qwen3 8B"
-    assert row["actions"] == ["use", "probe", "check_update"]  # S10a-2: drift from the row
+    # S10a-2: drift from the row; the follow-up: remove from the row.
+    assert row["actions"] == ["use", "probe", "check_update", "remove"]
     assert row["fit"]["verdict"] in {"comfortable", "tight", "wont_fit", "unknown"}
     sources = {s["key"]: s for s in body["sources"]}
     assert sources["ollama"]["ok"] is True and sources["ollama"]["rows"] == 2
@@ -511,3 +512,33 @@ async def test_drift_says_why_when_a_side_cannot_be_read(client, local, mount_ba
 
     bad = await client.post("/admin/catalog/drift", json={})
     assert bad.status_code == 400
+
+
+# ── remove (the follow-up): verified against /api/tags ─────────────────────
+
+
+async def test_remove_deletes_and_verifies_against_tags(client, local):
+    resp = await client.delete("/admin/models?model=qwen3:4b")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"removed": "qwen3:4b", "verified": True, "installed_now": 1}
+    assert ("/api/delete", {"model": "qwen3:4b"}) in local.seen
+    rows = _rows_by_id((await client.get("/admin/catalog")).json())
+    assert rows["ollama:qwen3:4b"]["installed"] is False, "back to a library row"
+
+    gone = await client.delete("/admin/models?model=qwen3:4b")
+    assert gone.status_code == 404 and "not installed" in gone.json()["error"]
+    bad = await client.delete("/admin/models?model=")
+    assert bad.status_code == 400
+
+
+async def test_a_delete_ollama_claims_but_tags_still_list_is_a_stated_502(
+    client, local, monkeypatch
+):
+    from app.adapters import ollama as ollama_mod
+
+    async def lying_delete(app, base_url, name):
+        return None  # 200, nothing removed
+
+    monkeypatch.setattr(ollama_mod, "delete", lying_delete)
+    resp = await client.delete("/admin/models?model=qwen3:4b")
+    assert resp.status_code == 502 and "still lists 'qwen3:4b'" in resp.json()["error"]

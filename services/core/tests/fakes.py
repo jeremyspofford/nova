@@ -198,6 +198,7 @@ class FakeGateway:
                 Route("/admin/catalog/hf/{org}/{repo}", self._admin, methods=["GET"]),
                 Route("/admin/catalog/resolve", self._admin, methods=["GET"]),
                 Route("/admin/catalog/drift", self._admin, methods=["POST"]),
+                Route("/admin/models", self._admin, methods=["DELETE"]),
             ]
         )
 

@@ -1482,3 +1482,13 @@ def test_ordinary_install_talk_without_a_model_reference_never_fires():
         "The catalogue lists qwen3:4b as installed.",
     ):
         assert guards.narration_check(reply, [other_span()]) is None, reply
+
+
+def test_a_removed_model_claim_needs_a_remove_span_naming_that_model():
+    reply = "I removed qwen3:4b to free the space."
+    flagged = guards.narration_check(reply, [other_span()])
+    assert flagged is not None and kinds(flagged) == ["removed_model"]
+    assert guards.narration_check(reply, [tool_span("model_remove", model="qwen3:4b")]) is None
+    wrong = guards.narration_check(reply, [tool_span("model_remove", model="qwen3:8b")])
+    assert wrong is not None
+    assert guards.narration_check("You could remove qwen3:4b yourself.", [other_span()]) is None

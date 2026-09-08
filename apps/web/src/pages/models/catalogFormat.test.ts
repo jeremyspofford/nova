@@ -170,4 +170,19 @@ describe('catalogFormat — current and labels', () => {
     expect(capabilityChips(denied).map(c => [c.label, c.value])).toEqual([['no tools', false]])
     expect(capabilityChips(row({ id: 'openrouter:x/z' }))).toEqual([])
   })
+
+  it('an inferred number is not a stated one: the size facet leaves it out and counts it unless inferred is included', () => {
+    const estimated = row({
+      id: 'ollama:hf.co/o/r',
+      kind: 'hub',
+      facts: { size_bytes: { value: 2_000_000_000, basis: 'inferred', source: 'hf-hub', note: '≈ Q4_K_M' } },
+    })
+    const stated = row({ id: 'ollama:x:1b', installed: false, facts: { size_bytes: { value: 1_000_000_000, basis: 'declared', source: 'ollama-tags' } } })
+    const off = applyFacets([estimated, stated], { ...EMPTY_FACETS, tab: 'available', maxSizeGb: 3 })
+    expect(off.rows.map(r => r.id)).toEqual(['ollama:x:1b'])
+    expect(off.hidden.noSize).toBe(1)
+    const on = applyFacets([estimated, stated], { ...EMPTY_FACETS, tab: 'available', maxSizeGb: 3, includeInferred: true })
+    expect(on.rows.map(r => r.id)).toEqual(['ollama:hf.co/o/r', 'ollama:x:1b'])
+    expect(on.hidden.noSize).toBe(0)
+  })
 })

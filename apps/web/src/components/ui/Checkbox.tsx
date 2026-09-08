@@ -10,6 +10,8 @@ type CheckboxProps = {
   disabled?: boolean
   className?: string
   id?: string
+  /** An accessible name when there is no visible label (a per-row tick). */
+  'aria-label'?: string
 }
 
 export function Checkbox({
@@ -21,6 +23,7 @@ export function Checkbox({
   disabled = false,
   className,
   id,
+  'aria-label': ariaLabel,
 }: CheckboxProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const checkboxId = id || (label ? `checkbox-${label.toLowerCase().replace(/\s+/g, '-')}` : undefined)
@@ -51,6 +54,7 @@ export function Checkbox({
           onChange={(e) => onChange?.(e.target.checked)}
           disabled={disabled}
           className="sr-only peer"
+          aria-label={ariaLabel}
         />
         <span
           className={clsx(

@@ -49,6 +49,10 @@ EXPANDS = ("gguf", "downloads", "likes", "lastModified", "tags", "pipeline_tag",
 SOURCE_KEY = "hf-hub"
 SOURCE_URL = f"{HF_BASE}/api/models"
 DEFAULT_QUANT = "Q4_K_M"  # ollama's own default when a repo carries it
+# llama.cpp's own figure for Q4_K_M (4.85 bits per weight); the estimate a
+# search row carries before a quant is picked. Marked inferred wherever used.
+DEFAULT_QUANT_BITS_PER_WEIGHT = 4.85
+DEFAULT_QUANT_BYTES_PER_PARAM = DEFAULT_QUANT_BITS_PER_WEIGHT / 8
 
 CURSOR_RE = re.compile(r"^[A-Za-z0-9_=-]+$")
 SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
@@ -516,6 +520,18 @@ def to_catalog_row(
     total = gguf.get("total")
     if isinstance(total, int | float) and not isinstance(total, bool) and total > 0:
         facts["params_b"] = _fact(round(total / 1e9, 2))
+        # A search row states no file size (that is per quant, on the repo
+        # detail). What CAN be said is an estimate at the quant ollama pulls
+        # by default — marked inferred, so filters leave it out unless asked
+        # and the page draws it dashed; the detail call replaces it.
+        facts["size_bytes"] = _fact(
+            int(total * DEFAULT_QUANT_BYTES_PER_PARAM),
+            basis="inferred",
+            note=(
+                f"≈ {DEFAULT_QUANT} at {DEFAULT_QUANT_BITS_PER_WEIGHT} bits/weight from "
+                f"{round(total / 1e9, 2)}B params — pick a quant for the stated size"
+            ),
+        )
     context = gguf.get("context_length")
     if isinstance(context, int) and not isinstance(context, bool) and context > 0:
         facts["context_length"] = _fact(context)

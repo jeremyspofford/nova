@@ -3,154 +3,203 @@ import type { CatalogFact, CatalogRow } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
 import { formatBytes } from '../../lib/pullStream'
 import { fitLabel, fitSourceLabel } from '../../lib/modelFit'
-import { BASIS_MARK, tagLabel } from './catalogFormat'
+import { BASIS_MARK, capabilityChips, tagLabel } from './catalogFormat'
 
 /**
- * A row's whole story: every fact with its basis and the source that stated
- * it, the sources with their fetch times, license, probe, drift. Nothing
- * here is composed from two fields with different lifetimes — each line
- * names the one server field it came from.
+ * A row's whole story, laid out to be READ: facts in a two-column grid with
+ * the value in front and the basis beneath it in small type, capability
+ * and suitability chips with their notes, then sources, fit, probe and
+ * upstream state. Nothing here is composed from two fields with different
+ * lifetimes — each line names the one server field it came from.
  */
 function factText(key: string, fact: CatalogFact): string {
   const v = fact.value
-  if (key === 'size_bytes' && typeof v === 'number') return formatBytes(v)
+  const approx = fact.basis === 'inferred' ? '≈ ' : ''
+  if (key === 'size_bytes' && typeof v === 'number') return approx + formatBytes(v)
   if ((key === 'price_prompt' || key === 'price_completion') && typeof v === 'number') {
     return `$${(v * 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })} per 1M`
   }
   if (key === 'context_length' && typeof v === 'number') return `${v.toLocaleString()} tokens`
-  if (key === 'params_b' && typeof v === 'number') return `${v}B params`
+  if (key === 'params_b' && typeof v === 'number') return `${v}B`
+  if (key === 'vram_gb' && typeof v === 'number') return `${v} GB`
+  if (key === 'downloads' && typeof v === 'number') return v.toLocaleString()
+  if (key === 'digest' && typeof v === 'string') return v
   if (typeof v === 'boolean') return v ? 'yes' : 'no'
   return String(v)
 }
 
+const LABELS: Record<string, string> = {
+  size_bytes: 'Size on disk',
+  params_b: 'Parameters',
+  quant: 'Quantisation',
+  context_length: 'Context',
+  family: 'Family',
+  license: 'License',
+  digest: 'Digest',
+  modified_at: 'Modified',
+  price_prompt: 'Price in',
+  price_completion: 'Price out',
+  max_output_tokens: 'Max output',
+  vram_gb: 'VRAM',
+  downloads: 'Downloads',
+  likes: 'Likes',
+  trending: 'Trending',
+  last_modified: 'Last modified',
+  gated: 'Gated',
+  hugging_face_id: 'Hugging Face id',
+  description: 'Description',
+}
+
+function Basis({ fact }: { fact: CatalogFact }) {
+  return (
+    <span className="block text-micro text-content-tertiary" title={fact.note ?? ''}>
+      {fact.basis}
+      {BASIS_MARK[fact.basis] ? ` ${BASIS_MARK[fact.basis]}` : ''} · {fact.source}
+      {fact.at ? ` · ${fact.at.slice(0, 10)}` : ''}
+      {fact.basis === 'inferred' && fact.note ? ` — ${fact.note}` : ''}
+    </span>
+  )
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h4 className="mb-2 text-caption font-medium uppercase tracking-wider text-content-tertiary">{title}</h4>
+      {children}
+    </section>
+  )
+}
+
 export function ModelDetails({ row }: { row: CatalogRow }) {
-  const facts = Object.entries(row.facts)
-  const caps = Object.entries(row.capabilities)
+  const facts = Object.entries(row.facts).filter(([key]) => key !== 'description')
+  const description = row.facts.description
+  const caps = capabilityChips(row)
   const suits = Object.entries(row.suitability)
   return (
-    <div className="space-y-4 text-compact" data-testid={`model-details-${row.id}`}>
+    <div className="space-y-6" data-testid={`model-details-${row.id}`}>
       <div>
-        <p className="font-mono text-content-primary break-all">{row.id}</p>
-        <p className="text-caption text-content-tertiary">
-          {row.kind}
-          {row.installed === true ? ' · installed' : row.installed === false ? ' · not installed' : ''}
-        </p>
+        <p className="font-mono text-compact text-content-primary break-all">{row.id}</p>
+        <div className="mt-2 flex flex-wrap gap-1">
+          <Badge size="sm" color="neutral">{row.kind}</Badge>
+          {row.installed === true && <Badge size="sm" color="accent">installed</Badge>}
+          {row.installed === false && <Badge size="sm" color="neutral">not installed</Badge>}
+          <Badge size="sm" color="neutral">{row.provider}</Badge>
+        </div>
+        {row.note && <p className="mt-2 text-compact text-content-secondary">{row.note}</p>}
+        {description && typeof description.value === 'string' && (
+          <p className="mt-2 text-caption text-content-tertiary">{description.value}</p>
+        )}
       </div>
 
-      <section>
-        <h4 className="text-caption uppercase tracking-wider text-content-tertiary mb-1">Sources</h4>
-        <ul className="space-y-0.5">
-          {row.sources.map(s => (
-            <li key={s.key} className="text-caption">
-              <span className="font-mono">{s.key}</span>
-              {s.fetched_at ? ` · fetched ${formatRelativeTime(s.fetched_at)}` : ''}
-              {s.cached ? ' (cached)' : ''}
-              {s.ok === false ? ` · ${s.note ?? 'failed'}` : ''}
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section>
-        <h4 className="text-caption uppercase tracking-wider text-content-tertiary mb-1">Facts</h4>
+      <Section title="Facts">
         {facts.length === 0 ? (
           <p className="text-caption text-content-tertiary">not stated</p>
         ) : (
-          <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+          <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2">
             {facts.map(([key, fact]) => (
-              <div key={key} className="contents">
-                <dt className="text-caption text-content-tertiary">{key.replace(/_/g, ' ')}</dt>
-                <dd className="text-caption">
-                  {factText(key, fact)}{' '}
-                  <span className="text-content-tertiary" title={fact.note ?? ''}>
-                    ({fact.basis}
-                    {BASIS_MARK[fact.basis] ? ` ${BASIS_MARK[fact.basis]}` : ''} · {fact.source}
-                    {fact.at ? ` · ${fact.at.slice(0, 10)}` : ''})
-                  </span>
+              <div key={key} className="min-w-0">
+                <dt className="text-caption text-content-tertiary">{LABELS[key] ?? key.replace(/_/g, ' ')}</dt>
+                <dd className={`text-compact break-all ${fact.basis === 'inferred' ? 'text-warning' : 'text-content-primary'}`}>
+                  {factText(key, fact)}
+                  <Basis fact={fact} />
                 </dd>
               </div>
             ))}
           </dl>
         )}
-      </section>
+      </Section>
 
-      <section>
-        <h4 className="text-caption uppercase tracking-wider text-content-tertiary mb-1">Capabilities</h4>
+      <Section title="Capabilities">
         {caps.length === 0 ? (
           <p className="text-caption text-content-tertiary">not stated</p>
         ) : (
-          <div className="flex flex-wrap gap-1">
-            {caps.map(([key, fact]) => (
-              <Badge
-                key={key}
-                size="sm"
-                color={fact.value ? (fact.basis === 'inferred' ? 'warning' : 'success') : 'neutral'}
-                dot={false}
-              >
-                <span title={`${fact.basis} · ${fact.source}${fact.note ? ` · ${fact.note}` : ''}`}>
-                  {key}
-                  {fact.basis === 'inferred' ? '?' : ''}
-                  {!fact.value ? ' no' : ''}
+          <ul className="space-y-1.5">
+            {caps.map(chip => (
+              <li key={chip.key} className="flex items-start gap-2 text-compact">
+                <span
+                  data-basis={chip.basis}
+                  className={`inline-flex h-5 shrink-0 items-center rounded-sm px-1.5 text-micro ${
+                    !chip.value
+                      ? 'border border-line text-content-tertiary line-through'
+                      : chip.basis === 'inferred'
+                        ? 'border border-dashed border-warning text-warning'
+                        : 'bg-success-dim text-emerald-700 dark:text-emerald-400'
+                  }`}
+                >
+                  {chip.label}
                 </span>
-              </Badge>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section>
-        <h4 className="text-caption uppercase tracking-wider text-content-tertiary mb-1">Suitability</h4>
-        {suits.length === 0 ? (
-          <p className="text-caption text-content-tertiary">not stated</p>
-        ) : (
-          <ul className="space-y-0.5">
-            {suits.map(([key, fact]) => (
-              <li key={key} className="text-caption">
-                {tagLabel(key.split(':')[0], fact)}{' '}
-                <span className="text-content-tertiary">
-                  ({fact.basis} · {fact.source}
-                  {fact.note ? ` · ${fact.note}` : ''})
+                <span className="text-caption text-content-tertiary">
+                  {chip.basis}
+                  {chip.note ? ` — ${chip.note}` : ''}
                 </span>
               </li>
             ))}
           </ul>
         )}
-      </section>
+      </Section>
+
+      <Section title="Suitability">
+        {suits.length === 0 ? (
+          <p className="text-caption text-content-tertiary">not stated</p>
+        ) : (
+          <ul className="space-y-1.5">
+            {suits.map(([key, fact]) => (
+              <li key={key} className="text-compact">
+                <span className={fact.basis === 'inferred' ? 'text-warning' : fact.basis === 'measured' ? 'text-blue-700 dark:text-blue-400' : 'text-content-primary'}>
+                  {tagLabel(key.split(':')[0], fact)}
+                </span>
+                <Basis fact={fact} />
+                {fact.basis !== 'inferred' && fact.note && <span className="block text-caption text-content-tertiary">{fact.note}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Section>
+
+      <Section title="Sources">
+        <ul className="space-y-1">
+          {row.sources.map(s => (
+            <li key={s.key} className="text-caption">
+              <span className="font-mono text-content-primary">{s.key}</span>
+              {s.fetched_at ? <span className="text-content-tertiary"> · fetched {formatRelativeTime(s.fetched_at)}</span> : ''}
+              {s.cached ? <span className="text-content-tertiary"> (cached)</span> : ''}
+              {s.ok === false ? <span className="text-danger"> · {s.note ?? 'failed'}</span> : ''}
+            </li>
+          ))}
+        </ul>
+      </Section>
 
       {row.fit && (
-        <section>
-          <h4 className="text-caption uppercase tracking-wider text-content-tertiary mb-1">Fit</h4>
-          <p className="text-caption">
+        <Section title="Fit on this GPU">
+          <p className="text-compact">
             {fitLabel(row.fit)}
-            {fitSourceLabel(row.fit) ? ` · ${fitSourceLabel(row.fit)}` : ''}
+            {fitSourceLabel(row.fit) ? <span className="text-content-tertiary"> · {fitSourceLabel(row.fit)}</span> : ''}
           </p>
-        </section>
+        </Section>
       )}
 
       {row.probe && (
-        <section>
-          <h4 className="text-caption uppercase tracking-wider text-content-tertiary mb-1">Last probe</h4>
-          <p className="text-caption">
+        <Section title="Last probe">
+          <p className="text-compact">
             {row.probe.ok ? 'answered' : 'failed'}
             {row.probe.latency_ms !== null ? ` · ${row.probe.latency_ms} ms` : ''}
             {row.probe.vram_mb !== null ? ` · ${(row.probe.vram_mb / 1024).toFixed(1)} GB VRAM` : ''}
-            {` · ${formatRelativeTime(row.probe.created_at)}`}
+            <span className="text-content-tertiary"> · {formatRelativeTime(row.probe.created_at)}</span>
           </p>
-        </section>
+        </Section>
       )}
 
       {row.drift && (
-        <section>
-          <h4 className="text-caption uppercase tracking-wider text-content-tertiary mb-1">Upstream</h4>
-          <p className="text-caption">
+        <Section title="Upstream">
+          <p className="text-compact">
             {row.drift.moved === true
               ? `has moved since you pulled (was ${row.drift.installed_digest?.slice(0, 19)}…, now ${row.drift.upstream_digest?.slice(0, 19)}…)`
               : row.drift.moved === false
                 ? 'up to date'
                 : (row.drift.note ?? 'unknown')}
-            {` · checked ${formatRelativeTime(row.drift.checked_at)}`}
+            <span className="text-content-tertiary"> · checked {formatRelativeTime(row.drift.checked_at)}</span>
           </p>
-        </section>
+        </Section>
       )}
     </div>
   )

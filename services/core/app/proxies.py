@@ -130,6 +130,13 @@ async def catalog_resolve(request: Request) -> Response:
     return await _forward(request, "GET", "/admin/catalog/resolve", timeout=CATALOG_HF_TIMEOUT)
 
 
+@router.delete("/models")
+async def remove_model(request: Request) -> Response:
+    """Remove an installed model from the bundled ollama (`?model=`), verified
+    by the gateway against /api/tags. 1:1."""
+    return await _forward(request, "DELETE", "/admin/models", timeout=CATALOG_HF_TIMEOUT)
+
+
 @router.post("/models/catalog/drift")
 async def catalog_drift(request: Request) -> Response:
     """Has the source moved since a model was pulled (S10a-2)? 1:1."""

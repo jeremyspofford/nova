@@ -372,3 +372,80 @@ async def test_set_as_chat_model_writes_the_setting_and_reads_it_back(gateway, p
     assert text.endswith(" chat.model is now ollama:qwen3:4b (read back).")
     row = await pool.fetchrow("SELECT value FROM settings WHERE key = 'chat.model'")
     assert row["value"] == "ollama:qwen3:4b"
+
+
+# ── model_check_update / model_remove (the follow-ups) ────────────────────
+
+
+async def test_check_update_reads_the_gateways_verdict_out_in_words(gateway):
+    fake, ctx, _ = gateway
+    digest_a, digest_b = "sha256:" + "a" * 64, "sha256:" + "b" * 64
+    fake.admin_body = {
+        "model": "qwen3:8b",
+        "checked_at": "2026-09-07T12:00:00+00:00",
+        "installed_digest": digest_a,
+        "upstream_digest": digest_a,
+        "moved": False,
+        "basis": "weights-digest",
+        "source": "ollama-registry",
+    }
+    text, ok = await _run(models.model_check_update, ctx, model="ollama:qwen3:8b")
+    assert ok and text.startswith("qwen3:8b is up to date: the installed weights (sha256:a")
+    assert "the ollama registry ships now" in text
+    assert fake.seen[-1] == ("/admin/catalog/drift", {"model": "qwen3:8b"})
+
+    fake.admin_body = {**fake.admin_body, "upstream_digest": digest_b, "moved": True}
+    text, ok = await _run(models.model_check_update, ctx, model="qwen3:8b")
+    assert ok and "has moved upstream" in text and "Nothing was downloaded" in text
+    assert "call model_pull with the same name" in text
+
+    fake.admin_body = {
+        **fake.admin_body,
+        "upstream_digest": None,
+        "moved": None,
+        "note": "the source could not be read — timed out",
+        "retry_after_s": 30,
+    }
+    text, ok = await _run(models.model_check_update, ctx, model="qwen3:8b")
+    assert ok and text.startswith(
+        "Could not tell whether qwen3:8b has moved — the source could not be read"
+    )
+    assert "(retry in 30 s)" in text
+
+    fake.admin_status = 404
+    fake.admin_body = {"error": "'nope:1b' is not installed"}
+    text, ok = await _run(models.model_check_update, ctx, model="nope:1b")
+    assert not ok and "not installed — nothing to compare" in text
+    text, ok = await _run(models.model_check_update, ctx, model="openrouter:openai/gpt-x")
+    assert not ok and "only the bundled ollama" in text
+
+
+@requires_db
+async def test_remove_is_verified_by_the_gateway_and_refuses_the_current_chat_model(gateway, pool):
+    fake, ctx, _ = gateway
+    fake.admin_body = {"removed": "qwen3:4b", "verified": True, "installed_now": 1}
+    text, ok = await _run(models.model_remove, ctx, model="qwen3:4b")
+    assert (
+        ok
+        and text
+        == "Removed qwen3:4b — verified against ollama's own list; 1 model(s) remain installed."
+    )
+    path, _ = fake.seen[-1]
+    assert path == "/admin/models" and fake.queries[-1] == b"model=qwen3%3A4b"
+
+    # A 200 without the gateway's verification is not "removed".
+    fake.admin_body = {"removed": "qwen3:4b"}
+    text, ok = await _run(models.model_remove, ctx, model="qwen3:4b")
+    assert not ok and "did not verify" in text
+
+    # The current chat model: a cannot, stated, before the gateway is called.
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('chat.model', '\"ollama:qwen3:8b\"'::jsonb) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+    )
+    calls = len(fake.seen)
+    text, ok = await _run(models.model_remove, ctx, model="qwen3:8b")
+    assert not ok and "is the current chat model" in text
+    assert len(fake.seen) == calls
+    text, ok = await _run(models.model_remove, ctx, model="openrouter:openai/gpt-x")
+    assert not ok and "only the bundled ollama" in text

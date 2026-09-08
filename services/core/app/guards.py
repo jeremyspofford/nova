@@ -58,6 +58,7 @@ _READ_TOOLS = frozenset({"workspace_read_file"})
 _CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
 _FETCH_TOOLS = frozenset({"fetch_url"})
 _PULL_TOOLS = frozenset({"model_pull"})
+_REMOVE_TOOLS = frozenset({"model_remove"})
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -65,6 +66,7 @@ _KIND_TOOLS: dict[str, frozenset[str]] = {
     "file_contents": _CONTENT_TOOLS,
     "fetched_url": _FETCH_TOOLS,
     "pulled_model": _PULL_TOOLS,
+    "removed_model": _REMOVE_TOOLS,
 }
 
 # "I pulled / downloaded / installed <model ref>": a completed-pull claim,
@@ -75,6 +77,14 @@ _KIND_TOOLS: dict[str, frozenset[str]] = {
 _PULLED_MODEL = re.compile(
     r"\bi(?:'ve|\s+have|\s+just|\s+have\s+just)?\s+(?:just\s+)?"
     r"(?:pulled|downloaded|installed)\s+(?:the\s+)?(?:model\s+)?"
+    r"(?P<ref>(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+))",
+    re.I,
+)
+# "I removed / deleted / uninstalled <model ref>": the same anchor, backed
+# only by a successful model_remove span naming that ref.
+_REMOVED_MODEL = re.compile(
+    r"\bi(?:'ve|\s+have|\s+just|\s+have\s+just)?\s+(?:just\s+)?"
+    r"(?:removed|deleted|uninstalled)\s+(?:the\s+)?(?:model\s+)?"
     r"(?P<ref>(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+))",
     re.I,
 )
@@ -572,6 +582,8 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
     # pulled a model: I + pulled/downloaded/installed + a model reference.
     for pm in _PULLED_MODEL.finditer(clause):
         claims.append(("pulled_model", _strip_trailing_punct(pm.group("ref")), pm.group(0)))
+    for rm in _REMOVED_MODEL.finditer(clause):
+        claims.append(("removed_model", _strip_trailing_punct(rm.group("ref")), rm.group(0)))
 
     return claims
 
@@ -633,7 +645,7 @@ def _target_of(span: Any) -> str | None:
     if span.name == "fetch_url":
         url = args.get("url")
         return url if isinstance(url, str) else None
-    if span.name == "model_pull":
+    if span.name in ("model_pull", "model_remove", "model_check_update"):
         model = args.get("model")
         return model if isinstance(model, str) else None
     return None
@@ -1010,6 +1022,23 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
             re.I,
         ),
         "model_catalog_search",
+    ),
+    (
+        re.compile(
+            r"(?:remove|delete|uninstall)(?:ing)?\s+"
+            r"(?:(?:a|an|the|installed|local|any|old|unused)\s+){0,2}"
+            r"(?:ai\s+|language\s+|llm\s+)?models?\b",
+            re.I,
+        ),
+        "model_remove",
+    ),
+    (
+        re.compile(
+            r"check(?:ing)?\s+(?:for\s+)?(?:model\s+)?updates?\b(?:\s+(?:for|on|to)\s+(?:a\s+|the\s+)?models?)?"
+            r"|(?:update|upgrade|refresh)(?:ing)?\s+(?:(?:a|an|the|installed|local)\s+){0,2}models?\b",
+            re.I,
+        ),
+        "model_check_update",
     ),
 )
 

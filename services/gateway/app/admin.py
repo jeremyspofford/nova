@@ -25,6 +25,7 @@ from app import curated as curated_mod
 from app import fit as fit_mod
 from app import pulls as pulls_mod
 from app import suggest as suggest_mod
+from app.adapters import ollama
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 logger = logging.getLogger("gateway")
@@ -778,6 +779,39 @@ async def catalog_hf_repo(org: str, repo: str, request: Request) -> dict:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
     installed = await catalog.installed_names(request.app, await db.get_pool())
     return catalog.hf_repo_row(detail, installed)
+
+
+@router.delete("/models")
+async def remove_model(request: Request) -> dict:
+    """Remove an installed model from the bundled ollama (`?model=`). The
+    answer is VERIFIED: after ollama's 200, /api/tags is re-read and the
+    name must be gone — a 200 that still lists the model is a stated 502,
+    never "removed". Never touches a cloud model (nothing to remove) and
+    refuses a name that is not installed with ollama's own 404."""
+    model = request.query_params.get("model") or ""
+    try:
+        model = pulls_mod.validate_model(model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    pool = await db.get_pool()
+    builtin = await providers.get_row(pool, "ollama")
+    base_url = providers.base_url_of(builtin)
+    try:
+        before = await ollama.ADAPTER.list_models(request.app, builtin)
+        name = catalog.installed_name(before.models, model)
+        if name is None:
+            raise HTTPException(status_code=404, detail=f"{model!r} is not installed")
+        await ollama.delete(request.app, base_url, name)
+        after = await ollama.ADAPTER.list_models(request.app, builtin)
+    except adapters.ProviderRefused as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    if catalog.installed_name(after.models, name) is not None:
+        raise HTTPException(
+            status_code=502,
+            detail=f"ollama answered 200 to the delete but /api/tags still lists {name!r}",
+        )
+    logger.info("model removed: %s", name)
+    return {"removed": name, "verified": True, "installed_now": len(after.models)}
 
 
 @router.post("/catalog/drift")
