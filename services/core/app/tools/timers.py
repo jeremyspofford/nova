@@ -107,6 +107,22 @@ def _store():
     return timers
 
 
+def _agents():
+    """app.agents, imported at call time for the same reason as _store: it
+    imports app.tools at its top (for the registry), so naming it here at
+    module time would close the cycle while this package is half-built."""
+    from app import agents
+
+    return agents
+
+
+def _is_agent(ctx: ToolContext) -> bool:
+    """An agent turn's ctx.person is a Person VALUE with role 'agent' and no
+    people row (app/agents.py); the role string is read from there so it is
+    spelled once."""
+    return getattr(ctx.person, "role", None) == _agents().AGENT_PERSON_ROLE
+
+
 def _person(ctx: ToolContext) -> Person:
     person = ctx.person
     if person is None or getattr(person, "id", None) is None:
@@ -258,6 +274,11 @@ def _title(text: str) -> str:
 
 
 async def create_timer(args: dict, ctx: ToolContext) -> str:
+    # An agent's ctx.person has no people row, and the conversation this row
+    # would land in is inserted for that person_id — postgres would refuse
+    # the foreign key anyway; this refuses first, in words the agent can act
+    # on (put it in the report), instead of a constraint name.
+    _agents().refuse_person_write(ctx, "a timer")
     person = _person(ctx)
     pool = await db.get_pool()
 
@@ -367,11 +388,24 @@ def _truncated_note(shown: int, total: int) -> str | None:
     return f"(showing the newest {shown} of {total} — the Schedules page has the rest)"
 
 
+def _bound_listing(rows: list[asyncpg.Record]) -> str:
+    """What an agent turn sees: the scheduled turns bound to run AS it. It has
+    no person-scoped set to show (its Person is a value with no row, so
+    list_for would answer for nobody), and the rows it is bound to belong to
+    the owner who set them — listed here, cancelled only by a person."""
+    if not rows:
+        return "no timers are bound to you"
+    return "\n".join(["timers bound to you:", *(_line(r) for r in rows)])
+
+
 async def list_timers(args: dict, ctx: ToolContext) -> str:
     """The person's own timers plus the install's jobs (timers.list_for's set —
-    the same rows the Schedules page shows this person), one line each."""
+    the same rows the Schedules page shows this person), one line each. An
+    agent turn is shown the other axis instead: the timers bound to it."""
     person = _person(ctx)
     pool = await db.get_pool()
+    if _is_agent(ctx):
+        return _bound_listing(await _store().list_bound(pool, person.id))
     rows, total = await _visible(pool, person)
     if not rows:
         return "No timers: nothing is scheduled and no reminder is set."
@@ -409,6 +443,9 @@ def _matches(row: asyncpg.Record, key: str) -> bool:
 
 
 async def cancel_timer(args: dict, ctx: ToolContext) -> str:
+    # A timer is a person's row (see create_timer): an agent turn is refused
+    # in words before anything is read, never shown "no timer of yours".
+    _agents().refuse_person_write(ctx, "a timer")
     person = _person(ctx)
     pool = await db.get_pool()
     key = args["id_or_title"]
@@ -528,8 +565,8 @@ TOOLS: tuple[Tool, ...] = (
         name="list_timers",
         description=(
             "List this person's reminders and scheduled turns (and the system's housekeeping "
-            "jobs): id, kind, title, when each next fires, and whether it is paused. Takes no "
-            "arguments."
+            "jobs): id, kind, title, when each next fires, and whether it is paused. An agent "
+            "sees the scheduled turns bound to run as it. Takes no arguments."
         ),
         parameters=_obj({}, []),
         executor=list_timers,

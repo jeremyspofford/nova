@@ -33,6 +33,12 @@ import asyncpg
 DEVICE_ENROLLED = "device.enrolled"
 DEVICE_REVOKED = "device.revoked"
 DEVICE_AUDIT_BREAK = "device.audit_break"
+# Agents (S12): the row's whole arc — created with the spec it was given,
+# each update with the keys that moved, the delete with the timers it paused.
+# Written by app/agents.py in the same transaction as the row.
+AGENT_CREATED = "agent.created"
+AGENT_UPDATED = "agent.updated"
+AGENT_DELETED = "agent.deleted"
 
 
 async def record_event(

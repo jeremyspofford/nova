@@ -34,6 +34,11 @@ OWNER = {"name": "jeremy", "password": "correct horse battery staple"}
 _TABLES = (
     "timer_firings",
     "timers",
+    # S12: timers.agent_id references agents (RESTRICT), so agents goes after
+    # timers. agents ↔ turns reference each other (turns.agent_id and
+    # agents.created_turn_id), so no order satisfies both — the CASCADE on
+    # the DROP and on the TRUNCATE is what makes the cycle a non-issue.
+    "agents",
     "device_audit",
     "devices",
     "pairing_codes",

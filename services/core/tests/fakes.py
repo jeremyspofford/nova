@@ -213,7 +213,8 @@ class FakeGateway:
                 Route("/admin/spend/caps", self._admin, methods=["GET", "PUT"]),
                 Route("/admin/spend/prices", self._admin, methods=["GET", "PUT", "DELETE"]),
                 Route("/admin/routes", self._admin, methods=["GET"]),
-                Route("/admin/routes/{role}", self._admin, methods=["PUT"]),
+                # S12: agents.unregister_route DELETEs a derived role's row.
+                Route("/admin/routes/{role}", self._admin, methods=["PUT", "DELETE"]),
                 Route("/admin/route/explain", self._explain, methods=["GET"]),
                 Route("/admin/routes/walls/{provider}", self._admin, methods=["DELETE"]),
             ]

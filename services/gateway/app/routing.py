@@ -24,6 +24,12 @@ name (that would spend money nobody chose). Nothing runnable at all is a
 503 that lists every verdict. Every decision that is not link 1 carries
 its reason on the response (`X-Nova-Route`) and in the usage chunk, so
 the reply can say it (rail 20 — no silent fallback).
+
+Roles are BUILT-INS ∪ any name the ledger's own usage.ROLE_RE accepts
+(S12-2): a core-side agent's role is DERIVED from its name (`agent_<name>`)
+and the ledger already meters it under that role, so the same rule lets
+it own a chain — one with no chain (or an empty one) walks the chat chain,
+exactly as scheduled/judge do. Nothing here keeps a second list of roles.
 """
 
 from __future__ import annotations
@@ -44,7 +50,7 @@ from app.cache import TTLCache
 
 logger = logging.getLogger("gateway")
 
-ROLES = ("chat", "scheduled", "judge", "coding", "vision")
+BUILTIN_ROLES = ("chat", "scheduled", "judge", "coding", "vision")
 # Roles nothing calls yet — shown on the page as "no user yet".
 RESERVED_ROLES = frozenset({"coding", "vision"})
 WALL_STATUSES = frozenset({401, 402, 403, 429})
@@ -94,15 +100,21 @@ class Decision:
 
 
 def validate_role(role: str) -> str:
-    if role not in ROLES:
-        raise ValueError(f"role must be one of {', '.join(ROLES)} — got {role!r}")
-    return role
+    """A built-in, or any name the ledger's ROLE_RE accepts — the one rule
+    usage.Attribution applies to X-Nova-Role, so whatever can be metered
+    under a role can be routed by it."""
+    if role in BUILTIN_ROLES or usage.ROLE_RE.fullmatch(role):
+        return role
+    raise ValueError(
+        f"role must be a built-in ({', '.join(BUILTIN_ROLES)}) or a lowercase [a-z_] name "
+        f"of at most 32 chars — got {role!r}"
+    )
 
 
 async def chains(pool: asyncpg.Pool) -> dict[str, list[str]]:
     rows = await pool.fetch("SELECT role, chain FROM routes")
     out = {r["role"]: list(json.loads(r["chain"])) for r in rows}
-    for role in ROLES:
+    for role in BUILTIN_ROLES:
         out.setdefault(role, [])
     return out
 
@@ -134,6 +146,13 @@ async def set_chain(pool: asyncpg.Pool, role: str, chain: list, names: set[str])
         json.dumps(cleaned),
     )
     return cleaned
+
+
+async def delete_chain(pool: asyncpg.Pool, role: str) -> bool:
+    """Drop a role's row. True only when a row was actually deleted — the
+    command tag is read, never assumed (role is the primary key: 0 or 1)."""
+    result = await pool.execute("DELETE FROM routes WHERE role = $1", role)
+    return result == "DELETE 1"
 
 
 # ── walls ──────────────────────────────────────────────────────────────────
@@ -415,5 +434,5 @@ def clear_tags_cache() -> None:
     TAGS_CACHE.clear()
 
 
-__all__ = ["ROLES", "RESERVED_ROLES", "Decision", "NothingRunnable", "resolve", "explain"]
+__all__ = ["BUILTIN_ROLES", "RESERVED_ROLES", "Decision", "NothingRunnable", "resolve", "explain"]
 _ = time  # noqa: F841 — kept for callers that time the walk

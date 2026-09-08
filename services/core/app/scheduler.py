@@ -350,19 +350,6 @@ def framed_instruction(title: str, instruction: str, *, now_words: str) -> str:
     )
 
 
-async def _settle_detached(spawned_before: set[asyncio.Task]) -> None:
-    """Wait for the detached work THIS turn fired (its atomic trace close) —
-    never the whole of chat._BACKGROUND, and never the task this runs in."""
-    me = asyncio.current_task()
-    while True:
-        pending = [
-            t for t in chat._BACKGROUND if t not in spawned_before and t is not me and not t.done()
-        ]
-        if not pending:
-            return
-        await asyncio.gather(*pending, return_exceptions=True)
-
-
 def _error_frame(frames: list) -> str | None:
     for frame in frames:
         if not isinstance(frame, str) or not frame.startswith("data: "):
@@ -433,7 +420,8 @@ async def _fire_scheduled(
         frames.append,
         ingest=False,
     )
-    await _settle_detached(spawned_before)
+    # The one settle helper, shared with delegation (S12) — see chat.settle_detached.
+    await chat.settle_detached(spawned_before)
     status = await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id)
     if status == "ok":
         delivery["chat"] = {"ok": True}

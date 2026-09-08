@@ -182,7 +182,30 @@ async def routes(request: Request) -> Response:
 
 @router.put("/routes/{role}")
 async def put_route(role: str, request: Request) -> Response:
+    """Set a role's chain. An agent's role (`agent_<name>`, S12) is refused
+    HERE when no such agent exists — the Routing page is the only production
+    caller, so a typo is refused where the owner types it, by name, instead
+    of becoming a chain nobody walks. Every other role is the gateway's to
+    judge (its built-ins, its ROLE_RE); its 400 comes back verbatim."""
+    from app import agents  # function-local: agents imports the store, not the proxies
+
+    if role.startswith(agents.ROLE_PREFIX):
+        name = role[len(agents.ROLE_PREFIX) :]
+        live = await agents.names(await db.get_pool())
+        if name not in live:
+            roles = ", ".join(agents.ROLE_PREFIX + n for n in live) or "none yet"
+            raise HTTPException(
+                status_code=400, detail=f"no agent named {name!r} — live agent roles: {roles}"
+            )
     return await _forward(request, "PUT", f"/admin/routes/{role}")
+
+
+@router.delete("/routes/{role}")
+async def delete_route(role: str, request: Request) -> Response:
+    """Drop a role's chain row (S12-2). The gateway refuses a built-in and
+    404s a role with no row; both come back verbatim. Used by the Routing
+    page for a stray row (an agent that no longer exists)."""
+    return await _forward(request, "DELETE", f"/admin/routes/{role}")
 
 
 @router.get("/routes/explain")

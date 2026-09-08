@@ -250,6 +250,28 @@ export interface StoredMessage {
   /** The gateway's stated reason when this turn's answer came from a
    * fallback link (S10-2); null when link 1 served. */
   route_reason?: string | null
+  /** The agent whose turn wrote this row (S12, the `@name` path) —
+   * `agents.name` joined through the turn's `agent_id`, the `turn_kind`
+   * idiom: DERIVED on read, never a stored label, so a deleted agent's
+   * rows simply lose the badge. null for user rows and for Nova's own
+   * replies. Absent on a core older than S12. */
+  agent?: string | null
+  /** The delegations Nova's turn made while writing this row (S12) —
+   * derived from her `delegate_to_agent` spans' `meta.facts`, the
+   * `served_by` idiom. Empty when she delegated nothing; absent on a core
+   * older than S12. */
+  delegations?: Delegation[]
+}
+
+/** One `delegate_to_agent` call as the turn ledger recorded it (S12).
+ * `status` is the CHILD turn's close and `files` the paths of its
+ * successful workspace_write_file spans — both derived from spans, never
+ * from the agent's own report of what it did. */
+export interface Delegation {
+  agent: string
+  agent_turn_id: string
+  status: 'ok' | 'error' | 'interrupted'
+  files: string[]
 }
 
 export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
@@ -383,7 +405,11 @@ export const deleteOwnerPrice = (provider: string, model: string) =>
 
 // ── routing (S10-2): the role chains, the walk explained, the walls ─────
 
-export type RouteRole = 'chat' | 'scheduled' | 'judge' | 'coding' | 'vision'
+/** The five roles the gateway ships with; every other role is derived — a
+ * core-side agent named `x` owns `agent_x` (S12). */
+export type BuiltinRole = 'chat' | 'scheduled' | 'judge' | 'coding' | 'vision'
+/** Any routing role: a built-in or an agent's derived `agent_<name>`. */
+export type RouteRole = BuiltinRole | string
 
 export interface RouteVerdict {
   link: number
@@ -412,7 +438,7 @@ export interface RouteWall {
 }
 
 export interface Routes {
-  roles: { role: RouteRole; chain: string[]; reserved: boolean }[]
+  roles: { role: RouteRole; chain: string[]; reserved: boolean; builtin?: boolean }[]
   walls: RouteWall[]
 }
 
@@ -423,6 +449,23 @@ export const explainRoute = (role: RouteRole, model?: string) =>
   apiGet<RouteExplain>(`/api/v1/routes/explain?role=${role}${model ? `&model=${encodeURIComponent(model)}` : ''}`)
 export const clearWall = (provider: string) =>
   apiSend<{ provider: string; cleared: boolean }>(`/api/v1/routes/walls/${encodeURIComponent(provider)}`, 'DELETE')
+/** DELETE /routes/{role} drops the role's stored chain — nothing to read
+ * back; a built-in (400) or a role with no row (404) is thrown by `request`
+ * with the gateway's stated reason. */
+export async function deleteRoute(role: string): Promise<void> {
+  await request(`/api/v1/routes/${encodeURIComponent(role)}`, { method: 'DELETE' })
+}
+
+// ── agents (S12): the live agents, each owning a derived routing role ───
+
+export interface AgentSummary {
+  name: string
+  purpose: string
+  /** the routing role derived from the name: `agent_<name>` */
+  role: string
+}
+
+export const listAgents = () => apiGet<AgentSummary[]>('/api/v1/agents')
 
 // ── activity (the turn ledger, read-only) ───────────────────────────────
 

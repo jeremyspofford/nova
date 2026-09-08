@@ -6,8 +6,10 @@ from __future__ import annotations
 import json
 import logging
 import re
+import uuid
 from pathlib import Path
 
+import asyncpg
 import pytest
 import yaml
 
@@ -188,3 +190,97 @@ async def test_the_person_is_on_the_turn_and_survives_their_deletion(pool):
     await pool.execute("DELETE FROM people WHERE id = $1", person["id"])
     # ON DELETE SET NULL: the turn (and its spend) outlives the scratch person.
     assert (await pool.fetchval("SELECT person_id FROM turns WHERE id = $1", turn.id)) is None
+
+
+# -- S12: who did the work, and what it is doing right now --
+
+
+async def _agent(pool) -> uuid.UUID:
+    """A minimal agents row. Not in conftest's per-test TRUNCATE list, so the
+    tests that use it delete it themselves."""
+    return await pool.fetchval(
+        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
+        "VALUES ('coder', 'writes code', 'be terse', ARRAY['get_time'], 5, 'page') RETURNING id"
+    )
+
+
+async def test_the_agent_and_role_are_on_the_turn_and_survive_the_agents_deletion(pool):
+    """turns.agent_id says WHO did the work, turns.role which routing role its
+    rounds walked; person_id stays the owner it was for. Both round-trip
+    through open_turn and the row. ON DELETE SET NULL: deleting the agent
+    keeps the trace and its role text in Activity and only loses the name."""
+    owner = await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('owner', 'owner') RETURNING id"
+    )
+    agent = await _agent(pool)
+    try:
+        turn = await traces.open_turn(
+            pool, kind="agent", person_id=owner, agent_id=agent, role="agent_coder"
+        )
+        assert turn.agent_id == agent and turn.role == "agent_coder"
+        assert turn.person_id == owner and turn.kind == "agent"
+        await traces.close_turn(pool, turn, "ok")
+        row = await pool.fetchrow(
+            "SELECT person_id, agent_id, role, kind, status FROM turns WHERE id = $1", turn.id
+        )
+        assert row["person_id"] == owner
+        assert row["agent_id"] == agent
+        assert row["role"] == "agent_coder"
+        assert row["kind"] == "agent" and row["status"] == "ok"
+
+        await pool.execute("DELETE FROM agents WHERE id = $1", agent)
+        row = await pool.fetchrow("SELECT agent_id, role FROM turns WHERE id = $1", turn.id)
+        assert row["agent_id"] is None
+        assert row["role"] == "agent_coder"
+    finally:
+        await pool.execute("DELETE FROM agents WHERE id = $1", agent)
+
+
+async def test_a_turn_nobody_delegated_stores_no_agent_and_no_role(pool):
+    """Nova's own turns (every caller today) pass neither: both columns are
+    NULL, so 'who' reads as Nova and the role stays derived from kind."""
+    turn = await _turn(pool)
+    assert turn.agent_id is None and turn.role is None
+    row = await pool.fetchrow("SELECT agent_id, role FROM turns WHERE id = $1", turn.id)
+    assert row["agent_id"] is None and row["role"] is None
+
+
+async def test_a_turn_for_an_agent_that_does_not_exist_is_refused(pool):
+    """An agent_id naming no row is refused by the foreign key before the turn
+    exists — never stored as a dangling reference that would attribute work
+    to nobody. Nothing is left behind."""
+    with pytest.raises(asyncpg.ForeignKeyViolationError):
+        await traces.open_turn(pool, kind="agent", agent_id=uuid.uuid4(), role="agent_ghost")
+    assert await pool.fetchval("SELECT count(*) FROM turns") == 0
+
+
+async def test_doing_is_set_read_and_cleared_and_close_turn_leaves_it_alone(pool):
+    """DOING is what a running turn is doing right now, held only in this
+    process. Clearing an id never recorded is a no-op (every exit path may
+    call it), reading one is None (idle as far as this process knows), and
+    close_turn does not touch it: the scheduler closes reminder/job turns that
+    never entered DOING, and chat's close is a detached task that can fail —
+    the pop belongs to chat._run_turn's finally, the one line every exit of a
+    turn chat ran passes through."""
+    unknown = uuid.uuid4()
+    assert traces.doing(unknown) is None
+    traces.clear_doing(unknown)  # no-op, no error
+    assert unknown not in traces.DOING
+
+    turn = await _turn(pool)
+    try:
+        traces.set_doing(turn.id, "starting")
+        assert traces.doing(turn.id) == "starting"
+        traces.set_doing(turn.id, "thinking")
+        assert traces.doing(turn.id) == "thinking"
+        traces.set_doing(turn.id, "get_time")
+        assert traces.DOING[turn.id] == "get_time"
+
+        await traces.close_turn(pool, turn, "ok")
+        assert traces.doing(turn.id) == "get_time"  # chat owns the pop, not the close
+
+        traces.clear_doing(turn.id)
+        assert traces.doing(turn.id) is None
+        traces.clear_doing(turn.id)  # idempotent
+    finally:
+        traces.clear_doing(turn.id)

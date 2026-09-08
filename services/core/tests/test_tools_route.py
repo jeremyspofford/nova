@@ -68,9 +68,21 @@ async def test_the_tool_asks_the_gateway_with_the_role_and_model(pool, mount_pee
     )
     await route.route_explain({"role": "chat"}, ctx)
     assert gateway.queries[-1] == b"role=chat&model=openrouter%3Agpt-y"
+    # S12-2: roles are the gateway's one rule (built-ins plus an agent's
+    # `agent_<name>`); the tool keeps no list of its own and quotes the 400.
+    refusing = FakeGateway(
+        admin_status=400,
+        admin_body={
+            "error": (
+                "role must be a built-in (chat, scheduled, judge, coding, vision) or a "
+                "lowercase [a-z_] name of at most 32 chars — got 'Vibes-1'"
+            )
+        },
+    )
+    mount_peers(gateway=refusing)
     try:
-        await route.route_explain({"role": "vibes"}, ctx)
+        await route.route_explain({"role": "Vibes-1"}, ctx)
     except ToolFailure as exc:
-        assert "role must be one of" in str(exc)
+        assert "the routing check was refused — role must be a built-in" in str(exc)
     else:
-        raise AssertionError("a bad role must be refused")
+        raise AssertionError("a role the gateway refuses must be refused in its words")

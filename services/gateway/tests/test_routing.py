@@ -24,6 +24,12 @@ from tests.fakes import FakeOllama, FakeOpenAICompat
 
 pytestmark = requires_db
 
+# validate_role's exact refusal (S12-2): names the rule and the offending name.
+BAD_ROLE_MESSAGE = (
+    "role must be a built-in (chat, scheduled, judge, coding, vision) or a lowercase "
+    "[a-z_] name of at most 32 chars — got 'Vibes-1'"
+)
+
 
 def _frames(body: bytes) -> list:
     out = []
@@ -101,8 +107,10 @@ async def test_the_explicit_pick_is_link_one_and_the_chain_is_the_fallbacks(
     # A bad link is refused by name before anything is stored.
     bad = await client.put("/admin/routes/chat", json={"chain": ["nope:model"]})
     assert bad.status_code == 400 and "does not name a registered provider" in bad.json()["error"]
-    bad = await client.put("/admin/routes/vibes", json={"chain": []})
-    assert bad.status_code == 400
+    # Moved 'vibes' -> 'Vibes-1' (S12-2): 'vibes' matches the ledger's ROLE_RE and
+    # is now an accepted derived role; only a name ROLE_RE refuses is refused here.
+    bad = await client.put("/admin/routes/Vibes-1", json={"chain": []})
+    assert bad.status_code == 400 and bad.json()["error"] == BAD_ROLE_MESSAGE
 
 
 async def test_a_capped_provider_is_skipped_before_the_call_and_the_reason_is_stated(
@@ -269,8 +277,21 @@ async def test_nothing_runnable_is_a_503_that_lists_every_verdict(client, pool, 
     resp = await _chat(client, "chat")
     assert resp.status_code == 503
     assert "qwen3:4b is not installed" in resp.json()["error"]
-    bad = await _chat(client, "vibes")
-    assert bad.status_code == 400
+    # Moved 'vibes' -> a derived role (S12-2): 'vibes' matches the ledger's ROLE_RE,
+    # so it is no longer a 400 — with no chain of its own it walks the chat chain and
+    # gets the same 503. 'Vibes-1' never reaches the walk through the header at all:
+    # usage.Attribution.from_headers drops a name ROLE_RE refuses to "no role" (the
+    # ledger's rule, unchanged), so the request is served unrouted and the row's
+    # role is NULL. The refusal itself is pinned through explain, which takes the
+    # role verbatim.
+    unknown = await _chat(client, "vibes")
+    assert unknown.status_code == 503 and "qwen3:4b is not installed" in unknown.json()["error"]
+    unrouted = await _chat(client, "Vibes-1")
+    assert unrouted.status_code == 200 and "x-nova-route" not in unrouted.headers
+    (row,) = await pool.fetch("SELECT role FROM usage_events WHERE kind = 'completion'")
+    assert row["role"] is None
+    bad = await client.get("/admin/route/explain?role=Vibes-1")
+    assert bad.status_code == 400 and bad.json()["error"] == BAD_ROLE_MESSAGE
 
 
 async def test_a_bare_local_pick_is_link_one_on_the_default_provider(client, pool, local):
@@ -284,3 +305,98 @@ async def test_a_bare_local_pick_is_link_one_on_the_default_provider(client, poo
     assert resp.headers["x-nova-served-by"] == "ollama:qwen3:8b"
     assert resp.headers["x-nova-route"] == "role=chat;link=1"
     assert local.seen[-1][1]["model"] == "qwen3:8b"
+
+
+async def test_a_derived_role_with_its_own_chain_resolves_to_it_and_without_one_walks_chat(
+    client, pool, local
+):
+    """S12-2: a core-side agent's role (`agent_<name>`, the ledger's own
+    ROLE_RE) can own a chain. With one, it serves from it; with an empty
+    chain or no row at all it walks the chat chain — exactly as Nova's
+    scheduled/judge fallbacks do."""
+    await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:8b"]})
+    put = await client.put("/admin/routes/agent_coder", json={"chain": ["ollama:qwen3:4b"]})
+    assert put.status_code == 200 and put.json() == {
+        "role": "agent_coder",
+        "chain": ["ollama:qwen3:4b"],
+    }
+
+    resp = await _chat(client, "agent_coder")
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:4b"
+    assert resp.headers["x-nova-route"] == "role=agent_coder;link=1"
+    assert _route_chunk(resp.content) == {
+        "role": "agent_coder",
+        "link": 1,
+        "reason": None,
+        "served_by": "ollama:qwen3:4b",
+        "standby": False,
+    }
+    (row,) = await pool.fetch("SELECT role, served_by FROM usage_events")
+    assert (row["role"], row["served_by"]) == ("agent_coder", "ollama:qwen3:4b")
+
+    # explain names the same chain, without serving.
+    ex = (await client.get("/admin/route/explain?role=agent_coder")).json()
+    assert ex["role"] == "agent_coder" and [v["id"] for v in ex["chain"]] == ["ollama:qwen3:4b"]
+    assert ex["would_serve"]["served_by"] == "ollama:qwen3:4b"
+
+    # An empty chain of its own: the chat chain serves, under the agent's role.
+    await client.put("/admin/routes/agent_coder", json={"chain": []})
+    resp = await _chat(client, "agent_coder")
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:8b"
+    assert resp.headers["x-nova-route"] == "role=agent_coder;link=1"
+
+    # No row at all (never set, or removed): the same walk.
+    assert (await client.delete("/admin/routes/agent_coder")).status_code == 200
+    for role in ("agent_coder", "agent_reviewer"):
+        resp = await _chat(client, role)
+        assert resp.status_code == 200
+        assert resp.headers["x-nova-served-by"] == "ollama:qwen3:8b"
+        assert resp.headers["x-nova-route"] == f"role={role};link=1"
+    ex = (await client.get("/admin/route/explain?role=agent_reviewer")).json()
+    assert ex["role"] == "agent_reviewer" and ex["would_serve"]["served_by"] == "ollama:qwen3:8b"
+    rows = await pool.fetch("SELECT role FROM usage_events ORDER BY id")
+    assert [r["role"] for r in rows] == ["agent_coder"] * 3 + ["agent_reviewer"]
+
+
+async def test_the_routes_page_lists_built_ins_first_and_a_derived_role_can_be_removed(
+    client, pool, local
+):
+    """S12-2: GET /admin/routes is the built-ins in their own order, then
+    every other routes row by name, each saying whether it is built in;
+    DELETE refuses a built-in, reads the row count for the rest."""
+    page = (await client.get("/admin/routes")).json()["roles"]
+    assert [r["role"] for r in page] == list(routing.BUILTIN_ROLES)
+    assert all(r["builtin"] is True for r in page)
+    assert [r["role"] for r in page if r["reserved"]] == sorted(routing.RESERVED_ROLES)
+
+    for role in ("agent_zed", "agent_alpha"):
+        put = await client.put(f"/admin/routes/{role}", json={"chain": ["ollama:qwen3:4b"]})
+        assert put.status_code == 200, put.text
+    page = (await client.get("/admin/routes")).json()["roles"]
+    assert [r["role"] for r in page] == [*routing.BUILTIN_ROLES, "agent_alpha", "agent_zed"]
+    derived = [r for r in page if not r["builtin"]]
+    assert derived == [
+        {"role": "agent_alpha", "chain": ["ollama:qwen3:4b"], "reserved": False, "builtin": False},
+        {"role": "agent_zed", "chain": ["ollama:qwen3:4b"], "reserved": False, "builtin": False},
+    ]
+
+    # A built-in is never removed, row or not.
+    await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:4b"]})
+    for role in ("chat", "vision"):
+        bad = await client.delete(f"/admin/routes/{role}")
+        assert bad.status_code == 400
+        assert bad.json()["error"] == f"{role} is a built-in role and cannot be removed"
+    assert (await pool.fetchval("SELECT count(*) FROM routes WHERE role = 'chat'")) == 1
+
+    # A derived role's row goes; the second DELETE finds nothing and says so.
+    gone = await client.delete("/admin/routes/agent_zed")
+    assert gone.status_code == 200 and gone.json() == {"deleted": "agent_zed"}
+    assert (await pool.fetchval("SELECT count(*) FROM routes WHERE role = 'agent_zed'")) == 0
+    again = await client.delete("/admin/routes/agent_zed")
+    assert again.status_code == 404 and again.json()["error"] == "no route for role 'agent_zed'"
+    never = await client.delete("/admin/routes/agent_never_set")
+    assert never.status_code == 404
+    page = (await client.get("/admin/routes")).json()["roles"]
+    assert [r["role"] for r in page] == [*routing.BUILTIN_ROLES, "agent_alpha"]

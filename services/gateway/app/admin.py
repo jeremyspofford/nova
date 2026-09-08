@@ -892,17 +892,22 @@ async def delete_owner_price(request: Request) -> dict:
 
 @router.get("/routes")
 async def get_routes(request: Request) -> dict:
+    """Every role with a chain: the built-ins first (in their own order,
+    a row or not), then every other routes row — a derived agent role —
+    by name. `builtin` says which is which; `reserved` is unchanged."""
     pool = await db.get_pool()
     chains = await routing.chains(pool)
     walled = await routing.walls(pool)
+    derived = sorted(role for role in chains if role not in routing.BUILTIN_ROLES)
     return {
         "roles": [
             {
                 "role": role,
                 "chain": chains.get(role, []),
                 "reserved": role in routing.RESERVED_ROLES,
+                "builtin": role in routing.BUILTIN_ROLES,
             }
-            for role in routing.ROLES
+            for role in (*routing.BUILTIN_ROLES, *derived)
         ],
         "walls": [{**w, "walled_until": w["walled_until"].isoformat()} for w in walled.values()],
     }
@@ -954,6 +959,22 @@ async def clear_wall(provider: str) -> dict:
         raise HTTPException(status_code=404, detail=f"{provider!r} is not walled")
     logger.info("wall cleared by the owner: %s", provider)
     return {"provider": provider, "cleared": True}
+
+
+@router.delete("/routes/{role}")
+async def delete_route(role: str) -> dict:
+    """Drop a derived role's chain (its agent is gone, or the owner set it
+    by mistake). A built-in is never removed — PUT it to [] instead. The
+    answer reads the row count: no row is a 404, never "deleted"."""
+    if role in routing.BUILTIN_ROLES:
+        raise HTTPException(
+            status_code=400, detail=f"{role} is a built-in role and cannot be removed"
+        )
+    removed = await routing.delete_chain(await db.get_pool(), role)
+    if not removed:
+        raise HTTPException(status_code=404, detail=f"no route for role {role!r}")
+    logger.info("route removed: %s", role)
+    return {"deleted": role}
 
 
 @router.get("/catalog")

@@ -1,9 +1,16 @@
 """POST /api/v1/chat/stream — one turn, streamed, and the trace it leaves.
 
 Frame contract (each line is `data: <json>`):
-    {"meta": {conversation_id, model, turn_id}}   exactly once, first
+    {"meta": {conversation_id, model, turn_id,
+              agent}}                             exactly once, first — `agent`
+                                                   (S12) is the name of the agent
+                                                   that ran the turn, null when it
+                                                   was Nova herself
     {"t": "<delta>"}                              zero or more
-    {"activity": {"tool", "status", "reason"?}}   zero or more, while tools run
+    {"activity": {"tool", "status", "reason"?,
+                  "detail"?, "agent"?,
+                  "agent_turn_id"?, "step"?,
+                  "step_status"?}}                zero or more, while tools run
                                                    — `reason` is present ONLY on
                                                    status "error", and only when
                                                    the call itself stated one: the
@@ -15,6 +22,16 @@ Frame contract (each line is `data: <json>`):
                                                    tell a stated tool failure from
                                                    a turn cut off mid-call, so it
                                                    must not claim either happened.
+                                                   The other five appear ONLY on
+                                                   status "progress" and come from
+                                                   the running tool's own report:
+                                                   a str report is its `detail`; a
+                                                   dict report (S12: a delegation
+                                                   relaying the agent turn it is
+                                                   running) contributes exactly
+                                                   those five keys, copied by name
+                                                   in _activity_frame — a tool can
+                                                   never set `tool` or `status`.
     {"correction": "<note>"}                      zero or more, when an honesty
                                                    guard contradicts or redirects
                                                    the reply (see app/guards.py)
@@ -55,7 +72,7 @@ import logging
 import re
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable, Iterable, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from urllib.parse import unquote
@@ -67,6 +84,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app import (
+    agents,
     conversations,
     db,
     devices,
@@ -433,6 +451,31 @@ async def drain_background() -> None:
         await asyncio.gather(*list(_BACKGROUND), return_exceptions=True)
 
 
+async def settle_detached(spawned_before: set[asyncio.Task]) -> None:
+    """Wait for the detached work ONE turn fired since `spawned_before` was
+    snapshotted — its atomic trace close, a queued memory ingest — so a
+    caller that ran _run_turn inline (the scheduler, a delegation) can read
+    the turn's status back and trust it.
+
+    Never drain_background(): the caller is often itself one of _BACKGROUND's
+    tasks (a suite job, a delegated turn inside a chat turn), and a task that
+    gathers the whole set gathers ITSELF — a deadlock, hit the first time an
+    eval job ran detached. So this waits only for tasks that appeared after
+    the snapshot, never for the task it runs in, and loops so work those
+    tasks fire in turn is waited for too. One implementation, shared by the
+    scheduler and delegation (S12) so the two can never disagree about what
+    "settled" means.
+    """
+    me = asyncio.current_task()
+    while True:
+        pending = [
+            t for t in _BACKGROUND if t not in spawned_before and t is not me and not t.done()
+        ]
+        if not pending:
+            return
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 def _frame(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -463,15 +506,27 @@ def _activity_reason(result: str) -> str | None:
     return text
 
 
+# The keys a tool's DICT progress report may put on an activity frame (S12):
+# the line itself, and the agent turn a delegation is relaying — which agent,
+# which turn (so the Activity page can be opened on it), which step it is on
+# and how that step ended. Copied by name and nothing else, so `tool` and
+# `status` — the frame's own facts about THIS call — can never be written by
+# the tool that is reporting.
+ACTIVITY_REPORT_KEYS = ("detail", "agent", "agent_turn_id", "step", "step_status")
+
+
 def _activity_frame(
-    tool: str, status: str, result: str | None = None, *, detail: str | None = None
+    tool: str, status: str, result: str | None = None, *, detail: str | dict | None = None
 ) -> str:
     """The `{"activity": ...}` SSE frame for one tool call's status change.
 
     `reason` is attached only when status == "error" and the call actually
     stated one (see _activity_reason) — never on "start"/"ok". `detail` is
     attached only on "progress": the tool's own words about a long call
-    still running (a pull's percentage), capped like a reason.
+    still running (a pull's percentage), capped like a reason. A dict is a
+    structured report (ToolContext.progress): only the string values of
+    ACTIVITY_REPORT_KEYS are copied, `detail` capped exactly as a str one
+    is, so a str report and a dict `{"detail": ...}` produce the same frame.
     """
     activity: dict[str, str] = {"tool": tool, "status": status}
     if status == "error" and result is not None:
@@ -479,7 +534,12 @@ def _activity_frame(
         if reason is not None:
             activity["reason"] = reason
     if status == "progress" and detail:
-        activity["detail"] = detail.strip()[:ACTIVITY_REASON_LIMIT]
+        report = detail if isinstance(detail, dict) else {"detail": detail}
+        for key in ACTIVITY_REPORT_KEYS:
+            value = report.get(key)
+            if not isinstance(value, str) or not value:
+                continue
+            activity[key] = value.strip()[:ACTIVITY_REASON_LIMIT] if key == "detail" else value
     return _frame({"activity": activity})
 
 
@@ -503,14 +563,30 @@ def history_window(
     return kept
 
 
-def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
+def stable_system_prompt(
+    model: str, tool_names: Sequence[str], *, agent_block: str | None = None
+) -> str:
     """The half that does not change from turn to turn.
 
     The tool list is derived from the registry rather than written out
     here, so a tool added to the toolset is named in the prompt by that
     fact alone and cannot drift out of step with what is advertised.
+
+    `agent_block` (S12) is an agent's own block — who it is, its purpose and
+    instructions, its folder and round budget — appended after the shared
+    preamble as its own section, never in place of it: the preamble is the
+    honesty rails the guards enforce, and an agent's turn runs under exactly
+    the same guards, so it gets the same rails PLUS its block. None (Nova)
+    is byte-identical to the prompt before agents existed.
+
+    The delegation sentence is derived from `tool_names`, not written in
+    unconditionally: it belongs to whoever holds agents.DELEGATE_TOOL, and
+    an agent's subset never does, so an agent is never told how to relay a
+    report it cannot request. The name is the module constant, never a
+    literal here: a rename of the tool moves this sentence with it instead
+    of silently dropping it from every prompt.
     """
-    return (
+    prompt = (
         "You are Nova, a self-hosted assistant running on this household's own hardware. "
         f"The model answering is {model or 'the gateway default'}. Be direct and concrete, "
         "and say plainly when you do not know something.\n\n"
@@ -542,22 +618,60 @@ def stable_system_prompt(model: str, tool_names: Sequence[str]) -> str:
         "monthly caps, a provider that refused); when asked why a reply came from a "
         "given model, use route_explain and quote its reason — never guess."
     )
+    if agents.DELEGATE_TOOL in tool_names:
+        prompt += (
+            f" {agents.DELEGATE_TOOL} runs an agent to completion and answers with a facts line "
+            "the backend wrote, then the agent's own report: relay from the facts line — the files "
+            "it lists are the files that exist — quote the report as the agent's words, say "
+            "the agent did not finish when the result starts with Error:, and never say an "
+            "agent did something the facts line does not show or claim its work as your own."
+        )
+    if agent_block:
+        prompt = f"{prompt}\n\n{agent_block}"
+    return prompt
 
 
-def volatile_system_prompt(snippets: Sequence[str]) -> str | None:
-    """The half that changes every turn — omitted entirely when there is nothing in it."""
-    if not snippets:
+def volatile_system_prompt(snippets: Sequence[str], roster: str | None = None) -> str | None:
+    """The half that changes every turn — omitted entirely when there is nothing in it.
+
+    `roster` (S12) is the one line naming the agents Nova can delegate to,
+    read from the table for THIS turn (agents.roster_line) — None when there
+    are none, and then the prompt is byte-identical to before agents existed.
+    """
+    parts: list[str] = []
+    if snippets:
+        notes = "\n".join(f"- {snippet}" for snippet in snippets)
+        parts.append(f"Relevant notes:\n{notes}")
+    if roster:
+        parts.append(roster)
+    if not parts:
         return None
-    notes = "\n".join(f"- {snippet}" for snippet in snippets)
-    return f"Relevant notes:\n{notes}\n\nCurrent time: {datetime.now(UTC).isoformat()}"
+    parts.append(f"Current time: {datetime.now(UTC).isoformat()}")
+    return "\n\n".join(parts)
 
 
 def base_messages(
-    model: str, snippets: Sequence[str], history: Sequence[dict], message: str
+    model: str,
+    snippets: Sequence[str],
+    history: Sequence[dict],
+    message: str,
+    persona: agents.Persona | None = None,
+    roster: str | None = None,
 ) -> list[dict]:
-    """The transcript the first round of the turn starts from."""
-    messages = [{"role": "system", "content": stable_system_prompt(model, tools.tool_names())}]
-    volatile = volatile_system_prompt(snippets)
+    """The transcript the first round of the turn starts from.
+
+    `persona` (S12) decides whose prompt this is: None is Nova's, exactly as
+    before — the whole live registry and no block; an agent's names its
+    subset and carries its block. `roster` is Nova's line about who she can
+    delegate to (see volatile_system_prompt)."""
+    if persona is None:
+        stable = stable_system_prompt(model, tools.tool_names())
+    else:
+        stable = stable_system_prompt(
+            model, persona.tool_names, agent_block=persona.instructions_block
+        )
+    messages = [{"role": "system", "content": stable}]
+    volatile = volatile_system_prompt(snippets, roster)
     if volatile is not None:
         messages.append({"role": "system", "content": volatile})
     messages.extend(history)
@@ -997,23 +1111,77 @@ def turn_failure_statement(reason: str, spans: Sequence[traces.Span]) -> str:
 # -- peers -----------------------------------------------------------------
 
 
-async def _recall(app, turn: traces.Turn, person: Person, query: str) -> list[str]:
+async def _recall_scope(client: httpx.AsyncClient, query: str, person_id: str) -> list:
+    """One /recall for one memory partition; raises on any failure so the
+    caller can record it against THAT scope."""
+    response = await client.post(
+        "/recall", json={"query": query, "person_id": person_id, "k": RECALL_K}
+    )
+    response.raise_for_status()
+    return _results_from(response.json())
+
+
+async def _recall(
+    app, turn: traces.Turn, person: Person, query: str, *, shared: uuid.UUID | None = None
+) -> list[str]:
+    """The notes the turn starts with, under ONE memory_recall span.
+
+    `person` is whose partition is asked — the owner for Nova's turns, the
+    agent (a Person value, S12) for an agent's. `shared` names a SECOND
+    partition recalled alongside it: the owner's, only for an agent allowed
+    to read the household's shared notes. The two calls run concurrently
+    (asyncio.gather) inside the one RECALL_TIMEOUT budget, so a second scope
+    never doubles the wait, and each is fail-open on its own: one partition
+    the memory service could not answer costs THOSE notes, never the other's
+    and never the turn. Shared hits are prefixed "(shared) " so the model
+    can tell whose note it is reading. With `shared` None the request, the
+    span meta ({k, hits} or {k, error}) and the return are exactly what they
+    were before agents existed; with it the span also carries
+    `scopes: {own: n, shared: m}` and, per failed scope, `errors`.
+    """
     with turn.span("memory_recall") as span:
         span.meta["k"] = RECALL_K
+        scopes = {"own": str(person.id)}
+        if shared is not None:
+            scopes["shared"] = str(shared)
         try:
             async with peers.client(app, peers.MEMORY, RECALL_TIMEOUT) as client:
-                response = await client.post(
-                    "/recall",
-                    json={"query": query, "person_id": str(person.id), "k": RECALL_K},
+                outcomes = await asyncio.gather(
+                    *(_recall_scope(client, query, pid) for pid in scopes.values()),
+                    return_exceptions=True,
                 )
-                response.raise_for_status()
-                results = _results_from(response.json())
         except Exception as exc:
+            # The client itself could not be made (the peer is unconfigured):
+            # no scope was asked, so the whole recall is the one failure.
             reason = peers.reason(exc)
             span.meta["error"] = reason
             logger.warning("memory recall failed, continuing without notes: %s", reason)
             return []
-        snippets = _snippets(results)
+        hits: dict[str, list[str]] = {}
+        errors: dict[str, str] = {}
+        for name, outcome in zip(scopes, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                errors[name] = peers.reason(outcome)
+                hits[name] = []
+            else:
+                hits[name] = _snippets(outcome)
+        if shared is None:
+            if errors:
+                span.meta["error"] = errors["own"]
+                logger.warning("memory recall failed, continuing without notes: %s", errors["own"])
+                return []
+            snippets = hits["own"]
+        else:
+            for name, reason in errors.items():
+                logger.warning(
+                    "memory recall (%s scope) failed, continuing without those notes: %s",
+                    name,
+                    reason,
+                )
+            if errors:
+                span.meta["errors"] = errors
+            snippets = [*hits["own"], *(f"(shared) {s}" for s in hits["shared"])]
+            span.meta["scopes"] = {"own": len(hits["own"]), "shared": len(hits["shared"])}
         span.meta["hits"] = len(snippets)
         return snippets
 
@@ -1136,7 +1304,13 @@ async def _persist_assistant(
     )
 
 
-async def _run_tool(turn: traces.Turn, ctx: tools.ToolContext, call: ToolCall) -> tuple[str, bool]:
+async def _run_tool(
+    turn: traces.Turn,
+    ctx: tools.ToolContext,
+    call: ToolCall,
+    *,
+    subset: Collection[str] | None = None,
+) -> tuple[str, bool]:
     """One tool call, timed, recorded, and unable to raise.
 
     dispatch() decides ok; nothing here reads the result text to work out
@@ -1151,6 +1325,13 @@ async def _run_tool(turn: traces.Turn, ctx: tools.ToolContext, call: ToolCall) -
     tool refused with "not connected" established the machine is offline, and
     the span carries `facts: [{"device": …, "connected": false}]` so a guard can
     tell "it checked and reports offline" from "it never looked".
+
+    `subset` (S12) is the toolset the turn's persona was advertised (an
+    agent's); None is Nova, who holds the whole registry. A call naming a
+    tool outside it is marked on the span and RUNS regardless: the subset is
+    scope, not permission — the model was shown fewer tools, and the trace
+    says when it reached past what it was shown, so the Activity page can
+    show the specialism was crossed. Nothing here decides whether it may.
     """
     facts = ctx.facts_sink
     with turn.span("tool", call.name) as span:
@@ -1160,6 +1341,9 @@ async def _run_tool(turn: traces.Turn, ctx: tools.ToolContext, call: ToolCall) -
             # read off the wire. It still goes through schema validation — the
             # accommodation changes where the call was READ, never what it is.
             span.meta["parsed_from_markup"] = True
+        if subset is not None and call.name not in subset:
+            # Scope, not permission (see the docstring): recorded, then run.
+            span.meta["outside_subset"] = True
         # Pre-set, and overwritten the moment dispatch answers. A turn the
         # client abandons mid-call still files this span on the way out, and
         # it must read as "never finished" rather than as an untested
@@ -1185,6 +1369,8 @@ async def _dispatch_calls(
     calls: Sequence[ToolCall],
     messages: list[dict],
     emit: Callable[[str | None], None],
+    *,
+    subset: Collection[str] | None = None,
 ) -> bool:
     """Run one round's tool calls, append their results, stream what happened.
 
@@ -1194,12 +1380,14 @@ async def _dispatch_calls(
     made in a redirect is dispatched, recorded and framed exactly like a call
     made in a normal round — there is no second, weaker path. And every call
     that reaches a tool RUNS: nothing here decides whether it may (v4 makes no
-    authorization decisions); the only call ever refused is one the model wrote
-    as text.
+    authorization decisions); the only calls ever refused are one the model
+    wrote as text and one naming a tool that does not exist (which could not
+    run anywhere — see below for why an agent's is answered here).
 
     Returns `ran_ephemeral`, a MECHANICAL fact about this batch: whether a
     successful call was an ephemeral (point-in-time) read. The caller ORs it
-    into its own.
+    into its own. `subset` is handed to _run_tool unchanged (S12: the
+    persona's toolset, or None for Nova) — it marks, it never gates.
     """
     ran_ephemeral = False
     for call in calls:
@@ -1214,6 +1402,21 @@ async def _dispatch_calls(
             emit(_activity_frame(call.name, "error", result))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             continue
+        if subset is not None and call.name not in tools.REGISTRY:
+            # A name no tool has, from a persona that was shown a SUBSET. Not a
+            # gate: tools.dispatch would refuse this call too (there is nothing
+            # to run) — but its sentence names the WHOLE registry as "the tools
+            # you have", which for an agent is a lie about its hands and an
+            # invitation to reach for the twenty-odd tools it was never given.
+            # So the refusal is composed here from the subset it was actually
+            # shown, synchronously (no await joins the funnel; test_no_approvals
+            # pins the await list), recorded as a refused span like any other.
+            # Nova (subset None) still gets dispatch's own sentence: the whole
+            # registry IS her hands.
+            result = _refuse_unknown_tool(turn, call, subset)
+            emit(_activity_frame(call.name, "error", result))
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+            continue
         # The call's own progress channel: a frame per report, under this
         # call's name. Bound synchronously (no await joins the funnel).
         call_ctx = dataclasses.replace(
@@ -1222,7 +1425,10 @@ async def _dispatch_calls(
                 _activity_frame(_name, "progress", detail=detail)
             ),
         )
-        result, ok = await _run_tool(turn, call_ctx, call)
+        # What the turn is doing right now, for whoever asks (traces.DOING):
+        # the tool's name, set synchronously so no await joins the funnel.
+        traces.set_doing(turn.id, call.name)
+        result, ok = await _run_tool(turn, call_ctx, call, subset=subset)
         ran_tool = tools.REGISTRY.get(call.name)
         if ok and ran_tool is not None and ran_tool.ephemeral:
             ran_ephemeral = True
@@ -1319,6 +1525,31 @@ def _refuse_markup_as_text(turn: traces.Turn, call: ToolCall) -> str:
     return _refuse_call(turn, call, markup_as_text_refusal(call.name), MARKUP_AS_TEXT_FLAG)
 
 
+def unknown_tool_refusal(name: str, subset: Collection[str]) -> str:
+    """The refusal an agent gets for naming a tool that does not exist: the
+    same fact tools.dispatch states, but the list is the SUBSET the agent was
+    shown, in the order it was shown, never the whole registry."""
+    return (
+        f"{tools.ERROR_PREFIX}there is no tool named {name!r} — the tools you were given are: "
+        f"{', '.join(subset)}"
+    )
+
+
+def _refuse_unknown_tool(turn: traces.Turn, call: ToolCall, subset: Collection[str]) -> str:
+    """A call to a name no tool has, from a persona holding a subset: NOT
+    dispatched (nothing could run), recorded as a tool span with ok=False and
+    `reason: unknown_tool` so the trace shows the call and why, and answered
+    with the subset-scoped sentence. Returns that stated result."""
+    reason = unknown_tool_refusal(call.name, subset)
+    with turn.span("tool", call.name) as span:
+        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        span.meta["ok"] = False
+        span.meta["result_head"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["error"] = reason[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["reason"] = "unknown_tool"
+    return reason
+
+
 def _refuse_redirect_closed(turn: traces.Turn, calls: Sequence[ToolCall]) -> list[ToolCall]:
     """Every tool call a redirect made in a round that advertised no tools:
     refused and recorded, never dispatched, never silently dropped.
@@ -1405,6 +1636,9 @@ async def _gateway_round(
     redirect wants — its text is emitted once, after the note, and only if it is
     actually going to be used.
     """
+    # One site covers every round there is — the loop's, the narration
+    # round, both redirect shapes — because they all come through here.
+    traces.set_doing(turn.id, "thinking")
     collected: list[str] = []
     buffer = ToolCallBuffer()
     failure: str | None = None
@@ -1604,7 +1838,11 @@ _ROLE_BY_KIND = {"chat": "chat", "scheduled": "scheduled"}
 
 
 def _role_of(turn: traces.Turn) -> str | None:
-    return _ROLE_BY_KIND.get(_purpose_of(turn))
+    """The turn's own role when it was opened with one (S12: an agent's
+    `agent_<name>`, whatever kind the turn is), else the kind's. An eval turn
+    is opened with none and its kind maps to none — rail 17 holds by the same
+    line."""
+    return turn.role or _ROLE_BY_KIND.get(_purpose_of(turn))
 
 
 async def _collect_completion(
@@ -1626,8 +1864,14 @@ async def _collect_completion(
 
     Records an `llm_call` span of its own with `purpose` (judge / redirect) —
     S10: these calls cost money too, and before this they were the one
-    round nobody could see or attribute.
+    round nobody could see or attribute. The routing role it walks is the
+    TURN's own when it has one (S12: an agent's redirect rounds walk its
+    chain and count against its cap, exactly like its tool rounds), and the
+    judge role otherwise — Nova's judge/redirect rounds are unchanged.
     """
+    # A redirect or judge round is a gateway round too: whoever asks what the
+    # turn is doing gets the same answer as for its own rounds (traces.DOING).
+    traces.set_doing(turn.id, "thinking")
     payload: dict = {"messages": list(messages), "stream": True}
     if model:
         # An empty chat.model means "the gateway default"; sending "" would ask
@@ -1647,7 +1891,7 @@ async def _collect_completion(
                     "POST",
                     "/v1/chat/completions",
                     json=payload,
-                    headers=peers.attribution_headers(turn, purpose, "judge"),
+                    headers=peers.attribution_headers(turn, purpose, turn.role or "judge"),
                 ) as response:
                     served_by = response.headers.get("x-nova-served-by")
                     if served_by:
@@ -1813,6 +2057,8 @@ async def _deferral_redirect(
     messages: Sequence[dict],
     emit: Callable[[str | None], None],
     user_message: str = "",
+    *,
+    persona: agents.Persona,
 ) -> str:
     """Regenerate ONCE to actually do the promised action, or say so honestly.
 
@@ -1832,7 +2078,9 @@ async def _deferral_redirect(
     FAIL-OPEN and bounded to ONE redirect: the regenerated reply is checked once
     (never re-redirected), and a gateway/transport error degrades to the honest
     note rather than an error frame or a lost turn. Records exactly one
-    'deferral' guard span.
+    'deferral' guard span. The re-check reads `persona.tool_names` (S12) —
+    the toolset THIS turn was shown, so an agent is judged against its own
+    hands and never against a tool only Nova holds.
     """
     with turn.span("guard", "deferral") as span:
         span.meta.update(detected=True, action=claim.tool, phrase=claim.phrase)
@@ -1867,7 +2115,7 @@ async def _deferral_redirect(
             try:
                 still_defers = (
                     guards.deferral_check(
-                        corrected, turn.spans, tools.tool_names(), user_message=user_message
+                        corrected, turn.spans, persona.tool_names, user_message=user_message
                     )
                     is not None
                 )
@@ -1922,6 +2170,7 @@ def _regen_rejected_by(
     tool_ctx: tools.ToolContext,
     device_names: Sequence[str],
     user_message: str,
+    persona: agents.Persona,
 ) -> str | None:
     """Which mechanical guard, if any, REFUSES the regenerated reply.
 
@@ -1929,7 +2178,10 @@ def _regen_rejected_by(
     and (unlike a corrected turn) is INGESTED into per-person memory. So it must
     clear the same bar the model's own reply had to clear, not merely the
     consent re-check that motivated the redirect: the full mechanical set, over
-    THIS turn's live spans and the live tool registry. Without that, a regen
+    THIS turn's live spans and the toolset THIS turn was shown (S12:
+    `persona.tool_names` — Nova's is the live registry, an agent's its
+    subset, so an agent's honest "I have no such tool" is never refused as a
+    false denial of a tool only Nova holds). Without that, a regen
     answering "Done — I've saved it to report.md" with no span behind it would
     persist unvetted and poison recall — trading a pending-state fabrication for
     a completed-action one, which is worse, because it is ingested.
@@ -1951,7 +2203,7 @@ def _regen_rejected_by(
         ("narration", lambda: guards.narration_check(corrected, turn.spans)),
         (
             "capability_claim",
-            lambda: guards.capability_claim_check(corrected, tools.tool_names()),
+            lambda: guards.capability_claim_check(corrected, persona.tool_names),
         ),
         (
             "state_claim",
@@ -1960,16 +2212,13 @@ def _regen_rejected_by(
         (
             "presented_listing",
             lambda: guards.presented_listing_check(
-                corrected,
-                turn.spans,
-                tools.tool_names_by_result_kind(tools.RESULT_KIND_LISTING),
-                user_message,
+                corrected, turn.spans, persona.listing_tools, user_message
             ),
         ),
         (
             "deferral",
             lambda: guards.deferral_check(
-                corrected, turn.spans, tools.tool_names(), user_message=user_message
+                corrected, turn.spans, persona.tool_names, user_message=user_message
             ),
         ),
         ("bare_intent", lambda: guards.bare_intent_check(corrected, turn.spans)),
@@ -2015,6 +2264,8 @@ async def _claim_redirect(
     device_names: Sequence[str],
     user_message: str,
     emit: Callable[[str | None], None],
+    persona: agents.Persona,
+    subset: Collection[str] | None = None,
 ) -> _ClaimRedirect:
     """Regenerate ONCE, with tools, after a REPLACE-class guard fired.
 
@@ -2064,6 +2315,11 @@ async def _claim_redirect(
 
     FAIL-OPEN throughout: any exception ships the correction, never an error
     frame and never a lost turn.
+
+    `persona` and `subset` (S12) are the turn's own, threaded through
+    unchanged: the regeneration is vetted against the toolset this turn was
+    shown, and a call it dispatches is marked outside the subset exactly as
+    the turn loop's would be.
     """
     read_ephemeral = False
     # Tool calls this redirect wrote as MARKUP and had refused (a round with no
@@ -2132,7 +2388,9 @@ async def _claim_redirect(
                         "tool_calls": [call.as_openai() for call in calls],
                     }
                 )
-                read_ephemeral = await _dispatch_calls(turn, tool_ctx, calls, attempt, emit)
+                read_ephemeral = await _dispatch_calls(
+                    turn, tool_ctx, calls, attempt, emit, subset=subset
+                )
                 # One final round to say what happened, with the tool loop
                 # CLOSED (no tools advertised) — the redirect gets one attempt at
                 # the action, never a loop of its own. A call it makes anyway is
@@ -2168,7 +2426,7 @@ async def _claim_redirect(
         # Judged ONCE by the FULL mechanical set — this text is about to replace
         # the durable record AND be ingested — and never re-redirected.
         rejected_by = (
-            _regen_rejected_by(corrected, turn, tool_ctx, device_names, user_message)
+            _regen_rejected_by(corrected, turn, tool_ctx, device_names, user_message, persona)
             if corrected
             else None
         )
@@ -2205,6 +2463,7 @@ async def _run_turn(
     emit: Callable[[str | None], None],
     *,
     ingest: bool = True,
+    persona: agents.Persona | None = None,
 ) -> None:
     """The whole turn, run to completion regardless of who is still watching.
 
@@ -2212,6 +2471,18 @@ async def _run_turn(
     timer's instruction rides as the model's message and must not be written
     into memory as something he said today, every day. Chat and the eval
     runner leave it at the default.
+
+    `persona` (S12) is WHO the turn runs as. None is Nova — agents.nova_
+    persona(), the whole live registry and the env workspace root, and every
+    byte the gateway sees is what it saw before agents existed (pinned). An
+    agent's persona is read at exactly the sites that used to read the
+    registry or the environment: the prompt (its subset and its block), the
+    advertised tools, the workspace root the tool context is contained in,
+    the toolset every honesty guard judges against (so an agent's honest "I
+    have no such tool" is never "corrected"), the second memory scope
+    recalled, the cap checked before the first round, and the subset flag on
+    each tool span. There is no second path for an agent: the same loop,
+    the same guards, the same persist and the same close.
 
     This is the ONLY writer of the assistant message and the ONLY caller of
     close_turn for this turn. It is spawned as a detached background task, so
@@ -2244,7 +2515,7 @@ async def _run_turn(
     # if none is, so a turn never gets two.
     persisted_reply = False
 
-    async def _end_without_a_reply(stated: str) -> None:
+    async def _end_without_a_reply(stated: str, *, verbatim: bool = False) -> None:
         """The turn's ONE exit for a model call that did not answer.
 
         A turn that ends 'error' owes the owner a VISIBLE reply, not a blank:
@@ -2260,9 +2531,19 @@ async def _run_turn(
         but it is unguarded text from a call that did not finish, and the
         next turn must not read it back as an answer. Not ingested: a failed
         call is plumbing, not knowledge.
+
+        `verbatim` (S12) persists `stated` as-is instead of composing a
+        model-failure statement around it: the cap exit's sentence is already
+        the whole fact ("agent coder is over its monthly cap…") and no model
+        was called for it to have failed. Everything else — decided 'error',
+        persist first then emit, no ingest — is identical.
         """
         nonlocal decided, persisted_reply
-        statement = model_failure_statement(model=model, failure=stated, spans=turn.spans)
+        statement = (
+            stated
+            if verbatim
+            else model_failure_statement(model=model, failure=stated, spans=turn.spans)
+        )
         logger.warning("chat turn %s failed: %s", turn.id, stated)
         decided = "error"
         await _persist_assistant(pool, conversation_id, statement, turn.id)
@@ -2271,6 +2552,31 @@ async def _run_turn(
         emit(DONE_FRAME)
 
     try:
+        # Inside the try, so a persona that cannot be built still reaches
+        # the finally that closes the turn.
+        persona = persona or agents.nova_persona()
+        if persona.agent is not None and (
+            turn.agent_id != persona.agent.id or turn.role != persona.agent.role
+        ):
+            # The turn row says WHO did the work and which chain its rounds
+            # walked; the persona says whose tools, folder and cap the turn
+            # runs under. Two answers is a programming error in the caller,
+            # and running through it would bill one agent for another's work
+            # (or Nova's) and file spans under the wrong name — so it is
+            # stated and the turn ends 'error' through the except below,
+            # never quietly run as either.
+            raise ValueError(
+                f"turn {turn.id} was opened as {turn.role or 'nova'} but is being run as "
+                f"{persona.agent.role}"
+            )
+        if persona.agent is not None:
+            # The round budget is ONE fact, the agent's own row (copied there
+            # at create time; agents._rounds_for): the argument is what the
+            # caller happened to read, and a caller that read the global
+            # setting instead of the row would run an agent past the budget
+            # its prompt states ("You have N tool rounds per task"). So the
+            # row wins, always.
+            max_tool_rounds = persona.agent.max_tool_rounds
         emit(
             _frame(
                 {
@@ -2278,22 +2584,73 @@ async def _run_turn(
                         "conversation_id": str(conversation_id),
                         "model": model,
                         "turn_id": str(turn.id),
+                        # S12: an optional field on a known key — old clients
+                        # ignore it; the Agents page reads it.
+                        "agent": persona.agent.name if persona.agent else None,
                     }
                 }
             )
         )
+        traces.set_doing(turn.id, "starting")
 
-        snippets = await _recall(app, turn, person, message)
-        messages = base_messages(model, snippets, history, message)
-        advertised = tools.advertised_tools()
-        tool_ctx = tools.context_for(
-            app,
-            person,
-            # The turn's own facts channel: a call that DETERMINED something
-            # (a device's connectivity) records it here even when it then
-            # refused, and _run_tool copies each call's slice onto its span.
-            facts_sink=[],
-        )
+        if persona.agent is not None:
+            # The cap, BEFORE any recall or round: read from the same ledger
+            # the Spend page shows and recorded on its own span whatever it
+            # says — read, skipped (no cap), or unreadable (the turn runs and
+            # the span says so; fail-open, never quiet). A hit ends the turn
+            # through the one failure exit with the sentence persisted as-is:
+            # the assistant row, the error frame and the turn's status agree,
+            # and nothing was spent finding out.
+            with turn.span("agent_cap") as span:
+                problem, facts = await agents.cap_problem(app, pool, persona.agent)
+                span.meta.update(facts)
+            if problem:
+                await _end_without_a_reply(problem, verbatim=True)
+                return
+
+        # Nova's roster of agents to delegate to, read from the table for
+        # THIS turn — None when there are none (the prompt is then byte-
+        # identical to before) and never for an agent (it does not delegate).
+        # A table that cannot be read is fail-OPEN (the turn runs with no
+        # roster, as if none existed) but never quiet: the failure is filed
+        # on an `agent_roster` span, which exists ONLY on failure — so a turn
+        # that silently lost its roster is a turn with that span, not a
+        # log line nobody reads.
+        roster = None
+        if persona.agent is None:
+            try:
+                roster = await agents.roster_line(pool)
+            except Exception as exc:
+                with turn.span("agent_roster") as span:
+                    span.meta["error"] = peers.reason(exc)
+        snippets = await _recall(app, turn, person, message, shared=persona.shared_person_id)
+        messages = base_messages(model, snippets, history, message, persona, roster=roster)
+        if persona.agent is None:
+            # The bare call, exactly as before: the whole registry.
+            advertised = tools.advertised_tools()
+            tool_ctx = tools.context_for(
+                app,
+                person,
+                # The turn's own facts channel: a call that DETERMINED
+                # something (a device's connectivity) records it here even
+                # when it then refused, and _run_tool copies each call's
+                # slice onto its span.
+                facts_sink=[],
+            )
+        else:
+            advertised = tools.advertised_tools(persona.tool_names)
+            tool_ctx = tools.context_for(
+                app,
+                person,
+                facts_sink=[],
+                # The agent's folder is the containment boundary for every
+                # filesystem call this turn makes — the same gate as Nova's,
+                # rooted lower.
+                workspace_root=persona.workspace_root,
+            )
+        # The toolset the trace marks a call against (None: Nova, who holds
+        # everything). Computed once, threaded into every dispatch site.
+        subset = persona.tool_names if persona.agent is not None else None
         # Did this turn run an EPHEMERAL tool (a live, point-in-time read like a
         # web fetch)? Its result goes stale, so the turn is not ingested into
         # long-term memory — otherwise recall would serve the cached snapshot as
@@ -2408,7 +2765,9 @@ async def _run_turn(
                     "tool_calls": [call.as_openai() for call in calls],
                 }
             )
-            ran_ephemeral = await _dispatch_calls(turn, tool_ctx, calls, messages, emit)
+            ran_ephemeral = await _dispatch_calls(
+                turn, tool_ctx, calls, messages, emit, subset=subset
+            )
             read_ephemeral = read_ephemeral or ran_ephemeral
 
         if failure is not None:
@@ -2648,6 +3007,8 @@ async def _run_turn(
                 device_names=device_names,
                 user_message=message,
                 emit=emit,
+                persona=persona,
+                subset=subset,
             )
             consent_text = outcome.text
             consent_redirected = outcome.redirected
@@ -2658,11 +3019,14 @@ async def _run_turn(
         redirect_spent = consent_correction is not None
 
         # The capability-denial guard, on the same raw reply, same fail-OPEN
-        # contract. Derived from the live tool registry (tools.tool_names()): a
-        # denial is only false when its satisfying tool is actually available, so
-        # registering/removing a tool moves the verdict by itself.
+        # contract. Derived from the toolset THIS turn was shown (persona.tool_
+        # names — Nova's is the live registry, an agent's its subset): a denial
+        # is only false when its satisfying tool is actually in the model's
+        # hands, so registering/removing a tool moves the verdict by itself,
+        # and an agent's honest "I can't browse the web" (it was given no
+        # fetch_url) is never "corrected" into a lie.
         try:
-            capability_correction = guards.capability_claim_check(text, tools.tool_names())
+            capability_correction = guards.capability_claim_check(text, persona.tool_names)
         except Exception:
             logger.exception("capability-claim guard raised; shipping the reply uncorrected")
             capability_correction = None
@@ -2732,6 +3096,8 @@ async def _run_turn(
                     device_names=device_names,
                     user_message=message,
                     emit=emit,
+                    persona=persona,
+                    subset=subset,
                 )
                 state_text = outcome.text
                 state_redirected = outcome.redirected
@@ -2763,12 +3129,13 @@ async def _run_turn(
         # PRESENTED_LISTING_UNVERIFIED_NOTE).
         listing_unverified = False
         listing_text: str | None = None
-        listing_tools: list[str] = []
+        # The listing tools THIS turn was shown, off the persona (S12): read
+        # from the registry once when the persona was built, narrowed to its
+        # toolset — a listing tool an agent was not given cannot be the one
+        # it "should have called". Nova's is every listing tool registered.
+        listing_tools: list[str] = list(persona.listing_tools)
         if not consent_redirected and not state_redirected:
             try:
-                # The registry read sits INSIDE the fail-open: a registry that
-                # blips must ship the reply, never break the turn.
-                listing_tools = tools.tool_names_by_result_kind(tools.RESULT_KIND_LISTING)
                 listing_claim = guards.presented_listing_check(
                     text, turn.spans, listing_tools, message
                 )
@@ -2829,6 +3196,8 @@ async def _run_turn(
                     device_names=device_names,
                     user_message=message,
                     emit=emit,
+                    persona=persona,
+                    subset=subset,
                 )
                 listing_text = outcome.text
                 listing_redirected = outcome.redirected
@@ -2947,7 +3316,7 @@ async def _run_turn(
         # honesty correction outranks re-prompting a promise).
         try:
             deferral = guards.deferral_check(
-                persisted, turn.spans, tools.tool_names(), user_message=message
+                persisted, turn.spans, persona.tool_names, user_message=message
             )
         except Exception:
             logger.exception("deferral guard raised; shipping the reply uncorrected")
@@ -2983,7 +3352,15 @@ async def _run_turn(
             # defers/errors, appends an honest note. Either way it consumes the
             # turn's one redirect, so the responsiveness check below is skipped.
             persisted = await _deferral_redirect(
-                app, turn, model, deferral, persisted, messages, emit, user_message=message
+                app,
+                turn,
+                model,
+                deferral,
+                persisted,
+                messages,
+                emit,
+                user_message=message,
+                persona=persona,
             )
 
         # The OFFER shape of the same guard (owner ruling 2026-09-03: "want me
@@ -3044,6 +3421,8 @@ async def _run_turn(
                 device_names=device_names,
                 user_message=message,
                 emit=emit,
+                persona=persona,
+                subset=subset,
             )
             offer_redirected = outcome.redirected
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
@@ -3103,6 +3482,8 @@ async def _run_turn(
                 device_names=device_names,
                 user_message=message,
                 emit=emit,
+                persona=persona,
+                subset=subset,
             )
             bare_intent_redirected = outcome.redirected
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
@@ -3283,6 +3664,9 @@ async def _run_turn(
             # an eval turn never registered (scratch persons stay off the
             # owner's flag) and still ends here.
             traces.INFLIGHT.discard(turn.id)
+            # And no longer doing anything (traces.DOING): the one writer that
+            # pops, on every exit path, beside the INFLIGHT discard.
+            traces.clear_doing(turn.id)
             emit(None)
 
 

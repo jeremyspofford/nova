@@ -12,7 +12,8 @@ import httpx
 from app import db, peers, settings_store
 from app.tools.base import Tool, ToolContext, ToolFailure
 
-ROLES = ("chat", "scheduled", "judge", "coding", "vision")
+# No list of roles here (S12-2): the gateway is the one rule — built-ins plus
+# any agent's derived role `agent_<name>` — and its refusal is quoted below.
 EXPLAIN_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
 
@@ -53,9 +54,7 @@ def describe(body: dict) -> str:
 
 
 async def route_explain(args: dict, ctx: ToolContext) -> str:
-    role = str(args.get("role") or "chat")
-    if role not in ROLES:
-        raise ToolFailure(f"role must be one of {', '.join(ROLES)}")
+    role = str(args.get("role") or "chat").strip()
     params = {"role": role}
     model = str(args.get("model") or "")
     if not model and role == "chat":
@@ -92,7 +91,8 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="route_explain",
         description=(
-            "Why a call for a role (chat, scheduled, judge) goes to the model it goes to: "
+            "Why a call for a role (chat, scheduled, judge, or an agent's role agent_<name>) "
+            "goes to the model it goes to: "
             "each link in the role's chain with its live verdict — would serve, over its "
             "monthly cap, the provider refused recently (walled), not installed — and the "
             "gateway's stated reason for any fallback. Use it to answer 'why did that come "
@@ -103,8 +103,10 @@ TOOLS: tuple[Tool, ...] = (
             "properties": {
                 "role": {
                     "type": "string",
-                    "enum": list(ROLES),
-                    "description": "The role to explain (default chat).",
+                    "description": (
+                        "The role to explain (default chat): chat, scheduled, judge, or an "
+                        "agent's role agent_<name>."
+                    ),
                 },
                 "model": {
                     "type": "string",

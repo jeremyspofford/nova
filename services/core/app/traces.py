@@ -18,6 +18,11 @@ responding" for a day). Two facts close that gap mechanically:
   * sweep_orphaned_turns runs at startup, when INFLIGHT is empty by
     construction, and closes every leftover NULL row as 'interrupted' — so
     every turn reaches a terminal status even across process death.
+
+DOING (S12) is the same lesson applied to "what is it doing right now": a
+process-local map from turn id to the step in progress, written by
+chat._run_turn for every turn it runs and gone with the process, so an
+agent can never be reported busy by a row a dead process left behind.
 """
 
 from __future__ import annotations
@@ -41,8 +46,42 @@ VALID_STATUSES = ("ok", "error", "interrupted")
 # which is exactly the liveness a database column cannot carry. Only the
 # owner's chat turns are registered; an eval turn runs against a scratch
 # person and must never feed the owner's pending flag. Correct only with ONE
-# core process (no --workers, no replicas) — pinned in test_traces.
+# core process (no --workers, no replicas) — pinned in test_traces. This set
+# answers "is the owner's chat still generating?" and nothing else — what any
+# turn is doing right now, chat or not, is DOING below.
 INFLIGHT: set[uuid.UUID] = set()
+
+# What each turn this process is running is doing RIGHT NOW: 'starting',
+# 'thinking' (a gateway round in progress), or the name of the tool being
+# run. Written only by chat._run_turn, for EVERY turn it runs — chat,
+# scheduled, eval, agent — and popped in its finally beside INFLIGHT.discard,
+# on every exit path. It exists so the Agents page can say "coder is running
+# web_search" from a fact rather than a guess, and it is process-local on
+# purpose: a stored flag would lie the moment the process died (the row
+# would still say 'thinking' a day later), while a map in memory cannot
+# outlive the work it describes. A turn absent here is idle as far as this
+# process knows; an open row with no DOING entry is an orphan for the sweep.
+# Kept apart from INFLIGHT because that set has a narrower contract (only the
+# owner's chat turns register, so pending_turn never lies for the chat page)
+# and the scheduler never joins it — an agent-bound firing would read idle
+# while working. One core process, same as INFLIGHT.
+DOING: dict[uuid.UUID, str] = {}
+
+
+def doing(turn_id: uuid.UUID) -> str | None:
+    """What the turn is doing now, or None when this process is not running it."""
+    return DOING.get(turn_id)
+
+
+def set_doing(turn_id: uuid.UUID, what: str) -> None:
+    """Record the step a running turn just entered (overwrites the previous one)."""
+    DOING[turn_id] = what
+
+
+def clear_doing(turn_id: uuid.UUID) -> None:
+    """Forget the turn; a no-op for an id never recorded, so every exit path
+    can call it without first asking whether the turn got as far as 'starting'."""
+    DOING.pop(turn_id, None)
 
 
 @dataclass
@@ -92,6 +131,11 @@ class Turn:
     person_id: uuid.UUID | None = None
     timezone: str = "UTC"
     kind: str = "chat"
+    # S12: WHO did the work (None = Nova herself) and the routing role its
+    # gateway rounds walked (None = derived from kind, as before). person_id
+    # above stays the owner the work is FOR — his money, his Activity page.
+    agent_id: uuid.UUID | None = None
+    role: str | None = None
     spans: list[Span] = field(default_factory=list)
 
     def span(self, kind: str, name: str | None = None) -> SpanRecorder:
@@ -106,14 +150,22 @@ async def open_turn(
     model: str | None = None,
     person_id: uuid.UUID | None = None,
     timezone: str = "UTC",
+    agent_id: uuid.UUID | None = None,
+    role: str | None = None,
 ) -> Turn:
+    # An agent_id naming no agents row is refused by the foreign key, never
+    # stored as a dangling reference — the caller learns the agent is gone
+    # before the turn exists rather than after it has spent money.
     row = await pool.fetchrow(
-        "INSERT INTO turns (kind, conversation_id, model, person_id) VALUES ($1, $2, $3, $4) "
-        "RETURNING id, started_at",
+        "INSERT INTO turns (kind, conversation_id, model, person_id, agent_id, role) "
+        "VALUES ($1, $2, $3, $4, $5, $6) "
+        "RETURNING id, started_at, agent_id, role",
         kind,
         conversation_id,
         model,
         person_id,
+        agent_id,
+        role,
     )
     return Turn(
         id=row["id"],
@@ -123,11 +175,23 @@ async def open_turn(
         person_id=person_id,
         timezone=timezone,
         kind=kind,
+        # Read back from the row rather than echoed from the arguments, so the
+        # Turn carries what the ledger actually holds.
+        agent_id=row["agent_id"],
+        role=row["role"],
     )
 
 
 async def close_turn(pool: asyncpg.Pool, turn: Turn, status: str) -> None:
-    """All the spans and the final status, in one transaction or not at all."""
+    """All the spans and the final status, in one transaction or not at all.
+
+    Deliberately leaves DOING alone. The scheduler closes reminder and job
+    turns here without ever running chat._run_turn (nothing set DOING for
+    them), and chat spawns this close detached and shielded — it can fail
+    and be logged while the turn still ends. The one place that always runs
+    on every exit of a turn chat ran is _run_turn's finally, so that is the
+    one writer that pops DOING, beside INFLIGHT.discard.
+    """
     if status not in VALID_STATUSES:
         raise ValueError(f"turn status must be one of {VALID_STATUSES}, got {status!r}")
     async with pool.acquire() as conn, conn.transaction():

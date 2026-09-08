@@ -290,6 +290,18 @@ async def list_for(
     )
 
 
+async def list_bound(pool: asyncpg.Pool, agent_id: uuid.UUID) -> list[asyncpg.Record]:
+    """The timers an agent RUNS (agent_id = this agent, migration 021), newest
+    first — the set list_timers shows an agent turn. person_id stays the
+    owner who set each one, so the same rows are still his in list_for; this
+    is the other axis, who does the work. No page: an agent is bound to a
+    timer by an owner's action, one at a time, never in the hundreds."""
+    return await pool.fetch(
+        f"SELECT {_COLUMNS} FROM timers WHERE agent_id = $1 ORDER BY created_at DESC, id DESC",
+        agent_id,
+    )
+
+
 async def _existing(pool: asyncpg.Pool, timer_id: uuid.UUID) -> asyncpg.Record:
     row = await get(pool, timer_id)
     if row is None:

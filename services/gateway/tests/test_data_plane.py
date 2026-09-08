@@ -381,3 +381,51 @@ async def test_a_declared_content_length_is_never_forwarded_on_the_streaming_pat
     # (now-false) declared length.
     assert partial in resp.content
     assert b'"error"' in resp.content
+
+
+async def test_a_derived_agent_role_is_served_from_its_own_chain_and_metered_under_it(
+    client, pool, monkeypatch, mount_backend
+):
+    """S12-2: `X-Nova-Role: agent_coder` (a core-side agent's derived role)
+    walks that role's chain — a cloud provider the owner named — and the
+    ledger row carries the role, so the agent is served and metered by its
+    own chain, not chat's."""
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    local = FakeOllama(deltas=("Hel", "lo"))
+    mount_backend("http://ollama.test", local.app)
+    await backends.save_config(pool, {"kind": "ollama", "model": "qwen3:8b"})
+    cloud = FakeOpenAICompat(accepts_key="sk-1")
+    mount_backend("http://coder.test", cloud.app)
+    made = await client.post(
+        "/admin/providers",
+        json={
+            "name": "coder_cloud",
+            "adapter": "openai-chat",
+            "base_url": "http://coder.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-1",
+        },
+    )
+    assert made.status_code == 200, made.text
+    put = await client.put("/admin/routes/agent_coder", json={"chain": ["coder_cloud:big-model"]})
+    assert put.status_code == 200 and put.json()["chain"] == ["coder_cloud:big-model"]
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}], "stream": True},
+        headers={"X-Nova-Role": "agent_coder", "X-Nova-Purpose": "agent"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "coder_cloud:big-model"
+    assert resp.headers["x-nova-route"] == "role=agent_coder;link=1"
+    assert [p for p, _ in cloud.seen if p.endswith("/chat/completions")] == ["/v1/chat/completions"]
+    assert cloud.seen[-1][1]["model"] == "big-model"
+    assert not [p for p, _ in local.seen if p.endswith("/chat/completions")]
+    (row,) = await pool.fetch("SELECT role, purpose, served_by, route_link FROM usage_events")
+    assert (row["role"], row["purpose"], row["served_by"], row["route_link"]) == (
+        "agent_coder",
+        "agent",
+        "coder_cloud:big-model",
+        1,
+    )

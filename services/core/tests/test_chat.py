@@ -78,7 +78,11 @@ async def test_happy_path_frames_persistence_and_trace(owner_client, pool, mount
     assert status == 200
 
     meta = sent[0]["meta"]
-    assert set(meta) == {"conversation_id", "model", "turn_id"}
+    # S12 (2026-09-08): the meta frame gained `agent` — the name of the agent
+    # that ran the turn, null for Nova herself. An optional field on a known
+    # key; old clients ignore it.
+    assert set(meta) == {"conversation_id", "model", "turn_id", "agent"}
+    assert meta["agent"] is None
     assert meta["model"] == "qwen3:8b"
     assert [f["t"] for f in sent if isinstance(f, dict) and "t" in f] == ["Hel", "lo."]
     assert sent[-1] == DONE

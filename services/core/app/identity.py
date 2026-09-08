@@ -9,9 +9,13 @@ refuses every request when SERVICE_TOKEN is unset.
 
 There is no separate operator-role gate anywhere in this service: every
 authenticated person sees every route (Person.role is carried, never
-branched on). That is named here rather than silently assumed, so a route
+branched on for access). Its one reader, agents.refuse_person_write, looks
+at it only to tell a people row from an agent VALUE (agents.AGENT_PERSON_ROLE)
+so a person-scoped write can refuse in words — never to grant or deny a
+person anything. That is named here rather than silently assumed, so a route
 that wants a narrower audience knows there is nothing to lean on yet.
 """
+
 from __future__ import annotations
 
 import hashlib

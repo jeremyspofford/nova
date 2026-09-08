@@ -32,6 +32,8 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Iterable
+from pathlib import Path
 
 from app.tools import (
     devices,
@@ -92,11 +94,26 @@ def tool_names_by_result_kind(kind: str) -> list[str]:
     return sorted(name for name, tool in REGISTRY.items() if tool.result_kind == kind)
 
 
-def context_for(app, person, *, facts_sink: list[dict] | None = None) -> ToolContext:
-    """The context a turn hands its tools. The workspace root is read from
-    the environment once, here, so a single read decides the boundary for
-    every filesystem call that turn makes. `facts_sink` collects the facts a
-    call DETERMINED even when it refused (see ToolContext).
+def context_for(
+    app,
+    person,
+    *,
+    facts_sink: list[dict] | None = None,
+    workspace_root: Path | None = None,
+) -> ToolContext:
+    """The context a turn hands its tools. The workspace root is decided
+    once, here, so a single decision sets the boundary for every filesystem
+    call that turn makes: by default it is read from the environment (Nova's
+    own turns), and a caller may hand in a different root instead. An
+    agent's folder is exactly that — a different root on the SAME
+    containment (workspace._resolve_within is relative to whatever root the
+    context carries), so an agent turn scoped to `<root>/agents/<name>/`
+    cannot reach past its folder any more than Nova can reach past hers,
+    and nothing in the workspace tools has to know an agent exists. A root
+    given here is used as-is: this function does not check that it lies
+    under the env root, because the caller that derived it is the one place
+    that knows why it is where it is. `facts_sink` collects the facts a call
+    DETERMINED even when it refused (see ToolContext).
 
     `person` must be a real identity: every route resolves one before a turn
     starts (identity.require_person) and the memory tools scope to it. A None
@@ -107,16 +124,34 @@ def context_for(app, person, *, facts_sink: list[dict] | None = None) -> ToolCon
     return ToolContext(
         app=app,
         person=person,
-        workspace_root=workspace.root_from_env(),
+        workspace_root=workspace.root_from_env() if workspace_root is None else workspace_root,
         facts_sink=facts_sink,
     )
 
 
-def advertised_tools() -> list[dict]:
+def advertised_tools(names: Iterable[str] | None = None) -> list[dict]:
     """The OpenAI `tools` array, derived from the registry rather than
     written out beside it — a tool added to a module is advertised by that
     fact alone, and can never be advertised with a schema different from
-    the one dispatch validates against."""
+    the one dispatch validates against.
+
+    `names` is a subset to advertise (an agent's toolset); None means the
+    whole registry, in tool_names() order, exactly as before. A subset is
+    SCOPE at advertisement time and nothing more: the model is shown fewer
+    tools, so an honest "I don't have that tool" is true of what it was
+    shown, while dispatch is unchanged — a call naming a registered tool
+    outside the subset still runs (the trace marks it as outside the
+    subset; chat owns that). Order is still tool_names() order, never the
+    caller's, so two callers advertising the same set send the same bytes.
+    A name that is not in the registry is skipped here, not stated: the
+    caller that holds the agent's list is the one that can say "[tool X: no
+    longer exists]" in the prompt where the model will read it, and a
+    dropped name in a wire array would say nothing to anyone."""
+    if names is None:
+        chosen = tool_names()
+    else:
+        wanted = set(names)
+        chosen = [name for name in tool_names() if name in wanted]
     return [
         {
             "type": "function",
@@ -126,7 +161,7 @@ def advertised_tools() -> list[dict]:
                 "parameters": tool.parameters,
             },
         }
-        for tool in (REGISTRY[name] for name in tool_names())
+        for tool in (REGISTRY[name] for name in chosen)
     ]
 
 

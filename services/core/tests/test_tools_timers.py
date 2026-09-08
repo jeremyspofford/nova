@@ -747,3 +747,160 @@ async def test_get_time_states_an_unreadable_setting_instead_of_guessing(tmp_pat
         in result
     )
     assert "unix epoch" in result
+
+
+# -- an agent turn: a Person VALUE with no people row --------------------------------------
+
+# agents.refuse_person_write's exact words, after dispatch's "Error: " prefix.
+AGENT_REFUSAL = (
+    "Error: a timer belongs to a person and an agent is not one — put it in your report and "
+    "Nova will do it"
+)
+
+
+async def _agent_row(pool, name: str = "coder") -> uuid.UUID:
+    """A minimal agents row (migration 021); conftest's per-test TRUNCATE
+    clears it."""
+    return await pool.fetchval(
+        "INSERT INTO agents (name, purpose, instructions, tools, max_tool_rounds, created_via) "
+        "VALUES ($1, 'writes code', 'be terse', ARRAY['get_time'], 5, 'page') RETURNING id",
+        name,
+    )
+
+
+def _agent_person(agent_id: uuid.UUID | None = None, name: str = "coder") -> Person:
+    """What agents.Agent.person() hands a turn: a Person VALUE whose role is
+    'agent' and whose id is an agents row — never a people row."""
+    return Person(id=agent_id or uuid.uuid4(), name=name, role="agent")
+
+
+async def _counts(pool) -> tuple[int, int]:
+    return (
+        await pool.fetchval("SELECT count(*) FROM timers"),
+        await pool.fetchval("SELECT count(*) FROM conversations"),
+    )
+
+
+async def test_create_timer_from_an_agent_turn_is_refused_in_words_and_writes_nothing(
+    pool, tmp_path
+):
+    """An agent's ctx.person has no people row, so create_timer would first
+    INSERT the active conversation for that person_id and hit the foreign
+    key. It is refused before any write, in words the agent can act on — and
+    the same call from the owner still lands, so the guard is on the role,
+    never on the tool."""
+    owner, _ = await _person(pool)
+    before = await _counts(pool)
+
+    result, ok = await _create(_ctx(_agent_person(), tmp_path), text="stretch", in_minutes=2)
+
+    assert ok is False
+    assert result == AGENT_REFUSAL
+    assert await _counts(pool) == before
+
+    result, ok = await _create(_ctx(owner, tmp_path), text="stretch", in_minutes=2)
+    assert ok is True, result
+    assert len(await _rows(pool, owner)) == 1
+
+
+async def test_cancel_timer_from_an_agent_turn_is_refused_in_words_and_deletes_nothing(
+    pool, tmp_path
+):
+    owner, _ = await _person(pool)
+    result, ok = await _create(_ctx(owner, tmp_path), text="stretch", in_minutes=2)
+    assert ok is True, result
+    (row,) = await _rows(pool, owner)
+    before = await _counts(pool)
+
+    for key in ("stretch", str(row["id"])):
+        result, ok = await tools.dispatch(
+            "cancel_timer", {"id_or_title": key}, _ctx(_agent_person(), tmp_path)
+        )
+        assert ok is False
+        assert result == AGENT_REFUSAL
+    assert await _counts(pool) == before
+    assert await pool.fetchval("SELECT count(*) FROM timers WHERE id = $1", row["id"]) == 1
+
+    # The owner's cancel is untouched by the guard.
+    result, ok = await tools.dispatch(
+        "cancel_timer", {"id_or_title": "stretch"}, _ctx(owner, tmp_path)
+    )
+    assert ok is True, result
+    assert await _rows(pool, owner) == []
+
+
+async def test_list_timers_from_an_agent_turn_lists_the_timers_bound_to_it(pool, tmp_path):
+    """An agent's Person is a value with no row, so the person-scoped list
+    would answer for nobody; it is shown the other axis — the scheduled turns
+    whose agent_id (migration 021) is its own. person_id stays the owner who
+    set them, so the owner's own list still shows every row."""
+    owner, _ = await _person(pool)
+    await _set_timezone(pool, NY)
+    coder = await _agent_row(pool)
+    reviewer = await _agent_row(pool, name="reviewer")
+    ctx = _ctx(owner, tmp_path)
+    result, ok = await _create(ctx, text="stretch", in_minutes=2)
+    assert ok is True, result
+    result, ok = await _create(
+        ctx, text="review the diffs", kind="scheduled", repeat={"every": "day", "at": "07:00"}
+    )
+    assert ok is True, result
+    await timers.ensure_jobs(pool)
+    review = next(r for r in await _rows(pool, owner) if r["kind"] == "scheduled")
+    await pool.execute("UPDATE timers SET agent_id = $1 WHERE id = $2", coder, review["id"])
+
+    result, ok = await tools.dispatch("list_timers", "", _ctx(_agent_person(coder), tmp_path))
+    assert ok is True, result
+    assert result.startswith("timers bound to you:\n")
+    assert f"- {str(review['id'])[:8]} scheduled 'review the diffs': " in result
+    assert timers.timer_spec(review)["schedule_words"] in result
+    assert "stretch" not in result
+    assert timers.JOB_TITLES["retention"] not in result
+
+    # A pause is stated the same way as in the owner's list.
+    await timers.pause(pool, review["id"], reason="not this week")
+    result, ok = await tools.dispatch("list_timers", "", _ctx(_agent_person(coder), tmp_path))
+    assert ok is True
+    assert "— PAUSED: not this week" in result
+
+    # An agent bound to nothing is told so — never shown the owner's rows.
+    result, ok = await tools.dispatch(
+        "list_timers", "", _ctx(_agent_person(reviewer, name="reviewer"), tmp_path)
+    )
+    assert ok is True
+    assert result == "no timers are bound to you"
+
+    # The owner's set is unchanged by the binding: both rows and the job.
+    result, ok = await tools.dispatch("list_timers", "", ctx)
+    assert ok is True
+    assert result.startswith("2 timers of yours")
+    assert "'stretch'" in result and "'review the diffs'" in result
+    assert "1 housekeeping job (system):" in result
+
+
+async def test_list_bound_is_the_store_projection_newest_first(pool, tmp_path):
+    """timers.list_bound reads the same columns as list_for (one projection,
+    _COLUMNS), so _line / timer_spec read a bound row exactly as an owned one;
+    only the agent's own rows come back, newest first."""
+    owner, _ = await _person(pool)
+    await _set_timezone(pool, NY)
+    coder = await _agent_row(pool)
+    ctx = _ctx(owner, tmp_path)
+    for text in ("first", "second"):
+        result, ok = await _create(
+            ctx, text=text, kind="scheduled", repeat={"every": "day", "at": "07:00"}
+        )
+        assert ok is True, result
+        time.sleep(0.01)  # distinct created_at, so "newest" is well-defined
+    first, second = await _rows(pool, owner)
+    await pool.execute(
+        "UPDATE timers SET agent_id = $1 WHERE id = ANY($2::uuid[])",
+        coder,
+        [first["id"], second["id"]],
+    )
+
+    rows = await timers.list_bound(pool, coder)
+    assert [r["id"] for r in rows] == [second["id"], first["id"]]
+    (owned,) = await timers.list_for(pool, owner, limit=1)
+    assert list(rows[0].keys()) == list(owned.keys())
+    assert await timers.list_bound(pool, uuid.uuid4()) == []

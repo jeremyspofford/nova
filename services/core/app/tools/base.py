@@ -4,6 +4,7 @@ Kept in its own module so the executor modules (workspace, memory, web,
 util) and the registry that assembles them can both import these types
 without importing each other.
 """
+
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
@@ -63,10 +64,16 @@ class ToolContext:
     workspace_root: Path
     facts_sink: list[dict] | None = None
     # The OUTPUT channel for a long call's progress ("pulling qwen3:4b — 42%
-    # (2.1 of 4.9 GB)"): chat binds it per call to an activity frame with
-    # `detail`, so the bubble shows the download moving. None outside a turn.
+    # (2.1 of 4.9 GB)"): chat binds it per call to an activity frame, so the
+    # bubble shows the call moving. None outside a turn. A str is a detail
+    # line, shown as-is. A dict is a structured report — a delegation
+    # relaying the steps of the agent turn it is running ("coder is
+    # working…", which tool the agent is on, whether that step failed) — and
+    # chat._activity_frame copies ONLY allow-listed keys from it onto the
+    # frame, so a tool cannot forge the frame's own `tool`/`status` and an
+    # old client that reads tool/status/detail still sees the line move.
     # An output channel is not a principal a permission could bind to.
-    progress: Callable[[str], None] | None = None
+    progress: Callable[[str | dict], None] | None = None
 
 
 @dataclass(frozen=True)

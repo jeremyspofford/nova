@@ -58,6 +58,8 @@ ROUTES = [
     ("PUT", "/api/v1/routes/chat", "/admin/routes/chat", {"chain": ["ollama:qwen3:8b"]}),
     ("GET", "/api/v1/routes/explain", "/admin/route/explain", None),
     ("DELETE", "/api/v1/routes/walls/openrouter", "/admin/routes/walls/openrouter", None),
+    # S12-2: a role's chain row can be dropped (a stray agent role).
+    ("DELETE", "/api/v1/routes/agent_coder", "/admin/routes/agent_coder", None),
 ]
 
 
@@ -257,3 +259,22 @@ def test_timed_out_states_an_unbounded_read_for_a_timeout_with_no_read_bound():
     assert exc.status_code == 502
     assert "an unbounded read" in exc.detail
     assert "/admin/pull" in exc.detail
+
+
+async def test_an_agent_role_with_no_agent_is_refused_before_the_gateway(owner_client, mount_peers):
+    """S12-2: `agent_<name>` is refused by core, by name, when no such agent
+    exists — the Routing page is the only production caller, so a typo is
+    refused where the owner types it instead of becoming a chain nobody
+    walks. Every other role stays the gateway's to judge."""
+    gateway = FakeGateway()
+    mount_peers(gateway=gateway)
+
+    resp = await owner_client.put("/api/v1/routes/agent_nobody", json={"chain": []})
+
+    assert resp.status_code == 400
+    assert "no agent named 'nobody'" in resp.json()["error"]
+    assert gateway.seen == []
+
+    resp = await owner_client.put("/api/v1/routes/chat", json={"chain": []})
+    assert resp.status_code == 200
+    assert gateway.seen[-1] == ("/admin/routes/chat", {"chain": []})

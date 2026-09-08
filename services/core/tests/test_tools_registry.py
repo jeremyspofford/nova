@@ -10,6 +10,7 @@ can read and retry from.
 from __future__ import annotations
 
 import json
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -299,3 +300,133 @@ def test_the_tools_package_imports_on_its_own():
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == str(len(tools.REGISTRY))
+
+
+# -- S12: an agent's subset, an agent's folder (2026-09-08) ----------------
+#
+# Both are SCOPE handed in at the two places a turn already touches the
+# registry — what is advertised, and what root the context carries — never a
+# field on Tool or ToolContext (test_no_approvals pins both field sets) and
+# never a check inside dispatch (its single await is pinned too). These tests
+# pin that the no-argument forms are byte-for-byte what they were, so Nova's
+# own turns and the scheduler's cannot drift when an agent's do not.
+
+
+def _owner():
+    from app.identity import Person
+
+    return Person(id=uuid.uuid4(), name="jeremy", role="owner")
+
+
+def test_advertised_tools_with_no_argument_is_the_whole_registry_in_order():
+    """The zero-arg call is what every non-agent turn makes (and what
+    test_chat_model_failure monkeypatches with a zero-arg stand-in), so it
+    must keep working with no argument and keep producing the same bytes."""
+    whole = tools.advertised_tools()
+    assert [entry["function"]["name"] for entry in whole] == tools.tool_names()
+    assert tools.advertised_tools(None) == whole
+    assert tools.advertised_tools(tools.tool_names()) == whole
+
+
+def test_advertised_tools_with_names_advertises_only_the_registered_ones():
+    """An unknown name is skipped, not raised on and not invented: the
+    caller holding the agent's list is where "[tool nope: no longer
+    exists]" gets said, in the prompt the model reads."""
+    subset = tools.advertised_tools(["workspace_read_file", "nope"])
+    assert [entry["function"]["name"] for entry in subset] == ["workspace_read_file"]
+    assert subset[0] == next(
+        entry
+        for entry in tools.advertised_tools()
+        if entry["function"]["name"] == "workspace_read_file"
+    )
+
+
+def test_advertised_tools_orders_a_subset_by_registry_not_by_caller():
+    """Two agents naming the same tools in a different order send the same
+    `tools` array, so a prompt-cache prefix is not lost to list order."""
+    a = tools.advertised_tools(["memory_save", "workspace_read_file", "get_time"])
+    b = tools.advertised_tools(["get_time", "memory_save", "workspace_read_file"])
+    assert a == b
+    assert [entry["function"]["name"] for entry in a] == [
+        "get_time",
+        "memory_save",
+        "workspace_read_file",
+    ]
+
+
+def test_advertised_tools_with_an_empty_subset_advertises_nothing():
+    assert tools.advertised_tools([]) == []
+
+
+def test_context_for_defaults_the_root_to_the_environment(monkeypatch, tmp_path):
+    from app.tools import workspace
+
+    monkeypatch.setenv(workspace.WORKSPACE_ROOT_ENV, str(tmp_path / "nova"))
+    ctx = tools.context_for(None, _owner())
+    assert ctx.workspace_root == workspace.root_from_env() == tmp_path / "nova"
+
+
+def test_context_for_uses_a_given_root_as_is(monkeypatch, tmp_path):
+    """An agent's folder is a different root on the same containment: the
+    workspace tools resolve every path against ctx.workspace_root, so the
+    root handed in here IS the boundary for that turn."""
+    from app.tools import workspace
+
+    monkeypatch.setenv(workspace.WORKSPACE_ROOT_ENV, str(tmp_path / "nova"))
+    folder = tmp_path / "nova" / "agents" / "coder"
+    ctx = tools.context_for(None, _owner(), workspace_root=folder)
+    assert ctx.workspace_root == folder
+    assert ctx.workspace_root != workspace.root_from_env()
+    # The rest of the context is what it always was.
+    assert ctx.app is None and ctx.facts_sink is None and ctx.progress is None
+
+
+async def test_a_given_root_is_the_boundary_the_workspace_tools_enforce(monkeypatch, tmp_path):
+    """Not a unit pin on a field — the actual tool, through dispatch, with a
+    root that is a subfolder of the env root: a path that climbs out of the
+    folder is refused even though it would still be inside the env root."""
+    from app.tools import workspace
+
+    monkeypatch.setenv(workspace.WORKSPACE_ROOT_ENV, str(tmp_path / "nova"))
+    folder = tmp_path / "nova" / "agents" / "coder"
+    (tmp_path / "nova").mkdir()
+    (tmp_path / "nova" / "secret.md").write_text("owner's file", encoding="utf-8")
+    ctx = tools.context_for(None, _owner(), workspace_root=folder)
+
+    result, ok = await tools.dispatch("workspace_read_file", {"path": "../../secret.md"}, ctx)
+    assert ok is False
+    assert result.startswith("Error: ")
+    assert "outside the workspace" in result
+
+    result, ok = await tools.dispatch(
+        "workspace_write_file", {"path": "notes.md", "content": "hi"}, ctx
+    )
+    assert ok is True, result
+    assert (folder / "notes.md").read_text(encoding="utf-8") == "hi"
+
+
+def test_context_for_still_refuses_no_person_before_looking_at_the_root(tmp_path):
+    """A root does not stand in for an identity: the memory tools scope to
+    ctx.person, and a None there is a caller bug however the root was chosen."""
+    with pytest.raises(ValueError, match="person"):
+        tools.context_for(None, None)
+    with pytest.raises(ValueError, match="person"):
+        tools.context_for(None, None, workspace_root=tmp_path)
+
+
+def test_progress_accepts_a_detail_line_or_a_structured_report():
+    """The channel widened to `str | dict` so a delegation can relay an
+    agent's steps as structured keys chat allow-lists; the str path a model
+    pull uses is unchanged. The FIELD SET is pinned in test_no_approvals —
+    this is only the annotation, the one thing that changed."""
+    annotation = ToolContext.__dataclass_fields__["progress"].type
+    assert "str | dict" in str(annotation), annotation
+    seen: list = []
+    ctx = ToolContext(app=None, person=None, workspace_root=Path("/x"), progress=seen.append)
+    assert ctx.progress is not None
+    ctx.progress("pulling — 42%")
+    ctx.progress({"detail": "coder is working…", "agent": "coder", "step": "get_time"})
+    assert seen == [
+        "pulling — 42%",
+        {"detail": "coder is working…", "agent": "coder", "step": "get_time"},
+    ]
