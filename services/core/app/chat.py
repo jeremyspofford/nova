@@ -1876,6 +1876,14 @@ async def _gateway_round(
         # reason and then gives the model another round; a closed round refuses
         # it alongside its own reason. Both go through the one _refuse_call.
         text = "".join(collected)
+        # How much the MODEL wrote this round, recorded before any of our own
+        # transforms touch it (S11). It is the structural answer to "did the
+        # model write this reply, or did our own harness?": v3 once pushed the
+        # backend's "this turn produced no reply" placeholder to a phone as
+        # real news and recorded the beat ok. guards.model_wrote_nothing reads
+        # this across a turn's rounds; zero here is a fact, never an inference
+        # from a provider's token count in another unit.
+        span.meta[guards.COMPLETION_CHARS_FIELD] = len(text)
         # streamed=True: a round's text really can stop mid-block, and half an
         # emitted call is not prose. (The persist boundary passes False — a
         # finished record is never partial, and the rule would eat a sentence.)

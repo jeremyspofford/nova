@@ -13,7 +13,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import guards
+from app import chat, checks, guards
 
 # -- span stand-ins --------------------------------------------------------
 #
@@ -2153,3 +2153,718 @@ def test_the_delegation_matcher_never_raises_on_odd_input(reply):
     guards.delegation_claim_check(reply, [], AGENTS)
     guards.delegation_claim_check(reply, [refused_facts_span("coder")], AGENTS, self_name="coder")
     guards.delegation_claim_check(reply, [], [], self_name="coder")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# The proactive-beat guards (S11): observation, delivery, novelty, and the
+# structural harness-prose detector.
+#
+# A beat speaks into an empty room, so these negatives carry even more than
+# the rest of the file: the correction IS the whole account he gets of that
+# hour, and a false one makes the guard the liar about a night nobody watched.
+# ══════════════════════════════════════════════════════════════════════════
+
+
+def finding(key: str, title: str = "", **facts):
+    """A checks.Finding stand-in — the guards duck-type key/facts."""
+    return SimpleNamespace(key=key, title=title, facts=facts, urgent=False)
+
+
+def check_run(check: str, *, ran: bool = True, reason=None, findings=()):
+    """A checks.CheckRun stand-in. `checks.quiet` reads check/ran/reason/
+    findings, and observation_check hands it straight through."""
+    return SimpleNamespace(check=check, ran=ran, reason=reason, findings=tuple(findings))
+
+
+def llm_span(**meta):
+    return SimpleNamespace(kind="llm_call", name=None, meta=dict(meta))
+
+
+# The real shapes app/checks/ returns, copied from the families themselves.
+GATEWAY_DOWN = finding(
+    "peer_down:gateway",
+    peer="gateway",
+    url="http://gateway:8081/health",
+    probe="/health",
+    reason="ConnectError: connection refused",
+)
+TIMER_PAUSED = finding(
+    "timer_paused:8b1f0a2e-0000-4000-8000-000000000001",
+    timer_id="8b1f0a2e-0000-4000-8000-000000000001",
+    kind="beat",
+    reason="5 consecutive failures",
+    paused_at="2026-09-08T03:00:00+00:00",
+    consecutive_failures=5,
+)
+CAP_HIT = finding(
+    "spend_over_cap:openrouter",
+    scope="provider",
+    provider="openrouter",
+    cap_usd=20.0,
+    month="2026-09",
+)
+
+ALL_RAN_CLEAN = [check_run("stack_gateway"), check_run("money_caps"), check_run("work_timers")]
+ONE_DID_NOT_RUN = [
+    check_run("stack_gateway"),
+    check_run("money_caps", ran=False, reason="the ledger did not answer"),
+]
+FOUND_SOMETHING = [
+    check_run("stack_gateway", findings=(GATEWAY_DOWN,)),
+    check_run("money_caps"),
+]
+
+
+# -- observation_check: a fault nothing found -------------------------------
+
+
+def test_a_fault_no_finding_names_is_corrected():
+    """The shape the slice exists for: a beat reporting news it never had."""
+    correction = guards.observation_check(
+        "I noticed the backups have not run.", [GATEWAY_DOWN], FOUND_SOMETHING
+    )
+    assert correction is not None
+    assert kinds(correction) == ["unbacked_observation"]
+    assert correction.claims[0].target == "backups"
+    assert correction.text == guards.OBSERVATION_UNBACKED_CORRECTION
+
+
+def test_a_fault_with_no_findings_at_all_is_corrected():
+    correction = guards.observation_check("The gateway is down.", [], ALL_RAN_CLEAN)
+    assert correction is not None
+    assert targets(correction) == ["gateway"]
+
+
+def test_the_same_sentence_is_clean_when_a_finding_names_it():
+    """The derived half: one membership test in the pass's own findings flips
+    the verdict on the identical sentence."""
+    assert guards.observation_check("The gateway is down.", [GATEWAY_DOWN], FOUND_SOMETHING) is None
+
+
+def test_a_subject_named_only_inside_the_facts_backs_the_claim():
+    """The reply calls it "the watch beat"; the finding's facts say kind=beat
+    and a uuid. One shared word is the whole backing — a check names a timer by
+    its id, a person names it by its title."""
+    runs = [check_run("work_paused_timers", findings=(TIMER_PAUSED,))]
+    assert guards.observation_check("The watch beat is paused.", [TIMER_PAUSED], runs) is None
+
+
+def test_a_check_family_this_module_has_never_heard_of_arms_itself():
+    """Derived, never hardcoded: a finding invented here — no such check
+    exists — grants its own vocabulary with no edit to guards.py."""
+    invented = finding("solar_flare:roof", panel="roof", reason="inverter offline")
+    runs = [check_run("solar", findings=(invented,))]
+    assert guards.observation_check("The roof panel is offline.", [invented], runs) is None
+    # ...and a DIFFERENT subject is still unbacked on the same pass.
+    correction = guards.observation_check("The cellar pump is offline.", [invented], runs)
+    assert correction is not None and targets(correction) == ["cellar pump"]
+
+
+def test_every_fault_verb_shape_is_read():
+    for reply in (
+        "The nightly backup did not run.",
+        "The nightly backup has failed 5 times.",
+        "The nightly backup keeps failing.",
+        "The nightly backup stopped running.",
+        "The nightly backup went offline.",
+        "The nightly backup is unreachable.",
+        "The nightly backup has gone offline.",
+        "The nightly backup is over its cap.",
+    ):
+        correction = guards.observation_check(reply, [GATEWAY_DOWN], FOUND_SOMETHING)
+        assert correction is not None, f"{reply!r} was not read as a fault claim"
+        assert correction.claims[0].target == "nightly backup"
+
+
+# -- observation_check: the all-clear ---------------------------------------
+
+
+def test_an_all_clear_with_a_check_that_did_not_run_is_corrected():
+    """The v3 incident in reverse, and the one this slice exists to prevent:
+    "all clear" from a probe that was never made."""
+    correction = guards.observation_check("Everything looks fine.", [], ONE_DID_NOT_RUN)
+    assert correction is not None
+    assert kinds(correction) == ["unbacked_all_clear"]
+    assert correction.text == guards.ALL_CLEAR_NOT_RUN_CORRECTION.format(unrun=1, total=2)
+
+
+def test_an_all_clear_is_clean_when_every_check_ran_and_found_nothing():
+    for reply in (
+        "Everything looks fine.",
+        "Nothing to report.",
+        "All clear — nothing came up this hour.",
+        "No issues.",
+    ):
+        assert guards.observation_check(reply, [], ALL_RAN_CLEAN) is None, reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Everything looks fine.",
+        "Everything is fine.",
+        "Everything's fine.",
+        "All good.",
+        "All clear.",
+        "Nothing to report.",
+        "Nothing to flag.",
+        "No issues.",
+        "No problems found.",
+        "All checks passed.",
+        "Everything is running normally.",
+        "The stack is healthy.",
+    ],
+)
+def test_every_all_clear_shape_is_read(reply):
+    correction = guards.observation_check(reply, [], ONE_DID_NOT_RUN)
+    assert correction is not None, f"{reply!r} was not read as an all-clear"
+    assert kinds(correction) == ["unbacked_all_clear"]
+
+
+def test_an_all_clear_while_findings_came_back_is_corrected_with_the_count():
+    correction = guards.observation_check("Nothing to report.", [GATEWAY_DOWN], FOUND_SOMETHING)
+    assert correction is not None
+    assert correction.text == guards.ALL_CLEAR_FOUND_CORRECTION.format(found=1)
+
+
+def test_an_all_clear_with_no_checks_at_all_is_corrected():
+    """`all(...)` over nothing is True — a registry that failed to import would
+    report a perfect night having looked at nothing. checks.quiet refuses that,
+    and this guard reads the same function rather than a second copy of it."""
+    assert checks.quiet([]) == (False, "no check ran — nothing was checked")
+    correction = guards.observation_check("All clear.", [], [])
+    assert correction is not None
+    assert correction.text == guards.ALL_CLEAR_NOTHING_CHECKED_CORRECTION
+
+
+def test_the_all_clear_wins_over_a_fault_claim_in_the_same_reply():
+    correction = guards.observation_check(
+        "The gateway is down. Everything else is fine. All good.", [], ONE_DID_NOT_RUN
+    )
+    assert correction is not None
+    assert kinds(correction) == ["unbacked_all_clear"]
+
+
+def test_a_partial_all_clear_is_not_an_all_clear():
+    """ "everything ELSE looks fine" is an honest statement about the rest."""
+    assert (
+        guards.observation_check(
+            "The gateway is down. Everything else looks fine.", [GATEWAY_DOWN], FOUND_SOMETHING
+        )
+        is None
+    )
+
+
+# -- observation_check: the exemptions --------------------------------------
+
+
+OBSERVATION_MUST_NOT_FIRE = [
+    ("question", "Is the gateway down?"),
+    ("conditional", "If the gateway is down, I'll restart it."),
+    ("temporal", "Once the gateway is unreachable I'll say so."),
+    ("intent", "Let me check whether the gateway is down."),
+    ("reported", "You said the gateway is down."),
+    ("reported_log", "The log says the gateway is down."),
+    ("prior_time", "The gateway was down earlier."),
+    ("negated", "The gateway is not down."),
+    ("no_longer", "The gateway is no longer down."),
+    ("future", "The gateway will be down during the upgrade."),
+    ("hedged", "The gateway is probably down."),
+    ("vague_subject", "It is down."),
+    ("vague_everything", "Everything is broken."),
+    ("uncertain", "I'm not sure the gateway is down."),
+    ("plain_report", "I restarted the container and it came back up."),
+    ("no_fault_at_all", "The watch beat ran at 03:00 and took 1.2 seconds."),
+    ("all_clear_negated", "I can't say everything looks fine."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", OBSERVATION_MUST_NOT_FIRE, ids=[c[0] for c in OBSERVATION_MUST_NOT_FIRE]
+)
+def test_observation_must_not_fire_on_honest_replies(label, reply):
+    assert guards.observation_check(reply, [], ALL_RAN_CLEAN) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
+
+
+def test_a_negated_fault_is_supported_by_an_empty_pass():
+    """The asymmetry against state_claim_check, stated: there, a negated device
+    state is as unchecked as a positive one; here the look-up HAPPENED and came
+    back empty, so "the gateway is not down" is exactly what an empty pass
+    supports."""
+    assert guards.observation_check("The gateway is not down.", [], ALL_RAN_CLEAN) is None
+
+
+def test_observation_is_clean_over_its_own_corrections():
+    for text in (
+        guards.OBSERVATION_UNBACKED_CORRECTION,
+        guards.ALL_CLEAR_NOT_RUN_CORRECTION.format(unrun=2, total=5),
+        guards.ALL_CLEAR_FOUND_CORRECTION.format(found=3),
+        guards.ALL_CLEAR_NOTHING_CHECKED_CORRECTION,
+    ):
+        assert guards.observation_check(text, [], ONE_DID_NOT_RUN) is None, text
+        assert guards.observation_check(text, [], []) is None, text
+
+
+def test_observation_empty_and_odd_inputs():
+    assert guards.observation_check("", [], []) is None
+    assert guards.observation_check("   ", [GATEWAY_DOWN], ALL_RAN_CLEAN) is None
+    # A pass with findings but no runs still reads the fault vocabulary.
+    assert guards.observation_check("The gateway is down.", [GATEWAY_DOWN], []) is None
+    for reply in ("is down", "the", "…—;:!?()[]", "gateway " * 400, "down\ndown\ndown"):
+        guards.observation_check(reply, [GATEWAY_DOWN, CAP_HIT], FOUND_SOMETHING)
+    # facts that are not a flat dict of strings must not raise
+    weird = finding("odd:one", nested={"a": [1, 2, {"b": None}]}, flag=True, nothing=None)
+    guards.observation_check("The thing is down.", [weird], [check_run("odd")])
+
+
+def test_observation_is_pure_same_inputs_same_verdict():
+    reply = "The gateway is down."
+    first = guards.observation_check(reply, [], ALL_RAN_CLEAN)
+    second = guards.observation_check(reply, [], ALL_RAN_CLEAN)
+    assert first == second
+
+
+# -- delivery_claim_check ---------------------------------------------------
+
+
+DELIVERED = ("the gateway did not answer /health — ConnectError: connection refused",)
+
+
+def test_a_delivery_claim_with_nothing_delivered_is_corrected():
+    correction = guards.delivery_claim_check("I already told you about the gateway.", [])
+    assert correction is not None
+    assert kinds(correction) == ["unbacked_delivery"]
+    assert correction.claims[0].target == "gateway"
+    assert correction.text == guards.DELIVERY_CLAIM_CORRECTION
+
+
+def test_a_delivery_claim_a_delivered_notice_backs_is_clean():
+    assert guards.delivery_claim_check("I already told you about the gateway.", DELIVERED) is None
+
+
+def test_a_delivery_claim_about_something_else_is_still_corrected():
+    """Something WAS delivered — just not this. The set is read per word, so a
+    claim that shares nothing with anything delivered is the only one caught."""
+    correction = guards.delivery_claim_check(
+        "I sent you a notification about the openrouter cap.", DELIVERED
+    )
+    assert correction is not None
+    assert correction.claims[0].target.startswith("openrouter")
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I notified you about the openrouter cap.",
+        "I alerted you about the openrouter cap.",
+        "I sent you a notification about the openrouter cap.",
+        "I pushed an alert about the openrouter cap.",
+        "I let you know about the openrouter cap.",
+        "You were already notified about the openrouter cap.",
+        "I've told you about the openrouter cap.",
+        "I already mentioned the openrouter cap.",
+        "I've flagged the openrouter cap.",
+    ],
+)
+def test_every_delivery_shape_is_read(reply):
+    assert guards.delivery_claim_check(reply, DELIVERED) is not None, reply
+
+
+DELIVERY_MUST_NOT_FIRE = [
+    ("future", "I'll let you know about the openrouter cap."),
+    ("future_tell", "I'll tell you about the openrouter cap tomorrow."),
+    ("negated", "I have not told you about the openrouter cap."),
+    ("negated_never", "I never told you about the openrouter cap."),
+    ("question", "Did I already tell you about the openrouter cap?"),
+    ("hedged", "I think I already told you about the openrouter cap."),
+    ("reported", "You said I already told you about the openrouter cap."),
+    ("nothing_specific", "I already told you about it."),
+    ("nothing_specific_bare", "I already told you."),
+    ("conversational_past", "I told you about the openrouter cap."),
+    ("other_subject", "You told me about the openrouter cap."),
+    ("plain", "The openrouter cap was reached at 04:00."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", DELIVERY_MUST_NOT_FIRE, ids=[c[0] for c in DELIVERY_MUST_NOT_FIRE]
+)
+def test_delivery_must_not_fire_on_honest_replies(label, reply):
+    assert guards.delivery_claim_check(reply, DELIVERED) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
+
+
+def test_delivery_is_clean_over_its_own_correction():
+    assert guards.delivery_claim_check(guards.DELIVERY_CLAIM_CORRECTION, []) is None
+
+
+def test_delivery_empty_and_odd_inputs():
+    assert guards.delivery_claim_check("", []) is None
+    assert guards.delivery_claim_check("   ", DELIVERED) is None
+    assert guards.delivery_claim_check("I already told you about the gateway.", ("",)) is not None
+    for reply in ("I already told you", "told you", "…—;:!?()[]", "I've mentioned " * 200):
+        guards.delivery_claim_check(reply, DELIVERED)
+        guards.delivery_claim_check(reply, [])
+
+
+def test_delivery_is_pure_same_inputs_same_verdict():
+    reply = "I already told you about the gateway."
+    assert guards.delivery_claim_check(reply, []) == guards.delivery_claim_check(reply, [])
+
+
+# -- novelty_claim_check ----------------------------------------------------
+
+
+REPEATED = {"the beat 'watch' has failed 4 times in a row — it pauses itself at 5": 3}
+
+
+def test_a_novelty_claim_about_a_repeat_is_corrected_with_the_count():
+    correction = guards.novelty_claim_check(
+        "The watch beat has failed again. This is new.", REPEATED
+    )
+    assert correction is not None
+    assert kinds(correction) == ["unbacked_novelty"]
+    assert correction.text == guards.NOVELTY_CLAIM_CORRECTION.format(repeats=3)
+    assert "3 times" in correction.text
+
+
+def test_a_first_sighting_is_clean():
+    assert (
+        guards.novelty_claim_check(
+            "The watch beat has failed. This is new.",
+            {"the beat 'watch' has failed 4 times in a row": 1},
+        )
+        is None
+    )
+
+
+def test_a_reply_that_also_names_a_new_finding_is_clean():
+    """A digest naming both a standing fault and a fresh one is the ordinary
+    case — the novelty claim can honestly be about the fresh one."""
+    mixed = dict(REPEATED)
+    mixed["the gateway did not answer /health"] = 1
+    assert (
+        guards.novelty_claim_check(
+            "The watch beat failed and the gateway is down — this is new.", mixed
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The watch beat failed. This is new.",
+        "The watch beat failed. That's new.",
+        "The watch beat has failed for the first time.",
+        "This is the first time the watch beat has failed.",
+        "I've never seen this before — the watch beat failed.",
+        "A new failure: the watch beat.",
+    ],
+)
+def test_every_novelty_shape_is_read(reply):
+    assert guards.novelty_claim_check(reply, REPEATED) is not None, reply
+
+
+NOVELTY_MUST_NOT_FIRE = [
+    ("negated", "The watch beat failed. That is not new."),
+    ("question", "The watch beat failed. Is this new?"),
+    ("hedged", "The watch beat failed. This might be new."),
+    ("i_think", "The watch beat failed. I think this is new."),
+    ("reported", "You said the watch beat failure is new."),
+    ("unrelated_subject", "The gateway is down. This is new."),
+    ("no_novelty_claim", "The watch beat has failed 4 times in a row."),
+    ("one_word_overlap", "The beat is fine. This is new."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", NOVELTY_MUST_NOT_FIRE, ids=[c[0] for c in NOVELTY_MUST_NOT_FIRE]
+)
+def test_novelty_must_not_fire_on_honest_replies(label, reply):
+    assert guards.novelty_claim_check(reply, REPEATED) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
+
+
+def test_novelty_is_clean_over_its_own_correction():
+    text = guards.NOVELTY_CLAIM_CORRECTION.format(repeats=4)
+    assert guards.novelty_claim_check(text, REPEATED) is None
+
+
+def test_novelty_empty_and_odd_inputs():
+    assert guards.novelty_claim_check("This is new.", {}) is None
+    assert guards.novelty_claim_check("", REPEATED) is None
+    assert guards.novelty_claim_check("   ", REPEATED) is None
+    assert guards.novelty_claim_check("This is new.", {"": 5}) is None
+    assert guards.novelty_claim_check("This is new.", {"watch beat failed": None}) is None
+    for reply in ("this is new", "new", "…—;:!?()[]", "the watch beat failed " * 200):
+        guards.novelty_claim_check(reply, REPEATED)
+
+
+def test_novelty_is_pure_same_inputs_same_verdict():
+    reply = "The watch beat failed. This is new."
+    assert guards.novelty_claim_check(reply, REPEATED) == guards.novelty_claim_check(
+        reply, REPEATED
+    )
+
+
+# -- model_wrote_nothing: the structural detector ---------------------------
+
+
+def test_no_llm_call_spans_is_indeterminate_not_silence():
+    """The safety property: a True SUPPRESSES a report, so an unreadable trace
+    must never read as "the model was silent"."""
+    assert guards.model_wrote_nothing([]) is False
+    assert guards.model_wrote_nothing([tool_span("workspace_read_file", path="a.md")]) is False
+
+
+def test_a_round_recorded_at_zero_characters_is_the_backend_writing():
+    assert guards.model_wrote_nothing([llm_span(**{guards.COMPLETION_CHARS_FIELD: 0})]) is True
+
+
+def test_an_empty_round_class_is_a_recorded_zero():
+    """chat.py writes EMPTY_ROUND only when a round produced no content, no
+    tool calls and no stated error — a mechanical zero, and the shape the v3
+    push had behind it."""
+    assert guards.model_wrote_nothing([llm_span(error_class=chat.EMPTY_ROUND)]) is True
+
+
+def test_the_empty_round_class_is_pinned_to_chat():
+    """Mirrored as a literal because chat imports guards; if it is renamed this
+    reddens instead of the detector silently never matching."""
+    assert guards._EMPTY_ROUND_CLASS == chat.EMPTY_ROUND
+
+
+def test_any_round_that_wrote_something_clears_the_whole_turn():
+    assert guards.model_wrote_nothing([llm_span(**{guards.COMPLETION_CHARS_FIELD: 12})]) is False
+    assert (
+        guards.model_wrote_nothing(
+            [
+                llm_span(error_class=chat.EMPTY_ROUND),
+                llm_span(**{guards.COMPLETION_CHARS_FIELD: 40}),
+            ]
+        )
+        is False
+    )
+    # completion_tokens is read ONLY as "not zero" — never as a zero.
+    assert guards.model_wrote_nothing([llm_span(completion_tokens=7)]) is False
+    assert guards.model_wrote_nothing([llm_span(completion_tokens=0)]) is False
+
+
+def test_a_round_whose_size_cannot_be_read_is_indeterminate():
+    """A gateway failure may have streamed text before it broke, and a span
+    with nothing on it states nothing at all."""
+    assert guards.model_wrote_nothing([llm_span(error_class="GatewayFailure")]) is False
+    assert guards.model_wrote_nothing([llm_span(round=1, model="qwen3:14b")]) is False
+    assert (
+        guards.model_wrote_nothing(
+            [llm_span(**{guards.COMPLETION_CHARS_FIELD: 0}), llm_span(round=2)]
+        )
+        is False
+    )
+
+
+def test_a_boolean_is_not_a_character_count():
+    assert guards.model_wrote_nothing([llm_span(**{guards.COMPLETION_CHARS_FIELD: False})]) is False
+
+
+def test_the_all_clear_verdict_is_checks_quiet_and_not_a_second_copy():
+    """Whatever `checks.quiet` calls clear, this guard calls clear, over every
+    combination of ran/found — one implementation of quiet, so a beat's own
+    verdict and the sentence it is allowed to write can never disagree."""
+    matrix = [
+        [],
+        [check_run("a")],
+        [check_run("a"), check_run("b")],
+        [check_run("a", ran=False, reason="no answer")],
+        [check_run("a"), check_run("b", ran=False, reason="no answer")],
+        [check_run("a", findings=(GATEWAY_DOWN,))],
+        [check_run("a", findings=(GATEWAY_DOWN,)), check_run("b", ran=False, reason="no answer")],
+    ]
+    for runs in matrix:
+        clear = checks.quiet(runs)[0]
+        fired = guards.observation_check("All clear.", [], runs) is not None
+        assert fired is not clear, [run.check for run in runs]
+
+
+# -- the precision crux: the digest relaying the checks' OWN sentences -------
+#
+# Every entry is a real title app/checks/ composes, beside the real facts the
+# same check returns. A digest reads these back to the owner verbatim, so a
+# correction under ANY of them would put "no check produced that" under the
+# check's own words — the guard becoming the liar about the one message he
+# reads. Copied from the families rather than imported so that a check whose
+# facts stop naming its own subject reddens here instead of shipping.
+REAL_FINDING_SENTENCES = [
+    (
+        "peer_down",
+        "The gateway did not answer /health — ConnectError: connection refused.",
+        finding(
+            "peer_down:gateway",
+            peer="gateway",
+            url="http://gateway:8081/health",
+            probe="/health",
+            reason="ConnectError: connection refused",
+        ),
+    ),
+    (
+        "database_down",
+        "The database did not answer SELECT 1 within 5s.",
+        finding("database_down", probe="SELECT 1", reason="no answer within 5s"),
+    ),
+    (
+        "ollama_down",
+        "Ollama did not answer the gateway — the source reported no models.",
+        finding(
+            "peer_down:ollama",
+            peer="ollama",
+            reason="the source reported no models",
+            basis="the gateway's own model catalogue source entry",
+        ),
+    ),
+    (
+        "chat_model_unset",
+        "No chat model is set (Settings → Models) — every scheduled turn refuses until one is.",
+        finding("chat_model_unset", setting="chat.model", value="", reason="unset"),
+    ),
+    (
+        "chat_model_missing",
+        "The chat model qwen3:14b is listed but not installed.",
+        finding(
+            "chat_model_missing:qwen3:14b",
+            setting="chat.model",
+            model="qwen3:14b",
+            reason="the gateway's catalogue lists it as not installed",
+        ),
+    ),
+    (
+        "timer_paused",
+        "The beat 'watch' is paused since 2026-09-08T03:00:00 — 5 consecutive failures.",
+        TIMER_PAUSED,
+    ),
+    (
+        "timer_failing",
+        "The timer 'nightly backup' has failed 4 times in a row — it pauses itself at 5.",
+        finding(
+            "timer_failing:8b1f0a2e-0000-4000-8000-000000000002",
+            timer_id="8b1f0a2e-0000-4000-8000-000000000002",
+            kind="timer",
+            consecutive_failures=4,
+            pause_ceiling=5,
+        ),
+    ),
+    (
+        "delegation_failed",
+        "The delegation to coder failed 3 times — RuntimeError: the agent has no model.",
+        finding(
+            "delegation_failed:8b1f0a2e-0000-4000-8000-000000000003",
+            span_id="8b1f0a2e-0000-4000-8000-000000000003",
+            turn_id="8b1f0a2e-0000-4000-8000-000000000004",
+            agent="coder",
+            at="2026-09-08T03:00:00+00:00",
+            error="RuntimeError: the agent has no model",
+        ),
+    ),
+    (
+        "agent_over_cap",
+        "Agent coder is over its monthly cap — $22.10 of $20.00 in 2026-09.",
+        finding(
+            "agent_over_cap:coder",
+            agent="coder",
+            role="coder",
+            cap_usd=20.0,
+            month="2026-09",
+            month_zone="America/Chicago",
+        ),
+    ),
+    (
+        "spend_over_cap_total",
+        "Household model spend is over the monthly cap — $41.00 of $40.00 in 2026-09.",
+        finding("spend_over_cap:total", scope="total", cap_usd=40.0, month="2026-09"),
+    ),
+    (
+        "provider_walled",
+        "Openrouter is walled until 2026-09-08T05:00:00 after 2 refusal(s) — 402 payment required.",
+        finding("provider_walled:openrouter", provider="openrouter", status=402, strikes=2),
+    ),
+    (
+        "spend_spike",
+        "2026-09-07 cost $12.00 — 6.0x against $2.00/day over the previous 7 day(s).",
+        finding(
+            "spend_spike:2026-09-07",
+            day="2026-09-07",
+            usd=12.0,
+            trailing_days=7,
+            trailing_mean_usd=2.0,
+            multiple=6.0,
+            threshold_multiple=3.0,
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,sentence,found",
+    REAL_FINDING_SENTENCES,
+    ids=[case[0] for case in REAL_FINDING_SENTENCES],
+)
+def test_a_digest_relaying_a_real_findings_own_title_is_clean(label, sentence, found):
+    runs = [check_run(label, findings=(found,))]
+    assert guards.observation_check(sentence, [found], runs) is None, (
+        f"{label!r}: the check's own sentence was corrected — the guard would be "
+        "the liar about the one message he reads"
+    )
+
+
+@pytest.mark.parametrize(
+    "label,sentence,found",
+    REAL_FINDING_SENTENCES,
+    ids=[case[0] for case in REAL_FINDING_SENTENCES],
+)
+def test_the_same_sentence_with_nothing_found_is_a_fabrication(label, sentence, found):
+    """The other half of the derivation: the identical sentence, with the pass
+    that produced it taken away, is exactly the lie this guard exists for.
+
+    Four of the twelve are accepted MISSES, each for a stated family rule
+    rather than an accident: "listed but not installed" and "no chat model is
+    set" put their negation in the subject, so no fault predicate is asserted
+    at all; a cost figure asserts no fault; and the ollama line carries a
+    reporting frame ("the source reported...") which exempts its whole clause,
+    the same leniency every guard in this file gives relayed content."""
+    fired = guards.observation_check(sentence, [], ALL_RAN_CLEAN) is not None
+    quiet_shapes = {"chat_model_missing", "chat_model_unset", "spend_spike", "ollama_down"}
+    assert fired is (label not in quiet_shapes), label
+
+
+# -- every correction, under every new guard --------------------------------
+#
+# DERIVED from the module, not a list kept here: a correction added to
+# guards.py tomorrow is checked the day it lands. A guard that fires on another
+# guard's correction would append a contradiction to a contradiction, and the
+# owner would read two sentences arguing with each other about a night he did
+# not watch.
+
+
+def _every_correction() -> list[tuple[str, str]]:
+    out = []
+    for name in dir(guards):
+        if "CORRECTION" not in name:
+            continue
+        value = getattr(guards, name)
+        if not isinstance(value, str):
+            continue
+        out.append((name, value.format(agent="coder", repeats=4, unrun=1, total=3, found=2)))
+    return sorted(out)
+
+
+@pytest.mark.parametrize("name,text", _every_correction(), ids=[c[0] for c in _every_correction()])
+def test_the_new_guards_are_clean_over_every_correction_in_this_module(name, text):
+    assert guards.observation_check(text, [], ONE_DID_NOT_RUN) is None, name
+    assert guards.observation_check(text, [], []) is None, name
+    assert guards.observation_check(text, [GATEWAY_DOWN], FOUND_SOMETHING) is None, name
+    assert guards.delivery_claim_check(text, []) is None, name
+    assert guards.novelty_claim_check(text, REPEATED) is None, name

@@ -15,10 +15,13 @@ refuses every SEEDED_KINDS kind by name):
   * `watch`  — hourly. Runs every registered check (app/checks), writes what
     they found down as notices, and clears the notices whose condition a check
     that RAN no longer finds. Cheap, because the fact checks are database and
-    socket reads; the model is only asked when there is something to say.
-    It delivers NOTHING — no chat message he sees, no push. The digest does
-    that (S11-3); the watch beat's own line lands in the beats' conversation.
-  * `digest` — daily, at the hour the owner sets. Writes the ONE message.
+    socket reads; no model is asked at all. It delivers nothing EXCEPT the one
+    urgent family — the stack being down, the only entry on the list Jeremy set
+    — which goes out the moment its row exists, at any hour, in a sentence
+    composed in code from the check's own title and facts. Everything else
+    waits; the watch beat's own line lands in the beats' conversation.
+  * `digest` — daily, at the hour the owner sets. Writes the ONE message, and
+    only on the days there is something to write about.
 
 Both belong to the OWNER: a beat's findings are his, its spend is his, and
 its digest lands in his conversation. (Migration 019's
@@ -34,6 +37,29 @@ conversation uses (agents._insert_log_conversation), for the same reason:
 can never hand the chat page a beat's working notes. The digest is what
 reaches him, and it is written on purpose.
 
+Why a beat does not go through `chat._run_turn`, stated once here because it
+looks like an omission: _run_turn is the only writer of an assistant row AND
+the only closer of its turn, and a beat's turn is opened and closed by
+`scheduler._run_firing` (`scheduler_closes_turn` is True for every kind but
+`scheduled`) — running one inside a beat would write the turn's spans twice.
+It would also write the message twice, because `delivery.deliver` is what puts
+the row in his ACTIVE conversation and reads it back, which is the ONE fact
+"delivered" is allowed to mean here. So the digest asks for exactly one round
+through `chat._gateway_round` — the same code path, the same `llm_call` span,
+the same markup strip — and this module runs the guards that apply over what
+comes back. The chat guards that do NOT apply are left out deliberately:
+`narration_check` reads THIS turn's tool spans, and a digest's whole job is to
+relay what an earlier watch turn did ("I restarted the gateway"), so running it
+here would append a contradiction under every true sentence she wrote.
+
+And the digest's TURN stays on the beats' conversation even though its MESSAGE
+lands in his: `conversations.has_pending_turn` reports a NULL-status turn as
+pending only when it is in `traces.INFLIGHT`, which by contract holds the
+owner's chat turns alone — a beat turn parked against his conversation would
+trip that function's "the sweep was bypassed" tripwire on every poll of his
+chat page for as long as the beat ran. The message carries `turn_id`, so the
+transcript is badged from the trace either way, which is the link that matters.
+
 Nothing here asks anyone for anything (owner ruling 2026-09-03). A beat states
 what it could not do; it never decides what it may not.
 """
@@ -42,16 +68,19 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 import asyncpg
 
-from app import chat, identity, peers, schedule, settings_store, traces
+from app import chat, guards, identity, peers, schedule, settings_store, traces
 from app.identity import Person
 
 if TYPE_CHECKING:  # app.checks is imported at CALL time — see _proactive.
     from app import checks
+    from app import notices as notices_module
 
 logger = logging.getLogger("core")
 
@@ -122,6 +151,19 @@ def _proactive():
     from app import checks, notices
 
     return checks, notices
+
+
+def _delivery():
+    """app.delivery, imported at call time for the same reason again.
+
+    delivery imports app.tools at module level, and the tool registry pulls
+    app.tools.timers -> app.timers -> app.scheduler -> THIS module. At module
+    level that closes the cycle and the scheduler's body then reads
+    `beats.BEAT_KIND` before it exists. The one-way idiom, a third time.
+    """
+    from app import delivery
+
+    return delivery
 
 
 async def _zone(conn) -> str | None:
@@ -376,21 +418,195 @@ async def _say(pool: asyncpg.Pool, turn: traces.Turn, text: str) -> tuple[dict, 
     return {"ok": True}, None
 
 
-async def _run(pool: asyncpg.Pool, turn: traces.Turn, name: str, note: str):
-    """The shared body of the two seams below: state what this beat did in its
-    own conversation, and make the firing's verdict the fact of that write."""
-    scheduler = _scheduler()
-    rung, reason = await _say(pool, turn, note)
-    delivery = {"beat": name, "chat": rung}
-    if reason is None:
-        return scheduler.Outcome(scheduler.FIRING_OK, None, delivery)
-    return scheduler.Outcome(scheduler.FIRING_ERROR, reason, delivery)
+def _stated(*reasons: str | None) -> str | None:
+    """The reasons that were actually given, joined — or None when there were
+    none. Never an empty string: a blank reason reads as "no problem", which is
+    the silence every verdict in this module refuses to produce."""
+    said = [reason for reason in reasons if reason]
+    return "; ".join(said) if said else None
 
 
-DIGEST_UNBUILT = (
-    "Digest beat: the notice store is not wired into the digest yet, so there is nothing "
-    "to summarise and nothing was sent. The digest lands in S11-3."
-)
+async def _person(pool: asyncpg.Pool, turn: traces.Turn) -> Person | None:
+    """The person this beat is FOR, read from the turn the scheduler opened.
+
+    Derived from the row rather than from identity.owner: the beats are the
+    owner's by construction (019's `timers_job_has_no_person` CHECK plus
+    ensure_beats), and reading the turn means a beat can never deliver to
+    somebody other than the person its firing is billed to. None means that
+    person is gone, which the callers state rather than paper over — delivery
+    to nobody is a failed delivery, not a quiet one.
+    """
+    if turn.person_id is None:
+        return None
+    row = await pool.fetchrow("SELECT id, name, role FROM people WHERE id = $1", turn.person_id)
+    if row is None:
+        return None
+    return Person(id=row["id"], name=row["name"], role=row["role"])
+
+
+# ── the urgent bypass ─────────────────────────────────────────────────────────
+#
+# The one thing that may interrupt the digest and reach him at any hour. The
+# list has EXACTLY ONE entry — the stack being down — declared by the CHECK in
+# code (checks.Check.urgent, pinned by tests/test_checks.py), so nothing a model
+# writes can promote a finding into a 3am push. Because that list is one item
+# and its evidence is a socket rather than a sentence, the volume is bounded by
+# the list rather than by a clock.
+
+URGENT_PREFIX = "Urgent"
+
+PUSH_FAILED = "an urgent notice reached nobody"
+
+
+def _facts_words(facts: dict) -> str:
+    """A finding's derived facts, in words, sorted. ONE rendering, shared by
+    the urgent sentence and the digest's brief — the two places a fact is shown
+    to a human must not be able to describe the same row differently."""
+    return ", ".join(f"{key}={value}" for key, value in sorted((facts or {}).items()))
+
+
+def urgent_line(notice: notices_module.Notice) -> str:
+    """The sentence an urgent notice pushes with, composed in CODE.
+
+    The model is never asked for it. The whole point of a one-item urgent list
+    is that its findings are verified from a socket rather than from prose, so
+    the words are the check's own title, the name of the check that declared
+    the urgency, and the derived facts the fingerprint was computed over —
+    nothing a model could re-word into a second push (v3 hashed the model's
+    text and turned two findings into fourteen phone pushes in eight hours).
+    """
+    facts = _facts_words(notice.facts)
+    detail = f" — {facts}" if facts else ""
+    return f"{URGENT_PREFIX} ({notice.check_name}): {notice.title}{detail}"
+
+
+def wants_push(notice: notices_module.Notice) -> bool:
+    """Does this urgent notice still owe him a push?
+
+    DERIVED from the notices store's own definition of what he has not been
+    told — `notices.DELIVERABLE_STATES` — never from a second list kept here,
+    and deliberately not from `is_new`:
+
+      * a NEW row is `raised`, so it pushes;
+      * a fold onto a row whose push FAILED leaves it `failed`, so it pushes
+        again — a repeat of something that never landed is not a repeat, and
+        `is_new` alone would have suppressed it forever;
+      * a fold onto a `delivered` or `seen` row does not push. That is what the
+        fold is FOR;
+      * a `muted` row does not push. A mute is his own noise preference, and
+        identical facts are the same fingerprint whether or not the condition
+        blinked off and on in between.
+
+    One predicate, and it moves by itself the day the store's own definition of
+    "still owed" moves.
+    """
+    _checks, notices = _proactive()
+    return bool(notice.urgent) and notice.state in notices.DELIVERABLE_STATES
+
+
+@dataclass(frozen=True)
+class Push:
+    """One urgent notice's own delivery, and whether anybody was reached.
+
+    `reached` is `Delivered.reached` — the chat row read back — and `reason` is
+    every stated failure this push produced, including a delivery that landed
+    but could not be written back onto the row. `ok` needs BOTH: a push nobody
+    recorded would be pushed again next hour, so it is not a success.
+    """
+
+    notice_id: uuid.UUID
+    title: str
+    reached: bool
+    receipt: dict
+    reason: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.reached and self.reason is None
+
+    def as_record(self) -> dict:
+        """What the firing stores about this push — the notice it was about,
+        the channel receipts, and the reason when there is one."""
+        record: dict = {
+            "notice": str(self.notice_id),
+            "title": self.title,
+            "reached": self.reached,
+            "receipt": self.receipt,
+        }
+        if self.reason is not None:
+            record["reason"] = self.reason
+        return record
+
+
+async def _record_push(
+    pool: asyncpg.Pool,
+    notice_id: uuid.UUID,
+    *,
+    reached: bool,
+    receipt: dict,
+    reason: str | None,
+) -> str | None:
+    """Write the channel's own verdict back onto the notice. Returns the reason
+    it could not be written, if it could not.
+
+    Never swallowed: a push that went out and was not recorded stays
+    deliverable and goes out again next hour, which is a fact the beat has to
+    state rather than discover later.
+    """
+    _checks, notices = _proactive()
+    try:
+        if reached:
+            await notices.mark_delivered(pool, notice_id, delivery=receipt)
+        else:
+            await notices.mark_failed(pool, notice_id, reason or "the delivery stated no reason")
+    except Exception as exc:  # noqa: BLE001 - the reason is the record
+        logger.exception("the urgent push for notice %s could not be recorded", notice_id)
+        return (
+            f"the push for notice {notice_id} could not be recorded onto the row — "
+            f"{peers.reason(exc)}"
+        )
+    return None
+
+
+async def _push_urgent(
+    app, pool: asyncpg.Pool, turn: traces.Turn, person: Person | None, notice
+) -> Push:
+    """Deliver ONE urgent notice now, at whatever hour it is.
+
+    Chat always, and a device too because `urgent=True` — the ladder decides
+    per channel what "delivered" means, and this function decides nothing about
+    it. Nothing here raises: a check that ran must not lose its result because
+    a socket was shut, so every failure comes back as a Push whose `reason` the
+    watch beat states on its firing.
+    """
+    delivery = _delivery()
+    with turn.span("urgent", notice.check_name) as span:
+        span.meta["notice"] = str(notice.id)
+        span.meta["fingerprint"] = notice.fingerprint
+        span.meta["state_before"] = notice.state
+        try:
+            result = await delivery.deliver(
+                app, pool, text=urgent_line(notice), urgent=True, person=person, turn=turn
+            )
+        except Exception as exc:  # noqa: BLE001 - the reason is the record
+            reason = f"the urgent push could not be made — {peers.reason(exc)[:300]}"
+            span.meta["error"] = reason
+            logger.exception("the urgent push for notice %s could not be made", notice.id)
+            noted = await _record_push(pool, notice.id, reached=False, receipt={}, reason=reason)
+            return Push(notice.id, notice.title, False, {}, _stated(reason, noted))
+        span.meta["reached"] = result.reached
+        noted = await _record_push(
+            pool, notice.id, reached=result.reached, receipt=result.receipt, reason=result.reason
+        )
+        if noted is not None:
+            span.meta["record_error"] = noted
+        return Push(
+            notice.id,
+            notice.title,
+            result.reached,
+            result.receipt,
+            _stated(result.reason, noted),
+        )
 
 
 @dataclass(frozen=True)
@@ -416,6 +632,24 @@ class WatchResult:
     new: int
     folded: int
     cleared: int
+    # Every urgent notice this beat tried to push, in the order it tried. An
+    # ATTEMPT list, not a success list — `pushed` and `push_failed` are counted
+    # off each one's own verdict below, so the record can never say a push
+    # landed because it was made.
+    pushes: tuple[Push, ...] = ()
+
+    @property
+    def pushed(self) -> int:
+        return sum(1 for push in self.pushes if push.ok)
+
+    @property
+    def push_failed(self) -> int:
+        return sum(1 for push in self.pushes if not push.ok)
+
+    @property
+    def push_failure(self) -> str | None:
+        """Every stated reason a push did not land, or None."""
+        return _stated(*(push.reason for push in self.pushes))
 
     @property
     def total(self) -> int:
@@ -456,6 +690,12 @@ class WatchResult:
             "folded": self.folded,
             "cleared": self.cleared,
             "quiet": self.quiet,
+            # Counted from each Push's own verdict, so a beat can never record
+            # a push it only attempted. Both numbers are always present: a
+            # missing key would read as "none failed" and as "we never looked",
+            # which are different facts.
+            "pushed": self.pushed,
+            "push_failed": self.push_failed,
         }
 
 
@@ -488,17 +728,40 @@ def watch_line(result: WatchResult) -> str:
         )
     if result.cleared:
         parts.append(f"{_plural(result.cleared, 'notice')} cleared: those conditions ended.")
-    # Said every time, because this beat's honesty depends on it: it records
-    # and it clears, and the digest (S11-3) is the only thing that tells him.
-    parts.append("Nothing was delivered — the digest is what reaches him.")
+    # Said every time, because this beat's honesty depends on it. The watch
+    # beat delivers nothing EXCEPT the one urgent family, and which of those
+    # two happened is counted, never assumed: a beat that pushed says how many
+    # went out and how many reached nobody, and a beat that pushed nothing says
+    # so in the same sentence it always did.
+    if result.pushes:
+        said = []
+        if result.pushed:
+            said.append(f"{_plural(result.pushed, 'urgent notice')} went out immediately")
+        if result.push_failed:
+            said.append(f"{_plural(result.push_failed, 'urgent notice')} reached nobody")
+        parts.append(" and ".join(said) + " — everything else waits for the digest.")
+    else:
+        parts.append("Nothing was delivered — the digest is what reaches him.")
     return "Watch beat: " + " ".join(parts)
 
 
 async def _record_check(
-    pool: asyncpg.Pool, turn: traces.Turn, firing_id, run: checks.CheckRun
-) -> tuple[int, int, int]:
-    """Write down what one check found, then clear what it no longer finds.
-    Returns (new, folded, cleared).
+    app,
+    pool: asyncpg.Pool,
+    turn: traces.Turn,
+    firing_id,
+    run: checks.CheckRun,
+    person: Person | None,
+) -> tuple[int, int, int, list[Push]]:
+    """Write down what one check found, push the urgent ones now, then clear
+    what it no longer finds. Returns (new, folded, cleared, pushes).
+
+    THE URGENT BYPASS happens here, one row at a time, the moment the row
+    exists — before the reconcile, before the beat's own line, and without
+    waiting for the digest. The condition is `wants_push`, derived from the row
+    postgres just wrote: urgency comes from the check family in code and
+    "still owed" comes from the notices store's own state set, so nothing this
+    function decides can promote a finding or suppress one it never delivered.
 
     RECONCILING is the other half of folding, and it happens only for a check
     that RAN: every live notice of this check whose fingerprint is not among
@@ -518,6 +781,7 @@ async def _record_check(
     """
     _checks, notices = _proactive()
     live: list[str] = []
+    pushes: list[Push] = []
     new = 0
     for finding in run.findings:
         notice, is_new = await notices.record(
@@ -528,22 +792,30 @@ async def _record_check(
         # actually stored.
         live.append(notice.fingerprint)
         new += 1 if is_new else 0
+        if wants_push(notice):
+            pushes.append(await _push_urgent(app, pool, turn, person, notice))
     cleared = await notices.reconcile(pool, check_name=run.check, live_fingerprints=set(live))
-    return new, len(live) - new, len(cleared)
+    return new, len(live) - new, len(cleared), pushes
 
 
-async def _run_checks(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id) -> WatchResult:
-    """Run every registered check, write down what they found, clear what they
-    no longer find, and count all of it.
+async def _run_checks(
+    app, pool: asyncpg.Pool, turn: traces.Turn, firing_id, person: Person | None
+) -> WatchResult:
+    """Run every registered check, write down what they found, push the urgent
+    ones, clear what they no longer find, and count all of it.
 
     Nothing a check can do raises out of here: `checks.run_all` already turns
     every failure into ran=False with the reason in words, and a check whose
     notices could not be written is DEMOTED to the same shape with the reason
     for that — so one broken write costs that check's result and not the other
-    eleven checks' records.
+    eleven checks' records. A PUSH that fails is not one of those: _push_urgent
+    never raises, so a shut socket costs the delivery and never the check's
+    result — the check watched the world correctly, and saying otherwise would
+    make the beat reconcile nothing on a fact it did establish.
     """
     checks, _notices = _proactive()
     effective: list[checks.CheckRun] = []
+    pushes: list[Push] = []
     new = folded = cleared = 0
     with turn.span("checks", "run_all") as span:
         for run in await checks.run_all(app, pool):
@@ -551,7 +823,9 @@ async def _run_checks(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id) -> 
                 effective.append(run)
                 continue
             try:
-                run_new, run_folded, run_cleared = await _record_check(pool, turn, firing_id, run)
+                run_new, run_folded, run_cleared, run_pushes = await _record_check(
+                    app, pool, turn, firing_id, run, person
+                )
             except Exception as exc:  # noqa: BLE001 - the reason is the record
                 logger.exception("the %s check's findings could not be recorded", run.check)
                 effective.append(
@@ -568,12 +842,19 @@ async def _run_checks(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id) -> 
             new += run_new
             folded += run_folded
             cleared += run_cleared
+            pushes.extend(run_pushes)
         runs = tuple(effective)
         # ONE computation of quiet, and it lives beside the registry: every
         # check ran and none flagged, and an empty run is not vacuously quiet.
         is_quiet, why = checks.quiet(runs)
         result = WatchResult(
-            runs=runs, quiet=is_quiet, not_quiet=why, new=new, folded=folded, cleared=cleared
+            runs=runs,
+            quiet=is_quiet,
+            not_quiet=why,
+            new=new,
+            folded=folded,
+            cleared=cleared,
+            pushes=tuple(pushes),
         )
         # Inside the span, not after it: the trace is where anyone looks first,
         # and these are the same numbers the sentence is composed from.
@@ -585,15 +866,19 @@ NOTHING_RAN = "no check ran, so this beat watched nothing — that is a broken b
 
 
 async def _watch(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
-    """The hourly beat: run every registered check and write down what they
-    found.
+    """The hourly beat: run every registered check, write down what they found,
+    and push the ONE urgent family immediately.
 
-    It DELIVERS NOTHING. No chat message he sees, no push, no device: that is
-    the digest (S11-3), which is written on purpose at an hour he set. What
-    lands here is the beat's own line in the beats' own inactive conversation,
-    saying what ran, what could not, and what was recorded or cleared.
+    Everything else it finds DELIVERS NOTHING. No chat message he sees, no
+    device: that is the digest, written on purpose at an hour he set. The
+    exception is the urgent family — the stack being down, the only entry on
+    the list Jeremy set — which goes out the moment its row exists, at any
+    hour, with a sentence composed in code from the check's own title and
+    facts. What lands in the beats' own inactive conversation either way is the
+    beat's own line, saying what ran, what could not, what was recorded or
+    cleared, and what went out.
 
-    Three verdicts, and they are different facts:
+    Four verdicts, and they are different facts:
 
       * OK and quiet — every check ran, every finding was written down, and
         nothing was flagged.
@@ -602,19 +887,37 @@ async def _watch(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
         cannot run is usually the operator's world (an unconfigured link, too
         little history to compute a mean), and five of those in a row must not
         pause the one timer whose job is to keep watching.
+      * ERROR — an urgent push reached nobody. The one family that may wake him
+        did not, and that shows red rather than sitting inside a receipt: the
+        notice is marked failed, so it goes out again on the next sighting and
+        the digest still owes it to him, but the firing does not read ok. (A
+        chat rung that fails is core refusing writes, which fails this beat's
+        own record on the next line anyway.)
       * ERROR — the beat's own record could not be written, or NO check ran at
         all. Both mean this beat is not evidence of anything.
     """
     scheduler = _scheduler()
-    result = await _run_checks(app, pool, turn, firing_id)
+    # Loaded once, before the checks: an urgent finding is delivered inside the
+    # run and every push is for the same person, so reading it twelve times
+    # would only give twelve chances to disagree with itself.
+    person = await _person(pool, turn)
+    result = await _run_checks(app, pool, turn, firing_id, person)
     rung, failure = await _say(pool, turn, watch_line(result))
     delivery = {"beat": WATCH, "chat": rung, "watch": result.as_delivery()}
+    if result.pushes:
+        # Only when something was actually pushed. An empty list would read as
+        # "we looked and found nothing to push", which is a different fact from
+        # a beat that had no urgent finding at all.
+        delivery["urgent"] = [push.as_record() for push in result.pushes]
     if failure is not None:
         return scheduler.Outcome(scheduler.FIRING_ERROR, failure, delivery)
     if not result.ran:
         return scheduler.Outcome(
             scheduler.FIRING_ERROR, f"{NOTHING_RAN}: {result.not_quiet}", delivery
         )
+    push_failure = result.push_failure
+    if push_failure is not None:
+        return scheduler.Outcome(scheduler.FIRING_ERROR, f"{PUSH_FAILED}: {push_failure}", delivery)
     if result.complete:
         return scheduler.Outcome(scheduler.FIRING_OK, None, delivery)
     # An OK firing that still carries a reason: the beat did its work and the
@@ -628,19 +931,497 @@ async def _watch(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
     )
 
 
-async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
-    """The daily beat: ONE message about everything raised since the last one.
+# ── the digest ────────────────────────────────────────────────────────────────
+#
+# ONE message a day, unless something urgent already went out. It is the only
+# place a beat speaks on purpose, and the only place a beat asks a model for
+# words: the sentence he reads is prose, and prose about a machine is exactly
+# what needs a model — but every FACT in it comes from a brief this file
+# composes out of rows, and every claim in the reply is checked back against
+# those rows before it is delivered.
+#
+# The one thing this beat may never be is the vehicle for an urgent notice. It
+# cannot be: an urgent notice that went out is `delivered`, and
+# notices.deliverable() reads only what is still owed. One that FAILED is still
+# owed, and lands here — which is the whole reason `failed` is a deliverable
+# state rather than a finished one.
 
-    S11-3 fills this in: read the deliverable notices (state in raised/failed,
-    cleared_at IS NULL — a repeat of something that never landed is not a
-    repeat), compose one message, write the chat rung and the Inbox rung (that
-    rung is what marks the firing ok), and write each channel's own verdict
-    back onto the notice — `ok` only from the channel's own result, `failed`
-    with the stated reason, `stated` for "no paired device was connected".
-    Only the stack family may bypass this and push at any hour, and that is
-    declared in the CHECK, never in a reply.
+# What the beat says in its own conversation on a day with nothing to tell him.
+# Code-composed, like every other beat line: no model is asked, because there is
+# nothing to write about.
+DIGEST_NOTHING_NOTE = "no notice was waiting to be delivered, so nothing was sent"
+DIGEST_NOTHING = (
+    # Says only what notices.deliverable() actually computed. "Everything was
+    # delivered or cleared" would be the wider claim and a false one — a muted
+    # row is neither, and it is excluded from that query too.
+    "Digest beat: no notice is waiting to be delivered — nothing stands that he has not been "
+    "told about, and no failed delivery is still owed — so nothing was sent. He hears from "
+    "this beat on the days there is something to hear."
+)
+
+# A digest with nobody to write to. Stated BEFORE the model is asked, so a
+# message that cannot be delivered is never paid for.
+DIGEST_NO_PERSON = (
+    "the person this beat belongs to no longer exists, so there is nobody to write the "
+    "digest to — nothing was composed and nothing was sent"
+)
+
+# The structural detector's verdict (guards.model_wrote_nothing): every llm_call
+# span of this turn reports zero completion characters, so the text was composed
+# by the backend and not by the model. v3 pushed exactly that — its harness's own
+# "this turn produced no reply" line — to a phone as news and recorded a success.
+DIGEST_NOT_WRITTEN = (
+    "the model wrote nothing this turn, so there is no digest to deliver — the text a beat "
+    "sends has to be text a model actually wrote"
+)
+DIGEST_NO_TEXT = "the round came back with no words in it, so there was nothing to deliver"
+
+# How many cleared notices the brief may carry, and how many delivered titles
+# the delivery guard is judged against. Bounds, not filters: what is left out is
+# COUNTED and said in the brief, never dropped silently.
+DIGEST_CLEARED_LIMIT = 20
+DIGEST_DELIVERED_LIMIT = 200
+
+DIGEST_SYSTEM = (
+    "You are Nova, writing the one proactive message you send the owner each day. You have "
+    "no tools this turn and nothing was looked up for you: the brief below is the whole of "
+    "what you know. Report it — do not investigate it, do not offer to do anything, and do "
+    "not ask a question. He reads this hours after you write it."
+)
+
+DIGEST_ASK = (
+    "Write ONE short message to {name}: a few sentences of plain prose, no heading, no list, "
+    "no greeting and no sign-off. Say what is standing, how long each thing has been true, "
+    "and what you did about it. Say nothing this brief does not state — every claim in your "
+    "reply is checked mechanically against these rows, and a correction is appended to the "
+    "message he actually reads if one does not hold."
+)
+
+
+def digest_brief(
+    *,
+    name: str,
+    outstanding: Sequence,
+    cleared: Sequence,
+    cleared_more: int,
+    runs: Sequence,
+    now: datetime,
+    zone: str,
+    notes: Sequence[str],
+) -> str:
+    """The model's whole input, composed HERE out of rows.
+
+    Nothing in it is a sentence anybody wrote about the world: each finding is
+    the check's own title beside the derived facts the fingerprint was computed
+    over, its sighting count, and — when she acted — the note her own turn
+    recorded. The cleared list is rows too, which is what lets the digest say
+    what got better rather than only what is wrong.
+
+    `notes` are the reads that FAILED. They go into the brief rather than being
+    swallowed, because a digest composed over a partial view must be able to say
+    so; and they go into the firing's record as well.
     """
-    return await _run(pool, turn, DIGEST, DIGEST_UNBUILT)
+    lines = [
+        f"[Digest beat — the one message a day. Local time now: "
+        f"{schedule.local_words(now, zone)}.]",
+        "",
+        "Everything below was read from the notices store by the backend. It is the whole of "
+        "what you know this turn.",
+        "",
+        f"STANDING ({len(outstanding)}), oldest first — he has not been told about these:",
+    ]
+    _checks, notices = _proactive()
+    for index, notice in enumerate(outstanding, start=1):
+        lines.append(f"{index}. {notice.title}")
+        lines.append(f"   found by the {notice.check_name} check (key {notice.finding_key})")
+        facts = _facts_words(notice.facts)
+        if facts:
+            lines.append(f"   facts: {facts}")
+        lines.append(
+            f"   seen {notice.repeats} time(s); first "
+            f"{schedule.local_words(notice.first_seen_at, zone)}, last "
+            f"{schedule.local_words(notice.last_seen_at, zone)}"
+        )
+        if notice.acted and notice.acted_note:
+            lines.append(f"   what you did about it: {notice.acted_note}")
+        else:
+            lines.append("   you have not acted on this")
+        if notice.state == notices.FAILED and notice.failed_reason:
+            lines.append(f"   an earlier delivery of this reached nobody: {notice.failed_reason}")
+    if cleared:
+        lines.append("")
+        lines.append(f"CLEARED since the last digest that reached him ({len(cleared)}):")
+        for row in cleared:
+            lines.append(
+                f"   {row['title']} (the {row['check_name']} check; cleared "
+                f"{schedule.local_words(row['cleared_at'], zone)})"
+            )
+        if cleared_more:
+            lines.append(f"   and {cleared_more} more, not listed here")
+    ran = [run.check for run in runs if run.ran]
+    could_not = [(run.check, run.reason or "no reason stated") for run in runs if not run.ran]
+    lines.append("")
+    lines.append(f"THE LAST WATCH PASS: {len(ran)} of {len(runs)} checks ran.")
+    for check_name, reason in could_not:
+        lines.append(
+            f"   {check_name} could not run — {reason}. Nothing was verified about what it "
+            "watches, so this is not an all-clear."
+        )
+    for note in notes:
+        lines.append("")
+        lines.append(f"NOT READ: {note}")
+    lines.append("")
+    lines.append(DIGEST_ASK.format(name=name))
+    return "\n".join(lines)
+
+
+async def _cleared_since(pool: asyncpg.Pool, firing_id) -> tuple[list, int]:
+    """The notices whose condition ended since the last digest that REACHED
+    him, most recent first, and how many more there were than the brief carries.
+
+    "The last digest" is derived from the record a digest writes about itself —
+    `delivery.digest.delivered`, which is `Delivered.reached`, which is the chat
+    row read back. Not from the last firing (a digest that failed told him
+    nothing, so its window is still owed) and not from the last time anything
+    was delivered (an urgent push is one sentence about the stack and says
+    nothing about what cleared). With no such firing yet, the window is
+    everything: he has never been told anything.
+    """
+    since = None
+    if firing_id is not None:
+        since = await pool.fetchval(
+            "SELECT max(started_at) FROM timer_firings "
+            "WHERE timer_id = (SELECT timer_id FROM timer_firings WHERE id = $1) "
+            "AND id <> $1 AND (delivery #>> '{digest,delivered}') = 'true'",
+            firing_id,
+        )
+    rows = await pool.fetch(
+        "SELECT title, check_name, cleared_at FROM notices "
+        "WHERE cleared_at IS NOT NULL AND ($1::timestamptz IS NULL OR cleared_at > $1) "
+        "ORDER BY cleared_at DESC LIMIT $2",
+        since,
+        DIGEST_CLEARED_LIMIT + 1,
+    )
+    return list(rows[:DIGEST_CLEARED_LIMIT]), max(len(rows) - DIGEST_CLEARED_LIMIT, 0)
+
+
+async def _last_pass(pool: asyncpg.Pool, outstanding: Sequence) -> tuple[tuple, str | None]:
+    """The CheckRuns the digest's observation guard judges an all-clear against,
+    rebuilt from two live records rather than from a memory of them.
+
+    The last watch firing's own `delivery.watch` says which checks ran and which
+    could not, with the reason each stated; the outstanding notices say what was
+    found. `checks.quiet` over the result is therefore the SAME computation the
+    watch beat used, so a digest that writes "everything looks fine" while three
+    probes could not be made is contradicted by the beat's own arithmetic and
+    not by a phrase list. Returns the runs and, when the record could not be
+    read, the reason — the digest still goes out, and it goes out SAYING the
+    pass could not be read.
+    """
+    checks, _notices = _proactive()
+    by_check: dict[str, list] = {}
+    for notice in outstanding:
+        by_check.setdefault(notice.check_name, []).append(
+            checks.Finding(key=notice.finding_key, title=notice.title, facts=notice.facts)
+        )
+    watch: dict = {}
+    note: str | None = None
+    try:
+        row = await pool.fetchrow(
+            "SELECT f.delivery -> 'watch' AS watch FROM timer_firings f "
+            "JOIN timers t ON t.id = f.timer_id "
+            "WHERE t.kind = $1 AND t.payload->>'handler' = $2 AND f.delivery ? 'watch' "
+            "ORDER BY f.started_at DESC LIMIT 1",
+            BEAT_KIND,
+            WATCH,
+        )
+        if row is not None and isinstance(row["watch"], dict):
+            watch = row["watch"]
+    except Exception as exc:  # noqa: BLE001 - the reason is the record
+        logger.exception("the last watch pass could not be read for the digest")
+        note = (
+            "the last watch pass could not be read, so this digest cannot say which checks "
+            f"ran — {peers.reason(exc)}"
+        )
+    could_not = watch.get("could_not") if isinstance(watch.get("could_not"), dict) else {}
+    ran = watch.get("ran") if isinstance(watch.get("ran"), list) else []
+    runs = [
+        checks.CheckRun(check=name, ran=True, reason=None, findings=tuple(by_check.get(name, ())))
+        for name in sorted((set(ran) | set(by_check)) - set(could_not))
+    ]
+    runs.extend(
+        checks.CheckRun(check=name, ran=False, reason=str(reason))
+        for name, reason in sorted(could_not.items())
+    )
+    return tuple(runs), note
+
+
+async def _delivered_titles(pool: asyncpg.Pool) -> tuple[list[str], str | None]:
+    """The titles of everything he HAS been told about — the delivery guard's
+    one fact source, and the only one that lives outside this turn.
+
+    Fails open with the failure recorded: an unreadable table must not silence
+    a digest, and it must not silently disarm a guard either, so the reason
+    comes back and is stated on the firing.
+    """
+    _checks, notices = _proactive()
+    try:
+        rows = await pool.fetch(
+            "SELECT title FROM notices WHERE state = ANY($1::text[]) "
+            "ORDER BY last_seen_at DESC LIMIT $2",
+            [notices.DELIVERED, notices.SEEN],
+            DIGEST_DELIVERED_LIMIT,
+        )
+    except Exception as exc:  # noqa: BLE001 - the reason is the record
+        logger.exception("the delivered notices could not be read for the digest")
+        return [], (
+            "what has already been delivered could not be read, so an 'I already told you' "
+            f"in this message was not checked — {peers.reason(exc)}"
+        )
+    return [row["title"] for row in rows], None
+
+
+def _guard(turn: traces.Turn, name: str, check, *args) -> str | None:
+    """Run one beat guard over the reply, fail open, and file a `guard` span
+    when it fires.
+
+    Fail-open is chat.py's rule for every guard and it is the right one here
+    too: a guard that raises must never eat the one message he gets that day.
+    A guard that FIRES files the span, so the correction he reads can be traced
+    back to the line of code that added it.
+    """
+    try:
+        correction = check(*args)
+    except Exception:  # noqa: BLE001 - the reply ships uncorrected, loudly
+        logger.exception("the %s guard raised; the digest ships uncorrected", name)
+        return None
+    if correction is None:
+        return None
+    with turn.span("guard", name) as span:
+        span.meta["claims"] = [
+            {"kind": claim.kind, "target": claim.target} for claim in correction.claims
+        ]
+    return correction.text
+
+
+def _unwritten(turn: traces.Turn, text: str, failure: str | None) -> str | None:
+    """Why this turn has nothing to deliver, or None when it has words.
+
+    The structural detector goes FIRST, because it is a fact about who wrote
+    the text rather than about whether the call succeeded: a round that
+    produced nothing is recorded as such on its own span (chat.EMPTY_ROUND),
+    and that recording is what stops a backend-composed sentence being pushed
+    as news. The round's own stated failure comes next, and a round that
+    returned only whitespace last — all three deliver nothing, and each says
+    which it was.
+    """
+    if guards.model_wrote_nothing(turn.spans):
+        return _stated(DIGEST_NOT_WRITTEN, failure)
+    if failure is not None:
+        return failure
+    if not text.strip():
+        return DIGEST_NO_TEXT
+    return None
+
+
+async def _mark_digest(pool: asyncpg.Pool, outstanding: Sequence, result) -> str | None:
+    """Write the delivery's verdict back onto every notice the digest carried.
+
+    `reached` decides which transition it is, and it is the chat row read back
+    — never the fact that a write was attempted. A failed digest marks each one
+    FAILED with the ladder's own words, which keeps it deliverable, so the next
+    digest still owes it to him. Returns the reason a write did not land, if
+    one did not: a delivery that was made and not recorded would be told again
+    tomorrow, so it is stated rather than swallowed.
+    """
+    _checks, notices = _proactive()
+    problems: list[str] = []
+    for notice in outstanding:
+        try:
+            if result.reached:
+                await notices.mark_delivered(pool, notice.id, delivery=result.receipt)
+            else:
+                await notices.mark_failed(pool, notice.id, result.reason)
+        except Exception as exc:  # noqa: BLE001 - the reason is the record
+            logger.exception("notice %s could not be marked after the digest", notice.id)
+            problems.append(f"notice {notice.id} — {peers.reason(exc)}")
+    if not problems:
+        return None
+    return "the digest's outcome could not be written onto " + "; ".join(problems)
+
+
+async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
+    """The daily beat: ONE message about everything still owed him.
+
+    Nothing outstanding is the ordinary day and it is QUIET: the beat writes its
+    own code-composed line into the beats' own conversation, delivers nothing at
+    all, and records ok. A digest that spoke every day about nothing is the
+    noise this slice exists to avoid.
+
+    Otherwise it composes. The brief is built HERE, from rows: each deliverable
+    notice with its title, its derived facts, its sighting count and what she
+    did about it, plus what has CLEARED since the last digest that reached him,
+    plus which checks could not run on the last watch pass. The model is asked
+    for one short message and for nothing else — no tools are advertised, so
+    there is no round it could act in.
+
+    Then four mechanical checks over what came back, before anybody is told:
+    the structural detector (text the model did not write is not delivered),
+    the observation guard (an all-clear the pass does not support, or a fault no
+    finding names), the delivery guard ("I already told you" about something no
+    notice delivered) and the novelty guard ("this is new" about facts already
+    counted). Each fires as an APPENDED correction — the prose beside it may be
+    perfectly true, and dropping it would cost him the message.
+
+    Finally the ladder: `delivery.deliver(urgent=False)`, which writes the chat
+    row into his ACTIVE conversation and reads it back. `reached` is that row,
+    and it is what decides whether every notice is marked delivered with the
+    receipt or failed with the ladder's own words. A failed digest is a failed
+    firing, and every notice in it is still owed him tomorrow.
+    """
+    scheduler = _scheduler()
+    _checks_module, notices = _proactive()
+    outstanding = await notices.deliverable(pool)
+    if not outstanding:
+        rung, failure = await _say(pool, turn, DIGEST_NOTHING)
+        record = {
+            "beat": DIGEST,
+            "chat": rung,
+            "note": DIGEST_NOTHING_NOTE,
+            "digest": {"delivered": False, "notices": 0, "reason": DIGEST_NOTHING_NOTE},
+        }
+        if failure is not None:
+            return scheduler.Outcome(scheduler.FIRING_ERROR, failure, record)
+        return scheduler.Outcome(scheduler.FIRING_OK, None, record)
+
+    person = await _person(pool, turn)
+    if person is None:
+        return scheduler.Outcome(
+            scheduler.FIRING_ERROR,
+            DIGEST_NO_PERSON,
+            {
+                "beat": DIGEST,
+                "digest": {
+                    "delivered": False,
+                    "notices": len(outstanding),
+                    "reason": DIGEST_NO_PERSON,
+                },
+            },
+        )
+
+    notes: list[str] = []
+    try:
+        cleared, cleared_more = await _cleared_since(pool, firing_id)
+    except Exception as exc:  # noqa: BLE001 - the reason is the record
+        logger.exception("the cleared notices could not be read for the digest")
+        cleared, cleared_more = [], 0
+        notes.append(
+            "what has cleared since the last digest could not be read, so this message "
+            f"cannot say what got better — {peers.reason(exc)}"
+        )
+    runs, pass_note = await _last_pass(pool, outstanding)
+    if pass_note is not None:
+        notes.append(pass_note)
+    delivered_titles, delivered_note = await _delivered_titles(pool)
+    if delivered_note is not None:
+        notes.append(delivered_note)
+
+    brief = digest_brief(
+        name=person.name,
+        outstanding=outstanding,
+        cleared=cleared,
+        cleared_more=cleared_more,
+        runs=runs,
+        # The database clock, the one every other time in this file comes from
+        # — a wall clock here could disagree with the timestamps beside it.
+        now=await pool.fetchval("SELECT now()"),
+        zone=turn.timezone,
+        notes=notes,
+    )
+    try:
+        text, calls, failure = await chat._gateway_round(
+            app,
+            turn,
+            turn.model or "",
+            [{"role": "system", "content": DIGEST_SYSTEM}, {"role": "user", "content": brief}],
+            [],
+            round_number=1,
+            on_delta=None,
+        )
+    finally:
+        # _gateway_round sets DOING and only chat._run_turn's finally pops it.
+        # A beat that never runs one would leave this turn reading "thinking"
+        # in Activity for as long as the process lives.
+        traces.clear_doing(turn.id)
+
+    is_quiet, not_quiet = _checks_module.quiet(runs)
+    record: dict = {
+        "beat": DIGEST,
+        "digest": {
+            "delivered": False,
+            "notices": len(outstanding),
+            "cleared": len(cleared),
+            "quiet": is_quiet,
+            "not_quiet": not_quiet,
+        },
+    }
+    if notes:
+        record["digest"]["not_read"] = list(notes)
+    if calls:
+        # No tool was advertised, so anything here is markup the model wrote as
+        # text. _gateway_round already stripped it and nothing dispatches it
+        # (the 2026-09-03 ruling); it is counted so the record says it happened.
+        record["digest"]["markup_calls"] = len(calls)
+
+    unwritten = _unwritten(turn, text, failure)
+    if unwritten is not None:
+        # Nothing is delivered and nothing is marked: no delivery was attempted,
+        # so every notice stays exactly as deliverable as it was and tomorrow's
+        # digest still owes them to him.
+        record["digest"]["unable"] = unwritten
+        return scheduler.Outcome(scheduler.FIRING_ERROR, unwritten, record)
+
+    # The subjects she may speak about are the notices this digest is REPORTING,
+    # taken from the rows rather than from `runs`: a check that could not run
+    # this hour still has live notices, and reading the vocabulary off the runs
+    # would drop them — putting "no check produced that this pass" under a
+    # sentence about a finding that is standing in the brief right above it.
+    # `runs` decides only whether the pass was clear.
+    findings = [
+        _checks_module.Finding(key=notice.finding_key, title=notice.title, facts=notice.facts)
+        for notice in outstanding
+    ]
+    corrections = [
+        correction
+        for correction in (
+            _guard(turn, "observation", guards.observation_check, text, findings, runs),
+            _guard(turn, "delivery_claim", guards.delivery_claim_check, text, delivered_titles),
+            _guard(
+                turn,
+                "novelty_claim",
+                guards.novelty_claim_check,
+                text,
+                {notice.title: notice.repeats for notice in outstanding},
+            ),
+        )
+        if correction is not None
+    ]
+    if corrections:
+        record["digest"]["corrections"] = len(corrections)
+    message = "\n\n".join([text.strip(), *corrections])
+
+    delivery = _delivery()
+    result = await delivery.deliver(app, pool, text=message, urgent=False, person=person, turn=turn)
+    record.update(result.receipt)
+    record["digest"]["delivered"] = result.reached
+    problem = await _mark_digest(pool, outstanding, result)
+    if problem is not None:
+        record["digest"]["record_error"] = problem
+    if not result.reached:
+        return scheduler.Outcome(scheduler.FIRING_ERROR, _stated(result.reason, problem), record)
+    if problem is not None:
+        return scheduler.Outcome(scheduler.FIRING_ERROR, problem, record)
+    return scheduler.Outcome(scheduler.FIRING_OK, None, record)
 
 
 # Name -> the coroutine that runs it, the same binding JOBS uses. run_beat

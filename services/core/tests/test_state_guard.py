@@ -11,6 +11,7 @@ parroted out of an earlier (then-true) reply while the device was online. Every
 toggle the guard derives from is proven here too: the SAME sentence flips
 verdict on a successful device span, and on whether anything is paired at all.
 """
+
 from __future__ import annotations
 
 import ast
@@ -136,9 +137,9 @@ MUST_NOT_FIRE = [
 
 @pytest.mark.parametrize("label,reply", MUST_NOT_FIRE, ids=[c[0] for c in MUST_NOT_FIRE])
 def test_must_not_fire_on_replies_that_assert_no_current_state(label, reply):
-    assert (
-        guards.state_claim_check(reply, [], NAMES) is None
-    ), f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    assert guards.state_claim_check(reply, [], NAMES) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
 
 
 # The misses this precision buys, pinned so they are a CHOICE and not a
@@ -160,9 +161,7 @@ ACCEPTED_MISSES = [
 ]
 
 
-@pytest.mark.parametrize(
-    "label,reply", ACCEPTED_MISSES, ids=[c[0] for c in ACCEPTED_MISSES]
-)
+@pytest.mark.parametrize("label,reply", ACCEPTED_MISSES, ids=[c[0] for c in ACCEPTED_MISSES])
 def test_the_accepted_misses_stay_missed(label, reply):
     assert guards.state_claim_check(reply, [], NAMES) is None
 
@@ -221,7 +220,7 @@ def test_a_refusal_that_determined_connectivity_backs_the_claim():
 
 
 def test_a_refusal_that_determined_nothing_still_backs_nothing():
-    """"no paired device named X" refuses BEFORE connectivity is looked at, so
+    """ "no paired device named X" refuses BEFORE connectivity is looked at, so
     it records no fact and settles nothing. The claim is still unchecked."""
     refused = Span("device_run", ok=False)  # no facts recorded
     assert guards.state_claim_check(OWNER_CASE, [refused], NAMES) is not None
@@ -356,6 +355,18 @@ _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
         _RECORDS,
         "the ONE place core determines a device's connectivity during _admit; "
         "writes {device, connected} to ctx.facts_sink for BOTH outcomes.",
+    ),
+    ("delivery.py", "_connected_device_names"): (
+        _BOOKKEEPING,
+        "S11: the same derivation as the scheduler's, duplicated because "
+        "scheduler imports beats at module level and a module-level import "
+        "back would close the cycle. Reads connected_ids() only to pick which "
+        "paired devices an URGENT notice goes to. Each target is then "
+        "re-determined and RECORDED by _require_connected inside the "
+        "device_notify call delivery dispatches through chat._run_tool, so the "
+        "span carries the fact; the 'no paired device was connected' note "
+        "lands on the notice's receipt and the firing row for the Schedules "
+        "page, never in text a model produced or a guard reads.",
     ),
     ("scheduler.py", "_connected_device_names"): (
         _BOOKKEEPING,

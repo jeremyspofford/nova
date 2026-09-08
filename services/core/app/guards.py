@@ -45,7 +45,7 @@ flooded-and-clipped argument record) counts as backing any claim of its kind.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, NamedTuple
@@ -3656,3 +3656,811 @@ def delegation_claim_check(
                 ),
             )
     return None
+
+
+# -- the proactive-beat guards (S11) ----------------------------------------
+#
+# The ninth, tenth and eleventh siblings, for the three lies that only a
+# message NOBODY ASKED FOR can tell. Every guard above reads a reply to a
+# person's question: he was there, he knows what he asked, and a fabrication
+# has to get past him in the same minute. A beat speaks into an empty room —
+# she looks at the stack at 03:00, nobody reads the trace, and the sentence at
+# breakfast is the entire account anyone gets. v3's proactive engine failed on
+# exactly that: one beat pushed the HARNESS's own "this turn produced no reply"
+# text to a phone as news and recorded the push a success, and another reported
+# a clean night from a probe that had never been made.
+#
+#   observation_check(reply, findings, runs)     — she may assert a fault only
+#       about something a check ACTUALLY produced this pass, and may call the
+#       pass clear only when it WAS clear.
+#   delivery_claim_check(reply, delivered_titles) — "I already told you about
+#       X" is contradicted unless a notice about X really went out.
+#   novelty_claim_check(reply, repeats_by_title)  — "this is new" is
+#       contradicted, with the real count, when the same facts have already
+#       come back.
+#   model_wrote_nothing(spans)                    — not a guard: the structural
+#       fact that the reply text was written by the backend, not the model.
+#
+# All four keep the family's two rules. PURE: text plus the facts the caller
+# read, never a model, a socket or a clock, so a guard can never itself become
+# a source of narration. PRECISION-first (ruling S2d-R2): a wrongly-corrected
+# honest reply makes the guard the liar, and a beat's reply is the ONLY thing
+# he reads about that hour, so a false correction there is worse than anywhere
+# else in the system.
+#
+# The DERIVATION, which is the whole design of the first one: the subjects a
+# beat may speak about are computed from the FINDINGS THEMSELVES — the words in
+# each finding's `key` and in its `facts` — never from a phrase list someone
+# maintains here. A check family added tomorrow arms this guard for its own
+# vocabulary the day it returns its first finding, and a check that RAN and
+# found nothing grants no vocabulary at all, which is exactly the point: "the
+# gateway is down" is a lie precisely when no finding says so. A finding's
+# `title` is deliberately NOT harvested. It is the SENTENCE about the facts,
+# and deriving a control from sentences is the v3 fingerprint bug in a new
+# costume (app/checks/__init__.py: the fingerprint hashes facts, never titles).
+
+# The stated corrections. Each says only what is mechanically true, carries no
+# fault predicate, no all-clear phrase, no delivery claim and no novelty claim
+# of its own, so running any of these guards over its own correction comes back
+# clean (pinned in test_guards.py — every guard in this file is clean over its
+# own text).
+OBSERVATION_UNBACKED_CORRECTION = (
+    "Correction: no check produced that this pass — I am reporting something the checks "
+    "did not find."
+)
+ALL_CLEAR_NOT_RUN_CORRECTION = (
+    "Correction: I cannot call this pass clear — {unrun} of {total} checks could not be made, "
+    "so nothing was verified about what they watch."
+)
+ALL_CLEAR_FOUND_CORRECTION = (
+    "Correction: I cannot call this pass clear — {found} finding(s) came back this pass."
+)
+ALL_CLEAR_NOTHING_CHECKED_CORRECTION = (
+    "Correction: I cannot call this pass clear — no check was made this pass, so nothing "
+    "was looked at."
+)
+DELIVERY_CLAIM_CORRECTION = (
+    "Correction: I have no record of telling you that — no notice about it was delivered."
+)
+NOVELTY_CLAIM_CORRECTION = (
+    "Correction: that is not new — these same facts have come back {repeats} times now."
+)
+
+# Words are compared as bare alphanumeric runs — the underscore is a SEPARATOR
+# here, not a word character, because a check's key and its fact names are
+# snake_case ("database_down", "spend_over_cap", "timer_id") and the subject
+# lives inside them. So "gateway's", "peer_down:gateway", "chat.model" and
+# "hf.co/org/repo:tag" all yield the words inside them. Anything shorter than
+# three characters says nothing about a subject.
+_OBS_WORD = re.compile(r"[A-Za-z0-9]+")
+_OBS_MIN_WORD = 3
+# Vague heads that name no subject a finding could be about. A clause whose
+# subject is only one of these ("it is down", "everything is broken") cannot be
+# resolved to a thing, so it is left alone — precision-first, and an accepted
+# miss stated out loud.
+_OBS_VAGUE = frozenset(
+    {
+        "it",
+        "its",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "this",
+        "that",
+        "these",
+        "those",
+        "there",
+        "here",
+        "everything",
+        "anything",
+        "something",
+        "nothing",
+        "everyone",
+        "someone",
+        "anybody",
+        "everybody",
+        "one",
+        "ones",
+        "thing",
+        "things",
+        "stuff",
+        "which",
+        "who",
+        "what",
+        "we",
+        "us",
+        "our",
+        "you",
+        "your",
+        "yours",
+        "his",
+        "her",
+        "hers",
+        "him",
+        "she",
+        "and",
+        "but",
+        "the",
+        "all",
+        "both",
+        "some",
+        "any",
+        "each",
+        "every",
+        "much",
+        "many",
+        "most",
+        "few",
+        "other",
+        "others",
+        "else",
+        "same",
+        "such",
+        "own",
+    }
+)
+# Words for the ACT of reporting rather than the thing reported. "I noticed the
+# backups have not run" is about backups, not about noticing, so these are
+# dropped from every subject, object and title before anything is compared —
+# symmetrically, on both sides, since no check names a fault after them either.
+_OBS_REPORTING = frozenset(
+    {
+        "notice",
+        "notices",
+        "noticed",
+        "noticing",
+        "find",
+        "finds",
+        "found",
+        "finding",
+        "findings",
+        "see",
+        "sees",
+        "saw",
+        "seen",
+        "seeing",
+        "spot",
+        "spots",
+        "spotted",
+        "observe",
+        "observed",
+        "look",
+        "looks",
+        "looked",
+        "looking",
+        "seem",
+        "seems",
+        "seemed",
+        "appear",
+        "appears",
+        "appeared",
+        "show",
+        "shows",
+        "showed",
+        "shown",
+        "say",
+        "says",
+        "said",
+        "saying",
+        "tell",
+        "tells",
+        "told",
+        "telling",
+        "know",
+        "knows",
+        "knew",
+        "think",
+        "thinks",
+        "thought",
+        "believe",
+        "believes",
+        "report",
+        "reports",
+        "reported",
+        "reporting",
+        "mention",
+        "mentions",
+        "mentioned",
+    }
+)
+# How far back from a fault predicate the subject can sit, and how deep into a
+# `facts` structure the harvest walks. Both are bounds on work, not judgements.
+_OBS_SUBJECT_TOKENS = 6
+_FACT_MAX_DEPTH = 6
+_FACT_MAX_WORDS = 2000
+
+
+def _singular(word: str) -> str:
+    """A crude de-pluralisation, applied to BOTH sides of every comparison so
+    "backups" in a reply meets "backup" in a fact. Leniency, deliberately: the
+    cost of matching too readily is a missed correction, the cost of matching
+    too strictly is a correction on an honest sentence."""
+    if len(word) > 3 and word.endswith("s") and not word.endswith(("ss", "us", "is")):
+        return word[:-1]
+    return word
+
+
+def _content_words(text: str) -> list[str]:
+    """The words in `text` that could name a SUBJECT — everything that is not a
+    determiner, a stop word, a preposition, a vague head or a word for the act
+    of reporting. Shared by every comparison in this section so both sides are
+    read the same way."""
+    out: list[str] = []
+    for raw in _OBS_WORD.findall(text):
+        low = raw.lower()
+        if len(low) < _OBS_MIN_WORD:
+            continue
+        if low in _OBS_VAGUE or low in _STOP_WORDS or low in _DETERMINER_ADJ:
+            continue
+        if low in _PREP_ADVERB or low in _ABOUTNESS or low in _LIST_CONT:
+            continue
+        if low in _OBS_REPORTING:
+            continue
+        out.append(low)
+    return out
+
+
+def _harvest(value: Any, words: set[str], depth: int = 0) -> None:
+    """Every subject word inside one finding's key or facts, walked as DATA.
+
+    A dict contributes its keys as well as its values ("timer_id" is how a
+    check names what it is about), a list its items, a scalar its own text. A
+    bool or None contributes nothing — "true"/"false"/"none" name no subject.
+    Depth and total are bounded so a pathological `facts` cannot spin here.
+    """
+    if depth > _FACT_MAX_DEPTH or len(words) >= _FACT_MAX_WORDS:
+        return
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            _harvest(key, words, depth + 1)
+            _harvest(item, words, depth + 1)
+        return
+    if isinstance(value, list | tuple | set | frozenset):
+        for item in value:
+            _harvest(item, words, depth + 1)
+        return
+    if value is None or isinstance(value, bool):
+        return
+    for word in _content_words(str(value)):
+        words.add(_singular(word))
+
+
+def _subject_vocabulary(findings: Sequence[Any]) -> frozenset[str]:
+    """Every subject a beat may assert a fault about this pass, DERIVED from
+    the findings' own `key` and `facts` (never their titles — see the section
+    header). An empty pass yields an empty vocabulary, which is why an
+    all-quiet beat that then names a fault is caught by construction."""
+    words: set[str] = set()
+    for finding in findings:
+        _harvest(getattr(finding, "key", None), words)
+        _harvest(getattr(finding, "facts", None), words)
+    return frozenset(words)
+
+
+# A bad STATE, asserted of a subject by a present-tense copula. Every entry is
+# unambiguously a fault: the polysemous words that made state_claim_check the
+# liar in review ("up", "available") are absent here for the same reason.
+_FAULT_STATE = (
+    r"(?:down|offline|unreachable|not\s+reachable|unresponsive|not\s+responding"
+    r"|not\s+running|not\s+installed|not\s+set|missing|gone|broken|failing|failed"
+    r"|erroring|stuck|stale|paused|walled|throttled|rate-?limited"
+    r"|out\s+of\s+(?:disk|space|memory|room)"
+    r"|over\s+(?:(?:its|their|the|his|her|your|my)\s+)?(?:\w+\s+)?"
+    r"(?:cap|budget|limit|ceiling)s?)"
+)
+# Adverbs that may sit between the copula and the state. Two families are
+# deliberately ABSENT, and both absences differ from state_claim_check on
+# purpose:
+#
+#   * negation ("not", "no longer"). An absence of findings is an absence of
+#     faults, so "the gateway is not down" is CONSISTENT with a quiet pass and
+#     must stay clean. In state_claim_check a negated device state is just as
+#     unchecked as a positive one — there the fact was never looked up at all;
+#     here the look-up happened and came back empty.
+#   * hedging ("probably", "likely", "apparently"). A guess is not a report:
+#     "the gateway is probably down" claims nothing the checks contradict, and
+#     correcting it would put the guard's flat contradiction under a sentence
+#     that was already hedged.
+_OBS_ADVERB = (
+    r"(?:still|currently|now|again|already|actually|indeed|definitely"
+    r"|completely|totally|entirely|fully|effectively|basically|essentially)"
+)
+# <subject> is/appears/has gone ... <fault state>. The leading \s+ or possessive
+# keeps the match starting AFTER the subject, so the text before it is the
+# subject phrase.
+_FAULT_COPULA = re.compile(
+    rf"(?:\s+(?:{_PRESENT_COPULA})|['’]s)(?:\s+{_OBS_ADVERB})*\s+(?P<state>{_FAULT_STATE})\b",
+    re.I,
+)
+# The fault stated as a VERB rather than a state. Only shapes that can only be
+# a fault: a negated completion ("has not run", "did not answer"), a failure
+# ("has failed", "failed 4 times", "keeps failing"), or a stop ("stopped
+# responding", "went offline"). A bare "run"/"answered" is a success and is not
+# here; "could not be made" is deliberately not a shape, so this file's own
+# corrections stay clean over it.
+#
+# "finish"/"complete" are deliberately ABSENT, and the cross-pin in
+# test_guards.py is why: DELEGATION_FAILED_CORRECTION says "{agent} did not
+# finish that task", and two of this file's guards appending contradictions to
+# each other is the worst thing a correction can do to a message nobody
+# watched. It costs nothing real — whether a DELEGATED task finished is
+# delegation_claim_check's subject, read off the delegate spans; this guard
+# watches the stack, the work and the money.
+_FAULT_VERB = re.compile(
+    r"\b(?:(?:has|have|had)\s+not\s+(?:run|ran|started|responded|answered|reported|fired)"
+    r"|(?:has|have|had)n['’]?t\s+(?:run|ran|started|responded|answered|reported|fired)"
+    r"|did\s+not\s+(?:run|start|respond|answer|report|fire)"
+    r"|didn['’]?t\s+(?:run|start|respond|answer|report|fire)"
+    r"|could\s+not\s+(?:run|start|respond|answer|connect)"
+    r"|couldn['’]?t\s+(?:run|start|respond|answer|connect)"
+    r"|(?:has|have|had)\s+failed"
+    r"|failed\s+(?:\d+\s+times|to\s+\w+|again|repeatedly)"
+    r"|keeps?\s+failing"
+    r"|stopped\s+(?:running|responding|working|firing|reporting)"
+    r"|went\s+(?:down|offline)"
+    r"|ran\s+out\s+of\s+(?:disk|space|memory|room))",
+    re.I,
+)
+# An ALL-CLEAR: the beat telling him there is nothing to tell. Each shape is
+# unambiguous — a partial "everything ELSE looks fine" never matches, because
+# the word between the subject and the copula breaks the pattern, and a partial
+# statement about the things that DID come back is honest.
+_ALL_CLEAR = re.compile(
+    r"\ball\s+(?:clear|good|fine|green|quiet|well)\b"
+    r"|\ball\s+(?:the\s+)?checks?\s+(?:passed|came\s+back\s+clean|are\s+green|look\s+fine)\b"
+    r"|\b(?:everything|every\s+check|the\s+(?:whole\s+)?stack|all\s+(?:systems?|services?))"
+    r"\s*(?:['’]s|is|are|was|were|looks?|seems?|appears?|remains?|checks?\s+out)"
+    r"(?:\s+(?:still|currently|now|already|completely|totally))?"
+    r"\s*(?:to\s+be\s+)?(?:fine|good|ok|okay|normal|healthy|clear|green|well"
+    r"|in\s+order|as\s+expected|running\s+(?:fine|normally)|working\s+(?:fine|normally))\b"
+    r"|\bnothing\s+(?:to\s+(?:report|flag|tell\s+you|worry\s+about)"
+    r"|(?:is\s+|looks\s+)?(?:wrong|amiss|broken|off)"
+    r"|(?:new\s+)?(?:came|turned)\s+up)\b"
+    r"|\bno\s+(?:issues?|problems?|faults?|failures?|findings?|errors?)\b",
+    re.I,
+)
+
+
+def _obs_segment(before: str) -> str:
+    """The text a subject or a hedge can live in: the clause back to its last
+    boundary. "I checked the timers and the gateway is down" hands back " the
+    gateway " — the coordinated subject, not the whole sentence."""
+    return _COORD_BREAK.split(before)[-1]
+
+
+def _obs_blocked(segment: str, clause: str) -> bool:
+    """True when the clause supposes, doubts, proposes or relays the state
+    rather than asserting it — the family's shared machinery, read exactly as
+    state_claim_check and delegation_claim_check read it."""
+    if _DELEGATION_HEDGE.search(segment) is not None or _STATE_HEDGE.search(segment) is not None:
+        return True
+    if _STATE_INTENT.search(segment) is not None:
+        return True
+    return _PRIOR_TIME.search(clause) is not None or _REPORTED.search(clause) is not None
+
+
+def _fault_subject(before: str) -> tuple[str, list[str]]:
+    """(the subject phrase, its content words) for a fault asserted after
+    `before`. The window is the last few tokens of the segment, so a long
+    preamble cannot smuggle an unrelated noun in as the subject."""
+    segment = _obs_segment(before)
+    words = _content_words(segment)[-_OBS_SUBJECT_TOKENS:]
+    return segment.strip()[-80:], words
+
+
+def _names_a_finding(words: Sequence[str], vocabulary: frozenset[str]) -> bool:
+    """True when ANY word of the subject is a word a finding used. One word is
+    enough on purpose: a check names a paused timer by its id and kind while
+    the reply names it by its title, and the overlap is the noun they share."""
+    return any(_singular(word) in vocabulary for word in words)
+
+
+def _pass_was_clear(runs: Sequence[Any]) -> bool:
+    """Was this pass QUIET — every check ran, none of them found anything?
+
+    Read from `checks.quiet`, which is the ONE implementation of that property
+    (a beat's own verdict, the digest's and this guard's must never be able to
+    disagree about what "clear" means). The import is deferred to the call
+    because it would otherwise be a cycle: app.checks pulls in its families,
+    which import timers -> scheduler -> beats -> chat, and chat imports THIS
+    module. By the time a guard runs, every one of them is loaded.
+    """
+    from app import checks
+
+    return checks.quiet(runs)[0]
+
+
+def _all_clear_correction(runs: Sequence[Any]) -> str:
+    """Why this pass was not clear, in the counts the runs themselves carry.
+    Derived, never a stored sentence — and never the model's."""
+    if not runs:
+        return ALL_CLEAR_NOTHING_CHECKED_CORRECTION
+    unrun = sum(1 for run in runs if not getattr(run, "ran", False))
+    if unrun:
+        return ALL_CLEAR_NOT_RUN_CORRECTION.format(unrun=unrun, total=len(runs))
+    found = sum(len(getattr(run, "findings", ()) or ()) for run in runs)
+    return ALL_CLEAR_FOUND_CORRECTION.format(found=found)
+
+
+def observation_check(
+    reply_text: str, findings: Sequence[Any], runs: Sequence[Any]
+) -> Correction | None:
+    """Contradict a beat that reports something the checks did not produce.
+
+    Two shapes, both mechanical:
+
+      * an ALL-CLEAR ("everything looks fine", "nothing to report", "all
+        good") when the pass was not clear. Quiet is COMPUTED — by
+        `checks.quiet`, the one implementation of it, so a check that could
+        not run, a check that found something, and a pass with no checks in it
+        all make the claim false by the same line of code. This is the lie the
+        whole slice exists to prevent: v3 reported a clean night from a probe
+        it never made.
+      * a specific FAULT ("the gateway is down", "the backups have not run")
+        whose subject no finding names. The allowed subjects are DERIVED from
+        this pass's findings — the words in their keys and facts — so a family
+        added tomorrow arms the guard for its own vocabulary, and a check that
+        ran and found nothing grants none at all.
+
+    Returns a Correction (the all-clear first: it is the larger lie, and it
+    contradicts every fault claim beside it anyway), or None — an honest
+    report, a question, a hedge or conditional, a future or past frame, a
+    negated state ("the gateway is NOT down", which an empty pass supports), a
+    reported frame, or a subject too vague to resolve. Pure and
+    precision-first.
+    """
+    if not reply_text or not reply_text.strip():
+        return None
+    clear = _pass_was_clear(runs)
+    vocabulary = _subject_vocabulary(findings)
+    unbacked: list[UnbackedClaim] = []
+    seen: set[str] = set()
+    for clause, is_question in _clauses(reply_text):
+        if is_question:
+            continue  # "is the gateway down?" asserts nothing
+        if not clear:
+            for match in _ALL_CLEAR.finditer(clause):
+                before = clause[: match.start()]
+                if _has_negator(before) or _obs_blocked(_obs_segment(before), clause):
+                    continue  # "I can't say everything looks fine" is honest
+                return Correction(
+                    claims=(
+                        UnbackedClaim(
+                            kind="unbacked_all_clear",
+                            target=None,
+                            phrase=match.group(0).strip()[:80],
+                        ),
+                    ),
+                    text=_all_clear_correction(runs),
+                )
+        for pattern in (_FAULT_COPULA, _FAULT_VERB):
+            for match in pattern.finditer(clause):
+                before = clause[: match.start()]
+                subject, words = _fault_subject(before)
+                if not words:
+                    continue  # "it is down" names nothing this can resolve
+                if _obs_blocked(_obs_segment(before), clause):
+                    continue
+                if _names_a_finding(words, vocabulary):
+                    continue  # a check really did produce this subject
+                key = " ".join(words)
+                if key in seen:
+                    continue
+                seen.add(key)
+                unbacked.append(
+                    UnbackedClaim(
+                        kind="unbacked_observation",
+                        target=key,
+                        phrase=(subject + " " + match.group(0).strip())[:80],
+                    )
+                )
+    if not unbacked:
+        return None
+    return Correction(claims=tuple(unbacked), text=OBSERVATION_UNBACKED_CORRECTION)
+
+
+# -- the delivery-claim guard ------------------------------------------------
+#
+# The second thing only a proactive message can lie about: whether it ever
+# reached anybody. "Accepted by transport" is never "received", and a delivery
+# that reached nobody is a FAILED delivery — so a beat that says "I already
+# told you about that" when the push failed, the digest never composed, or the
+# notice is still sitting in `raised`, has closed a loop that never closed. The
+# operator then waits for news he has already been told he got.
+#
+# delivery_claim_check(reply_text, delivered_titles) takes the FACTS from the
+# caller: it is the first of this family whose evidence is a query rather than
+# this turn's spans, and the caller owns that query (notices in state delivered
+# or seen). Here it is only a set of titles, so the guard stays pure.
+#
+# The precision cuts, in the order they matter:
+#
+#   * A claim must name something SPECIFIC. "I already told you" with no
+#     object cannot be checked against anything and is left alone — the
+#     accepted miss, stated out loud, because the alternative is correcting a
+#     sentence whose referent we cannot see.
+#   * A claim must be in the DELIVERY register. "I notified you", "I sent you
+#     a notification", "I flagged it" are claims about a channel; a bare "I
+#     told you about X" is ordinary conversation about something said in chat,
+#     so the told/mentioned family additionally requires a prior marker
+#     ("already", "previously", or the perfect "I've told you"). The
+#     conversational form is an accepted miss.
+#   * Backing is one shared word. A title and a claim rarely use the same
+#     phrase, so an object word appearing in ANY delivered title backs the
+#     claim; only a claim that shares nothing with anything delivered is
+#     contradicted.
+#   * The usual family exemptions: a question, a negation ("I have not told
+#     you"), a future ("I'll let you know"), a hedge ("I think I told you"),
+#     a reported frame. NOT _PRIOR_TIME: "I told you about that yesterday" is
+#     the claim itself, not an action placed outside this turn.
+
+# The NOTIFY register — a channel is named, so no prior marker is needed.
+_DELIVERY_NOTIFIED = re.compile(
+    r"\bi(?:['’]ve|\s+have)?\s+(?:already\s+|previously\s+)?"
+    r"(?:notified|alerted|warned|pinged)\s+you\b"
+    r"|\bi(?:['’]ve|\s+have)?\s+(?:already\s+)?(?:sent|pushed)\s+(?:you\s+)?"
+    r"(?:a|an|the)\s+(?:notification|alert|push|notice|heads-?up|message|reminder)\b"
+    r"|\byou(?:['’]ve|\s+have|\s+were)\s+(?:already\s+)?(?:been\s+)?"
+    r"(?:notified|alerted|told|informed)\b"
+    r"|\bi\s+let\s+you\s+know\b",
+    re.I,
+)
+# The TOLD register — ordinary words, so a prior marker is required: an
+# explicit already/previously, or the perfect aspect that carries the same
+# meaning ("I've told you", "I have mentioned").
+_DELIVERY_TOLD = re.compile(
+    r"\bi(?:['’]ve|\s+have)\s+(?:already\s+|previously\s+)?"
+    r"(?:told\s+you|mentioned|flagged|reported|raised|noted)\b"
+    r"|\bi\s+(?:already|previously)\s+(?:told\s+you|mentioned|flagged|reported|raised|noted)\b",
+    re.I,
+)
+# How much of the clause after the trigger is read as what the claim NAMED.
+_DELIVERY_OBJECT_CHARS = 120
+
+
+def _delivered_words(delivered_titles: Sequence[str]) -> frozenset[str]:
+    """Every content word in everything that actually went out, de-pluralised.
+    The union, not per title: a claim is backed when it shares a word with
+    ANYTHING delivered (see the section header)."""
+    words: set[str] = set()
+    for title in delivered_titles:
+        for word in _content_words(str(title)):
+            words.add(_singular(word))
+    return frozenset(words)
+
+
+def delivery_claim_check(reply_text: str, delivered_titles: Sequence[str]) -> Correction | None:
+    """Contradict "I already told you about X" when no notice about X went out.
+
+    Returns a Correction naming what the reply claimed to have delivered, or
+    None — a claim backed by something in `delivered_titles`, a claim naming
+    nothing specific, a future/negated/hedged/questioned/reported form, or a
+    plain reply. Pure and precision-first: it reads the text and the titles the
+    caller queried, nothing else.
+    """
+    if not reply_text or not reply_text.strip():
+        return None
+    delivered = _delivered_words(delivered_titles)
+    for clause, is_question in _clauses(reply_text):
+        if is_question:
+            continue  # "did I already tell you about that?" claims nothing
+        if _REPORTED.search(clause) is not None:
+            continue  # someone else's account of what was said
+        for pattern in (_DELIVERY_NOTIFIED, _DELIVERY_TOLD):
+            match = pattern.search(clause)
+            if match is None:
+                continue
+            before = clause[: match.start()]
+            if _has_negator(before) or _DELEGATION_HEDGE.search(_obs_segment(before)) is not None:
+                continue
+            named = _content_words(clause[match.end() : match.end() + _DELIVERY_OBJECT_CHARS])
+            if not named:
+                continue  # "I already told you" — nothing to check it against
+            if any(_singular(word) in delivered for word in named):
+                continue  # a notice about it really went out
+            return Correction(
+                claims=(
+                    UnbackedClaim(
+                        kind="unbacked_delivery",
+                        target=" ".join(named[:6]),
+                        phrase=clause[match.start() :].strip()[:80],
+                    ),
+                ),
+                text=DELIVERY_CLAIM_CORRECTION,
+            )
+    return None
+
+
+# -- the novelty-claim guard -------------------------------------------------
+#
+# The third: "this is new". A notice folds onto its fingerprint and counts the
+# sightings, so whether a finding is news is a NUMBER (`notices.repeats`), and
+# a beat calling the fourth sighting the first one turns a standing fault into
+# a fresh alarm every morning — v3's fourteen-pushes-in-eight-hours failure
+# wearing the digest's clothes.
+#
+# novelty_claim_check(reply_text, repeats_by_title) takes the counts from the
+# caller (title -> repeats, as the notices rows hold them) and contradicts a
+# novelty assertion WITH THE REAL COUNT, so the correction is itself evidence.
+#
+# The precision cuts:
+#
+#   * The claim must be an assertion of novelty, not a hedge ("this might be
+#     new"), a negation ("that is not new" — which is also this guard's own
+#     correction, so it must stay clean) or a question.
+#   * The claim must be TIED to a repeated finding: a title is the one the
+#     reply is talking about only when the reply shares at least two of its
+#     content words (one, when the title has only one). Below that the guard
+#     cannot tell what the sentence is about and says nothing.
+#   * If a finding the caller reports as NEW (repeats <= 1) is tied to the
+#     reply just as well, the novelty claim can honestly be about that one, so
+#     the guard stays silent. A digest that names both a new fault and a
+#     standing one is the ordinary case, and correcting it would make the
+#     guard the liar.
+
+_NOVELTY = re.compile(
+    r"\b(?:this|that|it)(?:['’]s|\s+(?:is|looks|seems|appears))\s+(?:a\s+)?new\b"
+    r"|\b(?:this|that)\s+is\s+the\s+first\s+time\b"
+    r"|\bfor\s+the\s+first\s+time\b"
+    r"|\bi(?:['’]ve|\s+have)\s+(?:not|never)\s+seen\s+(?:this|that|it)\s+before\b"
+    r"|\b(?:this|that|it)\s+(?:has|have)\s+(?:not|never)\s+(?:happened|come\s+up|appeared)"
+    r"\s+before\b"
+    r"|\b(?:a\s+)?new\s+(?:finding|problem|issue|fault|failure|fold|notice)\b"
+    r"|\bjust\s+(?:started|began|appeared|showed\s+up|came\s+up)\b"
+    r"|\bfirst\s+(?:sighting|occurrence)\b",
+    re.I,
+)
+# How many of a title's content words the reply must share before this guard
+# will say the sentence is ABOUT that finding — and how many are enough to
+# EXEMPT it. The asymmetry is the precision cut: a repeated finding must be
+# named twice over before it is contradicted, while a single shared word with
+# something the caller reports as new is enough for the novelty claim to be
+# honest. Leniency runs toward not correcting.
+_NOVELTY_MIN_OVERLAP = 2
+_NOVELTY_EXEMPT_OVERLAP = 1
+
+
+def _ties_to(title: str, said: frozenset[str], minimum: int) -> int:
+    """How many of a title's content words the reply used, or 0 when that is
+    below `minimum` (capped at the title's own length, so a one-word title is
+    not unmatchable)."""
+    words = {_singular(word) for word in _content_words(str(title))}
+    if not words:
+        return 0
+    shared = len(words & said)
+    return shared if shared >= min(minimum, len(words)) else 0
+
+
+def novelty_claim_check(reply_text: str, repeats_by_title: Mapping[str, int]) -> Correction | None:
+    """Contradict "this is new" about a finding that has already come back.
+
+    Returns a Correction carrying the real sighting count, or None — a first
+    sighting, a claim this cannot tie to a repeated finding, a reply that also
+    names a genuinely new one, a hedge/negation/question, or an empty mapping.
+    Pure and precision-first.
+    """
+    if not reply_text or not reply_text.strip() or not repeats_by_title:
+        return None
+    asserted = None
+    for clause, is_question in _clauses(reply_text):
+        if is_question:
+            continue
+        if _REPORTED.search(clause) is not None:
+            continue
+        match = _NOVELTY.search(clause)
+        if match is None:
+            continue
+        if _DELEGATION_HEDGE.search(_obs_segment(clause[: match.start()])) is not None:
+            continue
+        asserted = match.group(0).strip()
+        break
+    if asserted is None:
+        return None
+    said = {_singular(word) for word in _content_words(reply_text)}
+    for title, repeats in repeats_by_title.items():
+        # A finding the caller itself reports as new, named anywhere in this
+        # reply, is something the novelty claim could honestly be about — so
+        # nothing is said at all.
+        if int(repeats or 0) <= 1 and _ties_to(title, said, _NOVELTY_EXEMPT_OVERLAP):
+            return None
+    best: tuple[int, int, str] | None = None
+    for title, repeats in repeats_by_title.items():
+        count = int(repeats or 0)
+        if count <= 1:
+            continue
+        shared = _ties_to(title, said, _NOVELTY_MIN_OVERLAP)
+        if not shared:
+            continue
+        if best is None or (shared, count) > (best[0], best[1]):
+            best = (shared, count, title)
+    if best is None:
+        return None
+    _shared, repeats, title = best
+    return Correction(
+        claims=(UnbackedClaim(kind="unbacked_novelty", target=title[:80], phrase=asserted[:80]),),
+        text=NOVELTY_CLAIM_CORRECTION.format(repeats=repeats),
+    )
+
+
+# -- the harness-prose detector (structural, not a guard) --------------------
+#
+# Not a claim check: a fact about WHO WROTE the words. When every `llm_call`
+# span of a turn is recorded as having produced zero completion characters, the
+# assistant text did not come from the model — it was composed by the backend
+# (a stated failure, an empty-round statement, a placeholder). v3 pushed
+# exactly that text to a phone as news and recorded the push a success. A beat
+# whose text nobody wrote has nothing to deliver, and the caller records
+# `unable` and delivers nothing.
+#
+# NO llm_call span at all is INDETERMINATE and returns False. That direction is
+# the whole safety property: a True here SUPPRESSES a report, so an unreadable
+# trace must never be read as "the model was silent" — the cost of a wrong True
+# is the owner not being told about a real fault.
+#
+# What a span reports today, in order of authority:
+#
+#   * `completion_chars` — the characters the round's content actually ran to.
+#     THIS FIELD DOES NOT EXIST YET (2026-09-08): app/chat.py's `llm_call` span
+#     records `completion_tokens` (only when the gateway sends a usage chunk),
+#     `tool_calls`, `error`/`error_class` and a `stream` counter, and nothing
+#     that states the size of the text. The one honest recording is one line in
+#     `_gateway_round`, beside `text = "".join(collected)`:
+#         span.meta[guards.COMPLETION_CHARS_FIELD] = len(text)
+#     Until it lands the detector still fires on the case it exists for, via
+#     the second reading below; it gets sharper, not different, the day the
+#     field is written.
+#   * `error_class == "EmptyRound"` — chat.EMPTY_ROUND, which chat.py writes
+#     ONLY when a round produced no content, no tool calls and no stated error.
+#     That IS a recorded zero, mechanically, and it is the shape the v3 push
+#     had behind it.
+#   * `completion_tokens` greater than zero — read ONLY as evidence that the
+#     round DID write something. A reported zero is never read as a zero: it is
+#     a provider's count in another unit, and trusting it would suppress a real
+#     report on a bad usage frame.
+#
+# Anything else — a gateway failure (the stream may have carried text before it
+# broke), a span with no size on it at all — is indeterminate and returns False.
+
+# The field app/chat.py should record the round's content length under, named
+# here so the recording and the reading cannot drift apart.
+COMPLETION_CHARS_FIELD = "completion_chars"
+# chat.EMPTY_ROUND, mirrored as a literal because chat.py imports THIS module
+# and the import cannot run the other way. tests/test_guards.py pins the two
+# equal, so a rename reddens a test instead of silently never matching.
+_EMPTY_ROUND_CLASS = "EmptyRound"
+
+
+def _completion_size(span: Any) -> int | None:
+    """The characters one llm_call span is RECORDED as having written, or None
+    when the span does not say (see the section header for the three readings
+    and why a reported zero token count is not one of them)."""
+    meta = getattr(span, "meta", None) or {}
+    chars = meta.get(COMPLETION_CHARS_FIELD)
+    if isinstance(chars, int) and not isinstance(chars, bool):
+        return max(chars, 0)
+    if meta.get("error_class") == _EMPTY_ROUND_CLASS:
+        return 0
+    tokens = meta.get("completion_tokens")
+    if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > 0:
+        return tokens  # not a character count — read only as "not zero"
+    return None
+
+
+def model_wrote_nothing(spans: Sequence[Any]) -> bool:
+    """True when every llm_call span of this turn reports zero completion
+    characters — the text was written by the backend, not the model.
+
+    False when any round wrote something, when any round's size cannot be read,
+    and when there are no llm_call spans at all: an unreadable trace is
+    INDETERMINATE and must never suppress a real report.
+    """
+    reported = 0
+    for span in spans:
+        if getattr(span, "kind", None) != "llm_call":
+            continue
+        size = _completion_size(span)
+        if size is None or size > 0:
+            return False
+        reported += 1
+    return reported > 0

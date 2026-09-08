@@ -11,17 +11,33 @@ and none flagged says "quiet"."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 
-from app import beats, chat, checks, conversations, notices, scheduler, settings_store, timers
+from app import (
+    beats,
+    chat,
+    checks,
+    conversations,
+    devices,
+    devices_ws,
+    guards,
+    notices,
+    scheduler,
+    settings_store,
+    timers,
+)
 from app.checks import Check, CheckRun, Finding
 from app.identity import Person
 from app.main import app
 from app.timers import TimerRefused
 from tests.conftest import requires_db
+from tests.device_fakes import FakeDevice, FakeWSConn
+from tests.fakes import FakeGateway
 
 pytestmark = requires_db
 
@@ -276,6 +292,8 @@ async def test_a_due_beat_opens_a_beat_turn_that_lands_in_the_beats_own_conversa
         "folded": 0,
         "cleared": 0,
         "quiet": True,
+        "pushed": 0,
+        "push_failed": 0,
     }
     turn = await pool.fetchrow("SELECT * FROM turns WHERE id = $1", firing["turn_id"])
     assert turn["kind"] == beats.BEAT_TURN_KIND
@@ -294,7 +312,7 @@ async def test_a_due_beat_opens_a_beat_turn_that_lands_in_the_beats_own_conversa
 
     landed = [m["content"] for m in await _messages(pool, beat_conversation)]
     assert landed[0].startswith("Watch beat: all 1 check ran and none flagged — quiet.")
-    assert beats.DIGEST_UNBUILT in landed
+    assert beats.DIGEST_NOTHING in landed  # nothing outstanding: the digest is quiet
     assert all(m["turn_id"] is not None for m in await _messages(pool, beat_conversation))
     # The whole point: nothing in the thread he reads.
     assert await _messages(pool, his_chat["id"]) == []
@@ -344,6 +362,8 @@ async def test_the_same_facts_an_hour_later_fold_and_the_beat_counts_it(pool, on
         "folded": 1,
         "cleared": 0,
         "quiet": False,
+        "pushed": 0,
+        "push_failed": 0,
     }
     # Every check ran, so the firing carries no reason: the record is the line.
     assert second["status"] == scheduler.FIRING_OK and second["reason"] is None
@@ -429,6 +449,8 @@ async def test_a_check_that_did_not_run_clears_nothing_and_the_beat_is_not_an_al
         "folded": 0,
         "cleared": 0,
         "quiet": False,
+        "pushed": 0,
+        "push_failed": 0,
     }
     line = (await _messages(pool, watch["conversation_id"]))[1]["content"]
     assert "1 of 2 checks ran" in line and "the ledger did not answer" in line
@@ -693,3 +715,603 @@ async def test_a_beat_that_raises_is_an_error_whose_reason_is_on_the_span(pool, 
     )
     assert span["name"] == beats.WATCH
     assert "the check registry is on fire" in span["meta"]["error"]
+
+
+# -- the two ways she speaks (S11-3) ----------------------------------------------
+#
+# The watch beat records; the DIGEST is what reaches him, once a day — except
+# for the one urgent family, which goes out the moment its row exists, at any
+# hour, with a sentence composed in code. Everything below is that split, and
+# every pin here is one rule in different clothes: a delivery that reached
+# nobody is a FAILED delivery, never a quiet success.
+
+
+@pytest.fixture(autouse=True)
+def _clean_hub():
+    """The hub is process-global, so a socket left registered by one test would
+    make the next test's beat push to a device it never connected."""
+    devices_ws.hub._conns.clear()
+    devices_ws.hub._pending.clear()
+    yield
+    devices_ws.hub._conns.clear()
+    devices_ws.hub._pending.clear()
+
+
+async def _run_beat(pool, name: str, *, now: datetime):
+    """Fire exactly ONE beat and hand back its firing row.
+
+    tick_once claims by `next_fire_at`, and the two seeded beats have no
+    guaranteed order between them — so the other one is paused and this one is
+    made due, rather than trusting whichever the seed happened to time first.
+    """
+    rows = await _beat_rows(pool)
+    for other, row in rows.items():
+        if other == name:
+            await pool.execute(
+                "UPDATE timers SET paused_at = NULL, paused_reason = NULL, next_fire_at = $2 "
+                "WHERE id = $1",
+                row["id"],
+                now - timedelta(minutes=1),
+            )
+        else:
+            await pool.execute(
+                "UPDATE timers SET paused_at = now(), paused_reason = 'one beat at a time' "
+                "WHERE id = $1",
+                row["id"],
+            )
+    fired = await scheduler.tick_once(app, pool, now=now)
+    assert len(fired) == 1, "exactly one beat should have been due"
+    return (await _firings(pool, rows[name]["id"]))[-1]
+
+
+async def _connect(pool, *, name: str):
+    """Enroll and drive serve() to a registered socket (test_delivery's shape)."""
+    device = FakeDevice()
+    creator = await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('adult', 'adult') RETURNING id"
+    )
+    code = await devices.mint_pairing_code(pool, created_by=creator)
+    enrolled = await devices.enroll(
+        pool,
+        code=code["code"],
+        pubkey=device.pubkey_hex,
+        name=name,
+        platform="linux",
+        hostname="host",
+    )
+    device.device_id = enrolled["device_id"]
+    conn = FakeWSConn()
+    task = asyncio.create_task(devices_ws.serve(conn, pool))
+    ready = await asyncio.wait_for(device.handshake(conn), 2)
+    assert ready["type"] == "ready"
+    return device, conn, task
+
+
+async def _close(conn, task) -> None:
+    conn.feed_close()
+    await asyncio.wait_for(task, 2)
+
+
+def _brief(gateway) -> str:
+    """The user message the digest handed the model — the code-composed brief."""
+    payloads = [body for path, body in gateway.seen if path == "/v1/chat/completions"]
+    assert len(payloads) == 1, f"the digest asks for exactly one round, not {len(payloads)}"
+    return payloads[0]["messages"][-1]["content"]
+
+
+def _urgent_finding() -> Finding:
+    return Finding(
+        key="peer_down:gateway",
+        title="the gateway has not answered for 40 minutes",
+        facts={"peer": "gateway", "state": "unreachable"},
+    )
+
+
+# -- one message a day ------------------------------------------------------------
+
+
+async def test_two_findings_in_a_day_produce_exactly_one_chat_message(pool, only, mount_peers):
+    """The gate for this sub-slice. Two things went wrong; he hears once."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(
+        _check("work_thing", [_finding("timer_failing:1", failures=4)]),
+        _check("money_thing", [_finding("agent_over_cap:coder", spent_usd=41)]),
+    )
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    assert len(await _notices(pool)) == 2
+    assert await _messages(pool, his_chat["id"]) == [], "the watch beat tells him nothing"
+
+    gateway = FakeGateway(deltas=("Two things are still standing from today's checks.",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    landed = await _messages(pool, his_chat["id"])
+    assert len(landed) == 1, "one digest a day, whatever it carries"
+    assert landed[0]["content"] == "Two things are still standing from today's checks."
+    assert landed[0]["turn_id"] == firing["turn_id"], "his message is badged from the beat's trace"
+    assert firing["status"] == scheduler.FIRING_OK and firing["reason"] is None
+    assert firing["delivery"]["chat"] == {"ok": True}
+    assert firing["delivery"]["digest"]["delivered"] is True
+    assert firing["delivery"]["digest"]["notices"] == 2
+    assert "devices" not in firing["delivery"], "a digest never reaches for a device"
+    assert [row["state"] for row in await _notices(pool)] == ["delivered", "delivered"]
+
+    # The brief is composed in CODE from the rows: each check's own title, the
+    # derived facts the fingerprint was computed over, and the sighting count.
+    brief = _brief(gateway)
+    assert "timer_failing:1 is true" in brief and "failures=4" in brief
+    assert "agent_over_cap:coder is true" in brief and "spent_usd=41" in brief
+    assert "seen 1 time(s)" in brief
+    payload = [b for p, b in gateway.seen if p == "/v1/chat/completions"][0]
+    assert "tools" not in payload, "no tool is advertised: there is no round she could act in"
+
+
+async def test_a_day_with_nothing_to_tell_him_produces_no_message_at_all(pool, only, mount_peers):
+    """A beat that found nothing must be able to say nothing. The line it does
+    write goes into its own inactive conversation, and no model is asked at
+    all — there is nothing to write about."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("all_fine", []))
+    await beats.ensure_beats(pool)
+    beat_conversation = await beats.beat_conversation(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+
+    gateway = FakeGateway(deltas=("must never be asked",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    assert await _messages(pool, his_chat["id"]) == []
+    assert firing["status"] == scheduler.FIRING_OK and firing["reason"] is None
+    assert firing["delivery"]["digest"] == {
+        "delivered": False,
+        "notices": 0,
+        "reason": beats.DIGEST_NOTHING_NOTE,
+    }
+    assert gateway.seen == [], "a quiet digest costs nothing: no model is asked"
+    assert beats.DIGEST_NOTHING in [
+        row["content"] for row in await _messages(pool, beat_conversation)
+    ]
+
+
+# -- the urgent bypass ------------------------------------------------------------
+
+
+async def test_an_urgent_finding_pushes_immediately_with_a_code_composed_sentence(
+    pool, only, mount_peers
+):
+    """The other gate: the one urgent family arrives the moment it is found, at
+    whatever hour, on chat AND on every connected device — and the sentence is
+    composed from the check's own title and facts, because the whole point of a
+    one-item urgent list is that it needs no prose."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    phone, conn, task = await _connect(pool, name="phone")
+    gateway = FakeGateway(deltas=("must never be asked",))
+    mount_peers(gateway=gateway)
+    only(_check("stack_gateway", [_urgent_finding()], urgent=True))
+    await beats.ensure_beats(pool)
+
+    fire = asyncio.create_task(_run_beat(pool, beats.WATCH, now=LATER))
+    command = await asyncio.wait_for(phone.answer_command(conn), 5)
+    firing = await asyncio.wait_for(fire, 10)
+
+    said = (
+        "Urgent (stack_gateway): the gateway has not answered for 40 minutes "
+        "— peer=gateway, state=unreachable"
+    )
+    assert [row["content"] for row in await _messages(pool, his_chat["id"])] == [said]
+    assert command["envelope"]["args"]["message"] == said
+    assert gateway.seen == [], "urgency is a property of the check, so no model is asked"
+
+    (row,) = await _notices(pool)
+    assert row["state"] == notices.DELIVERED
+    assert firing["delivery"]["watch"]["pushed"] == 1
+    assert firing["delivery"]["watch"]["push_failed"] == 0
+    (record,) = firing["delivery"]["urgent"]
+    assert record["reached"] is True
+    assert record["receipt"] == {"chat": {"ok": True}, "devices": [{"name": "phone", "ok": True}]}
+    assert firing["status"] == scheduler.FIRING_OK
+    await _close(conn, task)
+
+
+async def test_the_watch_beats_own_line_counts_the_push_instead_of_claiming_silence(pool, only):
+    """The line the watch beat writes about itself is composed from the counts,
+    so a beat that DID deliver never says "nothing was delivered"."""
+    await _owner(pool)
+    only(_check("stack_gateway", [_urgent_finding()], urgent=True))
+    await beats.ensure_beats(pool)
+    beat_conversation = await beats.beat_conversation(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+
+    line = (await _messages(pool, beat_conversation))[0]["content"]
+    assert "1 urgent notice went out immediately — everything else waits for the digest." in line
+    assert "Nothing was delivered" not in line
+
+
+async def test_the_same_urgent_finding_an_hour_later_folds_and_does_not_push_again(pool, only):
+    """That is what the fold is FOR. v3 re-worded two findings into fourteen
+    phone pushes in eight hours; the fingerprint is over the facts, so the same
+    facts are the same news and the same news is told once."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("stack_gateway", [_urgent_finding()], urgent=True))
+    await beats.ensure_beats(pool)
+
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    assert len(await _messages(pool, his_chat["id"])) == 1
+    second = await _run_beat(pool, beats.WATCH, now=LATER + timedelta(hours=1))
+
+    assert len(await _messages(pool, his_chat["id"])) == 1, "a fold delivers nothing"
+    (row,) = await _notices(pool)
+    assert row["repeats"] == 2 and row["state"] == notices.DELIVERED
+    assert second["delivery"]["watch"]["folded"] == 1
+    assert second["delivery"]["watch"]["pushed"] == 0
+    assert "urgent" not in second["delivery"], "no push was attempted, so none is recorded"
+
+
+async def test_a_failed_urgent_delivery_pushes_again_on_the_next_sighting(pool, only, monkeypatch):
+    """A repeat of something that never landed is not a repeat. The condition
+    is DERIVED from the notices store's own deliverable states, so a failed row
+    is still owed and the next sighting tries again."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("stack_gateway", [_urgent_finding()], urgent=True))
+    await beats.ensure_beats(pool)
+
+    real = chat._persist_assistant
+    # A flag rather than undoing the patch: `only` uses the same monkeypatch
+    # instance, so undoing here would restore the real twelve-check registry
+    # underneath the next beat as well.
+    broken = {"disk": True}
+
+    async def refuse(pool_, conversation_id, text, turn_id=None):
+        # Only HIS conversation: the beat's own record still lands, so this is
+        # a failed DELIVERY and not a broken beat.
+        if broken["disk"] and conversation_id == his_chat["id"]:
+            raise RuntimeError("the disk is full")
+        return await real(pool_, conversation_id, text, turn_id)
+
+    monkeypatch.setattr(chat, "_persist_assistant", refuse)
+    first = await _run_beat(pool, beats.WATCH, now=LATER)
+
+    assert await _messages(pool, his_chat["id"]) == []
+    (row,) = await _notices(pool)
+    assert row["state"] == notices.FAILED
+    assert first["status"] == scheduler.FIRING_ERROR
+    assert beats.PUSH_FAILED in first["reason"] and "the disk is full" in first["reason"]
+    assert first["delivery"]["watch"]["push_failed"] == 1
+
+    broken["disk"] = False
+    second = await _run_beat(pool, beats.WATCH, now=LATER + timedelta(hours=1))
+
+    assert len(await _messages(pool, his_chat["id"])) == 1, "the retry is the point"
+    (row,) = await _notices(pool)
+    assert row["state"] == notices.DELIVERED and row["repeats"] == 2
+    assert second["delivery"]["watch"]["pushed"] == 1
+    assert second["status"] == scheduler.FIRING_OK
+
+
+def test_only_a_notice_nobody_was_told_about_pushes():
+    """The predicate is two fields wide and both are derived: urgency from the
+    check family, "still owed" from notices.DELIVERABLE_STATES. Nothing about
+    `is_new` — a failed push would otherwise be suppressed forever."""
+    assert set(notices.DELIVERABLE_STATES) == {notices.RAISED, notices.FAILED}
+    for state in notices.STATES:
+        expected = state in notices.DELIVERABLE_STATES
+        assert beats.wants_push(SimpleNamespace(urgent=True, state=state)) is expected
+        assert beats.wants_push(SimpleNamespace(urgent=False, state=state)) is False
+
+
+def test_the_urgent_sentence_names_the_check_that_made_it_urgent():
+    """The S11 gate: an urgent notice says which check made it urgent. Composed
+    from the row, never from a model."""
+    said = beats.urgent_line(
+        SimpleNamespace(
+            check_name="stack_database",
+            title="the database refused a connection",
+            facts={"error": "too many clients", "peer": "postgres"},
+        )
+    )
+    assert said == (
+        "Urgent (stack_database): the database refused a connection "
+        "— error=too many clients, peer=postgres"
+    )
+
+
+# -- what the digest may and may not carry ----------------------------------------
+
+
+async def test_the_digest_never_carries_an_urgent_notice_that_already_went_out(
+    pool, only, mount_peers
+):
+    """It cannot: a pushed notice is `delivered`, and deliverable() reads only
+    what is still owed. The ordinary finding beside it is still told."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(
+        _check("stack_gateway", [_urgent_finding()], urgent=True),
+        _check("work_thing", [_finding("timer_failing:1", failures=4)]),
+    )
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+
+    gateway = FakeGateway(deltas=("A timer has failed four nights running.",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    brief = _brief(gateway)
+    assert "timer_failing:1 is true" in brief
+    assert "the gateway has not answered" not in brief, "he was already told, at the hour"
+    assert firing["delivery"]["digest"]["notices"] == 1
+    # Two messages in his chat: the urgent push at the hour, the digest after.
+    assert [row["content"] for row in await _messages(pool, his_chat["id"])] == [
+        "Urgent (stack_gateway): the gateway has not answered for 40 minutes "
+        "— peer=gateway, state=unreachable",
+        "A timer has failed four nights running.",
+    ]
+
+
+async def test_an_urgent_notice_that_reached_nobody_is_still_owed_and_lands_in_the_digest(
+    pool, only, mount_peers, monkeypatch
+):
+    """`failed` is a deliverable state, not a finished one — otherwise ONE bad
+    push would suppress a still-true finding forever."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("stack_gateway", [_urgent_finding()], urgent=True))
+    await beats.ensure_beats(pool)
+
+    real = chat._persist_assistant
+    # See the note above: undo() would restore the real registry too.
+    broken = {"disk": True}
+
+    async def refuse(pool_, conversation_id, text, turn_id=None):
+        if broken["disk"] and conversation_id == his_chat["id"]:
+            raise RuntimeError("the disk is full")
+        return await real(pool_, conversation_id, text, turn_id)
+
+    monkeypatch.setattr(chat, "_persist_assistant", refuse)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    broken["disk"] = False
+
+    gateway = FakeGateway(deltas=("The gateway went quiet last night; here is what I saw.",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    brief = _brief(gateway)
+    assert "the gateway has not answered for 40 minutes" in brief
+    assert "an earlier delivery of this reached nobody" in brief
+    assert firing["delivery"]["digest"]["delivered"] is True
+    assert (await _notices(pool))[0]["state"] == notices.DELIVERED
+
+
+async def test_a_digest_whose_chat_rung_fails_marks_every_notice_failed_and_tells_him_next_time(
+    pool, only, mount_peers, monkeypatch
+):
+    """A delivery that reached nobody is a FAILED delivery. Each notice records
+    the ladder's own words, stays deliverable, and is in the next digest."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(
+        _check("work_thing", [_finding("timer_failing:1", failures=4)]),
+        _check("money_thing", [_finding("agent_over_cap:coder", spent_usd=41)]),
+    )
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+
+    real = chat._persist_assistant
+    # See the note above: undo() would restore the real registry too.
+    broken = {"disk": True}
+
+    async def refuse(pool_, conversation_id, text, turn_id=None):
+        if broken["disk"] and conversation_id == his_chat["id"]:
+            raise RuntimeError("the disk is full")
+        return await real(pool_, conversation_id, text, turn_id)
+
+    monkeypatch.setattr(chat, "_persist_assistant", refuse)
+    mount_peers(gateway=FakeGateway(deltas=("Two things came up today.",)))
+    failed = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    assert await _messages(pool, his_chat["id"]) == []
+    assert failed["status"] == scheduler.FIRING_ERROR
+    assert "the disk is full" in failed["reason"]
+    assert failed["delivery"]["chat"]["ok"] is False
+    assert failed["delivery"]["digest"]["delivered"] is False
+    rows = await _notices(pool)
+    assert [row["state"] for row in rows] == [notices.FAILED, notices.FAILED]
+    reasons = await pool.fetch("SELECT failed_reason FROM notices")
+    assert all("the disk is full" in row["failed_reason"] for row in reasons)
+
+    broken["disk"] = False
+    gateway = FakeGateway(deltas=("Still two things standing.",))
+    mount_peers(gateway=gateway)
+    again = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=24))
+
+    assert again["delivery"]["digest"]["notices"] == 2, "nobody was told, so it is still owed"
+    assert [row["content"] for row in await _messages(pool, his_chat["id"])] == [
+        "Still two things standing."
+    ]
+    assert [row["state"] for row in await _notices(pool)] == [
+        notices.DELIVERED,
+        notices.DELIVERED,
+    ]
+
+
+# -- the guards, over the one message he reads ------------------------------------
+
+
+async def test_a_beat_whose_reply_the_model_did_not_write_delivers_nothing(pool, only, mount_peers):
+    """The v3 incident exactly: a beat pushed the harness's own "this turn
+    produced no reply" text to a phone as news and recorded success. A round
+    that produced nothing is recorded as such on its own span, and that
+    recording — not a sentence — is what stops the delivery."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+
+    mount_peers(gateway=FakeGateway(deltas=()))  # a round with no content at all
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    assert await _messages(pool, his_chat["id"]) == []
+    assert firing["status"] == scheduler.FIRING_ERROR
+    assert beats.DIGEST_NOT_WRITTEN in firing["reason"]
+    assert beats.DIGEST_NOT_WRITTEN in firing["delivery"]["digest"]["unable"]
+    assert firing["delivery"]["digest"]["delivered"] is False
+    # Nothing was attempted, so nothing is marked: it is owed exactly as before.
+    (row,) = await _notices(pool)
+    assert row["state"] == notices.RAISED
+    span = await pool.fetchrow(
+        "SELECT meta FROM turn_spans WHERE turn_id = $1 AND kind = 'llm_call'", firing["turn_id"]
+    )
+    assert span["meta"]["error_class"] == chat.EMPTY_ROUND
+    assert guards.model_wrote_nothing([SimpleNamespace(kind="llm_call", meta=span["meta"])])
+
+
+async def test_an_all_clear_while_a_check_could_not_run_is_corrected_and_the_beat_is_not_quiet(
+    pool, only, mount_peers
+):
+    """Quiet is COMPUTED, by the same checks.quiet the watch beat used, over the
+    runs the last pass actually recorded. A digest that writes "everything looks
+    fine" while a probe could not be made is contradicted in the message he
+    reads, and the firing does not record the pass as quiet."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(
+        _check("work_thing", [_finding("timer_failing:1", failures=4)]),
+        _check("stack_ollama", [], raises=checks.CannotCheck("the gateway link is not configured")),
+    )
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+
+    gateway = FakeGateway(deltas=("Everything looks fine.",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    (message,) = await _messages(pool, his_chat["id"])
+    assert message["content"].startswith("Everything looks fine.")
+    assert guards.ALL_CLEAR_NOT_RUN_CORRECTION.format(unrun=1, total=2) in message["content"]
+    assert firing["delivery"]["digest"]["quiet"] is False
+    assert "stack_ollama" in firing["delivery"]["digest"]["not_quiet"]
+    assert firing["delivery"]["digest"]["corrections"] == 1
+    # The brief told her the truth first — the guard is the second line, not the
+    # only one.
+    assert "stack_ollama could not run — the gateway link is not configured" in _brief(gateway)
+    span = await pool.fetchrow(
+        "SELECT name FROM turn_spans WHERE turn_id = $1 AND kind = 'guard'", firing["turn_id"]
+    )
+    assert span["name"] == "observation"
+
+
+async def test_the_digest_says_what_got_better_since_the_last_one(pool, only, mount_peers):
+    """Half of "she tells you once" is telling you when it STOPPED. The cleared
+    list is read from rows the reconcile wrote — the same rows that free a
+    fingerprint — so the digest can say what got better without anyone
+    remembering it."""
+    owner = await _owner(pool)
+    await conversations.active_conversation(pool, owner)
+    standing = {
+        "work": [_finding("timer_failing:1", failures=4)],
+        "money": [_finding("agent_over_cap:coder", spent_usd=41)],
+    }
+
+    async def work(app_, pool_):
+        return list(standing["work"])
+
+    async def money(app_, pool_):
+        return list(standing["money"])
+
+    only(
+        Check(name="work_thing", describe="w", urgent=False, run=work),
+        Check(name="money_thing", describe="m", urgent=False, run=money),
+    )
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    standing["work"] = []  # he fixed it
+    await _run_beat(pool, beats.WATCH, now=LATER + timedelta(hours=1))
+
+    gateway = FakeGateway(deltas=("The coder agent is over its cap; the timer is sorted.",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=2))
+
+    brief = _brief(gateway)
+    standing_half, cleared_half = brief.split("CLEARED since the last digest")
+    assert "agent_over_cap:coder is true" in standing_half
+    assert "timer_failing:1 is true" in cleared_half
+    assert firing["delivery"]["digest"] == {
+        "delivered": True,
+        "notices": 1,
+        "cleared": 1,
+        "quiet": False,
+        "not_quiet": "1 finding(s) from money_thing",
+    }
+    # A relayed fault whose subject a finding names is BACKED, so the guard says
+    # nothing: a correction under her own true sentence would be the worst
+    # thing this family could do to the one message he reads.
+    (message,) = await _messages(pool, (await conversations.active_conversation(pool, owner))["id"])
+    assert message["content"] == "The coder agent is over its cap; the timer is sorted."
+
+
+def test_the_brief_is_rows_it_says_what_she_did_and_what_reached_nobody():
+    """digest_brief is pure and composed from the notice rows: the check's own
+    title, the derived facts the fingerprint was computed over, the sighting
+    count, her own acted note, and — for a notice whose delivery failed — the
+    fact that nobody was told. No sentence anyone wrote about the world."""
+    now = datetime(2031, 6, 1, 14, 0, tzinfo=UTC)
+    outstanding = [
+        SimpleNamespace(
+            title="the coder agent is over its monthly cap",
+            check_name="money_caps",
+            finding_key="agent_over_cap:coder",
+            facts={"spent_usd": 41, "cap_usd": 40},
+            repeats=3,
+            first_seen_at=now,
+            last_seen_at=now,
+            acted=True,
+            acted_note="lowered its round budget to 4",
+            state=notices.RAISED,
+            failed_reason=None,
+        ),
+        SimpleNamespace(
+            title="the nightly backup timer is paused",
+            check_name="work_timers",
+            finding_key="timer_paused:9",
+            facts={},
+            repeats=1,
+            first_seen_at=now,
+            last_seen_at=now,
+            acted=False,
+            acted_note=None,
+            state=notices.FAILED,
+            failed_reason="the disk is full",
+        ),
+    ]
+    brief = beats.digest_brief(
+        name="jeremy",
+        outstanding=outstanding,
+        cleared=[],
+        cleared_more=0,
+        runs=(
+            CheckRun(check="money_caps", ran=True, reason=None),
+            CheckRun(check="stack_ollama", ran=False, reason="the gateway link is not configured"),
+        ),
+        now=now,
+        zone="UTC",
+        notes=["the cleared notices could not be read — RuntimeError: boom"],
+    )
+    assert "STANDING (2)" in brief
+    assert "facts: cap_usd=40, spent_usd=41" in brief
+    assert "seen 3 time(s)" in brief
+    assert "what you did about it: lowered its round budget to 4" in brief
+    assert "you have not acted on this" in brief
+    assert "an earlier delivery of this reached nobody: the disk is full" in brief
+    assert "THE LAST WATCH PASS: 1 of 2 checks ran." in brief
+    assert "stack_ollama could not run — the gateway link is not configured" in brief
+    # A read that FAILED is in the brief, not swallowed: a message composed over
+    # a partial view has to be able to say so.
+    assert "NOT READ: the cleared notices could not be read — RuntimeError: boom" in brief
+    assert brief.endswith(beats.DIGEST_ASK.format(name="jeremy"))
