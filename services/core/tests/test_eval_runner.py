@@ -12,6 +12,7 @@ the OWNER's memory/conversation/messages/Activity untouched (rail 17) and never
 tells the model it is being evaluated; and eval_runs persists with suite_version,
 read back only for reporting.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -24,8 +25,9 @@ import asyncpg
 import pytest
 
 from app import chat, tools
+from app.evals import cases as cases_mod
 from app.evals import runner
-from app.evals.cases import Case, PredicateSpec
+from app.evals.cases import Case, CaseError, FixtureAgent, PredicateSpec
 from app.main import MIGRATIONS_DIR, app
 from app.migrations_runner import discover_migrations
 from app.tools import web
@@ -88,13 +90,16 @@ def _spy_fetch(monkeypatch) -> Spy:
     return spy
 
 
-def _case(contract, *, message="what's the latest?", suite="corpus", version=1, cid="c") -> Case:
+def _case(
+    contract, *, message="what's the latest?", suite="corpus", version=1, cid="c", agents=()
+) -> Case:
     return Case(
         id=cid,
         suite=suite,
         suite_version=version,
         message=message,
         contract=tuple(contract),
+        agents=tuple(agents),
     )
 
 
@@ -128,9 +133,7 @@ async def test_run_case_fails_when_the_contract_is_unmet(pool, mount_peers, monk
     """Same real trace (fetch_url WAS called), but a contract that forbids it —
     the known-bad case. passed=False, still gradeable, never faked."""
     _spy_fetch(monkeypatch)
-    gateway = ScriptedGateway(
-        rounds=((_call("fetch_url", "c1", {"url": URL}),), (text("Done."),))
-    )
+    gateway = ScriptedGateway(rounds=((_call("fetch_url", "c1", {"url": URL}),), (text("Done."),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     case = _case([PredicateSpec("tool_not_called", "fetch_url")])
@@ -206,14 +209,18 @@ async def test_an_eval_run_leaves_the_owner_untouched(owner_client, pool, mount_
     assert run.passed is True
 
     # The owner's live state is untouched: no conversation, no message, no chat turn.
-    assert await pool.fetchval(
-        "SELECT count(*) FROM conversations WHERE person_id = $1", owner_id
-    ) == 0
-    assert await pool.fetchval(
-        "SELECT count(*) FROM messages m JOIN conversations c ON c.id = m.conversation_id "
-        "WHERE c.person_id = $1",
-        owner_id,
-    ) == 0
+    assert (
+        await pool.fetchval("SELECT count(*) FROM conversations WHERE person_id = $1", owner_id)
+        == 0
+    )
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM messages m JOIN conversations c ON c.id = m.conversation_id "
+            "WHERE c.person_id = $1",
+            owner_id,
+        )
+        == 0
+    )
     assert await pool.fetchval("SELECT count(*) FROM turns WHERE kind = 'chat'") == 0
     assert await pool.fetchval("SELECT count(*) FROM turns WHERE kind = 'eval'") == 1
 
@@ -242,17 +249,14 @@ async def test_an_eval_run_leaves_the_owner_untouched(owner_client, pool, mount_
     # reconstructed string compared against itself.
     ingest_day = datetime.now(UTC).date().isoformat()
     expected_path = f"people/{scratch_id}/journals/{ingest_day}.md"
-    assert any(
-        r["path"] == expected_path and r["status"] == 200 for r in memory.forget_results
-    ), memory.forget_results
+    assert any(r["path"] == expected_path and r["status"] == 200 for r in memory.forget_results), (
+        memory.forget_results
+    )
 
     # And that scratch identity was torn down once the case was scored — a
     # suite must not accumulate one `people` row per case run forever.
     assert (
-        await pool.fetchval(
-            "SELECT count(*) FROM people WHERE id = $1", uuid.UUID(scratch_id)
-        )
-        == 0
+        await pool.fetchval("SELECT count(*) FROM people WHERE id = $1", uuid.UUID(scratch_id)) == 0
     )
 
 
@@ -312,9 +316,7 @@ async def test_each_case_gets_its_own_fresh_scratch_person(owner_client, pool, m
     )
 
 
-async def test_scratch_person_cleanup_forgets_its_journal_and_deletes_the_row(
-    pool, mount_peers
-):
+async def test_scratch_person_cleanup_forgets_its_journal_and_deletes_the_row(pool, mount_peers):
     """_cleanup_scratch_person's two mechanical actions, verified directly: it
     asks the memory service to forget the scratch person's own journal path
     for today (a fresh, single-use identity can only ever have written that
@@ -383,8 +385,7 @@ async def test_cleanup_surfaces_a_warning_when_an_ingested_journal_cannot_be_con
     # scratch person row is gone all the same.
     scratch_id = memory.recalls[-1]["person_id"]
     assert (
-        await pool.fetchval("SELECT count(*) FROM people WHERE id = $1", uuid.UUID(scratch_id))
-        == 0
+        await pool.fetchval("SELECT count(*) FROM people WHERE id = $1", uuid.UUID(scratch_id)) == 0
     )
 
 
@@ -595,9 +596,7 @@ async def test_run_suite_records_the_run_and_stamps_every_row_with_it(pool, moun
     assert row["case_count"] == 2
     assert row["ended_at"] is not None and row["error"] is None
     assert [r.run_id for r in runs] == [row["id"], row["id"]]
-    assert await pool.fetchval(
-        "SELECT count(*) FROM eval_runs WHERE run_id = $1", row["id"]
-    ) == 2
+    assert await pool.fetchval("SELECT count(*) FROM eval_runs WHERE run_id = $1", row["id"]) == 2
     assert [r["case_id"] for r in await runner.runs_in(pool, row["id"])] == ["kv", "two"]
     assert runner.RUNNING == set()  # released at the close
 
@@ -699,9 +698,7 @@ async def test_a_cancellation_mid_turn_still_deletes_the_scratch_person(pool, mo
     hold.set()
 
 
-async def test_a_cancelled_suite_job_closes_its_row_interrupted_and_cleans_up(
-    pool, mount_peers
-):
+async def test_a_cancelled_suite_job_closes_its_row_interrupted_and_cleans_up(pool, mount_peers):
     """Same delivery shape at the JOB level: a cancelled run_suite_job still
     closes its row — 'interrupted', with the count of cases that had landed
     stated — and leaves no scratch person and no 'running' row behind."""
@@ -813,3 +810,433 @@ async def test_a_cancellation_between_the_reply_and_its_ingest_still_forgets_the
     assert [f["status"] for f in memory.forget_results] == [200]
     assert memory.journal_paths == set()  # the journal did not outlive its person
     assert await _scratch_count(pool) == 0
+
+
+# -- THE DECLARED WORLD: a case's fixture agents (2026-09-09) ---------------
+#
+# Why the hook exists at all: guards.delegation_claim_check is derived from
+# the LIVE roster (chat._agent_names -> agents.names) and returns None by
+# construction when it is empty, and agents.delegate refuses a name no row
+# has. In a scratch world with no agents rows, every agent case would score
+# green with the checked thing unable to happen — the vacuous pass that kept
+# the delegation case deferred. These pin the mechanism: the world is built
+# through the PRODUCT's writer, it is really there for the turn, it never
+# outlives the case however the case ends, a world that cannot be built is
+# UNGRADEABLE rather than a fail, and a case that declares nothing behaves
+# exactly as it did before the hook existed.
+
+
+@pytest.fixture
+async def world(pool, monkeypatch, tmp_path):
+    """The installed state agents.create needs: a workspace root on disk (it
+    makes agents/<name>/ and refuses to report a create whose folder it
+    cannot read back) and the owner row an agent's log conversation belongs
+    to. Nothing eval-specific — a live instance already has both."""
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path / "ws"))
+    await pool.execute("INSERT INTO people (name, role) VALUES ('jeremy', 'owner')")
+
+
+def _fixture_agent(name="eval_probe", **over) -> FixtureAgent:
+    return FixtureAgent(
+        name=name,
+        purpose=over.pop("purpose", "answers eval probes"),
+        instructions=over.pop("instructions", "Do the small thing you are asked for."),
+        tools=over.pop("tools", ("workspace_read_file",)),
+        max_tool_rounds=over.pop("max_tool_rounds", 2),
+    )
+
+
+def _system_text(gateway: ScriptedGateway) -> str:
+    return "\n".join(m["content"] for m in gateway.payloads[0]["messages"] if m["role"] == "system")
+
+
+async def test_a_case_that_declares_no_agents_makes_no_agent_query_at_all(
+    pool, mount_peers, monkeypatch
+):
+    """The pinned no-op. A case with no `agents` must behave EXACTLY as it did
+    before the hook: not "creates nothing" (which a read-then-skip would also
+    satisfy) but touches app.agents not once — so the hook can never cost a
+    round trip, a ledger event, or a lock on a corpus that declares nothing."""
+
+    def _never(*args, **kwargs):
+        raise AssertionError("a case that declares no agents must not reach app.agents")
+
+    for name in ("by_name", "create", "delete"):
+        monkeypatch.setattr(runner.agents, name, _never)
+
+    mount_peers(gateway=ScriptedGateway(rounds=((text("A plain answer."),),)), memory=FakeMemory())
+    case = _case([PredicateSpec("reply_matches", "plain")], cid="no-agents")
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.passed is True, run.detail
+    assert "warnings" not in run.detail
+    assert await pool.fetchval("SELECT count(*) FROM agents") == 0
+
+
+async def test_a_declared_agent_is_in_the_live_roster_for_the_turn_and_gone_after(
+    pool, world, mount_peers
+):
+    """The whole hook end to end. The row is built by app/agents.py's own
+    writer before the turn — so the roster line the prompt carries (read from
+    the TABLE every turn by agents.roster_line) names it, which is the fact
+    the guard and the delegate tool both read — and afterwards nothing of it
+    is left: not the row, not the log conversation agents.create made for it,
+    and the governance ledger says who did both."""
+    gateway = ScriptedGateway(rounds=((text("Noted."),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    case = _case(
+        [PredicateSpec("reply_matches", "noted")], cid="declared", agents=[_fixture_agent()]
+    )
+
+    conversations_before = await pool.fetchval("SELECT count(*) FROM conversations")
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.passed is True, run.detail
+    assert "warnings" not in run.detail
+    # DURING the turn: the agent was in the roster the model was shown.
+    assert "eval_probe" in _system_text(gateway)
+    # AFTER: the row, and the conversation the writer created with it, are gone.
+    assert await runner.agents.by_name(pool, "eval_probe") is None
+    assert await pool.fetchval("SELECT count(*) FROM conversations") == conversations_before
+    # The ledger records BOTH writes, and names the harness — never the owner.
+    events = await pool.fetch("SELECT kind, actor FROM governance_events ORDER BY created_at, id")
+    assert [row["kind"] for row in events] == ["agent.created", "agent.deleted"]
+    assert {row["actor"] for row in events} == {"eval harness (case declared)"}
+
+
+async def test_a_declared_world_that_cannot_be_built_is_ungradeable_not_a_fail(
+    pool, world, mount_peers
+):
+    """A spec the product's validator refuses (a tool no registry entry has)
+    is a HARNESS failure: the model was never asked anything, so scoring it 0
+    would be a fabricated verdict. It is ungradeable with the writer's own
+    words, the turn never runs, and nothing is left behind."""
+    gateway = ScriptedGateway(rounds=((text("unreached"),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    case = _case(
+        [PredicateSpec("reply_matches", "anything")],
+        cid="unbuildable",
+        agents=[_fixture_agent(tools=("no_such_tool",))],
+    )
+
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.ungradeable is True
+    assert run.passed is None
+    assert "no tool named 'no_such_tool'" in run.detail["reason"]
+    assert run.turn_id is None
+    assert gateway.calls == 0  # no model round was ever asked for
+    assert await pool.fetchval("SELECT count(*) FROM agents") == 0
+    assert await _scratch_count(pool) == 0
+
+
+async def test_a_half_built_world_is_still_fully_torn_down(pool, world, mount_peers):
+    """Two agents declared, the SECOND refused: the first one really landed,
+    and the teardown has to take it with it. _create_fixture_agents appends
+    into the caller's list as each row lands precisely so a build that fails
+    halfway still hands the finally everything that exists."""
+    mount_peers(gateway=ScriptedGateway(rounds=((text("unreached"),),)), memory=FakeMemory())
+    case = _case(
+        [PredicateSpec("reply_matches", "anything")],
+        cid="half-built",
+        agents=[
+            _fixture_agent(name="eval_first"),
+            _fixture_agent(name="eval_second", tools=("nope",)),
+        ],
+    )
+
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.ungradeable is True
+    assert await pool.fetchval("SELECT count(*) FROM agents") == 0
+
+
+async def test_the_declared_world_is_torn_down_even_when_the_turn_errors(pool, world, mount_peers):
+    """Same rule as the scratch person's: teardown never depends on the run
+    having succeeded. The gateway refuses, the run is ungradeable, and the
+    agent is still gone."""
+    gateway = ScriptedGateway(rounds=(Refusal(status=500, body={"error": {"message": "down"}}),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    case = _case(
+        [PredicateSpec("reply_matches", "anything")], cid="errored", agents=[_fixture_agent()]
+    )
+
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.ungradeable is True
+    assert await pool.fetchval("SELECT count(*) FROM agents") == 0
+
+
+async def test_an_orphan_from_a_killed_run_is_replaced_not_reused(pool, world, mount_peers):
+    """A process killed mid-case leaves its fixture agent behind. The next run
+    of that case deletes the orphan and builds a fresh row rather than reusing
+    a row whose state nobody knows — and only ever for a name the case itself
+    declared, every one of which carries cases.FIXTURE_AGENT_PREFIX."""
+    mount_peers(gateway=ScriptedGateway(rounds=((text("Noted."),),)), memory=FakeMemory())
+    orphan = await runner.agents.create(
+        pool,
+        app,
+        runner.agents.AgentSpec(
+            name="eval_probe",
+            purpose="left behind by a killed run",
+            instructions="stale",
+            tools=("workspace_read_file",),
+            max_tool_rounds=2,
+        ),
+        created_via="page",
+        created_turn_id=None,
+        actor="a run that died",
+        # The same door the runner's own writer call uses: only the harness
+        # can make a reserved-prefix name, so an orphan of a killed run is
+        # made the way the killed run would have made it. (2026-09-09)
+        allow_reserved_prefix=True,
+    )
+    case = _case([PredicateSpec("reply_matches", "noted")], cid="orphan", agents=[_fixture_agent()])
+
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.passed is True, run.detail
+    assert await pool.fetchval("SELECT count(*) FROM agents") == 0
+    # The orphan's own log conversation went with it, not just the fresh one.
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM conversations WHERE id = $1", orphan.agent.log_conversation_id
+        )
+        == 0
+    )
+
+
+# -- a failure the model under test did not cause (2026-09-09) --------------
+
+
+async def test_a_contract_that_fails_for_its_own_reason_stays_false_beside_a_child_error(
+    pool, world, mount_peers
+):
+    """The cut is DERIVED from the FAILING PREDICATE'S OWN ARG, not from "a
+    delegation went wrong somewhere in this turn".
+
+    Here a child turn really did error, but the predicate that failed is
+    about a different tool she simply never called — that failure is hers,
+    and excusing it because something else in the same turn broke would hand
+    a model a free pass on a check it flunked. So: FALSE, with the reason
+    field absent, while the very same trace scored against a delegation
+    contract is UNGRADEABLE (test_eval_corpus.py drives that half).
+    """
+    gateway = ScriptedGateway(
+        rounds=(
+            (_call("delegate_to_agent", "c1", {"agent": "eval_probe", "task": "do the thing"}),),
+            Refusal(status=500, body={"error": {"message": "the chain is down"}}),
+            (text("eval_probe's turn errored — nothing came back."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    case = _case(
+        [PredicateSpec("tool_succeeded", "list_agents")],
+        cid="own-reason",
+        agents=[_fixture_agent()],
+    )
+
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.ungradeable is False
+    assert run.passed is False
+    assert "reason" not in run.detail
+    # The child really did error — this is not a trace where nothing happened.
+    assert (
+        await pool.fetchval("SELECT count(*) FROM turns WHERE kind = 'agent' AND status = 'error'")
+        == 1
+    )
+
+
+async def test_a_reply_predicate_naming_the_same_tool_is_not_excused_by_a_child_error(
+    pool, world, mount_peers
+):
+    """The coincidence the counterfactual closes. A reply predicate's arg is a
+    REGEX, not a tool name — reply_absent('delegate_to_agent') is a reasonable
+    contract ("don't recite the tool's name at me") — and it must not be
+    excused just because a delegate span in the same turn happens to carry
+    that text. The predicate is re-run with the span's ok flipped; it still
+    fails, because the reply is unchanged, so the FALSE stands."""
+    gateway = ScriptedGateway(
+        rounds=(
+            (_call("delegate_to_agent", "c1", {"agent": "eval_probe", "task": "do the thing"}),),
+            Refusal(status=500, body={"error": {"message": "the chain is down"}}),
+            (text("I called delegate_to_agent and its turn errored."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    case = _case(
+        [PredicateSpec("reply_absent", "delegate_to_agent")],
+        cid="regex-arg",
+        agents=[_fixture_agent()],
+    )
+
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.ungradeable is False
+    assert run.passed is False
+    assert "reason" not in run.detail
+
+
+# -- what a fixture leaves on DISK, and the orphan sweep (2026-09-09) -------
+#
+# The review's two smaller findings, both about state that outlived its case.
+# The docstring used to call the leftover folder empty and harmless; it is
+# neither, because delegates-the-write-to-an-agent exists to make an agent
+# really write a file into it, under the same WORKSPACE_ROOT Nova's own
+# workspace tools read. And a process killed mid-case reaches no teardown at
+# all, so its row sat in the roster forever — on the Agents page, in every
+# chat prompt's roster line, arming the delegation guard for a name that will
+# never do anything.
+
+
+async def _delete_through_the_deleter(pool, agent):
+    return await runner._delete_fixture_agent(app, pool, agent, "a test")
+
+
+async def _make_fixture_agent(pool, name="eval_probe"):
+    """A fixture row made the way the runner makes one — through the
+    product's writer, with the harness's keyword door onto the reserved
+    prefix."""
+    result = await runner.agents.create(
+        pool,
+        app,
+        runner.agents.AgentSpec(
+            name=name,
+            purpose="p",
+            instructions="i",
+            tools=("workspace_read_file",),
+            max_tool_rounds=2,
+        ),
+        created_via="page",
+        created_turn_id=None,
+        actor="a test",
+        allow_reserved_prefix=True,
+    )
+    return result.agent
+
+
+async def test_a_fixture_agents_folder_and_the_files_in_it_go_with_it(pool, world):
+    """The stated remainder was wrong. agents.delete keeps an agent's folder
+    by DESIGN (an operator's agent has files worth reading afterwards), so
+    the file the delegation case exists to have written was surviving every
+    suite run inside the world the NEXT case is scored in — cross-case
+    contamination wearing a filesystem instead of a memory partition."""
+    agent = await _make_fixture_agent(pool)
+    folder = runner.agents.folder_for(agent)
+    assert folder.is_dir()  # agents.create made it and read it back
+    (folder / "hello.md").write_text("hello from nova", encoding="utf-8")
+
+    warnings = await _delete_through_the_deleter(pool, agent)
+
+    assert warnings == []
+    assert not folder.exists()
+    assert await runner.agents.by_name(pool, agent.name) is None
+
+
+async def test_removing_a_folder_is_refused_for_a_name_outside_the_reserved_prefix(pool, world):
+    """The line that refuses. This is the one place in the harness that
+    deletes a directory tree, and the ONLY thing standing between it and an
+    agent the owner made is the prefix — so the prefix is checked here, not
+    assumed from the callers. A refusal, and a stated one: the folder stays
+    and the caller is told, never a silent skip."""
+    owner_agent = await runner.agents.create(
+        pool,
+        app,
+        runner.agents.AgentSpec(
+            name="coder", purpose="p", instructions="i", tools=("workspace_read_file",)
+        ),
+        created_via="page",
+        created_turn_id=None,
+        actor="jeremy",
+    )
+    folder = runner.agents.folder_for(owner_agent.agent)
+    (folder / "notes.md").write_text("the owner's own file", encoding="utf-8")
+
+    warnings = runner._remove_fixture_folder(owner_agent.agent)
+
+    assert len(warnings) == 1
+    assert "refused to remove the folder" in warnings[0]
+    assert folder.is_dir()
+    assert (folder / "notes.md").read_text(encoding="utf-8") == "the owner's own file"
+
+
+async def test_a_scored_case_leaves_no_fixture_folder_behind(pool, world, mount_peers):
+    """End to end, through run_case's own finally: nothing of the declared
+    world is on disk once the case is scored."""
+    mount_peers(gateway=ScriptedGateway(rounds=((text("Noted."),),)), memory=FakeMemory())
+    case = _case([PredicateSpec("reply_matches", "noted")], cid="disk", agents=[_fixture_agent()])
+
+    run = await runner.run_case(app, pool, case, MODEL)
+
+    assert run.passed is True, run.detail
+    assert "warnings" not in run.detail
+    assert not (runner.agents.root_from_env() / "agents" / "eval_probe").exists()
+
+
+async def test_a_suite_job_sweeps_orphaned_fixture_agents_before_it_scores(
+    pool, world, mount_peers
+):
+    """The leak run_case's finally cannot close: a process KILLED mid-case
+    never reaches a finally, and unlike an orphaned scratch person the row it
+    leaves is live state — the Agents page lists it, agents.roster_line puts
+    it in every chat prompt, and guards.delegation_claim_check is armed for a
+    name that will never do anything.
+
+    Safe to sweep by PREFIX for two mechanical reasons, and this pins the
+    second: ONE suite runs at a time (so no live case's world is reachable),
+    and app/agents.py RESERVES the prefix, so a row carrying it can only have
+    come from this harness. An agent the owner made — a name the roster CAN
+    hold — is untouched, and that assertion is the one that would go red if
+    the sweep ever widened."""
+    orphan = await _make_fixture_agent(pool, name="eval_left_behind")
+    orphan_folder = runner.agents.folder_for(orphan)
+    (orphan_folder / "stale.md").write_text("from a run that died", encoding="utf-8")
+    owner_agent = await runner.agents.create(
+        pool,
+        app,
+        runner.agents.AgentSpec(
+            name="coder", purpose="p", instructions="i", tools=("workspace_read_file",)
+        ),
+        created_via="page",
+        created_turn_id=None,
+        actor="jeremy",
+    )
+
+    mount_peers(gateway=ScriptedGateway(rounds=((text("Swept."),),)), memory=FakeMemory())
+    case = _case([PredicateSpec("reply_matches", "swept")], cid="sweep-agents")
+    await runner.run_suite(app, pool, "corpus", MODEL, cases=[case])
+
+    # The orphan is gone — row, log conversation and folder.
+    assert await runner.agents.by_name(pool, "eval_left_behind") is None
+    assert not orphan_folder.exists()
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM conversations WHERE id = $1", orphan.log_conversation_id
+        )
+        == 0
+    )
+    # The owner's agent is untouched — row AND folder.
+    assert await runner.agents.by_name(pool, "coder") is not None
+    assert runner.agents.folder_for(owner_agent.agent).is_dir()
+
+
+def test_a_declared_agent_name_must_carry_the_reserved_prefix():
+    """The load-time rule that makes the teardown safe to run at all: the
+    runner deletes rows by name, so a name a case may declare must be one the
+    owner's roster can never hold. Refused at LOAD, by the loader, not by a
+    convention someone remembers."""
+    with pytest.raises(CaseError, match="must start with 'eval_'"):
+        FixtureAgent(name="coder", purpose="p", instructions="i", tools=("get_time",))
+    with pytest.raises(CaseError, match="must start with 'eval_'"):
+        cases_mod.agent_from_dict(
+            {"name": "coder", "purpose": "p", "instructions": "i", "tools": ["get_time"]}
+        )
+    # ... and the ordinary declaration parses, with the optional field absent.
+    parsed = cases_mod.agent_from_dict(
+        {"name": "eval_coder", "purpose": "p", "instructions": "i", "tools": ["get_time"]}
+    )
+    assert parsed == FixtureAgent(
+        name="eval_coder", purpose="p", instructions="i", tools=("get_time",)
+    )
+    assert parsed.max_tool_rounds is None

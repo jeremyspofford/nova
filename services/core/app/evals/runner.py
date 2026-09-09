@@ -28,6 +28,40 @@ Three properties are enforced mechanically, not by intention:
     suite runs over time, does not litter `people`/`conversations`/`messages`
     unboundedly.
 
+    THE DECLARED WORLD (2026-09-09). Scratch isolation is per-PERSON, and
+    some facts a case must be scored against are not person-scoped at all:
+    the `agents` table is one household-wide roster, and two of the honesty
+    controls read it live — guards.delegation_claim_check is derived from
+    chat._agent_names (an EMPTY roster makes it silent by construction) and
+    agents.delegate refuses a name no row has. In a scratch world with no
+    agents, a case about either would score green without the checked thing
+    ever being able to happen: a pass for the wrong reason, which is worse
+    than no case. So a case may DECLARE the agents its replay needs
+    (cases.FixtureAgent), and this module builds them before the turn and
+    tears them down with the rest of the scratch state
+    (_create_fixture_agents / _delete_fixture_agents). Two rules keep that
+    honest, both mechanical: the rows are made and removed through
+    app/agents.py's OWN writer (never hand-written SQL), so a case exercises
+    the create/delete the page and her create_agent tool use; and the
+    teardown only ever deletes a name a case declared, every one of which
+    carries cases.FIXTURE_AGENT_PREFIX (refused at load otherwise), so it can
+    never reach an agent the owner made. A case that declares no agents runs
+    exactly as before — no query, no row, no ledger event.
+
+    WHAT A FIXTURE LEAVES BEHIND: nothing. The row, the log conversation
+    agents.create made with it, and the FOLDER agents/<name>/ all go
+    (_delete_fixture_agent / _remove_fixture_folder). The folder was the one
+    remainder this module used to call harmless and empty, which was simply
+    wrong: delegates-the-write-to-an-agent exists to make eval_writer really
+    write hello.md, under the same WORKSPACE_ROOT Nova's own workspace tools
+    read, once per suite run — state accumulating inside the world the NEXT
+    case is scored in. And a process KILLED mid-case reaches no teardown at
+    all, so every suite job sweeps orphaned fixture agents by prefix before
+    it scores anything (_sweep_orphan_fixture_agents), beside the
+    scratch-people sweep and safe for the same one-run-at-a-time reason —
+    plus the prefix app/agents.py reserves, which is what keeps the sweep off
+    a row the owner made. (2026-09-09)
+
   * NO TEST-AWARENESS LEAKAGE. _run_turn builds the prompt from the normal
     stable/volatile system prompt — this module injects nothing. No "eval mode"
     string reaches the model; the only eval-ness is the turn's kind='eval' tag
@@ -38,6 +72,19 @@ Three properties are enforced mechanically, not by intention:
     empty reply — the turn closes 'error'), the run is UNGRADEABLE: recorded as
     such and excluded from the denominator, NEVER scored 0 or a fake false (v3
     lesson: tournament-vram-self-starvation / fitness-measures-not-declares).
+
+    The same rule reaches ONE LEVEL DOWN (2026-09-09). A delegated child turn
+    is the one place inside a scored turn where a DIFFERENT model answers: it
+    is opened with no model of its own and the role agent_<name>, and the
+    gateway serves a role with no chain from the CHAT chain
+    (services/gateway/app/routing.py). So a child turn that errored fails the
+    delegation contract without the scored model having done anything wrong,
+    and _measured_someone_else reads that off the trace — the delegate span's
+    own facts, where a child turn that RAN carries CHILD_TURN_FACT and a call
+    refused before anything ran does not — and returns UNGRADEABLE with the
+    child's stated reason. A delegation the model never attempted, and one it
+    got refused by naming an agent no row has, stay FALSE: those are the
+    model's.
 
 The turn's trace is recorded normally (turns/turn_spans) but tagged kind='eval',
 so it is attributable to the eval run and reachable at /api/v1/activity/<id> for
@@ -51,7 +98,8 @@ runs of the same version.
 
 A SUITE RUN IS A JOB, AND ITS TRUTH IS A ROW (migration 016). Every suite run
 opens an eval_suite_runs row first (open_suite_run) and runs as run_suite_job:
-sweep orphaned scratch people, score each case, persist it WITH the run's id,
+sweep orphaned scratch people and orphaned fixture agents, score each case,
+persist it WITH the run's id,
 then close the row 'done' / 'error' (+ why) / 'interrupted' with an ended_at —
 in a finally, shielded, so the row is closed no matter how the job ends. The
 row lives in the database, detached from any HTTP connection: a page that
@@ -72,6 +120,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -81,7 +130,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import chat, peers, settings_store, traces
+from app import agents, chat, peers, settings_store, traces
 from app.evals import cases as cases_mod
 from app.evals import predicates
 from app.identity import Person
@@ -297,6 +346,295 @@ async def _sweep_orphan_scratch_people(pool: asyncpg.Pool) -> int:
     return len(rows)
 
 
+# -- the declared world: a case's fixture agents ---------------------------
+#
+# See the module docstring's "THE DECLARED WORLD". Everything here goes
+# through app/agents.py, the product's one writer, and touches only names a
+# case declared.
+
+# What the ledger records as the agent's origin. migration 021's CHECK admits
+# exactly 'chat' and 'page', and the harness is neither — so the honest field
+# is the ACTOR, which names the case that declared the row (a governance
+# event nobody can read as the owner having made this agent). Stated here
+# rather than quietly picked: the column cannot say "eval" without a
+# migration, and inventing one for a fixture would be worse than saying which
+# of the two values was borrowed and why.
+FIXTURE_CREATED_VIA = "page"
+
+
+def _fixture_actor(case: cases_mod.Case) -> str:
+    return f"eval harness (case {case.id})"
+
+
+async def _create_fixture_agents(
+    app, pool: asyncpg.Pool, case: cases_mod.Case, created: list[agents.Agent]
+) -> None:
+    """Create the agents `case` declares, appending each created row to
+    `created` AS IT LANDS — the caller's list, so a build that fails halfway
+    still hands its teardown everything that exists (the same discipline as
+    the scratch person's: state must never survive whatever went wrong).
+
+    A row already holding the name is an ORPHAN of a run that died before its
+    teardown — the name carries the reserved prefix, so it cannot be an agent
+    the owner made — and is deleted first, loudly, through the same writer.
+    Anything that goes wrong RAISES with the writer's own words (an unknown
+    tool, a name the pattern refuses, no owner account yet); run_case turns
+    that into an UNGRADEABLE run, because a world that could not be built
+    never measured the model."""
+    actor = _fixture_actor(case)
+    for spec in case.agents:
+        orphan = await agents.by_name(pool, spec.name)
+        if orphan is not None:
+            logger.warning(
+                "evals: agent %s already existed before case %s — deleting the orphan "
+                "left by an earlier run before rebuilding it",
+                spec.name,
+                case.id,
+            )
+            # The same teardown the case's own agents get, so an orphan does
+            # not leave the half of itself (its log conversation) that
+            # agents.delete keeps by design. Its warnings can only be LOGGED
+            # — there is no run row to attach them to yet — but nothing
+            # material is lost silently: if the row itself survived, the
+            # create below is refused by name ("an agent named … already
+            # exists") and the case is UNGRADEABLE with that reason.
+            await _delete_fixture_agent(app, pool, orphan, actor)
+        result = await agents.create(
+            pool,
+            app,
+            agents.AgentSpec(
+                name=spec.name,
+                purpose=spec.purpose,
+                instructions=spec.instructions,
+                tools=tuple(spec.tools),
+                max_tool_rounds=spec.max_tool_rounds,
+            ),
+            created_via=FIXTURE_CREATED_VIA,
+            created_turn_id=None,
+            actor=actor,
+            # The harness's own door onto the reserved prefix (2026-09-09).
+            # agents.validate_spec refuses cases.FIXTURE_AGENT_PREFIX for the
+            # page, the API and her create_agent tool, so the roster cannot
+            # hold a name this teardown would delete; the fixture rows still
+            # go through the product's writer, and this keyword — reachable
+            # from Python only, never from a tool argument or a request body —
+            # is the single exception, right where the harness builds them.
+            allow_reserved_prefix=True,
+        )
+        created.append(result.agent)
+
+
+def _remove_fixture_folder(agent: agents.Agent) -> list[str]:
+    """Delete agents/<name>/ and everything in it; return a warning if that
+    could not be verified. Never raises — a teardown step must not fail the
+    run it is cleaning up after — and never SILENT: no rmtree(ignore_errors=
+    True) here, because a swallowed reason is how a failed cleanup reads as a
+    successful one.
+
+    The reserved prefix is CHECKED, not assumed. Every other caller-side rule
+    (a declared name, a case that loaded) is upstream of this function, and
+    this is the one line in the harness that deletes a directory tree: if a
+    name without cases.FIXTURE_AGENT_PREFIX ever reaches it, the folder stays
+    and the caller is told. A path derived from an owner's agent name is
+    exactly what must never be removable here."""
+    if not agent.name.startswith(cases_mod.FIXTURE_AGENT_PREFIX):
+        message = (
+            f"eval fixture cleanup: refused to remove the folder of agent {agent.name} — "
+            f"its name does not carry {cases_mod.FIXTURE_AGENT_PREFIX!r}, so this harness "
+            f"has no claim on it; the folder was left in place"
+        )
+        logger.error(message)
+        return [message]
+    folder = agents.folder_for(agent)
+    if not folder.exists():
+        # agents.create makes it and refuses a create it cannot read back, so
+        # an absent folder here means something else already removed it —
+        # nothing to do, and nothing to warn about.
+        return []
+    try:
+        shutil.rmtree(folder)
+    except Exception as exc:
+        message = (
+            f"eval fixture cleanup: the folder of agent {agent.name} ({folder}) could not "
+            f"be removed — {type(exc).__name__}: {exc}"
+        )
+        logger.exception("eval fixture cleanup: could not remove the folder %s", folder)
+        return [message]
+    if folder.exists():
+        message = (
+            f"eval fixture cleanup: the folder of agent {agent.name} ({folder}) is still "
+            f"there after it was removed"
+        )
+        logger.warning(message)
+        return [message]
+    return []
+
+
+async def _delete_fixture_agent(
+    app, pool: asyncpg.Pool, agent: agents.Agent, actor: str
+) -> list[str]:
+    """Remove ONE fixture agent: its row, through the product's own writer,
+    and the log conversation agents.create made with it. Best-effort like
+    every other teardown step — nothing here raises — but never SILENT: a
+    step that could not verify its own result returns a warning string, which
+    the caller attaches to the case's result where the operator reads it
+    beside the score.
+
+    The log conversation is deleted here rather than left because
+    agents.delete deliberately keeps it (an operator's agent has a history
+    worth reading after the agent is gone) — but an eval's is a task/report
+    pair nobody asked for, appearing in the OWNER's conversation list once per
+    run. Its messages cascade with it (migration 002) and the child turn's
+    trace survives (turns.conversation_id is ON DELETE SET NULL), exactly as
+    the scratch conversation's does.
+
+    The FOLDER agents/<name>/ goes too (_remove_fixture_folder), which
+    agents.delete deliberately keeps — an operator's agent has files worth
+    reading after the agent is gone — and which the docstring here once
+    called an empty remainder. It is not empty: the whole point of
+    delegates-the-write-to-an-agent is that eval_writer really writes
+    hello.md, under the same WORKSPACE_ROOT Nova's own workspace tools read,
+    once per suite run and never removed. That is not a tiny remainder, it is
+    accumulating state inside the world the NEXT case is scored in — the
+    cross-case contamination per-case scratch identities exist to prevent,
+    wearing a filesystem instead of a memory partition. The blast-radius
+    argument is the row's, unchanged: the path is derived from a name the
+    case declared, and every declared name carries
+    cases.FIXTURE_AGENT_PREFIX. (2026-09-09)
+
+    What is deliberately LEFT: nothing on disk under agents/<name>/, and no
+    memory notes — a delegated child turn runs with ingest=False
+    (agents.delegate), so a fixture agent writes none. If that ever changes,
+    this is the function that would have to forget them."""
+    warnings: list[str] = []
+    try:
+        await agents.delete(pool, app, agent.name, actor=actor)
+    except Exception as exc:
+        message = (
+            f"eval fixture cleanup: agent {agent.name} could not be deleted — "
+            f"{type(exc).__name__}: {exc} — it is still in the household's roster"
+        )
+        logger.exception("eval fixture cleanup: could not delete agent %s", agent.name)
+        return [message]
+    # Only after the row is really gone (agents.delete re-reads and raises if
+    # it is not): a live agent whose folder was deleted under it would be a
+    # worse state than the leftover this removes.
+    warnings.extend(_remove_fixture_folder(agent))
+    if agent.log_conversation_id is None:
+        return warnings
+    try:
+        tag = await pool.execute(
+            "DELETE FROM conversations WHERE id = $1", agent.log_conversation_id
+        )
+    except Exception as exc:
+        message = (
+            f"eval fixture cleanup: the log conversation of agent {agent.name} "
+            f"({agent.log_conversation_id}) could not be deleted — {type(exc).__name__}: {exc}"
+        )
+        logger.exception(
+            "eval fixture cleanup: could not delete the log conversation of agent %s",
+            agent.name,
+        )
+        return [message]
+    if tag != "DELETE 1":
+        message = (
+            f"eval fixture cleanup: the log conversation of agent {agent.name} "
+            f"({agent.log_conversation_id}) was not there to delete — the database "
+            f"said {tag!r}"
+        )
+        logger.warning(message)
+        warnings.append(message)
+    return warnings
+
+
+async def _delete_fixture_agents(
+    app, pool: asyncpg.Pool, created: Sequence[agents.Agent], actor: str
+) -> list[str]:
+    """Every agent this case created, newest first, each through
+    _delete_fixture_agent. Never raises; returns the warnings to attach to
+    the case's own result."""
+    warnings: list[str] = []
+    for agent in reversed(list(created)):
+        warnings.extend(await _delete_fixture_agent(app, pool, agent, actor))
+    return warnings
+
+
+# The actor the sweep's ledger events name. Not a case id — no case is being
+# scored when this runs — so it says what it actually is.
+SWEEP_ACTOR = "eval harness (orphan fixture sweep)"
+
+
+async def _sweep_orphan_fixture_agents(app, pool: asyncpg.Pool) -> list[str]:
+    """Delete every agent whose name carries cases.FIXTURE_AGENT_PREFIX,
+    through the SAME deleter a case's own fixtures go through
+    (_delete_fixture_agent: the product's writer, the log conversation, the
+    folder) — run once at the START of every suite job, beside
+    _sweep_orphan_scratch_people, and for the same reason.
+
+    THE LEAK IT CLOSES. run_case's finally tears its declared world down
+    however the case ends, but a PROCESS killed mid-case (SIGKILL, an OOM, a
+    container restart) never reaches a finally, and the row it leaves is not
+    an inert one like an orphaned scratch person: it is on the Agents page,
+    it goes into the roster line of every chat prompt the household composes
+    (agents.roster_line), and it ARMS guards.delegation_claim_check for a
+    name that will never do anything — a live control pointed at a fixture.
+    _create_fixture_agents already replaces the orphan of a case that runs
+    AGAIN; nothing removed the orphan of a case that was deleted, renamed, or
+    simply is not in the suite being run. This does.
+
+    WHY IT IS SAFE, both halves mechanical and neither of them a convention:
+
+      * it cannot reach a LIVE fixture, because ONE suite runs at a time (the
+        eval_suite_runs_one_running partial unique index) — the same
+        invariant the scratch-people sweep depends on, so there is no
+        concurrent case whose declared world this could delete out from
+        under it; and
+      * it cannot reach an agent the OWNER made, because app/agents.py
+        RESERVES the prefix: agents.validate_spec refuses a name starting
+        with cases.FIXTURE_AGENT_PREFIX to the Agents page, to the API and to
+        her create_agent tool, and opens one keyword-only door that the
+        runner's own writer call passes — so a row carrying the prefix can
+        only ever have been built by this harness. That reservation is a
+        DEPENDENCY of this sweep and is named rather than assumed: the
+        load-time rule in cases.FixtureAgent bounds what a case may DECLARE
+        and says nothing about what else is already in the table, which is
+        exactly the gap a prefix sweep walks into. Sweeping by prefix would
+        be unsafe without it, and it is the same one fact both sides read
+        (cases.FIXTURE_AGENT_PREFIX is agents.EVAL_FIXTURE_PREFIX, not a
+        copy of the string). (2026-09-09)
+
+    KNOWN REMAINDER, stated rather than papered over: this sweeps ROWS, and
+    each row's folder goes with it through the deleter. A process killed in
+    the narrow window between the row's delete committing and its folder
+    being removed leaves a folder with no row, which nothing here collects —
+    deliberately, because collecting it would mean globbing and removing
+    directories no case ever declared, a wider blast radius than the leak.
+
+    Returns the names actually gone, verified by re-reading each one rather
+    than by the delete not having raised. A row that survived is logged as
+    survived; there is no run row to attach a warning to at sweep time, so
+    the log is where it lands."""
+    orphans = [
+        agent
+        for agent in await agents.list_all(pool)
+        if agent.name.startswith(cases_mod.FIXTURE_AGENT_PREFIX)
+    ]
+    swept: list[str] = []
+    for agent in orphans:
+        for warning in await _delete_fixture_agent(app, pool, agent, SWEEP_ACTOR):
+            logger.warning("%s", warning)
+        if await agents.by_name(pool, agent.name) is None:
+            swept.append(agent.name)
+        else:
+            logger.warning(
+                "evals: orphaned fixture agent %s is STILL in the roster after its sweep",
+                agent.name,
+            )
+    if swept:
+        logger.info("evals: swept %d orphaned fixture agent(s): %s", len(swept), ", ".join(swept))
+    return swept
+
+
 async def _scratch_conversation(pool: asyncpg.Pool, person: Person) -> uuid.UUID:
     """A fresh conversation owned by the scratch person, marked inactive so it is
     never picked up as anyone's active thread. One per run keeps runs from
@@ -338,6 +676,147 @@ def _error_frame(frames: Sequence[Any]) -> str | None:
     return None
 
 
+# The facts key agents.RunFacts.as_facts() writes on a delegate span: the id
+# of the CHILD turn that actually ran. Its PRESENCE is the whole mechanical
+# difference between the two ways a delegation can fail, and the runner reads
+# it for exactly the same reason guards._delegation_backing does — one fact,
+# read twice, never a second opinion about it:
+#
+#   * a child turn really ran and ended badly  -> the facts entry carries this
+#     key (agents.delegate appends run_facts to ctx.facts_sink BEFORE it
+#     decides ok, and chat._run_tool copies the sink's new entries onto the
+#     span on failure as well as on success);
+#   * the call was REFUSED before anything ran -> agents.delegation_refused
+#     files {"agent", "status": "refused", "reason"} instead, with NO turn id.
+#
+# (2026-09-09)
+CHILD_TURN_FACT = "agent_turn_id"
+
+
+def _child_turn_error(spans: Sequence[Any], tool_name: str) -> str | None:
+    """The stated reason a call to `tool_name` failed BECAUSE the child turn
+    it started errored — or None when no such span exists.
+
+    None covers every OTHER way that tool can have gone wrong, and each of
+    them stays the model's: no span at all (it never called the tool), a span
+    that is ok (it worked), and a span refused before any child turn opened —
+    an agent name no row has, an empty task — which is the model choosing its
+    arguments badly and carries no CHILD_TURN_FACT to be read here.
+
+    The reason is the span's own error text (the ToolFailure agents.delegate
+    raised, which already states the child's status or its error frame). A
+    span with no error recorded says so rather than inventing one: a run
+    excluded from the denominator has to say why it was excluded."""
+    for span in spans:
+        if span.kind != "tool" or span.name != tool_name:
+            continue
+        meta = span.meta or {}
+        if meta.get("ok") is True:
+            continue
+        facts = meta.get("facts")
+        if not isinstance(facts, list):
+            continue
+        for fact in facts:
+            if isinstance(fact, dict) and fact.get(CHILD_TURN_FACT):
+                stated = str(meta.get("error") or "").strip()
+                return stated or (
+                    f"the {tool_name} span recorded no reason — only that its child turn "
+                    f"({fact[CHILD_TURN_FACT]}) did not finish"
+                )
+    return None
+
+
+@dataclass(frozen=True)
+class _AsIfSpan:
+    """A span as it WOULD have read had the child turn finished. Built only
+    inside _measured_someone_else, never recorded anywhere: predicates read
+    exactly kind/name/meta, so this is the whole surface, and it exists to
+    ask one counterfactual question rather than to state a fact."""
+
+    kind: str
+    name: str
+    meta: dict
+
+
+def _as_if_the_child_had_finished(spans: Sequence[Any], tool_name: str) -> list[Any]:
+    """`spans` with every failed `tool_name` call marked ok — the same trace,
+    one fact flipped."""
+    return [
+        _AsIfSpan(span.kind, span.name, {**(span.meta or {}), "ok": True})
+        if span.kind == "tool"
+        and span.name == tool_name
+        and (span.meta or {}).get("ok") is not True
+        else span
+        for span in spans
+    ]
+
+
+def _measured_someone_else(
+    spans: Sequence[Any], reply: str, results: Sequence[predicates.PredicateResult]
+) -> str | None:
+    """The reason this contract's failure is NOT the model under test's — or
+    None, which is the ordinary case and leaves the FALSE exactly as scored.
+
+    UNGRADEABLE != 0 is this module's rule (see the docstring), and a
+    delegated child turn is the one place inside a scored turn where a
+    DIFFERENT model answers: the child is opened with no model of its own and
+    the role agent_<name>, and the gateway serves a role with no chain from
+    the CHAT chain (services/gateway/app/routing.py). So a child turn that
+    errored — the chain down, its model not installed, no report persisted —
+    fails the delegation contract without the scored model ever having done
+    anything wrong, and recording that as FALSE would be a fabricated verdict
+    about a model that was never measured.
+
+    TWO facts have to hold, and both are read rather than assumed. A FAILING
+    predicate is excused only when
+
+      1. its arg names a tool whose span shows a child turn that RAN and
+         ended badly (_child_turn_error — the presence of CHILD_TURN_FACT,
+         which a refusal-before-run does not have), and
+      2. that failure is WHY the predicate failed, established by re-running
+         the predicate itself over the same trace with that span's ok flipped
+         (_as_if_the_child_had_finished): it is excused only if it would then
+         have PASSED.
+
+    The second is what keeps this from being a list of predicate names
+    someone maintains, and it is not decoration. tool_called ignores ok, so a
+    child error never fails it. tool_not_called fails because the call was
+    MADE, which the child's fate does not change. And a reply predicate's arg
+    is a REGEX, not a tool — reply_absent('delegate_to_agent') is a perfectly
+    reasonable contract, and it must not be excused by a delegate span that
+    happens to share its text. Every one of those still fails the
+    counterfactual and stays the FALSE it is. In practice tool_succeeded is
+    the only predicate this can excuse, but that is a CONCLUSION the check
+    reaches, not an assumption it starts from.
+
+    ONE excusable predicate excludes the WHOLE run, not just that predicate,
+    and that is deliberate. From the round the child failed onward, the tool
+    failure is IN the model's context — it steers every later round and so
+    every later predicate — so a turn with a broken delegation in it is not a
+    clean measurement of anything, and scoring the rest of it would be
+    reporting a number the run did not earn. Exclusion is the conservative
+    direction the whole UNGRADEABLE rule points in. (2026-09-09)"""
+    for result in results:
+        if result.passed or not result.arg:
+            continue
+        reason = _child_turn_error(spans, result.arg)
+        if reason is None:
+            continue
+        would_pass, _detail = predicates.PREDICATES[result.predicate](
+            _as_if_the_child_had_finished(spans, result.arg), reply, result.arg
+        )
+        if not would_pass:
+            # It would have failed anyway: the child's error is not the cause,
+            # so this stays the model's own FALSE.
+            continue
+        return (
+            f"{result.predicate}({result.arg!r}) failed because the delegated child "
+            f"turn did not finish, and a child turn is served by the chat chain, not "
+            f"by the model under test — {reason}"
+        )
+    return None
+
+
 async def _settle_turn_work(spawned_before: set[asyncio.Task]) -> None:
     """Let the detached work the turn just fired land — its atomic trace close
     and any queued memory ingest — before the turn's status is read and the
@@ -363,7 +842,8 @@ async def _settle_turn_work(spawned_before: set[asyncio.Task]) -> None:
 
 async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) -> EvalRun:
     """Replay one case against `model` and score it. See the module docstring for
-    the three enforced properties (scratch isolation, no leakage, ungradeable!=0)."""
+    the enforced properties (scratch isolation and the declared world, no
+    leakage, ungradeable!=0)."""
     person = await scratch_person(pool)
     # "Today" as of BEFORE the turn runs — _cleanup_scratch_person also reads
     # it fresh at cleanup time and forgets both if they differ, so a turn that
@@ -377,16 +857,49 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # Bound here for the same reason: the finally's cleanup settles this
     # turn's detached work first, and a setup-phase exit has no turn to settle.
     spawned_before: set[asyncio.Task] | None = None
+    # The agents this case declared, as they were actually created — appended
+    # by _create_fixture_agents as each lands, so a half-built world is still
+    # fully torn down. Empty, and untouched by any query, for a case that
+    # declares none.
+    fixture_agents: list[agents.Agent] = []
 
     # Everything from here on runs against this case's OWN fresh scratch
     # person — the finally below tears it down (person + its conversation +
-    # its one possible memory journal file) NO MATTER WHERE this exits: the
-    # normal score, the ungradeable-status return, the _run_turn-raised
-    # return, or an exception in the setup itself (conversation create,
-    # message insert, settings read, open_turn) that propagates past this
-    # function entirely — a scratch person must never survive whatever else
-    # goes wrong scoring its case.
+    # its one possible memory journal file, and any agent this case declared)
+    # NO MATTER WHERE this exits: the normal score, the ungradeable-status
+    # return, the unbuildable-world return, the _run_turn-raised return, or an
+    # exception in the setup itself (conversation create, message insert,
+    # settings read, open_turn) that propagates past this function entirely —
+    # a scratch person must never survive whatever else goes wrong scoring its
+    # case.
     try:
+        # The world before the history: a case's declared agents have to be
+        # in the table before the turn reads the roster. A failure to BUILD
+        # the world is not the model's — it never got asked anything — so it
+        # is UNGRADEABLE with the writer's own reason, never a fail, and the
+        # finally below still tears down whatever landed.
+        try:
+            await _create_fixture_agents(app, pool, case, fixture_agents)
+        except Exception as exc:
+            logger.exception(
+                "eval run_case: the declared agents for case %s could not be built", case.id
+            )
+            result = EvalRun(
+                case_id=case.id,
+                suite=case.suite,
+                suite_version=case.suite_version,
+                model=model,
+                passed=None,
+                ungradeable=True,
+                detail={
+                    "reason": (
+                        "the case's declared agents could not be created — "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                },
+            )
+            return result
+
         conversation_id = await _scratch_conversation(pool, person)
         history = _history_from_setup(case.setup)
 
@@ -489,7 +1002,17 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
                     "reply": reply[:_DETAIL_REPLY_CHARS],
                     "predicates": [r.as_json() for r in results],
                 }
-                result = _base(passed, False, detail)
+                # A failure the model under test did not cause is UNGRADEABLE,
+                # not a 0 — the same rule as an errored turn, applied one level
+                # down, to a DELEGATED child turn that ran on a different
+                # model's chain. The predicate evidence is kept alongside the
+                # reason, so the operator reads what was scored and why it was
+                # excluded rather than a bare "ungradeable". (2026-09-09)
+                elsewhere = _measured_someone_else(turn.spans, reply, results)
+                if elsewhere is not None:
+                    result = _base(None, True, {"reason": elsewhere, **detail})
+                else:
+                    result = _base(passed, False, detail)
         return result
     finally:
         # The cleanup must not race the turn's queued ingest (/forget before
@@ -517,7 +1040,15 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         async def _settle_then_cleanup() -> list[str]:
             if spawned_before is not None:
                 await _settle_turn_work(spawned_before)
-            return await _cleanup_scratch_person(app, pool, person, ingest_date_before, turn)
+            warnings = await _cleanup_scratch_person(app, pool, person, ingest_date_before, turn)
+            # The declared world goes the same way as the scratch person, in
+            # the same shielded task: whatever this case created is deleted
+            # no matter how the case ended, and a teardown that could not
+            # verify itself says so on the case's own result.
+            warnings.extend(
+                await _delete_fixture_agents(app, pool, fixture_agents, _fixture_actor(case))
+            )
+            return warnings
 
         cleanup = chat._spawn(_settle_then_cleanup())
         cleanup_warnings = await asyncio.shield(cleanup)
@@ -776,7 +1307,8 @@ async def run_suite_job(
     model: str,
 ) -> list[EvalRun]:
     """The job behind one eval_suite_runs row (already 'running', from
-    open_suite_run): sweep orphaned scratch people, score every case
+    open_suite_run): sweep orphaned scratch people AND orphaned fixture
+    agents, score every case
     SEQUENTIALLY against the one chosen model, persist each row WITH run_id
     as it lands, and close the row — 'done', or 'error' with the exception
     stated, or 'interrupted' if this task is cancelled — in a finally, so the
@@ -794,6 +1326,7 @@ async def run_suite_job(
     error: str | None = None
     try:
         await _sweep_orphan_scratch_people(pool)
+        await _sweep_orphan_fixture_agents(app, pool)
         for case in suite_cases:
             run = await run_case(app, pool, case, model)
             run.run_id = run_id

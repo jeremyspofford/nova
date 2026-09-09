@@ -324,6 +324,134 @@ def test_validate_spec_refuses_each_by_name(root):
     )
 
 
+# ── the eval harness's reserved prefix (2026-09-09) ────────────────────────
+#
+# The eval runner CREATES the agents a case declares and DELETES them by name
+# afterwards, and rests that teardown on the premise that its prefix is a name
+# the owner's roster cannot hold. Until this rule the premise was simply false:
+# validate_spec accepted "eval_helper" from the Agents page and from her
+# create_agent tool, so an agent the owner made under that name would have been
+# destroyed — with its log conversation — by the next suite run. These pin the
+# rule that makes the premise TRUE, both of the owner's doors, the ONE constant
+# behind it, and the single door the harness keeps.
+
+
+def test_the_reserved_prefix_is_refused_and_the_refusal_says_why(root):
+    with pytest.raises(AgentError, match="reserved") as refused:
+        agents.validate_spec(_spec(name="eval_helper"), root=root)
+    message = str(refused.value)
+    assert agents.EVAL_FIXTURE_PREFIX in message
+    # It names the CONSEQUENCE, not just the rule: what would happen to the
+    # agent if the roster were allowed to hold the name.
+    assert "eval harness" in message and "DELETES" in message
+    # The rule is the PREFIX, not one name — and it stops at the prefix.
+    with pytest.raises(AgentError, match="reserved"):
+        agents.validate_spec(_spec(name="eval_x"), root=root)
+    agents.validate_spec(_spec(name="evaluator"), root=root)  # not the prefix
+    # The harness's own door is the single exception, and it is a Python
+    # keyword — no field of a spec, so no tool argument or request body reaches
+    # it (the two owner doors below are refused by that construction).
+    agents.validate_spec(_spec(name="eval_helper"), root=root, allow_reserved_prefix=True)
+
+
+def test_the_harness_and_the_roster_read_ONE_prefix():
+    """Not two literals with the same value: the loader reads the roster's
+    constant, so the day the prefix moves it moves in both places at once."""
+    from app.evals import cases as eval_cases
+
+    assert eval_cases.FIXTURE_AGENT_PREFIX == agents.EVAL_FIXTURE_PREFIX
+    assert agents.EVAL_FIXTURE_PREFIX in agents.RESERVED_PREFIXES
+    loader = Path(eval_cases.__file__).read_text(encoding="utf-8")
+    assert "FIXTURE_AGENT_PREFIX = agents.EVAL_FIXTURE_PREFIX" in loader
+    # The dependency runs ONE way — evals reads the roster's rule; app.agents
+    # never imports app.evals — so the rule cannot be circular. Cold, in a
+    # subprocess, for the same reason the chat-import pin is.
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, app.agents; print([m for m in sys.modules if m.startswith('app.evals')])",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=str(Path(__file__).resolve().parent.parent),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "[]"
+
+
+def test_the_harness_door_has_exactly_one_caller():
+    """allow_reserved_prefix is the harness's door and nothing else's. This
+    goes red the day it is plumbed into a route, a tool or the page — which is
+    the only way an owner could reach the name again."""
+    core = Path(agents.__file__).resolve().parent
+    callers = sorted(
+        str(path.relative_to(core))
+        for path in core.rglob("*.py")
+        if "allow_reserved_prefix=True" in path.read_text(encoding="utf-8")
+    )
+    assert callers == ["agents.py", "evals/runner.py"]
+    # agents.py's own use is `update`, whose spec carries the EXISTING row's
+    # name — never a name a caller chose.
+    source = Path(agents.__file__).read_text(encoding="utf-8")
+    assert source.count("allow_reserved_prefix=True") == 1
+    assert "validate_spec(merged, allow_reserved_prefix=True)" in source
+
+
+async def test_both_owner_doors_refuse_the_reserved_prefix(owner_client, pool, mount_peers, root):
+    """Her create_agent tool and the Agents page — the only two ways an agent
+    comes to exist — both refuse, and neither leaves anything behind."""
+    mount_peers(gateway=_gateway())
+    row = await pool.fetchrow("SELECT id, name, role FROM people WHERE role = 'owner'")
+    owner = Person(id=row["id"], name=row["name"], role=row["role"])
+    body = {
+        "name": "eval_helper",
+        "purpose": "writes notes",
+        "instructions": "Be brief.",
+        "tools": ["workspace_write_file"],
+    }
+
+    result, ok = await tools.dispatch("create_agent", dict(body), tools.context_for(app, owner))
+    assert not ok and "reserved" in result and agents.EVAL_FIXTURE_PREFIX in result
+
+    resp = await owner_client.post("/api/v1/agents", json=dict(body))
+    assert resp.status_code == 400, resp.text
+    assert "reserved" in resp.text
+
+    assert await agents.list_all(pool) == []
+    assert await pool.fetchval("SELECT count(*) FROM conversations") == 0
+
+
+async def test_a_row_under_the_reserved_prefix_still_lives_its_whole_life(pool, mount_peers, root):
+    """The rule guards WRITES OF A NAME, never rows: a row that predates it
+    (stood in for here by the harness's own door — the same row either way) is
+    still read, still listed, still editable and still deletable. A rule that
+    reached back into the table would be the data loss it exists to prevent."""
+    await _owner(pool)
+    mount_peers(gateway=_gateway())
+
+    created = await agents.create(
+        pool,
+        app,
+        _spec(name="eval_helper"),
+        created_via="page",
+        created_turn_id=None,
+        actor="jeremy",
+        allow_reserved_prefix=True,
+    )
+    assert created.agent.name == "eval_helper"
+    assert (await agents.by_name(pool, "eval_helper")) is not None
+    assert "eval_helper" in await agents.names(pool)
+
+    updated = await agents.update(
+        pool, app, "eval_helper", {"purpose": "still the owner's"}, actor="jeremy"
+    )
+    assert updated.agent.purpose == "still the owner's"
+
+    await agents.delete(pool, app, "eval_helper", actor="jeremy")
+    assert (await agents.by_name(pool, "eval_helper")) is None
+
+
 # ── create ─────────────────────────────────────────────────────────────────
 
 

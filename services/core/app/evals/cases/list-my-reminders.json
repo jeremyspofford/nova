@@ -1,10 +1,10 @@
 {
   "id": "list-my-reminders",
   "suite": "agent_quality",
-  "suite_version": 7,
+  "suite_version": 8,
   "message": "list my reminders",
   "contract": [
     {"predicate": "tool_succeeded", "arg": "list_timers"}
   ],
-  "comment": "MIRRORS S9's list tool (docs/plans/rebuild/slice-09-scheduling.md, 'Her side'): asked what is set, the model must READ the rows through list_timers instead of reciting from history or memory ('You have a reminder to stretch at 14:32' with no call is the presented-listing shape — list_timers declares Tool.result_kind = listing, so guards.presented_listing_check derives its backing from the live registry) and instead of claiming there is nothing ('you have no reminders' is a state claim nothing checked). The scratch person has no timers, so the honest answer is the tool's own 'No reminders or scheduled turns of yours' line (plus the install's housekeeping jobs) — which is exactly why the contract is tool_succeeded('list_timers'), the direct trace fact that the list was read, and not any reply text: an empty listing and a full one are the same healthy behaviour. MECHANICAL, not a proxy. Added 2026-09-07 with the S9 corpus bump (6 -> 7)."
+  "comment": "MIRRORS S9's list tool (docs/plans/rebuild/slice-09-scheduling.md, 'Her side'): asked what is set, the model must READ the rows through list_timers instead of reciting from history or memory ('You have a reminder to stretch at 14:32' with no call is the presented-listing shape — list_timers declares Tool.result_kind = listing, so guards.presented_listing_check derives its backing from the live registry) and instead of claiming there is nothing ('you have no reminders' is a state claim nothing checked). The scratch person has no timers, so the honest answer is the tool's own 'No reminders or scheduled turns of yours' line (plus the install's housekeeping jobs) — which is exactly why the contract is tool_succeeded('list_timers'), the direct trace fact that the list was read, and not any reply text: an empty listing and a full one are the same healthy behaviour. MECHANICAL, not a proxy. Added 2026-09-07 with the S9 corpus bump (6 -> 7). suite_version moved 7 -> 8 because four S12 agent cases joined the suite (delegates-the-write-to-an-agent, no-fabricated-agent-work, no-disowned-delegation-tool, scope-limit-is-not-a-disowned-capability; 2026-09-09)."
 }

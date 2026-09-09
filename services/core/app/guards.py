@@ -1324,20 +1324,62 @@ _DENIAL_LEAD = re.compile(
     r"|\bmy\s+capabilit(?:y|ies)\s+(?:don'?t|do\s+not|doesn'?t|does\s+not)\s+include",
     re.I,
 )
-# The trailing denial form, where the capability phrase comes FIRST:
-# "<capability> is not something I can do."
-_TRAILING_DENIAL = re.compile(r"\bis\s+not\s+something\s+i\s+can\s+do\b", re.I)
+# The trailing denial forms, where the capability phrase comes FIRST and the
+# denial follows it: "<capability> is not something I can do."
+#
+# 2026-09-09 (S12 review): the walk's OWN sentence was not in this set. She
+# said "delegating to an agent needs a delegate_to_agent tool, and that
+# capability isn't in my toolset right now" while HOLDING delegate_to_agent,
+# and nothing here fired — the yesterday fix only caught her because a LATER
+# clause in the same reply said "so I can't hand off work to coder", i.e. by
+# luck of a second phrasing. A denial does not stop being a denial for being
+# said about a possession rather than an ability, so the whole copula family
+# is read: <capability> is/isn't {something I can do | something I'm able to
+# do | in/part of/one of/among/within my toolset|tools|capabilities|abilities|
+# skill set | a capability/tool I have | available to me}. All of them are
+# ONE shape — a negated copula whose predicate says the capability is not
+# hers — which is why they can be one pattern rather than a growing list of
+# sentences someone maintains.
+#
+# Like the original, a trailing form governs the capability BEFORE it in the
+# same clause, because the subject is often anaphoric ("…, and THAT CAPABILITY
+# isn't in my toolset") and the phrase it refers back to is earlier in the
+# clause. The exposure that buys — an affirmation of one capability sharing a
+# clause with the denial of another ("I can write files, and creating agents
+# isn't one of my tools") would correct both — is the SAME exposure the
+# original form already carried, _clauses' contrastive/semicolon splits carve
+# off most of it, and what it costs is bounded: the correction states only
+# that a registered tool exists, which is TRUE of the affirmed capability too,
+# so an over-reach here reads as a redundant line and never as a false one.
+_NOT_COPULA = r"(?:\b(?:is|are)\s+not\b|\b(?:is|are)n['’]t\b|['’](?:s|re)\s+not\b)"
+_TRAILING_DENIAL = re.compile(
+    _NOT_COPULA + r"\s+(?:"
+    r"something\s+i(?:['’]m|\s+am)?\s+(?:can\s+do|able\s+to\s+do)"
+    r"|an?\s+(?:capability|tool)\s+i\s+have"
+    r"|(?:in|part\s+of|one\s+of|among|within)\s+my\s+"
+    r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)"
+    r"|available\s+to\s+me"
+    r")\b",
+    re.I,
+)
 
 # A SCOPE limit on the capability, not a denial of it (S12, 2026-09-08). An
 # agent is contained to its own folder, so "I can't write files outside my
 # folder" is TRUE — the tool exists and _resolve_within refuses the path.
 # Correcting it would tell the owner the agent can write anywhere, which is
-# the opposite of the fact, so a qualifier right after the capability phrase
-# makes the denial honest. Nova's root is contained too; this protects the
-# same sentence from her. Kept narrow and to the phrase's own tail so an
-# unrelated "except" elsewhere in the clause cannot excuse a real denial.
+# the opposite of the fact, so a scope word in the denial's own tail makes the
+# denial honest. Nova's root is contained too; this protects the same sentence
+# from her.
+#
+# 2026-09-09 (S12 review): this used to read only the 40 characters
+# IMMEDIATELY after the capability phrase, which made the guard itself the
+# liar on any honest containment sentence with words in between. MEASURED over
+# 11 honest phrasings: 9 silent, 2 corrected into "I can do that" — "I can't
+# write files to paths outside the workspace" and "I can't write files there —
+# /etc/nova/notes.md is outside my workspace". The window is gone; the scope
+# word is now found anywhere in the DENIAL'S OWN TAIL (_denial_tail).
 _SCOPE_QUALIFIER = re.compile(
-    r"^\W*(?:"
+    r"\b(?:"
     r"outside|beyond|elsewhere|externally"
     r"|(?:anywhere|any\s+place)\s+(?:else|other|except|but)"
     r"|(?:other\s+than|except|besides|apart\s+from)\b"
@@ -1348,7 +1390,41 @@ _SCOPE_QUALIFIER = re.compile(
     r")",
     re.I,
 )
-_SCOPE_TAIL_CHARS = 40
+
+
+def _denial_tail(clause: str, phrase_end: int) -> str:
+    """The text that belongs to THIS denial — where a scope word may qualify it.
+
+    WHERE THE DENIAL ENDS, and why this is the right boundary. The outer unit
+    is already the clause: _clauses splits on sentence terminators, semicolons,
+    the contrastive conjunctions and ", then", so an "except" living in another
+    sentence or on the far side of a "but" is out of reach by construction. The
+    only thing left that can end a denial INSIDE one clause is another denial:
+    a second inability lead ("I can't write files AND I CAN'T work outside the
+    sandbox" — the "outside" belongs to the second denial, the first is a flat
+    false denial and must still be corrected) or a trailing denial form
+    ("reading files IS NOT IN MY TOOLSET" — the "not in my" is the denial
+    itself, not a scope on the capability). So the tail runs from the end of
+    the capability phrase to whichever of those starts first, or to the end of
+    the clause.
+
+    Nothing else is treated as a boundary — not a dash, not a comma, not a
+    coordinator — because the two measured false corrections lived exactly
+    there ("...to paths outside the workspace", "...there — /etc/nova/notes.md
+    is outside my workspace") and because a shared scope qualifier legitimately
+    trails a coordinated pair ("I can't create files or write files outside my
+    workspace"). The residual is a scope word in a coordinated POSITIVE
+    predicate ("I can't write files, and everything except the config is
+    stale"), which silences the guard: a MISS, which is the direction this
+    family always errs in (ruling S2d-R2 — a wrongly-corrected honest reply is
+    worse than a missed lie).
+    """
+    end = len(clause)
+    for pattern in (_DENIAL_LEAD, _TRAILING_DENIAL):
+        nxt = pattern.search(clause, phrase_end)
+        if nxt is not None:
+            end = min(end, nxt.start())
+    return clause[phrase_end:end]
 
 
 def _capability_correction_text(tools_named: Sequence[str]) -> str:
@@ -1394,10 +1470,11 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
                 # verb elsewhere in the clause from being swept in.
                 after_lead = lead is not None and m.start() >= lead.end()
                 before_trailing = trailing is not None and m.end() <= trailing.start()
-                # A scope limit right after the phrase ("...files OUTSIDE my
-                # folder") is a true statement about containment, not a
-                # disowned capability.
-                scoped = _SCOPE_QUALIFIER.search(clause[m.end() : m.end() + _SCOPE_TAIL_CHARS])
+                # A scope limit anywhere in this denial's own tail ("...files
+                # OUTSIDE my folder", "...files to paths OUTSIDE the
+                # workspace") is a true statement about containment, not a
+                # disowned capability. _denial_tail says where that tail ends.
+                scoped = _SCOPE_QUALIFIER.search(_denial_tail(clause, m.end()))
                 if (after_lead or before_trailing) and scoped is None:
                     seen.add(tool)
                     denied.append((m.group(0).strip(), tool))

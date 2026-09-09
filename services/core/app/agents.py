@@ -69,6 +69,25 @@ DELEGATE_TOOL = "delegate_to_agent"
 
 NAME_RE = re.compile(r"^[a-z][a-z_]{0,25}$")
 RESERVED_NAMES = frozenset({"nova"})
+# The eval harness's fixture prefix, and the ONE definition of it (2026-09-09).
+#
+# WHY IT IS RESERVED HERE. The eval runner creates the agents a case declares
+# and DELETES them by name afterwards (evals/runner.py
+# _create_fixture_agents / _delete_fixture_agents), and it justifies that
+# teardown on the premise that the blast radius is a name the owner's roster
+# cannot hold. Until this line the premise was FALSE: validate_spec accepted
+# "eval_helper" from the Agents page and from her create_agent tool, so an
+# agent the owner made would have been destroyed — with its log conversation —
+# by the next suite run. The rule makes the premise true instead of asserting
+# it, which is the only way a premise like that is worth resting on.
+#
+# WHICH WAY THE DEPENDENCY RUNS: evals/cases.py imports this constant
+# (FIXTURE_AGENT_PREFIX = agents.EVAL_FIXTURE_PREFIX); app.agents never
+# imports app.evals — the roster's writer owns the rule about what the roster
+# may hold, and the harness reads it. evals/runner.py already imports this
+# module, so the direction is the one that was there.
+EVAL_FIXTURE_PREFIX = "eval_"
+RESERVED_PREFIXES = frozenset({EVAL_FIXTURE_PREFIX})
 MENTION_RE = re.compile(r"^@([a-z][a-z_]{0,25})\b")
 CREATED_VIA = ("chat", "page")
 MIN_ROUNDS, MAX_ROUNDS = 1, 50
@@ -462,10 +481,26 @@ def _names_tuple(value: Any, what: str) -> tuple[str, ...]:
     return tuple(out)
 
 
-def validate_spec(spec: AgentSpec, *, root: Path | None = None) -> None:
+def validate_spec(
+    spec: AgentSpec, *, root: Path | None = None, allow_reserved_prefix: bool = False
+) -> None:
     """Every refusal states the rule it applies and, where there is a live
     set to name, names it: the registry for tools, the directory for skills.
-    Nothing here is a list someone maintains."""
+    Nothing here is a list someone maintains.
+
+    `allow_reserved_prefix` is the eval harness's own door (2026-09-09) and
+    the ONLY one: the runner builds its fixture rows through this same writer
+    (never hand-written SQL), so the prefix it deletes by has to be creatable
+    by something. It is a Python keyword, not a field of the spec — no tool
+    argument, no request body and no model output can reach it, so
+    `create_agent` and the API are refused by construction. `update` passes it
+    too, for a different reason stated at that call site.
+
+    This guards WRITES only. A row that predates the rule keeps existing, is
+    still listed, still runs and can still be deleted — nothing here scans the
+    table, and a rule that reached back and deleted rows would be the very
+    data loss it exists to prevent.
+    """
     if not isinstance(spec.name, str) or not NAME_RE.fullmatch(spec.name):
         raise AgentError(
             f"agent name {spec.name!r} must match ^[a-z][a-z_]{{0,25}}$ — lowercase letters "
@@ -473,6 +508,15 @@ def validate_spec(spec: AgentSpec, *, root: Path | None = None) -> None:
         )
     if spec.name in RESERVED_NAMES:
         raise AgentError(f"{spec.name!r} is reserved — it is Nova's own name")
+    if not allow_reserved_prefix:
+        for prefix in sorted(RESERVED_PREFIXES):
+            if spec.name.startswith(prefix):
+                raise AgentError(
+                    f"agent name {spec.name!r} is reserved — names starting with {prefix!r} "
+                    "belong to the eval harness, which CREATES and DELETES them on every "
+                    "suite run, so an agent of yours with that name would be destroyed "
+                    "along with its log conversation. Pick another name."
+                )
     if not isinstance(spec.purpose, str) or not isinstance(spec.instructions, str):
         raise AgentError("purpose and instructions must be text")
     for name in _names_tuple(spec.tools, "tools"):
@@ -838,6 +882,7 @@ async def create(
     created_via: str,
     created_turn_id: uuid.UUID | None,
     actor: str,
+    allow_reserved_prefix: bool = False,
 ) -> CreateResult:
     """The one way an agent comes to exist, from the page or from Nova's
     tool. In order, each step verified: validate; ONE transaction holding
@@ -846,8 +891,13 @@ async def create(
     there is not an agent); after commit the gateway route, whose failure
     is STATED in the result and never a rollback (the agent is servable on
     the chat chain without a row of its own); then the row and the folder
-    read back, and the sentence composed from what was read."""
-    validate_spec(spec)
+    read back, and the sentence composed from what was read.
+
+    `allow_reserved_prefix` (2026-09-09) is the eval harness's door onto
+    EVAL_FIXTURE_PREFIX — a Python keyword only the runner passes, so the
+    page, the API and her create_agent tool are all refused by construction.
+    """
+    validate_spec(spec, allow_reserved_prefix=allow_reserved_prefix)
     if created_via not in CREATED_VIA:
         raise AgentError(
             f"created_via must be one of {', '.join(CREATED_VIA)}, got {created_via!r}"
@@ -951,7 +1001,12 @@ async def update(pool: asyncpg.Pool, app, name: str, changes: dict, *, actor: st
         read_shared_memory=bool(pick("read_shared_memory", current.read_shared_memory)),
         model_chain=changes.get("model_chain", ()),
     )
-    validate_spec(merged)
+    # The reserved prefix is not re-applied here (2026-09-09): `name` is not
+    # updatable, so this spec's name is the EXISTING row's — a rule about what
+    # may ENTER the roster, applied to a row already in it, would leave an
+    # agent made before the rule (or by the harness) editable by nobody. The
+    # refusal belongs on create, where the name is chosen.
+    validate_spec(merged, allow_reserved_prefix=True)
     rounds = await _rounds_for(pool, merged)
     cap = _cap_decimal(merged.monthly_cap_usd)
     changed = sorted(key for key in changes if key != "name")

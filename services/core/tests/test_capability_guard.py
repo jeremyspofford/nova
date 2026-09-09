@@ -295,19 +295,39 @@ def test_the_agent_corrections_are_clean_over_themselves():
 # _resolve_within refuses the path. Correcting it would tell the owner the
 # agent can write anywhere, which is the opposite of the fact. Nova's root
 # is contained too, so the same sentence is protected from her.
+#
+# THE LIST MOVED 6 -> 11 (2026-09-09). The first fix read only the 40
+# characters IMMEDIATELY after the capability phrase, so it excused the six
+# phrasings below that happen to put the scope word there and CORRECTED every
+# honest containment sentence with any words in between. Measured over these
+# eleven that day: 9 silent, 2 corrected into "Correction: I can do that — I
+# have a tool for it (workspace_write_file)", i.e. the guard telling the owner
+# she can write anywhere. The two that were wrong are #2 and #3 and they are
+# pinned here by name; the window is gone (guards._denial_tail) and all
+# eleven now measure silent. This list IS the re-measurement — a phrasing
+# added here is a phrasing someone checked.
 @pytest.mark.parametrize(
     "reply",
     [
+        "I can't write files outside my workspace.",
+        # The two live FALSE CORRECTIONS the 40-char window left behind:
+        "I can't write files to paths outside the workspace.",
+        "I can't write files there — /etc/nova/notes.md is outside my workspace.",
         "I can't list files outside my folder.",
         "I cannot read files outside agents/coder/.",
         "I can't write files anywhere except my own folder.",
-        "I can't search the web or list files from external sources.",
         "I'm unable to read files from another person's workspace.",
         "I can't write files elsewhere.",
+        "I can't search the web or list files from external sources.",
+        "I can't write files anywhere other than my workspace root.",
+        "I can't create files beyond my sandbox.",
     ],
 )
 def test_a_scope_limit_on_a_capability_is_honest(reply):
-    assert guards.capability_claim_check(reply, ALL_TOOLS) is None
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None, (
+        "a truthful containment sentence was corrected into 'I can do that' — "
+        "the guard is the liar, the worse of the two failures"
+    )
 
 
 @pytest.mark.parametrize(
@@ -316,8 +336,83 @@ def test_a_scope_limit_on_a_capability_is_honest(reply):
         "I can't list files.",
         "I can't write files.",
         "I'm unable to read a file for you.",
+        # 2026-09-09: the tail is THIS denial's, and it ends where the NEXT
+        # denial starts — the scope word belongs to the second clause's
+        # denial, so the first is still the flat false denial it looks like.
+        "I can't write files and I can't work outside the sandbox.",
     ],
 )
 def test_a_bare_denial_of_a_held_capability_is_still_corrected(reply):
     """The qualifier must excuse a SCOPE, never the capability itself."""
     assert guards.capability_claim_check(reply, ALL_TOOLS) is not None
+
+
+# -- the trailing denial forms (2026-09-09) --------------------------------
+#
+# The walk's OWN sentence did not reach the guard. She said "delegating to an
+# agent needs a delegate_to_agent tool, and that capability isn't in my
+# toolset right now" while HOLDING delegate_to_agent, and every denial lead in
+# the set is a first-person present ability form ("I can't", "I'm unable to",
+# "my capabilities don't include") — none of which that sentence contains. The
+# 2026-09-08 fix caught her only because a LATER clause said "so I can't hand
+# off work to coder": a second phrasing, not the one she used. A denial does
+# not stop being a denial for being said about a possession rather than an
+# ability, so the whole negated-copula family is read now.
+
+
+@pytest.mark.parametrize(
+    ("reply", "tool"),
+    [
+        # THE WALK, verbatim (2026-09-08) — the sentence the guard missed.
+        (
+            "delegating to an agent needs a delegate_to_agent tool, and that capability "
+            "isn't in my toolset right now",
+            "delegate_to_agent",
+        ),
+        ("Delegating to an agent is not in my toolset.", "delegate_to_agent"),
+        ("Delegating to an agent is not a capability I have.", "delegate_to_agent"),
+        ("Web browsing isn't available to me.", "fetch_url"),
+        ("Reading files is not one of my tools.", "workspace_read_file"),
+        ("Listing files isn't among my tools.", "workspace_list_files"),
+        ("Creating an agent is not part of my capabilities.", "create_agent"),
+        ("Writing files isn't something I'm able to do.", "workspace_write_file"),
+        # The original form, still read.
+        ("Scheduling tasks is not something I can do.", "create_timer"),
+    ],
+)
+def test_a_trailing_denial_of_a_held_capability_is_corrected(reply, tool):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None, "a trailing denial is a denial"
+    assert tool in tgt(correction)
+    assert tool in correction.text
+
+
+def test_a_trailing_denial_is_not_read_as_its_own_scope_limit():
+    """A trailing denial's own "not in my toolset" is the DENIAL, not a scope
+    on the capability — the tail a scope word may live in ends where the next
+    denial begins, so the two cannot be confused for each other."""
+    fired = guards.capability_claim_check("Reading files is not in my toolset.", ALL_TOOLS)
+    assert fired is not None and tgt(fired) == ["workspace_read_file"]
+    # ...while a REAL scope qualifier in front of the same denial is honest.
+    assert (
+        guards.capability_claim_check(
+            "Writing files outside my workspace is not something I can do.", ALL_TOOLS
+        )
+        is None
+    )
+
+
+def test_the_trailing_forms_stay_derived_from_the_live_tool_set():
+    """The same sentence flips on the registry alone, exactly as the lead
+    forms do — the trailing family is not a second, hardcoded verdict."""
+    reply = "Delegating to an agent isn't in my toolset."
+    assert guards.capability_claim_check(reply, ["delegate_to_agent"]) is not None
+    assert guards.capability_claim_check(reply, []) is None
+
+
+def test_the_trailing_correction_is_clean_over_itself():
+    correction = guards.capability_claim_check(
+        "Delegating to an agent isn't in my toolset.", ALL_TOOLS
+    )
+    assert correction is not None
+    assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
