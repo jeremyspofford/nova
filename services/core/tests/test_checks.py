@@ -159,8 +159,9 @@ def only(monkeypatch):
     return _use
 
 
-def _check(name: str, run, *, urgent: bool = False) -> Check:
-    return Check(name=name, describe=f"{name} (a test)", urgent=urgent, run=run)
+def _check(name: str, run, *, urgent: bool = False, deadline_s: float | None = None) -> Check:
+    extra = {} if deadline_s is None else {"deadline_s": deadline_s}
+    return Check(name=name, describe=f"{name} (a test)", urgent=urgent, run=run, **extra)
 
 
 # ── the fingerprint ────────────────────────────────────────────────────────
@@ -261,16 +262,36 @@ async def test_run_all_never_raises_and_reports_the_broken_check_by_name(only):
     assert not all(r.ran for r in runs)
 
 
-async def test_a_hanging_check_is_bounded_and_says_so(only, monkeypatch):
-    monkeypatch.setattr(checks, "CHECK_DEADLINE_S", 0.05)
+async def test_a_hanging_check_is_bounded_and_says_so(only):
+    """S11 (2026-09-08): the bound moved from a module constant to the CHECK.
+    review_commitments waits on a local model reading a window of his messages
+    and the shared 60 s cut it off on its first live beat, so the deadline now
+    describes the probe rather than the cheapest probe in the registry — and
+    the stated reason names the bound that was ACTUALLY applied."""
 
     async def forever(app, pool):
         await asyncio.sleep(5)
         return []
 
-    only(_check("sleepy", forever))
+    only(_check("sleepy", forever, deadline_s=0.05))
     run = await checks.run_one(None, None, "sleepy")
     assert (run.ran, run.reason) == (False, "the check did not finish within 0.05s")
+
+
+async def test_a_check_that_declares_no_deadline_gets_the_registry_default(only):
+    async def forever(app, pool):
+        await asyncio.sleep(5)
+        return []
+
+    only(_check("sleepy", forever))
+    assert checks.REGISTRY["sleepy"].deadline_s == checks.CHECK_DEADLINE_S
+
+
+def test_the_only_check_that_raises_its_own_deadline_is_the_one_that_reads_a_model():
+    """A deadline generous enough for a model call would hide a socket probe
+    that hung, so raising it is deliberate and stays visible here."""
+    raised = {n for n, c in checks.REGISTRY.items() if c.deadline_s != checks.CHECK_DEADLINE_S}
+    assert raised == {"review_commitments"}
 
 
 async def test_rubbish_from_a_check_is_a_check_that_did_not_run(only):

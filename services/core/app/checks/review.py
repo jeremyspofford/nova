@@ -115,11 +115,22 @@ NOTE_CHARS = 400
 QUOTE_CHARS = 240
 COMMITMENT_CHARS = 200
 
-# The completion's own bounds. The read timeout is chat.JUDGE_TIMEOUT's shape —
-# a long first token is a model thinking, not a failure — and the whole check
-# is bounded again by checks.CHECK_DEADLINE_S above it. max_tokens bounds what
-# a runaway answer can cost.
-REVIEW_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=10.0, pool=5.0)
+# The completion's own bounds. A long first token is a model thinking, not a
+# failure, and max_tokens bounds what a runaway answer can cost.
+#
+# The read budget was 30 s, chat.JUDGE_TIMEOUT's shape, and the first live beat
+# (2026-09-08) proved that wrong: a judge call scores one short reply, while
+# this one hands a 27B local model a 6,000-character window of his messages and
+# waits for structured JSON. It timed out, so the one check that reads his
+# commitments never ran on its first hour. Sized instead against the local
+# model this box actually serves, and kept under checks.CHECK_DEADLINE_S so the
+# deadline above still owns the outer bound.
+REVIEW_TIMEOUT = httpx.Timeout(connect=5.0, read=110.0, write=10.0, pool=5.0)
+# The whole check's own bound, declared on its Check so the registry applies it
+# instead of the default meant for socket probes. Comfortably over the read
+# budget above, so a slow model is reported as a slow MODEL and not as a check
+# that mysteriously did not finish.
+REVIEW_DEADLINE_S = 150.0
 RECALL_TIMEOUT = httpx.Timeout(5.0)
 REVIEW_MAX_TOKENS = 800
 
@@ -557,6 +568,10 @@ async def commitments(app, pool) -> list[Finding]:
 CHECKS: tuple[Check, ...] = (
     Check(
         name=CHECK_NAME,
+        # Longer than the registry default, for the one reason the default
+        # cannot cover: this check waits on a local model reading a window of
+        # his messages, and the shared 60 s cut it off on its first live beat.
+        deadline_s=REVIEW_DEADLINE_S,
         describe=(
             f"Things he said he would do in his own messages of the last {WINDOW.days} days and "
             f"has not finished — a model's reading, asked at most every "

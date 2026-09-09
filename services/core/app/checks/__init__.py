@@ -130,6 +130,13 @@ class Check:
     describe: str
     urgent: bool
     run: Callable[..., Awaitable[list[Finding]]]
+    # How long this check may take. Most are socket and row reads and the
+    # default is generous for them; review_commitments hands a local 27B model
+    # a window of his messages and waits for structured JSON, which the shared
+    # 60 s cut off on its very first live beat (2026-09-08). A per-check bound
+    # is the honest shape: the deadline should describe the probe, not the
+    # cheapest probe in the registry.
+    deadline_s: float = CHECK_DEADLINE_S
 
 
 REGISTRY: dict[str, Check] = {}
@@ -270,14 +277,18 @@ def fingerprint(finding: Finding) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _reason(exc: BaseException) -> str:
-    """A short, honest description of why a check could not run."""
+def _reason(exc: BaseException, deadline: float = CHECK_DEADLINE_S) -> str:
+    """A short, honest description of why a check could not run.
+
+    `deadline` is the bound that was actually applied to THIS check, so a
+    timeout says the number it was cut at rather than the registry's default.
+    """
     text = str(exc).strip()
     if isinstance(exc, CannotCheck):
         # Already written for a reader — the class name would add nothing.
         return text or "the check stated no reason"
     if isinstance(exc, TimeoutError):
-        return f"the check did not finish within {CHECK_DEADLINE_S:g}s"
+        return f"the check did not finish within {deadline:g}s"
     return f"{type(exc).__name__}: {text}" if text else type(exc).__name__
 
 
@@ -313,14 +324,20 @@ async def _wrapped(check: Check, app, pool) -> CheckRun:
     let the beat read as quiet.
     """
     try:
-        raw = await asyncio.wait_for(check.run(app, pool), CHECK_DEADLINE_S)
+        raw = await asyncio.wait_for(check.run(app, pool), check.deadline_s)
         return CheckRun(check=check.name, ran=True, reason=None, findings=_declared(check, raw))
-    except NotDue as exc:
+    except NotDue as exc:  # its cadence, not a failure
         # Its own cadence said no. Not a gap in this hour — recorded and named,
         # and deliberately NOT counted against quiet.
-        return CheckRun(check=check.name, ran=False, reason=_reason(exc), findings=(), due=False)
+        return CheckRun(
+            check=check.name,
+            ran=False,
+            reason=_reason(exc, check.deadline_s),
+            findings=(),
+            due=False,
+        )
     except Exception as exc:  # noqa: BLE001 — every failure shape is stated, none escapes
-        reason = _reason(exc)
+        reason = _reason(exc, check.deadline_s)
         logger.warning("check %s could not run — %s", check.name, reason)
         return CheckRun(check=check.name, ran=False, reason=reason, findings=())
 
