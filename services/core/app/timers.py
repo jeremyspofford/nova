@@ -57,7 +57,9 @@ JOBS: dict[str, Callable[[asyncpg.Pool], Awaitable[str]]] = {}
 # The schedule each job is seeded with, computed in UTC (jobs belong to the
 # install, not to a person's zone).
 JOB_SCHEDULES: dict[str, dict] = {"retention": {"kind": "day", "at": "03:30"}}
-JOB_TITLES: dict[str, str] = {"retention": "Prune firing history older than 30 days"}
+JOB_TITLES: dict[str, str] = {
+    "retention": "Prune firing history and cleared notices older than 30 days"
+}
 
 # agent_id (migration 021, S12): WHO runs a scheduled row — NULL is Nova.
 # person_id stays the owner who set it, so list_for / owned / the Schedules
@@ -85,18 +87,50 @@ class TimerRefused(Exception):
 # -- the retention job ----------------------------------------------------------
 
 
+def _deleted(tag: str) -> int:
+    """asyncpg's command tag is "DELETE <n>"; a malformed tag is a real failure
+    and raises rather than being read as zero — "nothing to delete" and "the
+    delete did not happen" must never look the same."""
+    return int(tag.rsplit(" ", 1)[1])
+
+
 async def retention(pool: asyncpg.Pool) -> str:
-    """Delete firings older than RETENTION_DAYS and say how many went. Age-based,
-    never a row cap: a cap makes count(*) lie about how many times a timer ran
-    ([[automation-runs-capped-at-50]])."""
-    tag = await pool.execute(
-        "DELETE FROM timer_firings WHERE started_at < now() - make_interval(days => $1)",
-        RETENTION_DAYS,
+    """Delete firings older than RETENTION_DAYS, and notices that have been
+    CLEARED for that long, and say how many of each went. Age-based, never a
+    row cap: a cap makes count(*) lie about how many times a timer ran
+    ([[automation-runs-capped-at-50]]).
+
+    Two rules on the notices half, both load-bearing (S11):
+
+      * only a CLEARED notice goes. A live one is a condition that is still
+        true, and deleting it would lose the fact AND free its fingerprint,
+        so the very next watch pass would raise it again as news — the
+        pruner would become the thing that makes her repeat herself.
+      * a MUTED notice NEVER goes, stated in the predicate rather than left
+        to follow from the fact that a mute is never cleared. A mute is the
+        owner saying stop telling me about this until the facts change, and
+        it is held by the ROW: delete it and the same finding comes back
+        unmuted. v3 shipped exactly that bug and re-armed a nag forever.
+    """
+    firings = _deleted(
+        await pool.execute(
+            "DELETE FROM timer_firings WHERE started_at < now() - make_interval(days => $1)",
+            RETENTION_DAYS,
+        )
     )
-    # asyncpg's command tag is "DELETE <n>"; a malformed tag is a real failure.
-    count = int(tag.rsplit(" ", 1)[1])
-    noun = "firing" if count == 1 else "firings"
-    return f"deleted {count} {noun} older than {RETENTION_DAYS} days"
+    notices = _deleted(
+        await pool.execute(
+            "DELETE FROM notices WHERE cleared_at IS NOT NULL "
+            "AND cleared_at < now() - make_interval(days => $1) "
+            "AND state <> 'muted'",
+            RETENTION_DAYS,
+        )
+    )
+    parts = [
+        f"deleted {firings} {'firing' if firings == 1 else 'firings'}",
+        f"{notices} cleared {'notice' if notices == 1 else 'notices'}",
+    ]
+    return f"{' and '.join(parts)} older than {RETENTION_DAYS} days"
 
 
 JOBS["retention"] = retention

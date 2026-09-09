@@ -656,14 +656,17 @@ async def test_a_due_job_runs_its_handler_under_a_job_span(pool):
     assert len(fired) == 1
     firing = await pool.fetchrow("SELECT * FROM timer_firings WHERE id = $1", fired[0])
     assert firing["status"] == "ok"
+    # S11 (2026-09-09): the retention job also prunes notices that have been
+    # CLEARED for the window, so its one sentence now reports both counts.
+    # A live notice and a MUTED one are never pruned — see timers.retention.
     assert firing["delivery"] == {
-        "job": {"ok": True, "result": "deleted 1 firing older than 30 days"}
+        "job": {"ok": True, "result": "deleted 1 firing and 0 cleared notices older than 30 days"}
     }
     turn = await pool.fetchrow("SELECT * FROM turns WHERE id = $1", firing["turn_id"])
     assert turn["kind"] == "job" and turn["status"] == "ok" and turn["conversation_id"] is None
     (span,) = await _spans(pool, turn["id"])
     assert (span["kind"], span["name"]) == ("job", "retention")
-    assert span["meta"] == {"result": "deleted 1 firing older than 30 days"}
+    assert span["meta"] == {"result": "deleted 1 firing and 0 cleared notices older than 30 days"}
     after = await timers.get(pool, job["id"])
     assert after["next_fire_at"] == job["next_fire_at"] + timedelta(days=1)
 

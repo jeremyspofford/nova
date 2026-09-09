@@ -1,5 +1,6 @@
 """The timers store: rows are created validated, paused with a reason, resumed
 by the rule, deleted for real; jobs come from JOBS and nowhere else."""
+
 from __future__ import annotations
 
 import asyncio
@@ -292,9 +293,10 @@ async def test_fire_now_runs_the_tick_inline_and_returns_that_firing(pool):
     after = await timers.get(pool, row["id"])
     assert after["next_fire_at"] == row["next_fire_at"]
     assert firing["scheduled_for"] < row["next_fire_at"]
-    assert await pool.fetchval(
-        "SELECT content FROM messages WHERE conversation_id = $1", conversation
-    ) == "Reminder: stretch"
+    assert (
+        await pool.fetchval("SELECT content FROM messages WHERE conversation_id = $1", conversation)
+        == "Reminder: stretch"
+    )
 
 
 async def test_fire_now_on_a_paused_row_is_refused_with_the_pause_reason(pool):
@@ -427,7 +429,7 @@ async def test_a_second_job_row_for_one_handler_is_refused_by_the_database(pool)
         await pool.execute(
             "INSERT INTO timers (kind, title, payload, schedule, timezone, created_via) "
             "VALUES ('job', 'dup', '{\"handler\": \"retention\"}', "
-            "'{\"kind\":\"day\",\"at\":\"03:30\"}', 'UTC', 'system')"
+            '\'{"kind":"day","at":"03:30"}\', \'UTC\', \'system\')'
         )
 
 
@@ -439,7 +441,7 @@ async def test_the_schema_refuses_a_job_with_a_person_and_a_person_row_without_o
         await pool.execute(
             "INSERT INTO timers (person_id, kind, title, payload, schedule, timezone, created_via) "
             "VALUES ($1, 'job', 'x', '{\"handler\": \"nope\"}', "
-            "'{\"kind\":\"day\",\"at\":\"03:30\"}', 'UTC', 'system')",
+            '\'{"kind":"day","at":"03:30"}\', \'UTC\', \'system\')',
             person.id,
         )
     with pytest.raises(asyncpg.CheckViolationError):
@@ -466,6 +468,82 @@ async def test_retention_deletes_only_firings_older_than_30_days_and_says_how_ma
             row["id"],
             age_days,
         )
-    assert await timers.retention(pool) == "deleted 2 firings older than 30 days"
+    # S11 (2026-09-09): the sentence gained the notices half; the firings half
+    # is unchanged and the notices half has its own tests below.
+    assert (
+        await timers.retention(pool) == "deleted 2 firings and 0 cleared notices older than 30 days"
+    )
     assert await pool.fetchval("SELECT count(*) FROM timer_firings") == 2
-    assert await timers.retention(pool) == "deleted 0 firings older than 30 days"
+    assert (
+        await timers.retention(pool) == "deleted 0 firings and 0 cleared notices older than 30 days"
+    )
+
+
+# -- the retention job also prunes cleared notices (S11, 2026-09-09) ---------
+
+
+async def _notice(pool, *, fingerprint: str, cleared_days_ago=None, state="delivered"):
+    """A notice row, straight in — this is the pruner's contract with the
+    table, not with the store, so seeding by hand is the honest fixture."""
+    return await pool.fetchval(
+        "INSERT INTO notices (check_name, finding_key, fingerprint, title, state, "
+        "delivered_at, muted_at, cleared_at) VALUES "
+        "('work_paused_timers', 'k', $1, 'a thing', $2, "
+        " CASE WHEN $2 = 'delivered' THEN now() END, "
+        " CASE WHEN $2 = 'muted' THEN now() END, "
+        " CASE WHEN $3::int IS NULL THEN NULL "
+        "      ELSE now() - make_interval(days => $3::int) END) RETURNING id",
+        fingerprint,
+        state,
+        cleared_days_ago,
+    )
+
+
+async def test_retention_prunes_a_long_cleared_notice_and_says_how_many(pool):
+    old = await _notice(pool, fingerprint="old", cleared_days_ago=timers.RETENTION_DAYS + 1)
+    recent = await _notice(pool, fingerprint="recent", cleared_days_ago=1)
+
+    said = await timers.retention(pool)
+
+    assert "1 cleared notice" in said
+    assert f"older than {timers.RETENTION_DAYS} days" in said
+    left = {r["id"] for r in await pool.fetch("SELECT id FROM notices")}
+    assert old not in left
+    assert recent in left
+
+
+async def test_retention_never_touches_a_live_notice(pool):
+    """A live notice is a condition that is still TRUE. Deleting it would lose
+    the fact and free its fingerprint, so the next watch pass would raise it
+    again as news — the pruner would become the thing that makes her repeat
+    herself."""
+    live = await _notice(pool, fingerprint="live", cleared_days_ago=None)
+
+    said = await timers.retention(pool)
+
+    assert "0 cleared notices" in said
+    assert await pool.fetchval("SELECT count(*) FROM notices WHERE id = $1", live) == 1
+
+
+async def test_retention_never_deletes_a_mute_however_old(pool):
+    """A mute is held by the ROW: delete it and the same finding comes back
+    unmuted. v3 shipped that bug and re-armed a nag forever, so the predicate
+    says it rather than leaning on muted rows never being cleared."""
+    muted = await pool.fetchval(
+        "INSERT INTO notices (check_name, finding_key, fingerprint, title, state, "
+        "muted_at, cleared_at) VALUES ('work_paused_timers', 'k', 'muted', 'a thing', "
+        "'muted', now(), now() - make_interval(days => $1)) RETURNING id",
+        timers.RETENTION_DAYS + 400,
+    )
+
+    await timers.retention(pool)
+
+    assert await pool.fetchval("SELECT count(*) FROM notices WHERE id = $1", muted) == 1
+
+
+def test_a_malformed_delete_tag_raises_rather_than_reading_as_zero():
+    """ "nothing to delete" and "the delete did not happen" must never look the
+    same — the count is read, never guessed."""
+    assert timers._deleted("DELETE 7") == 7
+    with pytest.raises((ValueError, IndexError)):
+        timers._deleted("OOPS")
