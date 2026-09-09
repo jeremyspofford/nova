@@ -1,4 +1,5 @@
 """FastAPI entrypoint for the memory service."""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +14,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.api import router as memory_router
-from app.api import warm_context
+from app.api import warm_context, warm_vectors
 from app.auth import bearer_auth_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
@@ -40,6 +41,12 @@ async def lifespan(app: FastAPI):
     # app.api.warm_context for why this makes "built by full rescan at
     # startup" literally true in the running service.
     warm_context()
+    # Then the vectors for it, from the cache where possible. Never fatal:
+    # the embedding model is the owner's to pull, so a deployment without one
+    # is an ordinary state — it serves lexical recall and every /recall says
+    # so. warm_vectors logs which unavailability it hit; it cannot fail
+    # quietly (see app.api.warm_vectors).
+    await warm_vectors()
     yield
 
 

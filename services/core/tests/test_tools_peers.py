@@ -81,6 +81,79 @@ async def test_zero_hits_are_stated_plainly(memory_ctx):
     assert "unicorns" in result
 
 
+# S13-5: memory searches twice — by word and by meaning — and the meaning half
+# needs an embedding model the owner pulls. When it did not run, /recall says so
+# in its own words, and this tool is the path she reaches for deliberately when
+# somebody asks what she remembers. "No saved notes matched" out of half a
+# search is a claim about the notes that the search never established.
+
+REDUCED = (
+    {"name": "lexical", "ran": True, "ranked": 2},
+    {
+        "name": "semantic",
+        "ran": False,
+        "reason": (
+            "the embedding model 'nomic-embed-text' is not installed on the embedding "
+            "service at http://ollama:11434"
+        ),
+    },
+)
+FULL = (
+    {"name": "lexical", "ran": True, "ranked": 2},
+    {"name": "semantic", "ran": True, "ranked": 3},
+)
+NO_ANSWER = (
+    "These notes hold no answer to that — nothing in these notes contains any of the words "
+    "that were asked about. This search did not use every retriever it has: semantic (the "
+    "embedding model 'nomic-embed-text' is not installed on the embedding service at "
+    "http://ollama:11434). A note that says the same thing in different words could have "
+    "been missed."
+)
+MATCHED = (
+    "1 note(s) matched and cleared the relevance floor, best match first. This search did "
+    "not use every retriever it has: semantic (the embedding model 'nomic-embed-text' is "
+    "not installed on the embedding service at http://ollama:11434). A note that says the "
+    "same thing in different words could have been missed."
+)
+
+
+async def test_finding_nothing_with_half_a_search_repeats_memorys_sentence(memory_ctx):
+    ctx = memory_ctx(
+        fakes.FakeMemory(results=(), recall_statement=NO_ANSWER, recall_retrievers=REDUCED)
+    )
+    result, ok = await tools.dispatch("memory_search", {"query": "my haiku"}, ctx)
+    assert ok is True
+    # Memory's words, not this service's claim about the notes.
+    assert "did not use every retriever" in result
+    assert "not installed" in result
+    assert "No saved notes matched" not in result
+
+
+async def test_hits_from_half_a_search_carry_the_caveat_too(memory_ctx):
+    memory = fakes.FakeMemory(
+        results=({"title": "Coffee", "kind": "topic", "snippet": "pour-over, no sugar"},),
+        recall_statement=MATCHED,
+        recall_retrievers=REDUCED,
+    )
+    result, ok = await tools.dispatch("memory_search", {"query": "coffee"}, memory_ctx(memory))
+    assert ok is True
+    assert "Coffee (topic): pour-over, no sugar" in result
+    # "here is one note" reads as "and there was only one" without this.
+    assert "could have been missed" in result
+
+
+async def test_a_full_search_adds_nothing_about_how_it_was_done(memory_ctx):
+    memory = fakes.FakeMemory(
+        results=({"title": "Coffee", "kind": "topic", "snippet": "pour-over"},),
+        recall_statement="1 note(s) matched and cleared the relevance floor, best match first.",
+        recall_retrievers=FULL,
+    )
+    result, ok = await tools.dispatch("memory_search", {"query": "coffee"}, memory_ctx(memory))
+    assert ok is True
+    assert "Coffee (topic): pour-over" in result
+    assert "relevance floor" not in result
+
+
 async def test_a_tool_cannot_choose_whose_memory_it_reads(memory_ctx):
     memory = fakes.FakeMemory()
     ctx = memory_ctx(memory)

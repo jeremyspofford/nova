@@ -335,6 +335,13 @@ class FakeMemory:
     """
 
     results: tuple[dict, ...] = ()
+    # S13: /recall's envelope. `statement` is memory's own sentence about the
+    # recall and `retrievers` its report of which searches actually ran; both
+    # are omitted from the response unless a test sets them, so the default
+    # shape here stays the pre-S13 one and a caller that must cope with an
+    # older memory service is still exercised against it.
+    recall_statement: str | None = None
+    recall_retrievers: tuple[dict, ...] = ()
     recall_status: int = 200
     ingest_status: int = 200
     save_status: int = 200
@@ -392,7 +399,12 @@ class FakeMemory:
             return JSONResponse({"error": "bad memory bearer"}, status_code=401)
         if self.recall_status != 200:
             return JSONResponse({"error": "index unavailable"}, status_code=self.recall_status)
-        return JSONResponse({"results": list(self.results)})
+        answer: dict = {"results": list(self.results)}
+        if self.recall_statement is not None:
+            answer["statement"] = self.recall_statement
+        if self.recall_retrievers:
+            answer["retrievers"] = [dict(report) for report in self.recall_retrievers]
+        return JSONResponse(answer)
 
     async def _ingest(self, request):
         body = await request.json()

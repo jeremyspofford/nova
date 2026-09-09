@@ -40,6 +40,37 @@ async def _call_memory(ctx: ToolContext, path: str, payload: dict) -> object:
         raise ToolFailure(f"could not reach memory — {peers.reason(exc)}") from exc
 
 
+def _statement(body: object) -> str | None:
+    """Memory's own sentence about the recall, when it sent one.
+
+    /recall says which nothing it found and whether it searched with
+    everything it has; those are memory's facts and memory's words, and this
+    tool repeats them rather than composing a claim of its own. None for a
+    memory service too old to send one — see `search`.
+    """
+    if isinstance(body, dict):
+        said = body.get("statement")
+        if isinstance(said, str) and said.strip():
+            return said.strip()
+    return None
+
+
+def _reduced(body: object) -> bool:
+    """True when memory says one of its retrievers did not run on this call.
+
+    Memory searches twice — by word and by meaning — and the meaning half
+    needs an embedding model that may not be installed. Read off memory's own
+    report; this service never decides what the report means.
+    """
+    reports = body.get("retrievers") if isinstance(body, dict) else None
+    if not isinstance(reports, list):
+        return False
+    return any(
+        isinstance(report, dict) and report.get("ran") is False and report.get("reason")
+        for report in reports
+    )
+
+
 def _hits(body: object) -> list[dict]:
     """/recall answers with a bare list; a dict wrapper is tolerated so a
     later shape change downgrades to zero hits rather than a crash."""
@@ -65,10 +96,18 @@ async def search(args: dict, ctx: ToolContext) -> str:
         ctx, "/recall", {"query": query, "person_id": _person_id(ctx), "k": k}
     )
     hits = _hits(body)
+    said = _statement(body)
     if not hits:
-        # Said plainly: an empty result is a fact about the notes, and the
-        # model needs to be able to tell it apart from a failed lookup.
-        return f"No saved notes matched {query!r}."
+        # Memory's own sentence, whenever it sent one: it says WHICH nothing
+        # this is — the notes hold no answer to that, or the search that
+        # looked was the reduced one because the embedding model is not
+        # installed. "No saved notes matched" is a claim about the notes, and
+        # a search that could not run with everything it has established
+        # nothing about them; making that claim here is the lie this feature
+        # exists to prevent, on the one path she reaches for deliberately.
+        # The fallback is for a memory service too old to send a statement:
+        # it claims nothing beyond the empty result it was given.
+        return said or f"No saved notes matched {query!r}."
 
     lines = [f"{len(hits)} note(s) matched {query!r}:"]
     for hit in hits:
@@ -76,6 +115,11 @@ async def search(args: dict, ctx: ToolContext) -> str:
         kind = hit.get("kind") or "note"
         snippet = _clip(str(hit.get("snippet") or ""))
         lines.append(f"- {title} ({kind}): {snippet}" if snippet else f"- {title} ({kind})")
+    if said and _reduced(body):
+        # Hits found, but by half the search. Said on the found path too,
+        # because "here are three notes" reads as "and there were only
+        # three" — and a note phrased differently could have been missed.
+        lines.append(said)
     return "\n".join(lines)
 
 

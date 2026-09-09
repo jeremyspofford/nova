@@ -149,7 +149,11 @@ async def test_recall_finds_seeded_topic_and_ranks_exact_term_first(monkeypatch,
         "created",
         "snippet",
         "score",
+        # S13-5: which retrievers put this unit forward. A recall answered by
+        # word matching alone must not look like one the embedder also ranked.
+        "retrievers",
     }
+    assert results[0]["retrievers"] == ["lexical"]
     # A topic note has no "## HH:MM" entries, so it is one unit and its id is
     # the file's own path — chunking is a journal's shape, not every file's.
     assert results[0]["document"] == results[0]["path"] and results[0]["fragment"] is None

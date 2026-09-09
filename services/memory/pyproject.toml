@@ -7,6 +7,11 @@ dependencies = [
     "uvicorn[standard]",
     "asyncpg",
     "pyyaml",
+    # S13-5: the embedder talks HTTP to ollama's /api/embed from inside an
+    # async route, so it needs an async client. httpx was already here as a
+    # test dependency; this moves it to a runtime one because the service now
+    # makes calls of its own rather than only receiving them.
+    "httpx",
 ]
 
 [dependency-groups]

@@ -15,13 +15,23 @@ from __future__ import annotations
 import io
 import logging
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
-from app.index import BM25Index
+from app.embedding import (
+    BackfillReport,
+    EmbedConfig,
+    Embedder,
+    EmbedderUnavailable,
+    VectorCache,
+    backfill,
+    cache_path,
+)
+from app.index import BM25Index, RetrieverReport
 from app.store import MemoryStore, PathEscape, StoredFile, split_entries
 
 logger = logging.getLogger("memory.api")
@@ -38,7 +48,18 @@ DEFAULT_ROOT = "/data/memory"
 # fresh tmp-dir root per test, so they always hit a cold build here too,
 # which is exactly how "restart rescan" is exercised without any special
 # reset hook.
-_contexts: dict[str, tuple[MemoryStore, BM25Index]] = {}
+_contexts: dict[str, Context] = {}
+
+
+@dataclass
+class Context:
+    """Everything one MEMORY_ROOT needs to answer with: the files, the index
+    over them, the embedder, and the vector cache beside them."""
+
+    store: MemoryStore
+    index: BM25Index
+    embedder: Embedder
+    cache: VectorCache
 
 
 def _current_root() -> Path:
@@ -95,7 +116,7 @@ def _index_document(index: BM25Index, stored: StoredFile) -> list[str]:
     return [f"{stored.rel_path}#{entry.fragment}" for entry in entries]
 
 
-def _build_context(root: Path) -> tuple[MemoryStore, BM25Index]:
+def _build_context(root: Path) -> Context:
     store = MemoryStore(root)
     index = BM25Index()
     for stored in store.iter_all():
@@ -112,10 +133,19 @@ def _build_context(root: Path) -> tuple[MemoryStore, BM25Index]:
             _index_document(index, stored)
         except ValueError as exc:
             logger.warning("skipping unindexable memory file %s: %s", stored.rel_path, exc)
-    return store, index
+    config = EmbedConfig.from_env()
+    cache = VectorCache(cache_path(root, config))
+    # Vectors that were paid for on an earlier run, handed straight to the
+    # index. Only the ones whose text is still indexed are applied — a cache
+    # that outlived its note contributes nothing and is pruned below.
+    live = index.live_digests()
+    for digest, vector in cache.load().items():
+        if digest in live:
+            index.set_vector(digest, vector)
+    return Context(store=store, index=index, embedder=Embedder(config), cache=cache)
 
 
-def _context() -> tuple[MemoryStore, BM25Index]:
+def _context() -> Context:
     root = _current_root()
     key = str(root)
     ctx = _contexts.get(key)
@@ -130,6 +160,75 @@ def warm_context() -> None:
     from main.py's lifespan so "built by full rescan at startup" is true
     of the real deployment, not just of the lazy-init fallback."""
     _context()
+
+
+async def warm_vectors() -> BackfillReport:
+    """Embed whatever the vector cache did not already hold, at startup.
+
+    Deliberately NOT fatal and deliberately NOT silent. The embedding model is
+    pulled by the owner, not installed by this service, so "no embedder yet"
+    is an ordinary state for a running deployment — memory must serve lexical
+    recall through it and every /recall must SAY that is what it is doing. So
+    the pass logs which of the stated unavailabilities it hit and returns;
+    what it must never do is fail quietly and leave recall calling itself
+    semantic over an empty vector space.
+
+    A pass is bounded (MEMORY_EMBED_BACKFILL_SECONDS) and picks up where it
+    left off on the next write, so a large corpus fills in over a few turns
+    rather than holding up a startup a healthcheck is waiting on.
+    """
+    ctx = _context()
+    report = await _fill_vectors(ctx)
+    # Prune only here: startup is the one moment the live set is complete and
+    # nothing else is writing. A cache that is never pruned keeps a vector for
+    # every exchange ever edited and every note ever forgotten.
+    live = ctx.index.live_digests()
+    dropped_memory = ctx.index.retain_vectors(live)
+    dropped_disk = ctx.cache.prune(live)
+    if dropped_memory or dropped_disk:
+        logger.info(
+            "embedding cache pruned: %d vectors dropped from memory, %d from %s",
+            dropped_memory,
+            dropped_disk,
+            ctx.cache.path,
+        )
+    return report
+
+
+async def _fill_vectors(ctx: Context, scope_prefix: str = "") -> BackfillReport:
+    """One bounded embedding pass over the units that have no vector yet.
+
+    Called at startup and after every write, never from /recall: embedding a
+    corpus takes seconds (4.0 s for 47 chunks, measured) and /recall answers
+    inside core's 2 s budget. A write happens at the end of every turn, so an
+    embedder that appears while the service is running — the owner pulls the
+    model — is picked up on the next turn without a restart.
+    """
+    missing = ctx.index.missing_vectors(scope_prefix)
+    if not missing:
+        return BackfillReport()
+    report = await backfill(ctx.embedder, ctx.cache, missing, apply=ctx.index.set_vector)
+    if report.failed:
+        # Named, at warning level, every time. This is the line that turns "we
+        # shipped semantic recall and it never ran" into something visible.
+        logger.warning(
+            "embedding pass covered %d/%d units and then stopped: %s",
+            report.embedded + report.from_cache,
+            report.requested,
+            report.failed,
+        )
+    elif report.embedded or report.out_of_budget:
+        logger.info(
+            "embedding pass: %d embedded, %d from cache, %d requested, %.2fs%s",
+            report.embedded,
+            report.from_cache,
+            report.requested,
+            report.seconds,
+            " (stopped on budget, the rest follows on the next write)"
+            if report.out_of_budget
+            else "",
+        )
+    return report
 
 
 class Exchange(BaseModel):
@@ -162,7 +261,8 @@ class ForgetRequest(BaseModel):
 
 @router.post("/ingest")
 async def ingest(req: IngestRequest) -> dict:
-    store, index = _context()
+    ctx = _context()
+    store, index = ctx.store, ctx.index
     user_text = req.exchange.user.strip()
     assistant_text = req.exchange.assistant.strip()
     entry = f"User: {user_text}\n\nAssistant: {assistant_text}"
@@ -191,6 +291,11 @@ async def ingest(req: IngestRequest) -> dict:
             status_code=500,
             detail="the exchange was written but the journal was not indexed as exchanges",
         )
+    # The new exchange's vector, and any the corpus is still missing. Off the
+    # reply path (core awaits /ingest after the turn, with a 10 s budget) and
+    # bounded, so this is where a corpus catches up after the owner pulls the
+    # embedding model — no restart, and no embedding on /recall.
+    await _fill_vectors(ctx)
     return {"path": stored.rel_path, "appended": True}
 
 
@@ -204,7 +309,8 @@ async def save(req: SaveRequest) -> dict:
     numbered sibling, because the caller asked to save something, not to
     lose something.
     """
-    store, index = _context()
+    ctx = _context()
+    store, index = ctx.store, ctx.index
     title = req.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="title is empty — a note needs a name")
@@ -234,6 +340,7 @@ async def save(req: SaveRequest) -> dict:
 
     stored = store.read(abs_path)
     _index_document(index, stored)
+    await _fill_vectors(ctx)
     return {"path": stored.rel_path, "saved": True}
 
 
@@ -241,22 +348,53 @@ async def save(req: SaveRequest) -> dict:
 async def recall(req: RecallRequest) -> dict:
     """What these notes hold on a question — or a stated nothing.
 
-    The answer is {hits, found, statement}, not a bare list, because a bare
-    list could only ever say "no hits" and this route now has three different
-    things to say: here is what matched; the notes hold no answer, and here is
-    why; and (as an HTTP failure, never as an empty list) the notes could not
-    be read at all. `statement` is the sentence a caller can repeat — the
-    relevance floor is this service's rule, so the words for it belong here and
-    not in whatever calls it.
+    The answer is {hits, found, statement, retrievers}, not a bare list,
+    because a bare list could only ever say "no hits" and this route has four
+    different things to say: here is what matched; the notes hold no answer,
+    and here is why; here is what matched but only ONE of the two searches
+    ran, so a note phrased differently may have been missed; and (as an HTTP
+    failure, never as an empty list) the notes could not be read at all.
+
+    `retrievers` is the mechanical half of that. It says which searches
+    actually ran on THIS call — not which are configured, not which are
+    intended — and names the reason for any that did not. Whether the
+    embedding model is installed is a fact this service can only learn by
+    asking, so it asks on every recall, and what it learns travels: an answer
+    found by word matching alone is marked as one, and core turns that into a
+    sentence in the prompt. Degrading to lexical while still calling itself
+    semantic is the single easiest lie in this feature, and this is the line
+    of code that refuses to tell it.
+
+    `statement` is the sentence a caller can repeat — the relevance floor and
+    the embedder are both this service's business, so the words for them
+    belong here and not in whatever calls it.
     """
-    store, index = _context()
+    ctx = _context()
+    store, index = ctx.store, ctx.index
     try:
         person_root = store.person_root(req.person_id)
     except PathEscape as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
+    # The question, embedded — the ONE embedding call on a turn's critical
+    # path, under its own tighter budget (see DEFAULT_QUERY_TIMEOUT). A
+    # failure here is never fatal and never silent: it becomes the sentence
+    # the semantic retriever reports for not having run.
+    query_vector = None
+    semantic_unavailable = None
+    try:
+        query_vector = await ctx.embedder.embed_query(req.query)
+    except EmbedderUnavailable as exc:
+        semantic_unavailable = str(exc)
+
     scope_prefix = store.rel_path(person_root) + "/"
-    outcome = index.search_detail(req.query, scope_prefix=scope_prefix, k=max(req.k, 0))
+    outcome = index.search_detail(
+        req.query,
+        scope_prefix=scope_prefix,
+        k=max(req.k, 0),
+        query_vector=query_vector,
+        semantic_unavailable=semantic_unavailable,
+    )
     hits = outcome.hits
 
     # Scope is mechanical: re-assert the resolved path of every hit
@@ -278,14 +416,20 @@ async def recall(req: RecallRequest) -> dict:
             continue
         safe_hits.append(hit)
 
+    retrievers = [_retriever_payload(report) for report in outcome.retrievers]
+    caveat = _search_caveat(outcome.retrievers)
+
     if safe_hits:
+        statement = (
+            f"{len(safe_hits)} note(s) matched and cleared the relevance floor, best match first."
+        )
+        if caveat:
+            statement = f"{statement} {caveat}"
         return {
             "hits": safe_hits,
             "found": True,
-            "statement": (
-                f"{len(safe_hits)} note(s) matched and cleared the relevance floor, "
-                "best match first."
-            ),
+            "statement": statement,
+            "retrievers": retrievers,
         }
     # No hits: say WHICH nothing this is. index.search_detail gives the reason
     # when it found nothing; when it found something and every hit was then
@@ -294,16 +438,60 @@ async def recall(req: RecallRequest) -> dict:
     reason = outcome.reason or (
         "the notes that matched are no longer on disk, so this search could not be completed"
     )
+    statement = f"These notes hold no answer to that — {reason}."
+    if caveat:
+        statement = f"{statement} {caveat}"
     return {
         "hits": [],
         "found": False,
-        "statement": f"These notes hold no answer to that — {reason}.",
+        "statement": statement,
+        "retrievers": retrievers,
     }
+
+
+def _retriever_payload(report: RetrieverReport) -> dict:
+    """One retriever's report, as facts. `ranked` is a count of units, never a
+    score, and no similarity of any kind appears here: a cosine is not a
+    confidence and must not be handed to anything that would show it as one."""
+    payload: dict = {"name": report.name, "ran": report.ran}
+    if report.ran:
+        payload["ranked"] = report.ranked
+    if report.reason:
+        payload["reason"] = report.reason
+    if report.coverage:
+        payload["coverage"] = report.coverage
+    return payload
+
+
+def _search_caveat(reports: tuple[RetrieverReport, ...]) -> str | None:
+    """The sentence that says this search was not the search it could have been.
+
+    Composed here rather than in core because the reason belongs to this
+    service — it is the one that knows whether the embedding model is
+    installed. It says what was NOT done and why; it never claims the notes
+    hold nothing, because a search that could not run properly has established
+    nothing at all about the notes.
+    """
+    absent = [report for report in reports if not report.ran and report.reason]
+    partial = [report for report in reports if report.ran and report.coverage]
+    parts = []
+    if absent:
+        missed = ", ".join(f"{report.name} ({report.reason})" for report in absent)
+        parts.append(
+            f"This search did not use every retriever it has: {missed}. A note that says the "
+            "same thing in different words could have been missed."
+        )
+    for report in partial:
+        parts.append(
+            f"The {report.name} search covered only part of the notes — {report.coverage}."
+        )
+    return " ".join(parts) or None
 
 
 @router.post("/forget")
 async def forget(req: ForgetRequest) -> dict:
-    store, index = _context()
+    ctx = _context()
+    store, index = ctx.store, ctx.index
     try:
         resolved = store.resolve_in_person(req.person_id, req.path)
     except PathEscape as exc:
@@ -323,7 +511,7 @@ async def forget(req: ForgetRequest) -> dict:
 
 @router.get("/export")
 async def export(person_id: str = Query(...)) -> StreamingResponse:
-    store, _index = _context()
+    store = _context().store
     try:
         data = store.export_tar_gz(person_id)
     except PathEscape as exc:

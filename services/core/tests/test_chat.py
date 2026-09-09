@@ -193,6 +193,75 @@ def test_the_prompt_tells_nothing_matched_apart_from_could_not_be_read():
     assert chat.volatile_system_prompt(chat.Recalled()) is None
 
 
+def test_the_prompt_says_when_only_half_the_search_ran():
+    """S13-5: a third state, and it is neither of the other two.
+
+    Memory searches twice — by word and by meaning — and the meaning half
+    needs an embedding model that may not be installed. "Nothing was written
+    down about that" and "I could not look properly" are different things to
+    say to somebody, and she can only say which if she is told which.
+    """
+    reduced = (
+        "the semantic search did not run — the embedding model 'nomic-embed-text' is not "
+        "installed on the embedding service at http://ollama:11434."
+    )
+    with_notes = chat.volatile_system_prompt(
+        chat.Recalled(notes=("Kitchen: the kettle is new",), degraded=reduced)
+    )
+    assert "How that search was done:" in with_notes
+    assert "not installed" in with_notes
+    # It qualifies the notes rather than replacing them.
+    assert "the kettle is new" in with_notes
+
+    without = chat.volatile_system_prompt(
+        chat.Recalled(empty="no note matched those words", degraded=reduced)
+    )
+    assert "returned nothing: no note matched those words" in without
+    assert "How that search was done:" in without
+    assert "rather than that she has nothing on the subject" in without
+    # Distinct from the memory-is-down sentence: memory answered.
+    assert "could not be read this turn" not in without
+
+    # A full search says nothing about how it was done.
+    full = chat.volatile_system_prompt(chat.Recalled(notes=("a note",)))
+    assert "How that search was done:" not in full
+
+
+def test_a_reduced_search_is_read_off_memorys_own_report():
+    """core does not decide what a retriever report means, or reword it.
+
+    Whether the embedding model is installed is memory's business and the
+    sentence is memory's; this only picks out the fact that a retriever did
+    not run. An older memory service that sends no report claims nothing in
+    either direction — it must not be described as having run a full search,
+    and it cannot be described as having run a reduced one.
+    """
+    assert chat._degraded_from({"hits": [], "results": []}) is None
+    assert (
+        chat._degraded_from(
+            {
+                "retrievers": [
+                    {"name": "lexical", "ran": True, "ranked": 3},
+                    {"name": "semantic", "ran": True, "ranked": 2},
+                ]
+            }
+        )
+        is None
+    )
+    said = chat._degraded_from(
+        {
+            "retrievers": [
+                {"name": "lexical", "ran": True, "ranked": 3},
+                {"name": "semantic", "ran": False, "reason": "the model is not installed"},
+            ]
+        }
+    )
+    assert said == "the semantic search did not run — the model is not installed."
+    # `ran: False` with no reason is not a sentence anybody can repeat, and
+    # inventing one here would be this service speaking for memory.
+    assert chat._degraded_from({"retrievers": [{"name": "semantic", "ran": False}]}) is None
+
+
 async def test_recall_failure_leaves_the_turn_fine_and_the_span_honest(
     owner_client, pool, mount_peers
 ):

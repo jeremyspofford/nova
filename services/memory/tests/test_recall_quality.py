@@ -75,6 +75,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -83,6 +84,7 @@ import pytest
 import recall_corpus as corpus
 from httpx import ASGITransport, AsyncClient
 
+from app import api
 from app.main import app
 
 TOKEN = "recall-quality-token"
@@ -136,6 +138,48 @@ K = 5
 # ---------------------------------------------------------------------------
 ANSWER_IN_CONTEXT_FLOOR = 8
 ABSENT_ANSWER_HITS_CEILING = 0
+
+# ---------------------------------------------------------------------------
+# THE SAME TWENTY, WITH THE SEMANTIC HALF TURNED ON (S13-5).
+#
+# The pins above are the LEXICAL numbers, and they stay that way on purpose:
+# CI has no ollama and the embedding model is the owner's to pull, so a
+# measurement that needed one would not run and a suite that silently ran
+# without one would report the lexical number under a hybrid name. The
+# retriever assertion in _recall is what keeps those two apart mechanically.
+#
+# These are the numbers with a live embedder, measured 2026-09-09 against
+# nomic-embed-text (768d) on the bundled ollama, over this fixture:
+#
+#   answer-in-context   8 -> 12 of 20
+#   absent-answer hits  0 of 6   (unchanged, and it is the whole difficulty)
+#   answer, whole store 10 -> 14 of 20
+#   file-in-top-5       12 -> 16 of 20
+#   answered with nothing 3 -> 1 of 20
+#
+# The four that moved are Q01, Q04, Q08 and Q18 — "graphics memory" against a
+# note that says VRAM, "nudge me on a repeating basis" against a blink
+# reminder, "short poem about the cold season" against a haiku about winter,
+# and "how many goes does my note taker get" against six tool rounds. Every
+# one is a word the notes do not contain, which is why no amount of BM25
+# tuning reached them and why this sub-slice exists.
+#
+# The same run against Jeremy's REAL notes, read-only, 8 of 18 -> 13 of 18
+# with the absent-answer count still 0 of 5 (one of the six is answerable in
+# his corpus and is not scored there).
+#
+# This pass runs only when MEMORY_RECALL_EMBED_URL names a reachable embedder
+# — and when it does, it is a ratchet exactly like the pair above: a
+# regression fails, and an improvement fails until somebody moves the constant
+# and says in the commit by how much.
+# ---------------------------------------------------------------------------
+HYBRID_ANSWER_IN_CONTEXT_FLOOR = 12
+HYBRID_ABSENT_ANSWER_HITS_CEILING = 0
+
+# Opt-in, and named separately from MEMORY_EMBED_URL so that turning the
+# service's own default on can never turn this measurement on by accident.
+LIVE_EMBEDDER_ENV = "MEMORY_RECALL_EMBED_URL"
+LIVE_EMBEDDER_MODEL_ENV = "MEMORY_RECALL_EMBED_MODEL"
 
 
 @dataclass
@@ -235,7 +279,9 @@ def _document(path: str) -> str:
     return path.split("#", 1)[0]
 
 
-async def _recall(client: AsyncClient, question: str, k: int) -> list[dict]:
+async def _recall(
+    client: AsyncClient, question: str, k: int, *, semantic: bool = False
+) -> list[dict]:
     response = await client.post(
         "/recall",
         json={"query": question, "person_id": corpus.PERSON_ID, "k": k},
@@ -261,10 +307,29 @@ async def _recall(client: AsyncClient, question: str, k: int) -> list[dict]:
         raise AssertionError(f"/recall disagreed with itself about `found` for {question!r}")
     if not hits and not str(body.get("statement", "")).strip():
         raise AssertionError(f"/recall found nothing for {question!r} and did not say why")
+    # S13-5 made "which searches ran" the route's own answer too, and this is
+    # what stops the two scorecards below from silently measuring the same
+    # thing. A lexical pass whose embedder had quietly come up would score as
+    # the pinned lexical number while being a hybrid search — the exact
+    # confusion the feature exists to prevent, reproduced in its own suite.
+    reports = body.get("retrievers")
+    if not isinstance(reports, list) or not reports:
+        raise AssertionError(f"/recall answered without a retriever report for {question!r}")
+    ran = {report["name"]: report.get("ran") for report in reports}
+    if ran.get("lexical") is not True:
+        raise AssertionError(f"/recall did not run the lexical retriever for {question!r}")
+    if ran.get("semantic") is not semantic:
+        state = "ran" if ran.get("semantic") else "did not run"
+        raise AssertionError(
+            f"this pass expected semantic={semantic} and the semantic retriever {state} "
+            f"for {question!r}: {reports!r}"
+        )
     return hits
 
 
-async def _measure(rel_paths: dict[str, str], units_by_key: dict[str, int]) -> Scorecard:
+async def _measure(
+    rel_paths: dict[str, str], units_by_key: dict[str, int], *, semantic: bool = False
+) -> Scorecard:
     # Hits come back as rel paths whose journal names are rebased dates; the
     # report names fixture keys instead ("day-00"), so a run next year reads
     # the same as a run today.
@@ -273,7 +338,7 @@ async def _measure(rel_paths: dict[str, str], units_by_key: dict[str, int]) -> S
     async with AsyncClient(transport=transport, base_url=BASE_URL) as client:
         results = []
         for case in corpus.CASES:
-            hits = await _recall(client, case.question, K)
+            hits = await _recall(client, case.question, K, semantic=semantic)
             targets = {rel_paths[key] for key in case.targets}
             answer = re.compile(case.answer, re.I)
             result = Result(
@@ -292,13 +357,15 @@ async def _measure(rel_paths: dict[str, str], units_by_key: dict[str, int]) -> S
             # what "everything" means to a chunked index — asking for the
             # document count would hand over eight of forty-odd exchanges and
             # quietly stop being the whole store.
-            everything = await _recall(client, case.question, sum(units_by_key.values()))
+            everything = await _recall(
+                client, case.question, sum(units_by_key.values()), semantic=semantic
+            )
             result.whole_store_answer = any(answer.search(_model_sees(h)) for h in everything)
             results.append(result)
 
         absent = []
         for case in corpus.ABSENT_CASES:
-            hits = await _recall(client, case.question, K)
+            hits = await _recall(client, case.question, K, semantic=semantic)
             absent.append(
                 AbsentResult(
                     case_id=case.id,
@@ -339,6 +406,56 @@ def scorecard(tmp_path_factory) -> Scorecard:
         if doc_count != expected:
             raise AssertionError(f"fixture built {doc_count} documents, expected {expected}")
         return asyncio.run(_measure(rel_paths, corpus.units_by_key(root, rel_paths)))
+
+
+@pytest.fixture(scope="module")
+def hybrid_scorecard(tmp_path_factory) -> Scorecard:
+    """The same twenty questions with a LIVE embedder behind /recall.
+
+    Skipped, loudly, when no embedder is named — the model is pulled by the
+    owner and CI has none, so this cannot be a suite that has to pass
+    everywhere. What it must never do is pass by running lexically: the
+    backfill's own report is checked before a single question is asked, and a
+    pass whose embedder could not be used FAILS with the embedder's sentence
+    rather than quietly measuring the number above under a different name.
+    """
+    url = os.environ.get(LIVE_EMBEDDER_ENV, "").strip()
+    if not url:
+        pytest.skip(
+            f"no live embedder: set {LIVE_EMBEDDER_ENV} (and optionally "
+            f"{LIVE_EMBEDDER_MODEL_ENV}) to measure hybrid recall"
+        )
+    root = Path(tmp_path_factory.mktemp("recall-quality-hybrid")) / "root"
+    rel_paths = corpus.build(root)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("SERVICE_TOKEN", TOKEN)
+        patch.setenv("MEMORY_ROOT", str(root))
+        patch.setenv("MEMORY_EMBED_URL", url)
+        model = os.environ.get(LIVE_EMBEDDER_MODEL_ENV, "").strip()
+        if model:
+            patch.setenv("MEMORY_EMBED_MODEL", model)
+        # The whole corpus, in one pass, however long it takes: this is a
+        # measurement, not a turn.
+        patch.setenv("MEMORY_EMBED_BACKFILL_SECONDS", "300")
+        patch.delenv("DATABASE_URL", raising=False)
+        api._contexts.clear()
+        try:
+            report = asyncio.run(api.warm_vectors())
+            if report.failed:
+                raise AssertionError(
+                    f"the live embedder at {url} could not embed this corpus: {report.failed}"
+                )
+            covered = api._context().index.vector_coverage(f"people/{corpus.PERSON_ID}/")
+            if covered[0] != covered[1]:
+                raise AssertionError(
+                    f"only {covered[0]} of {covered[1]} units were embedded; a partial corpus "
+                    "is a different measurement"
+                )
+            return asyncio.run(
+                _measure(rel_paths, corpus.units_by_key(root, rel_paths), semantic=True)
+            )
+        finally:
+            api._contexts.clear()
 
 
 # -- the corpus is what it claims to be ------------------------------------
@@ -441,6 +558,74 @@ def test_absent_answer_gain_must_move_the_pin(scorecard: Scorecard):
     )
 
 
+# -- the same pins, with the semantic half on -------------------------------
+
+
+def test_hybrid_answer_in_context_meets_its_pinned_floor(hybrid_scorecard: Scorecard):
+    assert hybrid_scorecard.answer_in_context >= HYBRID_ANSWER_IN_CONTEXT_FLOOR, (
+        f"hybrid answer-in-context fell to {hybrid_scorecard.answer_in_context}/"
+        f"{len(corpus.CASES)}, below the pinned floor of {HYBRID_ANSWER_IN_CONTEXT_FLOOR}.\n\n"
+        + _hybrid_report(hybrid_scorecard)
+    )
+
+
+def test_hybrid_answer_in_context_gain_must_move_the_pin(hybrid_scorecard: Scorecard):
+    assert hybrid_scorecard.answer_in_context <= HYBRID_ANSWER_IN_CONTEXT_FLOOR, (
+        f"hybrid answer-in-context is now {hybrid_scorecard.answer_in_context}/"
+        f"{len(corpus.CASES)}, above the pinned {HYBRID_ANSWER_IN_CONTEXT_FLOOR}. Raise "
+        f"HYBRID_ANSWER_IN_CONTEXT_FLOOR and say in the commit what moved it.\n\n"
+        + _hybrid_report(hybrid_scorecard)
+    )
+
+
+def test_hybrid_keeps_the_absent_answer_ceiling(hybrid_scorecard: Scorecard):
+    """The hard half of adding an embedder.
+
+    Cosine always has a nearest neighbour, so semantic recall's natural
+    behaviour is to answer every unanswerable question with five confident
+    notes — measured at 6/6 with no floor of its own. This is the line that
+    notices if the derived floor stops holding.
+    """
+    assert hybrid_scorecard.absent_with_hits <= HYBRID_ABSENT_ANSWER_HITS_CEILING, (
+        f"{hybrid_scorecard.absent_with_hits}/{len(corpus.ABSENT_CASES)} unanswerable questions "
+        f"came back with hits once the embedder was on, above the pinned ceiling of "
+        f"{HYBRID_ABSENT_ANSWER_HITS_CEILING}.\n\n" + _hybrid_report(hybrid_scorecard)
+    )
+
+
+def test_hybrid_absent_answer_gain_must_move_the_pin(hybrid_scorecard: Scorecard):
+    assert hybrid_scorecard.absent_with_hits >= HYBRID_ABSENT_ANSWER_HITS_CEILING, (
+        f"only {hybrid_scorecard.absent_with_hits}/{len(corpus.ABSENT_CASES)} unanswerable "
+        f"questions came back with hits, below the pinned "
+        f"{HYBRID_ABSENT_ANSWER_HITS_CEILING}. Lower HYBRID_ABSENT_ANSWER_HITS_CEILING and say "
+        f"so in the commit.\n\n" + _hybrid_report(hybrid_scorecard)
+    )
+
+
+def test_hybrid_beats_lexical_on_the_number_that_matters(
+    scorecard: Scorecard, hybrid_scorecard: Scorecard
+):
+    """The claim the sub-slice is allowed to make, checked rather than
+    asserted in a commit message: with the embedder on, more of the answers
+    reach the model, and no more of the unanswerable questions do."""
+    assert hybrid_scorecard.answer_in_context > scorecard.answer_in_context
+    assert hybrid_scorecard.absent_with_hits <= scorecard.absent_with_hits
+
+
+def test_hybrid_report(hybrid_scorecard: Scorecard, capsys):
+    with capsys.disabled():
+        print("\n" + _hybrid_report(hybrid_scorecard))
+
+
+def _hybrid_report(scorecard: Scorecard) -> str:
+    return report(
+        scorecard,
+        floor=HYBRID_ANSWER_IN_CONTEXT_FLOOR,
+        ceiling=HYBRID_ABSENT_ANSWER_HITS_CEILING,
+        label="word matching + meaning",
+    )
+
+
 # -- the diagnosis, reported beside the number ------------------------------
 
 
@@ -452,9 +637,15 @@ def test_report(scorecard: Scorecard, capsys):
         print("\n" + report(scorecard))
 
 
-def report(scorecard: Scorecard) -> str:
+def report(
+    scorecard: Scorecard,
+    *,
+    floor: int = ANSWER_IN_CONTEXT_FLOOR,
+    ceiling: int = ABSENT_ANSWER_HITS_CEILING,
+    label: str = "word matching only",
+) -> str:
     lines = [
-        f"recall quality — {scorecard.doc_count} documents indexed as "
+        f"recall quality ({label}) — {scorecard.doc_count} documents indexed as "
         f"{scorecard.unit_count} units, k={K}",
         "",
         f"{'case':5} {'answer@':8} {'file@':7} {'whole':6} {'top hit':14} question",
@@ -474,8 +665,7 @@ def report(scorecard: Scorecard) -> str:
         "",
         f"answered with nothing  {refused}/{total}"
         "   (recall said the notes hold no answer, rather than guessing)",
-        f"answer-in-context      {scorecard.answer_in_context}/{total}"
-        f"   (pinned floor {ANSWER_IN_CONTEXT_FLOOR})",
+        f"answer-in-context      {scorecard.answer_in_context}/{total}   (pinned floor {floor})",
         f"file-in-top-{K}          {scorecard.file_in_top_k}/{total}"
         f"   (by chance alone {scorecard.file_in_top_k_by_chance:.1f}/{total} — "
         "reported, never asserted)",
@@ -492,6 +682,6 @@ def report(scorecard: Scorecard) -> str:
     lines.append("")
     lines.append(
         f"absent-answer hits     {scorecard.absent_with_hits}/{len(scorecard.absent)}"
-        f"   (pinned ceiling {ABSENT_ANSWER_HITS_CEILING})"
+        f"   (pinned ceiling {ceiling})"
     )
     return "\n".join(lines)

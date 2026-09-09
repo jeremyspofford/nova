@@ -681,6 +681,18 @@ class Recalled:
     # Memory could not be asked at all, or one scope of it could not: the
     # reason, already on the memory_recall span, carried to the prompt too.
     unreachable: str | None = None
+    # Memory ANSWERED, but with only part of the search it has (S13-5). Its
+    # recall is two retrievers — word matching and meaning — and when the
+    # embedding model is not installed, or the inference container is down,
+    # the second one does not run. Memory says so on every answer; this is
+    # that sentence, in memory's own words, on its way to the prompt.
+    #
+    # A third distinct state, and it has to be: "she found nothing" is a
+    # statement about the notes, "memory was down" is a statement about the
+    # service, and this one is neither — she looked, but not with everything
+    # she has, so a note phrased differently could have been missed. Folding
+    # it into either of the others would make her say something false.
+    degraded: str | None = None
 
 
 # The line above the notes. It says only what is mechanically true of every hit
@@ -716,6 +728,16 @@ def volatile_system_prompt(recall: Recalled, roster: str | None = None) -> str |
             f"Her memory could not be read this turn — {recall.unreachable}. Nothing here is "
             "evidence about what she has or has not been told; say the lookup failed rather "
             "than that she has nothing on the subject."
+        )
+    if recall.degraded:
+        # Said whether or not there are notes above. With notes it qualifies
+        # them; with none it is the difference between "there is nothing
+        # written down about that" and "I could not look properly" — and she
+        # can only tell someone which if she is told which.
+        parts.append(
+            f"How that search was done: {recall.degraded} Treat this as a limit on the search "
+            "and not as evidence about the notes: if the answer is not here, say the search was "
+            "the reduced one rather than that she has nothing on the subject."
         )
     if roster:
         parts.append(roster)
@@ -831,6 +853,41 @@ def _snippets(results: Iterable, today: date | None = None) -> list[str]:
         if text:
             snippets.append(text)
     return snippets
+
+
+def _degraded_from(body: object) -> str | None:
+    """Memory's sentence about a search that did not use everything it has.
+
+    /recall reports `retrievers` — which searches ran on that call and, for
+    any that did not, why. This service does not decide what that means or
+    reword it: whether the embedding model is installed is memory's business,
+    the sentence is memory's, and this only picks out the fact that one of
+    them did not run.
+
+    None when every retriever ran, and None for a memory service too old to
+    send the field — an older peer that cannot report a degraded search must
+    not be described as having run a full one, but it also cannot be
+    described as having run a reduced one, so nothing is claimed either way.
+    """
+    if not isinstance(body, dict):
+        return None
+    reports = body.get("retrievers")
+    if not isinstance(reports, list):
+        return None
+    missing = [
+        report
+        for report in reports
+        if isinstance(report, dict) and report.get("ran") is False and report.get("reason")
+    ]
+    if not missing:
+        return None
+    return (
+        "; ".join(
+            f"the {report.get('name', 'unnamed')} search did not run — {report['reason']}"
+            for report in missing
+        )
+        + "."
+    )
 
 
 def _statement_from(body: object) -> str | None:
@@ -1242,19 +1299,21 @@ def turn_failure_statement(reason: str, spans: Sequence[traces.Span]) -> str:
 
 async def _recall_scope(
     client: httpx.AsyncClient, query: str, person_id: str
-) -> tuple[list, str | None]:
+) -> tuple[list, str | None, str | None]:
     """One /recall for one memory partition; raises on any failure so the
     caller can record it against THAT scope.
 
-    Returns the hits AND memory's own statement about them, because an empty
-    list is the one answer this service must never interpret for itself.
+    Returns the hits, memory's own statement about them, and its report of any
+    retriever that did not run — because an empty list is the one answer this
+    service must never interpret for itself, and a full-looking list from half
+    a search is the other.
     """
     response = await client.post(
         "/recall", json={"query": query, "person_id": person_id, "k": RECALL_K}
     )
     response.raise_for_status()
     body = response.json()
-    return _results_from(body), _statement_from(body)
+    return _results_from(body), _statement_from(body), _degraded_from(body)
 
 
 async def _recall(
@@ -1301,16 +1360,25 @@ async def _recall(
             return Recalled(unreachable=reason)
         hits: dict[str, list[str]] = {}
         said: dict[str, str | None] = {}
+        reduced: dict[str, str | None] = {}
         errors: dict[str, str] = {}
         for name, outcome in zip(scopes, outcomes, strict=True):
             if isinstance(outcome, BaseException):
                 errors[name] = peers.reason(outcome)
                 hits[name] = []
                 said[name] = None
+                reduced[name] = None
             else:
-                results, statement = outcome
+                results, statement, degraded = outcome
                 hits[name] = _snippets(results)
                 said[name] = statement
+                reduced[name] = degraded
+        degraded = reduced.get("own") or next((value for value in reduced.values() if value), None)
+        if degraded:
+            # On the span as well as in the prompt: the trace is where "was
+            # semantic recall actually running that week?" gets answered
+            # without taking anybody's word for it.
+            span.meta["retrievers_missing"] = degraded
         if shared is None:
             if errors:
                 span.meta["error"] = errors["own"]
@@ -1337,7 +1405,7 @@ async def _recall(
             or None
         )
         if snippets:
-            return Recalled(notes=tuple(snippets), unreachable=unreachable)
+            return Recalled(notes=tuple(snippets), unreachable=unreachable, degraded=degraded)
         # Memory answered and had nothing. Its own sentence says why — the
         # relevance floor is its rule, not this service's — and the fallback is
         # for a memory service too old to send one: it claims nothing beyond
@@ -1345,6 +1413,7 @@ async def _recall(
         return Recalled(
             empty=said.get("own") or "nothing in the notes matched what was asked",
             unreachable=unreachable,
+            degraded=degraded,
         )
 
 
