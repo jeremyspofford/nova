@@ -17,13 +17,42 @@ built so a later slice starts from the truth.
   leaves no gap (its findings are still standing as notices) and is still
   named, so "not due" never reads as "looked and found nothing".
 
+## The first unattended night (2026-09-09), and what it changed
+
+The engine ran with nobody driving it. His machine slept: core logged
+nothing between 02:00 and 11:23 UTC, then every overdue timer fired at
+once. The 07:30 digest fired on its own and correctly said NOTHING,
+because nothing was outstanding — which is the design working. But it
+would have said nothing about not having watched for nine hours either.
+
+That produced the coverage line, and reviewing the coverage line produced
+the finding that matters most in this slice: **the engine's own death was
+silent.** The digest goes quiet when nothing is outstanding, and coverage
+was computed after that early return. So on the day the watch beat stops —
+five failures, a hand pause, or the switch — nothing new can become
+deliverable, the standing findings are already delivered, and every later
+digest writes nothing, forever. `run_all` is called only from the watch
+beat, so no check can ever see its own beat die. Fixed: coverage is
+computed first and a span with no proven pass breaks the silence.
+
+Proven live on 2026-09-09 by pausing the watch beat by hand: the digest
+delivered "you are hearing this because there is nothing to show that
+anything was WATCHED either, so today's quiet is not evidence that
+anything is fine", with the real 9h 18m overnight gap and the pause reason
+off the row.
+
+A watch-gap CHECK was built and then reverted whole: each night's gap is
+its own fingerprint, so a nightly-sleeping host would raise a fresh
+unmuteable notice every morning and surface each three times. The
+unconditional coverage line closes the defect without the nag.
+
 ## Open
 
-- **The digest was verified against a walled gateway.** The happy path ran
-  once the wall was cleared, and the message was good. What has NOT been
-  seen is a full unattended day: beats firing on their own hourly schedule
-  and a digest arriving at 07:30 without anyone pressing Run now. That is
-  the remaining half of the S11-6 gate.
+- **Watching stops when the machine sleeps.** This is a WSL-on-Windows
+  host, so the containers freeze with it: nine of twelve hours had no pass
+  on the first night. The digest now says so rather than implying cover.
+  Watching while the machine is off is a different and much larger
+  question — where Nova runs — and is not this slice's to answer.
 - **Ollama walls itself under this load.** During the walk ollama took a
   502 ReadTimeout and the gateway walled it for an hour, which is S10
   working as designed — but an hourly beat plus a six-hourly model-reading
