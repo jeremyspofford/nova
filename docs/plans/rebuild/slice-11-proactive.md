@@ -1,7 +1,7 @@
 # Slice 11 — The proactive engine: she notices, she acts, she tells you once
 
 Branch `slice/s11`, cut from `rebuild/v4` at 82c3858a (the S12 merge).
-Status: SPEC, awaiting Jeremy's approval.
+Status: BUILT, DEPLOYED and WALKED 2026-09-08.
 
 Nova only ever speaks when spoken to. Everything she could notice — a
 scheduled task that has failed five nights running, an agent sitting over
@@ -252,3 +252,35 @@ below its spend), and confirm she notices within one beat, acts if she
 can, folds the repeat rather than repeating it, and tells you once at your
 digest hour — with the trace for every claim. Then leave it running for a
 day and count how many times it spoke.
+
+
+## The live walk (2026-09-08)
+
+Deployed from the branch; migration 022 applied and both beats seeded at
+startup. Turned on from the API the Settings page uses, then:
+
+- Setting the digest hour re-timed the digest beat and said so ("next Wed 9
+  Sep 07:30 EDT"); "half past seven" was refused in core's own words.
+- A healthy pass: 11 of 13 checks ran and it did NOT call itself quiet —
+  two checks stated exactly why they could not look, and one real finding
+  came out of it: the timer that paused when an agent was deleted during
+  the S12 walk had been sitting unread.
+- Stopped the memory container. The pass found it, marked it urgent, and
+  pushed immediately into his chat with a sentence composed in code naming
+  the check that made it urgent. The beat's own line stayed in the hidden
+  conversation. The review check refused to run rather than read a narrower
+  window, and said so.
+- Fired again with memory still down: folded, pushed nothing.
+- Restarted memory: the next pass CLEARED it, and it left the live set.
+- The digest then REFUSED to deliver, because ollama had walled itself and
+  the model wrote nothing — it recorded that reason instead of pushing the
+  backend's own placeholder as news. That is the v3 incident, prevented.
+- With the wall cleared it wrote one message covering both standing
+  findings with how often each had recurred, that she had taken no action
+  on either, the memory error that had since cleared, and the two checks
+  that could not complete — ending "so neither check is an all-clear".
+- The Inbox shows all three with their badges, sighting counts, derived
+  facts and per-channel delivery, and its only buttons are seen and mute.
+
+Two defects the walk caught are recorded in `slice-11-carries.md`, both
+fixed there and then.
