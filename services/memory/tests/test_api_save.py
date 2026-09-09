@@ -6,6 +6,7 @@ picking the note up so /recall can find it in the same process. The one
 behaviour /ingest does not have is collision: two notes with the same
 title must become two files, never one overwritten one.
 """
+
 from __future__ import annotations
 
 import os
@@ -70,7 +71,7 @@ async def test_a_saved_note_is_immediately_recallable(monkeypatch, tmp_path):
         resp = await client.post(
             "/recall", headers=_headers(), json={"query": "pour-over coffee", "person_id": "alice"}
         )
-    results = resp.json()
+    results = resp.json()["hits"]
     assert [r["path"] for r in results] == ["people/alice/topics/coffee.md"]
 
 
@@ -81,7 +82,7 @@ async def test_a_saved_note_belongs_to_its_person_only(monkeypatch, tmp_path):
         resp = await client.post(
             "/recall", headers=_headers(), json={"query": "alpha nine codes", "person_id": "bob"}
         )
-    assert resp.json() == []
+    assert resp.json()["hits"] == [] and resp.json()["found"] is False
 
 
 async def test_no_tmp_artifacts_are_left_behind(monkeypatch, tmp_path):

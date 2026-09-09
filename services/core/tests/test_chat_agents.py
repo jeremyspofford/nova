@@ -241,22 +241,33 @@ async def test_persona_none_is_byte_identical_to_the_bare_calls(pool, mount_peer
     turn, frames = await _nova_turn(pool, owner, "hello")
 
     payload = gateway.payloads[0]
-    # No agents exist, no notes were recalled: exactly the stable prompt and
-    # the user — no roster line, no volatile message.
-    assert payload["messages"] == [
-        {"role": "system", "content": chat.stable_system_prompt(MODEL, tools.tool_names())},
-        {"role": "user", "content": "hello"},
-    ]
+    # No agents exist: no roster line, and the stable prompt is untouched. The
+    # volatile message is now present even with no notes, because S13 makes
+    # recall SAY that it looked and found nothing — an absent block and an
+    # empty-handed search used to read identically to the model.
+    assert payload["messages"][0] == {
+        "role": "system",
+        "content": chat.stable_system_prompt(MODEL, tools.tool_names()),
+    }
+    assert payload["messages"][1]["content"].startswith(
+        "Her memory was searched for this turn and returned nothing:"
+    )
+    assert payload["messages"][2] == {"role": "user", "content": "hello"}
     assert payload["tools"] == tools.advertised_tools()
     assert chat.stable_system_prompt(MODEL, tools.tool_names(), agent_block=None) == (
         chat.stable_system_prompt(MODEL, tools.tool_names())
     )
-    assert chat.base_messages(MODEL, [], [], "hello") == chat.base_messages(
-        MODEL, [], [], "hello", None, roster=None
+    empty = chat.Recalled()
+    assert chat.base_messages(MODEL, empty, [], "hello") == chat.base_messages(
+        MODEL, empty, [], "hello", None, roster=None
     )
-    assert chat.volatile_system_prompt([]) is None and chat.volatile_system_prompt([], None) is None
-    note = chat.volatile_system_prompt(["a note"])
-    assert note is not None and note.startswith("Relevant notes:\n- a note\n\nCurrent time: ")
+    # A Recalled that knows NOTHING — not even that a search happened — still
+    # produces no volatile message at all.
+    assert chat.volatile_system_prompt(empty) is None
+    assert chat.volatile_system_prompt(empty, None) is None
+    note = chat.volatile_system_prompt(chat.Recalled(notes=("a note",)))
+    assert note is not None
+    assert note.startswith(f"{chat.NOTES_HEADER}\n- a note\n\nCurrent time: ")
     meta = _parsed(frames)[0]["meta"]
     assert set(meta) == {"conversation_id", "model", "turn_id", "agent"} and meta["agent"] is None
     assert await _reply(pool, turn.id) == "hi"
@@ -552,7 +563,8 @@ async def test_recall_asks_one_partition_or_two_under_one_span(pool, mount_peers
     assert recall["meta"] == {"k": 5, "scopes": {"own": 1, "shared": 1}, "hits": 2}
     volatile = gateway.payloads[0]["messages"][1]["content"]
     assert volatile.startswith(
-        "Relevant notes:\n- Kitchen: the kettle is new\n- (shared) Kitchen: the kettle is new\n"
+        f"{chat.NOTES_HEADER}\n- Kitchen: the kettle is new"
+        "\n- (shared) Kitchen: the kettle is new\n"
     )
 
 
@@ -625,7 +637,13 @@ async def test_novas_volatile_prompt_carries_the_roster_only_when_agents_exist(
     turn, _ = await _nova_turn(pool, owner)
     messages = gateway.payloads[0]["messages"]
     assert [m["role"] for m in messages] == ["system", "system", "user"]
-    assert messages[1]["content"].startswith(f"{roster}\n\nCurrent time: ")
+    # Memory's empty-handed statement, then the roster (S13 always says which
+    # of "nothing matched" and "could not be read" happened; before it, a turn
+    # with no notes carried the roster line alone).
+    assert messages[1]["content"].startswith(
+        "Her memory was searched for this turn and returned nothing:"
+    )
+    assert f"\n\n{roster}\n\nCurrent time: " in messages[1]["content"]
     # A roster that was read leaves no span: the span exists ONLY on failure.
     assert [s["kind"] for s in await _spans(pool, turn.id) if s["kind"] == "agent_roster"] == []
 
@@ -635,7 +653,7 @@ async def test_novas_volatile_prompt_carries_the_roster_only_when_agents_exist(
     )
     await _nova_turn(pool, owner)
     assert gateway.payloads[0]["messages"][1]["content"].startswith(
-        f"Relevant notes:\n- Kitchen: kettle\n\n{roster}\n\nCurrent time: "
+        f"{chat.NOTES_HEADER}\n- Kitchen: kettle\n\n{roster}\n\nCurrent time: "
     )
 
 
@@ -986,7 +1004,14 @@ async def test_a_roster_that_cannot_be_read_leaves_a_span(pool, mount_peers, roo
     assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn.id) == "ok"
     (span,) = [s for s in await _spans(pool, turn.id) if s["kind"] == "agent_roster"]
     assert span["meta"] == {"error": "RuntimeError: agents table gone"}
-    assert [m["role"] for m in gateway.payloads[0]["messages"]] == ["system", "user"]
+    # The volatile message is memory's empty-handed statement and nothing else:
+    # the roster line is what the failed read cost this turn.
+    messages = gateway.payloads[0]["messages"]
+    assert [m["role"] for m in messages] == ["system", "system", "user"]
+    assert messages[1]["content"].startswith(
+        "Her memory was searched for this turn and returned nothing:"
+    )
+    assert "delegate to" not in messages[1]["content"]
 
 
 async def test_the_listing_guard_judges_an_agent_by_its_own_listing_tools(pool, mount_peers, root):

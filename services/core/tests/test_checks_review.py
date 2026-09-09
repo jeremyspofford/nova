@@ -28,13 +28,14 @@ that stand between a model's sentence and a notice:
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import timedelta
 
 import httpx
 import pytest
 
-from app import beats, checks
+from app import beats, checks, identity
 from app.checks import Finding, review
 from app.main import app as core_app
 from tests import fakes
@@ -226,6 +227,42 @@ async def test_the_window_is_his_recent_messages_and_memory_is_background(pool, 
     # The note is there, and it is labelled as something that cannot be cited.
     assert "he owes the council a form" in brief and "cannot" in brief
     assert memory.recalls and memory.recalls[0]["person_id"] == str(person)
+
+
+async def test_the_memory_query_is_about_commitments_and_never_about_his_name(pool, mount_peers):
+    """S13, live bug: the query was built by interpolating `owner.name`, which
+    is an email address. The tokeniser split it and "com" — a token in every URL
+    the notes quote — became the query's highest-scoring term, so this check's
+    background was whichever note held the most links.
+
+    Pinned mechanically rather than by reading the constant: whatever the query
+    says, the owner's name and every piece of it must be absent from it, and it
+    has to be about the thing the check is looking for.
+    """
+    person = await _owner(pool)
+    # The live shape: on the running stack the owner's name IS an email
+    # address, which is how "com" got to be this query's best term.
+    await pool.execute(
+        "UPDATE people SET name = 'jeremyspofford@example.com' WHERE id = $1", person
+    )
+    owner = await identity.owner(pool)
+    conversation = await _conversation(pool, person)
+    await _message(pool, conversation, GARAGE, ago=timedelta(days=2))
+    memory = FakeMemory(results=())
+    mount_peers(gateway=_gateway(text="[]"), memory=memory)
+
+    run = await checks.run_one(core_app, pool, review.CHECK_NAME)
+    assert run.ran
+
+    (recall,) = memory.recalls
+    query = recall["query"].lower()
+    assert owner.name, "the fixture owner must have a name for this test to mean anything"
+    assert owner.name.lower() not in query
+    for piece in re.split(r"[^a-z0-9]+", owner.name.lower()):
+        # "com", "gmail", the local part: none of them are evidence about a
+        # promise, and one of them was the top-scoring term in this query.
+        assert piece and piece not in re.split(r"[^a-z0-9]+", query)
+    assert "promised" in query and "commitment" in query
 
 
 async def test_the_call_says_who_is_paying_and_what_it_is_for(pool, mount_peers):

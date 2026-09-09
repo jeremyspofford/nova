@@ -1,8 +1,10 @@
 """POST /api/v1/chat/stream — frames, persistence, and the trace it leaves."""
+
 from __future__ import annotations
 
 import asyncio
 import json
+from datetime import date
 
 import pytest
 
@@ -134,7 +136,10 @@ async def test_the_prompt_is_two_system_messages_with_the_notes_in_the_volatile_
     sent = payload["messages"]
     assert [m["role"] for m in sent] == ["system", "system", "user"]
     assert "qwen3:8b" in sent[0]["content"]
-    assert "Relevant notes:" in sent[1]["content"]
+    # The block says what is mechanically true of the hits under it (they
+    # matched, they cleared recall's floor, they are records) — never that they
+    # are "relevant", which is the property nothing had established.
+    assert chat.NOTES_HEADER in sent[1]["content"]
     assert "the kettle is new" in sent[1]["content"]
     assert sent[2] == {"role": "user", "content": "kettle?"}
     assert memory.recalls[0] == {
@@ -142,6 +147,50 @@ async def test_the_prompt_is_two_system_messages_with_the_notes_in_the_volatile_
         "person_id": (await pool.fetchval("SELECT id::text FROM people")),
         "k": 5,
     }
+
+
+def test_a_note_is_labelled_with_what_is_known_about_it_and_nothing_more():
+    """S13: "Relevant notes:" asserted a property nothing had established.
+
+    What a hit carries instead is what memory actually sent about it — its kind
+    and its age — and a hit that sent neither is labelled with neither. Guessing
+    "today" from a missing date is how a two-week-old note gets read as this
+    morning's, so an unknown age is simply absent.
+    """
+    today = date(2026, 9, 9)
+    labelled = chat._snippets(
+        [
+            {
+                "title": "Journal - 2026-09-06",
+                "snippet": "we settled on mise",
+                "kind": "journal",
+                "created": "2026-09-06",
+            },
+            {"title": "Kitchen", "snippet": "the kettle is new"},
+        ],
+        today,
+    )
+    assert labelled == [
+        "[journal, 3 days ago] Journal - 2026-09-06: we settled on mise",
+        "Kitchen: the kettle is new",
+    ]
+    assert chat._age("2026-09-09", today) == "today"
+    assert chat._age("2026-09-08", today) == "yesterday"
+    # Nothing to read the age from: say nothing about it.
+    assert chat._age(None, today) is None and chat._age("not a date", today) is None
+
+
+def test_the_prompt_tells_nothing_matched_apart_from_could_not_be_read():
+    """The two facts a bare empty list used to collapse into one."""
+    nothing = chat.volatile_system_prompt(chat.Recalled(empty="no note matched those words"))
+    down = chat.volatile_system_prompt(chat.Recalled(unreachable="ConnectError: refused"))
+    assert nothing is not None and down is not None
+    assert "returned nothing: no note matched those words" in nothing
+    assert "could not be read this turn" not in nothing
+    assert "could not be read this turn — ConnectError: refused" in down
+    assert "returned nothing" not in down
+    # Knowing neither is still no volatile block at all.
+    assert chat.volatile_system_prompt(chat.Recalled()) is None
 
 
 async def test_recall_failure_leaves_the_turn_fine_and_the_span_honest(
@@ -163,14 +212,20 @@ async def test_recall_failure_leaves_the_turn_fine_and_the_span_honest(
     assert recall["meta"].get("hits", 0) == 0
     assert "500" in recall["meta"]["error"]
 
-    # No snippets means no volatile message at all — not an empty one.
+    # S13: a recall that FAILED reaches the prompt as a failure. It used to be
+    # indistinguishable from a recall that found nothing — both were an absent
+    # volatile message — so she answered "I have nothing on that" out of an
+    # outage. The reason is on the span AND in front of the model.
     sent_messages = gateway.seen[0][1]["messages"]
-    assert [m["role"] for m in sent_messages] == ["system", "user"]
+    assert [m["role"] for m in sent_messages] == ["system", "system", "user"]
+    volatile = sent_messages[1]["content"]
+    assert volatile.startswith("Her memory could not be read this turn — ")
+    assert "500" in volatile
+    assert "say the lookup failed" in volatile
+    assert "returned nothing" not in volatile
 
 
-async def test_gateway_error_states_the_reason_and_marks_the_turn(
-    owner_client, pool, mount_peers
-):
+async def test_gateway_error_states_the_reason_and_marks_the_turn(owner_client, pool, mount_peers):
     mount_peers(gateway=FakeGateway(status=500), memory=FakeMemory())
     await _set_model(owner_client)
 
@@ -220,9 +275,7 @@ async def test_an_empty_completion_is_an_error_not_a_silent_success(
     assert await pool.fetchval("SELECT status FROM turns") == "error"
 
 
-async def test_history_drops_whole_oldest_messages_at_the_char_cap(
-    owner_client, pool, mount_peers
-):
+async def test_history_drops_whole_oldest_messages_at_the_char_cap(owner_client, pool, mount_peers):
     gateway = FakeGateway()
     mount_peers(gateway=gateway, memory=FakeMemory())
     await _set_model(owner_client)

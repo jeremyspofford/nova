@@ -2,11 +2,12 @@
 scenarios in the Task 5 brief. Every test gets its own tmp-dir
 MEMORY_ROOT (via pytest's tmp_path) so the module-level context cache in
 app.api never leaks state between tests."""
+
 from __future__ import annotations
 
 import io
 import tarfile
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from httpx import ASGITransport, AsyncClient
 
@@ -130,11 +131,28 @@ async def test_recall_finds_seeded_topic_and_ranks_exact_term_first(monkeypatch,
             "/recall", headers=_headers(), json={"query": "coffee", "person_id": "alice", "k": 5}
         )
     assert resp.status_code == 200
-    results = resp.json()
-    assert isinstance(results, list)
+    body = resp.json()
+    # S13: the answer is an envelope, not a bare list. A bare list could only
+    # ever say "no hits", and this route has to be able to say WHICH nothing it
+    # is holding — see the /recall docstring.
+    assert body["found"] is True
+    assert "matched" in body["statement"]
+    results = body["hits"]
     assert results
     assert results[0]["path"] == "people/alice/topics/coffee.md"
-    assert set(results[0].keys()) == {"path", "title", "kind", "snippet", "score"}
+    assert set(results[0].keys()) == {
+        "path",
+        "document",
+        "fragment",
+        "title",
+        "kind",
+        "created",
+        "snippet",
+        "score",
+    }
+    # A topic note has no "## HH:MM" entries, so it is one unit and its id is
+    # the file's own path — chunking is a journal's shape, not every file's.
+    assert results[0]["document"] == results[0]["path"] and results[0]["fragment"] is None
 
 
 async def test_recall_recency_boost_new_created_wins(monkeypatch, tmp_path):
@@ -148,7 +166,7 @@ async def test_recall_recency_boost_new_created_wins(monkeypatch, tmp_path):
         resp = await client.post(
             "/recall", headers=_headers(), json={"query": "pour-over coffee", "person_id": "alice"}
         )
-    results = resp.json()
+    results = resp.json()["hits"]
     assert [r["path"] for r in results] == [
         "people/alice/topics/new.md",
         "people/alice/topics/old.md",
@@ -171,9 +189,10 @@ async def test_recall_never_returns_other_persons_files(monkeypatch, tmp_path):
             headers=_headers(),
             json={"query": "secret launch codes alpha nine", "person_id": "bob", "k": 5},
         )
-    results = resp.json()
-    assert all(not r["path"].startswith("people/alice/") for r in results)
-    assert results == []
+    body = resp.json()
+    assert all(not r["path"].startswith("people/alice/") for r in body["hits"])
+    assert body["hits"] == []
+    assert body["found"] is False
 
 
 # -- 4. forget -----------------------------------------------------------
@@ -234,7 +253,7 @@ async def test_forget_deletes_and_recall_stops_returning_it(monkeypatch, tmp_pat
         recall_before = await client.post(
             "/recall", headers=_headers(), json={"query": "coffee", "person_id": "alice"}
         )
-        assert recall_before.json()
+        assert recall_before.json()["hits"]
 
         forget_resp = await client.post(
             "/forget",
@@ -247,7 +266,8 @@ async def test_forget_deletes_and_recall_stops_returning_it(monkeypatch, tmp_pat
         recall_after = await client.post(
             "/recall", headers=_headers(), json={"query": "coffee", "person_id": "alice"}
         )
-    assert recall_after.json() == []
+    after = recall_after.json()
+    assert after["hits"] == [] and after["found"] is False
     assert not (tmp_path / "root" / "people" / "alice" / "topics" / "coffee.md").exists()
 
 
@@ -307,7 +327,7 @@ async def test_restart_rescan_serves_recall_without_any_ingest_call(monkeypatch,
             "/recall", headers=_headers(), json={"query": "pour-over coffee", "person_id": "alice"}
         )
     assert resp.status_code == 200
-    results = resp.json()
+    results = resp.json()["hits"]
     assert results
     assert results[0]["path"] == "people/alice/topics/coffee.md"
 
@@ -343,7 +363,7 @@ async def test_warm_context_boots_over_one_bad_file_and_serves_recall(
             "/recall", headers=_headers(), json={"query": "coffee", "person_id": "alice"}
         )
     assert resp.status_code == 200
-    results = resp.json()
+    results = resp.json()["hits"]
     assert results
     assert results[0]["path"] == "people/alice/topics/good.md"
 
@@ -364,7 +384,7 @@ async def test_lazy_first_request_boots_over_one_bad_file_and_serves_recall(
                 "/recall", headers=_headers(), json={"query": "coffee", "person_id": "alice"}
             )
     assert resp.status_code == 200
-    results = resp.json()
+    results = resp.json()["hits"]
     assert results
     assert results[0]["path"] == "people/alice/topics/good.md"
     assert any(bad_rel_path in record.message for record in caplog.records)
@@ -422,3 +442,74 @@ async def test_simulated_failure_during_ingest_leaves_original_intact(monkeypatc
         except OSError:
             pass
     assert path.read_text(encoding="utf-8") == original
+
+
+async def test_an_ingest_that_was_not_chunked_is_a_stated_failure(monkeypatch, tmp_path):
+    """append_journal writes "## HH:MM"; split_entries reads it. If those two
+    stop agreeing the file is indexed whole, chunking is off, recall gets worse
+    and nothing says why — so /ingest checks it rather than trusting it."""
+    _auth(monkeypatch, tmp_path)
+    monkeypatch.setattr(api, "split_entries", lambda body: [])
+
+    async with _client() as client:
+        resp = await client.post(
+            "/ingest",
+            headers=_headers(),
+            json={
+                "person_id": "alice",
+                "conversation_id": "11111111-1111-1111-1111-111111111111",
+                "exchange": {"user": "hello", "assistant": "hi"},
+            },
+        )
+    assert resp.status_code == 500
+    assert "not indexed as exchanges" in resp.json()["error"]
+
+
+async def test_a_journal_recalls_as_the_exchange_that_matched(monkeypatch, tmp_path):
+    """The whole point of chunking, end to end: a day holding two unrelated
+    exchanges answers with the ONE that matched, under a citable id, and the
+    excerpt is that exchange rather than a window centred on filler words."""
+    _auth(monkeypatch, tmp_path)
+    store = _fixture_store(tmp_path)
+    when = datetime(2026, 9, 9, 16, 32, tzinfo=UTC)
+    store.append_journal(
+        "alice", "User: how much RAM?\n\nAssistant: 64GB of system RAM.", when=when
+    )
+    store.append_journal(
+        "alice",
+        "User: what about the espresso machine?\n\nAssistant: it needs descaling.",
+        when=when.replace(minute=45),
+    )
+
+    async with _client() as client:
+        resp = await client.post(
+            "/recall", headers=_headers(), json={"query": "espresso", "person_id": "alice", "k": 5}
+        )
+    body = resp.json()
+    assert body["found"] is True
+    (hit,) = body["hits"]
+    assert hit["path"] == "people/alice/journals/2026-09-09.md#16:45"
+    assert hit["document"] == "people/alice/journals/2026-09-09.md"
+    assert hit["fragment"] == "16:45"
+    assert hit["kind"] == "journal" and hit["created"] == "2026-09-09"
+    assert "descaling" in hit["snippet"] and "64GB" not in hit["snippet"]
+
+
+async def test_a_question_the_notes_have_no_answer_to_comes_back_saying_so(monkeypatch, tmp_path):
+    """Jeremy's decision, 2026-09-09: recall may return nothing, and says so."""
+    _auth(monkeypatch, tmp_path)
+    store = _fixture_store(tmp_path)
+    store.write_topic("alice", "coffee", "Coffee", "Alice mentioned pour-over coffee once.")
+
+    async with _client() as client:
+        resp = await client.post(
+            "/recall",
+            headers=_headers(),
+            json={"query": "did I ever mention my cat?", "person_id": "alice", "k": 5},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["hits"] == [] and body["found"] is False
+    assert "hold no answer" in body["statement"]
+    # The reason names WHY, so the sentence Nova repeats is not a guess.
+    assert "never contained" in body["statement"]

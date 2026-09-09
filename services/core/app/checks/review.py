@@ -110,6 +110,22 @@ CHAR_BUDGET = 6000
 RECALL_K = 5
 NOTE_CHARS = 400
 
+# The query, written from what this check is LOOKING FOR and nothing else.
+#
+# It used to interpolate `owner.name`, and owner.name is an email address. The
+# tokeniser split it, and "com" — a token in every URL in the corpus — came out
+# as the highest-scoring term in the query, so the check's background notes
+# were whichever note happened to quote the most links. A person's name is not
+# evidence about their promises even when it IS a name; here it was a domain
+# suffix. Derived from the intent, so what comes back is about commitments.
+#
+# test_checks_review.py pins the property mechanically: the owner's name must
+# not appear in what is sent to /recall.
+RECALL_QUERY = (
+    "promised, said he would, plans to, going to, will do later, agreed to, "
+    "follow up, outstanding task, errand, commitment he took on"
+)
+
 # The quote that goes in the facts (from the row) and the ceiling on the
 # model's own words in the title.
 QUOTE_CHARS = 240
@@ -306,10 +322,7 @@ async def _notes(app, owner: identity.Person) -> list[str]:
             response = await client.post(
                 "/recall",
                 json={
-                    "query": (
-                        f"things {owner.name} said he would do — promises, plans and errands "
-                        "he took on himself"
-                    ),
+                    "query": RECALL_QUERY,
                     "person_id": str(owner.id),
                     "k": RECALL_K,
                 },

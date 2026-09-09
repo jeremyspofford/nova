@@ -9,6 +9,7 @@ Bearer auth on every one of these routes is handled upstream by
 app.auth.bearer_auth_middleware (mounted once in main.py) — nothing here
 re-checks it.
 """
+
 from __future__ import annotations
 
 import io
@@ -21,7 +22,7 @@ from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from app.index import BM25Index
-from app.store import MemoryStore, PathEscape
+from app.store import MemoryStore, PathEscape, StoredFile, split_entries
 
 logger = logging.getLogger("memory.api")
 
@@ -44,6 +45,56 @@ def _current_root() -> Path:
     return Path(os.environ.get("MEMORY_ROOT", DEFAULT_ROOT)).resolve()
 
 
+def _index_document(index: BM25Index, stored: StoredFile) -> list[str]:
+    """Put one file into the index as its EXCHANGES, and return their unit ids.
+
+    A day of conversation is one file — up to 21 KB of it — and indexing it
+    whole was measured (docs/plans/rebuild/slice-13-memory.md) to put the
+    400-character excerpt an average of thousands of characters away from the
+    answer, because the excerpt centres on wherever the question's ordinary
+    words happen to cluster and in a transcript that is almost never near the
+    fact. So the INDEX is chunked at the '## HH:MM' headings the store already
+    writes; the file on disk is untouched, iter_all still yields whole files,
+    and /forget still deletes whole files.
+
+    Every unit keeps the file's title, kind and date, so a hit still says which
+    day it came from, and carries the file as its `document` so scope, deletion
+    and re-indexing all still work on files.
+
+    Units already indexed for this document and no longer present (a journal
+    re-read after an append, an exchange edited out by hand) are retired first:
+    an index that only ever gains chunks would go on citing spans that are not
+    in the file any more.
+    """
+    entries = split_entries(stored.body)
+    title = stored.meta.get("title", "")
+    kind = stored.meta.get("kind", "topic")
+    created = stored.meta.get("created")
+    if not entries:
+        # A topic note has no headings: one unit, id == the file's own path,
+        # exactly as before chunking existed.
+        index.remove(stored.rel_path)
+        index.upsert(stored.rel_path, title=title, kind=kind, created=created, body=stored.body)
+        return [stored.rel_path]
+    live = set()
+    for entry in entries:
+        unit_id = f"{stored.rel_path}#{entry.fragment}"
+        live.add(unit_id)
+        index.upsert(
+            unit_id,
+            title=title,
+            kind=kind,
+            created=created,
+            body=entry.text,
+            document=stored.rel_path,
+            fragment=entry.fragment,
+        )
+    for stale in index.units_for(stored.rel_path):
+        if stale not in live:
+            index.remove_unit(stale)
+    return [f"{stored.rel_path}#{entry.fragment}" for entry in entries]
+
+
 def _build_context(root: Path) -> tuple[MemoryStore, BM25Index]:
     store = MemoryStore(root)
     index = BM25Index()
@@ -58,13 +109,7 @@ def _build_context(root: Path) -> tuple[MemoryStore, BM25Index]:
         # never let one bad file take down a full rescan (startup via
         # warm_context(), or a request via the lazy path here).
         try:
-            index.upsert(
-                stored.rel_path,
-                title=stored.meta.get("title", ""),
-                kind=stored.meta.get("kind", "topic"),
-                created=stored.meta.get("created"),
-                body=stored.body,
-            )
+            _index_document(index, stored)
         except ValueError as exc:
             logger.warning("skipping unindexable memory file %s: %s", stored.rel_path, exc)
     return store, index
@@ -135,13 +180,17 @@ async def ingest(req: IngestRequest) -> dict:
         raise HTTPException(status_code=500, detail="ingest write did not verify")
 
     stored = store.read(abs_path)
-    index.upsert(
-        stored.rel_path,
-        title=stored.meta.get("title", ""),
-        kind=stored.meta.get("kind", "journal"),
-        created=stored.meta.get("created"),
-        body=stored.body,
-    )
+    units = _index_document(index, stored)
+    # State what is true, then check it anyway. append_journal writes the
+    # "## HH:MM" heading and split_entries reads it; if those two ever stop
+    # agreeing, this file falls back to being indexed whole and chunking is
+    # silently off — recall gets worse and nothing says why. A journal that
+    # did not come out as exchanges is a fault, not a quieter success.
+    if not any("#" in unit for unit in units):
+        raise HTTPException(
+            status_code=500,
+            detail="the exchange was written but the journal was not indexed as exchanges",
+        )
     return {"path": stored.rel_path, "appended": True}
 
 
@@ -184,18 +233,22 @@ async def save(req: SaveRequest) -> dict:
         )
 
     stored = store.read(abs_path)
-    index.upsert(
-        stored.rel_path,
-        title=stored.meta.get("title", ""),
-        kind=stored.meta.get("kind", "topic"),
-        created=stored.meta.get("created"),
-        body=stored.body,
-    )
+    _index_document(index, stored)
     return {"path": stored.rel_path, "saved": True}
 
 
 @router.post("/recall")
-async def recall(req: RecallRequest) -> list[dict]:
+async def recall(req: RecallRequest) -> dict:
+    """What these notes hold on a question — or a stated nothing.
+
+    The answer is {hits, found, statement}, not a bare list, because a bare
+    list could only ever say "no hits" and this route now has three different
+    things to say: here is what matched; the notes hold no answer, and here is
+    why; and (as an HTTP failure, never as an empty list) the notes could not
+    be read at all. `statement` is the sentence a caller can repeat — the
+    relevance floor is this service's rule, so the words for it belong here and
+    not in whatever calls it.
+    """
     store, index = _context()
     try:
         person_root = store.person_root(req.person_id)
@@ -203,7 +256,8 @@ async def recall(req: RecallRequest) -> list[dict]:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
     scope_prefix = store.rel_path(person_root) + "/"
-    hits = index.search(req.query, scope_prefix=scope_prefix, k=max(req.k, 0))
+    outcome = index.search_detail(req.query, scope_prefix=scope_prefix, k=max(req.k, 0))
+    hits = outcome.hits
 
     # Scope is mechanical: re-assert the resolved path of every hit
     # before it leaves the process, even though the index was only ever
@@ -211,15 +265,40 @@ async def recall(req: RecallRequest) -> list[dict]:
     # check, not the index's own filtering.
     safe_hits = []
     for hit in hits:
+        # A hit's id names an exchange ("...md#16:32"); the FILE is what the
+        # scope check resolves, and the index hands it over as its own field
+        # rather than the check re-splitting the id and getting the rule
+        # slightly different from the one that built it.
         try:
-            resolved = store.resolve_in_person(req.person_id, hit["path"])
+            resolved = store.resolve_in_person(req.person_id, hit["document"])
         except PathEscape:
-            logger.error("index produced an out-of-scope hit: %s", hit["path"])
+            logger.error("index produced an out-of-scope hit: %s", hit["document"])
             continue
         if not resolved.is_file():
             continue
         safe_hits.append(hit)
-    return safe_hits
+
+    if safe_hits:
+        return {
+            "hits": safe_hits,
+            "found": True,
+            "statement": (
+                f"{len(safe_hits)} note(s) matched and cleared the relevance floor, "
+                "best match first."
+            ),
+        }
+    # No hits: say WHICH nothing this is. index.search_detail gives the reason
+    # when it found nothing; when it found something and every hit was then
+    # dropped by the scope re-check above, the index and the disk disagree, and
+    # that is a fault to name rather than an answer to report as an empty one.
+    reason = outcome.reason or (
+        "the notes that matched are no longer on disk, so this search could not be completed"
+    )
+    return {
+        "hits": [],
+        "found": False,
+        "statement": f"These notes hold no answer to that — {reason}.",
+    }
 
 
 @router.post("/forget")

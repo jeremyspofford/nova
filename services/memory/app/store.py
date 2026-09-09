@@ -18,6 +18,7 @@ schema_migrations table — the BM25 index this store feeds (index.py) is
 entirely in-process for this slice. The DB seam exists for a later slice
 to use, it is simply unused by S1's memory service.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -28,6 +29,7 @@ import re
 import tarfile
 import tempfile
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -40,6 +42,12 @@ logger = logging.getLogger("memory.store")
 _FRONTMATTER_START = "---\n"
 _FRONTMATTER_END = "\n---\n"
 _SLUG_RE = re.compile(r"[^a-z0-9-]+")
+
+# The heading append_journal writes in front of every exchange. This module
+# writes that line, so this module owns reading it back: split_entries() below
+# is the exact inverse of append_journal(), and nothing else may re-derive the
+# shape of a journal from a regex of its own.
+_ENTRY_HEADING_RE = re.compile(r"^## (\d{1,2}:\d{2})[ \t]*$", re.M)
 
 # How many same-slug notes one person may hold before create_topic gives up
 # and says so. A cap that is hit is a stated failure, never a silent
@@ -61,6 +69,78 @@ class StoredFile:
     abs_path: Path
     meta: dict
     body: str
+
+
+@dataclass(frozen=True)
+class Entry:
+    """One '## HH:MM' exchange inside a journal body — the unit recall indexes.
+
+    `fragment` is the name that goes after the '#' in a citable id
+    ("people/x/journals/2026-09-09.md#16:32"). `start`/`end` are character
+    offsets into the BODY the entry was split out of, heading included, so an
+    id resolves back to an exact span of the file rather than to a re-search
+    of it: body[entry.start:entry.end] is what was cited, byte for byte.
+    """
+
+    fragment: str
+    text: str  # the exchange without its heading — what gets indexed and excerpted
+    start: int
+    end: int
+
+
+def split_entries(body: str) -> list[Entry]:
+    """A journal body -> its exchanges, in file order.
+
+    Two entries can land in the same minute (two exchanges inside sixty
+    seconds), which would give two chunks the same id, so a repeated time gets
+    "-2", "-3" appended in file order. That rule lives ONLY here, and
+    find_entry() below looks an id up by recomputing these same names rather
+    than by parsing them, so the two can never drift apart.
+
+    Text before the first heading — whitespace in every file the service
+    writes, but a hand-edited note could carry a preamble — comes back as an
+    entry named "start". Dropping it would be content silently missing from
+    the index, which is the one outcome this function may not have.
+
+    A body with no headings at all (a topic note) returns [], and the caller
+    indexes the whole file as one unit.
+    """
+    matches = list(_ENTRY_HEADING_RE.finditer(body))
+    if not matches:
+        return []
+    entries: list[Entry] = []
+    preamble = body[: matches[0].start()]
+    if preamble.strip():
+        entries.append(
+            Entry(fragment="start", text=preamble.strip(), start=0, end=matches[0].start())
+        )
+    seen: Counter = Counter()
+    for i, match in enumerate(matches):
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(body)
+        at = match.group(1)
+        seen[at] += 1
+        fragment = at if seen[at] == 1 else f"{at}-{seen[at]}"
+        entries.append(
+            Entry(
+                fragment=fragment,
+                text=body[match.end() : end].strip(),
+                start=match.start(),
+                end=end,
+            )
+        )
+    return entries
+
+
+def find_entry(body: str, fragment: str) -> Entry | None:
+    """The entry a citable id names, or None when the file no longer holds it.
+
+    None is a fact — the file was rewritten, the entry is gone — and callers
+    must say that rather than quietly citing a neighbouring exchange.
+    """
+    for entry in split_entries(body):
+        if entry.fragment == fragment:
+            return entry
+    return None
 
 
 def slugify(text: str) -> str:
@@ -170,9 +250,7 @@ class MemoryStore:
         try:
             resolved.relative_to(person_root)
         except ValueError:
-            raise PathEscape(
-                f"{rel_path!r} does not resolve inside people/{person_id}/"
-            ) from None
+            raise PathEscape(f"{rel_path!r} does not resolve inside people/{person_id}/") from None
         return resolved
 
     def rel_path(self, abs_path: Path) -> str:

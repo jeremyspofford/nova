@@ -454,9 +454,16 @@ async def test_run_suite_sweeps_orphaned_scratch_people_first(owner_client, pool
 
 async def test_the_model_is_never_told_it_is_being_evaluated(pool, mount_peers):
     """NO TEST-AWARENESS LEAKAGE: the prompt the gateway receives is byte-identical
-    to a normal turn's — the stable system prompt then the user message, nothing
-    else, and no 'eval' string anywhere. The only eval-ness (kind='eval', scratch
-    person) never reaches the model."""
+    to a normal turn's — the stable system prompt, the volatile one a turn with no
+    notes gets, then the user message, and no 'eval' string anywhere. The only
+    eval-ness (kind='eval', scratch person) never reaches the model.
+
+    S13 note: the volatile message is now present on a turn whose recall came
+    back empty, because "I looked and found nothing" is a fact she is entitled
+    to state. It is the same message a normal turn gets — which is the property
+    this test is actually about — and it is asserted here against the function
+    that builds it rather than against a copy of its wording.
+    """
     gateway = ScriptedGateway(rounds=((text("An answer."),),))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
@@ -464,10 +471,19 @@ async def test_the_model_is_never_told_it_is_being_evaluated(pool, mount_peers):
     await runner.run_case(app, pool, case, MODEL)
 
     messages = gateway.payloads[0]["messages"]
-    assert messages == [
-        {"role": "system", "content": chat.stable_system_prompt(MODEL, tools.tool_names())},
-        {"role": "user", "content": "a plain question"},
-    ]
+    assert [m["role"] for m in messages] == ["system", "system", "user"]
+    assert messages[0] == {
+        "role": "system",
+        "content": chat.stable_system_prompt(MODEL, tools.tool_names()),
+    }
+    # The volatile half, minus its trailing timestamp: what a scratch person
+    # with no notes gets on any turn, eval or not.
+    empty_note = chat.volatile_system_prompt(
+        chat.Recalled(empty="nothing in the notes matched what was asked")
+    )
+    assert empty_note is not None
+    assert messages[1]["content"].startswith(empty_note.split("Current time:")[0])
+    assert messages[2] == {"role": "user", "content": "a plain question"}
     assert "eval" not in json.dumps(messages).lower()
     assert gateway.payloads[0]["model"] == MODEL  # the chosen model is what was served
 
