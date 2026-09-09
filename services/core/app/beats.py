@@ -70,7 +70,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import asyncpg
@@ -456,6 +456,110 @@ async def retime_digest(pool: asyncpg.Pool) -> str:
     return f"the digest is {words}"
 
 
+# -- the watch beat's own history ----------------------------------------------
+#
+# Its schedule row and the instants it actually STARTED, with whether each of
+# those firings made a PASS. The digest reads them to say how much of the span
+# since the last message was really watched. They live here because THIS module
+# is where a beat's identity is — `payload.handler`, never a title someone
+# could edit — and a copy of that join in another file is a copy that drifts.
+
+# The two keys the watch beat writes about ITSELF, spelled once. `_watch` files
+# its WatchResult under `delivery.watch` and `WatchResult.as_delivery()` puts
+# the checks that ran under `ran`; both readers below and `_last_pass` compose
+# their paths from these, so a rename moves the writer and every reader
+# together instead of leaving a query that silently matches nothing.
+_WATCH_RECORD = "watch"
+_WATCH_RAN = "ran"
+_RAN_PATH = f"'{{{_WATCH_RECORD},{_WATCH_RAN}}}'"
+
+# What makes a firing a PASS, in SQL: the beat's own record of itself carries a
+# non-empty list of checks that ran.
+#
+# A ROW is not a pass, and that distinction is the whole point of this fragment
+# (2026-09-09). A firing row exists from the moment the scheduler CLAIMS it,
+# and several kinds of firing watch nothing at all: `proactive.enabled` false
+# returns FIRING_OK having never called a check, a shutdown leaves the row
+# `interrupted`, anything that fails before the checks leaves it `error`. Three
+# days with the engine switched off would otherwise report "the watch beat ran
+# 75 times" — the exact lie this line exists to prevent. `jsonb_typeof` guards
+# the length: a record written in some other shape is not a pass either, and it
+# must not raise instead of saying so.
+_WATCH_PASS = (
+    f"jsonb_typeof(f.delivery #> {_RAN_PATH}) = 'array' "
+    f"AND jsonb_array_length(f.delivery #> {_RAN_PATH}) > 0"
+)
+
+# One SQL fragment, so every reader below selects the same rows from the same
+# join and cannot disagree about which timer the watch beat is.
+_WATCH_FIRINGS = (
+    f"SELECT f.started_at, ({_WATCH_PASS}) AS made_a_pass FROM timer_firings f "
+    "JOIN timers t ON t.id = f.timer_id "
+    "WHERE t.kind = $1 AND t.payload->>'handler' = $2"
+)
+
+
+@dataclass(frozen=True)
+class WatchFiring:
+    """One row of the watch beat's history: when it started, and whether that
+    firing actually looked at anything.
+
+    Two facts, kept apart on purpose, because the digest says both. `made_a_pass`
+    is read off the record the beat writes about itself rather than off the
+    firing's status — being claimed, and even finishing OK, is not evidence that
+    a check ran.
+    """
+
+    started_at: datetime
+    made_a_pass: bool
+
+
+async def watch_row(pool: asyncpg.Pool) -> asyncpg.Record | None:
+    """The watch beat's own timer row, or None when it has not been seeded.
+
+    `schedule` and `timezone` give the coverage sentence its yardstick — the
+    owner can retime the beat on the Schedules page, so "hourly" is a fact
+    about a row and never a constant in this file. `paused_at` and
+    `paused_reason` are the CAUSE the loudest version of that sentence names:
+    a beat paused after five consecutive failures, or by his own hand, will not
+    run again by itself, and saying only that it did not run would leave the
+    reason sitting unread in the row.
+    """
+    return await pool.fetchrow(
+        "SELECT id, schedule, timezone, paused_at, paused_reason, next_fire_at FROM timers "
+        "WHERE kind = $1 AND payload->>'handler' = $2",
+        BEAT_KIND,
+        WATCH,
+    )
+
+
+async def watch_firings(
+    pool: asyncpg.Pool, *, since: datetime | None = None, until: datetime | None = None
+) -> list[WatchFiring]:
+    """Every firing of the watch beat in (`since`, `until`], oldest first.
+
+    `started_at`, not `scheduled_for`: coverage is about real time in which
+    something was looked at, and a firing that ran nine hours late covered the
+    hour it actually ran in, not the hour it was meant for.
+
+    `until` is not decoration. The caller passes the SAME instant it uses as
+    the closing boundary of the span, so a firing that begins after the mark —
+    the digest's own model round takes minutes, and the watch beat is hourly —
+    cannot be counted inside a window that ends before it. Without it the count
+    and the boundary disagree, and the trailing gap is understated by exactly
+    the time the round took.
+    """
+    rows = await pool.fetch(
+        f"{_WATCH_FIRINGS} AND ($3::timestamptz IS NULL OR f.started_at > $3) "
+        "AND ($4::timestamptz IS NULL OR f.started_at <= $4) ORDER BY f.started_at",
+        BEAT_KIND,
+        WATCH,
+        since,
+        until,
+    )
+    return [WatchFiring(row["started_at"], bool(row["made_a_pass"])) for row in rows]
+
+
 # -- one firing ---------------------------------------------------------------
 
 
@@ -537,6 +641,28 @@ def _stated(*reasons: str | None) -> str | None:
     the silence every verdict in this module refuses to produce."""
     said = [reason for reason in reasons if reason]
     return "; ".join(said) if said else None
+
+
+def duration_words(gap: timedelta) -> str:
+    """A span of time in words: "9h 18m", "45m", "2d 3h".
+
+    ONE rendering, shared by the digest's coverage sentence and the coverage
+    check's own title (app/checks/work.py imports it), so the gap he reads
+    about in the daily message and the gap on the Inbox row are the same number
+    said the same way. Coarse above an hour on purpose — the exact instants are
+    in the finding's facts, and a reader of a sentence wants the size.
+    """
+    seconds = max(0, int(gap.total_seconds()))
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    if minutes:
+        return f"{minutes}m"
+    return f"{seconds}s"
 
 
 async def _person(pool: asyncpg.Pool, turn: traces.Turn) -> Person | None:
@@ -796,7 +922,9 @@ class WatchResult:
         composed from — jsonb, so anyone reading `timer_firings.delivery` sees
         exactly what the line claims."""
         return {
-            "ran": list(self.ran),
+            # The key the digest's coverage query reads a PASS out of, spelled
+            # once beside the join that reads it (2026-09-09).
+            _WATCH_RAN: list(self.ran),
             "could_not": dict(self.could_not),
             "findings": self.findings,
             "new": self.new,
@@ -1016,7 +1144,7 @@ async def _watch(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
     person = await _person(pool, turn)
     result = await _run_checks(app, pool, turn, firing_id, person)
     rung, failure = await _say(pool, turn, watch_line(result))
-    delivery = {"beat": WATCH, "chat": rung, "watch": result.as_delivery()}
+    delivery = {"beat": WATCH, "chat": rung, _WATCH_RECORD: result.as_delivery()}
     if result.pushes:
         # Only when something was actually pushed. An empty list would read as
         # "we looked and found nothing to push", which is a different fact from
@@ -1094,6 +1222,61 @@ DIGEST_NO_TEXT = "the round came back with no words in it, so there was nothing 
 # COUNTED and said in the brief, never dropped silently.
 DIGEST_CLEARED_LIMIT = 20
 DIGEST_DELIVERED_LIMIT = 200
+
+# How many STILL STANDING notices the digest's code-composed tail may name.
+# Same rule as the two above: a bound, not a filter — what is left out is
+# counted in the same sentence and stays in the Inbox.
+DIGEST_STANDING_LIMIT = 10
+
+# The two code-composed lines the backend appends UNDER whatever the model
+# wrote. The model writes the prose; these are the facts, and neither can
+# overstate the other — the delegate facts-line idiom, in the one message a
+# day.
+#
+# COVERAGE goes out every time, on a good day as loudly as on a bad one. It is
+# provenance, and it exists because of the night of 2026-09-09: the host slept
+# from 02:00 to 11:23 UTC, the hourly watch beat ran twice in twelve hours, and
+# nothing lied — the firing history recorded the gap exactly — but a digest
+# composed only from findings would have reported them without ever saying that
+# nothing had been watched for nine of those hours. A reader assumes the hourly
+# cover he was promised. "All quiet" must never be able to mean "I was not
+# there", so the sentence that says how much was watched is not conditional on
+# there being bad news.
+COVERAGE_PREFIX = "Coverage:"
+COVERAGE_UNREADABLE = (
+    f"{COVERAGE_PREFIX} the watch beat's own firing history could not be read, so this message "
+    "cannot say how much of the time since the last digest was actually watched"
+)
+COVERAGE_NOTHING = (
+    f"{COVERAGE_PREFIX} the watch beat has no firing on record at all, so nothing above was "
+    "watched by it — this is not an all-clear."
+)
+NOT_AN_ALL_CLEAR = "so nothing above was watched in that time — this is not an all-clear."
+
+# The one thing that can make a QUIET day speak (2026-09-09). Nothing owed and
+# nothing watched are the same silence from the outside, and the day the watch
+# beat stops is the day the difference matters most — a paused beat raises
+# nothing new, deliverable() empties, and every digest after that writes
+# nothing at all, forever, with no check able to notice because checks run only
+# from that beat. So on a day with nothing to report AND nothing to show for
+# the watching, the digest sends this and the coverage line under it. Composed
+# in code, no model asked: there is nothing to write about, and the whole point
+# of the sentence is that a model had no hand in it.
+DIGEST_UNWATCHED = (
+    "Nothing is waiting to be delivered. On any other day that would be the whole of it and "
+    "you would hear nothing at all — you are hearing this because there is nothing to show "
+    "that anything was WATCHED either, so today's quiet is not evidence that anything is fine."
+)
+DIGEST_UNWATCHED_NOTE = (
+    "no notice was waiting to be delivered, and nothing showed that the watch beat made a pass "
+    "over the span either, so the coverage line went out on its own"
+)
+
+STANDING_PREFIX = "Still standing, already reported and not repeated here:"
+STANDING_WHY = "They stay in the Inbox until they clear."
+STANDING_UNREADABLE = (
+    "What is still standing from earlier digests could not be read, so this message cannot name it"
+)
 
 DIGEST_SYSTEM = (
     "You are Nova, writing the one proactive message you send the owner each day. You have "
@@ -1234,9 +1417,8 @@ async def _owed_today(pool: asyncpg.Pool, notices) -> tuple[list, int]:
     return owed[:cap], max(0, len(owed) - cap)
 
 
-async def _cleared_since(pool: asyncpg.Pool, firing_id) -> tuple[list, int]:
-    """The notices whose condition ended since the last digest that REACHED
-    him, most recent first, and how many more there were than the brief carries.
+async def _last_digest_at(pool: asyncpg.Pool, firing_id) -> datetime | None:
+    """When the last digest that REACHED him started, or None when none has.
 
     "The last digest" is derived from the record a digest writes about itself —
     `delivery.digest.delivered`, which is `Delivered.reached`, which is the chat
@@ -1245,23 +1427,40 @@ async def _cleared_since(pool: asyncpg.Pool, firing_id) -> tuple[list, int]:
     was delivered (an urgent push is one sentence about the stack and says
     nothing about what cleared). With no such firing yet, the window is
     everything: he has never been told anything.
+
+    ONE definition of "since the last digest", because two readers now use it —
+    what has cleared, and how much of the span was watched — and a message
+    whose two halves counted from different instants would be worse than
+    either half alone.
     """
-    since = None
-    if firing_id is not None:
-        since = await pool.fetchval(
-            "SELECT max(started_at) FROM timer_firings "
-            "WHERE timer_id = (SELECT timer_id FROM timer_firings WHERE id = $1) "
-            "AND id <> $1 AND (delivery #>> '{digest,delivered}') = 'true'",
-            firing_id,
-        )
+    if firing_id is None:
+        return None
+    return await pool.fetchval(
+        "SELECT max(started_at) FROM timer_firings "
+        "WHERE timer_id = (SELECT timer_id FROM timer_firings WHERE id = $1) "
+        "AND id <> $1 AND (delivery #>> '{digest,delivered}') = 'true'",
+        firing_id,
+    )
+
+
+async def _cleared_since(pool: asyncpg.Pool, firing_id) -> tuple[list, int]:
+    """The notices whose condition ended since the last digest that REACHED
+    him, most recent first, and how many more there were than the brief carries.
+
+    The overflow is COUNTED, not inferred from the page (2026-09-09): fetching
+    one row past the limit and subtracting saturates at 1, so a night when
+    thirty conditions ended would have read "and 1 more".
+    """
+    since = await _last_digest_at(pool, firing_id)
+    where = "cleared_at IS NOT NULL AND ($1::timestamptz IS NULL OR cleared_at > $1)"
+    total = await pool.fetchval(f"SELECT count(*) FROM notices WHERE {where}", since)
     rows = await pool.fetch(
-        "SELECT title, check_name, cleared_at FROM notices "
-        "WHERE cleared_at IS NOT NULL AND ($1::timestamptz IS NULL OR cleared_at > $1) "
+        f"SELECT title, check_name, cleared_at FROM notices WHERE {where} "
         "ORDER BY cleared_at DESC LIMIT $2",
         since,
-        DIGEST_CLEARED_LIMIT + 1,
+        DIGEST_CLEARED_LIMIT,
     )
-    return list(rows[:DIGEST_CLEARED_LIMIT]), max(len(rows) - DIGEST_CLEARED_LIMIT, 0)
+    return list(rows), max(int(total) - len(rows), 0)
 
 
 async def _last_pass(pool: asyncpg.Pool, outstanding: Sequence) -> tuple[tuple, str | None]:
@@ -1287,9 +1486,9 @@ async def _last_pass(pool: asyncpg.Pool, outstanding: Sequence) -> tuple[tuple, 
     note: str | None = None
     try:
         row = await pool.fetchrow(
-            "SELECT f.delivery -> 'watch' AS watch FROM timer_firings f "
+            f"SELECT f.delivery -> '{_WATCH_RECORD}' AS watch FROM timer_firings f "
             "JOIN timers t ON t.id = f.timer_id "
-            "WHERE t.kind = $1 AND t.payload->>'handler' = $2 AND f.delivery ? 'watch' "
+            f"WHERE t.kind = $1 AND t.payload->>'handler' = $2 AND f.delivery ? '{_WATCH_RECORD}' "
             "ORDER BY f.started_at DESC LIMIT 1",
             BEAT_KIND,
             WATCH,
@@ -1303,7 +1502,7 @@ async def _last_pass(pool: asyncpg.Pool, outstanding: Sequence) -> tuple[tuple, 
             f"ran — {peers.reason(exc)}"
         )
     could_not = watch.get("could_not") if isinstance(watch.get("could_not"), dict) else {}
-    ran = watch.get("ran") if isinstance(watch.get("ran"), list) else []
+    ran = watch.get(_WATCH_RAN) if isinstance(watch.get(_WATCH_RAN), list) else []
     runs = [
         checks.CheckRun(check=name, ran=True, reason=None, findings=tuple(by_check.get(name, ())))
         for name in sorted((set(ran) | set(by_check)) - set(could_not))
@@ -1338,6 +1537,310 @@ async def _delivered_titles(pool: asyncpg.Pool) -> tuple[list[str], str | None]:
             f"in this message was not checked — {peers.reason(exc)}"
         )
     return [row["title"] for row in rows], None
+
+
+# ── the two facts lines the backend appends ──────────────────────────────────
+
+
+@dataclass(frozen=True)
+class Coverage:
+    """How much of the span since the last digest the watch beat actually
+    covered, counted from its own firing rows.
+
+    Two numbers, and keeping them apart is the point (2026-09-09). `firings` is
+    how many times the beat STARTED; `passes` is how many of those firings ran
+    a check. They are usually the same and when they are not the difference is
+    the news: the engine's switch being off returns FIRING_OK having never
+    called a check, a shutdown leaves the row `interrupted`, a failure before
+    the checks leaves it `error`. A line counting rows alone would report "the
+    watch beat ran 75 times" over three days with the engine off — the exact
+    lie this sentence exists to prevent — so the sentence states both numbers
+    rather than quietly reporting the smaller one.
+
+    `longest_gap` is the widest stretch inside the span in which no PASS was
+    made, measured over the boundaries [window start, every pass, the mark], so
+    a span with one pass at its very beginning reports the twenty-three hours
+    after it rather than "no gap".
+
+    `paused_at`/`paused_reason` come off the watch beat's own timer row. A
+    paused beat will not run again by itself, so the sentence that says nothing
+    was watched carries WHY in the same breath: the cause is already in the row
+    and leaving it there would make the loudest line in the message the least
+    useful one.
+
+    `unreadable` is the honest empty state. When the history could not be read
+    this says so in the message and on the firing; it never falls back to a
+    number nobody counted, because a coverage sentence that reads well and was
+    not computed is worse than no sentence at all.
+    """
+
+    firings: int
+    passes: int
+    # The instant the span starts at: the last digest that reached him, or —
+    # when there has never been one — the beat's first firing on record. Which
+    # of the two it was is `from_a_digest`, because they mean different things
+    # to a reader and the sentence says which.
+    window_start: datetime | None
+    from_a_digest: bool
+    longest_gap: timedelta | None
+    paused_at: datetime | None = None
+    paused_reason: str | None = None
+    # schedule.describe over the watch beat's own row ("every hour at :05
+    # America/New_York"), so the gap has a yardstick beside it. A stored zone
+    # that no longer loads leaves this None and states why in `schedule_note`
+    # rather than quietly dropping the clause.
+    schedule_words: str | None = None
+    schedule_note: str | None = None
+    unreadable: str | None = None
+
+    @property
+    def unproven(self) -> bool:
+        """Is this span one that CANNOT be shown to have been watched?
+
+        Three ways, and the digest speaks on any of them even on a day with
+        nothing else to say: no pass was made, or the beat is paused (so no
+        pass will be made), or the history could not be read at all — never
+        reporting full coverage for a history nobody could count is the same
+        rule as the unreadable line itself.
+
+        This is what closes the silent death. Checks run only from the watch
+        beat, so no check can ever see its own beat stop: a paused watch beat
+        raises nothing new, `deliverable()` empties out once the standing
+        findings are delivered, and every digest after that writes NOTHING,
+        forever, with nothing else in the system able to notice.
+        """
+        return self.unreadable is not None or self.passes == 0 or self.paused_at is not None
+
+    def _paused_words(self, zone: str) -> str:
+        """The pause, in words, or "". Never just "it is paused": the reason is
+        on the row and a symptom without its cause is the sentence this whole
+        line is a reaction to."""
+        if self.paused_at is None:
+            return ""
+        why = self.paused_reason or "no reason was recorded on the row"
+        return (
+            f" The beat is PAUSED (since {schedule.local_words(self.paused_at, zone)}) and will "
+            f"not run again until it is resumed — {why}."
+        )
+
+    def line(self, zone: str) -> str:
+        """The sentence, composed here in code. Never asked of a model: it is
+        the one claim in the message whose whole point is that a model had no
+        hand in it."""
+        if self.unreadable is not None:
+            return f"{COVERAGE_UNREADABLE} — {self.unreadable}."
+        if self.window_start is None:
+            return COVERAGE_NOTHING + self._paused_words(zone)
+        since = (
+            f"the last digest that reached you ({schedule.local_words(self.window_start, zone)})"
+            if self.from_a_digest
+            else f"its first firing on record ({schedule.local_words(self.window_start, zone)})"
+        )
+        if not self.passes:
+            # Both shapes of "nothing was watched", and they are different
+            # facts: a beat that never fired, and a beat that fired and looked
+            # at nothing. Neither is allowed to read as an all-clear.
+            did = (
+                f"has not run at all since {since}"
+                if not self.firings
+                else (
+                    f"fired {_plural(self.firings, 'time')} since {since} and not one of those "
+                    "firings ran a check"
+                )
+            )
+            return (
+                f"{COVERAGE_PREFIX} the watch beat {did}, {NOT_AN_ALL_CLEAR}"
+                + self._paused_words(zone)
+            )
+        made = (
+            "every one of them making a pass"
+            if self.passes == self.firings
+            else f"{self.passes} of them making a pass"
+        )
+        words = (
+            f"{COVERAGE_PREFIX} the watch beat fired {_plural(self.firings, 'time')} since "
+            f"{since}, {made}"
+        )
+        if self.longest_gap is not None:
+            words += (
+                f", and the longest it went without a pass was {duration_words(self.longest_gap)}"
+            )
+        if self.schedule_words:
+            words += f" (it is scheduled {self.schedule_words})"
+        elif self.schedule_note:
+            words += (
+                " (its own schedule could not be read, so there is nothing here to compare "
+                f"that against — {self.schedule_note})"
+            )
+        return words + "." + self._paused_words(zone)
+
+    def as_record(self) -> dict:
+        """What the firing stores, in the numbers the sentence was composed
+        from — so `timer_firings.delivery` can be checked against the message
+        he actually read."""
+        record: dict = {
+            "firings": self.firings,
+            "passes": self.passes,
+            "from_a_digest": self.from_a_digest,
+        }
+        if self.window_start is not None:
+            record["window_start"] = self.window_start.isoformat()
+        if self.longest_gap is not None:
+            record["longest_gap_s"] = round(self.longest_gap.total_seconds())
+        if self.paused_at is not None:
+            record["paused_at"] = self.paused_at.isoformat()
+            record["paused_reason"] = self.paused_reason
+        if self.unreadable is not None:
+            record["unreadable"] = self.unreadable
+        return record
+
+
+async def _coverage(pool: asyncpg.Pool, firing_id, mark: datetime) -> Coverage:
+    """Count the watch beat's PASSES since the last digest that reached him.
+
+    `mark` closes the span and bounds the firing query, one instant for both:
+    a count taken over a wider window than the boundary it is reported against
+    would understate the trailing gap and could count a firing that starts
+    after the mark. It is read fresh in `_digest` immediately before this call
+    rather than reused from earlier in the beat.
+
+    Nothing here raises: a coverage line is provenance under a message that is
+    already composed, and losing the whole digest because a history read failed
+    would trade a small silence for a large one. The failure is stated in the
+    line itself and recorded on the firing instead.
+
+    The gap is measured over the boundaries [window start, every pass, mark]
+    and not just between passes, so the two cases that read as "no gap" while
+    covering nothing — one pass at the very start of the span, one at the very
+    end — are counted like any other stretch.
+    """
+    try:
+        since = await _last_digest_at(pool, firing_id)
+        firings = await watch_firings(pool, since=since, until=mark)
+        row = await watch_row(pool)
+    except Exception as exc:  # noqa: BLE001 - the reason is the record
+        logger.exception("the watch beat's firing history could not be read for the digest")
+        return Coverage(
+            firings=0,
+            passes=0,
+            window_start=None,
+            from_a_digest=False,
+            longest_gap=None,
+            unreadable=peers.reason(exc),
+        )
+    words = note = None
+    paused_at = paused_reason = None
+    if row is not None:
+        paused_at, paused_reason = row["paused_at"], row["paused_reason"]
+        try:
+            words = schedule.describe(row["schedule"], row["timezone"], None)
+        except Exception as exc:  # noqa: BLE001 - said, never silently dropped
+            note = peers.reason(exc)
+    passes = [firing.started_at for firing in firings if firing.made_a_pass]
+    # With no digest on record the span starts at the beat's own first firing:
+    # he has never been told anything, so everything it has ever done is new.
+    window_start = since if since is not None else (firings[0].started_at if firings else None)
+    longest = None
+    if window_start is not None:
+        marks = [window_start, *passes, mark]
+        longest = max(
+            (later - earlier for earlier, later in zip(marks, marks[1:], strict=False)),
+            default=None,
+        )
+    return Coverage(
+        firings=len(firings),
+        passes=len(passes),
+        window_start=window_start,
+        from_a_digest=since is not None,
+        longest_gap=longest,
+        paused_at=paused_at,
+        paused_reason=paused_reason,
+        schedule_words=words,
+        schedule_note=note,
+    )
+
+
+def _standing_predicate(notices) -> str:
+    """The SQL for "still true, already told, and not muted", DERIVED from the
+    notices store's own definition of what is still owed.
+
+    Named states would be a second, weaker copy of that definition — and were
+    (2026-09-09): spelling this as `delivered` or `seen` hardcoded two of the
+    five states, and a LIVE notice whose delivery FAILED and which he then
+    marked seen fell between the two halves of the message and was never named
+    again. `deliverable()` is `_LIVE AND _UNREAD AND state = ANY(...)`, so the
+    complement of it inside the live, unmuted rows is exactly what has already
+    been told — including that one. The store's private fragments are read on
+    purpose rather than re-spelled: one definition of live and of unread, so
+    the two halves of one message stay disjoint BY CONSTRUCTION and cannot
+    drift into overlapping or into leaving a row in neither.
+    """
+    return (
+        f"{notices._LIVE} AND state <> '{notices.MUTED}' "
+        f"AND NOT ({notices._UNREAD} AND state = ANY($1::text[]))"
+    )
+
+
+async def _standing(pool: asyncpg.Pool) -> tuple[list, int, str | None]:
+    """The notices that are still TRUE and that he has already been told about,
+    longest-standing first — plus how many more there were, plus the reason
+    they could not be read, if they could not.
+
+    Its own small query on purpose. `notices.deliverable()` means "still owed"
+    and that meaning is settled; widening it to include what has already been
+    delivered would make the digest deliver these rows again and mark them
+    again, which is precisely what must not happen. The two sets cannot even
+    overlap: this predicate is the complement of that one.
+
+    `muted` is absent, and that is the whole point of a mute: he asked to stop
+    hearing about those facts, and a tail that re-listed them every morning
+    would be the v3 re-armed nag with a new name.
+
+    The overflow is COUNTED, not inferred from the page (2026-09-09): fetching
+    one row past the limit and subtracting saturates at 1, so forty standing
+    notices read as "and 1 more".
+    """
+    _checks, notices = _proactive()
+    predicate = _standing_predicate(notices)
+    states = list(notices.DELIVERABLE_STATES)
+    try:
+        total = await pool.fetchval(f"SELECT count(*) FROM notices WHERE {predicate}", states)
+        rows = await pool.fetch(
+            f"SELECT title, check_name, repeats FROM notices WHERE {predicate} "
+            "ORDER BY first_seen_at LIMIT $2",
+            states,
+            DIGEST_STANDING_LIMIT,
+        )
+    except Exception as exc:  # noqa: BLE001 - the reason is the record
+        logger.exception("the standing notices could not be read for the digest")
+        return [], 0, peers.reason(exc)
+    return list(rows), max(int(total) - len(rows), 0), None
+
+
+def standing_line(rows: Sequence, more: int, note: str | None) -> str | None:
+    """One line naming what is still true and was reported before — or None.
+
+    NAMED, never re-explained, and never re-delivered: these rows keep the
+    state they already have, nothing marks them again, and the sentence is a
+    list of titles with the sighting count rather than the finding written out
+    a second time. A daily re-listing of the same standing problem, with its
+    facts and its history, is exactly the nag this whole design exists to
+    avoid — the Inbox is where standing things live, and this line is the
+    pointer to it.
+
+    It rides a message that already exists. On a day with nothing outstanding
+    the digest writes nothing at all and this is never reached, which is
+    deliberate: a standing problem must not be able to cause a message, or
+    "one message a day unless there is something to say" would become "one
+    message a day, forever, from the first thing that ever broke".
+    """
+    if note is not None:
+        return f"{STANDING_UNREADABLE} — {note}."
+    if not rows:
+        return None
+    named = "; ".join(f"{row['title']} (seen {_plural(row['repeats'], 'time')})" for row in rows)
+    tail = f", and {more} more" if more else ""
+    return f"{STANDING_PREFIX} {named}{tail}. {STANDING_WHY}"
 
 
 def _guard(turn: traces.Turn, name: str, check, *args) -> str | None:
@@ -1409,13 +1912,72 @@ async def _mark_digest(pool: asyncpg.Pool, outstanding: Sequence, result) -> str
     return "the digest's outcome could not be written onto " + "; ".join(problems)
 
 
+async def _quiet_digest(
+    app, pool: asyncpg.Pool, turn: traces.Turn, coverage: Coverage, person: Person | None
+):
+    """A day with nothing outstanding — and whether that is QUIET or SILENT.
+
+    Quiet is the ordinary day and it is unchanged: passes were made, nothing is
+    owed, the beat writes its own code-composed line into the beats' own
+    conversation and he hears nothing at all. A digest that spoke every day
+    about nothing is the noise this slice exists to avoid.
+
+    SILENT is the other day, and it is the one this function exists for
+    (2026-09-09). `coverage.unproven` is true when no pass was made over the
+    whole span, when the watch beat is paused, or when its history could not be
+    read — and any of those means the quiet is a fact about the watcher rather
+    than about the world. Nothing else in the system can catch it: `run_all` is
+    called only from the watch beat, so no check can ever see its own beat
+    stop, and once a paused beat raises nothing new `deliverable()` empties out
+    and every digest after that writes NOTHING, forever. So the digest speaks:
+    one short line composed HERE, in code, with no model asked, and the
+    coverage sentence under it naming what did not happen and — off the timer
+    row's own `paused_reason` — why.
+
+    It goes through the same non-urgent ladder every digest uses, so "he was
+    told" means the same thing on this day as on any other: the chat row read
+    back, and a firing that reads ERROR when nobody was reached.
+    """
+    scheduler = _scheduler()
+    record: dict = {
+        "beat": DIGEST,
+        "digest": {"delivered": False, "notices": 0, "coverage": coverage.as_record()},
+    }
+    if not coverage.unproven:
+        rung, failure = await _say(pool, turn, DIGEST_NOTHING)
+        record["chat"] = rung
+        record["note"] = DIGEST_NOTHING_NOTE
+        record["digest"]["reason"] = DIGEST_NOTHING_NOTE
+        if failure is not None:
+            return scheduler.Outcome(scheduler.FIRING_ERROR, failure, record)
+        return scheduler.Outcome(scheduler.FIRING_OK, None, record)
+
+    record["note"] = DIGEST_UNWATCHED_NOTE
+    record["digest"]["reason"] = DIGEST_UNWATCHED_NOTE
+    if person is None:
+        # Stated, never swallowed: there is nobody to tell, which is a worse
+        # version of the same silence and must not read as a delivery.
+        record["digest"]["unable"] = DIGEST_NO_PERSON
+        return scheduler.Outcome(scheduler.FIRING_ERROR, DIGEST_NO_PERSON, record)
+    message = "\n\n".join([DIGEST_UNWATCHED, coverage.line(turn.timezone)])
+    delivery = _delivery()
+    result = await delivery.deliver(app, pool, text=message, urgent=False, person=person, turn=turn)
+    record.update(result.receipt)
+    record["digest"]["delivered"] = result.reached
+    if not result.reached:
+        return scheduler.Outcome(scheduler.FIRING_ERROR, result.reason, record)
+    return scheduler.Outcome(scheduler.FIRING_OK, None, record)
+
+
 async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
     """The daily beat: ONE message about everything still owed him.
 
     Nothing outstanding is the ordinary day and it is QUIET: the beat writes its
     own code-composed line into the beats' own conversation, delivers nothing at
     all, and records ok. A digest that spoke every day about nothing is the
-    noise this slice exists to avoid.
+    noise this slice exists to avoid. The exception, and the reason coverage is
+    computed before that early return, is a quiet day on which nothing was
+    WATCHED — see `_quiet_digest`.
 
     Otherwise it composes. The brief is built HERE, from rows: each deliverable
     notice with its title, its derived facts, its sighting count and what she
@@ -1437,6 +1999,19 @@ async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
     never marked delivered, so they are still owed tomorrow — and the count
     goes on the firing.
 
+    Then two lines the BACKEND composes and appends under the prose, the
+    delegate facts-line idiom: the model writes the sentences, the backend
+    writes the numbers, and neither can overstate the other. COVERAGE goes out
+    every time — how many times the watch beat FIRED since the last digest that
+    reached him, how many of those firings actually made a pass, and the
+    longest stretch without one, off its own rows — because a digest that
+    reports findings without saying how much was watched lets "all quiet" mean
+    "I was not there". STILL STANDING goes out only when
+    something is: one line naming what is still true and was reported before,
+    with its sighting count, NOT re-explained and NOT re-delivered (those rows
+    keep the state they have; nothing marks them again). Both ride the message;
+    neither can cause one.
+
     Finally the ladder: `delivery.deliver(urgent=False)`, which writes the chat
     row into his ACTIVE conversation and reads it back. `reached` is that row,
     and it is what decides whether every notice is marked delivered with the
@@ -1446,19 +2021,20 @@ async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
     scheduler = _scheduler()
     _checks_module, notices = _proactive()
     outstanding, held_back = await _owed_today(pool, notices)
-    if not outstanding:
-        rung, failure = await _say(pool, turn, DIGEST_NOTHING)
-        record = {
-            "beat": DIGEST,
-            "chat": rung,
-            "note": DIGEST_NOTHING_NOTE,
-            "digest": {"delivered": False, "notices": 0, "reason": DIGEST_NOTHING_NOTE},
-        }
-        if failure is not None:
-            return scheduler.Outcome(scheduler.FIRING_ERROR, failure, record)
-        return scheduler.Outcome(scheduler.FIRING_OK, None, record)
-
+    # The database clock, the one every other time in this file comes from — a
+    # wall clock here could disagree with the timestamps beside it. Read ONCE
+    # and used both as the coverage span's closing boundary and as the bound on
+    # the query that counts it, so the count and the boundary cannot be two
+    # different instants.
+    now = await pool.fetchval("SELECT now()")
+    # BEFORE the quiet early-return, because the quiet return is precisely
+    # where this was missing (2026-09-09): on the one day it matters most — the
+    # day the watch beat stopped — the provenance line never appeared at all.
+    coverage = await _coverage(pool, firing_id, now)
     person = await _person(pool, turn)
+    if not outstanding:
+        return await _quiet_digest(app, pool, turn, coverage, person)
+
     if person is None:
         return scheduler.Outcome(
             scheduler.FIRING_ERROR,
@@ -1496,9 +2072,7 @@ async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
         cleared=cleared,
         cleared_more=cleared_more,
         runs=runs,
-        # The database clock, the one every other time in this file comes from
-        # — a wall clock here could disagree with the timestamps beside it.
-        now=await pool.fetchval("SELECT now()"),
+        now=now,
         zone=turn.timezone,
         notes=notes,
     )
@@ -1576,7 +2150,22 @@ async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
     ]
     if corrections:
         record["digest"]["corrections"] = len(corrections)
-    message = "\n\n".join([text.strip(), *corrections])
+
+    # The facts the BACKEND writes, appended under the model's prose: the model
+    # was never told these numbers and cannot overstate them, and they are here
+    # whatever it wrote. Coverage always — that is the point of it — and the
+    # standing tail only when something is standing.
+    standing, standing_more, standing_note = await _standing(pool)
+    record["digest"]["coverage"] = coverage.as_record()
+    if standing or standing_more:
+        record["digest"]["standing"] = len(standing) + standing_more
+    if standing_note is not None:
+        record["digest"]["standing_unreadable"] = standing_note
+    facts_lines = [coverage.line(turn.timezone)]
+    tail = standing_line(standing, standing_more, standing_note)
+    if tail is not None:
+        facts_lines.append(tail)
+    message = "\n\n".join([text.strip(), *corrections, *facts_lines])
 
     delivery = _delivery()
     result = await delivery.deliver(app, pool, text=message, urgent=False, person=person, turn=turn)

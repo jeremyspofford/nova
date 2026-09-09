@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
@@ -770,8 +771,17 @@ async def _run_beat(pool, name: str, *, now: datetime):
     """Fire exactly ONE beat and hand back its firing row.
 
     tick_once claims by `next_fire_at`, and the two seeded beats have no
-    guaranteed order between them — so the other one is paused and this one is
-    made due, rather than trusting whichever the seed happened to time first.
+    guaranteed order between them — so the other one is put OUT OF REACH and
+    this one is made due, rather than trusting whichever the seed happened to
+    time first.
+
+    Out of reach rather than PAUSED, changed 2026-09-09: the claim reads
+    `paused_at IS NULL AND next_fire_at <= now`, so moving the instant selects
+    one beat exactly as well — and the digest now reads `paused_at` off the
+    watch row to say why nothing was watched, so a harness that paused the
+    watch beat in order to run the digest would have made every digest in this
+    file report its own scaffolding as a dead beat. A pause a TEST sets on the
+    other beat is left alone for the same reason.
     """
     rows = await _beat_rows(pool)
     for other, row in rows.items():
@@ -784,9 +794,9 @@ async def _run_beat(pool, name: str, *, now: datetime):
             )
         else:
             await pool.execute(
-                "UPDATE timers SET paused_at = now(), paused_reason = 'one beat at a time' "
-                "WHERE id = $1",
+                "UPDATE timers SET next_fire_at = $2 WHERE id = $1",
                 row["id"],
+                now + timedelta(days=365),
             )
     fired = await scheduler.tick_once(app, pool, now=now)
     assert len(fired) == 1, "exactly one beat should have been due"
@@ -828,6 +838,23 @@ def _brief(gateway) -> str:
     return payloads[0]["messages"][-1]["content"]
 
 
+def _prose(content: str) -> str:
+    """The model's own words, without the code-composed facts the backend
+    appends beneath them.
+
+    The pin moved on 2026-09-09: every digest now carries a COVERAGE line (and
+    a STILL STANDING tail when something is standing), separated from the prose
+    by a blank line — the delegate facts-line idiom, in the one message a day.
+    The prose is still asserted exactly; what is new is what stands under it.
+    """
+    return content.split("\n\n")[0]
+
+
+def _facts_lines(content: str) -> list[str]:
+    """Everything the backend appended under the prose."""
+    return content.split("\n\n")[1:]
+
+
 def _urgent_finding() -> Finding:
     return Finding(
         key="peer_down:gateway",
@@ -858,7 +885,12 @@ async def test_two_findings_in_a_day_produce_exactly_one_chat_message(pool, only
 
     landed = await _messages(pool, his_chat["id"])
     assert len(landed) == 1, "one digest a day, whatever it carries"
-    assert landed[0]["content"] == "Two things are still standing from today's checks."
+    assert _prose(landed[0]["content"]) == "Two things are still standing from today's checks."
+    # Provenance, appended in code beneath her prose and present on a good day
+    # as loudly as on a bad one: "all quiet" must never mean "I was not there".
+    assert any(
+        line.startswith(beats.COVERAGE_PREFIX) for line in _facts_lines(landed[0]["content"])
+    )
     assert landed[0]["turn_id"] == firing["turn_id"], "his message is badged from the beat's trace"
     assert firing["status"] == scheduler.FIRING_OK and firing["reason"] is None
     assert firing["delivery"]["chat"] == {"ok": True}
@@ -894,7 +926,13 @@ async def test_a_day_with_nothing_to_tell_him_produces_no_message_at_all(pool, o
 
     assert await _messages(pool, his_chat["id"]) == []
     assert firing["status"] == scheduler.FIRING_OK and firing["reason"] is None
-    assert firing["delivery"]["digest"] == {
+    digest = dict(firing["delivery"]["digest"])
+    # Coverage rides the record of a quiet day too, and is computed BEFORE the
+    # early return (2026-09-09): the day the watch beat stops IS a quiet day,
+    # and it is the one day the provenance line has to appear. This day was
+    # watched — one pass — so the quiet stands and nothing is sent.
+    assert digest.pop("coverage")["passes"] == 1
+    assert digest == {
         "delivered": False,
         "notices": 0,
         "reason": beats.DIGEST_NOTHING_NOTE,
@@ -1076,7 +1114,7 @@ async def test_the_digest_never_carries_an_urgent_notice_that_already_went_out(
     assert "the gateway has not answered" not in brief, "he was already told, at the hour"
     assert firing["delivery"]["digest"]["notices"] == 1
     # Two messages in his chat: the urgent push at the hour, the digest after.
-    assert [row["content"] for row in await _messages(pool, his_chat["id"])] == [
+    assert [_prose(row["content"]) for row in await _messages(pool, his_chat["id"])] == [
         "Urgent (stack_gateway): the gateway has not answered for 40 minutes "
         "— peer=gateway, state=unreachable",
         "A timer has failed four nights running.",
@@ -1160,7 +1198,7 @@ async def test_a_digest_whose_chat_rung_fails_marks_every_notice_failed_and_tell
     again = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=24))
 
     assert again["delivery"]["digest"]["notices"] == 2, "nobody was told, so it is still owed"
-    assert [row["content"] for row in await _messages(pool, his_chat["id"])] == [
+    assert [_prose(row["content"]) for row in await _messages(pool, his_chat["id"])] == [
         "Still two things standing."
     ]
     assert [row["state"] for row in await _notices(pool)] == [
@@ -1271,7 +1309,11 @@ async def test_the_digest_says_what_got_better_since_the_last_one(pool, only, mo
     standing_half, cleared_half = brief.split("CLEARED since the last digest")
     assert "agent_over_cap:coder is true" in standing_half
     assert "timer_failing:1 is true" in cleared_half
-    assert firing["delivery"]["digest"] == {
+    digest = dict(firing["delivery"]["digest"])
+    # Provenance rides every digest now (2026-09-09); the rest of the record is
+    # unchanged, and the coverage numbers have their own tests below.
+    assert digest.pop("coverage")["passes"] == 2
+    assert digest == {
         "delivered": True,
         "notices": 1,
         "cleared": 1,
@@ -1282,7 +1324,7 @@ async def test_the_digest_says_what_got_better_since_the_last_one(pool, only, mo
     # nothing: a correction under her own true sentence would be the worst
     # thing this family could do to the one message he reads.
     (message,) = await _messages(pool, (await conversations.active_conversation(pool, owner))["id"])
-    assert message["content"] == "The coder agent is over its cap; the timer is sorted."
+    assert _prose(message["content"]) == "The coder agent is over its cap; the timer is sorted."
 
 
 def test_the_brief_is_rows_it_says_what_she_did_and_what_reached_nobody():
@@ -1344,6 +1386,680 @@ def test_the_brief_is_rows_it_says_what_she_did_and_what_reached_nobody():
     # a partial view has to be able to say so.
     assert "NOT READ: the cleared notices could not be read — RuntimeError: boom" in brief
     assert brief.endswith(beats.DIGEST_ASK.format(name="jeremy"))
+
+
+# -- the facts the backend appends (2026-09-09) -----------------------------------
+#
+# The engine's first unattended night. The host slept from 02:00 to 11:23 UTC:
+# the hourly watch beat ran at 01:05, at 02:05, and then not for nine hours.
+# Nothing lied — the firing history holds the gap exactly — but the 07:30
+# digest would have reported its findings without ever saying that nothing had
+# been watched for nine of the previous twelve. A reader assumes the hourly
+# cover he was promised, and silence reading as coverage is the whole defect
+# class this slice exists to eliminate.
+#
+# Two lines the BACKEND composes and appends under whatever the model wrote,
+# the delegate facts-line idiom: the model writes the prose, the backend writes
+# the numbers, neither can overstate the other.
+#
+#   * COVERAGE, every time, good day or bad: how many times the watch beat
+#     FIRED since the last digest that reached him, how many of those firings
+#     actually made a PASS, and the longest it went without one. Provenance, so
+#     "all quiet" can never mean "I was not there".
+#   * STILL STANDING, only when something is: what is still true and was
+#     already reported, named with its sighting count — not re-explained, not
+#     re-delivered, and never able to CAUSE a message.
+#
+# Three of these pins moved on the review of the same day and each says why
+# where it sits: a firing ROW is not a pass; coverage is computed BEFORE the
+# quiet early-return, so the one day the watch beat stops is not the one day
+# the digest says nothing; and what is "already told" is derived from the
+# notices store's own definition of what is still owed rather than named
+# state by state.
+
+
+async def _fired(pool, timer_id, *ats: datetime, made_a_pass: bool = True) -> None:
+    """Watch firing rows at exactly these instants. Written by hand because a
+    real tick stamps every firing with now(), and a night's worth of history is
+    the thing under test.
+
+    `made_a_pass` is the difference between a ROW and a PASS: the record a beat
+    writes about ITSELF is where "a check actually ran" lives, and a firing
+    without one watched nothing — the engine switched off, a shutdown, an error
+    before the checks.
+    """
+    for at in ats:
+        await pool.execute(
+            "INSERT INTO timer_firings (timer_id, scheduled_for, started_at, ended_at, status, "
+            "delivery) VALUES ($1, $2, $2, $2, 'ok', $3::jsonb)",
+            timer_id,
+            at,
+            {"beat": beats.WATCH, "watch": {"ran": ["work_thing"]}} if made_a_pass else {},
+        )
+
+
+async def _watch_history(pool, *hours_back: float, made_a_pass: bool = True) -> None:
+    """Watch firings that many hours before the one real pass this test ran, so
+    every interval below is exact rather than a wall-clock near-miss."""
+    watch = (await _beat_rows(pool))["watch"]
+    (real,) = await _firings(pool, watch["id"])
+    await _fired(
+        pool,
+        watch["id"],
+        *(real["started_at"] - timedelta(hours=h) for h in hours_back),
+        made_a_pass=made_a_pass,
+    )
+
+
+async def _first_watch_start(pool) -> datetime:
+    return (await beats.watch_firings(pool))[0].started_at
+
+
+async def _pause_the_watch_beat(pool, reason: str) -> None:
+    await pool.execute(
+        "UPDATE timers SET paused_at = now(), paused_reason = $1 "
+        "WHERE kind = $2 AND payload->>'handler' = $3",
+        reason,
+        beats.BEAT_KIND,
+        beats.WATCH,
+    )
+
+
+def _line(content: str, prefix: str) -> str | None:
+    for line in _facts_lines(content):
+        if line.startswith(prefix):
+            return line
+    return None
+
+
+async def test_the_coverage_line_is_there_on_a_good_day_too(pool, only, mount_peers):
+    """It is PROVENANCE, not news. A digest that reports findings without
+    saying how much was watched lets "all quiet" mean "I was not there", so the
+    sentence is not conditional on the numbers being bad."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    await _watch_history(pool, 6, 5, 4, 3, 2, 1)
+
+    gateway = FakeGateway(deltas=("One thing is still standing.",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    (message,) = await _messages(pool, his_chat["id"])
+    coverage = _line(message["content"], beats.COVERAGE_PREFIX)
+    assert coverage is not None, "the coverage line goes out every time"
+    assert "fired 7 times" in coverage and "every one of them making a pass" in coverage
+    assert "the longest it went without a pass was 1h 00m" in coverage
+    assert "every hour at :05" in coverage, "the gap needs its yardstick beside it"
+    # The firing carries the numbers the sentence was composed from, so the
+    # record can be checked against the message he actually read.
+    assert firing["delivery"]["digest"]["coverage"] == {
+        "firings": 7,
+        "passes": 7,
+        "from_a_digest": False,
+        "window_start": (await _first_watch_start(pool)).isoformat(),
+        "longest_gap_s": 3600,
+    }
+
+
+async def test_a_firing_row_is_not_a_pass_and_the_line_says_both_numbers(pool, only, mount_peers):
+    """The review's CRITICAL, 2026-09-09. A row is written the moment the
+    scheduler CLAIMS a firing, and several kinds of firing watch nothing at
+    all: `proactive.enabled` false returns FIRING_OK having never called a
+    check, a shutdown leaves the row interrupted, a failure before the checks
+    leaves it error. Counting rows would have reported "the watch beat ran 75
+    times" after three days with the engine switched off — the exact lie this
+    line exists to prevent.
+
+    So a PASS is read off the record the beat writes about itself, and the
+    difference is STATED rather than papered over with the smaller number."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    await _watch_history(pool, 6, 5, 4, 3, 2, 1, made_a_pass=False)
+
+    mount_peers(gateway=FakeGateway(deltas=("One thing is still standing.",)))
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    (message,) = await _messages(pool, his_chat["id"])
+    coverage = _line(message["content"], beats.COVERAGE_PREFIX)
+    assert "fired 7 times" in coverage and "1 of them making a pass" in coverage
+    record = firing["delivery"]["digest"]["coverage"]
+    assert (record["firings"], record["passes"]) == (7, 1)
+    # And the gap is measured between PASSES: six firings that watched nothing
+    # do not shorten a six-hour hole in the watching.
+    assert record["longest_gap_s"] == 6 * 3600
+    assert "the longest it went without a pass was 6h 00m" in coverage
+
+
+async def test_the_night_the_host_slept_is_in_the_coverage_line(pool, only, mount_peers):
+    """The 2026-09-09 shape, in rows: two passes and then a nine-hour hole. The
+    findings are reported exactly as before; what is new is that the message
+    also says how much of the span was watched."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_paused:9", reason="an agent was deleted")]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    await _watch_history(pool, 12, 11)
+
+    mount_peers(gateway=FakeGateway(deltas=("A timer is still paused.",)))
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    (message,) = await _messages(pool, his_chat["id"])
+    coverage = _line(message["content"], beats.COVERAGE_PREFIX)
+    assert "fired 3 times" in coverage
+    assert "the longest it went without a pass was 11h 00m" in coverage
+    assert firing["delivery"]["digest"]["coverage"]["longest_gap_s"] == 11 * 3600
+
+
+async def test_a_watch_beat_that_has_not_run_since_the_last_digest_says_exactly_that(
+    pool, only, mount_peers
+):
+    """The loudest version of the same fact, on a day that still has findings
+    of its own to carry it: the beat did not run at all. Said in the message,
+    not left as an absence."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_paused:9", reason="an agent was deleted")]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    mount_peers(gateway=FakeGateway(deltas=("A timer is still paused.",)))
+    await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    # Something new to report, and no watch pass since that digest reached him.
+    await notices.record(
+        pool,
+        Finding(key="timer_failing:1", title="timer_failing:1 is true", facts={"failures": 4}),
+        check_name="work_thing",
+        turn_id=None,
+        firing_id=None,
+    )
+    mount_peers(gateway=FakeGateway(deltas=("A timer has failed four nights running.",)))
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
+
+    latest = (await _messages(pool, his_chat["id"]))[-1]
+    coverage = _line(latest["content"], beats.COVERAGE_PREFIX)
+    assert "has not run at all since the last digest that reached you" in coverage
+    assert beats.NOT_AN_ALL_CLEAR in coverage
+    assert firing["delivery"]["digest"]["coverage"]["passes"] == 0
+    assert firing["delivery"]["digest"]["coverage"]["from_a_digest"] is True
+
+
+async def test_firings_that_watched_nothing_are_not_an_all_clear_either(pool, only, mount_peers):
+    """The other shape of zero passes, and a different fact from a beat that
+    never fired: it fired on schedule all night and every one of those firings
+    ran no check. The sentence says which of the two happened."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_paused:9", reason="an agent was deleted")]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    mount_peers(gateway=FakeGateway(deltas=("A timer is still paused.",)))
+    await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    # Three firings INSIDE the span — after the digest that reached him — each
+    # of which ran no check. Placed off that digest's own start so the span
+    # they sit in is the one the next digest measures.
+    (told_him,) = await _firings(pool, (await _beat_rows(pool))["digest"]["id"])
+    await _fired(
+        pool,
+        (await _beat_rows(pool))["watch"]["id"],
+        *(told_him["started_at"] + timedelta(milliseconds=ms) for ms in (1, 2, 3)),
+        made_a_pass=False,
+    )
+    await notices.record(
+        pool,
+        Finding(key="timer_failing:1", title="timer_failing:1 is true", facts={"failures": 4}),
+        check_name="work_thing",
+        turn_id=None,
+        firing_id=None,
+    )
+    mount_peers(gateway=FakeGateway(deltas=("A timer has failed four nights running.",)))
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
+
+    coverage = _line((await _messages(pool, his_chat["id"]))[-1]["content"], beats.COVERAGE_PREFIX)
+    assert "fired 3 times" in coverage and "not one of those firings ran a check" in coverage
+    assert beats.NOT_AN_ALL_CLEAR in coverage
+    record = firing["delivery"]["digest"]["coverage"]
+    assert (record["firings"], record["passes"]) == (3, 0)
+
+
+async def test_a_history_that_cannot_be_read_says_so_rather_than_a_number_nobody_counted(
+    pool, only, mount_peers, monkeypatch
+):
+    """A coverage sentence that reads well and was not computed is worse than
+    no sentence at all — and losing the whole digest over it would trade a
+    small silence for a large one, so it is stated in the line and on the
+    firing and the message still goes."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+
+    async def gone(*args, **kwargs):
+        raise RuntimeError("the firing history is gone")
+
+    monkeypatch.setattr(beats, "watch_firings", gone)
+    mount_peers(gateway=FakeGateway(deltas=("One thing is still standing.",)))
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    (message,) = await _messages(pool, his_chat["id"])
+    assert message["content"].startswith("One thing is still standing.")
+    coverage = _line(message["content"], beats.COVERAGE_PREFIX)
+    assert coverage.startswith(beats.COVERAGE_UNREADABLE)
+    assert "the firing history is gone" in coverage
+    assert "the firing history is gone" in firing["delivery"]["digest"]["coverage"]["unreadable"]
+
+
+async def test_a_firing_after_the_mark_is_not_counted_in_a_span_that_ended_before_it(pool):
+    """The review's clock defect, 2026-09-09. `now` was captured before the
+    model round and reused as the span's closing boundary up to ten minutes
+    later, so the trailing gap was understated and a firing that began DURING
+    the round was counted while sitting after the boundary. One instant does
+    both jobs: it closes the span and it bounds the query."""
+    await _owner(pool)
+    await beats.ensure_beats(pool)
+    watch = (await _beat_rows(pool))["watch"]
+    mark = await pool.fetchval("SELECT now()")
+    before, after = mark - timedelta(hours=1), mark + timedelta(minutes=10)
+    await _fired(pool, watch["id"], before, after)
+
+    assert [f.started_at for f in await beats.watch_firings(pool, until=mark)] == [before]
+    assert len(await beats.watch_firings(pool)) == 2, "unbounded, the row is still there"
+    coverage = await beats._coverage(pool, None, mark)
+    assert (coverage.firings, coverage.passes) == (1, 1)
+    assert coverage.longest_gap == timedelta(hours=1)
+
+
+# -- the silent death: the day the watch beat stops -------------------------------
+#
+# The review's MAJOR, and the worst of the six. The quiet early-return happened
+# BEFORE coverage was computed, so the provenance line never appeared on the one
+# day it mattered most. Nothing else in the system can catch it: `run_all` is
+# called only from the watch beat, so no check can ever see its own beat stop —
+# once the beat is paused or off nothing new is raised, `deliverable()` empties
+# out as the standing findings are delivered, and every digest after that writes
+# NOTHING, forever. So coverage is computed first, and a quiet day with nothing
+# to show for the watching SPEAKS.
+
+
+async def test_a_quiet_day_on_which_nothing_was_watched_still_speaks(pool, only, mount_peers):
+    """Nothing owed and nothing watched are the same silence from outside, and
+    they are opposite facts. He hears the short code-composed line, and no
+    model is asked for it — there is nothing to write about, and the whole
+    point of the sentence is that a model had no hand in it."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    mount_peers(gateway=FakeGateway(deltas=("One thing is still standing.",)))
+    await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+    assert await notices.deliverable(pool) == [], "he was told, so nothing is owed"
+
+    gateway = FakeGateway(deltas=("must never be asked",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
+
+    latest = (await _messages(pool, his_chat["id"]))[-1]
+    assert latest["content"].startswith(beats.DIGEST_UNWATCHED)
+    coverage = _line(latest["content"], beats.COVERAGE_PREFIX)
+    assert "has not run at all since the last digest that reached you" in coverage
+    assert beats.NOT_AN_ALL_CLEAR in coverage
+    assert gateway.seen == [], "composed in code: nothing was asked of a model"
+    assert firing["status"] == scheduler.FIRING_OK
+    assert firing["delivery"]["digest"]["delivered"] is True
+    assert firing["delivery"]["digest"]["reason"] == beats.DIGEST_UNWATCHED_NOTE
+    assert firing["delivery"]["digest"]["coverage"]["passes"] == 0
+
+
+async def test_a_paused_watch_beat_says_so_and_says_why_off_its_own_row(pool, only, mount_peers):
+    """The cause is already in the row — `paused_at` and `paused_reason` — and
+    the loudest sentence in the message is the wrong place to state a symptom
+    and leave the reason unread. A paused beat will not run again by itself, so
+    it speaks even on a day whose span had a pass in it."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    mount_peers(gateway=FakeGateway(deltas=("One thing is still standing.",)))
+    await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+    await _run_beat(pool, beats.WATCH, now=LATER + timedelta(hours=1))
+    why = "5 consecutive failures: the checks could not reach postgres"
+    await _pause_the_watch_beat(pool, why)
+
+    gateway = FakeGateway(deltas=("must never be asked",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
+
+    latest = (await _messages(pool, his_chat["id"]))[-1]
+    coverage = _line(latest["content"], beats.COVERAGE_PREFIX)
+    assert "PAUSED" in coverage and why in coverage
+    assert gateway.seen == []
+    record = firing["delivery"]["digest"]["coverage"]
+    assert record["paused_reason"] == why and record["paused_at"] is not None
+    assert record["passes"] == 1, "it passed before it was paused — and it will not again"
+
+
+async def test_a_quiet_day_that_was_actually_watched_is_still_silent(pool, only, mount_peers):
+    """The other half, unchanged: a digest that spoke every day about nothing
+    is the noise this slice exists to avoid. Passes were made and nothing is
+    owed, so he hears nothing at all — and the coverage the quiet day was
+    judged on is on the firing, where it can be read back."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    mount_peers(gateway=FakeGateway(deltas=("One thing is still standing.",)))
+    await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+    await _run_beat(pool, beats.WATCH, now=LATER + timedelta(hours=1))
+
+    gateway = FakeGateway(deltas=("must never be asked",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
+
+    assert len(await _messages(pool, his_chat["id"])) == 1, "he hears nothing on a watched day"
+    assert gateway.seen == []
+    standing, _more, _note = await beats._standing(pool)
+    assert [row["title"] for row in standing] == ["timer_failing:1 is true"], (
+        "something IS standing — the tail rides a message and can never cause one"
+    )
+    assert firing["delivery"]["digest"]["reason"] == beats.DIGEST_NOTHING_NOTE
+    assert firing["delivery"]["digest"]["coverage"]["passes"] == 1
+
+
+# -- the tail: what is still standing ---------------------------------------------
+
+
+async def _standing_then_something_new(pool, only, mount_peers):
+    """Get one notice DELIVERED and still true, then raise a second one — the
+    shape every standing test below needs, made the way production makes it."""
+    standing = _finding("timer_paused:9", reason="an agent was deleted")
+    fresh = _finding("timer_failing:1", failures=4)
+    only(_check("work_thing", [standing]))
+    await beats.ensure_beats(pool)
+    mount_peers(gateway=FakeGateway(deltas=("The nightly backup timer is paused.",)))
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+    only(_check("work_thing", [standing, fresh]))
+    await _run_beat(pool, beats.WATCH, now=LATER + timedelta(hours=1))
+
+
+async def test_a_still_true_notice_he_was_told_about_is_named_again_but_never_explained_again(
+    pool, only, mount_peers
+):
+    """The second half of the same night. The paused-timer notice had been seen
+    eight times and was still true, and because it was delivered in the first
+    digest, deliverable() would never hand it back — so every digest after that
+    went silent about it while the Inbox still showed it. It is named in one
+    code-composed line with its sighting count, and that is all."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    await _standing_then_something_new(pool, only, mount_peers)
+
+    gateway = FakeGateway(deltas=("A timer has failed four nights running.",))
+    mount_peers(gateway=gateway)
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
+
+    latest = (await _messages(pool, his_chat["id"]))[-1]
+    tail = _line(latest["content"], beats.STANDING_PREFIX)
+    assert tail is not None
+    assert "timer_paused:9 is true (seen 2 times)" in tail
+    assert beats.STANDING_WHY in tail
+    assert "timer_failing:1" not in tail, "what the digest is reporting is not also standing"
+    assert firing["delivery"]["digest"]["standing"] == 1
+
+    # NOT re-explained: the model is never told about it a second time, so it
+    # cannot write about it and nothing in the message but the tail names it.
+    brief = _brief(gateway)
+    assert "timer_paused:9" not in brief
+    assert "timer_failing:1 is true" in brief
+
+
+async def test_a_live_notice_whose_delivery_failed_and_was_then_seen_is_still_named(
+    pool, only, mount_peers, monkeypatch
+):
+    """The review's second MAJOR, 2026-09-09. Naming `delivered` and `seen`
+    hardcoded two of the five states, and a live notice that FAILED delivery
+    and which he then opened in the Inbox fell between the two halves of the
+    message: deliverable() drops it the moment `seen_at` is set, and a
+    state-named tail never picked it up — so it was never mentioned again while
+    it was still true.
+
+    The predicate is DERIVED now: live, not muted, and not what deliverable()
+    would return. Disjoint by construction, and this row lands in the half that
+    still names it."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(
+        _check("work_thing", [_finding("timer_paused:9", reason="an agent was deleted")]),
+        _check("money_thing", [_finding("agent_over_cap:coder", spent_usd=41)]),
+    )
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+
+    real = chat._persist_assistant
+    broken = {"disk": True}
+
+    async def refuse(pool_, conversation_id, text, turn_id=None):
+        if broken["disk"] and conversation_id == his_chat["id"]:
+            raise RuntimeError("the disk is full")
+        return await real(pool_, conversation_id, text, turn_id)
+
+    monkeypatch.setattr(chat, "_persist_assistant", refuse)
+    mount_peers(gateway=FakeGateway(deltas=("Two things came up today.",)))
+    await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+    assert await _messages(pool, his_chat["id"]) == [], "nobody was told"
+
+    # He opens ONE of them in the Inbox. It stays `failed` — the only record
+    # that nobody was told — and stops being deliverable, because he read it.
+    row = await pool.fetchrow("SELECT id FROM notices WHERE finding_key = 'timer_paused:9'")
+    await notices.mark_seen(pool, row["id"])
+    assert [n.finding_key for n in await notices.deliverable(pool)] == ["agent_over_cap:coder"]
+
+    broken["disk"] = False
+    mount_peers(gateway=FakeGateway(deltas=("The coder agent is over its cap.",)))
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
+
+    latest = (await _messages(pool, his_chat["id"]))[-1]
+    tail = _line(latest["content"], beats.STANDING_PREFIX)
+    assert tail is not None and "timer_paused:9 is true" in tail
+    assert firing["delivery"]["digest"]["standing"] == 1
+    state = await pool.fetchval("SELECT state FROM notices WHERE id = $1", row["id"])
+    assert state == notices.FAILED, "and its state is untouched by being named"
+
+
+async def test_a_still_standing_notice_is_never_marked_delivered_a_second_time(
+    pool, only, mount_peers
+):
+    """Naming it is not delivering it. The row keeps the state and the receipt
+    it already has — a second `delivered_at` would say a channel took it
+    tonight, which nothing did."""
+    owner = await _owner(pool)
+    await conversations.active_conversation(pool, owner)
+    await _standing_then_something_new(pool, only, mount_peers)
+    query = "SELECT state, delivered_at, seen_at, repeats FROM notices WHERE finding_key = $1"
+    before = await pool.fetchrow(query, "timer_paused:9")
+    assert before["state"] == notices.DELIVERED
+
+    mount_peers(gateway=FakeGateway(deltas=("A timer has failed four nights running.",)))
+    await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
+
+    after = await pool.fetchrow(query, "timer_paused:9")
+    assert after["state"] == notices.DELIVERED
+    assert after["delivered_at"] == before["delivered_at"], "it was named, not delivered again"
+    assert after["seen_at"] is None
+    assert len(await notices.deliverable(pool)) == 0, "and it is still not owed to him"
+
+
+async def test_a_muted_notice_is_never_named_in_the_tail(pool, only, mount_peers):
+    """A mute is his own noise preference, and a tail that re-listed muted
+    facts every morning would be the v3 re-armed nag with a new name."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    await _standing_then_something_new(pool, only, mount_peers)
+    await pool.execute(
+        "UPDATE notices SET state = $1, muted_at = now() WHERE finding_key = 'timer_paused:9'",
+        notices.MUTED,
+    )
+
+    mount_peers(gateway=FakeGateway(deltas=("A timer has failed four nights running.",)))
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
+
+    latest = (await _messages(pool, his_chat["id"]))[-1]
+    assert _line(latest["content"], beats.STANDING_PREFIX) is None
+    assert "standing" not in firing["delivery"]["digest"]
+
+
+async def test_the_standing_tail_counts_every_row_it_left_out(pool, only):
+    """The review's overflow defect, 2026-09-09: the count was LIMIT+1 minus
+    the page, which saturates at 1 — forty standing notices read as "and 1
+    more". The overflow is counted separately from the page it did not fit."""
+    await _owner(pool)
+    only(_check("work_thing", []))
+    over = beats.DIGEST_STANDING_LIMIT + 3
+    for n in range(over):
+        notice, _new = await notices.record(
+            pool,
+            _finding(f"timer_paused:{n}", reason="an agent was deleted"),
+            check_name="work_thing",
+            turn_id=None,
+            firing_id=None,
+        )
+        await notices.mark_delivered(pool, notice.id, delivery={"chat": {"ok": True}})
+
+    rows, more, note = await beats._standing(pool)
+    assert note is None
+    assert len(rows) == beats.DIGEST_STANDING_LIMIT
+    assert more == 3, "counted, never inferred from a page one row longer than the limit"
+    assert f"and {more} more" in beats.standing_line(rows, more, note)
+
+
+async def test_the_cleared_tail_counts_every_row_it_left_out(pool, only):
+    """The same copied idiom, in the other half of the brief."""
+    await _owner(pool)
+    only(_check("work_thing", []))
+    over = beats.DIGEST_CLEARED_LIMIT + 3
+    for n in range(over):
+        await notices.record(
+            pool,
+            _finding(f"timer_paused:{n}", reason="an agent was deleted"),
+            check_name="work_thing",
+            turn_id=None,
+            firing_id=None,
+        )
+    assert len(await notices.reconcile(pool, check_name="work_thing", live_fingerprints=set())) == (
+        over
+    )
+
+    cleared, more = await beats._cleared_since(pool, None)
+    assert len(cleared) == beats.DIGEST_CLEARED_LIMIT
+    assert more == 3
+
+
+async def test_nothing_standing_leaves_no_tail_at_all(pool, only, mount_peers):
+    """The first digest of a fresh install: one thing to report and nothing
+    standing behind it. Coverage, and no tail."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    only(_check("work_thing", [_finding("timer_failing:1", failures=4)]))
+    await beats.ensure_beats(pool)
+    await _run_beat(pool, beats.WATCH, now=LATER)
+    mount_peers(gateway=FakeGateway(deltas=("One thing is still standing.",)))
+    firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(minutes=5))
+
+    (message,) = await _messages(pool, his_chat["id"])
+    assert len(_facts_lines(message["content"])) == 1, "the coverage line and nothing else"
+    assert _line(message["content"], beats.STANDING_PREFIX) is None
+    assert "standing" not in firing["delivery"]["digest"]
+
+
+# -- the two lines on their own ---------------------------------------------------
+
+
+def test_a_beat_with_no_firing_on_record_is_said_rather_than_left_blank():
+    line = beats.Coverage(
+        firings=0, passes=0, window_start=None, from_a_digest=False, longest_gap=None
+    ).line("UTC")
+    assert line == beats.COVERAGE_NOTHING
+
+
+def test_the_coverage_line_says_when_its_own_schedule_could_not_be_read():
+    """A stored zone that stops resolving must not silently drop the yardstick."""
+    line = beats.Coverage(
+        firings=4,
+        passes=4,
+        window_start=datetime(2026, 9, 9, 7, 30, tzinfo=UTC),
+        from_a_digest=True,
+        longest_gap=timedelta(hours=9, minutes=18),
+        schedule_note="SpecError: 'Mars/Olympus_Mons' is not an IANA timezone",
+    ).line("UTC")
+    assert "fired 4 times" in line and "9h 18m" in line
+    assert "its own schedule could not be read" in line and "Mars/Olympus_Mons" in line
+
+
+def test_a_pause_with_no_reason_on_the_row_says_that_rather_than_nothing():
+    """`paused_reason` is nullable, and "it is paused" with no cause is the
+    shape of sentence this line was written to replace."""
+    line = beats.Coverage(
+        firings=0,
+        passes=0,
+        window_start=None,
+        from_a_digest=False,
+        longest_gap=None,
+        paused_at=datetime(2026, 9, 9, 2, 0, tzinfo=UTC),
+    ).line("UTC")
+    assert "PAUSED" in line and "no reason was recorded on the row" in line
+
+
+def test_coverage_that_cannot_be_shown_is_what_makes_a_quiet_day_speak():
+    """One predicate, three ways in — and its complement is the ordinary quiet
+    day. Stated here so the condition that breaks the silence is readable
+    without a database."""
+    watched = beats.Coverage(
+        firings=24,
+        passes=24,
+        window_start=datetime(2026, 9, 9, 7, 30, tzinfo=UTC),
+        from_a_digest=True,
+        longest_gap=timedelta(hours=1),
+    )
+    assert watched.unproven is False
+    assert replace(watched, passes=0).unproven is True
+    assert replace(watched, paused_at=datetime(2026, 9, 9, 8, 0, tzinfo=UTC)).unproven is True
+    assert replace(watched, unreadable="the table is gone").unproven is True
+
+
+def test_the_standing_tail_counts_what_it_could_not_fit_and_never_drops_it():
+    rows = [{"title": f"thing {n}", "check_name": "work_thing", "repeats": n} for n in (1, 2)]
+    line = beats.standing_line(rows, 3, None)
+    assert line.startswith(beats.STANDING_PREFIX)
+    assert "thing 1 (seen 1 time)" in line and "thing 2 (seen 2 times)" in line
+    assert "and 3 more" in line
+
+
+def test_the_standing_tail_says_it_could_not_be_read_rather_than_nothing():
+    line = beats.standing_line([], 0, "RuntimeError: the table is gone")
+    assert line.startswith(beats.STANDING_UNREADABLE) and "the table is gone" in line
+
+
+def test_nothing_standing_is_no_tail_at_all():
+    assert beats.standing_line([], 0, None) is None
+
+
+def test_a_span_of_time_reads_the_same_wherever_it_is_shown():
+    assert beats.duration_words(timedelta(seconds=9)) == "9s"
+    assert beats.duration_words(timedelta(minutes=45)) == "45m"
+    assert beats.duration_words(timedelta(hours=1)) == "1h 00m"
+    assert beats.duration_words(timedelta(hours=9, minutes=18)) == "9h 18m"
+    assert beats.duration_words(timedelta(days=2, hours=3)) == "2d 3h"
 
 
 # -- the switch (S11-6) -----------------------------------------------------------
@@ -1465,7 +2181,7 @@ async def test_the_digest_carries_at_most_the_days_ceiling_and_holds_the_rest(
     assert firing["delivery"]["digest"]["notices"] == 1
     assert firing["delivery"]["digest"]["held_back"] == 1
     assert "STANDING (1)" in _brief(gateway), "the model is told about one, not two"
-    assert [row["content"] for row in await _messages(pool, his_chat["id"])] == [
+    assert [_prose(row["content"]) for row in await _messages(pool, his_chat["id"])] == [
         "One thing is still standing."
     ]
     assert sorted(row["state"] for row in await _notices(pool)) == [
