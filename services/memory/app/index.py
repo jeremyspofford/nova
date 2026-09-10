@@ -243,6 +243,14 @@ class _Doc:
     # exchange in it on every append) costs an embedding call only for the
     # exchange whose text actually changed.
     digest: str = ""
+    # The unit's citation, when its file carries one (S14-1): the message id
+    # it was distilled from and the ROLE of that row. Carried on the hit
+    # unchanged, because a fact standing only on an assistant row is
+    # supported by something the model itself produced, and a caller cannot
+    # tell that from a fact the person stated unless the role travels. None
+    # for every note that cites nothing — which is the whole corpus as it
+    # stands, and absence is the honest label for it.
+    source: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -319,7 +327,34 @@ class BM25Index:
         body: str,
         document: str | None = None,
         fragment: str | None = None,
+        source: dict | None = None,
+        superseded: bool = False,
     ) -> None:
+        """Put one unit in the index — unless it has been superseded, in which
+        case take it OUT and keep it out.
+
+        THE SKIP LIVES HERE, and not in the store's iterator or in a filter
+        over the search results, for two reasons.
+
+        This is the single door. api._index_document is not the only caller —
+        /save and /ingest index a file they have just read, the startup rescan
+        indexes every file, and tests upsert directly — so a filter in
+        store.iter_all() would cover the rescan and none of the write paths.
+        Every one of them arrives here, so "a superseded note is not in this
+        index" is a property of the index rather than a habit of its callers.
+
+        And it is a removal rather than a flag because a flagged unit would
+        still be counted. _scope_stats derives document frequency, the average
+        length and n from the units in scope, and the semantic floor derives
+        "how alike are two of these notes" from their vectors: a superseded
+        note left in the corpus would go on moving the ranking of the live
+        notes it was replaced by, and go on being embedded, while never being
+        returned. Nothing is deleted from DISK — the file keeps its date and
+        its citation, and "what did I have before" is answered by reading it.
+        """
+        if superseded:
+            self.remove_unit(unit_id)
+            return
         self.remove_unit(unit_id)
         text = f"{title}\n\n{body}"
         tf = Counter(tokenize(text))
@@ -334,6 +369,7 @@ class BM25Index:
             term_freq=tf,
             length=sum(tf.values()),
             digest=digest_of(text),
+            source=source,
         )
         self._docs[unit_id] = doc
         self._stats.clear()
@@ -668,6 +704,10 @@ class BM25Index:
                     # it was found, which is what lets a caller tell a note
                     # matched word for word from one matched by meaning alone.
                     "retrievers": names,
+                    # The citation the note carries, or None. Relayed exactly
+                    # as stored: this index does not decide what a citation is
+                    # worth, it only refuses to lose the role that says.
+                    "source": doc.source,
                 }
                 for score, names, doc in top
             ],

@@ -17,7 +17,9 @@ import io
 import logging
 import os
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -91,16 +93,36 @@ def _index_document(index: BM25Index, stored: StoredFile) -> list[str]:
     re-read after an append, an exchange edited out by hand) are retired first:
     an index that only ever gains chunks would go on citing spans that are not
     in the file any more.
+
+    A SUPERSEDED NOTE IS TAKEN OUT AND NOT PUT BACK (S14-1). The file keeps
+    its date, its body and its citation, so what was believed before is still
+    readable; it is simply not a thing recall may answer from. Returning []
+    here rather than the unit ids is the same rule as everywhere else in this
+    service — a step reports what LANDED, and nothing landed.
     """
     entries = split_entries(stored.body)
     title = stored.meta.get("title", "")
     kind = stored.meta.get("kind", "topic")
     created = stored.meta.get("created")
+    source = stored.meta.get("source")
+    if not isinstance(source, dict):
+        source = None
+    superseded = bool(stored.meta.get("superseded_by"))
+    if superseded:
+        index.remove(stored.rel_path)
+        return []
     if not entries:
         # A topic note has no headings: one unit, id == the file's own path,
         # exactly as before chunking existed.
         index.remove(stored.rel_path)
-        index.upsert(stored.rel_path, title=title, kind=kind, created=created, body=stored.body)
+        index.upsert(
+            stored.rel_path,
+            title=title,
+            kind=kind,
+            created=created,
+            body=stored.body,
+            source=source,
+        )
         return [stored.rel_path]
     live = set()
     for entry in entries:
@@ -114,6 +136,7 @@ def _index_document(index: BM25Index, stored: StoredFile) -> list[str]:
             body=entry.text,
             document=stored.rel_path,
             fragment=entry.fragment,
+            source=source,
         )
     for stale in index.units_for(stored.rel_path):
         if stale not in live:
@@ -576,10 +599,39 @@ class RecallRequest(BaseModel):
     k: int = 5
 
 
+class SourceRef(BaseModel):
+    """The citation a distilled note carries: the row, and WHOSE row it was.
+
+    `role` is a closed set, so a citation that cannot say whose words it
+    stands on is a 422 rather than a note that reads like evidence. That
+    matters because the two roles are not the same evidence at all: a fact
+    supported only by an assistant row is supported by something the model
+    itself produced. store.normalize_source refuses the same shape again, one
+    layer down, for callers that never come through HTTP.
+    """
+
+    message_id: str
+    role: Literal["user", "assistant"]
+
+
 class SaveRequest(BaseModel):
     person_id: str
     title: str
     content: str
+    # What the fact is ABOUT — the superseding key. A note written on a
+    # subject retires this person's earlier live note on the same subject.
+    # Omitted (the shape every caller had before S14-1) means nothing is
+    # superseded and the note is simply another note.
+    subject: str | None = None
+    # The date of the EXCHANGE this fact came from. `created` follows it, so a
+    # fact distilled today out of a conversation twelve days ago is twelve
+    # days old to the ranker and to the age the prompt prints.
+    said_at: date | None = None
+    # `created` outright, for a caller that has a reason to date a note
+    # differently from the exchange it cites. Wins over said_at when both are
+    # given; when neither is, the note is dated today exactly as before.
+    created: date | None = None
+    source: SourceRef | None = None
 
 
 class ForgetRequest(BaseModel):
@@ -636,6 +688,18 @@ async def save(req: SaveRequest) -> dict:
     replaces an existing note: a title whose slug is taken gets a
     numbered sibling, because the caller asked to save something, not to
     lose something.
+
+    SUPERSEDING (S14-1) is the one thing that changes an existing note, and
+    it changes only its frontmatter. A note saved with a `subject` retires
+    this person's earlier live note on that same subject: the old file keeps
+    its body, its date and its citation and gains `superseded_by`, and it
+    leaves the index, so recall answers from the current fact while "what did
+    I have before" is still on disk. The old note is never deleted and the
+    new note never overwrites it.
+
+    Nothing here judges that two notes contradict each other — the subject
+    string is the whole comparison. Deciding by meaning is exactly the
+    judgement a model would get wrong quietly.
     """
     ctx = _context()
     store, index = ctx.store, ctx.index
@@ -647,13 +711,26 @@ async def save(req: SaveRequest) -> dict:
         # Nothing to write means nothing to verify, and a save that cannot
         # be checked must not answer "saved".
         raise HTTPException(status_code=400, detail="content is empty — there is nothing to save")
+    subject = (req.subject or "").strip()
 
     try:
-        abs_path = store.create_topic(req.person_id, title, content)
+        abs_path = store.create_topic(
+            req.person_id,
+            title,
+            content,
+            created=req.created or req.said_at,
+            subject=subject or None,
+            said_at=req.said_at,
+            source=req.source.model_dump() if req.source else None,
+        )
     except PathEscape as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        # A citation that does not name its row and its role — refused by the
+        # store, named back to the caller rather than stored half-formed.
+        raise HTTPException(status_code=400, detail=str(exc)) from None
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"could not write the note: {exc}") from None
 
@@ -668,8 +745,61 @@ async def save(req: SaveRequest) -> dict:
 
     stored = store.read(abs_path)
     _index_document(index, stored)
+    superseded = _retire_earlier_notes(store, index, req.person_id, subject, stored)
     await _fill_after_write(ctx)
-    return {"path": stored.rel_path, "saved": True}
+    return {"path": stored.rel_path, "saved": True, "superseded": superseded}
+
+
+def _retire_earlier_notes(
+    store: MemoryStore, index: BM25Index, person_id: str, subject: str, stored: StoredFile
+) -> list[str]:
+    """Mark this person's earlier live notes on `subject` superseded by the
+    note just written, drop them from the index, and CHECK that they are gone.
+
+    The order is deliberate: the new note is on disk and indexed first, so a
+    failure anywhere below leaves two live notes — the state this service was
+    already in before superseding existed — rather than a subject with no
+    current note at all.
+
+    Every failure here is a 500 that names what happened, including the path
+    that WAS written. A save that answered "saved" while leaving a
+    contradicting note live and recallable would be the exact defect
+    superseding exists to remove, reported as a success.
+    """
+    if not subject:
+        return []
+    try:
+        stamped = store.supersede_by_subject(
+            person_id, subject, superseded_by=stored.rel_path, exclude=stored.abs_path
+        )
+    except (OSError, PathEscape, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"the note was written to {stored.rel_path}, but an earlier note on "
+                f"{subject!r} could not be marked superseded: {exc}"
+            ),
+        ) from None
+
+    retired: list[str] = []
+    for path in stamped:
+        older = store.read(path)
+        _index_document(index, older)
+        # The load-bearing line. "Recall skips a superseded note" is worth
+        # nothing as an intention: this asks the index whether the units are
+        # actually gone, and a note still indexed is a fault, not a note.
+        left = index.units_for(older.rel_path)
+        if left:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"the note was written to {stored.rel_path} and {older.rel_path} was marked "
+                    f"superseded, but it is still in the index as {left} and would still be "
+                    "recalled"
+                ),
+            )
+        retired.append(older.rel_path)
+    return retired
 
 
 @router.post("/recall")

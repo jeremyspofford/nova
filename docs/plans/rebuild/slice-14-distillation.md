@@ -42,6 +42,62 @@ decisions if ignored.
   tokenised, so `people`, `journals`, `2026`, `09` become search terms
   that match every other note's citation.
 
+## The rule Jeremy added, which reshapes the slice (2026-09-10)
+
+His words: hardware specs "can be found ad hoc and shouldn't be written. Or
+if they're written, that's fine for comparing if we ever update our system
+… but it should still treat the ad-hoc command as truth and be done first.
+Things like that. But I can't think of every edge case so we need to build
+nova to be able to think on her feet."
+
+He is right, and it dissolves most of what superseding was for. There are
+two kinds of fact and only one of them belongs in memory as an answer:
+
+- **Live-answerable.** She has a tool that knows right now: `device_info`
+  for a machine's disk and memory, `device_run` for `nvidia-smi`,
+  `model_catalog_search` for what is installed, `list_agents`,
+  `list_timers`, `spend_report`, `get_time`, `workspace_list_files`. "How
+  much VRAM" was never a memory question.
+- **Told once, stored nowhere else.** Preferences, decisions, the things
+  he said that have no other source. Memory IS the source, and nothing can
+  check it.
+
+**The enumeration problem he named is avoided by deriving the set from the
+live registry**, the way the capability guard already derives its verdict:
+the distiller is shown the tools that exist and names the one that answers
+a fact. A wrong guess costs an unnecessary note, never a wrong answer.
+
+**And his decision on what happens then, taken 2026-09-10: the backend
+runs the check itself.** A recalled note that names a live source is
+checked before she answers, and she is handed BOTH — what he said, dated,
+and what the machine says now. She never answers from a stale note because
+a current one is always beside it.
+
+The one place this does NOT become her judgement, stated because it is the
+failure this codebase keeps catching: WHICH SOURCE WINS is code. A live
+check beats a note; the note becomes "what you said on the 31st". Her feet
+decide whether to check, which tool, how to say it. The ordering is one
+line.
+
+### What that costs, and how it is bounded
+
+- **A tool call on the recall path.** It runs concurrently, under a budget
+  inside core's existing recall timeout, and a check that fails or times
+  out is STATED beside the note — never dropped, so a stale note can never
+  quietly pass as current.
+- **A stored call that runs unasked.** This is new: nothing in v4 has run
+  a tool on the backend's own initiative before. So the check may only use
+  a tool that CHANGES NOTHING, and `Tool` gains `reads_only` to say which.
+  That moves an exact-field-set pin in `test_no_approvals.py`, deliberately
+  and with the reason: this is not a permission and denies nobody anything
+  — every tool stays hers to call. It answers a question the codebase has
+  never had to ask, which is what the BACKEND may run when nobody asked it
+  to. A tool that does not declare it cannot be an automatic check.
+- The note stores the call, so it also stores its arguments (`device_info`
+  needs a device name). Those are written by the distiller from her own
+  tools and validated against the tool's own schema before it is stored —
+  a call that would not dispatch is not written down.
+
 ## Architecture
 
 ### A distilled note is a claim with a receipt
