@@ -124,6 +124,14 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # over the page's one writer (create/update/delete/list). TWENTY-SIX
         # -> THIRTY-ONE. Same funnel, no row anywhere to run: an agent is hers
         # to make and to hand work to the moment the module is in REGISTRY.
+        # S14-3 (2026-09-10): the one-off pass over conversation that was
+        # already stored when distillation was built. THIRTY-ONE ->
+        # THIRTY-TWO. A tool rather than a script because operating the
+        # running system is hers: the hourly beat keeps up on its own, and
+        # catching memory up with what came before is something she can be
+        # asked to do and the trace can record. It WRITES, so it is not
+        # reads_only and the backend will not run it on its own initiative.
+        "memory_backfill",
         "delegate_to_agent",
         "create_agent",
         "update_agent",

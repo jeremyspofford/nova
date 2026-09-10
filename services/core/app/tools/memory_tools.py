@@ -263,6 +263,44 @@ async def save(args: dict, ctx: ToolContext) -> str:
     return f"Saved {title!r} to memory at {path}."
 
 
+async def backfill(args: dict, ctx: ToolContext) -> str:
+    """Distil the conversation already stored into facts her memory can find.
+
+    A tool rather than a script, because operating the running system is hers:
+    the beat keeps up with what is said from now on, and this is the pass over
+    what was already there when the beat was built. She can be asked to run it,
+    the trace records what it did, and the result says what it could not do.
+
+    NOT ephemeral and NOT reads_only — it writes notes, so nothing runs it on
+    anyone's initiative but hers.
+    """
+    from app import db, distil
+
+    person = ctx.person
+    if person is None:
+        raise ToolFailure("this turn has no identity, so there are no notes to write")
+    steps = args.get("steps") or distil.BACKFILL_MAX_STEPS
+    pool = await db.get_pool()
+    result = await distil.backfill(ctx.app, pool, person, max_steps=int(steps))
+    if not result.ran:
+        raise ToolFailure(result.reason or "the backfill did not run")
+
+    # Composed from what LANDED. `written` is the paths memory confirmed, and
+    # every span that produced nothing is named rather than left as the
+    # difference between two numbers.
+    parts = [
+        f"Distilled {result.steps} span(s) of stored conversation: read {result.read} messages, "
+        f"proposed {result.proposed} facts, wrote {len(result.written)} notes"
+    ]
+    if result.failed:
+        parts.append(f"could not be saved: {'; '.join(result.failed[:5])}")
+    if result.problems:
+        parts.append(f"spans with no notes: {'; '.join(result.problems[:5])}")
+    if result.remaining:
+        parts.append(result.remaining)
+    return ". ".join(parts) + "."
+
+
 TOOLS: tuple[Tool, ...] = (
     Tool(
         name="memory_search",
@@ -303,5 +341,30 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=save,
+    ),
+    Tool(
+        name="memory_backfill",
+        description=(
+            "Read this person's stored conversation and write the durable facts in it into "
+            "their notes, oldest first. Use it once to catch memory up with what was said "
+            "before distillation existed; the hourly beat keeps up after that."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": (
+                        "How many spans of conversation to walk in this run. The result "
+                        "says what is left if it does not reach now."
+                    ),
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+        executor=backfill,
     ),
 )

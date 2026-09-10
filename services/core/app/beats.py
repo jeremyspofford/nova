@@ -2478,7 +2478,7 @@ async def _distil(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
             work.meta["read"] = found.read
             work.meta["proposed"] = found.proposed
             work.meta["verified"] = found.verified
-            written, failed = await _write_facts(app, person, found.facts)
+            written, failed = await distil_module.write_facts(app, person, found.facts)
             work.meta["written"] = len(written)
             if failed:
                 work.meta["failed"] = list(failed)
@@ -2519,44 +2519,6 @@ async def _distil(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
     if problem is not None:
         return scheduler.Outcome(scheduler.FIRING_ERROR, problem, delivery)
     return scheduler.Outcome(scheduler.FIRING_OK, distil_line(result, span), delivery)
-
-
-async def _write_facts(app, person, facts) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Save each fact and report what LANDED.
-
-    Through `memory_tools.save_note` — the one writer, and therefore the single
-    door that validates a stored live_source against the live registry before
-    it is written. A fact whose call the backend would not run is refused HERE
-    with the reason rather than being written as a note that presents as the
-    current answer.
-
-    One failure never costs the others: each save is its own try, the reasons
-    are collected in words, and the caller counts the paths rather than the
-    attempts.
-    """
-    from app import tools
-    from app.tools import memory_tools
-
-    ctx = tools.context_for(app, person)
-    written: list[str] = []
-    failed: list[str] = []
-    for fact in facts:
-        try:
-            path = await memory_tools.save_note(
-                ctx,
-                title=fact.title,
-                content=fact.body,
-                subject=fact.subject,
-                said_at=fact.said_at.date() if hasattr(fact.said_at, "date") else fact.said_at,
-                source=fact.source,
-                live_source=fact.live_source,
-            )
-        except Exception as exc:  # noqa: BLE001 - the reason is the record
-            logger.warning("distil could not save %r: %s", fact.title, exc)
-            failed.append(f"{fact.title!r} — {peers.reason(exc)[:200]}")
-        else:
-            written.append(path)
-    return tuple(written), tuple(failed)
 
 
 _RUNNERS = {WATCH: _watch, DIGEST: _digest, DISTIL: _distil}

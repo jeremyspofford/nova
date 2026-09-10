@@ -771,3 +771,141 @@ def test_offering_nothing_is_a_stated_limit_rather_than_a_quiet_pass(monkeypatch
     assert offered == ()
     assert limit is not None
     assert "nothing able to check it" in limit
+
+
+# ── the backfill: the conversation that was already there ──────────────────
+#
+# The beat keeps up with what is said from now on. This is the pass over what
+# was stored before it existed, and its one non-obvious property is the
+# DIRECTION it walks.
+
+
+async def _said_over(pool, person, days: int) -> uuid.UUID:
+    """One message a day for `days` days, oldest first, all restating the same
+    subject in different words — which is what makes the walk direction visible.
+    """
+    conversation = await _conversation(pool, person.id)
+    for day in range(days, 0, -1):
+        await _message(
+            pool, conversation, f"the tower has {day * 8}GB of VRAM", ago=timedelta(days=day)
+        )
+    return conversation
+
+
+async def test_the_backfill_walks_oldest_first_so_the_newest_fact_ends_up_live(
+    pool, mount_peers, monkeypatch
+):
+    """NOT a preference. Superseding is last-write-wins by subject: writing a
+    note on hardware.vram retires the earlier live note on it. Walk the archive
+    newest-first and the OLDEST statement of every restated fact ends up as the
+    live note, with the current one filed as its own predecessor — every
+    restated fact wrong, quietly, in the way that looks fine until someone asks.
+    """
+    person = await _person(pool)
+    await _said_over(pool, person, 3)
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+
+    windows: list = []
+
+    async def _spy(app_, pool_, who, *, since, through=None, **kw):
+        windows.append(through)
+        return distil.Distillation()
+
+    monkeypatch.setattr(distil, "distil", _spy)
+
+    result = await distil.backfill(core_app, pool, person, step=timedelta(days=1), max_steps=10)
+
+    assert result.ran
+    assert windows == sorted(windows), "the walk must go forwards in time"
+    assert len(windows) == result.steps >= 3
+
+
+async def test_the_backfill_writes_what_it_finds_and_counts_the_paths(
+    pool, mount_peers, monkeypatch
+):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, HIS, ago=timedelta(hours=6))
+    mount_peers(gateway=_gateway(_item(real)), memory=FakeNotes())
+
+    saved: list = []
+
+    async def _save(ctx, *, title, content, **fields):
+        saved.append({"title": title, **fields})
+        return f"people/x/topics/{len(saved)}.md"
+
+    from app.tools import memory_tools
+
+    monkeypatch.setattr(memory_tools, "save_note", _save)
+
+    result = await distil.backfill(core_app, pool, person, step=timedelta(hours=12), max_steps=4)
+
+    assert result.ran and result.written and len(result.written) == len(saved)
+    assert saved[0]["subject"] == SUBJECT
+    assert saved[0]["source"]["role"] == "user"
+    assert result.failed == ()
+
+
+async def test_a_step_that_fails_never_costs_the_rest_of_the_archive(
+    pool, mount_peers, monkeypatch
+):
+    """A gateway blip in the middle of day three must not abandon days four
+    through twelve — and the span it could not read is NAMED, because a span
+    nobody distilled is a hole in the notes that nothing else would report."""
+    person = await _person(pool)
+    await _said_over(pool, person, 4)
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+
+    calls = {"n": 0}
+
+    async def _flaky(app_, pool_, who, *, since, through=None, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return distil.Distillation(reason="the gateway refused (503)")
+        return distil.Distillation(read=1)
+
+    monkeypatch.setattr(distil, "distil", _flaky)
+
+    result = await distil.backfill(core_app, pool, person, step=timedelta(days=1), max_steps=10)
+
+    assert result.ran, "one bad step is not a failed backfill"
+    assert calls["n"] >= 4, "the walk carried on past the failure"
+    assert len(result.problems) == 1 and "503" in result.problems[0]
+
+
+async def test_a_walk_that_did_not_reach_now_says_what_is_left(pool, mount_peers, monkeypatch):
+    """A backfill that quit early without saying so leaves notes nobody knows
+    are missing — indistinguishable from a person who never said those things."""
+    person = await _person(pool)
+    await _said_over(pool, person, 10)
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+    monkeypatch.setattr(distil, "distil", lambda *a, **k: _completed(distil.Distillation(read=1)))
+
+    result = await distil.backfill(core_app, pool, person, step=timedelta(days=1), max_steps=3)
+
+    assert result.steps == 3
+    assert result.remaining is not None and "still undistilled" in result.remaining
+    assert result.through is not None
+
+
+async def test_a_person_with_no_conversation_is_a_stated_reason_not_an_empty_pass(
+    pool, mount_peers
+):
+    person = await _person(pool)
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+
+    result = await distil.backfill(core_app, pool, person)
+
+    assert not result.ran
+    assert "no stored conversation" in result.reason
+    assert result.written == ()
+
+
+def _completed(value):
+    """An already-finished awaitable, for a monkeypatch that is not a coroutine
+    function."""
+
+    async def _run():
+        return value
+
+    return _run()

@@ -231,9 +231,27 @@ mechanism S13 predicted would raise the ceiling.
     - Counts are of what LANDED: `written` is the list of paths memory
       confirmed, and a fact that could not be saved is NAMED rather than
       left to be inferred from a number being smaller.
-  - **Still open in S14-3: the backfill.** The beat keeps up; the twelve
-    days already stored need a deliberate pass of their own. Building it is
-    mine; running it against his live memory is his call and hers to do.
+  - **The backfill LANDED (2026-09-10)** as `distil.backfill` plus a
+    `memory_backfill` tool — a tool rather than a script, because operating
+    the running system is hers: she can be asked to catch memory up and the
+    trace records what it did. Registry 31 -> 32. It WRITES, so it is not
+    reads_only and the automatic runner refuses it by name.
+    - **It walks OLDEST FIRST, and that is not a preference.** Superseding
+      is last-write-wins by subject. Walk the archive newest-first and the
+      OLDEST statement of every restated fact ends up as the live note,
+      with the current one filed as its own predecessor — every restated
+      fact wrong, quietly, in the way that looks fine until someone asks.
+      `model_read.window` gained a `through` boundary for this; the live
+      readers leave it None and get exactly the query they had.
+    - A step that fails does NOT end the walk. A gateway blip on day three
+      must not cost days four to twelve, and each span with no notes is
+      named — a span nobody distilled is a hole nothing else would report.
+    - A walk that did not reach now says how much is left. Quitting early
+      in silence leaves notes nobody knows are missing, which is
+      indistinguishable from a person who never said those things.
+    - `distil.write_facts` is the one writer for the beat and the backfill.
+  - **Not yet run against his live memory.** Building it is mine; running a
+    pass that writes real notes into his own data is his call.
 - **S14-4 the measurement.** Fixture, floors, the number in the commit.
 
 ## What would make this lie

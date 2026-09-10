@@ -561,6 +561,7 @@ async def distil(
     max_messages: int = MAX_MESSAGES,
     char_budget: int = CHAR_BUDGET,
     subjects: Sequence[str] | None = None,
+    through: datetime | None = None,
 ) -> Distillation:
     """Read this person's recent conversation and return the facts in it.
 
@@ -581,6 +582,7 @@ async def distil(
             since=since,
             max_messages=max_messages,
             char_budget=char_budget,
+            through=through,
         )
     except model_read.ReadFailed as exc:
         return Distillation(
@@ -678,4 +680,171 @@ async def distil(
         dropped=dropped,
         folded=folded,
         limits=tuple(limits),
+    )
+
+
+# -- writing them down, and the one-off pass over what is already there --------
+
+
+# How much conversation one backfill STEP reads. Small enough that a step is a
+# normal-sized read (the same order as a beat's window), so a step that fails
+# costs one step rather than the archive.
+BACKFILL_STEP = timedelta(hours=12)
+# The most steps one backfill call walks. A bound on cost that the caller can
+# raise, and what is left is SAID — a backfill that stopped early and did not
+# say so would leave notes nobody knows are missing.
+BACKFILL_MAX_STEPS = 40
+
+
+async def write_facts(app, person, facts) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Save each fact and report what LANDED: the paths, and the reasons for
+    the rest.
+
+    THE ONE WRITER for both the beat and the backfill, through
+    `memory_tools.save_note` — which is itself the single door that validates a
+    stored live_source against the live registry. A fact naming a call the
+    backend would not run is refused HERE with the reason, rather than written
+    as a note that reads like the current answer with nothing able to check it.
+
+    One failure never costs the others: each save is its own try, and the
+    caller counts paths rather than attempts.
+    """
+    from app import tools
+    from app.tools import memory_tools
+
+    ctx = tools.context_for(app, person)
+    written: list[str] = []
+    failed: list[str] = []
+    for fact in facts:
+        try:
+            path = await memory_tools.save_note(
+                ctx,
+                title=fact.title,
+                content=fact.body,
+                subject=fact.subject,
+                said_at=fact.said_at.date() if hasattr(fact.said_at, "date") else fact.said_at,
+                source=fact.source,
+                live_source=fact.live_source,
+            )
+        except Exception as exc:  # noqa: BLE001 - the reason is the record
+            logger.warning("could not save distilled note %r: %s", fact.title, exc)
+            failed.append(f"{fact.title!r} — {peers.reason(exc)[:200]}")
+        else:
+            written.append(path)
+    return tuple(written), tuple(failed)
+
+
+@dataclass(frozen=True)
+class Backfilled:
+    """What one backfill call covered and what it wrote. Counted from the steps
+    that actually ran, never from the steps that were planned."""
+
+    steps: int = 0
+    read: int = 0
+    proposed: int = 0
+    written: tuple[str, ...] = ()
+    failed: tuple[str, ...] = ()
+    # The instant the walk reached. A later call resumes from here.
+    through: datetime | None = None
+    # What is still undistilled, in words, when the walk did not reach now.
+    remaining: str | None = None
+    # Steps that could not run, each with its reason. A backfill goes ON past
+    # one — a gateway blip must not abandon eleven days — and every one of them
+    # is named, because a step nobody distilled is a hole in the notes that
+    # nothing else would ever report.
+    problems: tuple[str, ...] = ()
+    reason: str | None = None
+
+    @property
+    def ran(self) -> bool:
+        return self.reason is None
+
+
+async def oldest_message(pool, person_id) -> datetime | None:
+    """When this person's history starts, or None when they have none."""
+    return await pool.fetchval(
+        "SELECT min(m.created_at) FROM messages m JOIN conversations c ON c.id = m.conversation_id "
+        "WHERE c.person_id = $1",
+        person_id,
+    )
+
+
+async def backfill(
+    app,
+    pool,
+    person,
+    *,
+    since: datetime | None = None,
+    step: timedelta = BACKFILL_STEP,
+    max_steps: int = BACKFILL_MAX_STEPS,
+) -> Backfilled:
+    """Distil the conversation that is already stored, OLDEST FIRST.
+
+    The beat keeps up with what is said from now on; this is the twelve days
+    that were already there when it was built. It is the same pass, walked over
+    the archive in steps instead of over the last hour.
+
+    OLDEST FIRST IS NOT A PREFERENCE. Superseding is last-write-wins by
+    subject: writing a note on `hardware.vram` retires this person's earlier
+    live note on it. Walk the archive newest-first and the OLDEST statement of
+    every restated fact ends up as the live note, with the current one filed as
+    its own predecessor — every restated fact wrong, quietly, in exactly the
+    way that looks fine until someone asks.
+
+    Bounded and STATED. It walks at most `max_steps`, and when the walk has not
+    reached now it says how much is left rather than stopping silently — a
+    backfill that quit early without saying so leaves notes nobody knows are
+    missing, which is indistinguishable from a person who never said those
+    things.
+
+    A step that fails does not end the walk. A gateway blip in the middle of
+    day three must not cost days four through twelve; the reason is collected
+    and the walk goes on, so `problems` names exactly which spans have no notes.
+    """
+    start = since or await oldest_message(pool, person.id)
+    if start is None:
+        return Backfilled(
+            reason="this person has no stored conversation, so there is nothing to distil"
+        )
+    now = await pool.fetchval("SELECT now()")
+    # Read once for the whole walk rather than per step: the subjects are the
+    # same corpus every time, and forty exports would be forty chances for one
+    # of them to fail differently.
+    subjects, subject_limit = await known_subjects(app, person.id)
+
+    written: list[str] = []
+    failed: list[str] = []
+    problems: list[str] = [subject_limit] if subject_limit else []
+    steps = read = proposed = 0
+    through = start
+    while through < now and steps < max_steps:
+        through = min(through + step, now)
+        steps += 1
+        found = await distil(app, pool, person, since=step, through=through, subjects=subjects)
+        if not found.ran:
+            problems.append(
+                f"nothing distilled up to {through.isoformat(timespec='minutes')} — {found.reason}"
+            )
+            continue
+        read += found.read
+        proposed += found.proposed
+        step_written, step_failed = await write_facts(app, person, found.facts)
+        written.extend(step_written)
+        failed.extend(step_failed)
+
+    remaining = None
+    if through < now:
+        remaining = (
+            f"the walk stopped at {through.isoformat(timespec='minutes')} after {steps} steps; "
+            f"everything said since then is still undistilled — run it again from there"
+        )
+    return Backfilled(
+        steps=steps,
+        read=read,
+        proposed=proposed,
+        written=tuple(written),
+        failed=tuple(failed),
+        through=through,
+        remaining=remaining,
+        problems=tuple(problems),
     )

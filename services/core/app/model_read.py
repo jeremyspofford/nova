@@ -43,7 +43,7 @@ import json
 import logging
 import uuid
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import httpx
 
@@ -95,9 +95,18 @@ async def window(
     since: timedelta,
     max_messages: int,
     char_budget: int,
+    through: datetime | None = None,
 ) -> list:
     """This person's messages in the named roles, newest first until the budget
     is spent, returned oldest first.
+
+    `through` closes the window at an instant instead of at now, so the span is
+    (`through` - `since`, `through`]. The live readers leave it None and get
+    exactly the query they had. The BACKFILL sets it, because it walks the
+    archive in steps and a relative-only window can only ever look at the most
+    recent one — and it walks OLDEST FIRST, because superseding is last-write-
+    wins by subject and reading newest first would leave the oldest statement
+    of a fact as the live note.
 
     WHICH ROLES IS THE CALLER'S DECISION AND IT IS NOT A DETAIL. review.py
     passes ("user",) alone: once it is a row, her promise and his are
@@ -113,12 +122,14 @@ async def window(
             "SELECT m.id, m.role, m.created_at, m.content FROM messages m "
             "JOIN conversations c ON c.id = m.conversation_id "
             "WHERE c.person_id = $1 AND m.role = ANY($2::text[]) "
-            "  AND m.created_at >= now() - $3::interval "
+            "  AND m.created_at > COALESCE($5::timestamptz, now()) - $3::interval "
+            "  AND ($5::timestamptz IS NULL OR m.created_at <= $5) "
             "ORDER BY m.created_at DESC, m.id DESC LIMIT $4",
             person_id,
             list(roles),
             since,
             max_messages,
+            through,
         )
     except Exception as exc:  # noqa: BLE001 — the reason is the record
         raise ReadFailed(peers.reason(exc)) from exc
