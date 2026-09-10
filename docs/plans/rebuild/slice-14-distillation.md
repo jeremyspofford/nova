@@ -250,8 +250,38 @@ mechanism S13 predicted would raise the ceiling.
       in silence leaves notes nobody knows are missing, which is
       indistinguishable from a person who never said those things.
     - `distil.write_facts` is the one writer for the beat and the backfill.
-  - **Not yet run against his live memory.** Building it is mine; running a
-    pass that writes real notes into his own data is his call.
+  - **DEPLOYED AND WALKED, 2026-09-10.** Jeremy's call: deploy it live and
+    let it run. Three walks were needed, and the two failures were the
+    point of walking.
+    - **Walk 1** hung for 16 minutes and wrote nothing. A read timeout
+      bounds SILENCE; a reasoning model that is thinking is never silent,
+      so it streamed steadily past a 110s read timeout with nothing able
+      to stop it, holding her whole turn open. `model_read.complete` now
+      bounds the whole stream.
+    - **Walk 2** ran cleanly and reported "0 facts proposed" over eight
+      days. Two causes, both from reading the model's own reasoning:
+      the prompt said "PREFER NOT TO REPORT a fact one of them answers",
+      which INVERTED the owner's ruling, and the model quoted it back
+      while talking itself out of every fact it had found; and
+      `max_tokens` was sized for the answer rather than the reasoning, so
+      dense windows emitted nothing at all. The second was the worse one,
+      because a truncated read reached the pass as an empty list and was
+      reported as a read that looked and found nothing. `finish_reason`
+      now says which happened.
+    - **Walk 3 worked: 137 messages read, 40 facts proposed, 40 notes
+      written**, 45 on disk in total. Verified on disk rather than from
+      her reply: `subject` for superseding, `said_at: 2026-09-09` on a
+      note written on the 10th (dated by the exchange), `source.role:
+      assistant` where the fact stands on her own words, and
+      `live_source` naming a validated call. 26 of the 45 name one.
+    - **Walk 4 proved the ruling, end to end.** Asked what timers he has,
+      the trace shows two tool spans marked `unasked` BEFORE the first
+      model call. She opened "Checked just now", listed the current three,
+      and then said the timers named in her older notes are NOT in the
+      list — the note said the log timer was "paused, not cancelled", the
+      live check said it no longer exists, and she answered from the check
+      and named the difference. She never called `list_timers` herself.
+  - Remaining: S14-4, the measurement.
 - **S14-4 the measurement.** Fixture, floors, the number in the commit.
 
 ## What would make this lie
