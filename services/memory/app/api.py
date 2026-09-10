@@ -12,6 +12,7 @@ re-checks it.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -139,9 +140,9 @@ def _build_context(root: Path) -> Context:
     # index. Only the ones whose text is still indexed are applied — a cache
     # that outlived its note contributes nothing and is pruned below.
     live = index.live_digests()
-    for digest, vector in cache.load().items():
+    for digest, windows in cache.load().items():
         if digest in live:
-            index.set_vector(digest, vector)
+            index.set_vectors(digest, windows)
     return Context(store=store, index=index, embedder=Embedder(config), cache=cache)
 
 
@@ -162,8 +163,71 @@ def warm_context() -> None:
     _context()
 
 
-async def warm_vectors() -> BackfillReport:
-    """Embed whatever the vector cache did not already hold, at startup.
+# THE BACKGROUND EMBEDDING PASS, and the failure that made it one.
+#
+# Until 2026-09-09 the backlog was filled by a bounded pass awaited at boot and
+# again on every write. Measured on the running stack the day the model was
+# pulled, that shape produced this in the log:
+#
+#     embedding pass covered 16/75 units and then stopped:
+#     the embedding service did not answer within 5s (ReadTimeout)
+#
+# Nothing was broken. The service answered every call; a batch of sixteen
+# contended chunks simply took longer than the five seconds the pass allowed
+# itself, and the pass then treated its own budget as a fault and gave up
+# until the next restart. Recall afterwards was correct and useless: 0 of 49
+# notes embedded, so semantic matching honestly refused to run, for ever.
+#
+# Three things fix it, and all three are here rather than in a bigger number:
+#
+#   1. the budget is per CALL (embedding.DEFAULT_TIMEOUT), so it means "this
+#      call is not coming back" and nothing else;
+#   2. the pass runs in the BACKGROUND and boot does not wait for it, so it
+#      may take as long as the work takes;
+#   3. it RETRIES a stated failure instead of parking it until the next boot,
+#      because the failures it actually meets — the model is not pulled yet, a
+#      27B is holding the GPU — resolve on their own.
+#
+# What makes all of that safe to re-run is the content-keyed cache: a re-run
+# costs one dictionary lookup per unit already embedded, so continuing is
+# always cheaper than deciding whether to continue.
+#
+# MEASURED, both shapes, on a read-only copy of the real notes with the local
+# 27B chat model resident and the GPU contended:
+#
+#   old shape (5 s whole-pass budget, batch 16, 5 s per call)
+#       "embedding pass covered 64/75 units and then stopped: the embedding
+#        service did not answer within 5s (ReadTimeout)" — coverage 38 of 49
+#       in Jeremy's scope, so recall still refuses to match by meaning. Under
+#       the heavier contention of the original run it was 16 of 75.
+#
+#   this shape (per-call 30 s, batch 8, background, no pass budget)
+#       start_vector_backfill returned in 0.1 ms with the task not yet run —
+#       boot was not waiting — and the pass finished the whole corpus in
+#       35.6 s. Coverage 0 of 49 -> 49 of 49.
+_passes: dict[str, asyncio.Task] = {}
+
+# Roots with a pass mid-flight. Set and cleared with no await between, so this
+# is a mutual exclusion in asyncio without a lock, and it is what stops a
+# write-path slice and the background pass from paying for the same vector
+# twice.
+_filling: set[str] = set()
+
+# Digests the embedder has REFUSED — a unit past the model's context with no
+# white space to split on. Learned from the pass that met them, never guessed.
+# Without this the background pass would ask for them again on every round and
+# never reach "done"; with it they stay unembedded and every recall over that
+# scope keeps saying so through vector_coverage.
+_unembeddable: dict[str, set[str]] = {}
+
+
+async def warm_vectors(*, slice_seconds: float | None = None) -> BackfillReport:
+    """Fill the backlog now, awaited, and prune what the notes no longer hold.
+
+    This is the pass itself. `start_vector_backfill` is what the running
+    service uses — it puts this on a background task so boot does not wait —
+    and this is what a caller that genuinely wants to wait for the vectors
+    (a measurement, a test) calls directly.
 
     Deliberately NOT fatal and deliberately NOT silent. The embedding model is
     pulled by the owner, not installed by this service, so "no embedder yet"
@@ -172,16 +236,148 @@ async def warm_vectors() -> BackfillReport:
     the pass logs which of the stated unavailabilities it hit and returns;
     what it must never do is fail quietly and leave recall calling itself
     semantic over an empty vector space.
-
-    A pass is bounded (MEMORY_EMBED_BACKFILL_SECONDS) and picks up where it
-    left off on the next write, so a large corpus fills in over a few turns
-    rather than holding up a startup a healthcheck is waiting on.
     """
     ctx = _context()
-    report = await _fill_vectors(ctx)
-    # Prune only here: startup is the one moment the live set is complete and
-    # nothing else is writing. A cache that is never pruned keeps a vector for
-    # every exchange ever edited and every note ever forgotten.
+    key = str(_current_root())
+    report = await _fill_vectors(ctx, key, slice_seconds=slice_seconds)
+    if not report.deferred:
+        _prune_vectors(ctx)
+    return report
+
+
+def start_vector_backfill() -> asyncio.Task | None:
+    """Put the backlog pass on a background task and return immediately.
+
+    Called from main.py's lifespan INSTEAD of awaiting the pass, so a corpus
+    that takes four minutes to embed does not hold up a startup a healthcheck
+    is waiting on — and called again from the write paths, so an embedder that
+    appears while the service is running (the owner pulls the model) is picked
+    up without a restart.
+
+    Returns the task rather than swallowing it: a caller that wants to wait —
+    a test, a measurement — can, and the running service simply does not.
+    Never starts a second pass over the same root.
+    """
+    key = str(_current_root())
+    running = _passes.get(key)
+    if running is not None and not running.done():
+        return running
+    task = asyncio.ensure_future(_backfill_loop(key))
+    _passes[key] = task
+    return task
+
+
+async def _backfill_loop(key: str) -> None:
+    """Embed until there is nothing left to embed, retrying stated failures.
+
+    The loop's own honesty rule: it may retry, and it may give up, but it may
+    never end quietly. Every exit writes a log line saying which of the three
+    it was — finished, gave up after N attempts and why, or the notes it is
+    working on were rebuilt underneath it.
+    """
+    attempts = 0
+    while True:
+        ctx = _contexts.get(key)
+        if ctx is None:
+            # The context was cleared (a rebuild, a test). Whatever rebuilt it
+            # starts its own pass; this one has nothing left to work on.
+            logger.info("embedding pass for %s stopped: its index was rebuilt", key)
+            return
+        switched_off = ctx.embedder.unavailable_reason()
+        if switched_off:
+            # Read from configuration, so it cannot become true while this
+            # process runs. Retrying it twenty times over twenty minutes would
+            # be a loop that could never succeed, and the deployment already
+            # knows: every /recall says the search was the reduced one.
+            logger.info("embedding pass not started: %s", switched_off)
+            return
+        report = await _fill_vectors(ctx, key)
+        if report.deferred:
+            logger.info("embedding pass stopped: %s", report.deferred)
+            return
+        if report.failed:
+            attempts += 1
+            config = ctx.embedder.config
+            if attempts >= config.max_attempts:
+                logger.warning(
+                    "embedding pass gave up after %d attempts with %d note(s) still unembedded: "
+                    "%s — recall keeps saying it matched words alone until this is fixed and the "
+                    "service restarted or another note written",
+                    attempts,
+                    report.remaining,
+                    report.failed,
+                )
+                return
+            logger.warning(
+                "embedding pass stopped with %d note(s) left (attempt %d of %d), retrying in "
+                "%.0fs: %s",
+                report.remaining,
+                attempts,
+                config.max_attempts,
+                config.retry_seconds,
+                report.failed,
+            )
+            await asyncio.sleep(config.retry_seconds)
+            continue
+        if report.remaining:
+            # Only a slice budget can leave work behind without a failure, and
+            # this pass sets none. Named rather than looped on, because a loop
+            # that cannot say why it is going round again is a spin.
+            logger.warning(
+                "embedding pass ended with %d note(s) unembedded and no reason given — "
+                "not retrying",
+                report.remaining,
+            )
+            return
+        _prune_vectors(ctx)
+        if not report.embedded:
+            # Nothing needed embedding, so no call was made, so the model is
+            # still cold — and the next thing to ask for it is a turn, under a
+            # budget that a cold load does not fit (embedding.py's comment on
+            # DEFAULT_QUERY_TIMEOUT). One throwaway embed here pays the ~1.5 s
+            # load off the critical path and leaves it resident.
+            await _warm_model(ctx)
+        logger.info(
+            "embedding pass finished: %d embedded, %d already cached, %d note(s) the model "
+            "cannot read",
+            report.embedded,
+            report.from_cache,
+            len(_unembeddable.get(key, ())),
+        )
+        return
+
+
+async def _warm_model(ctx: Context) -> None:
+    """One call whose only purpose is to leave the model loaded.
+
+    Reported, never assumed: this is also the first honest answer to "is the
+    embedding model actually installed", asked at boot instead of on the
+    owner's first question.
+    """
+    try:
+        # The BACKFILL's per-call budget, not the query's. This call is on
+        # nobody's critical path, and the whole point of it is to absorb a cold
+        # load that the query budget deliberately cannot — putting it under
+        # 1.6 s would make it fail exactly when it was most needed.
+        await ctx.embedder.embed(["warm"])
+    except EmbedderUnavailable as exc:
+        logger.warning("the embedding model could not be warmed: %s", exc)
+        return
+    keep_alive = ctx.embedder.config.keep_alive_seconds
+    logger.info(
+        "the embedding model %s answered and is asked to stay resident for %s",
+        ctx.embedder.config.model,
+        "as long as it can" if keep_alive < 0 else f"{keep_alive:g}s",
+    )
+
+
+def _prune_vectors(ctx: Context) -> None:
+    """Drop vectors for text the notes no longer hold.
+
+    Run at the end of a pass, when the live set is complete and nothing else
+    is writing. A cache that is never pruned keeps a vector for every exchange
+    ever edited and every note ever forgotten.
+    """
     live = ctx.index.live_digests()
     dropped_memory = ctx.index.retain_vectors(live)
     dropped_disk = ctx.cache.prune(live)
@@ -192,22 +388,62 @@ async def warm_vectors() -> BackfillReport:
             dropped_disk,
             ctx.cache.path,
         )
-    return report
 
 
-async def _fill_vectors(ctx: Context, scope_prefix: str = "") -> BackfillReport:
-    """One bounded embedding pass over the units that have no vector yet.
+async def _fill_vectors(
+    ctx: Context,
+    key: str,
+    scope_prefix: str = "",
+    *,
+    slice_seconds: float | None = None,
+) -> BackfillReport:
+    """One embedding pass over the units that have no vector yet.
 
-    Called at startup and after every write, never from /recall: embedding a
-    corpus takes seconds (4.0 s for 47 chunks, measured) and /recall answers
-    inside core's 2 s budget. A write happens at the end of every turn, so an
-    embedder that appears while the service is running — the owner pulls the
-    model — is picked up on the next turn without a restart.
+    `slice_seconds` is the wall clock the CALLER is prepared to wait, and only
+    the write paths pass one — the background pass runs unbounded, because
+    nothing is waiting on it. Never called from /recall: /recall embeds the
+    question and nothing else.
     """
-    missing = ctx.index.missing_vectors(scope_prefix)
+    refused = _unembeddable.setdefault(key, set())
+    missing = [
+        (digest, text)
+        for digest, text in ctx.index.missing_vectors(scope_prefix)
+        if digest not in refused
+    ]
     if not missing:
         return BackfillReport()
-    report = await backfill(ctx.embedder, ctx.cache, missing, apply=ctx.index.set_vector)
+    if key in _filling:
+        # No await between this check and the add below, so two coroutines
+        # cannot both get past it.
+        return BackfillReport(
+            requested=len(missing),
+            remaining=len(missing),
+            deferred=(
+                f"another embedding pass over these notes is already running, so this call "
+                f"left the remaining {len(missing)} note(s) to it"
+            ),
+        )
+    _filling.add(key)
+    try:
+        report = await backfill(
+            ctx.embedder,
+            ctx.cache,
+            missing,
+            apply=ctx.index.set_vectors,
+            slice_seconds=slice_seconds,
+        )
+    finally:
+        _filling.discard(key)
+    refused.update(report.unembeddable)
+    if report.too_long:
+        # Not a failure of the pass, and not silent either: these units have
+        # no vector, so every recall over this scope reports its coverage as
+        # short of the whole. The sentences say which notes and why.
+        logger.warning(
+            "%d note(s) could not be embedded at all: %s",
+            len(report.too_long),
+            "; ".join(report.too_long),
+        )
     if report.failed:
         # Named, at warning level, every time. This is the line that turns "we
         # shipped semantic recall and it never ran" into something visible.
@@ -217,17 +453,38 @@ async def _fill_vectors(ctx: Context, scope_prefix: str = "") -> BackfillReport:
             report.requested,
             report.failed,
         )
-    elif report.embedded or report.out_of_budget:
+    elif report.out_of_budget:
+        # A budget that cut real work, said as a budget. It is NOT logged at
+        # warning level and it does not carry a failure sentence, because the
+        # service did nothing wrong — the caller was simply not prepared to
+        # wait, and the background pass has the rest.
+        logger.info("embedding pass: %s", report.budget_note)
+    elif report.embedded:
         logger.info(
-            "embedding pass: %d embedded, %d from cache, %d requested, %.2fs%s",
+            "embedding pass: %d embedded, %d from cache, %d requested, %.2fs",
             report.embedded,
             report.from_cache,
             report.requested,
             report.seconds,
-            " (stopped on budget, the rest follows on the next write)"
-            if report.out_of_budget
-            else "",
         )
+    return report
+
+
+async def _fill_after_write(ctx: Context) -> BackfillReport:
+    """What a write path does about vectors: a short slice, then hand over.
+
+    core awaits /ingest inside a 10 s budget and the new exchange is one call
+    (~25 ms warm), so a one-second slice embeds it and forty more like it
+    without making anyone wait. Anything still missing goes to the background
+    pass, which is started here — so an owner who pulls the embedding model
+    mid-session gets the whole corpus filled from the next turn, with no
+    restart.
+    """
+    report = await _fill_vectors(
+        ctx, str(_current_root()), slice_seconds=ctx.embedder.config.slice_seconds
+    )
+    if report.remaining:
+        start_vector_backfill()
     return report
 
 
@@ -295,7 +552,7 @@ async def ingest(req: IngestRequest) -> dict:
     # reply path (core awaits /ingest after the turn, with a 10 s budget) and
     # bounded, so this is where a corpus catches up after the owner pulls the
     # embedding model — no restart, and no embedding on /recall.
-    await _fill_vectors(ctx)
+    await _fill_after_write(ctx)
     return {"path": stored.rel_path, "appended": True}
 
 
@@ -340,7 +597,7 @@ async def save(req: SaveRequest) -> dict:
 
     stored = store.read(abs_path)
     _index_document(index, stored)
-    await _fill_vectors(ctx)
+    await _fill_after_write(ctx)
     return {"path": stored.rel_path, "saved": True}
 
 

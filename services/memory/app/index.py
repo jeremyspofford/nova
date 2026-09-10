@@ -270,12 +270,16 @@ class BM25Index:
         # reaches a size where it is not, the fix is to keep per-scope counters
         # and invalidate one scope at a time, not to go back to sharing them.
         self._stats: dict[str, _Stats] = {}
-        # digest -> unit vector. Keyed by the hash of the text rather than by
-        # the unit id, so an exchange that is re-indexed unchanged, or a note
-        # saved again under a new name, keeps the vector that was already paid
-        # for. Filled by set_vector() from the cache at startup and from the
-        # embedder on the write paths; empty until then, and recall says so.
-        self._vectors: dict[str, list[float]] = {}
+        # digest -> the WINDOWS covering that unit's text. Keyed by the hash
+        # of the text rather than by the unit id, so an exchange that is
+        # re-indexed unchanged, or a note saved again under a new name, keeps
+        # the vector that was already paid for. A list because one vector can
+        # only stand for as much text as the model can read at once: a note
+        # past that is embedded in pieces (app.embedding.Embedder.
+        # embed_windows) and scored by its best-matching piece. Filled by
+        # set_vectors() from the cache at startup and from the embedder on the
+        # write paths; empty until then, and recall says so.
+        self._vectors: dict[str, list[list[float]]] = {}
         # Per-scope "how alike are two of these notes", the semantic floor.
         # Dropped whole on any change to the units or their vectors, for the
         # same reason _stats is (see above): a cache that is only ever
@@ -340,9 +344,11 @@ class BM25Index:
 
     # -- vectors ---------------------------------------------------------
 
-    def set_vector(self, digest: str, vector: list[float]) -> None:
-        """Attach one embedded vector, by text hash."""
-        self._vectors[digest] = vector
+    def set_vectors(self, digest: str, windows: list[list[float]]) -> None:
+        """Attach the windows covering one unit's text, by text hash."""
+        if not windows:
+            return
+        self._vectors[digest] = windows
         self._background.clear()
 
     def has_vector(self, digest: str) -> bool:
@@ -415,7 +421,15 @@ class BM25Index:
         cached = self._background.get(scope_prefix, ...)
         if cached is not ...:
             return cached
-        vectors = [self._vectors[doc.digest] for _value, doc in sims]
+        if len(sims) < SEMANTIC_MIN_SAMPLE:
+            self._background[scope_prefix] = None
+            return None
+        # Every WINDOW is a vector in this average, not every note: a note
+        # long enough to have been split is two texts as far as the embedder
+        # is concerned, and the line being derived is "how alike are two of
+        # these texts". The identity below holds over whatever set of unit
+        # vectors it is given.
+        vectors = [window for _value, doc in sims for window in self._vectors[doc.digest]]
         n = len(vectors)
         if n < SEMANTIC_MIN_SAMPLE:
             self._background[scope_prefix] = None
@@ -634,13 +648,31 @@ class BM25Index:
             )
             return [], RetrieverReport(name="semantic", ran=False, reason=reason), None
         sims: list[tuple[float, _Doc]] = []
+        mismatched = 0
         for doc in scope:
-            vector = self._vectors.get(doc.digest)
-            if vector is None:
+            windows = self._vectors.get(doc.digest)
+            if not windows:
                 continue
-            sims.append((dot(query_vector, vector), doc))
+            # A vector of another width cannot be compared to this question
+            # at all — the same model name re-pulled at a different dimension,
+            # or a cache from one embedder read by another. Skipped and
+            # counted, never crashed on and never quietly dotted against a
+            # truncated copy of itself.
+            usable = [window for window in windows if len(window) == len(query_vector)]
+            if not usable:
+                mismatched += 1
+                continue
+            # The best-matching WINDOW is the note's score. A long note is
+            # embedded in pieces, and the question is about one of them.
+            sims.append((max(dot(query_vector, window) for window in usable), doc))
         have, total = len(sims), len(scope)
         coverage = None if have == total else f"{have} of {total} notes in this scope are embedded"
+        if mismatched:
+            coverage = (
+                f"{coverage or f'{have} of {total} notes in this scope are embedded'} "
+                f"({mismatched} of them by a model whose vectors are a different width, which "
+                "cannot be compared to this question)"
+            )
         # ONE gate, and it is the floor's own: below SEMANTIC_MIN_SAMPLE
         # embedded notes there is no "how alike are two of these" to measure
         # a resemblance against, so the retriever says it did not run rather

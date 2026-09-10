@@ -80,11 +80,14 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import httpx
 import pytest
 import recall_corpus as corpus
+import recall_vectors
 from httpx import ASGITransport, AsyncClient
 
 from app import api
+from app.embedding import Embedder
 from app.main import app
 
 TOKEN = "recall-quality-token"
@@ -142,14 +145,15 @@ ABSENT_ANSWER_HITS_CEILING = 0
 # ---------------------------------------------------------------------------
 # THE SAME TWENTY, WITH THE SEMANTIC HALF TURNED ON (S13-5).
 #
-# The pins above are the LEXICAL numbers, and they stay that way on purpose:
-# CI has no ollama and the embedding model is the owner's to pull, so a
-# measurement that needed one would not run and a suite that silently ran
-# without one would report the lexical number under a hybrid name. The
-# retriever assertion in _recall is what keeps those two apart mechanically.
+# The pins above are the LEXICAL numbers, and they stay pinned on purpose:
+# "the embedding model is not installed" is an ordinary state of a real
+# deployment — it is the owner who pulls it — so it has to stay a MEASURED
+# state and not an untested one. conftest.py empties MEMORY_EMBED_URL for the
+# whole suite, which is what keeps those two numbers honest, and the retriever
+# assertion in _recall is what keeps this pair from ever measuring the other.
 #
-# These are the numbers with a live embedder, measured 2026-09-09 against
-# nomic-embed-text (768d) on the bundled ollama, over this fixture:
+# These are the numbers with the semantic half on, measured 2026-09-09 against
+# nomic-embed-text (768d) over this fixture:
 #
 #   answer-in-context   8 -> 12 of 20
 #   absent-answer hits  0 of 6   (unchanged, and it is the whole difficulty)
@@ -168,16 +172,43 @@ ABSENT_ANSWER_HITS_CEILING = 0
 # with the absent-answer count still 0 of 5 (one of the six is answerable in
 # his corpus and is not scored there).
 #
-# This pass runs only when MEMORY_RECALL_EMBED_URL names a reachable embedder
-# — and when it does, it is a ratchet exactly like the pair above: a
-# regression fails, and an improvement fails until somebody moves the constant
-# and says in the commit by how much.
+# Re-measured after the embedder stopped letting ollama truncate silently
+# (truncate=false, and a note past the model's context embedded as windows and
+# scored by its best-matching one). Both numbers are UNCHANGED — 12 of 20 and
+# 0 of 6, and 13 of 18 on his real notes — because the one over-long unit in
+# each corpus is the newest day's pasted review, which is not what any of the
+# eight remaining questions is about. It is a correctness fix rather than a
+# quality fix, and it is recorded here as measured so nobody has to re-derive
+# that it bought nothing on this corpus.
+#
+# WHAT CHANGED 2026-09-09, AND WHY THE NUMBERS DID NOT.
+#
+# This pass used to run only where somebody had ollama up and the model
+# pulled; everywhere else it skipped. So the number that justifies the whole
+# sub-slice was checked on one laptop and nowhere else, and a regression in
+# fusion, in the derived floor or in the coverage rule could reach main with
+# nothing watching. It now replays vectors RECORDED from that model
+# (tests/recall_vectors.py) in front of the real Embedder, and needs no
+# network and no GPU.
+#
+# The replay was checked against the live model the day it was recorded and
+# reproduces it EXACTLY — 12/20, 0/6, 16/20 file-in-top-5, 14/20 whole store,
+# 1/20 answered with nothing, and the same rank for every one of the twenty
+# cases. That is not a coincidence to be re-assumed later, which is why
+# MEMORY_RECALL_EMBED_URL still runs the identical measurement against a live
+# model: that is how the recording is checked for drift.
+#
+# It is a ratchet exactly like the lexical pair: a regression fails, and an
+# improvement fails until somebody moves the constant and says in the commit
+# by how much.
 # ---------------------------------------------------------------------------
 HYBRID_ANSWER_IN_CONTEXT_FLOOR = 12
 HYBRID_ABSENT_ANSWER_HITS_CEILING = 0
 
 # Opt-in, and named separately from MEMORY_EMBED_URL so that turning the
 # service's own default on can never turn this measurement on by accident.
+# Setting it swaps the recording for the live model — same corpus, same
+# questions, same pins.
 LIVE_EMBEDDER_ENV = "MEMORY_RECALL_EMBED_URL"
 LIVE_EMBEDDER_MODEL_ENV = "MEMORY_RECALL_EMBED_MODEL"
 
@@ -410,41 +441,58 @@ def scorecard(tmp_path_factory) -> Scorecard:
 
 @pytest.fixture(scope="module")
 def hybrid_scorecard(tmp_path_factory) -> Scorecard:
-    """The same twenty questions with a LIVE embedder behind /recall.
+    """The same twenty questions with the semantic half ON, and no model.
 
-    Skipped, loudly, when no embedder is named — the model is pulled by the
-    owner and CI has none, so this cannot be a suite that has to pass
-    everywhere. What it must never do is pass by running lexically: the
-    backfill's own report is checked before a single question is asked, and a
-    pass whose embedder could not be used FAILS with the embedder's sentence
-    rather than quietly measuring the number above under a different name.
+    This ran only where somebody had ollama and the model pulled, which meant
+    the number that justifies the whole sub-slice was checked on one laptop and
+    nowhere else. It now replays vectors RECORDED from that model against this
+    exact corpus (tests/recall_vectors.py), in front of the real Embedder, so
+    the measurement runs on a clean checkout with no network and no GPU.
+
+    What it must never do is pass by running lexically. Three things stop that:
+    the backfill's own report is checked before a question is asked, coverage
+    must be complete, and `_recall` asserts on every call that the semantic
+    retriever RAN. And the replay itself refuses to invent — a text with no
+    recorded vector raises rather than returning something plausible.
+
+    Set MEMORY_RECALL_EMBED_URL to run the same measurement against a live
+    model instead; that is how the recording is checked for drift, and it is
+    the only reason to want the slow path.
     """
-    url = os.environ.get(LIVE_EMBEDDER_ENV, "").strip()
-    if not url:
-        pytest.skip(
-            f"no live embedder: set {LIVE_EMBEDDER_ENV} (and optionally "
-            f"{LIVE_EMBEDDER_MODEL_ENV}) to measure hybrid recall"
-        )
+    live = os.environ.get(LIVE_EMBEDDER_ENV, "").strip()
+    model = os.environ.get(LIVE_EMBEDDER_MODEL_ENV, "").strip() or recall_vectors.MODEL
     root = Path(tmp_path_factory.mktemp("recall-quality-hybrid")) / "root"
     rel_paths = corpus.build(root)
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("SERVICE_TOKEN", TOKEN)
         patch.setenv("MEMORY_ROOT", str(root))
-        patch.setenv("MEMORY_EMBED_URL", url)
-        model = os.environ.get(LIVE_EMBEDDER_MODEL_ENV, "").strip()
-        if model:
-            patch.setenv("MEMORY_EMBED_MODEL", model)
-        # The whole corpus, in one pass, however long it takes: this is a
-        # measurement, not a turn.
-        patch.setenv("MEMORY_EMBED_BACKFILL_SECONDS", "300")
+        patch.setenv("MEMORY_EMBED_MODEL", model)
         patch.delenv("DATABASE_URL", raising=False)
+        if live:
+            # The whole corpus, in one pass, however long it takes: this is a
+            # measurement, not a turn. On this machine the embedder shares a
+            # 24 GB GPU with the local chat models, and with a 27B resident one
+            # embed call was probed at 5-31 s. What is pinned below is which
+            # notes RANK, not how fast they were embedded.
+            patch.setenv("MEMORY_EMBED_URL", live)
+            patch.setenv("MEMORY_EMBED_TIMEOUT", "180")
+            patch.setenv("MEMORY_EMBED_QUERY_TIMEOUT", "180")
+        else:
+            patch.setenv("MEMORY_EMBED_URL", "http://recorded.test")
+            recorded = recall_vectors.load(model)
+            patch.setattr(
+                api,
+                "Embedder",
+                lambda config: Embedder(
+                    config, transport=httpx.MockTransport(recall_vectors.handler(recorded))
+                ),
+            )
         api._contexts.clear()
+        api._unembeddable.clear()
         try:
             report = asyncio.run(api.warm_vectors())
             if report.failed:
-                raise AssertionError(
-                    f"the live embedder at {url} could not embed this corpus: {report.failed}"
-                )
+                raise AssertionError(f"the embedder could not embed this corpus: {report.failed}")
             covered = api._context().index.vector_coverage(f"people/{corpus.PERSON_ID}/")
             if covered[0] != covered[1]:
                 raise AssertionError(
@@ -456,6 +504,7 @@ def hybrid_scorecard(tmp_path_factory) -> Scorecard:
             )
         finally:
             api._contexts.clear()
+            api._unembeddable.clear()
 
 
 # -- the corpus is what it claims to be ------------------------------------
@@ -685,3 +734,64 @@ def report(
         f"   (pinned ceiling {ceiling})"
     )
     return "\n".join(lines)
+
+
+# -- the recording cannot quietly become a lexical run ----------------------
+
+
+def test_the_recording_refuses_to_invent_a_vector():
+    """The one property that makes a replayed measurement trustworthy.
+
+    A fake embedder that answered anything for an unrecorded text would turn
+    this suite into the exact silent fallback the feature exists to prevent:
+    the pass would score a lexical-only run and call it hybrid. So a miss
+    raises, and it names the text so the next builder knows what to re-record.
+    """
+    recording = recall_vectors.load()
+    respond = recall_vectors.handler(recording)
+    request = httpx.Request(
+        "POST",
+        "http://recorded.test/api/embed",
+        json={"model": "m", "input": ["a question nobody ever recorded"]},
+    )
+    with pytest.raises(AssertionError, match="no recorded answer"):
+        respond(request)
+
+
+def test_the_recording_reproduces_the_model_refusing_an_over_long_note():
+    """A recording of successes alone would never exercise windowing.
+
+    One fixture chunk is past nomic-embed-text's context. The shipping code
+    learns that from the SERVICE refusing it and then embeds the halves. The
+    recording therefore keeps the refusal as well as the vectors, and this is
+    what notices the day somebody records only the happy path — after which
+    the over-long chunk would have no vector and coverage would silently fall.
+    """
+    recording = recall_vectors.load()
+    assert recording.refused, "the fixture holds a note past the model's context; record it"
+    assert any("context" in said.lower() for said in recording.refused.values())
+
+
+def test_a_recorded_text_keeps_its_key_when_the_corpus_is_rebuilt_tomorrow(tmp_path):
+    """The one fidelity concession, checked rather than asserted in prose.
+
+    The fixture rebases its journal dates so the corpus is always the same age
+    relative to today — that is what keeps the recency multiplier, and the
+    lexical half, constant from one day to the next. It also means a chunk's
+    text carries a different date tomorrow. The recording's key normalises ISO
+    dates for exactly that reason, and if the normalisation ever stops covering
+    what moves, this fails here instead of on some future morning.
+    """
+    from datetime import date
+
+    keys = []
+    for index, when in enumerate((date(2026, 1, 1), date(2027, 3, 3))):
+        root = tmp_path / f"corpus-{index}"
+        corpus.build(root, today=when)
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv("MEMORY_EMBED_URL", "")
+            context = api._build_context(root)
+        keys.append({recall_vectors.key(text) for _digest, text in context.index.missing_vectors()})
+    assert keys[0] == keys[1]
+    recorded = set(recall_vectors.load().vectors) | set(recall_vectors.load().refused)
+    assert keys[0] <= recorded, "the recording does not cover every chunk of the fixture corpus"

@@ -312,6 +312,105 @@ async def test_an_exact_token_still_wins_where_the_embedder_is_vague(wired, tmp_
     assert "lexical" in body["hits"][0]["retrievers"]
 
 
+async def test_a_long_note_is_found_by_the_part_of_it_that_answers(wired, tmp_path):
+    """A note past the model's context is scored by its best-matching WINDOW.
+
+    The live corpus holds an 11 KB pasted exchange, and ollama's default is to
+    embed a text that long from its head and answer 200 as though it had read
+    all of it. This is that note: everything the question is about is in its
+    last two lines. With one truncated vector it is unreachable by meaning and
+    recall says "no note here resembles the question" — about text it never
+    embedded. With windows it comes back, and it is a semantic hit.
+    """
+    limit = 400
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        assert body["truncate"] is False, "a silent truncation is the bug, not a fallback"
+        for text in body["input"]:
+            if len(text) > limit:
+                return httpx.Response(
+                    400, json={"error": "the input length exceeds the context length"}
+                )
+        return httpx.Response(
+            200, json={"embeddings": [_vector_for(text) for text in body["input"]]}
+        )
+
+    wired(handler)
+    store = _seed(tmp_path)
+    padding = "The morning ritual is a slow pour and a warm mug. " * 12
+    store.write_topic(
+        PERSON, "pasted", "Pasted review", f"{padding}\n\nThe card in the box holds 24GB of vram."
+    )
+    api._contexts.clear()
+    report = await api.warm_vectors()
+    assert report.failed is None and report.too_long == ()
+    # Nothing is short of a vector: the long note has more than one.
+    assert api._context().index.vector_coverage(f"people/{PERSON}/") == (5, 5)
+
+    async with _client() as client:
+        body = await _recall(client, "how much vram is in the box")
+    paths = [hit["path"] for hit in body["hits"]]
+    pasted = f"people/{PERSON}/topics/pasted.md"
+    assert pasted in paths, body
+    hit = next(hit for hit in body["hits"] if hit["path"] == pasted)
+    assert "semantic" in hit["retrievers"]
+
+
+async def test_a_question_too_long_to_embed_says_that_about_the_QUESTION(wired, tmp_path):
+    """The sentence has to be about the right thing.
+
+    A note past the model's context is split; a question is not, because half
+    a question is not a smaller question. So this one reports that the
+    QUESTION could not be matched by meaning — not that one of the notes is
+    too long, which is what the note-shaped sentence would have said.
+    """
+    limit = 400
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        for text in body["input"]:
+            if len(text) > limit:
+                return httpx.Response(
+                    400, json={"error": "the input length exceeds the context length"}
+                )
+        return httpx.Response(
+            200, json={"embeddings": [_vector_for(text) for text in body["input"]]}
+        )
+
+    wired(handler)
+    _seed(tmp_path)
+    await api.warm_vectors()
+    async with _client() as client:
+        body = await _recall(client, "how much vram " + ("and what else did I say " * 30))
+    semantic = _retriever(body, "semantic")
+    assert semantic["ran"] is False
+    assert "the question is longer" in semantic["reason"]
+    assert "notes" not in semantic["reason"].split(" — ")[0]
+    # And the lexical half still answered, marked as all that ran.
+    assert "did not use every retriever" in body["statement"]
+
+
+async def test_a_vector_of_the_wrong_width_is_not_compared_and_is_counted(wired, tmp_path):
+    """A model re-pulled at a different dimension, or one deployment's cache
+    read by another. The old vectors cannot be compared to this question at
+    all; they are skipped and stated, never dotted against a truncated copy of
+    themselves and never a 500."""
+    wired(_handler())
+    _seed(tmp_path)
+    await api.warm_vectors()
+    ctx = api._context()
+    # One note's vector, as a narrower model would have written it.
+    digest = next(iter(ctx.index.live_digests()))
+    ctx.index.set_vectors(digest, [[1.0, 0.0]])
+    async with _client() as client:
+        body = await _recall(client, "how much vram is in the box")
+    semantic = _retriever(body, "semantic")
+    assert semantic["ran"] is True
+    assert "different width" in semantic["coverage"]
+    assert "cannot be compared" in body["statement"]
+
+
 # -- 3. the vectors are not paid for twice ----------------------------------
 
 

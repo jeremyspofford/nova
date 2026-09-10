@@ -21,6 +21,8 @@ WHAT THIS MODULE IS RESPONSIBLE FOR
     environment, never a literal in a call site;
   * one HTTP call to ollama's /api/embed, and the mapping from everything
     that can go wrong to a SENTENCE that says which thing went wrong;
+  * covering a note the model cannot read in one go — the service is told
+    never to truncate, and a long note is embedded as windows instead;
   * the on-disk vector cache, keyed by a hash of the exact text embedded.
 
 It does NOT rank anything. Ranking and fusion live in app/index.py beside
@@ -80,34 +82,128 @@ DEFAULT_URL = "http://ollama:11434"
 # comparable and mixing them would silently corrupt every ranking.
 DEFAULT_MODEL = "nomic-embed-text"
 
-# One HTTP call's budget. A warm single-text embed measured 25-35 ms against
-# the bundled ollama; the first call after the model is idle-unloaded measured
-# 1.2 s, and a cold pull-then-load is slower still. 5 s is generous for the
-# warm case and still returns a stated failure long before core's own 10 s
-# ingest budget expires.
-DEFAULT_TIMEOUT = 5.0
+# HOW LONG THE MODEL STAYS RESIDENT, and why it is not ollama's default.
+#
+# ollama unloads an idle model after 5 minutes. Measured on this box
+# 2026-09-09, with the GPU otherwise idle, over three unload-then-embed
+# trials: the first call after an unload took 1,444 / 1,455 / 1,728 ms, and
+# every call after it took 17-26 ms. So a cold load costs roughly SIXTY times
+# a warm call, and it is paid by whoever asks first.
+#
+# Who asks first, on a quiet machine, is the hourly watch beat
+# (services/core/app/beats.py WATCH_SCHEDULE = every hour at minute 5), which
+# runs the checks and whose review check recalls from memory. An hour is
+# twelve times ollama's idle window, so WITHOUT this every proactive recall
+# pays the cold load — and the query budget below cannot absorb one, which is
+# how "semantic ran=false, the embedding service did not answer within 1.5s"
+# came to be the normal state of a working deployment rather than a fault.
+#
+# 90 minutes, deliberately, derived from that cadence: comfortably past the
+# hourly beat with half an hour of slack for a late one, and short enough that
+# a machine which has genuinely gone quiet for an hour and a half gives the
+# VRAM back rather than holding it for ever.
+#
+# WHAT IT COSTS, measured rather than estimated: /api/ps reports
+# nomic-embed-text resident at 323,150,151 bytes — 0.32 GB — beside
+# qwen3.8:27b at 17.4 GB on a 24 GB card. Keeping the embedder warm costs 1.3%
+# of the card and does not change which chat model fits. Verified live after
+# this landed: /api/ps showed the embedder expiring 90 minutes after its last
+# call while the 27B beside it expired in five, which is the difference this
+# constant buys.
+#
+# It is sent as a number of seconds because ollama accepts one. -1 (for ever)
+# is available to a deployment that wants it and is not the default, because
+# "for ever" is a claim on somebody else's VRAM that nothing here is entitled
+# to make.
+DEFAULT_KEEP_ALIVE_SECONDS = 90 * 60
 
-# The budget for the ONE call /recall makes — embedding the question. It is
-# separate and much tighter than DEFAULT_TIMEOUT because it is the only
-# embedding call on a turn's critical path, and core gives the whole of
-# /recall 2.0 s (services/core/app/chat.py RECALL_TIMEOUT). An embedder that
-# is merely slow must leave memory enough time to answer "I searched by words
-# alone because the embedder did not answer in time" — if the call ran to the
-# 5 s budget instead, core would time out and Nova would be told memory was
-# unreachable, which is a different and false statement about what happened.
-DEFAULT_QUERY_TIMEOUT = 1.5
+# ONE CALL's budget on the backfill path — per CALL, never per pass.
+#
+# This was a per-pass budget until 2026-09-09, and the failure it produced is
+# the reason for the distinction. At boot the pass got 5 s for the WHOLE
+# corpus, embedded 16 of 75 units, and logged "the embedding service did not
+# answer within 5s" — so a service that was working perfectly reported a
+# timeout, the backlog never filled, and every recall afterwards correctly but
+# uselessly refused to match by meaning because almost nothing was embedded.
+# A budget belongs on one call, where it means "this call is not coming back";
+# how long the whole job takes is the background pass's business and nobody
+# is waiting on it.
+#
+# 30 s, from the measured spread rather than from the warm case. A batch of 8
+# real chunks measured 300 ms with the GPU idle; with a 27B chat model
+# resident and busy, a single embed call was probed at 5-31 s. A budget under
+# the contended figure would turn "the GPU is busy" into a stated failure and
+# stop a pass that would have finished, so it is set above it.
+DEFAULT_TIMEOUT = 30.0
 
-# Texts per request. The whole 47-chunk fixture corpus in ONE request measured
-# 4.0 s; sixteen at a time keeps any single call short enough that a budget
-# can actually stop between batches instead of only after everything.
-DEFAULT_BATCH = 16
+# The budget for the ONE call /recall makes — embedding the question.
+#
+# DERIVED, not chosen: core gives the whole of /recall 2.0 s
+# (services/core/app/chat.py RECALL_TIMEOUT), and memory must answer inside
+# that even when the embedder does not, because "I searched by words alone,
+# the embedder did not answer in time" and "memory was unreachable" are
+# different facts and only the first one is true. So the question's budget is
+# core's budget minus what the rest of /recall needs, and the rest of /recall
+# was measured at 4.5 ms of ranking (docs/plans/rebuild/slice-13-memory.md).
+# 400 ms of reserve is roughly ninety times that, which covers the HTTP round
+# trip, the scope re-check and the JSON with room to spare.
+#
+# WHAT IT DOES NOT COVER, stated because the number looks like it should: a
+# COLD load measured 1,444-1,728 ms here, so a question that arrives while the
+# model is unloaded will sometimes miss even this budget. Raising it is not
+# the fix — past 2.0 s core times out and Nova is told something false. The
+# fix is that the model should not be cold, which is what
+# DEFAULT_KEEP_ALIVE_SECONDS and the boot warm-up in api.py are for, and when
+# it is cold anyway recall says which half of the search it did.
+CORE_RECALL_TIMEOUT = 2.0
+RECALL_RESERVE = 0.4
+DEFAULT_QUERY_TIMEOUT = CORE_RECALL_TIMEOUT - RECALL_RESERVE
 
-# How long a backfill pass may spend embedding documents. Used at startup and
-# on the write paths (/ingest, /save), never on /recall — see api.py. A pass
-# that runs out of budget stops on a batch boundary and leaves the rest for
-# the next write, so the corpus fills in over a few turns instead of one call
-# blowing a caller's timeout.
-DEFAULT_BACKFILL_SECONDS = 5.0
+# Texts per request. MEASURED, because the assumption was wrong in both
+# directions.
+#
+# The claim this batch size inherited was that one big request amortises the
+# model's cost. The counter-claim, from a probe taken while the GPU was busy,
+# was that a batch of 40 took 5,167 ms — 130 ms an item against 8-10 ms for a
+# warm single — and that batching was therefore a pessimisation. Neither
+# survived measurement. Timed on this box 2026-09-09 over the real 74-chunk
+# corpus, GPU idle, batched request against the same texts sent one at a time:
+#
+#     n    batched          singles          ratio
+#     4    176 ms  (44/item)  163 ms (41/item)  0.92
+#     8    300 ms  (38/item)  339 ms (42/item)  1.13
+#    16    586 ms  (37/item)  664 ms (42/item)  1.13
+#    32  1,343 ms  (42/item) 1,454 ms (45/item) 1.08
+#    74  1,978 ms  (27/item) 2,058 ms (28/item) 1.04
+#
+# Batching is a WASH — 0.9x to 1.3x across a second run too. ollama embeds the
+# inputs one after another; all a batch saves is the HTTP round trip. The
+# 130 ms an item in the contended probe was the GPU, not the batch: the same
+# contention makes a single call take 5-31 s.
+#
+# So the batch size is not a throughput decision, because there is no
+# throughput to win. It is chosen for RESUMPTION GRANULARITY: a call that
+# times out loses everything in it, and the pass can only stop between calls.
+# Eight is ~300 ms of work idle, a few seconds contended, and eight units of
+# loss in the worst case.
+DEFAULT_BATCH = 8
+
+# What a WRITE path may spend embedding inline before handing the rest to the
+# background pass. /ingest and /save are awaited by core inside its 10 s
+# budget, and the new exchange is one call (~25 ms warm), so a second is forty
+# warm units of margin. A slice that runs out is not a failure and does not
+# read as one — see BackfillReport.out_of_budget and the sentence beside it.
+DEFAULT_SLICE_SECONDS = 1.0
+
+# How long the background pass waits before trying again after a STATED
+# failure, and how many times. The failures it actually meets resolve on their
+# own — the owner has not pulled the model yet, or a 27B is holding the GPU —
+# so giving up on the first one would mean waiting for the next restart, which
+# is the behaviour this pass exists to replace. It gives up eventually rather
+# than never, and says so in the log when it does, because a pass that retried
+# for ever would be indistinguishable from one that was working.
+DEFAULT_RETRY_SECONDS = 60.0
+DEFAULT_MAX_ATTEMPTS = 20
 
 
 class EmbedderUnavailable(Exception):
@@ -135,7 +231,10 @@ class EmbedConfig:
     timeout: float
     query_timeout: float
     batch: int
-    backfill_seconds: float
+    slice_seconds: float
+    keep_alive_seconds: float
+    retry_seconds: float
+    max_attempts: int
 
     @classmethod
     def from_env(cls) -> EmbedConfig:
@@ -145,7 +244,21 @@ class EmbedConfig:
             timeout=_float_env("MEMORY_EMBED_TIMEOUT", DEFAULT_TIMEOUT),
             query_timeout=_float_env("MEMORY_EMBED_QUERY_TIMEOUT", DEFAULT_QUERY_TIMEOUT),
             batch=max(1, int(_float_env("MEMORY_EMBED_BATCH", DEFAULT_BATCH))),
-            backfill_seconds=_float_env("MEMORY_EMBED_BACKFILL_SECONDS", DEFAULT_BACKFILL_SECONDS),
+            # Zero is a real setting here, unlike every other budget: it
+            # means "embed nothing inline, hand the whole backlog to the
+            # background pass", which is what a deployment that never wants a
+            # write to wait would ask for.
+            slice_seconds=_nonnegative_env("MEMORY_EMBED_SLICE_SECONDS", DEFAULT_SLICE_SECONDS),
+            # The one budget that may legitimately be negative: -1 is ollama's
+            # "keep it resident until something evicts it", so this reads the
+            # value itself rather than going through _float_env's positive-only
+            # guard, and 0 (unload immediately after the call) stays available
+            # to a deployment that wants the VRAM back between turns.
+            keep_alive_seconds=_keep_alive_env(
+                "MEMORY_EMBED_KEEP_ALIVE_SECONDS", DEFAULT_KEEP_ALIVE_SECONDS
+            ),
+            retry_seconds=_float_env("MEMORY_EMBED_RETRY_SECONDS", DEFAULT_RETRY_SECONDS),
+            max_attempts=max(1, int(_float_env("MEMORY_EMBED_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS))),
         )
 
     @property
@@ -156,6 +269,42 @@ class EmbedConfig:
     def model_slug(self) -> str:
         """The model name as a filename component — the cache is per model."""
         return "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in self.model)
+
+
+def _nonnegative_env(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("%s=%r is not a number — using %s", name, raw, default)
+        return default
+    if value < 0:
+        logger.warning("%s=%r is negative — using %s", name, raw, default)
+        return default
+    return value
+
+
+def _keep_alive_env(name: str, default: float) -> float:
+    """How long the model stays resident, in seconds. -1 means "for ever"."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning("%s=%r is not a number — using %s", name, raw, default)
+        return default
+    if value < -1:
+        logger.warning(
+            "%s=%r is not a duration (only -1, meaning for ever, is negative) — using %s",
+            name,
+            raw,
+            default,
+        )
+        return default
+    return value
 
 
 def _float_env(name: str, default: float) -> float:
@@ -205,8 +354,22 @@ class Embedder:
         return None
 
     async def embed_query(self, text: str) -> list[float]:
-        """The question, embedded under the tighter on-the-turn budget."""
-        vectors = await self.embed([text], timeout=self.config.query_timeout)
+        """The question, embedded under the tighter on-the-turn budget.
+
+        Not windowed, unlike a note: a question is one thing being asked, and
+        half of it is not a smaller version of it. One past the model's
+        context gets its own sentence rather than the note-shaped one from
+        `embed`, because "the question was too long to match by meaning" and
+        "one of these notes is too long" are different facts and only one of
+        them is true here.
+        """
+        try:
+            vectors = await self.embed([text], timeout=self.config.query_timeout)
+        except TextTooLong as exc:
+            raise TextTooLong(
+                f"the question is longer than {self.config.model!r} can read in one go, so it "
+                f"could not be matched by meaning at all — {self.config.url} refused it"
+            ) from exc
         return vectors[0]
 
     async def embed_windows(self, text: str) -> list[list[float]]:
@@ -227,10 +390,11 @@ class Embedder:
         try:
             return await self.embed([text])
         except TextTooLong:
-            pass
-        head, tail = _split_text(text)
-        if head is None or tail is None:
-            raise
+            head, tail = _split_text(text)
+            if head is None or tail is None:
+                # Nothing to split on: the caller keeps the stated sentence
+                # and this unit stays unembedded, which recall reports.
+                raise
         return await self.embed_windows(head) + await self.embed_windows(tail)
 
     async def embed(self, texts: list[str], *, timeout: float | None = None) -> list[list[float]]:
@@ -255,7 +419,18 @@ class Embedder:
         # was in the missing third, say "no note here resembles the question",
         # which is a claim about text nobody ever embedded. So the service is
         # told to refuse instead, and `embed_windows` embeds the pieces.
-        payload = {"model": self.config.model, "input": texts, "truncate": False}
+        # keep_alive, on EVERY call, for the reason measured beside
+        # DEFAULT_KEEP_ALIVE_SECONDS: ollama unloads an idle model after five
+        # minutes, the proactive beat asks hourly, and a cold load costs
+        # ~1.5 s against a warm call's ~20 ms. Sent on the backfill's calls as
+        # well as the query's, so the pass that fills the corpus at boot is
+        # also what leaves the model warm for the first question.
+        payload = {
+            "model": self.config.model,
+            "input": texts,
+            "truncate": False,
+            "keep_alive": self.config.keep_alive_seconds,
+        }
         try:
             async with httpx.AsyncClient(timeout=budget, transport=self._transport) as client:
                 response = await client.post(url, json=payload)
@@ -404,6 +579,33 @@ def dot(a: list[float], b: list[float]) -> float:
     return sum(x * y for x, y in zip(a, b, strict=True))
 
 
+def _split_text(text: str) -> tuple[str | None, str | None]:
+    """Halve `text` at the white space nearest its middle.
+
+    A blank line first, then any newline, then a space — the boundaries a
+    transcript actually has, in the order that keeps a window readable. The
+    halves are what get embedded, so a split through the middle of a sentence
+    costs the meaning of that sentence in one window; a split between
+    paragraphs costs nothing.
+
+    (None, None) when there is no white space to cut on, which is the one case
+    a unit cannot be embedded at all.
+    """
+    middle = len(text) // 2
+    for separator in ("\n\n", "\n", " "):
+        left = text.rfind(separator, 0, middle)
+        right = text.find(separator, middle)
+        candidates = [pos for pos in (left, right) if pos > 0]
+        if not candidates:
+            continue
+        best = min(candidates, key=lambda pos: abs(pos - middle))
+        head = text[:best].strip()
+        tail = text[best + len(separator) :].strip()
+        if head and tail:
+            return head, tail
+    return None, None
+
+
 class VectorCache:
     """digest -> vector, held in memory and written beside the notes.
 
@@ -417,9 +619,12 @@ class VectorCache:
     this corpus is 4,700 chunks — roughly a year of journals at the current
     rate — which is about 6.5 minutes of embedding on every restart, in front
     of a startup that a healthcheck is waiting on. With the cache it is a one
-    time cost: 4,700 vectors is 14 MB of float32, stored base64 in a JSONL
-    file of about 19 MB, which loads in well under a second, and a restart
-    re-embeds nothing at all.
+    time cost. Measured on his real corpus rather than estimated: the cache
+    for 74 units is 314 KB, 4,247 bytes a unit, so a hundred times this
+    corpus is a 20 MB file that loads in well under a second and a restart
+    re-embeds nothing at all. (A unit that had to be split carries a vector
+    per window; one note in 48 does today, which is where the 4,247 sits
+    above the 3,157 bytes a single 768-float vector costs.)
 
     The file lives at MEMORY_ROOT/.embeddings/<model>.jsonl — beside the notes
     and inside the service's own volume, but OUTSIDE people/, so it is not
@@ -438,10 +643,14 @@ class VectorCache:
 
     def __init__(self, path: Path):
         self.path = path
-        self._vectors: dict[str, list[float]] = {}
+        # digest -> the WINDOWS covering that text. One entry for a note that
+        # fits the model's context, more for one that had to be split (see
+        # Embedder.embed_windows) — the unit's vector is a list because a
+        # single vector could only ever stand for part of a long note.
+        self._vectors: dict[str, list[list[float]]] = {}
         self._loaded = False
 
-    def load(self) -> dict[str, list[float]]:
+    def load(self) -> dict[str, list[list[float]]]:
         """Read the cache file. A corrupt line is dropped and named, never
         fatal: a half-written vector costs one re-embed, and refusing to start
         over it would cost the whole service."""
@@ -464,27 +673,29 @@ class VectorCache:
             kept += 1
         if dropped:
             logger.warning(
-                "embedding cache %s: kept %d vectors, dropped %d unreadable lines",
+                "embedding cache %s: kept %d vectors, dropped %d lines that were unreadable or "
+                "written in an older format (those are re-embedded, because a vector from a "
+                "version that could truncate silently cannot be told from a whole one)",
                 self.path,
                 kept,
                 dropped,
             )
         return self._vectors
 
-    def get(self, digest: str) -> list[float] | None:
+    def get(self, digest: str) -> list[list[float]] | None:
         return self._vectors.get(digest)
 
-    def add(self, pairs: list[tuple[str, list[float]]]) -> None:
+    def add(self, pairs: list[tuple[str, list[list[float]]]]) -> None:
         """Remember and append. Written as it is produced rather than at exit,
         so a service killed mid-backfill keeps what it had already paid for."""
         if not pairs:
             return
-        for digest, vector in pairs:
-            self._vectors[digest] = vector
+        for digest, windows in pairs:
+            self._vectors[digest] = windows
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
-            for digest, vector in pairs:
-                handle.write(_encode_line(digest, vector) + "\n")
+            for digest, windows in pairs:
+                handle.write(_encode_line(digest, windows) + "\n")
 
     def prune(self, live: set[str]) -> int:
         """Rewrite the file with only the vectors still in the index.
@@ -504,8 +715,8 @@ class VectorCache:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.path.with_suffix(".jsonl.tmp")
         with temporary.open("w", encoding="utf-8") as handle:
-            for digest, vector in self._vectors.items():
-                handle.write(_encode_line(digest, vector) + "\n")
+            for digest, windows in self._vectors.items():
+                handle.write(_encode_line(digest, windows) + "\n")
         temporary.replace(self.path)
         return len(stale)
 
@@ -514,36 +725,73 @@ def cache_path(root: Path, config: EmbedConfig) -> Path:
     return root / ".embeddings" / f"{config.model_slug}.jsonl"
 
 
-def _encode_line(digest: str, vector: list[float]) -> str:
-    blob = base64.b64encode(array("f", vector).tobytes()).decode("ascii")
-    return json.dumps({"h": digest, "d": len(vector), "v": blob}, separators=(",", ":"))
+# The cache line format, and why a line has to carry it.
+#
+# Format 1 was one vector per text, written while the embedder let ollama
+# truncate silently — so a line for a text longer than the model's context is
+# a vector of its first 2,048 tokens and NOTHING in the line says so. It
+# cannot be told from a good one, so it is not trusted: format 1 lines are
+# dropped on load and re-embedded (47 chunks, seconds). Trusting them would
+# keep exactly the silent half-vector this change exists to remove, and keep
+# it for as long as the note goes unedited.
+CACHE_FORMAT = 2
 
 
-def _decode_line(line: str) -> tuple[str, list[float]] | None:
+def _encode_line(digest: str, windows: list[list[float]]) -> str:
+    """One cache line: the format, the text hash, the width, and the windows."""
+    blobs = [base64.b64encode(array("f", window).tobytes()).decode("ascii") for window in windows]
+    width = len(windows[0]) if windows else 0
+    return json.dumps(
+        {"f": CACHE_FORMAT, "h": digest, "d": width, "v": blobs}, separators=(",", ":")
+    )
+
+
+def _decode_line(line: str) -> tuple[str, list[list[float]]] | None:
     try:
         record = json.loads(line)
+        if record.get("f") != CACHE_FORMAT:
+            return None
         digest = record["h"]
         width = int(record["d"])
-        raw = base64.b64decode(record["v"])
-    except (ValueError, KeyError, TypeError):
+        blobs = record["v"]
+    except (ValueError, KeyError, TypeError, AttributeError):
         return None
-    values = array("f")
-    try:
-        values.frombytes(raw)
-    except ValueError:
+    if not isinstance(blobs, list) or not blobs or not width:
         return None
-    if len(values) != width or not width:
-        return None
-    return digest, list(values)
+    windows = []
+    for blob in blobs:
+        values = array("f")
+        try:
+            values.frombytes(base64.b64decode(blob))
+        except (ValueError, TypeError):
+            return None
+        if len(values) != width:
+            return None
+        windows.append(list(values))
+    return digest, windows
 
 
 @dataclass
 class BackfillReport:
     """What one embedding pass actually did — for the log and for the tests.
 
-    `failed` is the sentence from EmbedderUnavailable, not a boolean: a pass
-    that could not run has to be able to say which unavailability it hit, in
-    the same words /recall will use.
+    THREE OUTCOMES THAT MUST NOT LOOK ALIKE, which is why this is a record and
+    not a boolean:
+
+      * `failed` — the sentence from EmbedderUnavailable. Something is wrong
+        with the service and the pass could not go on.
+      * `out_of_budget` — the pass was WORKING and a slice budget stopped it
+        on a batch boundary. `budget_note` is the sentence for it, and it says
+        so in those words, because a slice that cut real work reading as a
+        failure is exactly the confusion that made a healthy embedder look
+        broken at boot on 2026-09-09.
+      * `deferred` — nothing was attempted because another pass over the same
+        notes is already running. Not a failure and not a budget; the work is
+        happening, just not here.
+
+    `remaining` is how many units still have no vector when the pass stopped —
+    the number that says whether anything is left to do, rather than leaving a
+    caller to subtract.
     """
 
     requested: int = 0
@@ -552,6 +800,25 @@ class BackfillReport:
     failed: str | None = None
     seconds: float = 0.0
     out_of_budget: bool = False
+    budget_note: str | None = None
+    deferred: str | None = None
+    remaining: int = 0
+    # Units the embedder refused because they exceed its context and have no
+    # white space to split on. NOT a `failed`: the pass ran and everything
+    # else is embedded. Each one leaves a unit with no vector, which
+    # BM25Index.vector_coverage then states on every recall — the sentences
+    # are here so a log says which note it was.
+    too_long: tuple[str, ...] = ()
+    # The digests of those units. A background pass that keeps asking for them
+    # would never finish, so it takes them off its own list — and this is how
+    # it learns which ones, from the pass that actually met them, rather than
+    # from a rule that guesses.
+    unembeddable: tuple[str, ...] = ()
+
+    @property
+    def done(self) -> bool:
+        """Every unit this pass was given now has a vector, or provably cannot."""
+        return self.remaining == 0 and not self.failed and not self.deferred
 
 
 async def backfill(
@@ -560,21 +827,30 @@ async def backfill(
     missing: list[tuple[str, str]],
     *,
     apply,
-    budget: float | None = None,
+    slice_seconds: float | None = None,
 ) -> BackfillReport:
     """Embed `missing` — (digest, text) pairs — and hand each vector to
     `apply(digest, vector)`.
 
-    Cached digests are applied without a call. Everything else is embedded in
-    batches until the budget runs out, and a pass that stops early says so:
-    the next write picks up where it left off. A failure stops the pass and is
-    reported, never swallowed — a backfill that quietly embedded nothing and
-    said nothing is how recall ends up calling itself semantic over an empty
-    vector space.
+    A vector is a LIST of windows: one for a note that fits the model's
+    context, more for one that had to be split to be covered whole.
+
+    THE BUDGET IS ON THE CALL, NOT ON THE PASS. Every HTTP call is bounded by
+    `embedder.config.timeout`, which is what "the service did not answer"
+    means. `slice_seconds` is a different thing and is optional: it is the
+    wall clock a CALLER is prepared to wait, and it exists for the write paths
+    that core is awaiting. The background pass passes None and simply runs
+    until the work is done, because nothing is waiting on it and a job that
+    takes four minutes is not a job that failed.
+
+    Cached digests are applied without a call. A slice that runs out stops on
+    a batch boundary and says so as a budget rather than as a failure. A
+    service failure stops the pass and is reported, never swallowed — a
+    backfill that quietly embedded nothing and said nothing is how recall ends
+    up calling itself semantic over an empty vector space.
     """
     report = BackfillReport(requested=len(missing))
     started = time.monotonic()
-    budget = embedder.config.backfill_seconds if budget is None else budget
     todo: list[tuple[str, str]] = []
     for dig, text in missing:
         cached = cache.get(dig)
@@ -583,29 +859,74 @@ async def backfill(
             report.from_cache += 1
         else:
             todo.append((dig, text))
+    too_long: list[str] = []
+    unembeddable: list[str] = []
     if not todo:
         report.seconds = time.monotonic() - started
         return report
     off = embedder.unavailable_reason()
     if off:
         report.failed = off
+        report.remaining = len(todo)
         report.seconds = time.monotonic() - started
         return report
     batch = embedder.config.batch
+    done = 0
     for start in range(0, len(todo), batch):
-        if time.monotonic() - started >= budget:
+        if slice_seconds is not None and time.monotonic() - started >= slice_seconds:
             report.out_of_budget = True
+            report.budget_note = (
+                f"this pass was given {slice_seconds:g}s and used it; "
+                f"{len(todo) - done} note(s) are still waiting for a vector and a background "
+                f"pass continues from here — the embedding service answered every call it was "
+                f"asked"
+            )
             break
-        window = todo[start : start + batch]
+        chunk = todo[start : start + batch]
         try:
-            vectors = await embedder.embed([text for _dig, text in window])
+            vectors = await embedder.embed([text for _dig, text in chunk])
+            pairs = [(dig, [vector]) for (dig, _text), vector in zip(chunk, vectors, strict=True)]
+        except TextTooLong:
+            # One text in the batch is past the model's context, and a batch
+            # is all-or-nothing, so the batch is retried one text at a time —
+            # each split into windows if it needs to be. Only the long ones
+            # pay the extra calls, and only when there are any.
+            pairs = []
+            refused = 0
+            for dig, text in chunk:
+                try:
+                    pairs.append((dig, await embedder.embed_windows(text)))
+                except TextTooLong as exc:
+                    too_long.append(str(exc))
+                    unembeddable.append(dig)
+                    refused += 1
+                except EmbedderUnavailable as exc:
+                    report.failed = str(exc)
+                    break
+            done += len(pairs) + refused
+            if report.failed:
+                if pairs:
+                    cache.add(pairs)
+                    for dig, windows in pairs:
+                        apply(dig, windows)
+                    report.embedded += len(pairs)
+                break
+            if pairs:
+                cache.add(pairs)
+                for dig, windows in pairs:
+                    apply(dig, windows)
+                report.embedded += len(pairs)
+            continue
         except EmbedderUnavailable as exc:
             report.failed = str(exc)
             break
-        pairs = [(dig, vector) for (dig, _text), vector in zip(window, vectors, strict=True)]
         cache.add(pairs)
-        for dig, vector in pairs:
-            apply(dig, vector)
+        for dig, windows in pairs:
+            apply(dig, windows)
         report.embedded += len(pairs)
+        done += len(chunk)
+    report.too_long = tuple(too_long)
+    report.unembeddable = tuple(unembeddable)
+    report.remaining = max(0, len(todo) - report.embedded - len(unembeddable))
     report.seconds = time.monotonic() - started
     return report
