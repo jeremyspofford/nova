@@ -121,25 +121,50 @@ class LiveCall:
         return (self.tool, tuple(sorted((k, repr(v)) for k, v in self.args.items())))
 
 
-def runnable(call: LiveCall) -> str | None:
-    """Why this call may NOT be run unasked, or None when it may.
+def may_run_unasked(name: str) -> str | None:
+    """Why this TOOL may never be run on the backend's own initiative, or None.
+
+    The tool-level half of `runnable`, separated because three doors need it
+    and they must not drift: the runner asks before dispatching, the memory
+    write door asks before a note may cite a call, and the distiller asks
+    which calls are worth offering the model at all. A distiller that offered
+    fetch_url would spend a model's attention proposing facts the write door
+    then throws away whole.
 
     Every condition is read off the live registry, so registering a tool and
-    adding it to AUTO_RUN is the whole of granting a check — there is no
-    second list to remember. A refusal returns its reason rather than a bare
-    False because the caller states it: a check that did not happen must never
-    be indistinguishable from one that passed.
+    adding it to AUTO_RUN is the whole of granting a check. The reason is
+    returned rather than a bare False because every caller STATES it: a check
+    that did not happen must never be indistinguishable from one that passed.
     """
-    tool = tools.REGISTRY.get(call.tool)
+    tool = tools.REGISTRY.get(name)
     if tool is None:
-        return f"there is no tool named {call.tool!r}"
+        return f"there is no tool named {name!r}"
     if not tool.reads_only:
-        return f"{call.tool} changes something, and nothing runs unasked that does"
-    if call.tool not in AUTO_RUN:
+        return f"{name} changes something, and nothing runs unasked that does"
+    if name not in AUTO_RUN:
         return NOT_AUTO_RUN.get(
-            call.tool, f"{call.tool} is not one of the checks the backend runs on its own"
+            name, f"{name} is not one of the checks the backend runs on its own"
         )
-    problem = schema.validate(tool.parameters, call.args)
+    return None
+
+
+def offerable() -> tuple:
+    """The registry entries a stored call may name — for whoever is composing
+    the list a model chooses from. Derived from the same predicate the runner
+    and the write door use, so a tool that would be refused downstream is
+    never offered upstream."""
+    return tuple(
+        tool for name, tool in sorted(tools.REGISTRY.items()) if may_run_unasked(name) is None
+    )
+
+
+def runnable(call: LiveCall) -> str | None:
+    """Why this CALL may not be run unasked, or None when it may: the tool,
+    then the arguments against that tool's own advertised schema."""
+    refusal = may_run_unasked(call.tool)
+    if refusal is not None:
+        return refusal
+    problem = schema.validate(tools.REGISTRY[call.tool].parameters, call.args)
     if problem is not None:
         return f"the stored arguments do not fit {call.tool}: {problem}"
     return None

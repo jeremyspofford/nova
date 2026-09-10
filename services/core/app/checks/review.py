@@ -76,18 +76,14 @@ first until the budget is spent. Two consequences worth stating out loud:
 
 from __future__ import annotations
 
-import json
-import logging
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 
 import httpx
 
-from app import identity, peers, settings_store
+from app import identity, model_read, peers
 from app.checks import CannotCheck, Check, Finding, NotDue
-
-logger = logging.getLogger("core")
 
 CHECK_NAME = "review_commitments"
 
@@ -104,6 +100,15 @@ REVIEW_EVERY = timedelta(hours=6)
 WINDOW = timedelta(days=14)
 MAX_MESSAGES = 60
 CHAR_BUDGET = 6000
+
+# The roles this check reads, in the window AND in the verification — the one
+# tuple, so the two can never drift apart. HIS OWN MESSAGES and nothing else:
+# an assistant row in his conversation belongs to him too, so a promise she
+# made would read exactly like one he made and the citation check could not
+# tell them apart. The distiller passes both roles for the opposite and equally
+# deliberate reason (app/distil.py), which is why this is a constant here
+# rather than a default anywhere shared.
+ROLES = ("user",)
 
 # What memory is asked for alongside the messages, and how much of each note is
 # shown. Notes are BACKGROUND: they carry no message id, so nothing in them can
@@ -193,12 +198,12 @@ def _beats():
     return beats
 
 
-def _clip(text: str, limit: int) -> str:
-    """A short, whole prefix. Deliberately not chat._clip: that one appends a
-    "(+N more chars)" tail, which is right in a trace and wrong inside a
-    fingerprinted fact, where every character is part of the hash."""
-    text = " ".join(text.split())
-    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+# A short, whole prefix — app/model_read.py's, shared with the distiller so
+# the two readers cannot come to clip a quote differently. Deliberately not
+# chat._clip: that one appends a "(+N more chars)" tail, which is right in a
+# trace and wrong inside a fingerprinted fact, where every character is part
+# of the hash.
+_clip = model_read.clip
 
 
 def _ago(delta: timedelta) -> str:
@@ -280,32 +285,25 @@ async def _window(pool, owner: identity.Person) -> list:
     row in the same conversation belongs to him too, so the citation check
     could not tell her promise from his. The window is what makes the subject
     right, rather than a sentence in the prompt asking for it.
+
+    THE ROLES ARE THIS CHECK'S OWN DECISION, which is why they are passed here
+    and not defaulted in model_read.window: the distiller reads both sides on
+    purpose and carries the role onto what it writes (app/distil.py). One
+    fetch, two readers, two deliberate windows.
     """
     try:
-        rows = await pool.fetch(
-            "SELECT m.id, m.created_at, m.content FROM messages m "
-            "JOIN conversations c ON c.id = m.conversation_id "
-            "WHERE c.person_id = $1 AND m.role = 'user' AND m.created_at >= now() - $2::interval "
-            "ORDER BY m.created_at DESC, m.id DESC LIMIT $3",
+        return await model_read.window(
+            pool,
             owner.id,
-            WINDOW,
-            MAX_MESSAGES,
+            roles=ROLES,
+            since=WINDOW,
+            max_messages=MAX_MESSAGES,
+            char_budget=CHAR_BUDGET,
         )
-    except Exception as exc:  # noqa: BLE001 — the reason is the record
+    except model_read.ReadFailed as exc:
         raise CannotCheck(
-            f"his recent messages could not be read, so there was no window to "
-            f"review — {peers.reason(exc)}"
+            f"his recent messages could not be read, so there was no window to review — {exc}"
         ) from exc
-    kept: list = []
-    used = 0
-    for row in rows:
-        used += len(row["content"])
-        if used > CHAR_BUDGET:
-            # Whole messages only — everything older goes with it.
-            break
-        kept.append(row)
-    kept.reverse()
-    return kept
 
 
 @dataclass(frozen=True)
@@ -450,119 +448,63 @@ def _attribution(owner: identity.Person) -> dict[str, str]:
     is this check's own name and the role is the beat role every other round of
     a beat walks, so the spend still lands where a beat's spend belongs.
     """
-    chat = _chat()
-    beats = _beats()
-    headers = {
-        peers.HEADER_PURPOSE: CHECK_NAME,
-        peers.HEADER_PERSON: str(owner.id),
-    }
-    # Read from the SAME map chat uses to route a beat's rounds, so a renamed
-    # or removed role sends nothing rather than a role the gateway never had.
-    role = chat._ROLE_BY_KIND.get(beats.BEAT_TURN_KIND)
-    if role:
-        headers[peers.HEADER_ROLE] = role
-    return headers
+    return model_read.attribution(owner.id, CHECK_NAME)
 
 
 async def _ask(app, pool, owner: identity.Person, brief: str) -> str:
-    """One completion, every content delta concatenated — chat._collect_completion's
-    path, followed rather than reused because that one records its round on a
-    turn and a check has none (see _attribution).
+    """One completion, every content delta concatenated — model_read.complete's
+    path, which is chat._collect_completion's followed rather than reused
+    because that one records its round on a turn and a check has none (see
+    _attribution).
 
-    The same peer client, the same bearer, the same chunk parsing
-    (chat._chunk_parts), the same "an empty model means the gateway default"
-    rule. Every way this can fail — the link unconfigured, the socket refused,
-    a non-200, an error frame mid-stream — raises CannotCheck with what it
-    said: the model was not asked, so this pass looked at nothing.
+    Every way this can fail — the link unconfigured, the socket refused, a
+    non-200, an error frame mid-stream — becomes CannotCheck with what it said:
+    the model was not asked, so this pass looked at nothing. The two shapes are
+    kept apart because the words belong to different owners — a gateway that
+    REFUSED has already said the whole of it, while a socket that would not
+    open is a reason this check has to say what it cost.
     """
-    chat = _chat()
     try:
-        model = await settings_store.read_value(pool, "chat.model")
-    except Exception as exc:  # noqa: BLE001 — the reason is the record
+        model = await model_read.chat_model(pool)
+    except model_read.ReadFailed as exc:
         raise CannotCheck(
-            f"the chat model could not be read, so the model was not asked — {peers.reason(exc)}"
+            f"the chat model could not be read, so the model was not asked — {exc}"
         ) from exc
-    payload: dict = {
-        "messages": [
-            {"role": "system", "content": REVIEW_SYSTEM},
-            {"role": "user", "content": brief},
-        ],
-        "stream": True,
-        "max_tokens": REVIEW_MAX_TOKENS,
-    }
-    if model:
-        # An empty chat.model means "the gateway default"; sending "" would ask
-        # for a model literally named "".
-        payload["model"] = model
-    collected: list[str] = []
     try:
-        async with peers.client(app, peers.GATEWAY, REVIEW_TIMEOUT) as client:
-            async with client.stream(
-                "POST", "/v1/chat/completions", json=payload, headers=_attribution(owner)
-            ) as response:
-                if response.status_code != 200:
-                    detail = (await response.aread()).decode(errors="replace")[:200]
-                    raise CannotCheck(f"the gateway refused ({response.status_code}): {detail}")
-                async for line in response.aiter_lines():
-                    line = line.strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[len("data:") :].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    delta, _usage, error, _fragments = chat._chunk_parts(chunk)
-                    if error is not None:
-                        raise CannotCheck(f"the gateway reported: {error}")
-                    if delta:
-                        collected.append(delta)
-    except CannotCheck:
-        raise
-    except Exception as exc:  # noqa: BLE001 — every failure shape is stated
-        raise CannotCheck(
-            f"the gateway could not be asked to read his messages — {peers.reason(exc)}"
-        ) from exc
-    return "".join(collected)
+        return await model_read.complete(
+            app,
+            system=REVIEW_SYSTEM,
+            brief=brief,
+            model=model,
+            headers=_attribution(owner),
+            timeout=REVIEW_TIMEOUT,
+            max_tokens=REVIEW_MAX_TOKENS,
+        )
+    except model_read.GatewayRefused as exc:
+        raise CannotCheck(str(exc)) from exc
+    except model_read.ReadFailed as exc:
+        raise CannotCheck(f"the gateway could not be asked to read his messages — {exc}") from exc
 
 
 def _items(raw: str) -> list[tuple[uuid.UUID, str]]:
     """The model's answer, parsed into (message id, its words) pairs.
 
-    Tolerant about SHAPE — the outermost JSON array anywhere in the text, so a
-    fenced block or a sentence around it costs nothing, and either spelling of
-    each key — and not tolerant about anything else. An id that is not a uuid,
-    an item with no words, and a second item citing a message already taken all
-    drop here. Nothing that survives is trusted yet: _verified still has to
+    The SHAPE tolerance is model_read.parse_array's — the outermost JSON array
+    anywhere in the text, so a fenced block or a sentence around it costs
+    nothing — and what an entry has to SAY is this check's own: either spelling
+    of each key, an id that is a uuid, words that are not empty, and one item
+    per message. Nothing that survives is trusted yet: _verified still has to
     find the row.
 
     An answer that parses to nothing is ZERO findings, never an error: the
     model was asked and it said nothing usable, which is a pass that looked.
     """
-    start, end = raw.find("["), raw.rfind("]")
-    if start == -1 or end <= start:
-        logger.warning("%s: the model's answer carried no JSON list — %r", CHECK_NAME, raw[:200])
-        return []
-    try:
-        parsed = json.loads(raw[start : end + 1])
-    except json.JSONDecodeError as exc:
-        logger.warning("%s: the model's answer would not parse — %s", CHECK_NAME, exc)
-        return []
-    if not isinstance(parsed, list):
-        return []
     out: list[tuple[uuid.UUID, str]] = []
     seen: set[uuid.UUID] = set()
-    for entry in parsed:
-        if not isinstance(entry, dict):
-            continue
+    for entry in model_read.parse_array(raw, label=CHECK_NAME):
         said = str(entry.get("commitment") or entry.get("what") or "").strip()
-        try:
-            message_id = uuid.UUID(str(entry.get("message_id") or entry.get("id") or "").strip())
-        except (AttributeError, TypeError, ValueError):
-            continue
-        if not said or message_id in seen:
+        message_id = model_read.message_id(entry, "message_id", "id")
+        if message_id is None or not said or message_id in seen:
             # One message is one subject. A second reading of the same row
             # would be the same key and the same facts, so it would fold onto
             # the first the moment it was written down anyway.
@@ -587,30 +529,18 @@ async def _verified(pool, owner: identity.Person, items) -> list[Finding]:
     found nothing.
     """
     try:
-        rows = await pool.fetch(
-            "SELECT m.id, m.created_at, m.content FROM messages m "
-            "JOIN conversations c ON c.id = m.conversation_id "
-            "WHERE m.id = ANY($1::uuid[]) AND c.person_id = $2 AND m.role = 'user'",
-            [message_id for message_id, _said in items],
-            owner.id,
+        by_id = await model_read.resolve_messages(
+            pool, owner.id, [message_id for message_id, _said in items], roles=ROLES
         )
-    except Exception as exc:  # noqa: BLE001 — the reason is the record
+    except model_read.ReadFailed as exc:
         raise CannotCheck(
             f"the messages the model cited could not be verified, so nothing it said could be "
-            f"used — {peers.reason(exc)}"
+            f"used — {exc}"
         ) from exc
-    by_id = {row["id"]: row for row in rows}
     findings: list[Finding] = []
-    for message_id, said in items:
-        row = by_id.get(message_id)
-        if row is None:
-            logger.warning(
-                "%s: dropped a finding citing message %s — no message of %s's has that id",
-                CHECK_NAME,
-                message_id,
-                owner.name,
-            )
-            continue
+    for row, said in model_read.keep_cited(
+        by_id, items, label=CHECK_NAME, what="a finding", whose=owner.name
+    ):
         when = row["created_at"]
         quote = _clip(row["content"], QUOTE_CHARS)
         findings.append(
