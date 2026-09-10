@@ -4,17 +4,79 @@ Neither tool takes an owner: the person is whoever the turn is being run
 for, taken from the context. A tool that could name its own scope would be
 a tool that could read someone else's notes by asking nicely.
 """
+
 from __future__ import annotations
 
 import httpx
 
 from app import peers
+from app.tools import schema
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 MEMORY_TIMEOUT = httpx.Timeout(10.0)
 DEFAULT_K = 5
 MAX_K = 20
 SNIPPET_CHARS = 300
+
+
+def validate_live_source(live_source: object) -> dict:
+    """A note's `live_source` checked against the LIVE tool registry, or a
+    ToolFailure naming exactly what is wrong with it.
+
+    WHY THIS IS HERE AND NOT IN THE MEMORY SERVICE. A `live_source` is the
+    read-only call that answers a fact now, and a call that could never
+    dispatch must not be written down — a note pointing at a tool that does
+    not exist, or carrying arguments that tool would refuse, is a promise of a
+    check nothing can run. Establishing that needs two things memory cannot
+    have: the set of registered tools, and each tool's advertised JSON schema.
+    The memory service is a separate process that does not import this package
+    and must not start; the alternative — a copy of the tool names kept in
+    memory's own source — is exactly the hand-maintained list the house rule
+    forbids, wrong the day a tool is registered and wrong silently. So the
+    shape is checked there (store.normalize_live_source) and the NAMES and
+    ARGUMENTS are checked here, against the registry itself.
+
+    Derived, never hardcoded: the tool set comes from tools.REGISTRY and the
+    argument check from that tool's own `parameters`, so registering a new
+    read tool makes it a valid live source with no edit here.
+
+    WHAT THIS DOES NOT CHECK, and it is a real gap rather than an oversight:
+    that the call CHANGES NOTHING. The next sub-slice runs a live source
+    automatically before she answers, and it may only ever run a tool that
+    reads. v4's `Tool` has no `reads_only` flag to derive that from, and
+    adding one moves the exact-field-set pin in tests/test_no_approvals.py, so
+    it is left for that slice to move deliberately with its reason. Until
+    then this validates that a live source CAN dispatch, never that it is safe
+    to dispatch unasked. 2026-09-10.
+    """
+    # Imported here rather than at module scope: the registry in app.tools
+    # imports THIS module to collect its tools, so a top-level import would be
+    # a cycle. app.tools.schema has no such problem and is imported normally.
+    from app import tools
+
+    if not isinstance(live_source, dict):
+        raise ToolFailure("a live source must be an object naming a tool and its arguments")
+    name = live_source.get("tool")
+    if not isinstance(name, str) or not name.strip():
+        raise ToolFailure("a live source must name the tool that answers this fact now")
+    name = name.strip()
+    tool = tools.REGISTRY.get(name)
+    if tool is None:
+        raise ToolFailure(
+            f"there is no tool called {name!r}, so a note citing it as its live source would "
+            "promise a check that can never run"
+        )
+    args = live_source.get("args")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        raise ToolFailure(
+            f"a live source's args must be an object, got {schema.json_type_name(args)}"
+        )
+    problem = schema.validate(tool.parameters, args)
+    if problem:
+        raise ToolFailure(f"{name} would refuse those arguments: {problem}")
+    return {"tool": name, "args": args}
 
 
 def _person_id(ctx: ToolContext) -> str:
@@ -25,6 +87,13 @@ def _person_id(ctx: ToolContext) -> str:
 
 
 async def _call_memory(ctx: ToolContext, path: str, payload: dict) -> object:
+    # THE SINGLE DOOR into the memory service from this process. A payload
+    # carrying a `live_source` is checked against the live registry before it
+    # is posted, so a caller that forgets to validate cannot write a note
+    # naming a call that could never dispatch — the check is a property of the
+    # path rather than a habit of its callers.
+    if payload.get("live_source") is not None:
+        payload = {**payload, "live_source": validate_live_source(payload["live_source"])}
     try:
         async with peers.client(ctx.app, peers.MEMORY, MEMORY_TIMEOUT) as client:
             response = await client.post(path, json=payload)

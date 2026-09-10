@@ -830,13 +830,71 @@ def _age(created: object, today: date | None = None) -> str | None:
     return f"{days} days ago"
 
 
+def _support(source: object) -> str | None:
+    """What a note's citation stands on, when it carries one.
+
+    A distilled note (S14-1) names the message it was written from AND the
+    role of that row, and the role is the whole point. A fact whose only
+    support is an ASSISTANT row is supported by something the model itself
+    produced: it establishes nothing about the world, and it must not read in
+    the prompt like something she was told. So the two are different phrases,
+    never one word like "cited".
+
+    A note with no citation gets no marker at all, and that is deliberate
+    rather than an omission. Every note and every journal exchange written
+    before distillation existed cites nothing; labelling all of them would add
+    a word to every line that distinguishes nothing, while the two lines that
+    DO carry a citation are exactly the ones a reader has to be able to weigh
+    differently. Absence of a marker is therefore the corpus's ordinary state,
+    presence is the claim, and neither is asserted beyond what memory sent.
+    """
+    if not isinstance(source, dict):
+        return None
+    role = source.get("role")
+    if role == "user":
+        return "cited to something the person said"
+    if role == "assistant":
+        return "cited only to something she said herself"
+    # A citation whose role memory did not send is not a citation this can
+    # weigh — say nothing rather than pick the flattering reading.
+    return None
+
+
+def _live_source(live_source: object) -> str | None:
+    """The call that answers this note's fact NOW, when the note names one.
+
+    Owner ruling 2026-09-10: "hardware specs can be found ad hoc and shouldn't
+    be written. Or if they're written, that's fine for comparing if we ever
+    update our system and have that data stored, but it should still treat the
+    ad-hoc command as truth and be done first."
+
+    So a note that names a live source is a RECORD OF WHAT WAS TRUE, and the
+    tool is the current answer. That is a different kind of hit from a
+    preference or a decision, where the note is the only source there is, and
+    the two must not read the same in the prompt: the whole failure this
+    prevents is her reciting "24GB" from a note written before the card was
+    changed, with the machine one call away and able to say.
+
+    The tool's NAME is printed and its arguments are not — the name is what
+    she reaches for, the arguments are on the hit for whatever dispatches it,
+    and a bracket label is not the place to render a call.
+    """
+    if not isinstance(live_source, dict):
+        return None
+    tool = live_source.get("tool")
+    if not isinstance(tool, str) or not tool.strip():
+        return None
+    return f"not the current answer — {tool.strip()} answers this now, ask it first"
+
+
 def _snippets(results: Iterable, today: date | None = None) -> list[str]:
     """One line per hit, carrying what is mechanically KNOWN about it.
 
-    A hit's kind and age come off the hit itself, and either is omitted when
-    memory did not send it — the label states what the record is, never more.
-    Everything the block asserts beyond this (that it matched, that it cleared
-    the floor) is in NOTES_HEADER and is true of every hit by construction.
+    A hit's kind, age, citation and live source come off the hit itself, and
+    each is omitted when memory did not send it — the label states what the
+    record is, never more. Everything the block asserts beyond this (that it
+    matched, that it cleared the floor) is in NOTES_HEADER and is true of
+    every hit by construction.
     """
     snippets = []
     for hit in results:
@@ -852,6 +910,12 @@ def _snippets(results: Iterable, today: date | None = None) -> list[str]:
             age = _age(hit.get("created"), today)
             if age:
                 known.append(age)
+            support = _support(hit.get("source"))
+            if support:
+                known.append(support)
+            live = _live_source(hit.get("live_source"))
+            if live:
+                known.append(live)
             if text and known:
                 text = f"[{', '.join(known)}] {text}"
         else:

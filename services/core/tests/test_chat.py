@@ -180,6 +180,83 @@ def test_a_note_is_labelled_with_what_is_known_about_it_and_nothing_more():
     assert chat._age(None, today) is None and chat._age("not a date", today) is None
 
 
+def test_a_note_standing_only_on_her_own_words_is_labelled_as_such():
+    """S14-1. A distilled note names the message it came from and the ROLE of
+    that row, and the role is the whole point: a fact supported only by an
+    assistant row is supported by something the model itself produced, and it
+    must not read in the prompt like something she was told.
+
+    A note with no citation carries no marker — that is the ordinary state of
+    the whole corpus, and a word on every line would distinguish nothing.
+    """
+    today = date(2026, 9, 10)
+    labelled = chat._snippets(
+        [
+            {
+                "title": "Coffee",
+                "snippet": "pour-over, no sugar",
+                "kind": "topic",
+                "created": "2026-09-10",
+                "source": {"message_id": "m1", "role": "user"},
+            },
+            {
+                "title": "Vram",
+                "snippet": "24GB",
+                "kind": "topic",
+                "created": "2026-09-10",
+                "source": {"message_id": "m2", "role": "assistant"},
+            },
+            {"title": "Kitchen", "snippet": "the kettle is new", "kind": "topic"},
+        ],
+        today,
+    )
+    assert labelled == [
+        "[topic, today, cited to something the person said] Coffee: pour-over, no sugar",
+        "[topic, today, cited only to something she said herself] Vram: 24GB",
+        "[topic] Kitchen: the kettle is new",
+    ]
+    # A citation memory sent without a usable role is not a citation this can
+    # weigh — say nothing rather than pick the flattering reading.
+    assert chat._support({"message_id": "m3"}) is None
+    assert chat._support("people/x/journals/2026-09-01.md") is None
+
+
+def test_a_note_a_tool_can_answer_now_is_labelled_as_not_the_current_answer():
+    """Owner ruling 2026-09-10: a spec a command can read should be read ad
+    hoc, and the ad-hoc answer is the truth. The note is history — worth
+    keeping to say what changed, never the current figure — and the failure
+    this label prevents is reciting "24GB" from a note written before the card
+    was swapped, with the machine one call away and able to say."""
+    today = date(2026, 9, 10)
+    labelled = chat._snippets(
+        [
+            {
+                "title": "Graphics memory",
+                "snippet": "the card holds 24GB",
+                "kind": "topic",
+                "created": "2026-08-20",
+                "live_source": {"tool": "device_info", "args": {"device": "desktop"}},
+            },
+            {
+                "title": "Coffee",
+                "snippet": "pour-over, no sugar",
+                "kind": "topic",
+                "created": "2026-08-20",
+            },
+        ],
+        today,
+    )
+    assert labelled == [
+        "[topic, 21 days ago, not the current answer — device_info answers this now, ask it "
+        "first] Graphics memory: the card holds 24GB",
+        # Nothing can check a preference; memory IS the source, and the line
+        # says nothing extra about it.
+        "[topic, 21 days ago] Coffee: pour-over, no sugar",
+    ]
+    assert chat._live_source({"args": {}}) is None
+    assert chat._live_source("device_info") is None
+
+
 def test_the_prompt_tells_nothing_matched_apart_from_could_not_be_read():
     """The two facts a bare empty list used to collapse into one."""
     nothing = chat.volatile_system_prompt(chat.Recalled(empty="no note matched those words"))

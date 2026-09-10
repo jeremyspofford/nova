@@ -251,6 +251,12 @@ class _Doc:
     # for every note that cites nothing — which is the whole corpus as it
     # stands, and absence is the honest label for it.
     source: dict | None = None
+    # The read-only call that answers this unit's fact NOW, when its file
+    # names one ({tool, args}). A unit carrying one is HISTORY with a current
+    # answer available elsewhere, and it is not the same kind of hit as one
+    # nothing can check. Carried, never acted on: this index does not
+    # dispatch anything, it refuses to lose the fact that something could.
+    live_source: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -328,29 +334,29 @@ class BM25Index:
         document: str | None = None,
         fragment: str | None = None,
         source: dict | None = None,
+        live_source: dict | None = None,
         superseded: bool = False,
     ) -> None:
         """Put one unit in the index — unless it has been superseded, in which
         case take it OUT and keep it out.
 
-        THE SKIP LIVES HERE, and not in the store's iterator or in a filter
-        over the search results, for two reasons.
+        THE SKIP IS A REMOVAL AND NOT A FLAG, and that is the decision worth
+        stating. A flagged unit would still be COUNTED: _scope_stats derives
+        document frequency, the average length and n from the units in a
+        scope, and the semantic floor derives "how alike are two of these
+        notes" from their vectors. A superseded note left in the corpus would
+        go on moving the ranking of the live note that replaced it, and go on
+        being embedded, while never being returned — a corpus statistic drawn
+        from a note nothing may answer with. Nothing is deleted from DISK: the
+        file keeps its body, its date and its citation, and "what did I have
+        before" is answered by reading it.
 
-        This is the single door. api._index_document is not the only caller —
-        /save and /ingest index a file they have just read, the startup rescan
-        indexes every file, and tests upsert directly — so a filter in
-        store.iter_all() would cover the rescan and none of the write paths.
-        Every one of them arrives here, so "a superseded note is not in this
-        index" is a property of the index rather than a habit of its callers.
-
-        And it is a removal rather than a flag because a flagged unit would
-        still be counted. _scope_stats derives document frequency, the average
-        length and n from the units in scope, and the semantic floor derives
-        "how alike are two of these notes" from their vectors: a superseded
-        note left in the corpus would go on moving the ranking of the live
-        notes it was replaced by, and go on being embedded, while never being
-        returned. Nothing is deleted from DISK — the file keeps its date and
-        its citation, and "what did I have before" is answered by reading it.
+        Files reach the index through api._index_document, which drops a
+        superseded file whole (a journal is many units and only remove() takes
+        a document). This is the same rule one layer down, for a caller that
+        hands over a UNIT rather than a file — the write paths, the startup
+        rescan and a test all end here, so "a superseded unit is not in this
+        index" holds whichever of them asked.
         """
         if superseded:
             self.remove_unit(unit_id)
@@ -370,6 +376,7 @@ class BM25Index:
             length=sum(tf.values()),
             digest=digest_of(text),
             source=source,
+            live_source=live_source,
         )
         self._docs[unit_id] = doc
         self._stats.clear()
@@ -708,6 +715,12 @@ class BM25Index:
                     # as stored: this index does not decide what a citation is
                     # worth, it only refuses to lose the role that says.
                     "source": doc.source,
+                    # The call that answers this fact now, or None. Present on
+                    # every hit rather than only on the ones that have one, so
+                    # a caller can never read a missing key as "this service
+                    # is too old to say" — None is the answer "nothing else
+                    # can check this; these notes are the source".
+                    "live_source": doc.live_source,
                 }
                 for score, names, doc in top
             ],

@@ -4,6 +4,7 @@ The memory fake refuses any request without core's memory bearer, so
 "the tool authenticates" is proved by these tests passing at all rather
 than by reading the code.
 """
+
 from __future__ import annotations
 
 import re
@@ -15,7 +16,8 @@ import pytest
 from app import tools
 from app.identity import Person
 from app.main import app
-from app.tools.base import ToolContext
+from app.tools import memory_tools
+from app.tools.base import ToolContext, ToolFailure
 from tests import fakes
 
 # dispatch() consults no table and no grant (no approvals, 2026-09-03 —
@@ -34,9 +36,7 @@ def memory_ctx(monkeypatch, tmp_path):
         if memory is not None:
             monkeypatch.setenv("MEMORY_URL", fakes.MEMORY_URL)
             monkeypatch.setenv("CORE_MEMORY_TOKEN", fakes.MEMORY_TOKEN)
-            app.state.peer_transports = {
-                fakes.MEMORY_URL: fakes.StreamingASGITransport(memory.app)
-            }
+            app.state.peer_transports = {fakes.MEMORY_URL: fakes.StreamingASGITransport(memory.app)}
         else:
             monkeypatch.delenv("MEMORY_URL", raising=False)
             monkeypatch.delenv("CORE_MEMORY_TOKEN", raising=False)
@@ -244,6 +244,78 @@ async def test_a_failed_save_is_a_stated_error(memory_ctx):
     result, ok = await tools.dispatch("memory_save", {"title": "A", "content": "b"}, ctx)
     assert ok is False
     assert "500" in result
+
+
+# -- a note's live source, checked against the LIVE registry (S14-1) -------
+#
+# Owner ruling 2026-09-10: a fact a tool can look up ad hoc — a machine's
+# memory, the models installed, the time — should be looked up ad hoc, and the
+# note about it is history. A distilled note may therefore carry the call that
+# answers it now, and a call that could never dispatch must not be written
+# down. The memory service checks the SHAPE (it does not and must not import
+# this registry); these are the checks only this process can make.
+
+
+def test_a_live_source_naming_a_tool_that_does_not_exist_is_refused():
+    with pytest.raises(ToolFailure, match="no tool called"):
+        memory_tools.validate_live_source({"tool": "read_the_owners_mind", "args": {}})
+
+
+def test_a_live_source_whose_arguments_that_tool_would_refuse_is_refused():
+    """Checked against the tool's OWN advertised schema, so a tool registered
+    tomorrow is validated with no edit here."""
+    with pytest.raises(ToolFailure, match="would refuse those arguments"):
+        memory_tools.validate_live_source({"tool": "memory_search", "args": {"query": 7}})
+    with pytest.raises(ToolFailure, match="would refuse those arguments"):
+        memory_tools.validate_live_source({"tool": "memory_search", "args": {}})
+
+
+def test_a_live_source_that_can_actually_dispatch_comes_back_normalised():
+    assert memory_tools.validate_live_source(
+        {"tool": " memory_search ", "args": {"query": "vram"}}
+    ) == {"tool": "memory_search", "args": {"query": "vram"}}
+    # A call with no arguments is a call, not a malformed one.
+    assert memory_tools.validate_live_source({"tool": "get_time"}) == {
+        "tool": "get_time",
+        "args": {},
+    }
+
+
+def test_no_registered_tool_is_rejected_as_an_unknown_name():
+    """Derived, never hardcoded: nothing here holds a list of which tools may
+    answer a fact. Every tool in the live registry is a name this accepts, so
+    the day a read tool is registered it is usable as a live source with no
+    edit here — and the day one is renamed, this is what notices."""
+    for name in tools.REGISTRY:
+        try:
+            memory_tools.validate_live_source({"tool": name, "args": {}})
+        except ToolFailure as exc:
+            # Missing required arguments is a fact about these ARGS. An
+            # unknown name would be a fact about the registry, and there is
+            # no tool in the registry this may call unknown.
+            assert "no tool called" not in str(exc), name
+
+
+async def test_the_call_path_itself_refuses_an_unusable_live_source(memory_ctx):
+    """The single door. A caller inside this process that posts a live_source
+    to /save is checked before the request leaves, so writing a note naming a
+    call that can never run is a property of the path rather than a habit of
+    whoever remembered to validate."""
+    memory = fakes.FakeMemory()
+    ctx = memory_ctx(memory)
+    with pytest.raises(ToolFailure, match="no tool called"):
+        await memory_tools._call_memory(
+            ctx,
+            "/save",
+            {
+                "person_id": str(PERSON.id),
+                "title": "Vram",
+                "content": "24GB",
+                "live_source": {"tool": "nope", "args": {}},
+            },
+        )
+    # Nothing was posted: the note does not exist anywhere.
+    assert memory.saves == []
 
 
 # -- get_time --------------------------------------------------------------

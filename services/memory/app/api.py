@@ -39,7 +39,7 @@ from app.embedding import (
     cache_path,
 )
 from app.index import BM25Index, RetrieverReport
-from app.store import MemoryStore, PathEscape, StoredFile, split_entries
+from app.store import MemoryStore, PathEscape, StoredFile, is_superseded, split_entries
 
 logger = logging.getLogger("memory.api")
 
@@ -107,8 +107,13 @@ def _index_document(index: BM25Index, stored: StoredFile) -> list[str]:
     source = stored.meta.get("source")
     if not isinstance(source, dict):
         source = None
-    superseded = bool(stored.meta.get("superseded_by"))
-    if superseded:
+    live_source = stored.meta.get("live_source")
+    if not isinstance(live_source, dict):
+        live_source = None
+    if is_superseded(stored.meta):
+        # The whole file leaves the index: a topic note is one unit but a
+        # journal is many, and remove() is what takes a document. index.upsert
+        # refuses a superseded UNIT for the same reason, one layer down.
         index.remove(stored.rel_path)
         return []
     if not entries:
@@ -122,6 +127,7 @@ def _index_document(index: BM25Index, stored: StoredFile) -> list[str]:
             created=created,
             body=stored.body,
             source=source,
+            live_source=live_source,
         )
         return [stored.rel_path]
     live = set()
@@ -137,6 +143,7 @@ def _index_document(index: BM25Index, stored: StoredFile) -> list[str]:
             document=stored.rel_path,
             fragment=entry.fragment,
             source=source,
+            live_source=live_source,
         )
     for stale in index.units_for(stored.rel_path):
         if stale not in live:
@@ -614,6 +621,28 @@ class SourceRef(BaseModel):
     role: Literal["user", "assistant"]
 
 
+class LiveSourceRef(BaseModel):
+    """The read-only call that answers this fact NOW, when one exists.
+
+    Owner ruling 2026-09-10: a fact a tool can look up ad hoc — a machine's
+    memory, the models installed, this month's spend — should be found ad hoc,
+    and the ad-hoc answer is the truth. A note about such a fact is history
+    worth keeping for "did that change?", and never the current answer.
+
+    WHAT THIS ENDPOINT CHECKS, AND WHAT IT CANNOT. Shape only: a tool name and
+    an argument mapping. Whether `tool` is a registered tool and whether
+    `args` satisfy that tool's advertised schema are facts about core's LIVE
+    tool registry, which this service does not import and must not — see
+    store.normalize_live_source for why a copy of the tool list here would be
+    a hand-maintained list that rots. The caller checks that against the
+    registry before it ever posts here
+    (core: app/tools/memory_tools.validate_live_source).
+    """
+
+    tool: str
+    args: dict = {}
+
+
 class SaveRequest(BaseModel):
     person_id: str
     title: str
@@ -632,6 +661,9 @@ class SaveRequest(BaseModel):
     # given; when neither is, the note is dated today exactly as before.
     created: date | None = None
     source: SourceRef | None = None
+    # The call that answers this fact now, when one exists. Its presence is
+    # what tells a reader the note is HISTORY rather than the current answer.
+    live_source: LiveSourceRef | None = None
 
 
 class ForgetRequest(BaseModel):
@@ -722,6 +754,7 @@ async def save(req: SaveRequest) -> dict:
             subject=subject or None,
             said_at=req.said_at,
             source=req.source.model_dump() if req.source else None,
+            live_source=req.live_source.model_dump() if req.live_source else None,
         )
     except PathEscape as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None

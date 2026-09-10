@@ -8,7 +8,11 @@ Layout under MEMORY_ROOT:
 exists now so that slice adds rows, not a migration.)
 
 Every file is YAML frontmatter (id, owner, kind, title, created, tags)
-followed by a markdown body. Writes are always atomic: a tmp file in the
+followed by a markdown body. A DISTILLED note — one short fact written out
+of a conversation rather than a whole exchange — carries up to five more,
+every one of them optional: `subject`, `said_at`, `source`, `live_source`
+and `superseded_by`. See the block above SUBJECT_KEY for what each is for
+and why it is frontmatter rather than prose. Writes are always atomic: a tmp file in the
 same directory, fsync'd, then renamed over the target with os.replace
 (atomic on POSIX) — a crash between the write and the rename leaves the
 previous file (or no file at all) intact, never a half-written one.
@@ -76,16 +80,33 @@ MAX_SLUG_ATTEMPTS = 200
 #                  follows it, because `created` is what the recency
 #                  multiplier boosts and what the prompt prints as an age.
 #   source         the citation: the message id AND the role of that row.
+#   live_source    the read-only call that answers this fact NOW, when one
+#                  exists ({tool, args}). See below — it splits the corpus in
+#                  two, and it is the difference between a fact memory IS the
+#                  source of and a fact memory is merely the HISTORY of.
 #   superseded_by  the rel_path of the note that replaced this one. Set on
 #                  the OLDER note; nothing is ever deleted.
 SUBJECT_KEY = "subject"
 SAID_AT_KEY = "said_at"
 SOURCE_KEY = "source"
+LIVE_SOURCE_KEY = "live_source"
 SUPERSEDED_BY_KEY = "superseded_by"
 
 # The roles a citation may name. A row is either something the person said or
 # something the model produced, and those are not the same evidence.
 CITABLE_ROLES = ("user", "assistant")
+
+
+def is_superseded(meta: dict) -> bool:
+    """Whether a note has been replaced by a newer one on its subject.
+
+    ONE predicate, and everything that needs the answer asks it: the scan that
+    stamps older notes (below) and the indexer that keeps them out of recall
+    (api._index_document). Two readings of the same frontmatter key, written
+    in two places, is how "superseded" comes to mean one thing on disk and
+    another in the index.
+    """
+    return bool(meta.get(SUPERSEDED_BY_KEY))
 
 
 def subject_key(subject: object) -> str:
@@ -134,7 +155,62 @@ def normalize_source(source: object) -> dict:
     return {"message_id": message_id.strip(), "role": role}
 
 
-def _distilled_fields(subject: str | None, said_at: date | None, source: dict | None) -> dict:
+def normalize_live_source(live_source: object) -> dict:
+    """The call that answers this fact right now — SHAPE CHECKED HERE, NAME
+    AND ARGUMENTS CHECKED BY THE CALLER. Or a ValueError naming what is wrong.
+
+    WHY THE FIELD EXISTS (owner ruling, 2026-09-10). "Hardware specs can be
+    found ad hoc and shouldn't be written. Or if they're written, that's fine
+    for comparing if we ever update our system and have that data stored, but
+    it should still treat the ad-hoc command as truth and be done first."
+    There are two kinds of distilled fact and they are not interchangeable:
+
+      * LIVE-ANSWERABLE — a tool knows the answer right now (a machine's
+        memory, the models installed, this month's spend, the time). A note
+        about one is HISTORY. It is worth keeping — it is what "did that
+        change?" is answered by — but it is never the current answer, and
+        serving it as one is the whole failure mode.
+      * TOLD ONCE — a preference, a decision, a person. Nothing can check it;
+        memory IS the source.
+
+    A note carrying `live_source` is the first kind, and everything that
+    presents it has to say so.
+
+    WHY THIS ONLY CHECKS THE SHAPE, and where the real check lives. Whether
+    `tool` names a registered tool, and whether `args` satisfy that tool's own
+    advertised JSON schema, are facts about core's live tool registry. This
+    service is a separate process with its own dependencies and no knowledge
+    of the toolset at all, and it must stay that way: a copy of the tool names
+    here would be precisely the hand-maintained list the house rule forbids —
+    wrong the day a tool is registered, and wrong silently. So the registry
+    check runs in the CALLER, against the live registry
+    (services/core/app/tools/memory_tools.validate_live_source), and what
+    reaches this service is checked here for the one thing a shape check can
+    honestly establish: that there is a tool name and an argument mapping at
+    all.
+    """
+    if not isinstance(live_source, dict):
+        raise ValueError("a live source must be a mapping naming a tool and its arguments")
+    tool = live_source.get("tool")
+    if not isinstance(tool, str) or not tool.strip():
+        raise ValueError("a live source must name the tool that answers this fact now")
+    args = live_source.get("args")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        raise ValueError(
+            "a live source's args must be a mapping of the arguments that call takes, "
+            f"got {type(args).__name__}"
+        )
+    return {"tool": tool.strip(), "args": args}
+
+
+def _distilled_fields(
+    subject: str | None,
+    said_at: date | None,
+    source: dict | None,
+    live_source: dict | None = None,
+) -> dict:
     """The optional keys, present only when they carry something.
 
     A key written as `subject: null` would make every note look like a note
@@ -147,6 +223,8 @@ def _distilled_fields(subject: str | None, said_at: date | None, source: dict | 
         extra[SAID_AT_KEY] = said_at
     if source is not None:
         extra[SOURCE_KEY] = normalize_source(source)
+    if live_source is not None:
+        extra[LIVE_SOURCE_KEY] = normalize_live_source(live_source)
     return extra
 
 
@@ -315,8 +393,28 @@ def _parse(text: str) -> tuple[dict, str]:
     return meta, body
 
 
+class _NoAliasDumper(yaml.SafeDumper):
+    """A dumper that never emits YAML anchors and aliases.
+
+    Found by a test, 2026-09-10. `created` follows `said_at`, so a distilled
+    note normally holds the SAME date object under two keys — and pyyaml's
+    default is to write the second one as a reference to the first:
+
+        created: &id001 2026-08-20
+        said_at: *id001
+
+    That round-trips perfectly and is unreadable. These files are documented
+    as human-readable and safe to edit by hand, and a hand edit to `created`
+    there silently moves `said_at` as well, which is precisely the pair of
+    facts this slice exists to keep apart. Two keys, two dates, written out.
+    """
+
+    def ignore_aliases(self, data: object) -> bool:
+        return True
+
+
 def _render(meta: dict, body: str) -> str:
-    header = yaml.safe_dump(meta, sort_keys=False).strip()
+    header = yaml.dump(meta, Dumper=_NoAliasDumper, sort_keys=False).strip()
     return f"---\n{header}\n---\n{body}"
 
 
@@ -403,6 +501,7 @@ class MemoryStore:
         subject: str | None = None,
         said_at: date | None = None,
         source: dict | None = None,
+        live_source: dict | None = None,
     ) -> Path:
         """Create or overwrite a topic note. No HTTP route in this slice
         creates topics (S1 ships no tool surface at all) — this exists
@@ -417,7 +516,7 @@ class MemoryStore:
             "kind": "topic",
             "title": title,
             "created": created or said_at or datetime.now(UTC).date(),
-            **_distilled_fields(subject, said_at, source),
+            **_distilled_fields(subject, said_at, source, live_source),
             "tags": tags or [],
         }
         _atomic_write(path, _render(meta, "\n" + body.strip() + "\n"))
@@ -434,6 +533,7 @@ class MemoryStore:
         subject: str | None = None,
         said_at: date | None = None,
         source: dict | None = None,
+        live_source: dict | None = None,
     ) -> Path:
         """Create a NEW topic note, never replacing one that already exists.
 
@@ -456,7 +556,7 @@ class MemoryStore:
             # is a backfill that stamps every fact in the history as this
             # morning's and ranks them above the transcript they came from.
             "created": created or said_at or datetime.now(UTC).date(),
-            **_distilled_fields(subject, said_at, source),
+            **_distilled_fields(subject, said_at, source, live_source),
             "tags": tags or [],
         }
         for attempt in range(1, MAX_SLUG_ATTEMPTS + 1):
@@ -497,15 +597,6 @@ class MemoryStore:
                 f"{self.rel_path(abs_path)} was rewritten but does not carry "
                 f"{SUPERSEDED_BY_KEY}: {superseded_by}"
             )
-
-    def live_topic(self, stored_meta: dict) -> bool:
-        """Whether a note is the current one on its subject.
-
-        One predicate, read by the store's scan below AND by the indexer, so
-        "superseded" cannot come to mean one thing on disk and another in the
-        index.
-        """
-        return not stored_meta.get(SUPERSEDED_BY_KEY)
 
     def supersede_by_subject(
         self,
@@ -552,7 +643,7 @@ class MemoryStore:
                 continue
             if subject_key(meta.get(SUBJECT_KEY)) != key:
                 continue
-            if not self.live_topic(meta):
+            if is_superseded(meta):
                 continue
             self.mark_superseded(path, superseded_by)
             stamped.append(path)
