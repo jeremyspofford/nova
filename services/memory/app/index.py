@@ -30,6 +30,7 @@ recency + a snippet window". S13 measured what recall was actually doing
 from __future__ import annotations
 
 import math
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -119,6 +120,14 @@ RRF_K = 60
 # A store this small is also one where BM25 over everything is already
 # handing over most of it.
 SEMANTIC_MIN_SAMPLE = 3
+
+# How fast the measured per-unit ranking cost (note_rank_seconds) comes DOWN
+# after a slow search. It rises instantly — a budget sized on the average is
+# the budget that overruns — and decays a fifth of the way towards each newer,
+# faster figure, so one stalled search stops holding core's query budget down
+# for the life of the process while a genuinely slower corpus is believed at
+# once. 2026-09-10.
+RANK_COST_DECAY = 0.2
 
 # Recency boost: final = bm25 * (1 + RECENCY_WEIGHT * exp(-age_days / RECENCY_DECAY_DAYS))
 RECENCY_WEIGHT = 0.5
@@ -285,6 +294,20 @@ class BM25Index:
         # same reason _stats is (see above): a cache that is only ever
         # discarded cannot describe a corpus it no longer matches.
         self._background: dict[str, float | None] = {}
+        # THE WIDTH THE LIVE MODEL PRODUCES, learned rather than configured
+        # (2026-09-10). None until something that actually held a live vector
+        # says so — see set_vector_width. A vector of any other width is not a
+        # vector of this corpus at all: it cannot be dotted against a question
+        # this model embeds, so everywhere this index is asked whether a unit
+        # "has a vector" the answer has to mean "has one that can be compared
+        # to a question", or the backfill is told there is nothing to do while
+        # semantic recall is permanently dead.
+        self._vector_width: int | None = None
+        # How long ranking one unit of a scope costs, in seconds, measured
+        # from this process's own searches (see note_rank_seconds). None until
+        # a search has been timed; api.py seeds the budget from a measured
+        # constant until then and takes whichever is larger.
+        self._rank_seconds_per_unit: float | None = None
 
     def upsert(
         self,
@@ -352,7 +375,93 @@ class BM25Index:
         self._background.clear()
 
     def has_vector(self, digest: str) -> bool:
-        return digest in self._vectors
+        """Does this text have a vector THIS question could be compared to?
+
+        Width-aware since 2026-09-10, and that is the whole point of it. The
+        reviewer's repro: run a full pass, then narrow the model's output. Every
+        digest is still in `_vectors`, so the old presence-only answer said
+        47 of 47 embedded, missing_vectors said none, and the next pass logged
+        "0 embedded" — while `_semantic` correctly refused to compare a single
+        one of them and semantic recall was dead for as long as the notes went
+        unedited. A wrong-width vector is not a vector of this corpus; it counts
+        as MISSING here so the backfill goes and gets a real one.
+        """
+        return self._usable(self._vectors.get(digest))
+
+    def _usable(self, windows: list[list[float]] | None) -> bool:
+        """Windows that can be compared to what the live model embeds.
+
+        With no live width learned yet (nothing has held a live vector this
+        process — a boot whose corpus was entirely cached and whose embedder
+        has not answered yet) this cannot know, and it does not guess: it
+        answers on presence, exactly as it did before, and the first live
+        vector settles it (set_vector_width).
+        """
+        if not windows:
+            return False
+        if self._vector_width is None:
+            return True
+        return all(len(window) == self._vector_width for window in windows)
+
+    def vector_width(self) -> int | None:
+        """The width the live model produces, or None if nothing has said."""
+        return self._vector_width
+
+    def set_vector_width(self, width: int) -> list[str]:
+        """Declare the width the LIVE embedder answers with; return what died.
+
+        Only a caller holding a vector the CURRENT model just produced may call
+        this — the query it embedded, or the batch a pass just got back. The
+        cache is not such a caller: cached windows are exactly what this is
+        here to invalidate.
+
+        Every digest whose windows are not that width is dropped from the map,
+        and its digest returned so the caller can drop it from the cache FILE
+        too. Leaving it on disk would re-import it on the next boot and put the
+        corpus straight back into the state where it counted as embedded and
+        could not be compared to anything.
+        """
+        if width <= 0 or self._vector_width == width:
+            return []
+        self._vector_width = width
+        stale = [
+            digest
+            for digest, windows in self._vectors.items()
+            if any(len(window) != width for window in windows)
+        ]
+        for digest in stale:
+            del self._vectors[digest]
+        if stale:
+            self._background.clear()
+        return stale
+
+    def note_rank_seconds(self, scope_prefix: str, seconds: float) -> None:
+        """Record what ranking this scope actually cost, per unit.
+
+        Ranking is linear in the scope and the scope only grows, so the reserve
+        core's budget needs is not a constant (see api._query_budget). This is
+        where the number comes from: the search's own wall clock over its own
+        unit count, kept as the WORST recent figure rather than an average,
+        because a budget sized on the average is the budget that overruns.
+        """
+        units = self._scope_stats(scope_prefix).n
+        if units <= 0 or seconds <= 0:
+            return
+        per_unit = seconds / units
+        if self._rank_seconds_per_unit is None or per_unit > self._rank_seconds_per_unit:
+            self._rank_seconds_per_unit = per_unit
+            return
+        # Decay towards the live figure so a one-off stall (a GC pause, a busy
+        # box) stops holding the budget down for the life of the process.
+        self._rank_seconds_per_unit -= (self._rank_seconds_per_unit - per_unit) * RANK_COST_DECAY
+
+    def rank_seconds_per_unit(self) -> float | None:
+        """What ranking one unit costs here, measured — None until timed."""
+        return self._rank_seconds_per_unit
+
+    def scope_units(self, scope_prefix: str) -> int:
+        """How many units a search over this scope has to rank."""
+        return self._scope_stats(scope_prefix).n
 
     def live_digests(self) -> set[str]:
         """Every text hash currently indexed — what the caches may keep."""
@@ -373,35 +482,46 @@ class BM25Index:
         return len(stale)
 
     def missing_vectors(self, scope_prefix: str = "") -> list[tuple[str, str]]:
-        """(digest, text) for every indexed unit in scope with no vector yet.
+        """(digest, text) for every indexed unit in scope with no USABLE vector.
 
         De-duplicated by digest: two identical exchanges are one embedding
         call, not two.
+
+        "Usable" and not "present" (2026-09-10): a unit whose windows are the
+        wrong width for the live model has a vector nothing can compare to the
+        question, so it belongs on the backfill's list. Before this, the day
+        the embedding model changed, every unit still counted as embedded and
+        the pass logged "0 embedded" for ever.
         """
         missing: dict[str, str] = {}
         for unit_id, doc in self._docs.items():
             if scope_prefix and not unit_id.startswith(scope_prefix):
                 continue
-            if doc.digest in self._vectors or doc.digest in missing:
+            if doc.digest in missing or self._usable(self._vectors.get(doc.digest)):
                 continue
             missing[doc.digest] = doc.text
         return list(missing.items())
 
     def vector_coverage(self, scope_prefix: str) -> tuple[int, int]:
-        """(units with a vector, units) for one scope — the honest denominator
-        behind "semantic recall ran over 12 of 47 notes"."""
+        """(units with a COMPARABLE vector, units) for one scope — the honest
+        denominator behind "semantic recall ran over 12 of 47 notes".
+
+        A unit whose windows are the wrong width for the live model counts as
+        uncovered here, because the number this feeds is a claim about what a
+        question could be matched against. 2026-09-10.
+        """
         have = 0
         total = 0
         for unit_id, doc in self._docs.items():
             if not unit_id.startswith(scope_prefix):
                 continue
             total += 1
-            if doc.digest in self._vectors:
+            if self._usable(self._vectors.get(doc.digest)):
                 have += 1
         return have, total
 
     def _background_similarity(
-        self, scope_prefix: str, sims: list[tuple[float, _Doc]]
+        self, scope_prefix: str, notes: int, vectors: list[list[float]]
     ) -> float | None:
         """How alike two DIFFERENT notes in this scope are, on average.
 
@@ -421,15 +541,17 @@ class BM25Index:
         cached = self._background.get(scope_prefix, ...)
         if cached is not ...:
             return cached
-        if len(sims) < SEMANTIC_MIN_SAMPLE:
+        if notes < SEMANTIC_MIN_SAMPLE:
             self._background[scope_prefix] = None
             return None
         # Every WINDOW is a vector in this average, not every note: a note
         # long enough to have been split is two texts as far as the embedder
         # is concerned, and the line being derived is "how alike are two of
         # these texts". The identity below holds over whatever set of unit
-        # vectors it is given.
-        vectors = [window for _value, doc in sims for window in self._vectors[doc.digest]]
+        # vectors it is given — and `vectors` is the COMPARABLE windows the
+        # caller kept, all of one width, never the raw map: a note carrying one
+        # window from this model and one from another would otherwise make the
+        # sum below index off the end of itself. 2026-09-10.
         n = len(vectors)
         if n < SEMANTIC_MIN_SAMPLE:
             self._background[scope_prefix] = None
@@ -492,6 +614,7 @@ class BM25Index:
         than a silent lexical answer — this method has no way to pretend a
         search happened.
         """
+        started = time.monotonic()
         scope = [doc for unit_id, doc in self._docs.items() if unit_id.startswith(scope_prefix)]
         today = today or datetime.now(UTC).date()
 
@@ -500,6 +623,12 @@ class BM25Index:
             query_vector, scope, scope_prefix, semantic_unavailable
         )
         reports = (lexical_report, semantic_report)
+        # What this search cost, per unit of the scope it ranked — the number
+        # the next call's embedding budget is reserved from (api._query_budget).
+        # Measured here rather than estimated anywhere, because ranking grows
+        # with the corpus and a fixed reserve is a promise that expires: at
+        # 10,000 units ranking measured 504 ms of core's 2.0 s. 2026-09-10.
+        self.note_rank_seconds(scope_prefix, time.monotonic() - started)
 
         if not lexical and not semantic:
             return Outcome(
@@ -648,6 +777,7 @@ class BM25Index:
             )
             return [], RetrieverReport(name="semantic", ran=False, reason=reason), None
         sims: list[tuple[float, _Doc]] = []
+        comparable: list[list[float]] = []
         mismatched = 0
         for doc in scope:
             windows = self._vectors.get(doc.digest)
@@ -662,34 +792,39 @@ class BM25Index:
             if not usable:
                 mismatched += 1
                 continue
+            comparable.extend(usable)
             # The best-matching WINDOW is the note's score. A long note is
             # embedded in pieces, and the question is about one of them.
             sims.append((max(dot(query_vector, window) for window in usable), doc))
         have, total = len(sims), len(scope)
-        coverage = None if have == total else f"{have} of {total} notes in this scope are embedded"
-        if mismatched:
-            coverage = (
-                f"{coverage or f'{have} of {total} notes in this scope are embedded'} "
-                f"({mismatched} of them by a model whose vectors are a different width, which "
-                "cannot be compared to this question)"
-            )
+        coverage = _coverage_sentence(have, total, mismatched)
         # ONE gate, and it is the floor's own: below SEMANTIC_MIN_SAMPLE
         # embedded notes there is no "how alike are two of these" to measure
         # a resemblance against, so the retriever says it did not run rather
         # than ranking on a threshold it could not derive.
-        floor = self._background_similarity(scope_prefix, sims)
+        floor = self._background_similarity(scope_prefix, have, comparable)
         if floor is None:
             return (
                 [],
                 RetrieverReport(
                     name="semantic",
                     ran=False,
+                    # TWO FACTS, SPLIT (2026-09-10). This used to say "only
+                    # {have} of {total} notes have been embedded so far", and
+                    # that sentence is FALSE in the case it is most likely to
+                    # be read in: all 47 notes embedded by a model whose
+                    # vectors are a different width reaches here with have=0,
+                    # and "0 of 47 embedded" is not what happened. Why the
+                    # floor could not be derived is the reason; how much of the
+                    # scope could be reached is the coverage, which
+                    # api._search_caveat now relays for a retriever that did
+                    # NOT run as well as for one that did.
                     reason=(
-                        f"only {have} of {total} notes in this scope have been embedded so far — "
-                        "too few to tell a real resemblance from the ordinary resemblance "
-                        "between any two of these notes"
+                        "too few of these notes could be matched by meaning to tell a real "
+                        "resemblance from the ordinary resemblance between any two of them"
                     ),
-                    coverage=coverage,
+                    coverage=coverage
+                    or f"all {total} note(s) in this scope are embedded and comparable",
                 ),
                 None,
             )
@@ -761,6 +896,35 @@ def _fuse(lexical: list[_Doc], semantic: list[_Doc]) -> list[tuple[float, list[s
         ),
     )
     return [(scores[unit_id], names[unit_id], docs[unit_id]) for unit_id in order]
+
+
+def _coverage_sentence(have: int, total: int, mismatched: int) -> str | None:
+    """How much of this scope the meaning half could actually reach.
+
+    THREE DIFFERENT SHORTFALLS, and they are not the same fact (2026-09-10):
+
+      * `have` — notes with a vector this question can be dotted against;
+      * `mismatched` — notes that DO have a vector, from a model whose output
+        is a different width. "Not embedded" is false of them and so is
+        "searched"; the honest word is that they could not be compared;
+      * the rest — notes with no vector at all, waiting on the backfill.
+
+    None when the whole scope was reachable, because a search that covered
+    everything has no limitation to declare.
+    """
+    if total <= 0:
+        return "this scope holds no notes at all"
+    if have == total:
+        return None
+    if not mismatched:
+        return f"{have} of {total} notes in this scope are embedded"
+    unembedded = total - have - mismatched
+    tail = f", and {unembedded} have no vector at all" if unembedded else ""
+    return (
+        f"{have} of {total} notes in this scope could be matched by meaning — {mismatched} "
+        f"carry a vector from a model whose vectors are a different width, which cannot be "
+        f"compared to this question{tail}"
+    )
 
 
 def _merge_reasons(lexical: str | None, semantic: str | None) -> str:

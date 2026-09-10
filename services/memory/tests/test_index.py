@@ -224,3 +224,80 @@ def test_a_journal_is_indexed_as_exchanges_and_forgotten_as_a_file():
     assert idx.units_for(document) == []
     assert idx.search("coffee", scope_prefix="people/a/", k=5) == []
     assert idx.search("tea", scope_prefix="people/a/", k=5) == []
+
+
+# -- a vector of another width counts as MISSING, everywhere ----------------
+#
+# MAJOR 1 of the adversarial review, 2026-09-10. `_semantic` always refused to
+# compare a vector of the wrong width to the question, and that was right; what
+# was missing is that nothing TOLD the backfill those vectors were useless. The
+# index decided "has a vector" on the presence of a digest, so a corpus
+# re-embedded by a model of another dimension read as fully covered for ever
+# and the pass had nothing to do.
+
+
+def _indexed(count: int = 3) -> BM25Index:
+    idx = BM25Index()
+    for n in range(count):
+        idx.upsert(
+            f"people/a/topics/n{n}.md",
+            title=f"Note {n}",
+            kind="topic",
+            created=date.today(),
+            body=f"the body of note {n}",
+        )
+    return idx
+
+
+def _digests(idx: BM25Index) -> list[str]:
+    return sorted(idx.live_digests())
+
+
+def test_a_wrong_width_vector_is_missing_to_the_backfill_and_uncovered_to_recall():
+    idx = _indexed()
+    for digest in _digests(idx):
+        idx.set_vectors(digest, [[1.0, 0.0, 0.0, 0.0]])
+    # Nothing has held a live vector yet, so the index cannot know a width and
+    # does not guess: presence is all it has, exactly as before.
+    assert idx.vector_coverage("people/a/") == (3, 3)
+    assert idx.missing_vectors("people/a/") == []
+
+    # The live model answers 2-wide. Every one of those vectors is now a vector
+    # of nothing this question can be compared to.
+    dropped = idx.set_vector_width(2)
+    assert sorted(dropped) == _digests(idx)
+    assert idx.vector_width() == 2
+    assert idx.vector_coverage("people/a/") == (0, 3)
+    assert len(idx.missing_vectors("people/a/")) == 3
+    assert not any(idx.has_vector(digest) for digest in _digests(idx))
+
+
+def test_a_wrong_width_vector_arriving_after_the_width_is_known_is_still_missing():
+    """The drop above runs when the width CHANGES. A vector that shows up at
+    the wrong width afterwards — one deployment's cache read by another, a
+    half-migrated store — must not be counted either, which is why the
+    accounting itself is width-aware rather than only the drop."""
+    idx = _indexed()
+    live = _digests(idx)
+    for digest in live:
+        idx.set_vectors(digest, [[1.0, 0.0]])
+    assert idx.set_vector_width(2) == []
+    assert idx.vector_coverage("people/a/") == (3, 3)
+
+    idx.set_vectors(live[0], [[1.0, 0.0, 0.0, 0.0]])
+    assert idx.has_vector(live[0]) is False
+    assert idx.vector_coverage("people/a/") == (2, 3)
+    assert [digest for digest, _text in idx.missing_vectors("people/a/")] == [live[0]]
+
+
+def test_a_note_embedded_in_windows_of_mixed_widths_is_not_half_believed():
+    """One window from this model and one from another covers the note with
+    something that cannot be compared to a question — a partial vector
+    pretending to stand for the whole note is the exact silent half-answer the
+    windowing work removed."""
+    idx = _indexed(1)
+    digest = _digests(idx)[0]
+    idx.set_vectors(digest, [[1.0, 0.0], [1.0, 0.0, 0.0, 0.0]])
+    idx.set_vector_width(2)
+    assert idx.has_vector(digest) is False
+    assert idx.vector_coverage("people/a/") == (0, 1)

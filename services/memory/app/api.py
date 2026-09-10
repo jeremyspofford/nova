@@ -24,6 +24,10 @@ from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from app.embedding import (
+    CORE_RECALL_TIMEOUT,
+    MIN_QUERY_BUDGET,
+    RANK_SECONDS_PER_UNIT_SEED,
+    RECALL_RESERVE,
     BackfillReport,
     EmbedConfig,
     Embedder,
@@ -275,6 +279,14 @@ async def _backfill_loop(key: str) -> None:
     it was — finished, gave up after N attempts and why, or the notes it is
     working on were rebuilt underneath it.
     """
+    # ATTEMPTS SINCE THE LAST ONE THAT EMBEDDED ANYTHING, not attempts total
+    # (2026-09-10). It counted every failure until the review named the shape:
+    # at the scale the cache comment plans for — about 4,700 chunks — a pass
+    # embeds hundreds of units and then meets the per-call budget, so twenty
+    # attempts that each did real work would abandon a corpus that was filling
+    # normally, and the log line would say "gave up after 20 attempts" about a
+    # service that never failed to do anything. The cap is for a pass getting
+    # NOWHERE, which is what it says, so progress resets it.
     attempts = 0
     while True:
         ctx = _contexts.get(key)
@@ -295,22 +307,26 @@ async def _backfill_loop(key: str) -> None:
         if report.deferred:
             logger.info("embedding pass stopped: %s", report.deferred)
             return
+        if report.embedded:
+            # Real work landed. Whatever happens next, this pass is not the
+            # one the cap below is about.
+            attempts = 0
         if report.failed:
             attempts += 1
             config = ctx.embedder.config
             if attempts >= config.max_attempts:
                 logger.warning(
-                    "embedding pass gave up after %d attempts with %d note(s) still unembedded: "
-                    "%s — recall keeps saying it matched words alone until this is fixed and the "
-                    "service restarted or another note written",
+                    "embedding pass gave up after %d attempts that embedded nothing, with %d "
+                    "note(s) still unembedded: %s — recall keeps saying it matched words alone "
+                    "until this is fixed and the service restarted or another note written",
                     attempts,
                     report.remaining,
                     report.failed,
                 )
                 return
             logger.warning(
-                "embedding pass stopped with %d note(s) left (attempt %d of %d), retrying in "
-                "%.0fs: %s",
+                "embedding pass stopped with %d note(s) left (attempt %d of %d since the last "
+                "one that embedded anything), retrying in %.0fs: %s",
                 report.remaining,
                 attempts,
                 config.max_attempts,
@@ -318,6 +334,11 @@ async def _backfill_loop(key: str) -> None:
                 report.failed,
             )
             await asyncio.sleep(config.retry_seconds)
+            continue
+        if report.stale_width:
+            # The model's width changed under us and _fill_vectors invalidated
+            # the vectors that can no longer be compared to anything. There is
+            # work again; it was logged there, and this goes and does it.
             continue
         if report.remaining:
             # Only a slice budget can leave work behind without a failure, and
@@ -336,7 +357,16 @@ async def _backfill_loop(key: str) -> None:
             # budget that a cold load does not fit (embedding.py's comment on
             # DEFAULT_QUERY_TIMEOUT). One throwaway embed here pays the ~1.5 s
             # load off the critical path and leaves it resident.
-            await _warm_model(ctx)
+            #
+            # It is ALSO the only look at the live model a boot over a fully
+            # cached corpus ever gets, and that is the case the width bug hides
+            # in: every vector read off disk, nothing to embed, so nothing to
+            # learn a width from. The warm-up's own answer settles it, and if
+            # the model has changed dimension the whole cache is invalidated
+            # here and the pass goes round again to re-embed it. 2026-09-10.
+            width = await _warm_model(ctx)
+            if width and _invalidate_stale_width(ctx, width):
+                continue
         logger.info(
             "embedding pass finished: %d embedded, %d already cached, %d note(s) the model "
             "cannot read",
@@ -347,28 +377,56 @@ async def _backfill_loop(key: str) -> None:
         return
 
 
-async def _warm_model(ctx: Context) -> None:
+async def _warm_model(ctx: Context) -> int | None:
     """One call whose only purpose is to leave the model loaded.
 
     Reported, never assumed: this is also the first honest answer to "is the
     embedding model actually installed", asked at boot instead of on the
-    owner's first question.
+    owner's first question — and, since 2026-09-10, the width of the vectors it
+    answers with, which is returned so a cached corpus of another width can be
+    invalidated rather than believed.
     """
     try:
         # The BACKFILL's per-call budget, not the query's. This call is on
         # nobody's critical path, and the whole point of it is to absorb a cold
         # load that the query budget deliberately cannot — putting it under
         # 1.6 s would make it fail exactly when it was most needed.
-        await ctx.embedder.embed(["warm"])
+        vectors = await ctx.embedder.embed(["warm"])
     except EmbedderUnavailable as exc:
         logger.warning("the embedding model could not be warmed: %s", exc)
-        return
+        return None
     keep_alive = ctx.embedder.config.keep_alive_seconds
+    width = len(vectors[0]) if vectors and vectors[0] else None
     logger.info(
-        "the embedding model %s answered and is asked to stay resident for %s",
+        "the embedding model %s answered with %s and is asked to stay resident for %s",
         ctx.embedder.config.model,
+        f"{width}-wide vectors" if width else "no vector at all",
         "as long as it can" if keep_alive < 0 else f"{keep_alive:g}s",
     )
+    return width
+
+
+def _invalidate_stale_width(ctx: Context, width: int) -> int:
+    """Forget every vector the live model can no longer produce a match for.
+
+    In the index and in the cache file, because either one on its own puts the
+    corpus back where it started on the next boot. Returns how many notes have
+    to be embedded again — 0 is the ordinary case and says nothing.
+    """
+    stale = ctx.index.set_vector_width(width)
+    if not stale:
+        return 0
+    forgotten = ctx.cache.drop(set(stale))
+    logger.warning(
+        "the embedding model now answers with %d-wide vectors: %d note(s) held a vector of "
+        "another width, which cannot be compared to any question, so they were dropped from the "
+        "index and %d from %s and will be embedded again",
+        width,
+        len(stale),
+        forgotten,
+        ctx.cache.path,
+    )
+    return len(stale)
 
 
 def _prune_vectors(ctx: Context) -> None:
@@ -435,6 +493,15 @@ async def _fill_vectors(
     finally:
         _filling.discard(key)
     refused.update(report.unembeddable)
+    # THE LIVE WIDTH, learned from what the model actually just answered with —
+    # the one moment it is a fact rather than a configuration. A corpus
+    # embedded by an earlier model at another width is invalidated here, in the
+    # index AND on disk, so the next round re-embeds it. Without this, the day
+    # the embedding model changes, every unit goes on counting as embedded, the
+    # pass logs "0 embedded", and semantic recall is dead in a way nothing
+    # reports. 2026-09-10.
+    if report.width:
+        report.stale_width = _invalidate_stale_width(ctx, report.width)
     if report.too_long:
         # Not a failure of the pass, and not silent either: these units have
         # no vector, so every recall over this scope reports its coverage as
@@ -483,7 +550,11 @@ async def _fill_after_write(ctx: Context) -> BackfillReport:
     report = await _fill_vectors(
         ctx, str(_current_root()), slice_seconds=ctx.embedder.config.slice_seconds
     )
-    if report.remaining:
+    # `stale_width` as well as `remaining`: a write whose embed came back at a
+    # new width has just invalidated the whole corpus, and there is nothing
+    # left in `remaining` to say so. Without this the notes would sit
+    # uncomparable until the next restart. 2026-09-10.
+    if report.remaining or report.stale_width:
         start_vector_backfill()
     return report
 
@@ -637,14 +708,21 @@ async def recall(req: RecallRequest) -> dict:
     # path, under its own tighter budget (see DEFAULT_QUERY_TIMEOUT). A
     # failure here is never fatal and never silent: it becomes the sentence
     # the semantic retriever reports for not having run.
+    scope_prefix = store.rel_path(person_root) + "/"
+    # What is left for the model once ranking this scope is paid for. Derived,
+    # because ranking grows with the corpus and the budget it leaves does not
+    # (see embedding.RECALL_RESERVE).
+    budget, budget_note = _query_budget(index, scope_prefix, ctx.embedder.config)
     query_vector = None
     semantic_unavailable = None
-    try:
-        query_vector = await ctx.embedder.embed_query(req.query)
-    except EmbedderUnavailable as exc:
-        semantic_unavailable = str(exc)
+    if budget is None:
+        semantic_unavailable = budget_note
+    else:
+        try:
+            query_vector = await ctx.embedder.embed_query(req.query, timeout=budget)
+        except EmbedderUnavailable as exc:
+            semantic_unavailable = str(exc)
 
-    scope_prefix = store.rel_path(person_root) + "/"
     outcome = index.search_detail(
         req.query,
         scope_prefix=scope_prefix,
@@ -673,8 +751,22 @@ async def recall(req: RecallRequest) -> dict:
             continue
         safe_hits.append(hit)
 
+    if query_vector is not None:
+        # The one live fact about the model's output width on this path. Done
+        # AFTER the search, so this call's own report still says "a vector of a
+        # different width" about the notes it could not compare — and then the
+        # backfill is told, so the next call has real vectors instead of the
+        # same sentence for ever. 2026-09-10.
+        if _invalidate_stale_width(ctx, len(query_vector)):
+            start_vector_backfill()
+
     retrievers = [_retriever_payload(report) for report in outcome.retrievers]
     caveat = _search_caveat(outcome.retrievers)
+    if budget_note and budget is not None:
+        # The budget was cut and the search still ran. Said anyway: a recall
+        # that got less time than the deployment configured because the corpus
+        # grew is a fact about this answer, not a detail of the plumbing.
+        caveat = f"{caveat} {budget_note}" if caveat else budget_note
 
     if safe_hits:
         statement = (
@@ -706,6 +798,55 @@ async def recall(req: RecallRequest) -> dict:
     }
 
 
+def _query_budget(
+    index: BM25Index, scope_prefix: str, config: EmbedConfig
+) -> tuple[float | None, str | None]:
+    """How long the question may spend being embedded, and what to say about it.
+
+    THE FIXED RESERVE WAS A PROMISE THAT EXPIRES (2026-09-10). core gives the
+    whole of /recall 2.0 s; memory reserved a flat 0.4 s of it for its own
+    ranking and handed the rest to the embedder. Ranking is linear in the scope
+    and measured 48 ms at 1,000 units, 267 ms at 5,000 and 504 ms at 10,000, so
+    past roughly 8,000 units the reserve is gone, the embedder is given time
+    /recall has already spent, and core times the call out with nothing
+    anywhere saying the corpus size was the reason.
+
+    So the reserve is the measured floor PLUS the live scope times what ranking
+    one unit actually costs here — this process's own measurement
+    (BM25Index.note_rank_seconds), or the measured seed until a search has been
+    timed, whichever is larger, because a budget sized on the optimistic figure
+    is the budget that overruns.
+
+    Returns (budget, note). A None budget means there is not enough of core's
+    two seconds left to ask the model at all, and the note is then the stated
+    reason the semantic retriever did not run — never a silent lexical answer.
+    """
+    units = index.scope_units(scope_prefix)
+    measured = index.rank_seconds_per_unit()
+    per_unit = max(measured or 0.0, RANK_SECONDS_PER_UNIT_SEED)
+    ranking = units * per_unit
+    budget = min(config.query_timeout, CORE_RECALL_TIMEOUT - RECALL_RESERVE - ranking)
+    if budget < MIN_QUERY_BUDGET:
+        return None, (
+            f"ranking the {units} note(s) in this scope takes about {ranking:.2f}s of the "
+            f"{CORE_RECALL_TIMEOUT:g}s this whole search is given, which leaves less time than "
+            f"the embedding model needs to read the question at all — so the question was "
+            f"matched by its words alone, and this is a limit of the corpus size and not of "
+            f"the notes"
+        )
+    # Said only when the number actually MOVED at the precision it is stated
+    # at: a scope small enough that its ranking rounds away has nothing to
+    # report, and a caveat printed on every recall saying "1.60s instead of
+    # 1.60s" would be noise that trains a reader to skip the line that matters.
+    if round(budget, 2) >= round(config.query_timeout, 2):
+        return budget, None
+    return budget, (
+        f"The question was given {budget:.2f}s to be matched by meaning instead of "
+        f"{config.query_timeout:.2f}s, because ranking the {units} note(s) in this scope takes "
+        f"about {ranking:.2f}s of the {CORE_RECALL_TIMEOUT:g}s this whole search is given."
+    )
+
+
 def _retriever_payload(report: RetrieverReport) -> dict:
     """One retriever's report, as facts. `ranked` is a count of units, never a
     score, and no similarity of any kind appears here: a cosine is not a
@@ -728,12 +869,25 @@ def _search_caveat(reports: tuple[RetrieverReport, ...]) -> str | None:
     installed. It says what was NOT done and why; it never claims the notes
     hold nothing, because a search that could not run properly has established
     nothing at all about the notes.
+
+    COVERAGE IS RELAYED FOR A RETRIEVER THAT DID NOT RUN TOO (2026-09-10). It
+    used to be included only for one that RAN, and the sentence that reached
+    the owner in its place was false in the case that mattered most: with all
+    47 notes embedded by a model of another width, the semantic half does not
+    run, and the reason alone said nothing about the 47 vectors sitting there
+    unusable. How much of the scope could be reached is a separate fact from
+    why the search stopped, and both of them are true at once.
     """
     absent = [report for report in reports if not report.ran and report.reason]
     partial = [report for report in reports if report.ran and report.coverage]
     parts = []
     if absent:
-        missed = ", ".join(f"{report.name} ({report.reason})" for report in absent)
+        missed = ", ".join(
+            f"{report.name} ({report.reason}"
+            + (f"; {report.coverage}" if report.coverage else "")
+            + ")"
+            for report in absent
+        )
         parts.append(
             f"This search did not use every retriever it has: {missed}. A note that says the "
             "same thing in different words could have been missed."

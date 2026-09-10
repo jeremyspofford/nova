@@ -46,12 +46,12 @@ PERSON = "alice"
 WIDTH = 4
 
 
-def _vector(text: str) -> list[float]:
+def _vector(text: str, width: int = WIDTH) -> list[float]:
     """A direction per text. Nothing here measures quality, so any stable
     unit vector will do — what is under test is the pass, not the ranking."""
     total = sum(ord(ch) for ch in text)
-    axis = total % WIDTH
-    return [1.0 if i == axis else 0.0 for i in range(WIDTH)]
+    axis = total % width
+    return [1.0 if i == axis else 0.0 for i in range(width)]
 
 
 class Service:
@@ -62,10 +62,18 @@ class Service:
     shipping ones.
     """
 
-    def __init__(self):
+    def __init__(self, width: int = WIDTH, fail_every: int = 0):
         self.calls: list[list[str]] = []
         self.keep_alive: list[object] = []
         self.fail_for = 0  # answer this many more calls with a stated failure
+        # The dimension of the vectors this stand-in answers with. A model
+        # re-pulled at another dimension is the failure MAJOR 1 is about, and
+        # it is expressed here rather than in a second mock.
+        self.width = width
+        # Fail every Nth call, for ever. A pass that keeps meeting a budget
+        # while embedding real work every time is what the attempt cap used to
+        # abandon.
+        self.fail_every = fail_every
 
     @property
     def texts(self) -> list[str]:
@@ -78,7 +86,11 @@ class Service:
         if self.fail_for > 0:
             self.fail_for -= 1
             return httpx.Response(503, json={"error": "the GPU is busy"})
-        return httpx.Response(200, json={"embeddings": [_vector(text) for text in body["input"]]})
+        if self.fail_every and len(self.calls) % self.fail_every == 0:
+            return httpx.Response(503, json={"error": "the GPU is busy"})
+        return httpx.Response(
+            200, json={"embeddings": [_vector(text, self.width) for text in body["input"]]}
+        )
 
 
 @pytest.fixture
@@ -368,3 +380,136 @@ async def test_a_deployment_with_no_embedder_says_so_once_and_does_not_loop(
     said = [r.getMessage() for r in caplog.records if "switched off" in r.getMessage()]
     assert said, "the pass ended without saying why it never started"
     assert len(said) == 1, "it said it more than once, so it went round"
+
+
+# -- a vector of the wrong width is not a vector ----------------------------
+#
+# MAJOR 1, from the adversarial review of 2026-09-10. The index decided
+# "embedded" on the PRESENCE of a digest, and `_semantic` correctly refused to
+# compare a vector of another width to the question — so after a model was
+# re-pulled at a different dimension the corpus read as 47 of 47 embedded, the
+# pass logged "0 embedded", and semantic recall was dead for as long as the
+# notes went unedited. Nothing in the service said a word about it.
+
+
+async def test_a_corpus_embedded_at_another_width_is_re_embedded_not_counted_as_done(
+    wired, tmp_path, caplog
+):
+    """The reviewer's repro: fill the corpus, narrow the model, restart.
+
+    Everything the pass sees on the second boot is a cache hit, so without the
+    width rule there is nothing to embed and nothing to say. What must happen
+    instead is that the warm-up's own answer settles the live width, every
+    vector of the old one is dropped from the index AND from the cache file,
+    and the pass goes round again and re-embeds the corpus.
+    """
+    wired(Service())
+    _seed(tmp_path, 5)
+    api.warm_context()
+    await asyncio.wait_for(api.start_vector_backfill(), timeout=5)
+    assert _coverage(tmp_path) == (5, 5)
+
+    # The same MEMORY_ROOT, the same cache file, a model of another dimension.
+    narrow = Service(width=2)
+    wired(narrow)
+    api._passes.clear()
+    api._unembeddable.clear()
+    api.warm_context()
+    with caplog.at_level(logging.WARNING, logger="memory.api"):
+        await asyncio.wait_for(api.start_vector_backfill(), timeout=5)
+
+    assert _coverage(tmp_path) == (5, 5)
+    assert api._context().index.vector_width() == 2
+    embedded = [text for call in narrow.calls for text in call if text != "warm"]
+    assert len(embedded) == 5, (
+        "the pass believed the old vectors and embedded nothing, so semantic recall is dead "
+        f"and nothing says so: {narrow.calls!r}"
+    )
+    said = [r.getMessage() for r in caplog.records if "another width" in r.getMessage()]
+    assert said, "the corpus was silently invalidated"
+
+
+async def test_the_cache_file_loses_the_wrong_width_lines_rather_than_reloading_them(
+    wired, tmp_path
+):
+    """Dropping them from the index alone would put the corpus straight back
+    into the broken state on the next boot, because the cache is read into the
+    index while the index is being built."""
+    wired(Service())
+    _seed(tmp_path, 3)
+    api.warm_context()
+    await asyncio.wait_for(api.start_vector_backfill(), timeout=5)
+    cache_file = tmp_path / ".embeddings" / "nomic-embed-text.jsonl"
+    widths = {json.loads(line)["d"] for line in cache_file.read_text().splitlines() if line.strip()}
+    assert widths == {WIDTH}
+
+    wired(Service(width=2))
+    api._passes.clear()
+    api._unembeddable.clear()
+    api.warm_context()
+    await asyncio.wait_for(api.start_vector_backfill(), timeout=5)
+    widths = {json.loads(line)["d"] for line in cache_file.read_text().splitlines() if line.strip()}
+    assert widths == {2}, f"a vector the live model cannot match is still on disk: {widths}"
+
+    # And a third boot over that cache is a no-op, so this cannot become a
+    # corpus that re-embeds itself for ever.
+    third = Service(width=2)
+    wired(third)
+    api._passes.clear()
+    api._unembeddable.clear()
+    api.warm_context()
+    await asyncio.wait_for(api.start_vector_backfill(), timeout=5)
+    assert third.calls == [["warm"]], f"the pass re-embedded a corpus it already had: {third.calls}"
+
+
+# -- the attempt cap counts attempts that got NOWHERE -----------------------
+
+
+async def test_a_pass_that_keeps_embedding_is_not_abandoned_at_the_attempt_cap(
+    wired, tmp_path, caplog
+):
+    """MINOR 5, from the same review.
+
+    The loop counted TOTAL failures. At the scale the cache comment plans for —
+    about 4,700 chunks — every attempt embeds hundreds of units and then meets
+    the per-call budget, so twenty attempts that each did real work would
+    abandon a corpus that was filling normally, and the log would say "gave up
+    after 20 attempts" about a service that never failed to do anything.
+
+    Here: 24 notes, batch 8, a service that answers one call and refuses the
+    next, for ever. Every attempt embeds eight notes. With a cap of two, the
+    old shape stopped at sixteen; the cap now means what its own log line says,
+    so the corpus finishes.
+    """
+    service = Service(fail_every=2)
+    wired(service)
+    _seed(tmp_path, 24)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("MEMORY_EMBED_MAX_ATTEMPTS", "2")
+        patch.setenv("MEMORY_EMBED_BATCH", "8")
+        api._contexts.clear()
+        api.warm_context()
+        with caplog.at_level(logging.WARNING, logger="memory.api"):
+            await asyncio.wait_for(api.start_vector_backfill(), timeout=10)
+    assert _coverage(tmp_path) == (24, 24)
+    gave_up = [r.getMessage() for r in caplog.records if "gave up" in r.getMessage()]
+    assert not gave_up, f"a pass that embedded on every attempt was abandoned: {gave_up}"
+
+
+async def test_a_pass_that_embeds_nothing_still_gives_up_at_the_cap(wired, tmp_path, caplog):
+    """The other half of the same rule: resetting on progress must not turn the
+    cap into "never give up". A pass getting nowhere still stops, and still
+    says how many notes it left."""
+    service = Service()
+    service.fail_for = 10_000
+    wired(service)
+    _seed(tmp_path, 3)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("MEMORY_EMBED_MAX_ATTEMPTS", "2")
+        api._contexts.clear()
+        api.warm_context()
+        with caplog.at_level(logging.WARNING, logger="memory.api"):
+            await asyncio.wait_for(api.start_vector_backfill(), timeout=10)
+    gave_up = [r.getMessage() for r in caplog.records if "gave up" in r.getMessage()]
+    assert gave_up and "3 note(s) still unembedded" in gave_up[0]
+    assert "embedded nothing" in gave_up[0]

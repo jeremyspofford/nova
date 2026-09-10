@@ -56,19 +56,31 @@ def _statement(body: object) -> str | None:
 
 
 def _reduced(body: object) -> bool:
-    """True when memory says one of its retrievers did not run on this call.
+    """True when memory says this search was not the search it has.
 
     Memory searches twice — by word and by meaning — and the meaning half
     needs an embedding model that may not be installed. Read off memory's own
     report; this service never decides what the report means.
+
+    TWO SHAPES OF LIMITATION, not one (2026-09-10). A retriever that did not
+    run at all reports `ran: false` with a reason. A retriever that ran over
+    part of the corpus reports `ran: true` with a `coverage` line — "12 of 47
+    notes in this scope are embedded" — and this used to read that as a whole
+    search, so memory's statement was withheld and the tool's list of hits
+    read as the complete answer. A search over a quarter of the notes is not
+    a complete answer, and the person asking has to be told which one it was.
     """
     reports = body.get("retrievers") if isinstance(body, dict) else None
     if not isinstance(reports, list):
         return False
-    return any(
-        isinstance(report, dict) and report.get("ran") is False and report.get("reason")
-        for report in reports
-    )
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        if report.get("ran") is False and report.get("reason"):
+            return True
+        if report.get("ran") is True and report.get("coverage"):
+            return True
+    return False
 
 
 def _hits(body: object) -> list[dict]:

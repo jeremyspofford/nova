@@ -79,6 +79,7 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 
 import httpx
@@ -307,7 +308,37 @@ async def _window(pool, owner: identity.Person) -> list:
     return kept
 
 
-async def _notes(app, owner: identity.Person) -> list[str]:
+@dataclass(frozen=True)
+class Background:
+    """What memory gave this pass, and what it said about its own search.
+
+    THREE FIELDS BECAUSE THE OLD ONE FLATTENED A LIE (MAJOR 3, 2026-09-10).
+    `_notes` returned a bare list of notes, so `_brief` had exactly two states
+    to write from — notes, or "Her memory returned no note bearing on this."
+    That sentence is a claim about his notes, and it was written even when the
+    meaning half of memory's search never ran.
+
+    This is the caller most likely to be in that state, and not by accident:
+    the embedder's keep-alive is derived from THIS beat's cadence
+    (services/memory/app/embedding.py, DEFAULT_KEEP_ALIVE_SECONDS), so on a
+    quiet machine the hourly watch is the first thing to ask, and a cold load
+    measured 1,444-1,728 ms against a query budget of 1.6 s. The reduced
+    search is the normal case here, and the flat claim was written on top of
+    it.
+    """
+
+    notes: tuple[str, ...] = ()
+    # memory's own sentence about the recall — which nothing it found, and
+    # whether it searched with everything it has. Its words, never reworded:
+    # whether the embedding model is installed is memory's business.
+    statement: str | None = None
+    # chat._degraded_from's reading of `retrievers`: set when a retriever did
+    # not run, or ran over only part of the notes. The trigger for replacing
+    # the flat claim above, and the reason the brief carries a caveat.
+    limited: str | None = None
+
+
+async def _notes(app, owner: identity.Person) -> Background:
     """Background from memory — a commitment she wrote down is often the only
     record that a chat line was ever a promise.
 
@@ -315,6 +346,29 @@ async def _notes(app, owner: identity.Person) -> list[str]:
     Reading his messages alone and reporting the result would be a narrower
     window than this check is defined over, and "nothing outstanding" out of a
     smaller world is exactly the false all-clear this slice exists to stop.
+
+    A search that RAN but not with everything it has is deliberately NOT
+    CannotCheck, and the reasoning is worth writing down because the two look
+    alike (2026-09-10).
+
+    This check is defined over HIS MESSAGES — `_window` reads every one of them
+    in the last fourteen days, and that window is complete or the check raises.
+    Memory is background here and is labelled as background in the brief: a
+    note carries no message id, `_verified` drops any finding whose citation
+    does not resolve to a message of his, and the brief says in as many words
+    that nothing reported may rest on a note alone. So a partial memory search
+    cannot make a finding FALSE; it can only make the check miss something.
+
+    Raising CannotCheck on it would also be the wrong trade in the other
+    direction: the semantic half is unavailable on any deployment where the
+    owner has not pulled an embedding model, which is a supported state, so
+    the rule would turn this check permanently off for those deployments and
+    he would get nothing at all rather than a caveated something.
+
+    So: it reports, and the limit is stated in the brief beside the notes, in
+    memory's own words, instead of the flat claim. The line that stays
+    CannotCheck is memory not answering — that is a window this check could
+    not read, not a search that read less of one.
     """
     chat = _chat()
     try:
@@ -335,12 +389,26 @@ async def _notes(app, owner: identity.Person) -> list[str]:
             f"would have read a narrower window than the check is defined over — "
             f"{peers.reason(exc)}"
         ) from exc
-    return [_clip(note, NOTE_CHARS) for note in chat._snippets(chat._results_from(body))][:RECALL_K]
+    notes = [_clip(note, NOTE_CHARS) for note in chat._snippets(chat._results_from(body))]
+    # The statement and the retriever report travel with the notes. Reading the
+    # body through _results_from alone — which is what this did — discards the
+    # only two things memory sends that say whether the search was whole.
+    return Background(
+        notes=tuple(notes[:RECALL_K]),
+        statement=chat._statement_from(body),
+        limited=chat._degraded_from(body),
+    )
 
 
-def _brief(owner: identity.Person, window, notes: list[str]) -> str:
+def _brief(owner: identity.Person, window, background: Background) -> str:
     """The user message: his own rows, each headed by the id it must be cited
-    by, and the notes as background that carries no id."""
+    by, and the notes as background that carries no id.
+
+    "Her memory returned no note bearing on this." is a claim about his notes,
+    and it is only written when memory actually searched them with everything
+    it has. When it did not, memory's own sentence replaces it and the caveat
+    goes beside the notes either way — see Background. 2026-09-10.
+    """
     lines = [
         f"{owner.name}'s own messages, oldest first. The id before each one is what you cite.",
         "",
@@ -349,12 +417,25 @@ def _brief(owner: identity.Person, window, notes: list[str]) -> str:
         lines.append(f"[{row['id']}] {row['created_at'].isoformat(timespec='minutes')}")
         lines.append(row["content"])
         lines.append("")
-    if notes:
+    if background.notes:
         lines.append("Notes from her memory, background only — they carry no id and cannot be")
         lines.append("cited, so nothing you report may rest on one alone:")
-        lines.extend(f"- {note}" for note in notes)
+        lines.extend(f"- {note}" for note in background.notes)
+    elif background.limited:
+        lines.append(
+            "Her memory returned no note bearing on this — and the search that looked was not "
+            "the full one, so that is not evidence that nothing was written down:"
+        )
     else:
         lines.append("Her memory returned no note bearing on this.")
+    if background.limited:
+        lines.append(background.statement or background.limited)
+        lines.append(
+            "Treat that as a limit on the search and not as evidence about the notes. His "
+            "messages above were read whole and every finding must rest on one of them, so "
+            "report from those; a commitment written down in different words may simply have "
+            "been missed."
+        )
     return "\n".join(lines)
 
 
@@ -570,8 +651,8 @@ async def commitments(app, pool) -> list[Finding]:
         # beat is free to clear anything it was still holding, because there is
         # no longer a message to point at (see the module docstring).
         return []
-    notes = await _notes(app, owner)
-    answer = await _ask(app, pool, owner, _brief(owner, window, notes))
+    background = await _notes(app, owner)
+    answer = await _ask(app, pool, owner, _brief(owner, window, background))
     items = _items(answer)
     if not items:
         return []

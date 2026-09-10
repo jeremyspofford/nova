@@ -229,6 +229,146 @@ async def test_the_window_is_his_recent_messages_and_memory_is_background(pool, 
     assert memory.recalls and memory.recalls[0]["person_id"] == str(person)
 
 
+# -- the brief never states a falsehood about her memory ---------------------
+#
+# MAJOR 3 of the adversarial review, 2026-09-10. `_notes` read the recall body
+# through `_results_from` alone, discarding memory's statement and its
+# retriever report, so `_brief` had two states: notes, or the flat claim "Her
+# memory returned no note bearing on this."
+#
+# That claim was written even when the meaning half of memory's search never
+# ran — and this is the caller most likely to be in that state. The embedder's
+# keep-alive is DERIVED from this very beat's cadence, so on a quiet machine
+# the hourly watch is the first thing to ask for the model and a cold load
+# (measured 1,444-1,728 ms) does not fit the 1.6 s query budget.
+
+REDUCED_RETRIEVERS = (
+    {"name": "lexical", "ran": True, "ranked": 2},
+    {
+        "name": "semantic",
+        "ran": False,
+        "reason": "the embedding service at http://ollama:11434 did not answer within 1.6s",
+    },
+)
+PARTIAL_RETRIEVERS = (
+    {"name": "lexical", "ran": True, "ranked": 2},
+    {
+        "name": "semantic",
+        "ran": True,
+        "ranked": 1,
+        "coverage": "12 of 47 notes in this scope are embedded",
+    },
+)
+REDUCED_STATEMENT = (
+    "These notes hold no answer to that — nothing in these notes contains any of the words "
+    "that were asked about. This search did not use every retriever it has: semantic (the "
+    "embedding service at http://ollama:11434 did not answer within 1.6s). A note that says "
+    "the same thing in different words could have been missed."
+)
+
+
+async def test_an_empty_recall_from_half_a_search_is_not_reported_as_no_note(pool, mount_peers):
+    """The falsehood, and what replaces it: memory's own words."""
+    person = await _owner(pool)
+    conversation = await _conversation(pool, person)
+    await _message(pool, conversation, GARAGE)
+    gateway = _gateway(text="[]")
+    mount_peers(
+        gateway=gateway,
+        memory=FakeMemory(
+            results=(),
+            recall_statement=REDUCED_STATEMENT,
+            recall_retrievers=REDUCED_RETRIEVERS,
+        ),
+    )
+
+    run = await checks.run_one(core_app, pool, review.CHECK_NAME)
+
+    # It still reports: the window this check is defined over is HIS messages,
+    # and every one of them was read (see review._notes for why this is not
+    # CannotCheck).
+    assert run.ran and run.findings == ()
+    brief = _brief(gateway)
+    assert "Her memory returned no note bearing on this." not in brief
+    assert "the search that looked was not the full one" in brief
+    assert "did not answer within 1.6s" in brief
+    assert "a limit on the search and not as evidence about the notes" in brief
+
+
+async def test_notes_from_a_search_over_part_of_the_corpus_carry_the_caveat(pool, mount_peers):
+    """Notes came back, and they came out of a quarter of her notes. The
+    caveat goes beside them rather than replacing them — and the model is told
+    that findings still rest on his messages, which WERE read whole."""
+    person = await _owner(pool)
+    conversation = await _conversation(pool, person)
+    await _message(pool, conversation, GARAGE)
+    gateway = _gateway(text="[]")
+    mount_peers(
+        gateway=gateway,
+        memory=FakeMemory(
+            results=({"title": "house", "snippet": "he owes the council a form"},),
+            recall_statement=(
+                "1 note(s) matched and cleared the relevance floor, best match first. The "
+                "semantic search covered only part of the notes — 12 of 47 notes in this "
+                "scope are embedded."
+            ),
+            recall_retrievers=PARTIAL_RETRIEVERS,
+        ),
+    )
+
+    run = await checks.run_one(core_app, pool, review.CHECK_NAME)
+
+    assert run.ran and run.findings == ()
+    brief = _brief(gateway)
+    assert "he owes the council a form" in brief
+    assert "12 of 47 notes in this scope are embedded" in brief
+    assert "messages above were read whole" in brief
+
+
+async def test_a_whole_search_that_found_nothing_still_says_so_plainly(pool, mount_peers):
+    """The caveat is not boilerplate. When memory searched with everything it
+    has and had nothing, the flat sentence is TRUE and stays."""
+    person = await _owner(pool)
+    conversation = await _conversation(pool, person)
+    await _message(pool, conversation, GARAGE)
+    gateway = _gateway(text="[]")
+    mount_peers(
+        gateway=gateway,
+        memory=FakeMemory(
+            results=(),
+            recall_statement="These notes hold no answer to that.",
+            recall_retrievers=(
+                {"name": "lexical", "ran": True, "ranked": 0},
+                {"name": "semantic", "ran": True, "ranked": 0},
+            ),
+        ),
+    )
+
+    run = await checks.run_one(core_app, pool, review.CHECK_NAME)
+
+    assert run.ran and run.findings == ()
+    brief = _brief(gateway)
+    assert "Her memory returned no note bearing on this." in brief
+    assert "not the full one" not in brief
+    assert "limit on the search" not in brief
+
+
+async def test_a_memory_service_that_cannot_be_asked_is_still_cannot_check(pool, mount_peers):
+    """The line that does NOT move. A reduced search read a narrower slice of
+    her notes; a memory service that did not answer read none of them, and this
+    check is defined over a window it could not then assemble."""
+    person = await _owner(pool)
+    conversation = await _conversation(pool, person)
+    await _message(pool, conversation, GARAGE)
+    mount_peers(gateway=_gateway(text="[]"), memory=None)
+    core_app.state.peer_transports = {fakes.MEMORY_URL: _Dead()}
+
+    run = await checks.run_one(core_app, pool, review.CHECK_NAME)
+
+    assert run.ran is False
+    assert "narrower window than the check is defined over" in (run.reason or "")
+
+
 async def test_the_memory_query_is_about_commitments_and_never_about_his_name(pool, mount_peers):
     """S13, live bug: the query was built by interpolating `owner.name`, which
     is an email address. The tokeniser split it and "com" — a token in every URL

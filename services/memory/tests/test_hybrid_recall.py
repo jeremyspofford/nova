@@ -409,6 +409,45 @@ async def test_a_vector_of_the_wrong_width_is_not_compared_and_is_counted(wired,
     assert semantic["ran"] is True
     assert "different width" in semantic["coverage"]
     assert "cannot be compared" in body["statement"]
+    # And it is a note the backfill will now go and get, rather than one that
+    # counts as embedded for ever (MAJOR 1, 2026-09-10).
+    assert ctx.index.has_vector(digest) is False
+    assert digest in {dig for dig, _text in ctx.index.missing_vectors(f"people/{PERSON}/")}
+
+
+async def test_a_whole_corpus_at_the_wrong_width_is_never_called_unembedded(wired, tmp_path):
+    """MINOR 4 of the 2026-09-10 review, and the sentence it produced.
+
+    With every note embedded by a model of another dimension, the semantic half
+    cannot derive its floor and does not run. The reason it gave was "only 0 of
+    4 notes in this scope have been embedded so far" — which is FALSE: all four
+    are embedded, and the reason none could be used is a width nothing
+    mentioned, because coverage was relayed only for a retriever that RAN.
+    """
+    wired(_handler())
+    _seed(tmp_path)
+    await api.warm_vectors()
+    ctx = api._context()
+    for digest in list(ctx.index.live_digests()):
+        ctx.index.set_vectors(digest, [[1.0, 0.0]])
+    async with _client() as client:
+        body = await _recall(client, "how much vram is in the box")
+    semantic = _retriever(body, "semantic")
+    assert semantic["ran"] is False
+    assert "embedded" not in semantic["reason"], (
+        f"the refusal still claims something about how many notes are embedded: "
+        f"{semantic['reason']!r}"
+    )
+    # The count is a separate fact, and it survives to the sentence a caller
+    # repeats even though the retriever did not run.
+    assert semantic["coverage"] == (
+        "0 of 4 notes in this scope could be matched by meaning — 4 carry a vector from a "
+        "model whose vectors are a different width, which cannot be compared to this question"
+    )
+    assert "different width" in body["statement"]
+    assert "0 of 4 notes in this scope have been embedded" not in body["statement"]
+    # ...and the backfill is told, so this is a state the service leaves.
+    assert len(ctx.index.missing_vectors(f"people/{PERSON}/")) == 4
 
 
 # -- 3. the vectors are not paid for twice ----------------------------------
@@ -479,3 +518,45 @@ async def test_the_cache_file_is_not_a_memory_file(wired, tmp_path):
         response = await client.get("/export", headers=_headers(), params={"person_id": PERSON})
     assert response.status_code == 200
     assert b".embeddings" not in response.content
+
+
+# -- the budget the question gets is stated when the corpus cut it ----------
+
+
+async def test_a_budget_cut_by_the_corpus_reaches_the_sentence_a_caller_repeats(wired, tmp_path):
+    """MINOR 6, end to end. The reserve is derived from what ranking THIS
+    scope costs, and a search that was given less time than the deployment
+    configured says so beside its hits — a fact about this answer, not a
+    detail of the plumbing."""
+    wired(_handler())
+    _seed(tmp_path)
+    await api.warm_vectors()
+    ctx = api._context()
+    # This process has timed a search of these four notes at half a second.
+    ctx.index.note_rank_seconds(f"people/{PERSON}/", 0.5)
+    async with _client() as client:
+        body = await _recall(client, "how much vram is in the box")
+    assert body["found"] is True
+    assert _retriever(body, "semantic")["ran"] is True
+    assert "instead of" in body["statement"]
+    assert "ranking the 4 note(s) in this scope" in body["statement"]
+
+
+async def test_a_corpus_that_leaves_no_time_for_the_model_says_that_not_a_timeout(wired, tmp_path):
+    """The end of the curve: the model is not asked at all, and the semantic
+    half reports a corpus-size limit. Reporting "the embedding service did not
+    answer within 0.03s" would be a true sentence about the wrong thing."""
+    calls: list = []
+    wired(_handler(calls))
+    _seed(tmp_path)
+    await api.warm_vectors()
+    ctx = api._context()
+    ctx.index.note_rank_seconds(f"people/{PERSON}/", 8.0)
+    calls.clear()
+    async with _client() as client:
+        body = await _recall(client, "how much vram is in the box")
+    semantic = _retriever(body, "semantic")
+    assert semantic["ran"] is False
+    assert "corpus size and not of the notes" in semantic["reason"]
+    assert calls == [], "the model was asked under a budget it could never meet"
+    assert "did not use every retriever" in body["statement"]

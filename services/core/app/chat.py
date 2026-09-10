@@ -687,6 +687,12 @@ class Recalled:
     # the second one does not run. Memory says so on every answer; this is
     # that sentence, in memory's own words, on its way to the prompt.
     #
+    # It also covers the search that RAN over only part of the corpus
+    # (2026-09-10): with 12 of 47 notes embedded, both retrievers ran and the
+    # answer still came out of a quarter of the notes. Memory states that
+    # too, and until this field carried it the sentence was composed, sent,
+    # and dropped on the floor here.
+    #
     # A third distinct state, and it has to be: "she found nothing" is a
     # statement about the notes, "memory was down" is a statement about the
     # service, and this one is neither — she looked, but not with everything
@@ -858,36 +864,53 @@ def _snippets(results: Iterable, today: date | None = None) -> list[str]:
 def _degraded_from(body: object) -> str | None:
     """Memory's sentence about a search that did not use everything it has.
 
-    /recall reports `retrievers` — which searches ran on that call and, for
-    any that did not, why. This service does not decide what that means or
-    reword it: whether the embedding model is installed is memory's business,
-    the sentence is memory's, and this only picks out the fact that one of
-    them did not run.
+    /recall reports `retrievers` — which searches ran on that call, why any
+    that did not, and how much of the scope any that DID could actually reach.
+    This service does not decide what that means or reword it: whether the
+    embedding model is installed is memory's business, the sentence is
+    memory's, and this only picks out the fact that the search was limited.
 
-    None when every retriever ran, and None for a memory service too old to
-    send the field — an older peer that cannot report a degraded search must
-    not be described as having run a full one, but it also cannot be
-    described as having run a reduced one, so nothing is claimed either way.
+    ANY LIMITATION, not only a retriever that failed to run (2026-09-10). This
+    used to select on `ran is False` alone, so memory's other sentence — "the
+    semantic search covered only part of the notes — 12 of 47 notes in this
+    scope are embedded" — was composed, sent on every answer, and thrown away
+    here. A search that ranked a quarter of the corpus reported ran=True with
+    no reason, this returned None, the span carried no `retrievers_missing`,
+    and the prompt said nothing: a partial search read exactly like a whole
+    one. That is the same lie as a silent lexical fallback, in a shape the
+    first fix did not cover.
+
+    None when every retriever ran over everything, and None for a memory
+    service too old to send the field — an older peer that cannot report a
+    degraded search must not be described as having run a full one, but it
+    also cannot be described as having run a reduced one, so nothing is
+    claimed either way.
     """
     if not isinstance(body, dict):
         return None
     reports = body.get("retrievers")
     if not isinstance(reports, list):
         return None
-    missing = [
-        report
-        for report in reports
-        if isinstance(report, dict) and report.get("ran") is False and report.get("reason")
-    ]
-    if not missing:
+    limits = []
+    for report in reports:
+        if not isinstance(report, dict):
+            continue
+        name = report.get("name") or "unnamed"
+        reason = report.get("reason")
+        # memory's own words for how much of the scope it reached. Relayed, not
+        # reworded: how many notes are embedded is memory's fact and its
+        # sentence, and this service has no way to check either.
+        coverage = report.get("coverage")
+        if report.get("ran") is False and reason:
+            said = f"the {name} search did not run — {reason}"
+            if coverage:
+                said = f"{said} ({coverage})"
+            limits.append(said)
+        elif report.get("ran") is True and coverage:
+            limits.append(f"the {name} search covered only part of the notes — {coverage}")
+    if not limits:
         return None
-    return (
-        "; ".join(
-            f"the {report.get('name', 'unnamed')} search did not run — {report['reason']}"
-            for report in missing
-        )
-        + "."
-    )
+    return "; ".join(limits) + "."
 
 
 def _statement_from(body: object) -> str | None:

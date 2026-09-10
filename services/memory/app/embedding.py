@@ -156,7 +156,48 @@ DEFAULT_TIMEOUT = 30.0
 # DEFAULT_KEEP_ALIVE_SECONDS and the boot warm-up in api.py are for, and when
 # it is cold anyway recall says which half of the search it did.
 CORE_RECALL_TIMEOUT = 2.0
+
+# THE RESERVE: a measured floor, plus a term that GROWS WITH THE CORPUS.
+#
+# It was a flat 0.4 until 2026-09-10, and the review named what that promises.
+# 0.4 s was reserved for a ranking cost measured at 4.5 ms over 47 units — and
+# ranking is linear in the scope, which only ever grows. Measured on this box,
+# one scope, warm:
+#
+#     units      ranking
+#      1,000       48 ms
+#      5,000      267 ms
+#     10,000      504 ms
+#
+# — about 50 us a unit. Past roughly 8,000 units the ranking alone spends the
+# whole reserve, so the embedder is handed a budget the rest of /recall has
+# already used, core times the request out at 2.0 s, and nothing anywhere says
+# the reason was that the corpus got big.
+#
+# So 0.4 stays as the FLOOR — it is the measured round trip, scope re-check and
+# JSON, and at today's corpus the budget is byte-identical to what it was — and
+# above it the reserve is derived per call from the live scope, preferring what
+# this process has actually TIMED (BM25Index.note_rank_seconds) over the seed
+# below. api._query_budget does the arithmetic and /recall states it when the
+# corpus is what cut the budget.
 RECALL_RESERVE = 0.4
+
+# The seed for the per-unit ranking cost, from the table above. Used only until
+# this process has timed a search of its own, and then only if it is the larger
+# of the two. 2026-09-10.
+RANK_SECONDS_PER_UNIT_SEED = 50e-6
+
+# The smallest budget worth handing the embedder at all. A warm embed measured
+# 17-26 ms here, so this is roughly ten warm calls of headroom; below it a call
+# fails on the clock rather than on the model, and "the embedding service did
+# not answer within 0.03s" is a sentence about the wrong thing. When the
+# derived budget falls under this, /recall does not call the embedder at all
+# and says that ranking this many notes is why. 2026-09-10.
+MIN_QUERY_BUDGET = 0.25
+
+# The ceiling: what the question's budget is over a scope small enough that its
+# ranking disappears into the floor above. MEMORY_EMBED_QUERY_TIMEOUT overrides
+# it, and the derived budget can only ever come in UNDER it.
 DEFAULT_QUERY_TIMEOUT = CORE_RECALL_TIMEOUT - RECALL_RESERVE
 
 # Texts per request. MEASURED, because the assumption was wrong in both
@@ -353,8 +394,12 @@ class Embedder:
             )
         return None
 
-    async def embed_query(self, text: str) -> list[float]:
+    async def embed_query(self, text: str, *, timeout: float | None = None) -> list[float]:
         """The question, embedded under the tighter on-the-turn budget.
+
+        `timeout` is that budget when the caller derived one from the live
+        corpus (api._query_budget) — ranking grows with the scope and what is
+        left for the model shrinks with it. None uses the configured ceiling.
 
         Not windowed, unlike a note: a question is one thing being asked, and
         half of it is not a smaller version of it. One past the model's
@@ -363,8 +408,10 @@ class Embedder:
         "one of these notes is too long" are different facts and only one of
         them is true here.
         """
+        ceiling = self.config.query_timeout
+        budget = ceiling if timeout is None else min(timeout, ceiling)
         try:
-            vectors = await self.embed([text], timeout=self.config.query_timeout)
+            vectors = await self.embed([text], timeout=budget)
         except TextTooLong as exc:
             raise TextTooLong(
                 f"the question is longer than {self.config.model!r} can read in one go, so it "
@@ -697,6 +744,35 @@ class VectorCache:
             for digest, windows in pairs:
                 handle.write(_encode_line(digest, windows) + "\n")
 
+    def drop(self, digests: set[str]) -> int:
+        """Forget specific vectors and rewrite the file without them.
+
+        `prune` removes what the NOTES no longer hold; this removes what the
+        MODEL no longer produces — windows of a width the live embedder cannot
+        answer with any more (BM25Index.set_vector_width). Both have to exist:
+        leaving a wrong-width line on disk means the next boot reads it back
+        in, the index counts the unit as embedded, the backfill finds nothing
+        to do, and semantic recall is dead until somebody edits the note.
+        2026-09-10.
+        """
+        if not self._loaded:
+            return 0
+        gone = [digest for digest in digests if digest in self._vectors]
+        if not gone:
+            return 0
+        for digest in gone:
+            del self._vectors[digest]
+        self._rewrite()
+        return len(gone)
+
+    def _rewrite(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.path.with_suffix(".jsonl.tmp")
+        with temporary.open("w", encoding="utf-8") as handle:
+            for digest, windows in self._vectors.items():
+                handle.write(_encode_line(digest, windows) + "\n")
+        temporary.replace(self.path)
+
     def prune(self, live: set[str]) -> int:
         """Rewrite the file with only the vectors still in the index.
 
@@ -712,12 +788,7 @@ class VectorCache:
             return 0
         for digest in stale:
             del self._vectors[digest]
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_suffix(".jsonl.tmp")
-        with temporary.open("w", encoding="utf-8") as handle:
-            for digest, windows in self._vectors.items():
-                handle.write(_encode_line(digest, windows) + "\n")
-        temporary.replace(self.path)
+        self._rewrite()
         return len(stale)
 
 
@@ -735,6 +806,15 @@ def cache_path(root: Path, config: EmbedConfig) -> Path:
 # keep exactly the silent half-vector this change exists to remove, and keep
 # it for as long as the note goes unedited.
 CACHE_FORMAT = 2
+
+
+def _width_of(pairs: list[tuple[str, list[list[float]]]]) -> int | None:
+    """The width of vectors the model just produced, from the answer itself."""
+    for _digest, windows in pairs:
+        for window in windows:
+            if window:
+                return len(window)
+    return None
 
 
 def _encode_line(digest: str, windows: list[list[float]]) -> str:
@@ -814,11 +894,28 @@ class BackfillReport:
     # it learns which ones, from the pass that actually met them, rather than
     # from a rule that guesses.
     unembeddable: tuple[str, ...] = ()
+    # The WIDTH of the vectors this pass actually got back, or None when it
+    # made no successful call. This is the only place the live model's width is
+    # a fact rather than an assumption, and api.py hands it to
+    # BM25Index.set_vector_width so a corpus embedded at another width is
+    # invalidated instead of counting as done for ever. 2026-09-10.
+    width: int | None = None
+    # Vectors dropped because they were that other width. Not a failure — the
+    # work simply has to be done again — but the pass must go round once more,
+    # and the caller can only know that from here.
+    stale_width: int = 0
 
     @property
     def done(self) -> bool:
-        """Every unit this pass was given now has a vector, or provably cannot."""
-        return self.remaining == 0 and not self.failed and not self.deferred
+        """Every unit this pass was given now has a vector, or provably cannot.
+
+        `stale_width` counts against it: a pass whose vectors came back at a new
+        width has just invalidated notes that are not in `remaining`, and there
+        is more to do. 2026-09-10.
+        """
+        return (
+            self.remaining == 0 and not self.stale_width and not self.failed and not self.deferred
+        )
 
 
 async def backfill(
@@ -904,18 +1001,14 @@ async def backfill(
                     report.failed = str(exc)
                     break
             done += len(pairs) + refused
-            if report.failed:
-                if pairs:
-                    cache.add(pairs)
-                    for dig, windows in pairs:
-                        apply(dig, windows)
-                    report.embedded += len(pairs)
-                break
             if pairs:
                 cache.add(pairs)
                 for dig, windows in pairs:
                     apply(dig, windows)
                 report.embedded += len(pairs)
+                report.width = _width_of(pairs) or report.width
+            if report.failed:
+                break
             continue
         except EmbedderUnavailable as exc:
             report.failed = str(exc)
@@ -924,6 +1017,7 @@ async def backfill(
         for dig, windows in pairs:
             apply(dig, windows)
         report.embedded += len(pairs)
+        report.width = _width_of(pairs) or report.width
         done += len(chunk)
     report.too_long = tuple(too_long)
     report.unembeddable = tuple(unembeddable)

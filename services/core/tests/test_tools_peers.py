@@ -142,6 +142,40 @@ async def test_hits_from_half_a_search_carry_the_caveat_too(memory_ctx):
     assert "could have been missed" in result
 
 
+PARTIAL = (
+    {"name": "lexical", "ran": True, "ranked": 2},
+    {
+        "name": "semantic",
+        "ran": True,
+        "ranked": 1,
+        "coverage": "12 of 47 notes in this scope are embedded",
+    },
+)
+PART_MATCHED = (
+    "1 note(s) matched and cleared the relevance floor, best match first. The semantic "
+    "search covered only part of the notes — 12 of 47 notes in this scope are embedded."
+)
+
+
+async def test_hits_from_a_search_over_part_of_the_notes_carry_the_caveat(memory_ctx):
+    """MAJOR 2 of the adversarial review, 2026-09-10.
+
+    Both retrievers ran; the meaning half reached twelve notes of forty-seven.
+    `_reduced` selected on `ran is False` alone, so this read as a whole search
+    and memory's sentence was withheld — the tool she reaches for deliberately
+    answered "1 note(s) matched" about a quarter of her notes.
+    """
+    memory = fakes.FakeMemory(
+        results=({"title": "Coffee", "kind": "topic", "snippet": "pour-over, no sugar"},),
+        recall_statement=PART_MATCHED,
+        recall_retrievers=PARTIAL,
+    )
+    result, ok = await tools.dispatch("memory_search", {"query": "coffee"}, memory_ctx(memory))
+    assert ok is True
+    assert "Coffee (topic): pour-over, no sugar" in result
+    assert "12 of 47 notes in this scope are embedded" in result
+
+
 async def test_a_full_search_adds_nothing_about_how_it_was_done(memory_ctx):
     memory = fakes.FakeMemory(
         results=({"title": "Coffee", "kind": "topic", "snippet": "pour-over"},),

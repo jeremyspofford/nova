@@ -153,3 +153,74 @@ The suite is the verification, and it is honest in a way a walk cannot be:
 the same twenty questions, before and after, with the number in the commit
 message. Then the live walk that only a person can do — ask her something
 you told her a week ago and see whether she knows it.
+
+## The adversarial review of 2026-09-10, and the one decision in it
+
+Six defects, one shape: **the service knew its search was limited and the fact
+did not reach the person.** Five were plainly bugs and were fixed as bugs. One
+needed a judgement call, and it is recorded here rather than only in a
+docstring, because it is the kind of thing a later slice will otherwise
+re-decide by accident.
+
+### May a check defined over a full window report on a partial search?
+
+`checks/review.py` is defined over **his messages** — every one of them in the
+last fourteen days, or `_window` raises. It also asks memory for background.
+A memory service that cannot be answered at all is already `CannotCheck`: the
+check could not assemble the world it is defined over. The question the review
+raised is whether a memory search that RAN, but with only its word half, or
+over a quarter of the embedded corpus, is the same thing.
+
+**Decided: it reports, with the limit stated in the brief in memory's own
+words.** Three reasons, in order of weight:
+
+1. **A partial memory search cannot make a finding false.** Notes carry no
+   message id; `_verified` drops any finding whose citation does not resolve
+   to a message of his; the brief says in as many words that nothing reported
+   may rest on a note alone. A reduced search can only make the check MISS
+   something, and the caveat is what says so.
+2. **The window it is defined over was read whole.** His messages are the
+   subject; memory is background, and is labelled as background.
+3. **`CannotCheck` here would switch the check off for a whole class of
+   deployment.** The semantic half is unavailable on any box where the owner
+   has not pulled an embedding model — a supported state — so the rule would
+   mean those owners get nothing at all rather than a caveated something.
+
+The line that does **not** move: memory not answering stays `CannotCheck`.
+"Read less of the notes" and "read none of them" are different, and only the
+second is a window this check could not assemble.
+
+### The other five, for the record
+
+- **A wrong-width vector counted as embedded for ever.** The index decided
+  "has a vector" on the presence of a digest, so after the embedding model was
+  re-pulled at another dimension the corpus read as fully covered, the pass
+  logged "0 embedded", and semantic recall was dead until the notes were
+  edited. Presence is now *comparability*: `has_vector`, `missing_vectors` and
+  `vector_coverage` are width-aware, the width is learned from a live vector
+  (the backfill's own answer, the boot warm-up, or the embedded question), and
+  vectors of any other width are dropped from the index *and* from the cache
+  file so the next pass re-embeds them.
+- **Partial coverage never reached the prompt.** Memory composed
+  "the semantic search covered only part of the notes — 12 of 47…" and core's
+  `_degraded_from` selected on `ran is False` alone, so it was thrown away.
+  It now selects on any stated limitation, relays memory's own coverage words,
+  and reaches the prompt on the branch with hits as well as the empty one.
+  `memory_search` had the same gap and now has the same rule.
+- **"only 0 of 47 notes have been embedded" was false** when all 47 were
+  embedded at an incomparable width. The reason (why the floor could not be
+  derived) and the coverage (how much of the scope was reachable) are separate
+  facts now, and `_search_caveat` relays coverage for a retriever that did not
+  run as well as for one that did.
+- **The backfill counted total failures, not failures without progress.** At
+  the ~4,700-chunk scale the cache is designed for, every attempt embeds
+  hundreds of units and then meets the per-call budget, so twenty productive
+  attempts would abandon a corpus that was filling normally. The counter
+  resets whenever a pass embedded anything, so the cap means what its log line
+  says.
+- **`RECALL_RESERVE` was a fixed 0.4 s for a cost that grows with the corpus**
+  (48 ms at 1,000 units, 267 ms at 5,000, 504 ms at 10,000). 0.4 is now the
+  floor; above it the reserve is the live scope times what ranking one unit
+  actually costs *in this process*, and `/recall` states in its `statement`
+  when the corpus is what cut the budget — or that the corpus left no time to
+  match by meaning at all, which is a different sentence from a timeout.

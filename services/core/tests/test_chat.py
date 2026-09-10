@@ -262,6 +262,72 @@ def test_a_reduced_search_is_read_off_memorys_own_report():
     assert chat._degraded_from({"retrievers": [{"name": "semantic", "ran": False}]}) is None
 
 
+def test_a_search_that_ran_over_part_of_the_notes_is_a_limitation_too():
+    """MAJOR 2 of the adversarial review, 2026-09-10.
+
+    Memory composes the sentence — "The semantic search covered only part of
+    the notes — 12 of 47 notes in this scope are embedded." — and sends it on
+    every answer. This selected on `ran is False` alone, so a semantic
+    retriever that RAN over a quarter of the corpus (ran=True, no reason,
+    coverage set) produced None: no `retrievers_missing` on the span, nothing
+    in the prompt, and an answer out of a quarter of the notes reading exactly
+    like an answer out of all of them.
+    """
+    partial = chat._degraded_from(
+        {
+            "retrievers": [
+                {"name": "lexical", "ran": True, "ranked": 3},
+                {
+                    "name": "semantic",
+                    "ran": True,
+                    "ranked": 2,
+                    "coverage": "12 of 47 notes in this scope are embedded",
+                },
+            ]
+        }
+    )
+    assert partial == (
+        "the semantic search covered only part of the notes — 12 of 47 notes in this scope "
+        "are embedded."
+    )
+    # And a retriever that did not run carries its coverage as well: "all 47
+    # embedded at a width nothing can compare" is not "0 embedded", and the
+    # reason alone never said which. (MINOR 4, same review.)
+    both = chat._degraded_from(
+        {
+            "retrievers": [
+                {"name": "lexical", "ran": True, "ranked": 3},
+                {
+                    "name": "semantic",
+                    "ran": False,
+                    "reason": "too few of these notes could be matched by meaning",
+                    "coverage": "0 of 47 notes in this scope could be matched by meaning — 47 "
+                    "carry a vector from a model whose vectors are a different width",
+                },
+            ]
+        }
+    )
+    assert "different width" in both
+    assert both.startswith("the semantic search did not run — too few")
+
+
+def test_a_partial_search_qualifies_the_notes_it_did_return():
+    """The branch WITH hits. "Here are three notes" reads as "and that is what
+    there is"; a search over a quarter of the corpus has to say so beside the
+    notes, not instead of them."""
+    partial = (
+        "the semantic search covered only part of the notes — 12 of 47 notes in this scope "
+        "are embedded."
+    )
+    prompt = chat.volatile_system_prompt(
+        chat.Recalled(notes=("Kitchen: the kettle is new",), degraded=partial)
+    )
+    assert "the kettle is new" in prompt
+    assert "How that search was done:" in prompt
+    assert "12 of 47" in prompt
+    assert "rather than that she has nothing on the subject" in prompt
+
+
 async def test_recall_failure_leaves_the_turn_fine_and_the_span_honest(
     owner_client, pool, mount_peers
 ):
