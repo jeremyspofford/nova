@@ -31,6 +31,7 @@ from app import (
     scheduler,
     settings_store,
     timers,
+    traces,
 )
 from app.checks import Check, CheckRun, Finding
 from app.identity import Person
@@ -1495,12 +1496,19 @@ async def test_the_coverage_line_is_there_on_a_good_day_too(pool, only, mount_pe
     assert "every hour at :05" in coverage, "the gap needs its yardstick beside it"
     # The firing carries the numbers the sentence was composed from, so the
     # record can be checked against the message he actually read.
+    # 2026-09-10: the record gained expected_interval_s, the beat's own
+    # interval derived from its schedule. It is the yardstick a gap is judged
+    # against, so it belongs beside the gap on the row rather than only in the
+    # sentence. blind_spell_s is deliberately ABSENT here: one hour against an
+    # hourly beat is a late tick, not a hole, which is what makes this a good
+    # day.
     assert firing["delivery"]["digest"]["coverage"] == {
         "firings": 7,
         "passes": 7,
         "from_a_digest": False,
         "window_start": (await _first_watch_start(pool)).isoformat(),
         "longest_gap_s": 3600,
+        "expected_interval_s": 3600,
     }
 
 
@@ -2213,3 +2221,92 @@ async def test_a_ceiling_that_could_carry_nothing_is_said_out_loud_and_not_used(
     assert "held_back" not in firing["delivery"]["digest"]
     assert len(await _messages(pool, his_chat["id"])) == 1
     assert any(beats.MAX_NOTICES_KEY in r.getMessage() for r in caplog.records)
+
+
+async def _beat_turn(pool, owner):
+    """A beat turn in the beats' own conversation, the way _run_firing opens
+    one — so a decision can be driven without a whole firing."""
+    return await traces.open_turn(
+        pool,
+        kind=beats.BEAT_TURN_KIND,
+        conversation_id=await beats.beat_conversation(pool),
+        model="",
+        person_id=owner.id,
+        timezone="UTC",
+    )
+
+
+async def test_a_quiet_day_with_a_hole_in_it_is_not_a_watched_day(pool, mount_peers):
+    """The live miss, 2026-09-10, reproduced at the decision that made it.
+
+    His machine sleeps nightly, so the watch beat ran nine times and then not
+    at all for eleven hours. Inside that hole ollama went unreachable, both
+    models were walled, and it recovered before the next pass — so nothing was
+    outstanding by morning. `unproven` counted only three states (no pass at
+    all, paused, unreadable), so nine passes read as a watched day and the
+    digest said NOTHING on the morning after an outage nobody saw.
+
+    A hole of GAP_MULTIPLE intervals or more now breaks the silence, and the
+    sentence is the OTHER one: the beat DID run, so "nothing was watched"
+    would be false about it — what is true is that the quiet covers only part
+    of the span.
+
+    Driven through _quiet_digest with a Coverage built here rather than
+    through two beats, because the span's closing mark is read from the real
+    clock while the beat harness runs in 2031: the decision is what this pins.
+    """
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    gateway = FakeGateway(deltas=("must never be asked",))
+    mount_peers(gateway=gateway)
+    await beats.ensure_beats(pool)
+    turn = await _beat_turn(pool, owner)
+    coverage = beats.Coverage(
+        firings=9,
+        passes=9,
+        window_start=LATER,
+        from_a_digest=True,
+        longest_gap=timedelta(hours=11),
+        expected_interval=timedelta(hours=1),
+        schedule_words="every hour at :05 UTC",
+    )
+
+    assert coverage.blind_spell == timedelta(hours=11)
+    assert coverage.unproven, "nine passes with an eleven-hour hole is not a watched day"
+
+    outcome = await beats._quiet_digest(app, pool, turn, coverage, owner)
+
+    assert outcome.status == scheduler.FIRING_OK
+    assert outcome.delivery["digest"]["reason"] == beats.DIGEST_PARTLY_WATCHED_NOTE
+    said = await _messages(pool, his_chat["id"])
+    assert len(said) == 1, "the silence is broken on a day with a hole in it"
+    assert beats.DIGEST_PARTLY_WATCHED in said[-1]["content"]
+    assert "11h 00m" in said[-1]["content"], "the hole is named, not merely implied"
+    assert gateway.seen == [], "no model is asked — the line is composed in code"
+
+
+async def test_a_watched_quiet_day_still_says_nothing(pool, mount_peers):
+    """The other side of the ratchet, at the same decision: a gap of about one
+    interval is a late tick, and a digest that spoke about that every day is
+    the noise this slice exists to avoid."""
+    owner = await _owner(pool)
+    his_chat = await conversations.active_conversation(pool, owner)
+    mount_peers(gateway=FakeGateway(deltas=("must never be asked",)))
+    await beats.ensure_beats(pool)
+    turn = await _beat_turn(pool, owner)
+    coverage = beats.Coverage(
+        firings=24,
+        passes=24,
+        window_start=LATER,
+        from_a_digest=True,
+        longest_gap=timedelta(hours=1),
+        expected_interval=timedelta(hours=1),
+    )
+
+    assert coverage.blind_spell is None, "one interval of slack is not a hole"
+    assert not coverage.unproven
+
+    outcome = await beats._quiet_digest(app, pool, turn, coverage, owner)
+
+    assert outcome.delivery["digest"]["reason"] == beats.DIGEST_NOTHING_NOTE
+    assert await _messages(pool, his_chat["id"]) == [], "he hears nothing"

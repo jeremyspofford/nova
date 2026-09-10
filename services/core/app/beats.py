@@ -70,7 +70,7 @@ import logging
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 import asyncpg
@@ -1243,6 +1243,58 @@ DIGEST_STANDING_LIMIT = 10
 # there", so the sentence that says how much was watched is not conditional on
 # there being bad news.
 COVERAGE_PREFIX = "Coverage:"
+
+# How wide a hole in the watching is worth breaking a quiet day's silence for,
+# as a multiple of the beat's OWN interval. One missed pass spans two
+# intervals and a late tick barely more than one, so three means at least two
+# consecutive passes did not happen.
+#
+# This exists because of a live miss (2026-09-10). `unproven` counted only
+# three states — no pass at all, paused, unreadable — so nine passes with an
+# eleven-hour hole in the middle read as a watched day and the digest said
+# nothing. A real outage had happened inside that hole: ollama went
+# unreachable at 00:32, both models walled, and the next pass was eleven hours
+# later by which time it had recovered. His machine sleeps every night, so
+# that is not a rare shape, it is the ordinary one — and "some passes
+# happened" was standing in for "the span was watched".
+GAP_MULTIPLE = 3
+# How many firings ahead to ask the schedule for. The widest spacing among
+# them is the expectation, so an irregular shape (weekdays only, the first of
+# the month) is judged against its own widest ordinary gap rather than its
+# average.
+INTERVAL_SAMPLES = 8
+
+
+def _expected_interval(row) -> timedelta | None:
+    """How long the watch beat's own schedule says it goes between firings.
+
+    DERIVED by asking the schedule for its next several firings, never a
+    hardcoded "hourly": the owner can retime the beat on the Schedules page
+    and the yardstick has to move with it. A schedule that cannot be read, or
+    one that fires once and never again, has no interval and the gap is then
+    reported without a judgement rather than judged against a guess.
+    """
+    if row is None:
+        return None
+    try:
+        spec, zone = row["schedule"], row["timezone"]
+        at = datetime.now(UTC)
+        firings = []
+        for _ in range(INTERVAL_SAMPLES):
+            at = schedule.next_after(spec, at, zone)
+            if at is None:
+                break
+            firings.append(at)
+    except Exception:  # noqa: BLE001 — no yardstick is a stated absence, not a crash
+        return None
+    if len(firings) < 2:
+        return None
+    return max(
+        (later - earlier for earlier, later in zip(firings, firings[1:], strict=False)),
+        default=None,
+    )
+
+
 COVERAGE_UNREADABLE = (
     f"{COVERAGE_PREFIX} the watch beat's own firing history could not be read, so this message "
     "cannot say how much of the time since the last digest was actually watched"
@@ -1270,6 +1322,18 @@ DIGEST_UNWATCHED = (
 DIGEST_UNWATCHED_NOTE = (
     "no notice was waiting to be delivered, and nothing showed that the watch beat made a pass "
     "over the span either, so the coverage line went out on its own"
+)
+# The other quiet day that has to speak (2026-09-10): the beat DID run, so
+# every sentence above would be false, but it left a hole wide enough that the
+# quiet only covers part of the span.
+DIGEST_PARTLY_WATCHED = (
+    "Nothing is waiting to be delivered. You are hearing this anyway because there was a "
+    "stretch in which nothing was watched at all, so today's quiet covers only the part of "
+    "the day I was actually looking at."
+)
+DIGEST_PARTLY_WATCHED_NOTE = (
+    "no notice was waiting to be delivered, but the watch beat left a gap wide enough that the "
+    "quiet covers only part of the span, so the coverage line went out on its own"
 )
 
 STANDING_PREFIX = "Still standing, already reported and not repeated here:"
@@ -1591,17 +1655,48 @@ class Coverage:
     # rather than quietly dropping the clause.
     schedule_words: str | None = None
     schedule_note: str | None = None
+    # The beat's own interval, derived from its schedule (see
+    # _expected_interval). It is the yardstick `blind_spell` measures the
+    # longest gap against; None means there is no yardstick, and a gap is then
+    # reported without a judgement rather than judged against a guess.
+    expected_interval: timedelta | None = None
     unreadable: str | None = None
+
+    @property
+    def blind_spell(self) -> timedelta | None:
+        """The stretch nobody watched, when it is wide enough to be news.
+
+        A gap of one interval is a late tick. `GAP_MULTIPLE` of them means at
+        least two consecutive passes did not happen, which on an hourly beat
+        is hours of the day in which anything could have broken and recovered
+        unseen — and did, on 2026-09-10.
+        """
+        if self.longest_gap is None or self.expected_interval is None:
+            return None
+        if self.expected_interval <= timedelta(0):
+            return None
+        if self.longest_gap < self.expected_interval * GAP_MULTIPLE:
+            return None
+        return self.longest_gap
 
     @property
     def unproven(self) -> bool:
         """Is this span one that CANNOT be shown to have been watched?
 
-        Three ways, and the digest speaks on any of them even on a day with
-        nothing else to say: no pass was made, or the beat is paused (so no
-        pass will be made), or the history could not be read at all — never
-        reporting full coverage for a history nobody could count is the same
-        rule as the unreadable line itself.
+        FOUR ways, and the digest speaks on any of them even on a day with
+        nothing else to say: no pass was made, the beat is paused (so no pass
+        will be made), the history could not be read at all — never reporting
+        full coverage for a history nobody could count is the same rule as the
+        unreadable line itself — or a `blind_spell`, a hole wide enough that
+        the span was only partly watched.
+
+        The fourth was added on 2026-09-10 after it was missed live. The other
+        three all mean "nothing was watched", and a day with SOME passes was
+        therefore treated as a watched day: nine passes with an eleven-hour
+        hole read exactly like full cover, and the digest stayed silent on the
+        morning after an outage that had happened and recovered inside the
+        hole. On a machine that sleeps nightly that is the ordinary shape, not
+        a rare one.
 
         This is what closes the silent death. Checks run only from the watch
         beat, so no check can ever see its own beat stop: a paused watch beat
@@ -1609,7 +1704,12 @@ class Coverage:
         findings are delivered, and every digest after that writes NOTHING,
         forever, with nothing else in the system able to notice.
         """
-        return self.unreadable is not None or self.passes == 0 or self.paused_at is not None
+        return (
+            self.unreadable is not None
+            or self.passes == 0
+            or self.paused_at is not None
+            or self.blind_spell is not None
+        )
 
     def _paused_words(self, zone: str) -> str:
         """The pause, in words, or "". Never just "it is paused": the reason is
@@ -1665,6 +1765,13 @@ class Coverage:
             words += (
                 f", and the longest it went without a pass was {duration_words(self.longest_gap)}"
             )
+        spell = self.blind_spell
+        if spell is not None:
+            words += (
+                f" — a stretch of {duration_words(spell)} in which nothing was watched at all, "
+                "so the quiet over that stretch is a fact about the watcher rather than about "
+                "the world"
+            )
         if self.schedule_words:
             words += f" (it is scheduled {self.schedule_words})"
         elif self.schedule_note:
@@ -1687,6 +1794,12 @@ class Coverage:
             record["window_start"] = self.window_start.isoformat()
         if self.longest_gap is not None:
             record["longest_gap_s"] = round(self.longest_gap.total_seconds())
+        if self.expected_interval is not None:
+            record["expected_interval_s"] = round(self.expected_interval.total_seconds())
+        # Recorded only when it is one, so the firing row says which quiet
+        # days had a hole in them and which were watched throughout.
+        if self.blind_spell is not None:
+            record["blind_spell_s"] = round(self.blind_spell.total_seconds())
         if self.paused_at is not None:
             record["paused_at"] = self.paused_at.isoformat()
             record["paused_reason"] = self.paused_reason
@@ -1757,6 +1870,7 @@ async def _coverage(pool: asyncpg.Pool, firing_id, mark: datetime) -> Coverage:
         paused_reason=paused_reason,
         schedule_words=words,
         schedule_note=note,
+        expected_interval=_expected_interval(row),
     )
 
 
@@ -1952,14 +2066,20 @@ async def _quiet_digest(
             return scheduler.Outcome(scheduler.FIRING_ERROR, failure, record)
         return scheduler.Outcome(scheduler.FIRING_OK, None, record)
 
-    record["note"] = DIGEST_UNWATCHED_NOTE
-    record["digest"]["reason"] = DIGEST_UNWATCHED_NOTE
+    # Which silence is being broken decides which sentence is true. A beat that
+    # never ran and a beat that ran with a hole in it are different facts, and
+    # the "nothing was WATCHED" wording is simply false about the second.
+    partly = coverage.passes > 0 and coverage.blind_spell is not None
+    opening = DIGEST_PARTLY_WATCHED if partly else DIGEST_UNWATCHED
+    note = DIGEST_PARTLY_WATCHED_NOTE if partly else DIGEST_UNWATCHED_NOTE
+    record["note"] = note
+    record["digest"]["reason"] = note
     if person is None:
         # Stated, never swallowed: there is nobody to tell, which is a worse
         # version of the same silence and must not read as a delivery.
         record["digest"]["unable"] = DIGEST_NO_PERSON
         return scheduler.Outcome(scheduler.FIRING_ERROR, DIGEST_NO_PERSON, record)
-    message = "\n\n".join([DIGEST_UNWATCHED, coverage.line(turn.timezone)])
+    message = "\n\n".join([opening, coverage.line(turn.timezone)])
     delivery = _delivery()
     result = await delivery.deliver(app, pool, text=message, urgent=False, person=person, turn=turn)
     record.update(result.receipt)
