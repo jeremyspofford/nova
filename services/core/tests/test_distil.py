@@ -1017,3 +1017,82 @@ async def test_a_backfill_that_runs_out_of_time_says_where_it_stopped(
     assert result.ran
     assert result.steps < 999, "the clock stopped it, not the step count"
     assert result.remaining is not None and "picks up from there" in result.remaining
+
+
+async def test_a_model_cut_off_mid_thought_says_so_instead_of_reporting_nothing(
+    pool, mount_peers, monkeypatch
+):
+    """The honest-looking zero, and it is the reason the first live backfill
+    over eight days of real conversation wrote nothing (2026-09-10).
+
+    A reasoning model spends `max_tokens` on its deliberation FIRST and only
+    then writes. On a dense window qwen3.8:27b burned the whole 1,200-token
+    budget thinking and emitted zero characters of content. The tolerant parse
+    turned that into an empty list, the pass reported "0 facts proposed", and
+    a read that was CUT OFF read exactly like a read that looked and found
+    nothing — the same class of lie as a silent fallback.
+
+    `finish_reason: "length"` is the protocol saying which one happened, so it
+    is read rather than guessed at from the shape of the text.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+
+    class _Truncating:
+        """A gateway that stops on the token cap having written no content —
+        every character of its budget went to reasoning."""
+
+        def __init__(self):
+            self.app = Starlette(routes=[Route("/v1/chat/completions", self._go, methods=["POST"])])
+
+        async def _go(self, request):
+            async def _stream():
+                yield b'data: {"choices":[{"delta":{"reasoning":"let me think"}}]}\n\n'
+                yield b'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n'
+                yield b"data: [DONE]\n\n"
+
+            return StreamingResponse(_stream(), media_type="text/event-stream")
+
+    mount_peers(gateway=_Truncating(), memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert not result.ran, "a cut-off read must never report as a pass that found nothing"
+    assert "never reached an answer" in result.reason
+    assert result.proposed == 0 and result.facts == ()
+
+
+def test_the_token_budget_leaves_room_for_the_reasoning_as_well_as_the_answer():
+    """A number with a measurement behind it, not a guess.
+
+    Measured on the live stack against a dense window: 1,200 tokens bought
+    3,997 characters of reasoning and no answer at all; 5,000 bought 6,416 of
+    reasoning and 827 of answer. Sizing this for the answer alone is what made
+    every dense day come back empty.
+    """
+    from app.checks import review
+
+    assert distil.DISTIL_MAX_TOKENS >= 4000, (
+        "a reasoning model spends this budget before it writes a character; sized for the "
+        "answer alone, a dense window comes back with nothing"
+    )
+    # review.py reads the same spine and has the same hazard.
+    assert review.REVIEW_MAX_TOKENS >= 4000
+
+
+def test_the_prompt_asks_for_live_answerable_facts_rather_than_discouraging_them():
+    """The owner's ruling, and the prompt used to say the opposite of it.
+
+    His words (2026-09-10): if a live-answerable fact is "written, that's fine
+    for comparing if we ever update our system and have that data stored". The
+    clause said "PREFER NOT TO REPORT a fact one of them answers", and the
+    model's own reasoning on the live stack quoted it back while talking itself
+    out of every fact it had found: "borderline since list_agents() answers
+    it". Zero notes from eight days of conversation, caused by one sentence.
+    """
+    assert "PREFER NOT TO REPORT" not in distil.DISTIL_SYSTEM
+    assert "REPORT THOSE FACTS TOO" in distil.DISTIL_SYSTEM
+    # And it still requires the call to be named, which is what makes the note
+    # read as history rather than as the current answer.
+    assert "live_source" in distil.DISTIL_SYSTEM

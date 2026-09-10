@@ -154,7 +154,13 @@ REVIEW_TIMEOUT = httpx.Timeout(connect=5.0, read=110.0, write=10.0, pool=5.0)
 # that mysteriously did not finish.
 REVIEW_DEADLINE_S = 150.0
 RECALL_TIMEOUT = httpx.Timeout(5.0)
-REVIEW_MAX_TOKENS = 800
+# Sized for the reasoning as well as the answer — see DISTIL_MAX_TOKENS for the
+# measurement (2026-09-10). 800 was the answer's size, and a reasoning model
+# spends its budget deliberating before it writes a character, so this check has
+# had the same hazard since it was written: a window it could not finish
+# thinking about would report "nothing to review" rather than "cut off". It
+# says so now either way (model_read.complete reads finish_reason).
+REVIEW_MAX_TOKENS = 4000
 
 # States the truth AND is checked anyway: the id requirement below is enforced
 # by _verified against the database, so a model that ignores every word of this

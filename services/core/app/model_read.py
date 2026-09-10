@@ -236,6 +236,7 @@ async def complete(
     if model:
         payload["model"] = model
     collected: list[str] = []
+    truncated = False
     try:
         async with asyncio.timeout(budget), peers.client(app, peers.GATEWAY, timeout) as client:
             async with client.stream(
@@ -255,6 +256,9 @@ async def complete(
                         chunk = json.loads(data)
                     except json.JSONDecodeError:
                         continue
+                    for choice in chunk.get("choices") or []:
+                        if choice.get("finish_reason") == "length":
+                            truncated = True
                     delta, _usage, error, _fragments = chat._chunk_parts(chunk)
                     if error is not None:
                         raise GatewayRefused(f"the gateway reported: {error}")
@@ -271,7 +275,30 @@ async def complete(
         ) from exc
     except Exception as exc:  # noqa: BLE001 — every failure shape is stated
         raise ReadFailed(peers.reason(exc)) from exc
-    return "".join(collected)
+
+    answer = "".join(collected)
+    if truncated and not answer.strip():
+        # THE MODEL NEVER REACHED ITS ANSWER, and that is not the same fact as
+        # a model that answered nothing (2026-09-10, found on the live stack).
+        #
+        # A reasoning model spends `max_tokens` on its reasoning first. On a
+        # dense window qwen3.8:27b burned the whole 1,200-token budget
+        # deliberating and emitted zero characters of content; the tolerant
+        # parse turned that into an empty list, and the pass reported "0 facts
+        # proposed" — a read that was cut off, reading exactly like a read that
+        # looked and found nothing. That is the same class of lie as a silent
+        # fallback, and it is the reason a whole backfill over eight days of
+        # real conversation reported an honest-looking zero.
+        #
+        # `finish_reason: "length"` is the protocol saying so, so this is read
+        # rather than guessed at from the shape of the text.
+        raise ReadFailed(
+            f"the model used its whole {max_tokens}-token budget on its own reasoning and "
+            "never reached an answer — a reasoning model spends that budget before it starts "
+            "writing, so this is a budget too small for this window rather than a window with "
+            "nothing in it"
+        )
+    return answer
 
 
 def parse_array(raw: str, *, label: str) -> list[dict]:

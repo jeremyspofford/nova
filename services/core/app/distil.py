@@ -120,7 +120,19 @@ QUOTE_CHARS = 300
 # measured reason: a local 27B model reading a window of conversation and
 # answering in structured JSON is not a judge call scoring one reply.
 DISTIL_TIMEOUT = httpx.Timeout(connect=5.0, read=110.0, write=10.0, pool=5.0)
-DISTIL_MAX_TOKENS = 1200
+# MEASURED, and it budgets for the REASONING as well as the answer — which is
+# the whole point (2026-09-10, on the live stack). A reasoning model spends
+# max_tokens on its deliberation first and only then writes. On a dense window
+# (26 messages, an 11.7k-character brief) qwen3.8:27b produced:
+#
+#     max_tokens=1200 -> 3,997 chars of reasoning, 0 chars of answer
+#     max_tokens=5000 -> 6,416 chars of reasoning, 827 chars of answer
+#
+# 1,200 was sized for the answer alone, so every dense day of eight days of
+# real conversation came back empty and the backfill reported an honest-looking
+# zero. Anything that hits the cap now SAYS it hit the cap (model_read.complete)
+# rather than reading as a window with nothing in it.
+DISTIL_MAX_TOKENS = 5000
 
 # Reading the subjects already in use. The export is the whole of this
 # person's notes, so it is bounded by bytes as well as by seconds: over the
@@ -155,12 +167,13 @@ DISTIL_SYSTEM = (
     "thing, even when the wording differs — reusing it is what lets the newer fact replace "
     "the older one instead of sitting beside it. Invent a new subject only when none of them "
     "fits.\n"
-    "TOOLS: some facts do not belong in these notes at all, because a tool can answer them "
-    "right now and the tool's answer is the truth. The tools listed below are what she can "
-    "run. PREFER NOT TO REPORT a fact one of them answers. If you report it anyway — because "
-    "it is worth having a dated record of what it used to be — you MUST name the call: add "
-    '"live_source": {"tool": "<one of the tools listed>", "args": {...}}. An item naming a '
-    "call that cannot run is discarded whole.\n"
+    "TOOLS: for some facts a tool can answer the question right now, and then the tool's "
+    "answer is the truth and this note is the dated record of what it used to be. REPORT "
+    "THOSE FACTS TOO — a record of what the box had last month is exactly what 'did that "
+    "change?' is answered with — and name the call that answers it now: add "
+    '"live_source": {"tool": "<one of the tools listed>", "args": {...}}. The tools listed '
+    "below are the ones that can be run. An item naming a call that cannot run is discarded "
+    "whole, so name one of those or leave live_source out.\n"
     "If nothing in the conversation is worth keeping, answer []."
 )
 
