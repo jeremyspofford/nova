@@ -35,7 +35,7 @@ import json
 import tarfile
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pytest
@@ -1096,3 +1096,42 @@ def test_the_prompt_asks_for_live_answerable_facts_rather_than_discouraging_them
     # And it still requires the call to be named, which is what makes the note
     # read as history rather than as the current answer.
     assert "live_source" in distil.DISTIL_SYSTEM
+
+
+async def test_a_fact_may_only_cite_a_message_this_pass_actually_read(pool, mount_peers):
+    """THE WINDOW IS THE EVIDENCE, and "a real message of his" was too weak a
+    bar (2026-09-10, found by reading the notes a live backfill wrote).
+
+    A backfill step reading 2026-09-02 cited a message from 2026-09-10 — Nova's
+    own status reply from ten minutes earlier — and it RESOLVED, because it was
+    a real message of his in an allowed role. The note was then built from that
+    row: dated by it, quoted from it, and written as a fact about a
+    conversation the model had never been shown.
+
+    Two things break when a citation can point outside the window. The note's
+    date is not the date of the exchange it claims to summarise, which is the
+    one property this slice exists to get right. And a backfill that walks
+    oldest first stops being ordered — a fact dated today, written in the first
+    step, is superseded by an older one written in the fourth, leaving the
+    stale note live. Both happened, to `hardware.vram`.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    # What this pass reads: an old span, the way a backfill step reads one.
+    in_window = await _message(pool, conversation, HIS, ago=timedelta(days=9))
+    # And a real, recent message of his that this pass is NOT shown.
+    outside = await _message(pool, conversation, "much later, something else entirely")
+    through = await pool.fetchval("SELECT now() - interval '8 days'")
+
+    mount_peers(
+        gateway=_gateway(_item(in_window), _item(outside, subject="drinks")), memory=FakeNotes()
+    )
+
+    result = await distil.distil(core_app, pool, person, since=timedelta(days=2), through=through)
+
+    assert result.proposed == 2
+    assert result.dropped == 1, "the citation outside the window must be dropped"
+    (fact,) = result.facts
+    assert fact.message_id == in_window
+    # Dated by the exchange it actually read, which is the property that broke.
+    assert (datetime.now(UTC) - fact.said_at) > timedelta(days=8)

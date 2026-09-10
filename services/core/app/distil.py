@@ -687,7 +687,14 @@ async def distil(
 
     try:
         by_id = await model_read.resolve_messages(
-            pool, person.id, [cited for cited, _proposed in proposals], roles=ROLES
+            pool,
+            person.id,
+            [cited for cited, _proposed in proposals],
+            roles=ROLES,
+            # The window is the evidence: a fact may only cite a message this
+            # pass actually read. Without this a step reading one day can cite
+            # a row from another and date the note by it.
+            within=[row["id"] for row in window],
         )
     except model_read.ReadFailed as exc:
         return Distillation(

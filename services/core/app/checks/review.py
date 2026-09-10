@@ -520,12 +520,14 @@ def _items(raw: str) -> list[tuple[uuid.UUID, str]]:
     return out
 
 
-async def _verified(pool, owner: identity.Person, items) -> list[Finding]:
+async def _verified(pool, owner: identity.Person, items, window) -> list[Finding]:
     """The line of code that refuses when the model invents a citation.
 
     Every cited id is looked up as a message of HIS — a `user` row in a
-    conversation he owns — and an id that does not resolve is dropped with a
-    warning naming it. What is built from the ones that do resolve is built
+    conversation he owns, AND one this pass actually read (`window`; see
+    model_read.resolve_messages for why "a real message of his" was too weak
+    a bar) — and an id that does not resolve is dropped with a warning
+    naming it. What is built from the ones that do resolve is built
     from the ROW: its id, the instant he wrote it, and a quote of what it
     actually says. The model's own words reach only the title, marked there as
     her reading of it.
@@ -536,7 +538,13 @@ async def _verified(pool, owner: identity.Person, items) -> list[Finding]:
     """
     try:
         by_id = await model_read.resolve_messages(
-            pool, owner.id, [message_id for message_id, _said in items], roles=ROLES
+            pool,
+            owner.id,
+            [message_id for message_id, _said in items],
+            roles=ROLES,
+            # Same rule as distillation: a commitment may only be cited to a
+            # message this pass was shown, never to some other real one.
+            within=[row["id"] for row in window],
         )
     except model_read.ReadFailed as exc:
         raise CannotCheck(
@@ -592,7 +600,7 @@ async def commitments(app, pool) -> list[Finding]:
     items = _items(answer)
     if not items:
         return []
-    return await _verified(pool, owner, items)
+    return await _verified(pool, owner, items, window)
 
 
 CHECKS: tuple[Check, ...] = (

@@ -345,7 +345,14 @@ def message_id(entry: dict, *keys: str) -> uuid.UUID | None:
     return None
 
 
-async def resolve_messages(pool, person_id, ids: Sequence[uuid.UUID], *, roles: Sequence[str]):
+async def resolve_messages(
+    pool,
+    person_id,
+    ids: Sequence[uuid.UUID],
+    *,
+    roles: Sequence[str],
+    within: Sequence[uuid.UUID] | None = None,
+):
     """The cited rows that actually exist, by id — the line of code that
     refuses when the model invents a citation.
 
@@ -353,6 +360,24 @@ async def resolve_messages(pool, person_id, ids: Sequence[uuid.UUID], *, roles: 
     roles. What comes back is a map, so an id that does not resolve is simply
     absent and `keep_cited` drops it with a warning; what a caller builds from
     the ones that do resolve, it builds FROM THE ROW.
+
+    `within` NARROWS IT TO THE EVIDENCE, and without it this check is weaker
+    than it looks (2026-09-10, found on the live stack). "A real message of
+    his" is not the same claim as "a message he was shown here". A backfill
+    step reading 2026-09-02 cited a message from 2026-09-10 — Nova's own
+    status reply from ten minutes earlier — and it resolved, because it WAS a
+    real message of his. The note was then built from that row: dated by it,
+    quoted from it, and written as a fact about a conversation the model was
+    never reading.
+
+    Two things break when a citation can point outside the window. The note's
+    date is not the date of the exchange it claims to summarise, which is the
+    one property S14 exists to get right; and a backfill that walks oldest
+    first stops being ordered, so a fact dated today, written in the first
+    step, is superseded by an older one written in the fourth — leaving the
+    stale note live. Both happened.
+
+    So the window IS the evidence, and a caller that has one passes it.
 
     A query that could not be MADE raises. Unverified claims must not become
     notices or notes, and returning an empty map would be indistinguishable
@@ -363,10 +388,12 @@ async def resolve_messages(pool, person_id, ids: Sequence[uuid.UUID], *, roles: 
         rows = await pool.fetch(
             "SELECT m.id, m.role, m.created_at, m.content FROM messages m "
             "JOIN conversations c ON c.id = m.conversation_id "
-            "WHERE m.id = ANY($1::uuid[]) AND c.person_id = $2 AND m.role = ANY($3::text[])",
+            "WHERE m.id = ANY($1::uuid[]) AND c.person_id = $2 AND m.role = ANY($3::text[]) "
+            "  AND ($4::uuid[] IS NULL OR m.id = ANY($4::uuid[]))",
             list(ids),
             person_id,
             list(roles),
+            None if within is None else list(within),
         )
     except Exception as exc:  # noqa: BLE001 — the reason is the record
         raise ReadFailed(peers.reason(exc)) from exc
