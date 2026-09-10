@@ -29,17 +29,18 @@ What is pinned here, in the same shape as tests/test_checks_review.py:
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import tarfile
 import uuid
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import date, timedelta
 
 import httpx
 import pytest
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse, Response
+from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 from app import distil, identity, model_read
@@ -101,11 +102,13 @@ class FakeNotes:
         return Response(buffer.getvalue(), media_type="application/gzip")
 
 
-def note(subject: str | None, *, title: str = "a note") -> str:
+def note(subject: str | None, *, title: str = "a note", said_at: str | None = None) -> str:
     """One note on disk, in the store's own frontmatter shape."""
     lines = ["---", f"title: {title}", "kind: topic", "created: 2026-09-01"]
     if subject is not None:
         lines.append(f"subject: {subject}")
+    if said_at is not None:
+        lines.append(f"said_at: {said_at}")
     lines += ["---", "", "the body"]
     return "\n".join(lines)
 
@@ -909,3 +912,108 @@ def _completed(value):
         return value
 
     return _run()
+
+
+# ── what the live stack found (2026-09-10) ─────────────────────────────────
+
+
+async def test_a_model_that_streams_for_ever_is_cut_off_and_says_so(pool, mount_peers, monkeypatch):
+    """FOUND ON THE RUNNING STACK, not by reading the code.
+
+    A read timeout bounds SILENCE. A reasoning model that is thinking is not
+    silent — it emits a chunk every few milliseconds — so the 110s read timeout
+    beside this let one distil step stream steadily for over sixteen minutes,
+    holding the backfill and the owner's whole turn open behind it, with
+    nothing anywhere able to stop it. The reasoning is discarded, so all of
+    that bought nothing.
+
+    It RAISES rather than returning what it has: a truncated answer is a
+    truncated JSON array, and "the model said nothing usable" and "we cut it
+    off mid-sentence" are different facts about different things.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+
+    class _Endless:
+        """A gateway that streams for ever without ever falling silent."""
+
+        def __init__(self):
+            self.app = Starlette(routes=[Route("/v1/chat/completions", self._go, methods=["POST"])])
+
+        async def _go(self, request):
+            async def _stream():
+                while True:
+                    yield b'data: {"choices":[{"delta":{"reasoning":"thinking "}}]}\n\n'
+                    await asyncio.sleep(0.001)
+
+            return StreamingResponse(_stream(), media_type="text/event-stream")
+
+    mount_peers(gateway=_Endless(), memory=FakeNotes())
+    monkeypatch.setattr(model_read, "STREAM_BUDGET_SECONDS", 0.4)
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert not result.ran, "an unbounded stream must not read as a pass that found nothing"
+    assert "still answering" in result.reason
+    assert result.facts == ()
+
+
+async def test_the_backfill_resumes_after_the_newest_fact_already_written(
+    pool, mount_peers, monkeypatch
+):
+    """Twelve days at twelve-hour steps is twenty-odd model rounds, so one call
+    cannot finish it and the next one must not start again from the beginning.
+
+    Where it picks up is DERIVED from the notes themselves — the newest
+    exchange any of them cites — so there is no table and no counter to drift.
+    It under-advances rather than over-advances: a span that yielded no facts
+    is read again, which costs a repeat, and a skipped one is a hole nobody
+    ever finds.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    for days in (9, 5, 1):
+        await _message(pool, conversation, HIS, ago=timedelta(days=days))
+
+    notes = FakeNotes(notes={"topics/a.md": note(SUBJECT, said_at="2026-09-05")})
+    mount_peers(gateway=_gateway(), memory=notes)
+
+    windows: list = []
+
+    async def _spy(app_, pool_, who, *, since, through=None, **kw):
+        windows.append(through)
+        return distil.Distillation()
+
+    monkeypatch.setattr(distil, "distil", _spy)
+    result = await distil.backfill(core_app, pool, person, step=timedelta(days=1), max_steps=30)
+
+    assert result.ran and windows
+    # It started from the day the newest note cites, not from nine days back.
+    assert windows[0].date() >= date(2026, 9, 5)
+
+
+async def test_a_backfill_that_runs_out_of_time_says_where_it_stopped(
+    pool, mount_peers, monkeypatch
+):
+    """A wall-clock bound, because a step is a model round of tens of seconds
+    and somebody is waiting on the turn this runs inside."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS, ago=timedelta(days=9))
+
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+
+    async def _slow(app_, pool_, who, *, since, through=None, **kw):
+        await asyncio.sleep(0.05)
+        return distil.Distillation(read=1)
+
+    monkeypatch.setattr(distil, "distil", _slow)
+
+    result = await distil.backfill(
+        core_app, pool, person, step=timedelta(hours=1), max_steps=999, budget=0.2
+    )
+
+    assert result.ran
+    assert result.steps < 999, "the clock stopped it, not the step count"
+    assert result.remaining is not None and "picks up from there" in result.remaining

@@ -39,6 +39,7 @@ Two exception types, and the difference is who owns the words:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import uuid
@@ -50,6 +51,16 @@ import httpx
 from app import peers, settings_store
 
 logger = logging.getLogger("core")
+
+# The longest one completion may STREAM for, whatever it is streaming.
+#
+# Measured, not guessed (2026-09-10): a distil step against qwen3.8:27b took
+# 48 s and 2,466 chunks for 602 characters of answer, because nearly all of it
+# was reasoning that is thrown away. Another step on the same model streamed
+# for over sixteen minutes and was still going. 150 s is three times the
+# measured good case, so a normal read is never cut off, and it turns an
+# unbounded hang into one stated sentence on one span of conversation.
+STREAM_BUDGET_SECONDS = 150.0
 
 
 class ReadFailed(RuntimeError):
@@ -179,6 +190,7 @@ async def complete(
     headers: dict[str, str],
     timeout: httpx.Timeout,
     max_tokens: int,
+    budget: float | None = None,
 ) -> str:
     """One completion, every content delta concatenated —
     chat._collect_completion's path, followed rather than reused because that
@@ -189,8 +201,29 @@ async def complete(
     (chat._chunk_parts). Every way this can fail — the link unconfigured, the
     socket refused, a non-200, an error frame mid-stream — raises, so a caller
     can never report a pass that never reached a model.
+
+    `budget` BOUNDS THE WHOLE STREAM, and it is not the same thing as the
+    read timeout beside it (2026-09-10, found on the live stack). A read
+    timeout bounds SILENCE: it fires when no byte arrives for N seconds. A
+    reasoning model that is thinking is not silent — it emits a chunk every
+    few milliseconds — so a 110 s read timeout let one distil step stream
+    steadily for over sixteen minutes, holding the backfill and the owner's
+    whole turn open behind it, with nothing anywhere able to stop it. The
+    reasoning tokens are discarded (`chat._chunk_parts` reads `content` and
+    nothing else), so all of that time bought nothing.
+
+    Past the budget this RAISES rather than returning what it has. Partial
+    content is a truncated JSON array, and a caller cannot tell "the model
+    said nothing usable" from "we cut it off mid-sentence" — those are
+    different facts and only one of them is about the conversation.
     """
     from app import chat
+
+    # Read at CALL time, not bound as a default: a default is evaluated when
+    # this function is defined, so a test that lowers the constant would still
+    # wait the shipped budget and pass for the wrong reason — which is exactly
+    # what happened the first time this was written (2026-09-10).
+    budget = STREAM_BUDGET_SECONDS if budget is None else budget
 
     payload: dict = {
         "messages": [
@@ -204,7 +237,7 @@ async def complete(
         payload["model"] = model
     collected: list[str] = []
     try:
-        async with peers.client(app, peers.GATEWAY, timeout) as client:
+        async with asyncio.timeout(budget), peers.client(app, peers.GATEWAY, timeout) as client:
             async with client.stream(
                 "POST", "/v1/chat/completions", json=payload, headers=headers
             ) as response:
@@ -229,6 +262,13 @@ async def complete(
                         collected.append(delta)
     except ReadFailed:
         raise
+    except TimeoutError as exc:
+        raise ReadFailed(
+            f"the model was still answering after {budget:g}s and was cut off — it had produced "
+            f"{sum(len(part) for part in collected)} characters of answer, and a reasoning model "
+            "that thinks past the budget streams steadily rather than falling silent, so nothing "
+            "shorter than this bound would ever stop it"
+        ) from exc
     except Exception as exc:  # noqa: BLE001 — every failure shape is stated
         raise ReadFailed(peers.reason(exc)) from exc
     return "".join(collected)

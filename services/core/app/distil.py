@@ -78,10 +78,12 @@ from __future__ import annotations
 import io
 import logging
 import tarfile
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from datetime import time as dtime
 
 import httpx
 
@@ -245,8 +247,8 @@ class Distillation:
 # -- what the model is shown ------------------------------------------------
 
 
-def _subject_of(text: str) -> str | None:
-    """The `subject` out of one note's frontmatter, or None.
+def _scalar_of(text: str, key: str) -> str | None:
+    """One scalar key out of one note's frontmatter, or None.
 
     A DELIBERATELY NARROW READER of a format the memory service owns. It reads
     the frontmatter block only, one scalar key, and gives up on anything it
@@ -265,15 +267,18 @@ def _subject_of(text: str) -> str | None:
     for line in lines[1:]:
         if line.strip() == "---":
             return None
-        key, sep, value = line.partition(":")
-        if not sep or key.strip() != "subject":
+        found, sep, value = line.partition(":")
+        if not sep or found.strip() != key:
             continue
-        subject = value.strip().strip("'\"").strip()
-        return subject or None
+        return value.strip().strip("'\"").strip() or None
     return None
 
 
-async def known_subjects(app, person_id) -> tuple[tuple[str, ...], str | None]:
+def _subject_of(text: str) -> str | None:
+    return _scalar_of(text, "subject")
+
+
+async def _notes_state(app, person_id) -> tuple[tuple[str, ...], str | None, str | None]:
     """The subjects this person's notes already use, read LIVE — and the limit
     on that read when there was one.
 
@@ -295,17 +300,27 @@ async def known_subjects(app, person_id) -> tuple[tuple[str, ...], str | None]:
             response.raise_for_status()
             data = response.content
     except Exception as exc:  # noqa: BLE001 — every failure shape is stated
-        return (), (
-            "the subjects already in use could not be read from memory, so a fact restated "
-            f"here may be written as a new note beside the old one — {peers.reason(exc)}"
+        return (
+            (),
+            None,
+            (
+                "the subjects already in use could not be read from memory, so a fact restated "
+                f"here may be written as a new note beside the old one — {peers.reason(exc)}"
+            ),
         )
     if len(data) > SUBJECTS_MAX_BYTES:
-        return (), (
-            f"this person's notes export to {len(data)} bytes, over the {SUBJECTS_MAX_BYTES}-byte "
-            "ceiling this pass will read, so the subjects already in use were not read and a "
-            "restated fact may be written as a new note beside the old one"
+        return (
+            (),
+            None,
+            (
+                f"this person's notes export to {len(data)} bytes, over the "
+                f"{SUBJECTS_MAX_BYTES}-byte ceiling this pass will read, so the subjects "
+                "already in use were not read and a "
+                "restated fact may be written as a new note beside the old one"
+            ),
         )
     subjects: set[str] = set()
+    newest: str | None = None
     try:
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as archive:
             for member in archive:
@@ -318,18 +333,43 @@ async def known_subjects(app, person_id) -> tuple[tuple[str, ...], str | None]:
                 subject = _subject_of(head)
                 if subject:
                     subjects.add(subject)
+                # The newest exchange any distilled note cites — what the
+                # backfill resumes AFTER. `said_at` and not `created`: a note
+                # written today out of a two-week-old conversation covers that
+                # conversation, and resuming from when it was WRITTEN would
+                # skip the fortnight in between.
+                said = _scalar_of(head, "said_at")
+                if said and (newest is None or said > newest):
+                    newest = said
     except (tarfile.TarError, OSError, EOFError) as exc:
-        return (), (
-            "this person's notes could not be unpacked to read the subjects already in use, so "
-            f"a restated fact may be written as a new note beside the old one — {exc}"
+        return (
+            (),
+            newest,
+            (
+                "this person's notes could not be unpacked to read the subjects already in use, so "
+                f"a restated fact may be written as a new note beside the old one — {exc}"
+            ),
         )
     ordered = tuple(sorted(subjects))
     if len(ordered) > MAX_SUBJECTS_SHOWN:
-        return ordered[:MAX_SUBJECTS_SHOWN], (
-            f"{len(ordered)} subjects are in use and only {MAX_SUBJECTS_SHOWN} were shown, so a "
-            "fact about one of the rest may be written as a new note beside the old one"
+        return (
+            ordered[:MAX_SUBJECTS_SHOWN],
+            newest,
+            (
+                f"{len(ordered)} subjects are in use and only {MAX_SUBJECTS_SHOWN} were "
+                "shown, so a fact about one of the rest may be written as a new note "
+                "beside the old one"
+            ),
         )
-    return ordered, None
+    return ordered, newest, None
+
+
+async def known_subjects(app, person_id) -> tuple[tuple[str, ...], str | None]:
+    """The subjects this person's notes already use, and the limit on that
+    read. The pass's view of `_notes_state`, which also reports how far
+    distillation has already reached — a fact only the backfill needs."""
+    subjects, _newest, limit = await _notes_state(app, person_id)
+    return subjects, limit
 
 
 def live_tools() -> tuple[tuple, str | None]:
@@ -694,6 +734,13 @@ BACKFILL_STEP = timedelta(hours=12)
 # raise, and what is left is SAID — a backfill that stopped early and did not
 # say so would leave notes nobody knows are missing.
 BACKFILL_MAX_STEPS = 40
+# The wall clock one backfill call may spend, measured rather than guessed
+# (2026-09-10, live): one step against qwen3.8:27b took 48 s, nearly all of it
+# reasoning tokens that are thrown away. Twelve days at twelve-hour steps is
+# twenty-four of those — twenty minutes at best — inside a single tool call
+# inside a turn somebody is waiting on. So a call does what it can, says where
+# it stopped, and the next one RESUMES rather than starting again.
+BACKFILL_BUDGET_SECONDS = 420.0
 
 
 async def write_facts(app, person, facts) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -760,6 +807,29 @@ class Backfilled:
         return self.reason is None
 
 
+def _resume_after(reached: str | None) -> datetime | None:
+    """The instant a walk picks up from, out of the newest `said_at` any
+    distilled note carries.
+
+    A date, not a datetime: `said_at` is stored as one, so the day it names is
+    read as its START. That deliberately re-reads the day already covered
+    rather than skipping the rest of it — a repeated fact supersedes itself and
+    costs a model round, and a skipped one is a hole nobody ever finds.
+
+    Unparseable is None, which sends the walk to the beginning of the history:
+    the safe direction, for the same reason.
+    """
+    if not reached:
+        return None
+    try:
+        return datetime.fromisoformat(reached).replace(tzinfo=UTC)
+    except ValueError:
+        try:
+            return datetime.combine(date.fromisoformat(reached[:10]), dtime(), tzinfo=UTC)
+        except ValueError:
+            return None
+
+
 async def oldest_message(pool, person_id) -> datetime | None:
     """When this person's history starts, or None when they have none."""
     return await pool.fetchval(
@@ -777,6 +847,7 @@ async def backfill(
     since: datetime | None = None,
     step: timedelta = BACKFILL_STEP,
     max_steps: int = BACKFILL_MAX_STEPS,
+    budget: float = BACKFILL_BUDGET_SECONDS,
 ) -> Backfilled:
     """Distil the conversation that is already stored, OLDEST FIRST.
 
@@ -791,33 +862,44 @@ async def backfill(
     its own predecessor — every restated fact wrong, quietly, in exactly the
     way that looks fine until someone asks.
 
-    Bounded and STATED. It walks at most `max_steps`, and when the walk has not
-    reached now it says how much is left rather than stopping silently — a
-    backfill that quit early without saying so leaves notes nobody knows are
-    missing, which is indistinguishable from a person who never said those
-    things.
+    IT RESUMES. With no `since` given, the walk starts after the newest
+    exchange any distilled note already cites (`said_at` off the notes
+    themselves, read from the same export the subjects come from) — derived
+    state, no new table, and it under-advances rather than over-advances: a
+    span that yielded no facts is simply read again, which costs a repeat and
+    never a gap. Only a person with no distilled notes at all starts at the
+    beginning of their history.
+
+    Bounded and STATED, in steps AND in wall clock. One step is a model round
+    of tens of seconds, and twelve days of history is twenty-odd of them inside
+    a tool call somebody is waiting on; when either bound stops the walk it
+    says how much is left rather than stopping silently. A backfill that quit
+    early without saying so leaves notes nobody knows are missing, which is
+    indistinguishable from a person who never said those things.
 
     A step that fails does not end the walk. A gateway blip in the middle of
     day three must not cost days four through twelve; the reason is collected
     and the walk goes on, so `problems` names exactly which spans have no notes.
     """
-    start = since or await oldest_message(pool, person.id)
+    # Read once for the whole walk rather than per step: the subjects are the
+    # same corpus every time, and forty exports would be forty chances for one
+    # of them to fail differently. It also says how far distillation already
+    # reached, which is where this walk picks up.
+    subjects, reached, subject_limit = await _notes_state(app, person.id)
+    start = since or _resume_after(reached) or await oldest_message(pool, person.id)
     if start is None:
         return Backfilled(
             reason="this person has no stored conversation, so there is nothing to distil"
         )
     now = await pool.fetchval("SELECT now()")
-    # Read once for the whole walk rather than per step: the subjects are the
-    # same corpus every time, and forty exports would be forty chances for one
-    # of them to fail differently.
-    subjects, subject_limit = await known_subjects(app, person.id)
 
     written: list[str] = []
     failed: list[str] = []
     problems: list[str] = [subject_limit] if subject_limit else []
     steps = read = proposed = 0
     through = start
-    while through < now and steps < max_steps:
+    deadline = time.monotonic() + budget
+    while through < now and steps < max_steps and time.monotonic() < deadline:
         through = min(through + step, now)
         steps += 1
         found = await distil(app, pool, person, since=step, through=through, subjects=subjects)
@@ -836,7 +918,8 @@ async def backfill(
     if through < now:
         remaining = (
             f"the walk stopped at {through.isoformat(timespec='minutes')} after {steps} steps; "
-            f"everything said since then is still undistilled — run it again from there"
+            "everything said since then is still undistilled — run it again and it picks up "
+            "from there"
         )
     return Backfilled(
         steps=steps,
