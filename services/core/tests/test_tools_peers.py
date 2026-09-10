@@ -265,20 +265,43 @@ def test_a_live_source_whose_arguments_that_tool_would_refuse_is_refused():
     """Checked against the tool's OWN advertised schema, so a tool registered
     tomorrow is validated with no edit here."""
     with pytest.raises(ToolFailure, match="would refuse those arguments"):
-        memory_tools.validate_live_source({"tool": "memory_search", "args": {"query": 7}})
+        memory_tools.validate_live_source({"tool": "device_info", "args": {"device": 7}})
     with pytest.raises(ToolFailure, match="would refuse those arguments"):
-        memory_tools.validate_live_source({"tool": "memory_search", "args": {}})
+        memory_tools.validate_live_source({"tool": "device_info", "args": {}})
 
 
 def test_a_live_source_that_can_actually_dispatch_comes_back_normalised():
     assert memory_tools.validate_live_source(
-        {"tool": " memory_search ", "args": {"query": "vram"}}
-    ) == {"tool": "memory_search", "args": {"query": "vram"}}
+        {"tool": " device_info ", "args": {"device": "desktop"}}
+    ) == {"tool": "device_info", "args": {"device": "desktop"}}
     # A call with no arguments is a call, not a malformed one.
     assert memory_tools.validate_live_source({"tool": "get_time"}) == {
         "tool": "get_time",
         "args": {},
     }
+
+
+def test_a_dispatchable_call_the_backend_would_not_run_is_still_refused():
+    """Two doors, ONE predicate (S14, 2026-09-10).
+
+    A live source exists for exactly one consumer: the check the backend runs
+    on its own initiative before she answers. So "this call could dispatch" was
+    never the right bar — a note citing a check that will never run is a note
+    promising an answer nobody will ever fetch, and it reads in the prompt
+    exactly like one that will.
+
+    `live_facts.runnable` is the predicate at BOTH doors, which is what stops
+    them drifting: a writer, and a tool that reaches an address the note itself
+    chose, are refused here at write time in the runner's own words.
+    """
+    with pytest.raises(ToolFailure, match="changes something"):
+        memory_tools.validate_live_source(
+            {"tool": "workspace_write_file", "args": {"path": "a", "content": "b"}}
+        )
+    with pytest.raises(ToolFailure, match="address"):
+        memory_tools.validate_live_source({"tool": "fetch_url", "args": {"url": "http://x/"}})
+    with pytest.raises(ToolFailure, match="checking it against memory"):
+        memory_tools.validate_live_source({"tool": "memory_search", "args": {"query": "vram"}})
 
 
 def test_no_registered_tool_is_rejected_as_an_unknown_name():
@@ -290,9 +313,11 @@ def test_no_registered_tool_is_rejected_as_an_unknown_name():
         try:
             memory_tools.validate_live_source({"tool": name, "args": {}})
         except ToolFailure as exc:
-            # Missing required arguments is a fact about these ARGS. An
-            # unknown name would be a fact about the registry, and there is
-            # no tool in the registry this may call unknown.
+            # Missing required arguments is a fact about these ARGS, and being
+            # unsafe to run unasked is a fact about the TOOL — both are honest
+            # refusals of this call. An unknown name would be a fact about the
+            # registry, and there is no tool in the registry this may call
+            # unknown.
             assert "no tool called" not in str(exc), name
 
 

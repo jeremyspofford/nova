@@ -90,6 +90,7 @@ from app import (
     devices,
     guards,
     identity,
+    live_facts,
     markup_calls,
     peers,
     settings_store,
@@ -699,6 +700,15 @@ class Recalled:
     # she has, so a note phrased differently could have been missed. Folding
     # it into either of the others would make her say something false.
     degraded: str | None = None
+    # The calls the recalled notes said answer their facts NOW (S14). Carried
+    # rather than run inside _recall because running them is a different kind
+    # of act: recall reads memory, a live check reaches the world, and the
+    # turn's own tool context is what it must reach it with.
+    live_calls: tuple[live_facts.LiveCall, ...] = ()
+    # What those checks came back with, already ordered live-answer-first by
+    # live_facts.lines(). Filled in after the checks run; empty when no note
+    # named one.
+    live: tuple[str, ...] = ()
 
 
 # The line above the notes. It says only what is mechanically true of every hit
@@ -729,6 +739,15 @@ def volatile_system_prompt(recall: Recalled, roster: str | None = None) -> str |
         # she cannot tell someone she looked and has nothing unless she is told
         # that she looked and has nothing.
         parts.append(f"Her memory was searched for this turn and returned nothing: {recall.empty}")
+    if recall.live:
+        # UNDER the notes and never folded into them. A checked fact and a
+        # written-down one are different kinds of thing, and the whole ruling
+        # this implements is that she reads the checked one as the answer.
+        parts.append(
+            "Live checks the backend ran for this turn BEFORE asking her anything. Where one of "
+            "these disagrees with a note above, the check is the current answer and the note is "
+            "history:\n" + "\n".join(f"- {line}" for line in recall.live)
+        )
     if recall.unreachable:
         parts.append(
             f"Her memory could not be read this turn — {recall.unreachable}. Nothing here is "
@@ -878,13 +897,54 @@ def _live_source(live_source: object) -> str | None:
     The tool's NAME is printed and its arguments are not — the name is what
     she reaches for, the arguments are on the hit for whatever dispatches it,
     and a bracket label is not the place to render a call.
+
+    IT NO LONGER TELLS HER TO GO AND CHECK (S14-3). It used to end "ask it
+    first", which was a request in a prompt — the shape this codebase does not
+    trust with a property that must hold. The backend now runs the check
+    itself before she is asked anything, and reports the outcome under the
+    notes, so this label states only the invariant thing: what kind of record
+    this is. Whether the check ran, and what it said, is live_facts' line to
+    write, because only it knows.
     """
     if not isinstance(live_source, dict):
         return None
     tool = live_source.get("tool")
     if not isinstance(tool, str) or not tool.strip():
         return None
-    return f"not the current answer — {tool.strip()} answers this now, ask it first"
+    return f"a record, not the current answer — {tool.strip()} is what answers this now"
+
+
+def _live_calls(results: Iterable) -> list[live_facts.LiveCall]:
+    """The calls the hits named, in rank order, skipping anything malformed.
+
+    A note's `live_source` was written by a model out of a transcript, so this
+    reads it defensively and drops what it cannot understand — a note that
+    names no runnable call is simply a note, which is the pre-S14 behaviour and
+    a safe one. What it must NOT do is guess: a live_source with no tool name
+    yields nothing rather than a plausible call, because a check that ran the
+    wrong command and reported an answer is worse than no check at all.
+
+    Whether a named call may actually be RUN is live_facts.runnable's decision,
+    not this one — this only reads what is written down.
+    """
+    calls: list[live_facts.LiveCall] = []
+    for hit in results:
+        if not isinstance(hit, dict):
+            continue
+        source = hit.get("live_source")
+        if not isinstance(source, dict):
+            continue
+        tool = source.get("tool")
+        if not isinstance(tool, str) or not tool.strip():
+            continue
+        args = source.get("args")
+        if args is None:
+            args = {}
+        if not isinstance(args, dict):
+            continue
+        label = hit.get("title") or hit.get("path") or tool.strip()
+        calls.append(live_facts.LiveCall(tool=tool.strip(), args=args, note=str(label)))
+    return calls
 
 
 def _snippets(results: Iterable, today: date | None = None) -> list[str]:
@@ -1446,6 +1506,7 @@ async def _recall(
             logger.warning("memory recall failed, continuing without notes: %s", reason)
             return Recalled(unreachable=reason)
         hits: dict[str, list[str]] = {}
+        calls: list[live_facts.LiveCall] = []
         said: dict[str, str | None] = {}
         reduced: dict[str, str | None] = {}
         errors: dict[str, str] = {}
@@ -1458,6 +1519,10 @@ async def _recall(
             else:
                 results, statement, degraded = outcome
                 hits[name] = _snippets(results)
+                # From every scope that answered: an agent allowed to read the
+                # household's notes gets the same check on them that Nova does,
+                # because a stale note is stale whoever recalled it.
+                calls.extend(_live_calls(results))
                 said[name] = statement
                 reduced[name] = degraded
         degraded = reduced.get("own") or next((value for value in reduced.values() if value), None)
@@ -1492,7 +1557,12 @@ async def _recall(
             or None
         )
         if snippets:
-            return Recalled(notes=tuple(snippets), unreachable=unreachable, degraded=degraded)
+            return Recalled(
+                notes=tuple(snippets),
+                unreachable=unreachable,
+                degraded=degraded,
+                live_calls=tuple(calls),
+            )
         # Memory answered and had nothing. Its own sentence says why — the
         # relevance floor is its rule, not this service's — and the fallback is
         # for a memory service too old to send one: it claims nothing beyond
@@ -3088,7 +3158,6 @@ async def _run_turn(
                 with turn.span("agent_roster") as span:
                     span.meta["error"] = peers.reason(exc)
         recalled = await _recall(app, turn, person, message, shared=persona.shared_person_id)
-        messages = base_messages(model, recalled, history, message, persona, roster=roster)
         if persona.agent is None:
             # The bare call, exactly as before: the whole registry.
             advertised = tools.advertised_tools()
@@ -3112,6 +3181,31 @@ async def _run_turn(
                 # rooted lower.
                 workspace_root=persona.workspace_root,
             )
+        # The live checks, BEFORE the prompt is built and therefore before she
+        # is asked anything (S14, owner ruling 2026-09-10). A note that names
+        # the tool answering its fact now gets that tool run, and the answer
+        # goes into the prompt above her — she cannot recite a stale spec
+        # because the current one is already beside it.
+        #
+        # It runs on the turn's OWN context: the same workspace root, the same
+        # person, so an agent's check is contained exactly where its own calls
+        # are. The whole step is fail-open — a check that refuses or times out
+        # is STATED next to the note, never dropped, because a check that
+        # silently did not happen leaves the note reading as though it had
+        # been confirmed.
+        #
+        # NOT narrowed to an agent's subset, deliberately. The subset is scope
+        # and never permission (_dispatch_calls runs a call outside it and
+        # just marks the span), and this is the BACKEND checking a note, not
+        # the agent reaching for a tool. Narrowing it would mean an agent with
+        # a small toolset is the one that gets handed the stale note — which
+        # is the failure this exists to prevent, aimed at whoever can least
+        # afford it.
+        checked_live: list[live_facts.Checked] = []
+        if recalled.live_calls:
+            checked_live = await live_facts.run(list(recalled.live_calls), turn, tool_ctx)
+            recalled = dataclasses.replace(recalled, live=tuple(live_facts.lines(checked_live)))
+        messages = base_messages(model, recalled, history, message, persona, roster=roster)
         # The toolset the trace marks a call against (None: Nova, who holds
         # everything). Computed once, threaded into every dispatch site.
         subset = persona.tool_names if persona.agent is not None else None
@@ -3120,7 +3214,14 @@ async def _run_turn(
         # long-term memory — otherwise recall would serve the cached snapshot as
         # "the latest" and the model would re-narrate it instead of fetching
         # again. Derived from the tool's own `ephemeral` flag, not a name here.
-        read_ephemeral = False
+        #
+        # It STARTS from the live checks (S14), which are calls this turn made
+        # even though nobody asked for them: a check that read something which
+        # goes stale suppresses ingest exactly as the same call would if she
+        # had made it. Otherwise her reply quoting the fresh figure is ingested
+        # as a new note with no live source, and the staleness this whole step
+        # exists to kill comes back laundered through her own words.
+        read_ephemeral = live_facts.ephemeral(checked_live)
 
         # A round is one gateway call plus the tool calls it asks for. The
         # cap counts gateway calls: reaching it with tools still pending

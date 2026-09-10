@@ -40,14 +40,15 @@ def validate_live_source(live_source: object) -> dict:
     argument check from that tool's own `parameters`, so registering a new
     read tool makes it a valid live source with no edit here.
 
-    WHAT THIS DOES NOT CHECK, and it is a real gap rather than an oversight:
-    that the call CHANGES NOTHING. The next sub-slice runs a live source
-    automatically before she answers, and it may only ever run a tool that
-    reads. v4's `Tool` has no `reads_only` flag to derive that from, and
-    adding one moves the exact-field-set pin in tests/test_no_approvals.py, so
-    it is left for that slice to move deliberately with its reason. Until
-    then this validates that a live source CAN dispatch, never that it is safe
-    to dispatch unasked. 2026-09-10.
+    AND THAT IT IS SAFE TO RUN UNASKED (2026-09-10, the gap this used to
+    name and leave open). A live source's only consumer is the check the
+    backend runs on its own initiative before she answers, so a call that
+    that check would refuse is not a note with a caveat — it is a note
+    promising a check that will never happen. The predicate is
+    `live_facts.runnable`, the SAME one the runner applies at recall time, so
+    the two doors cannot drift into disagreeing about what may run: a tool
+    that changes something, or one that reaches an address the note itself
+    chose, is refused here at write time with the runner's own reason.
     """
     # Imported here rather than at module scope: the registry in app.tools
     # imports THIS module to collect its tools, so a top-level import would be
@@ -76,6 +77,17 @@ def validate_live_source(live_source: object) -> dict:
     problem = schema.validate(tool.parameters, args)
     if problem:
         raise ToolFailure(f"{name} would refuse those arguments: {problem}")
+    # The last check, and the one that decides whether this note is worth
+    # anything: would the automatic runner actually run this? Imported here
+    # for the same cycle reason as tools above.
+    from app import live_facts
+
+    refusal = live_facts.runnable(live_facts.LiveCall(tool=name, args=args, note=""))
+    if refusal is not None:
+        raise ToolFailure(
+            f"{name} cannot be a live source — {refusal}; a note may only cite a check the "
+            "backend is willing to run on its own before answering"
+        )
     return {"tool": name, "args": args}
 
 

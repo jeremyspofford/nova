@@ -173,6 +173,32 @@ mechanism S13 predicted would raise the ceiling.
 - **S14-3 the beat and the backfill.** The third beat, its own switch, its
   counts; the one-off pass over the twelve days. GATE: the backfill dates
   each fact by its exchange, not by the pass.
+  - **The live check LANDED first (2026-09-10)**, because it is the half of
+    S14-3 the owner's ruling turns on and it depended on nothing the
+    extractor was building. `app/live_facts.py` decides what the backend may
+    run when nobody asked it to, runs it before the prompt is composed, and
+    writes the line that puts the live answer above the note. Four things
+    are worth carrying forward as decisions rather than details:
+    - **`Tool.reads_only` is necessary and NOT sufficient**, so the auto-run
+      set is written down separately: `fetch_url` and `web_search` change
+      nothing and still reach an address the note itself chose. The safe
+      default is exclusion and a test reddens until a new tool is
+      classified either way with its reason.
+    - **The write door now uses the runner's own predicate.** `validate_
+      live_source` called `live_facts.runnable`, so a note cannot cite a
+      check the backend would refuse. Two doors, one predicate, no drift.
+    - **A check files a REAL tool span**, kind `tool`, named for the tool,
+      marked `unasked`. It has to: the presented-listing guard reads spans
+      to decide backing, and a listing the backend produced is a listing
+      that really ran — file it under a private kind and the guard
+      contradicts her for showing a true one.
+    - **A check obeys `Tool.ephemeral`.** Otherwise the loop closes: she
+      quotes the fresh figure, the exchange is ingested, and next month
+      recall serves HER sentence back as a fresh note with no live source —
+      the same staleness, laundered through her own words.
+    - The note label stopped saying "ask it first". That was a request in a
+      prompt for a property that must hold; the backend does the asking now
+      and the outcome line says which happened.
 - **S14-4 the measurement.** Fixture, floors, the number in the commit.
 
 ## What would make this lie
