@@ -1,7 +1,7 @@
 # Slice 13 — Memory: she stops forgetting what you told her
 
 Branch `slice/s13`, cut from `rebuild/v4` at c440e29d.
-Status: SPEC, measured 2026-09-09.
+Status: BUILT, DEPLOYED and WALKED 2026-09-10.
 
 The roadmap has said since S1 that "BM25 recall misses conversational
 phrasings". It has never been measured, so it was never fixed. It is
@@ -224,3 +224,77 @@ second is a window this check could not assemble.
   actually costs *in this process*, and `/recall` states in its `statement`
   when the corpus is what cut the budget — or that the corpus left no time to
   match by meaning at all, which is a different sentence from a timeout.
+
+
+## What shipped, measured
+
+| | answer reaches her | confident answers to unanswerable questions |
+|---|---|---|
+| before | 6 of 20 | 6 of 6 |
+| after the mechanical work | 8 of 20 | 0 of 6 |
+| with the embedder | **12 of 20** | 0 of 6 |
+
+The mechanical half, each measured on its own so the commit could say what
+bought what: chunking at the `## HH:MM` boundaries 6 → 9 and the ceiling
+7 → 11; stopwords and stemming moved the headline not at all (reported as
+a finding, not quietly kept) though it raised the ceiling and killed a
+false positive; the derived relevance floor cost two answers and bought
+the whole of decision 1; a wider excerpt 7 → 8.
+
+Then the vocabulary gap, which no word-matching method can bridge: seven
+questions where the word simply is not in the notes. Local embeddings
+through ollama, cached by a hash of the exact text, cosine over the whole
+corpus because it is a few dozen chunks. Nova pulled the model herself.
+
+**The live walk, 2026-09-10.** Every one of these has the lexical half
+ranking nothing and the semantic half ranking first:
+
+- "how much graphics memory does my machine have?" → the note that says
+  24GB VRAM
+- "read me back that short poem about the cold season" → the haiku about
+  winter
+- "did I ask you to nudge me about anything on a repeating basis?" →
+  "remind me every 5 minutes to blink"
+- "is there a program on my box for showing folder layouts?" → "using the
+  tree application"
+
+## What the honesty machinery caught, which is most of the value
+
+Every problem in this slice was found by the code reporting its own
+limits, not by reading it:
+
+- The first live query said the semantic half did not run and named the
+  reason: the embedder did not answer in 1.5 s. Timed directly: the first
+  call after a pull costs 605 ms and warm calls 8 ms — but a genuinely
+  cold load is 1,444–1,728 ms, so the budget was wrong.
+- The boot pass said it embedded 16 of 75 units and stopped, because a
+  whole-pass budget cannot embed a corpus.
+- Recall then refused semantic matching entirely, with the best sentence
+  in the feature: nothing is embedded, so it cannot tell a real
+  resemblance from the ordinary resemblance between any two notes.
+- A later session found one commit was a TORN SNAPSHOT — the truncation
+  fix present, nothing calling it — by extracting that commit's tree and
+  running it, rather than reading the diff.
+- And the embedder had been silently truncating at 2,048 tokens, so an
+  11 KB exchange was embedded from its head while recall went on saying
+  no note resembled the question.
+
+The review then found six more of the same species, the worst being that a
+vector of the wrong WIDTH counted as embedded for ever: the day the model
+changes, every vector is uncomparable, the pass logs "finished, 0
+embedded", and semantic recall is permanently dead while every log line
+reads healthy.
+
+## Carries
+
+- **Distillation is not built** (decision 2). Memory is still 99% raw
+  transcript with one hand-saved note in twelve days. Retrieval over
+  transcript is retrieving transcript, and 12/20 is where that ceiling
+  sits. This is the highest-value remaining work in memory.
+- **"What did we talk about" still searches** (decision 3). It is a
+  request for recent history, not a query.
+- **The absent-answer set is imperfect on his real corpus**: "cat" appears
+  twice, from `cat` shell commands in a transcript, so the lexical half
+  legitimately matches it.
+- The query budget only visibly moves past roughly 8,000 units; the
+  per-unit ranking term exists but is untested at that scale.
