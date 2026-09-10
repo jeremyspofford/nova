@@ -139,7 +139,39 @@ K = 5
 # Move a constant only with a measurement beside it, and say in the commit
 # which way it went.
 # ---------------------------------------------------------------------------
-ANSWER_IN_CONTEXT_FLOOR = 8
+# ---------------------------------------------------------------------------
+# RE-MEASURED 2026-09-10 (S14-4), ON A CORPUS THAT DELIBERATELY CHANGED.
+#
+# The fixture is no longer eight documents. It is those eight plus the 45
+# distilled notes app/distil.py produced from that same transcript against a
+# real model (services/core/tests/recall_distilled.py) — 53 documents, 92
+# units. Forty-five notes out of eight days is not an inflated fixture: the
+# live backfill produced exactly that many from eight days of real
+# conversation on 2026-09-10.
+#
+# So this number is measured against a different corpus and is NOT comparable
+# to the 8 above. It is re-pinned rather than lowered, and it went DOWN:
+#
+#   word matching only      8 -> 7 of 20
+#   word matching + meaning 12 -> 13 of 20   (HYBRID floor below)
+#   absent-answer hits       0 -> 0 of 6     (unchanged; no new false
+#                                             confidence from 45 more documents)
+#
+# THE ONE THAT REGRESSED IS Q18, and it says exactly what distillation is and
+# is not for. "How many goes does my note taker get on a job?" is answered by
+# a distilled note titled "six tool rounds per job" — the fact IS now written
+# down, which it was not before. Word matching still cannot reach it, because
+# the question and the note share no vocabulary ("goes"/"rounds", "note
+# taker"/the agent's name), and with k fixed at 5 that note now competes with
+# 44 siblings instead of 7 documents. Distillation writes the fact down; only
+# the semantic half can find it when the words differ.
+#
+# Stated plainly because it is a trade and not a win: on an install where the
+# embedding model is NOT pulled, distillation cost one of twenty. On one where
+# it is — which is what Nova runs — it bought one. Both are pinned so neither
+# can drift unnoticed.
+# ---------------------------------------------------------------------------
+ANSWER_IN_CONTEXT_FLOOR = 7
 ABSENT_ANSWER_HITS_CEILING = 0
 
 # ---------------------------------------------------------------------------
@@ -202,7 +234,12 @@ ABSENT_ANSWER_HITS_CEILING = 0
 # improvement fails until somebody moves the constant and says in the commit
 # by how much.
 # ---------------------------------------------------------------------------
-HYBRID_ANSWER_IN_CONTEXT_FLOOR = 12
+# S14-4 (2026-09-10): 12 -> 13. The distilled notes joined the corpus and the
+# semantic half found one more answer than it did without them — the mechanism
+# S13 predicted, which is that a short note fits WHOLE inside the excerpt
+# window while the exchange it came from does not. See the block above for the
+# lexical number, which moved the other way.
+HYBRID_ANSWER_IN_CONTEXT_FLOOR = 13
 HYBRID_ABSENT_ANSWER_HITS_CEILING = 0
 
 # Opt-in, and named separately from MEMORY_EMBED_URL so that turning the
@@ -430,10 +467,14 @@ def scorecard(tmp_path_factory) -> Scorecard:
         patch.setenv("MEMORY_ROOT", str(root))
         patch.delenv("DATABASE_URL", raising=False)
         doc_count = len(list(root.rglob("*.md")))
-        # The shape is the diagnosis: eight documents, k=5. If the fixture
-        # ever stops being eight documents the numbers below stop being
-        # comparable to the baseline, and that must fail loudly here.
-        expected = len(corpus.fixture_files())
+        # The shape is part of the diagnosis, so a fixture that quietly changed
+        # size would make the numbers below incomparable. This must therefore
+        # fail loudly — and it MOVED deliberately in S14-4 (2026-09-10): eight
+        # transcript documents plus the distilled notes app/distil.py produced
+        # from that same transcript. Both halves are derived (fixture_files and
+        # distilled_files read the directory), so regenerating the notes moves
+        # this number by itself rather than needing an edit here.
+        expected = len(corpus.fixture_files()) + len(corpus.distilled_files())
         if doc_count != expected:
             raise AssertionError(f"fixture built {doc_count} documents, expected {expected}")
         return asyncio.run(_measure(rel_paths, corpus.units_by_key(root, rel_paths)))
