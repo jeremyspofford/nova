@@ -199,6 +199,41 @@ mechanism S13 predicted would raise the ceiling.
     - The note label stopped saying "ask it first". That was a request in a
       prompt for a property that must hold; the backend does the asking now
       and the outcome line says which happened.
+  - **The beat LANDED (2026-09-10).** Hourly at :35, off the watch beat's
+    :05 so the two never share a tick — a tick runs its firings serially,
+    and a distil pass's model round would otherwise delay every reminder
+    behind it. Hourly rather than daily because a pass over an hour with
+    nothing said in it costs nothing: the window comes back empty and the
+    model is never asked, so the cadence is paid for only in hours he
+    actually talked to her. Decisions worth carrying:
+    - **`proactive.enabled` does NOT gate it** (`GATED_BY_PROACTIVE`). That
+      switch is about whether she goes looking and then speaks up.
+      Distillation tells him nothing; it writes into his own notes so
+      recall can find them. An install that never turned the proactive
+      engine on would otherwise have a memory that quietly never learned
+      anything, with the reason filed under a different feature.
+    - **The window is derived from the beat's own firing history**, and the
+      mark (`wrote_through`) is stamped ONLY when a note actually landed.
+      A firing row exists from the moment the scheduler claims it, and a
+      claimed firing that saved nothing is not evidence that the hour it
+      covers was ever distilled — stamping it would step the window past
+      conversation nobody read, losing those facts with no record that they
+      ever existed. Same discipline as `_WATCH_PASS`.
+    - **One pass reaches back at most two days and SAYS what it did not
+      reach.** A machine asleep for a week must not produce one enormous
+      read, and a silently clipped window is how "she has nothing on that"
+      gets said about something he told her. The rest is the backfill's.
+    - **`memory_tools.save_note` is the one writer.** The tool passes only
+      a title and a body; `subject`, `said_at` and `source` are on the
+      function and not on the schema she is shown, because superseding is
+      decided by subject and a model guessing at which earlier note to
+      retire retires a true one.
+    - Counts are of what LANDED: `written` is the list of paths memory
+      confirmed, and a fact that could not be saved is NAMED rather than
+      left to be inferred from a number being smaller.
+  - **Still open in S14-3: the backfill.** The beat keeps up; the twelve
+    days already stored need a deliberate pass of their own. Building it is
+    mine; running it against his live memory is his call and hers to do.
 - **S14-4 the measurement.** Fixture, floors, the number in the commit.
 
 ## What would make this lie

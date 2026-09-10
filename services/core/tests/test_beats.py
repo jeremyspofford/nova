@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -139,10 +140,28 @@ async def _messages(pool, conversation_id):
     )
 
 
+async def _lines(pool, timer_id) -> list[str]:
+    """The lines THIS beat wrote, oldest first, found through its own firings.
+
+    By provenance, never by position in the conversation. Every beat writes
+    into the one inactive thread, so `messages[1]` meant "the watch beat's
+    second line" only for as long as there were two beats — and a third one
+    silently re-pointed every such index at a different beat's sentence.
+    """
+    return [
+        row["content"]
+        for row in await pool.fetch(
+            "SELECT m.content FROM messages m JOIN timer_firings f ON f.turn_id = m.turn_id "
+            "WHERE f.timer_id = $1 ORDER BY m.created_at",
+            timer_id,
+        )
+    ]
+
+
 # -- seeding --------------------------------------------------------------------
 
 
-async def test_seeding_is_idempotent_and_both_beats_belong_to_the_owner(pool):
+async def test_seeding_is_idempotent_and_every_beat_belongs_to_the_owner(pool):
     owner = await _owner(pool)
     await _setting(pool, "nova.timezone", NY)
     # True is the READ-BACK — every beat in BEATS was found as a row after the
@@ -152,16 +171,24 @@ async def test_seeding_is_idempotent_and_both_beats_belong_to_the_owner(pool):
     assert await beats.ensure_beats(pool) is True  # a second start makes no third row
 
     rows = await _beat_rows(pool)
-    assert sorted(rows) == ["digest", "watch"]
+    # Derived from BEATS rather than spelled again: the seed reads that tuple,
+    # so a beat added without a title, a schedule or an owner reddens below
+    # rather than being seeded half-right.
+    assert sorted(rows) == sorted(beats.BEATS)
     for name, row in rows.items():
         assert row["person_id"] == owner.id, f"{name} must be the owner's: its findings are his"
         assert row["created_via"] == "system"
         assert row["timezone"] == NY
         assert row["paused_at"] is None and row["next_fire_at"] is not None
         assert row["title"] == beats.BEAT_TITLES[name]
-    # Hourly and daily, the two cadences the slice asked for.
+    # The cadences, each named. The two hourly beats are on DIFFERENT minutes
+    # on purpose — one tick runs its firings serially, so sharing :05 would
+    # make every watch beat wait behind a distil pass's model round.
     assert rows["watch"]["schedule"] == {"kind": "hour", "minute": beats.WATCH_SCHEDULE["minute"]}
     assert rows["digest"]["schedule"] == {"kind": "day", "at": beats.DEFAULT_DIGEST_AT}
+    assert rows["distil"]["schedule"] == {"kind": "hour", "minute": beats.DISTIL_SCHEDULE["minute"]}
+    hourly = [r["schedule"] for r in rows.values() if r["schedule"]["kind"] == "hour"]
+    assert len({spec["minute"] for spec in hourly}) == len(hourly)
     assert await pool.fetchval("SELECT count(*) FROM conversations") == 1
 
 
@@ -174,7 +201,7 @@ async def test_seeding_leaves_an_existing_row_alone(pool):
     await beats.ensure_beats(pool)
     again = await timers.get(pool, watch["id"])
     assert again["paused_at"] is not None and again["paused_reason"] == "quiet week"
-    assert len(await _beat_rows(pool)) == 2
+    assert len(await _beat_rows(pool)) == len(beats.BEATS)
 
 
 async def test_the_digest_hour_comes_from_the_setting_when_it_is_there(pool):
@@ -253,13 +280,10 @@ async def test_a_deleted_beat_conversation_is_replaced_and_the_rows_are_re_point
     first = await beats.beat_conversation(pool)
     await pool.execute("DELETE FROM conversations WHERE id = $1", first)
     # 019's ON DELETE SET NULL: the rows would otherwise fire into nowhere.
-    assert (
-        await pool.fetchval(
-            "SELECT count(*) FROM timers WHERE kind = $1 AND conversation_id IS NULL",
-            beats.BEAT_KIND,
-        )
-        == 2
-    )
+    assert await pool.fetchval(
+        "SELECT count(*) FROM timers WHERE kind = $1 AND conversation_id IS NULL",
+        beats.BEAT_KIND,
+    ) == len(beats.BEATS)
     second = await beats.beat_conversation(pool)
     assert second != first
     rows = await _beat_rows(pool)
@@ -299,7 +323,7 @@ async def test_a_due_beat_opens_a_beat_turn_that_lands_in_the_beats_own_conversa
     watch = (await _beat_rows(pool))["watch"]
 
     fired = await scheduler.tick_once(app, pool, now=LATER)
-    assert len(fired) == 2  # both beats were due
+    assert len(fired) == 3  # every beat was due (S14 added distil)
 
     (firing,) = await _firings(pool, watch["id"])
     assert firing["status"] == "ok" and firing["reason"] is None
@@ -332,7 +356,8 @@ async def test_a_due_beat_opens_a_beat_turn_that_lands_in_the_beats_own_conversa
     assert spans[("checks", "run_all")]["quiet"] is True
 
     landed = [m["content"] for m in await _messages(pool, beat_conversation)]
-    assert landed[0].startswith("Watch beat: all 1 check ran and none flagged — quiet.")
+    (watch_line,) = await _lines(pool, watch["id"])
+    assert watch_line.startswith("Watch beat: all 1 check ran and none flagged — quiet.")
     assert beats.DIGEST_NOTHING in landed  # nothing outstanding: the digest is quiet
     assert all(m["turn_id"] is not None for m in await _messages(pool, beat_conversation))
     # The whole point: nothing in the thread he reads.
@@ -358,7 +383,7 @@ async def test_every_finding_is_written_down_stamped_with_the_turn_and_the_firin
     assert row["turn_id"] == firing["turn_id"]
     assert row["firing_id"] == firing["id"]
     assert firing["delivery"]["watch"]["new"] == 1
-    line = (await _messages(pool, watch["conversation_id"]))[0]["content"]
+    (line,) = await _lines(pool, watch["id"])
     assert "1 finding(s) from work_thing" in line and "1 new" in line
 
 
@@ -388,7 +413,7 @@ async def test_the_same_facts_an_hour_later_fold_and_the_beat_counts_it(pool, on
     }
     # Every check ran, so the firing carries no reason: the record is the line.
     assert second["status"] == scheduler.FIRING_OK and second["reason"] is None
-    line = (await _messages(pool, watch["conversation_id"]))[1]["content"]
+    line = (await _lines(pool, watch["id"]))[1]
     assert "0 new and 1 folded onto a notice already raised" in line
 
 
@@ -416,10 +441,7 @@ async def test_a_condition_that_ended_is_cleared_and_the_same_facts_are_news_aga
     second = (await _firings(pool, watch["id"]))[1]
     assert second["delivery"]["watch"]["cleared"] == 1
     assert second["delivery"]["watch"]["quiet"] is True
-    assert (
-        "1 notice cleared: those conditions ended."
-        in (await _messages(pool, watch["conversation_id"]))[1]["content"]
-    )
+    assert "1 notice cleared: those conditions ended." in (await _lines(pool, watch["id"]))[1]
 
     registry["findings"] = [finding]  # and it broke again
     await scheduler.tick_once(app, pool, now=LATER + timedelta(hours=4))
@@ -473,7 +495,7 @@ async def test_a_check_that_did_not_run_clears_nothing_and_the_beat_is_not_an_al
         "pushed": 0,
         "push_failed": 0,
     }
-    line = (await _messages(pool, watch["conversation_id"]))[1]["content"]
+    line = (await _lines(pool, watch["id"]))[1]
     assert "1 of 2 checks ran" in line and "the ledger did not answer" in line
     assert "— quiet." not in line and "all clear" not in line.lower()
 
@@ -539,7 +561,7 @@ async def test_the_watch_beat_delivers_nothing_and_says_so(pool, only):
     assert await _messages(pool, his_chat["id"]) == []
     (firing,) = await _firings(pool, watch["id"])
     assert "devices" not in firing["delivery"]
-    line = (await _messages(pool, watch["conversation_id"]))[0]["content"]
+    (line,) = await _lines(pool, watch["id"])
     assert "Nothing was delivered — the digest is what reaches him." in line
 
 
@@ -2310,3 +2332,276 @@ async def test_a_watched_quiet_day_still_says_nothing(pool, mount_peers):
 
     assert outcome.delivery["digest"]["reason"] == beats.DIGEST_NOTHING_NOTE
     assert await _messages(pool, his_chat["id"]) == [], "he hears nothing"
+
+
+# -- distil ---------------------------------------------------------------------
+#
+# Recall is only as good as what is stored, and almost all of what is stored is
+# raw transcript. This beat writes the facts down. What is pinned: the window
+# comes from the beat's OWN firing history, the counts are of what LANDED, the
+# mark moves only when something did, and the proactive switch does not reach it.
+
+
+def _distilled(**fields):
+    """A pass's result, as app.distil returns one."""
+    from app import distil as distil_module
+
+    return distil_module.Distillation(**fields)
+
+
+def _fact(title="Graphics memory", subject="hardware.vram", live_source=None):
+    from app import distil as distil_module
+
+    return distil_module.Fact(
+        subject=subject,
+        title=title,
+        body='"24GB"\n\nSaid in conversation on 2026-09-01T10:00.',
+        message_id=uuid.uuid4(),
+        said_by="user",
+        said_at=datetime(2026, 9, 1, 10, tzinfo=UTC),
+        live_source=live_source,
+    )
+
+
+@pytest.fixture
+def distils(monkeypatch):
+    """Make the extractor return this, and record the window it was asked for.
+
+    The extractor has its own forty tests; what these are about is the beat
+    around it — which window it asks for, what it does with what comes back,
+    and what it writes down about itself.
+    """
+    from app import distil as distil_module
+
+    seen: dict = {}
+
+    def _use(result):
+        async def _fake(app_, pool_, person, *, since, **kw):
+            seen["since"] = since
+            seen["person"] = person
+            return result
+
+        monkeypatch.setattr(distil_module, "distil", _fake)
+        return seen
+
+    return _use
+
+
+@pytest.fixture
+def saves(monkeypatch):
+    """Record every note the beat writes, and let a test fail one of them."""
+    from app.tools import memory_tools
+
+    written: list[dict] = []
+
+    def _use(fail: str | None = None):
+        async def _save(ctx, *, title, content, **fields):
+            if fail is not None and title == fail:
+                raise memory_tools.ToolFailure("memory said no")
+            written.append({"title": title, "content": content, **fields})
+            return f"people/x/topics/{len(written)}.md"
+
+        monkeypatch.setattr(memory_tools, "save_note", _save)
+        return written
+
+    return _use
+
+
+async def test_the_distil_beat_writes_the_facts_and_counts_what_landed(pool, distils, saves):
+    """The gate for the beat: the extractor's facts become notes, each carrying
+    the frontmatter the note shape needs, and the firing's numbers are of what
+    memory confirmed rather than of what was attempted."""
+    await _owner(pool)
+    await beats.ensure_beats(pool)
+    row = (await _beat_rows(pool))["distil"]
+    written = saves()
+    distils(_distilled(facts=(_fact(),), read=12, proposed=3, dropped=1, folded=1))
+
+    await scheduler.tick_once(app, pool, now=LATER)
+
+    (firing,) = await _firings(pool, row["id"])
+    assert firing["status"] == "ok" and firing["reason"] is not None
+    record = firing["delivery"]["distil"]
+    assert record["read"] == 12 and record["proposed"] == 3 and record["dropped"] == 1
+    assert record["written"] == ["people/x/topics/1.md"]
+    assert record["failed"] == []
+
+    # The note carries what makes superseding and dating work — from the
+    # verified row, not from anything the model wrote.
+    (note,) = written
+    assert note["title"] == "Graphics memory"
+    assert note["subject"] == "hardware.vram"
+    assert note["said_at"] == date(2026, 9, 1)
+    assert note["source"]["role"] == "user"
+
+    (line,) = await _lines(pool, row["id"])
+    assert "read 12 messages" in line and "wrote 1 note" in line
+
+
+async def test_the_mark_moves_only_when_something_was_written(pool, distils, saves):
+    """The value the NEXT pass reads. Stamping it for a pass that wrote nothing
+    would step the window past conversation nobody distilled, and the facts in
+    it would be lost with no record that they ever existed — which is the
+    silent loss this whole slice is about."""
+    await _owner(pool)
+    await beats.ensure_beats(pool)
+    row = (await _beat_rows(pool))["distil"]
+    saves()
+    distils(_distilled(read=4, proposed=0))  # it looked; there was nothing in it
+
+    await scheduler.tick_once(app, pool, now=LATER)
+
+    (firing,) = await _firings(pool, row["id"])
+    assert firing["status"] == "ok"
+    assert "wrote_through" not in firing["delivery"]["distil"]
+
+    # And the next pass therefore still reads back to the default window, not
+    # to the firing that wrote nothing.
+    span, clipped = await beats.distil_span(pool, LATER + timedelta(hours=1))
+    assert span == beats.DISTIL_FIRST_WINDOW and clipped is None
+
+
+async def _wrote_through(pool, timer_id, ago: timedelta) -> None:
+    """A past distil firing that actually wrote something, `ago` before now.
+
+    Written against the DATABASE clock on purpose. The scheduler's tests drive
+    a fake `now`, but a firing's `started_at` is the database's now() and so is
+    the instant distil_span measures back from — a span derived from one clock
+    and marked with another would be wrong by however far apart they are.
+    """
+    await pool.execute(
+        "INSERT INTO timer_firings (timer_id, scheduled_for, started_at, ended_at, status, "
+        "delivery) VALUES ($1, now() - $2::interval, now() - $2::interval, now(), 'ok', "
+        "$3::jsonb)",
+        timer_id,
+        ago,
+        {"beat": "distil", "distil": {"wrote_through": "2026-09-01T00:00:00+00:00"}},
+    )
+
+
+async def test_the_window_is_derived_from_the_last_pass_that_wrote_something(pool, distils, saves):
+    """No new table and no counter to drift: how far back to read is a fact
+    about the beat's own history, the way the review check derives its
+    cadence."""
+    await _owner(pool)
+    await beats.ensure_beats(pool)
+    row = (await _beat_rows(pool))["distil"]
+    await _wrote_through(pool, row["id"], timedelta(hours=3))
+    saves()
+    seen = distils(_distilled(read=0))
+
+    await scheduler.tick_once(app, pool, now=LATER)
+
+    assert timedelta(hours=2, minutes=55) < seen["since"] < timedelta(hours=3, minutes=5)
+
+
+async def test_a_firing_that_wrote_nothing_does_not_move_the_window(pool):
+    """A pass is not a firing. A row exists from the moment the scheduler
+    claims it, and a claimed firing that saved nothing is not evidence that the
+    hour it covers was ever distilled — so the next pass reads it again."""
+    await _owner(pool)
+    await beats.ensure_beats(pool)
+    row = (await _beat_rows(pool))["distil"]
+    await pool.execute(
+        "INSERT INTO timer_firings (timer_id, scheduled_for, started_at, ended_at, status, "
+        "delivery) VALUES ($1, now() - $2::interval, now() - $2::interval, now(), 'ok', "
+        "$3::jsonb)",
+        row["id"],
+        timedelta(hours=3),
+        {"beat": "distil", "distil": {"read": 9, "written": []}},
+    )
+
+    span, clipped = await beats.distil_span(pool, datetime.now(UTC))
+
+    assert span == beats.DISTIL_FIRST_WINDOW and clipped is None
+
+
+async def test_a_beat_that_was_down_for_a_week_says_what_it_did_not_reach(pool):
+    """A silently clipped window is how "she has nothing on that" gets said
+    about something he told her. One pass is bounded; the rest is a backfill,
+    and the line says so."""
+    await _owner(pool)
+    await beats.ensure_beats(pool)
+    row = (await _beat_rows(pool))["distil"]
+    await pool.execute(
+        "INSERT INTO timer_firings (timer_id, scheduled_for, started_at, ended_at, status, "
+        "delivery) VALUES ($1, $2, $2, $2, 'ok', $3::jsonb)",
+        row["id"],
+        LATER - timedelta(days=8),
+        {"beat": "distil", "distil": {"wrote_through": (LATER - timedelta(days=8)).isoformat()}},
+    )
+
+    span, clipped = await beats.distil_span(pool, LATER)
+
+    assert span == beats.DISTIL_MAX_WINDOW
+    assert clipped is not None and "needs a backfill" in clipped
+
+
+async def test_a_fact_that_could_not_be_saved_is_named_and_the_firing_is_not_ok(
+    pool, distils, saves
+):
+    """Counted from the write, never from the intention. A pass that verified
+    two facts and stored one wrote ONE note, and the one that did not land is
+    named rather than left to be inferred from a number being smaller."""
+    await _owner(pool)
+    await beats.ensure_beats(pool)
+    row = (await _beat_rows(pool))["distil"]
+    written = saves(fail="Coffee")
+    distils(
+        _distilled(facts=(_fact(), _fact(title="Coffee", subject="drinks")), proposed=2, read=6)
+    )
+
+    await scheduler.tick_once(app, pool, now=LATER)
+
+    (firing,) = await _firings(pool, row["id"])
+    assert firing["status"] == "error"
+    assert "could not be saved" in firing["reason"]
+    record = firing["delivery"]["distil"]
+    assert len(record["written"]) == 1 and len(written) == 1
+    assert "'Coffee'" in record["failed"][0]
+    # One failure never costs the others.
+    assert "wrote_through" in record
+
+
+async def test_the_proactive_switch_does_not_reach_distillation(pool, distils, saves):
+    """`proactive.enabled` is about whether she goes looking and then tells
+    him. Distillation tells him nothing — it writes down what was already said,
+    into his own notes, so recall can find it. An install that never turned the
+    proactive engine on would otherwise have a memory that quietly never
+    learned anything, with the reason filed under a different feature."""
+    await _owner(pool)
+    await _setting(pool, beats.ENABLED_KEY, False)
+    await beats.ensure_beats(pool)
+    rows = await _beat_rows(pool)
+    written = saves()
+    distils(_distilled(facts=(_fact(),), read=3, proposed=1))
+
+    await scheduler.tick_once(app, pool, now=LATER)
+
+    # The watch beat did nothing and said so; the distil beat did its work.
+    (watch_firing,) = await _firings(pool, rows["watch"]["id"])
+    assert watch_firing["delivery"].get("proactive") == {"enabled": False}
+    (distil_firing,) = await _firings(pool, rows["distil"]["id"])
+    assert distil_firing["delivery"]["distil"]["written"] == ["people/x/topics/1.md"]
+    assert len(written) == 1
+
+
+async def test_a_pass_that_could_not_run_states_the_reason_and_writes_nothing(pool, distils, saves):
+    """An empty result from a pass that never looked is the false all-clear
+    this area exists to stop, so a cannot-check is an error with the reason in
+    it and not a quiet ok."""
+    await _owner(pool)
+    await beats.ensure_beats(pool)
+    row = (await _beat_rows(pool))["distil"]
+    written = saves()
+    distils(_distilled(reason="the gateway could not be reached — connection refused"))
+
+    await scheduler.tick_once(app, pool, now=LATER)
+
+    (firing,) = await _firings(pool, row["id"])
+    assert firing["status"] == "error"
+    assert "connection refused" in firing["reason"]
+    assert written == []
+    assert "wrote_through" not in firing["delivery"]["distil"]
+    (line,) = await _lines(pool, row["id"])
+    assert line.startswith("Distil: no pass over")

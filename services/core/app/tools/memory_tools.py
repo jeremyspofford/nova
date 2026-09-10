@@ -216,18 +216,51 @@ async def search(args: dict, ctx: ToolContext) -> str:
     return "\n".join(lines)
 
 
-async def save(args: dict, ctx: ToolContext) -> str:
-    title = args["title"]
-    body = await _call_memory(
-        ctx,
-        "/save",
-        {"person_id": _person_id(ctx), "title": title, "content": args["content"]},
-    )
-    # The endpoint verifies the file exists before answering; this checks
-    # that it actually said so, rather than treating any 200 as a save.
+async def save_note(
+    ctx: ToolContext,
+    *,
+    title: str,
+    content: str,
+    subject: str | None = None,
+    said_at: object = None,
+    source: dict | None = None,
+    live_source: dict | None = None,
+) -> str:
+    """Write ONE note and return the path it landed at, or raise the reason.
+
+    THE ONE WRITER. Her `memory_save` tool and the distiller both come through
+    here, so "was it actually saved" is answered in one place: memory verifies
+    the file exists before it answers, and this checks that it SAID so rather
+    than reading any 200 as a save.
+
+    The tool passes only a title and a body — deliberately. Superseding is
+    decided by `subject`, dating by `said_at`, and provenance by `source`, and
+    those are facts the distiller derives from a verified database row. A model
+    asked to fill them in mid-conversation would be guessing at which earlier
+    note to retire, and a wrong guess retires a true note. So the extra fields
+    exist on this function and not on the schema she is shown.
+    """
+    payload: dict = {"person_id": _person_id(ctx), "title": title, "content": content}
+    for key, value in (
+        ("subject", subject),
+        ("said_at", said_at.isoformat() if hasattr(said_at, "isoformat") else said_at),
+        ("source", source),
+        ("live_source", live_source),
+    ):
+        # Omitted rather than sent as null: the payload a caller with nothing
+        # extra to say sends is byte-identical to the pre-S14 one.
+        if value is not None:
+            payload[key] = value
+    body = await _call_memory(ctx, "/save", payload)
     if not isinstance(body, dict) or body.get("saved") is not True or not body.get("path"):
         raise ToolFailure(f"memory answered without confirming the save: {body!r}"[:300])
-    return f"Saved {title!r} to memory at {body['path']}."
+    return str(body["path"])
+
+
+async def save(args: dict, ctx: ToolContext) -> str:
+    title = args["title"]
+    path = await save_note(ctx, title=title, content=args["content"])
+    return f"Saved {title!r} to memory at {path}."
 
 
 TOOLS: tuple[Tool, ...] = (
