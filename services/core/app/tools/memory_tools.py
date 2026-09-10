@@ -240,6 +240,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=search,
+        reads_only=True,
     ),
     Tool(
         name="memory_save",

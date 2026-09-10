@@ -757,6 +757,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=model_catalog_search,
+        reads_only=True,
         ephemeral=True,
         result_kind=RESULT_KIND_LISTING,
     ),
@@ -812,6 +813,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=model_check_update,
+        reads_only=True,
         ephemeral=True,
     ),
     Tool(
