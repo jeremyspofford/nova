@@ -352,5 +352,9 @@ TOOLS: tuple[Tool, ...] = (
         executor=list_agents,
         reads_only=True,
         result_kind=RESULT_KIND_LISTING,
+        # Each row carries the agent's cap and its month-to-date spend, read
+        # from the same ledger spend_report reads. A figure quoted out of this
+        # result IS a figure read from the record (S15).
+        reports_spend=True,
     ),
 )

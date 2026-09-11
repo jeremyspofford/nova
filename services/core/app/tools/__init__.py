@@ -98,6 +98,16 @@ def tool_names() -> list[str]:
     return sorted(REGISTRY)
 
 
+def tool_names_reporting_spend() -> list[str]:
+    """The registered tools whose result carries a ledger figure, sorted.
+
+    Read from the live registry every call, so a tool that declares
+    `reports_spend` backs a spend claim by that declaration alone and the guard
+    never keeps a list of names (S15 — `list_agents` reports each agent's cap
+    and spend, and a figure quoted from it was being retracted as unread)."""
+    return sorted(name for name, tool in REGISTRY.items() if tool.reports_spend)
+
+
 def tool_names_by_result_kind(kind: str) -> list[str]:
     """The registered tools declaring `Tool.result_kind == kind`, sorted.
     Derived from the live registry every call, so a tool added (or

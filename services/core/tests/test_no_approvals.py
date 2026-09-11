@@ -105,6 +105,12 @@ def test_tool_carries_no_precheck_or_gate_field():
     # answers it NOW, and something that changes the world must never run
     # unasked. If this set ever gains a field dispatch consults, that field is
     # a gate whatever it is called.
+    # 2026-09-11 (S15): `reports_spend` joins the set on the same terms. It is a
+    # fact about the RESULT — does a successful call put a ledger figure in
+    # front of her — and it exists because the spend guard's backing set was a
+    # hand-kept list of one name, so a true figure quoted out of `list_agents`
+    # was retracted as one nobody read. Nothing reads it to refuse a call; the
+    # guard reads it AFTER the fact, to decide whether a sentence is backed.
     assert set(Tool.__dataclass_fields__) == {
         "name",
         "description",
@@ -113,6 +119,7 @@ def test_tool_carries_no_precheck_or_gate_field():
         "ephemeral",
         "result_kind",
         "reads_only",
+        "reports_spend",
     }
 
 
@@ -277,6 +284,7 @@ async def test_the_schema_carries_no_approval_state(pool):
     assert not ({"capabilities", "fs_roots", "home_dir"} & await columns("devices"))
     assert "kind" not in await columns("messages")
     assert "action_class" not in await columns("governance_events")
-    assert await pool.fetchval(
-        "SELECT count(*) FROM settings WHERE key = 'autonomy.graduation_runs'"
-    ) == 0
+    assert (
+        await pool.fetchval("SELECT count(*) FROM settings WHERE key = 'autonomy.graduation_runs'")
+        == 0
+    )

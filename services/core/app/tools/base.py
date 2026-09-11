@@ -142,3 +142,18 @@ class Tool:
     # anything", and a policy smuggled in here would be a policy nobody could
     # find.
     reads_only: bool = False
+    # Does a successful result PUT A LEDGER FIGURE in front of her? (S15.)
+    #
+    # The spend guard retracts a dollar figure she states with no ledger read
+    # behind it, and its backing set used to be a list of one name kept in the
+    # guard. `list_agents` reports each agent's cap and month-to-date spend, so
+    # a figure read straight out of that result was retracted as unbacked — a
+    # TRUE sentence, corrected, twice in a row on 2026-09-11, once contradicting
+    # its own body. A false retraction is worse than the claim it corrects: it
+    # teaches the owner that her corrections are noise.
+    #
+    # So the guard derives its set from this field (tools.tool_names_reporting_
+    # spend) and a tool self-registers by declaring it — the same shape
+    # `result_kind` already uses for the listing guard. A fact about the
+    # OUTPUT, never a permission: nothing reads it to refuse a call.
+    reports_spend: bool = False

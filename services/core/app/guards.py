@@ -60,7 +60,6 @@ _CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
 _FETCH_TOOLS = frozenset({"fetch_url"})
 _PULL_TOOLS = frozenset({"model_pull"})
 _REMOVE_TOOLS = frozenset({"model_remove"})
-_SPEND_TOOLS = frozenset({"spend_report"})
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -69,8 +68,30 @@ _KIND_TOOLS: dict[str, frozenset[str]] = {
     "fetched_url": _FETCH_TOOLS,
     "pulled_model": _PULL_TOOLS,
     "removed_model": _REMOVE_TOOLS,
-    "stated_spend": _SPEND_TOOLS,
 }
+
+
+def _spend_tools() -> frozenset[str]:
+    """Which tools' successful spans back a stated dollar figure — DERIVED from
+    the live registry, never a list kept here (S15).
+
+    It was a list of one name, `spend_report`, and `list_agents` reports every
+    agent's cap and month-to-date spend from the same ledger. So a figure the
+    owner had just been shown was retracted as one nobody read — twice in a row
+    on 2026-09-11, the second time contradicting its own body. A false
+    retraction is worse than the claim it corrects: it teaches him that her
+    corrections are noise, which is the one thing this layer cannot afford.
+
+    Imported inside the call because app.tools imports this module.
+    """
+    from app import tools
+
+    return frozenset(tools.tool_names_reporting_spend())
+
+
+def _tools_for_kind(kind: str) -> frozenset[str]:
+    return _spend_tools() if kind == "stated_spend" else _KIND_TOOLS[kind]
+
 
 # A stated SPEND figure — "we spent $0.0005 today", "today's spend: $3.20",
 # "$12 spent on openrouter", "you've been charged $4" — with no spend_report
@@ -849,7 +870,7 @@ def _target_of(span: Any) -> str | None:
 
 
 def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
-    matching = [span for span in successful if span.name in _KIND_TOOLS[kind]]
+    matching = [span for span in successful if span.name in _tools_for_kind(kind)]
     if not matching:
         return False
     span_targets = [_target_of(span) for span in matching]

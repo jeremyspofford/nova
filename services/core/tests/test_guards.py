@@ -1682,6 +1682,46 @@ def test_a_spend_figure_backed_by_a_spend_report_span_is_honest():
     assert failed is not None
 
 
+def test_any_tool_that_reports_spend_backs_a_spend_figure_not_just_spend_report():
+    """2026-09-11, from the owner's transcript: a TRUE sentence retracted.
+
+    `list_agents` returns each agent's cap and month-to-date spend — his reply
+    quoted the figure out of that very result — and the guard appended
+    "Correction: I did not read the spend ledger this turn" anyway, because the
+    backing set was a hand-kept list holding only `spend_report`. The next reply
+    did it again and contradicted its own body, which said "per my spend read
+    above".
+
+    A false retraction is worse than the claim it corrects: it teaches the owner
+    that her corrections are noise, which is the one thing this whole layer is
+    for. So the backing set is DERIVED from the registry — a tool declares
+    `reports_spend` and self-registers, the way a listing tool already declares
+    `result_kind` — and nothing here keeps a list of names.
+    """
+    reply = "The coder agent is capped at $2.00 and has spent $0.00 this month."
+    assert guards.narration_check(reply, [tool_span("list_agents")]) is None, (
+        "a figure read out of list_agents is not a figure nobody read"
+    )
+    # Still flagged when the only span that ran reports no spend at all.
+    assert guards.narration_check(reply, [tool_span("get_time")]) is not None
+    # And a failed read backs nothing, whichever tool it was.
+    assert guards.narration_check(reply, [tool_span("list_agents", ok=False)]) is not None
+
+
+def test_the_spend_backing_set_is_the_registry_not_a_list_in_the_guard():
+    """The declaration IS the registration. This is the tripwire for the day
+    someone adds a spend-reporting tool and does not declare it: the set is read
+    from the live registry, so the fix is one field on the tool rather than an
+    edit here."""
+    from app import tools
+
+    declared = set(tools.tool_names_reporting_spend())
+    assert declared == {
+        name for name, tool in tools.REGISTRY.items() if getattr(tool, "reports_spend", False)
+    }
+    assert {"spend_report", "list_agents"} <= declared, sorted(declared)
+
+
 def test_price_talk_and_the_users_own_figures_are_not_spend_claims():
     for reply in (
         "Opus costs $15 per million output tokens.",
