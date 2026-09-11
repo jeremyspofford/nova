@@ -2868,3 +2868,95 @@ def test_the_new_guards_are_clean_over_every_correction_in_this_module(name, tex
     assert guards.observation_check(text, [GATEWAY_DOWN], FOUND_SOMETHING) is None, name
     assert guards.delivery_claim_check(text, []) is None, name
     assert guards.novelty_claim_check(text, REPEATED) is None, name
+
+
+# -- deleted a file (S16) --------------------------------------------------
+#
+# She told the owner "there is no delete operation in my toolbox" and was
+# right. Now there is one, so a claimed deletion becomes a claim the trace can
+# contradict — and she has faked a deletion before, which is why the tool
+# arriving without this guard would be half the work.
+
+
+def test_a_delete_claim_with_no_delete_span_is_flagged():
+    reply = "I've deleted groceries.md for you."
+    correction = guards.narration_check(reply, [other_span("memory_recall"), other_span()])
+    assert correction is not None
+    assert kinds(correction) == ["deleted_file"]
+    assert targets(correction) == ["groceries.md"]
+
+
+def test_a_delete_claim_with_a_matching_span_is_not_flagged():
+    reply = "I've deleted groceries.md for you."
+    spans = [tool_span("workspace_delete", path="groceries.md")]
+    assert guards.narration_check(reply, spans) is None
+
+
+def test_a_delete_claim_is_not_backed_by_a_write_span():
+    reply = "I removed old-notes.md from the workspace."
+    spans = [tool_span("workspace_write_file", path="old-notes.md")]
+    correction = guards.narration_check(reply, spans)
+    assert correction is not None
+    assert kinds(correction) == ["deleted_file"]
+
+
+def test_deleting_one_file_does_not_back_a_claim_about_another():
+    reply = "I deleted groceries.md."
+    spans = [tool_span("workspace_delete", path="shopping.md")]
+    correction = guards.narration_check(reply, spans)
+    assert correction is not None
+    assert targets(correction) == ["groceries.md"]
+
+
+def test_a_failed_delete_span_does_not_back_the_claim():
+    reply = "I deleted groceries.md."
+    spans = [tool_span("workspace_delete", ok=False, path="groceries.md")]
+    assert guards.narration_check(reply, spans) is not None
+
+
+def test_removing_a_model_is_still_a_model_claim_not_a_file_one():
+    """A model ref carries a tag, a filename carries an extension. The two
+    anchors do not overlap, and this pins that they never start to."""
+    reply = "I removed qwen3:14b."
+    spans = [tool_span("model_remove", model="qwen3:14b")]
+    assert guards.narration_check(reply, spans) is None
+
+
+def test_an_offer_to_delete_is_not_a_claim():
+    reply = "Would you like me to delete groceries.md?"
+    assert guards.narration_check(reply, []) is None
+
+
+def test_a_future_delete_is_not_a_claim():
+    reply = "I'll delete groceries.md once you confirm."
+    assert guards.narration_check(reply, []) is None
+
+
+def test_a_stated_delete_failure_is_not_a_claim():
+    reply = "I could not delete groceries.md — it is not in the workspace."
+    assert guards.narration_check(reply, []) is None
+
+
+def test_a_deletion_attributed_to_the_owner_is_not_a_self_claim():
+    reply = "You deleted groceries.md earlier, so there is nothing there now."
+    assert guards.narration_check(reply, []) is None
+
+
+def test_a_bare_noun_deletion_is_never_a_claim():
+    """Precision first: without a filename token there is no target, and an
+    ordinary sentence must not become a correction."""
+    reply = "I deleted the duplicates we talked about."
+    assert guards.narration_check(reply, []) is None
+
+
+def test_a_passive_deletion_claim_is_flagged():
+    reply = "groceries.md has been deleted."
+    correction = guards.narration_check(reply, [other_span()])
+    assert correction is not None
+    assert kinds(correction) == ["deleted_file"]
+
+
+def test_a_passive_deletion_claim_with_a_delete_span_is_not_flagged():
+    reply = "groceries.md has been deleted."
+    spans = [tool_span("workspace_delete", path="groceries.md")]
+    assert guards.narration_check(reply, spans) is None
