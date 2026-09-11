@@ -56,6 +56,9 @@ _TABLES = (
     # uses a plain CREATE, like 019_timers.sql) and rows would leak between
     # tests in the meantime.
     "queued_messages",
+    # S17: skill_uses references skills AND turns, so it drops ahead of both.
+    "skill_uses",
+    "skills",
     "turn_spans",
     "turns",
     "messages",
