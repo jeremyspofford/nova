@@ -228,6 +228,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=read_file,
+        reads_only=True,
     ),
     Tool(
         name="workspace_list_files",
@@ -247,6 +248,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=list_files,
+        reads_only=True,
         # Its result IS a listing: the presented-listing guard reads this
         # declaration to know a real listing was produced this turn.
         result_kind=RESULT_KIND_LISTING,

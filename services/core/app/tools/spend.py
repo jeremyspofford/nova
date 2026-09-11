@@ -164,6 +164,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=spend_report,
+        reads_only=True,
         ephemeral=True,
     ),
 )

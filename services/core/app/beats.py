@@ -89,7 +89,8 @@ logger = logging.getLogger("core")
 # than by a title someone might edit.
 WATCH = "watch"
 DIGEST = "digest"
-BEATS = (WATCH, DIGEST)
+DISTIL = "distil"
+BEATS = (WATCH, DIGEST, DISTIL)
 
 # timers.kind and turns.kind. Spelled separately because they are two different
 # columns in two different tables that happen to agree; a future rename of one
@@ -100,12 +101,41 @@ BEAT_TURN_KIND = "beat"
 BEAT_TITLES: dict[str, str] = {
     WATCH: "Watch: run the checks every hour and act on what they find",
     DIGEST: "Digest: one message a day about what she found",
+    DISTIL: "Distil: turn what was said into facts her memory can find",
 }
 
 # Hourly, at :05 rather than :00. A firing runs serially inside one tick, and
 # :00 is where wall-clock reminders pile up — a beat that took a minute there
 # would delay them all.
 WATCH_SCHEDULE = {"kind": "hour", "minute": 5}
+
+# Hourly too, at :35 — off the watch beat's :05 so the two never share a tick,
+# and nowhere near :00. Hourly rather than daily because "keep up" was the
+# owner's word for it and a pass over an hour with nothing said in it costs
+# NOTHING: the window comes back empty and the model is never asked. The price
+# of the cadence is paid only in hours he actually talked to her.
+DISTIL_SCHEDULE = {"kind": "hour", "minute": 35}
+
+# The beats the proactive switch gates, and it is not all of them.
+#
+# `proactive.enabled` is about whether she goes looking for things to tell him
+# and then tells him. Distillation tells him nothing — it writes down what was
+# already said, into his own notes, so that recall can find it. That is memory
+# hygiene, and an install that never turned the proactive engine on would
+# otherwise have a memory that quietly never learned anything, with the reason
+# buried in a setting about a different feature.
+GATED_BY_PROACTIVE = (WATCH, DIGEST)
+
+# How far back a distil pass reads when the beat has no history to derive a
+# mark from — a fresh install, or the first firing after this beat was added.
+# One day rather than the whole archive: the backfill is a deliberate separate
+# pass over everything, and a beat that quietly tried to swallow twelve days on
+# its first tick would be doing the backfill's job without anyone asking.
+DISTIL_FIRST_WINDOW = timedelta(days=1)
+# The most a single catch-up pass reaches back for, however long the beat was
+# down. A machine asleep for a week must not produce one enormous read; what
+# is older than this is the backfill's to do, and the line says so.
+DISTIL_MAX_WINDOW = timedelta(days=2)
 
 # The digest's hour. Read defensively — through settings_store when the def is
 # registered, straight off the table if it ever is not — and never trusted
@@ -326,7 +356,11 @@ async def ensure_beats(pool: asyncpg.Pool) -> bool:
     zone = await _zone(pool)
     if zone is None:
         return False
-    specs = {WATCH: schedule.validate(WATCH_SCHEDULE), DIGEST: await _digest_spec(pool)}
+    specs = {
+        WATCH: schedule.validate(WATCH_SCHEDULE),
+        DIGEST: await _digest_spec(pool),
+        DISTIL: schedule.validate(DISTIL_SCHEDULE),
+    }
     seeded: list[str] = []
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock($1)", _SEED_LOCK)
@@ -601,7 +635,10 @@ async def run_beat(app, pool: asyncpg.Pool, row: asyncpg.Record, firing_id, turn
         return scheduler.Outcome(scheduler.FIRING_REFUSED, reason, {}, pause_reason=reason)
     with turn.span("beat", name) as span:
         try:
-            off = await proactive_off(pool)
+            # Read only for the beats it is about. Distillation writes into his
+            # own notes and tells him nothing, so a switch about whether she
+            # goes looking and speaks up has no business stopping it.
+            off = await proactive_off(pool) if name in GATED_BY_PROACTIVE else None
             if off is not None:
                 outcome = scheduler.Outcome(
                     scheduler.FIRING_OK, off, {"beat": name, "proactive": {"enabled": False}}
@@ -2304,4 +2341,184 @@ async def _digest(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
 # Name -> the coroutine that runs it, the same binding JOBS uses. run_beat
 # refuses a name that is not here rather than routing an unknown row to a
 # model.
-_RUNNERS = {WATCH: _watch, DIGEST: _digest}
+# -- distil -------------------------------------------------------------------
+#
+# Recall is only as good as what is stored, and almost everything stored is raw
+# transcript. This beat writes the facts down.
+
+
+# The record this beat leaves about itself, and the path a later firing reads
+# to find the mark. `written` is the count of notes that LANDED — memory
+# confirmed the path — so a run that verified ten facts and could save none
+# says zero here and is not a pass. Same discipline as _WATCH_PASS: a firing
+# row exists from the moment it is claimed, and being claimed is not evidence.
+_DISTIL_RECORD = "distil"
+_DISTIL_MARK = "{delivery,distil,wrote_through}"
+_DISTIL_PASS = "f.delivery #>> '{distil,wrote_through}' IS NOT NULL"
+
+
+@dataclass(frozen=True)
+class DistilResult:
+    """What one distil pass actually did. Every number is counted from an
+    outcome, never from an attempt: `written` is the length of the list of
+    paths memory confirmed, and `failed` is the reasons it did not."""
+
+    # From the extractor: how much conversation was read, how many facts the
+    # model proposed, how many lost their citation or their live source.
+    read: int = 0
+    proposed: int = 0
+    dropped: int = 0
+    folded: int = 0
+    # From the writes: the paths memory confirmed, and the reasons for the rest.
+    written: tuple[str, ...] = ()
+    failed: tuple[str, ...] = ()
+    # Every limit on this pass, in words — a subject list that could not be
+    # read, a window that was clipped, a peer that could not be reached.
+    limits: tuple[str, ...] = ()
+    # The reason there was no pass at all, when there was none.
+    reason: str | None = None
+
+    @property
+    def ran(self) -> bool:
+        return self.reason is None
+
+
+def distil_line(result: DistilResult, span: timedelta) -> str:
+    """The beat's own line, composed from the counts.
+
+    It says what LANDED first and what stopped it second, because the first
+    clause is what gets read. A pass that wrote nothing says which of the two
+    nothings it was: nothing was said in the window, or something was and none
+    of it could be written down.
+    """
+    covered = f"the {duration_words(span)} since the last pass"
+    if not result.ran:
+        return f"Distil: no pass over {covered} — {result.reason}"
+    if result.read == 0:
+        return f"Distil: nothing was said in {covered}, so there was nothing to write down."
+    parts = [
+        f"Distil: read {_plural(result.read, 'message')} from {covered}, "
+        f"proposed {result.proposed}, wrote {_plural(len(result.written), 'note')}"
+    ]
+    if result.folded:
+        parts.append(f"{result.folded} restated a fact already proposed in this pass")
+    if result.dropped:
+        parts.append(f"{_plural(result.dropped, 'proposal')} dropped as unverifiable")
+    if result.failed:
+        parts.append(f"could not be saved: {'; '.join(result.failed)}")
+    if result.limits:
+        parts.append(f"limits on this pass: {'; '.join(result.limits)}")
+    return ". ".join(parts) + "."
+
+
+async def distil_span(pool: asyncpg.Pool, now: datetime) -> tuple[timedelta, str | None]:
+    """How far back this pass reads, and the limit on that when there is one.
+
+    DERIVED FROM THE BEAT'S OWN FIRING HISTORY, the way the review check derives
+    its cadence — no new table and no counter to drift. The mark is the start of
+    the most recent firing that actually WROTE something through; a firing that
+    was claimed, or that ran and saved nothing, marks nothing, so the next pass
+    reads the same window again rather than stepping over an hour nobody
+    distilled.
+
+    Two bounds, both stated. With no such firing at all this reads
+    DISTIL_FIRST_WINDOW, because swallowing the whole archive on the first tick
+    would be doing the backfill's job without anyone asking for it. However long
+    the beat was down, one pass reaches back at most DISTIL_MAX_WINDOW and SAYS
+    what it did not reach — the older conversation is still there and still
+    distillable, and a silently clipped window is how "she has nothing on that"
+    gets said about something he told her.
+    """
+    last = await pool.fetchval(
+        "SELECT max(f.started_at) FROM timer_firings f JOIN timers t ON t.id = f.timer_id "
+        f"WHERE t.kind = $1 AND t.payload->>'handler' = $2 AND {_DISTIL_PASS}",
+        BEAT_KIND,
+        DISTIL,
+    )
+    if last is None:
+        return DISTIL_FIRST_WINDOW, None
+    span = now - last
+    if span <= DISTIL_MAX_WINDOW:
+        return max(span, timedelta(0)), None
+    return DISTIL_MAX_WINDOW, (
+        f"the last pass that wrote anything was {duration_words(span)} ago, and one pass reads "
+        f"at most {duration_words(DISTIL_MAX_WINDOW)} — what was said before that is still "
+        "undistilled and needs a backfill"
+    )
+
+
+async def _distil(app, pool: asyncpg.Pool, turn: traces.Turn, firing_id):
+    """One distil pass: read what was said, verify it, write the facts down.
+
+    NOT gated by proactive.enabled (see GATED_BY_PROACTIVE) and it delivers
+    nothing to him — the only thing it writes outside his notes is its own line
+    in the beats' conversation.
+
+    The counts on the firing are of what LANDED. `wrote_through` is stamped
+    ONLY when a note was actually saved, because that value is the mark the
+    next pass reads: recording it for a pass that saved nothing would step the
+    window past conversation nobody ever distilled, and the facts in it would
+    be lost silently, which is the failure this whole slice is about.
+    """
+    scheduler = _scheduler()
+    # Imported at call time, like _proactive's checks: app.distil reaches the
+    # gateway and the tool registry, and a module-level import here would tie
+    # the scheduler's import graph to both.
+    from app import distil as distil_module
+
+    person = await _person(pool, turn)
+    now = await pool.fetchval("SELECT now()")
+    span, clipped = await distil_span(pool, now)
+
+    if person is None:
+        result = DistilResult(reason="there is no owner account, so there are no notes to write")
+    else:
+        with turn.span("distil") as work:
+            found = await distil_module.distil(app, pool, person, since=span)
+            work.meta["read"] = found.read
+            work.meta["proposed"] = found.proposed
+            work.meta["verified"] = found.verified
+            written, failed = await distil_module.write_facts(app, person, found.facts)
+            work.meta["written"] = len(written)
+            if failed:
+                work.meta["failed"] = list(failed)
+        result = DistilResult(
+            read=found.read,
+            proposed=found.proposed,
+            dropped=found.dropped,
+            folded=found.folded,
+            written=written,
+            failed=failed,
+            limits=tuple(x for x in (*found.limits, clipped) if x),
+            reason=found.reason,
+        )
+
+    rung, say_failed = await _say(pool, turn, distil_line(result, span))
+    delivery: dict = {
+        "beat": DISTIL,
+        "chat": rung,
+        _DISTIL_RECORD: {
+            "read": result.read,
+            "proposed": result.proposed,
+            "dropped": result.dropped,
+            "written": list(result.written),
+            "failed": list(result.failed),
+        },
+    }
+    if result.written:
+        # The mark, and only when something landed. `now` rather than the
+        # instant the writes finished: the window this pass READ ended at now,
+        # and dating the mark later would skip whatever was said while it ran.
+        delivery[_DISTIL_RECORD]["wrote_through"] = now.isoformat()
+
+    problem = _stated(
+        say_failed,
+        result.reason if not result.ran else None,
+        f"{_plural(len(result.failed), 'fact')} could not be saved" if result.failed else None,
+    )
+    if problem is not None:
+        return scheduler.Outcome(scheduler.FIRING_ERROR, problem, delivery)
+    return scheduler.Outcome(scheduler.FIRING_OK, distil_line(result, span), delivery)
+
+
+_RUNNERS = {WATCH: _watch, DIGEST: _digest, DISTIL: _distil}

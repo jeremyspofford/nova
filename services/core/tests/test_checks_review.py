@@ -540,7 +540,7 @@ async def test_a_review_finding_cannot_promote_itself(pool, mount_peers, monkeyp
     conversation = await _conversation(pool, person)
     real = await _message(pool, conversation, GARAGE)
 
-    async def _urgent(pool, owner, items):
+    async def _urgent(pool, owner, items, window):
         return [Finding(key="commitment:x", title="urgent by fiat", facts={"a": 1}, urgent=True)]
 
     monkeypatch.setattr(review, "_verified", _urgent)

@@ -50,5 +50,6 @@ TOOLS: tuple[Tool, ...] = (
         ),
         parameters=NO_ARGUMENTS,
         executor=get_time,
+        reads_only=True,
     ),
 )

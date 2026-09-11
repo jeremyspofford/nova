@@ -350,6 +350,7 @@ TOOLS: tuple[Tool, ...] = (
         ),
         parameters=_obj({}, []),
         executor=list_agents,
+        reads_only=True,
         result_kind=RESULT_KIND_LISTING,
     ),
 )

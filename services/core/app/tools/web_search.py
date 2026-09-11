@@ -285,6 +285,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=web_search,
+        reads_only=True,
         # Search results are a live, time-sensitive read, exactly like fetch_url:
         # the turn is NOT ingested into long-term memory, so a later "what's the
         # latest?" re-searches instead of recalling a stale snapshot and serving

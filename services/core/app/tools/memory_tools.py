@@ -4,17 +4,91 @@ Neither tool takes an owner: the person is whoever the turn is being run
 for, taken from the context. A tool that could name its own scope would be
 a tool that could read someone else's notes by asking nicely.
 """
+
 from __future__ import annotations
 
 import httpx
 
 from app import peers
+from app.tools import schema
 from app.tools.base import Tool, ToolContext, ToolFailure
 
 MEMORY_TIMEOUT = httpx.Timeout(10.0)
 DEFAULT_K = 5
 MAX_K = 20
 SNIPPET_CHARS = 300
+
+
+def validate_live_source(live_source: object) -> dict:
+    """A note's `live_source` checked against the LIVE tool registry, or a
+    ToolFailure naming exactly what is wrong with it.
+
+    WHY THIS IS HERE AND NOT IN THE MEMORY SERVICE. A `live_source` is the
+    read-only call that answers a fact now, and a call that could never
+    dispatch must not be written down — a note pointing at a tool that does
+    not exist, or carrying arguments that tool would refuse, is a promise of a
+    check nothing can run. Establishing that needs two things memory cannot
+    have: the set of registered tools, and each tool's advertised JSON schema.
+    The memory service is a separate process that does not import this package
+    and must not start; the alternative — a copy of the tool names kept in
+    memory's own source — is exactly the hand-maintained list the house rule
+    forbids, wrong the day a tool is registered and wrong silently. So the
+    shape is checked there (store.normalize_live_source) and the NAMES and
+    ARGUMENTS are checked here, against the registry itself.
+
+    Derived, never hardcoded: the tool set comes from tools.REGISTRY and the
+    argument check from that tool's own `parameters`, so registering a new
+    read tool makes it a valid live source with no edit here.
+
+    AND THAT IT IS SAFE TO RUN UNASKED (2026-09-10, the gap this used to
+    name and leave open). A live source's only consumer is the check the
+    backend runs on its own initiative before she answers, so a call that
+    that check would refuse is not a note with a caveat — it is a note
+    promising a check that will never happen. The predicate is
+    `live_facts.runnable`, the SAME one the runner applies at recall time, so
+    the two doors cannot drift into disagreeing about what may run: a tool
+    that changes something, or one that reaches an address the note itself
+    chose, is refused here at write time with the runner's own reason.
+    """
+    # Imported here rather than at module scope: the registry in app.tools
+    # imports THIS module to collect its tools, so a top-level import would be
+    # a cycle. app.tools.schema has no such problem and is imported normally.
+    from app import tools
+
+    if not isinstance(live_source, dict):
+        raise ToolFailure("a live source must be an object naming a tool and its arguments")
+    name = live_source.get("tool")
+    if not isinstance(name, str) or not name.strip():
+        raise ToolFailure("a live source must name the tool that answers this fact now")
+    name = name.strip()
+    tool = tools.REGISTRY.get(name)
+    if tool is None:
+        raise ToolFailure(
+            f"there is no tool called {name!r}, so a note citing it as its live source would "
+            "promise a check that can never run"
+        )
+    args = live_source.get("args")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        raise ToolFailure(
+            f"a live source's args must be an object, got {schema.json_type_name(args)}"
+        )
+    problem = schema.validate(tool.parameters, args)
+    if problem:
+        raise ToolFailure(f"{name} would refuse those arguments: {problem}")
+    # The last check, and the one that decides whether this note is worth
+    # anything: would the automatic runner actually run this? Imported here
+    # for the same cycle reason as tools above.
+    from app import live_facts
+
+    refusal = live_facts.runnable(live_facts.LiveCall(tool=name, args=args, note=""))
+    if refusal is not None:
+        raise ToolFailure(
+            f"{name} cannot be a live source — {refusal}; a note may only cite a check the "
+            "backend is willing to run on its own before answering"
+        )
+    return {"tool": name, "args": args}
 
 
 def _person_id(ctx: ToolContext) -> str:
@@ -25,6 +99,13 @@ def _person_id(ctx: ToolContext) -> str:
 
 
 async def _call_memory(ctx: ToolContext, path: str, payload: dict) -> object:
+    # THE SINGLE DOOR into the memory service from this process. A payload
+    # carrying a `live_source` is checked against the live registry before it
+    # is posted, so a caller that forgets to validate cannot write a note
+    # naming a call that could never dispatch — the check is a property of the
+    # path rather than a habit of its callers.
+    if payload.get("live_source") is not None:
+        payload = {**payload, "live_source": validate_live_source(payload["live_source"])}
     try:
         async with peers.client(ctx.app, peers.MEMORY, MEMORY_TIMEOUT) as client:
             response = await client.post(path, json=payload)
@@ -135,18 +216,89 @@ async def search(args: dict, ctx: ToolContext) -> str:
     return "\n".join(lines)
 
 
-async def save(args: dict, ctx: ToolContext) -> str:
-    title = args["title"]
-    body = await _call_memory(
-        ctx,
-        "/save",
-        {"person_id": _person_id(ctx), "title": title, "content": args["content"]},
-    )
-    # The endpoint verifies the file exists before answering; this checks
-    # that it actually said so, rather than treating any 200 as a save.
+async def save_note(
+    ctx: ToolContext,
+    *,
+    title: str,
+    content: str,
+    subject: str | None = None,
+    said_at: object = None,
+    source: dict | None = None,
+    live_source: dict | None = None,
+) -> str:
+    """Write ONE note and return the path it landed at, or raise the reason.
+
+    THE ONE WRITER. Her `memory_save` tool and the distiller both come through
+    here, so "was it actually saved" is answered in one place: memory verifies
+    the file exists before it answers, and this checks that it SAID so rather
+    than reading any 200 as a save.
+
+    The tool passes only a title and a body — deliberately. Superseding is
+    decided by `subject`, dating by `said_at`, and provenance by `source`, and
+    those are facts the distiller derives from a verified database row. A model
+    asked to fill them in mid-conversation would be guessing at which earlier
+    note to retire, and a wrong guess retires a true note. So the extra fields
+    exist on this function and not on the schema she is shown.
+    """
+    payload: dict = {"person_id": _person_id(ctx), "title": title, "content": content}
+    for key, value in (
+        ("subject", subject),
+        ("said_at", said_at.isoformat() if hasattr(said_at, "isoformat") else said_at),
+        ("source", source),
+        ("live_source", live_source),
+    ):
+        # Omitted rather than sent as null: the payload a caller with nothing
+        # extra to say sends is byte-identical to the pre-S14 one.
+        if value is not None:
+            payload[key] = value
+    body = await _call_memory(ctx, "/save", payload)
     if not isinstance(body, dict) or body.get("saved") is not True or not body.get("path"):
         raise ToolFailure(f"memory answered without confirming the save: {body!r}"[:300])
-    return f"Saved {title!r} to memory at {body['path']}."
+    return str(body["path"])
+
+
+async def save(args: dict, ctx: ToolContext) -> str:
+    title = args["title"]
+    path = await save_note(ctx, title=title, content=args["content"])
+    return f"Saved {title!r} to memory at {path}."
+
+
+async def backfill(args: dict, ctx: ToolContext) -> str:
+    """Distil the conversation already stored into facts her memory can find.
+
+    A tool rather than a script, because operating the running system is hers:
+    the beat keeps up with what is said from now on, and this is the pass over
+    what was already there when the beat was built. She can be asked to run it,
+    the trace records what it did, and the result says what it could not do.
+
+    NOT ephemeral and NOT reads_only — it writes notes, so nothing runs it on
+    anyone's initiative but hers.
+    """
+    from app import db, distil
+
+    person = ctx.person
+    if person is None:
+        raise ToolFailure("this turn has no identity, so there are no notes to write")
+    steps = args.get("steps") or distil.BACKFILL_MAX_STEPS
+    pool = await db.get_pool()
+    result = await distil.backfill(ctx.app, pool, person, max_steps=int(steps))
+    if not result.ran:
+        raise ToolFailure(result.reason or "the backfill did not run")
+
+    # Composed from what LANDED. `written` is the paths memory confirmed, and
+    # every span that produced nothing is named rather than left as the
+    # difference between two numbers.
+    parts = [
+        f"Distilled {result.steps} span(s) of stored conversation: read {result.read} messages, "
+        f"proposed {result.proposed} facts, wrote {len(result.written)} notes"
+    ]
+    if result.failed:
+        parts.append(f"could not be saved: {'; '.join(result.failed[:5])}")
+    if result.problems:
+        parts.append(f"spans with no notes: {'; '.join(result.problems[:5])}")
+    if result.remaining:
+        parts.append(result.remaining)
+    return ". ".join(parts) + "."
 
 
 TOOLS: tuple[Tool, ...] = (
@@ -171,6 +323,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=search,
+        reads_only=True,
     ),
     Tool(
         name="memory_save",
@@ -188,5 +341,30 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=save,
+    ),
+    Tool(
+        name="memory_backfill",
+        description=(
+            "Read this person's stored conversation and write the durable facts in it into "
+            "their notes, oldest first. Use it once to catch memory up with what was said "
+            "before distillation existed; the hourly beat keeps up after that."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "steps": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": (
+                        "How many spans of conversation to walk in this run. The result "
+                        "says what is left if it does not reach now."
+                    ),
+                },
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+        executor=backfill,
     ),
 )

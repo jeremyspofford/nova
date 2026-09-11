@@ -139,7 +139,72 @@ K = 5
 # Move a constant only with a measurement beside it, and say in the commit
 # which way it went.
 # ---------------------------------------------------------------------------
-ANSWER_IN_CONTEXT_FLOOR = 8
+# ---------------------------------------------------------------------------
+# RE-MEASURED 2026-09-10 (S14-4), ON A CORPUS THAT DELIBERATELY CHANGED.
+#
+# The fixture is no longer eight documents. It is those eight plus the 45
+# distilled notes app/distil.py produced from that same transcript against a
+# real model (services/core/tests/recall_distilled.py) — 53 documents, 92
+# units. Forty-five notes out of eight days is not an inflated fixture: the
+# live backfill produced exactly that many from eight days of real
+# conversation on 2026-09-10.
+#
+# So this number is measured against a different corpus and is NOT directly
+# comparable to the 8 above. IT IS ALSO ONE SAMPLE OF A NOISY GENERATOR, and
+# that is the most important thing on this page.
+#
+# THE FIXTURE IS WRITTEN BY A MODEL, SO IT VARIES. Three regenerations of the
+# distilled notes from the SAME code and the same transcript scored:
+#
+#     sample 1:  7 lexical, 12 hybrid   (28 notes)  <- committed, the median
+#     sample 2:  7 lexical, 12 hybrid   (37 notes)
+#     sample 3: 10 lexical, 14 hybrid   (27 notes)
+#
+# A three-point spread on twenty questions. Against a pre-S14 baseline of 8
+# and 12, the median effect of distillation on THIS fixture is zero on the
+# hybrid number and slightly negative on the lexical one. Earlier passes of
+# this work reported "12 -> 13" and then "12 -> 14" as gains; both were single
+# favourable draws, and both are retracted here. Twenty questions cannot
+# resolve a one- or two-question effect against this much noise.
+#
+# THE COMMITTED SAMPLE IS THE MEDIAN BY HYBRID SCORE, and the rule was fixed
+# before the samples were looked at. Regenerating and keeping whichever run
+# scores best is the obvious way to lie with this file, and it is the reason
+# the rule is written down here rather than left to whoever runs it next.
+#
+# WHAT THE FLOORS ARE FOR, GIVEN THAT. They catch a real regression in the
+# retrieval CODE against a fixed corpus — which they still do, because the
+# corpus on disk does not move. They are set at the low end of the observed
+# spread so a regeneration does not redden them, and a move of one or two must
+# NOT be read as a change in quality. If you regenerate and the number moves,
+# that is the generator, not your patch.
+#
+# WHAT DISTILLATION DID BUY, since it is not this number: the notes exist, are
+# readable, carry a dated citation and a role, and carry the `live_source`
+# call the backend now runs before she answers — which is the thing the owner
+# actually asked for, is walked on the live stack, and is invisible to this
+# suite because this suite is memory alone.
+#
+# THE FIRST PASSES WERE STILL WRONG, and fixing them was not wasted even
+# though the number did not move. Reading the notes rather than the score
+# found four real defects: the notes were FRAGMENTS ("own directory", "file
+# tools only", two of them sharing a title); a note's body was a VERBATIM
+# SLICE of the transcript, so it added no signal over the chunk it came from;
+# one long message ATE THE WINDOW, so a day read one message out of ten; and
+# six notes recorded that Madrid is the capital of Spain, because the prompt
+# asked for facts "still true next month" rather than facts about HIM.
+#
+# WHAT IS STILL MISSING, measured. Two questions return the right document at
+# rank 1 with the answer outside the excerpt: a hit found by MEANING has no
+# lexical anchor, so `index._snippet` falls back to the head of the chunk,
+# which for an exchange is the question rather than the reply. That is recall's
+# defect, not distillation's, and it is worth two of these twenty.
+#
+# Preferring a distilled note over a transcript chunk in the fusion WAS tried
+# and is not in the code: on one sample it bought two and cost one, which is
+# inside the noise above, for a magic constant in a slice this one does not own.
+# ---------------------------------------------------------------------------
+ANSWER_IN_CONTEXT_FLOOR = 7
 ABSENT_ANSWER_HITS_CEILING = 0
 
 # ---------------------------------------------------------------------------
@@ -202,6 +267,13 @@ ABSENT_ANSWER_HITS_CEILING = 0
 # improvement fails until somebody moves the constant and says in the commit
 # by how much.
 # ---------------------------------------------------------------------------
+# S14-4 (2026-09-10): UNCHANGED at 12, and that is the finding. The distilled
+# notes joined the corpus and the semantic half found the same number of
+# answers it found without them (12, 12, 14 over three regenerations; see the
+# spread in the block above). The mechanism S13 predicted — a short note fits
+# WHOLE inside the excerpt window while the exchange it came from does not —
+# is real and visible in individual cases, and it is not worth a measurable
+# number of questions here. The floor stays where S13 left it.
 HYBRID_ANSWER_IN_CONTEXT_FLOOR = 12
 HYBRID_ABSENT_ANSWER_HITS_CEILING = 0
 
@@ -430,10 +502,14 @@ def scorecard(tmp_path_factory) -> Scorecard:
         patch.setenv("MEMORY_ROOT", str(root))
         patch.delenv("DATABASE_URL", raising=False)
         doc_count = len(list(root.rglob("*.md")))
-        # The shape is the diagnosis: eight documents, k=5. If the fixture
-        # ever stops being eight documents the numbers below stop being
-        # comparable to the baseline, and that must fail loudly here.
-        expected = len(corpus.fixture_files())
+        # The shape is part of the diagnosis, so a fixture that quietly changed
+        # size would make the numbers below incomparable. This must therefore
+        # fail loudly — and it MOVED deliberately in S14-4 (2026-09-10): eight
+        # transcript documents plus the distilled notes app/distil.py produced
+        # from that same transcript. Both halves are derived (fixture_files and
+        # distilled_files read the directory), so regenerating the notes moves
+        # this number by itself rather than needing an edit here.
+        expected = len(corpus.fixture_files()) + len(corpus.distilled_files())
         if doc_count != expected:
             raise AssertionError(f"fixture built {doc_count} documents, expected {expected}")
         return asyncio.run(_measure(rel_paths, corpus.units_by_key(root, rel_paths)))
