@@ -149,27 +149,60 @@ K = 5
 # live backfill produced exactly that many from eight days of real
 # conversation on 2026-09-10.
 #
-# So this number is measured against a different corpus and is NOT comparable
-# to the 8 above. It is re-pinned rather than lowered, and it went DOWN:
+# So this number is measured against a different corpus and is NOT directly
+# comparable to the 8 above. IT IS ALSO ONE SAMPLE OF A NOISY GENERATOR, and
+# that is the most important thing on this page.
 #
-#   word matching only      8 -> 7 of 20
-#   word matching + meaning 12 -> 13 of 20   (HYBRID floor below)
-#   absent-answer hits       0 -> 0 of 6     (unchanged; no new false
-#                                             confidence from 45 more documents)
+# THE FIXTURE IS WRITTEN BY A MODEL, SO IT VARIES. Three regenerations of the
+# distilled notes from the SAME code and the same transcript scored:
 #
-# THE ONE THAT REGRESSED IS Q18, and it says exactly what distillation is and
-# is not for. "How many goes does my note taker get on a job?" is answered by
-# a distilled note titled "six tool rounds per job" — the fact IS now written
-# down, which it was not before. Word matching still cannot reach it, because
-# the question and the note share no vocabulary ("goes"/"rounds", "note
-# taker"/the agent's name), and with k fixed at 5 that note now competes with
-# 44 siblings instead of 7 documents. Distillation writes the fact down; only
-# the semantic half can find it when the words differ.
+#     sample 1:  7 lexical, 12 hybrid   (28 notes)  <- committed, the median
+#     sample 2:  7 lexical, 12 hybrid   (37 notes)
+#     sample 3: 10 lexical, 14 hybrid   (27 notes)
 #
-# Stated plainly because it is a trade and not a win: on an install where the
-# embedding model is NOT pulled, distillation cost one of twenty. On one where
-# it is — which is what Nova runs — it bought one. Both are pinned so neither
-# can drift unnoticed.
+# A three-point spread on twenty questions. Against a pre-S14 baseline of 8
+# and 12, the median effect of distillation on THIS fixture is zero on the
+# hybrid number and slightly negative on the lexical one. Earlier passes of
+# this work reported "12 -> 13" and then "12 -> 14" as gains; both were single
+# favourable draws, and both are retracted here. Twenty questions cannot
+# resolve a one- or two-question effect against this much noise.
+#
+# THE COMMITTED SAMPLE IS THE MEDIAN BY HYBRID SCORE, and the rule was fixed
+# before the samples were looked at. Regenerating and keeping whichever run
+# scores best is the obvious way to lie with this file, and it is the reason
+# the rule is written down here rather than left to whoever runs it next.
+#
+# WHAT THE FLOORS ARE FOR, GIVEN THAT. They catch a real regression in the
+# retrieval CODE against a fixed corpus — which they still do, because the
+# corpus on disk does not move. They are set at the low end of the observed
+# spread so a regeneration does not redden them, and a move of one or two must
+# NOT be read as a change in quality. If you regenerate and the number moves,
+# that is the generator, not your patch.
+#
+# WHAT DISTILLATION DID BUY, since it is not this number: the notes exist, are
+# readable, carry a dated citation and a role, and carry the `live_source`
+# call the backend now runs before she answers — which is the thing the owner
+# actually asked for, is walked on the live stack, and is invisible to this
+# suite because this suite is memory alone.
+#
+# THE FIRST PASSES WERE STILL WRONG, and fixing them was not wasted even
+# though the number did not move. Reading the notes rather than the score
+# found four real defects: the notes were FRAGMENTS ("own directory", "file
+# tools only", two of them sharing a title); a note's body was a VERBATIM
+# SLICE of the transcript, so it added no signal over the chunk it came from;
+# one long message ATE THE WINDOW, so a day read one message out of ten; and
+# six notes recorded that Madrid is the capital of Spain, because the prompt
+# asked for facts "still true next month" rather than facts about HIM.
+#
+# WHAT IS STILL MISSING, measured. Two questions return the right document at
+# rank 1 with the answer outside the excerpt: a hit found by MEANING has no
+# lexical anchor, so `index._snippet` falls back to the head of the chunk,
+# which for an exchange is the question rather than the reply. That is recall's
+# defect, not distillation's, and it is worth two of these twenty.
+#
+# Preferring a distilled note over a transcript chunk in the fusion WAS tried
+# and is not in the code: on one sample it bought two and cost one, which is
+# inside the noise above, for a magic constant in a slice this one does not own.
 # ---------------------------------------------------------------------------
 ANSWER_IN_CONTEXT_FLOOR = 7
 ABSENT_ANSWER_HITS_CEILING = 0
@@ -234,12 +267,14 @@ ABSENT_ANSWER_HITS_CEILING = 0
 # improvement fails until somebody moves the constant and says in the commit
 # by how much.
 # ---------------------------------------------------------------------------
-# S14-4 (2026-09-10): 12 -> 13. The distilled notes joined the corpus and the
-# semantic half found one more answer than it did without them — the mechanism
-# S13 predicted, which is that a short note fits WHOLE inside the excerpt
-# window while the exchange it came from does not. See the block above for the
-# lexical number, which moved the other way.
-HYBRID_ANSWER_IN_CONTEXT_FLOOR = 13
+# S14-4 (2026-09-10): UNCHANGED at 12, and that is the finding. The distilled
+# notes joined the corpus and the semantic half found the same number of
+# answers it found without them (12, 12, 14 over three regenerations; see the
+# spread in the block above). The mechanism S13 predicted — a short note fits
+# WHOLE inside the excerpt window while the exchange it came from does not —
+# is real and visible in individual cases, and it is not worth a measurable
+# number of questions here. The floor stays where S13 left it.
+HYBRID_ANSWER_IN_CONTEXT_FLOOR = 12
 HYBRID_ABSENT_ANSWER_HITS_CEILING = 0
 
 # Opt-in, and named separately from MEMORY_EMBED_URL so that turning the

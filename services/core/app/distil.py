@@ -34,11 +34,21 @@ That distinction is code — a prompt sentence asking the model to mark its own
 sources would be a request, and this is a property that has to hold.
 
 THE MODEL CHOOSES WORDS; THE CODE CHOOSES FACTS. What the model returns is a
-citation, a subject and a short phrasing. The phrasing becomes the note TITLE
-and reaches nothing else. The BODY is composed here from the row — the quote
-out of `messages.content`, the instant out of `created_at`, the role out of
-`messages.role` — exactly as review.py builds its facts from the row and lets
-the paraphrase reach only the title.
+citation, a subject and one sentence. That sentence is the note's title AND
+the first line of its body; everything else is composed here from the row —
+the quote out of `messages.content`, the instant out of `created_at`, the role
+out of `messages.role`.
+
+The sentence used to be confined to the title, which was the strictest reading
+of review.py's "facts come from the row, never from the paraphrase", and it was
+measurably wrong: a note's indexed text was then a verbatim slice of the
+transcript, so it was a near-duplicate of the chunk it came from and adding
+forty-five of them bought ONE question out of twenty. A note that says nothing
+the transcript did not already say is a second copy, not a distillation. What
+protects the reader is unchanged and is the part that matters: the statement is
+LABELLED as her reading, the verbatim quote sits directly under it, and the
+citation and role stay in the frontmatter. The claim and its evidence arrive
+together. An unlabelled paraphrase standing in for the record is still refused.
 
 TWO THINGS THE MODEL IS SHOWN SO ITS CHOICES ARE DERIVED RATHER THAN INVENTED,
 both read live, neither a list anyone maintains:
@@ -61,16 +71,23 @@ was checked against the database.
 JEREMY'S RULE, 2026-09-10, which is why `live_source` exists at all: hardware
 specs "can be found ad hoc and shouldn't be written. Or if they're written,
 that's fine for comparing if we ever update our system … but it should still
-treat the ad-hoc command as truth and be done first." So this extractor STEERS
-AWAY from distilling a fact a tool can answer — the prompt says to prefer not
-to — and the steer is deliberately not a refusal, because a dated record of
-what the box HAD is what "did that change?" is answered by. What is mechanical
-is the consequence: an item that names a live source it cannot dispatch is
-DROPPED WHOLE rather than written down without it. The model itself judged
-that fact to be one a tool answers; storing it with no call attached would
-turn a history note into something that presents as the current answer, which
-is the exact failure the ruling is about. A dropped item costs a note that the
-next pass can still propose.
+treat the ad-hoc command as truth and be done first." So this extractor ASKS
+FOR those facts and asks for the call that answers them now — a dated record of
+what the box HAD is exactly what "did that change?" is answered with. The
+prompt once said to prefer NOT to report them, which inverted the ruling; the
+model quoted that clause back while talking itself out of every fact it had
+found, and eight days of real conversation distilled to nothing.
+
+What is mechanical is the call, never the fact. A named call is validated
+against the live registry and that tool's own schema, and against the same
+predicate the backend uses before it will run one unasked
+(`live_facts.runnable`) — so a note can only ever cite a check that would
+actually happen. A call that fails any of that is DROPPED and the fact is
+KEPT, with the note saying a check was named for it and could not be run.
+Dropping the item instead was the first design and it threw away a fifth of
+the yield: a fact already verified against a row died because an optional
+field was malformed, which is a fact about the model's formatting and nothing
+else.
 """
 
 from __future__ import annotations
@@ -155,10 +172,26 @@ DISTIL_SYSTEM = (
     "would want to look up: preferences, decisions, how his machines are set up, who people "
     "are, how he wants things done. Not the small talk, not what either of you was doing at "
     "the time, not a question that got answered and closed.\n"
+    "IT MUST BE A FACT ABOUT HIM OR HIS WORLD. These notes are HIS memory: his setup, his "
+    "machines, his files, his decisions, his preferences, the people and projects in his "
+    "life. General knowledge is not memory, however true and however recently it came up — "
+    '"Madrid is the capital of Spain" is not a fact about him, and neither is anything else '
+    "anyone could look up without knowing who he is. If a fact would be equally true for a "
+    "stranger, leave it out.\n"
     "Answer with JSON and nothing else: a list of objects, each one "
     '{"message_id": "<the id printed with the message the fact is stated in>", '
     '"subject": "<a short dotted key for what the fact is ABOUT, e.g. hardware.vram>", '
-    '"fact": "<the fact in a few words>"}.\n'
+    '"fact": "<the fact as ONE COMPLETE SENTENCE that makes sense on its own>"}.\n'
+    "WRITE SENTENCES, NOT LABELS. Each fact is read months later by someone who cannot see "
+    "this conversation, so it has to name its subject and say something about it. "
+    '"own directory" and "file tools only" and "21G reclaimable" are labels and are useless; '
+    '"The coder agent can only read and write inside its own folder" and "The docker data '
+    'directory has 21G that can be reclaimed" are facts. If a sentence would not make sense '
+    "read aloud to someone who was not there, it is not finished.\n"
+    "PREFER FEWER, FULLER FACTS. One thing he set up is ONE fact with its details in the "
+    "sentence, not six fragments about its tools, its folder, its rounds and its cost — six "
+    "notes that each say a fragment are six things to search through and none of them "
+    "answers a question by itself.\n"
     "Cite the message the fact is actually STATED in — either side of the conversation may "
     "state it, and the tidier statement is often Nova's. Every item must carry the id of the "
     "message its words came from. An item with no id, or with an id that was not printed "
@@ -531,14 +564,41 @@ def _validated_live_source(proposed: _Proposed) -> dict | None:
     return memory_tools.validate_live_source(proposed.live_source)
 
 
-def _body(row, live_source: dict | None) -> str:
-    """The note's body, composed HERE from the row.
+def _adds_nothing(title: str, quote: str) -> bool:
+    """True when the quote is the statement again, word for word.
 
-    The quote is `messages.content`, the instant is `created_at`, and the mark
-    on a fact standing only on her own words is the row's own `role`. The
-    model's phrasing is not in here at all — it is the title and nothing else —
-    which is review.py's rule (the facts come from the row, never from the
-    paraphrase) applied to the thing that gets written down and read back.
+    It happens whenever the row said the fact plainly and the model copied it,
+    and the result is a note that prints one sentence twice — in the body,
+    which is the text the index tokenises and a reader gets back.
+    """
+
+    def normalise(text: str) -> str:
+        return " ".join(text.lower().split()).strip(" .\"'")
+
+    return normalise(title) == normalise(quote)
+
+
+def _body(
+    row, proposed: _Proposed, live_source: dict | None, *, unusable_check: bool = False
+) -> str:
+    """The note's body: the FACT, then the row it came out of as its receipt.
+
+    THE FACT LEADS, and that changed in S14-5 (2026-09-10) because the
+    measurement said it had to. The body used to be the quote alone, with the
+    model's phrasing confined to the title — the strictest possible reading of
+    review.py's "facts come from the row, never from the paraphrase". The
+    consequence was measurable and bad: a note's indexed text was a VERBATIM
+    SLICE OF THE TRANSCRIPT, so semantically it was a near-duplicate of the
+    chunk it came from, and adding forty-five of them to the corpus bought one
+    question out of twenty. A distilled note that says nothing the transcript
+    did not already say is not a distillation, it is a second copy.
+
+    So the statement goes in, and NOTHING ABOUT THE RECEIPT WEAKENS. It is
+    labelled as her reading, the verbatim quote sits directly under it, and the
+    citation and role are still in the frontmatter — a reader and a model both
+    see the claim and the evidence for it together, which is the same shape the
+    live_source line already uses. What is refused is an unlabelled paraphrase
+    presented as the record; that is still refused.
 
     The citation itself is NOT in the body on purpose: the body is what the
     index tokenises, and a path or a uuid in it would put terms in the index
@@ -546,25 +606,44 @@ def _body(row, live_source: dict | None) -> str:
     where nothing is tokenised (services/memory/app/store.py).
     """
     when = row["created_at"].isoformat(timespec="minutes")
-    lines = [f'"{model_read.clip(row["content"], QUOTE_CHARS)}"', ""]
+    quote = model_read.clip(row["content"], QUOTE_CHARS)
+    # The statement, then the row it came out of — unless the row IS the
+    # statement, in which case printing it twice is noise in the one place
+    # that gets tokenised and read back.
+    lines = [proposed.title, ""]
+    if not _adds_nothing(proposed.title, quote):
+        lines += [f'"{quote}"', ""]
     if row["role"] == "assistant":
         lines.append(
-            f"Nova wrote that herself, in her own reply on {when}. It stands on her words "
-            "alone — nothing said to her is quoted here, so this note records what she "
-            "wrote rather than something she was told."
+            f"That is Nova's own reading of what she herself wrote on {when}. It stands on "
+            "her words alone — nothing said to her is quoted here, so this note records "
+            "what she wrote rather than something she was told."
         )
     else:
-        lines.append(f"Said in conversation on {when}.")
+        lines.append(f"Nova's reading of what was said in conversation on {when}, quoted above.")
     if live_source:
         lines.append("")
         lines.append(
             f"`{live_source['tool']}` answers this now, and that call is the truth: this note "
             "is only what was said, on the date above."
         )
+    elif unusable_check:
+        # Said, rather than left as an absence. The model judged this a fact
+        # something could check and then named a call that cannot run; a note
+        # that quietly lost that judgement would read as a fact nothing needs
+        # to check, which is the opposite of what was meant.
+        lines.append("")
+        lines.append(
+            "This is the kind of fact something could check, but no usable check was named "
+            "for it — treat it as a record of what was said on the date above and confirm it "
+            "before relying on it."
+        )
     return "\n".join(lines)
 
 
-def _fact(row, proposed: _Proposed, live_source: dict | None) -> Fact:
+def _fact(
+    row, proposed: _Proposed, live_source: dict | None, *, unusable_check: bool = False
+) -> Fact:
     """One verified row plus one proposal, as a note.
 
     THE ROLE COMES FROM THE ROW. `row["role"]` is what the verification query
@@ -574,7 +653,7 @@ def _fact(row, proposed: _Proposed, live_source: dict | None) -> Fact:
     return Fact(
         subject=proposed.subject,
         title=proposed.title,
-        body=_body(row, live_source),
+        body=_body(row, proposed, live_source, unusable_check=unusable_check),
         message_id=row["id"],
         said_by=row["role"],
         said_at=row["created_at"],
@@ -712,24 +791,46 @@ async def distil(
     dropped = malformed + (len(proposals) - len(cited_rows))
 
     facts: list[Fact] = []
+    unusable = 0
     for row, proposed in cited_rows:
         try:
             live_source = _validated_live_source(proposed)
-        except Exception as exc:  # noqa: BLE001 — however it fails, it is not written down
-            # The model itself judged this fact to be one a tool answers.
-            # Writing it with no call attached would make a history note read
-            # as the current answer, which is the ruling this field exists for.
-            dropped += 1
+            unusable_check = False
+        except Exception as exc:  # noqa: BLE001 — however it fails, it is stated
+            # THE FACT SURVIVES; the call does not (2026-09-10, measured).
+            #
+            # This used to drop the whole item, on the reasoning that a
+            # live-answerable fact stored with no call attached reads as the
+            # current answer. The reasoning was right and the remedy was
+            # wrong: it threw away a fact VERIFIED AGAINST A ROW because an
+            # optional field was malformed. Measured on the recall fixture,
+            # five of twenty-eight verified facts died that way — a fifth of
+            # the yield — and every one of them was lost because the model
+            # named a tool it had not been offered, which is a fact about the
+            # model's formatting and about nothing else.
+            #
+            # What the old reasoning was protecting is kept instead, and more
+            # cheaply: the note SAYS a check was named and cannot be run. That
+            # is the "this is history" signal without needing a working call,
+            # and it is more honest than either silently storing it bare or
+            # silently losing it.
+            unusable += 1
+            unusable_check = True
+            live_source = None
             logger.warning(
-                "%s: dropped the fact on %r citing message %s — its live source could not "
-                "dispatch: %s",
+                "%s: kept the fact on %r citing message %s, but dropped its live source — "
+                "it could not dispatch: %s",
                 PURPOSE,
                 proposed.subject,
                 row["id"],
                 exc,
             )
-            continue
-        facts.append(_fact(row, proposed, live_source))
+        facts.append(_fact(row, proposed, live_source, unusable_check=unusable_check))
+    if unusable:
+        limits.append(
+            f"{unusable} fact(s) named a check that could not be run, so they are stored as "
+            "records with nothing able to confirm them — each says so in its own text"
+        )
 
     kept, folded = _newest_per_subject(facts)
     kept.sort(key=lambda fact: fact.said_at)

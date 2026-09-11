@@ -278,12 +278,15 @@ async def test_a_fact_on_her_own_words_is_marked_and_his_is_not(pool, mount_peer
 
     assert mine.said_by == "user" and mine.her_words_alone is False
     assert mine.source["role"] == "user"
-    assert "Nova wrote that herself" not in mine.body
+    assert "her own reading of what she herself wrote" not in mine.body
 
     assert hers_fact.said_by == "assistant" and hers_fact.her_words_alone is True
     assert hers_fact.source["role"] == "assistant"
-    # Marked in the body a reader gets back, not only in a field.
-    assert "Nova wrote that herself" in hers_fact.body
+    # Marked in the body a reader gets back, not only in a field. The wording
+    # moved with S14-5 (the body now leads with the fact, so the line under the
+    # quote says whose reading THAT is), and the property is unchanged: a fact
+    # standing only on her own words says so where anybody reading it will see.
+    assert "Nova's own reading of what she herself wrote" in hers_fact.body
     assert "stands on her words alone" in hers_fact.body
 
 
@@ -306,12 +309,27 @@ async def test_the_role_on_the_note_is_the_rows_and_not_the_models(pool, mount_p
     assert fact.said_by == "assistant" and fact.her_words_alone is True
 
 
-# ── the body is the row; the model's words are the title ───────────────────
+# ── the body states the fact, and quotes the row as its receipt ────────────
 
 
-async def test_the_body_quotes_the_row_and_never_the_paraphrase(pool, mount_peers):
-    """What is written down is what was actually said. The model's phrasing is
-    the title and reaches nothing else — the same rule as review.py's facts."""
+async def test_the_body_states_the_fact_and_quotes_the_row_under_it(pool, mount_peers):
+    """PIN MOVED, 2026-09-10 (S14-5), and the measurement is the reason.
+
+    This used to assert the paraphrase was NOT in the body — the strictest
+    reading of review.py's "facts come from the row, never from the
+    paraphrase", with the model's phrasing confined to the title. The
+    consequence was measurable: a note's indexed text was a verbatim slice of
+    the transcript, so it was a near-duplicate of the chunk it came from, and
+    forty-five of them bought ONE question out of twenty on the recall suite.
+    A note that says nothing the transcript did not already say is a second
+    copy, not a distillation.
+
+    What must not weaken is the receipt, and it does not: the statement is
+    labelled as her reading, the verbatim quote sits directly under it, and the
+    citation and the role stay in the frontmatter. The claim and its evidence
+    are in the same place. What is still refused is an unlabelled paraphrase
+    standing in for the record.
+    """
     person = await _person(pool)
     conversation = await _conversation(pool, person.id)
     real = await _message(pool, conversation, HIS)
@@ -321,8 +339,14 @@ async def test_the_body_quotes_the_row_and_never_the_paraphrase(pool, mount_peer
     result = await distil.distil(core_app, pool, person)
 
     (fact,) = result.facts
-    assert HIS in fact.body
-    assert PARAPHRASE not in fact.body
+    assert HIS in fact.body, "the verbatim row is still the receipt"
+    assert PARAPHRASE in fact.body, "and the fact itself is now findable in the note"
+    # The claim comes FIRST and the quote is under it: a reader, and a small
+    # model reading an excerpt, sees what the note says before its evidence.
+    assert fact.body.index(PARAPHRASE) < fact.body.index(HIS)
+    # And it is never presented as the record — the line under the quote says
+    # whose reading it is.
+    assert "reading of what was said" in fact.body
     assert fact.title == PARAPHRASE
     # Dated by the EXCHANGE, not by the pass — what `created` will follow.
     assert fact.said_at == said_at
@@ -497,10 +521,23 @@ async def test_a_live_source_that_can_dispatch_is_kept_and_named_in_the_body(poo
         "device_info",
     ],
 )
-async def test_a_fact_whose_call_cannot_dispatch_is_dropped_whole(pool, mount_peers, live_source):
-    """The model itself judged this to be a fact a tool answers. Writing it
-    with no call attached would make a history note read as the current
-    answer, which is the ruling `live_source` exists for."""
+async def test_a_fact_whose_call_cannot_dispatch_keeps_the_fact(pool, mount_peers, live_source):
+    """PIN MOVED, 2026-09-10 (S14-5), and the measurement is the reason.
+
+    This used to drop the whole item, on the reasoning that a live-answerable
+    fact stored with no call attached reads as the current answer. The
+    reasoning was right; the remedy threw away a fact ALREADY VERIFIED AGAINST
+    A ROW because an optional field was malformed. Measured while regenerating
+    the recall fixture: five of twenty-eight verified facts died that way, a
+    fifth of the yield, and every one because the model named a tool it had
+    never been offered — a fact about the model's formatting and nothing else.
+
+    What the old reasoning protected is kept, and more cheaply: the note SAYS
+    a check was named for it and could not be run. That is the "this is
+    history" signal without needing a working call, and it beats both
+    alternatives — storing it bare says nothing, dropping it loses the fact,
+    and neither tells anybody what happened.
+    """
     person = await _person(pool)
     conversation = await _conversation(pool, person.id)
     real = await _message(pool, conversation, HIS)
@@ -508,8 +545,15 @@ async def test_a_fact_whose_call_cannot_dispatch_is_dropped_whole(pool, mount_pe
 
     result = await distil.distil(core_app, pool, person)
 
-    assert result.ran and result.facts == ()
-    assert result.proposed == 1 and result.dropped == 1
+    (fact,) = result.facts
+    assert result.proposed == 1 and result.dropped == 0
+    # The unusable call is NOT written down — only a call the backend would
+    # actually run may be stored (live_facts.runnable, the same predicate).
+    assert fact.live_source is None
+    # And the note states what happened, rather than reading as a fact nothing
+    # needs to check.
+    assert "no usable check was named" in fact.body
+    assert any("could not be run" in limit for limit in result.limits)
 
 
 # ── a peer that could not be reached is never a clean pass ─────────────────
@@ -656,21 +700,58 @@ async def test_the_window_is_bounded_by_time_and_by_characters(pool, mount_peers
     assert result.read == 1
 
 
-async def test_the_character_budget_cuts_between_whole_messages(pool, mount_peers):
+async def test_the_budget_drops_whole_messages_oldest_first(pool, mount_peers):
     """Half a message is worse than an absent one: the budget drops whole rows,
     oldest first, and what is shown is shown entire."""
     person = await _person(pool)
     conversation = await _conversation(pool, person.id)
-    old = await _message(pool, conversation, "old " * 100, ago=timedelta(hours=3))
-    new = await _message(pool, conversation, HIS)
+    # Five messages of identical length, so the arithmetic is the test rather
+    # than an accident of the prose.
+    said = [f"message {n} " + "x" * 40 for n in range(5)]
+    ids = [
+        await _message(pool, conversation, text, ago=timedelta(hours=9 - 2 * n))
+        for n, text in enumerate(said)
+    ]
     gateway = _gateway(text="[]")
     mount_peers(gateway=gateway, memory=FakeNotes())
 
-    result = await distil.distil(core_app, pool, person, char_budget=len(HIS) + 10)
+    # Room for exactly four of the five, so the fifth — the oldest — goes
+    # entirely rather than being shown in part.
+    result = await distil.distil(core_app, pool, person, char_budget=len(said[0]) * 4)
 
     brief = _brief(gateway)
-    assert str(new) in brief and str(old) not in brief
-    assert HIS in brief and result.read == 1
+    assert result.read == 4
+    assert str(ids[-1]) in brief and str(ids[0]) not in brief
+    assert said[0] not in brief, "dropped whole, never half-shown"
+    assert "cut off here" not in brief, "nothing needed clipping at this size"
+
+
+async def test_no_single_message_may_eat_the_whole_window(pool, mount_peers):
+    """PIN ADDED, 2026-09-10 (S14-5), from a measurement.
+
+    The budget takes the NEWEST message first, so one long one starves
+    everything behind it. On the recall fixture a day that ends with a long
+    pasted review read exactly ONE message out of ten — and everything said
+    earlier that day was never distilled, invisibly, because a pass that read
+    one message reports itself as a pass that read.
+
+    So an over-long message is CLIPPED to a share of the budget and SAYS it
+    was cut, rather than being taken whole. Taken whole it crowds out the day;
+    dropped it takes its own content with it; and neither tells anybody.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS, ago=timedelta(hours=3))
+    await _message(pool, conversation, "the newest message goes on " * 400)
+    gateway = _gateway(text="[]")
+    mount_peers(gateway=gateway, memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person, char_budget=600)
+
+    brief = _brief(gateway)
+    assert result.read == 2, "the long newest message must not be the whole window"
+    assert HIS in brief, "what was said earlier still reaches the model"
+    assert "cut off here" in brief, "and the clip is stated, never silent"
 
 
 # ── the call says who is paying and what it is for ─────────────────────────

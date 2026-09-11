@@ -62,6 +62,12 @@ logger = logging.getLogger("core")
 # unbounded hang into one stated sentence on one span of conversation.
 STREAM_BUDGET_SECONDS = 150.0
 
+# The fewest messages a window is shaped to hold, and therefore the largest
+# share of the character budget any ONE of them may take. Four rather than one
+# because a window with a single message in it is not a window: it is whatever
+# was said last, and everything before it is invisible.
+MIN_WINDOW_MESSAGES = 4
+
 
 class ReadFailed(RuntimeError):
     """A step of the read could not be made. `str(exc)` is the reason on its
@@ -144,14 +150,31 @@ async def window(
         )
     except Exception as exc:  # noqa: BLE001 — the reason is the record
         raise ReadFailed(peers.reason(exc)) from exc
+    # No single message may eat the window (2026-09-10, measured). The rule
+    # used to be whole-messages-until-the-budget-is-spent, which sounds fair
+    # and is not: the NEWEST message is taken first, so one long one starves
+    # everything behind it. On the recall fixture a day that ends with a long
+    # pasted review read exactly ONE message out of ten, and everything said
+    # earlier that day was never distilled at all — invisibly, because a pass
+    # that read one message reports itself as a pass that read.
+    #
+    # So an over-long message is CLIPPED to a share of the budget and says so,
+    # rather than being taken whole or dropped. Both alternatives lose more:
+    # taken whole it crowds out the rest of the day, dropped it takes its own
+    # content with it, and either way nothing tells anybody what went missing.
+    share = max(1, char_budget // MIN_WINDOW_MESSAGES)
     kept: list = []
     used = 0
     for row in rows:
-        used += len(row["content"])
-        if used > char_budget:
-            # Whole messages only — everything older goes with it.
+        content = row["content"]
+        if len(content) > share:
+            content = content[:share].rstrip() + " […this message is cut off here]"
+        if used + len(content) > char_budget and kept:
             break
-        kept.append(row)
+        used += len(content)
+        # asyncpg Records are immutable, so a clipped row travels as a plain
+        # dict with the same keys every caller already reads.
+        kept.append(dict(row, content=content) if content != row["content"] else row)
     kept.reverse()
     return kept
 
