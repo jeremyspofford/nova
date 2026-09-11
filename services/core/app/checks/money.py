@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from app import agents, peers, spend_api
-from app.checks import CannotCheck, Check, Finding
+from app.checks import CannotCheck, Check, Finding, NotDue
 
 ROUTES_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
@@ -249,10 +249,19 @@ async def daily_spike(app, pool) -> list[Finding]:
     covered_from = min(days)
     available = (target - covered_from).days
     if available < MIN_TRAILING_DAYS:
-        raise CannotCheck(
+        # NOT DUE, not a gap in coverage (S15). A young install is not a watcher
+        # that failed to look — it is a world that does not exist yet, and it
+        # resolves itself on a date this reason names. As CannotCheck it made
+        # EVERY beat report "not quiet" for the install's first days, the same
+        # sentence about twenty times in the owner's log, and a signal that is
+        # always on cannot report the outage it exists for (the split `NotDue`
+        # was added for). It is still named in every beat, so it can never read
+        # as "looked and found nothing".
+        ready = covered_from + timedelta(days=MIN_TRAILING_DAYS + 1)
+        raise NotDue(
             f"the ledger's earliest day is {covered_from.isoformat()}, so it covers only "
             f"{available} day(s) before {target.isoformat()} — a trailing mean needs at least "
-            f"{MIN_TRAILING_DAYS}"
+            f"{MIN_TRAILING_DAYS}, so this can first run from {ready.isoformat()}"
         )
     span = min(TRAILING_DAYS, available)
     # Every day in this range is inside coverage (span <= available), so a day

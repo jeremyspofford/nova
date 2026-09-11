@@ -882,6 +882,13 @@ async def test_too_little_history_is_a_check_that_did_not_run(pool, mount_peers)
     assert not run.ran and run.findings == ()
     assert "trailing mean needs at least 3" in run.reason
     assert f"earliest day is {_day(1)}" in run.reason
+    # NOT a gap in the hour's coverage (S15). A young install is not a watcher
+    # that failed to look — it is a world that does not exist yet, it fixes
+    # itself on a date the reason names, and it had been making every single
+    # beat report "not quiet" for days. A signal that is always on cannot
+    # report the outage it exists for, which is the split `due` was added for.
+    assert run.due is False
+    assert "from" in run.reason, "it says when it will be able to run"
 
 
 @requires_db
