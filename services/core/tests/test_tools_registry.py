@@ -85,10 +85,18 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # the registry, so this pinned set moved from seventeen to TWENTY. Same
     # funnel, no row anywhere to run; her reminders are a capability the moment
     # the module is in REGISTRY.
+    #
+    # Deliberate snapshot update (slice 16, 2026-09-11): workspace_delete, so
+    # THIRTY-TWO -> THIRTY-THREE. The owner asked her to delete a file, she
+    # could list it and read it and not remove it, and said so. It completes
+    # the file tools rather than adding a tier: the same containment gate, the
+    # same two-ended verification as a write, and what it removes goes to a
+    # trash that empties itself after a week.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
         "workspace_list_files",
+        "workspace_delete",
         "memory_search",
         "memory_save",
         "get_time",
