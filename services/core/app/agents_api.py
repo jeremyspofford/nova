@@ -1,7 +1,7 @@
 """/api/v1/agents — the Agents page's surface over the agent store
 (app/agents.py), plus the two lists the page's form is built from:
-`/api/v1/tools` (the live registry) and `/api/v1/skills` (the files under
-`<WORKSPACE_ROOT>/skills/`).
+`/api/v1/tools` (the live registry) and `/api/v1/skills` (app/skills_api.py:
+the skills table plus the files under `<WORKSPACE_ROOT>/skills/`).
 
 Nothing here decides anything. Every write is one store call, every
 refusal is the store's own words (AgentError → 400, quoted verbatim), and
@@ -307,8 +307,7 @@ async def list_tools(_person: Person = Depends(identity.require_person)) -> list
     ]
 
 
-@router.get("/skills")
-async def list_skills(_person: Person = Depends(identity.require_person)) -> list[dict]:
-    """The skill files under <WORKSPACE_ROOT>/skills/, read from the
-    directory at the call (agents.list_skills says which files count)."""
-    return agents.list_skills()
+# GET /skills moved to app/skills_api.py with S17: the page's list is now the
+# skills TABLE plus the files nobody has made a row for, and the Agents form
+# reads the same one endpoint for the names it offers. Two lists of what a
+# skill is would be two answers to the same question.

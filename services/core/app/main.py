@@ -31,6 +31,7 @@ from app import (
     queued,
     scheduler,
     settings_store,
+    skills_api,
     spend_api,
     timers,
     timers_api,
@@ -135,6 +136,7 @@ app.include_router(workspace_api.router)
 app.include_router(timers_api.router)
 app.include_router(agents_api.router)
 app.include_router(notices_api.router)
+app.include_router(skills_api.router)
 
 
 @app.exception_handler(StarletteHTTPException)

@@ -484,18 +484,54 @@ async def review_flagging(
 # ── where the words come from ──────────────────────────────────────────────
 
 
+def shape(names: Sequence[str]) -> list[str]:
+    """The procedure inside a call list: consecutive repeats collapsed.
+
+    Clearing four superseded notes is read, read, read, delete, delete,
+    delete; the next time it is three notes. The procedure is the same, and a
+    step list that counted the files would be a record of one afternoon rather
+    than of how the thing is done.
+    """
+    out: list[str] = []
+    for name in names:
+        if not out or out[-1] != name:
+            out.append(name)
+    return out
+
+
 async def steps_from_turns(pool: asyncpg.Pool, turn_ids: Sequence[uuid.UUID]) -> list[str]:
-    """The tool calls those turns actually made, in the order the ledger has
-    them. Tool spans only: a guard firing and a model round are not steps in a
-    procedure, and neither is a call that was never made."""
+    """The shape of the MOST RECENT of those turns.
+
+    Tool spans only: a guard firing and a model round are not steps in a
+    procedure, and neither is a call that was never made. And the newest turn
+    rather than all of them concatenated — a skill drafted from three walks of
+    the same procedure describes the procedure once, not three times, and the
+    latest walk is the one closest to how it is done now. Every source turn's
+    own shape still reaches the body, so a walk that differed is visible to
+    whoever reads the draft.
+    """
+    per_turn = await shapes_from_turns(pool, turn_ids)
+    return per_turn[-1][1] if per_turn else []
+
+
+async def shapes_from_turns(
+    pool: asyncpg.Pool, turn_ids: Sequence[uuid.UUID]
+) -> list[tuple[uuid.UUID, list[str]]]:
+    """Each source turn's own shape, oldest first."""
     if not turn_ids:
         return []
     records = await pool.fetch(
-        "SELECT name FROM turn_spans WHERE turn_id = ANY($1::uuid[]) AND kind = 'tool' "
-        "AND name IS NOT NULL ORDER BY started_at, id",
+        "SELECT s.turn_id, s.name FROM turn_spans s JOIN turns t ON t.id = s.turn_id "
+        "WHERE s.turn_id = ANY($1::uuid[]) AND s.kind = 'tool' AND s.name IS NOT NULL "
+        "ORDER BY t.started_at, s.turn_id, s.started_at, s.id",
         list(turn_ids),
     )
-    return [r["name"] for r in records]
+    per_turn: list[tuple[uuid.UUID, list[str]]] = []
+    for record in records:
+        if not per_turn or per_turn[-1][0] != record["turn_id"]:
+            per_turn.append((record["turn_id"], []))
+        per_turn[-1][1].append(record["name"])
+    return [(turn_id, shape(names)) for turn_id, names in per_turn]
 
 
 async def requests_from_turns(
@@ -533,7 +569,11 @@ def compose_summary(requests: Iterable[tuple[datetime, str]]) -> str:
 
 
 def compose_body(
-    *, title: str, requests: Sequence[tuple[datetime, str]], step_names: Sequence[str]
+    *,
+    title: str,
+    requests: Sequence[tuple[datetime, str]],
+    step_names: Sequence[str],
+    other_walks: Sequence[Sequence[str]] = (),
 ) -> str:
     """The draft file. Every line of it is quoted or counted from the record,
     and it says so — the owner reading this should be able to tell at a glance
@@ -551,6 +591,13 @@ def compose_body(
     lines += [f"- {at.date().isoformat()}: {_one_line(text, 200)}" for at, text in requests]
     lines += ["", "## Steps that were taken", ""]
     lines += [f"{i}. `{name}`" for i, name in enumerate(step_names, start=1)]
+    differing = [walk for walk in other_walks if list(walk) != list(step_names)]
+    if differing:
+        # An earlier walk that did it differently is not noise to tidy away:
+        # it is the evidence that the procedure above is one version of the
+        # thing, and the owner is the one who decides which is right.
+        lines += ["", "Earlier walks that went differently:", ""]
+        lines += [f"- {', '.join(walk)}" for walk in differing]
     lines += ["", "## Notes", "", "(none yet)", ""]
     return "\n".join(lines)
 
@@ -569,11 +616,12 @@ async def draft_from_turns(
     empty is a procedure that describes nothing, and it would sit in the page
     looking like knowledge.
     """
-    step_names = await steps_from_turns(pool, turn_ids)
-    if not step_names:
+    walks = await shapes_from_turns(pool, turn_ids)
+    if not walks:
         raise ValueError(
             "those turns ran no tool calls, so there is no procedure in them to write down"
         )
+    step_names = walks[-1][1]
     requests = await requests_from_turns(pool, turn_ids)
     title = compose_title(step_names)
     return await create(
@@ -582,7 +630,12 @@ async def draft_from_turns(
         title=title,
         summary=compose_summary(requests),
         created_via=created_via,
-        body=compose_body(title=title, requests=requests, step_names=step_names),
+        body=compose_body(
+            title=title,
+            requests=requests,
+            step_names=step_names,
+            other_walks=[steps for _, steps in walks[:-1]],
+        ),
         source_turn_ids=list(turn_ids),
         step_names=step_names,
         root=root,

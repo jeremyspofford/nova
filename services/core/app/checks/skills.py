@@ -43,13 +43,10 @@ MIN_STEPS = 3
 MIN_TURNS = 2
 
 
-def shape(names: Sequence[str]) -> list[str]:
-    """The procedure inside a call list: consecutive repeats collapsed."""
-    out: list[str] = []
-    for name in names:
-        if not out or out[-1] != name:
-            out.append(name)
-    return out
+# The collapse lives in app/skills.py, because the draft composed from a
+# finding has to group the same way the finding did — two definitions of "the
+# same procedure" would report a repetition and then write down a different one.
+shape = skills_store.shape
 
 
 async def _sequences(pool) -> dict[tuple[str, ...], list[uuid.UUID]]:
