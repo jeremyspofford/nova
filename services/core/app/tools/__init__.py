@@ -42,6 +42,7 @@ from app.tools import (
     models,
     route,
     schema,
+    skills,
     spend,
     timers,
     util,
@@ -90,6 +91,10 @@ REGISTRY: dict[str, Tool] = {
         # S12: delegation and agent CRUD (tools/agents.py). Same funnel; the
         # executors reach app.agents function-locally (see that module).
         *agents.TOOLS,
+        # S17: reading a written-down procedure. The roster in the prompt names
+        # them; this is what carries a body, and its span is the ledger's
+        # evidence that one was used at all.
+        *skills.TOOLS,
     )
 }
 

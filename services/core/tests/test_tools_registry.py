@@ -92,6 +92,12 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # the file tools rather than adding a tier: the same containment gate, the
     # same two-ended verification as a write, and what it removes goes to a
     # trash that empties itself after a week.
+    #
+    # Deliberate snapshot update (slice 17, 2026-09-11): load_skill, so
+    # THIRTY-THREE -> THIRTY-FOUR. The prompt's roster names the household's
+    # written-down procedures and carries none of their bodies; this is the
+    # call that reads one, and its span is what makes "she used a skill"
+    # a fact on the trace instead of a guess about a reply.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -145,6 +151,9 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "update_agent",
         "delete_agent",
         "list_agents",
+        # S17 (2026-09-11): reading one of the household's written-down
+        # procedures. THIRTY-THREE -> THIRTY-FOUR.
+        "load_skill",
     }
 
 
@@ -493,6 +502,9 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         "web_search",
         "workspace_list_files",
         "workspace_read_file",
+        # S17: reading a written-down procedure changes nothing, and the
+        # roster that names them is derived from the table, not from here.
+        "load_skill",
     }
 
 
