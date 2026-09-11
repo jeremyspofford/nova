@@ -8,6 +8,7 @@ take — a table dispatch consults, a module that decides, an await between the
 schema check and the executor, a "waiting on you" result — each redden a test
 here rather than land quietly.
 """
+
 from __future__ import annotations
 
 import ast
@@ -95,6 +96,15 @@ def test_tool_carries_no_precheck_or_gate_field():
     call adds no await. Pin the fields EXACTLY (mirroring the ToolContext pin
     above): a precheck/gate/consent field re-added to Tool reddens here before
     any gate can be wired to it."""
+    # 2026-09-10 (S14): `reads_only` joins the set, deliberately. It is a fact
+    # about the executor — does running this CHANGE anything — and it is NOT a
+    # permission: nothing reads it to refuse her, every tool stays hers to
+    # call, and the test below asserts dispatch never looks at it. It exists
+    # for a question v4 has never had to ask, which is what the BACKEND may
+    # run when nobody asked it to: a distilled note carries the call that
+    # answers it NOW, and something that changes the world must never run
+    # unasked. If this set ever gains a field dispatch consults, that field is
+    # a gate whatever it is called.
     assert set(Tool.__dataclass_fields__) == {
         "name",
         "description",
@@ -102,7 +112,25 @@ def test_tool_carries_no_precheck_or_gate_field():
         "executor",
         "ephemeral",
         "result_kind",
+        "reads_only",
     }
+
+
+def test_dispatch_never_reads_reads_only():
+    """The line that keeps a property from becoming a gate.
+
+    `reads_only` says whether an executor changes anything. The moment
+    dispatch consults it to decide whether to run something, it stops being a
+    description and becomes permission — the exact shape the field-set pin
+    above exists to refuse. So: it may be read by the code that decides what
+    the backend runs UNASKED, and by nothing on the path of a call she made.
+    """
+    tree = ast.parse(TOOLS_INIT.read_text(encoding="utf-8"))
+    names = [node.attr for node in ast.walk(_dispatch_def(tree)) if isinstance(node, ast.Attribute)]
+    assert "reads_only" not in names, (
+        "dispatch reads Tool.reads_only — a property dispatch consults to decide "
+        "is a gate, whatever it is named"
+    )
 
 
 # -- (b) dispatch's shape: lookup, parse, validate, executor — nothing else ----

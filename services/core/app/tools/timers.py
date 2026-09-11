@@ -633,6 +633,7 @@ TOOLS: tuple[Tool, ...] = (
         ),
         parameters=_obj({}, []),
         executor=list_timers,
+        reads_only=True,
         result_kind=RESULT_KIND_LISTING,
     ),
     Tool(

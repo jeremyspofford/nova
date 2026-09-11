@@ -152,7 +152,27 @@ async def test_recall_finds_seeded_topic_and_ranks_exact_term_first(monkeypatch,
         # S13-5: which retrievers put this unit forward. A recall answered by
         # word matching alone must not look like one the embedder also ranked.
         "retrievers",
+        # PIN MOVED 2026-09-10 (S14-1). A hit now carries the note's citation
+        # — the message id it was distilled from and the ROLE of that row —
+        # or None when it cites nothing. It is on every hit, not only on the
+        # ones that have one, precisely so a caller cannot read the ABSENCE
+        # of the key as "this service is too old to say": a note supported
+        # only by an assistant row and a note supported by the person's own
+        # message must be tellable apart downstream, and None is the third
+        # answer that says neither is claimed.
+        "source",
+        # PIN MOVED 2026-09-10 (S14-1). And the read-only call that answers
+        # this fact NOW, when the note names one. Owner ruling the same day:
+        # a fact a tool can look up ad hoc should be looked up ad hoc, and the
+        # note is history. Also always present, also None when there is none —
+        # and None here is the substantive answer "nothing else can check
+        # this", which is the whole difference between a preference and a spec.
+        "live_source",
     }
+    # This fixture note cites nothing and nothing else can check it, and it
+    # says both rather than being silent about either.
+    assert results[0]["source"] is None
+    assert results[0]["live_source"] is None
     assert results[0]["retrievers"] == ["lexical"]
     # A topic note has no "## HH:MM" entries, so it is one unit and its id is
     # the file's own path — chunking is a journal's shape, not every file's.

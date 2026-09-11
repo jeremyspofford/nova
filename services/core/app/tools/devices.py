@@ -288,6 +288,7 @@ TOOLS: tuple[Tool, ...] = (
         ),
         parameters=_obj({}, []),
         executor=device_list,
+        reads_only=True,
         ephemeral=True,
         # The three device_list* tools enumerate a container (paired devices,
         # a directory, installed apps): their result IS a listing, and the
@@ -299,6 +300,7 @@ TOOLS: tuple[Tool, ...] = (
         description="Report a paired device's OS, disk and memory summary.",
         parameters=_obj({"device": _DEVICE_ARG}, ["device"]),
         executor=device_info,
+        reads_only=True,
         ephemeral=True,
     ),
     Tool(
@@ -315,6 +317,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path"],
         ),
         executor=device_list_files,
+        reads_only=True,
         ephemeral=True,
         result_kind=RESULT_KIND_LISTING,
     ),
@@ -332,6 +335,7 @@ TOOLS: tuple[Tool, ...] = (
             ["device", "path"],
         ),
         executor=device_read_file,
+        reads_only=True,
         ephemeral=True,
     ),
     Tool(
@@ -339,6 +343,7 @@ TOOLS: tuple[Tool, ...] = (
         description="List the applications installed on a paired device.",
         parameters=_obj({"device": _DEVICE_ARG}, ["device"]),
         executor=device_list_apps,
+        reads_only=True,
         ephemeral=True,
         result_kind=RESULT_KIND_LISTING,
     ),

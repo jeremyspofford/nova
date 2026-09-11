@@ -9,7 +9,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 
-from app import chat, guards, traces
+from app import chat, guards, tools, traces
 from app.main import app
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway, FakeMemory, ScriptedGateway
@@ -67,6 +67,18 @@ async def _spans(pool, turn_id) -> dict:
         "SELECT kind, name, duration_ms, meta FROM turn_spans WHERE turn_id = $1", turn_id
     )
     return {row["kind"]: row for row in rows}
+
+
+async def _tool_spans(pool, turn_id) -> list:
+    """Every tool span this turn filed, in order — _spans keys by KIND, so it
+    collapses a turn with several calls into one row."""
+    return list(
+        await pool.fetch(
+            "SELECT name, meta FROM turn_spans WHERE turn_id = $1 AND kind = 'tool' "
+            "ORDER BY started_at",
+            turn_id,
+        )
+    )
 
 
 async def test_happy_path_frames_persistence_and_trace(owner_client, pool, mount_peers):
@@ -179,6 +191,83 @@ def test_a_note_is_labelled_with_what_is_known_about_it_and_nothing_more():
     assert chat._age("2026-09-08", today) == "yesterday"
     # Nothing to read the age from: say nothing about it.
     assert chat._age(None, today) is None and chat._age("not a date", today) is None
+
+
+def test_a_note_standing_only_on_her_own_words_is_labelled_as_such():
+    """S14-1. A distilled note names the message it came from and the ROLE of
+    that row, and the role is the whole point: a fact supported only by an
+    assistant row is supported by something the model itself produced, and it
+    must not read in the prompt like something she was told.
+
+    A note with no citation carries no marker — that is the ordinary state of
+    the whole corpus, and a word on every line would distinguish nothing.
+    """
+    today = date(2026, 9, 10)
+    labelled = chat._snippets(
+        [
+            {
+                "title": "Coffee",
+                "snippet": "pour-over, no sugar",
+                "kind": "topic",
+                "created": "2026-09-10",
+                "source": {"message_id": "m1", "role": "user"},
+            },
+            {
+                "title": "Vram",
+                "snippet": "24GB",
+                "kind": "topic",
+                "created": "2026-09-10",
+                "source": {"message_id": "m2", "role": "assistant"},
+            },
+            {"title": "Kitchen", "snippet": "the kettle is new", "kind": "topic"},
+        ],
+        today,
+    )
+    assert labelled == [
+        "[topic, today, cited to something the person said] Coffee: pour-over, no sugar",
+        "[topic, today, cited only to something she said herself] Vram: 24GB",
+        "[topic] Kitchen: the kettle is new",
+    ]
+    # A citation memory sent without a usable role is not a citation this can
+    # weigh — say nothing rather than pick the flattering reading.
+    assert chat._support({"message_id": "m3"}) is None
+    assert chat._support("people/x/journals/2026-09-01.md") is None
+
+
+def test_a_note_a_tool_can_answer_now_is_labelled_as_not_the_current_answer():
+    """Owner ruling 2026-09-10: a spec a command can read should be read ad
+    hoc, and the ad-hoc answer is the truth. The note is history — worth
+    keeping to say what changed, never the current figure — and the failure
+    this label prevents is reciting "24GB" from a note written before the card
+    was swapped, with the machine one call away and able to say."""
+    today = date(2026, 9, 10)
+    labelled = chat._snippets(
+        [
+            {
+                "title": "Graphics memory",
+                "snippet": "the card holds 24GB",
+                "kind": "topic",
+                "created": "2026-08-20",
+                "live_source": {"tool": "device_info", "args": {"device": "desktop"}},
+            },
+            {
+                "title": "Coffee",
+                "snippet": "pour-over, no sugar",
+                "kind": "topic",
+                "created": "2026-08-20",
+            },
+        ],
+        today,
+    )
+    assert labelled == [
+        "[topic, 21 days ago, a record, not the current answer — device_info is what answers "
+        "this now] Graphics memory: the card holds 24GB",
+        # Nothing can check a preference; memory IS the source, and the line
+        # says nothing extra about it.
+        "[topic, 21 days ago] Coffee: pour-over, no sugar",
+    ]
+    assert chat._live_source({"args": {}}) is None
+    assert chat._live_source("device_info") is None
 
 
 def test_the_prompt_tells_nothing_matched_apart_from_could_not_be_read():
@@ -940,3 +1029,157 @@ async def test_a_turn_someone_else_owns_is_not_found_rather_than_forbidden(
         assert nobody.status_code == 404
     finally:
         traces.INFLIGHT.discard(their_turn)
+
+
+# -- the backend checks a note before she is asked anything (S14) -------------
+
+
+async def test_a_note_naming_a_live_source_is_checked_before_the_model_sees_it(
+    pool, owner_client, mount_peers
+):
+    """The owner's ruling, made mechanical (2026-09-10).
+
+    Until this, a note that a tool could answer NOW reached her as a sentence
+    asking her to check first. That is a request. Under pressure a model
+    answers from what is in front of it, and what was in front of it was
+    "24GB" — a figure from before the card was swapped, with the machine one
+    call away and able to say.
+
+    So the backend runs the check itself, BEFORE composing the prompt, and
+    hands her both. The assertion that matters is the last one: the live
+    answer is in the messages the model actually received, above her first
+    token, with the note demoted to history beside it.
+    """
+    gateway = FakeGateway(deltas=("fine",))
+    mount_peers(
+        gateway=gateway,
+        memory=FakeMemory(
+            results=(
+                {
+                    "title": "Graphics memory",
+                    "snippet": "the card holds 24GB",
+                    "kind": "topic",
+                    "created": "2026-08-20",
+                    "live_source": {"tool": "get_time", "args": {}},
+                },
+            )
+        ),
+    )
+    await _set_model(owner_client)
+
+    status, _ = await _say(owner_client, "how much VRAM does the desktop have?")
+    assert status == 200
+
+    turn = await pool.fetchrow("SELECT id FROM turns")
+    # A real tool span, so every guard that reads spans sees a call that
+    # really ran — and marked `unasked`, so the trace never lets the
+    # backend's call read as one she chose to make.
+    (check,) = await _tool_spans(pool, turn["id"])
+    assert check["name"] == "get_time"
+    assert check["meta"]["ok"] is True
+    assert check["meta"]["unasked"] is True
+
+    volatile = gateway.seen[-1][1]["messages"][1]["content"]
+    assert "Graphics memory: the card holds 24GB" in volatile
+    assert "Live checks the backend ran for this turn BEFORE asking her anything" in volatile
+    assert "the check is the current answer and the note is history" in volatile
+    assert volatile.index("24GB") < volatile.index("Live checks")
+
+
+async def test_a_note_whose_check_cannot_run_says_so_rather_than_reading_as_current(
+    pool, owner_client, mount_peers
+):
+    """The failure mode the whole step exists to prevent, in its quiet form.
+
+    A check that silently does not happen leaves the note in the prompt
+    reading exactly as it would have if the check had CONFIRMED it. So a
+    refusal is a line, not an absence — and a note citing a tool that no
+    longer exists is the case that will actually occur, because notes outlive
+    registries.
+    """
+    gateway = FakeGateway(deltas=("fine",))
+    mount_peers(
+        gateway=gateway,
+        memory=FakeMemory(
+            results=(
+                {
+                    "title": "Graphics memory",
+                    "snippet": "the card holds 24GB",
+                    "live_source": {"tool": "device_info_v2", "args": {}},
+                },
+            )
+        ),
+    )
+    await _set_model(owner_client)
+
+    status, _ = await _say(owner_client, "how much VRAM?")
+    assert status == 200
+
+    turn = await pool.fetchrow("SELECT id FROM turns")
+    # Refused before dispatch, so nothing ran and there is no tool span. The
+    # reason reaches the prompt, which is the only place it can do any good.
+    assert await _tool_spans(pool, turn["id"]) == []
+
+    volatile = gateway.seen[-1][1]["messages"][1]["content"]
+    assert "NOT checked" in volatile
+    assert "may be out of date" in volatile
+
+
+async def test_a_turn_whose_notes_name_no_check_opens_no_live_check_span(
+    pool, owner_client, mount_peers
+):
+    """The cost is paid only where there is something to check: a preference
+    is a fact memory is the source of, and running a tool over it would be
+    both pointless and a call the owner never asked for."""
+    gateway = FakeGateway(deltas=("fine",))
+    mount_peers(
+        gateway=gateway,
+        memory=FakeMemory(results=({"title": "Coffee", "snippet": "pour-over, no sugar"},)),
+    )
+    await _set_model(owner_client)
+
+    status, _ = await _say(owner_client, "how do I take my coffee?")
+    assert status == 200
+
+    turn = await pool.fetchrow("SELECT id FROM turns")
+    assert await _tool_spans(pool, turn["id"]) == [], (
+        "a note nothing can check must cost no calls at all"
+    )
+    volatile = gateway.seen[-1][1]["messages"][1]["content"]
+    assert "Live checks" not in volatile
+
+
+async def test_a_live_check_of_something_that_goes_stale_stops_the_turn_being_ingested(
+    pool, owner_client, mount_peers
+):
+    """The loop this closes, end to end, and it is not obvious.
+
+    A note says device_info answers the VRAM question. The backend runs it,
+    she quotes the fresh figure, and the exchange is ingested — producing a
+    NEW note, dated today, asserting that figure as current, with no live
+    source on it. Next month recall serves her own sentence back and there is
+    nothing to check it against.
+
+    So a check obeys `Tool.ephemeral` exactly as the same call would if SHE
+    had made it — decided from the registry, never from a name written here.
+    """
+    note = {
+        "title": "Graphics memory",
+        "snippet": "the card holds 24GB",
+        "live_source": {"tool": "list_timers", "args": {}},
+    }
+    memory = FakeMemory(results=(note,))
+    mount_peers(gateway=FakeGateway(deltas=("fine",)), memory=memory)
+    await _set_model(owner_client)
+    await _say(owner_client, "how much VRAM?")
+    # list_timers reads durable state: nothing about it goes stale, so the
+    # exchange is remembered exactly as it was before live checks existed.
+    assert memory.ingests, "a turn whose checks read nothing volatile is still ingested"
+
+    memory = FakeMemory(results=({**note, "live_source": {"tool": "device_list", "args": {}}},))
+    mount_peers(gateway=FakeGateway(deltas=("fine",)), memory=memory)
+    await _say(owner_client, "how much VRAM?")
+    assert tools.REGISTRY["device_list"].ephemeral  # the fact this rides on
+    assert memory.ingests == [], (
+        "a check read a point-in-time answer, so her reply quoting it must not become a note"
+    )

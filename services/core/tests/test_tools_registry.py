@@ -124,6 +124,14 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # over the page's one writer (create/update/delete/list). TWENTY-SIX
         # -> THIRTY-ONE. Same funnel, no row anywhere to run: an agent is hers
         # to make and to hand work to the moment the module is in REGISTRY.
+        # S14-3 (2026-09-10): the one-off pass over conversation that was
+        # already stored when distillation was built. THIRTY-ONE ->
+        # THIRTY-TWO. A tool rather than a script because operating the
+        # running system is hers: the hourly beat keeps up on its own, and
+        # catching memory up with what came before is something she can be
+        # asked to do and the trace can record. It WRITES, so it is not
+        # reads_only and the backend will not run it on its own initiative.
+        "memory_backfill",
         "delegate_to_agent",
         "create_agent",
         "update_agent",
@@ -440,3 +448,65 @@ def test_progress_accepts_a_detail_line_or_a_structured_report():
         "pulling — 42%",
         {"detail": "coder is working…", "agent": "coder", "step": "get_time"},
     ]
+
+
+# -- what changes the world, and what only looks (S14, 2026-09-10) -----------
+
+
+def test_the_tools_that_change_nothing_are_pinned_by_name():
+    """A tripwire, not a list to maintain for its own sake.
+
+    `reads_only` decides what the BACKEND may run when nobody asked it to — a
+    distilled note carries the call that answers it now, and something that
+    changes the world must never run unasked. So a tool added tomorrow must
+    say which side it is on, and this reddens until someone decides rather
+    than inheriting a default.
+
+    NECESSARY, NOT SUFFICIENT: fetch_url and web_search change nothing and are
+    true here, but they reach an address the caller chose, so the code that
+    picks the auto-run set narrows this further. One concept per flag.
+    """
+    reads = {name for name, tool in tools.REGISTRY.items() if tool.reads_only}
+    assert reads == {
+        "device_info",
+        "device_list",
+        "device_list_apps",
+        "device_list_files",
+        "device_read_file",
+        "fetch_url",
+        "get_time",
+        "list_agents",
+        "list_timers",
+        "memory_search",
+        "model_catalog_search",
+        "model_check_update",
+        "route_explain",
+        "spend_report",
+        "web_search",
+        "workspace_list_files",
+        "workspace_read_file",
+    }
+
+
+def test_every_tool_that_writes_says_it_changes_something():
+    """The half that would be silent if it were wrong. A writer, a launcher, a
+    notifier or a command runner marked reads_only could be run by the backend
+    with nobody asking — so name them here rather than trusting the flag."""
+    changes = {name for name, tool in tools.REGISTRY.items() if not tool.reads_only}
+    for name in (
+        "workspace_write_file",
+        "memory_save",
+        "device_run",
+        "device_write_file",
+        "device_launch_app",
+        "device_notify",
+        "model_pull",
+        "model_remove",
+        "create_timer",
+        "cancel_timer",
+        "create_agent",
+        "update_agent",
+        "delete_agent",
+        "delegate_to_agent",
+    ):
+        assert name in changes, f"{name} changes something and must not be reads_only"

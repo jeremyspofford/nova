@@ -121,3 +121,24 @@ class Tool:
     # A guard that needs to know whether a listing was produced this turn reads
     # this off the registry — never a name list of its own.
     result_kind: str | None = None
+    # Does running this CHANGE anything? (S14, 2026-09-10.)
+    #
+    # A fact about the executor, never a permission: every tool stays hers to
+    # call and nothing reads this to refuse her. dispatch does not look at it
+    # — the pin in test_no_approvals asserts dispatch is still lookup, parse,
+    # validate, executor and nothing else — because the moment dispatch
+    # consults a field to decide, that field is a gate.
+    #
+    # It exists for a question v4 has never had to ask: what may the BACKEND
+    # run when NOBODY asked it to. A distilled note can carry the call that
+    # answers it now ("how much VRAM" is answered by the machine, not by a
+    # note from three weeks ago), and the backend runs that call before she
+    # answers. Something that changes the world must never run unasked.
+    #
+    # NECESSARY, NOT SUFFICIENT, and the gap is deliberate: fetch_url and
+    # web_search change nothing and are true here, but they reach an address
+    # the caller chose, so whatever decides the auto-run set must narrow this
+    # further. One concept per flag — this one answers only "does it change
+    # anything", and a policy smuggled in here would be a policy nobody could
+    # find.
+    reads_only: bool = False

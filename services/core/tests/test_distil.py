@@ -1,0 +1,1218 @@
+"""app/distil.py — the extractor that turns a conversation into facts.
+
+Distillation shares review.py's spine (app/model_read.py) and differs from it
+in exactly one deliberate place, which is what most of this file is about: it
+reads BOTH sides of the conversation, because a durable fact is usually in her
+tidy restatement of what he said — and a fact standing only on an assistant row
+is supported by something the model itself produced, which verifies nothing
+about the world. So the ROLE of the cited row travels onto the note, and it
+travels in code.
+
+What is pinned here, in the same shape as tests/test_checks_review.py:
+
+  * a CITATION IS VERIFIED against the database. A fabricated one is dropped
+    and nothing it claimed survives; an answer of nothing BUT fabricated
+    citations is a pass that looked and wrote nothing, never an error;
+  * the ROLE COMES FROM THE ROW. A fact cited to her own reply is marked
+    differently from one cited to his message, in the frontmatter the note
+    carries and in the body it is composed of;
+  * the BODY QUOTES THE ROW. The model's phrasing reaches the title and
+    nothing else, so what a reader gets back is what was actually said;
+  * the SUBJECTS AND THE TOOLS ARE READ LIVE — the subjects out of memory's
+    own export so a restatement reuses one and superseding fires, the tools
+    out of the registry so a live source names a real call. A call that could
+    not dispatch takes its whole item with it;
+  * a peer that could not be reached is a STATED cannot-check with the reason,
+    never an empty list, and an unparseable answer is the opposite: zero facts
+    from a pass that genuinely looked.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import json
+import tarfile
+import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
+
+import httpx
+import pytest
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.routing import Route
+
+from app import distil, identity, model_read
+from app.main import app as core_app
+from tests import fakes
+from tests.conftest import requires_db
+from tests.fakes import FakeGateway
+
+pytestmark = requires_db
+
+# What was said, and what a model might call it. Deliberately share no words:
+# every assertion about "the row, not the paraphrase" would pass by accident if
+# one were a substring of the other.
+HIS = "the tower has 24GB of VRAM and 64GB of system RAM in it"
+HERS = "Right — 24GB VRAM, 64GB system RAM on the tower."
+PARAPHRASE = "graphics card capacity of the desktop"
+INVENTED = "he prefers oat milk"
+SUBJECT = "hardware.vram"
+
+
+class _Dead(httpx.AsyncBaseTransport):
+    """A peer whose socket refuses — a real httpx error, not a patched call."""
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+
+@dataclass
+class FakeNotes:
+    """A memory service that serves /export — this person's notes as the real
+    one packs them (tar.gz, arcnames relative to the person's own root).
+
+    tests/fakes.FakeMemory has no /export, and distillation reads the subjects
+    already in use out of one, so the fake lives here rather than growing the
+    shared one for a single reader.
+    """
+
+    # rel path under the person's root -> the file's text, frontmatter and all.
+    notes: dict[str, str] = field(default_factory=dict)
+    status: int = 200
+    exports: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.app = Starlette(routes=[Route("/export", self._export, methods=["GET"])])
+
+    async def _export(self, request):
+        self.exports.append(request.query_params.get("person_id", ""))
+        if request.headers.get("authorization") != f"Bearer {fakes.MEMORY_TOKEN}":
+            return JSONResponse({"error": "bad memory bearer"}, status_code=401)
+        if self.status != 200:
+            return JSONResponse({"error": "no notes"}, status_code=self.status)
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
+            for name, text in self.notes.items():
+                data = text.encode()
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+        return Response(buffer.getvalue(), media_type="application/gzip")
+
+
+def note(subject: str | None, *, title: str = "a note", said_at: str | None = None) -> str:
+    """One note on disk, in the store's own frontmatter shape."""
+    lines = ["---", f"title: {title}", "kind: topic", "created: 2026-09-01"]
+    if subject is not None:
+        lines.append(f"subject: {subject}")
+    if said_at is not None:
+        lines.append(f"said_at: {said_at}")
+    lines += ["---", "", "the body"]
+    return "\n".join(lines)
+
+
+async def _person(pool) -> identity.Person:
+    await pool.execute("INSERT INTO people (name, role) VALUES ('jeremy','owner')")
+    owner = await identity.owner(pool)
+    assert owner is not None
+    return owner
+
+
+async def _conversation(pool, person_id) -> uuid.UUID:
+    return await pool.fetchval(
+        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", person_id
+    )
+
+
+async def _message(pool, conversation_id, content, *, role="user", ago=timedelta()) -> uuid.UUID:
+    return await pool.fetchval(
+        "INSERT INTO messages (conversation_id, role, content, created_at) "
+        "VALUES ($1, $2, $3, now() - $4::interval) RETURNING id",
+        conversation_id,
+        role,
+        content,
+        ago,
+    )
+
+
+def _answer(*items: dict) -> str:
+    """The model's answer in the shape the extractor asks for, fenced — the
+    fence is there on purpose, because a small model writes one and the parser
+    has to survive it."""
+    return f"Here is what I found:\n```json\n{json.dumps(items)}\n```"
+
+
+def _item(message_id, *, subject=SUBJECT, fact=PARAPHRASE, live_source=None) -> dict:
+    entry = {"message_id": str(message_id), "subject": subject, "fact": fact}
+    if live_source is not None:
+        entry["live_source"] = live_source
+    return entry
+
+
+def _gateway(*items: dict, text: str | None = None) -> FakeGateway:
+    """A gateway that answers with this script, split across two deltas so the
+    read has to concatenate the stream like a real one."""
+    body = _answer(*items) if text is None else text
+    middle = len(body) // 2
+    return FakeGateway(deltas=(body[:middle], body[middle:]))
+
+
+def _brief(gateway: FakeGateway) -> str:
+    """The user message the extractor actually sent to the gateway."""
+    bodies = [
+        body for path, body in gateway.seen if path == "/v1/chat/completions" and body is not None
+    ]
+    return bodies[-1]["messages"][1]["content"]
+
+
+# ── the citation is verified ───────────────────────────────────────────────
+
+
+async def test_a_fabricated_citation_is_dropped_and_nothing_it_claimed_survives(pool, mount_peers):
+    """Two facts, one citing a real message and one citing an id nobody ever
+    wrote. Exactly one survives, it is built from the row, and every word of
+    the invented one is gone."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, HIS)
+    mount_peers(
+        gateway=_gateway(_item(real), _item(uuid.uuid4(), subject="drinks", fact=INVENTED)),
+        memory=FakeNotes(),
+    )
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran, result.reason
+    assert result.verified == 1 and result.proposed == 2 and result.dropped == 1
+    (fact,) = result.facts
+    assert fact.message_id == real
+    assert fact.source == {"message_id": str(real), "role": "user"}
+    assert HIS in fact.body
+    # And nothing at all survived of the fact whose citation was invented.
+    everything = fact.body + fact.title + fact.subject
+    assert INVENTED not in everything and "drinks" not in everything
+
+
+async def test_an_answer_of_only_invented_citations_reports_nothing(pool, mount_peers):
+    """Well-formed, confident, and citing two messages that do not exist. The
+    verification is a query, so none of it survives — and the pass RAN."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+    mount_peers(
+        gateway=_gateway(
+            _item(uuid.uuid4(), subject="drinks", fact=INVENTED),
+            _item(uuid.uuid4(), subject="gym", fact="he cancelled the gym"),
+        ),
+        memory=FakeNotes(),
+    )
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran and result.reason is None
+    assert result.facts == () and result.verified == 0
+    assert result.proposed == 2 and result.dropped == 2
+
+
+async def test_a_message_of_someone_elses_is_not_citable(pool, mount_peers):
+    """The verification is scoped to this person's own conversations, so a
+    real message id belonging to somebody else resolves to nothing."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+    stranger = await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('someone else','adult') RETURNING id"
+    )
+    theirs = await _message(pool, await _conversation(pool, stranger), "my box has 8GB")
+    mount_peers(gateway=_gateway(_item(theirs)), memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran and result.facts == () and result.dropped == 1
+
+
+# ── both sides are read, and the role travels ──────────────────────────────
+
+
+async def test_both_sides_are_read_and_her_restatement_is_citable(pool, mount_peers):
+    """The one deliberate difference from review.py: her reply is IN the window
+    and can be cited, because the tidy statement of a fact is usually hers."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    his = await _message(pool, conversation, HIS, ago=timedelta(minutes=2))
+    hers = await _message(pool, conversation, HERS, role="assistant")
+    gateway = _gateway(_item(hers))
+    mount_peers(gateway=gateway, memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    brief = _brief(gateway)
+    assert str(his) in brief and str(hers) in brief
+    assert HIS in brief and HERS in brief
+    assert result.ran and result.verified == 1
+
+
+async def test_a_fact_on_her_own_words_is_marked_and_his_is_not(pool, mount_peers):
+    """The sharpest line in the slice. Two facts, same subject family, one
+    cited to his message and one to her reply — and the mark comes from the
+    ROW's role, so nothing the model writes can move it."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    his = await _message(pool, conversation, HIS, ago=timedelta(minutes=2))
+    hers = await _message(pool, conversation, HERS, role="assistant")
+    mount_peers(
+        gateway=_gateway(
+            _item(his, subject="hardware.vram"),
+            _item(hers, subject="hardware.ram", fact="system memory of the tower"),
+        ),
+        memory=FakeNotes(),
+    )
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran and result.verified == 2
+    by_subject = {fact.subject: fact for fact in result.facts}
+    mine, hers_fact = by_subject["hardware.vram"], by_subject["hardware.ram"]
+
+    assert mine.said_by == "user" and mine.her_words_alone is False
+    assert mine.source["role"] == "user"
+    assert "her own reading of what she herself wrote" not in mine.body
+
+    assert hers_fact.said_by == "assistant" and hers_fact.her_words_alone is True
+    assert hers_fact.source["role"] == "assistant"
+    # Marked in the body a reader gets back, not only in a field. The wording
+    # moved with S14-5 (the body now leads with the fact, so the line under the
+    # quote says whose reading THAT is), and the property is unchanged: a fact
+    # standing only on her own words says so where anybody reading it will see.
+    assert "Nova's own reading of what she herself wrote" in hers_fact.body
+    assert "stands on her words alone" in hers_fact.body
+
+
+async def test_the_role_on_the_note_is_the_rows_and_not_the_models(pool, mount_peers):
+    """A model that says the fact came from him, citing a row that is hers.
+    The citation resolves to the assistant row and the note is marked as
+    standing on her words — the claim about the source is never read."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS, ago=timedelta(minutes=2))
+    hers = await _message(pool, conversation, HERS, role="assistant")
+    entry = _item(hers)
+    entry["role"] = "user"
+    entry["said_by"] = "jeremy"
+    mount_peers(gateway=_gateway(entry), memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    (fact,) = result.facts
+    assert fact.said_by == "assistant" and fact.her_words_alone is True
+
+
+# ── the body states the fact, and quotes the row as its receipt ────────────
+
+
+async def test_the_body_states_the_fact_and_quotes_the_row_under_it(pool, mount_peers):
+    """PIN MOVED, 2026-09-10 (S14-5), and the measurement is the reason.
+
+    This used to assert the paraphrase was NOT in the body — the strictest
+    reading of review.py's "facts come from the row, never from the
+    paraphrase", with the model's phrasing confined to the title. The
+    consequence was measurable: a note's indexed text was a verbatim slice of
+    the transcript, so it was a near-duplicate of the chunk it came from, and
+    forty-five of them bought ONE question out of twenty on the recall suite.
+    A note that says nothing the transcript did not already say is a second
+    copy, not a distillation.
+
+    What must not weaken is the receipt, and it does not: the statement is
+    labelled as her reading, the verbatim quote sits directly under it, and the
+    citation and the role stay in the frontmatter. The claim and its evidence
+    are in the same place. What is still refused is an unlabelled paraphrase
+    standing in for the record.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, HIS)
+    said_at = await pool.fetchval("SELECT created_at FROM messages WHERE id = $1", real)
+    mount_peers(gateway=_gateway(_item(real)), memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    (fact,) = result.facts
+    assert HIS in fact.body, "the verbatim row is still the receipt"
+    assert PARAPHRASE in fact.body, "and the fact itself is now findable in the note"
+    # The claim comes FIRST and the quote is under it: a reader, and a small
+    # model reading an excerpt, sees what the note says before its evidence.
+    assert fact.body.index(PARAPHRASE) < fact.body.index(HIS)
+    # And it is never presented as the record — the line under the quote says
+    # whose reading it is.
+    assert "reading of what was said" in fact.body
+    assert fact.title == PARAPHRASE
+    # Dated by the EXCHANGE, not by the pass — what `created` will follow.
+    assert fact.said_at == said_at
+    assert said_at.isoformat(timespec="minutes") in fact.body
+    # The citation is frontmatter, never body text: the body is what the index
+    # tokenises and a uuid in it is a term every distilled note would carry.
+    assert str(real) not in fact.body
+
+
+async def test_a_long_message_is_quoted_short_enough_to_sit_in_an_excerpt(pool, mount_peers):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, "he said " + ("very long " * 200))
+    mount_peers(gateway=_gateway(_item(real)), memory=FakeNotes())
+
+    (fact,) = (await distil.distil(core_app, pool, person)).facts
+
+    assert len(fact.body) < 500 and fact.body.endswith(".")
+
+
+# ── the subjects are read live, so a restatement replaces ──────────────────
+
+
+async def test_the_subjects_already_in_use_are_read_live_and_shown(pool, mount_peers):
+    """Read from memory's own export, because a recall hit does not carry its
+    note's subject and a list kept here would be wrong the day she writes one."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+    notes = FakeNotes(
+        notes={
+            "topics/hardware.md": note("hardware.vram"),
+            "topics/coffee.md": note("preferences.coffee"),
+            "journals/2026-09-01.md": note(None, title="a day"),
+        }
+    )
+    gateway = _gateway(text="[]")
+    mount_peers(gateway=gateway, memory=notes)
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran and result.limits == ()
+    brief = _brief(gateway)
+    assert "hardware.vram" in brief and "preferences.coffee" in brief
+    assert notes.exports == [str(person.id)]
+
+
+async def test_a_restatement_shown_the_subject_reuses_it(pool, mount_peers):
+    """The whole point of showing them: the second telling of a fact comes back
+    on the SAME subject, which is what makes the newer note retire the older
+    one instead of sitting beside it."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    first = await _message(pool, conversation, HIS, ago=timedelta(hours=9))
+    mount_peers(gateway=_gateway(_item(first)), memory=FakeNotes())
+    earlier = await distil.distil(core_app, pool, person)
+
+    # A week later he says it again, and her notes now hold the first one.
+    later_row = await _message(pool, conversation, "the tower is on 48GB of VRAM now")
+    notes = FakeNotes(notes={"topics/hardware.md": note(SUBJECT)})
+    gateway = _gateway(_item(later_row, fact="the desktop's graphics memory"))
+    mount_peers(gateway=gateway, memory=notes)
+
+    later = await distil.distil(core_app, pool, person)
+
+    assert SUBJECT in _brief(gateway)
+    assert earlier.facts[0].subject == later.facts[0].subject == SUBJECT
+    # Two notes, one subject, and the newer one is the newer exchange.
+    assert later.facts[0].said_at > earlier.facts[0].said_at
+
+
+async def test_two_facts_on_one_subject_in_one_pass_keep_the_newer_row(pool, mount_peers):
+    """Both would be written, the second retiring the first the moment it
+    landed — a note born superseded. Which survives is decided from the rows'
+    own timestamps, not from the order the model answered in."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    older = await _message(pool, conversation, HIS, ago=timedelta(hours=3))
+    newer = await _message(pool, conversation, "the tower is on 48GB of VRAM now")
+    mount_peers(
+        # Newest first in the answer, so "keep the last one" would be wrong too.
+        gateway=_gateway(_item(newer, fact="newer"), _item(older, fact="older")),
+        memory=FakeNotes(),
+    )
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.verified == 1 and result.folded == 1
+    assert result.facts[0].message_id == newer
+
+
+async def test_subjects_that_cannot_be_read_are_a_stated_limit_not_a_stop(pool, mount_peers):
+    """A missed subject costs a duplicate note — both dated, both recallable —
+    and can never make an answer wrong, so the pass says so and goes on."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, HIS)
+    mount_peers(gateway=_gateway(_item(real)), memory=FakeNotes())
+    core_app.state.peer_transports[fakes.MEMORY_URL] = _Dead()
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran and result.verified == 1
+    assert any("subjects already in use could not be read" in limit for limit in result.limits)
+    assert any("connection refused" in limit for limit in result.limits)
+
+
+async def test_a_caller_that_holds_the_subjects_is_not_made_to_read_them(pool, mount_peers):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+    notes = FakeNotes(notes={"topics/hardware.md": note("never.read")})
+    gateway = _gateway(text="[]")
+    mount_peers(gateway=gateway, memory=notes)
+
+    result = await distil.distil(core_app, pool, person, subjects=("passed.in",))
+
+    assert result.ran and notes.exports == []
+    assert "passed.in" in _brief(gateway) and "never.read" not in _brief(gateway)
+
+
+# ── the tools are read live, and a call that cannot run takes its fact ──────
+
+
+async def test_the_tools_are_the_live_registry_and_the_steer_is_stated(pool, mount_peers):
+    from app import tools
+
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+    gateway = _gateway(text="[]")
+    mount_peers(gateway=gateway, memory=FakeNotes())
+
+    assert (await distil.distil(core_app, pool, person)).ran
+
+    brief = _brief(gateway)
+    offered, _limit = distil.live_tools()
+    assert offered, "the registry must offer something for this test to mean anything"
+    for tool in offered[: distil.MAX_TOOLS_SHOWN]:
+        assert tool.name in brief
+    assert set(name for name, _t in tools.REGISTRY.items()) >= {t.name for t in offered}
+    # The steer Jeremy asked for: a fact a call answers is better left unwritten.
+    assert "better left unwritten" in brief
+
+
+async def test_a_live_source_that_can_dispatch_is_kept_and_named_in_the_body(pool, mount_peers):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, HIS)
+    mount_peers(
+        gateway=_gateway(
+            _item(real, live_source={"tool": "device_info", "args": {"device": "tower"}})
+        ),
+        memory=FakeNotes(),
+    )
+
+    result = await distil.distil(core_app, pool, person)
+
+    (fact,) = result.facts
+    assert fact.live_source == {"tool": "device_info", "args": {"device": "tower"}}
+    # The note says which is the truth — the call, not the note.
+    assert "device_info" in fact.body and "that call is the truth" in fact.body
+
+
+@pytest.mark.parametrize(
+    "live_source",
+    [
+        {"tool": "no_such_tool", "args": {}},
+        # Registered, but device_info would refuse those arguments.
+        {"tool": "device_info", "args": {}},
+        {"tool": "device_info", "args": {"device": 7}},
+        "device_info",
+    ],
+)
+async def test_a_fact_whose_call_cannot_dispatch_keeps_the_fact(pool, mount_peers, live_source):
+    """PIN MOVED, 2026-09-10 (S14-5), and the measurement is the reason.
+
+    This used to drop the whole item, on the reasoning that a live-answerable
+    fact stored with no call attached reads as the current answer. The
+    reasoning was right; the remedy threw away a fact ALREADY VERIFIED AGAINST
+    A ROW because an optional field was malformed. Measured while regenerating
+    the recall fixture: five of twenty-eight verified facts died that way, a
+    fifth of the yield, and every one because the model named a tool it had
+    never been offered — a fact about the model's formatting and nothing else.
+
+    What the old reasoning protected is kept, and more cheaply: the note SAYS
+    a check was named for it and could not be run. That is the "this is
+    history" signal without needing a working call, and it beats both
+    alternatives — storing it bare says nothing, dropping it loses the fact,
+    and neither tells anybody what happened.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, HIS)
+    mount_peers(gateway=_gateway(_item(real, live_source=live_source)), memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    (fact,) = result.facts
+    assert result.proposed == 1 and result.dropped == 0
+    # The unusable call is NOT written down — only a call the backend would
+    # actually run may be stored (live_facts.runnable, the same predicate).
+    assert fact.live_source is None
+    # And the note states what happened, rather than reading as a fact nothing
+    # needs to check.
+    assert "no usable check was named" in fact.body
+    assert any("could not be run" in limit for limit in result.limits)
+
+
+# ── a peer that could not be reached is never a clean pass ─────────────────
+
+
+async def test_a_gateway_that_cannot_be_reached_is_a_stated_cannot_check(pool, mount_peers):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+    mount_peers(gateway=FakeGateway(), memory=FakeNotes())
+    core_app.state.peer_transports[fakes.GATEWAY_URL] = _Dead()
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran is False and result.facts == ()
+    assert "gateway" in result.reason and "connection refused" in result.reason
+    # It read a window before it failed, and says so rather than claiming none.
+    assert result.read == 1 and result.verified == 0
+
+
+async def test_a_gateway_that_refuses_says_the_status_it_refused_with(pool, mount_peers):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+    mount_peers(gateway=FakeGateway(status=503), memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran is False and "503" in result.reason
+
+
+async def test_a_verification_that_could_not_be_made_writes_nothing(pool, mount_peers, monkeypatch):
+    """Unverified claims must not become notes, and reporting none of them
+    would say the pass looked and found nothing worth keeping. The window read
+    and the verification are separate reads, so this breaks the second one
+    alone — the pass got all the way to a model's answer and still wrote
+    nothing."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, HIS)
+    mount_peers(gateway=_gateway(_item(real)), memory=FakeNotes())
+
+    async def _broken(*args, **kwargs):
+        raise model_read.ReadFailed("the pool went away mid-pass")
+
+    monkeypatch.setattr(model_read, "resolve_messages", _broken)
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran is False and result.facts == ()
+    assert "could not be verified" in result.reason
+    assert "the pool went away mid-pass" in result.reason
+    # It read a window and got an answer; both are said rather than zeroed.
+    assert result.read == 1 and result.proposed == 1
+
+
+async def test_a_window_that_cannot_be_read_is_stated(pool, mount_peers):
+    person = await _person(pool)
+    mount_peers(gateway=_gateway(text="[]"), memory=FakeNotes())
+    await pool.execute("ALTER TABLE messages RENAME TO messages_hidden")
+    try:
+        result = await distil.distil(core_app, pool, person)
+    finally:
+        await pool.execute("ALTER TABLE messages_hidden RENAME TO messages")
+
+    assert result.ran is False
+    assert "conversation could not be read" in result.reason
+
+
+# ── an answer that says nothing is a pass that looked ──────────────────────
+
+
+async def test_an_unparseable_answer_is_a_pass_with_nothing_to_write(pool, mount_peers):
+    """The model was asked and answered prose. It genuinely looked, so this is
+    ran=True with no facts — never a crash and never a cannot-check."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+    mount_peers(
+        gateway=_gateway(text="Nothing in that conversation looks worth keeping, honestly."),
+        memory=FakeNotes(),
+    )
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran and result.reason is None
+    assert result.facts == () and result.proposed == 0
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "[]",
+        "",
+        "{}",
+        "[1, 2, 3]",
+        '[{"subject": "hardware.vram", "fact": "no id at all"}]',
+        '[{"message_id": "not-a-uuid", "subject": "s", "fact": "nope"}]',
+        # No subject: the superseding key is missing, so this could never be
+        # replaced by a later telling of the same fact.
+        '[{"message_id": "%s", "fact": "a fact with nothing to file it under"}]',
+        '[{"message_id": "%s", "subject": "hardware.vram"}]',
+        '{"message_id": "%s", "subject": "s", "fact": "an object, not a list"}',
+    ],
+)
+async def test_answers_that_carry_no_usable_fact_write_nothing(pool, mount_peers, answer):
+    """Every shape of "the model said something, none of it is a fact this code
+    can check" — each one a pass that looked and wrote nothing."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, HIS)
+    mount_peers(gateway=_gateway(text=answer.replace("%s", str(real))), memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran and result.facts == ()
+
+
+async def test_nothing_in_the_window_never_reaches_the_model(pool, mount_peers):
+    """No conversation, no question: a pass that read an empty window does not
+    pay for a completion to learn that."""
+    person = await _person(pool)
+    gateway = _gateway(text="[]")
+    mount_peers(gateway=gateway, memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.ran and result.facts == () and result.read == 0
+    assert gateway.seen == []
+
+
+async def test_the_window_is_bounded_by_time_and_by_characters(pool, mount_peers):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    recent = await _message(pool, conversation, HIS, ago=timedelta(hours=2))
+    await _message(pool, conversation, "I painted the shed", ago=timedelta(days=30))
+    gateway = _gateway(text="[]")
+    mount_peers(gateway=gateway, memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person, since=timedelta(days=1))
+
+    brief = _brief(gateway)
+    assert str(recent) in brief and "painted the shed" not in brief
+    assert result.read == 1
+
+
+async def test_the_budget_drops_whole_messages_oldest_first(pool, mount_peers):
+    """Half a message is worse than an absent one: the budget drops whole rows,
+    oldest first, and what is shown is shown entire."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    # Five messages of identical length, so the arithmetic is the test rather
+    # than an accident of the prose.
+    said = [f"message {n} " + "x" * 40 for n in range(5)]
+    ids = [
+        await _message(pool, conversation, text, ago=timedelta(hours=9 - 2 * n))
+        for n, text in enumerate(said)
+    ]
+    gateway = _gateway(text="[]")
+    mount_peers(gateway=gateway, memory=FakeNotes())
+
+    # Room for exactly four of the five, so the fifth — the oldest — goes
+    # entirely rather than being shown in part.
+    result = await distil.distil(core_app, pool, person, char_budget=len(said[0]) * 4)
+
+    brief = _brief(gateway)
+    assert result.read == 4
+    assert str(ids[-1]) in brief and str(ids[0]) not in brief
+    assert said[0] not in brief, "dropped whole, never half-shown"
+    assert "cut off here" not in brief, "nothing needed clipping at this size"
+
+
+async def test_no_single_message_may_eat_the_whole_window(pool, mount_peers):
+    """PIN ADDED, 2026-09-10 (S14-5), from a measurement.
+
+    The budget takes the NEWEST message first, so one long one starves
+    everything behind it. On the recall fixture a day that ends with a long
+    pasted review read exactly ONE message out of ten — and everything said
+    earlier that day was never distilled, invisibly, because a pass that read
+    one message reports itself as a pass that read.
+
+    So an over-long message is CLIPPED to a share of the budget and SAYS it
+    was cut, rather than being taken whole. Taken whole it crowds out the day;
+    dropped it takes its own content with it; and neither tells anybody.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS, ago=timedelta(hours=3))
+    await _message(pool, conversation, "the newest message goes on " * 400)
+    gateway = _gateway(text="[]")
+    mount_peers(gateway=gateway, memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person, char_budget=600)
+
+    brief = _brief(gateway)
+    assert result.read == 2, "the long newest message must not be the whole window"
+    assert HIS in brief, "what was said earlier still reaches the model"
+    assert "cut off here" in brief, "and the clip is stated, never silent"
+
+
+# ── the call says who is paying and what it is for ─────────────────────────
+
+
+async def test_the_call_says_who_is_paying_and_what_it_is_for(pool, mount_peers):
+    """The gateway meters every call. A distil pass has no turn to attribute
+    to, so what it CAN say it says: its own purpose, the person whose notes
+    these are, and the role a beat's rounds walk."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+    gateway = _gateway(text="[]")
+    mount_peers(gateway=gateway, memory=FakeNotes())
+
+    assert (await distil.distil(core_app, pool, person)).ran
+
+    headers = gateway.seen_headers[-1]
+    assert headers["x-nova-purpose"] == distil.PURPOSE
+    assert headers["x-nova-person"] == str(person.id)
+    assert headers["x-nova-role"] == "beat"
+
+
+# ── the counts are of what landed ──────────────────────────────────────────
+
+
+async def test_the_counts_are_of_what_landed_not_what_was_attempted(pool, mount_peers):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    first = await _message(pool, conversation, HIS, ago=timedelta(minutes=3))
+    second = await _message(pool, conversation, "I take my coffee black", ago=timedelta(minutes=2))
+    mount_peers(
+        gateway=_gateway(
+            _item(first),
+            _item(second, subject="preferences.coffee", fact="how he takes coffee"),
+            _item(uuid.uuid4(), subject="gym", fact=INVENTED),
+            {"subject": "malformed", "fact": "no citation at all"},
+        ),
+        memory=FakeNotes(),
+    )
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert result.read == 2
+    assert result.proposed == 3  # the malformed entry never became a proposal
+    assert result.dropped == 2  # the malformed one and the invented citation
+    assert result.verified == len(result.facts) == 2
+
+
+# ── the live-source candidates are the ones the backend would run ──────────
+#
+# The backend runs a stored call on its own initiative, which nothing in v4
+# did before S14. `Tool.reads_only` says a tool changes nothing; it does NOT
+# say the backend may run it unasked, and the gap is where fetch_url lives.
+# One predicate (live_facts.may_run_unasked) answers for all three doors —
+# the runner, the memory write door, and the list offered to the model here —
+# and these two pin that they cannot drift apart.
+
+
+def test_only_the_calls_the_backend_would_actually_run_are_offered():
+    """The distiller offers what the write door will ACCEPT, not what merely
+    reads (2026-09-10, once `Tool.reads_only` landed).
+
+    `reads_only` is the wrong bar on its own: fetch_url and web_search change
+    nothing and still reach an address the NOTE would choose, so the backend
+    refuses to run them unasked and `validate_live_source` refuses to store a
+    note citing them. Offering them here would spend the model's attention
+    proposing facts that are then dropped whole — a pass reporting work it did
+    not do, which is the one thing its counts exist to prevent.
+
+    So all three doors ask ONE predicate, and this is the test that they
+    cannot drift apart.
+    """
+    from app import live_facts, tools
+
+    offered, limit = distil.live_tools()
+    assert limit is None
+    names = [entry.name for entry in offered]
+
+    assert names == [entry.name for entry in live_facts.offerable()]
+    for name in names:
+        assert live_facts.may_run_unasked(name) is None
+        # And the write door agrees, which is the property that matters.
+        assert tools.REGISTRY[name].reads_only
+
+    assert "get_time" in names
+    for excluded in ("fetch_url", "web_search", "workspace_write_file"):
+        assert excluded not in names, f"{excluded} would be dropped by the write door"
+
+
+def test_offering_nothing_is_a_stated_limit_rather_than_a_quiet_pass(monkeypatch):
+    """A pass in which no fact COULD be given a live source is not a pass with
+    no live facts in it. Every note it wrote is a record with nothing able to
+    check it, and that has to be said rather than inferred from an absence."""
+    from app import live_facts
+
+    monkeypatch.setattr(live_facts, "AUTO_RUN", frozenset())
+
+    offered, limit = distil.live_tools()
+
+    assert offered == ()
+    assert limit is not None
+    assert "nothing able to check it" in limit
+
+
+# ── the backfill: the conversation that was already there ──────────────────
+#
+# The beat keeps up with what is said from now on. This is the pass over what
+# was stored before it existed, and its one non-obvious property is the
+# DIRECTION it walks.
+
+
+async def _said_over(pool, person, days: int) -> uuid.UUID:
+    """One message a day for `days` days, oldest first, all restating the same
+    subject in different words — which is what makes the walk direction visible.
+    """
+    conversation = await _conversation(pool, person.id)
+    for day in range(days, 0, -1):
+        await _message(
+            pool, conversation, f"the tower has {day * 8}GB of VRAM", ago=timedelta(days=day)
+        )
+    return conversation
+
+
+async def test_the_backfill_walks_oldest_first_so_the_newest_fact_ends_up_live(
+    pool, mount_peers, monkeypatch
+):
+    """NOT a preference. Superseding is last-write-wins by subject: writing a
+    note on hardware.vram retires the earlier live note on it. Walk the archive
+    newest-first and the OLDEST statement of every restated fact ends up as the
+    live note, with the current one filed as its own predecessor — every
+    restated fact wrong, quietly, in the way that looks fine until someone asks.
+    """
+    person = await _person(pool)
+    await _said_over(pool, person, 3)
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+
+    windows: list = []
+
+    async def _spy(app_, pool_, who, *, since, through=None, **kw):
+        windows.append(through)
+        return distil.Distillation()
+
+    monkeypatch.setattr(distil, "distil", _spy)
+
+    result = await distil.backfill(core_app, pool, person, step=timedelta(days=1), max_steps=10)
+
+    assert result.ran
+    assert windows == sorted(windows), "the walk must go forwards in time"
+    assert len(windows) == result.steps >= 3
+
+
+async def test_the_backfill_writes_what_it_finds_and_counts_the_paths(
+    pool, mount_peers, monkeypatch
+):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    real = await _message(pool, conversation, HIS, ago=timedelta(hours=6))
+    mount_peers(gateway=_gateway(_item(real)), memory=FakeNotes())
+
+    saved: list = []
+
+    async def _save(ctx, *, title, content, **fields):
+        saved.append({"title": title, **fields})
+        return f"people/x/topics/{len(saved)}.md"
+
+    from app.tools import memory_tools
+
+    monkeypatch.setattr(memory_tools, "save_note", _save)
+
+    result = await distil.backfill(core_app, pool, person, step=timedelta(hours=12), max_steps=4)
+
+    assert result.ran and result.written and len(result.written) == len(saved)
+    assert saved[0]["subject"] == SUBJECT
+    assert saved[0]["source"]["role"] == "user"
+    assert result.failed == ()
+
+
+async def test_a_step_that_fails_never_costs_the_rest_of_the_archive(
+    pool, mount_peers, monkeypatch
+):
+    """A gateway blip in the middle of day three must not abandon days four
+    through twelve — and the span it could not read is NAMED, because a span
+    nobody distilled is a hole in the notes that nothing else would report."""
+    person = await _person(pool)
+    await _said_over(pool, person, 4)
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+
+    calls = {"n": 0}
+
+    async def _flaky(app_, pool_, who, *, since, through=None, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            return distil.Distillation(reason="the gateway refused (503)")
+        return distil.Distillation(read=1)
+
+    monkeypatch.setattr(distil, "distil", _flaky)
+
+    result = await distil.backfill(core_app, pool, person, step=timedelta(days=1), max_steps=10)
+
+    assert result.ran, "one bad step is not a failed backfill"
+    assert calls["n"] >= 4, "the walk carried on past the failure"
+    assert len(result.problems) == 1 and "503" in result.problems[0]
+
+
+async def test_a_walk_that_did_not_reach_now_says_what_is_left(pool, mount_peers, monkeypatch):
+    """A backfill that quit early without saying so leaves notes nobody knows
+    are missing — indistinguishable from a person who never said those things."""
+    person = await _person(pool)
+    await _said_over(pool, person, 10)
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+    monkeypatch.setattr(distil, "distil", lambda *a, **k: _completed(distil.Distillation(read=1)))
+
+    result = await distil.backfill(core_app, pool, person, step=timedelta(days=1), max_steps=3)
+
+    assert result.steps == 3
+    assert result.remaining is not None and "still undistilled" in result.remaining
+    assert result.through is not None
+
+
+async def test_a_person_with_no_conversation_is_a_stated_reason_not_an_empty_pass(
+    pool, mount_peers
+):
+    person = await _person(pool)
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+
+    result = await distil.backfill(core_app, pool, person)
+
+    assert not result.ran
+    assert "no stored conversation" in result.reason
+    assert result.written == ()
+
+
+def _completed(value):
+    """An already-finished awaitable, for a monkeypatch that is not a coroutine
+    function."""
+
+    async def _run():
+        return value
+
+    return _run()
+
+
+# ── what the live stack found (2026-09-10) ─────────────────────────────────
+
+
+async def test_a_model_that_streams_for_ever_is_cut_off_and_says_so(pool, mount_peers, monkeypatch):
+    """FOUND ON THE RUNNING STACK, not by reading the code.
+
+    A read timeout bounds SILENCE. A reasoning model that is thinking is not
+    silent — it emits a chunk every few milliseconds — so the 110s read timeout
+    beside this let one distil step stream steadily for over sixteen minutes,
+    holding the backfill and the owner's whole turn open behind it, with
+    nothing anywhere able to stop it. The reasoning is discarded, so all of
+    that bought nothing.
+
+    It RAISES rather than returning what it has: a truncated answer is a
+    truncated JSON array, and "the model said nothing usable" and "we cut it
+    off mid-sentence" are different facts about different things.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+
+    class _Endless:
+        """A gateway that streams for ever without ever falling silent."""
+
+        def __init__(self):
+            self.app = Starlette(routes=[Route("/v1/chat/completions", self._go, methods=["POST"])])
+
+        async def _go(self, request):
+            async def _stream():
+                while True:
+                    yield b'data: {"choices":[{"delta":{"reasoning":"thinking "}}]}\n\n'
+                    await asyncio.sleep(0.001)
+
+            return StreamingResponse(_stream(), media_type="text/event-stream")
+
+    mount_peers(gateway=_Endless(), memory=FakeNotes())
+    monkeypatch.setattr(model_read, "STREAM_BUDGET_SECONDS", 0.4)
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert not result.ran, "an unbounded stream must not read as a pass that found nothing"
+    assert "still answering" in result.reason
+    assert result.facts == ()
+
+
+async def test_the_backfill_resumes_after_the_newest_fact_already_written(
+    pool, mount_peers, monkeypatch
+):
+    """Twelve days at twelve-hour steps is twenty-odd model rounds, so one call
+    cannot finish it and the next one must not start again from the beginning.
+
+    Where it picks up is DERIVED from the notes themselves — the newest
+    exchange any of them cites — so there is no table and no counter to drift.
+    It under-advances rather than over-advances: a span that yielded no facts
+    is read again, which costs a repeat, and a skipped one is a hole nobody
+    ever finds.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    for days in (9, 5, 1):
+        await _message(pool, conversation, HIS, ago=timedelta(days=days))
+
+    notes = FakeNotes(notes={"topics/a.md": note(SUBJECT, said_at="2026-09-05")})
+    mount_peers(gateway=_gateway(), memory=notes)
+
+    windows: list = []
+
+    async def _spy(app_, pool_, who, *, since, through=None, **kw):
+        windows.append(through)
+        return distil.Distillation()
+
+    monkeypatch.setattr(distil, "distil", _spy)
+    result = await distil.backfill(core_app, pool, person, step=timedelta(days=1), max_steps=30)
+
+    assert result.ran and windows
+    # It started from the day the newest note cites, not from nine days back.
+    assert windows[0].date() >= date(2026, 9, 5)
+
+
+async def test_a_backfill_that_runs_out_of_time_says_where_it_stopped(
+    pool, mount_peers, monkeypatch
+):
+    """A wall-clock bound, because a step is a model round of tens of seconds
+    and somebody is waiting on the turn this runs inside."""
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS, ago=timedelta(days=9))
+
+    mount_peers(gateway=_gateway(), memory=FakeNotes())
+
+    async def _slow(app_, pool_, who, *, since, through=None, **kw):
+        await asyncio.sleep(0.05)
+        return distil.Distillation(read=1)
+
+    monkeypatch.setattr(distil, "distil", _slow)
+
+    result = await distil.backfill(
+        core_app, pool, person, step=timedelta(hours=1), max_steps=999, budget=0.2
+    )
+
+    assert result.ran
+    assert result.steps < 999, "the clock stopped it, not the step count"
+    assert result.remaining is not None and "picks up from there" in result.remaining
+
+
+async def test_a_model_cut_off_mid_thought_says_so_instead_of_reporting_nothing(
+    pool, mount_peers, monkeypatch
+):
+    """The honest-looking zero, and it is the reason the first live backfill
+    over eight days of real conversation wrote nothing (2026-09-10).
+
+    A reasoning model spends `max_tokens` on its deliberation FIRST and only
+    then writes. On a dense window qwen3.8:27b burned the whole 1,200-token
+    budget thinking and emitted zero characters of content. The tolerant parse
+    turned that into an empty list, the pass reported "0 facts proposed", and
+    a read that was CUT OFF read exactly like a read that looked and found
+    nothing — the same class of lie as a silent fallback.
+
+    `finish_reason: "length"` is the protocol saying which one happened, so it
+    is read rather than guessed at from the shape of the text.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    await _message(pool, conversation, HIS)
+
+    class _Truncating:
+        """A gateway that stops on the token cap having written no content —
+        every character of its budget went to reasoning."""
+
+        def __init__(self):
+            self.app = Starlette(routes=[Route("/v1/chat/completions", self._go, methods=["POST"])])
+
+        async def _go(self, request):
+            async def _stream():
+                yield b'data: {"choices":[{"delta":{"reasoning":"let me think"}}]}\n\n'
+                yield b'data: {"choices":[{"delta":{},"finish_reason":"length"}]}\n\n'
+                yield b"data: [DONE]\n\n"
+
+            return StreamingResponse(_stream(), media_type="text/event-stream")
+
+    mount_peers(gateway=_Truncating(), memory=FakeNotes())
+
+    result = await distil.distil(core_app, pool, person)
+
+    assert not result.ran, "a cut-off read must never report as a pass that found nothing"
+    assert "never reached an answer" in result.reason
+    assert result.proposed == 0 and result.facts == ()
+
+
+def test_the_token_budget_leaves_room_for_the_reasoning_as_well_as_the_answer():
+    """A number with a measurement behind it, not a guess.
+
+    Measured on the live stack against a dense window: 1,200 tokens bought
+    3,997 characters of reasoning and no answer at all; 5,000 bought 6,416 of
+    reasoning and 827 of answer. Sizing this for the answer alone is what made
+    every dense day come back empty.
+    """
+    from app.checks import review
+
+    assert distil.DISTIL_MAX_TOKENS >= 4000, (
+        "a reasoning model spends this budget before it writes a character; sized for the "
+        "answer alone, a dense window comes back with nothing"
+    )
+    # review.py reads the same spine and has the same hazard.
+    assert review.REVIEW_MAX_TOKENS >= 4000
+
+
+def test_the_prompt_asks_for_live_answerable_facts_rather_than_discouraging_them():
+    """The owner's ruling, and the prompt used to say the opposite of it.
+
+    His words (2026-09-10): if a live-answerable fact is "written, that's fine
+    for comparing if we ever update our system and have that data stored". The
+    clause said "PREFER NOT TO REPORT a fact one of them answers", and the
+    model's own reasoning on the live stack quoted it back while talking itself
+    out of every fact it had found: "borderline since list_agents() answers
+    it". Zero notes from eight days of conversation, caused by one sentence.
+    """
+    assert "PREFER NOT TO REPORT" not in distil.DISTIL_SYSTEM
+    assert "REPORT THOSE FACTS TOO" in distil.DISTIL_SYSTEM
+    # And it still requires the call to be named, which is what makes the note
+    # read as history rather than as the current answer.
+    assert "live_source" in distil.DISTIL_SYSTEM
+
+
+async def test_a_fact_may_only_cite_a_message_this_pass_actually_read(pool, mount_peers):
+    """THE WINDOW IS THE EVIDENCE, and "a real message of his" was too weak a
+    bar (2026-09-10, found by reading the notes a live backfill wrote).
+
+    A backfill step reading 2026-09-02 cited a message from 2026-09-10 — Nova's
+    own status reply from ten minutes earlier — and it RESOLVED, because it was
+    a real message of his in an allowed role. The note was then built from that
+    row: dated by it, quoted from it, and written as a fact about a
+    conversation the model had never been shown.
+
+    Two things break when a citation can point outside the window. The note's
+    date is not the date of the exchange it claims to summarise, which is the
+    one property this slice exists to get right. And a backfill that walks
+    oldest first stops being ordered — a fact dated today, written in the first
+    step, is superseded by an older one written in the fourth, leaving the
+    stale note live. Both happened, to `hardware.vram`.
+    """
+    person = await _person(pool)
+    conversation = await _conversation(pool, person.id)
+    # What this pass reads: an old span, the way a backfill step reads one.
+    in_window = await _message(pool, conversation, HIS, ago=timedelta(days=9))
+    # And a real, recent message of his that this pass is NOT shown.
+    outside = await _message(pool, conversation, "much later, something else entirely")
+    through = await pool.fetchval("SELECT now() - interval '8 days'")
+
+    mount_peers(
+        gateway=_gateway(_item(in_window), _item(outside, subject="drinks")), memory=FakeNotes()
+    )
+
+    result = await distil.distil(core_app, pool, person, since=timedelta(days=2), through=through)
+
+    assert result.proposed == 2
+    assert result.dropped == 1, "the citation outside the window must be dropped"
+    (fact,) = result.facts
+    assert fact.message_id == in_window
+    # Dated by the exchange it actually read, which is the property that broke.
+    assert (datetime.now(UTC) - fact.said_at) > timedelta(days=8)

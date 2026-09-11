@@ -243,6 +243,20 @@ class _Doc:
     # exchange in it on every append) costs an embedding call only for the
     # exchange whose text actually changed.
     digest: str = ""
+    # The unit's citation, when its file carries one (S14-1): the message id
+    # it was distilled from and the ROLE of that row. Carried on the hit
+    # unchanged, because a fact standing only on an assistant row is
+    # supported by something the model itself produced, and a caller cannot
+    # tell that from a fact the person stated unless the role travels. None
+    # for every note that cites nothing — which is the whole corpus as it
+    # stands, and absence is the honest label for it.
+    source: dict | None = None
+    # The read-only call that answers this unit's fact NOW, when its file
+    # names one ({tool, args}). A unit carrying one is HISTORY with a current
+    # answer available elsewhere, and it is not the same kind of hit as one
+    # nothing can check. Carried, never acted on: this index does not
+    # dispatch anything, it refuses to lose the fact that something could.
+    live_source: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -319,7 +333,34 @@ class BM25Index:
         body: str,
         document: str | None = None,
         fragment: str | None = None,
+        source: dict | None = None,
+        live_source: dict | None = None,
+        superseded: bool = False,
     ) -> None:
+        """Put one unit in the index — unless it has been superseded, in which
+        case take it OUT and keep it out.
+
+        THE SKIP IS A REMOVAL AND NOT A FLAG, and that is the decision worth
+        stating. A flagged unit would still be COUNTED: _scope_stats derives
+        document frequency, the average length and n from the units in a
+        scope, and the semantic floor derives "how alike are two of these
+        notes" from their vectors. A superseded note left in the corpus would
+        go on moving the ranking of the live note that replaced it, and go on
+        being embedded, while never being returned — a corpus statistic drawn
+        from a note nothing may answer with. Nothing is deleted from DISK: the
+        file keeps its body, its date and its citation, and "what did I have
+        before" is answered by reading it.
+
+        Files reach the index through api._index_document, which drops a
+        superseded file whole (a journal is many units and only remove() takes
+        a document). This is the same rule one layer down, for a caller that
+        hands over a UNIT rather than a file — the write paths, the startup
+        rescan and a test all end here, so "a superseded unit is not in this
+        index" holds whichever of them asked.
+        """
+        if superseded:
+            self.remove_unit(unit_id)
+            return
         self.remove_unit(unit_id)
         text = f"{title}\n\n{body}"
         tf = Counter(tokenize(text))
@@ -334,6 +375,8 @@ class BM25Index:
             term_freq=tf,
             length=sum(tf.values()),
             digest=digest_of(text),
+            source=source,
+            live_source=live_source,
         )
         self._docs[unit_id] = doc
         self._stats.clear()
@@ -668,6 +711,16 @@ class BM25Index:
                     # it was found, which is what lets a caller tell a note
                     # matched word for word from one matched by meaning alone.
                     "retrievers": names,
+                    # The citation the note carries, or None. Relayed exactly
+                    # as stored: this index does not decide what a citation is
+                    # worth, it only refuses to lose the role that says.
+                    "source": doc.source,
+                    # The call that answers this fact now, or None. Present on
+                    # every hit rather than only on the ones that have one, so
+                    # a caller can never read a missing key as "this service
+                    # is too old to say" — None is the answer "nothing else
+                    # can check this; these notes are the source".
+                    "live_source": doc.live_source,
                 }
                 for score, names, doc in top
             ],

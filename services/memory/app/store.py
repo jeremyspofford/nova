@@ -8,7 +8,11 @@ Layout under MEMORY_ROOT:
 exists now so that slice adds rows, not a migration.)
 
 Every file is YAML frontmatter (id, owner, kind, title, created, tags)
-followed by a markdown body. Writes are always atomic: a tmp file in the
+followed by a markdown body. A DISTILLED note — one short fact written out
+of a conversation rather than a whole exchange — carries up to five more,
+every one of them optional: `subject`, `said_at`, `source`, `live_source`
+and `superseded_by`. See the block above SUBJECT_KEY for what each is for
+and why it is frontmatter rather than prose. Writes are always atomic: a tmp file in the
 same directory, fsync'd, then renamed over the target with os.replace
 (atomic on POSIX) — a crash between the write and the rename leaves the
 previous file (or no file at all) intact, never a half-written one.
@@ -53,6 +57,175 @@ _ENTRY_HEADING_RE = re.compile(r"^## (\d{1,2}:\d{2})[ \t]*$", re.M)
 # and says so. A cap that is hit is a stated failure, never a silent
 # overwrite of note number one.
 MAX_SLUG_ATTEMPTS = 200
+
+# -- the distilled-note fields (S14-1, 2026-09-10) -------------------------
+#
+# Four optional frontmatter keys. OPTIONAL is load-bearing: every note
+# already on disk has none of them, and every path below reads their absence
+# as "this note claims nothing beyond its own text" rather than as a default.
+#
+# They live in the FRONTMATTER and never in the body, and that is the whole
+# reason they exist as fields at all. api._index_document tokenises
+# `title + body`, so a citation written into the body ("from
+# people/jeremy/journals/2026-09-01.md") puts `people`, `journals`, `2026`
+# and `09` into the index as search terms — terms every other note's citation
+# also carries, which is a term that matches everything and discriminates
+# nothing. Frontmatter is not indexed, so a field here costs the ranker
+# nothing.
+#
+#   subject        what the fact is ABOUT ("hardware.vram"). The superseding
+#                  key: a new note on a subject retires the old note on it.
+#   said_at        the date of the EXCHANGE the fact was distilled from, as
+#                  opposed to the moment the note was written. `created`
+#                  follows it, because `created` is what the recency
+#                  multiplier boosts and what the prompt prints as an age.
+#   source         the citation: the message id AND the role of that row.
+#   live_source    the read-only call that answers this fact NOW, when one
+#                  exists ({tool, args}). See below — it splits the corpus in
+#                  two, and it is the difference between a fact memory IS the
+#                  source of and a fact memory is merely the HISTORY of.
+#   superseded_by  the rel_path of the note that replaced this one. Set on
+#                  the OLDER note; nothing is ever deleted.
+SUBJECT_KEY = "subject"
+SAID_AT_KEY = "said_at"
+SOURCE_KEY = "source"
+LIVE_SOURCE_KEY = "live_source"
+SUPERSEDED_BY_KEY = "superseded_by"
+
+# The roles a citation may name. A row is either something the person said or
+# something the model produced, and those are not the same evidence.
+CITABLE_ROLES = ("user", "assistant")
+
+
+def is_superseded(meta: dict) -> bool:
+    """Whether a note has been replaced by a newer one on its subject.
+
+    ONE predicate, and everything that needs the answer asks it: the scan that
+    stamps older notes (below) and the indexer that keeps them out of recall
+    (api._index_document). Two readings of the same frontmatter key, written
+    in two places, is how "superseded" comes to mean one thing on disk and
+    another in the index.
+    """
+    return bool(meta.get(SUPERSEDED_BY_KEY))
+
+
+def subject_key(subject: object) -> str:
+    """The form two subjects are compared in — the ONLY comparison anything
+    may use for superseding.
+
+    Casefolded and stripped, because a subject is chosen by a model writing
+    the note and "hardware.vram" and "Hardware.VRAM" are the same fact about
+    the same box. A missed match costs a duplicate note, never a wrong answer
+    (both keep their dates), but a match missed on capitalisation alone would
+    be a duplicate nobody could explain.
+    """
+    if not isinstance(subject, str):
+        return ""
+    return subject.strip().casefold()
+
+
+def normalize_source(source: object) -> dict:
+    """A citation, checked — or a ValueError naming what is missing.
+
+    A citation must name the row AND the role of that row. The role is not
+    decoration: a fact whose only support is an assistant row is supported by
+    something the model itself produced, which verifies nothing about the
+    world, and a citation that lost its role is indistinguishable from one
+    that never had it. So a source without a usable role is refused at the
+    store, not merely at the HTTP edge — this is the line of code that
+    refuses when a writer hands over half a citation.
+
+    What this does NOT claim: that the message id resolves to a real row.
+    The store has no access to the table it names. Resolving the id is the
+    extractor's job (S14-2) and the field is a citation, never a
+    verification.
+    """
+    if not isinstance(source, dict):
+        raise ValueError("a source must be a mapping with a message id and a role")
+    message_id = source.get("message_id")
+    role = source.get("role")
+    if not isinstance(message_id, str) or not message_id.strip():
+        raise ValueError("a source must name the message id it came from")
+    if role not in CITABLE_ROLES:
+        raise ValueError(
+            f"a source must name the role of the row it cites, one of {list(CITABLE_ROLES)} "
+            f"— got {role!r}; a citation that lost its role cannot be told apart from one "
+            "standing only on the assistant's own words"
+        )
+    return {"message_id": message_id.strip(), "role": role}
+
+
+def normalize_live_source(live_source: object) -> dict:
+    """The call that answers this fact right now — SHAPE CHECKED HERE, NAME
+    AND ARGUMENTS CHECKED BY THE CALLER. Or a ValueError naming what is wrong.
+
+    WHY THE FIELD EXISTS (owner ruling, 2026-09-10). "Hardware specs can be
+    found ad hoc and shouldn't be written. Or if they're written, that's fine
+    for comparing if we ever update our system and have that data stored, but
+    it should still treat the ad-hoc command as truth and be done first."
+    There are two kinds of distilled fact and they are not interchangeable:
+
+      * LIVE-ANSWERABLE — a tool knows the answer right now (a machine's
+        memory, the models installed, this month's spend, the time). A note
+        about one is HISTORY. It is worth keeping — it is what "did that
+        change?" is answered by — but it is never the current answer, and
+        serving it as one is the whole failure mode.
+      * TOLD ONCE — a preference, a decision, a person. Nothing can check it;
+        memory IS the source.
+
+    A note carrying `live_source` is the first kind, and everything that
+    presents it has to say so.
+
+    WHY THIS ONLY CHECKS THE SHAPE, and where the real check lives. Whether
+    `tool` names a registered tool, and whether `args` satisfy that tool's own
+    advertised JSON schema, are facts about core's live tool registry. This
+    service is a separate process with its own dependencies and no knowledge
+    of the toolset at all, and it must stay that way: a copy of the tool names
+    here would be precisely the hand-maintained list the house rule forbids —
+    wrong the day a tool is registered, and wrong silently. So the registry
+    check runs in the CALLER, against the live registry
+    (services/core/app/tools/memory_tools.validate_live_source), and what
+    reaches this service is checked here for the one thing a shape check can
+    honestly establish: that there is a tool name and an argument mapping at
+    all.
+    """
+    if not isinstance(live_source, dict):
+        raise ValueError("a live source must be a mapping naming a tool and its arguments")
+    tool = live_source.get("tool")
+    if not isinstance(tool, str) or not tool.strip():
+        raise ValueError("a live source must name the tool that answers this fact now")
+    args = live_source.get("args")
+    if args is None:
+        args = {}
+    if not isinstance(args, dict):
+        raise ValueError(
+            "a live source's args must be a mapping of the arguments that call takes, "
+            f"got {type(args).__name__}"
+        )
+    return {"tool": tool.strip(), "args": args}
+
+
+def _distilled_fields(
+    subject: str | None,
+    said_at: date | None,
+    source: dict | None,
+    live_source: dict | None = None,
+) -> dict:
+    """The optional keys, present only when they carry something.
+
+    A key written as `subject: null` would make every note look like a note
+    that was offered a subject and declined one. Absent means absent.
+    """
+    extra: dict = {}
+    if isinstance(subject, str) and subject.strip():
+        extra[SUBJECT_KEY] = subject.strip()
+    if said_at is not None:
+        extra[SAID_AT_KEY] = said_at
+    if source is not None:
+        extra[SOURCE_KEY] = normalize_source(source)
+    if live_source is not None:
+        extra[LIVE_SOURCE_KEY] = normalize_live_source(live_source)
+    return extra
 
 
 class PathEscape(ValueError):
@@ -220,8 +393,28 @@ def _parse(text: str) -> tuple[dict, str]:
     return meta, body
 
 
+class _NoAliasDumper(yaml.SafeDumper):
+    """A dumper that never emits YAML anchors and aliases.
+
+    Found by a test, 2026-09-10. `created` follows `said_at`, so a distilled
+    note normally holds the SAME date object under two keys — and pyyaml's
+    default is to write the second one as a reference to the first:
+
+        created: &id001 2026-08-20
+        said_at: *id001
+
+    That round-trips perfectly and is unreadable. These files are documented
+    as human-readable and safe to edit by hand, and a hand edit to `created`
+    there silently moves `said_at` as well, which is precisely the pair of
+    facts this slice exists to keep apart. Two keys, two dates, written out.
+    """
+
+    def ignore_aliases(self, data: object) -> bool:
+        return True
+
+
 def _render(meta: dict, body: str) -> str:
-    header = yaml.safe_dump(meta, sort_keys=False).strip()
+    header = yaml.dump(meta, Dumper=_NoAliasDumper, sort_keys=False).strip()
     return f"---\n{header}\n---\n{body}"
 
 
@@ -305,6 +498,10 @@ class MemoryStore:
         *,
         created: date | None = None,
         tags: list[str] | None = None,
+        subject: str | None = None,
+        said_at: date | None = None,
+        source: dict | None = None,
+        live_source: dict | None = None,
     ) -> Path:
         """Create or overwrite a topic note. No HTTP route in this slice
         creates topics (S1 ships no tool surface at all) — this exists
@@ -318,7 +515,8 @@ class MemoryStore:
             "owner": person_id,
             "kind": "topic",
             "title": title,
-            "created": created or datetime.now(UTC).date(),
+            "created": created or said_at or datetime.now(UTC).date(),
+            **_distilled_fields(subject, said_at, source, live_source),
             "tags": tags or [],
         }
         _atomic_write(path, _render(meta, "\n" + body.strip() + "\n"))
@@ -332,6 +530,10 @@ class MemoryStore:
         *,
         created: date | None = None,
         tags: list[str] | None = None,
+        subject: str | None = None,
+        said_at: date | None = None,
+        source: dict | None = None,
+        live_source: dict | None = None,
     ) -> Path:
         """Create a NEW topic note, never replacing one that already exists.
 
@@ -347,7 +549,14 @@ class MemoryStore:
             "owner": person_id,
             "kind": "topic",
             "title": title,
-            "created": created or datetime.now(UTC).date(),
+            # `created` FOLLOWS the exchange, and only falls back to today
+            # when neither was given. A note distilled this morning from a
+            # conversation twelve days ago is twelve days old to the recency
+            # multiplier and to the age the prompt prints — the alternative
+            # is a backfill that stamps every fact in the history as this
+            # morning's and ranks them above the transcript they came from.
+            "created": created or said_at or datetime.now(UTC).date(),
+            **_distilled_fields(subject, said_at, source, live_source),
             "tags": tags or [],
         }
         for attempt in range(1, MAX_SLUG_ATTEMPTS + 1):
@@ -362,6 +571,83 @@ class MemoryStore:
         raise FileExistsError(
             f"{MAX_SLUG_ATTEMPTS} notes already share the slug {base!r} for {person_id}"
         )
+
+    # -- superseding -------------------------------------------------------
+
+    def mark_superseded(self, abs_path: Path, superseded_by: str) -> None:
+        """Stamp one note as replaced by another, and CHECK that it landed.
+
+        The note itself is untouched otherwise: same body, same date, same
+        citation. "What did I have before" is still answerable from the file,
+        from /export and from a hand-read of the directory — this marks a note
+        as no longer current, it does not remove it.
+
+        The re-read is not ceremony. A stamp that did not land leaves a second
+        live note on the same subject, which is exactly the state superseding
+        exists to prevent, and it would be invisible: _atomic_write returning
+        without raising is not proof that the key is in the file. A step that
+        cannot verify its own result fails and says why.
+        """
+        meta, body = _parse(abs_path.read_text(encoding="utf-8"))
+        meta[SUPERSEDED_BY_KEY] = superseded_by
+        _atomic_write(abs_path, _render(meta, body))
+        check, _check_body = _parse(abs_path.read_text(encoding="utf-8"))
+        if check.get(SUPERSEDED_BY_KEY) != superseded_by:
+            raise OSError(
+                f"{self.rel_path(abs_path)} was rewritten but does not carry "
+                f"{SUPERSEDED_BY_KEY}: {superseded_by}"
+            )
+
+    def supersede_by_subject(
+        self,
+        person_id: str,
+        subject: str,
+        *,
+        superseded_by: str,
+        exclude: Path | None = None,
+    ) -> list[Path]:
+        """Retire every LIVE note this person holds on `subject`.
+
+        SUPERSEDING IS BY SUBJECT, MECHANICALLY — never by anything judging
+        that two sentences contradict each other. "24GB" and "48GB" are not
+        compared; they are two notes on `hardware.vram`, and the later one is
+        the current one. A model that picks a slightly different subject for
+        the same fact costs a duplicate note, both carrying their own dates;
+        a model asked to decide which of two sentences is true costs a wrong
+        answer, silently.
+
+        Returns the paths actually stamped, in file order, so the caller can
+        re-index each one and say what it did. A note the caller just wrote is
+        excluded by path rather than by name — a note cannot supersede itself.
+        """
+        key = subject_key(subject)
+        if not key:
+            return []
+        topics = self.person_root(person_id) / "topics"
+        if not topics.is_dir():
+            return []
+        stamped: list[Path] = []
+        for path in sorted(topics.glob("*.md")):
+            if path.is_symlink():
+                logger.warning("skipping symlinked memory file %s", path)
+                continue
+            if exclude is not None and path == exclude:
+                continue
+            try:
+                meta, _body = _parse(path.read_text(encoding="utf-8"))
+            except (ValueError, OSError) as exc:
+                # Same policy as iter_all: an unreadable file is named and
+                # skipped rather than aborting the pass. It stays live, which
+                # is a visible duplicate rather than a silent deletion.
+                logger.warning("skipping unparsable memory file %s: %s", path, exc)
+                continue
+            if subject_key(meta.get(SUBJECT_KEY)) != key:
+                continue
+            if is_superseded(meta):
+                continue
+            self.mark_superseded(path, superseded_by)
+            stamped.append(path)
+        return stamped
 
     # -- reading -------------------------------------------------------------
 

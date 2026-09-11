@@ -116,6 +116,7 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=route_explain,
+        reads_only=True,
         ephemeral=True,
     ),
 )
