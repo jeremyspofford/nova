@@ -37,12 +37,19 @@ describe('MobileNav derives its lists from Sidebar.navSections', () => {
   // Files now follows Inbox. The property being pinned has not changed: the
   // System group's order is deliberate and a drawer that reorders or drops an
   // entry is caught here.
-  it('Schedules → Agents → Inbox → Files hold their order in the System group', () => {
+  //
+  // Pin moved again 2026-09-11 (S17): Skills goes between Agents and Inbox.
+  // Agents and Skills are the two answers to "what does this household know
+  // how to do" — one a who, the other a how — and reading them apart would
+  // make the pair look unrelated. The Inbox keeps its place as the record of
+  // what acted on its own; it is now one entry further down.
+  it('Schedules → Agents → Skills → Inbox → Files hold their order in the System group', () => {
     const system = navSections.find(s => s.label === 'System')
     expect(system).toBeDefined()
     const routes = system!.items.map(i => i.to)
     expect(routes.indexOf('/agents')).toBe(routes.indexOf('/schedules') + 1)
-    expect(routes.indexOf('/inbox')).toBe(routes.indexOf('/agents') + 1)
+    expect(routes.indexOf('/skills')).toBe(routes.indexOf('/agents') + 1)
+    expect(routes.indexOf('/inbox')).toBe(routes.indexOf('/skills') + 1)
     expect(routes.indexOf('/files')).toBe(routes.indexOf('/inbox') + 1)
     expect(system!.items.find(i => i.to === '/agents')?.minRole).toBe('admin')
     expect(system!.items.find(i => i.to === '/inbox')?.minRole).toBe('admin')

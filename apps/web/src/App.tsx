@@ -24,6 +24,7 @@ import { AIQualityPage } from './pages/quality/AIQualityPage'
 import { SchedulesPage } from './pages/schedules/SchedulesPage'
 import { InboxPage } from './pages/inbox/InboxPage'
 import { AgentsPage } from './pages/agents/AgentsPage'
+import { SkillsPage } from './pages/skills/SkillsPage'
 import { AgentPage } from './pages/agents/AgentPage'
 import { deletedSummary } from './pages/agents/agentsFormat'
 import type { AgentDeleted } from './lib/api'
@@ -119,6 +120,7 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         <Route path="/schedules" element={<SchedulesPage />} />
         <Route path="/agents" element={<AgentsRoute />} />
         <Route path="/agents/:name" element={<AgentRoute />} />
+        <Route path="/skills" element={<SkillsPage />} />
         <Route path="/inbox" element={<InboxPage />} />
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/models" element={<ModelsPage />} />

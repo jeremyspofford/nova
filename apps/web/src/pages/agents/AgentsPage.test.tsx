@@ -11,7 +11,25 @@ const TOOLS: ToolInfo[] = [
   { name: 'delegate_to_agent', description: 'hand work to an agent', result_kind: 'text', ephemeral: false },
 ]
 
-const SKILLS: SkillInfo[] = [{ name: 'review', size: 120, modified: '2026-09-08T08:00:00Z' }]
+// A file under skills/ with no row of its own — still offerable to an agent
+// (S17 keeps those grants working), which is why the form lists it.
+const SKILLS: SkillInfo[] = [
+  {
+    name: 'review',
+    title: null,
+    summary: null,
+    status: null,
+    created_via: null,
+    step_names: [],
+    flagged_reason: null,
+    file_present: true,
+    uses: null,
+    created_at: null,
+    updated_at: null,
+    size: 120,
+    modified: '2026-09-08T08:00:00Z',
+  },
+]
 
 function saved(body: AgentWrite): AgentSaved {
   return {

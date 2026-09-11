@@ -1,5 +1,5 @@
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
-import { Activity, Bot, Boxes, CalendarClock, ChevronsLeft, ChevronsRight, Coins, FolderOpen, Gauge, Inbox, MessageSquare, ScrollText, Settings } from 'lucide-react'
+import { Activity, BookOpen, Bot, Boxes, CalendarClock, ChevronsLeft, ChevronsRight, Coins, FolderOpen, Gauge, Inbox, MessageSquare, ScrollText, Settings } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -46,6 +46,10 @@ export const navSections: NavSection[] = [
       // was written, since an agent is what the one does and what the other
       // shows.
       { to: '/agents', label: 'Agents', icon: Bot, minRole: 'admin' },
+      // S17: the procedures written down from what worked before. Beside
+      // Agents, because both answer "what does this household know how to
+      // do" — one as a who, the other as a how.
+      { to: '/skills', label: 'Skills', icon: BookOpen, minRole: 'admin' },
       // S11: what she noticed without being asked, and what she did about
       // it. Straight after Agents — the beats are the last thing that acts on
       // its own, and this is the record of those actions.

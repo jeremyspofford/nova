@@ -610,11 +610,65 @@ export interface ToolInfo {
   ephemeral: boolean
 }
 
-/** One file under `<WORKSPACE_ROOT>/skills/` (GET /api/v1/skills). */
+/** One entry of GET /api/v1/skills (S17): a skill ROW, or a file under
+ * `<WORKSPACE_ROOT>/skills/` that nobody has made a row for.
+ *
+ * A file with no row is listed with `status: null` — a file is not a
+ * lifecycle — and it is still offerable to an agent, which is why the agent
+ * form reads this same list. Everything beyond the row's own columns is
+ * derived at the request: `file_present` is the file checked at the call, and
+ * `uses` is the ledger, whose unwatched count is separate from its clean one
+ * because a turn nobody watched finish is not evidence that it went well. */
 export interface SkillInfo {
   name: string
-  size: number
-  modified: string
+  title: string | null
+  summary: string | null
+  status: 'draft' | 'active' | 'flagged' | 'retired' | null
+  created_via: 'beat' | 'page' | null
+  step_names: string[]
+  flagged_reason: string | null
+  file_present: boolean
+  uses: SkillUses | null
+  created_at: string | null
+  updated_at: string | null
+  size: number | null
+  modified: string | null
+}
+
+export interface SkillUses {
+  total: number
+  watched: number
+  rough: number
+  unwatched: number
+  last_used: string | null
+}
+
+/** One skill in full: the list row plus the body on disk and where it came
+ * from. A source turn swept by retention comes back `present: false` rather
+ * than as a link that 404s. */
+export interface SkillDetail extends SkillInfo {
+  body: string | null
+  source_turns: { id: string; present: boolean }[]
+}
+
+/** What one side of a trial DID, read from its turn's spans — never from
+ * what the reply said it did. */
+export interface SkillTrialSide {
+  calls: number | null
+  failed_calls: number | null
+  guard_fires?: number | null
+  read_the_skill: boolean | null
+  seconds: number | null
+  ungradeable: boolean
+  no_unbacked_claim: boolean | null
+  turn_id: string | null
+}
+
+export interface SkillTrial {
+  skill: string
+  model: string
+  message: string
+  sides: { with: SkillTrialSide; without: SkillTrialSide }
 }
 
 export const listAgents = () => apiGet<Agent[]>('/api/v1/agents')
@@ -643,6 +697,33 @@ export const getAgentLog = (name: string) =>
 export const listTools = () => apiGet<ToolInfo[]>('/api/v1/tools')
 
 export const listSkills = () => apiGet<SkillInfo[]>('/api/v1/skills')
+
+export const getSkill = (name: string) =>
+  apiGet<SkillDetail>(`/api/v1/skills/${encodeURIComponent(name)}`)
+
+/** A refusal (400) is the store's own sentence — shown verbatim. */
+export const createSkill = (body: {
+  name: string
+  title?: string
+  summary?: string
+  body?: string
+  from_notice?: string
+}) => apiSend<SkillDetail>('/api/v1/skills', 'POST', body)
+
+export const updateSkill = (
+  name: string,
+  changes: { title?: string; summary?: string; body?: string; status?: string; reason?: string },
+) => apiSend<SkillDetail>(`/api/v1/skills/${encodeURIComponent(name)}`, 'PATCH', changes)
+
+export const deleteSkill = (name: string) =>
+  apiSend<{ name: string; deleted: boolean; text: string }>(
+    `/api/v1/skills/${encodeURIComponent(name)}`,
+    'DELETE',
+  )
+
+/** Slow by construction: two real turns against a real model. */
+export const trialSkill = (name: string, model?: string) =>
+  apiSend<SkillTrial>(`/api/v1/skills/${encodeURIComponent(name)}/trial`, 'POST', { model })
 
 // ── activity (the turn ledger, read-only) ───────────────────────────────
 
