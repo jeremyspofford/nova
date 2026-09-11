@@ -246,3 +246,23 @@ async def test_a_draft_with_no_tool_spans_is_refused(pool, tmp_path):
         )
     assert "no tool" in str(exc.value)
     assert await skills.get(pool, "nothing") is None
+
+
+# ── the bridge to agents ───────────────────────────────────────────────────
+
+
+async def test_only_a_skill_with_a_row_that_is_not_active_counts_as_withdrawn(pool, tmp_path):
+    await skills.create(
+        pool, name="live", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    await skills.set_status(pool, "live", skills.ACTIVE)
+    await skills.create(
+        pool, name="pulled", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    await skills.set_status(pool, "pulled", skills.RETIRED)
+
+    # 'by-hand' has no row at all: a file an agent names is what agents have
+    # always had, and S17 does not take it away.
+    assert await skills.withdrawn_statuses(pool, ["live", "pulled", "by-hand"]) == {
+        "pulled": skills.RETIRED
+    }

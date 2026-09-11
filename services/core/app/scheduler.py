@@ -55,6 +55,7 @@ from app import (
     peers,
     schedule,
     settings_store,
+    skills,
     timers,
     tools,
     traces,
@@ -592,7 +593,13 @@ async def _fire_scheduled(
         max_tool_rounds = agent.max_tool_rounds
         # The shared-memory scope is derived from the row inside persona_for
         # from the OWNER's id — the timer's person, whose notes they are.
-        persona_kwargs = {"persona": agents.persona_for(agent, owner_id=row["person_id"])}
+        persona_kwargs = {
+            "persona": agents.persona_for(
+                agent,
+                owner_id=row["person_id"],
+                withdrawn=await skills.withdrawn_statuses(pool, agent.skills),
+            )
+        }
     frames: list = []
     spawned_before = set(chat._BACKGROUND)
     await chat._run_turn(

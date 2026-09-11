@@ -37,7 +37,7 @@ import json
 import logging
 import re
 import uuid
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -48,6 +48,7 @@ import asyncpg
 import httpx
 
 from app import governance, identity, peers, settings_store, spend_api, tools, traces
+from app import skills as skills_store
 from app.identity import Person
 from app.tools.base import ToolFailure
 from app.tools.spend import _usd
@@ -92,10 +93,11 @@ MENTION_RE = re.compile(r"^@([a-z][a-z_]{0,25})\b")
 CREATED_VIA = ("chat", "page")
 MIN_ROUNDS, MAX_ROUNDS = 1, 50
 
-SKILL_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,40}$")
-# A skill file is read into the prompt every turn; past this many characters
-# it is cut and the cut is STATED in the block, never silent.
-SKILL_CHARS = 4000
+# What a skill file IS — the name rule, the character budget, the directory
+# and the read — lives in app/skills.py (S17), because the skills table and
+# this module must agree about it: a name legal here and illegal there would
+# be a skill that can be granted and never read.
+SKILL_NAME_RE = skills_store.NAME_RE
 
 ROUTE_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
@@ -228,56 +230,18 @@ def folder_for(agent: Agent, root: Path | None = None) -> Path:
 
 
 def skills_dir(root: Path | None = None) -> Path:
-    return (root_from_env() if root is None else root) / "skills"
-
-
-def _skill_path(name: str, root: Path | None) -> Path | None:
-    """None for a name that fails the rule — such a name never reaches a
-    path, so a hand-edited row cannot turn `../x` into a file read."""
-    if not SKILL_NAME_RE.fullmatch(name):
-        return None
-    return skills_dir(root) / f"{name}.md"
+    return skills_store.skills_dir(root)
 
 
 def list_skills(root: Path | None = None) -> list[dict]:
-    """The skill files that exist: `<root>/skills/<name>.md` whose stem is a
-    usable name. Derived from the directory each call, so a file written by
-    hand (or by Nova with workspace_write_file) is a skill by that fact."""
-    directory = skills_dir(root)
-    if not directory.is_dir():
-        return []
-    out = []
-    for path in sorted(directory.glob("*.md")):
-        if not path.is_file() or not SKILL_NAME_RE.fullmatch(path.stem):
-            continue
-        stat = path.stat()
-        out.append(
-            {
-                "name": path.stem,
-                "size": stat.st_size,
-                "modified": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
-            }
-        )
-    return out
+    """The skill FILES that exist. Still derived from the directory rather
+    than from the table: a file written by hand is a skill an agent may name,
+    exactly as before S17 gave skills rows."""
+    return skills_store.list_body_files(root)
 
 
 def skill_text(name: str, root: Path | None = None) -> str | None:
-    """The file's text, cut at SKILL_CHARS with the cut stated; None when the
-    file is not there (the caller says so in the prompt — never dropped)."""
-    path = _skill_path(name, root)
-    if path is None or not path.is_file():
-        return None
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError as exc:
-        logger.warning("skill %s could not be read: %s", name, exc)
-        return None
-    if len(text) > SKILL_CHARS:
-        text = (
-            text[:SKILL_CHARS]
-            + f"\n[skill {name}: cut here — the first {SKILL_CHARS} of {len(text)} characters]"
-        )
-    return text
+    return skills_store.body_text(name, root)
 
 
 def unknown_tools(agent: Agent) -> list[str]:
@@ -287,7 +251,10 @@ def unknown_tools(agent: Agent) -> list[str]:
 
 def skills_status(agent: Agent, root: Path | None = None) -> list[dict]:
     return [
-        {"name": name, "present": (p := _skill_path(name, root)) is not None and p.is_file()}
+        {
+            "name": name,
+            "present": (p := skills_store.body_path(name, root)) is not None and p.is_file(),
+        }
         for name in agent.skills
     ]
 
@@ -297,12 +264,18 @@ def instructions_block(
     *,
     missing_tools: Sequence[str],
     skills: Sequence[tuple[str, str | None]],
+    withdrawn: Sequence[tuple[str, str]] = (),
 ) -> str:
     """The agent's own system-prompt block. States what is true about this
     turn — the folder, the round budget, which memory it can reach, how the
     owner reaches it — and names every tool or skill that is GONE rather
     than quietly leaving it out, so the model never plans around a hand it
-    does not have. `skills` is (name, text-or-None) as read by persona_for."""
+    does not have. `skills` is (name, text-or-None) as read by persona_for.
+
+    `withdrawn` (S17) is (name, status) for a skill this agent names whose ROW
+    says draft, flagged or retired. Its text is not pasted, and it is NAMED
+    here for the same reason a missing tool is: an agent planning around a
+    procedure the household withdrew is worse than one told it is gone."""
     if agent.read_shared_memory:
         memory = (
             "memory_search searches your own notes; shared household notes are recalled "
@@ -331,6 +304,9 @@ def instructions_block(
         parts.append(
             f"## Skill: {name}\n{text}" if text is not None else f"[skill {name}: file missing]"
         )
+    parts += [
+        f"[skill {name}: {status}, not active — do not follow it]" for name, status in withdrawn
+    ]
     return "\n\n".join(parts)
 
 
@@ -339,6 +315,7 @@ def persona_for(
     *,
     owner_id: uuid.UUID | None,
     root: Path | None = None,
+    withdrawn: Mapping[str, str] | None = None,
 ) -> Persona:
     """The agent's persona for one turn, built from the live registry and the
     live skill files: a subset entry no longer registered is NOT advertised
@@ -351,7 +328,12 @@ def persona_for(
     the caller passed — so no call site can widen an agent's recall past
     what its row says, or narrow it. A row that reads shared notes with no
     owner id to scope them to is a stated refusal, not a turn that quietly
-    recalls nothing."""
+    recalls nothing.
+
+    `withdrawn` (S17) maps a skill name to the non-active status its row is
+    in — skills.withdrawn_statuses, read by the caller because this function
+    is synchronous and holds no pool. None means nothing was looked up, which
+    is the pre-S17 behaviour and what the eval runner and the tests get."""
     if agent.read_shared_memory:
         if owner_id is None:
             raise AgentError(
@@ -363,12 +345,16 @@ def persona_for(
         shared_person_id = None
     present = tuple(name for name in agent.tools if name in tools.REGISTRY)
     missing = [name for name in agent.tools if name not in tools.REGISTRY]
-    skills = [(name, skill_text(name, root)) for name in agent.skills]
+    pulled = dict(withdrawn or {})
+    skills = [(name, skill_text(name, root)) for name in agent.skills if name not in pulled]
+    withheld = [(name, pulled[name]) for name in agent.skills if name in pulled]
     return Persona(
         agent=agent,
         tool_names=present,
         listing_tools=_listing_subset(present),
-        instructions_block=instructions_block(agent, missing_tools=missing, skills=skills),
+        instructions_block=instructions_block(
+            agent, missing_tools=missing, skills=skills, withdrawn=withheld
+        ),
         workspace_root=folder_for(agent, root),
         shared_person_id=shared_person_id,
     )
@@ -1739,7 +1725,11 @@ async def delegate(ctx, args: dict) -> str:
         agent.max_tool_rounds,
         translator,
         ingest=False,
-        persona=persona_for(agent, owner_id=caller.id),
+        persona=persona_for(
+            agent,
+            owner_id=caller.id,
+            withdrawn=await skills_store.withdrawn_statuses(pool, agent.skills),
+        ),
     )
     # No settle_detached here. _run_turn's own finally awaits the shielded
     # close_turn before it returns, and ingest=False queues no ingest — so by

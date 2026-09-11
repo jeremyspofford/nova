@@ -96,6 +96,7 @@ from app import (
     peers,
     queued,
     settings_store,
+    skills,
     tools,
     traces,
 )
@@ -4577,7 +4578,11 @@ async def _open_turn(
         model = ""
         max_tool_rounds = agent.max_tool_rounds
         runs_as = agent.person()
-        persona = agents.persona_for(agent, owner_id=person.id)
+        persona = agents.persona_for(
+            agent,
+            owner_id=person.id,
+            withdrawn=await skills.withdrawn_statuses(conn, agent.skills),
+        )
 
     turn = await traces.open_turn(
         conn,

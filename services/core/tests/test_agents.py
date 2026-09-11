@@ -35,7 +35,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-from app import agents, conversations, governance, timers, tools
+from app import agents, conversations, governance, skills, timers, tools
 from app.agents import Agent, AgentError, AgentSpec
 from app.identity import Person
 from app.main import app
@@ -209,20 +209,20 @@ def test_persona_for_advertises_the_subset_and_states_what_is_gone(root):
 
 
 def test_persona_embeds_a_skill_file_and_states_a_missing_one(root):
-    skills = root / "skills"
-    skills.mkdir(parents=True)
-    (skills / "review.md").write_text("Check every branch has a test.", encoding="utf-8")
-    long_body = "x" * (agents.SKILL_CHARS + 50)
-    (skills / "long.md").write_text(long_body, encoding="utf-8")
+    folder = root / "skills"
+    folder.mkdir(parents=True)
+    (folder / "review.md").write_text("Check every branch has a test.", encoding="utf-8")
+    long_body = "x" * (skills.BODY_CHARS + 50)
+    (folder / "long.md").write_text(long_body, encoding="utf-8")
     agent = _agent(skills=("review", "long", "gone"))
 
     block = agents.persona_for(agent, owner_id=None, root=root).instructions_block
     assert "## Skill: review\nCheck every branch has a test." in block
     assert "[skill gone: file missing]" in block
-    assert "## Skill: long\n" + "x" * agents.SKILL_CHARS in block
+    assert "## Skill: long\n" + "x" * skills.BODY_CHARS in block
     assert long_body not in block  # cut, and the cut is stated
     assert (
-        f"[skill long: cut here — the first {agents.SKILL_CHARS} of {len(long_body)} characters]"
+        f"[skill long: cut here — the first {skills.BODY_CHARS} of {len(long_body)} characters]"
         in block
     )
     assert agents.skills_status(agent, root) == [
@@ -953,3 +953,21 @@ def test_importing_agents_never_imports_chat():
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "[]"
+
+
+def test_persona_withholds_a_skill_whose_row_is_not_active(root):
+    folder = root / "skills"
+    folder.mkdir(parents=True)
+    (folder / "review.md").write_text("Check every branch has a test.", encoding="utf-8")
+    (folder / "old.md").write_text("The way we used to do it.", encoding="utf-8")
+    agent = _agent(skills=("review", "old"))
+
+    block = agents.persona_for(
+        agent, owner_id=None, root=root, withdrawn={"old": skills.RETIRED}
+    ).instructions_block
+
+    assert "## Skill: review\nCheck every branch has a test." in block
+    # Named, never silently dropped: an agent that plans around a withdrawn
+    # procedure is worse off than one told the household pulled it.
+    assert "[skill old: retired, not active — do not follow it]" in block
+    assert "The way we used to do it." not in block

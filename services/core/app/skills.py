@@ -44,7 +44,7 @@ import re
 import uuid
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 import asyncpg
@@ -162,7 +162,13 @@ def list_body_files(root: Path | None = None) -> list[dict]:
         if not path.is_file() or not NAME_RE.fullmatch(path.stem):
             continue
         stat = path.stat()
-        out.append({"name": path.stem, "size": stat.st_size, "modified": stat.st_mtime})
+        out.append(
+            {
+                "name": path.stem,
+                "size": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
+            }
+        )
     return out
 
 
@@ -331,12 +337,29 @@ async def load(pool: asyncpg.Pool, name: str, root: Path | None = None) -> tuple
     return skill, body
 
 
+async def withdrawn_statuses(pool: asyncpg.Pool, names: Sequence[str]) -> dict[str, str]:
+    """Of those names, the ones that HAVE a row and are not active, mapped to
+    the status they are in.
+
+    A name with NO row is not withdrawn. An agent naming a skill file is what
+    agents have had since S12, and a table added later must not silently take
+    a working procedure out of an agent's prompt — the row is the thing that
+    can withdraw one, so only a row can.
+    """
+    if not names:
+        return {}
+    records = await pool.fetch(
+        "SELECT name, status FROM skills WHERE name = ANY($1::text[]) AND status <> $2",
+        list(names),
+        ACTIVE,
+    )
+    return {r["name"]: r["status"] for r in records}
+
+
 # ── where the words come from ──────────────────────────────────────────────
 
 
-async def steps_from_turns(
-    pool: asyncpg.Pool, turn_ids: Sequence[uuid.UUID]
-) -> list[str]:
+async def steps_from_turns(pool: asyncpg.Pool, turn_ids: Sequence[uuid.UUID]) -> list[str]:
     """The tool calls those turns actually made, in the order the ledger has
     them. Tool spans only: a guard firing and a model round are not steps in a
     procedure, and neither is a call that was never made."""
