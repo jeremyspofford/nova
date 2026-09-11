@@ -15,6 +15,7 @@ and then VERIFIED: the file is stat'ed and its size compared against what
 was meant to land before this reports a single byte written. os.replace
 returning without raising is not evidence that the file is there.
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -105,8 +106,7 @@ async def write_file(args: dict, ctx: ToolContext) -> str:
     # is the size it should be" is a failure with the reason stated.
     if not path.is_file():
         raise ToolFailure(
-            f"the write of {_display(root, path)} did not verify — the file is not there "
-            "afterwards"
+            f"the write of {_display(root, path)} did not verify — the file is not there afterwards"
         )
     landed = path.stat().st_size
     if landed != len(data):
@@ -192,6 +192,59 @@ async def list_files(args: dict, ctx: ToolContext) -> str:
     return "\n".join(lines)
 
 
+async def delete_file(args: dict, ctx: ToolContext) -> str:
+    """Remove one file, or one EMPTY directory, from the workspace (S15).
+
+    The owner asked her to delete a file on 2026-09-11 and she could see it and
+    not remove it — "there is no delete operation in my toolbox" — so files she
+    had superseded had been piling up for weeks with no way to clear them.
+
+    Three rules, and each is the same discipline the write path follows:
+
+    * The same containment gate. A delete that could leave the workspace is the
+      one filesystem verb where a traversal bug is unrecoverable.
+    * A directory goes only if it is EMPTY. A recursive delete is not a verb she
+      is given: `rm -rf` on a model's say-so is a different risk in kind, and
+      the case that actually came up (an `agents/coder/` folder that outlived
+      its agent) is served by emptying it first.
+    * Nothing there is a FAILURE, not a quiet success. The end state is the same
+      either way, and that is exactly the trap: "deleted groceries.md" for a
+      path she mistyped reads as a tidy-up that never happened.
+
+    And it VERIFIES: the path is stat'ed afterwards, because unlink returning
+    without raising is not evidence the file is gone.
+    """
+    root = ctx.workspace_root.resolve()
+    path = _resolve_within(root, args["path"])
+    if path == root:
+        raise ToolFailure("that is the workspace itself, not something inside it")
+
+    shown = _display(root, path)
+    if path.is_dir():
+        if any(path.iterdir()):
+            raise ToolFailure(
+                f"{shown!r} is a directory and is not empty — delete what is in it first; "
+                "there is no recursive delete here"
+            )
+        try:
+            path.rmdir()
+        except OSError as exc:
+            raise ToolFailure(f"could not remove the directory {shown} — {exc}") from exc
+    elif path.is_file() or path.is_symlink():
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise ToolFailure(f"could not delete {shown} — {exc}") from exc
+    else:
+        raise ToolFailure(f"there is nothing at {shown!r} in the workspace to delete")
+
+    # Verify before reporting, the same rule the write path states: a syscall
+    # that did not raise is not a file that is gone.
+    if path.exists() or path.is_symlink():
+        raise ToolFailure(f"the delete of {shown} did not verify — it is still there afterwards")
+    return f"Deleted {shown}"
+
+
 TOOLS: tuple[Tool, ...] = (
     Tool(
         name="workspace_write_file",
@@ -212,6 +265,26 @@ TOOLS: tuple[Tool, ...] = (
             "additionalProperties": False,
         },
         executor=write_file,
+    ),
+    Tool(
+        name="workspace_delete_file",
+        description=(
+            "Delete a file from your workspace, or an empty directory. There is no "
+            "recursive delete: a directory with anything in it is refused, so empty it "
+            "first. Deleting something that is not there is an error, not a no-op."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Path relative to the workspace root, e.g. 'groceries.md'.",
+                }
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+        executor=delete_file,
     ),
     Tool(
         name="workspace_read_file",

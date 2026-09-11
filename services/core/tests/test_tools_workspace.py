@@ -6,6 +6,7 @@ mechanical gate — resolve the path and require the realpath to stay
 inside the root — and a filesystem tool the model drives needs it proven
 in its own suite, not by reference to another service's.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -161,9 +162,7 @@ async def test_a_crash_between_tmp_and_rename_leaves_the_previous_file_intact(
 async def test_content_over_the_cap_is_refused_never_truncated(tmp_path):
     ctx = _ctx(tmp_path)
     oversized = "x" * (workspace.MAX_WRITE_BYTES + 1)
-    result, ok = await _call(
-        "workspace_write_file", {"path": "big.md", "content": oversized}, ctx
-    )
+    result, ok = await _call("workspace_write_file", {"path": "big.md", "content": oversized}, ctx)
     assert ok is False
     assert str(workspace.MAX_WRITE_BYTES) in result
     assert not (ctx.workspace_root / "big.md").exists()
@@ -294,3 +293,73 @@ async def test_listing_a_missing_directory_is_a_stated_error(tmp_path):
     result, ok = await _call("workspace_list_files", {"path": "nowhere"}, ctx)
     assert ok is False
     assert "nowhere" in result
+
+
+# -- deleting (S15) ---------------------------------------------------------
+#
+# The owner asked her to delete a file on 2026-09-11 and she could see it and
+# not remove it: "my workspace tools are list, read, and write — there is no
+# delete operation in my toolbox". She had been accumulating files she could
+# not clear for weeks. The verb is the fix; every rule below is the same
+# discipline the write path already follows.
+
+
+@pytest.mark.parametrize(("label", "path"), ESCAPES, ids=[e[0] for e in ESCAPES])
+async def test_delete_refuses_paths_that_leave_the_workspace(tmp_path, label, path):
+    ctx = _ctx(tmp_path)
+    result, ok = await _call("workspace_delete_file", {"path": path}, ctx)
+    assert ok is False
+    assert "workspace" in result
+
+
+async def test_a_delete_removes_the_file_and_verifies_that_it_is_gone(tmp_path):
+    ctx = _ctx(tmp_path)
+    (ctx.workspace_root / "groceries.md").write_text("- milk\n", encoding="utf-8")
+
+    result, ok = await _call("workspace_delete_file", {"path": "groceries.md"}, ctx)
+    assert ok is True, result
+    assert "groceries.md" in result
+    assert not (ctx.workspace_root / "groceries.md").exists()
+
+
+async def test_deleting_something_that_is_not_there_is_a_failure_not_a_quiet_success(tmp_path):
+    """The end state is the same, and saying "deleted" would still be a claim
+    about an act that never happened — which is exactly how a typo'd path gets
+    reported as a tidy-up. It says there was nothing there."""
+    ctx = _ctx(tmp_path)
+    result, ok = await _call("workspace_delete_file", {"path": "never-existed.md"}, ctx)
+    assert ok is False
+    assert "never-existed.md" in result
+
+
+async def test_a_directory_with_anything_in_it_is_refused_by_name(tmp_path):
+    """A recursive delete is not a verb she is given. An EMPTY directory is
+    safe and is the other half of clearing up (the orphaned `agents/coder/`
+    that outlived its agent), so that one goes."""
+    ctx = _ctx(tmp_path)
+    (ctx.workspace_root / "agents" / "coder").mkdir(parents=True)
+    (ctx.workspace_root / "agents" / "coder" / "log.md").write_text("x", encoding="utf-8")
+
+    result, ok = await _call("workspace_delete_file", {"path": "agents/coder"}, ctx)
+    assert ok is False
+    assert "not empty" in result
+    assert (ctx.workspace_root / "agents" / "coder" / "log.md").exists()
+
+    await _call("workspace_delete_file", {"path": "agents/coder/log.md"}, ctx)
+    emptied, ok = await _call("workspace_delete_file", {"path": "agents/coder"}, ctx)
+    assert ok is True, emptied
+    assert not (ctx.workspace_root / "agents" / "coder").exists()
+
+
+async def test_the_workspace_root_itself_can_never_be_deleted(tmp_path):
+    ctx = _ctx(tmp_path)
+    for path in (".", "", "  "):
+        result, ok = await _call("workspace_delete_file", {"path": path}, ctx)
+        assert ok is False, path
+    assert ctx.workspace_root.is_dir()
+
+
+async def test_a_delete_is_not_a_read_only_tool(tmp_path):
+    """It changes the world, so the flag that says what may run unasked says
+    no — the same declaration the write tool carries."""
+    assert tools.REGISTRY["workspace_delete_file"].reads_only is False
