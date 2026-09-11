@@ -137,15 +137,23 @@ async def test_pull_preflight_states_the_free_space_check_for_a_known_size(
     assert "ok" in lines[0]
 
 
-async def test_pull_preflight_says_so_when_the_size_is_unknown(client, ollama):
+async def test_a_tag_the_registry_has_never_heard_of_does_not_start_a_download(client, ollama):
+    """Replaces a test that pinned the opposite (S15, 2026-09-11).
+
+    It used to assert that a model the registry answered 404 for went on to
+    stream a successful pull — true only because the fake ollama succeeds at
+    everything. Against the real one it fails, after the download has apparently
+    started, in ollama's words rather than in ours. The owner hit exactly that
+    with `gemma4:26b-a4b`.
+
+    A 404 from the registry is not "could not size it", it is "that tag does not
+    exist", and the difference is the whole fix.
+    """
     resp = await client.post("/admin/pull", json={"model": "totally-unknown-model"})
 
-    lines = _lines(resp.content)
-    assert lines[0]["status"] == "preflight"
-    assert "unknown" in lines[0]["note"]
-    assert "not in the ollama library (registry answered 404)" in lines[0]["note"]
-    assert "required_gb" not in lines[0]
-    assert lines[1:] == [{"status": "pulling", "completed": 1}, {"status": "success"}]
+    assert resp.status_code == 404, resp.text
+    assert "not in the ollama library (registry answered 404)" in resp.text
+    assert ollama.seen == []
 
 
 async def test_pull_unreachable_ollama_is_a_stated_502(client, pool, monkeypatch):
@@ -305,6 +313,36 @@ async def test_a_ref_that_is_neither_library_nor_hub_says_so(client, ollama, ups
 
 
 # ── S10a: the refusals a pull can state ────────────────────────────────────
+
+
+async def test_a_tag_the_library_does_not_have_is_refused_before_ollama_is_called(
+    client, ollama, upstreams
+):
+    """2026-09-11: the owner asked for `gemma4:26b-a4b`, which is not a tag.
+
+    The registry had already answered 404 — the preflight said so in the first
+    line — and the pull went ahead to ollama anyway, to fail there in ollama's
+    words after the stream had opened. Refuse before the act (rail 9), in the
+    gateway's own sentence, and NAME what the curated list does have under that
+    model, because "not found" alone leaves him guessing at the spelling.
+
+    The registry cannot be enumerated (.../tags/list is 404), so the near
+    misses come from the curated file — the one list of tags this box actually
+    vouches for — and the sentence says that is where they came from.
+    """
+    # The fake registry holds library/qwen3/8b and nothing else, so this 404s
+    # the way the real registry did for `gemma4:26b-a4b`.
+    resp = await client.post("/admin/pull", json={"model": "qwen3:404b"})
+
+    assert resp.status_code == 404, resp.text
+    said = resp.text
+    assert "qwen3:404b" in said
+    assert "not in the ollama library" in said
+    # Named from the curated list, which holds other qwen3 tags, and the
+    # sentence says that is where they came from.
+    assert "curated list has" in said
+    assert "qwen3:" in said.split("curated list has", 1)[1]
+    assert ollama.seen == [], "ollama was called for a tag the registry had already refused"
 
 
 @pytest.mark.parametrize(

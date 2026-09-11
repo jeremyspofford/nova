@@ -18,7 +18,7 @@ import asyncio
 import logging
 import re
 
-from app import hf_hub, ollama_registry
+from app import curated, hf_hub, ollama_registry
 from app.adapters.base import ProviderRefused
 
 logger = logging.getLogger("gateway")
@@ -77,13 +77,45 @@ def split_hub_ref(model: str) -> tuple[str, str, str | None]:
     return org, repo, (quant if colon and quant else None)
 
 
-def _unknown(model: str, why: str, resolved: dict | None = None) -> dict:
+def _unknown(model: str, why: str, resolved: dict | None = None, *, absent: bool = False) -> dict:
+    """Sizing failed, in words. `absent` is the one case that is not merely
+    unknown but KNOWN NOT TO EXIST — the registry answered 404 for the tag —
+    which the pull route refuses on rather than opening a stream that cannot
+    succeed (S15)."""
     return {
         "size_bytes": None,
         "size_source": None,
         "resolved": resolved or {},
+        "absent": absent,
         "note": f"model size for {model!r} is unknown — {why}",
     }
+
+
+def near_misses(model: str, limit: int = 6) -> list[str]:
+    """Curated slugs sharing this model's NAME — "did you mean" for a tag that
+    does not exist (S15).
+
+    The ollama registry cannot be enumerated (.../tags/list is 404), so there is
+    no authoritative tag list to offer. The curated file is the one list of tags
+    this box vouches for, and the caller SAYS that is where they came from
+    rather than implying the registry was asked.
+    """
+    name = model.split(":", 1)[0].strip().lower()
+    if not name:
+        return []
+    try:
+        entries = curated.load_curated()
+    except Exception:  # a broken curated file must not turn a 404 into a 500
+        logger.warning("curated list unreadable while composing near misses", exc_info=True)
+        return []
+    slugs = [
+        str(entry["slug"])
+        for entry in entries
+        if isinstance(entry.get("slug"), str)
+        and entry["slug"].split(":", 1)[0].strip().lower() == name
+        and entry["slug"] != model
+    ]
+    return sorted(dict.fromkeys(slugs))[:limit]
 
 
 async def pull_size(app, model: str) -> dict:
@@ -163,7 +195,10 @@ async def _registry_size(app, model: str) -> dict:
     try:
         parsed = await ollama_registry.manifest(app, model)
     except ProviderRefused as exc:
-        return _unknown(model, exc.detail)
+        # A 404 is not "could not size it" — it is the registry stating the tag
+        # does not exist, which the pull route refuses on (S15). Every other
+        # refusal leaves the size unknown and the pull proceeds, as before.
+        return _unknown(model, exc.detail, absent=exc.status == 404)
     resolved: dict = {}
     note = None
     if not parsed.config_digest:

@@ -218,6 +218,13 @@ async def _preflight_line(app, model: str) -> dict:
     if sized["resolved"]:
         line["resolved"] = sized["resolved"]
     if sized["size_bytes"] is None:
+        if sized.get("absent"):
+            # The registry stated the tag does not exist. Carried through rather
+            # than folded into the note, so the caller refuses on a FACT instead
+            # of matching words in a sentence (S15).
+            line["absent"] = True
+            line["note"] = sized["note"]
+            return line
         line["note"] = f"{sized['note']}; skipping the free-space check"
         return line
     size_bytes = sized["size_bytes"]
@@ -288,6 +295,21 @@ async def pull(request: Request) -> Response:
         # Sized BEFORE the stream opens, so the first line is the size and
         # the download never starts in the dark; bounded inside pull_size.
         preflight = await _preflight_line(request.app, model)
+        if preflight.get("absent"):
+            # The registry has already said this tag does not exist, so opening
+            # a stream to ollama can only fail there, in ollama's words, after
+            # the download has apparently begun. Refuse before the act (rail 9)
+            # and offer the spellings this box actually vouches for — the
+            # registry cannot be enumerated, so the curated file is the only
+            # honest source, and the sentence says so (S15: the owner asked for
+            # `gemma4:26b-a4b`, which is not a tag; `gemma4:26b` is).
+            alternatives = pulls_mod.near_misses(model)
+            suffix = (
+                f" — the curated list has {', '.join(alternatives)}"
+                if alternatives
+                else " — nothing in the curated list shares that name either"
+            )
+            raise HTTPException(status_code=404, detail=f"{preflight['note']}{suffix}")
 
         client = backends.http_client(request.app, PULL_TIMEOUT, base_url=ollama_url)
         try:

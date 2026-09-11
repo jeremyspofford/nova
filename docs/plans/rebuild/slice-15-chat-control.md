@@ -51,7 +51,31 @@ Read from `nova_core`, conversation `323892b5-8c0a-405d-a6f2-9f043c5a2a51`
 - **Scope stays at four.** Everything else the review turned up is recorded
   below as carries, for Jeremy to sequence.
 
-## Carries — found in the same transcript, deliberately not this slice
+## Carries — worked 2026-09-11, after the owner said "go through those issues"
+
+Status of each, in the order they were taken (worst first by what it cost him,
+not by size):
+
+| Carry | Outcome |
+|---|---|
+| `memory_backfill` reporting 0 facts as a clean result | Already fixed upstream — see below |
+| One 502 walling a whole chain for an hour | Fixed: the wall is scoped by what the status is about |
+| The false spend retraction | Fixed: the backing set is derived from the registry |
+| No workspace delete verb | Fixed: `workspace_delete_file` |
+| Error text sending him to Settings and Activity | Fixed: neither sentence points at a page |
+| `money_daily_spike` repeating the same line ~20 times | Fixed: a young install is NOT DUE, not a coverage gap |
+| A pull of a tag that does not exist | Fixed: refused before ollama is called, with near misses |
+| She lost her own action inside 48 hours | Still open — S14's territory, not touched |
+
+**The first one was already fixed, and finding that out was the point.** The
+three runs he made at 11:54, 12:17 and 12:35 EDT bracket two commits from the
+S14 session that afternoon — `4c386d8a` at 12:16 and `5ccb5ea1` at 12:34, whose
+title is literally "a cut-off read is not a read that found nothing". His run 3
+worked because the fix had landed minutes earlier. Re-fixing it from this
+branch's older base would have been work over a defect that no longer existed,
+which is why `rebuild/v4` was merged in before any of this started.
+
+## The carries as they were recorded
 
 - **One 502 walls a whole chain for 60 minutes.** A single `ReadTimeout` on
   `qwen3.8:27b` walled both links of the chat chain, so his retry 12 seconds
