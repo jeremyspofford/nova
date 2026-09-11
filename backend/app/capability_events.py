@@ -91,11 +91,36 @@ PROMPT_WINDOW_HOURS = 72
 
 
 async def _write(kind: str, subject: str, action: str, actor: str, detail: dict) -> None:
+    # PAIR-ATOMIC with the governance mirror (D-030): for each successfully
+    # completed _write() transaction, the legacy capability-event row and
+    # its governance mirror commit together or neither commits. This is NOT
+    # a completeness upgrade — a fire-and-forget task that is never
+    # scheduled, is interrupted, or fails before the transaction completes
+    # records nothing, exactly the existing capability-event posture.
+    from app import governance
+    d = detail or {}
+    mirror = governance.capability_changed(
+        kind=kind, subject=subject, action=action, actor=actor or "operator",
+        granted=_ident_list_or_none(d.get("granted")),
+        revoked=_ident_list_or_none(d.get("revoked")))
     async with db.acquire() as conn:
-        await conn.execute(
-            "INSERT INTO capability_events (kind, subject, action, actor, detail) "
-            "VALUES ($1, $2, $3, $4, $5::jsonb)",
-            kind, subject, action, actor or "operator", json.dumps(detail or {}))
+        async with conn.transaction():
+            await conn.execute(
+                "INSERT INTO capability_events (kind, subject, action, actor, detail) "
+                "VALUES ($1, $2, $3, $4, $5::jsonb)",
+                kind, subject, action, actor or "operator", json.dumps(d))
+            await governance.record(conn, mirror)
+
+
+def _ident_list_or_none(value):
+    """The mirror is a typed projection: granted/revoked ride along only
+    when they are well-formed identifier lists (diff_grants' shape). Any
+    other detail content stays in capability_events' own row — legacy
+    callers keep today's behavior regardless of what detail carries."""
+    if (isinstance(value, list) and len(value) <= 200
+            and all(isinstance(v, str) and 0 < len(v) <= 200 for v in value)):
+        return value
+    return None
 
 
 def record(kind: str, subject: str, action: str, *,

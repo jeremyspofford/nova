@@ -116,8 +116,31 @@ async def read_image(data_b64: str, mime: str, *, name: str = "") -> str:
         {"type": "image_url",
          "image_url": {"url": f"data:{mime or 'image/jpeg'};base64,{data_b64}"}},
     ]}]
+
+    # S4b-2 observe-only manifest. Every vision payload is target
+    # local_only in v1 by DELIBERATE POLICY (`vision_unclassified` /
+    # `policy_default` / VISION_V1_LOCAL_ONLY) — not a classification gap.
+    # Metadata is coarse enums only: no filename (`name` never reaches
+    # this), no exact mime/bytes/dimensions, no content, no digests. The
+    # exact size estimate below is transient and never recorded.
+    from app import context_manifest
+    est = (len(data_b64) * 3) // 4
+    _m = context_manifest.Manifest("vision", operation_purpose="vision")
+    _m.modality = "image"
+    _m.size_bucket = ("tiny" if est < 64 * 1024 else
+                      "small" if est < 512 * 1024 else
+                      "medium" if est < 4 * 1024 * 1024 else
+                      "large" if est < 16 * 1024 * 1024 else "oversize")
+    _low = (mime or "").lower()
+    _m.media_family = ("vector_or_unknown" if _low.startswith("image/svg")
+                       else "raster_image" if _low.startswith("image/")
+                       else "unknown")
+    _m.reasons.add("VISION_V1_LOCAL_ONLY")
+    _m.add_items("image", "vision_unclassified", class_source="policy_default")
+
     out = ""
-    async for event in llm_router.stream_chat(messages, model, None):
+    async for event in llm_router.stream_chat(messages, model, None,
+                                              manifest=_m):
         if event.get("type") == "text":
             out += event["text"]
         elif event.get("type") == "error":

@@ -103,6 +103,11 @@ async def lifespan(app: FastAPI):
     await db.init_pool()
     await db.run_migrations()
     await _report_stale_grants()
+    # Advisory only (Slice 1, docs/DECISIONS.md D-018/D-028): does the gates
+    # manifest still resolve to real code and real pinning tests? Logged,
+    # never fatal, decides nothing — same posture as the stale-grant report.
+    from app import gates
+    gates.report()
     await settings_store.warm()
     await providers.warm()
     await rules.warm()

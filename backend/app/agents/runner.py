@@ -19,8 +19,8 @@ import time
 from contextlib import AsyncExitStack
 from typing import AsyncIterator, Optional
 
-from app import (bg, capability_claims, deferral, degeneracy, guests,
-                 model_claims, narration, proposal,
+from app import (bg, capability_claims, context_manifest, deferral,
+                 degeneracy, guests, model_claims, narration, proposal,
                  redact, service_claims, settings_store, timefmt, trace)
 from app.agents import context_trim
 from app.llm import router as llm_router
@@ -2542,6 +2542,30 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                                 llm_router.effective_model(agent["model"]))
                 ] + list(turn_messages)
 
+    # S4a observe-only classification manifest (docs/DECISIONS.md;
+    # enforcement deferred). Built ONCE per turn from metadata already
+    # assembled above — nothing new is read, no content is passed — and
+    # handed explicitly to every stream_chat call this turn makes. V1 rules
+    # are deliberately blunt: a runner turn's context is the operator's, so
+    # its target verdict is local_only; the divergence against the observed
+    # route is the measurement.
+    _t0 = trace.current()
+    cm = context_manifest.Manifest(
+        "dispatch" if dispatch_depth else
+        (_t0.source if _t0 else "runner_untraced"))
+    cm.add_items("turn_messages", "operator_private", origin="conversation",
+                 count=max(1, len(turn_messages)))
+    cm.add_items("system_prompt_slots", "operator_private",
+                 origin="assembled")
+    if agent.get("name") == MAIN_AGENT:
+        cm.add_items("soul", "persona_core", origin="memory_file")
+    if guest is not None:
+        cm.add_items("guest_context", "guest_demo", origin="guest_session")
+    _n_recall = int(prompt_signals.get("memory_shown") or 0)
+    if _n_recall:
+        cm.add_items("memory_recall", "operator_private",
+                     origin="memory_store", count=_n_recall)
+
     # `or parent_untrusted`: a dispatch used to launder the taint. The parent
     # fetches a page, the fence starts refusing its ACTOR tools — and then it
     # calls dispatch_to_agent, which is NOT an actor, handing the page's
@@ -2744,7 +2768,8 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     window=win, history_count=history_count, detail=lsp)
                 async for event in llm_router.stream_chat(
                         messages, round_model, tools or None,
-                        thinking=agent.get("thinking") or "auto"):
+                        thinking=agent.get("thinking") or "auto",
+                        manifest=cm):
                     etype = event.get("type")
                     if etype == "text":
                         # THE ROUND SEAM. Rounds are joined onto final_text
@@ -2859,6 +2884,10 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
             target = await _fallback_target(
                 agent, round_model, failure, tried,
                 allowed_models=ctx.get("guest_allowed_models"))
+            if target:   # S4a observation only: did this retry cross to cloud?
+                cm.note_fallback(
+                    llm_router.is_local(llm_router.effective_model(round_model))
+                    and not llm_router.is_local(llm_router.effective_model(target)))
             if not target:
                 yield {"type": "error", "error": failure["error"]}
                 return
@@ -2987,6 +3016,10 @@ async def run_agent(agent: dict, turn_messages: list[dict], *,
                     {"error_class": degeneracy.ERROR_CLASS,
                      "error": degen["detail"]},
                     tried, allowed_models=ctx.get("guest_allowed_models"))
+                if target:   # S4a observation only
+                    cm.note_fallback(
+                        llm_router.is_local(llm_router.effective_model(round_model))
+                        and not llm_router.is_local(llm_router.effective_model(target)))
             bg.spawn(degeneracy.record(
                 resolved, degen["signal"], degen["detail"],
                 agent_name=agent.get("name"), standby=target),

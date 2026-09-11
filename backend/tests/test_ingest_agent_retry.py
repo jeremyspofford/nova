@@ -35,11 +35,13 @@ def check(label, cond, detail=""):
 
 
 async def run() -> None:
+    import _gov_cleanup as gc
     from app import db, ingest_jobs
     await db.init_pool()
 
     marker = f"https://example.invalid/test-agent-retry/{uuid.uuid4()}"
     async with db.acquire() as conn:
+        gov_wm, run_t0 = await gc.start_marks(conn)
         job_id = await conn.fetchval(
             "INSERT INTO ingest_jobs (url, status, error, attempts, max_attempts) "
             "VALUES ($1, 'failed', 'planted by the test', 3, 3) RETURNING id",
@@ -186,6 +188,23 @@ async def run() -> None:
     finally:
         async with db.acquire() as conn:
             await conn.execute("DELETE FROM ingest_jobs WHERE url = $1", marker)
+            # The agent retries above fire real capability events (subject =
+            # this suite's own job uuid), each atomically paired with a
+            # governance mirror (D-030). This suite owns both probe
+            # artifacts: drain the pair — exact job uuid, bounded by the
+            # run-start marks so nothing historical is reachable (D-031) —
+            # and assert zero of ours remain in any of the three tables.
+            await gc.drain_pair(conn, gov_after_id=gov_wm,
+                                legacy_after_ts=run_t0,
+                                subject_ids=[str(job_id)])
+            left = await gc.remaining_pair(
+                conn, gov_after_id=gov_wm, legacy_after_ts=run_t0,
+                subject_ids=[str(job_id)])
+            left += await conn.fetchval(
+                "SELECT count(*) FROM ingest_jobs WHERE url = $1", marker)
+            if left:
+                FAILURES.append(f"{left} probe row(s) survived cleanup "
+                                "(ingest job / capability / governance)")
         await db.close_pool()
 
 

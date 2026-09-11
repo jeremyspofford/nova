@@ -12,8 +12,29 @@ import logging
 import uuid
 from datetime import datetime
 
-from app import conversations, db, grounding, settings_store, trace
+from app import context_manifest, conversations, db, grounding, \
+    settings_store, trace
 from app.llm import router as llm_router
+
+
+async def _audience(conversation_id: str):
+    """(data_class, class_source, reason) from AUTHORITATIVE signals only
+    (S4b-1): `conversations.guest_id` marks a guest conversation. No
+    operator or household-member signal exists at conversation level
+    (messages carry no speaker attribution), and operator audience is never
+    inferred from the absence of evidence — everything non-guest classifies
+    `unknown` with AUDIENCE_UNAVAILABLE. All of these are target local_only
+    under the v1 rules; the distinction is provenance honesty, not routing."""
+    try:
+        async with db.acquire() as conn:
+            gid = await conn.fetchval(
+                "SELECT guest_id FROM conversations WHERE id = $1",
+                uuid.UUID(conversation_id))
+    except Exception:   # noqa: BLE001 — observation must not fail compaction
+        return "unknown", "missing", "AUDIENCE_UNAVAILABLE"
+    if gid:
+        return "guest_demo", "derived_rule", None
+    return "unknown", "missing", "AUDIENCE_UNAVAILABLE"
 
 log = logging.getLogger(__name__)
 
@@ -110,6 +131,22 @@ async def maybe_compact(conversation_id: str, model: str,
 
             compaction_model = llm_router.effective_model(
                 settings_store.get("compaction.model") or model)
+
+            # S4b-1 observe-only manifest, one per model call. Metadata only:
+            # message counts, audience class from the authoritative signal.
+            _cls, _src, _why = await _audience(conversation_id)
+
+            def _manifest(op: str) -> context_manifest.Manifest:
+                m = context_manifest.Manifest("compaction",
+                                              operation_purpose=op)
+                if _why:
+                    m.reasons.add(_why)
+                m.add_items("transcript", _cls, class_source=_src,
+                            count=max(1, included))
+                if prev:
+                    m.add_items("previous_summary", _cls, class_source=_src)
+                return m
+
             summary = ""
             async with trace.turn("compaction", conversation_id=conversation_id,
                                   model=compaction_model) as t:
@@ -118,7 +155,8 @@ async def maybe_compact(conversation_id: str, model: str,
                     async for event in llm_router.stream_chat(
                             [{"role": "system", "content": _SYSTEM},
                              {"role": "user", "content": user_prompt}],
-                            compaction_model):
+                            compaction_model,
+                            manifest=_manifest("compact")):
                         if event.get("type") == "text":
                             summary += event["text"]
                         elif event.get("type") == "usage":
@@ -162,11 +200,16 @@ async def maybe_compact(conversation_id: str, model: str,
                             "for a correction", len(invented),
                             ", ".join(invented[:6]))
                 fixed = ""
+                # VERIFIED S4b-1: this second call runs OUTSIDE the
+                # compaction turn (the `trace.turn` block above closed), so
+                # its observation takes the bounded no-turn path — no trace
+                # is created for it in this slice.
                 async for event in llm_router.stream_chat(
                         [{"role": "system", "content": _SYSTEM},
                          {"role": "user", "content": _REGROUND.format(
                              terms="\n".join(f"- {t}" for t in invented),
-                             draft=summary)}], compaction_model):
+                             draft=summary)}], compaction_model,
+                        manifest=_manifest("reground")):
                     if event.get("type") == "text":
                         fixed += event["text"]
                 if fixed.strip():

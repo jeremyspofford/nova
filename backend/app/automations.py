@@ -45,10 +45,21 @@ async def _auto_description(instruction: str) -> str:
         model = llm_router.effective_model(settings_store.get("automations.model") or "")
         if not model:
             return fallback
+        # S4b-3 observe-only manifest. An automation instruction is install
+        # configuration authored inside the operator's install — a derived
+        # rule about the CONTENT's home, not an identity inference (the
+        # D-036 constraint concerns conversation audience, which this is
+        # not). Target local_only under v1 rules either way.
+        from app import context_manifest
+        _m = context_manifest.Manifest("auto_description",
+                                       operation_purpose="auto_description")
+        _m.add_items("automation_instruction", "operator_private",
+                     origin="install_config")
         text = ""
         async for event in llm_router.stream_chat(
                 [{"role": "system", "content": _SUMMARY_SYSTEM},
-                 {"role": "user", "content": instruction}], model):
+                 {"role": "user", "content": instruction}], model,
+                manifest=_m):
             if event.get("type") == "text":
                 text += event["text"]
             elif event.get("type") == "error":

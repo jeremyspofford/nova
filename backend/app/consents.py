@@ -153,11 +153,22 @@ async def decide(consent_id: str, chosen: str) -> Optional[dict]:
         # UPDATE below still requires `status = 'pending'`, which is what makes
         # a decision single-use — two clicks cannot both win it.
         kind = await conn.fetchval("SELECT kind FROM consents WHERE id = $1", cid)
-        r = await conn.fetchrow(
-            "UPDATE consents SET status = 'decided', chosen = $2, decided_at = now() "
-            "WHERE id = $1 AND status = 'pending' "
-            "AND created_at > now() - make_interval(mins => $3) "
-            "RETURNING *", cid, chosen, decide_ttl_min(kind or ""))
+        # The decision and its governance event commit TOGETHER or not at
+        # all (D-030): a failed event INSERT rolls the click back — the row
+        # stays pending and the operator's endpoint errors, retryable.
+        async with conn.transaction():
+            r = await conn.fetchrow(
+                "UPDATE consents SET status = 'decided', chosen = $2, decided_at = now() "
+                "WHERE id = $1 AND status = 'pending' "
+                "AND created_at > now() - make_interval(mins => $3) "
+                "RETURNING *", cid, chosen, decide_ttl_min(kind or ""))
+            if r:
+                from app import governance
+                await governance.record(conn, governance.consent_decided(
+                    consent_id=str(r["id"]), consent_kind=r["kind"],
+                    chosen=chosen,
+                    conversation_id=str(r["conversation_id"])
+                    if r["conversation_id"] else None))
         if not r:  # stale pending row → expire it so the UI stops showing it
             await conn.execute(
                 "UPDATE consents SET status = 'expired' "
@@ -194,16 +205,30 @@ async def validate_and_use(kind: str, subject: str,
         except ValueError:
             cid = None  # fall back to kind+subject lookup
     async with db.acquire() as conn:
-        r = await conn.fetchrow(
-            "UPDATE consents SET used_at = now() WHERE id = ("
-            "  SELECT id FROM consents"
-            "   WHERE kind = $1 AND subject = $2 AND status = 'decided'"
-            "     AND chosen = 'approve' AND used_at IS NULL"
-            f"    AND decided_at > now() - interval '{USE_TTL_MIN} minutes'"
-            "     AND ($3::uuid IS NULL OR id = $3)"
-            "     AND ($4::text IS NULL OR requested_by = $4)"
-            "   ORDER BY decided_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED) "
-            "RETURNING *", kind, subject, cid, agent_name)
+        # Burn and governance event commit TOGETHER or not at all (D-030):
+        # a failed event INSERT rolls the burn back — used_at reverts, the
+        # approval survives for retry, and the guarded action fails closed
+        # (the raised error reaches the tool layer, which reports it).
+        # The row lock is held until this transaction commits; SKIP LOCKED
+        # losers still skip and get None (pinned by test_consent_burn.py).
+        async with conn.transaction():
+            r = await conn.fetchrow(
+                "UPDATE consents SET used_at = now() WHERE id = ("
+                "  SELECT id FROM consents"
+                "   WHERE kind = $1 AND subject = $2 AND status = 'decided'"
+                "     AND chosen = 'approve' AND used_at IS NULL"
+                f"    AND decided_at > now() - interval '{USE_TTL_MIN} minutes'"
+                "     AND ($3::uuid IS NULL OR id = $3)"
+                "     AND ($4::text IS NULL OR requested_by = $4)"
+                "   ORDER BY decided_at DESC LIMIT 1 FOR UPDATE SKIP LOCKED) "
+                "RETURNING *", kind, subject, cid, agent_name)
+            if r:
+                from app import governance
+                await governance.record(conn, governance.consent_burned(
+                    consent_id=str(r["id"]), consent_kind=r["kind"],
+                    agent_name=agent_name,
+                    conversation_id=str(r["conversation_id"])
+                    if r["conversation_id"] else None))
     if r:
         log.info("Consent burned: %s %s (%s) by %s", kind, subject, r["id"], agent_name)
     return _row(r) if r else None

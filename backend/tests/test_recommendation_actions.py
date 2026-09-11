@@ -398,9 +398,11 @@ def test_he_executes_the_plan_he_was_shown():
 
     async def run():
         import json as _json
+        import _gov_cleanup as gc
         from app import db, recommendations
         await db.init_pool()
         async with db.acquire() as conn:
+            gov_wm, run_t0 = await gc.start_marks(conn)
             rid = await conn.fetchval(
                 "INSERT INTO recommendations (kind,title,body,source,action,action_state) "
                 "VALUES ('mcp_server','scratch digest','b','lane-test',$1,'ready') "
@@ -435,6 +437,18 @@ def test_he_executes_the_plan_he_was_shown():
         finally:
             async with db.acquire() as conn:
                 await conn.execute("DELETE FROM recommendations WHERE id = $1", rid)
+                # decide() fires a capability event for 'scratch digest';
+                # drain this run's pair + governance mirror (exact subject,
+                # run-bounded, D-031) and assert none of ours remain.
+                await gc.drain_pair(conn, gov_after_id=gov_wm,
+                                    legacy_after_ts=run_t0,
+                                    subject_ids=["scratch digest"])
+                left = await gc.remaining_pair(
+                    conn, gov_after_id=gov_wm, legacy_after_ts=run_t0,
+                    subject_ids=["scratch digest"])
+                if left:
+                    FAILURES.append(f"digest: {left} governance/capability "
+                                    "row(s) survived cleanup")
 
     asyncio.run(run())
 
@@ -481,10 +495,13 @@ def test_a_failed_run_leaves_nothing_behind():
     print("\n13. the executor is all-or-nothing past registration")
 
     async def run():
+        import _gov_cleanup as gc
         from app import db
         from app.actions import mcp_server as ex
         from app.agents import registry as ar
         await db.init_pool()
+        async with db.acquire() as conn:
+            gov_wm, run_t0 = await gc.start_marks(conn)
 
         fake = [{"name": "ask", "description": "ask a thing",
                  "parameters_schema": {"type": "object", "properties": {}}}]
@@ -553,6 +570,20 @@ def test_a_failed_run_leaves_nothing_behind():
                 # reported to her as real changes to her own capabilities.
                 await conn.execute(
                     "DELETE FROM capability_events WHERE subject LIKE 'scratch-t13-%'")
+                # The events are fire-and-forget: late arrivals land AFTER
+                # the delete above, now as atomic (legacy + governance
+                # mirror) pairs. Drain this run's pairs — bounded by the
+                # run's start marks so nothing historical is reachable
+                # (D-031) — and assert none of ours remain.
+                await gc.drain_pair(conn, gov_after_id=gov_wm,
+                                    legacy_after_ts=run_t0,
+                                    subject_prefixes=("scratch-t13-",))
+                left = await gc.remaining_pair(
+                    conn, gov_after_id=gov_wm, legacy_after_ts=run_t0,
+                    subject_prefixes=("scratch-t13-",))
+                if left:
+                    FAILURES.append(f"t13: {left} governance/capability "
+                                    "row(s) survived cleanup")
 
     asyncio.run(run())
 
@@ -575,10 +606,13 @@ def test_an_approved_install_actually_finishes():
     print("\nan approved install actually finishes")
 
     async def run():
+        import _gov_cleanup as gc
         from app import db, mcp_client
         from app.actions import mcp_server as ex
         from app.agents import registry as ar
         await db.init_pool()
+        async with db.acquire() as conn:
+            gov_wm, run_t0 = await gc.start_marks(conn)
 
         fake = [{"name": "ask", "description": "ask a thing",
                  "parameters_schema": {"type": "object", "properties": {}}}]
@@ -636,6 +670,17 @@ def test_an_approved_install_actually_finishes():
                 await conn.execute(
                     "DELETE FROM capability_events WHERE subject = ANY($1::text[])",
                     [name, agent])
+                # Drain this run's late fire-and-forget pairs and their
+                # governance mirrors (exact subjects, run-bounded, D-031).
+                await gc.drain_pair(conn, gov_after_id=gov_wm,
+                                    legacy_after_ts=run_t0,
+                                    subject_ids=[name, agent])
+                left = await gc.remaining_pair(
+                    conn, gov_after_id=gov_wm, legacy_after_ts=run_t0,
+                    subject_ids=[name, agent])
+                if left:
+                    FAILURES.append(f"t14: {left} governance/capability "
+                                    "row(s) survived cleanup")
 
     asyncio.run(run())
 

@@ -322,8 +322,18 @@ async def resolve_thinking(model: str, preference: str) -> Optional[bool]:
 
 async def stream_chat(messages: list, model: str,
                       tools: Optional[list] = None,
-                      thinking: str = "auto") -> AsyncIterator[dict]:
+                      thinking: str = "auto",
+                      manifest=None) -> AsyncIterator[dict]:
     target = effective_model(model)
+    # Observe-only classification manifest (S4a, D-013/D-014 observation
+    # phase): AFTER resolution, BEFORE transport, so an attempted call is
+    # recorded even when transport fails. `manifest` is an explicit,
+    # optional handoff from the caller; a call without one records an
+    # honest MISSING_MANIFEST observation. Bounded, best-effort; changes
+    # nothing about the request, routing, or errors.
+    from app import context_manifest
+    await context_manifest.observe(model=target, is_local=is_local(target),
+                                   manifest=manifest)
     think = await resolve_thinking(target, thinking)
     if think is False and tools:
         # Suppressing the reasoning pass collapses tool selection on smaller

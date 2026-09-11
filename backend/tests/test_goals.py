@@ -62,6 +62,10 @@ async def run() -> None:
     await db.init_pool()
     await settings_store.warm()
     made: list[str] = []
+    decided_cards: list[str] = []   # consents this suite decides via the API
+    import _gov_cleanup as gc
+    async with db.acquire() as conn:
+        gov_wm = await gc.start_watermark(conn)
 
     try:
         print("1. the scope is a subset, and the exclusions are the point")
@@ -191,6 +195,7 @@ async def run() -> None:
         check("a card is raised for the operator", bool(card["question"]))
         check("still proposed before the click",
               (await goals.get(card["subject"]))["status"] == "proposed")
+        decided_cards.append(card["id"])
         await consents.decide(card["id"], "approve")
         check("the click activates it, in consents.decide — no agent has to "
               "notice the approval, so no agent can act on one that never came",
@@ -210,6 +215,22 @@ async def run() -> None:
         async with db.acquire() as conn:
             for gid in made:
                 await conn.execute("DELETE FROM goals WHERE id = $1::uuid", gid)
+            if decided_cards:
+                # Covers the failure path too — the inline delete after the
+                # click only runs when the test got that far.
+                await conn.execute(
+                    "DELETE FROM consents WHERE id = ANY($1::uuid[])",
+                    [__import__("uuid").UUID(i) for i in decided_cards])
+                # The click wrote a consent.decided governance event (D-030);
+                # remove ONLY this suite's own, bounded by the run watermark
+                # (D-031), and assert nothing of ours remains.
+                await gc.purge(conn, after_id=gov_wm,
+                               subject_ids=decided_cards)
+                left = await gc.remaining(conn, after_id=gov_wm,
+                                          subject_ids=decided_cards)
+                if left:
+                    FAILURES.append(f"{left} governance event(s) survived "
+                                    "cleanup")
         await db.close_pool()
 
 
