@@ -33,7 +33,7 @@ import httpx
 import pytest
 
 from app import checks, settings_store
-from app.checks import CannotCheck, Check, CheckRun, Finding, money, stack, work
+from app.checks import CannotCheck, Check, CheckRun, Finding, money, skills, stack, work
 from app.main import app as core_app
 from tests import fakes
 from tests.conftest import requires_db
@@ -214,8 +214,11 @@ def test_exactly_the_stack_family_declares_urgent():
     assert {checks.REGISTRY[name].run.__module__ for name in urgent} == {"app.checks.stack"}
     # And the other two families are registered and not urgent, so this is a
     # statement about the whole registry rather than about an empty one.
-    assert set(work.NAMES) | set(money.NAMES) <= set(checks.REGISTRY)
-    assert not ({*work.NAMES, *money.NAMES} & urgent)
+    assert set(work.NAMES) | set(money.NAMES) | set(skills.NAMES) <= set(checks.REGISTRY)
+    # S17 (2026-09-11): the skills family joins the non-urgent side. A
+    # procedure she has walked twice with nothing written down for it is
+    # something to mention in the digest, never something to wake anyone with.
+    assert not ({*work.NAMES, *money.NAMES, *skills.NAMES} & urgent)
     assert checks.check_names() == sorted(checks.REGISTRY)
     assert checks.urgent_names() == sorted(urgent)
 
