@@ -10,6 +10,7 @@ missing refuses by name instead of resolving to an empty procedure.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 
@@ -266,3 +267,116 @@ async def test_only_a_skill_with_a_row_that_is_not_active_counts_as_withdrawn(po
     assert await skills.withdrawn_statuses(pool, ["live", "pulled", "by-hand"]) == {
         "pulled": skills.RETIRED
     }
+
+
+# ── the ledger ─────────────────────────────────────────────────────────────
+
+
+async def _use(pool, skill, turn_id, *, failed=0, fires=0, known=True) -> None:
+    await pool.execute(
+        "INSERT INTO skill_uses (skill_id, turn_id, failed_calls, guard_fires, outcome_known) "
+        "VALUES ($1, $2, $3, $4, $5)",
+        skill.id,
+        turn_id,
+        failed,
+        fires,
+        known,
+    )
+
+
+async def test_a_use_is_recorded_for_a_successful_load_and_only_that(pool, tmp_path):
+    from app import traces
+
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    turn_id = await _turn(pool, conversation)
+    await skills.create(
+        pool, name="tidy", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    await skills.set_status(pool, "tidy", skills.ACTIVE)
+    now = datetime.now(UTC)
+    spans = [
+        traces.Span(
+            "tool", skills.LOAD_TOOL, now, 5, {"ok": True, "args_redacted": {"name": "tidy"}}
+        ),
+        # A load that was REFUSED handed her no procedure, so it is not a use
+        # of one: counting it would let a skill be flagged for turns in which
+        # it was never read.
+        traces.Span(
+            "tool", skills.LOAD_TOOL, now, 5, {"ok": False, "args_redacted": {"name": "gone"}}
+        ),
+        traces.Span("tool", "workspace_read_file", now, 5, {"ok": False}),
+        traces.Span("guard", "narration", now, 1, {}),
+    ]
+
+    written = await skills.record_uses(pool, turn_id, spans, status="ok")
+
+    assert written == ["tidy"]
+    row = await pool.fetchrow("SELECT * FROM skill_uses")
+    assert row["failed_calls"] == 1
+    assert row["guard_fires"] == 1
+    assert row["outcome_known"] is True
+
+
+@pytest.mark.parametrize("status", ["error", "stopped"])
+async def test_a_turn_that_did_not_finish_records_a_use_whose_outcome_is_unknown(
+    pool, tmp_path, status
+):
+    from app import traces
+
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    turn_id = await _turn(pool, conversation)
+    await skills.create(
+        pool, name="tidy", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    await skills.set_status(pool, "tidy", skills.ACTIVE)
+    spans = [
+        traces.Span(
+            "tool",
+            skills.LOAD_TOOL,
+            datetime.now(UTC),
+            5,
+            {"ok": True, "args_redacted": {"name": "tidy"}},
+        )
+    ]
+
+    await skills.record_uses(pool, turn_id, spans, status=status)
+
+    # The use is on record — it happened — but "it went badly" is a claim
+    # about a turn nobody watched finish, and the flag query filters it out.
+    assert await pool.fetchval("SELECT outcome_known FROM skill_uses") is False
+
+
+async def test_three_rough_uses_in_five_flags_the_skill_with_its_reason(pool, tmp_path):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    await skills.create(
+        pool, name="tidy", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    skill = await skills.set_status(pool, "tidy", skills.ACTIVE)
+
+    for failed in (1, 0, 1, 0):
+        await _use(pool, skill, await _turn(pool, conversation), failed=failed)
+    assert await skills.review_flagging(pool, skill.id) is None
+    assert (await skills.get(pool, "tidy")).status == skills.ACTIVE
+
+    await _use(pool, skill, await _turn(pool, conversation), fires=1)
+    flagged = await skills.review_flagging(pool, skill.id)
+
+    assert flagged.status == skills.FLAGGED
+    assert "3 of the last 5" in flagged.flagged_reason
+
+
+async def test_uses_nobody_watched_finish_cannot_flag_a_skill(pool, tmp_path):
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    await skills.create(
+        pool, name="tidy", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    skill = await skills.set_status(pool, "tidy", skills.ACTIVE)
+    for _ in range(5):
+        await _use(pool, skill, await _turn(pool, conversation), failed=1, known=False)
+
+    assert await skills.review_flagging(pool, skill.id) is None
+    assert (await skills.get(pool, "tidy")).status == skills.ACTIVE

@@ -41,6 +41,10 @@ KNOWN_KEYS = {
     "proactive.enabled",
     "proactive.digest_at",
     "proactive.max_notices_per_day",
+    # S17 (2026-09-11): how many of a skill's last five WATCHED uses must go
+    # badly before it is flagged for review. A knob because 3-of-5 is a guess,
+    # and the thing it moves is a raised hand, never a retirement.
+    "skills.flag_after_rough_uses",
 }
 
 

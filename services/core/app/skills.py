@@ -356,6 +356,131 @@ async def withdrawn_statuses(pool: asyncpg.Pool, names: Sequence[str]) -> dict[s
     return {r["name"]: r["status"] for r in records}
 
 
+# ── the ledger ─────────────────────────────────────────────────────────────
+
+# A skill is flagged when this many of its last FLAG_WINDOW known-outcome uses
+# were rough. Both numbers are a guess, which is why the threshold is a setting
+# the owner can move (skills.flag_after_rough_uses) and why the transition is
+# to FLAGGED — a raised hand — and never to retired.
+FLAG_WINDOW = 5
+
+
+def _rough(failed_calls: int, guard_fires: int) -> bool:
+    return failed_calls > 0 or guard_fires > 0
+
+
+async def record_uses(
+    pool: asyncpg.Pool,
+    turn_id: uuid.UUID,
+    spans: Sequence[object],
+    *,
+    status: str | None,
+) -> list[str]:
+    """One row per skill this turn actually READ, with what the turn's own
+    spans say happened afterwards. Returns the names recorded.
+
+    A REFUSED load is not a use. She was handed no procedure, so counting it
+    would let a skill be flagged for turns in which it was never read — the
+    ledger would then be measuring the tool, not the skill.
+
+    `status` is the turn's own: only a turn that ended `ok` has an outcome
+    anybody watched. A stopped turn (S15) or one that died on a transport
+    failure leaves an incomplete span record, and reading "no failures" off it
+    is reading silence as success.
+    """
+    loaded: list[str] = []
+    failed_calls = 0
+    guard_fires = 0
+    for span in spans:
+        kind = getattr(span, "kind", None)
+        meta = getattr(span, "meta", None) or {}
+        if kind == "guard":
+            guard_fires += 1
+            continue
+        if kind != "tool":
+            continue
+        ok = bool(meta.get("ok"))
+        if getattr(span, "name", None) == LOAD_TOOL:
+            if ok:
+                # The arguments as the trace recorded them — the same evidence
+                # the operator reads on the Activity page. A call that ran ok
+                # passed schema validation, so the name is there and is a
+                # string; anything else is a shape nothing should produce, and
+                # it is logged rather than counted as a use of some other
+                # skill.
+                name = (meta.get("args_redacted") or {}).get("name")
+                if isinstance(name, str) and name:
+                    loaded.append(name)
+                else:
+                    logger.warning(
+                        "a successful %s span on turn %s names no skill: %r",
+                        LOAD_TOOL,
+                        turn_id,
+                        meta.get("args_redacted"),
+                    )
+            continue
+        if not ok:
+            failed_calls += 1
+    if not loaded:
+        return []
+    known = status == "ok"
+    written: list[str] = []
+    for name in dict.fromkeys(loaded):
+        skill = await get(pool, name)
+        if skill is None:
+            # Read during the turn and deleted before it closed. Nothing to
+            # attach the use to, and inventing a row for a name is worse than
+            # losing one count.
+            continue
+        await pool.execute(
+            "INSERT INTO skill_uses (skill_id, turn_id, failed_calls, guard_fires, "
+            "outcome_known) VALUES ($1, $2, $3, $4, $5)",
+            skill.id,
+            turn_id,
+            failed_calls,
+            guard_fires,
+            known,
+        )
+        written.append(name)
+    return written
+
+
+async def review_flagging(
+    pool: asyncpg.Pool, skill_id: uuid.UUID, *, threshold: int = 3
+) -> Skill | None:
+    """Flag an ACTIVE skill whose recent known-outcome uses went badly, and
+    say in words which uses those were. Returns the moved row, or None when
+    nothing moved.
+
+    It never says a skill HELPED and it never retires one. What the counts
+    support is "the turns this was read in kept going wrong", which is a
+    reason for the owner to look, not a verdict about the procedure.
+    """
+    skill = await pool.fetchrow(f"SELECT {_COLUMNS} FROM skills WHERE id = $1", skill_id)
+    if skill is None or skill["status"] != ACTIVE:
+        return None
+    records = await pool.fetch(
+        "SELECT failed_calls, guard_fires FROM skill_uses "
+        "WHERE skill_id = $1 AND outcome_known ORDER BY loaded_at DESC, id DESC LIMIT $2",
+        skill_id,
+        FLAG_WINDOW,
+    )
+    if len(records) < FLAG_WINDOW:
+        # Fewer than a window of watched uses is not evidence about a skill,
+        # it is a small sample — see [[one-sample-is-not-a-measurement]].
+        return None
+    rough = [r for r in records if _rough(r["failed_calls"], r["guard_fires"])]
+    if len(rough) < threshold:
+        return None
+    calls = sum(r["failed_calls"] for r in rough)
+    fires = sum(r["guard_fires"] for r in rough)
+    reason = (
+        f"{len(rough)} of the last {FLAG_WINDOW} watched uses went badly "
+        f"({calls} failed tool call(s), {fires} guard correction(s))"
+    )
+    return await set_status(pool, skill["name"], FLAGGED, reason=reason)
+
+
 # ── where the words come from ──────────────────────────────────────────────
 
 

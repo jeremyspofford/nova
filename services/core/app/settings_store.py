@@ -111,6 +111,16 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         ),
     ),
     SettingDef(
+        key="skills.flag_after_rough_uses",
+        type="int",
+        default=3,
+        description=(
+            "How many of a skill's last five watched uses must go badly — a failed "
+            "tool call or a guard correction in the same turn — before it is flagged "
+            "for review. Flagging never retires a skill; it raises a hand."
+        ),
+    ),
+    SettingDef(
         key="agents.max_tool_rounds",
         type="int",
         default=6,

@@ -773,12 +773,21 @@ NOTES_HEADER = (
 )
 
 
-def volatile_system_prompt(recall: Recalled, roster: str | None = None) -> str | None:
+def volatile_system_prompt(
+    recall: Recalled, roster: str | None = None, skills_roster: str | None = None
+) -> str | None:
     """The half that changes every turn — omitted entirely when there is nothing in it.
 
     `roster` (S12) is the one line naming the agents Nova can delegate to,
     read from the table for THIS turn (agents.roster_line) — None when there
     are none, and then the prompt is byte-identical to before agents existed.
+
+    `skills_roster` (S17) is the same shape for the household's written-down
+    procedures: their NAMES and what each was asked for, never their bodies.
+    She reads one with load_skill, and that call is what makes the use
+    observable. None when no skill is active — a draft is not a procedure she
+    has been given — and then the prompt is byte-identical to before skills
+    existed.
     """
     parts: list[str] = []
     if recall.notes:
@@ -817,6 +826,8 @@ def volatile_system_prompt(recall: Recalled, roster: str | None = None) -> str |
         )
     if roster:
         parts.append(roster)
+    if skills_roster:
+        parts.append(skills_roster)
     if not parts:
         return None
     parts.append(f"Current time: {datetime.now(UTC).isoformat()}")
@@ -830,13 +841,15 @@ def base_messages(
     message: str,
     persona: agents.Persona | None = None,
     roster: str | None = None,
+    skills_roster: str | None = None,
 ) -> list[dict]:
     """The transcript the first round of the turn starts from.
 
     `persona` (S12) decides whose prompt this is: None is Nova's, exactly as
     before — the whole live registry and no block; an agent's names its
     subset and carries its block. `roster` is Nova's line about who she can
-    delegate to (see volatile_system_prompt)."""
+    delegate to, and `skills_roster` (S17) her line about the procedures
+    written down for this household (see volatile_system_prompt)."""
     if persona is None:
         stable = stable_system_prompt(model, tools.tool_names())
     else:
@@ -844,7 +857,7 @@ def base_messages(
             model, persona.tool_names, agent_block=persona.instructions_block
         )
     messages = [{"role": "system", "content": stable}]
-    volatile = volatile_system_prompt(recall, roster)
+    volatile = volatile_system_prompt(recall, roster, skills_roster)
     if volatile is not None:
         messages.append({"role": "system", "content": volatile})
     messages.extend(history)
@@ -3290,11 +3303,21 @@ async def _run_turn(
         # that silently lost its roster is a turn with that span, not a
         # log line nobody reads.
         roster = None
+        skills_roster = None
         if persona.agent is None:
             try:
                 roster = await agents.roster_line(pool)
             except Exception as exc:
                 with turn.span("agent_roster") as span:
+                    span.meta["error"] = peers.reason(exc)
+            # S17, same contract for the same reason: the procedures written
+            # down for this household, by NAME. An agent does not get it —
+            # its own skills are in its block, which is the subset it was
+            # given, and handing it the household roster would widen that.
+            try:
+                skills_roster = await skills.roster_line(pool)
+            except Exception as exc:
+                with turn.span("skills_roster") as span:
                     span.meta["error"] = peers.reason(exc)
         recalled = await _recall(app, turn, person, message, shared=persona.shared_person_id)
         if persona.agent is None:
@@ -3344,7 +3367,15 @@ async def _run_turn(
         if recalled.live_calls:
             checked_live = await live_facts.run(list(recalled.live_calls), turn, tool_ctx)
             recalled = dataclasses.replace(recalled, live=tuple(live_facts.lines(checked_live)))
-        messages = base_messages(model, recalled, history, message, persona, roster=roster)
+        messages = base_messages(
+            model,
+            recalled,
+            history,
+            message,
+            persona,
+            roster=roster,
+            skills_roster=skills_roster,
+        )
         # The toolset the trace marks a call against (None: Nova, who holds
         # everything). Computed once, threaded into every dispatch site.
         subset = persona.tool_names if persona.agent is not None else None
@@ -4446,6 +4477,17 @@ async def _run_turn(
             # but in a detached task it must not re-raise (nothing would
             # retrieve it), so it is logged and the sentinel still fires.
             logger.exception("could not close turn %s", turn.id)
+        try:
+            # The skills ledger (S17), after the close because it needs the
+            # turn's own STATUS: only a turn that ended ok has an outcome
+            # anybody watched, and a stopped or failed one is recorded as a
+            # use whose outcome is unknown rather than as a clean one.
+            # Best-effort and logged: a ledger that cannot be written must not
+            # take a finished turn down with it, and silence about it would
+            # read exactly like a turn that used no skill.
+            await _record_skill_uses(pool, turn, decided or "error")
+        except Exception:
+            logger.exception("could not record the skill uses of turn %s", turn.id)
         finally:
             # No longer this process's in-flight turn — closed (or its close
             # failed and was logged). Before the sentinel, so a reader that
@@ -4467,6 +4509,24 @@ async def _run_turn(
             # saw [DONE] has already seen the record. Its own task, so a drain
             # that cannot start cannot take this turn's ending down with it.
             _spawn(drain_queue(app, pool, conversation_id))
+
+
+async def _record_skill_uses(pool, turn: traces.Turn, status: str) -> None:
+    """One skill_uses row per procedure this turn actually read, then a look
+    at whether any of them should be flagged.
+
+    Read from the turn's OWN spans — the same evidence the Activity page shows
+    — so a skill cannot be credited with a turn it was not in, and a reply
+    claiming to have followed one leaves no row at all.
+    """
+    names = await skills.record_uses(pool, turn.id, turn.spans, status=status)
+    if not names:
+        return
+    threshold = await settings_store.read_value(pool, "skills.flag_after_rough_uses")
+    for name in names:
+        skill = await skills.get(pool, name)
+        if skill is not None:
+            await skills.review_flagging(pool, skill.id, threshold=int(threshold))
 
 
 @dataclass
