@@ -1444,10 +1444,23 @@ def _ran_clause(spans: Sequence[traces.Span]) -> str:
         pieces.append(f"{_names(ran)} ran")
     if failed:
         pieces.append(f"{_names(failed)} failed")
-    return f"Before that, {' and '.join(pieces)} — see Activity for the results."
+    return f"Before that, {' and '.join(pieces)}."
 
 
-RETRY_HINT = "Try again, or check the model in Settings → Models."
+# What to do next, in terms of things the OWNER can say to HER (S15).
+#
+# It used to read "Try again, or check the model in Settings → Models", and the
+# clause above used to end "— see Activity for the results". On 2026-09-09 he
+# said, in as many words: "I don't want to check the model settings, or activity
+# for results. You're AI, you're supposed to know that you should do that." Both
+# 2026-09-10 failures sent him to Settings anyway.
+#
+# So neither sentence points at a page now. This one names what he can ASK, and
+# nothing else: the pages still exist for when he wants them, and a failure
+# message is not the place to instruct him to go and do her job. The deeper half
+# of that complaint — her noticing and switching models herself — is a capability,
+# not a sentence, and it is not in this slice.
+RETRY_HINT = "Ask me to try again, or to use a different model."
 
 
 def model_failure_statement(*, model: str, failure: str, spans: Sequence[traces.Span]) -> str:

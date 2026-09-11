@@ -12,6 +12,7 @@ when known, the failure class, and whether anything ran — DERIVED from the
 failed round's span and the tool spans, sent as the same error frame live,
 recorded on the llm_call span as class + message, and never ingested.
 """
+
 from __future__ import annotations
 
 import json
@@ -59,8 +60,7 @@ def _errors(sent: list) -> list[str]:
 
 async def _llm_spans(pool) -> list:
     return await pool.fetch(
-        "SELECT name, duration_ms, meta FROM turn_spans WHERE kind = 'llm_call' "
-        "ORDER BY started_at"
+        "SELECT name, duration_ms, meta FROM turn_spans WHERE kind = 'llm_call' ORDER BY started_at"
     )
 
 
@@ -202,9 +202,7 @@ async def test_a_timeout_after_a_tool_ran_says_what_ran_instead_of_nothing(
     )
     mount_peers(gateway=scripted, memory=memory)
     _mount_gateway_transport(
-        RaisingTransport(
-            _read_timeout, inner=fakes.StreamingASGITransport(scripted.app), fail_on=2
-        )
+        RaisingTransport(_read_timeout, inner=fakes.StreamingASGITransport(scripted.app), fail_on=2)
     )
     await _set_model(owner_client)
 
@@ -229,9 +227,7 @@ async def test_a_timeout_after_a_tool_ran_says_what_ran_instead_of_nothing(
 # -- the connection ------------------------------------------------------------
 
 
-async def test_a_refused_connection_names_the_connection_failure(
-    owner_client, pool, mount_peers
-):
+async def test_a_refused_connection_names_the_connection_failure(owner_client, pool, mount_peers):
     mount_peers(gateway=FakeGateway(), memory=FakeMemory())
     _mount_gateway_transport(RaisingTransport(_connection_refused))
     await _set_model(owner_client)
@@ -255,9 +251,7 @@ async def test_a_refused_connection_names_the_connection_failure(
 # -- the gateway's own failures ------------------------------------------------
 
 
-async def test_a_provider_error_frame_is_stated_with_the_engine(
-    owner_client, pool, mount_peers
-):
+async def test_a_provider_error_frame_is_stated_with_the_engine(owner_client, pool, mount_peers):
     """The gateway got far enough to send headers (so the engine is known) and
     then reported a failure in-stream, the way its relay does when the backend
     dies mid-flight."""
@@ -388,9 +382,30 @@ def test_the_ran_clause_is_derived_from_tool_spans_and_excludes_refusals():
     statement = chat.model_failure_statement(model="m", failure="the reason", spans=spans)
     assert statement == (
         "I didn't get a response from m (openai) in round 3: the reason. "
-        "Before that, get_time ran and workspace_list failed — see Activity for the results. "
+        "Before that, get_time ran and workspace_list failed. "
         f"{chat.RETRY_HINT}"
     )
+
+
+def test_a_failure_sends_him_to_no_page_at_all():
+    """2026-09-09, his words: "I don't want to check the model settings, or
+    activity for results. You're AI, you're supposed to know that you should do
+    that." Both of the next day's failures sent him to Settings anyway.
+
+    The statement names what he can ASK HER; the pages still exist for when he
+    wants them, and a failure message is not the place to send him to do her job.
+    """
+    spans = [
+        _span("llm_call", "m", model="m", round=1),
+        _span("tool", "get_time", ok=True),
+    ]
+    for statement in (
+        chat.model_failure_statement(model="m", failure="the reason", spans=spans),
+        chat.turn_failure_statement("the reason", spans),
+        chat.stopped_statement(stated="he asked to stop it", where="between steps", spans=spans),
+    ):
+        assert "Settings" not in statement, statement
+        assert "Activity" not in statement, statement
 
 
 def test_the_statement_with_no_model_and_no_spans_still_names_what_is_known():
