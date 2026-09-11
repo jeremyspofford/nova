@@ -22,7 +22,17 @@ import type { StreamEvent } from '../../lib/streamChat'
  * persisted: reconciling from fetched history always starts a row at
  * `null` (see `message()` below), because the durable record of what ran
  * is the Activity page, not the chat transcript. */
-export type ActivityMarker = { tool: string; status: string; reason?: string; detail?: string } | null
+export type ActivityMarker = {
+  tool: string
+  status: string
+  reason?: string
+  detail?: string
+  /** How far through the call is, 0..100, when it knows (S15). Absent means
+   * indeterminate — the bar shimmers rather than sitting at zero, and a frame
+   * that stops reporting a fraction drops back to that rather than freezing
+   * the last number it happened to see. */
+  percent?: number
+} | null
 
 /** The tool whose activity frames open, feed and close a delegation. */
 export const DELEGATE_TOOL = 'delegate_to_agent'
@@ -60,6 +70,13 @@ export type MessageRow = {
   text: string
   streaming: boolean
   interrupted: boolean
+  /** The note a STOPPED turn ended with (S15), when the owner pressed Stop:
+   * where it stopped, and what that does and does not mean about the work.
+   * Distinct from `interrupted`, which is this store's finding that a stream
+   * died — a stop is deliberate, said by the server, and not a failure. Never
+   * persisted: the server writes the same words into the assistant row, so a
+   * reload shows the note as part of the text. */
+  stoppedNote: string | null
   activity: ActivityMarker
   /** `provider:model` as the gateway stated it on this turn's trace (the
    * `served_by` frame live, `served_by` on the fetched row after). null
@@ -106,6 +123,22 @@ export type ErrorRow = {
 
 export type ChatRow = MessageRow | ErrorRow
 
+/** A message core has ACCEPTED but not yet answered (S15): the owner sent it
+ * while a turn was running, so it waits and runs by itself when that turn ends.
+ *
+ * Held apart from `rows` on purpose. It is not a message anybody has answered,
+ * so putting it in the transcript would mean the two transcript-merging paths
+ * (`pollResolved` replaces every row; `idlePolled` matches client rows to
+ * server rows by text) each had to get it right — and they disagree, so it
+ * would show twice or vanish. Out here the SERVER's list is simply the truth
+ * and `queueSynced` adopts it. */
+export type QueuedMessage = {
+  id: string
+  body: string
+  /** How many accepted messages run before this one. 0 means it is next. */
+  ahead: number
+}
+
 export interface ChatState {
   rows: ChatRow[]
   streaming: boolean
@@ -113,6 +146,12 @@ export interface ChatState {
   model: string | null
   /** The assistant row currently being filled, if a turn is in flight. */
   pendingId: string | null
+  /** The server's id for the turn in flight, from the meta frame (S15) — what
+   * Stop addresses. Cleared the moment the turn ends and on every new send, so
+   * the button can never be pointed at a turn that has already finished. */
+  turnId: string | null
+  /** Messages core accepted while a turn was running, oldest first (S15). */
+  queued: QueuedMessage[]
 }
 
 export type ChatAction =
@@ -143,6 +182,28 @@ export type ChatAction =
       messages: FetchedMessage[]
       observedRows: ChatRow[]
     }
+  // The turn a RELOADED tab found already running server-side (S15), learned
+  // from /conversations/active rather than from a meta frame this tab never
+  // saw. It sets the turn id and nothing else — no row, no streaming flag; the
+  // pending-turn poll still owns the transcript. Without it, the one case that
+  // most needs Stop (a tab that came back to a hung turn) is the one case that
+  // cannot reach it. null when the poll resolves.
+  | { type: 'serverTurn'; turnId: string | null }
+  // The owner took an accepted message back (S15). Dispatched only AFTER the
+  // server confirms the cancellation, the clearChat discipline: never a fake
+  // success, because a chip that vanished while the message still ran would be
+  // the worst possible lie about a queue.
+  | { type: 'unqueued'; id: string }
+  // The server's list of accepted-but-unanswered messages, adopted whole. It is
+  // the truth: the server is what runs them, and this arrives on every poll
+  // tick, so an unchanged list must return the SAME state or the composer
+  // re-renders for ever.
+  | { type: 'queueSynced'; queued: QueuedMessage[] }
+  // A send made while a turn was running that core did not accept (S15). It gets
+  // its OWN error row rather than going through the `error` event, which would
+  // replace the LIVE turn's bubble — a failure to queue must not take down the
+  // reply the owner is reading.
+  | { type: 'queueFailed'; reason: string }
   | { type: 'reset' }
   // Clear-chat (button or the /clear slash command): the operator emptied THIS
   // conversation's transcript. Dispatched by chat-store.tsx only AFTER the clear
@@ -173,7 +234,22 @@ export type FetchedMessage = {
 export const NO_REPLY = 'the turn finished without a reply'
 
 export function emptyChat(): ChatState {
-  return { rows: [], streaming: false, conversationId: null, model: null, pendingId: null }
+  return {
+    rows: [],
+    streaming: false,
+    conversationId: null,
+    model: null,
+    pendingId: null,
+    turnId: null,
+    queued: [],
+  }
+}
+
+function sameQueue(a: QueuedMessage[], b: QueuedMessage[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((q, i) => q.id === b[i].id && q.body === b[i].body && q.ahead === b[i].ahead)
+  )
 }
 
 function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role'] }): MessageRow {
@@ -182,6 +258,7 @@ function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role
     text: '',
     streaming: false,
     interrupted: false,
+    stoppedNote: null,
     activity: null,
     servedBy: null,
     cost: null,
@@ -293,11 +370,24 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
         ...state,
         conversationId: event.conversationId || state.conversationId,
         model: event.model || state.model,
+        // What Stop addresses (S15). The meta frame is the one place the
+        // server states it, and it arrives first.
+        turnId: event.turnId || null,
       }
       // Who is writing the pending row (S12): the agent the server named,
       // or null for Nova. Set directly — the meta frame is the one fact.
       return state.pendingId === null ? next : withPending(next, row => ({ ...row, agent: event.agent }))
     }
+
+    // Accepted, not answered (S15) — and NOT a turn, so nothing about the one
+    // in flight moves: not `streaming`, not `pendingId`, not `turnId`, not a
+    // single row. This event arrives on its own POST, not on the live stream.
+    case 'queued':
+      return {
+        ...state,
+        conversationId: state.conversationId ?? event.conversationId ?? null,
+        queued: [...state.queued, { id: event.id, body: event.body, ahead: event.ahead }],
+      }
 
     case 'delta':
       if (state.pendingId === null) return state
@@ -321,6 +411,7 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
                 // A progress frame carries the tool's own words; the marker
                 // is REPLACED each time so the bubble shows the latest.
                 ...(event.detail !== undefined ? { detail: event.detail } : {}),
+                ...(event.percent !== undefined ? { percent: event.percent } : {}),
               },
         // Only the delegate tool's frames touch the delegation (S12); every
         // other tool's frames leave it exactly as it is.
@@ -349,24 +440,49 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
           ...state,
           rows: [...state.rows, { kind: 'error', id: `err-${state.rows.length}`, reason: event.reason }],
           streaming: false,
+          turnId: null,
         }
       }
-      return replacePendingWithError(state, event.reason)
+      return { ...replacePendingWithError(state, event.reason), turnId: null }
+
+    // The owner pressed Stop and the server ended the turn on purpose (S15).
+    // Settled like `done`, not like `error`: the text he watched stays, the
+    // note goes on the row, and no red bubble appears — nothing failed. It
+    // settles pendingId too, so the `done` frame that always follows cannot
+    // re-read an empty-text row as "finished without a reply": a stop during a
+    // tool call, before any prose, is a note and not a failure.
+    case 'stopped': {
+      if (state.pendingId === null) return { ...state, streaming: false, turnId: null }
+      return {
+        ...withPending(state, row =>
+          settleDelegation({
+            ...row,
+            streaming: false,
+            activity: null,
+            stoppedNote: event.note,
+          }),
+        ),
+        streaming: false,
+        pendingId: null,
+        turnId: null,
+      }
+    }
 
     case 'done': {
-      if (state.pendingId === null) return { ...state, streaming: false }
+      if (state.pendingId === null) return { ...state, streaming: false, turnId: null }
       const pending = pendingRow(state)
       // No text and no error frame: still a failure, said out loud.
-      if (pending && !pending.text) return replacePendingWithError(state, NO_REPLY)
+      if (pending && !pending.text) return { ...replacePendingWithError(state, NO_REPLY), turnId: null }
       return {
         ...withPending(state, row => settleDelegation({ ...row, streaming: false, activity: null })),
         streaming: false,
         pendingId: null,
+        turnId: null,
       }
     }
 
     case 'interrupted': {
-      if (state.pendingId === null) return { ...state, streaming: false }
+      if (state.pendingId === null) return { ...state, streaming: false, turnId: null }
       return {
         ...withPending(state, row =>
           settleDelegation({
@@ -378,6 +494,7 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
         ),
         streaming: false,
         pendingId: null,
+        turnId: null,
       }
     }
   }
@@ -422,6 +539,11 @@ function fromFetchedMessages(
     conversationId,
     model: state.model,
     rows: messages.map(serverRow),
+    // The queue is not part of the transcript and this fetch says nothing about
+    // it (S15): a message still waiting has not been answered, so replacing the
+    // rows must not drop it. Only `queueSynced`, which reads the server's own
+    // list, and `unqueued`, which the server has confirmed, change it.
+    queued: state.queued,
   }
 }
 
@@ -632,6 +754,30 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         return sameRows(merged, state.rows) ? state : { ...state, rows: merged }
       }
 
+    case 'unqueued': {
+      const left = state.queued.filter(q => q.id !== action.id)
+      return left.length === state.queued.length ? state : { ...state, queued: left }
+    }
+
+    case 'queueSynced':
+      return sameQueue(state.queued, action.queued) ? state : { ...state, queued: action.queued }
+
+    case 'queueFailed':
+      return {
+        ...state,
+        rows: [
+          ...state.rows,
+          { kind: 'error', id: `queue-err-${state.rows.length}`, reason: action.reason },
+        ],
+      }
+
+    case 'serverTurn':
+      // Only the id. A turn this tab is streaming itself always wins: its meta
+      // frame is first-hand, and a poll result that arrived late must never
+      // re-aim Stop at a turn that has already been replaced.
+      if (state.streaming) return state
+      return state.turnId === action.turnId ? state : { ...state, turnId: action.turnId }
+
     case 'reset':
       return emptyChat()
 
@@ -666,6 +812,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ],
         streaming: true,
         pendingId: action.assistantId,
+        // The new turn has no id until its meta frame arrives; keeping the
+        // previous one would point Stop at a turn that already finished.
+        turnId: null,
       }
 
     case 'event':

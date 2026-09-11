@@ -62,13 +62,15 @@ export type StreamEvent =
   // about a long call still running ("pulling qwen3:4b — 42% (1.0 GB of
   // 2.3 GB)"). Optional like `reason`. `agent`/`agentTurnId`/`step`/
   // `stepStatus` ride a delegate_to_agent progress frame (S12) — see the
-  // file comment.
+  // file comment. `percent` (S15) is 0..100 when the call knows its own
+  // fraction; absent means the bar is indeterminate, not at zero.
   | {
       type: 'activity'
       tool: string
       status: string
       reason?: string
       detail?: string
+      percent?: number
       agent?: string
       agentTurnId?: string
       step?: string
@@ -85,6 +87,18 @@ export type StreamEvent =
   // {"route": {...}} — the gateway served this turn from a link PAST the
   // first (S10-2): who answered and its stated reason. Sent only then.
   | { type: 'route'; route: RouteMarker }
+  // {"stopped": "Stopped while running model_pull — …"} — the owner pressed
+  // Stop and the turn ended on purpose (S15). Deliberately NOT an `error`:
+  // nothing failed, the text already streamed is still the record, and the
+  // note says where it stopped and what that does and does not mean. Always
+  // followed by `done`.
+  | { type: 'stopped'; note: string }
+  // Not a stream at all: a 202 whose body is the message core ACCEPTED because
+  // a turn was already running (S15). One conversation answers one question at
+  // a time and the server is what decides that, so this arrives in place of the
+  // whole event sequence — followed only by `done`. `ahead` is how many
+  // accepted messages run before this one; 0 means it is next.
+  | { type: 'queued'; id: string; conversationId: string; body: string; ahead: number }
   | { type: 'done' }
   | { type: 'interrupted'; reason: string }
 
@@ -127,7 +141,16 @@ export function failureReason(err: unknown): string {
 // the moment a newer server introduces one. A key IN this set with the
 // wrong shape (caught below, before this check ever runs) is still a
 // contract violation and still an error. (Ruling S2-R6, amending S1's R20.)
-const KNOWN_FRAME_KEYS = new Set(['t', 'error', 'meta', 'activity', 'served_by', 'usage', 'route'])
+const KNOWN_FRAME_KEYS = new Set([
+  't',
+  'error',
+  'stopped',
+  'meta',
+  'activity',
+  'served_by',
+  'usage',
+  'route',
+])
 
 function frameToEvent(payload: string): StreamEvent | null {
   if (payload === '[DONE]') return { type: 'done' }
@@ -145,6 +168,7 @@ function frameToEvent(payload: string): StreamEvent | null {
   const obj = data as Record<string, unknown>
   if (typeof obj.t === 'string') return { type: 'delta', text: obj.t }
   if (typeof obj.error === 'string') return { type: 'error', reason: obj.error }
+  if (typeof obj.stopped === 'string') return { type: 'stopped', note: obj.stopped }
   if (typeof obj.served_by === 'string' && obj.served_by) {
     return { type: 'served', servedBy: obj.served_by }
   }
@@ -210,6 +234,12 @@ function frameToEvent(payload: string): StreamEvent | null {
       // entirely rather than set to undefined.
       if (typeof activity.reason === 'string') event.reason = activity.reason
       if (typeof activity.detail === 'string') event.detail = activity.detail
+      // `percent` (S15) — the same rule, and the absence matters: no percent
+      // means an INDETERMINATE bar, never a bar sitting at zero, so a
+      // wrong-typed value must leave the key off rather than coerce.
+      if (typeof activity.percent === 'number' && Number.isFinite(activity.percent)) {
+        event.percent = activity.percent
+      }
       // The delegation relay keys (S12) — same rule: present only when the
       // server stated them, so a plain activity event is byte-identical to
       // what it was before these existed.
@@ -262,7 +292,10 @@ export function createSseParser(): SseParser {
   }
 }
 
-async function statedRefusal(response: Response): Promise<string> {
+/** What the server actually said about refusing, for a caller to show verbatim.
+ * Exported since S15: the store's own queue fetch must report a refusal in the
+ * same words as the stream does, not in words of its own. */
+export async function statedRefusal(response: Response): Promise<string> {
   let body = ''
   try {
     body = await response.text()
@@ -277,6 +310,41 @@ export interface StreamChatOptions {
   message: string
   conversationId?: string | null
   signal?: AbortSignal
+}
+
+/** A 202's body as the `queued` event it describes, or null when it is not the
+ * shape the contract promises. Exported because the store queues through its own
+ * fetch (it must not disturb the live stream), and the two must read an accepted
+ * message the same way. */
+export function parseQueued(payload: string): Extract<StreamEvent, { type: 'queued' }> | null {
+  let data: unknown
+  try {
+    data = JSON.parse(payload)
+  } catch {
+    return null
+  }
+  const row = (data as Record<string, unknown> | null)?.queued
+  if (row === null || typeof row !== 'object') return null
+  const queued = row as Record<string, unknown>
+  if (typeof queued.id !== 'string' || typeof queued.body !== 'string') return null
+  return {
+    type: 'queued',
+    id: queued.id,
+    conversationId: typeof queued.conversation_id === 'string' ? queued.conversation_id : '',
+    body: queued.body,
+    ahead: typeof queued.ahead === 'number' ? queued.ahead : 0,
+  }
+}
+
+/** The `queued` event, or a STATED error when the body cannot be read — never a
+ * silent drop, because a message the client believes was accepted and then
+ * forgets about is the one failure this whole feature exists to not have. */
+function* queuedFrom(payload: string): Generator<StreamEvent> {
+  const queued = parseQueued(payload)
+  yield queued ?? {
+    type: 'error',
+    reason: `the server accepted the message but said: ${quote(payload)}`,
+  }
 }
 
 export async function* streamChat(
@@ -303,6 +371,15 @@ export async function* streamChat(
 
   if (!response.ok) {
     yield { type: 'error', reason: await statedRefusal(response) }
+    yield { type: 'done' }
+    return
+  }
+  if (response.status === 202) {
+    // Accepted, not streamed (S15). A 202 is `ok`, so without this branch the
+    // JSON body would be read as SSE: one "unexpected line from the server"
+    // error and then an `interrupted`, which is how an accepted message would
+    // have looked like a failure.
+    yield* queuedFrom(await response.text())
     yield { type: 'done' }
     return
   }

@@ -766,6 +766,44 @@ def test_a_dict_progress_report_contributes_only_the_allow_listed_keys():
     }
 
 
+def test_a_progress_report_may_carry_a_percent_and_nothing_else_numeric():
+    """S15: a bar needs a NUMBER, and the words cannot be parsed for one.
+
+    `percent` is the one numeric key a tool may put on a frame, so the chat
+    can draw a determinate bar for any long call that knows its own fraction
+    — not a pull-shaped special case. It is clamped here rather than trusted,
+    and every other numeric key stays uncopyable.
+    """
+
+    def activity(frame: str) -> dict:
+        return json.loads(frame[len("data: ") :])["activity"]
+
+    assert activity(
+        chat._activity_frame("model_pull", "progress", detail={"detail": "42%", "percent": 42})
+    ) == {"tool": "model_pull", "status": "progress", "detail": "42%", "percent": 42}
+
+    def percent_of(value) -> int:
+        return activity(chat._activity_frame("x", "progress", detail={"percent": value}))["percent"]
+
+    # Clamped, not trusted: a tool's arithmetic is not the frame's contract.
+    assert percent_of(142) == 100
+    assert percent_of(-5) == 0
+    # A fraction of a point is not a percent anyone can see; it rides as an int.
+    assert percent_of(42.7) == 42
+    # Anything that is not a real number is dropped, exactly like a non-string
+    # `detail` — including a bool, which Python would otherwise count as an int.
+    for bad in ("42", True, None, [42], {"n": 42}, float("nan"), float("inf"), float("-inf")):
+        assert activity(chat._activity_frame("x", "progress", detail={"percent": bad})) == {
+            "tool": "x",
+            "status": "progress",
+        }
+    # Still only on progress, like every other report key.
+    assert activity(chat._activity_frame("x", "ok", detail={"percent": 42})) == {
+        "tool": "x",
+        "status": "ok",
+    }
+
+
 async def test_a_tools_progress_reports_reach_the_stream_str_or_dict(
     pool, mount_peers, root, monkeypatch
 ):

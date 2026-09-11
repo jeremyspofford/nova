@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import date
+import uuid
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -782,3 +783,160 @@ async def test_an_empty_message_is_refused(owner_client, mount_peers, message):
     mount_peers(gateway=FakeGateway(), memory=FakeMemory())
     resp = await owner_client.post("/api/v1/chat/stream", json={"message": message})
     assert resp.status_code in (400, 422)
+
+
+# -- the owner's Stop (S15) --
+
+
+async def test_stopping_a_streaming_turn_keeps_what_was_watched_and_closes_stopped(
+    owner_client, pool, mount_peers
+):
+    """Stop is a deliberate act with a record, not an abandonment.
+
+    The text already streamed is what the owner WATCHED, so it is what
+    persists — the same rule as any other turn ("a reload shows exactly what
+    was watched live"). The stop note is appended to it rather than replacing
+    it, the turn closes 'stopped' (never 'interrupted', which means no process
+    was running it), and the process-local flags are all clear afterwards.
+    """
+    hold = asyncio.Event()
+    gateway = FakeGateway(
+        deltas=("I will now do ",), hold=hold, after_hold=("the wrong thing entirely",)
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await _set_model(owner_client)
+
+    turn = asyncio.create_task(
+        owner_client.post("/api/v1/chat/stream", json={"message": "go on then"})
+    )
+    while not gateway.seen:
+        await asyncio.sleep(0.01)
+    try:
+        turn_id = await pool.fetchval("SELECT id FROM turns WHERE status IS NULL")
+        assert turn_id is not None
+        stop = await owner_client.post(f"/api/v1/chat/turns/{turn_id}/stop")
+        assert stop.status_code == 200, stop.text
+        # It was asked while the gateway was held, so it cannot have ended yet
+        # — and the route says exactly that rather than claiming a stop.
+        assert stop.json()["stopped"] is False
+        assert traces.stop_requested(turn_id) is not None
+    finally:
+        hold.set()
+
+    resp = await asyncio.wait_for(turn, timeout=10)
+    assert resp.status_code == 200
+    assert frames(resp.text)[-1] == DONE
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+
+    assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id) == "stopped"
+    reply = await pool.fetchval(
+        "SELECT content FROM messages WHERE turn_id = $1 AND role = 'assistant'", turn_id
+    )
+    assert reply is not None, "a stopped turn still owes the owner a visible reply"
+    assert "I will now do" in reply, "the text he watched is the record"
+    assert "stop" in reply.lower()
+    # The text after the stop was asked for never reaches the transcript.
+    assert "the wrong thing entirely" not in reply
+    assert turn_id not in traces.INFLIGHT
+    assert traces.stop_requested(turn_id) is None
+    assert traces.doing(turn_id) is None
+
+
+def test_the_stop_note_only_doubts_a_call_it_actually_interrupted():
+    """The defect a live walk found, pinned.
+
+    The note used to read the turn's live "doing" map for WHERE it stopped. A
+    stop that landed at a round boundary therefore named the last tool — which
+    had already returned ok — and then added that whether it finished was not
+    something she could see. A false uncertainty about a call that demonstrably
+    finished is the same defect as a false claim, so `where` comes from the raise
+    site and the caveat rides only on a stop inside a running call.
+    """
+    inside = chat.stopped_statement(
+        stated="the owner asked to stop it", where="while running model_pull", spans=[]
+    )
+    assert "Stopped while running model_pull" in inside
+    assert "whether it finished on its own" in inside
+
+    for where in ("between steps", "while writing the reply"):
+        note = chat.stopped_statement(stated="the owner asked to stop it", where=where, spans=[])
+        assert note.startswith(f"Stopped {where} —")
+        assert "whether it finished" not in note
+    # And no retry hint anywhere: nothing failed, and the owner did this on
+    # purpose. (He also said he does not want to be sent to Settings.)
+    assert "Settings" not in inside
+
+    # The interrupted call is not reported as a call that FAILED. Its span still
+    # carries the head pre-set before dispatch, which the ran/failed clause would
+    # otherwise read as a failure — "model_pull failed" about a download someone
+    # stopped on purpose. Another one the live walk turned up.
+    interrupted = traces.Span(
+        kind="tool",
+        name="model_pull",
+        started_at=datetime.now(UTC),
+        duration_ms=1,
+        meta={"ok": False, "result_head": chat.NEVER_RETURNED},
+    )
+    finished = traces.Span(
+        kind="tool",
+        name="model_catalog_search",
+        started_at=datetime.now(UTC),
+        duration_ms=1,
+        meta={"ok": True, "result_head": "1 model(s) match"},
+    )
+    note = chat.stopped_statement(
+        stated="the owner asked to stop it",
+        where="while running model_pull",
+        spans=[finished, interrupted],
+    )
+    assert "model_pull failed" not in note
+    assert "model_catalog_search ran" in note
+
+
+async def test_stopping_a_turn_nothing_here_is_running_is_refused_with_a_reason(
+    owner_client, pool, mount_peers
+):
+    """A stop nothing can act on is refused, not accepted. A 200 over a turn
+    that no process is running would be the purest form of reporting a success
+    nobody checked — the flag would be written and never read."""
+    mount_peers(gateway=FakeGateway(), memory=FakeMemory())
+    await _set_model(owner_client)
+    await _say(owner_client, "a turn that has already finished")
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+
+    finished = await pool.fetchval("SELECT id FROM turns ORDER BY started_at DESC LIMIT 1")
+    resp = await owner_client.post(f"/api/v1/chat/turns/{finished}/stop")
+    assert resp.status_code == 409, resp.text
+    assert "not running here" in resp.json()["error"]
+    assert "closed as 'ok'" in resp.json()["error"], "it says what the ledger actually holds"
+    assert traces.stop_requested(finished) is None
+
+
+async def test_a_turn_someone_else_owns_is_not_found_rather_than_forbidden(
+    owner_client, pool, mount_peers
+):
+    """Someone else's turn is NOT FOUND — the answer owned_conversation already
+    gives, so a stranger cannot probe which turn ids exist by reading the
+    difference between 403 and 404. An id nobody owns answers the same way."""
+    mount_peers(gateway=FakeGateway(), memory=FakeMemory())
+    stranger = await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('someone else', 'guest') RETURNING id"
+    )
+    theirs = await pool.fetchval(
+        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", stranger
+    )
+    their_turn = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id, person_id) VALUES ('chat', $1, $2) RETURNING id",
+        theirs,
+        stranger,
+    )
+    traces.INFLIGHT.add(their_turn)  # genuinely running, just not his
+    try:
+        resp = await owner_client.post(f"/api/v1/chat/turns/{their_turn}/stop")
+        assert resp.status_code == 404, resp.text
+        assert traces.stop_requested(their_turn) is None, "not even recorded"
+
+        nobody = await owner_client.post(f"/api/v1/chat/turns/{uuid.uuid4()}/stop")
+        assert nobody.status_code == 404
+    finally:
+        traces.INFLIGHT.discard(their_turn)

@@ -481,13 +481,25 @@ def _installed_row(catalog: dict, target: str) -> dict | None:
     return None
 
 
-def _progress_words(target: str, line: dict) -> str:
+def _progress_pct(line: dict) -> int | None:
+    """The whole-percent fraction this pull line reports, or None when it
+    carries no byte count to compute one from.
+
+    ONE computation, used by both the words and the number on the frame (S15),
+    so a bar can never sit at a different percentage than the sentence beside
+    it — two formulas here truncated and rounded differently.
+    """
     total, done = line.get("total"), line.get("completed")
-    status = str(line.get("status") or "pulling")
     if isinstance(total, int) and total > 0 and isinstance(done, int):
-        pct = min(100, int(done * 100 / total))
-        return f"pulling {target} — {pct}% ({_gb(done)} of {_gb(total)})"
-    return f"{status} — {target}"
+        return min(100, max(0, int(done * 100 / total)))
+    return None
+
+
+def _progress_words(target: str, line: dict) -> str:
+    pct = _progress_pct(line)
+    if pct is None:
+        return f"{str(line.get('status') or 'pulling')} — {target}"
+    return f"pulling {target} — {pct}% ({_gb(line['completed'])} of {_gb(line['total'])})"
 
 
 async def _send(ctx: ToolContext, method: str, path: str, **kwargs) -> tuple[int, dict]:
@@ -576,16 +588,28 @@ async def model_pull(args: dict, ctx: ToolContext) -> str:
     progress = ctx.progress
     saw_success = False
     preflight: str | None = None
-    last_pct = -1
+    # Per LAYER, not per pull: ollama downloads a model as several blobs and
+    # reports each one's own 0→100. Keeping one high-water mark for the whole
+    # turn meant the first layer to finish silenced every layer after it, so a
+    # multi-blob pull showed a bar that reached some number and then stopped
+    # moving while the download carried on. Found by walking a real pull.
+    last_pct: dict[str, int] = {}
     last_words: str | None = None
 
-    def report(words: str) -> None:
+    def report(words: str, pct: int | None = None) -> None:
         # Consecutive identical reports (a layer with no byte count yet
         # repeats its status line) are one frame, not twenty.
+        #
+        # A line that KNOWS its fraction reports the number beside the words
+        # (S15), because the chat draws a determinate bar and prose cannot be
+        # parsed for one. A line that does not — the preflight, a manifest with
+        # no byte count — stays a bare string and renders as words alone, so
+        # the bar never invents a position it was not told.
         nonlocal last_words
-        if progress is not None and words != last_words:
-            last_words = words
-            progress(words)
+        if progress is None or words == last_words:
+            return
+        last_words = words
+        progress(words if pct is None else {"detail": words, "percent": pct})
 
     try:
         async with _gateway(ctx, PULL_TIMEOUT) as client:
@@ -619,16 +643,17 @@ async def model_pull(args: dict, ctx: ToolContext) -> str:
                         continue
                     if progress is not None:
                         words = _progress_words(target, line)
-                        total, done = line.get("total"), line.get("completed")
-                        pct = (
-                            int(done * 100 / total)
-                            if isinstance(total, int) and total > 0 and isinstance(done, int)
-                            else -1
-                        )
-                        # Throttled: a frame every 5 points, or on a status change.
-                        if pct == -1 or pct - last_pct >= 5 or pct == 100:
-                            last_pct = pct if pct >= 0 else last_pct
+                        pct = _progress_pct(line)
+                        # One frame per whole percentage point REACHED, per layer,
+                        # which caps a layer at 100 frames and still moves a bar
+                        # smoothly. A line with no fraction yet (a manifest)
+                        # reports its words and is deduped by them instead.
+                        layer = str(line.get("status") or "pulling")
+                        if pct is None:
                             report(words)
+                        elif pct > last_pct.get(layer, -1):
+                            last_pct[layer] = pct
+                            report(words, pct)
     except httpx.TimeoutException as exc:
         raise ToolFailure(
             f"the pull stream went quiet for {PULL_TIMEOUT.read:g} s — {target} is not "

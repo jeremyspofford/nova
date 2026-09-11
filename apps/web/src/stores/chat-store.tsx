@@ -9,13 +9,20 @@ import {
 } from 'react'
 import { clearConversation as apiClearConversation } from '../lib/api'
 import { matchCommand } from '../lib/commands'
-import { streamChat, type FetchLike } from '../lib/streamChat'
+import {
+  failureReason,
+  parseQueued,
+  statedRefusal,
+  streamChat,
+  type FetchLike,
+} from '../lib/streamChat'
 import {
   chatReducer,
   emptyChat,
   type ChatRow,
   type ChatState,
   type FetchedMessage,
+  type QueuedMessage,
 } from '../pages/chat/chatReducer'
 
 /**
@@ -103,6 +110,31 @@ interface ChatStore {
    * message merely containing "/clear" sends normally (see lib/commands.ts).
    */
   clearChat: () => Promise<void>
+  /**
+   * Ask core to stop the turn in flight (S15). A no-op when this tab is not
+   * streaming one. It ASKS and nothing more: core ends the turn and sends the
+   * `stopped` frame, and that frame is what settles the row — so the store
+   * never shows an ending it has only requested. Aborting locally instead
+   * would be a disconnect, which ruling S2c-R1 defines as "finish".
+   */
+  stopTurn: () => Promise<void>
+  /**
+   * Record the turn a RELOADED tab found already running server-side (S15),
+   * learned from /conversations/active. It only gives `stopTurn` something to
+   * address — the pending-turn poll still owns the transcript. Pass null once
+   * the poll resolves.
+   */
+  noteServerTurn: (turnId: string | null) => void
+  /**
+   * Take back a message core accepted but has not run (S15). Rejects with the
+   * server's own words when it refuses — a message already being answered
+   * cannot be withdrawn, and the chip must stay rather than imply it was.
+   */
+  unqueue: (id: string) => Promise<void>
+  /** Adopt the server's list of accepted-but-unanswered messages. The server is
+   * what runs them, so its list is the truth; ChatPage hands this the `queued`
+   * field of /conversations/active on every poll tick. */
+  syncQueue: (queued: QueuedMessage[]) => void
 }
 
 /** The DI seam for the clear-chat call — same idiom as `fetchImpl`: production
@@ -180,6 +212,103 @@ export function ChatProvider({
     dispatch({ type: 'cleared', conversationId })
   }, [conversationsApi])
 
+  const noteServerTurn = useCallback((turnId: string | null) => {
+    dispatch({ type: 'serverTurn', turnId })
+  }, [])
+
+  /** Send while a turn is already running (S15).
+   *
+   * Its own fetch, deliberately not `streamChat`'s event loop: those events are
+   * written for the row being filled in, and feeding a `done` or an `error` from
+   * THIS request into the reducer would settle — or destroy — the live turn's
+   * bubble. Nothing here touches `abortRef`, `pendingId` or `streaming` either.
+   *
+   * The SERVER decides which it was. A 202 is an accepted message and becomes a
+   * chip. A 200 means the turn ended between the check and the request, so core
+   * started this message as a real turn instead: the turn finishes and persists
+   * regardless of who is reading (S2c), `pending_turn` is true meanwhile, and
+   * this tab picks the reply up through the same poll a reload uses — rather
+   * than this path inventing a second way to render a live turn.
+   */
+  const queueMessage = useCallback(
+    async (text: string) => {
+      const send: FetchLike = fetchImpl ?? (((url, init) => fetch(url, init)) as FetchLike)
+      const conversationId = stateRef.current.conversationId
+      const body: Record<string, unknown> = { message: text }
+      if (conversationId) body.conversation_id = conversationId
+      let response: Response
+      try {
+        response = await send('/api/v1/chat/stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          credentials: 'same-origin',
+          body: JSON.stringify(body),
+        })
+      } catch (err) {
+        dispatch({ type: 'queueFailed', reason: `could not reach Nova — ${failureReason(err)}` })
+        return
+      }
+      if (response.status === 202) {
+        const queued = parseQueued(await response.text())
+        if (queued === null) {
+          dispatch({
+            type: 'queueFailed',
+            reason: 'Nova accepted that message but described it in a way this page cannot read',
+          })
+          return
+        }
+        dispatch({ type: 'event', event: queued })
+        return
+      }
+      if (!response.ok) {
+        dispatch({ type: 'queueFailed', reason: await statedRefusal(response) })
+        return
+      }
+      // A 200: core started it. Nothing to render here — the reply lands through
+      // the pending-turn poll, the same path a reloaded tab uses.
+    },
+    [fetchImpl],
+  )
+
+  const unqueue = useCallback(
+    async (id: string) => {
+      const send: FetchLike = fetchImpl ?? (((url, init) => fetch(url, init)) as FetchLike)
+      const response = await send(`/api/v1/chat/queued/${id}`, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      })
+      if (!response.ok) {
+        // The message is still going to run; a chip that vanished here would say
+        // the opposite. Same discipline as clearChat: never a fake success.
+        throw new Error(await statedRefusal(response))
+      }
+      dispatch({ type: 'unqueued', id })
+    },
+    [fetchImpl],
+  )
+
+  const syncQueue = useCallback((queued: QueuedMessage[]) => {
+    dispatch({ type: 'queueSynced', queued })
+  }, [])
+
+  const stopTurn = useCallback(async () => {
+    const turnId = stateRef.current.turnId
+    // No turn id means no turn this tab is streaming — nothing to stop, and
+    // nothing to ask about. Read from the ref, not a closed-over render.
+    if (!turnId) return
+    // Asked, never assumed. The request does NOT abort the local stream and
+    // does not settle the row: core ends the turn and sends the `stopped`
+    // frame, and THAT is what the reducer acts on. Aborting here instead would
+    // be the browser claiming an ending it only requested — and a disconnect
+    // means "finish", not "stop" (ruling S2c-R1).
+    const send: FetchLike = fetchImpl ?? (((url, init) => fetch(url, init)) as FetchLike)
+    await send(`/api/v1/chat/turns/${turnId}/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+    })
+  }, [fetchImpl])
+
   // A local, un-sent assistant row (the /help listing). Never streamed to the
   // model, never persisted — see chatReducer's 'localMessage'.
   const appendLocalMessage = useCallback((text: string) => {
@@ -195,6 +324,15 @@ export function ChatProvider({
         // parser is the registry's own (lib/commands.ts), so a message that
         // merely CONTAINS "/clear" mid-text still sends normally.
         command.run({ clearChat, appendLocalMessage })
+        return
+      }
+      if (stateRef.current.streaming) {
+        // A turn is already running, so this message is for the queue (S15).
+        // Read from the ref, not a render's closure: the composer can be a
+        // render behind, and the SERVER decides anyway — if the turn has in fact
+        // ended, core starts this message and queueMessage says what happens
+        // then. The live turn's state is not touched on this path.
+        void queueMessage(text)
         return
       }
       const userId = nextId('u')
@@ -226,7 +364,7 @@ export function ChatProvider({
         }
       })()
     },
-    [fetchImpl, clearChat, appendLocalMessage],
+    [fetchImpl, clearChat, appendLocalMessage, queueMessage],
   )
 
   const loadConversation = useCallback((conversationId: string, messages: FetchedMessage[]) => {
@@ -258,6 +396,10 @@ export function ChatProvider({
         syncFromServer,
         setModel,
         clearChat,
+        stopTurn,
+        noteServerTurn,
+        unqueue,
+        syncQueue,
       }}
     >
       {children}

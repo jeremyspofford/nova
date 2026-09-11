@@ -6,6 +6,7 @@ wire, that it executes exactly once and in the model's order, what the
 client sees while it runs, what the next round is told, and what the trace
 says afterwards.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -230,9 +231,7 @@ async def test_the_second_round_is_told_what_the_tools_answered(
 
 
 async def test_tools_are_advertised_on_every_round(owner_client, pool, mount_peers, workspace):
-    gateway = ScriptedGateway(
-        rounds=((whole_call("c1", "get_time", {}),), (text("it is late"),))
-    )
+    gateway = ScriptedGateway(rounds=((whole_call("c1", "get_time", {}),), (text("it is late"),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     await _say(owner_client)
@@ -572,15 +571,9 @@ async def test_a_tool_call_in_the_narration_round_is_refused_not_dispatched(
     nicely: a call the narration round emits anyway is answered with a stated
     result and recorded as a refused span. The tool never runs, and the note
     still persists."""
-    write = (
-        whole_call("w1", "workspace_write_file", {"path": "a.md", "content": "one"}),
-    )
-    second = (
-        whole_call("w2", "workspace_write_file", {"path": "b.md", "content": "two"}),
-    )
-    third = (
-        whole_call("w3", "workspace_write_file", {"path": "c.md", "content": "three"}),
-    )
+    write = (whole_call("w1", "workspace_write_file", {"path": "a.md", "content": "one"}),)
+    second = (whole_call("w2", "workspace_write_file", {"path": "b.md", "content": "two"}),)
+    third = (whole_call("w3", "workspace_write_file", {"path": "c.md", "content": "three"}),)
     gateway = ScriptedGateway(rounds=(write, second, third))
     mount_peers(gateway=gateway, memory=FakeMemory())
     await _set(owner_client, "agents.max_tool_rounds", 2)
@@ -689,9 +682,7 @@ async def test_the_default_round_cap_is_six(owner_client):
 async def test_a_tool_round_with_no_text_does_not_trip_the_empty_floor(
     owner_client, pool, mount_peers, workspace
 ):
-    gateway = ScriptedGateway(
-        rounds=((whole_call("c1", "get_time", {}),), (text("It is late."),))
-    )
+    gateway = ScriptedGateway(rounds=((whole_call("c1", "get_time", {}),), (text("It is late."),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     sent = await _say(owner_client)
@@ -830,9 +821,7 @@ async def test_a_gateway_failure_mid_loop_is_stated_and_keeps_what_streamed(
 # -- history -------------------------------------------------------------
 
 
-async def test_the_next_turn_replays_no_tool_transcript(
-    owner_client, pool, mount_peers, workspace
-):
+async def test_the_next_turn_replays_no_tool_transcript(owner_client, pool, mount_peers, workspace):
     gateway = ScriptedGateway(
         rounds=(
             (whole_call("c1", "get_time", {}),),
@@ -1095,10 +1084,13 @@ def test_indexed_argument_fragments_still_concatenate_when_the_id_repeats():
 def test_two_calls_a_backend_gave_the_same_id_do_not_share_a_tool_call_id():
     """Two indexed calls really are two calls; a strict backend rejects two
     tool results carrying one id, so the duplicate is re-minted."""
-    ids = [call_id for call_id, _name, _args in _buffered(
-        _fragment(index=0, call_id="dup", name="get_time", arguments="{}"),
-        _fragment(index=1, call_id="dup", name="get_time", arguments="{}"),
-    )]
+    ids = [
+        call_id
+        for call_id, _name, _args in _buffered(
+            _fragment(index=0, call_id="dup", name="get_time", arguments="{}"),
+            _fragment(index=1, call_id="dup", name="get_time", arguments="{}"),
+        )
+    ]
     assert len(set(ids)) == 2
     assert ids[0] == "dup"
 
@@ -1148,3 +1140,67 @@ async def test_a_tools_progress_reports_stream_as_progress_frames_with_detail(
         "pulling qwen3:4b — 100% (2.3 GB of 2.3 GB)",
     ]
     assert "detail" not in activity_frames(sent, "start")[0]
+
+
+async def test_a_stop_lands_inside_a_long_tool_call_not_only_between_them(
+    owner_client, pool, mount_peers, workspace, monkeypatch
+):
+    """The case that prompted the feature: a download that reports as it goes.
+
+    The stop is checked in the PROGRESS callback the turn binds for every call,
+    so ANY long tool that reports its own progress becomes interruptible
+    without knowing Stop exists — derived from the reporting it already does,
+    not from a list of interruptible tools someone maintains.
+
+    The honest limit is in the assertions: core stopped WAITING on the call. It
+    does not claim the work the call had already done was undone, and the
+    reply must not say otherwise.
+    """
+    from app import tools
+    from app.tools.base import Tool
+
+    steps: list[int] = []
+
+    async def slow(args, ctx):
+        for i in range(200):
+            steps.append(i)
+            # The stop rides out through here — the same call that draws the bar.
+            ctx.progress(f"step {i} of 200")
+            await asyncio.sleep(0.005)
+        return "finished all 200 steps"
+
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "slow_tool",
+        Tool(name="slow_tool", description="x", parameters={"type": "object"}, executor=slow),
+    )
+    gateway = ScriptedGateway(
+        rounds=(
+            (*streamed_call(0, "c1", "slow_tool", {}),),
+            (text("all 200 steps are done."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    turn = asyncio.create_task(
+        owner_client.post("/api/v1/chat/stream", json={"message": "do the slow thing"})
+    )
+    while len(steps) < 3:
+        await asyncio.sleep(0.005)
+    turn_id = await pool.fetchval("SELECT id FROM turns WHERE status IS NULL")
+    stop = await owner_client.post(f"/api/v1/chat/turns/{turn_id}/stop")
+    assert stop.status_code == 200, stop.text
+
+    resp = await asyncio.wait_for(turn, timeout=10)
+    assert resp.status_code == 200
+    await asyncio.wait_for(chat.drain_background(), timeout=10)
+
+    assert len(steps) < 200, "the call ran to the end — the stop never landed inside it"
+    assert await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id) == "stopped"
+    reply = await pool.fetchval(
+        "SELECT content FROM messages WHERE turn_id = $1 AND role = 'assistant'", turn_id
+    )
+    assert reply is not None, "a stopped turn still owes the owner a visible reply"
+    assert "slow_tool" in reply, "it says what it was doing when it stopped"
+    assert "all 200 steps are done" not in reply, "the round after the stop never ran"
+    assert "finished all 200 steps" not in reply, "it does not claim the call completed"

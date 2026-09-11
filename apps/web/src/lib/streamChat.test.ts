@@ -204,6 +204,67 @@ describe('createSseParser', () => {
     ])
   })
 
+  // S15: one conversation answers one question at a time, and the SERVER
+  // decides which happened. A 202 is an accepted message, not a stream — and
+  // not an error either, which is what it used to parse as.
+  it('turns a 202 into a queued event and nothing else', async () => {
+    const fetchImpl = async () =>
+      ({
+        ok: true,
+        status: 202,
+        text: async () =>
+          JSON.stringify({
+            queued: { id: 'q1', conversation_id: 'c1', body: 'actually, 12b', ahead: 0 },
+          }),
+      }) as unknown as Response
+    const events = []
+    for await (const event of streamChat({ message: 'actually, 12b' }, fetchImpl)) {
+      events.push(event)
+    }
+    expect(events).toEqual([
+      { type: 'queued', id: 'q1', conversationId: 'c1', body: 'actually, 12b', ahead: 0 },
+      { type: 'done' },
+    ])
+  })
+
+  it('says so plainly when a 202 carries a body it cannot read', async () => {
+    const fetchImpl = async () =>
+      ({ ok: true, status: 202, text: async () => 'not json at all' }) as unknown as Response
+    const events = []
+    for await (const event of streamChat({ message: 'x' }, fetchImpl)) events.push(event)
+    expect(events[0]).toMatchObject({ type: 'error' })
+    expect(events[1]).toEqual({ type: 'done' })
+  })
+
+  // S15: the words cannot be parsed for a number, so a long call that knows
+  // its own fraction states it — and the chat draws a determinate bar.
+  it('carries the optional percent on a progress activity frame', () => {
+    expect(
+      parseAll([
+        'data: {"activity":{"tool":"model_pull","status":"progress","detail":"pulling qwen3:4b — 42%","percent":42}}\n\n',
+      ]),
+    ).toEqual([
+      {
+        type: 'activity',
+        tool: 'model_pull',
+        status: 'progress',
+        detail: 'pulling qwen3:4b — 42%',
+        percent: 42,
+      },
+    ])
+    // A percent with no words still positions the bar.
+    expect(
+      parseAll(['data: {"activity":{"tool":"x","status":"progress","percent":0}}\n\n']),
+    ).toEqual([{ type: 'activity', tool: 'x', status: 'progress', percent: 0 }])
+    // Anything that is not a number is absent, exactly like a bad detail —
+    // an absent percent means an indeterminate bar, never a bar at zero.
+    for (const bad of ['"42"', 'true', 'null', '[42]', '{}']) {
+      expect(
+        parseAll([`data: {"activity":{"tool":"x","status":"progress","percent":${bad}}}\n\n`]),
+      ).toEqual([{ type: 'activity', tool: 'x', status: 'progress' }])
+    }
+  })
+
   it('carries the optional reason on an error activity frame', () => {
     expect(
       parseAll([

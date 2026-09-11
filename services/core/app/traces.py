@@ -38,7 +38,12 @@ import asyncpg
 
 logger = logging.getLogger("core")
 
-VALID_STATUSES = ("ok", "error", "interrupted")
+# 'stopped' (S15) is deliberately NOT 'interrupted'. Interrupted means no
+# process was running the turn — the startup sweep's word, and the scheduler
+# attaches behaviour to it ("the process stopped, the timer did nothing
+# wrong"). Someone pressing Stop is the opposite: a process was running it and
+# was told to quit. Activity has to be able to tell a redeploy from a button.
+VALID_STATUSES = ("ok", "error", "interrupted", "stopped")
 
 # Turn ids this process is actually running: added by chat.chat_stream right
 # after open_turn, discarded in chat._run_turn's finally after the shielded
@@ -82,6 +87,44 @@ def clear_doing(turn_id: uuid.UUID) -> None:
     """Forget the turn; a no-op for an id never recorded, so every exit path
     can call it without first asking whether the turn got as far as 'starting'."""
     DOING.pop(turn_id, None)
+
+
+# Turns someone has asked to stop, and the sentence saying who asked and why
+# (S15). Process-local for exactly INFLIGHT's reason: a stop is a fact about
+# work happening in THIS process, and a stored flag would still read "stopping"
+# a day after the process running it died. Written by the stop route, read by
+# the turn itself at the points where it can act on it, popped in
+# chat._run_turn's finally beside INFLIGHT.discard and clear_doing.
+#
+# Derived from INFLIGHT, never a wish anyone can record: a stop for a turn no
+# process here is running could not take effect, because nothing would read
+# the flag — so ask_to_stop REFUSES rather than accepting and dropping it.
+# That also scopes Stop to the owner's chat turns, which is the only kind
+# anyone is watching: a scheduler firing's bound and a delegation's parent are
+# not people pressing a button and must never be reported as one.
+STOPPING: dict[uuid.UUID, str] = {}
+
+
+def ask_to_stop(turn_id: uuid.UUID, reason: str) -> bool:
+    """Record that this turn should stop. False when nothing here is running it.
+
+    A second ask keeps the FIRST reason: the turn is already stopping and the
+    second press is not what caused it.
+    """
+    if turn_id not in INFLIGHT:
+        return False
+    STOPPING.setdefault(turn_id, reason)
+    return True
+
+
+def stop_requested(turn_id: uuid.UUID) -> str | None:
+    """The stated reason this turn should stop, or None to carry on."""
+    return STOPPING.get(turn_id)
+
+
+def clear_stop(turn_id: uuid.UUID) -> None:
+    """Forget the ask; a no-op for an id never recorded, like clear_doing."""
+    STOPPING.pop(turn_id, None)
 
 
 @dataclass
@@ -143,7 +186,12 @@ class Turn:
 
 
 async def open_turn(
-    pool: asyncpg.Pool,
+    # A Pool or a Connection: S15 opens the turn inside the caller's
+    # transaction, so the claim on the queued message it answers and the turn
+    # row itself commit together — the queued table's CHECK requires that, and
+    # a claim naming no turn would read as a message that was sent. Both types
+    # answer fetchrow the same way; nothing here needs more.
+    pool: asyncpg.Pool | asyncpg.Connection,
     *,
     kind: str = "chat",
     conversation_id: uuid.UUID | None = None,

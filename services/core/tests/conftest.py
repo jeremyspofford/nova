@@ -5,6 +5,7 @@ postgres, so these tests need a real one: TEST_DATABASE_URL, same contract
 as Task 1's migration test. Unset means skip with a stated reason — never
 a pass that proved nothing.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -49,6 +50,12 @@ _TABLES = (
     "governance_events",
     "eval_runs",
     "eval_suite_runs",
+    # S15: queued_messages references conversations, people AND turns, so it is
+    # a child of all three and goes ahead of every one of them. Left out, the
+    # second run of the suite would collide on its CREATE TABLE (the migration
+    # uses a plain CREATE, like 019_timers.sql) and rows would leak between
+    # tests in the meantime.
+    "queued_messages",
     "turn_spans",
     "turns",
     "messages",
@@ -68,9 +75,7 @@ async def _build_schema() -> None:
         # core_signing_key is not in _TABLES (never per-test truncated) but must
         # still be dropped for a clean re-migration, or migration 011's CREATE
         # would collide with a leftover from a prior run.
-        await conn.execute(
-            f"DROP TABLE IF EXISTS {', '.join(_TABLES)}, core_signing_key CASCADE"
-        )
+        await conn.execute(f"DROP TABLE IF EXISTS {', '.join(_TABLES)}, core_signing_key CASCADE")
         await conn.execute("DROP TABLE IF EXISTS schema_migrations")
     finally:
         await conn.close()
@@ -88,6 +93,11 @@ async def pool(monkeypatch):
     # The pool belongs to this test's event loop, so it is built and torn
     # down per test rather than shared.
     p = await db.init_pool()
+    # Each test is a freshly started process as far as the code is concerned, and
+    # chat._SHUTTING_DOWN is a module latch a lifespan test would otherwise leave
+    # set for every test after it — queues would stop draining, quietly, with
+    # only a log line. (S15; the real lifespan clears it on startup too.)
+    chat.accept_queued_turns_again()
     await p.execute(f"TRUNCATE {', '.join(_TABLES)} RESTART IDENTITY CASCADE")
     try:
         yield p

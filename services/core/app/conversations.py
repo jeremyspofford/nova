@@ -8,7 +8,7 @@ import uuid
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException
 
-from app import db, identity, traces
+from app import db, identity, queued, traces
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/conversations", tags=["conversations"])
@@ -21,6 +21,55 @@ def as_json(row: asyncpg.Record) -> dict:
         "title": row["title"],
         "created_at": row["created_at"].isoformat(),
     }
+
+
+async def conversation_busy(
+    # A Pool or the caller's Connection: the queue gate asks this INSIDE the
+    # transaction that holds the conversation's advisory lock, so the answer is
+    # still true when it is acted on.
+    pool: asyncpg.Pool | asyncpg.Connection,
+    conversation_id: uuid.UUID,
+) -> bool:
+    """Is ANY turn for this conversation running in this process right now?
+
+    The gate the queue is built on (S15), and deliberately WIDER than
+    `has_pending_turn`'s reading of INFLIGHT. INFLIGHT holds only the owner's
+    chat turns — its own docstring says so, and the scheduler never joins it —
+    but a timer firing runs a turn in the owner's own conversation through the
+    same loop. A gate that read only INFLIGHT would let a typed message
+    interleave with a scheduled turn, which is precisely the defect the gate
+    exists to stop.
+
+    So it reads `traces.DOING` too: that map is written by `_run_turn` for EVERY
+    turn it runs — chat, scheduled, beat, eval, agent — which makes this derived
+    from the live work rather than from a set someone remembered to join.
+    """
+    rows = await pool.fetch(
+        "SELECT id FROM turns WHERE conversation_id = $1 AND status IS NULL", conversation_id
+    )
+    return any(row["id"] in traces.INFLIGHT or row["id"] in traces.DOING for row in rows)
+
+
+async def pending_turn_id(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> uuid.UUID | None:
+    """WHICH turn of this conversation is running here, if any (S15).
+
+    The same two live facts `has_pending_turn` derives its boolean from, kept as
+    the id — because the tab that most needs to stop a turn is the one that
+    RELOADED into it, and such a tab never saw the meta frame that would have
+    told it the turn's id. Without this it can show "still responding" over a
+    turn it cannot reach, which is the ten-hour hang of 2026-09-10 exactly.
+
+    The newest such row wins if there were somehow two; there should never be.
+    """
+    rows = await pool.fetch(
+        "SELECT id FROM turns WHERE conversation_id = $1 AND status IS NULL "
+        "ORDER BY started_at DESC",
+        conversation_id,
+    )
+    for row in rows:
+        if row["id"] in traces.INFLIGHT:
+            return row["id"]
+    return None
 
 
 async def has_pending_turn(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> bool:
@@ -36,11 +85,20 @@ async def has_pending_turn(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> bo
     it, so a NULL row that IS in INFLIGHT means genuinely still-generating —
     exactly what a reloaded client polls on before rendering the reply.
 
-    A NULL row NOT in INFLIGHT is never reported pending. It should not exist
+    A NULL row this process is running NEITHER as a chat turn (INFLIGHT) nor as
+    any other kind (traces.DOING) is never reported pending. It should not exist
     at all — the startup sweep (traces.sweep_orphaned_turns) closes every
     orphan before the first request — so one here is a tripwire: logged at
     WARNING, because it means the sweep was bypassed, not that a turn is
-    running.
+    running. DOING joined that test in S15: a timer firing's turn lives in the
+    owner's conversation and never joins INFLIGHT, so it used to be warned about
+    on every poll as though it were an orphan.
+
+    S15 also widened what "pending" means by one fact: an accepted-but-unsent
+    QUEUED message. An answer is just as much still coming for one of those, and
+    a reloaded tab polls on this flag — if it cleared in the gap between a turn
+    closing and the drain opening the next one, that tab would stop polling and
+    the queued reply would never appear.
     """
     rows = await pool.fetch(
         "SELECT id, started_at FROM turns WHERE conversation_id = $1 AND status IS NULL",
@@ -48,7 +106,7 @@ async def has_pending_turn(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> bo
     )
     pending = False
     for row in rows:
-        if row["id"] in traces.INFLIGHT:
+        if row["id"] in traces.INFLIGHT or row["id"] in traces.DOING:
             pending = True
             continue
         logger.warning(
@@ -59,7 +117,7 @@ async def has_pending_turn(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> bo
             conversation_id,
             row["started_at"].isoformat(),
         )
-    return pending
+    return pending or await queued.any_waiting(pool, conversation_id)
 
 
 async def active_conversation(pool: asyncpg.Pool, person: Person) -> asyncpg.Record:
@@ -110,7 +168,22 @@ async def get_active(person: Person = Depends(identity.require_person)) -> dict:
         # finishing server-side and should poll for it, rather than showing a
         # truncated reply (S2c). A just-created conversation has none.
         "pending_turn": await has_pending_turn(pool, conversation["id"]),
+        # And which one (S15), so that same reloaded client can STOP it. Both
+        # are derived from the same two facts; the boolean stays because every
+        # existing reader reads it.
+        "pending_turn_id": _or_none(await pending_turn_id(pool, conversation["id"])),
+        # The messages core has ACCEPTED and not yet answered (S15), oldest
+        # first — so a tab that reloaded still shows what it queued, rather than
+        # appearing to have lost it.
+        "queued": [
+            queued.as_json(row, ahead=i)
+            for i, row in enumerate(await queued.waiting(pool, conversation["id"]))
+        ],
     }
+
+
+def _or_none(value: uuid.UUID | None) -> str | None:
+    return None if value is None else str(value)
 
 
 def _delegation_json(span: dict) -> dict:

@@ -12,6 +12,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     text: '',
     streaming: true,
     interrupted: false,
+    stoppedNote: null,
     activity: null,
     servedBy: null,
     cost: null,
@@ -53,6 +54,81 @@ describe('MessageBubble — the live tool-call line', () => {
     const line = screen.getByTestId('activity-line')
     expect(line.textContent).toContain('using model_pull… pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)')
     expect(line.className).not.toMatch(/danger/)
+  })
+
+  // S15: a download that knows its fraction gets a real bar. The words stay —
+  // they carry the byte counts a bar cannot show.
+  it('draws a determinate bar at the stated percent', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          activity: {
+            tool: 'model_pull',
+            status: 'progress',
+            detail: 'pulling qwen3:4b — 42% (1.0 GB of 2.3 GB)',
+            percent: 42,
+          },
+        })}
+      />,
+    )
+    const bar = screen.getByRole('progressbar')
+    expect(bar.getAttribute('aria-valuenow')).toBe('42')
+    expect(screen.getByTestId('activity-line').textContent).toContain('1.0 GB of 2.3 GB')
+  })
+
+  it('draws no bar for a call that never stated a fraction', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          activity: { tool: 'model_pull', status: 'progress', detail: 'pulling manifest' },
+        })}
+      />,
+    )
+    expect(screen.queryByRole('progressbar')).toBeNull()
+  })
+
+  // S15: a stop is deliberate. It reads as a note on the reply, never as a
+  // failure — the whole point is that the owner did this on purpose.
+  it('shows the stop note under the text that was watched', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          text: 'I will now do ',
+          streaming: false,
+          stoppedNote: 'Stopped while running model_pull — you asked to stop it.',
+        })}
+      />,
+    )
+    const note = screen.getByTestId('stopped-note')
+    expect(note.textContent).toContain('Stopped while running model_pull')
+    expect(note.className).not.toMatch(/danger/)
+    expect(screen.queryByTestId('activity-line')).toBeNull()
+  })
+
+  it('shows the stop note on a turn stopped before it wrote anything', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({ text: '', streaming: false, stoppedNote: 'Stopped while working.' })}
+      />,
+    )
+    expect(screen.getByTestId('stopped-note').textContent).toContain('Stopped while working.')
+  })
+
+  it('shows no stop note on an ordinary reply', () => {
+    render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false })} />)
+    expect(screen.queryByTestId('stopped-note')).toBeNull()
+  })
+
+  it('draws no bar on a failure, whatever percent the last frame carried', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          activity: { tool: 'model_pull', status: 'error', reason: 'out of disk', percent: 80 },
+        })}
+      />,
+    )
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    expect(screen.getByTestId('activity-line').textContent).toBe('model_pull: out of disk')
   })
 
   it('shows the turn\'s cost beside who answered, and nothing when no round was priced', () => {
@@ -139,6 +215,7 @@ function userRow(text: string): MessageRow {
     turnKind: null,
     streaming: false,
     interrupted: false,
+    stoppedNote: null,
     activity: null,
     agent: null,
     delegation: null,

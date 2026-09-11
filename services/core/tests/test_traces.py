@@ -284,3 +284,51 @@ async def test_doing_is_set_read_and_cleared_and_close_turn_leaves_it_alone(pool
         traces.clear_doing(turn.id)  # idempotent
     finally:
         traces.clear_doing(turn.id)
+
+
+# -- the owner's Stop (S15) --
+
+
+async def test_a_stop_can_only_be_asked_of_a_turn_this_process_is_running(pool):
+    """STOPPING is derived from INFLIGHT, not a wish anyone can record.
+
+    A stop for a turn no process here is running could never take effect —
+    nothing would read the flag — so asking is REFUSED rather than accepted
+    and silently dropped. That is the whole difference between a Stop button
+    that works and one that returns 200 over nothing.
+    """
+    turn = await _turn(pool)
+    # Not in flight: nothing here is running it, so the ask is refused and
+    # records nothing.
+    assert traces.ask_to_stop(turn.id, "the owner pressed Stop") is False
+    assert traces.stop_requested(turn.id) is None
+    assert turn.id not in traces.STOPPING
+
+    traces.INFLIGHT.add(turn.id)
+    try:
+        assert traces.ask_to_stop(turn.id, "the owner pressed Stop") is True
+        assert traces.stop_requested(turn.id) == "the owner pressed Stop"
+        # Asking twice keeps the FIRST reason: the turn is already stopping and
+        # a second press did not cause it.
+        assert traces.ask_to_stop(turn.id, "pressed again") is True
+        assert traces.stop_requested(turn.id) == "the owner pressed Stop"
+    finally:
+        traces.INFLIGHT.discard(turn.id)
+        traces.clear_stop(turn.id)
+
+    # Cleared like DOING: by the turn's own finally, idempotently, and for an
+    # id never recorded.
+    assert traces.stop_requested(turn.id) is None
+    traces.clear_stop(uuid.uuid4())  # no-op, no error
+
+
+async def test_a_stopped_turn_closes_as_stopped_not_interrupted(pool):
+    """'interrupted' means NO process was running it — the sweep's word, and
+    the scheduler attaches behaviour to it. A deliberate Stop is a different
+    fact and gets its own status, so Activity can tell a redeploy from someone
+    pressing the button."""
+    turn = await _turn(pool)
+    await traces.close_turn(pool, turn, "stopped")
+    row = await pool.fetchrow("SELECT status, ended_at FROM turns WHERE id = $1", turn.id)
+    assert row["status"] == "stopped" and row["ended_at"] is not None
+    assert "stopped" in traces.VALID_STATUSES

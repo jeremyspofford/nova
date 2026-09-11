@@ -28,6 +28,7 @@ from app import (
     models_catalog,
     notices_api,
     proxies,
+    queued,
     scheduler,
     settings_store,
     spend_api,
@@ -60,10 +61,21 @@ async def lifespan(app: FastAPI):
         logger.exception("migrations failed — refusing to start")
         raise
     pool = await db.init_pool()
+    # This process is starting, not stopping (S15): begin_shutdown() below is a
+    # latch on a module global, and a process that went through a lifespan once
+    # already would otherwise never drain another queue.
+    chat.accept_queued_turns_again()
     # A fresh process runs no turns, so every NULL-status row is an orphan of
     # the process that died — closed as 'interrupted' here, before any request
     # can read it as pending (traces.sweep_orphaned_turns says why).
     await traces.sweep_orphaned_turns(pool)
+    # And the messages the dead process had ACCEPTED but not yet sent (S15). A
+    # fresh process runs no turns, so nothing will ever END to trigger their
+    # drain: each one is cancelled with a stated reason the owner can read,
+    # because a 202 nothing keeps is the worst kind of success to report — and
+    # they are not silently sent either, since the box may have been down for
+    # days (queued.sweep_stranded says why).
+    await queued.sweep_stranded(pool)
     # Same fact for eval suite runs: a fresh process runs no jobs, so every
     # 'running' eval_suite_runs row is a suite the dead process was mid-way
     # through — closed 'interrupted' here, before the page can read it as
@@ -92,6 +104,12 @@ async def lifespan(app: FastAPI):
     finally:
         ticker.cancel()
         await asyncio.gather(ticker, return_exceptions=True)
+        # No new queued turns from here (S15). drain_background below waits for
+        # every detached task and a drained turn spawns another drain, so a
+        # queue still draining could hold the process past its grace period and
+        # be SIGKILLed part-way — which is how a claimed message ends up with no
+        # reply. Set BEFORE the drain, so the two cannot chase each other.
+        chat.begin_shutdown()
         # Let detached work (in-flight turns that outlived their browser,
         # memory ingest, trace closes) finish before the pool it needs
         # disappears.

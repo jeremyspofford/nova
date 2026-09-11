@@ -259,12 +259,18 @@ describe('ChatProvider — the identity boundary (sign-out, or someone else sign
     )
 
     expect(seenSignals[0]?.aborted).toBe(true)
+    // The WHOLE state, enumerated on purpose: nothing of the previous person's
+    // turn may survive a change of who is signed in. `turnId` joined the shape
+    // with Stop (S15), and a stale one here would aim the button at a stranger's
+    // turn — so it is pinned to null like the rest.
     expect(probe.store!.state).toEqual({
       rows: [],
       streaming: false,
       conversationId: null,
       model: null,
       pendingId: null,
+      turnId: null,
+      queued: [],
     })
 
     // Whatever was already in flight when the abort fired must not land
@@ -483,5 +489,227 @@ describe('ChatProvider — clearChat + the /clear slash command', () => {
     })
 
     expect(probe.store!.state.rows).toHaveLength(2) // unchanged — no fake empty
+  })
+})
+
+/**
+ * The queue (S15). The composer used to be dead while Nova worked, so a
+ * correction typed during a long tool call had nowhere to go. Now a send while
+ * a turn is in flight goes through the same route and the SERVER decides: a 202
+ * means accepted, and the live stream it arrives alongside must not be disturbed
+ * by it.
+ */
+describe('ChatProvider — sending while a turn is already running', () => {
+  it('keeps the live turn intact and adds the accepted message beside it', async () => {
+    const stream = controlledStream()
+    const posts: { url: string; body: unknown }[] = []
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      posts.push({ url, body: init.body })
+      if (posts.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => '',
+          body: { getReader: () => stream.reader },
+        } as unknown as Response
+      }
+      return {
+        ok: true,
+        status: 202,
+        text: async () =>
+          JSON.stringify({
+            queued: { id: 'q1', conversation_id: 'c1', body: 'actually, 12b', ahead: 0 },
+          }),
+      } as unknown as Response
+    })
+
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+    render(
+      <ChatProvider fetchImpl={fetchImpl}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+
+    await act(async () => {
+      probe.store!.sendMessage('pull gemma4:26b')
+    })
+    stream.push('data: {"meta":{"conversation_id":"c1","model":"m","turn_id":"t-1"}}\n\n')
+    stream.push('data: {"t":"starting the pull"}\n\n')
+    await tick()
+
+    await act(async () => {
+      probe.store!.sendMessage('actually, 12b')
+    })
+    await tick()
+
+    const state: ChatState = probe.store!.state
+    expect(state.queued).toEqual([{ id: 'q1', body: 'actually, 12b', ahead: 0 }])
+    // The live turn is untouched: still streaming, still the same pending row,
+    // still the same turn id for Stop to address.
+    expect(state.streaming).toBe(true)
+    expect(state.turnId).toBe('t-1')
+    const assistant = state.rows.filter(r => r.kind === 'message' && r.role === 'assistant')
+    expect(assistant).toHaveLength(1)
+    expect(assistant[0]).toMatchObject({ text: 'starting the pull', streaming: true })
+    // And the second message is NOT a user bubble — it has not been answered.
+    const users = state.rows.filter(r => r.kind === 'message' && r.role === 'user')
+    expect(users.map(u => (u as { text: string }).text)).toEqual(['pull gemma4:26b'])
+
+    // The original stream still finishes normally afterwards.
+    stream.push('data: [DONE]\n\n')
+    stream.end()
+    await tick()
+    expect(probe.store!.state.streaming).toBe(false)
+    expect(probe.store!.state.queued).toHaveLength(1)
+  })
+
+  it('takes a message back only after the server confirms it', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes('/queued/')) {
+        return { ok: true, status: 200, text: async () => '{"cancelled":true}' } as unknown as Response
+      }
+      return {
+        ok: true,
+        status: 202,
+        text: async () =>
+          JSON.stringify({ queued: { id: 'q1', conversation_id: 'c1', body: 'oops', ahead: 0 } }),
+      } as unknown as Response
+    })
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+    render(
+      <ChatProvider fetchImpl={fetchImpl}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    await act(async () => {
+      probe.store!.sendMessage('oops')
+    })
+    await tick()
+    expect(probe.store!.state.queued).toHaveLength(1)
+
+    await act(async () => {
+      await probe.store!.unqueue('q1')
+    })
+    expect(fetchImpl).toHaveBeenCalledWith('/api/v1/chat/queued/q1', expect.anything())
+    expect(probe.store!.state.queued).toEqual([])
+  })
+
+  it('keeps the message when the server refuses to take it back', async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.includes('/queued/')) {
+        return {
+          ok: false,
+          status: 409,
+          text: async () => '{"error":"already being answered"}',
+        } as unknown as Response
+      }
+      return {
+        ok: true,
+        status: 202,
+        text: async () =>
+          JSON.stringify({ queued: { id: 'q1', conversation_id: 'c1', body: 'too late', ahead: 0 } }),
+      } as unknown as Response
+    })
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+    render(
+      <ChatProvider fetchImpl={fetchImpl}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+    await act(async () => {
+      probe.store!.sendMessage('too late')
+    })
+    await tick()
+
+    await act(async () => {
+      await expect(probe.store!.unqueue('q1')).rejects.toThrow(/already being answered/)
+    })
+    // Still there: the message is still going to run, and a chip that vanished
+    // would say otherwise.
+    expect(probe.store!.state.queued).toHaveLength(1)
+  })
+})
+
+/**
+ * Stop (S15). The SERVER ends the turn, not the browser: the old way to make a
+ * reply stop was to navigate away, and ruling S2c-R1 deliberately made that
+ * mean "finish". So Stop asks core, and the turn's own `stopped` frame is what
+ * settles the row — the store never fakes the ending it asked for.
+ */
+describe('ChatProvider — stopping a turn', () => {
+  it('asks core to stop the turn the meta frame named, and lets the stream settle it', async () => {
+    const stream = controlledStream()
+    const posts: string[] = []
+    const fetchImpl = vi.fn(async (url: string, init: RequestInit) => {
+      posts.push(url)
+      if (url.includes('/stop')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => '{"stopped":true,"status":"stopped"}',
+          json: async () => ({ stopped: true, status: 'stopped' }),
+        } as unknown as Response
+      }
+      return {
+        ok: true,
+        status: 200,
+        text: async () => '',
+        body: { getReader: () => stream.reader },
+        signal: init.signal,
+      } as unknown as Response
+    })
+
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+    render(
+      <ChatProvider fetchImpl={fetchImpl}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+
+    await act(async () => {
+      probe.store!.sendMessage('go on then')
+    })
+    stream.push('data: {"meta":{"conversation_id":"c1","model":"m","turn_id":"t-42"}}\n\n')
+    stream.push('data: {"t":"I will now do "}\n\n')
+    await tick()
+    expect(probe.store!.state.turnId).toBe('t-42')
+
+    await act(async () => {
+      await probe.store!.stopTurn()
+    })
+    expect(posts).toContain('/api/v1/chat/turns/t-42/stop')
+    // Asking is not ending: the row is still streaming until the server says
+    // otherwise, so the store cannot claim a stop it has not been told about.
+    expect(probe.store!.state.streaming).toBe(true)
+
+    stream.push('data: {"stopped":"Stopped while writing the reply — you asked to stop it."}\n\n')
+    stream.push('data: [DONE]\n\n')
+    stream.end()
+    await tick()
+
+    const state: ChatState = probe.store!.state
+    expect(state.streaming).toBe(false)
+    const assistant = state.rows.filter(r => r.kind === 'message' && r.role === 'assistant')
+    expect(assistant).toHaveLength(1)
+    expect(assistant[0]).toMatchObject({
+      text: 'I will now do ',
+      stoppedNote: 'Stopped while writing the reply — you asked to stop it.',
+    })
+    expect(state.rows.some(r => r.kind === 'error')).toBe(false)
+  })
+
+  it('does nothing at all when no turn is in flight', async () => {
+    const fetchImpl = vi.fn()
+    const probe: { store: ReturnType<typeof useChatStore> | null } = { store: null }
+    render(
+      <ChatProvider fetchImpl={fetchImpl as never}>
+        <Probe probe={probe} />
+      </ChatProvider>,
+    )
+
+    await act(async () => {
+      await probe.store!.stopTurn()
+    })
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 })

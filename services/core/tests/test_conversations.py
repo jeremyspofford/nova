@@ -18,10 +18,26 @@ async def test_active_creates_one_then_reuses_it(owner_client, pool):
     body = first.json()
     # pending_turn joined the shape in S2c so a reloaded client can tell a
     # turn is still finishing server-side and poll for it (see chat.py).
-    assert set(body) == {"id", "title", "created_at", "pending_turn"}
+    # pending_turn_id joined it in S15: the one case that most needs Stop is a
+    # tab that reloaded into a hung turn, and such a tab has no meta frame and
+    # so no turn id to aim the button at. Without this it could see the spinner
+    # and not reach the stop.
+    # `queued` joined it in S15 too: messages core accepted while a turn was
+    # running, so a reloaded tab still shows what it sent rather than appearing
+    # to have lost it.
+    assert set(body) == {
+        "id",
+        "title",
+        "created_at",
+        "pending_turn",
+        "pending_turn_id",
+        "queued",
+    }
     assert body["created_at"]
     # A brand-new conversation has no turn in flight.
     assert body["pending_turn"] is False
+    assert body["pending_turn_id"] is None
+    assert body["queued"] == []
 
     second = await owner_client.get("/api/v1/conversations/active")
     assert second.json()["id"] == body["id"]
@@ -50,10 +66,17 @@ async def test_active_reports_a_turn_this_process_is_running(owner_client, pool)
     traces.INFLIGHT.add(turn_id)
     try:
         assert await _pending(owner_client) is True
+        # And WHICH turn (S15), from the same derivation — so a reloaded tab
+        # can stop the turn it is waiting on instead of only watching it.
+        body = (await owner_client.get("/api/v1/conversations/active")).json()
+        assert body["pending_turn_id"] == str(turn_id)
     finally:
         traces.INFLIGHT.discard(turn_id)
     # Let go of it — the process is no longer running this turn.
     assert await _pending(owner_client) is False
+    assert (await owner_client.get("/api/v1/conversations/active")).json()[
+        "pending_turn_id"
+    ] is None
 
     # Closed, the row is terminal and stays clear.
     await pool.execute("UPDATE turns SET status = 'ok', ended_at = now() WHERE id = $1", turn_id)

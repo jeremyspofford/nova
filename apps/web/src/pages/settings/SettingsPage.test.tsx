@@ -73,7 +73,14 @@ const noopFetch = vi.fn(
 )
 
 function chatApi() {
-  const conversation: Conversation = { id: 'c1', title: null, created_at: '', pending_turn: false }
+  const conversation: Conversation = {
+    id: 'c1',
+    title: null,
+    created_at: '',
+    pending_turn: false,
+    pending_turn_id: null,
+    queued: [],
+  }
   return {
     getActiveConversation: vi.fn(async () => conversation),
     getMessages: vi.fn(async (): Promise<StoredMessage[]> => []),

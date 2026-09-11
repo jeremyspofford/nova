@@ -69,6 +69,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import math
 import re
 import time
 import uuid
@@ -79,8 +80,8 @@ from urllib.parse import unquote
 
 import asyncpg
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app import (
@@ -92,6 +93,7 @@ from app import (
     identity,
     markup_calls,
     peers,
+    queued,
     settings_store,
     tools,
     traces,
@@ -486,6 +488,38 @@ def _frame(payload: dict) -> str:
 ACTIVITY_REASON_LIMIT = 160
 
 
+def _stop_if_asked(turn: traces.Turn, where: str) -> None:
+    """Raise if someone has asked this turn to stop (S15).
+
+    The ONE place that decision is read, called from the three points a turn can
+    act on it: between rounds, as each content delta arrives, and as a tool
+    reports progress. Synchronous everywhere, so none of it joins the dispatch
+    funnel's await list (test_no_approvals pins that), and it reads
+    traces.STOPPING — the live fact — rather than a flag anyone passed down.
+
+    `where` is carried by the raise because the CALL SITE is the only thing that
+    knows it. Reading traces.DOING instead said "stopped while running
+    model_catalog_search" for a stop that landed at the next round boundary,
+    after that call had already returned ok — and then added the caveat that
+    whether it finished was unknowable, about a call that demonstrably finished.
+    A false uncertainty is the same defect as a false claim.
+    """
+    stated = traces.stop_requested(turn.id)
+    if stated is not None:
+        raise tools.TurnStopped(stated, where=where)
+
+
+def _report_progress(
+    turn: traces.Turn,
+    name: str,
+    emit: Callable[[str | None], None],
+    detail: str | dict,
+) -> None:
+    """One tool's progress report, and the stop that rides back out on it."""
+    _stop_if_asked(turn, f"while running {name}")
+    emit(_activity_frame(name, "progress", detail=detail))
+
+
 def _activity_reason(result: str) -> str | None:
     """The short, stated head of a tool's own error text — never invented.
 
@@ -514,6 +548,15 @@ def _activity_reason(result: str) -> str | None:
 # the tool that is reporting.
 ACTIVITY_REPORT_KEYS = ("detail", "agent", "agent_turn_id", "step", "step_status")
 
+# The one NUMERIC key a tool's dict report may put on a frame (S15): how far
+# through a long call it is, so the chat can draw a determinate bar for ANY
+# tool that knows its own fraction rather than parsing a pull's prose for a
+# number. Clamped here, never trusted — the frame's contract is 0..100 whatever
+# the tool's arithmetic did. A bool is excluded on purpose (Python counts True
+# as 1) and so is anything non-finite: a NaN would reach the browser as `null`
+# and an infinity is not a fraction of anything.
+ACTIVITY_REPORT_NUMBER_KEYS = ("percent",)
+
 
 def _activity_frame(
     tool: str, status: str, result: str | None = None, *, detail: str | dict | None = None
@@ -528,7 +571,7 @@ def _activity_frame(
     ACTIVITY_REPORT_KEYS are copied, `detail` capped exactly as a str one
     is, so a str report and a dict `{"detail": ...}` produce the same frame.
     """
-    activity: dict[str, str] = {"tool": tool, "status": status}
+    activity: dict[str, str | int] = {"tool": tool, "status": status}
     if status == "error" and result is not None:
         reason = _activity_reason(result)
         if reason is not None:
@@ -540,6 +583,13 @@ def _activity_frame(
             if not isinstance(value, str) or not value:
                 continue
             activity[key] = value.strip()[:ACTIVITY_REASON_LIMIT] if key == "detail" else value
+        for key in ACTIVITY_REPORT_NUMBER_KEYS:
+            number = report.get(key)
+            if isinstance(number, bool) or not isinstance(number, int | float):
+                continue
+            if not math.isfinite(number):
+                continue
+            activity[key] = int(max(0, min(100, number)))
     return _frame({"activity": activity})
 
 
@@ -1227,6 +1277,14 @@ def _last_llm_span(spans: Sequence[traces.Span]) -> traces.Span | None:
     return None
 
 
+# What a tool span says when the turn ended while the call was still running:
+# pre-set before dispatch and overwritten the moment it answers, so a span that
+# still reads this never returned. A stop is the common way that happens, and a
+# call that never returned is NOT a call that failed — `stopped_statement` reads
+# this to keep from saying "model_pull failed" about a download someone stopped.
+NEVER_RETURNED = "(the turn ended before this call returned)"
+
+
 def _tool_outcomes(spans: Sequence[traces.Span]) -> tuple[list[str], list[str]]:
     """(tools that ran ok, tools that ran and stated a failure), by name, in
     order, deduped — from the spans, never from any prose. A refused call (a
@@ -1308,6 +1366,47 @@ def model_failure_statement(*, model: str, failure: str, spans: Sequence[traces.
     return (
         f"I didn't get a response from {who}{where}: {failure}. {_ran_clause(spans)} {RETRY_HINT}"
     )
+
+
+# The prefix `_stop_if_asked` uses for a stop that landed inside a running tool
+# call. It is the only case where the call's own outcome is genuinely unknown, so
+# it is the only case that says so.
+_STOPPED_INSIDE = "while running "
+
+
+def stopped_statement(*, stated: str, where: str, spans: Sequence[traces.Span]) -> str:
+    """The note a STOPPED turn keeps, appended to the text the owner watched.
+
+    Every clause is a measured fact: the reason from whoever asked, `where` from
+    the raise site itself, and what ran from the tool spans.
+
+    The caveat about the work not being undone rides ONLY on a stop that landed
+    inside a running call — the one case where core genuinely cannot see whether
+    it finished. A stop at a round boundary is after the last call returned, and
+    a walk caught exactly that: reading the turn's live "doing" map named a call
+    that had already succeeded and then said its outcome was unknowable. A false
+    uncertainty is the same defect as a false claim.
+
+    There is no retry hint either: nothing failed, and the owner did this on
+    purpose.
+    """
+    note = f"Stopped {where} — {stated}."
+    if where.startswith(_STOPPED_INSIDE):
+        call = where[len(_STOPPED_INSIDE) :]
+        note += (
+            f" That means I stopped waiting for {call}; whether it finished on its own is not"
+            " something I can see from here."
+        )
+    # The interrupted call is dropped from the ran/failed clause: its span still
+    # carries the pre-set NEVER_RETURNED head, which _tool_outcomes reads as a
+    # failure, and "model_pull failed" is not true of a download someone stopped.
+    # The sentence above has already said what happened to it.
+    return f"{note} {_ran_clause([s for s in spans if not _was_interrupted(s)])}"
+
+
+def _was_interrupted(span: traces.Span) -> bool:
+    """A tool span for a call the turn ended before it could answer."""
+    return span.kind == "tool" and (span.meta or {}).get("result_head") == NEVER_RETURNED
 
 
 def turn_failure_statement(reason: str, spans: Sequence[traces.Span]) -> str:
@@ -1704,7 +1803,7 @@ async def _run_tool(
         # it must read as "never finished" rather than as an untested
         # success.
         span.meta["ok"] = False
-        span.meta["result_head"] = "(the turn ended before this call returned)"
+        span.meta["result_head"] = NEVER_RETURNED
         facts_before = len(facts) if facts is not None else 0
         result, ok = await tools.dispatch(call.name, call.arguments, ctx)
         span.meta["ok"] = ok
@@ -1774,11 +1873,15 @@ async def _dispatch_calls(
             continue
         # The call's own progress channel: a frame per report, under this
         # call's name. Bound synchronously (no await joins the funnel).
+        #
+        # It is also where a STOP reaches a long call (S15). The turn checks
+        # the ask on the way out and raises, so any tool that reports its own
+        # progress is interruptible mid-call without knowing Stop exists —
+        # derived from the reporting it already does. Still synchronous: no
+        # await joins the funnel, so test_no_approvals' await pins hold.
         call_ctx = dataclasses.replace(
             tool_ctx,
-            progress=lambda detail, _name=call.name: emit(
-                _activity_frame(_name, "progress", detail=detail)
-            ),
+            progress=lambda detail, _name=call.name: _report_progress(turn, _name, emit, detail),
         )
         # What the turn is doing right now, for whoever asks (traces.DOING):
         # the tool's name, set synchronously so no await joins the funnel.
@@ -2951,6 +3054,28 @@ async def _run_turn(
         emit(_frame({"error": statement}))
         emit(DONE_FRAME)
 
+    async def _end_stopped(stated: str, where: str) -> None:
+        """The turn's ONE exit for a stop the owner asked for (S15).
+
+        Persist FIRST, then emit — the same discipline as every other ending
+        here, so the turn never claims a record it does not have. The text
+        already streamed is KEPT and the note appended to it: that text is what
+        the owner watched, and the rule for every other turn is that a reload
+        shows exactly what was watched live. A stop is not a failure, so it does
+        not ride as an `error` frame and the turn does not close 'error'; it is
+        not knowledge either, so it is never ingested.
+        """
+        nonlocal persisted_reply
+        note = stopped_statement(stated=stated, where=where, spans=turn.spans)
+        watched = "".join(parts).strip()
+        logger.info("chat turn %s stopped: %s", turn.id, stated)
+        await _persist_assistant(
+            pool, conversation_id, f"{watched}\n\n{note}" if watched else note, turn.id
+        )
+        persisted_reply = True
+        emit(_frame({"stopped": note}))
+        emit(DONE_FRAME)
+
     try:
         # Inside the try, so a persona that cannot be built still reaches
         # the finally that closes the turn.
@@ -3068,7 +3193,13 @@ async def _run_turn(
 
         def _stream_delta(delta: str) -> None:
             """Every content delta, live and accumulated: the turn's durable text
-            is exactly what the watcher saw, in order, across every round."""
+            is exactly what the watcher saw, in order, across every round.
+
+            Also where a STOP lands while the model is talking (S15) — checked
+            BEFORE the delta is kept, so the transcript ends at the last words
+            the owner actually saw rather than one token past them.
+            """
+            _stop_if_asked(turn, "while writing the reply")
             parts.append(delta)
             emit(_frame({"t": delta}))
 
@@ -3131,6 +3262,12 @@ async def _run_turn(
                 emit(_frame({"served_by": served_by}))
 
         for round_number in range(1, rounds_allowed + 1):
+            # A stop asked while the last round's tools ran ends the turn here
+            # rather than buying another round of the direction he stopped.
+            # "between steps", not the name in DOING: that name belongs to a call
+            # that has already returned, and claiming its outcome is unknown
+            # would be a false uncertainty about a call that finished.
+            _stop_if_asked(turn, "between steps")
             round_text, calls, failure = await _gateway_round(
                 app,
                 turn,
@@ -4081,6 +4218,20 @@ async def _run_turn(
             )
         decided = "ok"
         emit(DONE_FRAME)
+    except tools.TurnStopped as exc:
+        # The owner pressed Stop (S15). Raised from one of the three points the
+        # turn reads traces.STOPPING — between rounds, per streamed delta, per
+        # tool progress report — and handled BEFORE the unplanned path below,
+        # which would otherwise file a deliberate act as a turn that failed.
+        decided = "stopped"
+        try:
+            await _end_stopped(exc.reason, exc.where)
+        except Exception:
+            # The stop happened; recording it did not. Said out loud rather
+            # than reported as recorded, and the frame contract is still kept.
+            logger.exception("could not record the stop of turn %s", turn.id)
+            emit(_frame({"error": f"the turn was stopped ({exc}) but the record failed"}))
+            emit(DONE_FRAME)
     except Exception as exc:
         # Anything unplanned — a database that refuses the assistant row, a
         # bug in here — still owes any attached client the frame contract, and
@@ -4126,24 +4277,67 @@ async def _run_turn(
             # And no longer doing anything (traces.DOING): the one writer that
             # pops, on every exit path, beside the INFLIGHT discard.
             traces.clear_doing(turn.id)
+            # Nor stoppable (traces.STOPPING, S15): popped here so a turn id
+            # can never carry a stale ask, and after clear_doing because the
+            # stop note above reads DOING.
+            traces.clear_stop(turn.id)
             emit(None)
+            # The conversation is free, so whatever the owner sent while it was
+            # busy can run now (S15). AFTER the sentinel and the discards, so
+            # the drain's own gate sees this turn as finished and a reader that
+            # saw [DONE] has already seen the record. Its own task, so a drain
+            # that cannot start cannot take this turn's ending down with it.
+            _spawn(drain_queue(app, pool, conversation_id))
 
 
-@router.post("/stream")
-async def chat_stream(
-    body: ChatRequest,
-    request: Request,
-    person: Person = Depends(identity.require_person),
-) -> StreamingResponse:
-    message = body.message.strip()
-    if not message:
-        raise HTTPException(status_code=400, detail="message is empty — nothing to ask")
+@dataclass
+class _Started:
+    """Everything a just-opened turn needs to be run, assembled under the
+    conversation's lock and handed back so the caller spawns it AFTER the
+    transaction commits."""
 
-    pool = await db.get_pool()
-    conversation = await conversations.resolve(pool, person, body.conversation_id)
-    conversation_id = conversation["id"]
+    turn: traces.Turn
+    runs_as: Person
+    message: str
+    history: Sequence[dict]
+    model: str
+    max_tool_rounds: int
+    persona: agents.Persona | None
 
-    message_id = await pool.fetchval(
+
+async def _open_turn(
+    # Everything here runs on the CALLER'S connection, inside the transaction
+    # that holds the conversation's lock — never on a pool of its own, which
+    # would be a second connection taken while this one holds that lock.
+    conn: asyncpg.Connection,
+    person: Person,
+    conversation_id: uuid.UUID,
+    message: str,
+    *,
+    queued_id: uuid.UUID | None = None,
+) -> _Started:
+    """Open a chat turn for `message`. THE one place that happens.
+
+    The caller must already hold this conversation's advisory lock on `conn`
+    (queued.hold_conversation) and must have decided that no turn is running —
+    this function does not decide, it acts. Both entry points use it: the stream
+    route and the queue drain. `_run_turn`'s docstring promises there is no
+    second path through a turn, and the preamble has to obey that too: an
+    inserted user row, an attributed history window, a model, a round budget and
+    a persona, built one way.
+
+    `queued_id`, when given, is the accepted message this turn is answering: the
+    claim is written in the SAME transaction as the turn row, which the table's
+    CHECK requires — a claim naming no turn would read as sent.
+
+    Everything here is a local query, and every one of them runs on `conn` — the
+    helpers it calls (agents.mentioned, settings_store.read_value, _owner_timezone,
+    traces.open_turn) all take an executor, so none of them reaches for a second
+    pool connection while this one holds the lock. Nothing waits on a model
+    either, so the lock is held for milliseconds: 019_timers.sql's rule is that a
+    model turn must never hold a row lock, and the pool has ten connections.
+    """
+    message_id = await conn.fetchval(
         "INSERT INTO messages (conversation_id, role, content) "
         "VALUES ($1, 'user', $2) RETURNING id",
         conversation_id,
@@ -4164,7 +4358,7 @@ async def chat_stream(
     # Resolved BEFORE the history read (2026-09-08, review finding) because
     # the history is written from the answering model's seat: who is
     # answering has to be known before its transcript can be attributed.
-    agent = await agents.mentioned(pool, message)
+    agent = await agents.mentioned(conn, message)
 
     # user/assistant only, because that is all the messages table holds. A
     # turn's tool calls and their results live in that turn's transcript and
@@ -4176,9 +4370,13 @@ async def chat_stream(
     # row, the get_messages idiom, never a stored label — EXCEPT the rows
     # written by whoever is answering now, which are its own words and are
     # handed back unlabelled. The rows themselves are untouched.
+    #
+    # Read INSIDE the lock (S15): a window read before the gate could miss the
+    # previous turn's reply, because that reply is persisted only moments before
+    # the turn lets go of the conversation.
     history = history_window(
         attributed_history(
-            await pool.fetch(
+            await conn.fetch(
                 "SELECT m.role, m.content, a.name AS agent FROM messages m "
                 "LEFT JOIN turns t ON t.id = m.turn_id "
                 "LEFT JOIN agents a ON a.id = t.agent_id "
@@ -4193,8 +4391,8 @@ async def chat_stream(
     )
 
     if agent is None:
-        model = await settings_store.read_value(pool, "chat.model")
-        max_tool_rounds = await settings_store.read_value(pool, "agents.max_tool_rounds")
+        model = await settings_store.read_value(conn, "chat.model")
+        max_tool_rounds = await settings_store.read_value(conn, "agents.max_tool_rounds")
         runs_as = person
         persona = None
     else:
@@ -4202,49 +4400,352 @@ async def chat_stream(
         max_tool_rounds = agent.max_tool_rounds
         runs_as = agent.person()
         persona = agents.persona_for(agent, owner_id=person.id)
+
     turn = await traces.open_turn(
-        pool,
+        conn,
         conversation_id=conversation_id,
         model=model,
         person_id=person.id,
-        timezone=await _owner_timezone(pool),
+        timezone=await _owner_timezone(conn),
         agent_id=None if agent is None else agent.id,
         role=None if agent is None else agent.role,
     )
-    # Registered the instant it exists (no await between): this process is
-    # running it, which is what conversations.has_pending_turn reads —
-    # discarded in _run_turn's finally, after the close, on every exit path.
+    if queued_id is not None:
+        await queued.mark_claimed(conn, queued_id, turn.id)
+    # Registered the instant it exists, inside the lock that decided it may
+    # exist (S15) and with no await between: a second send taking the lock after
+    # this commit must see a turn running. Discarded in _run_turn's finally,
+    # after the close, on every exit path — and by the caller if the transaction
+    # does not commit, so a rolled-back turn can never read as pending for ever.
     traces.INFLIGHT.add(turn.id)
+    return _Started(
+        turn=turn,
+        runs_as=runs_as,
+        message=message,
+        history=history,
+        model=model,
+        max_tool_rounds=max_tool_rounds,
+        persona=persona,
+    )
 
-    # The turn runs as its own detached task; the response only FORWARDS the
-    # frames it produces (through this queue). Decoupling "does it finish" from
-    # "who is watching" is the whole slice: a client disconnect cancels the
-    # forwarder below, never the task, so the turn finishes and persists the
-    # full reply regardless. put_nowait onto an unbounded queue never blocks,
-    # so a detached completion is never stalled by an absent reader — the
-    # frames it emits after the client is gone are simply never read.
-    queue: asyncio.Queue = asyncio.Queue()
+
+def _spawn_turn(
+    app,
+    pool: asyncpg.Pool,
+    conversation_id: uuid.UUID,
+    started: _Started,
+    emit: Callable[[str | None], None],
+) -> None:
+    """Run an opened turn as its own detached task.
+
+    Decoupling "does it finish" from "who is watching" is S2c's whole point: a
+    client disconnect cancels only the forwarder, never this, so the turn
+    finishes and persists the full reply regardless. put_nowait onto an
+    unbounded queue never blocks, so a detached completion is never stalled by an
+    absent reader — the frames it emits after the client is gone are simply never
+    read. A drained queued turn has no reader from the start, and that is the
+    same path, not a second one.
+    """
     _spawn(
         _run_turn(
-            request.app,
+            app,
             pool,
-            turn,
-            runs_as,
+            started.turn,
+            started.runs_as,
             conversation_id,
-            message,
-            history,
-            model,
-            max_tool_rounds,
-            queue.put_nowait,
-            persona=persona,
+            started.message,
+            started.history,
+            started.model,
+            started.max_tool_rounds,
+            emit,
+            persona=started.persona,
         )
     )
 
+
+def _discard_frame(_frame_text: str | None) -> None:
+    """The emit for a turn nobody is watching: a drained queued turn streams to
+    no browser. Frames are dropped, never buffered — the record of what happened
+    is the persisted reply and the turn's spans, exactly as it is for a turn
+    whose browser hung up."""
+
+
+# Set by the lifespan before drain_background(). A shutting-down process must
+# not START a queued turn: drain_background waits for every detached task and a
+# drained turn spawns another drain, so a queue still draining could hold the
+# process past its grace period and be SIGKILLed part-way — which is how a
+# claimed row ends up with no reply. The row stays WAITING instead, and the next
+# start cancels it with a stated reason (queued.sweep_stranded).
+_SHUTTING_DOWN = False
+
+
+def begin_shutdown() -> None:
+    """Stop accepting new queued turns. Called by the lifespan before it drains
+    the detached work, so the two cannot chase each other."""
+    global _SHUTTING_DOWN
+    _SHUTTING_DOWN = True
+
+
+def accept_queued_turns_again() -> None:
+    """A started process is not a stopping one.
+
+    Called by the lifespan on STARTUP, because `begin_shutdown` is otherwise a
+    one-way latch on a module global: anything that enters and leaves the
+    lifespan in the same process — a test suite, an in-process restart — would
+    leave every later turn unable to drain its queue, silently, with only a log
+    line saying so. Found exactly that way: the queue tests passed alone and
+    failed in the full run.
+    """
+    global _SHUTTING_DOWN
+    _SHUTTING_DOWN = False
+
+
+async def drain_queue(app, pool: asyncpg.Pool, conversation_id: uuid.UUID) -> None:
+    """Run this conversation's next accepted message, if there is one.
+
+    Called from `_run_turn`'s finally — for EVERY kind of turn, because any turn
+    ending is what frees the conversation. Two drains racing the same row is
+    therefore normal and harmless: the claim is `FOR UPDATE SKIP LOCKED` under
+    the conversation's lock, so one wins and the other finds nothing.
+
+    Failures are stated, never swallowed, and they CANCEL the row with a reason:
+    a message left waiting after its drain failed would wait for ever, because
+    nothing else is going to end and try again.
+    """
+    if _SHUTTING_DOWN:
+        logger.info(
+            "not draining the queue for conversation %s: core is shutting down, so the "
+            "message stays accepted and the next start will say it was not sent",
+            conversation_id,
+        )
+        return
+    # Cheapest possible no-op, and the overwhelming majority of calls: this runs
+    # after EVERY turn of every kind, and almost none of them has anything
+    # waiting. One indexed read beats acquiring a connection and taking a lock —
+    # which a suite of concurrent eval turns would do hundreds of times against a
+    # ten-connection pool. A row that arrives between this read and the claim
+    # below is not lost: the turn that accepted it is still running, so its own
+    # ending drains it.
+    if not await queued.any_waiting(pool, conversation_id):
+        return
+    row = None
+    started = None
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await queued.hold_conversation(conn, conversation_id)
+                if await conversations.conversation_busy(conn, conversation_id):
+                    # Someone asked something new in the gap. That turn's own
+                    # ending will drain this row; two at once is the thing the
+                    # gate exists to prevent.
+                    return
+                row = await queued.claim_next(conn, conversation_id)
+                if row is None:
+                    return
+                person = await identity.person_by_id(conn, row["person_id"])
+                if person is None:
+                    raise RuntimeError(f"person {row['person_id']} no longer exists")
+                started = await _open_turn(
+                    conn, person, conversation_id, row["body"], queued_id=row["id"]
+                )
+    except Exception as exc:
+        logger.exception("could not start the queued turn for conversation %s", conversation_id)
+        if started is not None:
+            traces.INFLIGHT.discard(started.turn.id)
+        if row is not None:
+            try:
+                await queued.cancel(
+                    pool,
+                    row["id"],
+                    row["person_id"],
+                    f"core could not start its turn — {peers.reason(exc)[:200]}",
+                )
+            except Exception:
+                logger.exception("could not even record that queued message %s failed", row["id"])
+        return
+    try:
+        _spawn_turn(app, pool, conversation_id, started, _discard_frame)
+    except Exception:
+        # The turn row exists and is claimed; nothing is running it. Said out
+        # loud and closed, rather than left reading as pending for ever.
+        logger.exception("could not spawn the queued turn %s", started.turn.id)
+        traces.INFLIGHT.discard(started.turn.id)
+        _spawn(traces.close_turn(pool, started.turn, "error"))
+
+
+@router.post("/stream")
+async def chat_stream(
+    body: ChatRequest,
+    request: Request,
+    person: Person = Depends(identity.require_person),
+) -> Response:
+    """Ask Nova something — or, if she is already answering, queue it (S15).
+
+    One conversation answers one question at a time, and the SERVER decides
+    which of the two happened: a client's idea of whether it is busy can be
+    stale, and before this there was no decision at all — a second POST opened a
+    second turn, neither saw the other's message, and two replies interleaved.
+
+    A started turn streams as it always did. A queued one answers 202 with the
+    row, and runs by itself when the turn in flight ends. The annotation is
+    `Response` rather than `StreamingResponse` so that it and the OpenAPI schema
+    both tell the truth about the two shapes.
+    """
+    message = body.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="message is empty — nothing to ask")
+
+    pool = await db.get_pool()
+    conversation = await conversations.resolve(pool, person, body.conversation_id)
+    conversation_id = conversation["id"]
+
+    queue: asyncio.Queue = asyncio.Queue()
+    started: _Started | None = None
+    accepted: dict | None = None
+    committed = False
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                # Under the lock, so what is decided here is still true when it
+                # is acted on. The check used to be separated from the turn's
+                # registration by seven round trips, which is all the room a
+                # double tap needs to start two turns at once.
+                await queued.hold_conversation(conn, conversation_id)
+                if await conversations.conversation_busy(conn, conversation_id):
+                    row = await queued.enqueue(conn, conversation_id, person.id, message)
+                    ahead = len(await queued.waiting(conn, conversation_id)) - 1
+                    accepted = queued.as_json(row, ahead=max(ahead, 0))
+                else:
+                    started = await _open_turn(conn, person, conversation_id, message)
+        committed = True
+    finally:
+        if started is not None and not committed:
+            # The turn row never landed, so nothing will ever close it — and a
+            # stale id in INFLIGHT reads as "still responding" for the life of
+            # the process (the 2026-09-01 defect).
+            traces.INFLIGHT.discard(started.turn.id)
+
+    if accepted is not None:
+        # A second trigger for the drain, and the reason it is needed: the turn
+        # that made this message wait may have ENDED while this transaction was
+        # still open, and its own drain's cheap pre-check reads committed rows
+        # only — so it would have seen nothing and returned. This one runs after
+        # the commit, takes the lock, and finds either a turn already running
+        # (nothing to do) or this message (runs it). Without it a message could be
+        # accepted into a conversation that nothing will ever free again.
+        _spawn(drain_queue(request.app, pool, conversation_id))
+        return JSONResponse(status_code=202, content={"queued": accepted})
+
+    assert started is not None  # the else branch above, spelled for the reader
+    _spawn_turn(request.app, pool, conversation_id, started, queue.put_nowait)
     return StreamingResponse(
         _stream_from_queue(queue),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
     )
+
+
+@router.delete("/queued/{queued_id}")
+async def unqueue(queued_id: uuid.UUID, person: Person = Depends(identity.require_person)) -> dict:
+    """Take back a message that has not run yet (S15).
+
+    Reported from the row the UPDATE actually changed, never assumed: a message
+    the drain claimed a moment ago is already being answered, and a 200 over
+    that would tell the owner it was withdrawn when it was not. Someone else's
+    is NOT FOUND rather than forbidden.
+    """
+    pool = await db.get_pool()
+    row = await queued.cancel(pool, queued_id, person.id, "you took it back before it ran")
+    if row is not None:
+        return {"cancelled": True, "queued": queued.as_json(row)}
+    existing = await queued.owned(pool, queued_id, person.id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"no queued message {queued_id} here")
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"queued message {queued_id} is already being answered"
+            if existing["claimed_at"] is not None
+            else f"queued message {queued_id} was already taken back: "
+            f"{existing['cancelled_reason']}"
+        ),
+    )
+
+
+# How long the stop route waits to see the turn actually end before answering.
+# Short, because the three points a turn reads the ask are all hot paths — a
+# streaming round checks per delta and a reporting tool per report — so a stop
+# normally lands in milliseconds. The budget exists so the answer can state
+# which of the two happened rather than assuming the good one.
+STOP_CONFIRM_S = 2.0
+_STOP_POLL_S = 0.05
+
+
+@router.post("/turns/{turn_id}/stop")
+async def stop_turn(turn_id: uuid.UUID, person: Person = Depends(identity.require_person)) -> dict:
+    """Stop a turn this process is running for this person (S15).
+
+    S2c-R1 said "with no explicit Stop yet, every disconnect means finish". It
+    still does: a disconnect is not this. Only this route stops a turn, and only
+    for the person whose conversation the turn belongs to — someone else's turn
+    is NOT FOUND rather than forbidden, the answer owned_conversation already
+    gives, so a stranger cannot probe which turn ids exist.
+
+    The answer never claims more than was checked. Asking is refused outright
+    when no turn here is running that id (traces.ask_to_stop reads INFLIGHT),
+    because the flag would be written and never read — a 200 over nothing. When
+    the ask IS recorded, the route waits up to STOP_CONFIRM_S for the turn to
+    reach a terminal status and reports which it saw: `stopped: true` with the
+    status the ledger now holds, or `stopped: false` naming what the turn was
+    still doing. The second is not a failure — it is the honest answer for a
+    turn sitting in a read that has not returned yet, and it will still stop at
+    its next step.
+    """
+    pool = await db.get_pool()
+    owned = await pool.fetchval(
+        "SELECT t.id FROM turns t JOIN conversations c ON c.id = t.conversation_id "
+        "WHERE t.id = $1 AND c.person_id = $2",
+        turn_id,
+        person.id,
+    )
+    if owned is None:
+        raise HTTPException(status_code=404, detail=f"no turn {turn_id} here")
+
+    stated = f"{person.name or 'the owner'} asked to stop it"
+    if not traces.ask_to_stop(turn_id, stated):
+        # Not in flight HERE. Either it finished already or a different process
+        # ran it; both mean nothing would ever read the flag.
+        status = await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"turn {turn_id} is not running here"
+                + (f" — it closed as '{status}'" if status else " — no process is running it")
+            ),
+        )
+
+    deadline = time.monotonic() + STOP_CONFIRM_S
+    while time.monotonic() < deadline:
+        status = await pool.fetchval("SELECT status FROM turns WHERE id = $1", turn_id)
+        if status is not None:
+            return {"turn_id": str(turn_id), "stopped": True, "status": status}
+        await asyncio.sleep(_STOP_POLL_S)
+
+    # traces.DOING is the right source HERE, unlike in the stop note: this is a
+    # live reading of a turn that has not ended, so whatever it says is what the
+    # turn is doing right now.
+    doing = traces.doing(turn_id)
+    busy_with = "working" if doing in (None, "starting", "thinking") else f"running {doing}"
+    return {
+        "turn_id": str(turn_id),
+        "stopped": False,
+        "status": None,
+        "doing": doing,
+        "stated": (
+            f"asked to stop; after {STOP_CONFIRM_S:g} s it was still {busy_with}"
+            " — it stops at its next step"
+        ),
+    }
 
 
 async def _stream_from_queue(queue: asyncio.Queue) -> AsyncIterator[str]:

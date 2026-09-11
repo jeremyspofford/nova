@@ -21,6 +21,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     text: '',
     streaming: false,
     interrupted: false,
+    stoppedNote: null,
     activity: null,
     servedBy: null,
     cost: null,

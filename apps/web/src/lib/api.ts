@@ -244,6 +244,16 @@ export interface Conversation {
   // showing a truncated answer — see services/core/app/conversations.py and
   // ChatPage's in-flight poll. (S2c.)
   pending_turn: boolean
+  // WHICH turn is still running, when one is (S15). A tab that reloaded into a
+  // turn never saw its meta frame, so without this it can show "still
+  // responding" over a turn it has no way to stop — which is exactly how a
+  // hung turn once held a conversation for ten and a half hours. null whenever
+  // pending_turn is false.
+  pending_turn_id: string | null
+  // Messages core has ACCEPTED but not yet answered, oldest first (S15) — sent
+  // while a turn was running. The server is what runs them, so this list is the
+  // truth the page adopts; `ahead` is how many run before each one.
+  queued: { id: string; conversation_id: string; body: string; ahead: number }[]
 }
 
 export interface StoredMessage {

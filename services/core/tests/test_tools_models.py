@@ -143,7 +143,7 @@ PULLED_4B = {
 def gateway(mount_peers, tmp_path):
     fake = fakes.FakeGateway(catalog_body=CATALOG, hf_body=HF_PAGE)
     mount_peers(gateway=fake)
-    reports: list[str] = []
+    reports: list[str | dict] = []
     ctx = ToolContext(app=app, person=None, workspace_root=tmp_path, progress=reports.append)
     return fake, ctx, reports
 
@@ -320,17 +320,49 @@ async def test_a_confirmed_pull_reports_progress_and_states_what_the_catalogue_l
     assert "Preflight: 2.3 GB needed, 100 GB free (size from ollama-registry)" in text
     assert "chat.model" not in text
     assert [p for p, _ in fake.seen] == ["/admin/pull", "/admin/catalog"]
-    # Progress: the preflight, the 10% and 50% and 100% reports (11% skipped —
-    # throttled to 5-point steps), then the catalogue check.
+    # Progress: the preflight, one report per whole percentage point reached,
+    # then the catalogue check. The lines that know a fraction report it as a
+    # NUMBER beside the words (S15), because a bar cannot be drawn from prose;
+    # the lines that do not (preflight, a manifest with no byte count) stay
+    # plain strings and render as words alone.
     assert reports[0] == "pulling qwen3:4b — 2.3 GB needed, 100 GB free (size from ollama-registry)"
     assert reports.count("pulling manifest — qwen3:4b") == 1, "identical reports are one frame"
-    percents = [r for r in reports if "%" in r]
-    assert percents == [
-        "pulling qwen3:4b — 10% (0.2 GB of 2.3 GB)",
-        "pulling qwen3:4b — 50% (1.2 GB of 2.3 GB)",
-        "pulling qwen3:4b — 100% (2.3 GB of 2.3 GB)",
+    # The fourth pull line is still 10% (it is 10.99 of a percent, truncated),
+    # so it reaches no new point and sends no frame — the bar would not move.
+    assert [r for r in reports if isinstance(r, dict)] == [
+        {"detail": "pulling qwen3:4b — 10% (0.2 GB of 2.3 GB)", "percent": 10},
+        {"detail": "pulling qwen3:4b — 50% (1.2 GB of 2.3 GB)", "percent": 50},
+        {"detail": "pulling qwen3:4b — 100% (2.3 GB of 2.3 GB)", "percent": 100},
     ]
+    # The number on the frame is the number in the words, always — one formula.
+    for dict_report in (r for r in reports if isinstance(r, dict)):
+        assert f"{dict_report['percent']}%" in dict_report["detail"]
     assert reports[-1] == "ollama reported success — checking the catalogue for qwen3:4b"
+
+
+async def test_every_layer_of_a_pull_reports_its_own_progress(gateway):
+    """A real pull is several blobs, each with its own 0→100.
+
+    Found by walking a live pull: one high-water mark for the whole call meant
+    the first layer to finish silenced every layer after it — the bar reached a
+    number and then sat there while gigabytes kept arriving. The mark is per
+    layer, so the second blob reports from its own start.
+    """
+    fake, ctx, reports = gateway
+    fake.pull_lines = (
+        '{"status":"preflight","required_gb":2.3,"free_gb":100,"ok":true}',
+        '{"status":"pulling sha256:aaaa","total":1000,"completed":500}',
+        '{"status":"pulling sha256:aaaa","total":1000,"completed":1000}',
+        # A second blob, starting over. Under the old rule neither line reported.
+        '{"status":"pulling sha256:bbbb","total":1000,"completed":300}',
+        '{"status":"pulling sha256:bbbb","total":1000,"completed":900}',
+        '{"status":"success"}',
+    )
+    fake.catalog_body = {**CATALOG, "rows": [CLOUD, PULLED_4B, INSTALLED]}
+
+    text, ok = await _run(models.model_pull, ctx, model="qwen3:4b")
+    assert ok, text
+    assert [r["percent"] for r in reports if isinstance(r, dict)] == [50, 100, 30, 90]
 
 
 async def test_a_success_line_the_catalogue_does_not_confirm_is_a_failure(gateway):

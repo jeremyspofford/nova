@@ -49,7 +49,14 @@ from app.tools import (
     web_search,
     workspace,
 )
-from app.tools.base import ERROR_PREFIX, RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
+from app.tools.base import (
+    ERROR_PREFIX,
+    RESULT_KIND_LISTING,
+    Tool,
+    ToolContext,
+    ToolFailure,
+    TurnStopped,
+)
 
 __all__ = [
     "ERROR_PREFIX",
@@ -234,6 +241,15 @@ async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str,
     try:
         result = await tool.executor(parsed, ctx)
         ok = True
+    except TurnStopped:
+        # The owner stopped the turn (S15) — not a refusal and not a bug, so it
+        # is neither reported to the model as an `Error:` (the call did not
+        # fail) nor logged as one. It is the turn's control flow passing
+        # through: re-raised so _run_turn's single stop exit records it, and
+        # deliberately BEFORE the two handlers below, which would otherwise
+        # swallow it and let the loop carry on spending on a turn that was
+        # told to quit.
+        raise
     except ToolFailure as exc:
         result, ok = f"{ERROR_PREFIX}{exc}", False
     except Exception as exc:

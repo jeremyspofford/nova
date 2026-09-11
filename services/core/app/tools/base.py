@@ -35,6 +35,33 @@ class ToolFailure(Exception):
     is a bug, and dispatch says so in different words — see dispatch()."""
 
 
+class TurnStopped(Exception):
+    """The owner asked to stop the turn this call belongs to (S15).
+
+    NOT a tool failure and not a bug — nothing is wrong with the call. It is
+    the turn's own control flow passing THROUGH the tool layer, raised by the
+    `progress` callback chat binds on the context, so any long call that
+    reports progress becomes interruptible without knowing Stop exists.
+    dispatch() re-raises it rather than turning it into an `Error:` result: the
+    model must not be told its tool failed, because it did not, and the turn is
+    about to end anyway.
+
+    It lives here, beside ToolContext, because it is part of that context's
+    contract: a tool that calls `ctx.progress` must be prepared for this to
+    come back out of it.
+
+    `reason` is who asked and why. `where` is what the turn was doing when the
+    stop actually landed, carried from the raise site because that is the only
+    thing that knows: reading the turn's live "doing" map instead named a tool
+    that had already returned, and then said its outcome was unknowable.
+    """
+
+    def __init__(self, reason: str, where: str = "working") -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.where = where
+
+
 @dataclass(frozen=True)
 class ToolContext:
     """Everything an executor is allowed to know about the turn it serves.

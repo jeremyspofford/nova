@@ -141,6 +141,18 @@ async def person_for_token(pool: asyncpg.Pool, token: str) -> Person | None:
     return _person(row)
 
 
+async def person_by_id(pool: asyncpg.Pool, person_id: uuid.UUID) -> Person | None:
+    """The person that id names, or None if the row is gone (S15).
+
+    The queue drain needs it: a queued message carries its owner's id, and the
+    turn it becomes must run as that person — their memory partition, their
+    money — not as whoever happened to be signed in when the drain fired.
+    """
+    return _person(
+        await pool.fetchrow("SELECT id, name, role FROM people WHERE id = $1", person_id)
+    )
+
+
 async def owner(pool: asyncpg.Pool) -> Person | None:
     row = await pool.fetchrow(
         "SELECT id, name, role FROM people WHERE role = 'owner' ORDER BY created_at LIMIT 1"

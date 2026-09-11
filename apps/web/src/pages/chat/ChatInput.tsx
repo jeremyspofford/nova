@@ -4,6 +4,7 @@ import { ArrowUp, Bot } from 'lucide-react'
 import { listAgents as apiListAgents, type AgentSummary } from '../../lib/api'
 import { autocompleteMatches, matchCommand, type Command } from '../../lib/commands'
 import { completeMention, mentionMatches, mentionQuery } from '../../lib/mentions'
+import { readLocal, writeLocal } from '../../lib/storage'
 
 /**
  * The chat composer: a textarea, a send button, and two autocompletes. The
@@ -30,6 +31,14 @@ import { completeMention, mentionMatches, mentionQuery } from '../../lib/mention
  * `api` is a dependency-injection seam, the ChatPage/ActivityPage idiom:
  * production uses the real client (the DEFAULT_API default); a test injects
  * a fake roster.
+ *
+ * `draftKey` (S15) is where the unsent text lives between mounts. ChatPage is
+ * a route element, so a trip to Settings unmounts this composer and used to
+ * take half a typed message with it. The key is per person and conversation
+ * (ChatPage composes it), so two conversations never show each other's
+ * half-written text. Undefined means "no conversation resolved yet" — typing
+ * still works, and the text is adopted into the draft the moment a key
+ * arrives, rather than being wiped by it.
  */
 
 interface ChatInputApi {
@@ -41,18 +50,50 @@ const DEFAULT_API: ChatInputApi = { listAgents: apiListAgents }
 export function ChatInput({
   onSubmit,
   disabled,
+  draftKey,
+  queueing = false,
   api = DEFAULT_API,
 }: {
   onSubmit: (text: string) => void
   disabled: boolean
+  draftKey?: string
+  /** A turn is running, so sending QUEUES rather than asks (S15). Changes what
+   * the send button says it will do; it does not gate anything, because the
+   * server is what decides, and it may well have finished by the time the
+   * request lands. */
+  queueing?: boolean
   api?: ChatInputApi
 }) {
-  const [input, setInput] = useState('')
+  const [input, setInput] = useState(() => (draftKey ? readLocal(draftKey, '') : ''))
   // Esc sets this to hide a dropdown that still has matches; any edit to the
   // input clears it again, so typing more re-opens the suggestions.
   const [dismissed, setDismissed] = useState(false)
   const [highlight, setHighlight] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // The draft. Written on every edit and removed the moment the message is
+  // sent, so storage only ever holds text that was NOT sent — a draft cannot
+  // come back to haunt a conversation it already went to.
+  const saveDraft = (value: string) => {
+    if (draftKey) writeLocal(draftKey, value === '' ? null : value)
+  }
+  // A conversation switch is a deliberate event; the same key re-rendering is
+  // not one. And a key ARRIVING where there was none (ChatPage resolves the
+  // conversation a tick after it mounts) adopts whatever is already typed
+  // instead of wiping it — the one case where a reset would lose real text.
+  const inputRef = useRef(input)
+  inputRef.current = input
+  const keyRef = useRef<string | undefined>(draftKey)
+  useEffect(() => {
+    if (draftKey === keyRef.current) return
+    const previous = keyRef.current
+    keyRef.current = draftKey
+    if (draftKey === undefined) return
+    const stored = readLocal(draftKey, '')
+    if (stored) setInput(stored)
+    else if (previous === undefined && inputRef.current) writeLocal(draftKey, inputRef.current)
+    else setInput('')
+  }, [draftKey])
 
   // The roster the `@` menu offers (S12): asked for ONCE, the first time the
   // input becomes a leading-@ token, and kept for the life of this composer.
@@ -110,6 +151,7 @@ export function ChatInput({
   const submit = (raw?: string) => {
     const text = (raw ?? input).trim()
     if (!text || disabled) return
+    saveDraft('')
     setInput('')
     setDismissed(true)
     setHighlight(0)
@@ -119,6 +161,7 @@ export function ChatInput({
 
   const changeInput = (value: string) => {
     setInput(value)
+    saveDraft(value)
     setDismissed(false)
     setHighlight(0)
     resize()
@@ -266,11 +309,21 @@ export function ChatInput({
           className="w-full bg-transparent resize-none text-content-primary placeholder:text-content-tertiary outline-none px-4 pt-4 pb-2"
           style={{ minHeight: '44px', maxHeight: '240px', fontSize: '16px' }}
         />
-        <div className="flex items-center justify-end px-3 pb-3 pt-1">
+        <div className="flex items-center justify-end gap-2 px-3 pb-3 pt-1">
+          {queueing && (
+            <span data-testid="will-queue" className="text-caption text-content-tertiary">
+              Nova is working — this will go next
+            </span>
+          )}
           <button
             type="submit"
             disabled={!input.trim() || disabled}
-            aria-label="Send message"
+            aria-label={queueing ? 'Queue message' : 'Send message'}
+            title={
+              queueing
+                ? 'Nova is working, so this is queued and runs when she finishes'
+                : undefined
+            }
             className={clsx(
               'flex items-center justify-center rounded-full h-9 w-9 transition-colors duration-fast',
               input.trim() && !disabled

@@ -16,7 +16,15 @@ import type { ClearedConversation, Conversation, StoredMessage } from '../../lib
  */
 
 function conversation(overrides: Partial<Conversation> = {}): Conversation {
-  return { id: 'c1', title: null, created_at: '', pending_turn: false, ...overrides }
+  return {
+    id: 'c1',
+    title: null,
+    created_at: '',
+    pending_turn: false,
+    pending_turn_id: null,
+    queued: [],
+    ...overrides,
+  }
 }
 
 function stored(id: string, role: string, content: string): StoredMessage {
@@ -470,6 +478,190 @@ describe('ChatPage — the idle poll (S9): a firing that lands while he is looki
     const atUnmount = api.getMessages.mock.calls.length
     await new Promise(resolve => setTimeout(resolve, 60))
     expect(api.getMessages.mock.calls.length).toBe(atUnmount)
+  })
+})
+
+/**
+ * The queue (S15). The composer used to go dead while Nova worked. Now it stays
+ * live, what the owner sends is shown as accepted, and the list comes from the
+ * server on every poll tick — because the server is what runs them.
+ */
+describe('ChatPage — messages waiting their turn', () => {
+  it('keeps the composer live while a turn runs, and says the next one will queue', async () => {
+    // A stream that never finishes: the turn stays in flight, which is exactly
+    // the state in which the composer used to be dead.
+    const fetchImpl = vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: async () => '',
+          body: { getReader: () => ({ read: () => new Promise(() => {}), cancel: async () => {} }) },
+        }) as unknown as Response,
+    )
+    const api = {
+      getActiveConversation: vi.fn(async () => conversation()),
+      getMessages: vi.fn(async () => [] as StoredMessage[]),
+    }
+    render(
+      <ChatProvider fetchImpl={fetchImpl as never}>
+        <ChatPage api={api} pollIntervalMs={5} />
+      </ChatProvider>,
+    )
+    const textarea = await waitFor(() => screen.getByLabelText('Message Nova'))
+    fireEvent.change(textarea, { target: { value: 'pull gemma4:26b' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+
+    await waitFor(() => expect(screen.getByTestId('will-queue')).toBeDefined())
+    // Still typable, and the send control is live for a second message.
+    expect(textarea.hasAttribute('disabled')).toBe(false)
+    fireEvent.change(textarea, { target: { value: 'actually, 12b' } })
+    expect(screen.getByLabelText('Queue message').hasAttribute('disabled')).toBe(false)
+  })
+
+  it('shows what the server says is waiting, and takes one back on request', async () => {
+    const deletes: string[] = []
+    const fetchImpl = vi.fn(async (url: string) => {
+      deletes.push(url)
+      return { ok: true, status: 200, text: async () => '{"cancelled":true}' } as unknown as Response
+    })
+    const api = {
+      getActiveConversation: vi.fn(async () =>
+        conversation({
+          pending_turn: true,
+          pending_turn_id: 't-1',
+          queued: [{ id: 'q1', conversation_id: 'c1', body: 'actually, 12b is fine', ahead: 0 }],
+        }),
+      ),
+      getMessages: vi.fn(async () => [] as StoredMessage[]),
+    }
+    render(
+      <ChatProvider fetchImpl={fetchImpl as never}>
+        <ChatPage api={api} pollIntervalMs={5} />
+      </ChatProvider>,
+    )
+
+    const chip = await waitFor(() => screen.getByTestId('queued-q1'))
+    expect(chip.textContent).toContain('actually, 12b is fine')
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('unqueue-q1'))
+    })
+    expect(deletes).toContain('/api/v1/chat/queued/q1')
+    await waitFor(() => expect(screen.queryByTestId('queued-q1')).toBeNull())
+  })
+
+  it('clears a chip once the server says the message has run', async () => {
+    // Nothing is streaming here: the queued message became a turn server-side
+    // and this tab is not reading it. Without a watch the chip would sit there
+    // saying a message is still waiting that has already been answered.
+    let waiting = [{ id: 'q1', conversation_id: 'c1', body: 'the second thing', ahead: 0 }]
+    const api = {
+      getActiveConversation: vi.fn(async () => conversation({ queued: waiting })),
+      getMessages: vi.fn(async () => [] as StoredMessage[]),
+    }
+    renderChat(api)
+    await waitFor(() => expect(screen.getByTestId('queued-q1')).toBeDefined())
+
+    waiting = []
+    await waitFor(() => expect(screen.queryByTestId('queued-q1')).toBeNull(), { timeout: 2000 })
+  })
+
+  it('shows nothing when nothing is waiting', async () => {
+    const api = {
+      getActiveConversation: vi.fn(async () => conversation()),
+      getMessages: vi.fn(async () => [] as StoredMessage[]),
+    }
+    renderChat(api)
+    await waitFor(() => expect(api.getMessages).toHaveBeenCalled())
+    expect(screen.queryByTestId('queued-list')).toBeNull()
+  })
+})
+
+/**
+ * Stop (S15). Two paths have to reach it, and the second is the one that
+ * matters most: a tab that RELOADED into a running turn has no meta frame and
+ * so no turn id of its own. It learns the id from /conversations/active, which
+ * is why "still responding" is now something you can act on rather than only
+ * watch.
+ */
+describe('ChatPage — stopping the turn', () => {
+  it('offers no stop when nothing is running', async () => {
+    renderChat({
+      getActiveConversation: vi.fn(async () => conversation()),
+      getMessages: vi.fn(async () => []),
+    })
+    await waitFor(() => expect(screen.getByLabelText('Message Nova')).toBeDefined())
+    expect(screen.queryByTestId('stop-turn')).toBeNull()
+  })
+
+  it('offers a stop over a turn this tab reloaded into, and asks core for THAT turn', async () => {
+    const stops: string[] = []
+    const fetchImpl = vi.fn(async (url: string) => {
+      stops.push(url)
+      return { ok: true, status: 200, text: async () => '{}' } as unknown as Response
+    })
+    const api = {
+      // Still running at mount, and still running on every poll — the hang.
+      getActiveConversation: vi.fn(async () =>
+        conversation({ pending_turn: true, pending_turn_id: 't-hung' }),
+      ),
+      getMessages: vi.fn(async () => [] as StoredMessage[]),
+    }
+    render(
+      <ChatProvider fetchImpl={fetchImpl as never}>
+        <ChatPage api={api} pollIntervalMs={5} />
+      </ChatProvider>,
+    )
+
+    const stop = await waitFor(() => screen.getByTestId('stop-turn'))
+    expect(screen.getByTestId('chat-responding')).toBeDefined()
+    await act(async () => {
+      fireEvent.click(stop)
+    })
+    expect(stops).toContain('/api/v1/chat/turns/t-hung/stop')
+  })
+})
+
+/**
+ * The draft (S15). ChatPage is a route element, so navigating to Settings and
+ * back unmounts it — this is the wiring that keeps the unsent text, keyed on
+ * the conversation the page actually resolved.
+ */
+describe('ChatPage — the composer keeps an unsent draft', () => {
+  const api = {
+    getActiveConversation: vi.fn(async () => conversation({ id: 'c-draft' })),
+    getMessages: vi.fn(async () => [] as StoredMessage[]),
+  }
+
+  it('restores what was typed after the page is unmounted and mounted again', async () => {
+    const { unmount } = renderChat(api)
+    await waitFor(() => expect(screen.getByLabelText('Message Nova')).toBeDefined())
+    fireEvent.change(screen.getByLabelText('Message Nova'), {
+      target: { value: 'can you pull gemma4:26b' },
+    })
+    unmount()
+
+    renderChat(api)
+    await waitFor(() =>
+      expect((screen.getByLabelText('Message Nova') as HTMLTextAreaElement).value).toBe(
+        'can you pull gemma4:26b',
+      ),
+    )
+  })
+
+  it('keys the draft on the conversation, so another conversation opens empty', async () => {
+    const { unmount } = renderChat(api)
+    await waitFor(() => expect(screen.getByLabelText('Message Nova')).toBeDefined())
+    fireEvent.change(screen.getByLabelText('Message Nova'), { target: { value: 'for c-draft' } })
+    unmount()
+
+    const other = {
+      getActiveConversation: vi.fn(async () => conversation({ id: 'c-other' })),
+      getMessages: vi.fn(async () => [] as StoredMessage[]),
+    }
+    renderChat(other)
+    await waitFor(() => expect(other.getMessages).toHaveBeenCalled())
+    expect((screen.getByLabelText('Message Nova') as HTMLTextAreaElement).value).toBe('')
   })
 })
 

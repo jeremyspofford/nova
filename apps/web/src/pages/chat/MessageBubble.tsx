@@ -11,9 +11,10 @@ import {
   Cpu,
   Loader2,
   Radar,
+  Square,
   Unplug,
 } from 'lucide-react'
-import { Badge } from '../../components/ui'
+import { Badge, ProgressBar } from '../../components/ui'
 import { Markdown } from '../../components/Markdown'
 import type { Delegation } from '../../lib/api'
 import { DELEGATE_TOOL, type ErrorRow, type LiveDelegation, type MessageRow } from './chatReducer'
@@ -41,26 +42,35 @@ import { DELEGATE_TOOL, type ErrorRow, type LiveDelegation, type MessageRow } fr
  */
 function ActivityLine({ activity }: { activity: NonNullable<MessageRow['activity']> }) {
   const failed = activity.status === 'error'
+  // A bar only for a call that is RUNNING and stated its own fraction (S15).
+  // A failure draws none whatever the last progress frame said — a bar sitting
+  // at 80% under a red "out of disk" line reads as still working.
+  const percent = !failed && activity.status === 'progress' ? activity.percent : undefined
   return (
-    <p
-      data-testid="activity-line"
-      className={`mt-1.5 inline-flex items-center gap-1.5 text-caption ${
-        failed ? 'text-danger' : 'text-content-tertiary'
-      }`}
-    >
-      {failed ? (
-        <AlertTriangle size={12} className="shrink-0" />
-      ) : (
-        <Loader2 size={12} className="shrink-0 animate-spin" />
+    <>
+      <p
+        data-testid="activity-line"
+        className={`mt-1.5 inline-flex items-center gap-1.5 text-caption ${
+          failed ? 'text-danger' : 'text-content-tertiary'
+        }`}
+      >
+        {failed ? (
+          <AlertTriangle size={12} className="shrink-0" />
+        ) : (
+          <Loader2 size={12} className="shrink-0 animate-spin" />
+        )}
+        {failed
+          ? activity.reason
+            ? `${activity.tool}: ${activity.reason}`
+            : `${activity.tool} failed`
+          : activity.status === 'progress' && activity.detail
+            ? `using ${activity.tool}… ${activity.detail}`
+            : `using ${activity.tool}…`}
+      </p>
+      {percent !== undefined && (
+        <ProgressBar value={percent} size="sm" className="mt-1 max-w-xs" />
       )}
-      {failed
-        ? activity.reason
-          ? `${activity.tool}: ${activity.reason}`
-          : `${activity.tool} failed`
-        : activity.status === 'progress' && activity.detail
-          ? `using ${activity.tool}… ${activity.detail}`
-          : `using ${activity.tool}…`}
-    </p>
+    </>
   )
 }
 
@@ -356,6 +366,19 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
           </p>
         )}
         {row.activity && !hideActivity && <ActivityLine activity={row.activity} />}
+        {/* The owner pressed Stop (S15). A NOTE, not a failure: tertiary text
+            and a square, never the danger colour or a warning triangle — the
+            turn ended because he asked it to, and the words are core's own
+            (they also say what a stop does NOT prove about the work). */}
+        {row.stoppedNote && (
+          <p
+            data-testid="stopped-note"
+            className="mt-1.5 inline-flex items-start gap-1.5 text-caption text-content-tertiary"
+          >
+            <Square size={11} className="mt-1 shrink-0" />
+            <span>{row.stoppedNote}</span>
+          </p>
+        )}
         {/* Who answered — `provider:model` as the gateway stated it on this
             turn's trace (S10-pre). Absent, never invented, when the turn is
             still streaming its first round or the server stated none. */}

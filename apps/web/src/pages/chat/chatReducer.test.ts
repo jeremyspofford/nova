@@ -380,6 +380,33 @@ describe('chatReducer — live tool activity in the pending bubble', () => {
     expect(messages(state)[1].activity).toBeNull()
   })
 
+  it('carries a progress percent on the marker, and drops it when the next frame has none', () => {
+    let state = started()
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'model_pull', status: 'progress', detail: '42%', percent: 42 },
+    })
+    expect(messages(state)[1].activity).toEqual({
+      tool: 'model_pull',
+      status: 'progress',
+      detail: '42%',
+      percent: 42,
+    })
+    // The marker is REPLACED, never merged: a later frame with no percent
+    // means the call stopped knowing its fraction, so the bar goes back to
+    // indeterminate rather than staying stuck at the last number it saw.
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'model_pull', status: 'progress', detail: 'verifying' },
+    })
+    expect(messages(state)[1].activity).toEqual({
+      tool: 'model_pull',
+      status: 'progress',
+      detail: 'verifying',
+    })
+    expect(messages(state)[1].activity).not.toHaveProperty('percent')
+  })
+
   it('a usage frame puts the turn\'s cost on the pending row; null stays null', () => {
     let state = started()
     state = chatReducer(state, {
@@ -1008,5 +1035,173 @@ describe('chatReducer — agents (S12): who wrote the row, and what she delegate
       observedRows: state.rows,
     })
     expect(messages(badged)[1].agent).toBe('coder')
+  })
+})
+
+/**
+ * The queue (S15). A message sent while a turn runs is ACCEPTED, not refused
+ * and not run concurrently. It is held apart from the transcript — it is not a
+ * message anybody has answered yet — so the server's list can stay
+ * authoritative without any of the duplicate-row merging that the transcript
+ * paths do.
+ */
+describe('chatReducer — messages accepted while a turn runs', () => {
+  const queuedEvent = {
+    type: 'queued' as const,
+    id: 'q1',
+    conversationId: 'c1',
+    body: 'actually, 12b is fine',
+    ahead: 0,
+  }
+
+  it('holds an accepted message apart from the transcript, and leaves the live turn alone', () => {
+    let state = chatReducer(started(), {
+      type: 'event',
+      event: { type: 'meta', conversationId: 'c1', model: 'm', turnId: 't-1', agent: null },
+    })
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'working' } })
+    const rowsBefore = state.rows
+    state = chatReducer(state, { type: 'event', event: queuedEvent })
+
+    expect(state.queued).toEqual([{ id: 'q1', body: 'actually, 12b is fine', ahead: 0 }])
+    expect(state.rows).toBe(rowsBefore)
+    expect(state.streaming).toBe(true)
+    expect(state.pendingId).not.toBeNull()
+    expect(state.turnId).toBe('t-1')
+  })
+
+  it('takes one back without touching the others', () => {
+    let state = chatReducer(emptyChat(), { type: 'event', event: queuedEvent })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { ...queuedEvent, id: 'q2', body: 'and another', ahead: 1 },
+    })
+    state = chatReducer(state, { type: 'unqueued', id: 'q1' })
+    expect(state.queued).toEqual([{ id: 'q2', body: 'and another', ahead: 1 }])
+    // An id that is not there changes nothing, and changes no identity either.
+    const same = chatReducer(state, { type: 'unqueued', id: 'nope' })
+    expect(same).toBe(state)
+  })
+
+  it('takes the server list as the truth, because the server is what runs them', () => {
+    let state = chatReducer(emptyChat(), { type: 'event', event: queuedEvent })
+    state = chatReducer(state, {
+      type: 'queueSynced',
+      queued: [{ id: 'q2', body: 'the only one left', ahead: 0 }],
+    })
+    expect(state.queued).toEqual([{ id: 'q2', body: 'the only one left', ahead: 0 }])
+    // An unchanged list is not a new state: this arrives on every poll tick and
+    // a fresh array each time would re-render the composer continuously.
+    const again = chatReducer(state, {
+      type: 'queueSynced',
+      queued: [{ id: 'q2', body: 'the only one left', ahead: 0 }],
+    })
+    expect(again).toBe(state)
+  })
+
+  it('survives the poll that resolves a turn, because the queue has not run yet', () => {
+    let state = chatReducer(emptyChat(), { type: 'loaded', conversationId: 'c1', messages: [] })
+    state = chatReducer(state, { type: 'event', event: queuedEvent })
+    state = chatReducer(state, {
+      type: 'pollResolved',
+      conversationId: 'c1',
+      messages: [
+        { id: 'u1', role: 'user', content: 'the first thing' },
+        { id: 'a1', role: 'assistant', content: 'the first answer' },
+      ],
+    })
+    expect(state.queued).toEqual([{ id: 'q1', body: 'actually, 12b is fine', ahead: 0 }])
+    expect(messages(state)).toHaveLength(2)
+  })
+
+  it('keeps an accepted message through a clear, because the server will still run it', () => {
+    // Clearing empties the transcript; it does not withdraw what core already
+    // accepted, any more than it stops the turn in flight (S2c: a disconnect
+    // means finish). Dropping the chip here would be the store claiming a
+    // cancellation nobody performed.
+    let state = chatReducer(emptyChat(), { type: 'loaded', conversationId: 'c1', messages: [] })
+    state = chatReducer(state, { type: 'event', event: queuedEvent })
+    expect(chatReducer(state, { type: 'cleared', conversationId: 'c1' }).queued).toEqual([
+      { id: 'q1', body: 'actually, 12b is fine', ahead: 0 },
+    ])
+  })
+
+  it('drops it on reset, which is a different person at the keyboard', () => {
+    let state = chatReducer(emptyChat(), { type: 'loaded', conversationId: 'c1', messages: [] })
+    state = chatReducer(state, { type: 'event', event: queuedEvent })
+    expect(chatReducer(state, { type: 'reset' }).queued).toEqual([])
+  })
+})
+
+/**
+ * Stop (S15). A turn the owner stopped is not a turn that failed: the text he
+ * watched stays, the note says where it stopped, and no red error row appears.
+ * The turn id has to be on the state for the button to have something to
+ * address — the meta frame is where it comes from.
+ */
+describe('chatReducer — the owner stopped the turn', () => {
+  const meta = {
+    type: 'meta' as const,
+    conversationId: 'c1',
+    model: 'qwen3:8b',
+    turnId: 't-1',
+    agent: null,
+  }
+
+  it('keeps the turn id from the meta frame and drops it when the turn ends', () => {
+    let state = chatReducer(started(), { type: 'event', event: meta })
+    expect(state.turnId).toBe('t-1')
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'hi' } })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    expect(state.turnId).toBeNull()
+  })
+
+  it('a new send clears the previous turn id, so Stop can never address a finished turn', () => {
+    let state = chatReducer(started(), { type: 'event', event: meta })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    state = chatReducer(state, { type: 'send', userId: 'u2', assistantId: 'a2', text: 'again' })
+    expect(state.turnId).toBeNull()
+  })
+
+  it('settles the pending row with the note, keeping the text that was watched', () => {
+    let state = chatReducer(started(), { type: 'event', event: meta })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'delta', text: 'I will now do ' },
+    })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'stopped', note: 'Stopped while running model_pull — you asked to stop it.' },
+    })
+
+    const row = messages(state)[1]
+    expect(row.text).toBe('I will now do ')
+    expect(row.stoppedNote).toBe('Stopped while running model_pull — you asked to stop it.')
+    expect(row.streaming).toBe(false)
+    expect(row.interrupted).toBe(false)
+    expect(row.activity).toBeNull()
+    expect(errors(state)).toEqual([])
+    expect(state.streaming).toBe(false)
+    expect(state.pendingId).toBeNull()
+    expect(state.turnId).toBeNull()
+  })
+
+  it('a stop with no text yet is a note, never "finished without a reply"', () => {
+    let state = chatReducer(started(), { type: 'event', event: meta })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'activity', tool: 'model_pull', status: 'start' },
+    })
+    state = chatReducer(state, {
+      type: 'event',
+      event: { type: 'stopped', note: 'Stopped while running model_pull.' },
+    })
+    // The DONE frame always follows a stop; it must not turn the settled row
+    // into a failure for having no prose.
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+
+    expect(errors(state)).toEqual([])
+    expect(messages(state)[1].stoppedNote).toBe('Stopped while running model_pull.')
+    expect(messages(state)[1].text).toBe('')
   })
 })

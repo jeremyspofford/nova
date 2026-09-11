@@ -261,3 +261,87 @@ describe('ChatInput — the @agent autocomplete (S12)', () => {
     expect(listAgents).not.toHaveBeenCalled()
   })
 })
+
+/**
+ * The draft (S15). Leaving /chat unmounts ChatPage, and with it the composer's
+ * state — so half a typed message used to vanish on a trip to Settings. The
+ * draft is per conversation, so two conversations never show each other's
+ * half-written text, and it is cleared by SENDING, never by a failed render.
+ */
+describe('ChatInput — the draft survives unmount', () => {
+  const KEY = 'nova-chat-draft:p1:c1'
+
+  it('starts from the stored draft for this key', () => {
+    localStorage.setItem(KEY, JSON.stringify('half a thought'))
+    render(<ChatInput onSubmit={vi.fn()} disabled={false} draftKey={KEY} />)
+    expect((screen.getByLabelText('Message Nova') as HTMLTextAreaElement).value).toBe(
+      'half a thought',
+    )
+  })
+
+  it('stores what was typed, so a remount shows it again', () => {
+    const { unmount } = render(<ChatInput onSubmit={vi.fn()} disabled={false} draftKey={KEY} />)
+    fireEvent.change(screen.getByLabelText('Message Nova'), {
+      target: { value: 'pull gemma4:26b for me' },
+    })
+    unmount()
+
+    render(<ChatInput onSubmit={vi.fn()} disabled={false} draftKey={KEY} />)
+    expect((screen.getByLabelText('Message Nova') as HTMLTextAreaElement).value).toBe(
+      'pull gemma4:26b for me',
+    )
+  })
+
+  it('forgets the draft once the message is sent', () => {
+    localStorage.setItem(KEY, JSON.stringify('sent for real'))
+    const onSubmit = vi.fn()
+    const { unmount } = render(<ChatInput onSubmit={onSubmit} disabled={false} draftKey={KEY} />)
+    fireEvent.keyDown(screen.getByLabelText('Message Nova'), { key: 'Enter' })
+
+    expect(onSubmit).toHaveBeenCalledWith('sent for real')
+    expect(localStorage.getItem(KEY)).toBeNull()
+    unmount()
+
+    render(<ChatInput onSubmit={vi.fn()} disabled={false} draftKey={KEY} />)
+    expect((screen.getByLabelText('Message Nova') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('keeps each conversation draft apart', () => {
+    localStorage.setItem('nova-chat-draft:p1:c1', JSON.stringify('for the first'))
+    const { unmount } = render(
+      <ChatInput onSubmit={vi.fn()} disabled={false} draftKey="nova-chat-draft:p1:c2" />,
+    )
+    expect((screen.getByLabelText('Message Nova') as HTMLTextAreaElement).value).toBe('')
+    unmount()
+
+    render(<ChatInput onSubmit={vi.fn()} disabled={false} draftKey="nova-chat-draft:p1:c1" />)
+    expect((screen.getByLabelText('Message Nova') as HTMLTextAreaElement).value).toBe(
+      'for the first',
+    )
+  })
+
+  it('says a send will be queued while Nova is working, and still sends it', () => {
+    // The composer used to be dead while a turn ran. It is live now, and it says
+    // what sending will actually do — the send is not gated, because the SERVER
+    // decides and the turn may have ended by the time the request lands.
+    const onSubmit = vi.fn()
+    render(<ChatInput onSubmit={onSubmit} disabled={false} queueing />)
+    expect(screen.getByTestId('will-queue')).toBeDefined()
+    const textarea = screen.getByLabelText('Message Nova')
+    fireEvent.change(textarea, { target: { value: 'actually, 12b' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledWith('actually, 12b')
+  })
+
+  it('says nothing of the sort when she is idle', () => {
+    render(<ChatInput onSubmit={vi.fn()} disabled={false} />)
+    expect(screen.queryByTestId('will-queue')).toBeNull()
+    expect(screen.getByLabelText('Send message')).toBeDefined()
+  })
+
+  it('keeps the typed text when no draft key is given yet', () => {
+    render(<ChatInput onSubmit={vi.fn()} disabled={false} />)
+    fireEvent.change(screen.getByLabelText('Message Nova'), { target: { value: 'no key' } })
+    expect((screen.getByLabelText('Message Nova') as HTMLTextAreaElement).value).toBe('no key')
+  })
+})
