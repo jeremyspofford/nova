@@ -416,3 +416,65 @@ def test_the_trailing_correction_is_clean_over_itself():
     )
     assert correction is not None
     assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
+
+
+# -- deleting a file (S16) -------------------------------------------------
+#
+# The sentence that started the slice, said to the owner on 2026-09-11 when he
+# asked her to delete a file: "there is no delete operation in my toolbox."
+# It was TRUE then. With workspace_delete registered it is a false denial, and
+# this guard is what refuses it.
+
+
+def test_the_owners_exact_no_delete_reply_is_contradicted():
+    reply = "I can list it and read it, but there is no delete operation in my toolbox."
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None
+    assert tgt(correction) == ["workspace_delete"]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't delete files.",
+        "I'm unable to delete files.",
+        "I don't have the ability to remove files.",
+        "My capabilities don't include deleting files.",
+        "Deleting files isn't in my toolset.",
+        "Removing files is not something I can do.",
+    ],
+)
+def test_a_general_denial_of_deletion_is_contradicted(reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None
+    assert tgt(correction) == ["workspace_delete"]
+
+
+def test_the_delete_denial_stays_derived_from_the_live_tool_set():
+    reply = "I can't delete files."
+    assert guards.capability_claim_check(reply, ["workspace_delete"]) is not None
+    assert guards.capability_claim_check(reply, []) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # a SPECIFIC failed attempt, not a denial of the ability
+        "I couldn't delete groceries.md — there is nothing at that path.",
+        "I can't delete groceries.md because it is a symbolic link.",
+        # a true statement about containment
+        "I can't delete files outside my workspace.",
+        # a question, a future form, another subject
+        "Would you like me to delete those files?",
+        "I'll delete them once you confirm.",
+        "You can't delete files from here.",
+    ],
+)
+def test_an_honest_sentence_about_deletion_is_left_alone(reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None
+
+
+def test_the_delete_correction_is_clean_over_itself():
+    correction = guards.capability_claim_check("I can't delete files.", ALL_TOOLS)
+    assert correction is not None
+    assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None

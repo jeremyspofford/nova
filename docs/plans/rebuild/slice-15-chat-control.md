@@ -61,7 +61,7 @@ not by size):
 | `memory_backfill` reporting 0 facts as a clean result | Already fixed upstream — see below |
 | One 502 walling a whole chain for an hour | Fixed: the wall is scoped by what the status is about |
 | The false spend retraction | Fixed: the backing set is derived from the registry |
-| No workspace delete verb | Fixed: `workspace_delete_file` |
+| No workspace delete verb | Fixed here as `workspace_delete_file`, then SUPERSEDED at the merge by slice 16's `workspace_delete` (trash, recursive, both-ended verification) — the two slices built it the same morning, independently |
 | Error text sending him to Settings and Activity | Fixed: neither sentence points at a page |
 | `money_daily_spike` repeating the same line ~20 times | Fixed: a young install is NOT DUE, not a coverage gap |
 | A pull of a tag that does not exist | Fixed: refused before ollama is called, with near misses |

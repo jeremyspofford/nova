@@ -18,6 +18,7 @@ The claim -> tool mapping (derived from the registry, not the prompt):
     create/write/save/update a file      -> workspace_write_file | memory_save
     present a file's contents as fact    -> workspace_read_file | workspace_write_file
     read/check a file                    -> workspace_read_file
+    delete/remove a file                 -> workspace_delete
     fetch/look up a URL                  -> fetch_url
 
 Two properties make this safe to run on every turn:
@@ -56,6 +57,7 @@ from typing import Any, NamedTuple
 # test_guards.py goes red the day that happens, which is the intended alarm.
 _WRITE_TOOLS = frozenset({"workspace_write_file", "memory_save"})
 _READ_TOOLS = frozenset({"workspace_read_file"})
+_DELETE_TOOLS = frozenset({"workspace_delete"})
 _CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
 _FETCH_TOOLS = frozenset({"fetch_url"})
 _PULL_TOOLS = frozenset({"model_pull"})
@@ -64,6 +66,7 @@ _REMOVE_TOOLS = frozenset({"model_remove"})
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
     "read_file": _READ_TOOLS,
+    "deleted_file": _DELETE_TOOLS,
     "file_contents": _CONTENT_TOOLS,
     "fetched_url": _FETCH_TOOLS,
     "pulled_model": _PULL_TOOLS,
@@ -189,10 +192,12 @@ _CONTENT_CLAIM = re.compile(
 _PASSIVE_CLAIM = re.compile(
     r"\b(" + _FILENAME_RE + r")\b\s+(?:has|have|had|was|were|is|are)\s+(?:been\s+|now\s+)?"
     r"(?P<verb>created|written|saved|updated|appended|added"
-    r"|read|opened|reviewed|checked|examined)\b",
+    r"|read|opened|reviewed|checked|examined"
+    r"|deleted|removed|erased)\b",
     re.I,
 )
 _PASSIVE_READ_VERBS = frozenset({"read", "opened", "reviewed", "checked", "examined"})
+_PASSIVE_DELETE_VERBS = frozenset({"deleted", "removed", "erased"})
 
 # Completed ACTIVE verbs, as whole tokens (the token scan lower-cases and looks
 # them up). Future/hedged forms use the base verb ("I'll create", "I can save")
@@ -201,7 +206,13 @@ _WRITE_VERB_TOKENS = frozenset(
     {"created", "wrote", "written", "saved", "updated", "appended", "added"}
 )
 _READ_VERB_TOKENS = frozenset({"read", "checked", "reviewed", "opened", "examined"})
-_ACTION_VERB_TOKENS = _WRITE_VERB_TOKENS | _READ_VERB_TOKENS
+# S16: a deletion is an action like any other, and it goes in the shared set so
+# every boundary scan below treats "deleted" as a verb rather than as a word an
+# object can run through. "removed" is here and in the model-removal pattern —
+# which one fires is decided by the object, exactly as "read" is split between
+# a file and a URL: a model reference carries a tag, a filename an extension.
+_DELETE_VERB_TOKENS = frozenset({"deleted", "removed", "erased"})
+_ACTION_VERB_TOKENS = _WRITE_VERB_TOKENS | _READ_VERB_TOKENS | _DELETE_VERB_TOKENS
 # add/append name the CONTENT as their immediate object and the file as a
 # destination ("added milk TO groceries.md"). The write target is therefore
 # the destination file, never the immediate object — "added config.yaml to the
@@ -768,7 +779,12 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
             if dest is not None:
                 claims.append(("wrote_file", dest, tok))
             continue
-        kind = "wrote_file" if low in _WRITE_VERB_TOKENS else "read_file"
+        if low in _WRITE_VERB_TOKENS:
+            kind = "wrote_file"
+        elif low in _DELETE_VERB_TOKENS:
+            kind = "deleted_file"
+        else:
+            kind = "read_file"
         for name in _objects_of(tokens, vi):
             claims.append((kind, name, tok))
 
@@ -785,7 +801,12 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
     # passive voice: "<file> has been updated / was read", filename-as-subject.
     for pm in _PASSIVE_CLAIM.finditer(clause):
         verb = pm.group("verb").lower()
-        kind = "read_file" if verb in _PASSIVE_READ_VERBS else "wrote_file"
+        if verb in _PASSIVE_READ_VERBS:
+            kind = "read_file"
+        elif verb in _PASSIVE_DELETE_VERBS:
+            kind = "deleted_file"
+        else:
+            kind = "wrote_file"
         claims.append((kind, pm.group(1), pm.group(0)))
 
     # content DUMP: "<file> contains the following / says:", filename-as-subject.
@@ -857,7 +878,7 @@ def _target_of(span: Any) -> str | None:
     args = (getattr(span, "meta", None) or {}).get("args_redacted")
     if not isinstance(args, dict):
         return None
-    if span.name in ("workspace_write_file", "workspace_read_file"):
+    if span.name in ("workspace_write_file", "workspace_read_file", "workspace_delete"):
         path = args.get("path")
         return path if isinstance(path, str) else None
     if span.name == "fetch_url":
@@ -1194,6 +1215,21 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "workspace_write_file",
     ),
+    # S16 (2026-09-11). The owner asked her to delete a file and got "there is
+    # no delete operation in my toolbox" — TRUE at the time, and a false denial
+    # the moment workspace_delete is registered. The phrases stay GENERAL, like
+    # every other entry: "delete files" and "no delete operation" match, "delete
+    # groceries.md" does not, so an honest report of ONE failed removal is
+    # never contradicted.
+    (
+        re.compile(
+            r"(?:delete|deleting|remove|removing|erase|erasing)\s+(?:a\s+)?files?\b"
+            r"|(?:delete|deletion|remove|removal)\s+"
+            r"(?:operation|tool|capability|function|command)s?\b",
+            re.I,
+        ),
+        "workspace_delete",
+    ),
     (
         re.compile(
             r"list(?:ing)?\s+(?:your\s+|the\s+)?files?\b"
@@ -1373,6 +1409,19 @@ _DENIAL_LEAD = re.compile(
 # that a registered tool exists, which is TRUE of the affirmed capability too,
 # so an over-reach here reads as a redundant line and never as a false one.
 _NOT_COPULA = r"(?:\b(?:is|are)\s+not\b|\b(?:is|are)n['’]t\b|['’](?:s|re)\s+not\b)"
+# "there is no <capability> in my toolbox" (S16, her sentence to the owner on
+# 2026-09-11). The lead family is first-person because a denial has to be ABOUT
+# her; this one is impersonal in grammar and self-referring in substance, so it
+# is admitted only when the clause also names her own toolset — the lookahead
+# is what keeps "there is no file at that path" out. Same lesson the trailing
+# family learned in S12: a denial does not stop being a denial for being said
+# about a possession rather than an ability.
+_ABSENT_FROM_TOOLSET = re.compile(
+    r"\bthere\s+(?:is|are)\s+no\b"
+    r"(?=[^.?!\n]*\bin\s+my\s+"
+    r"(?:tool\s?set|tools|toolkit|toolbox|capabilit(?:y|ies)|abilities|skill\s?set)\b)",
+    re.I,
+)
 _TRAILING_DENIAL = re.compile(
     _NOT_COPULA + r"\s+(?:"
     r"something\s+i(?:['’]m|\s+am)?\s+(?:can\s+do|able\s+to\s+do)"
@@ -1476,7 +1525,7 @@ def capability_claim_check(reply_text: str, available_tools: Sequence[str]) -> C
     for clause, is_question in _clauses(reply_text):
         if is_question:
             continue  # a question/offer asserts no inability
-        lead = _DENIAL_LEAD.search(clause)
+        lead = _DENIAL_LEAD.search(clause) or _ABSENT_FROM_TOOLSET.search(clause)
         trailing = _TRAILING_DENIAL.search(clause)
         if lead is None and trailing is None:
             continue
