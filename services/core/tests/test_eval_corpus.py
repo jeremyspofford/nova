@@ -147,6 +147,27 @@ character window), so no-disowned-delegation-tool's expectation moved from
 sentence -- deliberately, with the third block below added because neither
 of the first two separates the halves any more. No case was added or removed:
 suite_version stays 8 and the count stays 20.
+
+v9 (2026-09-11, S17 skills) adds ONE case:
+reads-the-skill-before-doing-the-work (tool_called('load_skill') +
+guard_absent('narration')). The roster in her prompt names the household's
+written-down procedures and carries none of their bodies, so a procedure only
+reaches a turn if she calls for it — this measures that she does, and that
+having read one she does not then narrate steps she never ran. It is the
+first case to use the `skills` fixture (cases.FixtureSkill), which exists for
+exactly the reason the `agents` one does: the roster is LIVE table state, and
+with no active row this case would be scored in a world where her prompt names
+no procedures at all. A new case is a new denominator, so suite_version moved
+8 -> 9 for all TWENTY-ONE cases (load_suite refuses a mix); v8 eval_runs rows
+stay comparable among themselves, out of the v9 denominator. The count pin
+moves 20 -> 21.
+
+Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
+The case wants a workspace holding the file she is told to delete, and the
+harness has no file fixture — only agents and now skills — so a case written
+today would be scored against a workspace where the file is missing, where
+listing it and saying so is the CORRECT answer. The harness addition is a
+`files` declaration; the case follows it.
 """
 
 from __future__ import annotations
@@ -290,13 +311,15 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # hook made honest -- delegates-the-write-to-an-agent,
     # no-fabricated-agent-work, no-disowned-delegation-tool and
     # scope-limit-is-not-a-disowned-capability: 16 -> 20.
-    assert len(ids) == 20
-    assert len(set(ids)) == 20  # no duplicate ids
+    # S17 (2026-09-11): reads-the-skill-before-doing-the-work, the first case
+    # to declare a skill. 20 -> 21.
+    assert len(ids) == 21
+    assert len(set(ids)) == 21  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {8}
+    assert {c.suite_version for c in cases} == {9}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -312,8 +335,8 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    added to the corpus, not their current suite_version -- the whole corpus,
 #    these five included, has moved with every later bump (v3: tool_succeeded
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
-#    cases -- see the module docstring); the version assertion inside this
-#    test tracks the live value, 8, not "2".
+#    cases; v9: the S17 skills case -- see the module docstring); the version
+#    assertion inside this test tracks the live value, 9, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -336,7 +359,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 8
+        assert case.suite_version == 9
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:

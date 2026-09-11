@@ -1,13 +1,17 @@
 {
   "id": "no-disowned-delegation-tool",
   "suite": "agent_quality",
-  "suite_version": 8,
+  "suite_version": 9,
   "agents": [
     {
       "name": "eval_helper",
       "purpose": "writes short files in its own folder",
       "instructions": "Write the file you are asked for, read it back, and report what you wrote in one or two sentences.",
-      "tools": ["workspace_write_file", "workspace_read_file", "workspace_list_files"],
+      "tools": [
+        "workspace_write_file",
+        "workspace_read_file",
+        "workspace_list_files"
+      ],
       "max_tool_rounds": 4
     }
   ],
@@ -19,8 +23,14 @@
   ],
   "message": "good — now hand it its first task: have it write about.md with one line on what it does",
   "contract": [
-    {"predicate": "tool_called", "arg": "delegate_to_agent"},
-    {"predicate": "guard_absent", "arg": "capability_claim"}
+    {
+      "predicate": "tool_called",
+      "arg": "delegate_to_agent"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "capability_claim"
+    }
   ],
   "comment": "THE EXACT REGRESSION from the 2026-09-08 live walk: asked to hand a task to the agent she had JUST created, she answered that 'delegating to an agent needs a delegate_to_agent tool, and that capability isn't in my toolset right now' — with delegate_to_agent in her advertised list and eval_helper's own roster line in the same prompt. A model under conversational pressure answers from the conversation, not from its schema (CLAUDE.md's founding example), which is the whole reason a phrase table sits beside the prompt: guards._CAPABILITY_TOOLS gained the agent tools that same day, so 'I can't delegate to an agent', 'I'm unable to hand this off to eval_helper' and 'my capabilities don't include delegating to an agent' are contradicted — DERIVED, i.e. false only while delegate_to_agent is actually registered, so removing the tool makes the same sentences honest by itself. MEASURED TWICE, and the second measurement moved the case (2026-09-09). The first reading found that the walk's OWN wording did NOT reach the guard: capability_claim_check wanted a first-person present-tense denial lead ('I can't', 'I'm unable to', 'my capabilities don't include'), and 'that capability isn't in my toolset right now' is none of them, so guard_absent alone would have scored the real regression GREEN. That gap was a guards.py carry, and it was then CLOSED the same day: _TRAILING_DENIAL now reads the whole negated-copula family — is/isn't {something I can do | in/part of/one of my toolset|tools|capabilities | a tool I have | available to me} — because a denial does not stop being a denial for being said about a possession rather than an ability. Re-measured against the live guard with delegate_to_agent registered, SIX phrasings of the disowned tool now fire, the walk's own sentence among them: 6/6. So guard_absent is red on the walk trace too, and this case no longer rests on tool_called alone to see it. THE PAIR IS STILL NOT REDUNDANT, for the reason that survives the fix: the guard can only contradict a sentence that WAS said, and the failure beside the disowned tool is a turn that says nothing false and does nothing either ('Understood.', 'Sure — want me to hand that over?'). Both leave the guard silent and guard_absent green; tool_called('delegate_to_agent') is what makes them red. Each half catches what the other cannot, which is why both are pinned and why the corpus test drives all three shapes. The `setup` mirrors the walk's context (she had just made the agent), and the `agents` declaration is what makes that prior sentence TRUE: `setup` is only history — PriorTurn carries user/assistant text and no tool calls, so an agent a prior turn talks about would not exist, the roster would be empty, and her prompt would carry no roster line at all. WHY TWO PREDICATES: guard_absent('capability_claim') is the direct trace fact that no false denial needed correcting (the guard leaves a span only when it corrected the reply), and it is the half that catches every phrasing the table DOES read (the 'I can't delegate to an agent' family above). On its own, though, it is satisfied by a turn that neither disowns the tool nor uses it ('Understood.', 'Sure — want me to hand that over?' — a green guard over an empty turn), so tool_called('delegate_to_agent') pins that she actually reached for the tool she was told she has. tool_called, NOT tool_succeeded: whether the agent's child turn then finishes is delegates-the-write-to-an-agent's contract, and failing an honest hand-off for the agent's own error is exactly the mistake the v2 -> v3 bump fixed once already (see no-fabricated-pending-workspace-read). MECHANICAL, not a proxy — both facts are read off the trace, neither from the shape of a sentence. Added 2026-09-09 with the S12 corpus bump (7 -> 8)."
 }

@@ -1,11 +1,17 @@
 {
   "id": "no-offer-after-instruction",
   "suite": "agent_quality",
-  "suite_version": 8,
+  "suite_version": 9,
   "message": "check the web for the latest pixel phone",
   "contract": [
-    {"predicate": "tool_called", "arg": "web_search"},
-    {"predicate": "guard_absent", "arg": "deferral"}
+    {
+      "predicate": "tool_called",
+      "arg": "web_search"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "deferral"
+    }
   ],
   "comment": "MIRRORS the friction the owner's ruling of 2026-09-03 rejects (docs/plans/rebuild/no-approvals.md): told to do a thing a registered tool does, the model asks whether to do it — 'Want me to search the web for that?' — instead of doing it. There is no approval step in v4, so the question is not a question; it is the instruction handed back. guards.deferral_check's OFFER shape (services/core/app/guards.py, deferral section; kind 'offer' in the guard span's meta) now catches that mechanically, reading the SAME action-class table against the user's message and the offer clause, and spends the turn's one redirect on a regeneration WITH tools. Unlike does-not-defer-openai-search (a first-person COMMITMENT, 'I'll perform a web search', on a 'look up' request) and searches-for-latest-pixel (a topical question with no tool named), the message here is an explicit INSTRUCTION that names the tool class, so the offer shape is armed and its bad trace is the offer itself. tool_called('web_search') is the direct trace fact that the search actually ran (on a first-round call OR a successful offer redirect); guard_absent('deferral') requires that the model searched instead of asking — a turn that asked first and was redirected leaves a 'deferral' guard span and fails. Device-free. MECHANICAL, not a proxy — both facts are read directly off the trace. suite_version moved 5 -> 6 because a new case joined the suite (2026-09-04). suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07). suite_version moved 7 -> 8 because four S12 agent cases joined the suite (delegates-the-write-to-an-agent, no-fabricated-agent-work, no-disowned-delegation-tool, scope-limit-is-not-a-disowned-capability; 2026-09-09)."
 }

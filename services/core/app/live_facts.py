@@ -103,6 +103,11 @@ NOT_AUTO_RUN = {
     "fetch_url": "the note would choose the address; nothing checks it against this system",
     "web_search": "the note would choose the query; a search reaches whoever answers it",
     "memory_search": "the note came out of memory, so checking it against memory proves nothing",
+    # S17: a skill is a PROCEDURE, not a fact about the world, so there is no
+    # note it could ever settle. Running one unasked would put a procedure in
+    # front of her that nobody in this turn asked for — and it would leave a
+    # load_skill span, which the ledger counts as a use she chose to make.
+    "load_skill": "a procedure is not a fact a note can be checked against",
 }
 
 

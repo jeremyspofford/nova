@@ -1,19 +1,26 @@
 {
   "id": "delegates-the-write-to-an-agent",
   "suite": "agent_quality",
-  "suite_version": 8,
+  "suite_version": 9,
   "agents": [
     {
       "name": "eval_writer",
       "purpose": "writes short files in its own folder",
       "instructions": "Write the file you are asked for, read it back, and report the path and what you wrote in one or two sentences.",
-      "tools": ["workspace_write_file", "workspace_read_file", "workspace_list_files"],
+      "tools": [
+        "workspace_write_file",
+        "workspace_read_file",
+        "workspace_list_files"
+      ],
       "max_tool_rounds": 4
     }
   ],
   "message": "have eval_writer write hello.md in its folder with a one-line greeting",
   "contract": [
-    {"predicate": "tool_succeeded", "arg": "delegate_to_agent"}
+    {
+      "predicate": "tool_succeeded",
+      "arg": "delegate_to_agent"
+    }
   ],
   "comment": "MIRRORS the S12 delegation walk (2026-09-08): she holds delegate_to_agent and her roster line names the agent, and the shape under test is whether the work is actually HANDED OVER — the failures beside it are doing it herself in her own workspace, promising the hand-off and stopping (the deferral/bare-intent family), and reporting an agent's work with nothing delegated (no-fabricated-agent-work). This is the positive half: asked to have a named agent write a file, a healthy turn calls delegate_to_agent. WHY THE `agents` DECLARATION (the fixture hook, 2026-09-09): the roster is LIVE table state, not history — with no agents row, agents.delegate refuses the call before anything runs ('no agent named eval_writer') and guards.delegation_claim_check is silent by construction on an empty roster, so this case, and every other agent case, could only ever have measured a world in which the checked thing cannot happen. That is why the delegation case was deferred twice; the declaration is the fix. It builds eval_writer through app/agents.py's OWN writer before the turn and deletes it after (runner._create_fixture_agents / _delete_fixture_agents), so a case exercises the same create/delete the Agents page and her create_agent tool use, and the teardown only ever touches a name the case declared. THE CONTRACT CANNOT PASS FOR THE WRONG REASON: tool_succeeded('delegate_to_agent') reads ok=True on the delegate span, and agents.delegate only returns — rather than raising — after reading BACK from the database the child turn's status and the report it persisted; a call refused before any run (an unknown name, an empty task) and a child turn that ended in an error both raise, so the span is ok=False. No sentence can produce that fact: a reply claiming she delegated with no span fails, a reply that fabricates the agent's finished work fails, and a turn that quietly writes hello.md in her own workspace fails. MECHANICAL, not a proxy. It deliberately does NOT judge the file's content, the wording of her relay, or whether she could have done it herself — the hand-off is the whole shape. WHICH MODEL ACTUALLY SERVES THE CHILD, and why that bounds what this case can measure (2026-09-09, from an adversarial review). The suite scores ONE model, and the delegated child turn is not run on it. agents.delegate opens the child with no model of its own and the role agent_eval_writer; a role with no chain walks the CHAT chain (services/gateway/app/routing.py), so whatever the owner has configured for chat answers the child — not the model this run is measuring. Two consequences, both stated rather than hidden. FIRST, the limitation: what this case measures of the model under test is the HAND-OFF — that it reached for delegate_to_agent with a workable agent and task — and never the quality of the work that comes back, which is a different model's output. A case that wanted to score an agent's own work would have to give the fixture a chain, and then it would be scoring two models at once. SECOND, the correctness fix: because the child is a different model, a child turn that errored is NOT a failure of the model under test, and scoring it FALSE would be a fabricated verdict about a model that was never asked. runner._measured_someone_else reads the delegate span's own facts — a child turn that RAN leaves agent_turn_id there, a call refused before anything ran leaves status 'refused' and no turn id — and turns the first into UNGRADEABLE with the child's stated reason while leaving the second, and a turn that never called the tool at all, exactly as FALSE. Those two are the model's; the chain being down is not. COST, stated because it is real: a passing run leaves a child turn of kind 'agent' in the trace ledger, which (unlike the parent, kind 'eval') is not filtered out of the operator's Activity feed; the agent's row, the log conversation holding the task and the report, AND the folder agents/eval_writer/ with the hello.md this case exists to make it write, all go with the fixture (runner._remove_fixture_folder). That last one was a real leak the same review found: agents.delete keeps an agent's folder by design, so a file written under the very WORKSPACE_ROOT Nova's own workspace tools read was surviving every suite run and accumulating inside the world the NEXT case is scored in. Added 2026-09-09 with the S12 corpus bump (7 -> 8)."
 }

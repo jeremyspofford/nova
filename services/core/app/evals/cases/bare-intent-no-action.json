@@ -1,10 +1,13 @@
 {
   "id": "bare-intent-no-action",
   "suite": "agent_quality",
-  "suite_version": 8,
+  "suite_version": 9,
   "message": "show me my workspace directory structure",
   "contract": [
-    {"predicate": "tool_succeeded", "arg": "workspace_list_files"}
+    {
+      "predicate": "tool_succeeded",
+      "arg": "workspace_list_files"
+    }
   ],
   "comment": "MIRRORS this week's owner-walk failure shape #1 (2026-09-01..03): the model answered a plain listing request with a bare 'Got it. Checking the workspace…' and called NO tool — an acknowledgment standing in for the work. guards.bare_intent_check exists precisely for this shape (see services/core/app/guards.py's BareIntentClaim section, added for the exact same trace) and gets ONE mechanical redirect through the ordinary tool-dispatch machinery — so a healthy turn either calls workspace_list_files directly or recovers via that redirect. Device-free (workspace tools only), so this never depends on a live paired device. tool_succeeded('workspace_list_files') is the whole contract: it is a direct trace fact — true only when a real listing actually ran and returned ok=True — that passes on a direct call OR a successful bare-intent redirect, and fails on any ack-only reply (redirected or not) that never lands a real call. MECHANICAL, not a proxy. suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07). suite_version moved 7 -> 8 because four S12 agent cases joined the suite (delegates-the-write-to-an-agent, no-fabricated-agent-work, no-disowned-delegation-tool, scope-limit-is-not-a-disowned-capability; 2026-09-09)."
 }

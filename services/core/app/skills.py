@@ -68,7 +68,7 @@ FLAGGED = "flagged"
 RETIRED = "retired"
 STATUSES = (DRAFT, ACTIVE, FLAGGED, RETIRED)
 
-CREATED_VIA = ("beat", "page")
+CREATED_VIA = ("beat", "page", "eval")
 
 # The tool that reads a body. Named here as a constant because the roster line
 # tells her how to use it: a rename moves that sentence instead of leaving the
@@ -689,7 +689,10 @@ async def trial(app, pool: asyncpg.Pool, name: str, model: str) -> dict:
             # turn that made an unbacked claim went badly whether or not it
             # had a procedure to follow.
             contract=(cases_mod.PredicateSpec(predicate="guard_absent", arg="narration"),),
-            skills=(name,) if with_skill else (),
+            # Declared by NAME and with no body: this row already exists, so
+            # the runner activates it and puts its status back rather than
+            # creating and deleting the owner's own skill.
+            skills=(cases_mod.FixtureSkill(name=name),) if with_skill else (),
         )
 
     sides = {}

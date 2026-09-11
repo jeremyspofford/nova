@@ -29,7 +29,11 @@ CREATE TABLE skills (
     summary     text NOT NULL,
     status      text NOT NULL DEFAULT 'draft'
                 CHECK (status IN ('draft', 'active', 'flagged', 'retired')),
-    created_via text NOT NULL CHECK (created_via IN ('beat', 'page')),
+    -- 'eval' is the harness's own: a case may DECLARE the skill its turn is
+    -- scored with, and the runner creates that row and deletes it again. It is
+    -- a third origin rather than a lie about one of the two real ones, so a row
+    -- left behind by a crashed run is identifiable as what it is.
+    created_via text NOT NULL CHECK (created_via IN ('beat', 'page', 'eval')),
     -- Provenance, and DELIBERATELY NOT a foreign key. Turn retention sweeps
     -- rows; a skill whose evidence aged out must not be deleted with it, nor
     -- silently emptied. The page resolves what still exists and says plainly

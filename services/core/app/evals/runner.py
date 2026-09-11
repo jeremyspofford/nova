@@ -840,51 +840,79 @@ async def _settle_turn_work(spawned_before: set[asyncio.Task]) -> None:
         await asyncio.gather(*pending, return_exceptions=True)
 
 
-async def _activate_fixture_skills(
+async def _build_fixture_skills(
     pool: asyncpg.Pool, case: cases_mod.Case
-) -> list[tuple[str, str]]:
-    """Make the case's declared skills ACTIVE, returning what each WAS.
+) -> list[tuple[str, str | None]]:
+    """Make the case's declared skills exist and be ACTIVE.
 
-    The roster is live table state, like the agent roster: with the skill left
-    a draft, a case about whether she reads one could only measure a world in
-    which she cannot. A name with no row raises — the case declared a world
-    that cannot be built, and the caller turns that into UNGRADEABLE rather
-    than a fail, because the model was never asked anything.
+    Returns the teardown plan: (name, previous status), where a previous
+    status of None means THIS RUN created the row and the teardown deletes it.
 
-    A row it flips is the household's real row for the length of the turn.
-    That is the same cost fixture agents already carry, and it is the reason a
-    suite is not something to run while somebody is chatting.
+    Why this is a fixture at all: the roster Nova reads is live table state,
+    and skills.roster_line returns None with no active row — so in the scratch
+    world a case about whether she reads a procedure would be scored against a
+    world where there is nothing to read.
+
+    The two shapes are told apart by the DECLARATION, never by a flag: a
+    declaration carrying a body builds its own world (and its name carries the
+    fixture prefix, so the teardown can only ever reach a row a case made),
+    while one that is just a name must already exist and is put back rather
+    than removed. A name that exists neither way raises — a world that cannot
+    be built is UNGRADEABLE, because the model was never asked anything.
     """
-    previous: list[tuple[str, str]] = []
-    for name in case.skills:
-        skill = await skills.get(pool, name)
-        if skill is None:
-            raise cases_mod.CaseError(f"the case declares a skill {name!r} with no row")
-        previous.append((name, skill.status))
-        if skill.status != skills.ACTIVE:
-            await skills.set_status(pool, name, skills.ACTIVE)
-    return previous
-
-
-async def _restore_fixture_skills(
-    pool: asyncpg.Pool, previous: Sequence[tuple[str, str]]
-) -> list[str]:
-    """Put each declared skill back the way it was. A restore that fails is a
-    WARNING on the case's result, never a silent change to the household's
-    own row."""
-    warnings: list[str] = []
-    for name, status in previous:
-        try:
-            current = await skills.get(pool, name)
-            if current is not None and current.status != status:
-                await skills.set_status(
-                    pool,
-                    name,
-                    status,
-                    reason=current.flagged_reason or "restored after an eval run",
+    plan: list[tuple[str, str | None]] = []
+    for declared in case.skills:
+        existing = await skills.get(pool, declared.name)
+        if existing is None:
+            if declared.body is None:
+                raise cases_mod.CaseError(
+                    f"the case declares a skill {declared.name!r} with no row and no body "
+                    "to create one from"
                 )
+            await skills.create(
+                pool,
+                name=declared.name,
+                title=declared.title,
+                summary=declared.summary,
+                created_via="eval",
+                body=declared.body,
+            )
+            plan.append((declared.name, None))
+        else:
+            plan.append((declared.name, existing.status))
+        await skills.set_status(pool, declared.name, skills.ACTIVE)
+    return plan
+
+
+async def _teardown_fixture_skills(
+    pool: asyncpg.Pool, plan: Sequence[tuple[str, str | None]]
+) -> list[str]:
+    """Put the world back: delete what this run created (row AND file — a
+    fixture file left in the workspace is a file the NEXT case is scored in,
+    the leak the S12 review found with agent folders), restore what was
+    already there. A teardown that could not finish is a WARNING on the case's
+    result, never a silent change to the household's own row."""
+    warnings: list[str] = []
+    for name, previous in plan:
+        try:
+            if previous is None:
+                await skills.delete(pool, name)
+                path = skills.body_path(name)
+                if path is not None and path.is_file():
+                    path.unlink()
+                if await skills.get(pool, name) is not None:
+                    warnings.append(f"the fixture skill {name!r} is still in the table")
+            else:
+                current = await skills.get(pool, name)
+                if current is not None and current.status != previous:
+                    await skills.set_status(
+                        pool,
+                        name,
+                        previous,
+                        reason=current.flagged_reason or "restored after an eval run",
+                    )
         except Exception as exc:
-            warnings.append(f"the skill {name!r} could not be restored to {status}: {exc}")
+            warnings.append(f"the skill {name!r} could not be put back: {exc}")
     return warnings
 
 
@@ -910,9 +938,9 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # fully torn down. Empty, and untouched by any query, for a case that
     # declares none.
     fixture_agents: list[agents.Agent] = []
-    # The declared skills' previous statuses, restored in the finally below
-    # whatever happens. Empty for a case that declares none.
-    fixture_skills: list[tuple[str, str]] = []
+    # The declared skills' teardown plan, run in the finally below whatever
+    # happens. Empty for a case that declares none.
+    fixture_skills: list[tuple[str, str | None]] = []
 
     # Everything from here on runs against this case's OWN fresh scratch
     # person — the finally below tears it down (person + its conversation +
@@ -931,7 +959,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         # finally below still tears down whatever landed.
         try:
             await _create_fixture_agents(app, pool, case, fixture_agents)
-            fixture_skills = await _activate_fixture_skills(pool, case)
+            fixture_skills = await _build_fixture_skills(pool, case)
         except Exception as exc:
             logger.exception(
                 "eval run_case: the declared world for case %s could not be built", case.id
@@ -1100,7 +1128,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             warnings.extend(
                 await _delete_fixture_agents(app, pool, fixture_agents, _fixture_actor(case))
             )
-            warnings.extend(await _restore_fixture_skills(pool, fixture_skills))
+            warnings.extend(await _teardown_fixture_skills(pool, fixture_skills))
             return warnings
 
         cleanup = chat._spawn(_settle_then_cleanup())

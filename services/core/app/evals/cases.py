@@ -183,6 +183,70 @@ class FixtureAgent:
 
 
 @dataclass(frozen=True)
+class FixtureSkill:
+    """One skill that must EXIST and be ACTIVE for a case's replay.
+
+    Same argument as FixtureAgent, one layer down: the roster Nova reads is
+    LIVE table state, and app/skills.py's roster_line returns None with no
+    active row — so in the scratch world a case about whether she reads a
+    procedure would score against a world where there is nothing to read.
+
+    A case DECLARES the whole skill (its body included) rather than naming one
+    it hopes the household has: a corpus case that depended on the owner's own
+    rows would measure a different world on every machine. The runner writes
+    it through app/skills.py's own writer and deletes it afterwards.
+
+    The one exception, and it is why `body` may be None: the trial
+    (skills.trial) declares a skill that ALREADY exists, to run its own source
+    request with it active and then put it back. The runner tells the two
+    apart by looking for the row, never by a flag a caller sets — a caller
+    that got the flag wrong would either delete the owner's skill or leave a
+    fixture behind.
+    """
+
+    name: str
+    title: str = "a declared skill"
+    summary: str = "declared by an eval case"
+    body: str | None = None
+
+    def __post_init__(self) -> None:
+        # A declaration that carries a BODY is a case building its own world,
+        # and the runner deletes that row afterwards — so the name must be one
+        # the owner's own skills can never collide with, the same rule and the
+        # same prefix as a fixture agent. A declaration with no body names a
+        # row that already exists and is only restored, so it is exempt.
+        if self.body is not None and not self.name.startswith(FIXTURE_AGENT_PREFIX):
+            raise CaseError(
+                f"a case's declared skill must be named {FIXTURE_AGENT_PREFIX}… when it "
+                f"carries a body (the harness creates and deletes that row), got {self.name!r}"
+            )
+
+    def as_json(self) -> dict:
+        out: dict = {"name": self.name, "title": self.title, "summary": self.summary}
+        if self.body is not None:
+            out["body"] = self.body
+        return out
+
+
+def skill_from_dict(raw: object) -> FixtureSkill:
+    """A declared skill, as a name or as an object. A bare string is the
+    trial's shape (a row that already exists); an object is a corpus case
+    declaring its own world."""
+    if isinstance(raw, str):
+        if not raw.strip():
+            raise CaseError("a case's skill name must not be blank")
+        return FixtureSkill(name=raw.strip())
+    if not isinstance(raw, dict):
+        raise CaseError(f"a case's skill must be a name or an object, got {type(raw).__name__}")
+    return FixtureSkill(
+        name=_require(raw, "name", str),
+        title=raw.get("title", "a declared skill"),
+        summary=raw.get("summary", "declared by an eval case"),
+        body=raw.get("body"),
+    )
+
+
+@dataclass(frozen=True)
 class Case:
     """One eval case. `contract` passes iff EVERY predicate passes (subset match
     against the trace, never equality against a recorded reply)."""
@@ -194,12 +258,12 @@ class Case:
     contract: tuple[PredicateSpec, ...]
     setup: tuple[PriorTurn, ...] = ()
     agents: tuple[FixtureAgent, ...] = ()
-    # S17: skills to make ACTIVE for this case's turn, by name. The roster is
-    # live table state, exactly like the agent roster (S12-3's fixture hook
-    # and the same reason): with every skill left as a draft, a case about
-    # whether she reads one could only ever measure a world where she cannot.
-    # The runner restores each row's previous status afterwards.
-    skills: tuple[str, ...] = ()
+    # S17: the skills that must exist and be ACTIVE for this turn. Live
+    # table state, exactly like the agent roster (S12-3's fixture hook, same
+    # reason): with every skill a draft, a case about whether she reads one
+    # would measure a world where there is nothing to read. The runner creates
+    # what is missing and deletes it after, and restores what already existed.
+    skills: tuple[FixtureSkill, ...] = ()
 
     def as_json(self) -> dict:
         return {
@@ -209,7 +273,7 @@ class Case:
             "message": self.message,
             "setup": [{"user": t.user, "assistant": t.assistant} for t in self.setup],
             "agents": [a.as_json() for a in self.agents],
-            "skills": list(self.skills),
+            "skills": [s.as_json() for s in self.skills],
             "contract": [p.as_json() for p in self.contract],
         }
 
@@ -269,11 +333,10 @@ def case_from_dict(raw: dict) -> Case:
         for t in raw.get("setup", [])
     )
     fixture_agents = tuple(agent_from_dict(a) for a in raw.get("agents", []))
-    fixture_skills = raw.get("skills", [])
-    if not isinstance(fixture_skills, list) or not all(
-        isinstance(name, str) and name.strip() for name in fixture_skills
-    ):
-        raise CaseError(f"a case's skills must be a list of names, got {fixture_skills!r}")
+    fixture_skills_raw = raw.get("skills", [])
+    if not isinstance(fixture_skills_raw, list):
+        raise CaseError(f"a case's skills must be a list, got {type(fixture_skills_raw).__name__}")
+    fixture_skills = tuple(skill_from_dict(entry) for entry in fixture_skills_raw)
     return Case(
         id=_require(raw, "id", str),
         suite=_require(raw, "suite", str),
@@ -282,7 +345,7 @@ def case_from_dict(raw: dict) -> Case:
         contract=contract,
         setup=setup,
         agents=fixture_agents,
-        skills=tuple(name.strip() for name in fixture_skills),
+        skills=fixture_skills,
     )
 
 

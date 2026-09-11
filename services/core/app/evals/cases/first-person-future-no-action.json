@@ -1,11 +1,17 @@
 {
   "id": "first-person-future-no-action",
   "suite": "agent_quality",
-  "suite_version": 8,
+  "suite_version": 9,
   "message": "how many files are in my workspace?",
   "contract": [
-    {"predicate": "tool_succeeded", "arg": "workspace_list_files"},
-    {"predicate": "reply_matches", "arg": "\\d"}
+    {
+      "predicate": "tool_succeeded",
+      "arg": "workspace_list_files"
+    },
+    {
+      "predicate": "reply_matches",
+      "arg": "\\d"
+    }
   ],
   "comment": "MIRRORS this week's owner-walk failure shape #2 (2026-09-01..03): asked a question that can only be answered by counting real files, the model replied 'I'll check the disk usage for you.' — a first-person future commitment with no tool call, caught by the same bare-intent family (guards.bare_intent_check: the verb 'check' is not one deferral_check maps to a specific tool, so this is the shape bare_intent exists to catch, not the commitment-form deferral guard). Device-free (workspace tools only). tool_succeeded('workspace_list_files') proves a real listing ran; reply_matches(/\\d/) proves the final reply actually reports a count rather than another bare promise — a promise-only reply has no digit and no successful span, so it fails BOTH predicates; a healthy answer ('There are 3 files…') passes both. MECHANICAL, not a proxy — the digit check only tests presence of a number, not that the number is correct (a graded/judged check is out of scope here, same caveat as v1's stays-on-topic case). suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07). suite_version moved 7 -> 8 because four S12 agent cases joined the suite (delegates-the-write-to-an-agent, no-fabricated-agent-work, no-disowned-delegation-tool, scope-limit-is-not-a-disowned-capability; 2026-09-09)."
 }
