@@ -640,3 +640,84 @@ async def draft_from_turns(
         step_names=step_names,
         root=root,
     )
+
+
+# ── the trial ──────────────────────────────────────────────────────────────
+
+# The suite a trial's two runs are filed under. They are NOT corpus cases —
+# they are composed from one skill's own source request and thrown away — so
+# they carry their own suite name and never move suite_version.
+TRIAL_SUITE = "skill_trial"
+
+
+async def trial(app, pool: asyncpg.Pool, name: str, model: str) -> dict:
+    """Run the skill's own first request twice — once with it active, once
+    without — and report what the two turns DID.
+
+    This is not a measurement of quality and the page says so. Two runs of one
+    request is a sample of one on each side ([[one-sample-is-not-a-measurement]]),
+    the model is non-deterministic, and no threshold here promotes anything:
+    the owner reads the two columns and decides. What it does buy is the one
+    thing a procedure's page cannot otherwise show — whether having the
+    procedure changed what the turn did at all.
+
+    Everything reported is read from `turn_spans` afterwards, by turn id. The
+    reply is not consulted: a turn that SAYS it followed the procedure and
+    called nothing is exactly the case this is here to expose.
+    """
+    from app.evals import cases as cases_mod
+    from app.evals import runner as eval_runner
+
+    skill = await get(pool, name)
+    if skill is None:
+        raise ValueError(f"no skill named {name!r}")
+    requests = await requests_from_turns(pool, skill.source_turn_ids)
+    if not requests:
+        raise ValueError(
+            f"the skill {name!r} has no source request to replay — it was written by hand, so "
+            "there is no turn to run again"
+        )
+    message = requests[0][1]
+
+    def _case(with_skill: bool) -> cases_mod.Case:
+        return cases_mod.Case(
+            id=f"skill-trial:{name}:{'with' if with_skill else 'without'}",
+            suite=TRIAL_SUITE,
+            suite_version=0,
+            message=message,
+            # A contract is required and this one is honest for both sides: a
+            # turn that made an unbacked claim went badly whether or not it
+            # had a procedure to follow.
+            contract=(cases_mod.PredicateSpec(predicate="guard_absent", arg="narration"),),
+            skills=(name,) if with_skill else (),
+        )
+
+    sides = {}
+    for with_skill in (True, False):
+        run = await eval_runner.run_case(app, pool, _case(with_skill), model)
+        sides["with" if with_skill else "without"] = {
+            **await _turn_facts(pool, run.turn_id),
+            "ungradeable": run.ungradeable,
+            "no_unbacked_claim": run.passed,
+            "turn_id": str(run.turn_id) if run.turn_id else None,
+        }
+    return {"skill": name, "model": model, "message": message, "sides": sides}
+
+
+async def _turn_facts(pool: asyncpg.Pool, turn_id: uuid.UUID | None) -> dict:
+    """What one trial turn actually did, off its spans."""
+    if turn_id is None:
+        return {"calls": None, "failed_calls": None, "read_the_skill": None, "seconds": None}
+    spans = await pool.fetch(
+        "SELECT kind, name, duration_ms, meta FROM turn_spans WHERE turn_id = $1", turn_id
+    )
+    tools_run = [s for s in spans if s["kind"] == "tool"]
+    return {
+        "calls": len(tools_run),
+        "failed_calls": sum(1 for s in tools_run if not (s["meta"] or {}).get("ok")),
+        "read_the_skill": any(
+            s["name"] == LOAD_TOOL and (s["meta"] or {}).get("ok") for s in tools_run
+        ),
+        "guard_fires": sum(1 for s in spans if s["kind"] == "guard"),
+        "seconds": round(sum((s["duration_ms"] or 0) for s in spans) / 1000, 2),
+    }

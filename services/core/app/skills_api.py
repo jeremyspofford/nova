@@ -33,9 +33,9 @@ import uuid
 from typing import Any
 
 import asyncpg
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
-from app import db, identity, skills
+from app import db, identity, settings_store, skills
 from app.checks import skills as skills_check
 from app.identity import Person
 
@@ -223,6 +223,29 @@ async def update_skill(
     except ValueError as exc:
         raise _bad(str(exc)) from exc
     return await read_skill(name, _person)
+
+
+@router.post("/skills/{name}/trial")
+async def trial_skill(
+    name: str,
+    request: Request,
+    body: dict = Body(default={}),
+    _person: Person = Depends(identity.require_person),
+) -> dict:
+    """Run the skill's own source request with it and without it.
+
+    Slow by construction — two real turns against a real model — and it is a
+    sample of one on each side, which the page states beside the numbers. It
+    promotes nothing: the owner reads the two columns and decides.
+    """
+    pool = await db.get_pool()
+    model = (body.get("model") or "").strip()
+    if not model:
+        model = str(await settings_store.read_value(pool, "chat.model") or "")
+    try:
+        return await skills.trial(request.app, pool, name, model)
+    except ValueError as exc:
+        raise _bad(str(exc)) from exc
 
 
 @router.delete("/skills/{name}")

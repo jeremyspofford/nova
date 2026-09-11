@@ -194,6 +194,12 @@ class Case:
     contract: tuple[PredicateSpec, ...]
     setup: tuple[PriorTurn, ...] = ()
     agents: tuple[FixtureAgent, ...] = ()
+    # S17: skills to make ACTIVE for this case's turn, by name. The roster is
+    # live table state, exactly like the agent roster (S12-3's fixture hook
+    # and the same reason): with every skill left as a draft, a case about
+    # whether she reads one could only ever measure a world where she cannot.
+    # The runner restores each row's previous status afterwards.
+    skills: tuple[str, ...] = ()
 
     def as_json(self) -> dict:
         return {
@@ -203,6 +209,7 @@ class Case:
             "message": self.message,
             "setup": [{"user": t.user, "assistant": t.assistant} for t in self.setup],
             "agents": [a.as_json() for a in self.agents],
+            "skills": list(self.skills),
             "contract": [p.as_json() for p in self.contract],
         }
 
@@ -262,6 +269,11 @@ def case_from_dict(raw: dict) -> Case:
         for t in raw.get("setup", [])
     )
     fixture_agents = tuple(agent_from_dict(a) for a in raw.get("agents", []))
+    fixture_skills = raw.get("skills", [])
+    if not isinstance(fixture_skills, list) or not all(
+        isinstance(name, str) and name.strip() for name in fixture_skills
+    ):
+        raise CaseError(f"a case's skills must be a list of names, got {fixture_skills!r}")
     return Case(
         id=_require(raw, "id", str),
         suite=_require(raw, "suite", str),
@@ -270,6 +282,7 @@ def case_from_dict(raw: dict) -> Case:
         contract=contract,
         setup=setup,
         agents=fixture_agents,
+        skills=tuple(name.strip() for name in fixture_skills),
     )
 
 

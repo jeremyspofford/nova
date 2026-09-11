@@ -202,3 +202,79 @@ async def test_a_notice_that_is_not_a_procedure_is_refused_by_name(
     )
     assert resp.status_code == 400
     assert "work_paused_timers" in resp.json()["error"]
+
+
+async def test_a_trial_runs_the_source_request_both_ways_and_reports_what_ran(
+    owner_client, pool, monkeypatch, tmp_path, mount_peers
+):
+    """Both turns are real turns. What comes back is read from their spans by
+    turn id — never from what either reply said it did."""
+    from tests.fakes import FakeMemory, ScriptedGateway
+    from tests.test_chat_tools import text, whole_call
+
+    root = await _root(monkeypatch, tmp_path)
+    (root / "skills").mkdir(parents=True, exist_ok=True)
+    person = await pool.fetchval("SELECT id FROM people WHERE role = 'owner'")
+    conversation = await pool.fetchval(
+        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", person
+    )
+    turn = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id, model, person_id) "
+        "VALUES ('chat', $1, 'm', $2) RETURNING id",
+        conversation,
+        person,
+    )
+    await pool.execute(
+        "INSERT INTO messages (conversation_id, turn_id, role, content) "
+        "VALUES ($1, $2, 'user', 'what time is it')",
+        conversation,
+        turn,
+    )
+    await pool.execute(
+        "INSERT INTO turn_spans (turn_id, kind, name, duration_ms) VALUES ($1, 'tool', $2, 5)",
+        turn,
+        "get_time",
+    )
+    await skills.create(
+        pool,
+        name="clock",
+        title="t",
+        summary="u",
+        created_via="beat",
+        body="1. call get_time\n",
+        source_turn_ids=[turn],
+        step_names=["get_time"],
+    )
+
+    # The WITH side reads the procedure and then answers; the WITHOUT side
+    # answers straight. Four rounds, in the order the two runs consume them.
+    gateway = ScriptedGateway(
+        rounds=(
+            (whole_call("c1", "load_skill", {"name": "clock"}),),
+            (text("It is nearly six."),),
+            (text("It is nearly six."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    resp = await owner_client.post("/api/v1/skills/clock/trial", json={"model": "qwen3:8b"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["message"] == "what time is it"
+    assert body["sides"]["with"]["read_the_skill"] is True
+    assert body["sides"]["without"]["read_the_skill"] is False
+    assert body["sides"]["without"]["calls"] == 0
+    # And the trial left the draft exactly as it found it.
+    assert (await skills.get(pool, "clock")).status == skills.DRAFT
+
+
+async def test_a_hand_written_skill_has_nothing_to_replay_and_says_so(
+    owner_client, pool, monkeypatch, tmp_path
+):
+    await _root(monkeypatch, tmp_path)
+    await _seed(pool, status=skills.DRAFT)
+
+    resp = await owner_client.post("/api/v1/skills/tidy/trial", json={"model": "m"})
+    assert resp.status_code == 400
+    assert "written by hand" in resp.json()["error"]

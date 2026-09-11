@@ -130,7 +130,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import agents, chat, peers, settings_store, traces
+from app import agents, chat, peers, settings_store, skills, traces
 from app.evals import cases as cases_mod
 from app.evals import predicates
 from app.identity import Person
@@ -840,6 +840,54 @@ async def _settle_turn_work(spawned_before: set[asyncio.Task]) -> None:
         await asyncio.gather(*pending, return_exceptions=True)
 
 
+async def _activate_fixture_skills(
+    pool: asyncpg.Pool, case: cases_mod.Case
+) -> list[tuple[str, str]]:
+    """Make the case's declared skills ACTIVE, returning what each WAS.
+
+    The roster is live table state, like the agent roster: with the skill left
+    a draft, a case about whether she reads one could only measure a world in
+    which she cannot. A name with no row raises — the case declared a world
+    that cannot be built, and the caller turns that into UNGRADEABLE rather
+    than a fail, because the model was never asked anything.
+
+    A row it flips is the household's real row for the length of the turn.
+    That is the same cost fixture agents already carry, and it is the reason a
+    suite is not something to run while somebody is chatting.
+    """
+    previous: list[tuple[str, str]] = []
+    for name in case.skills:
+        skill = await skills.get(pool, name)
+        if skill is None:
+            raise cases_mod.CaseError(f"the case declares a skill {name!r} with no row")
+        previous.append((name, skill.status))
+        if skill.status != skills.ACTIVE:
+            await skills.set_status(pool, name, skills.ACTIVE)
+    return previous
+
+
+async def _restore_fixture_skills(
+    pool: asyncpg.Pool, previous: Sequence[tuple[str, str]]
+) -> list[str]:
+    """Put each declared skill back the way it was. A restore that fails is a
+    WARNING on the case's result, never a silent change to the household's
+    own row."""
+    warnings: list[str] = []
+    for name, status in previous:
+        try:
+            current = await skills.get(pool, name)
+            if current is not None and current.status != status:
+                await skills.set_status(
+                    pool,
+                    name,
+                    status,
+                    reason=current.flagged_reason or "restored after an eval run",
+                )
+        except Exception as exc:
+            warnings.append(f"the skill {name!r} could not be restored to {status}: {exc}")
+    return warnings
+
+
 async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) -> EvalRun:
     """Replay one case against `model` and score it. See the module docstring for
     the enforced properties (scratch isolation and the declared world, no
@@ -862,6 +910,9 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # fully torn down. Empty, and untouched by any query, for a case that
     # declares none.
     fixture_agents: list[agents.Agent] = []
+    # The declared skills' previous statuses, restored in the finally below
+    # whatever happens. Empty for a case that declares none.
+    fixture_skills: list[tuple[str, str]] = []
 
     # Everything from here on runs against this case's OWN fresh scratch
     # person — the finally below tears it down (person + its conversation +
@@ -880,9 +931,10 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         # finally below still tears down whatever landed.
         try:
             await _create_fixture_agents(app, pool, case, fixture_agents)
+            fixture_skills = await _activate_fixture_skills(pool, case)
         except Exception as exc:
             logger.exception(
-                "eval run_case: the declared agents for case %s could not be built", case.id
+                "eval run_case: the declared world for case %s could not be built", case.id
             )
             result = EvalRun(
                 case_id=case.id,
@@ -893,7 +945,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
                 ungradeable=True,
                 detail={
                     "reason": (
-                        "the case's declared agents could not be created — "
+                        "the case's declared world could not be built — "
                         f"{type(exc).__name__}: {exc}"
                     )
                 },
@@ -1048,6 +1100,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             warnings.extend(
                 await _delete_fixture_agents(app, pool, fixture_agents, _fixture_actor(case))
             )
+            warnings.extend(await _restore_fixture_skills(pool, fixture_skills))
             return warnings
 
         cleanup = chat._spawn(_settle_then_cleanup())
