@@ -208,27 +208,111 @@ async def test_a_live_refusal_walls_the_provider_and_the_same_request_falls_to_t
     assert (await client.delete("/admin/routes/walls/openrouter")).status_code == 404
 
 
-async def test_walls_escalate_one_six_twenty_four_hours(pool, local):
+async def test_a_model_that_failed_does_not_wall_its_own_fallback(pool, local):
+    """2026-09-10, live: one timeout took the whole chain out for an hour.
+
+    `qwen3.8:27b` did not answer, and the wall was keyed by PROVIDER — so
+    `qwen3:8b`, the next link, was walled too without ever being called. The
+    owner's retry twelve seconds later failed instantly with a wall of text
+    naming two walled models, and every question for the next hour would have
+    done the same. On a box whose only provider is the local ollama, a
+    provider-wide wall for a server-side failure is a wall across everything.
+
+    What the status is ABOUT decides the scope, which is a fact the status
+    already carries: 401/402/403/429 are the provider talking about your
+    account, so they wall the provider; a 5xx is one model failing to serve,
+    so it walls that model and leaves its siblings alone.
+    """
     row = {"name": "ollama"}
-    first = await routing.record_refusal(pool, row, 429, "slow down")
-    second = await routing.record_refusal(pool, row, 429, "slow down")
-    third = await routing.record_refusal(pool, row, 500, "boom")
-    fourth = await routing.record_refusal(pool, row, 503, "boom")
-    hours = [
-        round((w["walled_until"] - w["walled_until"].replace(microsecond=0)).total_seconds())
-        for w in ()
+    outage = await routing.record_refusal(pool, row, 502, "ReadTimeout", model="qwen3.8:27b")
+    assert outage is not None and outage["model"] == "qwen3.8:27b"
+
+    walled = await routing.walls(pool)
+    by_name = {"ollama": {"name": "ollama", "local": True, "is_default": True}}
+    failed = await routing.judge_link(None, pool, "ollama:qwen3.8:27b", by_name, walled, "UTC", ())
+    sibling = await routing.judge_link(None, pool, "ollama:qwen3:8b", by_name, walled, "UTC", ())
+    assert failed["verdict"] == "walled", failed
+    assert sibling["verdict"] != "walled", "the fallback was walled for its sibling's failure"
+
+    # An ACCOUNT-level refusal still walls the whole provider: 402 is about the
+    # key, and trying another model on the same key would refuse identically.
+    await routing.record_refusal(pool, row, 402, "out of credit", model="qwen3:8b")
+    walled = await routing.walls(pool)
+    both = [
+        await routing.judge_link(None, pool, link, by_name, walled, "UTC", ())
+        for link in ("ollama:qwen3.8:27b", "ollama:qwen3:8b")
     ]
-    assert [w["strikes"] for w in (first, second, third, fourth)] == [1, 2, 3, 4]
-    spans = [
-        (w["walled_until"] - first["walled_until"]).total_seconds() for w in (second, third, fourth)
+    assert [v["verdict"] for v in both] == ["walled", "walled"]
+
+
+async def test_an_outage_wall_is_short_and_an_account_refusal_is_not(pool, local):
+    """A 5xx says "not right now" — usually a model still loading. An hour of
+    that is how one slow start costs every question for the rest of the hour.
+    An account refusal genuinely does last: nothing about 402 changes in a
+    minute. Two ladders, chosen by what the status is about."""
+    row = {"name": "ollama"}
+    outage = await routing.record_refusal(pool, row, 503, "loading", model="qwen3:8b")
+    account = await routing.record_refusal(pool, row, 402, "out of credit")
+    assert outage is not None and account is not None
+    outage_s = (outage["walled_until"] - outage["recorded_at"]).total_seconds()
+    account_s = (account["walled_until"] - account["recorded_at"]).total_seconds()
+    assert outage_s <= 300, f"a first outage wall of {outage_s:.0f}s is not a transient"
+    assert abs(account_s - 3600) < 5
+
+
+async def test_the_two_ladders_escalate_independently(pool, local):
+    """Account refusals climb 1h → 6h → 24h; outages climb 1m → 5m → 30m.
+
+    Their strike counts are separate, and that is the point: a model that
+    flaked twice this morning must not make the next 402 an instant 24-hour
+    wall, and a key that has been out of credit all week must not make a
+    model's first slow start look like a fourth strike. They are different
+    facts about different things, counted apart.
+    """
+    row = {"name": "ollama"}
+
+    def seconds(wall) -> float:
+        return (wall["walled_until"] - wall["recorded_at"]).total_seconds()
+
+    account = [await routing.record_refusal(pool, row, 429, "slow down") for _ in range(4)]
+    assert [w["strikes"] for w in account] == [1, 2, 3, 4]
+    assert [round(seconds(w)) for w in account] == [3600, 6 * 3600, 24 * 3600, 24 * 3600]
+    assert all(w["model"] == routing.WHOLE_PROVIDER for w in account)
+
+    outage = [
+        await routing.record_refusal(pool, row, 500, "boom", model="qwen3:8b") for _ in range(4)
     ]
-    assert (
-        abs(spans[0] - 5 * 3600) < 5
-        and abs(spans[1] - 23 * 3600) < 5
-        and abs(spans[2] - 23 * 3600) < 5
-    )
+    # Strike 1 again, not 5: the four 429s above were about the key.
+    assert [w["strikes"] for w in outage] == [1, 2, 3, 4]
+    assert [round(seconds(w)) for w in outage] == [60, 300, 1800, 1800]
+    assert all(w["model"] == "qwen3:8b" for w in outage)
+
+    # And each model counts its own strikes.
+    other = await routing.record_refusal(pool, row, 500, "boom", model="qwen3.8:27b")
+    assert other["strikes"] == 1
+
     assert await routing.record_refusal(pool, row, 400, "bad request") is None  # not a wall
-    assert hours == []
+
+
+async def test_a_clean_completion_clears_this_model_and_not_its_siblings(pool, local):
+    """An outage wall says one model would not serve. A SIBLING answering is no
+    evidence about it, so a success must not sweep every model's wall away and
+    send the next turn straight back into the one that just failed."""
+    row = {"name": "ollama"}
+    await routing.record_refusal(pool, row, 500, "boom", model="qwen3:8b")
+    await routing.record_refusal(pool, row, 500, "boom", model="qwen3.8:27b")
+
+    await routing.note_success(pool, "ollama", "qwen3:8b")
+    live = await routing.walls(pool)
+    assert ("ollama", "qwen3:8b") not in live
+    assert ("ollama", "qwen3.8:27b") in live, (
+        "a sibling's success cleared a wall it knows nothing about"
+    )
+
+    # The owner clearing the provider DOES mean all of it.
+    assert await routing.clear_wall(pool, "ollama") is True
+    assert await routing.walls(pool) == {}
+    assert await routing.clear_wall(pool, "ollama") is False
 
 
 async def test_an_empty_role_chain_uses_the_chat_chain_and_an_uninstalled_local_is_skipped(

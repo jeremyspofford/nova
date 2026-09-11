@@ -53,8 +53,21 @@ logger = logging.getLogger("gateway")
 BUILTIN_ROLES = ("chat", "scheduled", "judge", "coding", "vision")
 # Roles nothing calls yet — shown on the page as "no user yet".
 RESERVED_ROLES = frozenset({"coding", "vision"})
+# The statuses that are about the ACCOUNT rather than about one model: a key
+# with no credit, a key that is not allowed, a key being rate-limited. Another
+# model on the same key refuses identically, so these wall the whole provider.
 WALL_STATUSES = frozenset({401, 402, 403, 429})
+# An account refusal genuinely lasts — nothing about "out of credit" changes in
+# a minute — so it escalates over hours.
 WALL_STEPS_S = (3600, 6 * 3600, 24 * 3600)
+# A 5xx is one model saying "not right now", and on this box that is usually a
+# model still loading into VRAM. An hour of that is how one slow start costs
+# every question for the rest of the hour, so an outage starts at a minute and
+# only climbs if it keeps happening. It walls THAT MODEL, never its siblings.
+OUTAGE_STEPS_S = (60, 5 * 60, 30 * 60)
+# The `model` value that means "every model on this provider". Not NULL: it is
+# half of the primary key, and a NULL there is a row you cannot address.
+WHOLE_PROVIDER = ""
 TAGS_TTL_S = 30
 TAGS_CACHE = TTLCache(ttl_s=TAGS_TTL_S, max_entries=4)
 
@@ -158,53 +171,104 @@ async def delete_chain(pool: asyncpg.Pool, role: str) -> bool:
 # ── walls ──────────────────────────────────────────────────────────────────
 
 
-async def walls(pool: asyncpg.Pool) -> dict[str, dict]:
+async def walls(pool: asyncpg.Pool) -> dict[tuple[str, str], dict]:
+    """Every live wall, keyed by (provider, model).
+
+    `model` is WHOLE_PROVIDER for an account-level refusal and the model's own
+    id for an outage, so a caller asks two questions of this map — is the
+    provider walled, and is this model walled — and never confuses the two.
+    """
     rows = await pool.fetch(
-        "SELECT provider, walled_until, reason, status, strikes FROM provider_walls "
+        "SELECT provider, model, walled_until, reason, status, strikes FROM provider_walls "
         "WHERE walled_until > now()"
     )
-    return {r["provider"]: dict(r) for r in rows}
+    return {(r["provider"], r["model"]): dict(r) for r in rows}
 
 
-async def record_refusal(pool: asyncpg.Pool, row: dict, status: int, detail: str) -> dict | None:
-    """A provider refused before serving: wall it (escalating) — ONE
-    transaction with nothing else, so a wall never half-writes. The ledger
-    row for the refusal is written by usage.observe / record_probe on the
-    same path. Statuses outside WALL_STATUSES and below 500 wall nothing
-    (a 400 is about THIS request, not the provider)."""
+def wall_for(walled: dict[tuple[str, str], dict], provider: str, model: str) -> dict | None:
+    """The wall that stops this link, if one does. The provider-wide wall wins:
+    it is the broader fact and its reason is the one worth reading."""
+    return walled.get((provider, WHOLE_PROVIDER)) or walled.get((provider, model))
+
+
+async def record_refusal(
+    pool: asyncpg.Pool, row: dict, status: int, detail: str, *, model: str | None = None
+) -> dict | None:
+    """Something refused before serving: wall it (escalating) — ONE transaction
+    with nothing else, so a wall never half-writes. The ledger row for the
+    refusal is written by usage.observe / record_probe on the same path.
+    Statuses outside WALL_STATUSES and below 500 wall nothing (a 400 is about
+    THIS request, not the provider).
+
+    WHAT gets walled is derived from what the status is ABOUT, never from a list
+    of providers anyone maintains. An account-level status (WALL_STATUSES) is the
+    provider talking about your key, so it walls the provider and every model on
+    it; a 5xx is one model failing to serve, so it walls that model and leaves
+    its siblings runnable. On 2026-09-10 one model's read timeout walled its own
+    fallback for an hour and the owner's next question had nowhere to go.
+
+    `model` is optional only so an account-level refusal need not name one.
+    """
     if status not in WALL_STATUSES and status < 500:
         return None
+    account_level = status in WALL_STATUSES
+    scope = WHOLE_PROVIDER if account_level or not model else model
+    steps = WALL_STEPS_S if account_level else OUTAGE_STEPS_S
     async with pool.acquire() as conn, conn.transaction():
         prior = await conn.fetchrow(
-            "SELECT strikes, walled_until FROM provider_walls WHERE provider = $1", row["name"]
+            "SELECT strikes FROM provider_walls WHERE provider = $1 AND model = $2",
+            row["name"],
+            scope,
         )
         strikes = (prior["strikes"] if prior else 0) + 1
-        wait = WALL_STEPS_S[min(strikes, len(WALL_STEPS_S)) - 1]
-        until = datetime.now(UTC) + timedelta(seconds=wait)
-        reason = f"{row['name']} refused ({status}): {detail[:200]}"
+        wait = steps[min(strikes, len(steps)) - 1]
+        recorded_at = datetime.now(UTC)
+        until = recorded_at + timedelta(seconds=wait)
+        who = row["name"] if scope == WHOLE_PROVIDER else f"{row['name']}:{scope}"
+        reason = f"{who} refused ({status}): {detail[:200]}"
         await conn.execute(
-            "INSERT INTO provider_walls (provider, walled_until, reason, status, strikes) "
-            "VALUES ($1, $2, $3, $4, $5) ON CONFLICT (provider) DO UPDATE SET "
+            "INSERT INTO provider_walls (provider, model, walled_until, reason, status, strikes) "
+            "VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (provider, model) DO UPDATE SET "
             "walled_until = EXCLUDED.walled_until, reason = EXCLUDED.reason, "
             "status = EXCLUDED.status, strikes = EXCLUDED.strikes, updated_at = now()",
             row["name"],
+            scope,
             until,
             reason,
             status,
             strikes,
         )
-    logger.warning("provider walled: %s until %s (strike %d)", row["name"], until, strikes)
-    return {"provider": row["name"], "walled_until": until, "reason": reason, "strikes": strikes}
+    logger.warning("walled: %s until %s (strike %d)", who, until, strikes)
+    return {
+        "provider": row["name"],
+        "model": scope,
+        "walled_until": until,
+        "recorded_at": recorded_at,
+        "reason": reason,
+        "strikes": strikes,
+    }
 
 
 async def clear_wall(pool: asyncpg.Pool, provider: str) -> bool:
+    """The owner saying "try this provider again" — so it clears the
+    provider-wide wall AND every model wall under it, which is what "unwall
+    openrouter" means to the person clicking it."""
     result = await pool.execute("DELETE FROM provider_walls WHERE provider = $1", provider)
-    return result.endswith("1")
+    return not result.endswith(" 0")
 
 
-async def note_success(pool: asyncpg.Pool, provider: str) -> None:
-    """A clean completion clears the provider's wall and its strikes."""
-    await pool.execute("DELETE FROM provider_walls WHERE provider = $1", provider)
+async def note_success(pool: asyncpg.Pool, provider: str, model: str) -> None:
+    """A clean completion clears the provider's wall and THIS model's.
+
+    Not every model's: an outage wall says a particular model would not serve,
+    and one of its siblings answering is no evidence about it. Clearing them all
+    would send the next turn straight back into the model that just failed.
+    """
+    await pool.execute(
+        "DELETE FROM provider_walls WHERE provider = $1 AND model = ANY($2::text[])",
+        provider,
+        [WHOLE_PROVIDER, model],
+    )
 
 
 # ── the walk ───────────────────────────────────────────────────────────────
@@ -252,7 +316,7 @@ async def judge_link(
         }
     row = by_name[provider_name]
     entry = {"id": link, "provider": provider_name, "model": model, "local": bool(row.get("local"))}
-    wall = walled.get(provider_name)
+    wall = wall_for(walled, provider_name, model)
     if wall is not None:
         left = int((wall["walled_until"] - datetime.now(UTC)).total_seconds() // 60) + 1
         return {

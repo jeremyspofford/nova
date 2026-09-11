@@ -111,7 +111,9 @@ async def serve_by_role(
             )
         except HTTPException as exc:
             if exc.status_code in routing.WALL_STATUSES or exc.status_code >= 500:
-                await routing.record_refusal(pool, decision.row, exc.status_code, str(exc.detail))
+                await routing.record_refusal(
+                    pool, decision.row, exc.status_code, str(exc.detail), model=decision.model
+                )
                 skip.add(f"{decision.row['name']}:{decision.model}")
                 continue
             raise
@@ -120,11 +122,13 @@ async def serve_by_role(
             body_bytes = getattr(response, "body", b"")
             if body_bytes:
                 detail = body_bytes.decode(errors="replace")[:200]
-            await routing.record_refusal(pool, decision.row, response.status_code, detail)
+            await routing.record_refusal(
+                pool, decision.row, response.status_code, detail, model=decision.model
+            )
             skip.add(f"{decision.row['name']}:{decision.model}")
             continue
         if response.status_code == 200 and not decision.row.get("local"):
-            await routing.note_success(pool, decision.row["name"])
+            await routing.note_success(pool, decision.row["name"], decision.model)
         response.headers[ROUTE_HEADER] = decision.header()
         return response
     raise HTTPException(
