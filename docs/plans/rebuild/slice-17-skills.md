@@ -244,3 +244,59 @@ Stated as CLAUDE.md asks, one line per control:
 
 Every claim above checked against `turn_spans` by `turn_id`, and the files
 checked on the volume.
+
+---
+
+## Verification (walked 2026-09-11 on the deployed stack)
+
+Core and web rebuilt from `.worktrees/s17` into the live `nova` stack;
+migration 025 applied at startup. Every turn below is the real chat route as
+the owner, and every claim is checked against `turn_spans` by `turn_id`.
+
+| Turn | Asked | Ran |
+|---|---|---|
+| `5cb76ffb` | list the workspace, write walk-notes-1.md, read it back | list → write → read |
+| `783f8bcc` | "do that again please" for walk-notes-2.md | list → write → read |
+| beat fire | — | `skills_repeated_procedure` raised: the shape, walked in 2 turns |
+| `70d42164` | "same thing again for walk-notes-3.md please" | list, **load_skill**, write, read |
+| `8defbdea` | "one more time please, walk-notes-4.md" | **load_skill**, list, write, read |
+| `ddd2a191` | same again, with the skill RETIRED | `load_skill` **refused**, then the work by hand |
+
+The last row is the one worth keeping. With the skill retired the roster no
+longer named it, and she called for it anyway — from the conversation, where
+she had used it twice. The tool refused by status in as many words ("the skill
+… is retired, not active, so it is not a procedure to follow") and the ledger
+recorded no use, which is exactly the difference between a lifecycle held by a
+prompt and one held by a row.
+
+### Two defects the walk found, both real, neither caught by a test
+
+**The summary was empty, and the summary is the whole matching signal.** The
+first draft composed on the live stack said `asked as: (no request recorded)`.
+`requests_from_turns` read `messages.turn_id`, and a USER row never carries one
+— migration 018 added that column for the assistant row's served-by badge and
+says so in its first line. The unit test passed because its fixture stamped a
+column the product does not stamp: a test measuring a world that cannot exist,
+the same shape as the eval-fixture lesson in S12. The request is now found by
+CONVERSATION AND TIME (the newest user row at or before the turn opened, which
+is the row `chat_stream` inserts immediately before `traces.open_turn`), and
+the fixtures build the rows the product builds.
+
+**Every turn counted as rough.** Her first real use of a skill was recorded as
+having gone badly on a turn where nothing went wrong, because the ledger
+counted every `guard` span as a correction. Most guard spans exist only
+because a guard fired — the span is filed inside the `if correction is not
+None` — but the responsiveness judge files one whenever it RUNS, and says so
+on the span (`checked`). Five such uses would have flagged a healthy
+procedure. `skills.guard_fired` now reads what the span says about itself, so
+a future guard that wants the same treatment self-registers by writing the
+same marker.
+
+Both were found by asking her to do the thing, not by reading the code.
+
+### Not exercised live
+
+The trial (`POST /skills/{name}/trial`) is covered by its own test with a
+scripted gateway and not by this walk: it runs two real turns against the
+household's model and the walk's skill had one source request worth replaying,
+which would have written two more walk-notes files into the owner's workspace.

@@ -54,6 +54,22 @@ async def _span(pool, turn_id, kind, name, *, offset_secs: float = 0.0, meta=Non
 
 
 async def _message(pool, conversation, turn_id, role, content) -> None:
+    """A message row as the product writes one: a USER row carries no turn_id
+    (migration 018 added that column for the assistant row's badge and says so
+    plainly), which is why requests_from_turns finds his sentence by
+    conversation and time. A fixture that stamped it would measure a world the
+    product does not produce — it did, and the first draft composed on the live
+    stack had an empty summary."""
+    if role == "user":
+        await pool.execute(
+            "INSERT INTO messages (conversation_id, role, content, created_at) "
+            "VALUES ($1, 'user', $2, (SELECT started_at - interval '1 second' FROM turns "
+            "WHERE id = $3))",
+            conversation,
+            content,
+            turn_id,
+        )
+        return
     await pool.execute(
         "INSERT INTO messages (conversation_id, turn_id, role, content) VALUES ($1, $2, $3, $4)",
         conversation,
@@ -380,3 +396,37 @@ async def test_uses_nobody_watched_finish_cannot_flag_a_skill(pool, tmp_path):
 
     assert await skills.review_flagging(pool, skill.id) is None
     assert (await skills.get(pool, "tidy")).status == skills.ACTIVE
+
+
+async def test_a_guard_that_only_ran_is_not_a_guard_that_fired(pool, tmp_path):
+    """From the S17 walk: her first real use of a skill was recorded as rough
+    on a turn where nothing went wrong. The responsiveness judge files a span
+    whenever it RUNS — it says so on the span — and reading every guard span
+    as a correction would have flagged the procedure after five clean uses."""
+    from app import traces
+
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    turn_id = await _turn(pool, conversation)
+    await skills.create(
+        pool, name="tidy", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    await skills.set_status(pool, "tidy", skills.ACTIVE)
+    now = datetime.now(UTC)
+    spans = [
+        traces.Span(
+            "tool", skills.LOAD_TOOL, now, 5, {"ok": True, "args_redacted": {"name": "tidy"}}
+        ),
+        traces.Span("guard", "responsiveness", now, 5, {"checked": True, "verdict": "on_topic"}),
+    ]
+
+    await skills.record_uses(pool, turn_id, spans, status="ok")
+    assert await pool.fetchval("SELECT guard_fires FROM skill_uses") == 0
+
+    # And the one that DID correct still counts, on both shapes: a judge that
+    # redirected, and a guard whose span exists only because it fired.
+    await pool.execute("DELETE FROM skill_uses")
+    spans[1] = traces.Span("guard", "responsiveness", now, 5, {"checked": True, "redirected": True})
+    spans.append(traces.Span("guard", "narration", now, 1, {"backing_span": False}))
+    await skills.record_uses(pool, turn_id, spans, status="ok")
+    assert await pool.fetchval("SELECT guard_fires FROM skill_uses") == 2

@@ -155,11 +155,12 @@ async def test_a_draft_from_a_notice_is_composed_from_the_turns_that_walked_it(
             conversation,
             person,
         )
+        # No turn_id: a user row never carries one (migration 018), so this is
+        # the row shape requests_from_turns has to find by conversation and time.
         await pool.execute(
-            "INSERT INTO messages (conversation_id, turn_id, role, content) "
-            "VALUES ($1, $2, 'user', 'clear the superseded notes')",
+            "INSERT INTO messages (conversation_id, role, content, created_at) VALUES "
+            "($1, 'user', 'clear the superseded notes', now() - interval '1 second')",
             conversation,
-            turn,
         )
         for i, name in enumerate(sequence):
             await pool.execute(
@@ -225,10 +226,9 @@ async def test_a_trial_runs_the_source_request_both_ways_and_reports_what_ran(
         person,
     )
     await pool.execute(
-        "INSERT INTO messages (conversation_id, turn_id, role, content) "
-        "VALUES ($1, $2, 'user', 'what time is it')",
+        "INSERT INTO messages (conversation_id, role, content, created_at) "
+        "VALUES ($1, 'user', 'what time is it', now() - interval '1 second')",
         conversation,
-        turn,
     )
     await pool.execute(
         "INSERT INTO turn_spans (turn_id, kind, name, duration_ms) VALUES ($1, 'tool', $2, 5)",

@@ -369,6 +369,27 @@ def _rough(failed_calls: int, guard_fires: int) -> bool:
     return failed_calls > 0 or guard_fires > 0
 
 
+def guard_fired(meta: dict) -> bool:
+    """Did this guard span CORRECT something, or merely run?
+
+    Most guard spans exist only because a guard fired — the span is filed
+    inside the `if correction is not None` — so their presence is the fire.
+    The responsiveness judge is the exception: it files a span whenever the
+    check runs at all and says so on the span (`checked`), which is how it
+    reports having looked.
+
+    Reading every guard span as a fire made EVERY turn rough. Found on the
+    S17 walk: the first real use of a skill, on a turn where nothing at all
+    went wrong, was recorded as having gone badly — and five of those would
+    have flagged the procedure. A span that says it merely checked is read
+    here as what it says it is, and a future guard that wants the same
+    treatment self-registers by writing the same marker.
+    """
+    if not meta.get("checked"):
+        return True
+    return bool(meta.get("redirected"))
+
+
 async def record_uses(
     pool: asyncpg.Pool,
     turn_id: uuid.UUID,
@@ -395,7 +416,8 @@ async def record_uses(
         kind = getattr(span, "kind", None)
         meta = getattr(span, "meta", None) or {}
         if kind == "guard":
-            guard_fires += 1
+            if guard_fired(meta):
+                guard_fires += 1
             continue
         if kind != "tool":
             continue
@@ -537,17 +559,37 @@ async def shapes_from_turns(
 async def requests_from_turns(
     pool: asyncpg.Pool, turn_ids: Sequence[uuid.UUID]
 ) -> list[tuple[datetime, str]]:
-    """The USER message of each source turn, with its instant. His side only —
+    """The request each source turn ANSWERED, with its instant. His side only —
     an assistant row is her account of what he wanted, and a summary built out
-    of it would be a paraphrase standing in for the request."""
+    of it would be a paraphrase standing in for the request.
+
+    Found by CONVERSATION AND TIME, not by messages.turn_id, because a user
+    row never carries one: migration 018 added that column for the assistant
+    row's served-by badge and says in as many words that "user messages have no
+    turn". Reading it here returned nothing for every real turn, and the first
+    draft composed on the live stack said "asked as: (no request recorded)" —
+    the roster's whole matching signal, empty. The unit test had passed because
+    its fixture stamped the column the product does not stamp.
+
+    So: the newest user row in that turn's conversation at or before the turn
+    opened, which is the row chat_stream inserts immediately before
+    traces.open_turn. A turn whose conversation is gone, or that answered
+    nothing a person typed (a beat, a scheduled firing), contributes nothing
+    rather than borrowing somebody else's sentence.
+    """
     if not turn_ids:
         return []
     records = await pool.fetch(
-        "SELECT m.created_at, m.content FROM messages m "
-        "WHERE m.turn_id = ANY($1::uuid[]) AND m.role = 'user' ORDER BY m.created_at, m.id",
+        "SELECT DISTINCT ON (t.id) t.id, t.started_at AS turn_started, "
+        "m.created_at, m.content FROM turns t "
+        "JOIN messages m ON m.conversation_id = t.conversation_id "
+        "AND m.role = 'user' AND m.created_at <= t.started_at "
+        "WHERE t.id = ANY($1::uuid[]) "
+        "ORDER BY t.id, m.created_at DESC, m.id DESC",
         list(turn_ids),
     )
-    return [(r["created_at"], r["content"]) for r in records]
+    ordered = sorted(records, key=lambda r: r["turn_started"])
+    return [(r["created_at"], r["content"]) for r in ordered]
 
 
 def _one_line(text: str, limit: int = 160) -> str:
@@ -721,6 +763,8 @@ async def _turn_facts(pool: asyncpg.Pool, turn_id: uuid.UUID | None) -> dict:
         "read_the_skill": any(
             s["name"] == LOAD_TOOL and (s["meta"] or {}).get("ok") for s in tools_run
         ),
-        "guard_fires": sum(1 for s in spans if s["kind"] == "guard"),
+        "guard_fires": sum(
+            1 for s in spans if s["kind"] == "guard" and guard_fired(s["meta"] or {})
+        ),
         "seconds": round(sum((s["duration_ms"] or 0) for s in spans) / 1000, 2),
     }
