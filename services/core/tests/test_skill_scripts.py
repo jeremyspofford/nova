@@ -421,3 +421,25 @@ async def test_an_optional_input_she_leaves_out_is_refused_in_words(tmp_path):
     )
     assert not ok
     assert "note" in text
+
+
+def test_a_value_an_earlier_step_already_took_reuses_its_input():
+    """Write a file and read it back: the same path twice. Two inputs would
+    describe a script that writes one file and reads another — which is not
+    the procedure the walks show. Found against real spans on the S18 walk."""
+    draft = skill_scripts.derive(
+        [
+            [
+                ("workspace_write_file", {"path": "a.md", "content": "one"}),
+                ("workspace_read_file", {"path": "a.md"}),
+            ],
+            [
+                ("workspace_write_file", {"path": "b.md", "content": "two"}),
+                ("workspace_read_file", {"path": "b.md"}),
+            ],
+        ]
+    )
+    write, read = draft["script"]["steps"]
+    assert write["args"]["path"] == "{{ path }}"
+    assert read["args"]["path"] == "{{ path }}"
+    assert set(draft["inputs"]["properties"]) == {"path", "content"}

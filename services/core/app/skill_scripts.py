@@ -403,6 +403,13 @@ def derive(walks: Sequence[Sequence[tuple[str, dict]]]) -> dict:
     properties: dict[str, dict] = {}
     taken: set[str] = set()
     steps: list[dict] = []
+    # Per walk, the values already standing behind an input name. A later step
+    # that passes the SAME value an earlier step did — writing a file and then
+    # reading it back is the whole reason this exists — reuses that input
+    # instead of minting a second one. Without it the derived script wrote one
+    # file and read a different one, which is a script that cannot do the thing
+    # it was derived from (found on the S18 walk, against real spans).
+    standing: list[dict[str, str]] = [{} for _ in comparable]
 
     for position, (tool, calls) in enumerate(newest):
         repeated = any(len(other[position][1]) > 1 for other in comparable)
@@ -436,8 +443,17 @@ def derive(walks: Sequence[Sequence[tuple[str, dict]]]) -> dict:
             if len({repr(v) for v in values}) == 1:
                 args[key] = calls[0][key]
             else:
-                name = _unique(key, taken)
-                properties[name] = {"type": _json_type(calls[0].get(key))}
+                already = {
+                    walk_standing.get(repr(value))
+                    for walk_standing, value in zip(standing, values, strict=True)
+                }
+                if len(already) == 1 and None not in already:
+                    name = already.pop()
+                else:
+                    name = _unique(key, taken)
+                    properties[name] = {"type": _json_type(calls[0].get(key))}
+                    for walk_standing, value in zip(standing, values, strict=True):
+                        walk_standing[repr(value)] = name
                 args[key] = f"{{{{ {name} }}}}"
         steps.append({"tool": tool, "args": args})
 

@@ -197,3 +197,66 @@ run themselves" is answerable at a glance.
 3. Point a step at something that does not exist. The run stops there, the
    reply says which step failed and why, and claims nothing it did not do.
 4. The S17 ledger records the use, with the failed step counted.
+
+---
+
+## Verification (walked 2026-09-12 on the deployed stack)
+
+Core and web rebuilt from `.worktrees/s18`; migration 026 applied at startup.
+The skill walked is S17's own `note-what-is-in-the-workspace`, whose script was
+DERIVED from the two turns that made it.
+
+**The derivation, on real spans.** "Derive from the trace" read the two walks
+and proposed: `workspace_list_files` with no arguments (identical both times),
+`workspace_write_file` with `{{ path }}` and `{{ content }}` (both differed),
+and `workspace_read_file` with `{{ path }}` — the same input, because the read
+passed the value the write had already used.
+
+**One call, three spans.** Asked to run it, turn `0f6ee816`:
+
+| Span | ok | via_skill | args |
+|---|---|---|---|
+| `run_skill` | yes | — | name + the inputs she filled |
+| `workspace_list_files` | yes | step 1 | {} |
+| `workspace_write_file` | yes | step 2 | walk-notes-6.md, "a scripted run" |
+| `workspace_read_file` | yes | step 3 | walk-notes-6.md |
+
+Three model rounds for four calls, and the file is on the volume with the
+content she reported.
+
+**The failure path.** Asked to run it with `../escaped.md`, turn `876edc87`:
+step 1 ran, step 2 was refused by the workspace's containment gate, step 3 was
+never attempted and left no span. `run_skill` came back ok=False carrying the
+whole account, and she reported the refusal and offered the corrected path
+rather than claiming a write.
+
+### The defect the walk found
+
+**The ledger never saw a scripted run.** Two runs had happened and the skill's
+use count still read 2, from yesterday: `record_uses` counted `load_skill`
+spans, and a script is `run_skill`. The ledger is the thing that flags a
+procedure that stops helping, so scripts would have been the one kind of skill
+it could never flag. A `run_skill` span now counts as a use whether or not the
+run finished — unlike a refused LOAD, which handed her no procedure, a run that
+stopped at step two used the procedure and it went badly, which is precisely
+what the ledger is for — and the wrapper's own failure is kept out of
+`failed_calls`, because it is a summary of the step's and the step is already
+counted.
+
+### What the walk could not measure, and why
+
+The inference stack was in a bad way throughout: the GPU sat at 97-100% with
+6.6 GB held by a process outside this stack even after ollama was restarted
+with nothing loaded, the 27B timed out twice at the gateway's 300 s read limit,
+and the gateway walled the model after two strikes. The walk was completed on
+`qwen3:8b` and the setting put back afterwards. So this slice has NOT been
+measured for the thing that motivated it — whether a scripted run is faster
+than the same work call by call — and the eval corpus case measures the shape
+(that she runs it) rather than the saving. The trial (S17) is where that
+measurement belongs, and it needs a stack that is not contending with something
+else for the card.
+
+One thing the outage did show: after the failed turns she answered a later
+question from her own poisoned history, reporting the stack as broken while the
+model was answering her. Told the outage had passed, she ran the skill on the
+next turn. Same shape as [[consent-loop-context-poisoning]].

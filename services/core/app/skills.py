@@ -504,6 +504,24 @@ async def record_uses(
         if kind != "tool":
             continue
         ok = bool(meta.get("ok"))
+        if getattr(span, "name", None) == RUN_TOOL:
+            # A scripted use (S18). Counted whether or not the run succeeded:
+            # unlike a refused LOAD, which handed her no procedure, a run that
+            # stopped at step two DID use the procedure and it went badly —
+            # which is the thing the ledger exists to notice. Its own ok=False
+            # is not added to failed_calls, because that failure is a summary
+            # of the step's, and the step's span is already in this loop.
+            name = (meta.get("args_redacted") or {}).get("name")
+            if isinstance(name, str) and name:
+                loaded.append(name)
+            else:
+                logger.warning(
+                    "a %s span on turn %s names no skill: %r",
+                    RUN_TOOL,
+                    turn_id,
+                    meta.get("args_redacted"),
+                )
+            continue
         if getattr(span, "name", None) == LOAD_TOOL:
             if ok:
                 # The arguments as the trace recorded them — the same evidence

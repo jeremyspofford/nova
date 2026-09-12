@@ -502,3 +502,33 @@ async def test_the_roster_says_a_skill_is_scripted_and_names_its_inputs(pool, tm
     assert "SCRIPTED" in line
     assert skills.RUN_TOOL in line
     assert "paths[]" in line
+
+
+async def test_a_scripted_run_is_a_use_even_when_it_stopped_early(pool, tmp_path):
+    """From the S18 walk: two scripted runs recorded nothing, because the
+    ledger only knew about load_skill. A run that stopped at step two DID use
+    the procedure and it went badly, which is exactly what the ledger is for —
+    and the run's own failure is not double-counted, because it is a summary of
+    the step's, and the step is already in the tally."""
+    from app import traces
+
+    person = await _person(pool)
+    conversation = await _conversation(pool, person)
+    turn_id = await _turn(pool, conversation)
+    await skills.create(
+        pool, name="tidy", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    await skills.set_status(pool, "tidy", skills.ACTIVE)
+    now = datetime.now(UTC)
+    spans = [
+        traces.Span(
+            "tool", skills.RUN_TOOL, now, 5, {"ok": False, "args_redacted": {"name": "tidy"}}
+        ),
+        traces.Span("tool", "workspace_list_files", now, 5, {"ok": True, "via_skill": True}),
+        traces.Span("tool", "workspace_write_file", now, 5, {"ok": False, "via_skill": True}),
+    ]
+
+    assert await skills.record_uses(pool, turn_id, spans, status="ok") == ["tidy"]
+    row = await pool.fetchrow("SELECT failed_calls, outcome_known FROM skill_uses")
+    assert row["failed_calls"] == 1
+    assert row["outcome_known"] is True
