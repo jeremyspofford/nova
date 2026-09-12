@@ -80,12 +80,17 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
     # `progress` (S10a-3) is an OUTPUT channel a long call reports through —
     # a pull's percentage into an activity frame. Like facts_sink it is not a
     # principal a permission could bind to; nothing reads it to decide.
+    # `step` (S18) is the same kind of thing on the way IN: the turn's own span
+    # recorder, handed to a scripted skill so its steps land on the trace. It
+    # runs what the stored script already said to run and decides nothing; a
+    # context without one still runs the steps, and says they were not spanned.
     assert set(ctx.__dataclass_fields__) == {
         "app",
         "person",
         "workspace_root",
         "facts_sink",
         "progress",
+        "step",
     }
 
 

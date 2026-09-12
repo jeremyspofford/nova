@@ -93,6 +93,12 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # same two-ended verification as a write, and what it removes goes to a
     # trash that empties itself after a week.
     #
+    # Deliberate snapshot update (slice 18, 2026-09-12): run_skill, so
+    # THIRTY-FOUR -> THIRTY-FIVE. A skill may carry a step program, and this is
+    # the one call that runs it: her whole part is choosing the skill and
+    # filling its declared inputs, and the backend dispatches the steps — each
+    # one a real call on the trace, through this same registry.
+    #
     # Deliberate snapshot update (slice 17, 2026-09-11): load_skill, so
     # THIRTY-THREE -> THIRTY-FOUR. The prompt's roster names the household's
     # written-down procedures and carries none of their bodies; this is the
@@ -154,6 +160,9 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # S17 (2026-09-11): reading one of the household's written-down
         # procedures. THIRTY-THREE -> THIRTY-FOUR.
         "load_skill",
+        # S18 (2026-09-12): running a scripted one. THIRTY-FOUR -> THIRTY-FIVE.
+        # NOT reads_only — whatever its steps do, it does.
+        "run_skill",
     }
 
 

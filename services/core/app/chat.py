@@ -1978,6 +1978,49 @@ async def _run_tool(
     return result, ok
 
 
+async def _run_script_step(
+    turn: traces.Turn,
+    tool_ctx: tools.ToolContext,
+    emit: Callable[[str | None], None],
+    name: str,
+    args: dict,
+    *,
+    index: int,
+    item: object,
+) -> tuple[str, bool]:
+    """One step of a scripted skill, dispatched and SPANNED (S18).
+
+    The span is `kind="tool"` under the REAL tool's name, exactly like a call
+    the model made itself, so every reader downstream keeps working without
+    being told scripts exist: the narration guard backs a claim with it, the
+    capability verifier and the presented-listing check see it, the S17 ledger
+    counts a failed step as a failed call, and Activity shows the steps rather
+    than one opaque entry.
+
+    `via_skill` and `step` on the meta are additive — what a reader needs to
+    tell a scripted step from a typed one when it cares, and nothing needs to
+    care to stay correct.
+
+    It emits an activity frame per step for the same reason `progress` exists:
+    a run of eight calls should move the bubble, not sit silent.
+    """
+    with turn.span("tool", name) as span:
+        span.meta["args_redacted"] = _span_arguments(args)
+        span.meta["via_skill"] = True
+        span.meta["step"] = index
+        if item is not None:
+            span.meta["item"] = _redact(item)
+        span.meta["ok"] = False
+        span.meta["result_head"] = NEVER_RETURNED
+        result, ok = await tools.dispatch(name, args, tool_ctx)
+        span.meta["ok"] = ok
+        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        if not ok:
+            span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
+    emit(_activity_frame(name, "ok" if ok else "error", result))
+    return result, ok
+
+
 async def _dispatch_calls(
     turn: traces.Turn,
     tool_ctx: tools.ToolContext,
@@ -2043,6 +2086,14 @@ async def _dispatch_calls(
         call_ctx = dataclasses.replace(
             tool_ctx,
             progress=lambda detail, _name=call.name: _report_progress(turn, _name, emit, detail),
+            # A scripted skill's steps (S18) run through here, so each one
+            # files its OWN span under the real tool's name. The seam exists
+            # because dispatch does not write spans and _run_tool does: an
+            # executor cannot file one, and a script whose steps left no spans
+            # would be the hole in the trace this design refuses to dig.
+            step=lambda name, args, *, index, item, _skill=call.name: _run_script_step(
+                turn, tool_ctx, emit, name, args, index=index, item=item
+            ),
         )
         # What the turn is doing right now, for whoever asks (traces.DOING):
         # the tool's name, set synchronously so no await joins the funnel.

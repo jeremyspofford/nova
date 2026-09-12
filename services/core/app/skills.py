@@ -75,9 +75,14 @@ CREATED_VIA = ("beat", "page", "eval")
 # prompt naming a tool that no longer exists.
 LOAD_TOOL = "load_skill"
 
+# The tool that RUNS a scripted one (S18). Same reason it is a constant: the
+# roster line tells her how to call it, and a rename must move that sentence
+# rather than leave the prompt naming a tool that no longer exists.
+RUN_TOOL = "run_skill"
+
 _COLUMNS = (
     "id, name, title, summary, status, created_via, source_turn_ids, step_names, "
-    "flagged_reason, created_at, updated_at"
+    "flagged_reason, script, inputs, created_at, updated_at"
 )
 
 
@@ -96,6 +101,11 @@ class Skill:
     source_turn_ids: tuple[uuid.UUID, ...]
     step_names: tuple[str, ...]
     flagged_reason: str | None
+    # S18: the step program and the JSON Schema for what run_skill must be
+    # handed. Both None for a prose-only skill, both set for a scripted one —
+    # the migration's CHECK is what makes that pair a fact rather than a habit.
+    script: dict | None
+    inputs: dict | None
     created_at: datetime
     updated_at: datetime
 
@@ -111,6 +121,8 @@ class Skill:
             source_turn_ids=tuple(record["source_turn_ids"] or ()),
             step_names=tuple(record["step_names"] or ()),
             flagged_reason=record["flagged_reason"],
+            script=record["script"],
+            inputs=record["inputs"],
             created_at=record["created_at"],
             updated_at=record["updated_at"],
         )
@@ -194,6 +206,8 @@ async def create(
     body: str,
     source_turn_ids: Sequence[uuid.UUID] = (),
     step_names: Sequence[str] = (),
+    script: dict | None = None,
+    inputs: dict | None = None,
     root: Path | None = None,
 ) -> Skill:
     """Write the file, then the row. The file first because a row pointing at
@@ -205,17 +219,63 @@ async def create(
         raise ValueError(f"created_via must be one of {CREATED_VIA}, not {created_via!r}")
     if not title.strip() or not summary.strip():
         raise ValueError("a skill needs a title and a summary")
+    if (script is None) != (inputs is None):
+        raise ValueError(
+            "a script and its inputs schema go together — a script with no declared inputs "
+            "carries empty properties, which is not the same as declaring nothing"
+        )
+    if script is not None:
+        _validate_script(script, inputs)
     _write_body(name, body, root)
     record = await pool.fetchrow(
-        "INSERT INTO skills (name, title, summary, created_via, source_turn_ids, step_names) "
-        f"VALUES ($1, $2, $3, $4, $5, $6) RETURNING {_COLUMNS}",
+        "INSERT INTO skills (name, title, summary, created_via, source_turn_ids, step_names, "
+        f"script, inputs) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING {_COLUMNS}",
         name,
         title.strip(),
         summary.strip(),
         created_via,
         list(source_turn_ids),
         list(step_names),
+        script,
+        inputs,
     )
+    return Skill.from_row(record)
+
+
+def _validate_script(script: object, inputs: object) -> None:
+    """The script validator, imported where it is used: app/skill_scripts.py
+    imports the tool registry, and the registry's tool modules import this
+    one."""
+    from app import skill_scripts
+
+    try:
+        skill_scripts.validate(script, inputs)
+    except skill_scripts.ScriptError as exc:
+        raise ValueError(str(exc)) from exc
+
+
+async def set_script(
+    pool: asyncpg.Pool, name: str, script: dict | None, inputs: dict | None
+) -> Skill:
+    """Give a skill a script, or take one away (both None).
+
+    Validated here rather than at the API, so the page, a test and any later
+    caller are refused by the same sentence — and refused BEFORE the write, so
+    a stored script is always one that could run when it was saved.
+    """
+    if (script is None) != (inputs is None):
+        raise ValueError("a script and its inputs schema go together")
+    if script is not None:
+        _validate_script(script, inputs)
+    record = await pool.fetchrow(
+        "UPDATE skills SET script = $2, inputs = $3, updated_at = now() "
+        f"WHERE name = $1 RETURNING {_COLUMNS}",
+        name,
+        script,
+        inputs,
+    )
+    if record is None:
+        raise ValueError(f"no skill named {name!r}")
     return Skill.from_row(record)
 
 
@@ -306,12 +366,34 @@ async def roster_line(pool: asyncpg.Pool) -> str | None:
     active = await list_all(pool, status=ACTIVE)
     if not active:
         return None
-    parts = [f"{skill.name} — {skill.summary}" for skill in active]
-    return (
+    parts = [f"{skill.name} — {skill.summary}{_scripted_clause(skill)}" for skill in active]
+    head = (
         "Procedures you have written down, from times this worked before. Read one with "
-        f"{LOAD_TOOL}(name) BEFORE starting, when it matches what is being asked: "
-        + "; ".join(parts)
+        f"{LOAD_TOOL}(name) BEFORE starting, when it matches what is being asked"
     )
+    # The scripted sentence appears only when one of them IS scripted. Telling
+    # her about a verb with nothing to run is telling her about a capability
+    # she cannot use, and it keeps an unscripted stack's prompt byte-identical
+    # to what S17 shipped.
+    if any(skill.script is not None for skill in active):
+        head += (
+            f"; a SCRIPTED one you run with {RUN_TOOL}(name, inputs) instead, and the backend "
+            "does the steps"
+        )
+    return f"{head}: " + "; ".join(parts)
+
+
+def _scripted_clause(skill: Skill) -> str:
+    """What the roster says about a scripted skill: that it runs, and what it
+    needs. A roster that named a scripted skill without naming its inputs
+    would be telling her a call exists and withholding how to make it."""
+    if skill.script is None:
+        return ""
+    declared = ((skill.inputs or {}).get("properties") or {}).items()
+    shown = ", ".join(
+        f"{key}{'[]' if (spec or {}).get('type') == 'array' else ''}" for key, spec in declared
+    )
+    return f" [SCRIPTED — {RUN_TOOL} inputs: {shown or 'none'}]"
 
 
 async def load(pool: asyncpg.Pool, name: str, root: Path | None = None) -> tuple[Skill, str]:

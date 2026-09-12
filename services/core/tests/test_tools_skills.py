@@ -99,3 +99,98 @@ async def test_the_skill_is_read_from_the_household_root_not_the_callers_folder(
     result, ok = await tools.dispatch("load_skill", {"name": "tidy"}, _ctx(agent_root))
     assert ok
     assert "1. list the files" in result
+
+
+# ── run_skill (S18) ────────────────────────────────────────────────────────
+
+SCRIPT = {
+    "version": 1,
+    "steps": [
+        {"tool": "workspace_read_file", "args": {"path": "{{ p }}"}, "for_each": "paths", "as": "p"},
+        {"tool": "workspace_delete", "args": {"path": "{{ p }}"}, "for_each": "paths", "as": "p"},
+    ],
+}
+SCRIPT_INPUTS = {
+    "type": "object",
+    "properties": {"paths": {"type": "array", "items": {"type": "string"}}},
+    "required": ["paths"],
+    "additionalProperties": False,
+}
+
+
+async def _scripted(pool, root, name="tidy"):
+    await _seed(pool, root, name, status=skills.ACTIVE)
+    await skills.set_script(pool, name, SCRIPT, SCRIPT_INPUTS)
+
+
+async def test_a_script_runs_every_step_through_the_registry(pool, workspace):
+    await _scripted(pool, workspace)
+    for note in ("a.md", "b.md"):
+        (workspace / note).write_text("superseded", encoding="utf-8")
+
+    result, ok = await tools.dispatch(
+        "run_skill", {"name": "tidy", "inputs": {"paths": ["a.md", "b.md"]}}, _ctx(workspace)
+    )
+
+    assert ok, result
+    assert "All 4 steps ran" in result
+    # The files really went, and to the trash the delete tool keeps.
+    assert not (workspace / "a.md").exists()
+    assert not (workspace / "b.md").exists()
+
+
+async def test_a_failing_step_stops_the_run_and_the_tool_reports_it_as_a_failure(
+    pool, workspace
+):
+    await _scripted(pool, workspace)
+    (workspace / "a.md").write_text("superseded", encoding="utf-8")
+
+    result, ok = await tools.dispatch(
+        "run_skill", {"name": "tidy", "inputs": {"paths": ["a.md", "gone.md"]}}, _ctx(workspace)
+    )
+
+    assert not ok
+    assert "step 1" in result
+    assert "gone.md" in result
+    # a.md was read and deleted only if its step came before the failure; the
+    # shape under test is that the run STOPPED, and said so.
+    assert "not attempted" in result
+
+
+async def test_inputs_that_do_not_match_the_schema_are_refused_before_anything_runs(
+    pool, workspace
+):
+    await _scripted(pool, workspace)
+    (workspace / "a.md").write_text("superseded", encoding="utf-8")
+
+    result, ok = await tools.dispatch(
+        "run_skill", {"name": "tidy", "inputs": {"path": "a.md"}}, _ctx(workspace)
+    )
+
+    assert not ok
+    assert (workspace / "a.md").is_file()
+
+
+async def test_an_unscripted_skill_names_the_tool_that_does_read_one(pool, workspace):
+    """A model that reached for the wrong verb is told the right one, rather
+    than left to guess from a refusal."""
+    await _seed(pool, workspace, "prose", status=skills.ACTIVE)
+
+    result, ok = await tools.dispatch(
+        "run_skill", {"name": "prose", "inputs": {}}, _ctx(workspace)
+    )
+
+    assert not ok
+    assert skills.LOAD_TOOL in result
+
+
+async def test_a_retired_script_is_refused_by_status_like_any_other_skill(pool, workspace):
+    await _scripted(pool, workspace)
+    await skills.set_status(pool, "tidy", skills.RETIRED)
+
+    result, ok = await tools.dispatch(
+        "run_skill", {"name": "tidy", "inputs": {"paths": []}}, _ctx(workspace)
+    )
+
+    assert not ok
+    assert skills.RETIRED in result

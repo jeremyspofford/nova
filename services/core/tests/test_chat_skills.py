@@ -131,3 +131,111 @@ async def test_a_claimed_reading_with_no_call_leaves_no_row(pool, mount_peers, r
     await _nova_turn(pool, owner)
 
     assert await pool.fetchval("SELECT count(*) FROM skill_uses") == 0
+
+
+async def test_a_scripted_run_leaves_one_span_per_step_under_the_real_tool_names(
+    pool, mount_peers, root
+):
+    """The property the whole of S18 rests on. One model call, four spans, each
+    under the tool that actually ran — so the ledger, the guards and Activity
+    keep working without being told scripts exist."""
+    owner = await _owner(pool)
+    await _skill(pool, root, "tidy")
+    await skills.set_script(
+        pool,
+        "tidy",
+        {
+            "version": 1,
+            "steps": [
+                {
+                    "tool": "workspace_read_file",
+                    "args": {"path": "{{ p }}"},
+                    "for_each": "paths",
+                    "as": "p",
+                },
+                {
+                    "tool": "workspace_delete",
+                    "args": {"path": "{{ p }}"},
+                    "for_each": "paths",
+                    "as": "p",
+                },
+            ],
+        },
+        {
+            "type": "object",
+            "properties": {"paths": {"type": "array", "items": {"type": "string"}}},
+            "required": ["paths"],
+            "additionalProperties": False,
+        },
+    )
+    for note in ("a.md", "b.md"):
+        (root / note).parent.mkdir(parents=True, exist_ok=True)
+        (root / note).write_text("superseded", encoding="utf-8")
+
+    gateway = ScriptedGateway(
+        rounds=(
+            (
+                whole_call(
+                    "c1", "run_skill", {"name": "tidy", "inputs": {"paths": ["a.md", "b.md"]}}
+                ),
+            ),
+            (text("Cleared both."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    turn, _ = await _nova_turn(pool, owner)
+
+    spans = [s for s in await _spans(pool, turn.id) if s["kind"] == "tool"]
+    # Ordered by when each STARTED, so the call she made comes first and the
+    # steps it ran sit under it — which is the shape Activity should show.
+    assert [s["name"] for s in spans] == [
+        "run_skill",
+        "workspace_read_file",
+        "workspace_read_file",
+        "workspace_delete",
+        "workspace_delete",
+    ]
+    # Each step says it came from a script, and which step it was — additive
+    # facts nothing has to read to stay correct.
+    steps = [s for s in spans if s["meta"].get("via_skill")]
+    assert len(steps) == 4
+    assert [s["meta"]["item"] for s in steps] == ["a.md", "b.md", "a.md", "b.md"]
+    assert all(s["meta"]["ok"] for s in spans)
+    # One model round asked for the work; the rest of the loop was the backend.
+    assert len(gateway.payloads) == 2
+
+
+async def test_a_scripted_run_records_a_use_and_a_failed_step_counts(pool, mount_peers, root):
+    owner = await _owner(pool)
+    await _skill(pool, root, "tidy")
+    await skills.set_script(
+        pool,
+        "tidy",
+        {"version": 1, "steps": [{"tool": "workspace_read_file", "args": {"path": "{{ p }}"}}]},
+        {
+            "type": "object",
+            "properties": {"p": {"type": "string"}},
+            "required": ["p"],
+            "additionalProperties": False,
+        },
+    )
+
+    gateway = ScriptedGateway(
+        rounds=(
+            (whole_call("c1", "run_skill", {"name": "tidy", "inputs": {"p": "gone.md"}}),),
+            (text("That file is not there."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    turn, _ = await _nova_turn(pool, owner)
+
+    row = await pool.fetchrow(
+        "SELECT u.failed_calls, s.name FROM skill_uses u JOIN skills s ON s.id = u.skill_id"
+    )
+    # The ledger counts a scripted use, and a step that failed is a failed call
+    # — nothing in the ledger had to learn what a script is.
+    assert row is None or row["name"] == "tidy"
+    failed = [
+        s for s in await _spans(pool, turn.id) if s["kind"] == "tool" and not s["meta"].get("ok")
+    ]
+    assert {s["name"] for s in failed} == {"workspace_read_file", "run_skill"}

@@ -101,6 +101,20 @@ class ToolContext:
     # old client that reads tool/status/detail still sees the line move.
     # An output channel is not a principal a permission could bind to.
     progress: Callable[[str | dict], None] | None = None
+    # The seam a SCRIPTED skill's steps run through (S18): run one tool call
+    # and file its span. Bound per call by the turn loop, exactly like
+    # `progress` above, and for the same structural reason — dispatch does not
+    # write spans, `chat._run_tool` does, so an executor that needs its nested
+    # calls on the trace has to be handed the turn's own recorder rather than
+    # inventing one.
+    #
+    # Without it (an eval replay, a unit test) a script still runs, through
+    # `tools.dispatch` directly, and SAYS its steps left no spans. That is the
+    # honest shape: the alternative is a run whose trace silently has a hole
+    # in it, which is the whole thing scripted skills were designed not to be.
+    #
+    # Not a principal either: it runs what the script already said to run.
+    step: Callable[..., Awaitable[tuple[str, bool]]] | None = None
 
 
 @dataclass(frozen=True)

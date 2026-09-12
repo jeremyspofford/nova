@@ -430,3 +430,75 @@ async def test_a_guard_that_only_ran_is_not_a_guard_that_fired(pool, tmp_path):
     spans.append(traces.Span("guard", "narration", now, 1, {"backing_span": False}))
     await skills.record_uses(pool, turn_id, spans, status="ok")
     assert await pool.fetchval("SELECT guard_fires FROM skill_uses") == 2
+
+
+# ── scripts (S18) ──────────────────────────────────────────────────────────
+
+SCRIPT = {
+    "version": 1,
+    "steps": [
+        {"tool": "workspace_delete", "args": {"path": "{{ p }}"}, "for_each": "paths", "as": "p"}
+    ],
+}
+SCRIPT_INPUTS = {
+    "type": "object",
+    "properties": {"paths": {"type": "array", "items": {"type": "string"}}},
+    "required": ["paths"],
+    "additionalProperties": False,
+}
+
+
+async def test_a_script_and_its_inputs_are_stored_together(pool, tmp_path):
+    await skills.create(
+        pool, name="tidy", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    saved = await skills.set_script(pool, "tidy", SCRIPT, SCRIPT_INPUTS)
+    assert saved.script == SCRIPT
+    assert saved.inputs == SCRIPT_INPUTS
+    assert (await skills.get(pool, "tidy")).script == SCRIPT
+
+
+async def test_a_script_that_could_not_run_is_refused_before_it_is_stored(pool, tmp_path):
+    await skills.create(
+        pool, name="tidy", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    with pytest.raises(ValueError) as exc:
+        await skills.set_script(
+            pool, "tidy", {"version": 1, "steps": [{"tool": "nope", "args": {}}]}, SCRIPT_INPUTS
+        )
+    assert "nope" in str(exc.value)
+    assert (await skills.get(pool, "tidy")).script is None
+
+
+async def test_a_script_without_its_inputs_schema_is_refused(pool, tmp_path):
+    await skills.create(
+        pool, name="tidy", title="t", summary="u", created_via="page", body="b", root=tmp_path
+    )
+    with pytest.raises(ValueError):
+        await skills.set_script(pool, "tidy", SCRIPT, None)
+
+
+async def test_the_roster_says_a_skill_is_scripted_and_names_its_inputs(pool, tmp_path):
+    """A roster that named a scripted skill without naming its inputs would be
+    telling her a call exists and withholding how to make it."""
+    await skills.create(
+        pool,
+        name="tidy",
+        title="t",
+        summary="clears notes",
+        created_via="page",
+        body="b",
+        root=tmp_path,
+    )
+    await skills.set_status(pool, "tidy", skills.ACTIVE)
+    # Nothing is scripted yet: the line is what S17 shipped, and it does not
+    # name a verb she has nothing to use it on.
+    plain = await skills.roster_line(pool)
+    assert plain.endswith("tidy — clears notes")
+    assert skills.RUN_TOOL not in plain
+
+    await skills.set_script(pool, "tidy", SCRIPT, SCRIPT_INPUTS)
+    line = await skills.roster_line(pool)
+    assert "SCRIPTED" in line
+    assert skills.RUN_TOOL in line
+    assert "paths[]" in line
