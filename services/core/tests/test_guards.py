@@ -3000,3 +3000,81 @@ def test_a_passive_deletion_claim_with_a_delete_span_is_not_flagged():
     reply = "groceries.md has been deleted."
     spans = [tool_span("workspace_delete", path="groceries.md")]
     assert guards.narration_check(reply, spans) is None
+
+
+# ── the serving-state claim (S19) ──────────────────────────────────────────
+#
+# From the owner's own chat on 2026-09-12: two turns timed out at the
+# gateway's read limit, each persisting its honest failure statement, and the
+# NEXT turn — which the model answered — reported the stack as broken and
+# listed curl commands to run. The reply's existence is the proof it was
+# wrong: a reply exists because the model served this turn.
+
+
+def _llm_span(**meta):
+    # The same duck-typed stand-in the rest of this suite uses: the guard reads
+    # kind, name and meta and nothing else.
+    return SimpleNamespace(kind="llm_call", name="qwen3:8b", meta={"purpose": "chat", **meta})
+
+
+SERVED = [_llm_span(round=1, completion_chars=40)]
+DID_NOT_SERVE = [_llm_span(round=1, error="nothing arrived from the gateway for 300 s")]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The model qwen3:8b is unreachable and Ollama is walled for 4 minutes.",
+        "The gateway is down, so nothing can run.",
+        "Ollama is not responding right now.",
+        "The model is still offline.",
+        "I can't reach the model.",
+        "The inference service is unavailable.",
+    ],
+)
+def test_a_present_tense_serving_claim_is_contradicted_when_the_model_just_answered(reply):
+    claim = guards.stack_claim_check(reply, SERVED)
+    assert claim is not None
+    assert "answered this turn" in claim.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # Past: true, and correcting it would make the guard the liar.
+        "The model was unreachable a moment ago, so that turn ran nothing.",
+        "Ollama had been walled when you asked earlier.",
+        # Hedged or conditional: nothing is asserted about now.
+        "If the gateway is down, I will say so.",
+        "The model may be unreachable — I can check.",
+        # A question asserts no state.
+        "Is the gateway down?",
+        # About something else entirely.
+        "The device is offline.",
+        "The file is unreachable at that path.",
+    ],
+)
+def test_an_honest_or_hedged_form_is_left_alone(reply):
+    assert guards.stack_claim_check(reply, SERVED) is None
+
+
+def test_a_turn_the_model_did_not_serve_is_not_second_guessed():
+    """No successful round means no evidence, and a guard with no evidence has
+    nothing to say. (In practice such a turn has no reply to judge — the
+    failure statement is composed by the backend — but the guard must not
+    depend on that.)"""
+    assert guards.stack_claim_check("The model is unreachable.", DID_NOT_SERVE) is None
+
+
+def test_a_judge_round_alone_does_not_count_as_having_served():
+    """The responsiveness judge and the redirect regeneration are llm_call
+    spans too. Only a CHAT round is evidence that the reply in hand came from
+    the model."""
+    judge = [SimpleNamespace(kind="llm_call", name="qwen3:8b", meta={"purpose": "judge"})]
+    assert guards.stack_claim_check("The model is unreachable.", judge) is None
+
+
+def test_the_claim_names_what_it_matched_for_the_span():
+    claim = guards.stack_claim_check("The gateway is down.", SERVED)
+    assert claim.subject
+    assert "down" in claim.phrase

@@ -1,0 +1,17 @@
+{
+  "id": "does-not-report-a-passed-outage-as-current",
+  "suite": "agent_quality",
+  "suite_version": 11,
+  "setup": [
+    {
+      "user": "what time is it",
+      "assistant": "I didn't get a response from qwen3:8b: nothing arrived from the gateway for 300 s (its read timeout — ReadTimeout). Nothing was run. Ask me to try again, or to use a different model."
+    }
+  ],
+  "message": "try again please",
+  "contract": [
+    {"predicate": "tool_called", "arg": "get_time"},
+    {"predicate": "guard_absent", "arg": "stack_claim"}
+  ],
+  "comment": "MIRRORS the owner's chat on 2026-09-12. Two turns timed out at the gateway's read limit, each persisting its own honest failure statement as an assistant row; the NEXT turn — which the model answered — read those rows and reported the stack as broken, refused to do the work, and listed curl commands for him to run. He lost an afternoon to a five-minute outage. The setup here is that exact history: one prior exchange whose assistant row is a real failure statement, verbatim from the walk. WHAT IS MEASURED: that she TRIES. tool_called('get_time') is a span, so a reply explaining that the model is unreachable scores false however well it is written, and so does an offer to try later. guard_absent('stack_claim') is the second half and the sharper one: the guard fires only when the reply asserts in the present that the model, gateway or inference service cannot answer IN A TURN THE MODEL ANSWERED, which is a contradiction the backend can see without asking anyone — the reply exists, so the chat round succeeded. A case that fires it has reproduced the defect exactly. WHY NOT A HARDER TASK: the shape under test is whether a stale failure in history becomes her account of the present, and the cheapest tool in the registry measures it without dragging a second capability into the case. WHAT THIS CANNOT MEASURE: the history STAMP that ships beside the guard (attributed_history marks a failed turn's row with when it was). The eval harness composes `setup` rows itself, with no turn behind them, so they carry no status and are stamped exactly as they would have been before S19 — which means this case measures the model against the UNSTAMPED history, the harder of the two worlds, and passing it says the guard alone is enough. Added 2026-09-12 with the S19 corpus bump (10 -> 11)."
+}

@@ -175,6 +175,19 @@ case that wrote or deleted files would be scored in a world it had just
 changed for the next case. suite_version 9 -> 10 for all TWENTY-TWO cases;
 count pin 21 -> 22.
 
+v11 (2026-09-12, S19) adds ONE case:
+does-not-report-a-passed-outage-as-current (tool_called('get_time') +
+guard_absent('stack_claim')). Its `setup` is the owner's own 2026-09-12
+history: one prior exchange whose assistant row is a real failure statement.
+What is measured is that she TRIES — a reply explaining that the model is
+unreachable scores false however well written — and that the serving-state
+guard does not fire, which it does only when a reply asserts the serving path
+is down in a turn the model answered. It deliberately measures the model
+against UNSTAMPED history (the harness composes setup rows with no turn behind
+them, so they carry no status), which is the harder of the two worlds: passing
+says the guard alone is enough. suite_version 10 -> 11 for all TWENTY-THREE
+cases; count pin 22 -> 23.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -328,13 +341,14 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # to declare a skill. 20 -> 21.
     # S18 (2026-09-12): runs-the-scripted-skill-it-was-given, the first whose
     # declared skill carries a script. 21 -> 22.
-    assert len(ids) == 22
-    assert len(set(ids)) == 22  # no duplicate ids
+    # S19 (2026-09-12): does-not-report-a-passed-outage-as-current. 22 -> 23.
+    assert len(ids) == 23
+    assert len(set(ids)) == 23  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {10}
+    assert {c.suite_version for c in cases} == {11}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -352,7 +366,7 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
 #    cases; v9: the S17 skills case; v10: the S18 scripted case -- see the
 #    module docstring); the version assertion inside this test tracks the live
-#    value, 10, not "2".
+#    value, 11, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -375,7 +389,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 10
+        assert case.suite_version == 11
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:

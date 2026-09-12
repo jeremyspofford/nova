@@ -4611,3 +4611,117 @@ def model_wrote_nothing(spans: Sequence[Any]) -> bool:
             return False
         reported += 1
     return reported > 0
+
+
+# ── the SERVING-state claim: "the model is down" while it is answering ─────
+#
+# From the owner's chat on 2026-09-12. Two turns timed out at the gateway's
+# 300 s read limit, each persisting its own honest failure statement as an
+# assistant row. The NEXT turn — which the model answered — read those rows and
+# reported the stack as broken, refusing to run anything and listing curl
+# commands for the owner to try. Every word of it was about a state that had
+# already passed.
+#
+# The evidence here needs no probe and cannot be argued with: THE REPLY EXISTS,
+# so the model served this turn. A guard that had to ask the gateway whether it
+# was up would be a guard that could be wrong; this one reads the turn's own
+# chat round.
+#
+# Precision-first, like the other claim guards, and built on the same shared
+# vocabulary: present-tense copulas only, hedges and intent verbs before the
+# assertion suppress it, questions assert nothing, and a PAST report ("the
+# model was unreachable a moment ago") is true and is left alone — correcting
+# it would make the guard the liar, which is the failure the capability guard
+# was fixed for on 2026-09-09.
+
+STACK_CLAIM_CORRECTION = (
+    "Correction: the model answered this turn — this reply came from it — so that is a "
+    "record of something that already passed, not what is happening now. Whatever was "
+    "asked for can be attempted."
+)
+
+# The serving path, as the words a reply reaches for. A vocabulary, not a
+# policy list: these are the nouns that mean "the thing that answers", and the
+# model actually in play is added from the turn's own spans.
+_SERVING_NOUN = (
+    r"(?:model|gateway|inference(?:\s+service)?|inference|llm|ollama"
+    r"|chat\s+chain|chain|backend|stack)"
+)
+_SERVING_DET = r"(?:the|your|that|this|its)"
+# States that mean "it cannot answer right now".
+_SERVING_STATE = (
+    r"(?:unreachable|not\s+reachable|down|offline|unavailable|walled|blocked"
+    r"|not\s+responding|unresponsive|not\s+working|failing|timing\s+out|refusing)"
+)
+_SERVING_ASSERTION = re.compile(
+    rf"\b(?P<subj>(?:{_SERVING_DET}\s+)?{_SERVING_NOUN})"
+    rf"(?:\s+{_PRESENT_COPULA}|['’]s)"
+    rf"(?:\s+{_STATE_ADVERB})*"
+    rf"\s+(?P<state>{_SERVING_STATE})\b",
+    re.I,
+)
+# "I can't reach the model", "unable to reach ollama" — the same claim from the
+# other side, and it carries no copula for the pattern above to anchor on.
+_SERVING_UNREACHED = re.compile(
+    rf"\b(?:can\s*(?:no|')?t|cannot|can\s+not|unable\s+to)\s+"
+    rf"(?:reach|contact|talk\s+to|get\s+(?:a\s+)?(?:response|answer)\s+from)\s+"
+    rf"(?P<subj>(?:{_SERVING_DET}\s+)?{_SERVING_NOUN})\b",
+    re.I,
+)
+
+
+@dataclass(frozen=True)
+class StackClaim:
+    """An assertion that the thing answering cannot answer.
+
+    `subject` is what the reply named (the span says which), `phrase` the
+    matched text, and `text` the stated correction — the same shape the other
+    claim guards carry, so the turn's composition reads it identically.
+    """
+
+    subject: str
+    phrase: str
+    text: str = STACK_CLAIM_CORRECTION
+
+
+def served_this_turn(spans: Sequence[Any]) -> bool:
+    """Did the model answer THIS turn? A chat round with no error on it.
+
+    Judge and redirect rounds are llm_call spans too and are deliberately not
+    evidence: they are the backend's own second opinions, and the claim under
+    test is about the reply in hand.
+    """
+    for span in spans:
+        if getattr(span, "kind", None) != "llm_call":
+            continue
+        meta = getattr(span, "meta", None) or {}
+        if meta.get("purpose") not in (None, "chat"):
+            continue
+        if not meta.get("error"):
+            return True
+    return False
+
+
+def stack_claim_check(reply_text: str, spans: Sequence[Any]) -> StackClaim | None:
+    """Contradict a present-tense claim that the serving path is down, made in
+    a turn the model served. None otherwise — pure, precision-first, fail-open
+    at the call site like every other guard here."""
+    if not reply_text or not reply_text.strip():
+        return None
+    if not served_this_turn(spans):
+        return None
+    for clause, is_question in _clauses(reply_text):
+        if is_question:
+            continue
+        for pattern in (_SERVING_ASSERTION, _SERVING_UNREACHED):
+            match = pattern.search(clause)
+            if match is None:
+                continue
+            before = clause[: match.start()]
+            if _state_prefix_blocks(before) or _PRIOR_TIME.search(clause):
+                continue
+            return StackClaim(
+                subject=match.group("subj").strip(),
+                phrase=match.group(0).strip(),
+            )
+    return None

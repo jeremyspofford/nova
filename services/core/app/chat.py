@@ -622,8 +622,49 @@ def attributed_history(rows: Sequence, runner: str | None) -> list[dict[str, str
         content = row["content"]
         if row["role"] == "assistant" and row["agent"] and row["agent"] != runner:
             content = f"[{row['agent']}] {content}"
+        marker = _past_turn_marker(row)
+        if marker:
+            content = f"{marker} {content}"
         out.append({"role": row["role"], "content": content})
     return out
+
+
+# A turn that ended badly persists its own honest statement as an assistant row
+# (model_failure_statement / turn_failure_statement). That row is true about the
+# moment it was written and says nothing about when it was — and the next turn
+# reads it as prose, in the present tense, with no date on it.
+#
+# 2026-09-12: two turns timed out at the gateway's read limit; the turn after
+# them read their statements and told the owner the stack was down, listing curl
+# commands for him to try, while the model was answering him. He lost an
+# afternoon to a five-minute outage.
+#
+# So the row arrives STAMPED, and the stamp is derived from the turn's own
+# status — never from reading the text for words like "error", which would be
+# the guesswork this codebase keeps removing. The guard on the other side
+# (guards.stack_claim_check) is what refuses when she asserts it anyway: this
+# half only makes sure she was told the truth first.
+_PAST_TURN_MARKERS = {
+    "error": "[that turn failed at {when}; a record of that moment, not of now]",
+    "stopped": "[you stopped that turn at {when}; a record of that moment, not of now]",
+}
+
+
+def _past_turn_marker(row) -> str | None:
+    """The stamp an assistant row from a failed or stopped turn carries into
+    the next turn's history, or None for every ordinary row.
+
+    Tolerant of a row that carries neither column, because two callers build
+    these dicts by hand in tests and a missing key is not a failed turn.
+    """
+    if row.get("role") != "assistant":
+        return None
+    template = _PAST_TURN_MARKERS.get(row.get("status") or "")
+    if template is None:
+        return None
+    written = row.get("created_at")
+    when = written.strftime("%Y-%m-%d %H:%M UTC") if written is not None else "an earlier turn"
+    return template.format(when=when)
 
 
 def history_window(
@@ -3878,6 +3919,30 @@ async def _run_turn(
                 ]
             emit(_frame({"correction": capability_correction.text}))
 
+        # The SERVING-state claim guard (S19), same raw reply, same fail-OPEN
+        # contract. It fires when the reply asserts in the present that the
+        # model, the gateway or the inference service cannot answer — in a turn
+        # the model ANSWERED. The evidence needs no probe and cannot be argued
+        # with: this reply exists, so the chat round succeeded.
+        #
+        # The owner's chat on 2026-09-12 is the case. Two turns timed out at
+        # the gateway's read limit, each persisting its honest failure
+        # statement; the next turn read them and reported the stack as broken,
+        # refusing to do the work and listing curl commands for him to run,
+        # while the model was answering him.
+        stack_claim = None
+        try:
+            stack_claim = guards.stack_claim_check(text, turn.spans)
+        except Exception:
+            logger.exception("serving-state guard raised; shipping the reply uncorrected")
+            stack_claim = None
+        if stack_claim is not None:
+            with turn.span("guard", "stack_claim") as span:
+                span.meta["subject"] = stack_claim.subject
+                span.meta["phrase"] = stack_claim.phrase
+                span.meta["served"] = True
+            emit(_frame({"correction": stack_claim.text}))
+
         # The LIVE-STATE claim guard, on the same raw reply, same fail-OPEN
         # contract. Derived from the live device registry (`device_names`, read
         # above): it fires only when the reply asserts a paired device's CURRENT
@@ -4063,12 +4128,18 @@ async def _run_turn(
         # The unverified-listing case is APPEND-class (a note after the prose),
         # never a replacement — see the guard block above.
         listing_replacement = None if listing_unverified else listing_claim
+        # S19: a serving-state claim is REPLACE-class, for the reason the
+        # consent and capability claims are. The reply exists to refuse the
+        # request on the strength of an outage that has passed; keeping the
+        # prose would feed "nothing can run" back through history_window, which
+        # is exactly how ONE five-minute outage became an afternoon of refusals.
         replace_corrections = [
             c
             for c in (
                 consent_correction,
                 capability_correction,
                 state_claim,
+                stack_claim,
                 listing_replacement,
             )
             if c is not None
@@ -4097,6 +4168,7 @@ async def _run_turn(
                     consent_correction,
                     capability_correction,
                     state_claim,
+                    stack_claim,
                     listing_replacement,
                 )
                 if c is not None
@@ -4151,6 +4223,7 @@ async def _run_turn(
             or consent_correction is not None
             or capability_correction is not None
             or state_claim is not None
+            or stack_claim is not None
             or listing_claim is not None
         )
 
@@ -4441,6 +4514,12 @@ async def _run_turn(
             # line. A redirect that stood did the check (or said plainly it did
             # not), so THAT turn is ordinary knowledge again.
             or (state_claim is not None and not state_redirected)
+            # And a serving-state claim (S19). "The model is unreachable"
+            # ingested as knowledge is the same poison one layer down: recall
+            # would hand a later turn — in any conversation, since memory is
+            # per-person — a stale outage as a current fact, which is the very
+            # thing this guard exists to stop.
+            or stack_claim is not None
             # A presented listing nothing produced is the same noise again —
             # and the worst of it, because a recalled listing is exactly what
             # produced this one: ingesting it is how the next parrot gets its
@@ -4667,7 +4746,7 @@ async def _open_turn(
     history = history_window(
         attributed_history(
             await conn.fetch(
-                "SELECT m.role, m.content, a.name AS agent FROM messages m "
+                "SELECT m.role, m.content, m.created_at, t.status, a.name AS agent FROM messages m "
                 "LEFT JOIN turns t ON t.id = m.turn_id "
                 "LEFT JOIN agents a ON a.id = t.agent_id "
                 "WHERE m.conversation_id = $1 AND m.id <> $2 "

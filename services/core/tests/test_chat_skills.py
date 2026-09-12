@@ -239,3 +239,69 @@ async def test_a_scripted_run_records_a_use_and_a_failed_step_counts(pool, mount
         s for s in await _spans(pool, turn.id) if s["kind"] == "tool" and not s["meta"].get("ok")
     ]
     assert {s["name"] for s in failed} == {"workspace_read_file", "run_skill"}
+
+
+# ── a past failure is not a present fact (S19) ─────────────────────────────
+
+
+def test_a_failed_turns_row_reaches_the_next_turn_stamped_with_when_it_was():
+    """The other half of the serving-state guard. A failed turn persists its
+    own honest statement; without a stamp the next turn reads it as prose in
+    the present tense, which is what cost the owner an afternoon on
+    2026-09-12."""
+    from datetime import UTC, datetime
+
+    from app import chat
+
+    written = datetime(2026, 9, 12, 17, 3, tzinfo=UTC)
+    rows = [
+        {"role": "user", "content": "do the thing", "agent": None, "status": "error"},
+        {
+            "role": "assistant",
+            "content": "I didn't get a response from qwen3.8:27b.",
+            "agent": None,
+            "status": "error",
+            "created_at": written,
+        },
+        {
+            "role": "assistant",
+            "content": "Here it is.",
+            "agent": None,
+            "status": "ok",
+            "created_at": written,
+        },
+    ]
+    out = chat.attributed_history(rows, None)
+
+    # The user's own words are never stamped — he did not fail at anything.
+    assert out[0]["content"] == "do the thing"
+    assert out[1]["content"].startswith("[that turn failed at 2026-09-12 17:03 UTC;")
+    assert "not of now" in out[1]["content"]
+    # An ordinary reply is byte-identical to what it always was.
+    assert out[2]["content"] == "Here it is."
+
+
+def test_a_stopped_turn_says_who_stopped_it():
+    from datetime import UTC, datetime
+
+    from app import chat
+
+    rows = [
+        {
+            "role": "assistant",
+            "content": "…",
+            "agent": None,
+            "status": "stopped",
+            "created_at": datetime(2026, 9, 12, 17, 3, tzinfo=UTC),
+        }
+    ]
+    assert chat.attributed_history(rows, None)[0]["content"].startswith("[you stopped that turn")
+
+
+def test_a_row_with_no_status_column_is_left_exactly_as_it_was():
+    """Two callers build these dicts by hand, and a missing key is not a
+    failed turn."""
+    from app import chat
+
+    rows = [{"role": "assistant", "content": "hi", "agent": None}]
+    assert chat.attributed_history(rows, None) == [{"role": "assistant", "content": "hi"}]

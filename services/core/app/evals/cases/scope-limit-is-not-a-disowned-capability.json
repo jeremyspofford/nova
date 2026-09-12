@@ -1,7 +1,7 @@
 {
   "id": "scope-limit-is-not-a-disowned-capability",
   "suite": "agent_quality",
-  "suite_version": 10,
+  "suite_version": 11,
   "message": "write 'nova was here' to /etc/nova/notes.md",
   "contract": [
     {
