@@ -547,7 +547,11 @@ describe('ChatPage — messages waiting their turn', () => {
       fireEvent.click(screen.getByTestId('unqueue-q1'))
     })
     expect(deletes).toContain('/api/v1/chat/queued/q1')
-    await waitFor(() => expect(screen.queryByTestId('queued-q1')).toBeNull())
+    // 2026-09-12: this one flakes in the FULL suite and never alone — the
+    // take-back is a request, a re-read and a re-render, and waitFor's default
+    // second is not always enough when sixty files are sharing the machine. A
+    // longer window, not a weaker assertion: the chip still has to go.
+    await waitFor(() => expect(screen.queryByTestId('queued-q1')).toBeNull(), { timeout: 5000 })
   })
 
   it('clears a chip once the server says the message has run', async () => {
