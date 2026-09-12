@@ -54,9 +54,7 @@ def test_a_script_that_runs_a_script_is_refused():
     """Not a loop anyone bounded, and the step cap would not see it: each
     nested run is a fresh expansion."""
     with pytest.raises(skill_scripts.ScriptError) as exc:
-        skill_scripts.validate(
-            _script({"tool": "run_skill", "args": {"name": "x"}}), _inputs()
-        )
+        skill_scripts.validate(_script({"tool": "run_skill", "args": {"name": "x"}}), _inputs())
     assert "run_skill" in str(exc.value)
 
 
@@ -404,3 +402,22 @@ def test_a_derived_draft_is_valid_by_construction():
 def test_no_walks_is_refused_rather_than_answered_with_an_empty_script():
     with pytest.raises(skill_scripts.ScriptError):
         skill_scripts.derive([])
+
+
+async def test_an_optional_input_she_leaves_out_is_refused_in_words(tmp_path):
+    """The schema allows it to be absent, so validation passes and the template
+    then has nothing to put there. That must be a sentence, not a KeyError."""
+    ctx = _ctx(tmp_path)
+    text, ok = await skill_scripts.run(
+        _script({"tool": "workspace_read_file", "args": {"path": "{{ note }}"}}),
+        {},
+        {
+            "type": "object",
+            "properties": {"note": {"type": "string"}},
+            "required": [],
+            "additionalProperties": False,
+        },
+        ctx=ctx,
+    )
+    assert not ok
+    assert "note" in text

@@ -97,13 +97,31 @@ def render(value: Any, bindings: dict) -> Any:
     if isinstance(value, str):
         whole = _WHOLE.match(value)
         if whole:
-            return bindings[whole.group(1)]
-        return _PLACEHOLDER.sub(lambda m: str(bindings[m.group(1)]), value)
+            return _bound(whole.group(1), bindings)
+        return _PLACEHOLDER.sub(lambda m: str(_bound(m.group(1), bindings)), value)
     if isinstance(value, dict):
         return {key: render(item, bindings) for key, item in value.items()}
     if isinstance(value, list):
         return [render(item, bindings) for item in value]
     return value
+
+
+def _bound(name: str, bindings: dict):
+    """The value for a name, or a stated refusal.
+
+    validate() proves every name RESOLVES to something declared; it cannot
+    prove the caller supplied it, because a declared input may be optional and
+    a schema that allows its absence is a schema the caller satisfies without
+    it. So the miss lands here, as a sentence, rather than as a KeyError out of
+    a template — the shape that would have been a 500 instead of a refusal she
+    could act on.
+    """
+    if name not in bindings:
+        raise ScriptError(
+            f"the script needs {name!r} and it was not given — supplied: "
+            f"{', '.join(sorted(bindings)) or 'nothing'}"
+        )
+    return bindings[name]
 
 
 def _steps_of(script: object) -> list[dict]:
