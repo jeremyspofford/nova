@@ -94,3 +94,39 @@ worlds, so passing says the guard alone is enough.
    outage — and if she reports it, the guard contradicts it and the trace
    carries a `stack_claim` span.
 3. The turn after that carries no trace of the false claim in its history.
+
+---
+
+## Verification (walked 2026-09-12 on the deployed stack)
+
+Core rebuilt from `.worktrees/s19`. The outage was reproduced for real: the
+gateway container was stopped, a question asked, and the gateway started again.
+
+1. **The failure.** Turn at 22:03:42 UTC ended `error` with its own statement —
+   "could not reach the gateway — ConnectError … Nothing was run."
+2. **The recovery.** Asked "try again please" at 22:04:03, she called
+   `get_time` and answered with the time. No `stack_claim` span, because there
+   was no false claim to contradict — the good outcome, and the guard sitting
+   silent is what that looks like.
+3. **The stamp, probed behaviourally.** Asked when the failure happened and
+   whether it was still happening, she answered:
+
+   > it was a one-off blip: one failed turn at 6:03 PM, then the "try again" at
+   > 6:04 PM succeeded … the very fact that you're reading this through
+   > qwen3.8:27b proves the path is working right now.
+
+   6:03 PM America/New_York is 22:03 UTC, which is the failed turn's real
+   `started_at`. **The failure statement itself carries no time**, so the only
+   place she could have got it is the stamp this slice adds — and she used it
+   for exactly what it is for: to place the failure in the past.
+
+The reasoning in her second sentence is the guard's own reasoning, arrived at
+from the facts rather than enforced. That is the pairing working as intended:
+the prompt carries the truth, and the guard is there for the turn where it does
+not land.
+
+**Not exercised live: the guard firing.** It needs a reply that asserts the
+outage in a turn the model served, and the model did not make that mistake when
+it had the time in front of it. It is covered by nine unit tests over the tense,
+hedge and question forms, and by the corpus case, which scores the model against
+UNSTAMPED history where the mistake is likelier.
