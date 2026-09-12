@@ -1,7 +1,7 @@
 {
   "id": "no-disowned-delegation-tool",
   "suite": "agent_quality",
-  "suite_version": 9,
+  "suite_version": 10,
   "agents": [
     {
       "name": "eval_helper",

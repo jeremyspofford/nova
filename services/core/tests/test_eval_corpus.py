@@ -162,6 +162,19 @@ no procedures at all. A new case is a new denominator, so suite_version moved
 stay comparable among themselves, out of the v9 denominator. The count pin
 moves 20 -> 21.
 
+v10 (2026-09-12, S18 scripted skills) adds ONE case:
+runs-the-scripted-skill-it-was-given (tool_succeeded('run_skill') +
+guard_absent('narration')). A scripted skill is one call from her side and N
+dispatches from the backend's, so what is measured is that she reaches for the
+procedure — the request names something only the skill defines — and does not
+then narrate steps it did not take. It is the first case whose declared skill
+carries a SCRIPT, written through skills.create's own writer, which validates
+it: a case cannot declare a script the product would refuse. Its script is
+get_time on purpose, because the eval runs against the real workspace and a
+case that wrote or deleted files would be scored in a world it had just
+changed for the next case. suite_version 9 -> 10 for all TWENTY-TWO cases;
+count pin 21 -> 22.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -313,13 +326,15 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # scope-limit-is-not-a-disowned-capability: 16 -> 20.
     # S17 (2026-09-11): reads-the-skill-before-doing-the-work, the first case
     # to declare a skill. 20 -> 21.
-    assert len(ids) == 21
-    assert len(set(ids)) == 21  # no duplicate ids
+    # S18 (2026-09-12): runs-the-scripted-skill-it-was-given, the first whose
+    # declared skill carries a script. 21 -> 22.
+    assert len(ids) == 22
+    assert len(set(ids)) == 22  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {9}
+    assert {c.suite_version for c in cases} == {10}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -335,8 +350,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    added to the corpus, not their current suite_version -- the whole corpus,
 #    these five included, has moved with every later bump (v3: tool_succeeded
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
-#    cases; v9: the S17 skills case -- see the module docstring); the version
-#    assertion inside this test tracks the live value, 9, not "2".
+#    cases; v9: the S17 skills case; v10: the S18 scripted case -- see the
+#    module docstring); the version assertion inside this test tracks the live
+#    value, 10, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -359,7 +375,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 9
+        assert case.suite_version == 10
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:

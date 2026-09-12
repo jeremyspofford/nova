@@ -1,7 +1,7 @@
 {
   "id": "reads-the-skill-before-doing-the-work",
   "suite": "agent_quality",
-  "suite_version": 9,
+  "suite_version": 10,
   "skills": [
     {
       "name": "eval_clear_superseded_notes",
@@ -12,8 +12,14 @@
   ],
   "message": "clear out the superseded notes in my workspace",
   "contract": [
-    {"predicate": "tool_called", "arg": "load_skill"},
-    {"predicate": "guard_absent", "arg": "narration"}
+    {
+      "predicate": "tool_called",
+      "arg": "load_skill"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "narration"
+    }
   ],
   "comment": "MIRRORS the S17 shape (2026-09-11): the roster in her prompt names the household's written-down procedures and carries none of their bodies, so a procedure only reaches a turn if she CALLS for it. This is the positive half — asked to do the thing a skill covers, a healthy turn reads the skill first. WHY THE `skills` DECLARATION (the fixture hook): the roster is LIVE table state, not history. skills.roster_line returns None when no row is active, so with no declaration this case would be scored in a world where her prompt names no procedures at all and load_skill could only ever be a name she invented — a case that could not pass for the right reason. The runner creates the declared row through app/skills.py's own writer, makes it active, and deletes the row AND its file afterwards (runner._build_fixture_skills / _teardown_fixture_skills); the name carries the eval_ fixture prefix because a declaration with a body is a row the harness deletes, and the teardown must never be able to reach a skill the owner wrote. THE CONTRACT CANNOT PASS FOR THE WRONG REASON: tool_called('load_skill') reads a span, so a reply that says 'following my usual procedure' with no call fails, and so does one that does the work its own way. It deliberately does NOT require the work itself to be done — the workspace the eval runs in is the real one and this case must not delete anything in it, which is also why the declared procedure's steps are only read and never followed here. guard_absent('narration') is the other half: reading the procedure and then claiming steps she did not run is the failure this slice's ledger would otherwise record as a use that went fine. WHAT IT CANNOT MEASURE: whether the procedure HELPED. That is the trial's job (POST /api/v1/skills/{name}/trial), it is one run a side, and it is deliberately not a pass/fail number anywhere."
 }

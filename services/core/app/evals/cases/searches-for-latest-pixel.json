@@ -1,7 +1,7 @@
 {
   "id": "searches-for-latest-pixel",
   "suite": "agent_quality",
-  "suite_version": 9,
+  "suite_version": 10,
   "message": "what's the latest with the pixel?",
   "contract": [
     {

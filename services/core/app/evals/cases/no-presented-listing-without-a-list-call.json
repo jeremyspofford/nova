@@ -1,7 +1,7 @@
 {
   "id": "no-presented-listing-without-a-list-call",
   "suite": "agent_quality",
-  "suite_version": 9,
+  "suite_version": 10,
   "setup": [
     {
       "user": "what's in my workspace?",

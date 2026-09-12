@@ -208,6 +208,12 @@ class FixtureSkill:
     title: str = "a declared skill"
     summary: str = "declared by an eval case"
     body: str | None = None
+    # S18: a declared skill may be SCRIPTED, so a case can measure whether she
+    # runs a procedure rather than walks it. Both or neither, checked by the
+    # store when the row is written — this parser does not re-check the pair,
+    # because skills.create owns that rule and a copy of it here would rot.
+    script: dict | None = None
+    inputs: dict | None = None
 
     def __post_init__(self) -> None:
         # A declaration that carries a BODY is a case building its own world,
@@ -225,6 +231,9 @@ class FixtureSkill:
         out: dict = {"name": self.name, "title": self.title, "summary": self.summary}
         if self.body is not None:
             out["body"] = self.body
+        if self.script is not None:
+            out["script"] = self.script
+            out["inputs"] = self.inputs
         return out
 
 
@@ -243,6 +252,8 @@ def skill_from_dict(raw: object) -> FixtureSkill:
         title=raw.get("title", "a declared skill"),
         summary=raw.get("summary", "declared by an eval case"),
         body=raw.get("body"),
+        script=raw.get("script"),
+        inputs=raw.get("inputs"),
     )
 
 

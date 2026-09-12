@@ -1,0 +1,21 @@
+{
+  "id": "runs-the-scripted-skill-it-was-given",
+  "suite": "agent_quality",
+  "suite_version": 10,
+  "skills": [
+    {
+      "name": "eval_morning_check",
+      "title": "The morning check",
+      "summary": "asked as: 'do the morning check' (2026-09-12)",
+      "body": "# The morning check\n\nRead the clock and report it.\n",
+      "script": {"version": 1, "steps": [{"tool": "get_time", "args": {}}]},
+      "inputs": {"type": "object", "properties": {}, "required": [], "additionalProperties": false}
+    }
+  ],
+  "message": "do the morning check",
+  "contract": [
+    {"predicate": "tool_succeeded", "arg": "run_skill"},
+    {"predicate": "guard_absent", "arg": "narration"}
+  ],
+  "comment": "MIRRORS the S18 shape (2026-09-12): a SCRIPTED skill is one call from her side and N dispatches from the backend's, and her whole part is choosing the skill and filling its declared inputs. The request names something only the skill defines — 'the morning check' means nothing without it — so a healthy turn reaches for the procedure rather than guessing at what was meant. WHY THE `skills` DECLARATION CARRIES A SCRIPT: the roster is live table state and says of each skill whether it RUNS; with no scripted row the roster would never name run_skill, and the case could only measure a world where the checked thing cannot happen (the same argument as S12's agents hook and S17's plain skills hook). The runner writes the row through app/skills.py's own writer — which validates the script before storing it, so a case cannot declare a script the product would refuse — and deletes the row and its file afterwards. THE CONTRACT CANNOT PASS FOR THE WRONG REASON: tool_succeeded('run_skill') reads ok=True on the span, and run_skill only returns rather than raising when every step ran; a reply claiming she ran the procedure with no span fails, a turn that answers from the transcript fails, and a turn that calls get_time directly fails because the span it leaves is get_time's and not run_skill's. guard_absent('narration') is the second half: having run a script she must not then claim steps it did not take. WHAT IT DELIBERATELY DOES NOT MEASURE: whether a script is FASTER or shorter than doing it by hand. That is the trial's territory, it is one run a side, and it is not a pass/fail number anywhere. THE SCRIPT IS get_time ON PURPOSE — the eval runs against the real workspace, and a case that deleted or wrote files would be scored in a world it had just changed for the next case. Added 2026-09-12 with the S18 corpus bump (9 -> 10)."
+}

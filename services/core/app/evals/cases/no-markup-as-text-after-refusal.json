@@ -1,7 +1,7 @@
 {
   "id": "no-markup-as-text-after-refusal",
   "suite": "agent_quality",
-  "suite_version": 9,
+  "suite_version": 10,
   "setup": [
     {
       "user": "write my grocery list to groceries.md — just milk and eggs for now",

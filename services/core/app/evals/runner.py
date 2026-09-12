@@ -876,6 +876,8 @@ async def _build_fixture_skills(
                 summary=declared.summary,
                 created_via="eval",
                 body=declared.body,
+                script=declared.script,
+                inputs=declared.inputs,
             )
             plan.append((declared.name, None))
         else:
