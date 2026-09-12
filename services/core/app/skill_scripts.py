@@ -126,9 +126,7 @@ def validate(script: object, inputs_schema: object) -> None:
     are checked at run by `tools.schema.validate`, the same call every tool
     goes through — this function deliberately does not reimplement it.
     """
-    if not isinstance(inputs_schema, dict) or not isinstance(
-        inputs_schema.get("properties"), dict
-    ):
+    if not isinstance(inputs_schema, dict) or not isinstance(inputs_schema.get("properties"), dict):
         raise ScriptError(
             "the inputs schema must be a JSON object with a 'properties' object — "
             "a script that takes nothing declares empty properties, which is not "
@@ -290,8 +288,7 @@ async def run(
             lines.append(
                 f"Stopped at {_where(planned_step)}. "
                 + (
-                    f"{remaining} later step{'s were' if remaining != 1 else ' was'} "
-                    "not attempted."
+                    f"{remaining} later step{'s were' if remaining != 1 else ' was'} not attempted."
                     if remaining
                     else "It was the last step."
                 )
@@ -306,3 +303,133 @@ def _report(lines: Sequence[str], unspanned: bool) -> str:
     if unspanned:
         text += "\n(These steps ran outside a turn, so they are not recorded on the trace.)"
     return text
+
+
+# ── deriving a draft from what actually happened ───────────────────────────
+
+_JSON_TYPES = {str: "string", bool: "boolean", int: "integer", float: "number", list: "array"}
+
+
+def _json_type(value: object) -> str:
+    return _JSON_TYPES.get(type(value), "string")
+
+
+def _runs(walk: Sequence[tuple[str, dict]]) -> list[tuple[str, list[dict]]]:
+    """One walk as its RUNS: consecutive calls to the same tool grouped.
+
+    The same collapse `skills.shape` makes, keeping the arguments — a run is
+    the same call over a list, and the list is what becomes an input.
+    """
+    out: list[tuple[str, list[dict]]] = []
+    for tool, args in walk:
+        if out and out[-1][0] == tool:
+            out[-1][1].append(args)
+        else:
+            out.append((tool, [args]))
+    return out
+
+
+def _unique(name: str, taken: set[str]) -> str:
+    candidate, n = name, 1
+    while candidate in taken:
+        n += 1
+        candidate = f"{name}_{n}"
+    taken.add(candidate)
+    return candidate
+
+
+def derive(walks: Sequence[Sequence[tuple[str, dict]]]) -> dict:
+    """A candidate script from the calls those turns actually made.
+
+    No model is asked anything. The rules are the ones a person would apply
+    reading the walks side by side:
+
+      * a RUN of one tool becomes a repeat over a list, because that is what a
+        run is — writing it out as three steps would freeze the count of one
+        afternoon into the procedure;
+      * an argument whose value was the same in every walk becomes a constant;
+      * an argument whose value differed becomes an input named after it.
+
+    With ONE walk there is nothing to compare, so everything that does not
+    repeat is taken as a constant and the note says so — the page shows that
+    sentence, because a draft that quietly guessed would be worse than one
+    that admits what it could not know. When the walks did different things,
+    the NEWEST is the shape (it is the closest to how the thing is done now)
+    and the note says they differed.
+
+    Returns {"script", "inputs", "note"}; the result is valid by construction
+    and a test pins that, because a starting point that cannot be saved is
+    not a starting point.
+    """
+    walks = [list(walk) for walk in walks if walk]
+    if not walks:
+        raise ScriptError(
+            "those turns ran no tool calls, so there is nothing to derive a script from"
+        )
+
+    shaped = [_runs(walk) for walk in walks]
+    newest = shaped[-1]
+    comparable = [s for s in shaped if [tool for tool, _ in s] == [tool for tool, _ in newest]]
+    notes: list[str] = []
+    if len(comparable) < len(shaped):
+        notes.append(
+            "The recorded walks differ in what they called, so this is the newest one; "
+            "the others were used only where their steps line up."
+        )
+    if len(comparable) == 1:
+        notes.append(
+            "There is only one walk to read, so every argument that does not repeat was taken "
+            "as a constant. Change the ones that should be inputs."
+        )
+
+    properties: dict[str, dict] = {}
+    taken: set[str] = set()
+    steps: list[dict] = []
+
+    for position, (tool, calls) in enumerate(newest):
+        repeated = any(len(other[position][1]) > 1 for other in comparable)
+        keys = list(calls[0])
+        if repeated:
+            # Which argument is the list? The one that varies within the run —
+            # or, if a run of one is all we have, the only one there is.
+            varying = [k for k in keys if len({repr(c.get(k)) for c in calls}) > 1] or keys
+            item_key = varying[0]
+            if len(varying) > 1:
+                # Only one argument can be the list this step repeats over. The
+                # others are frozen at the value the first call used, which is a
+                # guess — so it is said rather than left to be discovered.
+                notes.append(
+                    f"Step {position + 1} varied in more than one argument "
+                    f"({', '.join(varying)}); {item_key} was taken as the list and the rest "
+                    "frozen at their first values."
+                )
+            plural = _unique(f"{item_key}s", taken)
+            properties[plural] = {
+                "type": "array",
+                "items": {"type": _json_type(calls[0].get(item_key))},
+            }
+            args = {k: (f"{{{{ {item_key} }}}}" if k == item_key else calls[0][k]) for k in keys}
+            steps.append({"tool": tool, "args": args, "for_each": plural, "as": item_key})
+            continue
+
+        args = {}
+        for key in keys:
+            values = [other[position][1][0].get(key) for other in comparable]
+            if len({repr(v) for v in values}) == 1:
+                args[key] = calls[0][key]
+            else:
+                name = _unique(key, taken)
+                properties[name] = {"type": _json_type(calls[0].get(key))}
+                args[key] = f"{{{{ {name} }}}}"
+        steps.append({"tool": tool, "args": args})
+
+    return {
+        "script": {"version": 1, "steps": steps},
+        "inputs": {
+            "type": "object",
+            "properties": properties,
+            "required": sorted(properties),
+            "additionalProperties": False,
+        },
+        "note": " ".join(notes),
+    }

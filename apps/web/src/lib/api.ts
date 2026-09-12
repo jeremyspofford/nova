@@ -627,12 +627,37 @@ export interface SkillInfo {
   created_via: 'beat' | 'page' | null
   step_names: string[]
   flagged_reason: string | null
+  /** S18: this skill RUNS. Derived server-side from the script's presence, so
+   * the list and the detail cannot disagree about what a script is. */
+  scripted: boolean
+  script: SkillScript | null
+  inputs: Record<string, unknown> | null
   file_present: boolean
   uses: SkillUses | null
   created_at: string | null
   updated_at: string | null
   size: number | null
   modified: string | null
+}
+
+/** A step program: steps in order, each a real tool call, a step optionally
+ * repeating over a list the caller supplied. No branching — tool results are
+ * prose, and a condition over prose is the guesswork scripts exist to remove. */
+export interface SkillScript {
+  version: number
+  steps: {
+    tool: string
+    args: Record<string, unknown>
+    for_each?: string
+    as?: string
+  }[]
+}
+
+/** What the derivation proposed, and what it could not know. */
+export interface SkillScriptDraft {
+  script: SkillScript
+  inputs: Record<string, unknown>
+  note: string
 }
 
 export interface SkillUses {
@@ -712,8 +737,21 @@ export const createSkill = (body: {
 
 export const updateSkill = (
   name: string,
-  changes: { title?: string; summary?: string; body?: string; status?: string; reason?: string },
+  changes: {
+    title?: string
+    summary?: string
+    body?: string
+    status?: string
+    reason?: string
+    script?: SkillScript | null
+    inputs?: Record<string, unknown> | null
+  },
 ) => apiSend<SkillDetail>(`/api/v1/skills/${encodeURIComponent(name)}`, 'PATCH', changes)
+
+/** Proposes a script from the calls the skill's source turns made. Saves
+ * nothing: the owner edits and saves deliberately. */
+export const draftSkillScript = (name: string) =>
+  apiSend<SkillScriptDraft>(`/api/v1/skills/${encodeURIComponent(name)}/script/draft`, 'POST')
 
 export const deleteSkill = (name: string) =>
   apiSend<{ name: string; deleted: boolean; text: string }>(

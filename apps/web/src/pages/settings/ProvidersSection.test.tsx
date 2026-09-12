@@ -15,7 +15,11 @@ function provider(overrides: Partial<Provider> = {}): Provider {
     preset: 'openrouter',
     builtin: false,
     is_default: false,
-    verified_at: '2026-09-05T00:00:00Z',
+    // RELATIVE to now, not a fixed instant (2026-09-12): the row's clause
+    // switches from "N ago" to an absolute date once a check is old enough, so
+    // a hardcoded date made this suite pass until the calendar caught up with
+    // it and then fail every run for a reason nothing had changed.
+    verified_at: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
     listing: 'available',
     listing_note: '431 models listed',
     key_proven: true,

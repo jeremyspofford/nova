@@ -638,6 +638,44 @@ async def shapes_from_turns(
     return [(turn_id, shape(names)) for turn_id, names in per_turn]
 
 
+async def walks_with_args(
+    pool: asyncpg.Pool, turn_ids: Sequence[uuid.UUID]
+) -> list[list[tuple[str, dict]]]:
+    """Each source turn's tool calls WITH the arguments they carried, oldest
+    turn first (S18).
+
+    `shapes_from_turns` answers the same question without the arguments,
+    because a step list is about what was done and not with what. A derived
+    script needs both, and it reads them from the same place: `args_redacted`
+    on the span, which is the record the Activity page shows — so a script
+    drafted here can only propose calls the trace says were actually made.
+
+    A span whose arguments were clipped whole (the bounded-record path, a
+    payload too large to store) carries a string rather than an object; it is
+    skipped, because a step composed from a truncated record would be a guess
+    wearing the clothes of evidence.
+    """
+    if not turn_ids:
+        return []
+    records = await pool.fetch(
+        "SELECT s.turn_id, s.name, s.meta FROM turn_spans s JOIN turns t ON t.id = s.turn_id "
+        "WHERE s.turn_id = ANY($1::uuid[]) AND s.kind = 'tool' AND s.name IS NOT NULL "
+        "ORDER BY t.started_at, s.turn_id, s.started_at, s.id",
+        list(turn_ids),
+    )
+    walks: list[list[tuple[str, dict]]] = []
+    seen: list[uuid.UUID] = []
+    for record in records:
+        args = (record["meta"] or {}).get("args_redacted")
+        if not isinstance(args, dict):
+            continue
+        if not seen or seen[-1] != record["turn_id"]:
+            seen.append(record["turn_id"])
+            walks.append([])
+        walks[-1].append((record["name"], args))
+    return [walk for walk in walks if walk]
+
+
 async def requests_from_turns(
     pool: asyncpg.Pool, turn_ids: Sequence[uuid.UUID]
 ) -> list[tuple[datetime, str]]:

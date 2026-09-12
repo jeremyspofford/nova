@@ -278,3 +278,100 @@ async def test_a_hand_written_skill_has_nothing_to_replay_and_says_so(
     resp = await owner_client.post("/api/v1/skills/tidy/trial", json={"model": "m"})
     assert resp.status_code == 400
     assert "written by hand" in resp.json()["error"]
+
+
+# ── scripts (S18) ──────────────────────────────────────────────────────────
+
+
+async def _walk(pool, person, calls, *, message="clear the notes"):
+    conversation = await pool.fetchval(
+        "INSERT INTO conversations (person_id) VALUES ($1) RETURNING id", person
+    )
+    turn = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id, model, person_id) "
+        "VALUES ('chat', $1, 'm', $2) RETURNING id",
+        conversation,
+        person,
+    )
+    await pool.execute(
+        "INSERT INTO messages (conversation_id, role, content, created_at) VALUES "
+        "($1, 'user', $2, now() - interval '1 second')",
+        conversation,
+        message,
+    )
+    for i, (tool, args) in enumerate(calls):
+        await pool.execute(
+            "INSERT INTO turn_spans (turn_id, kind, name, started_at, duration_ms, meta) "
+            "VALUES ($1, 'tool', $2, now() + make_interval(secs => $3), 5, $4)",
+            turn,
+            tool,
+            float(i),
+            {"ok": True, "args_redacted": args},
+        )
+    return turn
+
+
+async def test_a_draft_script_is_derived_from_the_calls_the_turns_made(
+    owner_client, pool, monkeypatch, tmp_path
+):
+    await _root(monkeypatch, tmp_path)
+    person = await pool.fetchval("SELECT id FROM people WHERE role = 'owner'")
+    first = await _walk(pool, person, [("workspace_delete", {"path": "a.md"})])
+    second = await _walk(pool, person, [("workspace_delete", {"path": "b.md"})])
+    await skills.create(
+        pool,
+        name="tidy",
+        title="t",
+        summary="u",
+        created_via="beat",
+        body="b",
+        source_turn_ids=[first, second],
+        step_names=["workspace_delete"],
+    )
+
+    resp = await owner_client.post("/api/v1/skills/tidy/script/draft")
+    assert resp.status_code == 200, resp.text
+    draft = resp.json()
+
+    # The path differed between the walks, so it is an input, not a constant.
+    assert draft["script"]["steps"][0]["args"] == {"path": "{{ path }}"}
+    assert set(draft["inputs"]["properties"]) == {"path"}
+    # And it saved nothing.
+    assert (await skills.get(pool, "tidy")).script is None
+
+
+async def test_saving_a_script_that_could_not_run_is_refused_in_the_stores_words(
+    owner_client, pool, monkeypatch, tmp_path
+):
+    await _root(monkeypatch, tmp_path)
+    await _seed(pool)
+
+    resp = await owner_client.patch(
+        "/api/v1/skills/tidy",
+        json={
+            "script": {"version": 1, "steps": [{"tool": "make_coffee", "args": {}}]},
+            "inputs": {"type": "object", "properties": {}},
+        },
+    )
+    assert resp.status_code == 400
+    assert "make_coffee" in resp.json()["error"]
+    assert (await skills.get(pool, "tidy")).script is None
+
+
+async def test_a_saved_script_comes_back_on_the_row_and_marks_it_scripted(
+    owner_client, pool, monkeypatch, tmp_path
+):
+    await _root(monkeypatch, tmp_path)
+    await _seed(pool)
+    script = {"version": 1, "steps": [{"tool": "get_time", "args": {}}]}
+
+    resp = await owner_client.patch(
+        "/api/v1/skills/tidy",
+        json={"script": script, "inputs": {"type": "object", "properties": {}}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["scripted"] is True
+    assert resp.json()["script"] == script
+
+    listed = {item["name"]: item for item in (await owner_client.get("/api/v1/skills")).json()}
+    assert listed["tidy"]["scripted"] is True

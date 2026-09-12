@@ -5,6 +5,7 @@ import { Badge, Button, EmptyState, Skeleton, Textarea } from '../../components/
 import {
   createSkill as apiCreateSkill,
   deleteSkill as apiDeleteSkill,
+  draftSkillScript as apiDraftSkillScript,
   getSkill as apiGetSkill,
   listSkills as apiListSkills,
   trialSkill as apiTrialSkill,
@@ -29,6 +30,7 @@ import { statusPill, trialWords, usesWords } from './skillsFormat'
  * two turns did, one run each. Activation is the owner's click.
  */
 export interface SkillsApi {
+  draftSkillScript: typeof apiDraftSkillScript
   listSkills: typeof apiListSkills
   getSkill: typeof apiGetSkill
   createSkill: typeof apiCreateSkill
@@ -38,6 +40,7 @@ export interface SkillsApi {
 }
 
 const DEFAULT_API: SkillsApi = {
+  draftSkillScript: apiDraftSkillScript,
   listSkills: apiListSkills,
   getSkill: apiGetSkill,
   createSkill: apiCreateSkill,
@@ -137,6 +140,11 @@ export function SkillsPage({ api = DEFAULT_API }: { api?: SkillsApi } = {}) {
                   </span>
                 </span>
                 <span className="flex shrink-0 items-center gap-2">
+                  {skill.scripted && (
+                    <Badge size="sm" color="info">
+                      Scripted
+                    </Badge>
+                  )}
                   {!skill.file_present && (
                     <Badge size="sm" color="danger">
                       File missing
@@ -391,6 +399,8 @@ function SkillDetailPanel({
         </Button>
       </div>
 
+      <ScriptPanel api={api} detail={detail} onSaved={async () => { await load(); onChanged() }} />
+
       {trial && (
         <div className="rounded-sm border border-border-subtle p-3" data-testid="skill-trial">
           <p className="text-compact text-content-primary">
@@ -405,6 +415,100 @@ function SkillDetailPanel({
           </p>
         </div>
       )}
+    </div>
+  )
+}
+
+
+/** The script, the inputs schema, and the button that proposes both from the
+ * trace. Two textareas rather than a form builder: the shape is small, the
+ * server validates it, and a refusal is its sentence shown verbatim — a
+ * builder would have to reimplement the rules to be any better than this. */
+function ScriptPanel({
+  api,
+  detail,
+  onSaved,
+}: {
+  api: SkillsApi
+  detail: SkillDetail
+  onSaved: () => void | Promise<void>
+}) {
+  const [script, setScript] = useState(() =>
+    detail.script ? JSON.stringify(detail.script, null, 2) : '',
+  )
+  const [inputs, setInputs] = useState(() =>
+    detail.inputs ? JSON.stringify(detail.inputs, null, 2) : '',
+  )
+  const [note, setNote] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  return (
+    <div className="space-y-2 rounded-sm border border-border-subtle p-3" data-testid="skill-script">
+      <p className="text-caption uppercase tracking-wider text-content-tertiary">
+        Script {detail.scripted ? '' : '(none — she follows this one by hand)'}
+      </p>
+      {note && (
+        <p role="status" className="text-compact text-warning" data-testid="script-note">
+          {note}
+        </p>
+      )}
+      {error && (
+        <p role="alert" className="text-compact text-danger">
+          {error}
+        </p>
+      )}
+      <Textarea
+        aria-label="Script"
+        rows={10}
+        value={script}
+        onChange={e => setScript(e.target.value)}
+      />
+      <Textarea
+        aria-label="Inputs schema"
+        rows={6}
+        value={inputs}
+        onChange={e => setInputs(e.target.value)}
+      />
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={async () => {
+            try {
+              const draft = await api.draftSkillScript(detail.name)
+              setScript(JSON.stringify(draft.script, null, 2))
+              setInputs(JSON.stringify(draft.inputs, null, 2))
+              // What the derivation could not know, kept in front of the owner
+              // rather than dropped once the textareas are full.
+              setNote(draft.note || null)
+              setError(null)
+            } catch (err) {
+              setError(reasonOf(err))
+            }
+          }}
+        >
+          Derive from the trace
+        </Button>
+        <Button
+          size="sm"
+          onClick={async () => {
+            try {
+              const parsed = script.trim() ? JSON.parse(script) : null
+              const parsedInputs = inputs.trim() ? JSON.parse(inputs) : null
+              await api.updateSkill(detail.name, { script: parsed, inputs: parsedInputs })
+              setError(null)
+              await onSaved()
+            } catch (err) {
+              // A JSON syntax error and a refusal from the store land in the
+              // same place, because to the person editing they are the same
+              // thing: the script was not saved, and here is why.
+              setError(reasonOf(err))
+            }
+          }}
+        >
+          Save script
+        </Button>
+      </div>
     </div>
   )
 }

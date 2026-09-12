@@ -6,6 +6,9 @@ import type { SkillDetail, SkillInfo, SkillTrial } from '../../lib/api'
 
 function row(overrides: Partial<SkillInfo> = {}): SkillInfo {
   return {
+    scripted: false,
+    script: null,
+    inputs: null,
     name: 'clear-notes',
     title: 'workspace_list_files → workspace_delete',
     summary: "asked as: 'clear the superseded notes' (2026-09-10)",
@@ -34,6 +37,11 @@ function detail(overrides: Partial<SkillDetail> = {}): SkillDetail {
 
 function api(overrides: Partial<SkillsApi> = {}): SkillsApi {
   return {
+    draftSkillScript: vi.fn(async () => ({
+      script: { version: 1, steps: [{ tool: 'workspace_delete', args: { path: '{{ path }}' } }] },
+      inputs: { type: 'object', properties: { path: { type: 'string' } } },
+      note: 'There is only one walk to read.',
+    })),
     listSkills: vi.fn(async () => [row()]),
     getSkill: vi.fn(async () => detail()),
     createSkill: vi.fn(async () => detail()),
@@ -173,5 +181,72 @@ describe('SkillsPage', () => {
     )
     expect(await screen.findByRole('alert')).toBeTruthy()
     expect(screen.getByRole('alert').textContent).toContain('core is down')
+  })
+
+  it('marks a scripted skill in the list', async () => {
+    const scripted = api({ listSkills: vi.fn(async () => [row({ scripted: true })]) })
+    render(
+      <MemoryRouter>
+        <SkillsPage api={scripted} />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('Scripted')).toBeTruthy()
+  })
+
+  it('deriving a script fills both boxes and keeps what it could not know in view', async () => {
+    const deriving = api()
+    render(
+      <MemoryRouter>
+        <SkillsPage api={deriving} />
+      </MemoryRouter>,
+    )
+    fireEvent.click(await screen.findByText('clear-notes'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Derive from the trace' }))
+
+    const box = (await screen.findByLabelText('Script')) as HTMLTextAreaElement
+    await waitFor(() => expect(box.value).toContain('workspace_delete'))
+    expect((screen.getByLabelText('Inputs schema') as HTMLTextAreaElement).value).toContain('path')
+    // The derivation said it had one walk to read. That sentence is the
+    // difference between a draft and a guess, so it stays on screen.
+    expect(screen.getByTestId('script-note').textContent).toContain('one walk')
+  })
+
+  it('a script the server refuses shows its sentence and does not clear the box', async () => {
+    const refusing = api({
+      updateSkill: vi.fn(async () => {
+        throw new Error("step 1 names 'make_coffee', which is not a tool that exists")
+      }),
+    })
+    render(
+      <MemoryRouter>
+        <SkillsPage api={refusing} />
+      </MemoryRouter>,
+    )
+    fireEvent.click(await screen.findByText('clear-notes'))
+    fireEvent.change(await screen.findByLabelText('Script'), {
+      target: { value: '{"version":1,"steps":[{"tool":"make_coffee","args":{}}]}' },
+    })
+    fireEvent.change(screen.getByLabelText('Inputs schema'), {
+      target: { value: '{"type":"object","properties":{}}' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }))
+
+    expect((await screen.findAllByRole('alert'))[0].textContent).toContain('make_coffee')
+    expect((screen.getByLabelText('Script') as HTMLTextAreaElement).value).toContain('make_coffee')
+  })
+
+  it('malformed JSON is reported the same way a refusal is', async () => {
+    const saving = api()
+    render(
+      <MemoryRouter>
+        <SkillsPage api={saving} />
+      </MemoryRouter>,
+    )
+    fireEvent.click(await screen.findByText('clear-notes'))
+    fireEvent.change(await screen.findByLabelText('Script'), { target: { value: '{not json' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save script' }))
+
+    expect((await screen.findAllByRole('alert')).length).toBeGreaterThan(0)
+    await waitFor(() => expect(saving.updateSkill).not.toHaveBeenCalled())
   })
 })

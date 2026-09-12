@@ -310,3 +310,97 @@ async def test_a_run_with_no_seam_says_its_steps_are_not_on_the_trace(tmp_path):
         ctx=ctx,
     )
     assert "not recorded on the trace" in text
+
+
+# ── deriving a draft from the trace ────────────────────────────────────────
+
+
+def test_an_argument_that_differed_between_walks_becomes_an_input():
+    draft = skill_scripts.derive(
+        [
+            [("workspace_write_file", {"path": "walk-1.md", "content": "one"})],
+            [("workspace_write_file", {"path": "walk-2.md", "content": "two"})],
+        ]
+    )
+    step = draft["script"]["steps"][0]
+    assert step["args"] == {"path": "{{ path }}", "content": "{{ content }}"}
+    assert set(draft["inputs"]["properties"]) == {"path", "content"}
+    assert draft["inputs"]["properties"]["path"]["type"] == "string"
+
+
+def test_an_argument_that_was_the_same_every_time_becomes_a_constant():
+    draft = skill_scripts.derive(
+        [
+            [("workspace_read_file", {"path": "notes.md"})],
+            [("workspace_read_file", {"path": "notes.md"})],
+        ]
+    )
+    assert draft["script"]["steps"][0]["args"] == {"path": "notes.md"}
+    assert draft["inputs"]["properties"] == {}
+
+
+def test_a_run_of_the_same_call_becomes_a_repeat_over_a_list():
+    """A run IS the same call over a list. Writing it out as three steps would
+    freeze the count of one afternoon into the procedure."""
+    draft = skill_scripts.derive(
+        [
+            [
+                ("workspace_delete", {"path": "a.md"}),
+                ("workspace_delete", {"path": "b.md"}),
+                ("workspace_delete", {"path": "c.md"}),
+            ]
+        ]
+    )
+    (step,) = draft["script"]["steps"]
+    assert step["for_each"] == "paths"
+    assert step["as"] == "path"
+    assert step["args"] == {"path": "{{ path }}"}
+    assert draft["inputs"]["properties"]["paths"] == {
+        "type": "array",
+        "items": {"type": "string"},
+    }
+
+
+def test_one_walk_cannot_tell_a_constant_from_a_variable_and_says_so():
+    draft = skill_scripts.derive([[("workspace_read_file", {"path": "notes.md"})]])
+    assert "one" in draft["note"].lower()
+    assert draft["script"]["steps"][0]["args"] == {"path": "notes.md"}
+
+
+def test_walks_that_did_different_things_use_the_newest_and_say_which():
+    draft = skill_scripts.derive(
+        [
+            [("workspace_read_file", {"path": "a.md"})],
+            [("workspace_list_files", {}), ("workspace_read_file", {"path": "a.md"})],
+        ]
+    )
+    assert [s["tool"] for s in draft["script"]["steps"]] == [
+        "workspace_list_files",
+        "workspace_read_file",
+    ]
+    assert "differ" in draft["note"].lower()
+
+
+def test_a_derived_draft_is_valid_by_construction():
+    """Whatever comes out of here must survive the validator, or the page would
+    offer a starting point that cannot be saved."""
+    draft = skill_scripts.derive(
+        [
+            [
+                ("workspace_list_files", {}),
+                ("workspace_read_file", {"path": "a.md"}),
+                ("workspace_read_file", {"path": "b.md"}),
+            ],
+            [
+                ("workspace_list_files", {}),
+                ("workspace_read_file", {"path": "c.md"}),
+                ("workspace_read_file", {"path": "d.md"}),
+            ],
+        ]
+    )
+    skill_scripts.validate(draft["script"], draft["inputs"])
+
+
+def test_no_walks_is_refused_rather_than_answered_with_an_empty_script():
+    with pytest.raises(skill_scripts.ScriptError):
+        skill_scripts.derive([])

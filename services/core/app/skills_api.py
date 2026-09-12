@@ -35,7 +35,7 @@ from typing import Any
 import asyncpg
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
 
-from app import db, identity, settings_store, skills
+from app import db, identity, settings_store, skill_scripts, skills
 from app.checks import skills as skills_check
 from app.identity import Person
 
@@ -74,6 +74,11 @@ def _row_json(skill: skills.Skill, *, file_present: bool, uses: dict) -> dict[st
         "created_via": skill.created_via,
         "step_names": list(skill.step_names),
         "flagged_reason": skill.flagged_reason,
+        # S18: a skill that RUNS. `scripted` is derived rather than stored so
+        # the list and the detail cannot disagree about what a script is.
+        "scripted": skill.script is not None,
+        "script": skill.script,
+        "inputs": skill.inputs,
         "file_present": file_present,
         "uses": uses,
         "created_at": skill.created_at.isoformat(),
@@ -109,6 +114,9 @@ async def list_skills(_person: Person = Depends(identity.require_person)) -> lis
             "created_via": None,
             "step_names": [],
             "flagged_reason": None,
+            "scripted": False,
+            "script": None,
+            "inputs": None,
             "file_present": True,
             "uses": None,
             "created_at": None,
@@ -210,6 +218,10 @@ async def update_skill(
         raise HTTPException(status_code=404, detail=f"no skill named {name!r}")
     status = body.get("status")
     try:
+        if "script" in body:
+            # Both or neither, and validated in the store: the page, a test and
+            # any later caller are refused by the same sentence.
+            await skills.set_script(pool, name, body.get("script"), body.get("inputs"))
         if any(key in body for key in ("title", "summary", "body")):
             await skills.update(
                 pool,
@@ -223,6 +235,26 @@ async def update_skill(
     except ValueError as exc:
         raise _bad(str(exc)) from exc
     return await read_skill(name, _person)
+
+
+@router.post("/skills/{name}/script/draft")
+async def draft_script(name: str, _person: Person = Depends(identity.require_person)) -> dict:
+    """Propose a script from the calls the skill's source turns actually made.
+
+    It SAVES NOTHING. The owner reads the draft, edits it and saves
+    deliberately — and the `note` says what the derivation could not know (one
+    walk cannot tell a constant from a variable), because a draft that quietly
+    guessed would be worse than one that admits it.
+    """
+    pool = await db.get_pool()
+    skill = await skills.get(pool, name)
+    if skill is None:
+        raise HTTPException(status_code=404, detail=f"no skill named {name!r}")
+    walks = await skills.walks_with_args(pool, skill.source_turn_ids)
+    try:
+        return skill_scripts.derive(walks)
+    except skill_scripts.ScriptError as exc:
+        raise _bad(str(exc)) from exc
 
 
 @router.post("/skills/{name}/trial")
