@@ -239,9 +239,31 @@ carried one card reading.
 Routing around a degraded card, configuring the ollama runtime, and the
 300 s gateway timeout. Unchanged from the spec.
 
+### Deployed, and what deploying immediately found
+
+Merged to `rebuild/v4` and deployed to the live stack on 2026-09-14.
+Migrations 028 and 029 applied; `GET /admin/vram` answers the real card.
+
+Free VRAM moves, which is the whole point: with ~6 GB held by something
+that is not ollama, `/admin/suggest` reported `free_gb: 17.7`, not the
+24.0 it would have reported forever before this slice.
+
+And in the same breath it reported `qwen3.8:27b: wont_fit` — on the card
+that runs it every day. The stored probe said 21.8 GB, which was a true
+WHOLE-CARD reading from 2026-08-29 and is about 2.6 GB too high in the new
+frame. Migration 008 adds `probes.frame`, stamps existing rows
+`whole_card`, defaults new ones to `model`, and the fit query reads only
+the current frame. The rows are kept — probes are a ledger and that
+measurement happened; what changes is which rows a DECISION may read.
+
+Worth writing down plainly: 3236 tests across three suites were green and
+the number was still wrong on the one machine that has history. A test
+suite cannot hold data written a fortnight ago in a frame that no longer
+exists.
+
 ### What is not done
 
-The DoD walk. Every part is built and tested (450 gateway, 888 web, the
-core suite), but nothing here has been walked against the live stack with a
-second model squeezing the card. That is the next thing, and it is the only
-thing that can say this works.
+The DoD walk's own steps. Nothing has been asked of HER in chat, and the
+contention has not been reproduced deliberately — that means loading a
+second large model to squeeze the card, which makes the owner's machine
+slow for a few minutes and is his call to schedule.
