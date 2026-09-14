@@ -268,3 +268,58 @@ async def test_ollama_unreachable_is_unknown_but_states_why(client, pool, monkey
     fit = _fit_for(resp.json(), "qwen3.8:27b")
     assert fit["verdict"] == "unknown"
     assert fit["reason"]
+
+
+async def test_a_probe_from_the_old_whole_card_frame_is_not_read_as_a_measurement(
+    client, pool, monkeypatch, tmp_path, mount_backend
+):
+    """Caught on the live stack minutes after deploying S22.
+
+    Before this slice a probe recorded the WHOLE-CARD nvidia-smi reading:
+    the desktop's ~2.6GB baseline plus the model. In the current frame
+    `needed_gb` is the model's own VRAM, so those rows read high — the 27B's
+    stored 21.8GB made it `wont_fit` on a 24GB card where it demonstrably
+    runs.
+
+    The row is kept (probes are a ledger, and it was true when taken); a fit
+    decision may not read it. The verdict falls back to the estimate and
+    says `estimated`, which is the honest state: nobody has measured this
+    model the way we now measure.
+    """
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(ps_models=[])
+    mount_backend("http://ollama.test", fake.app)
+    await backends.save_config(pool, {"kind": "ollama"})
+    await pool.execute(
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, frame) "
+        "VALUES ('qwen3.8:27b', 'ollama', true, 100, 22369, NULL, 'whole_card')"
+    )
+
+    fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3.8:27b")
+
+    assert fit["source"] == "estimated"
+    assert fit["needed_gb"] == 18.0
+    assert fit["verdict"] == "tight"
+
+
+async def test_a_new_probe_lands_in_the_current_frame_by_default(
+    client, pool, monkeypatch, tmp_path, mount_backend
+):
+    """The column defaults to 'model', so the probe route does not have to
+    remember to stamp it — and a probe written by anything that forgets is
+    still read correctly."""
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(ps_models=[])
+    mount_backend("http://ollama.test", fake.app)
+    await backends.save_config(pool, {"kind": "ollama"})
+    await pool.execute(
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
+        "VALUES ('qwen3.8:27b', 'ollama', true, 100, 17818, NULL)"
+    )
+
+    fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3.8:27b")
+
+    assert fit["source"] == "verified"
+    assert fit["needed_gb"] == 17.4

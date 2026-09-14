@@ -214,14 +214,28 @@ async def vram_route(request: Request) -> dict:
 
 
 async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
-    """The newest OK probe row per slug — a failed probe (ok=false) never
-    counts as a measurement, and an older successful one loses to a newer
-    one for the same model."""
+    """The newest OK probe row per slug, IN THE CURRENT FRAME.
+
+    A failed probe (ok=false) never counts as a measurement, and an older
+    successful one loses to a newer one for the same model.
+
+    `frame = 'model'` is the S22 filter and it is not a formality. Rows
+    written before this slice hold a WHOLE-CARD nvidia-smi reading — the
+    desktop baseline plus the model — and in the current frame they read
+    about 2.6 GB too high. The 27B's old 21.8 GB reading made it `wont_fit`
+    on a card where it demonstrably runs, caught on the live stack minutes
+    after deploying. The rows stay (they are a ledger, and they were true);
+    a fit decision just may not read them. A model with no reading in this
+    frame falls back to its download size or the curated estimate until it
+    is re-probed, which is the honest answer: nobody has measured it the way
+    we now measure.
+    """
     if not slugs:
         return {}
     rows = await pool.fetch(
         "SELECT DISTINCT ON (model) model, vram_mb, created_at FROM probes "
-        "WHERE model = ANY($1) AND ok = true AND vram_mb IS NOT NULL AND kind = 'ollama' "
+        "WHERE model = ANY($1) AND ok = true AND vram_mb IS NOT NULL "
+        "AND kind = 'ollama' AND frame = 'model' "
         "ORDER BY model, created_at DESC",
         slugs,
     )
