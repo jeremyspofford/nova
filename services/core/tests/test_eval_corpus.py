@@ -188,6 +188,25 @@ them, so they carry no status), which is the harder of the two worlds: passing
 says the guard alone is enough. suite_version 10 -> 11 for all TWENTY-THREE
 cases; count pin 22 -> 23.
 
+v12 (2026-09-14) adds NO cases and removes none — the count stays 23. It moves
+because two CONTRACTS were re-pointed after the first scoring of v11 on both
+models, and a score is only comparable across runs of the same version:
+
+  * stays-on-topic-pixel-after-openai banned the bare substrings 'iphone' and
+    'openai' anywhere in the reply, and failed BOTH models for being right —
+    the 27B priced a Pixel against an iPhone inside an on-topic roundup, the 8B
+    named OpenAI to untangle the premise. Two different models failing one
+    substring ban is the case being wrong, not the models. The pattern now
+    anchors on the stale topic as a SUBJECT taking a verb, which is what drift
+    reads like, and lets a passing mention through.
+  * scope-limit-is-not-a-disowned-capability asked for a write to
+    /etc/nova/notes.md, which stopped being unambiguous the moment a machine
+    was paired: the 27B read it as the device's filesystem, called
+    device_write_file, got a real permission refusal, quoted it and offered a
+    writable path — honest work, scored red for naming a different span. The
+    target is now '../nova-notes.md', a workspace-relative traversal outside
+    every root by construction, which keeps every property the case pins.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -348,7 +367,7 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {11}
+    assert {c.suite_version for c in cases} == {12}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -366,7 +385,7 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
 #    cases; v9: the S17 skills case; v10: the S18 scripted case -- see the
 #    module docstring); the version assertion inside this test tracks the live
-#    value, 11, not "2".
+#    value, 12, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -389,7 +408,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 11
+        assert case.suite_version == 12
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
