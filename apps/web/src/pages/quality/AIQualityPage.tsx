@@ -8,12 +8,14 @@ import {
   getActiveEvalRun as apiGetActiveEvalRun,
   getEvalRun as apiGetEvalRun,
   getEvalRuns as apiGetEvalRuns,
+  getRepeatedRuns as apiGetRepeatedRuns,
   getEvalSuites as apiGetEvalSuites,
   getInstalledModels as apiGetInstalledModels,
   getSuggestion as apiGetSuggestion,
   startEvalRun as apiStartEvalRun,
   type EvalCaseResult,
   type EvalRunRecord,
+  type EvalRepeatedRuns,
   type EvalRunResult,
   type EvalScoreSummary,
   type EvalSuite,
@@ -21,9 +23,12 @@ import {
 } from '../../lib/api'
 import { mergeModels } from '../settings/modelsFormat'
 import {
+  caseRunsLabel,
+  everyRunLine,
   passRatePercent,
   predicateLabel,
   scoreLine,
+  unstableCases,
   VERDICT_COLOR,
   VERDICT_LABEL,
   verdictOf,
@@ -67,6 +72,7 @@ import {
 export interface QualityApi {
   getEvalSuites: typeof apiGetEvalSuites
   getEvalRuns: typeof apiGetEvalRuns
+  getRepeatedRuns: typeof apiGetRepeatedRuns
   startEvalRun: typeof apiStartEvalRun
   getActiveEvalRun: typeof apiGetActiveEvalRun
   getEvalRun: typeof apiGetEvalRun
@@ -77,6 +83,7 @@ export interface QualityApi {
 const DEFAULT_API: QualityApi = {
   getEvalSuites: apiGetEvalSuites,
   getEvalRuns: apiGetEvalRuns,
+  getRepeatedRuns: apiGetRepeatedRuns,
   startEvalRun: apiStartEvalRun,
   getActiveEvalRun: apiGetActiveEvalRun,
   getEvalRun: apiGetEvalRun,
@@ -125,6 +132,11 @@ export function AIQualityPage({
   // Prior stored results for the current (suite, model) — the latest COMPLETE
   // run — shown when nothing is running or just finished.
   const [prior, setPrior] = useState<EvalRunResult | null>(null)
+  // What the last few COMPLETE runs of this exact pair agreed on (2026-09-14).
+  // A single run's rate is a sample of one — the same model disagreed with
+  // itself about a case an hour apart — so the page shows what passed EVERY
+  // run beside it, and names the cases that did not hold still.
+  const [repeated, setRepeated] = useState<EvalRepeatedRuns | null>(null)
   const [priorLoading, setPriorLoading] = useState(false)
   const [priorError, setPriorError] = useState<string | null>(null)
 
@@ -266,6 +278,17 @@ export function AIQualityPage({
     let live = true
     setPriorLoading(true)
     setPriorError(null)
+    setRepeated(null)
+    api
+      .getRepeatedRuns(suite, model)
+      // Additive: a page that cannot read the repeats still shows the stored
+      // run. It must never be the reason the score disappears.
+      .then(result => {
+        if (live) setRepeated(result)
+      })
+      .catch(() => {
+        if (live) setRepeated(null)
+      })
     api
       .getEvalRuns(suite, model)
       .then(result => {
@@ -396,6 +419,7 @@ export function AIQualityPage({
         finished={finished}
         caseCount={caseCount}
         prior={prior}
+        repeated={repeated}
         priorLoading={priorLoading}
         priorError={priorError}
         suite={suite}
@@ -406,6 +430,7 @@ export function AIQualityPage({
 }
 
 function Results({
+  repeated,
   running,
   record,
   pollError,
@@ -423,6 +448,7 @@ function Results({
   finished: EvalRunRecord | null
   caseCount: number | null
   prior: EvalRunResult | null
+  repeated: EvalRepeatedRuns | null
   priorLoading: boolean
   priorError: string | null
   suite: string
@@ -515,6 +541,7 @@ function Results({
           summary={prior.summary}
           caption={`Latest stored results · ${prior.model} · ${prior.suite} v${prior.suite_version}`}
         />
+        <AcrossRuns repeated={repeated} />
         <CaseTable cases={prior.cases} />
       </div>
     )
@@ -635,5 +662,41 @@ function CaseRow({ c }: { c: EvalCaseResult }) {
         )}
       </td>
     </tr>
+  )
+}
+
+
+/** What the last few runs AGREED on, beside the latest one's number.
+ *
+ * The score above is one run. On 2026-09-14 two runs of the same model on
+ * nearly the same corpus disagreed about a case neither version had touched,
+ * and reading the newer number would have been reading the luckier one. This
+ * block reports the floor — what passed EVERY run — and names the cases that
+ * did not hold still, because a case whose result moves is not yet a
+ * measurement of anything.
+ *
+ * Silent with fewer than two runs: one run says nothing about stability, and
+ * a block claiming otherwise would be the failure it exists to prevent.
+ */
+function AcrossRuns({ repeated }: { repeated: EvalRepeatedRuns | null }) {
+  if (repeated === null || repeated.runs_read < 2) return null
+  const unstable = unstableCases(repeated)
+  return (
+    <div
+      data-testid="eval-across-runs"
+      className="mb-4 rounded-lg border border-border px-5 py-3 glass-card dark:border-white/[0.08]"
+    >
+      <p className="text-body text-content-primary">{everyRunLine(repeated)}</p>
+      {unstable.length === 0 ? (
+        <p className="text-caption text-content-tertiary">
+          Every case agreed with itself across all {repeated.runs_read} runs.
+        </p>
+      ) : (
+        <p className="text-caption text-content-tertiary" data-testid="eval-unstable">
+          Did not hold still:{' '}
+          {unstable.map(c => `${c.case_id} (${caseRunsLabel(c)})`).join(', ')}
+        </p>
+      )}
+    </div>
   )
 }

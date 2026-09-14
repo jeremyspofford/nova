@@ -1,11 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import type { EvalCaseResult, EvalScoreSummary } from '../../lib/api'
-import {
-  passRatePercent,
-  predicateLabel,
-  scoreLine,
-  verdictOf,
-} from './qualityFormat'
+import type { EvalCaseResult, EvalRepeatedRuns, EvalScoreSummary } from '../../lib/api'
+import { caseRunsLabel, everyRunLine, passRatePercent, predicateLabel, scoreLine, unstableCases, verdictOf } from './qualityFormat'
 
 function caseResult(overrides: Partial<EvalCaseResult> = {}): EvalCaseResult {
   return {
@@ -65,5 +60,43 @@ describe('predicateLabel', () => {
     expect(predicateLabel({ predicate: 'legacy_predicate', passed: true })).toBe(
       'legacy_predicate',
     )
+  })
+})
+
+describe('repeated runs are reported at the floor', () => {
+  const repeated = (over: Partial<EvalRepeatedRuns> = {}): EvalRepeatedRuns => ({
+    suite: 'agent_quality',
+    suite_version: 13,
+    model: 'qwen3.8:27b',
+    runs_read: 3,
+    runs: [],
+    cases: [],
+    every_run: { passed: 21 },
+    floor: { passed: 21 },
+    best: { passed: 22 },
+    per_run: [],
+    ...over,
+  })
+
+  it('names what passed every time, and the best run beside it', () => {
+    expect(everyRunLine(repeated())).toBe(
+      '21 passed in every one of 3 runs · best single run 22',
+    )
+  })
+
+  it('refuses to talk about stability from one run', () => {
+    const line = everyRunLine(repeated({ runs_read: 1, every_run: { passed: 22 } }))
+    expect(line).toContain('one run')
+    expect(line).toContain('nothing about stability')
+  })
+
+  it('lists only the cases that disagreed with themselves', () => {
+    const cases = [
+      { case_id: 'steady', passed: 3, of: 3, graded: 3, stable: true, outcomes: [] },
+      { case_id: 'flaky', passed: 2, of: 3, graded: 3, stable: false, outcomes: [] },
+      { case_id: 'lonely', passed: 1, of: 1, graded: 1, stable: null, outcomes: [] },
+    ] as EvalRepeatedRuns['cases']
+    expect(unstableCases(repeated({ cases })).map(c => c.case_id)).toEqual(['flaky'])
+    expect(caseRunsLabel(cases[1])).toBe('2/3')
   })
 })

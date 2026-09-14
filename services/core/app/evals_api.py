@@ -274,6 +274,93 @@ async def latest_complete_run(
     }
 
 
+# Declared before /runs/{run_id} for the same reason "active" is: "repeated" is
+# a word, not an id.
+@router.get("/runs/repeated")
+async def repeated_runs(
+    suite: str,
+    model: str,
+    last: int = 3,
+    _person: Person = Depends(identity.require_person),
+) -> dict:
+    """How this model did across its last few COMPLETE runs of this suite, per
+    case, reported at the floor.
+
+    A single run's pass rate is a sample of one. On 2026-09-14 the same model
+    disagreed with itself about one case an hour apart, and the difference
+    between "91%" and "95%" that afternoon was mostly which run you read. So
+    this answers three things a single run cannot:
+
+      * `cases[].passed of N` — how many of the runs each case passed. A case
+        that is sometimes-green is the thing worth knowing and the thing an
+        average hides.
+      * `stable` — True when every run agreed, False when they did not, and
+        None when there is only ONE run to read, because a lone run says
+        nothing about stability and calling it stable would be the lie.
+      * `every_run.passed` — the headline: cases that passed in EVERY run.
+        The number that does not flatter. `floor` and `best` bracket the
+        single-run rates beside it.
+
+    Only `done` runs of exactly this suite_version are read; another version is
+    another measurement.
+    """
+    pool = await db.get_pool()
+    suite_cases = _load_suite_or_404(suite)
+    suite_version = suite_cases[0].suite_version
+    limit = max(1, min(last, 20))
+
+    runs = await runner.recent_complete_suite_runs(pool, suite, suite_version, model, limit)
+    per_case: dict[str, list[dict]] = {}
+    summaries: list[dict] = []
+    for run in runs:
+        rows = await runner.runs_in(pool, run["id"])
+        summaries.append(runner.summarize([(r["passed"], r["ungradeable"]) for r in rows]))
+        for row in rows:
+            per_case.setdefault(row["case_id"], []).append(
+                {
+                    "passed": row["passed"],
+                    "ungradeable": row["ungradeable"],
+                    "run_id": str(run["id"]),
+                }
+            )
+
+    cases = []
+    for case_id in sorted(per_case):
+        outcomes = per_case[case_id]
+        graded = [o for o in outcomes if not o["ungradeable"]]
+        passed = sum(1 for o in graded if o["passed"])
+        cases.append(
+            {
+                "case_id": case_id,
+                "passed": passed,
+                "of": len(outcomes),
+                "graded": len(graded),
+                # None with one run: a lone run cannot say whether a case is
+                # stable, and claiming it can is the failure this route exists
+                # to stop.
+                "stable": None if len(outcomes) < 2 else passed == len(outcomes),
+                "outcomes": [
+                    "ungradeable" if o["ungradeable"] else ("pass" if o["passed"] else "fail")
+                    for o in outcomes
+                ],
+            }
+        )
+
+    rates = [s["passed"] for s in summaries] or [0]
+    return {
+        "suite": suite,
+        "suite_version": suite_version,
+        "model": model,
+        "runs_read": len(runs),
+        "runs": [_suite_run(run) for run in runs],
+        "cases": cases,
+        "every_run": {"passed": sum(1 for c in cases if c["passed"] == c["of"] and c["of"])},
+        "floor": {"passed": min(rates)},
+        "best": {"passed": max(rates)},
+        "per_run": summaries,
+    }
+
+
 # Declared before /runs/{run_id}: "active" is a word, not an id, and must
 # never fall through to the id route as a 422.
 @router.get("/runs/active")

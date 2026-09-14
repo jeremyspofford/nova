@@ -1422,6 +1422,41 @@ export async function startEvalRun(suite: string, model: string): Promise<EvalRu
   return apiSend<EvalRunStarted>('/api/v1/evals/run', 'POST', { suite, model })
 }
 
+/** GET /api/v1/evals/runs/repeated — how a model did across its last few
+ * COMPLETE runs of one suite version (2026-09-14).
+ *
+ * A single run's pass rate is a sample of one: the same model disagreed with
+ * itself about one case an hour apart, and the difference between two
+ * headline numbers that afternoon was mostly which run you read. `stable` is
+ * null with only one run, because a lone run cannot say. */
+export interface EvalRepeatedCase {
+  case_id: string
+  passed: number
+  of: number
+  graded: number
+  stable: boolean | null
+  outcomes: ('pass' | 'fail' | 'ungradeable')[]
+}
+
+export interface EvalRepeatedRuns {
+  suite: string
+  suite_version: number
+  model: string
+  runs_read: number
+  runs: EvalSuiteRun[]
+  cases: EvalRepeatedCase[]
+  /** Cases that passed in EVERY run — the number that does not flatter. */
+  every_run: { passed: number }
+  floor: { passed: number }
+  best: { passed: number }
+  per_run: EvalScoreSummary[]
+}
+
+export const getRepeatedRuns = (suite: string, model: string, last = 3) => {
+  const params = new URLSearchParams({ suite, model, last: String(last) })
+  return apiGet<EvalRepeatedRuns>(`/api/v1/evals/runs/repeated?${params.toString()}`)
+}
+
 /** GET /api/v1/evals/runs/active — the running suite run, or null. Read on
  * mount so navigating away and back re-attaches to the same run. */
 export async function getActiveEvalRun(): Promise<EvalSuiteRun | null> {

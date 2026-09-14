@@ -1,4 +1,10 @@
-import type { EvalCaseResult, EvalPredicateResult, EvalScoreSummary } from '../../lib/api'
+import type {
+  EvalCaseResult,
+  EvalPredicateResult,
+  EvalRepeatedCase,
+  EvalRepeatedRuns,
+  EvalScoreSummary,
+} from '../../lib/api'
 
 /**
  * The pure formatting a scored case needs, kept out of the page so the
@@ -52,4 +58,30 @@ export function passRatePercent(summary: EvalScoreSummary): number | null {
  * none (a historical run at suite_version <= 4) shows the name alone. */
 export function predicateLabel(p: EvalPredicateResult): string {
   return p.arg ? `${p.predicate}(${p.arg})` : p.predicate
+}
+
+/**
+ * The headline across repeated runs: what passed EVERY time, with the single
+ * best run beside it so the gap is visible rather than averaged away.
+ *
+ * Reported at the floor on purpose (2026-09-14). One run of this suite scored
+ * 22/23 and the run an hour before it scored 21/23 on nearly the same corpus,
+ * disagreeing about a case neither version had touched. Quoting the newer
+ * number would have been quoting the luckier one.
+ */
+export function everyRunLine(r: EvalRepeatedRuns): string {
+  const runs = `${r.runs_read} run${r.runs_read === 1 ? '' : 's'}`
+  if (r.runs_read < 2) return `${r.every_run.passed} passed · one run, so nothing about stability`
+  return `${r.every_run.passed} passed in every one of ${runs} · best single run ${r.best.passed}`
+}
+
+/** "3/3" — how many of the repeated runs this case passed. */
+export function caseRunsLabel(c: EvalRepeatedCase): string {
+  return `${c.passed}/${c.of}`
+}
+
+/** The cases that did not agree with themselves across runs — the ones whose
+ * result is not yet a measurement. */
+export function unstableCases(r: EvalRepeatedRuns): EvalRepeatedCase[] {
+  return r.cases.filter(c => c.stable === false)
 }

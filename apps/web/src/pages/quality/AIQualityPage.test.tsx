@@ -4,6 +4,7 @@ import { AIQualityPage, type QualityApi } from './AIQualityPage'
 import {
   ApiError,
   type EvalCaseResult,
+  type EvalRepeatedRuns,
   type EvalRunRecord,
   type EvalRunResult,
   type EvalRunStarted,
@@ -94,9 +95,28 @@ const NO_SUGGESTION: Suggestion = {
 /** A full fake API, each field overridable per test. Defaults: one suite, one
  * installed model, no active run, no stored results (so the page settles on
  * an empty state), and a record that stays 'running' with nothing landed. */
+function repeated(over: Partial<EvalRepeatedRuns> = {}): EvalRepeatedRuns {
+  return {
+    suite: 'agent_quality',
+    suite_version: 13,
+    model: 'qwen3:8b',
+    runs_read: 1,
+    runs: [],
+    cases: [],
+    every_run: { passed: 0 },
+    floor: { passed: 0 },
+    best: { passed: 0 },
+    per_run: [],
+    ...over,
+  }
+}
+
 function fakeApi(overrides: Partial<QualityApi> = {}): QualityApi {
   return {
     getEvalSuites: vi.fn(async () => [suite()]),
+    // One run by default: the across-runs block stays silent, because one run
+    // says nothing about stability.
+    getRepeatedRuns: vi.fn(async () => repeated()),
     getInstalledModels: vi.fn(async () => ['qwen3:8b']),
     getSuggestion: vi.fn(async () => NO_SUGGESTION),
     getEvalRuns: vi.fn(async () => stored([], EMPTY_SUMMARY)),
@@ -371,5 +391,61 @@ describe('AIQualityPage', () => {
     )
     expect(screen.queryByTestId('eval-score')).toBeNull()
     expect(screen.queryByTestId('eval-running')).toBeNull()
+  })
+})
+
+/** A stored run with one passing case, so the score header renders. */
+function scoredRun(): EvalRunResult {
+  return stored([caseResult({ case_id: 'steady', passed: true })], {
+    total: 1,
+    gradeable: 1,
+    ungradeable: 0,
+    passed: 1,
+    pass_rate: 1,
+  })
+}
+
+describe('AIQualityPage — what the last few runs agreed on', () => {
+  it('stays silent with one run, because one run says nothing about stability', async () => {
+    render(<AIQualityPage api={fakeApi({ getEvalRuns: vi.fn(async () => scoredRun()) })} />)
+    await screen.findByTestId('eval-score')
+    expect(screen.queryByTestId('eval-across-runs')).toBeNull()
+  })
+
+  it('reports the floor and names the cases that did not hold still', async () => {
+    const api = fakeApi({
+      getEvalRuns: vi.fn(async () => scoredRun()),
+      getRepeatedRuns: vi.fn(async () =>
+        repeated({
+          runs_read: 3,
+          every_run: { passed: 21 },
+          best: { passed: 22 },
+          floor: { passed: 21 },
+          cases: [
+            { case_id: 'steady', passed: 3, of: 3, graded: 3, stable: true, outcomes: [] },
+            { case_id: 'wobbly', passed: 2, of: 3, graded: 3, stable: false, outcomes: [] },
+          ],
+        }),
+      ),
+    })
+    render(<AIQualityPage api={api} />)
+
+    const block = await screen.findByTestId('eval-across-runs')
+    expect(block.textContent).toContain('21 passed in every one of 3 runs')
+    expect(block.textContent).toContain('best single run 22')
+    expect(screen.getByTestId('eval-unstable').textContent).toContain('wobbly (2/3)')
+    expect(screen.getByTestId('eval-unstable').textContent).not.toContain('steady')
+  })
+
+  it('a repeats read that fails never costs the page its score', async () => {
+    const api = fakeApi({
+      getEvalRuns: vi.fn(async () => scoredRun()),
+      getRepeatedRuns: vi.fn(async () => {
+        throw new Error('core is down')
+      }),
+    })
+    render(<AIQualityPage api={api} />)
+    await screen.findByTestId('eval-score')
+    expect(screen.queryByTestId('eval-across-runs')).toBeNull()
   })
 })

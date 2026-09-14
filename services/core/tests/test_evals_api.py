@@ -18,6 +18,7 @@ underneath is the same one test_eval_runner.py already proves against a real
 trace; here the concern is the ROUTE and the RECORD (auth, 202-then-poll, the
 409, the sweep, the latest-complete read), not the scorer.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -146,9 +147,7 @@ async def test_run_answers_202_before_any_case_lands_and_the_job_finishes_detach
 
     # Answered before a single case landed: the job is mid-turn, gated.
     assert await pool.fetchval("SELECT count(*) FROM eval_runs") == 0
-    row = await pool.fetchrow(
-        "SELECT status, ended_at FROM eval_suite_runs WHERE id = $1", run_id
-    )
+    row = await pool.fetchrow("SELECT status, ended_at FROM eval_suite_runs WHERE id = $1", run_id)
     assert row["status"] == "running" and row["ended_at"] is None
 
     # The page's attach point sees it, and a partial is never a score.
@@ -285,9 +284,7 @@ async def test_a_client_that_hangs_up_never_stops_the_run(
         ],
     )
     hold = asyncio.Event()
-    gateway = ScriptedGateway(
-        rounds=((text("one"),), (text("two"),)), hold=hold, hold_before=0
-    )
+    gateway = ScriptedGateway(rounds=((text("one"),), (text("two"),)), hold=hold, hold_before=0)
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     body = json.dumps({"suite": "probe", "model": MODEL}).encode()
@@ -314,20 +311,16 @@ async def test_a_client_that_hangs_up_never_stops_the_run(
     # ...and the run is still alive: it reaches the gateway AFTER the request
     # is over, stalls there (gated), and has landed nothing yet.
     await _until(lambda: gateway.calls >= 1, what="the first case to reach the gateway")
-    assert await pool.fetchval(
-        "SELECT status FROM eval_suite_runs WHERE id = $1", run_id
-    ) == "running"
+    assert (
+        await pool.fetchval("SELECT status FROM eval_suite_runs WHERE id = $1", run_id) == "running"
+    )
     assert await pool.fetchval("SELECT count(*) FROM eval_runs") == 0
 
     hold.set()
     await _drain()
 
-    assert await pool.fetchval(
-        "SELECT status FROM eval_suite_runs WHERE id = $1", run_id
-    ) == "done"
-    assert await pool.fetchval(
-        "SELECT count(*) FROM eval_runs WHERE run_id = $1", run_id
-    ) == 2
+    assert await pool.fetchval("SELECT status FROM eval_suite_runs WHERE id = $1", run_id) == "done"
+    assert await pool.fetchval("SELECT count(*) FROM eval_runs WHERE run_id = $1", run_id) == 2
     assert await _scratch_count(pool) == 0  # every case's scratch person torn down
 
 
@@ -358,18 +351,17 @@ async def test_a_second_run_while_one_is_running_is_409_naming_the_active_run(
     assert "already running" in body["error"] and run_id in body["error"]
 
     assert await pool.fetchval("SELECT count(*) FROM eval_suite_runs") == 1
-    assert await pool.fetchval(
-        "SELECT count(*) FROM eval_suite_runs WHERE status = 'running'"
-    ) == 1
+    assert await pool.fetchval("SELECT count(*) FROM eval_suite_runs WHERE status = 'running'") == 1
     # The first suite reaches the model (and stalls there); the second never does.
     await _until(lambda: gateway.calls >= 1, what="the first run to reach the gateway")
     assert gateway.calls == 1
 
     hold.set()
     await _drain()
-    assert await pool.fetchval(
-        "SELECT status FROM eval_suite_runs WHERE id = $1", uuid.UUID(run_id)
-    ) == "done"
+    assert (
+        await pool.fetchval("SELECT status FROM eval_suite_runs WHERE id = $1", uuid.UUID(run_id))
+        == "done"
+    )
 
 
 async def test_run_sweeps_orphaned_scratch_people_before_running(
@@ -395,9 +387,12 @@ async def test_run_sweeps_orphaned_scratch_people_before_running(
     assert resp.status_code == 202, resp.text
     await _drain()
 
-    assert await pool.fetchval(
-        "SELECT count(*) FROM people WHERE id = ANY($1::uuid[])", [legacy, orphan]
-    ) == 0
+    assert (
+        await pool.fetchval(
+            "SELECT count(*) FROM people WHERE id = ANY($1::uuid[])", [legacy, orphan]
+        )
+        == 0
+    )
     assert await pool.fetchval("SELECT count(*) FROM people WHERE id = $1", owner_id) == 1
     assert await _scratch_count(pool) == 0
 
@@ -441,9 +436,12 @@ async def test_startup_marks_a_stale_running_row_interrupted_and_a_new_run_then_
             new_id = started.json()["run_id"]
             await _drain()
 
-            assert await pool.fetchval(
-                "SELECT status FROM eval_suite_runs WHERE id = $1", uuid.UUID(new_id)
-            ) == "done"
+            assert (
+                await pool.fetchval(
+                    "SELECT status FROM eval_suite_runs WHERE id = $1", uuid.UUID(new_id)
+                )
+                == "done"
+            )
             stored = (
                 await owner_client.get(f"/api/v1/evals/runs?suite=probe&model={MODEL}")
             ).json()
@@ -615,6 +613,104 @@ async def test_runs_with_no_complete_run_is_an_empty_state_not_a_zero(
 
 
 async def test_runs_requires_auth(client):
-    assert (
-        await client.get(f"/api/v1/evals/runs?suite=probe&model={MODEL}")
-    ).status_code == 401
+    assert (await client.get(f"/api/v1/evals/runs?suite=probe&model={MODEL}")).status_code == 401
+
+
+# ── repeated runs: the floor, not the last number (2026-09-14) ─────────────
+
+
+async def _finished_run(pool, model, outcomes, *, suite="agent_quality", version=13):
+    """A completed suite run with one eval_runs row per (case_id, passed)."""
+    run_id = await pool.fetchval(
+        "INSERT INTO eval_suite_runs (suite, suite_version, model, case_count, status, "
+        "ended_at) VALUES ($1, $2, $3, $4, 'done', now()) RETURNING id",
+        suite,
+        version,
+        model,
+        len(outcomes),
+    )
+    for case_id, passed in outcomes:
+        await pool.execute(
+            "INSERT INTO eval_runs (run_id, case_id, suite, suite_version, model, passed, "
+            "ungradeable) VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            run_id,
+            case_id,
+            suite,
+            version,
+            model,
+            passed,
+            passed is None,
+        )
+    return run_id
+
+
+async def test_a_case_that_passed_only_sometimes_is_reported_as_unstable(owner_client, pool):
+    """The lesson of 2026-09-14: the same model on nearly the same corpus
+    disagreed with itself about one case an hour apart. A single run's number
+    is not a measurement, so the repeated read says how many runs each case
+    passed in and never averages that away."""
+    for outcomes in (
+        [("steady", True), ("flaky", True)],
+        [("steady", True), ("flaky", False)],
+        [("steady", True), ("flaky", True)],
+    ):
+        await _finished_run(pool, "qwen3:8b", outcomes)
+
+    resp = await owner_client.get(
+        "/api/v1/evals/runs/repeated?suite=agent_quality&model=qwen3:8b&last=3"
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    cases = {c["case_id"]: c for c in body["cases"]}
+    assert cases["steady"]["passed"] == 3 and cases["steady"]["of"] == 3
+    assert cases["flaky"]["passed"] == 2 and cases["flaky"]["of"] == 3
+    assert cases["steady"]["stable"] is True
+    assert cases["flaky"]["stable"] is False
+    # The headline counts only what passed in EVERY run — the number that does
+    # not flatter.
+    assert body["every_run"]["passed"] == 1
+    assert body["runs_read"] == 3
+
+
+async def test_the_floor_is_the_worst_run_not_the_newest(owner_client, pool):
+    await _finished_run(pool, "qwen3:8b", [("a", True), ("b", True)])
+    await _finished_run(pool, "qwen3:8b", [("a", True), ("b", False)])
+    await _finished_run(pool, "qwen3:8b", [("a", True), ("b", True)])
+
+    body = (
+        await owner_client.get(
+            "/api/v1/evals/runs/repeated?suite=agent_quality&model=qwen3:8b&last=3"
+        )
+    ).json()
+    # Newest run scored 2/2; the floor is the 1/2 in the middle.
+    assert body["floor"]["passed"] == 1
+    assert body["best"]["passed"] == 2
+
+
+async def test_one_run_is_reported_as_one_run(owner_client, pool):
+    """No pretending. With a single run there is no stability to report, and
+    the answer says so rather than calling everything stable."""
+    await _finished_run(pool, "qwen3:8b", [("a", True)])
+    body = (
+        await owner_client.get(
+            "/api/v1/evals/runs/repeated?suite=agent_quality&model=qwen3:8b&last=3"
+        )
+    ).json()
+    assert body["runs_read"] == 1
+    assert body["cases"][0]["stable"] is None
+
+
+async def test_runs_of_another_version_are_never_blended_in(owner_client, pool):
+    """A score is only comparable inside one suite_version — the whole reason
+    the column exists."""
+    await _finished_run(pool, "qwen3:8b", [("a", True)], version=13)
+    await _finished_run(pool, "qwen3:8b", [("a", False)], version=12)
+
+    body = (
+        await owner_client.get(
+            "/api/v1/evals/runs/repeated?suite=agent_quality&model=qwen3:8b&last=3"
+        )
+    ).json()
+    assert body["runs_read"] == 1
+    assert body["suite_version"] == 13

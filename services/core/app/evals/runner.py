@@ -1272,6 +1272,35 @@ async def latest_complete_suite_run(
     return dict(row) if row else None
 
 
+async def recent_complete_suite_runs(
+    pool: asyncpg.Pool, suite: str, suite_version: int, model: str, limit: int
+) -> list[dict]:
+    """The newest `limit` COMPLETE runs for exactly this (suite, suite_version,
+    model), newest first (2026-09-14).
+
+    Why more than one: on 2026-09-14 the same model, on corpora differing in
+    two unrelated contracts, disagreed with itself about `searches-for-latest-
+    pixel` an hour apart — a pass and then a fail. A pass rate read off ONE run
+    is a sample of one dressed as a measurement ([[one-sample-is-not-a-
+    measurement]]), and two such numbers compared against each other is worse.
+
+    Same rule as the single-run query about what counts: only `done`, and only
+    this exact suite_version — another version is another measurement, which is
+    the entire reason the column exists.
+    """
+    rows = await pool.fetch(
+        f"SELECT {_SUITE_RUN_COLUMNS} FROM eval_suite_runs "
+        "WHERE suite = $1 AND suite_version = $2 AND model = $3 AND status = $4 "
+        "ORDER BY started_at DESC, id DESC LIMIT $5",
+        suite,
+        suite_version,
+        model,
+        SUITE_RUN_DONE,
+        limit,
+    )
+    return [dict(row) for row in rows]
+
+
 async def latest_complete_suite_runs(
     pool: asyncpg.Pool, suite: str, suite_version: int
 ) -> list[dict]:
