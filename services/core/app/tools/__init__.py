@@ -38,6 +38,7 @@ from pathlib import Path
 from app.tools import (
     agents,
     devices,
+    inference,
     memory_tools,
     models,
     route,
@@ -85,6 +86,11 @@ REGISTRY: dict[str, Tool] = {
         *web_search.TOOLS,
         *devices.TOOLS,
         *models.TOOLS,
+        # S22: one read of the GPU — free VRAM, what is resident, and this
+        # model's throughput against its own history. She could not see a
+        # contended card on 2026-09-12 and could not tell the owner what to
+        # close; this is that gap, not a demo of it.
+        *inference.TOOLS,
         *timers.TOOLS,
         *spend.TOOLS,
         *route.TOOLS,

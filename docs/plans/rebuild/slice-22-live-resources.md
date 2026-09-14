@@ -179,3 +179,69 @@ The failure can be reproduced deliberately, which is the point of this slice:
 5. Start a suite run against a model that cannot answer; it ends after three
    ungradeables with the reason, not after twenty-three.
 6. Release the card and confirm the notice clears rather than standing.
+
+---
+
+## As built (2026-09-14)
+
+Five parts, as specified. Four things moved during implementation, each
+because building it made the spec's version untrue.
+
+### The frame had to change, and that forced two more edits
+
+The spec said "read free VRAM live" and stopped there. It could not stop
+there. Ruling S2f-R3 had defined `needed_gb` as the WHOLE-CARD figure — the
+number nvidia-smi's `used` counter shows while the model serves, desktop
+baseline included — and that frame is exactly what forced `free_gb` to stay
+the card's full capacity: subtracting the baseline from free too would have
+counted it twice. "Free equals total, always" was a correct consequence of
+a coherent frame, and a catastrophic property in practice.
+
+So `fit.py`'s frame is rewritten and stated once: every number is the
+MODEL'S own VRAM, and the baseline lives on the free side only, where the
+driver has already subtracted it. Two consequences:
+
+- **The probe records a different number.** It now reads ollama's own
+  `/api/ps` `size_vram` for the model that just answered instead of an
+  undirected nvidia-smi reading. That is not tidiness: on the 12th an
+  undirected reading would have recorded 7 GB of the game's texture memory
+  as the model's own footprint and stored it badged `verified`.
+- **`curated_models.json`'s 27B estimate goes 22 → 18.** Both numbers
+  describe the same 2026-08-29 measurement; they differ by the baseline,
+  which moved sides. Left at 22 it would have read `wont_fit` on a card
+  where the model demonstrably runs.
+
+### Prompt processing is separated rather than disclaimed
+
+The spec conceded a limit: "a turn slowed only by a huge prompt is not
+visible to this check." Splitting the round at the first content delta
+costs one variable and removes the limit instead — `ttft_ms` is prompt
+processing, `generation_ms` is generation, and `tok_per_s` divides by the
+second. A turn with an enormous prompt no longer reads as a degraded card.
+
+### `cancelled` is its own status
+
+The spec said the cancel route "marks the row cancelled" without saying
+whether that was a new state. It is: reusing `interrupted` would have made
+"the process died under it" and "somebody pressed Stop" the same fact, and
+a reader of a half-finished run should not have to guess which happened.
+
+### `needed_gb` gained a middle source, and one shared map
+
+The spec's "prefer the catalogue's own `facts.size_bytes`" would have made
+`/admin/suggest` and the catalogue disagree about the same model, because
+only one of them had the bytes. `_fit_context` now carries ONE size map
+(ollama's `/api/tags`, cached) that both read — the same reason it already
+carried one card reading.
+
+### Out of scope, still out
+
+Routing around a degraded card, configuring the ollama runtime, and the
+300 s gateway timeout. Unchanged from the spec.
+
+### What is not done
+
+The DoD walk. Every part is built and tested (450 gateway, 888 web, the
+core suite), but nothing here has been walked against the live stack with a
+second model squeezing the card. That is the next thing, and it is the only
+thing that can say this works.

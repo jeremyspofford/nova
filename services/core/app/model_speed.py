@@ -35,7 +35,6 @@ that is genuinely contended, not a single bad round.
 from __future__ import annotations
 
 import statistics
-import uuid
 from dataclasses import dataclass
 
 import asyncpg
@@ -160,15 +159,3 @@ async def speeds(pool: asyncpg.Pool, model: str | None = None) -> dict[str, Spee
             baseline_rounds=len(baseline_rates),
         )
     return out
-
-
-async def turn_rate(pool: asyncpg.Pool, turn_id: uuid.UUID) -> float | None:
-    """The median rate across one turn's own rounds — what she answers with
-    when asked how this turn went, rather than a figure about the day."""
-    rows = await pool.fetch(
-        "SELECT (meta->>'tok_per_s')::float8 AS rate FROM turn_spans "
-        "WHERE turn_id = $1 AND kind = 'llm_call' AND meta ? 'tok_per_s'",
-        turn_id,
-    )
-    rates = [row["rate"] for row in rows if row["rate"]]
-    return round(statistics.median(rates), 2) if rates else None

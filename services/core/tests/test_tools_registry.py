@@ -163,6 +163,13 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # S18 (2026-09-12): running a scripted one. THIRTY-FOUR -> THIRTY-FIVE.
         # NOT reads_only — whatever its steps do, it does.
         "run_skill",
+        # S22 (2026-09-14): her own look at the GPU — free VRAM, what is
+        # resident, and this model's throughput against its own history on
+        # this machine. THIRTY-FIVE -> THIRTY-SIX. On 2026-09-12 she could
+        # not see that a video game was holding the card, could not say why
+        # her turn had failed beyond quoting the timeout, and could not tell
+        # the owner what to close.
+        "inference_health",
     }
 
 
@@ -514,6 +521,11 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # S17: reading a written-down procedure changes nothing, and the
         # roster that names them is derived from the table, not from here.
         "load_skill",
+        # S22: one read of nvidia-smi and some spans. It changes nothing on
+        # the machine, which is also what makes it safe for the backend to
+        # run unasked when a distilled note needs the present rather than a
+        # remembered number.
+        "inference_health",
     }
 
 

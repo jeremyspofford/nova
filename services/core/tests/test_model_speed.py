@@ -188,24 +188,3 @@ class TestSpeeds:
             "baseline_rounds": 0,
             "ratio": None,
         }
-
-
-class TestTurnRate:
-    async def test_one_turns_own_rounds(self, pool):
-        turn_id = uuid.uuid4()
-        await pool.execute(
-            "INSERT INTO turns (id, started_at, status, kind) VALUES ($1, now(), 'ok', 'chat')",
-            turn_id,
-        )
-        for rate in (10.0, 20.0, 30.0):
-            await pool.execute(
-                "INSERT INTO turn_spans (turn_id, kind, name, started_at, duration_ms, meta) "
-                "VALUES ($1, 'llm_call', 'm', now(), 1000, $2)",
-                turn_id,
-                {"model": "m", "tok_per_s": rate},
-            )
-
-        assert await model_speed.turn_rate(pool, turn_id) == 20.0
-
-    async def test_a_turn_with_no_rated_round_has_no_rate(self, pool):
-        assert await model_speed.turn_rate(pool, uuid.uuid4()) is None

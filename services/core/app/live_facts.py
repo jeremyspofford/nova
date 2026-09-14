@@ -86,6 +86,11 @@ AUTO_RUN = frozenset(
         "device_list_files",
         "device_read_file",
         "get_time",
+        # S22. The case `Tool.reads_only`'s own docstring names: "how much
+        # VRAM" is answered by the machine, not by a note from three weeks
+        # ago. It takes NO arguments at all, so there is no argument a model
+        # could have written wrong, and it reaches nothing outside this host.
+        "inference_health",
         "list_agents",
         "list_timers",
         "model_catalog_search",
