@@ -261,9 +261,46 @@ the number was still wrong on the one machine that has history. A test
 suite cannot hold data written a fortnight ago in a frame that no longer
 exists.
 
+### The walk (2026-09-14), and what it broke
+
+The contention did not need reproducing. Minutes after the deploy the owner
+asked Nova "what's the GPU doing" and the turn died:
+
+    llm_call  qwen3.8:27b  300009 ms
+    error: nothing arrived from the gateway for 300 s (ReadTimeout)
+    stream: {done: false, data_lines: 0}   completion_chars: 0
+
+The card at that moment: 23.4 GB of 24 in use, ollama holding 16.6, and
+~6.8 GB held by something that was not ollama. The exact condition this
+slice exists for.
+
+**And `inference_degraded` could say nothing about it.** A round that
+generates nothing generates no `tok_per_s`, so every median was blank. The
+measurement was blind to the worst state of the thing it measures.
+
+The premise was too narrow. S22 was built from the 12th, where ollama's own
+timing lines read 0.25 tok/s — slow, but generating. Contend the card
+harder and generation never starts.
+
+`model_speed.stalls()` is the other half: rounds that timed out in their
+READ phase having written nothing. Both parts of that absence are already on
+the span, so it needs no token to exist. The check reports it as its own
+finding on its own evidence, never gated behind having a rate. Two rounds,
+not one — one is a model pulled underneath a turn, or a restart landing
+mid-stream. `inference_health` was saying "not measured yet — 0 rounds" in
+this state, which is true about the median and a lie about the machine; it
+now says the rounds happened and produced nothing.
+
+Verified against the live rows, read-only:
+
+    stalls: {'qwen3.8:27b': {'walled_rounds': 1, 'rounds': 1}}
+    CannotCheck: ...none has stalled (needs 2 rounds that produced nothing)
+
+One walled round, correctly held below the threshold.
+
 ### What is not done
 
-The DoD walk's own steps. Nothing has been asked of HER in chat, and the
-contention has not been reproduced deliberately — that means loading a
-second large model to squeeze the card, which makes the owner's machine
-slow for a few minutes and is his call to schedule.
+Nothing has been asked of HER in chat — that needs the owner's own session,
+and "I curled it and it works" proves nothing about her. The two steps left
+are his: ask her about the GPU on a card that can answer, and confirm the
+Inbox item when a second round walls.
