@@ -108,6 +108,14 @@ async def test_suites_requires_auth(client):
 # -- POST /run: a detached job, answered 202, read back from its row --------
 
 
+# Every scripted gateway below leads with one WARM-UP round (S21): the job
+# sends a throwaway generation before the first case so the model's load is
+# paid outside a scored turn. It is a real call on the real path, so the
+# fixtures answer it like the gateway does — and `hold_before` counts from it,
+# which is why holding "before the first case" is 1 rather than 0.
+WARMUP_ROUND = (text("ready"),)
+
+
 async def test_run_answers_202_before_any_case_lands_and_the_job_finishes_detached(
     owner_client, pool, mount_peers, monkeypatch
 ):
@@ -128,11 +136,12 @@ async def test_run_answers_202_before_any_case_lands_and_the_job_finishes_detach
     hold = asyncio.Event()
     gateway = ScriptedGateway(
         rounds=(
+            WARMUP_ROUND,
             (text("VRAM is freed by offloading the KV cache."),),  # case ok
             Refusal(status=500, body={"error": {"message": "down"}}),  # case err: turn errors
         ),
         hold=hold,
-        hold_before=0,  # the first case's turn stalls at the gateway until released
+        hold_before=1,  # the first case's turn stalls at the gateway until released
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
 
@@ -210,12 +219,14 @@ async def test_run_record_shows_the_cases_so_far_and_no_summary_until_done(
     hold = asyncio.Event()
     gateway = ScriptedGateway(
         rounds=(
+            WARMUP_ROUND,
             (text("one"),),
             (text("two"),),
             Refusal(status=500, body={"error": {"message": "down"}}),
         ),
         hold=hold,
-        hold_before=1,
+        # The SECOND case stalls: call 0 is the warm-up, 1 is the first case.
+        hold_before=2,
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
 
@@ -284,7 +295,9 @@ async def test_a_client_that_hangs_up_never_stops_the_run(
         ],
     )
     hold = asyncio.Event()
-    gateway = ScriptedGateway(rounds=((text("one"),), (text("two"),)), hold=hold, hold_before=0)
+    gateway = ScriptedGateway(
+        rounds=(WARMUP_ROUND, (text("one"),), (text("two"),)), hold=hold, hold_before=1
+    )
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     body = json.dumps({"suite": "probe", "model": MODEL}).encode()
@@ -334,7 +347,7 @@ async def test_a_second_run_while_one_is_running_is_409_naming_the_active_run(
     started."""
     _use_suite(monkeypatch, [_case("a", [PredicateSpec("reply_matches", "x")], message="q")])
     hold = asyncio.Event()
-    gateway = ScriptedGateway(rounds=((text("x"),),), hold=hold, hold_before=0)
+    gateway = ScriptedGateway(rounds=(WARMUP_ROUND, (text("x"),)), hold=hold, hold_before=1)
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     first = await owner_client.post(RUN, json={"suite": "probe", "model": MODEL})
@@ -381,7 +394,7 @@ async def test_run_sweeps_orphaned_scratch_people_before_running(
     )
     owner_id = await pool.fetchval("SELECT id FROM people WHERE role = 'owner'")
     _use_suite(monkeypatch, [_case("a", [PredicateSpec("reply_matches", "x")], message="q")])
-    mount_peers(gateway=ScriptedGateway(rounds=((text("x"),),)), memory=FakeMemory())
+    mount_peers(gateway=ScriptedGateway(rounds=(WARMUP_ROUND, (text("x"),))), memory=FakeMemory())
 
     resp = await owner_client.post(RUN, json={"suite": "probe", "model": MODEL})
     assert resp.status_code == 202, resp.text
@@ -413,7 +426,7 @@ async def test_startup_marks_a_stale_running_row_interrupted_and_a_new_run_then_
         MODEL,
     )
     _use_suite(monkeypatch, [_case("a", [PredicateSpec("reply_matches", "x")], message="q")])
-    mount_peers(gateway=ScriptedGateway(rounds=((text("x"),),)), memory=FakeMemory())
+    mount_peers(gateway=ScriptedGateway(rounds=(WARMUP_ROUND, (text("x"),))), memory=FakeMemory())
 
     refused = await owner_client.post(RUN, json={"suite": "probe", "model": MODEL})
     assert refused.status_code == 409
@@ -714,3 +727,62 @@ async def test_runs_of_another_version_are_never_blended_in(owner_client, pool):
     ).json()
     assert body["runs_read"] == 1
     assert body["suite_version"] == 13
+
+
+# ── the model's load, paid before case one (S21) ───────────────────────────
+
+
+async def test_a_run_records_what_loading_the_model_cost(pool, monkeypatch, mount_peers):
+    """Cases run alphabetically, so case one always paid for whatever loading
+    the model needed — 17 GB off disk when the previous run used a different
+    model — inside a scored turn where nobody would look for it."""
+    from app.evals import runner
+
+    async def fake_warmup(app, model):
+        return 41_000, None
+
+    monkeypatch.setattr(runner, "warm_up_model", fake_warmup)
+    run_id = await pool.fetchval(
+        "INSERT INTO eval_suite_runs (suite, suite_version, model, case_count, status) "
+        "VALUES ('agent_quality', 13, 'qwen3:8b', 0, 'running') RETURNING id"
+    )
+    # The real app object: run_suite_job's orphan sweeps reach peers through it,
+    # and handing it None hangs the sweep and poisons the loop for every test
+    # after it (learned the hard way, 2026-09-14).
+    await runner.run_suite_job(app, pool, run_id, [], "qwen3:8b")
+
+    row = await pool.fetchrow(
+        "SELECT warmup_ms, warmup_note, status FROM eval_suite_runs WHERE id = $1", run_id
+    )
+    assert row["warmup_ms"] == 41_000
+    assert row["warmup_note"] is None
+    assert row["status"] == "done"
+
+
+async def test_a_warm_up_that_could_not_be_made_records_why_and_never_a_zero(
+    pool, monkeypatch, mount_peers
+):
+    """Best-effort, and it says so: a gateway that cannot be asked must not
+    stop a run whose cases each state their own failure — and must not leave a
+    0 behind, which would read as 'loaded instantly'."""
+    from app.evals import runner
+
+    async def fake_warmup(app, model):
+        return None, "the warm-up could not be made: no route to the gateway"
+
+    monkeypatch.setattr(runner, "warm_up_model", fake_warmup)
+    run_id = await pool.fetchval(
+        "INSERT INTO eval_suite_runs (suite, suite_version, model, case_count, status) "
+        "VALUES ('agent_quality', 13, 'qwen3:8b', 0, 'running') RETURNING id"
+    )
+    # The real app object: run_suite_job's orphan sweeps reach peers through it,
+    # and handing it None hangs the sweep and poisons the loop for every test
+    # after it (learned the hard way, 2026-09-14).
+    await runner.run_suite_job(app, pool, run_id, [], "qwen3:8b")
+
+    row = await pool.fetchrow(
+        "SELECT warmup_ms, warmup_note, status FROM eval_suite_runs WHERE id = $1", run_id
+    )
+    assert row["warmup_ms"] is None
+    assert "no route to the gateway" in row["warmup_note"]
+    assert row["status"] == "done"

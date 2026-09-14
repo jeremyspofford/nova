@@ -109,6 +109,12 @@ def _suite_run(row: dict) -> dict:
         "error": row["error"],
         "started_at": row["started_at"].isoformat(),
         "ended_at": row["ended_at"].isoformat() if row["ended_at"] else None,
+        # S21: what loading the model cost, paid before case one and kept out
+        # of its score. None means no number was measured — a run from before
+        # this, or a warm-up that could not be made, which `warmup_note` says
+        # in words. Never a 0, which would read as "loaded instantly".
+        "warmup_ms": row.get("warmup_ms"),
+        "warmup_note": row.get("warmup_note"),
     }
 
 

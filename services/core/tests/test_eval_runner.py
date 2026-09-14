@@ -491,8 +491,14 @@ async def test_the_model_is_never_told_it_is_being_evaluated(pool, mount_peers):
 # -- persistence: suite_version stored, read back only for reporting --------
 
 
+# A suite JOB warms the model before its first case (S21), so a fixture that
+# scripts a whole job answers that round too. run_case tests are untouched:
+# the warm-up belongs to the job, not to scoring a case.
+WARMUP_ROUND = (text("ready"),)
+
+
 async def test_eval_runs_persisted_with_suite_version_and_read_back(pool, mount_peers):
-    gateway = ScriptedGateway(rounds=((text("VRAM answer."),),))
+    gateway = ScriptedGateway(rounds=(WARMUP_ROUND, (text("VRAM answer."),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     case = _case([PredicateSpec("reply_matches", r"VRAM")], version=3, cid="kv")
@@ -552,6 +558,7 @@ async def test_run_suite_persists_all_and_score_summary_excludes_ungradeable(poo
     1/2 by counting the ungradeable run as a 0."""
     gateway = ScriptedGateway(
         rounds=(
+            WARMUP_ROUND,
             (text("VRAM answer."),),  # case 1: the reply
             Refusal(status=500, body={"error": {"message": "down"}}),  # case 2: errors
         )
@@ -643,7 +650,7 @@ async def test_a_harness_failure_closes_the_run_error_with_the_reason(
     run_case (a harness failure — here the scratch conversation create), the
     row closes 'error' with the exception stated, the rows already persisted
     stand, and nothing reads 'done'."""
-    gateway = ScriptedGateway(rounds=((text("VRAM answer."),),))
+    gateway = ScriptedGateway(rounds=(WARMUP_ROUND, (text("VRAM answer."),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
     real_create = runner._scratch_conversation
     calls = 0
@@ -720,7 +727,10 @@ async def test_a_cancelled_suite_job_closes_its_row_interrupted_and_cleans_up(po
     stated — and leaves no scratch person and no 'running' row behind."""
     hold = asyncio.Event()
     gateway = ScriptedGateway(
-        rounds=((text("one"),), (text("never delivered"),)), hold=hold, hold_before=1
+        rounds=(WARMUP_ROUND, (text("one"),), (text("never delivered"),)),
+        hold=hold,
+        # Call 0 is the job's warm-up; the second CASE is call 2.
+        hold_before=2,
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
     cases = [
@@ -731,7 +741,7 @@ async def test_a_cancelled_suite_job_closes_its_row_interrupted_and_cleans_up(po
 
     async with anyio.create_task_group() as tg:
         tg.start_soon(runner.run_suite_job, app, pool, row["id"], cases, MODEL)
-        await _until(lambda: gateway.calls >= 2, what="the second case to reach the gateway")
+        await _until(lambda: gateway.calls >= 3, what="the second case to reach the gateway")
         tg.cancel_scope.cancel()
 
     await asyncio.wait_for(chat.drain_background(), timeout=10)

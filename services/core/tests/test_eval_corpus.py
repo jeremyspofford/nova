@@ -1227,6 +1227,9 @@ async def test_running_the_suite_excludes_an_ungradeable_run_from_the_pass_rate(
 
     gateway = ScriptedGateway(
         rounds=(
+            # run_suite drives the same JOB the page does, so it warms the
+            # model first (S21) and the script answers that round too.
+            (text("ready"),),
             (_call("web_search", "c1", {"query": "latest pixel news"}),),
             (text("The newest Pixel has a strong camera."),),
             Refusal(status=500, body={"error": {"message": "down"}}),

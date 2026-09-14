@@ -1190,7 +1190,9 @@ INTERRUPTED_REASON = "the core process running this suite exited before every ca
 RUNNING: set[uuid.UUID] = set()
 
 _SUITE_RUN_COLUMNS = (
-    "id, suite, suite_version, model, status, case_count, error, started_at, ended_at"
+    "id, suite, suite_version, model, status, case_count, error, started_at, ended_at, "
+    # S21: what loading the model cost, kept out of the first case's score.
+    "warmup_ms, warmup_note"
 )
 
 
@@ -1411,6 +1413,52 @@ async def sweep_orphaned_suite_runs(pool: asyncpg.Pool) -> list[uuid.UUID]:
     return [row["id"] for row in rows]
 
 
+# One throwaway generation before the first case, so the model is resident when
+# scoring starts. Small on purpose: this exists to pay the LOAD, not to measure
+# anything.
+_WARMUP_MESSAGE = "Say the word ready, then stop."
+_WARMUP_TIMEOUT = httpx.Timeout(connect=5.0, read=600.0, write=10.0, pool=5.0)
+
+
+async def warm_up_model(app, model: str) -> tuple[int | None, str | None]:
+    """Load the model before the suite scores anything. Returns (ms, note).
+
+    Cases run alphabetically, so case one is always the same case — and before
+    this it also paid for whatever loading the model needed. Switching from a
+    17 GB model to an 11 GB one evicts and reloads, and that cost landed inside
+    a scored turn where nobody would look for it. A cold load slow enough to
+    push the first token past the gateway's 300 s silence budget would have
+    made that case ungradeable for a reason that has nothing to do with the
+    model's behaviour.
+
+    BEST-EFFORT, and it says so. A gateway that cannot be asked, a model that
+    refuses, a timeout — none of them stop the run, because every case states
+    its own failure anyway and refusing to start on a warm-up would be a new
+    way to lose a suite. What it never does is report a cost it did not
+    measure: a failed warm-up records no milliseconds and a note saying why,
+    never a 0.
+
+    The read timeout is deliberately longer than a turn's: this call is the one
+    that waits for the weights, and bounding it at the turn's budget would
+    reintroduce the very failure it exists to remove.
+    """
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": _WARMUP_MESSAGE}],
+        "stream": False,
+    }
+    started = datetime.now(UTC)
+    try:
+        async with peers.client(app, peers.GATEWAY, _WARMUP_TIMEOUT) as client:
+            resp = await client.post("/v1/chat/completions", json=payload)
+    except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
+        return None, f"the warm-up could not be made: {peers.reason(exc)}"
+    if resp.status_code != 200:
+        return None, f"the warm-up was refused ({resp.status_code})"
+    elapsed = int((datetime.now(UTC) - started).total_seconds() * 1000)
+    return elapsed, None
+
+
 async def run_suite_job(
     app,
     pool: asyncpg.Pool,
@@ -1439,6 +1487,21 @@ async def run_suite_job(
     try:
         await _sweep_orphan_scratch_people(pool)
         await _sweep_orphan_fixture_agents(app, pool)
+        # The model's load, paid BEFORE the first case and recorded rather than
+        # buried in it (S21). Never fatal: a warm-up that could not be made
+        # leaves a note and the cases still run.
+        warmup_ms, warmup_note = await warm_up_model(app, model)
+        await pool.execute(
+            "UPDATE eval_suite_runs SET warmup_ms = $2, warmup_note = $3 WHERE id = $1",
+            run_id,
+            warmup_ms,
+            warmup_note,
+        )
+        logger.info(
+            "eval suite run %s warm-up: %s",
+            run_id,
+            f"{warmup_ms} ms" if warmup_ms is not None else warmup_note,
+        )
         for case in suite_cases:
             run = await run_case(app, pool, case, model)
             run.run_id = run_id
