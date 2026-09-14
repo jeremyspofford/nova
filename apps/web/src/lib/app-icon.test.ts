@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { APP_ICONS, DEFAULT_APP_ICON, appIconHref, knownAppIcon, markDataUri } from './app-icon'
+import {
+  APP_ICONS,
+  DEFAULT_APP_ICON,
+  appIconHref,
+  knownAppIcon,
+  markDataUri,
+  orbDataUri,
+} from './app-icon'
 import { resolvePalette } from './color-palettes'
 
 /**
@@ -68,5 +75,55 @@ describe('the choice', () => {
     for (const choice of APP_ICONS) {
       expect(knownAppIcon(choice.key)).toBe(choice.key)
     }
+  })
+})
+
+describe('the v2 orb, redrawn', () => {
+  /**
+   * `dashboard/public/icons/nova-{192,512}.png`, commit 35036c52
+   * (2026-05-15), deleted eight weeks later when v3 cleared the v2 tree.
+   * The only orb this repo ever carried, and the one Jeremy remembers.
+   */
+  it('glows in the theme accent, so Nova gives back the teal orb it was', () => {
+    const teal = resolvePalette('nova')
+    const uri = decodeURIComponent(orbDataUri('dark', 'nova', 'teal'))
+
+    expect(uri).toContain('radialGradient')
+    expect(uri).toContain(`rgb(${teal.accent[500]})`)
+    expect(uri).toContain(`rgb(${teal.accent[300]})`)
+  })
+
+  it('fades to nothing INSIDE the circle — the halo is the whole character', () => {
+    // A gradient that finishes at the rim reads as a flat ball. The last
+    // stop must be fully transparent, or the sphere has a hard edge.
+    const uri = decodeURIComponent(orbDataUri('dark', 'nova', 'teal'))
+    expect(uri).toContain('offset="100%"')
+    expect(uri).toMatch(/offset="100%"[^/]*stop-opacity="0"/)
+  })
+
+  it('sits on a dark ground in both modes, because a glow needs one', () => {
+    const { neutral } = resolvePalette('nova')
+    for (const mode of ['dark', 'light'] as const) {
+      expect(decodeURIComponent(orbDataUri(mode, 'nova', 'teal'))).toContain(
+        `rgb(${neutral[950]})`,
+      )
+    }
+  })
+
+  it('the amber orb holds its colour whatever the theme is', () => {
+    // "The yellow orb" should not depend on which theme happens to be on.
+    const amber = resolvePalette('ember')
+    const choice = APP_ICONS.find(i => i.key === 'orb-amber')!
+    for (const preset of ['nova', 'nebula', 'ocean', 'daylight']) {
+      expect(decodeURIComponent(choice.href('dark', preset, 'teal'))).toContain(
+        `rgb(${amber.accent[500]})`,
+      )
+    }
+  })
+
+  it('the theme-following orb and the pinned one differ off the amber themes', () => {
+    const following = APP_ICONS.find(i => i.key === 'orb')!.href('dark', 'nova', 'teal')
+    const pinned = APP_ICONS.find(i => i.key === 'orb-amber')!.href('dark', 'nova', 'teal')
+    expect(following).not.toEqual(pinned)
   })
 })
