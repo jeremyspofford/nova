@@ -152,7 +152,12 @@ def local_row(
             SOURCE_PROBE,
             at=_iso(fit_probe.get("created_at")),
         )
-    row["fit"] = _fit_for(curated_entry, fit_probe, fit_ctx)
+    # The installed model's own download size — a fact about THIS host's
+    # copy, preferred over a hand-written integer when there is no probe
+    # (S22, see fit.py's precedence). Taken from `fit_ctx`, the ONE map
+    # /admin/suggest reads too, so the two surfaces cannot size the same
+    # model differently.
+    row["fit"] = _fit_for(curated_entry, fit_probe, fit_ctx, size_bytes=fit_ctx["sizes"].get(name))
     # check_update: an installed model can be compared against its source
     # (POST /admin/catalog/drift) — the page derives the button from this.
     row["actions"] = ["use", "probe", "check_update", "remove"]
@@ -199,20 +204,27 @@ def _annotate(row: dict, entry: dict | None) -> None:
         )
 
 
-def _fit_for(curated_entry: dict | None, probe_row: dict | None, fit_ctx: dict) -> dict:
-    """The existing whole-card verdict, or an honest `unknown` when there is
-    neither a curated estimate nor a probe to size the model by."""
+def _fit_for(
+    curated_entry: dict | None,
+    probe_row: dict | None,
+    fit_ctx: dict,
+    *,
+    size_bytes: int | None = None,
+) -> dict:
+    """The verdict, or an honest `unknown` when there is nothing at all to
+    size the model by — no probe, no download size, not in the curated
+    list."""
     free_gb, total_gb, reason = fit_ctx["free_gb"], fit_ctx["total_gb"], fit_ctx["reason"]
     has_probe = probe_row is not None and probe_row.get("vram_mb") is not None
-    if curated_entry is None and not has_probe:
+    if curated_entry is None and not has_probe and not size_bytes:
         return fit_mod.compute_fit(
             None,
             free_gb,
             total_gb,
             source=fit_mod.SOURCE_ESTIMATED,
-            reason="no estimate — not in the curated list and never probed",
+            reason="no estimate — not in the curated list, never probed, size unstated",
         )
-    needed_gb, source = fit_mod.needed_gb_for(curated_entry or {"min_vram_gb": None}, probe_row)
+    needed_gb, source = fit_mod.needed_gb_for(curated_entry or {}, probe_row, size_bytes)
     return fit_mod.compute_fit(needed_gb, free_gb, total_gb, source=source, reason=reason)
 
 

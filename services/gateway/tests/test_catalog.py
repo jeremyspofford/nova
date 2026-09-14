@@ -16,7 +16,7 @@ from app import admin, catalog, hf_hub, ollama_registry
 from app import curated as curated_mod
 from tests.conftest import requires_db
 from tests.fakes import FakeHFHub, FakeOllama, FakeOllamaRegistry, FakeOpenAICompat
-from tests.test_admin_suggest_fit import _write_hardware
+from tests.test_admin_suggest_fit import IDLE_FREE_MB, _card
 from tests.test_hf_hub import SIBLINGS
 from tests.test_ollama_registry import CONFIG, CONFIG_DIGEST, MANIFEST, TOTAL
 
@@ -149,7 +149,7 @@ async def test_fit_agrees_with_admin_suggest_for_the_same_slug(
     """Not vacuous: a real card, an older probe WITH a VRAM reading and a
     newer OK probe WITHOUT one. Fit must read the reading (suggest's
     query) while the row's probe block reports the newest probe."""
-    _write_hardware(monkeypatch, tmp_path, 24576)
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
     await pool.execute(
         "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, created_at) "
         "VALUES ('qwen3:8b', 'ollama', true, 100, 9508, NULL, now() - interval '1 day')"

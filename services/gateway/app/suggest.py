@@ -7,6 +7,7 @@ Tier boundaries are keyed on the largest SINGLE GPU's VRAM. ollama does
 not shard a model across multiple cards, so summing VRAM across GPUs would
 suggest a model that never actually fits on the one card that runs it.
 """
+
 from __future__ import annotations
 
 TIER_27B = "27B-class"
@@ -133,10 +134,18 @@ def models_for_tier(tier: str, curated: list[dict]) -> list[dict]:
     return out
 
 
-def suggest(hardware: dict, curated: list[dict]) -> dict:
+def suggest(hardware: dict, curated: list[dict], live_vram_gb: float | None = None) -> dict:
     """{tier, engine_suggestion, models, rationale} — the whole /admin/suggest
-    answer, pure function of the hardware facts and the curated catalog."""
-    vram_gb = largest_single_gpu_vram_gb(hardware)
+    answer, pure function of the hardware facts and the curated catalog.
+
+    `live_vram_gb` is the card read at the moment of the question (S22,
+    app/devices_vram.py) and WINS over `hardware` whenever it is known.
+    The install-time file is the fallback for the one case it is actually
+    good for: a container that cannot see the GPU yet, during the install
+    that wrote it. Anywhere else a stale file must not decide a live
+    question — owner ruling 2026-09-14.
+    """
+    vram_gb = live_vram_gb if live_vram_gb is not None else largest_single_gpu_vram_gb(hardware)
     tier = tier_for_vram_gb(vram_gb)
     return {
         "tier": tier,

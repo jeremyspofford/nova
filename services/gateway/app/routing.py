@@ -274,9 +274,16 @@ async def note_success(pool: asyncpg.Pool, provider: str, model: str) -> None:
 # ── the walk ───────────────────────────────────────────────────────────────
 
 
-async def installed_tags(app, pool: asyncpg.Pool) -> set[str] | None:
-    """What the bundled ollama lists, cached TAGS_TTL_S; None when it could
-    not be asked (a local link is then judged 'ollama unreachable')."""
+async def installed_sizes(app, pool: asyncpg.Pool) -> dict[str, int | None] | None:
+    """{tag -> download size in bytes} for what the bundled ollama lists,
+    cached TAGS_TTL_S; None when it could not be asked.
+
+    The cache holds the MAPPING rather than a bare name set so the size —
+    an exact fact about the copy on this host — is available everywhere the
+    names are, without a second /api/tags read. S22's fit precedence prefers
+    it over a hand-written estimate, and `_fit_context` shares one map with
+    every surface so two pages cannot size the same model differently.
+    """
     hit = TAGS_CACHE.get("tags")
     if hit is not None:
         return hit[0]
@@ -285,9 +292,16 @@ async def installed_tags(app, pool: asyncpg.Pool) -> set[str] | None:
         listing = await ollama.ADAPTER.list_models(app, builtin)
     except (ProviderRefused, providers.UnknownProvider):
         return None
-    names = {m["id"] for m in listing.models}
-    TAGS_CACHE.put("tags", names)
-    return names
+    sizes = {m["id"]: m.get("size_bytes") for m in listing.models}
+    TAGS_CACHE.put("tags", sizes)
+    return sizes
+
+
+async def installed_tags(app, pool: asyncpg.Pool) -> set[str] | None:
+    """What the bundled ollama lists, cached TAGS_TTL_S; None when it could
+    not be asked (a local link is then judged 'ollama unreachable')."""
+    sizes = await installed_sizes(app, pool)
+    return None if sizes is None else set(sizes)
 
 
 def _installed(names: set[str] | None, model: str) -> bool | None:

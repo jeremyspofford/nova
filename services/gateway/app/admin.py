@@ -8,7 +8,6 @@ parameter in S1.
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -21,7 +20,18 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from app import adapters, backends, catalog, db, hf_hub, ollama_registry, providers, routing, usage
+from app import (
+    adapters,
+    backends,
+    catalog,
+    db,
+    devices_vram,
+    hf_hub,
+    ollama_registry,
+    providers,
+    routing,
+    usage,
+)
 from app import curated as curated_mod
 from app import fit as fit_mod
 from app import pulls as pulls_mod
@@ -33,6 +43,14 @@ logger = logging.getLogger("gateway")
 
 # Ruling R2: install.sh writes <repo>/data/hardware.json on the host; the
 # compose file mounts that directory read-only into this container at /data.
+#
+# S22 demoted this file to ONE job: suggesting a model tier during install,
+# on a machine where nothing is running yet and there is nothing live to
+# read. It is a record of what the host looked like when install.sh ran, so
+# no SERVING decision may consult it — fit, routing and the health tool all
+# read the card through app/devices_vram.py instead.
+# tests/test_hardware_json_not_in_serving_path.py is the line of code that
+# refuses the day someone wires it back in.
 HARDWARE_PATH = Path("/data/hardware.json")
 # Matches the v4_models volume mounted into this container in compose.
 MODELS_DIR = Path("/models")
@@ -48,9 +66,6 @@ PULL_TIMEOUT = httpx.Timeout(connect=5.0, read=None, write=10.0, pool=5.0)
 PROBE_TIMEOUT = httpx.Timeout(connect=5.0, read=180.0, write=10.0, pool=5.0)
 # /api/ps is a cheap metadata read (no generation happens), unlike a probe.
 PS_TIMEOUT = httpx.Timeout(5.0)
-# nvidia-smi answers in well under a second on every host this has ever run
-# on; bounded generously anyway so a wedged driver cannot hang a probe.
-NVIDIA_SMI_TIMEOUT_S = 10.0
 
 
 def _read_hardware() -> tuple[dict, str | None]:
@@ -81,11 +96,13 @@ async def hardware() -> dict:
 async def _resident_models(app, base_url: str) -> tuple[list[dict] | None, str | None]:
     """(every model ollama's /api/ps reports resident, reason-if-unreadable).
 
-    Each entry is `{"model": name, "vram_mb": float}` — the per-model TABLE
-    app/fit.py's eviction-aware free-VRAM calc needs (ruling S2f-R2), not a
-    pre-summed total: summing here would throw away exactly the per-entry
-    distinction that calc is built to make (today every entry is swappable,
-    but the shape has to carry the possibility of one that is not).
+    Each entry is `{"model": name, "vram_mb": float}` — a per-model TABLE,
+    not a pre-summed total, because two callers need the rows themselves:
+    `fit.free_gb_after_switch` adds back what a switch would evict, and
+    `_footprint_vram_mb` picks out the ONE model that just answered. It is
+    also the only per-model VRAM figure on this host that can be attributed
+    to anything: the card's own counter sees every process and, under WSL2,
+    can name none of them.
     """
     client = backends.http_client(app, PS_TIMEOUT, base_url=base_url)
     try:
@@ -108,32 +125,34 @@ async def _resident_models(app, base_url: str) -> tuple[list[dict] | None, str |
 
 
 async def _free_and_total_vram_gb(
-    app, hardware: dict, config: dict
+    app, config: dict
 ) -> tuple[float | None, float | None, str | None]:
-    """(free_gb, total_gb, reason-if-free-is-unknown).
+    """(free_gb, total_gb, reason-if-free-is-unknown) — read from the card.
 
-    `total_gb` is the host's total (hardware.json, the largest single GPU —
-    ollama never shards across cards). `free_gb` answers "how much would be
-    available AFTER a switch", not "how much is free right now" — ruling
-    S2f-R2, see app/fit.py's module docstring: a local model switch evicts
-    whatever ollama currently holds resident, so free-for-a-switch is
-    computed by `fit.free_vram_gb_for_switch` from the live resident table,
-    never a static floor and never installed-sum. ollama's /api/ps is still
-    read here (via `_resident_models`) — not to subtract its numbers, but
-    because reachability IS part of the answer: an unreachable /api/ps
-    means "resident, and therefore free-after-switch, is unknown", which is
-    a different fact from "free is the whole card".
+    Both numbers come from ONE live `nvidia-smi` call (app/devices_vram.py)
+    at the moment of the question. Not hardware.json: that file is written
+    once by install.sh and never refreshed, and a fit decision made from it
+    is a decision about a machine as it was at install time. Owner ruling
+    2026-09-14, after a video game held 7 GB of this card for six hours
+    while the product reported 24 GB free: "Nova should do the work ad-hoc
+    to get the resources live, not read stale shit."
 
-    This `total_gb` is deliberately never reduced by the ~2.6GB non-model
-    baseline (Xwayland/WSL2) this host always carries — see fit.py's
-    module docstring, "THE FRAME, STATED ONCE": that baseline already
-    lives on the NEEDED side (curated_models.json's whole-card estimates,
-    and `_footprint_vram_mb`'s nvidia-smi reading, both include it), so
-    subtracting it here too would double-count it.
+    `free_gb` answers "how much would be available AFTER a switch", not
+    "how much is unused this instant" — ruling S2f-R2, see app/fit.py: a
+    local model switch evicts whatever ollama holds resident, so the card's
+    live free memory has the resident table added back to it. ollama's
+    /api/ps is read for that, and its reachability IS part of the answer:
+    unreachable means free-after-switch is unknown, which is a different
+    fact from "free is whatever is unused now".
+
+    Note the asymmetry, and that it is deliberate: `total_gb` survives every
+    degrade below, because the card's capacity is known the moment
+    nvidia-smi answers and does not depend on ollama at all.
     """
-    total_gb = suggest_mod.largest_single_gpu_vram_gb(hardware)
-    if total_gb is None:
-        return None, None, "no GPU detected on this host"
+    vram = await devices_vram.read_vram()
+    if not vram.known:
+        return None, None, vram.reason or "the GPU could not be read"
+    total_gb = vram.total_mb / 1024
     if config["kind"] != "ollama":
         return (
             None,
@@ -149,7 +168,49 @@ async def _free_and_total_vram_gb(
     resident, reason = await _resident_models(app, base_url)
     if resident is None:
         return None, total_gb, reason
-    return fit_mod.free_vram_gb_for_switch(total_gb, resident), total_gb, None
+    return fit_mod.free_gb_after_switch(vram.free_mb, resident), total_gb, None
+
+
+@router.get("/vram")
+async def vram_route(request: Request) -> dict:
+    """The card right now, plus what ollama is holding on it.
+
+    One route so everything that asks gets the SAME instant: core's
+    `inference_health` tool, the `inference_degraded` beat check, and
+    anything an operator curls. Both halves degrade independently and each
+    carries its own reason — the card can be readable while ollama is down,
+    and `free_after_switch_gb` is simply absent when it is, because a
+    number that needs the resident table cannot be invented without it.
+
+    Nothing here decides anything. It reports (owner ruling 2026-09-03).
+    """
+    vram = await devices_vram.read_vram()
+    out: dict = vram.as_dict()
+    out["total_gb"] = round(vram.total_mb / 1024, 1) if vram.total_mb is not None else None
+    out["free_gb"] = round(vram.free_mb / 1024, 1) if vram.free_mb is not None else None
+    out["used_gb"] = round(vram.used_mb / 1024, 1) if vram.used_mb is not None else None
+
+    pool = await db.get_pool()
+    config = await backends.read_config(pool)
+    base_url = backends.resolve_base_url(config) if config["kind"] == "ollama" else None
+    if not base_url:
+        out["resident"] = None
+        out["resident_reason"] = (
+            f"the active backend is {config['kind']}, not local ollama"
+            if config["kind"] != "ollama"
+            else "OLLAMA_URL is unset"
+        )
+        out["free_after_switch_gb"] = None
+        return out
+    resident, reason = await _resident_models(request.app, base_url)
+    out["resident"] = resident
+    out["resident_reason"] = reason
+    out["free_after_switch_gb"] = (
+        round(fit_mod.free_gb_after_switch(vram.free_mb, resident), 1)
+        if resident is not None and vram.free_mb is not None
+        else None
+    )
+    return out
 
 
 async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
@@ -170,24 +231,42 @@ async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
 async def _fit_context(app, pool) -> dict:
     """The numbers every fit verdict is computed against — read ONCE per
     request and shared by /admin/suggest and the catalogue, so the two can
-    never disagree about the same card."""
-    data, _note = _read_hardware()
+    never disagree about the same card, or about how big a model is.
+
+    `sizes` is the installed models' own download bytes from ollama's
+    /api/tags (cached TAGS_TTL_S). It sits here rather than being read
+    per-surface for exactly the reason the card does: two pages that size
+    the same model differently are two pages one of which is wrong.
+    """
     config = await backends.read_config(pool)
-    free_gb, total_gb, reason = await _free_and_total_vram_gb(app, data, config)
-    return {"free_gb": free_gb, "total_gb": total_gb, "reason": reason}
+    free_gb, total_gb, reason = await _free_and_total_vram_gb(app, config)
+    sizes = await routing.installed_sizes(app, pool)
+    return {
+        "free_gb": free_gb,
+        "total_gb": total_gb,
+        "reason": reason,
+        "sizes": sizes or {},
+    }
 
 
 @router.get("/suggest")
 async def suggest_route(request: Request) -> dict:
-    data, _note = _read_hardware()
-    result = suggest_mod.suggest(data, curated_mod.load_curated())
-
     pool = await db.get_pool()
     ctx = await _fit_context(request.app, pool)
+    # The tier prefers the live card and falls back to hardware.json only
+    # when nvidia-smi could not be reached at all — which is the install-time
+    # case that file exists for. `_fit_context` already read the card once
+    # this request; its `total_gb` IS that reading, so the tier and the fit
+    # verdicts below cannot disagree about the same GPU.
+    data, _note = _read_hardware()
+    result = suggest_mod.suggest(data, curated_mod.load_curated(), ctx["total_gb"])
+
     probes_by_model = await _latest_probes(pool, [m["slug"] for m in result["models"]])
 
     for model in result["models"]:
-        needed_gb, source = fit_mod.needed_gb_for(model, probes_by_model.get(model["slug"]))
+        needed_gb, source = fit_mod.needed_gb_for(
+            model, probes_by_model.get(model["slug"]), ctx["sizes"].get(model["slug"])
+        )
         model["fit"] = fit_mod.compute_fit(
             needed_gb, ctx["free_gb"], ctx["total_gb"], source=source, reason=ctx["reason"]
         )
@@ -355,97 +434,41 @@ async def pull(request: Request) -> Response:
             _PULLS_IN_FLIGHT.pop(key, None)
 
 
-async def _nvidia_smi_used_mb() -> tuple[float | None, str | None]:
-    """(total VRAM in use right now, in MiB, reason-if-unavailable).
+async def _footprint_vram_mb(app, base_url: str, model: str) -> int | None:
+    """The just-loaded model's own VRAM, in MiB: ollama's `/api/ps`
+    `size_vram` for the model that just answered.
 
-    Ruling S2f-R3 (the 17-vs-22 bug): a model's real footprint is the
-    WHOLE-CARD figure nvidia-smi reports — baseline non-model usage
-    (Xwayland/WSL2, ~2.6GB on this host) + weights + KV cache + compute
-    buffers — not ollama's own /api/ps size_vram, which is weights only
-    (see fit.py's module docstring for the full "whole-card frame"
-    reasoning). `_footprint_vram_mb` below calls this exactly ONCE, right
-    after a load succeeds, and records the reading AS-IS: never a
-    before/after delta (a first version of this fix did that and review
-    caught it as eviction-contaminated — see `_footprint_vram_mb`'s
-    docstring).
+    THE FRAME (S22, see app/fit.py): `needed_gb` is what the MODEL costs —
+    weights plus its KV cache at the serving context — never the machine's
+    whole-card usage. The baseline the desktop always holds lives on the
+    FREE side now, because free VRAM is read from the card and the driver
+    has already subtracted it there. So the probe records the one number on
+    this host that is genuinely attributable to a single model, rather than
+    an undirected nvidia-smi reading that conflates every process on the
+    machine and, under WSL2, cannot name any of them.
 
-    Summed across every line nvidia-smi prints: this host has exactly one
-    GPU, so summing and "the one GPU's figure" are the same number today. A
-    multi-GPU host where the probed model lands on a DIFFERENT card than
-    whatever else is running would make this reading noisy — the same
-    single-GPU assumption `suggest.largest_single_gpu_vram_gb` already
-    makes for `total_gb`, not solved here either.
+    That attribution is not academic. It is precisely what a raw used-MiB
+    reading got wrong on 2026-09-12: a game held 7 GB of this card, and a
+    probe taken during it would have recorded 7 GB of somebody else's
+    texture memory as the model's footprint and stored it as `verified`.
 
-    None (with a reason) whenever nvidia-smi cannot be run at all — no GPU
-    device passthrough on this container yet (see
-    deploy/docker-compose.gpu.yml), no NVIDIA driver, or the binary is
-    missing — so a probe run before that is wired degrades exactly like a
-    remote backend's probe already does (ok=True, vram_mb=None), never a
-    crash.
+    Read AFTER the completion answers, so the model is certainly resident.
+    Eviction-immune by construction: whatever just served the request is
+    what /api/ps names, regardless of what was loaded before it. A model
+    that is not in the table (evicted between the answer and this read, or
+    an engine that reports no size_vram) is None — unknown, never zero.
     """
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "nvidia-smi",
-            "--query-gpu=memory.used",
-            "--format=csv,noheader,nounits",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=NVIDIA_SMI_TIMEOUT_S)
-    except (OSError, TimeoutError) as exc:
-        return None, f"nvidia-smi could not be run — {exc}"
-    if proc.returncode != 0:
-        return None, f"nvidia-smi exited {proc.returncode}: {stderr.decode().strip()[:200]}"
-    total_mb = 0.0
-    for line in stdout.decode().splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            total_mb += float(line)
-        except ValueError:
-            continue
-    return total_mb, None
-
-
-async def _footprint_vram_mb() -> int | None:
-    """The just-loaded model's real total footprint, in the WHOLE-CARD
-    frame: a single nvidia-smi used-MiB reading taken immediately AFTER
-    the completion request that loads the model answers. Recorded AS-IS —
-    never a before/after delta.
-
-    A before/after delta was this fix's first (wrong) shape, and review
-    caught two compounding bugs in it: (1) eviction-contaminated — Fix B's
-    own premise is that loading a different local model EVICTS whatever
-    ollama had resident, so probing model B while model A was resident
-    would have recorded (baseline+B) - (baseline+A) = B-A, wildly
-    understating B whenever A != B (chatting on the 8B, then probing the
-    27B, would have stored ~10GB as "verified" and read the 27B
-    `comfortable` — the exact bug this whole slice exists to kill,
-    reintroduced one layer down); and (2) even probing the SAME model
-    twice, a delta EXCLUDES the ~2.6GB non-model baseline (Xwayland/WSL2)
-    that the curated whole-card figures INCLUDE, so probed and curated
-    needed_gb lived in two different frames that could never agree.
-
-    A single AFTER reading fixes both: it is eviction-IMMUNE (whatever the
-    completion just answered from IS what is resident at that instant,
-    regardless of what came before — ollama already evicted anything
-    else), and it is the same whole-card quantity — baseline included —
-    that curated_models.json states and that nvidia-smi shows the
-    operator. See fit.py's module docstring for why free_gb/total_gb must
-    therefore stay the FULL card, never total-minus-baseline: the baseline
-    already lives on the needed side of every comparison this module
-    makes.
-
-    A non-positive reading is reported as unreliable (None), never stored:
-    a card with anything resident always uses SOME VRAM greater than zero,
-    so zero or negative means nvidia-smi itself is unreliable right now,
-    not a real measurement.
-    """
-    after_mb, _reason = await _nvidia_smi_used_mb()
-    if after_mb is None or after_mb <= 0:
+    resident, _reason = await _resident_models(app, base_url)
+    if not resident:
         return None
-    return int(after_mb)
+    for entry in resident:
+        if entry.get("model") == model:
+            vram_mb = entry.get("vram_mb")
+            # A resident model always occupies SOME VRAM; a non-positive
+            # figure means the engine's own accounting is unreliable right
+            # now, which is not a measurement.
+            return int(vram_mb) if vram_mb and vram_mb > 0 else None
+    return None
 
 
 @router.post("/probe")
@@ -500,9 +523,10 @@ async def probe(request: Request) -> dict:
         elif kind == "ollama":
             # Only meaningful for a local ollama model — a remote/cloud
             # backend consumes no VRAM on this host at all. Read AFTER the
-            # request answers (never a before/after delta — see
-            # `_footprint_vram_mb`'s docstring for why that was wrong).
-            vram_mb = await _footprint_vram_mb()
+            # request answers, so the model is certainly resident.
+            base_url = backends.resolve_base_url(await backends.read_config(pool))
+            if base_url:
+                vram_mb = await _footprint_vram_mb(request.app, base_url, target_model)
     except adapters.ProviderRefused as exc:
         ok = False
         error = exc.detail
