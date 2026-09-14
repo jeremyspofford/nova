@@ -90,8 +90,23 @@ def _card_lines(body: dict) -> list[str]:
     return lines
 
 
-def _speed_lines(speed: model_speed.Speed, factor: int) -> list[str]:
-    """The throughput picture for the model she is serving on."""
+def _speed_lines(
+    speed: model_speed.Speed, factor: int, stall: model_speed.Stalls | None
+) -> list[str]:
+    """The throughput picture for the model she is serving on.
+
+    A stall is checked FIRST and it is not a footnote. Without it this said
+    "not measured yet — 0 rounds" on a machine where rounds had in fact been
+    running and dying: technically true about the median and completely
+    misleading about the machine. A round that waited out the gateway's
+    whole read timeout happened; it just produced nothing to measure.
+    """
+    if stall is not None and stall.walled >= model_speed.MIN_STALLED_ROUNDS:
+        return [
+            f"{speed.model} produced nothing at all in {stall.walled} of its last "
+            f"{stall.rounds} round(s) — each waited out the gateway's full read timeout, "
+            "so there is no speed to report. The card cannot currently serve this model."
+        ]
     if speed.recent is None:
         return [
             f"How fast {speed.model} is generating right now is not measured yet — "
@@ -133,7 +148,8 @@ async def inference_health(_args: dict, ctx: ToolContext) -> str:
     model = await settings_store.read_value(pool, "chat.model")
     if model:
         factor = await settings_store.read_value(pool, "inference.degraded_factor")
-        lines.extend(_speed_lines(await model_speed.speed_of(pool, model), factor))
+        stall = (await model_speed.stalls(pool)).get(model)
+        lines.extend(_speed_lines(await model_speed.speed_of(pool, model), factor, stall))
     else:
         lines.append("No chat model is configured, so there is no throughput to report.")
 

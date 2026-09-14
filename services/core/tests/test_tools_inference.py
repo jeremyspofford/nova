@@ -254,3 +254,28 @@ def test_the_tool_changes_nothing_and_goes_stale():
     # `ephemeral` exists to prevent.
     assert tool.ephemeral is True
     assert tool.parameters["properties"] == {}
+
+
+async def test_walled_rounds_are_said_rather_than_reported_as_nothing_measured(ask, pool):
+    """Walked 2026-09-14. Without this the tool said "not measured yet — 0
+    rounds" on a machine where rounds had been running and dying: true about
+    the median, and completely misleading about the machine."""
+    await _set_model(pool, "qwen3.8:27b")
+    for _ in range(2):
+        turn_id = uuid.uuid4()
+        await pool.execute(
+            "INSERT INTO turns (id, started_at, status, kind) VALUES ($1, now(), 'error', 'chat')",
+            turn_id,
+        )
+        await pool.execute(
+            "INSERT INTO turn_spans (turn_id, kind, name, started_at, duration_ms, meta) "
+            "VALUES ($1, 'llm_call', 'qwen3.8:27b', now(), 300009, $2)",
+            turn_id,
+            {"model": "qwen3.8:27b", "timeout_phase": "read", "completion_chars": 0},
+        )
+
+    said = await ask({**CARD, "used_mb": 23927.0, "free_mb": 396.0})
+
+    assert "produced nothing at all in 2 of its last 2 round(s)" in said
+    assert "cannot currently serve this model" in said
+    assert "not measured yet" not in said

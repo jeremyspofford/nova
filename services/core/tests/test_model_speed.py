@@ -188,3 +188,56 @@ class TestSpeeds:
             "baseline_rounds": 0,
             "ratio": None,
         }
+
+
+class TestStalls:
+    """The reading that survives a card nobody can get a token out of.
+
+    Walked 2026-09-14: the owner asked "what's the GPU doing", his turn
+    waited the gateway's full 300 s, received zero data lines and errored.
+    No token means no rate, so every median above is blank — and the worst
+    state of the machine was invisible to the measurement built for it.
+    """
+
+    async def _walled(self, pool, model: str, count: int, *, chars: int = 0) -> None:
+        for _ in range(count):
+            turn_id = uuid.uuid4()
+            await pool.execute(
+                "INSERT INTO turns (id, started_at, status, kind) "
+                "VALUES ($1, now(), 'error', 'chat')",
+                turn_id,
+            )
+            await pool.execute(
+                "INSERT INTO turn_spans (turn_id, kind, name, started_at, duration_ms, meta) "
+                "VALUES ($1, 'llm_call', $2, now(), 300009, $3)",
+                turn_id,
+                model,
+                {"model": model, "timeout_phase": "read", "completion_chars": chars},
+            )
+
+    async def test_a_walled_round_is_counted_without_any_token(self, pool):
+        await self._walled(pool, "qwen3.8:27b", 3)
+
+        stalled = await model_speed.stalls(pool)
+
+        assert stalled["qwen3.8:27b"].walled == 3
+        assert stalled["qwen3.8:27b"].rounds == 3
+        # And the token-based reading has nothing at all to say about it.
+        assert (await model_speed.speed_of(pool, "qwen3.8:27b")).recent is None
+
+    async def test_a_round_that_wrote_something_before_timing_out_is_not_walled(self, pool):
+        await self._walled(pool, "qwen3.8:27b", 3, chars=812)
+
+        stalled = await model_speed.stalls(pool)
+
+        assert stalled["qwen3.8:27b"].walled == 0
+        assert stalled["qwen3.8:27b"].rounds == 3
+
+    async def test_healthy_rounds_count_in_the_denominator(self, pool):
+        await _span(pool, model="qwen3:8b", rate=40.0, hours_ago=0.5)
+        await self._walled(pool, "qwen3:8b", 2)
+
+        stalled = await model_speed.stalls(pool)
+
+        assert stalled["qwen3:8b"].walled == 2
+        assert stalled["qwen3:8b"].rounds == 3

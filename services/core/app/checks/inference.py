@@ -1,9 +1,23 @@
 """Is the card actually available — measured, not assumed.
 
-One family, one check: `inference_degraded`. It fires when a model's recent
-throughput has collapsed against what this machine's own history says is
-normal for that model, and it carries BOTH numbers plus the card's live free
-VRAM.
+One family, one check: `inference_degraded`. It reports two conditions,
+because the card has two ways of being unavailable and only one of them is
+visible as a number.
+
+  * DEGRADED — a model's recent throughput has collapsed against what this
+    machine's own history says is normal for it. Both numbers are carried,
+    plus the card's live free VRAM.
+  * STALLED — rounds are waiting out the gateway's whole read timeout and
+    receiving nothing at all. No tokens means no rate, so the degraded half
+    is blind to it.
+
+The stalled half exists because the walk on 2026-09-14 found the gap. The
+owner asked "what's the GPU doing"; his turn waited the full 300 s, got
+zero data lines, and errored. The card was holding 6.8 GB for something
+that was not ollama and could not produce a single token — the exact
+condition this family exists for — and the throughput measurement could not
+see it, because a round that generates nothing generates no rate. A check
+that is blind to the worst state of the thing it watches is not a check.
 
 ## What it is for
 On 2026-09-12 the owner played a video game on this machine. It held ~7 GB
@@ -75,48 +89,112 @@ def _bucket(ratio: float) -> int:
     return 5
 
 
-async def _free_vram_gb(app) -> tuple[float | None, str | None]:
-    """(free GB after a switch, reason-if-unknown) from the gateway.
+async def _card_facts(app) -> dict:
+    """The card, read ONCE per beat and shared by every finding.
 
-    Never fatal to the check. The throughput collapse IS the finding; the
-    free VRAM is context for it — the first question the owner will have is
-    what took the card — so a gateway that cannot answer costs the finding a
-    fact, not its existence.
+    Never fatal to the check. The throughput collapse or the stall IS the
+    finding; the card is context for it — the first question the owner will
+    have is what took the GPU — so a gateway that cannot answer costs the
+    findings a fact, not their existence.
+
+    `others_gb` is the actionable half: the card's own used figure minus
+    what ollama holds, which is everything this machine cannot enumerate.
+    On the walk that produced the stalled half it was 6.8 GB.
     """
+    blank = {"free_gb": None, "others_gb": None, "reason": None, "facts": {}}
     try:
         async with peers.client(app, peers.GATEWAY, VRAM_TIMEOUT) as client:
             resp = await client.get(VRAM_PATH)
             resp.raise_for_status()
     except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
-        return None, f"the gateway could not be asked about the card — {peers.reason(exc)}"
+        return {
+            **blank,
+            "reason": f"the gateway could not be asked about the card — {peers.reason(exc)}",
+        }
     body = resp.json()
     free = body.get("free_after_switch_gb")
     if free is None:
         free = body.get("free_gb")
     if free is None:
-        return None, body.get("reason") or body.get("resident_reason") or "the card is unreadable"
-    return float(free), None
+        reason = body.get("reason") or body.get("resident_reason") or "the card is unreadable"
+        return {**blank, "reason": reason}
+
+    resident = body.get("resident") or []
+    used_mb = body.get("used_mb")
+    held_mb = sum(entry.get("vram_mb") or 0 for entry in resident)
+    others_gb = (used_mb - held_mb) / 1024 if used_mb is not None else None
+    facts: dict = {"free_vram_gb": round(float(free), 1)}
+    if others_gb is not None:
+        facts["non_ollama_vram_gb"] = round(others_gb, 1)
+    return {
+        "free_gb": float(free),
+        "others_gb": others_gb,
+        "reason": None,
+        "facts": facts,
+    }
+
+
+def _stalled_finding(stall: model_speed.Stalls, card: dict) -> Finding:
+    """A model that is producing nothing at all.
+
+    The facts are counts, not a rate, because there is no rate: this is the
+    state where every token-based measurement is blank. The free-VRAM
+    numbers ride along because they are the actionable half — on the walk
+    that produced this check, 6.8 GB of the card belonged to something that
+    was not ollama, and that is the sentence the owner can act on.
+    """
+    facts: dict = {
+        "model": stall.model,
+        "walled_rounds": stall.walled,
+        "rounds": stall.rounds,
+        **card["facts"],
+    }
+    title = (
+        f"{stall.model} produced nothing at all in {stall.walled} of its last "
+        f"{stall.rounds} round(s) — each waited out the gateway's full read timeout"
+    )
+    if card["free_gb"] is not None:
+        title += f". The card has {card['free_gb']:.1f} GB free"
+        if card["others_gb"] is not None and card["others_gb"] >= 1:
+            title += (
+                f", and {card['others_gb']:.1f} GB of it is held by something that is not ollama"
+            )
+    else:
+        title += f". Free VRAM is unknown — {card['reason']}"
+    return Finding(key=f"inference_stalled:{stall.model}", title=title, facts=facts)
 
 
 async def degraded(app, pool) -> list[Finding]:
-    """Every model generating materially slower than its own normal."""
+    """Every model that is generating far slower than its own normal, or not
+    generating at all."""
     factor = await settings_store.read_value(pool, DEGRADED_FACTOR_KEY)
     speeds = await model_speed.speeds(pool)
-    comparable = [s for s in speeds.values() if s.ratio is not None]
-    if not comparable:
-        raise CannotCheck(
-            "no model has both recent rounds and enough history to compare them against — "
-            f"nothing to measure (needs {model_speed.MIN_ROUNDS_RECENT} rounds in the last "
-            f"{model_speed.RECENT_HOURS} h and {model_speed.MIN_ROUNDS_BASELINE} in the last "
-            f"{model_speed.BASELINE_HOURS // 24} days)"
-        )
+    stalled = await model_speed.stalls(pool)
 
+    # The stalled half runs FIRST and on its own evidence. It must not be
+    # gated behind having a comparable rate: the whole reason it exists is
+    # that a stalled card has no rate to compare.
+    hard_stops = [s for s in stalled.values() if s.walled >= model_speed.MIN_STALLED_ROUNDS]
+    comparable = [s for s in speeds.values() if s.ratio is not None]
     slow = [s for s in comparable if s.ratio >= factor]
-    if not slow:
+
+    if not comparable and not hard_stops:
+        raise CannotCheck(
+            "no model has both recent rounds and enough history to compare them against, "
+            "and none has stalled — nothing to measure (needs "
+            f"{model_speed.MIN_ROUNDS_RECENT} rounds in the last "
+            f"{model_speed.RECENT_HOURS} h and {model_speed.MIN_ROUNDS_BASELINE} in the last "
+            f"{model_speed.BASELINE_HOURS // 24} days, or "
+            f"{model_speed.MIN_STALLED_ROUNDS} rounds that produced nothing)"
+        )
+    if not slow and not hard_stops:
         return []
 
-    free_gb, vram_reason = await _free_vram_gb(app)
-    findings = []
+    card = await _card_facts(app)
+    findings = [
+        _stalled_finding(stall, card) for stall in sorted(hard_stops, key=lambda s: -s.walled)
+    ]
+    free_gb, vram_reason = card["free_gb"], card["reason"]
     for speed in sorted(slow, key=lambda s: -s.ratio):
         facts: dict = {
             "model": speed.model,
@@ -127,9 +205,8 @@ async def degraded(app, pool) -> list[Finding]:
         facts["baseline_tok_per_s"] = speed.baseline
         facts["recent_rounds"] = speed.recent_rounds
         facts["baseline_rounds"] = speed.baseline_rounds
-        if free_gb is not None:
-            facts["free_vram_gb"] = round(free_gb, 1)
-        else:
+        facts.update(card["facts"])
+        if free_gb is None:
             facts["free_vram_reason"] = vram_reason
         findings.append(
             Finding(

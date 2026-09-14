@@ -20,6 +20,20 @@ with a very large prompt look like a degraded card. That time is not
 discarded: it is its own field, `ttft_ms`, so a slow prompt is visible as
 what it actually is.
 
+## A card can be too contended to measure at all
+Walked on the live stack 2026-09-14, and this is the limit that walk found.
+When the owner asked "what's the GPU doing", his turn waited the gateway's
+full 300 s and received ZERO data lines — the card was so contended that
+not one token came out. A round that produces nothing produces no rate
+either, so `tok_per_s` is absent and the medians below have nothing to
+read: the worst possible state of the machine is invisible to the very
+measurement built to notice it.
+
+`stalls()` is the other half. A round that timed out in its READ phase
+having written nothing is a hard fact about the machine, filed on the same
+span, and needs no token to exist. Between them: a card that is slow is
+caught by the rate, and a card that is stopped is caught by the stalls.
+
 ## A baseline is history, never a constant
 "Normal" for a model is what THIS machine has actually done with it, read
 from the same spans. A model that has always been slow here has a slow
@@ -159,3 +173,54 @@ async def speeds(pool: asyncpg.Pool, model: str | None = None) -> dict[str, Spee
             baseline_rounds=len(baseline_rates),
         )
     return out
+
+
+# How many rounds must have produced NOTHING before that is the machine
+# rather than an event. One read timeout is an event — a model being pulled
+# underneath a turn, a restart landing mid-stream. Two in the recent window
+# is a pattern, and the window is short enough that two arrive quickly.
+MIN_STALLED_ROUNDS = 2
+
+
+@dataclass(frozen=True)
+class Stalls:
+    """How many of a model's recent rounds produced nothing at all."""
+
+    model: str
+    walled: int
+    rounds: int
+
+    def as_dict(self) -> dict:
+        return {"model": self.model, "walled_rounds": self.walled, "rounds": self.rounds}
+
+
+_STALLS_SQL = """
+    SELECT (meta->>'model') AS model,
+           count(*) AS rounds,
+           count(*) FILTER (
+               WHERE meta->>'timeout_phase' = 'read'
+                 AND coalesce((meta->>'completion_chars')::int, 0) = 0
+           ) AS walled
+      FROM turn_spans
+     WHERE kind = 'llm_call'
+       AND started_at >= now() - ($1 || ' hours')::interval
+       AND meta ? 'model'
+  GROUP BY 1
+"""
+
+
+async def stalls(pool: asyncpg.Pool, hours: int = RECENT_HOURS) -> dict[str, Stalls]:
+    """Per model, how many recent rounds waited out the gateway's read
+    timeout having written nothing.
+
+    This is the signal that survives a card nobody can get a token out of.
+    `tok_per_s` needs a token; this needs only the absence of one, and the
+    span already records both halves of that absence — `timeout_phase` and
+    `completion_chars`.
+    """
+    rows = await pool.fetch(_STALLS_SQL, str(hours))
+    return {
+        row["model"]: Stalls(model=row["model"], walled=row["walled"], rounds=row["rounds"])
+        for row in rows
+        if row["model"]
+    }
