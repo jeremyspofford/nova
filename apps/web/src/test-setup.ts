@@ -1,4 +1,24 @@
 import { afterEach } from 'vitest'
+import { configure } from '@testing-library/dom'
+
+// Testing Library's default waitFor budget is 1 s, comfortable when this
+// suite was small and marginal now: 63 files run in parallel, and a test
+// that mounts two pages under three providers and waits on several async
+// loads can spend most of a second just being scheduled. SettingsPage's
+// model-switch test reddened that way — a flake that says nothing about the
+// product and erodes the suite's authority every time it fires.
+//
+// This is HALF the fix and useless alone. A wait bounded at 5 s inside a
+// test bounded at 5 s can never actually run out, so vitest kills the test
+// first and reports "Test timed out" instead of the assertion that broke —
+// which is precisely what the ChatPage take-back test had been doing. See
+// `testTimeout` in vite.config.ts, which is deliberately much larger than
+// this.
+//
+// Both bounds describe the ENVIRONMENT, not the code under test. Raising
+// them costs nothing on a passing run: waitFor returns the moment its
+// condition holds.
+configure({ asyncUtilTimeout: 5000 })
 
 // jsdom does not implement matchMedia; theme-store listens for OS color
 // scheme changes unconditionally on mount, so every test that renders

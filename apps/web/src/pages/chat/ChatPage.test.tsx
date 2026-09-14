@@ -520,9 +520,19 @@ describe('ChatPage — messages waiting their turn', () => {
   })
 
   it('shows what the server says is waiting, and takes one back on request', async () => {
+    // The server stops listing a message once it has been taken back —
+    // so the fake does too. It used to keep returning q1 forever, which
+    // made the assertion below a RACE: the click removed the chip locally
+    // and the next poll (5 ms later) put it straight back from a server
+    // still insisting it was queued. That reddened roughly one full-suite
+    // run in four and never failed alone, because alone the assertion won
+    // the race. The neighbouring 'clears a chip once the server says the
+    // message has run' test already models the server this way.
+    let waiting = [{ id: 'q1', conversation_id: 'c1', body: 'actually, 12b is fine', ahead: 0 }]
     const deletes: string[] = []
     const fetchImpl = vi.fn(async (url: string) => {
       deletes.push(url)
+      if (url.endsWith('/q1')) waiting = []
       return { ok: true, status: 200, text: async () => '{"cancelled":true}' } as unknown as Response
     })
     const api = {
@@ -530,7 +540,7 @@ describe('ChatPage — messages waiting their turn', () => {
         conversation({
           pending_turn: true,
           pending_turn_id: 't-1',
-          queued: [{ id: 'q1', conversation_id: 'c1', body: 'actually, 12b is fine', ahead: 0 }],
+          queued: waiting,
         }),
       ),
       getMessages: vi.fn(async () => [] as StoredMessage[]),
@@ -547,11 +557,9 @@ describe('ChatPage — messages waiting their turn', () => {
       fireEvent.click(screen.getByTestId('unqueue-q1'))
     })
     expect(deletes).toContain('/api/v1/chat/queued/q1')
-    // 2026-09-12: this one flakes in the FULL suite and never alone — the
-    // take-back is a request, a re-read and a re-render, and waitFor's default
-    // second is not always enough when sixty files are sharing the machine. A
-    // longer window, not a weaker assertion: the chip still has to go.
-    await waitFor(() => expect(screen.queryByTestId('queued-q1')).toBeNull(), { timeout: 5000 })
+    // The chip goes and STAYS gone, because the server has stopped listing
+    // it. No window to tune: there is nothing left to race.
+    await waitFor(() => expect(screen.queryByTestId('queued-q1')).toBeNull())
   })
 
   it('clears a chip once the server says the message has run', async () => {

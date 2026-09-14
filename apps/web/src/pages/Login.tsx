@@ -3,6 +3,9 @@ import { Eye, EyeOff, LogIn } from 'lucide-react'
 import { Button, Input } from '../components/ui'
 import { useAuth } from '../stores/auth-store'
 import { ApiError } from '../lib/api'
+import clsx from 'clsx'
+import { useTheme } from '../stores/theme-store'
+import { appIcon, appIconHref } from '../lib/app-icon'
 
 /**
  * Sign in. There is deliberately no "create account" path here — the first
@@ -10,6 +13,7 @@ import { ApiError } from '../lib/api'
  * instance to /onboarding before this page can ever render.
  */
 export function Login() {
+  const { brandIcon, mode, preset, customAccent } = useTheme()
   const { login } = useAuth()
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
@@ -37,9 +41,20 @@ export function Login() {
     <div className="min-h-dvh flex items-center justify-center bg-surface-root dark:bg-transparent px-4">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8 gap-3">
-          <div className="h-10 w-10 rounded-lg bg-accent flex items-center justify-center text-on-accent text-h3 font-semibold shadow-md dark:shadow-[0_0_20px_rgb(var(--accent-500)/0.3)]">
-            N
-          </div>
+          {/* The same brand mark the sidebar shows, from the same setting:
+              two places wearing one identity. The tile and its glow are for
+              a FILLED mark only — see src/lib/app-icon.ts. */}
+          <img
+            src={appIconHref(brandIcon, mode, preset, customAccent)}
+            alt=""
+            aria-hidden="true"
+            data-testid="brand-mark"
+            className={clsx(
+              'h-10 w-10',
+              appIcon(brandIcon).filled &&
+                'rounded-lg shadow-md dark:shadow-[0_0_20px_rgb(var(--accent-500)/0.3)]',
+            )}
+          />
           <div className="text-center">
             <h1 className="text-xl font-semibold text-content-primary">Nova</h1>
             <p className="mt-1 text-caption text-content-tertiary">Sign in to this instance</p>
