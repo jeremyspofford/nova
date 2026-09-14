@@ -1,0 +1,85 @@
+# Slice 22 — carries
+
+Open items from S22 (live resources). Each is a fact about what is NOT
+done, so a later slice starts from the truth rather than from a
+re-discovery.
+
+## DEFERRED: the last two walk steps
+
+Deferred by Jeremy, 2026-09-14: "Put the 'ask her about the gpu once the
+game's off' for later."
+
+Everything in S22 is built, tested and deployed, and the walk has already
+paid for itself once — it killed the slice's premise and bought the stalled
+half of the check (see the slice doc). What is left needs a turn the model
+can actually answer, which needs the card free.
+
+1. **Ask her about the GPU, in chat, in his own words.** Then read
+   `turn_spans` for that turn: `inference_health` should appear as a tool
+   span, and the reply should carry the card's real numbers. Curling the
+   route proves nothing about her — the whole point is whether the model
+   reaches for the tool when the question is about the GPU.
+2. **Confirm the Inbox item.** One walled round is on record; the check
+   needs two in the recent window (`model_speed.MIN_STALLED_ROUNDS`). If a
+   second turn walls while he is playing, the next beat should raise
+   `inference_stalled:qwen3.8:27b` naming both the walled count and how
+   much of the card is held by something that is not ollama. It should fold
+   rather than repeat on the following beat, and clear when the card frees.
+
+Neither needs code. Both need the owner's own session, which is the point.
+
+## TODO (owner-requested, unscheduled): a broader AI-quality corpus
+
+Asked for by Jeremy on 2026-09-14, in his words: "add a todo to make more
+general tests for the ai quality runs so that we can have a good idea of
+its quality and capabilities."
+
+**Recorded here on 2026-09-14 because it was not recorded anywhere.** It
+was agreed in a session that has since been compacted, and a promise that
+lives only in a transcript does not exist. That is the whole lesson: it
+took a "what's next?" to notice it had evaporated.
+
+**What exists today.** `agent_quality` is 23 cases and every one of them
+is a HONESTY or CONTRACT pin — did she call the tool, did she avoid
+claiming a thing she did not do, did the guard fire. That is what the
+corpus was built for and it does it well. It says almost nothing about
+whether she is any GOOD: whether she reasons, whether she writes well,
+whether she can hold a long context, whether she picks the right approach.
+
+**What it is for.** Choosing a model. The 27B scores 21/23 and the 8B
+19/23, which reads as "nearly the same" and is almost certainly false about
+capability — the two-case gap is honesty pins, not intelligence. Without a
+capability half, the suite cannot answer the question he actually asks it,
+which is "which model should Nova run".
+
+**Known hard part, stated so it is not re-discovered.** Mechanical
+predicates (`tool_called`, `reply_matches`) cannot grade reasoning or
+prose. Grading those means either a judge model — which v3 did, and which
+brings position bias, its own model's taste, and a second thing to trust —
+or hand-written rubrics that go stale. This is a design decision to make
+deliberately, not a corpus to start typing.
+
+## CARRIED IN from earlier slices, still open
+
+- **S16's claimed-deletion eval case.** Needs a workspace-file fixture in
+  the harness; cases can declare `agents` and `skills` today but not files.
+- **`no-fabricated-agent-work` is unstable on both models** (2/3). Reads
+  like the other ambiguous cases and deserves the same treatment.
+- **A matched three-run set for the 27B under the warm-up code.** Two of
+  its three recorded runs predate the S21 warm-up, so the floor across runs
+  is not strictly comparable.
+
+## OUT OF SCOPE, deliberately, and why
+
+- **Routing around a contended card.** Falling back to a smaller model when
+  the GPU is busy is a decision on his behalf, and S10's mode switch is
+  where that belongs. S22 states; it does not decide (owner ruling
+  2026-09-03). The 12th and the 14th are the argument for having that
+  conversation, not for skipping it.
+- **The ollama runtime knobs** — `OLLAMA_MAX_LOADED_MODELS`, KV-cache
+  quantisation, a context cap, the Windows sysmem-fallback policy. The
+  audit found every one unset. Each is a real trade-off and a separate
+  conversation, not a side effect of this slice. On a machine routinely
+  6 GB down this is plausibly the cheapest fix for the actual problem.
+- **The 300 s gateway timeout.** It bounds silence and is doing its job;
+  the problem was never that it fired.
