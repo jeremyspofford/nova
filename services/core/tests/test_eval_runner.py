@@ -1266,3 +1266,133 @@ def test_a_declared_agent_name_must_carry_the_reserved_prefix():
         name="eval_coder", purpose="p", instructions="i", tools=("get_time",)
     )
     assert parsed.max_tool_rounds is None
+
+
+# -- a run that cannot produce a measurement stops saying so (S22) ----------
+
+
+def _refusal() -> Refusal:
+    return Refusal(status=500, body={"error": {"message": "nothing arrived from the gateway"}})
+
+
+async def test_three_ungradeables_in_a_row_end_the_run_with_the_reason(pool, mount_peers):
+    """THE 2026-09-12 RUN. A video game held the GPU; every case errored at
+    the gateway's 300 s read limit and the suite spent two hours proving,
+    twenty-three times, something that was knowable after the third.
+
+    The run ends 'error' — an ungradeable streak is a statement about the
+    MACHINE, never a judgement about the model — and the reason carries the
+    last case's own words, because a timeout and a refused model are the same
+    streak and completely different problems.
+    """
+    gateway = ScriptedGateway(rounds=(WARMUP_ROUND, _refusal(), _refusal(), _refusal()))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    cases = [_case([PredicateSpec("reply_matches", "x")], cid=f"c{i}") for i in range(6)]
+
+    runs = await runner.run_suite(app, pool, "corpus", MODEL, cases=cases)
+
+    assert len(runs) == 3, "the last three cases never ran"
+    row = await pool.fetchrow("SELECT * FROM eval_suite_runs ORDER BY started_at DESC LIMIT 1")
+    assert row["status"] == "error"
+    assert "3 in a row were ungradeable" in row["error"]
+    assert "stopped after 3 of 6 case(s)" in row["error"]
+    assert "c2" in row["error"], "the reason names the last case"
+    assert "nothing arrived from the gateway" in row["error"], "in that case's own words"
+
+
+async def test_a_scattered_ungradeable_never_stops_the_run(pool, mount_peers):
+    """Three ungradeables, not in a row. A single bad case is an ordinary
+    event and stopping on one would make the harness unusable — the streak is
+    the machine, a scattering is the corpus."""
+    gateway = ScriptedGateway(
+        rounds=(
+            WARMUP_ROUND,
+            _refusal(),
+            (text("VRAM answer."),),
+            _refusal(),
+            (text("VRAM answer."),),
+            _refusal(),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    cases = [_case([PredicateSpec("reply_matches", "VRAM")], cid=f"c{i}") for i in range(5)]
+
+    runs = await runner.run_suite(app, pool, "corpus", MODEL, cases=cases)
+
+    assert len(runs) == 5
+    row = await pool.fetchrow("SELECT * FROM eval_suite_runs ORDER BY started_at DESC LIMIT 1")
+    assert row["status"] == "done"
+
+
+async def test_the_rows_already_scored_are_kept_when_a_streak_ends_the_run(pool, mount_peers):
+    """A run that stopped early is still evidence of what it did score. The
+    rows stay exactly as they landed; only the remaining cases are missing,
+    and the row says so."""
+    gateway = ScriptedGateway(
+        rounds=(WARMUP_ROUND, (text("VRAM answer."),), _refusal(), _refusal(), _refusal())
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    cases = [_case([PredicateSpec("reply_matches", "VRAM")], cid=f"c{i}") for i in range(6)]
+
+    await runner.run_suite(app, pool, "corpus", MODEL, cases=cases)
+
+    rows = await pool.fetch("SELECT case_id, passed, ungradeable FROM eval_runs ORDER BY case_id")
+    assert [(r["case_id"], r["passed"], r["ungradeable"]) for r in rows] == [
+        ("c0", True, False),
+        ("c1", None, True),
+        ("c2", None, True),
+        ("c3", None, True),
+    ]
+
+
+def test_the_streak_counts_only_the_tail():
+    made = [
+        runner.EvalRun("a", "s", 1, MODEL, True, False),
+        runner.EvalRun("b", "s", 1, MODEL, None, True),
+        runner.EvalRun("c", "s", 1, MODEL, None, True),
+    ]
+    assert runner._ungradeable_streak(made) == 2
+    assert runner._ungradeable_streak(made[:1]) == 0
+    assert runner._ungradeable_streak([]) == 0
+
+
+async def test_a_cancelled_run_stops_at_the_next_case_boundary(pool, mount_peers):
+    """Before S22 the only way to stop a suite was restarting core, which
+    also meant the record could not say a person had stopped it: the orphan
+    sweep closes a restarted run 'interrupted'.
+
+    The stamp is read BETWEEN cases — never mid-case, where a scratch person
+    and any fixture agents are still standing.
+    """
+    gateway = ScriptedGateway(
+        rounds=(WARMUP_ROUND, (text("VRAM answer."),), (text("VRAM answer."),))
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    cases = [_case([PredicateSpec("reply_matches", "VRAM")], cid=f"c{i}") for i in range(4)]
+
+    row = await runner.open_suite_run(pool, "corpus", 1, MODEL, len(cases))
+    await runner.request_cancel(pool, row["id"])
+    runs = await runner.run_suite_job(app, pool, row["id"], cases, MODEL)
+
+    assert runs == [], "the stamp was already there, so not even case one ran"
+    closed = await runner.suite_run(pool, row["id"])
+    assert closed["status"] == "cancelled"
+    assert "stopped on request after 0 of 4 case(s)" in closed["error"]
+    assert closed["cancel_requested_at"] is not None
+
+
+async def test_cancelling_a_finished_run_is_not_an_error_it_is_already_true(pool, mount_peers):
+    gateway = ScriptedGateway(rounds=(WARMUP_ROUND, (text("VRAM answer."),)))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    case = _case([PredicateSpec("reply_matches", "VRAM")], cid="c0")
+    await runner.run_suite(app, pool, "corpus", MODEL, cases=[case])
+    row = await pool.fetchrow("SELECT id FROM eval_suite_runs ORDER BY started_at DESC LIMIT 1")
+
+    after = await runner.request_cancel(pool, row["id"])
+
+    assert after["status"] == "done"
+    assert after["cancel_requested_at"] is None
+
+
+async def test_cancelling_a_run_that_does_not_exist_answers_nothing(pool):
+    assert await runner.request_cancel(pool, uuid.uuid4()) is None

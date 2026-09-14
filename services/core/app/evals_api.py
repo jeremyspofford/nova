@@ -45,9 +45,14 @@ docstring on why that is named, not silently assumed).
     cases, bump its version, and old-version runs fall out of view). Rows
     persisted before migration 016 belong to no run and are not shown here.
 
+  * POST /api/v1/evals/runs/{id}/cancel — ask a running suite to stop at its
+    next case boundary (S22). Answers the run row; a finished run is answered
+    unchanged rather than refused.
+
   <run> is {"id", "suite", "suite_version", "model", "status": running | done
-  | error | interrupted, "case_count", "error": str | null, "started_at",
-  "ended_at": str | null}. A case is {"case_id", "message" (joined from the
+  | error | interrupted | cancelled, "case_count", "error": str | null,
+  "started_at", "ended_at": str | null, "warmup_ms", "warmup_note",
+  "cancel_requested_at": str | null}. A case is {"case_id", "message" (joined from the
   suite by case_id; null if the case no longer exists at that version),
   "passed" (null EXACTLY when ungradeable), "ungradeable", "detail",
   "turn_id", "created_at"}.
@@ -115,6 +120,12 @@ def _suite_run(row: dict) -> dict:
         # in words. Never a 0, which would read as "loaded instantly".
         "warmup_ms": row.get("warmup_ms"),
         "warmup_note": row.get("warmup_note"),
+        # S22: when someone asked this run to stop. Present while it is still
+        # running and winding down, so the page can say "stopping" rather than
+        # looking like the button did nothing for a case's worth of time.
+        "cancel_requested_at": (
+            row["cancel_requested_at"].isoformat() if row.get("cancel_requested_at") else None
+        ),
     }
 
 
@@ -374,6 +385,31 @@ async def active_run(_person: Person = Depends(identity.require_person)) -> dict
     pool = await db.get_pool()
     row = await runner.active_suite_run(pool)
     return _suite_run(row) if row else None
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(
+    run_id: uuid.UUID,
+    _person: Person = Depends(identity.require_person),
+) -> dict:
+    """Ask a running suite to stop at its next case boundary.
+
+    Before S22 the only way to stop a suite was restarting core, which I did
+    twice on 2026-09-12 while a two-hour run produced twenty-three
+    ungradeables — and a restart closes the row through the orphan sweep, so
+    the record could not even say a person had stopped it.
+
+    This STATES a request; it does not kill anything. The job reads the stamp
+    between cases, where the scratch person and any fixture agents have
+    already been torn down. A run that has already finished answers with its
+    own row unchanged: asking a finished run to stop is not an error, it is
+    already true.
+    """
+    pool = await db.get_pool()
+    row = await runner.request_cancel(pool, run_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no eval suite run {run_id}")
+    return _suite_run(row)
 
 
 @router.get("/runs/{run_id}")

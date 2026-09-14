@@ -1178,6 +1178,11 @@ SUITE_RUN_RUNNING = "running"
 SUITE_RUN_DONE = "done"
 SUITE_RUN_ERROR = "error"
 SUITE_RUN_INTERRUPTED = "interrupted"
+# S22: a person said stop. Its own status rather than 'interrupted', because
+# they are different facts about the record — the process died under it
+# versus somebody pressed the button — and a reader of a half-finished run
+# should not have to guess which.
+SUITE_RUN_CANCELLED = "cancelled"
 
 # The stated reason a swept row carries — the row's own `error` says what the
 # page shows, never a guess made at read time.
@@ -1192,7 +1197,10 @@ RUNNING: set[uuid.UUID] = set()
 _SUITE_RUN_COLUMNS = (
     "id, suite, suite_version, model, status, case_count, error, started_at, ended_at, "
     # S21: what loading the model cost, kept out of the first case's score.
-    "warmup_ms, warmup_note"
+    "warmup_ms, warmup_note, "
+    # S22: when a person asked this run to stop (the job notices at its next
+    # case boundary). Null on every run nobody stopped.
+    "cancel_requested_at"
 )
 
 
@@ -1383,6 +1391,76 @@ async def close_suite_run(
     return closed
 
 
+# How many ungradeable cases in a row end the run. An ungradeable case is a
+# turn that ERRORED — the model never answered — so three of them back to
+# back is not a measurement in progress, it is a machine that cannot
+# currently produce one. On 2026-09-12 a suite scored zero of twenty-three
+# this way, each case costing 300 s of silence at the gateway's read limit:
+# two hours to learn something that was knowable after fifteen minutes.
+#
+# Three, not one: a single ungradeable case is an ordinary event (a tool
+# fixture that misbehaved, one bad round) and stopping on it would make the
+# harness unusable. Three consecutive is the machine, not the case.
+UNGRADEABLE_STREAK_LIMIT = 3
+
+
+def _ungradeable_streak(runs: Sequence[EvalRun]) -> int:
+    """How many of the runs at the END of the list are ungradeable."""
+    streak = 0
+    for run in reversed(runs):
+        if not run.ungradeable:
+            break
+        streak += 1
+    return streak
+
+
+def _streak_reason(runs: Sequence[EvalRun], total: int) -> str:
+    """Why the run stopped, in the LAST CASE'S OWN WORDS.
+
+    Never "too many failures". The reader needs to know what the turns were
+    actually saying — a 300 s gateway timeout and a refused model are the
+    same streak and completely different problems.
+    """
+    last = runs[-1]
+    detail = last.detail or {}
+    said = detail.get("reason") or "no reason was recorded"
+    return (
+        f"stopped after {len(runs)} of {total} case(s): "
+        f"{UNGRADEABLE_STREAK_LIMIT} in a row were ungradeable, so this run could not "
+        f"produce a measurement. The last one ({last.case_id}) said: {said}"
+    )
+
+
+async def cancel_requested(pool: asyncpg.Pool, run_id: uuid.UUID) -> bool:
+    """Has anyone asked this run to stop? Read at each case boundary."""
+    return bool(
+        await pool.fetchval(
+            "SELECT cancel_requested_at IS NOT NULL FROM eval_suite_runs WHERE id = $1", run_id
+        )
+    )
+
+
+async def request_cancel(pool: asyncpg.Pool, run_id: uuid.UUID) -> dict | None:
+    """Ask a running suite to stop at its next case boundary.
+
+    Returns the row as it now stands, or None when there is no such run. A
+    run that has already finished is returned unchanged and unstamped —
+    asking a finished run to stop is not an error, it is just already true.
+
+    Stamping is all this does. The JOB does the stopping, between cases,
+    where a scratch person and any fixture agents have already been torn
+    down; cancelling mid-case would leak exactly the rows
+    `_sweep_orphan_scratch_people` exists to clean up.
+    """
+    await pool.execute(
+        "UPDATE eval_suite_runs SET cancel_requested_at = now() "
+        "WHERE id = $1 AND status = $2 AND cancel_requested_at IS NULL",
+        run_id,
+        SUITE_RUN_RUNNING,
+    )
+    return await suite_run(pool, run_id)
+
+
 async def sweep_orphaned_suite_runs(pool: asyncpg.Pool) -> list[uuid.UUID]:
     """Mark every 'running' row no process is running as 'interrupted'; return
     the ids. Called at startup (app/main.py's lifespan, beside
@@ -1503,10 +1581,26 @@ async def run_suite_job(
             f"{warmup_ms} ms" if warmup_ms is not None else warmup_note,
         )
         for case in suite_cases:
+            # Both stops happen HERE, between cases, never mid-case: a case in
+            # flight owns a scratch person and possibly fixture agents, and
+            # cutting it between those leaks the rows the orphan sweeps exist
+            # to clean up.
+            if await cancel_requested(pool, run_id):
+                status = SUITE_RUN_CANCELLED
+                error = (
+                    f"stopped on request after {len(runs)} of {len(suite_cases)} case(s) — "
+                    "the remaining cases never ran"
+                )
+                return runs
             run = await run_case(app, pool, case, model)
             run.run_id = run_id
             await persist_run(pool, run)
             runs.append(run)
+            if _ungradeable_streak(runs) >= UNGRADEABLE_STREAK_LIMIT:
+                status = SUITE_RUN_ERROR
+                error = _streak_reason(runs, len(suite_cases))
+                logger.warning("eval suite run %s %s", run_id, error)
+                return runs
         status = SUITE_RUN_DONE
     except asyncio.CancelledError:
         status = SUITE_RUN_INTERRUPTED

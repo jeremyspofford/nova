@@ -786,3 +786,72 @@ async def test_a_warm_up_that_could_not_be_made_records_why_and_never_a_zero(
     assert row["warmup_ms"] is None
     assert "no route to the gateway" in row["warmup_note"]
     assert row["status"] == "done"
+
+
+# -- POST /runs/{id}/cancel: a person can stop a run (S22) ------------------
+
+
+async def test_a_running_suite_can_be_stopped_and_the_record_says_who_stopped_it(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    """On 2026-09-12 the only way to stop a suite was restarting core, which I
+    did twice — and a restart closes the row through the orphan sweep, so the
+    record could not even say a person had stopped it on purpose.
+
+    The run stops at the next CASE BOUNDARY, so case one (held at the gateway
+    when the request arrives) still finishes and still scores. Its status is
+    'cancelled', not 'interrupted': the process did not die, somebody pressed
+    the button.
+    """
+    _use_suite(
+        monkeypatch,
+        [
+            _case("a", [PredicateSpec("reply_matches", "VRAM")], message="one"),
+            _case("b", [PredicateSpec("reply_matches", "VRAM")], message="two"),
+            _case("c", [PredicateSpec("reply_matches", "VRAM")], message="three"),
+        ],
+    )
+    hold = asyncio.Event()
+    gateway = ScriptedGateway(
+        rounds=(
+            WARMUP_ROUND,
+            (text("VRAM answer."),),
+            (text("VRAM answer."),),
+            (text("VRAM answer."),),
+        ),
+        hold=hold,
+        hold_before=1,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    run_id = uuid.UUID(
+        (await owner_client.post(RUN, json={"suite": "probe", "model": MODEL})).json()["run_id"]
+    )
+
+    stopped = await owner_client.post(f"/api/v1/evals/runs/{run_id}/cancel")
+    assert stopped.status_code == 200, stopped.text
+    # The page can say "stopping" instead of looking like the button did
+    # nothing for a case's worth of time.
+    assert stopped.json()["cancel_requested_at"] is not None
+    assert stopped.json()["status"] == "running"
+
+    hold.set()
+    await _drain()
+
+    record = (await owner_client.get(f"/api/v1/evals/runs/{run_id}")).json()
+    assert record["run"]["status"] == "cancelled"
+    assert "stopped on request after 1 of 3 case(s)" in record["run"]["error"]
+    # What it DID score is kept: a stopped run is still evidence of its work.
+    assert [c["case_id"] for c in record["cases"]] == ["a"]
+    # And never rolled up into a rate — a partial is not a score.
+    assert record["summary"] is None
+
+
+async def test_cancelling_a_run_that_does_not_exist_is_a_404(owner_client):
+    resp = await owner_client.post(f"/api/v1/evals/runs/{uuid.uuid4()}/cancel")
+    assert resp.status_code == 404
+
+
+async def test_cancel_requires_auth(client):
+    resp = await client.post(f"/api/v1/evals/runs/{uuid.uuid4()}/cancel")
+    assert resp.status_code == 401

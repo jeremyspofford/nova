@@ -41,6 +41,7 @@ function suiteRun(overrides: Partial<EvalSuiteRun> = {}): EvalSuiteRun {
     error: null,
     started_at: '2026-09-03T10:00:00+00:00',
     ended_at: null,
+    cancel_requested_at: null,
     ...overrides,
   }
 }
@@ -121,6 +122,7 @@ function fakeApi(overrides: Partial<QualityApi> = {}): QualityApi {
     getSuggestion: vi.fn(async () => NO_SUGGESTION),
     getEvalRuns: vi.fn(async () => stored([], EMPTY_SUMMARY)),
     startEvalRun: vi.fn(async () => STARTED),
+    cancelEvalRun: vi.fn(async () => suiteRun({ cancel_requested_at: '2026-09-14T12:00:00+00:00' })),
     getActiveEvalRun: vi.fn(async () => null),
     getEvalRun: vi.fn(async () => record(suiteRun(), [])),
     ...overrides,
@@ -447,5 +449,71 @@ describe('AIQualityPage — what the last few runs agreed on', () => {
     render(<AIQualityPage api={api} />)
     await screen.findByTestId('eval-score')
     expect(screen.queryByTestId('eval-across-runs')).toBeNull()
+  })
+})
+
+describe('stopping a run', () => {
+  /**
+   * S22. On 2026-09-12 the only way to stop a suite was restarting core,
+   * which the owner watched happen twice while a two-hour run produced
+   * twenty-three ungradeable cases.
+   */
+  it('offers a Stop button only while a run is actually running', async () => {
+    const api = fakeApi({ getActiveEvalRun: vi.fn(async () => suiteRun()) })
+    render(<AIQualityPage api={api} pollMs={10} />)
+
+    expect(await screen.findByTestId('eval-stop-button')).toBeTruthy()
+  })
+
+  it('has no Stop button when nothing is running', async () => {
+    render(<AIQualityPage api={fakeApi()} pollMs={10} />)
+
+    await screen.findByTestId('eval-run-button')
+    expect(screen.queryByTestId('eval-stop-button')).toBeNull()
+  })
+
+  it('says it is stopping after this case, because the wait is real', async () => {
+    // The job reads the request between cases, so a case already in flight
+    // finishes first. A button that just went quiet would look like it had
+    // done nothing for a case's worth of time.
+    const api = fakeApi({ getActiveEvalRun: vi.fn(async () => suiteRun()) })
+    render(<AIQualityPage api={api} pollMs={10} />)
+
+    fireEvent.click(await screen.findByTestId('eval-stop-button'))
+
+    const note = await screen.findByTestId('eval-stopping')
+    expect(note.textContent).toContain('Stopping after this case')
+    expect(api.cancelEvalRun).toHaveBeenCalledWith('run-1')
+  })
+
+  it('a stopped run states that it was stopped, never a score', async () => {
+    const stopped = suiteRun({
+      status: 'cancelled',
+      ended_at: '2026-09-14T12:01:00+00:00',
+      error: 'stopped on request after 3 of 23 case(s) — the remaining cases never ran',
+    })
+    const api = fakeApi({
+      getActiveEvalRun: vi.fn(async () => suiteRun()),
+      getEvalRun: vi.fn(async () => record(stopped, [])),
+    })
+    render(<AIQualityPage api={api} pollMs={10} />)
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('stopped on request after 3 of 23')
+  })
+
+  it('a failure to ask says so and does not pretend the run stopped', async () => {
+    const api = fakeApi({
+      getActiveEvalRun: vi.fn(async () => suiteRun()),
+      cancelEvalRun: vi.fn(async () => {
+        throw new Error('the server is unreachable')
+      }),
+    })
+    render(<AIQualityPage api={api} pollMs={10} />)
+
+    fireEvent.click(await screen.findByTestId('eval-stop-button'))
+
+    const said = await screen.findByTestId('eval-poll-error')
+    expect(said.textContent).toContain('could not ask the run to stop — the server is unreachable')
   })
 })

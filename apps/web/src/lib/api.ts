@@ -1362,7 +1362,11 @@ export interface EvalScoreSummary {
  * holds it, then exactly one of 'done' (every case scored), 'error' (the job
  * failed; `error` says why) or 'interrupted' (the core process running it
  * exited first; `error` says so). */
-export type EvalRunStatus = 'running' | 'done' | 'error' | 'interrupted'
+/** 'cancelled' (S22) is deliberately its own state rather than a flavour of
+ * 'interrupted': the process dying under a run and a person pressing Stop are
+ * different facts about the record, and a reader of a half-finished run
+ * should not have to guess which happened. */
+export type EvalRunStatus = 'running' | 'done' | 'error' | 'interrupted' | 'cancelled'
 
 export interface EvalSuiteRun {
   id: string
@@ -1374,6 +1378,14 @@ export interface EvalSuiteRun {
   error: string | null
   started_at: string
   ended_at: string | null
+  /** What loading the model cost, paid before case one (S21). Null means no
+   * number was measured — never a 0, which would read as "loaded instantly". */
+  warmup_ms?: number | null
+  warmup_note?: string | null
+  /** When someone asked this run to stop (S22). Set while it is still running
+   * and winding down, so the page can say "stopping" instead of looking like
+   * the button did nothing for a case's worth of time. */
+  cancel_requested_at?: string | null
 }
 
 export interface EvalRunResult {
@@ -1420,6 +1432,19 @@ export interface EvalRunStarted {
  */
 export async function startEvalRun(suite: string, model: string): Promise<EvalRunStarted> {
   return apiSend<EvalRunStarted>('/api/v1/evals/run', 'POST', { suite, model })
+}
+
+/**
+ * POST /api/v1/evals/runs/{id}/cancel — ask a running suite to stop at its
+ * next case boundary.
+ *
+ * Before this the only way to stop a suite was restarting core, which is what
+ * actually happened on 2026-09-12 while a two-hour run produced twenty-three
+ * ungradeable cases. It STATES a request; the job does the stopping, between
+ * cases, where its scratch person and fixture agents have been torn down.
+ */
+export async function cancelEvalRun(runId: string): Promise<EvalSuiteRun> {
+  return apiSend<EvalSuiteRun>(`/api/v1/evals/runs/${runId}/cancel`, 'POST')
 }
 
 /** GET /api/v1/evals/runs/repeated — how a model did across its last few

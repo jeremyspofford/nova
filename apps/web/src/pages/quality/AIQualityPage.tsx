@@ -13,6 +13,7 @@ import {
   getInstalledModels as apiGetInstalledModels,
   getSuggestion as apiGetSuggestion,
   startEvalRun as apiStartEvalRun,
+  cancelEvalRun as apiCancelEvalRun,
   type EvalCaseResult,
   type EvalRunRecord,
   type EvalRepeatedRuns,
@@ -74,6 +75,7 @@ export interface QualityApi {
   getEvalRuns: typeof apiGetEvalRuns
   getRepeatedRuns: typeof apiGetRepeatedRuns
   startEvalRun: typeof apiStartEvalRun
+  cancelEvalRun: typeof apiCancelEvalRun
   getActiveEvalRun: typeof apiGetActiveEvalRun
   getEvalRun: typeof apiGetEvalRun
   getInstalledModels: typeof apiGetInstalledModels
@@ -85,7 +87,7 @@ const DEFAULT_API: QualityApi = {
   getEvalRuns: apiGetEvalRuns,
   getRepeatedRuns: apiGetRepeatedRuns,
   startEvalRun: apiStartEvalRun,
-  getActiveEvalRun: apiGetActiveEvalRun,
+  cancelEvalRun: apiCancelEvalRun,  getActiveEvalRun: apiGetActiveEvalRun,
   getEvalRun: apiGetEvalRun,
   getInstalledModels: apiGetInstalledModels,
   getSuggestion: apiGetSuggestion,
@@ -102,9 +104,9 @@ function reasonOf(err: unknown): string {
 function endedReason(record: EvalRunRecord): string {
   const { status, error } = record.run
   if (error) return error
-  return status === 'interrupted'
-    ? 'the run was interrupted before every case finished'
-    : `the run ended with status ${status}`
+  if (status === 'interrupted') return 'the run was interrupted before every case finished'
+  if (status === 'cancelled') return 'the run was stopped before every case finished'
+  return `the run ended with status ${status}`
 }
 
 function asStored(record: EvalRunRecord, summary: EvalScoreSummary): EvalRunResult {
@@ -343,6 +345,25 @@ export function AIQualityPage({
 
   const canRun = Boolean(suite) && Boolean(model) && !running && !attaching
 
+  // A stop is a REQUEST, and the wait is real: the job reads it between
+  // cases, so a case already in flight finishes first. The button says
+  // "Stopping…" for that whole window rather than going quiet and looking
+  // like nothing happened.
+  const [stopping, setStopping] = useState(false)
+  const stopRequested = record?.run.cancel_requested_at != null
+  const stop = useCallback(async () => {
+    if (watching === null) return
+    setStopping(true)
+    try {
+      const row = await api.cancelEvalRun(watching)
+      setRecord(prev => (prev ? { ...prev, run: row } : prev))
+    } catch (err) {
+      setPollError(`could not ask the run to stop — ${reasonOf(err)}`)
+    } finally {
+      setStopping(false)
+    }
+  }, [api, watching])
+
   return (
     <div>
       <PageHeader
@@ -401,6 +422,17 @@ export function AIQualityPage({
         >
           {running ? 'Running…' : 'Run suite'}
         </Button>
+        {running && (
+          <Button
+            variant="secondary"
+            onClick={stop}
+            disabled={stopping || stopRequested}
+            data-testid="eval-stop-button"
+            icon={<X size={14} />}
+          >
+            {stopRequested ? 'Stopping…' : 'Stop'}
+          </Button>
+        )}
       </div>
 
       {runError && (
@@ -472,6 +504,11 @@ function Results({
             {total !== null ? ` of ${total}` : ''} case{total === 1 ? '' : 's'} finished… this
             runs real turns and can take a few minutes. It keeps running if you leave this page.
           </span>
+          {record?.run.cancel_requested_at != null && (
+            <span data-testid="eval-stopping" className="text-warning">
+              Stopping after this case…
+            </span>
+          )}
         </div>
         {pollError && (
           <div
