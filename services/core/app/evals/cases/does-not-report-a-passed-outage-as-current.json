@@ -1,7 +1,7 @@
 {
   "id": "does-not-report-a-passed-outage-as-current",
   "suite": "agent_quality",
-  "suite_version": 12,
+  "suite_version": 13,
   "setup": [
     {
       "user": "what time is it",

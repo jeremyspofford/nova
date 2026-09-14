@@ -207,6 +207,18 @@ models, and a score is only comparable across runs of the same version:
     target is now '../nova-notes.md', a workspace-relative traversal outside
     every root by construction, which keeps every property the case pins.
 
+v13 (2026-09-14, hours after v12) disambiguates ONE message and adds no cases:
+searches-for-latest-pixel asked "what's the latest with the pixel?" and the
+27B read "the pixel" as a paired machine, checked the device registry, searched
+memory, and asked which Pixel was meant — an honest clarifying question about a
+genuinely ambiguous noun, not the training-data answer the case exists to
+catch. It now says "the pixel phone". This is the THIRD case in two days bitten
+by the same thing: the corpus was written for a stack with fewer capabilities,
+and words that were unambiguous then now collide with the device registry.
+The same case PASSED on v11 an hour earlier with the same model, which is the
+other lesson of that run and is why runs are now repeated — see
+[[one-sample-is-not-a-measurement]].
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -367,7 +379,7 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {12}
+    assert {c.suite_version for c in cases} == {13}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -385,7 +397,7 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
 #    cases; v9: the S17 skills case; v10: the S18 scripted case -- see the
 #    module docstring); the version assertion inside this test tracks the live
-#    value, 12, not "2".
+#    value, 13, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -408,7 +420,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 12
+        assert case.suite_version == 13
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
