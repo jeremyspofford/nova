@@ -121,6 +121,17 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         ),
     ),
     SettingDef(
+        key="inference.degraded_factor",
+        type="int",
+        default=5,
+        description=(
+            "How many times slower than its own usual a model has to be generating "
+            "before the beat says so. The comparison is against that model's own "
+            "history on this machine, so a model that has always been slow here is "
+            "never reported as degraded."
+        ),
+    ),
+    SettingDef(
         key="agents.max_tool_rounds",
         type="int",
         default=6,

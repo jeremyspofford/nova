@@ -156,6 +156,12 @@ class FakeGateway:
     # these too, so the persisted reply is the WHOLE answer, not the prefix
     # that happened to arrive before the client left.
     after_hold: tuple[str, ...] = ()
+    # Seconds to sleep between content deltas. S22 measures generation
+    # throughput from the FIRST delta to the end of the stream, and a fake
+    # that emits everything in the same microsecond has no generation phase
+    # to time — the rate would be absent, and a test asserting on it would
+    # be asserting on the scheduler.
+    delta_delay_s: float = 0.0
     admin_status: int = 200
     # The model catalogue (S10a): when set, /admin/catalog answers this body
     # and /admin/catalog/hf this page (with hf_status); when None they fall
@@ -263,6 +269,8 @@ class FakeGateway:
 
         async def stream():
             for delta in self.deltas:
+                if self.delta_delay_s:
+                    await asyncio.sleep(self.delta_delay_s)
                 yield _sse({"choices": [{"delta": {"content": delta}}]})
             if self.hold is not None:
                 await self.hold.wait()

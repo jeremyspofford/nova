@@ -388,7 +388,7 @@ async def run_one(app, pool, name: str) -> CheckRun:
 # app.checks is what makes the registry complete — there is no separate "wire
 # it up" step to forget (the v3 lesson: a capability nobody registered is
 # invisible from the code and obvious the moment it is asked for).
-from app.checks import money, review, skills, stack, work  # noqa: E402
+from app.checks import inference, money, review, skills, stack, work  # noqa: E402
 
 register_all(stack.CHECKS)
 register_all(work.CHECKS)
@@ -403,6 +403,11 @@ register_all(review.CHECKS)
 # call, and it writes nothing: the draft is composed when the owner asks for it
 # from the Inbox.
 register_all(skills.CHECKS)
+# S22: the family that watches whether the CARD is actually available. Rows
+# (llm_call spans) plus one read of the gateway's live nvidia-smi; it writes
+# nothing and decides nothing. urgent=False — a contended GPU is news for the
+# digest, not a reason to wake anyone at 3am.
+register_all(inference.CHECKS)
 
 __all__ = [
     "CHECK_DEADLINE_S",

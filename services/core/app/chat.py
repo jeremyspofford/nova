@@ -93,6 +93,7 @@ from app import (
     identity,
     live_facts,
     markup_calls,
+    model_speed,
     peers,
     queued,
     settings_store,
@@ -2364,6 +2365,11 @@ async def _gateway_round(
     stray_lines = 0
     stray_head: str | None = None
     t0 = time.perf_counter()
+    # When the first CONTENT delta arrived (S22). Everything before it is
+    # prompt processing; everything after is generation. Splitting the round
+    # here is what lets `tok_per_s` mean tokens per second of generation
+    # rather than a figure a very large prompt can drag down on its own.
+    t_first_delta: float | None = None
     purpose = purpose or _purpose_of(turn)
     role = role if role is not None else _role_of(turn)
     with turn.span("llm_call", model or None) as span:
@@ -2423,6 +2429,8 @@ async def _gateway_round(
                         for fragment in fragments:
                             buffer.add(fragment)
                         if delta:
+                            if t_first_delta is None:
+                                t_first_delta = time.perf_counter()
                             collected.append(delta)
                             if on_delta is not None:
                                 on_delta(delta)
@@ -2441,6 +2449,7 @@ async def _gateway_round(
                 span.meta["timeout_phase"] = phase
                 span.meta["timeout_s"] = getattr(GATEWAY_TIMEOUT, phase)
         elapsed_s = time.perf_counter() - t0
+        _note_throughput(span, t0, t_first_delta, elapsed_s)
         calls = buffer.finished()
         # A round's content is scanned ONCE, here, so every round in the system
         # — the turn loop's, the out-of-rounds narration round, both of a
@@ -2528,6 +2537,29 @@ def _note_usage(span, usage: dict) -> None:
         # The gateway could not write its ledger row: said on the span so
         # the Activity page shows the gap instead of a silent under-count.
         span.meta["usage_recorded"] = False
+
+
+def _note_throughput(span, t0: float, t_first_delta: float | None, elapsed_s: float) -> None:
+    """Time-to-first-token and generation rate, onto the round's own span.
+
+    Derived from what is already here — the gateway's `completion_tokens`
+    and this round's own clock — so measuring the card costs nothing and
+    needs no benchmark run. Absent rather than zero whenever it would not
+    be a measurement: a round that never produced a delta has no generation
+    phase to time, and `model_speed.tok_per_s` refuses a token count too
+    small to say anything.
+
+    This is what the 2026-09-12 contention would have shown as a number:
+    0.25 tok/s against a machine whose own history says 67.
+    """
+    if t_first_delta is None:
+        return
+    span.meta["ttft_ms"] = int((t_first_delta - t0) * 1000)
+    generation_ms = int((t0 + elapsed_s - t_first_delta) * 1000)
+    span.meta["generation_ms"] = generation_ms
+    rate = model_speed.tok_per_s(span.meta.get("completion_tokens"), generation_ms)
+    if rate is not None:
+        span.meta["tok_per_s"] = rate
 
 
 def _note_route(span, header: str | None) -> None:

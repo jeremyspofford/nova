@@ -45,6 +45,10 @@ KNOWN_KEYS = {
     # badly before it is flagged for review. A knob because 3-of-5 is a guess,
     # and the thing it moves is a raised hand, never a retirement.
     "skills.flag_after_rough_uses",
+    # S22 (2026-09-14): how many times slower than its OWN history a model
+    # has to be generating before the beat says so. A knob because 5x is a
+    # judgement call, and the thing it moves is a sentence in the digest.
+    "inference.degraded_factor",
 }
 
 
