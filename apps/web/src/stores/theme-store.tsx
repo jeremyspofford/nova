@@ -20,9 +20,14 @@ interface ThemeState {
   fontScale: number
   timezone: string                        // IANA timezone (e.g. "America/New_York")
   /** Which mark goes in the browser tab. The default is DERIVED from the
-   *  palette, so switching theme moves the tab icon with it; the v3 cosmic
-   *  swirl is kept as a fixed alternative. */
+   *  palette, so switching theme moves the tab icon with it; the v2 orb and
+   *  the v3 cosmic swirl are kept as alternatives. */
   appIcon: string
+  /** And which goes beside her name in the sidebar. Separate from the tab
+   *  on purpose: a favicon is a 16px silhouette in a crowded tab strip and
+   *  a sidebar mark sits at 28px next to a wordmark, so the one that reads
+   *  best at one size is often not the one that reads best at the other. */
+  brandIcon: string
 }
 
 interface ThemeStore {
@@ -43,6 +48,8 @@ interface ThemeStore {
   setTimezone: (tz: string) => void
   appIcon: string
   setAppIcon: (key: string) => void
+  brandIcon: string
+  setBrandIcon: (key: string) => void
 }
 
 export const STORAGE_KEY = 'nova-appearance'
@@ -65,6 +72,7 @@ function defaultState(): ThemeState {
     preset: DEFAULT_PRESET,
     presetChosen: false,
     appIcon: DEFAULT_APP_ICON,
+    brandIcon: DEFAULT_APP_ICON,
     customAccent: 'teal',
     fontScale: 1,
     timezone: getBrowserTimezone(),
@@ -115,6 +123,7 @@ function loadState(): ThemeState {
     // An unknown key (a removed icon, a hand-edited value) falls back to the
     // derived mark rather than leaving the tab with a broken href.
     appIcon: knownAppIcon(parsed.appIcon) ?? DEFAULT_APP_ICON,
+    brandIcon: knownAppIcon(parsed.brandIcon) ?? DEFAULT_APP_ICON,
   }
 }
 
@@ -346,6 +355,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, appIcon: known }))
   }, [])
 
+  const setBrandIcon = useCallback((key: string) => {
+    const known = knownAppIcon(key)
+    if (known === null) return
+    setState(s => ({ ...s, brandIcon: known }))
+  }, [])
+
   return (
     <ThemeContext.Provider value={{
       mode: resolvedMode,
@@ -363,6 +378,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setTimezone,
       appIcon: state.appIcon,
       setAppIcon,
+      brandIcon: state.brandIcon,
+      setBrandIcon,
     }}>
       {children}
     </ThemeContext.Provider>

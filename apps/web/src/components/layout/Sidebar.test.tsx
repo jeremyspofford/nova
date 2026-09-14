@@ -3,6 +3,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { AuthProvider } from '../../stores/auth-store'
+import { ThemeProvider } from '../../stores/theme-store'
 import { UnseenNoticesProvider } from '../../hooks/useUnseenNotices'
 import type { NoticeListing } from '../../lib/api'
 
@@ -31,11 +32,16 @@ function renderSidebar(listNotices: () => Promise<NoticeListing>) {
   mockAuth()
   return render(
     <MemoryRouter>
-      <AuthProvider>
-        <UnseenNoticesProvider listNotices={listNotices} pollMs={NEVER}>
-          <Sidebar collapsed={false} onToggle={() => {}} />
-        </UnseenNoticesProvider>
-      </AuthProvider>
+      {/* The brand mark is drawn from the palette, so the sidebar needs the
+          theme — as it always has in the real app (App.tsx wraps
+          everything). */}
+      <ThemeProvider>
+        <AuthProvider>
+          <UnseenNoticesProvider listNotices={listNotices} pollMs={NEVER}>
+            <Sidebar collapsed={false} onToggle={() => {}} />
+          </UnseenNoticesProvider>
+        </AuthProvider>
+      </ThemeProvider>
     </MemoryRouter>,
   )
 }
@@ -86,13 +92,41 @@ describe('Sidebar — the Inbox badge (S11)', () => {
     mockAuth()
     render(
       <MemoryRouter>
-        <AuthProvider>
-          <Sidebar collapsed={false} onToggle={() => {}} />
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            <Sidebar collapsed={false} onToggle={() => {}} />
+          </AuthProvider>
+        </ThemeProvider>
       </MemoryRouter>,
     )
     await waitFor(() => expect(inboxLink()).toBeDefined())
     expect(screen.queryByTestId('nav-count-badge')).toBeNull()
     expect(inboxLink().getAttribute('href')).toBe('/inbox')
+  })
+})
+
+describe('the brand mark', () => {
+  /** Asked for 2026-09-14: the N beside her name is a choice, not a
+   *  hardcoded letter, and it is chosen separately from the favicon. */
+  it('is drawn from the palette rather than hardcoded', async () => {
+    renderSidebar(async () => ({ notices: [], unseen_count: 0 }))
+
+    const mark = await screen.findByTestId('brand-mark')
+    expect(decodeURIComponent(mark.getAttribute('src') ?? '')).toContain('<svg')
+  })
+
+  it('gives the tile treatment to a filled mark only', async () => {
+    // A rounded tile and its glow belong to a solid shape. Drawn behind art
+    // that fades to transparency they read as a square halo around a round
+    // orb, so the choice declares which it is.
+    localStorage.setItem(
+      'nova-appearance',
+      JSON.stringify({ preset: 'nova', presetChosen: true, brandIcon: 'orb' }),
+    )
+    renderSidebar(async () => ({ notices: [], unseen_count: 0 }))
+
+    const mark = await screen.findByTestId('brand-mark')
+    expect(mark.className).not.toContain('rounded-lg')
+    localStorage.clear()
   })
 })

@@ -111,7 +111,7 @@ describe('AppearanceSection — one theme, one grid', () => {
   })
 })
 
-describe('the app icon picker', () => {
+describe('the icon pickers', () => {
   /** Jeremy asked for the v3 swirl to stay available as a choice rather
    *  than as the default — "keep it in the theme area so we can select an
    *  icon in the future to use". */
@@ -140,5 +140,43 @@ describe('the app icon picker', () => {
 
     const preview = (await screen.findByTestId('app-icon-mark')).querySelector('img')
     expect(decodeURIComponent(preview?.getAttribute('src') ?? '')).toContain('<svg')
+  })
+})
+
+describe('the sidebar mark is its own choice', () => {
+  /** Asked for 2026-09-14: the tab and the sidebar are different jobs — a
+   *  16px silhouette in a crowded tab strip versus a 28px mark beside a
+   *  wordmark — so picking one must not move the other. */
+  it('picking a sidebar mark leaves the tab icon alone', async () => {
+    renderSection()
+
+    fireEvent.click(await screen.findByTestId('brand-icon-orb'))
+
+    expect(screen.getByTestId('brand-icon-orb').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('app-icon-mark').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('app-icon-orb').getAttribute('aria-pressed')).toBe('false')
+    expect(document.querySelector('link[rel="icon"]')?.getAttribute('href')).toContain(
+      'data:image/svg',
+    )
+  })
+
+  it('and picking a tab icon leaves the sidebar alone', async () => {
+    renderSection()
+
+    fireEvent.click(await screen.findByTestId('app-icon-cosmic'))
+
+    expect(screen.getByTestId('brand-icon-mark').getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelector('link[rel="icon"]')?.getAttribute('href')).toBe(
+      '/icons/icon-192.png',
+    )
+  })
+
+  it('offers every icon to both', async () => {
+    renderSection()
+
+    for (const key of ['mark', 'orb', 'orb-amber', 'cosmic']) {
+      expect(await screen.findByTestId(`app-icon-${key}`)).toBeTruthy()
+      expect(await screen.findByTestId(`brand-icon-${key}`)).toBeTruthy()
+    }
   })
 })

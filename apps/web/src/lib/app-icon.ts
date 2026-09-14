@@ -1,8 +1,14 @@
 import { resolvePalette } from './color-palettes'
 
 /**
- * The icon in the browser tab, on the phone's home screen, and in the
- * bookmark bar.
+ * Nova's marks: the one in the browser tab and the one beside her name in
+ * the sidebar.
+ *
+ * TWO settings over ONE registry (asked for 2026-09-14). They are different
+ * jobs — a favicon is a 16px silhouette in a crowded tab strip, a sidebar
+ * mark sits at 28px next to a wordmark — and the icon that reads best at
+ * one size is often not the one that reads best at the other. Every choice
+ * is available to both.
  *
  * ## Why this is not just a PNG in public/
  * The first version of this WAS a PNG — v3's cosmic swirl, carried over
@@ -35,6 +41,15 @@ export interface AppIconChoice {
   key: string
   label: string
   description: string
+  /** Does the art fill its tile edge to edge?
+   *
+   *  The sidebar gives a filled mark the rounded-square treatment and the
+   *  accent glow that go with a solid shape; art that fades to transparency
+   *  is left alone, because a glow drawn around a square tile behind a
+   *  round orb looks like a mistake. A property rather than a name check,
+   *  so a new icon declares what it is instead of the sidebar learning a
+   *  list. */
+  filled: boolean
   /** The href for <link rel="icon">, given the live theme. A fixed asset
    *  ignores its arguments; a derived one paints itself from them. */
   href: (mode: 'light' | 'dark', preset: string, customAccent: string) => string
@@ -91,20 +106,22 @@ export function markDataUri(
  * was and Ember gives a yellow one.
  *
  * The gradient is the whole character of it — a bright core at 300, the
- * body at 500, then a wide soft falloff into the ground — so the stops are
+ * body at 500, then a wide soft falloff to nothing — so the stops are
  * palette steps rather than hand-mixed colours, and every theme keeps the
  * same depth.
+ *
+ * The ground is TRANSPARENT, unlike the original. v2 baked its own
+ * near-black into the PNG, which is a background that travels with the icon
+ * and fights every surface it lands on — a light browser tab, a dock, a
+ * home screen. Fading to nothing lets the orb sit on whatever is actually
+ * there.
  */
 export function orbDataUri(
-  mode: 'light' | 'dark',
+  _mode: 'light' | 'dark',
   preset: string,
   customAccent: string,
 ): string {
-  const { accent, neutral } = resolvePalette(preset, customAccent)
-  // The orb glows, so it wants a dark ground even in light mode — the
-  // original sat on v2's near-black and a pale ground washes the falloff
-  // out completely.
-  const ground = rgb(neutral[950])
+  const { accent } = resolvePalette(preset, customAccent)
   const core = rgb(accent[300])
   const body = rgb(accent[500])
   const svg = [
@@ -120,7 +137,10 @@ export function orbDataUri(
     `<stop offset="82%" stop-color="${body}" stop-opacity="0.35"/>`,
     `<stop offset="100%" stop-color="${body}" stop-opacity="0"/>`,
     `</radialGradient></defs>`,
-    `<rect width="64" height="64" rx="12" fill="${ground}"/>`,
+    // No ground rect: the orb is the icon, and the tile behind it is
+    // whatever the browser, the dock or the home screen puts there. The
+    // v2 original baked v2's near-black in, which is a background that
+    // follows the icon around and fights every surface it lands on.
     `<circle cx="32" cy="32" r="32" fill="url(#g)"/>`,
     `</svg>`,
   ].join('')
@@ -132,12 +152,14 @@ export const APP_ICONS: AppIconChoice[] = [
     key: 'mark',
     label: 'Nova mark',
     description: "The app's own N, in whatever accent the current theme uses.",
+    filled: true,
     href: markDataUri,
   },
   {
     key: 'orb',
     label: 'Orb',
     description: "The v2 orb, redrawn: a soft glow in the theme's accent.",
+    filled: false,
     href: orbDataUri,
   },
   {
@@ -147,12 +169,14 @@ export const APP_ICONS: AppIconChoice[] = [
     key: 'orb-amber',
     label: 'Orb (amber)',
     description: 'The same orb, pinned to amber whatever the theme is.',
+    filled: false,
     href: (mode, _preset, _customAccent) => orbDataUri(mode, 'ember', 'amber'),
   },
   {
     key: 'cosmic',
     label: 'Cosmic swirl',
     description: 'The v3 app icon: a swirl of nebula that reads as an N. Fixed colours.',
+    filled: false,
     href: () => '/icons/icon-192.png',
   },
 ]
@@ -161,12 +185,15 @@ export function knownAppIcon(key: unknown): string | null {
   return typeof key === 'string' && APP_ICONS.some(i => i.key === key) ? key : null
 }
 
+export function appIcon(key: string): AppIconChoice {
+  return APP_ICONS.find(i => i.key === key) ?? APP_ICONS[0]
+}
+
 export function appIconHref(
   key: string,
   mode: 'light' | 'dark',
   preset: string,
   customAccent: string,
 ): string {
-  const choice = APP_ICONS.find(i => i.key === key) ?? APP_ICONS[0]
-  return choice.href(mode, preset, customAccent)
+  return appIcon(key).href(mode, preset, customAccent)
 }

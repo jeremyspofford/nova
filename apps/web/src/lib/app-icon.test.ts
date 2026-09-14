@@ -101,13 +101,18 @@ describe('the v2 orb, redrawn', () => {
     expect(uri).toMatch(/offset="100%"[^/]*stop-opacity="0"/)
   })
 
-  it('sits on a dark ground in both modes, because a glow needs one', () => {
+  it('carries no background of its own, so it sits on whatever is there', () => {
+    // The v2 original baked v2's near-black into the PNG, which is a
+    // background that travels with the icon and fights every surface it
+    // lands on — a light browser tab, a dock, a home screen.
+    const uri = decodeURIComponent(orbDataUri('dark', 'nova', 'teal'))
+    expect(uri).not.toContain('<rect')
     const { neutral } = resolvePalette('nova')
-    for (const mode of ['dark', 'light'] as const) {
-      expect(decodeURIComponent(orbDataUri(mode, 'nova', 'teal'))).toContain(
-        `rgb(${neutral[950]})`,
-      )
-    }
+    expect(uri).not.toContain(`rgb(${neutral[950]})`)
+  })
+
+  it('looks the same in light and dark, having no ground to flip', () => {
+    expect(orbDataUri('light', 'nova', 'teal')).toEqual(orbDataUri('dark', 'nova', 'teal'))
   })
 
   it('the amber orb holds its colour whatever the theme is', () => {

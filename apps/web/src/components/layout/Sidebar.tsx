@@ -5,6 +5,8 @@ import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
+import { useTheme } from '../../stores/theme-store'
+import { appIcon, appIconHref } from '../../lib/app-icon'
 
 /** The one count a nav entry can carry (S11). A KEY, not a number: this
  * config is static and the count is live, read from the server by
@@ -118,6 +120,7 @@ export function Sidebar({
 }) {
   const location = useLocation()
   const navigate = useNavigate()
+  const { brandIcon, mode, preset, customAccent } = useTheme()
   const { user } = useAuth()
   const unseen = useUnseenNotices()
   const userRole: Role = user?.role ?? 'guest'
@@ -132,11 +135,27 @@ export function Sidebar({
         collapsed ? 'w-[60px]' : 'w-[240px]',
       )}
     >
-      {/* Logo — plain rounded square with the letter N, brand pass comes later */}
+      {/* The brand mark. Chosen in Appearance, separately from the favicon,
+          and drawn from the live palette (src/lib/app-icon.ts) rather than
+          hardcoded here — so a theme change moves it and a new icon needs no
+          edit in this file.
+
+          The rounded tile and its glow apply only to a FILLED mark: they
+          belong to a solid shape, and drawn behind art that fades to
+          transparency they read as a square halo around a round orb. The
+          choice declares which it is; this does not keep a list. */}
       <div className={clsx('flex items-center gap-2.5 px-3 h-14 shrink-0 cursor-pointer', collapsed && 'justify-center')} onClick={() => navigate('/chat')} title="Nova">
-        <div className="h-7 w-7 rounded-lg bg-accent flex items-center justify-center text-on-accent text-compact font-semibold shrink-0 dark:shadow-[0_0_16px_rgb(var(--accent-500)/0.3)]">
-          N
-        </div>
+        <img
+          src={appIconHref(brandIcon, mode, preset, customAccent)}
+          alt=""
+          aria-hidden="true"
+          data-testid="brand-mark"
+          className={clsx(
+            'h-7 w-7 shrink-0',
+            appIcon(brandIcon).filled &&
+              'rounded-lg dark:shadow-[0_0_16px_rgb(var(--accent-500)/0.3)]',
+          )}
+        />
         {!collapsed && (
           <span className="text-h3 text-content-primary tracking-tight">Nova</span>
         )}

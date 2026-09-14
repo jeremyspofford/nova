@@ -236,6 +236,65 @@ function AccentPicker({
  * does a browser that has never chosen start on" — so it gets the
  * draft/dirty inline save rather than being written on every click.
  */
+/** One row of icon choices. Two instances, one registry: the tab and the
+ *  sidebar pick independently. */
+function IconPicker({
+  label,
+  hint,
+  testIdPrefix,
+  value,
+  onPick,
+  mode,
+  preset,
+  customAccent,
+}: {
+  label: string
+  hint: string
+  testIdPrefix: string
+  value: string
+  onPick: (key: string) => void
+  mode: 'light' | 'dark'
+  preset: string
+  customAccent: string
+}) {
+  return (
+    <div role="group" aria-label={label}>
+      <div className="mb-2 text-caption font-medium text-content-secondary">{label}</div>
+      <div className="flex flex-wrap gap-2">
+        {APP_ICONS.map(choice => (
+          <button
+            key={choice.key}
+            type="button"
+            aria-pressed={value === choice.key}
+            data-testid={`${testIdPrefix}-${choice.key}`}
+            onClick={() => onPick(choice.key)}
+            className={clsx(
+              'flex items-center gap-2.5 rounded-sm border px-3 py-2 text-left transition-colors',
+              value === choice.key
+                ? 'border-accent bg-accent-dim'
+                : 'border-border hover:border-border-strong',
+            )}
+          >
+            <img
+              src={choice.href(mode, preset, customAccent)}
+              alt=""
+              aria-hidden="true"
+              className={clsx('h-7 w-7 shrink-0', choice.filled && 'rounded-lg')}
+            />
+            <span>
+              <span className="block text-compact text-content-primary">{choice.label}</span>
+              <span className="block text-caption text-content-tertiary">
+                {choice.description}
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+      <p className="mt-1.5 text-caption text-content-tertiary">{hint} This browser only.</p>
+    </div>
+  )
+}
+
 export function AppearanceSection({
   storedPreset,
   onStored,
@@ -249,6 +308,7 @@ export function AppearanceSection({
     customAccent, setCustomAccent,
     fontScale, setFontScale,
     appIcon, setAppIcon,
+    brandIcon, setBrandIcon,
     mode,
   } = useTheme()
 
@@ -357,42 +417,27 @@ export function AppearanceSection({
         )}
       </div>
 
-      <div role="group" aria-label="App icon">
-        <div className="mb-2 text-caption font-medium text-content-secondary">App icon</div>
-        <div className="flex flex-wrap gap-2">
-          {APP_ICONS.map(choice => (
-            <button
-              key={choice.key}
-              type="button"
-              aria-pressed={appIcon === choice.key}
-              data-testid={`app-icon-${choice.key}`}
-              onClick={() => setAppIcon(choice.key)}
-              className={clsx(
-                'flex items-center gap-2.5 rounded-sm border px-3 py-2 text-left transition-colors',
-                appIcon === choice.key
-                  ? 'border-accent bg-accent-dim'
-                  : 'border-border hover:border-border-strong',
-              )}
-            >
-              <img
-                src={choice.href(mode, preset, customAccent)}
-                alt=""
-                aria-hidden="true"
-                className="h-7 w-7 rounded-lg shrink-0"
-              />
-              <span>
-                <span className="block text-compact text-content-primary">{choice.label}</span>
-                <span className="block text-caption text-content-tertiary">
-                  {choice.description}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
-        <p className="mt-1.5 text-caption text-content-tertiary">
-          Shown in the browser tab and on a phone's home screen. This browser only.
-        </p>
-      </div>
+      <IconPicker
+        label="App icon"
+        hint="Shown in the browser tab and on a phone's home screen."
+        testIdPrefix="app-icon"
+        value={appIcon}
+        onPick={setAppIcon}
+        mode={mode}
+        preset={preset}
+        customAccent={customAccent}
+      />
+
+      <IconPicker
+        label="Sidebar mark"
+        hint="Shown beside her name in the sidebar. Separate from the tab icon, because a 16px favicon and a 28px mark are not the same job."
+        testIdPrefix="brand-icon"
+        value={brandIcon}
+        onPick={setBrandIcon}
+        mode={mode}
+        preset={preset}
+        customAccent={customAccent}
+      />
 
       <div role="group" aria-label="Text size">
         <div className="mb-2 text-caption font-medium text-content-secondary">Text size</div>
