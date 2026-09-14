@@ -1,10 +1,12 @@
 import { useState } from 'react'
+import clsx from 'clsx'
 import { Monitor, Moon, Palette, Sun, Type } from 'lucide-react'
 import { Section } from '../../components/ui'
 import { useTheme } from '../../stores/theme-store'
 import { accentPalettes, resolvePalette, themePresets, type ThemePreset } from '../../lib/color-palettes'
 import { putSetting } from '../../lib/api'
 import { InlineSave, type SaveMessage } from './shared'
+import { APP_ICONS } from '../../lib/app-icon'
 
 /** Accents that are not the signature colour of a community theme. */
 const communityAccents = new Set(
@@ -246,6 +248,7 @@ export function AppearanceSection({
     preset, setPreset,
     customAccent, setCustomAccent,
     fontScale, setFontScale,
+    appIcon, setAppIcon,
     mode,
   } = useTheme()
 
@@ -352,6 +355,43 @@ export function AppearanceSection({
             {active.label} is a {lockedMode} theme, so it sets the mode. Pick another theme to choose one.
           </p>
         )}
+      </div>
+
+      <div role="group" aria-label="App icon">
+        <div className="mb-2 text-caption font-medium text-content-secondary">App icon</div>
+        <div className="flex flex-wrap gap-2">
+          {APP_ICONS.map(choice => (
+            <button
+              key={choice.key}
+              type="button"
+              aria-pressed={appIcon === choice.key}
+              data-testid={`app-icon-${choice.key}`}
+              onClick={() => setAppIcon(choice.key)}
+              className={clsx(
+                'flex items-center gap-2.5 rounded-sm border px-3 py-2 text-left transition-colors',
+                appIcon === choice.key
+                  ? 'border-accent bg-accent-dim'
+                  : 'border-border hover:border-border-strong',
+              )}
+            >
+              <img
+                src={choice.href(mode, preset, customAccent)}
+                alt=""
+                aria-hidden="true"
+                className="h-7 w-7 rounded-lg shrink-0"
+              />
+              <span>
+                <span className="block text-compact text-content-primary">{choice.label}</span>
+                <span className="block text-caption text-content-tertiary">
+                  {choice.description}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+        <p className="mt-1.5 text-caption text-content-tertiary">
+          Shown in the browser tab and on a phone's home screen. This browser only.
+        </p>
       </div>
 
       <div role="group" aria-label="Text size">

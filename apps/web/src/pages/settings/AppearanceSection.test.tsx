@@ -110,3 +110,35 @@ describe('AppearanceSection — one theme, one grid', () => {
     expect(screen.getByText('Save as default')).toBeDefined()
   })
 })
+
+describe('the app icon picker', () => {
+  /** Jeremy asked for the v3 swirl to stay available as a choice rather
+   *  than as the default — "keep it in the theme area so we can select an
+   *  icon in the future to use". */
+  it('offers every icon and marks the active one', async () => {
+    renderSection()
+
+    const mark = await screen.findByTestId('app-icon-mark')
+    const cosmic = await screen.findByTestId('app-icon-cosmic')
+    expect(mark.getAttribute('aria-pressed')).toBe('true')
+    expect(cosmic.getAttribute('aria-pressed')).toBe('false')
+  })
+
+  it('picking one moves the tab icon', async () => {
+    renderSection()
+
+    fireEvent.click(await screen.findByTestId('app-icon-cosmic'))
+
+    expect(screen.getByTestId('app-icon-cosmic').getAttribute('aria-pressed')).toBe('true')
+    expect(document.querySelector('link[rel="icon"]')?.getAttribute('href')).toBe(
+      '/icons/icon-192.png',
+    )
+  })
+
+  it('each option previews itself, so the choice is visible before it is made', async () => {
+    renderSection()
+
+    const preview = (await screen.findByTestId('app-icon-mark')).querySelector('img')
+    expect(decodeURIComponent(preview?.getAttribute('src') ?? '')).toContain('<svg')
+  })
+})

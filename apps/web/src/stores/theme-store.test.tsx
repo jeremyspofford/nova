@@ -22,6 +22,10 @@ function Probe() {
       <button onClick={() => t.setModePreference('light')}>mode-light</button>
       <button onClick={() => t.setModePreference('dark')}>mode-dark</button>
       <button onClick={() => t.setModePreference('system')}>mode-system</button>
+      <span data-testid="app-icon">{t.appIcon}</span>
+      <button onClick={() => t.setAppIcon('cosmic')}>icon-cosmic</button>
+      <button onClick={() => t.setAppIcon('mark')}>icon-mark</button>
+      <button onClick={() => t.setAppIcon('not-an-icon')}>icon-bogus</button>
     </div>
   )
 }
@@ -198,4 +202,73 @@ describe('ThemeProvider', () => {
     expect(text('chosen')).toBe('false')
     expect(vars()).toContain('--accent-500:25 168 158')
   })
+})
+
+describe('the tab icon follows the theme', () => {
+  /**
+   * S22 walk-fix. The favicon shipped as a fixed v3 PNG and Jeremy's answer
+   * was: wrong icon. The app's own mark is drawn from the accent, so the tab
+   * has to be too — a fixed image is a different visual language AND it does
+   * not move when the palette does.
+   */
+  const icon = () => document.querySelector('link[rel="icon"]')!.getAttribute('href')
+
+  beforeEach(() => {
+    localStorage.clear()
+    document.getElementById('nova-theme-vars')?.remove()
+    document.querySelector('link[rel="icon"]')?.remove()
+    const link = document.createElement('link')
+    link.rel = 'icon'
+    document.head.appendChild(link)
+  })
+
+  it('paints the mark from the live palette and repaints it when the theme moves', () => {
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+
+    const before = icon()
+    expect(decodeURIComponent(before ?? '')).toContain('<svg')
+
+    click('nebula')
+    expect(icon()).not.toEqual(before)
+    expect(decodeURIComponent(icon() ?? '')).toContain('<svg')
+  })
+
+  it('a chosen fixed icon stays put across theme changes', () => {
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+
+    click('icon-cosmic')
+    expect(icon()).toBe('/icons/icon-192.png')
+
+    click('nebula')
+    expect(icon()).toBe('/icons/icon-192.png')
+  })
+
+  it('the choice survives a reload, like the theme does', () => {
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+    click('icon-cosmic')
+
+    expect(saved().appIcon).toBe('cosmic')
+  })
+
+  it('refuses a key it does not know rather than leaving a broken tab', () => {
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+
+    click('icon-cosmic')
+    click('icon-bogus')
+
+    expect(text('app-icon')).toBe('cosmic')
+    expect(icon()).toBe('/icons/icon-192.png')
+  })
+})
+
+it('creates the icon link when the document has none, rather than silently skipping', () => {
+  // A guard that quietly did nothing here would leave the tab on the
+  // browser's default forever and look exactly like a working theme.
+  localStorage.clear()
+  document.querySelector('link[rel="icon"]')?.remove()
+
+  render(<ThemeProvider><Probe /></ThemeProvider>)
+
+  const href = document.querySelector('link[rel="icon"]')?.getAttribute('href')
+  expect(decodeURIComponent(href ?? '')).toContain('<svg')
 })

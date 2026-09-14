@@ -3,10 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <!-- Nova's own mark, carried over from v3 (the app-icon lane): the
-         cosmic swirl that reads as an N. Served from apps/web/public/, which
-         vite copies to the build root, so both the dev server on :5173 and
-         the baked nginx image answer the same paths. -->
+    <!-- The first frame's icon, before React. The theme store replaces this
+         href with the mark painted from the live palette (src/lib/app-icon.ts)
+         a beat later, or with whichever icon this browser has chosen; this
+         only has to be a Nova mark rather than the browser's blank page
+         glyph. The v3 swirl serves that, and is also one of the choices.
+         Files live in apps/web/public/, which vite copies to the build root,
+         so :5173 and the baked nginx image answer the same paths. -->
     <link rel="icon" type="image/png" href="/icons/icon-192.png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com">

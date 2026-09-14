@@ -3,6 +3,7 @@ import {
   accentPalettes, themePresets, resolvePalette, normalizePreset, DEFAULT_PRESET,
   type ColorScale,
 } from '../lib/color-palettes'
+import { appIconHref, knownAppIcon, DEFAULT_APP_ICON } from '../lib/app-icon'
 
 type Mode = 'light' | 'dark'
 type ModePreference = 'light' | 'dark' | 'system'
@@ -18,6 +19,10 @@ interface ThemeState {
   customAccent: string
   fontScale: number
   timezone: string                        // IANA timezone (e.g. "America/New_York")
+  /** Which mark goes in the browser tab. The default is DERIVED from the
+   *  palette, so switching theme moves the tab icon with it; the v3 cosmic
+   *  swirl is kept as a fixed alternative. */
+  appIcon: string
 }
 
 interface ThemeStore {
@@ -36,6 +41,8 @@ interface ThemeStore {
   setFontScale: (scale: number) => void
   timezone: string
   setTimezone: (tz: string) => void
+  appIcon: string
+  setAppIcon: (key: string) => void
 }
 
 export const STORAGE_KEY = 'nova-appearance'
@@ -57,6 +64,7 @@ function defaultState(): ThemeState {
     modePreference: 'dark',
     preset: DEFAULT_PRESET,
     presetChosen: false,
+    appIcon: DEFAULT_APP_ICON,
     customAccent: 'teal',
     fontScale: 1,
     timezone: getBrowserTimezone(),
@@ -104,6 +112,9 @@ function loadState(): ThemeState {
     customAccent,
     fontScale: typeof parsed.fontScale === 'number' ? parsed.fontScale : 1,
     timezone: typeof parsed.timezone === 'string' && parsed.timezone ? parsed.timezone : getBrowserTimezone(),
+    // An unknown key (a removed icon, a hand-edited value) falls back to the
+    // derived mark rather than leaving the tab with a broken href.
+    appIcon: knownAppIcon(parsed.appIcon) ?? DEFAULT_APP_ICON,
   }
 }
 
@@ -234,6 +245,25 @@ function applyTheme(mode: Mode, state: ThemeState) {
 
   const meta = document.querySelector('meta[name="theme-color"]')
   if (meta) meta.setAttribute('content', themeColor(mode, state.preset, state.customAccent))
+
+  // The tab icon is part of the theme, not a static asset: the default mark
+  // is painted from this same palette, so a theme switch moves it too.
+  // index.html ships a <link rel="icon"> so a page that never mounts React
+  // still has one; this replaces its href rather than adding a second.
+  // Created when absent rather than skipped. A guard that quietly does
+  // nothing when index.html has no <link rel="icon"> would leave the tab on
+  // the browser's default forever and look exactly like a working theme.
+  let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+  if (!link) {
+    link = document.createElement('link')
+    link.rel = 'icon'
+    document.head.appendChild(link)
+  }
+  const href = appIconHref(state.appIcon, mode, state.preset, state.customAccent)
+  if (link.getAttribute('href') !== href) {
+    link.setAttribute('href', href)
+    link.setAttribute('type', href.startsWith('data:') ? 'image/svg+xml' : 'image/png')
+  }
 }
 
 const ThemeContext = createContext<ThemeStore | null>(null)
@@ -310,6 +340,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, timezone: tz }))
   }, [])
 
+  const setAppIcon = useCallback((key: string) => {
+    const known = knownAppIcon(key)
+    if (known === null) return
+    setState(s => ({ ...s, appIcon: known }))
+  }, [])
+
   return (
     <ThemeContext.Provider value={{
       mode: resolvedMode,
@@ -325,6 +361,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setFontScale,
       timezone: state.timezone,
       setTimezone,
+      appIcon: state.appIcon,
+      setAppIcon,
     }}>
       {children}
     </ThemeContext.Provider>
