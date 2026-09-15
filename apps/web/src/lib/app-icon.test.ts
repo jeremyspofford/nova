@@ -52,10 +52,17 @@ describe('the choice', () => {
   it('keeps the v3 swirl available as a fixed alternative', () => {
     const cosmic = APP_ICONS.find(i => i.key === 'cosmic')
     expect(cosmic).toBeTruthy()
-    expect(cosmic!.href('dark', 'nova', 'teal')).toBe('/icons/icon-192.png')
+    // Its OWN file, and specifically NOT the manifest's. Both pointed at
+    // `/icons/icon-192.png` until 2026-09-15; when that file became the orb,
+    // "Cosmic swirl" would have started showing an orb with nothing in the
+    // code looking wrong. The property worth pinning is the separation, so
+    // it is asserted below as well as the path.
+    expect(cosmic!.href('dark', 'nova', 'teal')).toBe('/icons/cosmic-192.png')
     // Fixed means fixed: it ignores the theme, which is exactly why it is
     // not the default.
-    expect(cosmic!.href('light', 'ember', 'teal')).toBe('/icons/icon-192.png')
+    expect(cosmic!.href('light', 'ember', 'teal')).toBe('/icons/cosmic-192.png')
+    // The home-screen icon is a different picture, and must stay one.
+    expect(cosmic!.href('dark', 'nova', 'teal')).not.toBe('/icons/icon-192.png')
   })
 
   it('defaults to the derived mark', () => {

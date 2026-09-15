@@ -177,7 +177,11 @@ export const APP_ICONS: AppIconChoice[] = [
     label: 'Cosmic swirl',
     description: 'The v3 app icon: a swirl of nebula that reads as an N. Fixed colours.',
     filled: false,
-    href: () => '/icons/icon-192.png',
+    // Its OWN file. This read `/icons/icon-192.png` until 2026-09-15, when
+    // the home-screen icons became the orb — at which point "Cosmic swirl"
+    // would have quietly started showing an orb, and nothing in the code
+    // would have looked wrong.
+    href: () => '/icons/cosmic-192.png',
   },
 ]
 

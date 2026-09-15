@@ -237,10 +237,10 @@ describe('the tab icon follows the theme', () => {
     render(<ThemeProvider><Probe /></ThemeProvider>)
 
     click('icon-cosmic')
-    expect(icon()).toBe('/icons/icon-192.png')
+    expect(icon()).toBe('/icons/cosmic-192.png')
 
     click('nebula')
-    expect(icon()).toBe('/icons/icon-192.png')
+    expect(icon()).toBe('/icons/cosmic-192.png')
   })
 
   it('the choice survives a reload, like the theme does', () => {
@@ -257,7 +257,7 @@ describe('the tab icon follows the theme', () => {
     click('icon-bogus')
 
     expect(text('app-icon')).toBe('cosmic')
-    expect(icon()).toBe('/icons/icon-192.png')
+    expect(icon()).toBe('/icons/cosmic-192.png')
   })
 })
 

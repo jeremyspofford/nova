@@ -131,7 +131,7 @@ describe('the icon pickers', () => {
 
     expect(screen.getByTestId('app-icon-cosmic').getAttribute('aria-pressed')).toBe('true')
     expect(document.querySelector('link[rel="icon"]')?.getAttribute('href')).toBe(
-      '/icons/icon-192.png',
+      '/icons/cosmic-192.png',
     )
   })
 
@@ -167,7 +167,7 @@ describe('the sidebar mark is its own choice', () => {
 
     expect(screen.getByTestId('brand-icon-mark').getAttribute('aria-pressed')).toBe('true')
     expect(document.querySelector('link[rel="icon"]')?.getAttribute('href')).toBe(
-      '/icons/icon-192.png',
+      '/icons/cosmic-192.png',
     )
   })
 
