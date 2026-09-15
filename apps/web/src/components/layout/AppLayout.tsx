@@ -39,13 +39,16 @@ export function AppLayout({
     // through it the moment it marks something seen.
     <MobileNavProvider>
       <UnseenNoticesProvider>
-        {/* Height from the MEASURED viewport, with 100dvh as the value for
-            the first paint and for anywhere the measurement never runs. See
-            src/lib/safeArea.ts for why dvh is not trusted here. */}
-        <div
-          className="flex bg-surface-root dark:bg-transparent"
-          style={{ height: 'var(--nova-vh, 100dvh)' }}
-        >
+        {/* `fixed inset-0`, not a height. The shell is anchored to the
+            layout viewport's four edges, so it is exactly as tall as the
+            viewport BY CONSTRUCTION — there is no number to be wrong. Both
+            earlier attempts computed one: `h-dvh` trusted what the browser
+            reports, and on this owner's installed iOS app that came out
+            short, leaving a bare strip at the bottom; sizing from a measured
+            `innerHeight` then overshot iOS's layout viewport and let the
+            document scroll, taking the top off the screen. Neither can
+            happen to an element pinned to the edges. */}
+        <div className="fixed inset-0 flex bg-surface-root dark:bg-transparent">
           <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
           {/* The top safe-area inset, once, for every page. index.html sets
               `viewport-fit=cover`, so the layout viewport extends under the

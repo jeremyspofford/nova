@@ -89,14 +89,6 @@ export function measureSafeArea(): void {
     const root = document.documentElement.style
     root.setProperty('--nova-safe-top', `${topInset(top, bottom, installedApp(), coversScreen())}px`)
     root.setProperty('--nova-safe-bottom', `${bottom}px`)
-    // The viewport's height, MEASURED. `100dvh` is what the browser says the
-    // viewport is; on this owner's installed iOS app it came out short, and
-    // a shell sized from it ended above the bottom of the screen. The strip
-    // below then painted the FLAT html background instead of body's
-    // gradient — whose last stop is a glow at `50% 100%` — so it read as a
-    // blank band about a tab bar tall. innerHeight is the number the layout
-    // actually has to fill.
-    root.setProperty('--nova-vh', `${window.innerHeight}px`)
     published = true
   } finally {
     probe.remove()

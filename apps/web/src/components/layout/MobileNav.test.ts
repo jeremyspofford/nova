@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { navSections } from './Sidebar'
-import { moreItems, primaryTabs } from './MobileNav'
+import { clampGripY, moreItems, primaryTabs } from './MobileNav'
 
 // The mobile drawer and the sidebar are two surfaces over ONE nav config.
 // They had drifted once (Governance missing from mobile); this pins that
@@ -62,5 +62,26 @@ describe('MobileNav derives its lists from Sidebar.navSections', () => {
     const badged = navSections.flatMap(s => s.items).filter(i => i.badge !== undefined)
     expect(badged.map(i => i.to)).toEqual(['/inbox'])
     expect(badged[0].badge).toBe('unseen_notices')
+  })
+})
+
+// The grip's saved position, kept on screen. A number restored from storage
+// was written against whatever viewport was current then — a rotation, or a
+// different device entirely, can put it past the bottom edge.
+describe('clampGripY', () => {
+  it('leaves a position that is already on screen alone', () => {
+    expect(clampGripY(300, 844)).toBe(300)
+  })
+
+  it('never lets the grip run off the top or the bottom', () => {
+    expect(clampGripY(-200, 844)).toBe(8)
+    // 844 − 64 tall − 8 margin.
+    expect(clampGripY(9999, 844)).toBe(772)
+  })
+
+  it('degrades to the top margin on a viewport too short to hold it', () => {
+    // Not a phone, but a zero height is what a viewport reports mid-launch
+    // and the clamp must not return a negative.
+    expect(clampGripY(400, 0)).toBe(8)
   })
 })

@@ -271,6 +271,76 @@ describe('AppLayout — which nav renders', () => {
     expect(await screen.findByTestId('mobile-drawer')).toBeTruthy()
   })
 
+  it('keeps the whole grip clear of the menu when open', async () => {
+    // The owner's call (2026-09-15): "that handle should only be on the edge
+    // of the menu, I don't like it flowing into the menu items." The touch
+    // target is wider than the drawn tab, and that slack used to bleed LEFT
+    // — free while the grip sat at the screen edge, but once it rides the
+    // panel's edge the same bleed lays 24px of button over the nav rows,
+    // swallowing taps on whichever one it covers. The slack extends right.
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.click(edgeHandle()!)
+    await screen.findByTestId('mobile-drawer')
+
+    const grip = edgeHandle()!
+    const tab = screen.getByTestId('edge-handle-tab')
+    // The panel is 300 wide and starts at x=0, so nothing belonging to the
+    // grip may begin before 300. jsdom does not lay out, so the assertion is
+    // on the declared geometry rather than on a measured rect.
+    expect(grip.style.left).toBe('300px')
+    expect(grip.className).not.toMatch(/-ml-/)
+    expect(tab.className).not.toMatch(/-ml-|pl-/)
+  })
+
+  it('a vertical drag moves the grip and remembers where it was left', async () => {
+    // "I'd like to be able to drag it up or down to move the handle to my
+    // preferred location." A handle fixed at the vertical centre is in the
+    // wrong place for whichever hand is not holding the phone.
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    const handle = edgeHandle()!
+
+    // Centred to begin with: positioned by class, with no explicit top.
+    expect(handle.className).toContain('top-1/2')
+    expect(handle.style.top).toBe('')
+
+    fireEvent.touchStart(handle, { touches: [{ clientX: 20, clientY: 400 }] })
+    fireEvent.touchMove(handle, { touches: [{ clientX: 22, clientY: 500 }] })
+    fireEvent.touchEnd(handle)
+
+    // jsdom reports a zero rect, so the grip's top starts at 0 and a 100px
+    // pull down lands it at 100.
+    expect(handle.style.top).toBe('100px')
+    expect(handle.className).not.toContain('top-1/2')
+    expect(localStorage.getItem('nova-grip-y')).toBe('100')
+  })
+
+  it('a vertical drag does not also open the menu', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    const handle = edgeHandle()!
+
+    fireEvent.touchStart(handle, { touches: [{ clientX: 20, clientY: 400 }] })
+    fireEvent.touchMove(handle, { touches: [{ clientX: 26, clientY: 520 }] })
+    fireEvent.touchEnd(handle)
+
+    await waitFor(() => expect(screen.queryByTestId('mobile-drawer')).toBeNull())
+  })
+
+  it('restores the position it was left at', async () => {
+    localStorage.setItem('nova-grip-y', '240')
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    expect(edgeHandle()!.style.top).toBe('240px')
+  })
+
   it('keeps the grip clean and carries the count inside the panel', async () => {
     // The owner's call (2026-09-15): a count on a closed handle is noise.
     // The trade is that the number is read rather than glanced at, so it

@@ -128,16 +128,22 @@ html.dark {
 }
 
 @layer base {
+  /* The document NEVER scrolls. Every scrollable region in this app is an
+     overflow-y-auto box inside the shell, so the only thing document scroll
+     can do here is move the whole app — which is exactly what it did.
+
+     A `min-height` floor stood here for one commit (2026-09-15) to stop a
+     short shell leaving a bare strip at the bottom. It made the document
+     TALLER than iOS's layout viewport instead, so the app could be scrolled
+     up: the top ran off the screen and the overscrolled strip showed at the
+     bottom. "The entire PWA app is still shifted high." A box that cannot
+     scroll cannot be scrolled to the wrong place. */
   html, body {
+    height: 100%;
+    overflow: hidden;
     overscroll-behavior: none;
   }
-  /* body's height is content-driven, and its background is the app's ground.
-     Anywhere the shell comes up short of the viewport, the strip below it
-     paints html's FLAT colour rather than this gradient — and the gradient's
-     last stop is a glow at `50% 100%`, so the seam is visible, not subtle.
-     Floor it at the viewport so there is no seam to see. */
   body {
-    min-height: var(--nova-vh, 100dvh);
     background:
       radial-gradient(ellipse at 15% 50%, rgb(var(--glow-1-light) / 0.18) 0%, transparent 50%),
       radial-gradient(ellipse at 85% 20%, rgb(var(--glow-2-light) / 0.18) 0%, transparent 50%),

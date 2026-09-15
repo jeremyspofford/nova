@@ -1,6 +1,6 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { EllipsisVertical, X } from 'lucide-react'
+import { GripVertical, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -32,14 +32,63 @@ const PANEL_W = 300
  *  back. Half is the least surprising place for it. */
 const SETTLE_AT = 0.5
 
+/** The visible tab, and the touch target around it. The target is
+ *  thumb-sized and the tab is not, so the extra width is transparent — and
+ *  it extends to the RIGHT of the tab, never to the left. Bleeding it
+ *  leftward was free while the grip lived at the screen edge, but the grip
+ *  now rides the panel's edge, and there the same bleed laid 24px of button
+ *  over the menu items. The owner's call (2026-09-15): the handle belongs
+ *  on the edge of the menu, not in it. */
+const GRIP_TAB_W = 16
+const GRIP_HIT_W = 40
+const GRIP_H = 64
+
+/** How far the grip is kept from the top and bottom of the screen. */
+const GRIP_MARGIN = 8
+
+const GRIP_Y_KEY = 'nova-grip-y'
+
+/** Keep the grip wholly on screen wherever it was left. A position saved in
+ *  landscape, or before a rotation, must not strand it half off an edge.
+ *  Pure, so the rule is testable without a device. */
+export function clampGripY(y: number, viewportH: number): number {
+  const lowest = Math.max(GRIP_MARGIN, viewportH - GRIP_H - GRIP_MARGIN)
+  return Math.min(Math.max(y, GRIP_MARGIN), lowest)
+}
+
+function readGripY(): number | null {
+  try {
+    const raw = localStorage.getItem(GRIP_Y_KEY)
+    if (raw === null) return null
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : null
+  } catch {
+    return null
+  }
+}
+
+type DragStart = {
+  x: number
+  y: number
+  axis: 'none' | 'x' | 'y'
+  /** Where the grip's top edge was when the finger went down. A vertical
+   *  drag moves it relative to this, so the grip does not jump to centre
+   *  itself under the thumb the moment the gesture is recognised. */
+  gripTop: number
+}
+
 export function MobileNav() {
   const [open, setOpen] = useState(false)
   /** How far the panel has been pulled in, in px, while a finger is down.
    *  null means no drag is in progress and CSS owns the position. */
   const [dragX, setDragX] = useState<number | null>(null)
-  const dragFrom = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y' } | null>(null)
+  /** Where the owner put the grip, in px from the top. null means he has
+   *  never moved it, which centres it. */
+  const [gripY, setGripY] = useState<number | null>(readGripY)
+  const dragFrom = useRef<DragStart | null>(null)
   /** Did the last touch actually travel? Read by `tap`, below. */
   const dragged = useRef(false)
+  const gripRef = useRef<HTMLButtonElement>(null)
 
   const location = useLocation()
   const { user } = useAuth()
@@ -50,15 +99,35 @@ export function MobileNav() {
   const isActive = (to: string) => location.pathname === to
   const moreActive = moreItems.some(section => section.items.some(item => isActive(item.to)))
 
+  // A rotation can leave a saved position off the screen. Only the PRESENCE
+  // of one is in the dep list — re-running on every pixel of a drag would
+  // fight the drag.
+  const placed = gripY !== null
+  useEffect(() => {
+    if (!placed) return
+    const reclamp = () => setGripY(y => (y === null ? null : clampGripY(y, window.innerHeight)))
+    reclamp()
+    window.addEventListener('resize', reclamp)
+    window.addEventListener('orientationchange', reclamp)
+    return () => {
+      window.removeEventListener('resize', reclamp)
+      window.removeEventListener('orientationchange', reclamp)
+    }
+  }, [placed])
+
   // Where the panel sits right now. During a drag it follows the finger;
   // otherwise CSS moves it and the transition below animates the change.
   const panelX = dragX !== null ? Math.min(0, dragX - PANEL_W) : open ? 0 : -PANEL_W
   const progress = (panelX + PANEL_W) / PANEL_W
 
-  const beginDrag = (e: React.TouchEvent, from: number) => {
+  const beginDrag = (e: React.TouchEvent) => {
     const t = e.touches[0]
-    dragFrom.current = { x: t.clientX, y: t.clientY, axis: 'none' }
-    setDragX(from)
+    dragFrom.current = {
+      x: t.clientX,
+      y: t.clientY,
+      axis: 'none',
+      gripTop: gripRef.current?.getBoundingClientRect().top ?? 0,
+    }
   }
 
   const moveDrag = (e: React.TouchEvent, from: number) => {
@@ -68,20 +137,39 @@ export function MobileNav() {
     const dx = t.clientX - start.x
     const dy = t.clientY - start.y
     // Decide once which way this gesture is going. Without the lock, a
-    // mostly-vertical scroll that drifts sideways drags the panel open a few
-    // pixels and fights the list.
+    // mostly-vertical move that drifts sideways would drag the panel open a
+    // few pixels while also moving the grip.
     if (start.axis === 'none') {
       if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return
       start.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
+      dragged.current = true
     }
-    if (start.axis === 'y') return
-    dragged.current = true
+    // Across: the panel. Up and down: the grip itself — the owner asked to
+    // be able to put the handle where his thumb actually is (2026-09-15).
+    if (start.axis === 'y') {
+      setGripY(clampGripY(start.gripTop + dy, window.innerHeight))
+      return
+    }
     setDragX(Math.max(0, Math.min(PANEL_W, from + dx)))
   }
 
   const endDrag = () => {
-    const settled = progress > SETTLE_AT
+    const axis = dragFrom.current?.axis
     dragFrom.current = null
+    if (axis === 'y') {
+      // Remember where he put it. A grip that resets on reload is a
+      // preference he has to keep re-stating, which is not a preference.
+      try {
+        if (gripY !== null) localStorage.setItem(GRIP_Y_KEY, String(gripY))
+      } catch {
+        // A browser with storage off just gets a centred grip next load.
+      }
+      return
+    }
+    // A tap ends here too, and `tap` owns that — so a gesture that never
+    // became a horizontal drag must not touch `open`.
+    if (dragX === null) return
+    const settled = progress > SETTLE_AT
     setDragX(null)
     setOpen(settled)
   }
@@ -111,31 +199,26 @@ export function MobileNav() {
           The bar was pinned to the one edge this app could not control: on
           the owner's iPhone the web view is shorter than the screen, so a
           dead strip sat below anything at bottom:0, and four attempts did
-          not fix it. Nothing is pinned there now, so the strip is background
-          rather than a visible defect. The bar's other item was "Chat",
-          which on a phone is always the current page.
+          not fix it. Nothing is pinned there now.
 
           NO BADGE HERE, by the owner's call (2026-09-15): a count on a
           closed handle is noise. The unseen count still rides the Inbox row
           INSIDE the panel, where it is read rather than glanced at — the
           trade he chose. */}
       <button
+        ref={gripRef}
         type="button"
         aria-label={open ? 'Close menu' : 'Open menu'}
         aria-expanded={open}
         data-testid="edge-handle"
         onClick={tap}
-        onTouchStart={e => beginDrag(e, open ? PANEL_W : 0)}
+        onTouchStart={beginDrag}
         onTouchMove={e => moveDrag(e, open ? PANEL_W : 0)}
         onTouchEnd={endDrag}
         className={clsx(
-          'md:hidden fixed top-1/2 -translate-y-1/2 z-[60]',
-          'flex items-center justify-center',
-          // 16px of visible tab with a 40px touch target bled off-screen —
-          // narrower than the first attempt, which the owner found wide.
-          'h-16 w-10 -ml-6 pl-6',
-          'rounded-r-lg bg-surface-elevated/60 border border-l-0 border-border-subtle',
-          'backdrop-blur active:opacity-100 opacity-70',
+          'md:hidden fixed z-[60] flex items-center justify-start',
+          // Centred until he moves it, and then wherever he left it.
+          gripY === null && 'top-1/2 -translate-y-1/2',
           hidden && 'opacity-0 pointer-events-none',
         )}
         style={{
@@ -143,16 +226,27 @@ export function MobileNav() {
           // when it opens: closed it sits at the screen edge, open it sits
           // on the panel's edge, and mid-gesture it tracks the finger. So
           // the same handle that pulls the menu out is visibly the one that
-          // pushes it back — what the owner asked for (2026-09-15) in
-          // preference to a "<<" button.
+          // pushes it back — what the owner asked for in preference to a
+          // "<<" button.
           left: panelX + PANEL_W,
-          transition: dragX !== null ? 'none' : 'left 220ms cubic-bezier(.22,.61,.36,1)',
+          top: gripY ?? undefined,
+          width: GRIP_HIT_W,
+          height: GRIP_H,
+          transition: dragFrom.current ? 'none' : 'left 220ms cubic-bezier(.22,.61,.36,1)',
         }}
       >
-        <EllipsisVertical
-          size={16}
-          className={moreActive ? 'text-accent' : 'text-content-tertiary'}
-        />
+        {/* Only this is drawn. The rest of the button is transparent reach,
+            extending RIGHT, over the page — never over the menu. */}
+        <span
+          data-testid="edge-handle-tab"
+          className="flex h-full items-center justify-center rounded-r-lg bg-surface-elevated/60 border border-l-0 border-border-subtle backdrop-blur"
+          style={{ width: GRIP_TAB_W }}
+        >
+          <GripVertical
+            size={12}
+            className={moreActive ? 'text-accent' : 'text-content-tertiary'}
+          />
+        </span>
       </button>
 
       {/* The PANEL. Mounted whenever it is open OR mid-drag, so a gesture has
@@ -171,7 +265,7 @@ export function MobileNav() {
           />
           <div
             data-testid="mobile-drawer-panel"
-            onTouchStart={e => beginDrag(e, PANEL_W)}
+            onTouchStart={beginDrag}
             onTouchMove={e => moveDrag(e, PANEL_W)}
             onTouchEnd={endDrag}
             className={clsx(

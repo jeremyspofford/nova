@@ -135,6 +135,35 @@ address and at another one so the source-address claim is made for real.
 No stack needs to be running; it runs in CI (`web` job). Set
 `GATE_TEST_PREFIX` to keep its container names apart from a live stack's.
 
+### e2e/phone-layout.sh — the phone shell, measured
+
+`npm test` runs in jsdom, which does not lay out. Two production defects
+lived entirely in that blind spot, a day apart on the owner's installed iOS
+app: a shell sized from `100dvh` came out shorter than the screen and left a
+bare strip at the bottom, and the fix for THAT overshot iOS's layout
+viewport, which let the document scroll so the whole app slid up off the
+top. Every unit test was green through both.
+
+So the two invariants are asserted in a real browser at iPhone size, against
+the baked image rather than the dev server:
+
+- the shell is exactly the viewport (`fixed inset-0`, nothing computed),
+- the document cannot scroll at all,
+- the drag handle's touch target sits outside the menu panel, and the menu
+  carries a route back to chat.
+
+    apps/web/e2e/phone-layout.sh                      # needs the stack up
+    NOVA_E2E_SHOTS=/tmp/shots apps/web/e2e/phone-layout.sh   # + screenshots
+
+It supplies its own browser via the playwright image, so there is nothing to
+install. Run it after touching `AppLayout`, `MobileNav`, `safeArea.ts` or the
+`html`/`body` rules in `index.css`.
+
+What it CANNOT do is reproduce iOS standalone mode — headless WebKit reports
+`dvh == innerHeight` and honours `env()` differently. It pins the invariants;
+only the phone can confirm the symptom is gone. `Settings → Display
+diagnostics` reads the numbers off the device for that.
+
 ## Deploy notes
 
 - Declaring the project network's IPAM (same subnet the live network already
