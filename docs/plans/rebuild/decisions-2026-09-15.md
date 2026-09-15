@@ -118,6 +118,45 @@ question that stopped the one config change worth making today.
 
 ---
 
+## 9. The mobile application → **FUTURE TOPIC, owner-raised**
+
+Raised 2026-09-15 after adding Nova to his home screen: "I also don't have
+access to settings in the mobile application. It's chat only, not a huge
+deal now but we will want to have an in-depth discussion in the future
+around the mobile application."
+
+Deferred deliberately. What was found while confirming it, so the future
+discussion starts from facts:
+
+- **Settings IS reachable on mobile**, behind the ellipsis "More" button in
+  the bottom tab bar, under a "System" heading. The role gate passes for an
+  owner (`hasMinRole` puts owner above admin). So the complaint is
+  discoverability, not absence — which is its own finding, since the owner
+  of the system could not find his own settings.
+- **`SURFACE_PRESET` is hardcoded** to `'advanced'` in
+  `apps/web/src/components/layout/MobileNav.tsx:24`, with its own comment:
+  "hardcoded to 'advanced' until a real feature-flag source lands". The
+  three-way preset (`chat_only` / `standard` / `advanced`) exists as a type
+  and a working filter (`sidebarFilter.ts`) and NOTHING sets it. The design
+  anticipated this conversation and stopped.
+- **The mobile nav is derived from the desktop one** — unlabelled sections
+  become primary tabs, labelled sections go in the drawer. Deliberate (they
+  had drifted once when hand-mirrored), but it means the mobile surface is
+  currently "the desktop nav, filtered" rather than a surface designed for a
+  phone.
+- **The home-screen icon cannot follow the in-app choice** (a manifest takes
+  static PNGs; the mark is a themed SVG). So on mobile he sees the swirl,
+  and the control that would change it is the one he could not find. Those
+  are the same problem wearing two hats.
+
+v3's prior art is worth reading first: memory `mobile-chat-first-pwa` (the
+PWA was chat-only by choice), `mobile-pages-not-modals` (full-screen pages
+and drill-down rather than modals, with `Surface`/`useIsMobile`/
+`useSheetHistory`), and `ios-pwa-safe-area` (iOS reports a top inset of 0
+while full-bleed; use `var(--nova-safe-top)`).
+
+---
+
 ## Order of work
 
 1. The web manifest (item 2) — small, agreed, finishes a closed scope.
