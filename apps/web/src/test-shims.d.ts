@@ -4,4 +4,7 @@
 // on nothing). Just the one call the test makes.
 declare module 'node:fs' {
   export function readFileSync(path: string | URL, encoding: 'utf8'): string
+  // The manifest test checks that every icon the manifest names is really in
+  // public/ — a missing one degrades Add-to-Home-Screen silently.
+  export function existsSync(path: string | URL): boolean
 }

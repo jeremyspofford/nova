@@ -12,6 +12,21 @@
          so :5173 and the baked nginx image answer the same paths. -->
     <link rel="icon" type="image/png" href="/icons/icon-192.png" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <!-- Add to Home Screen. The manifest gives Android/Chromium the name,
+         the standalone display mode, the ground colour and a maskable icon;
+         iOS reads almost none of it and needs the two apple- metas below for
+         the same effect.
+
+         NOTE, because it will look like a bug otherwise: the home-screen
+         icon CANNOT follow the theme. A manifest takes static PNGs, while
+         the in-app mark is an SVG painted from the live palette
+         (src/lib/app-icon.ts). So the phone shows the v3 swirl whatever
+         icon is chosen in Appearance — which is also the better choice for
+         a home screen, where a distinctive shape beats a letterform. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Nova" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">

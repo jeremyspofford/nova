@@ -432,6 +432,19 @@ server {
         try_files $uri =404;
     }
 
+    # `.webmanifest` is NOT in nginx's mime.types, so without this block the
+    # file is served as the default type. Chrome then refuses to parse it and
+    # Add-to-Home-Screen silently falls back to a bookmark — no error, no
+    # console entry the owner would look for. `try_files $uri =404` rather
+    # than the SPA fallback below for the same reason: a manifest request
+    # that answers with index.html is a 200 that means "broken".
+    location = /manifest.webmanifest {
+        include /etc/nginx/gate/gate_check.conf;
+        default_type application/manifest+json;
+        add_header Cache-Control "no-cache";
+        try_files $uri =404;
+    }
+
     # index.html must NOT be cached: a phone holding yesterday's shell while
     # /assets serves today's chunks is the classic "the feature isn't there".
     location / {
