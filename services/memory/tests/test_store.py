@@ -249,3 +249,75 @@ def test_text_before_the_first_heading_is_never_silently_dropped(tmp_path):
     entries = split_entries("a hand-written preamble\n\n## 10:00\n\nUser: hi\n\nAssistant: hello\n")
     assert [e.fragment for e in entries] == ["start", "10:00"]
     assert entries[0].text == "a hand-written preamble"
+
+
+# ── Threads (S24) ────────────────────────────────────────────────────────
+#
+# A room is one subject held over time. Written into the day's journal its
+# exchanges are scattered across however many days it was live and
+# interleaved with everything else said on those days — the shuffling a room
+# exists to stop. So a room gets its own document, in the SAME shape as a
+# journal, because then every existing mechanism does the right thing: the
+# indexer already tokenises title and body and already splits on `## HH:MM`.
+
+
+def test_a_room_gets_its_own_document_with_its_topic(tmp_path):
+    store = MemoryStore(tmp_path)
+    path, created = store.append_thread(
+        "jeremy", "c-123", "Nova: two timers keep failing", "User: which one?\n\nAssistant: the 7am"
+    )
+
+    assert created is True
+    assert path.name == "c-123.md"
+    assert path.parent.name == "threads"
+    text = path.read_text(encoding="utf-8")
+    assert (
+        "title: 'Nova: two timers keep failing'" in text or "Nova: two timers keep failing" in text
+    )
+    assert "kind: thread" in text
+    assert "which one?" in text
+
+
+def test_a_second_exchange_joins_the_same_room(tmp_path):
+    store = MemoryStore(tmp_path)
+    store.append_thread("jeremy", "c-123", "a topic", "User: one\n\nAssistant: two")
+    path, created = store.append_thread(
+        "jeremy", "c-123", "a topic", "User: three\n\nAssistant: four"
+    )
+
+    assert created is False
+    text = path.read_text(encoding="utf-8")
+    assert "one" in text and "three" in text
+    # Same shape as a journal, which is what makes the indexer split it into
+    # exchanges rather than indexing the whole room as one blob.
+    assert text.count("## ") >= 2
+
+
+def test_the_topic_is_refreshed_rather_than_left_stale(tmp_path):
+    """It costs nothing and means a parent message that changed does not
+    leave the room filed under what it used to say."""
+    store = MemoryStore(tmp_path)
+    store.append_thread("jeremy", "c-1", "the old topic", "User: a\n\nAssistant: b")
+    path, _ = store.append_thread("jeremy", "c-1", "the new topic", "User: c\n\nAssistant: d")
+
+    text = path.read_text(encoding="utf-8")
+    assert "the new topic" in text
+    assert "the old topic" not in text
+
+
+def test_two_rooms_never_share_a_document(tmp_path):
+    store = MemoryStore(tmp_path)
+    first, _ = store.append_thread("jeremy", "c-1", "one", "User: a\n\nAssistant: b")
+    second, _ = store.append_thread("jeremy", "c-2", "two", "User: c\n\nAssistant: d")
+
+    assert first != second
+    assert "c" not in first.read_text(encoding="utf-8").split("Assistant: b")[1]
+
+
+def test_a_conversation_id_cannot_escape_the_person_root(tmp_path):
+    """The id comes off a URL. `_resolve_within` is the real gate, but a
+    separator is refused before it ever gets there."""
+    store = MemoryStore(tmp_path)
+    for bad in ("../../etc/passwd", "a/b", "a\\b"):
+        with pytest.raises(PathEscape):
+            store.append_thread("jeremy", bad, "t", "User: a\n\nAssistant: b")

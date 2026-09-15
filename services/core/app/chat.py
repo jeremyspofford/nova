@@ -1877,7 +1877,55 @@ async def _recall(
         )
 
 
-async def _ingest(app, person: Person, conversation_id: uuid.UUID, exchange: dict) -> None:
+#: How much of a parent message becomes a room's title (S24). Long enough
+#: to say what the room is about, short enough to read as a title.
+THREAD_TITLE_CHARS = 120
+
+
+def thread_title(parent_role: str, parent_content: str) -> str:
+    """A room's topic, DERIVED from the message it hangs off.
+
+    No model writes this, so it cannot be wrong — only terse. That is the
+    whole argument for deriving it: a generated topic is a summary, and a
+    wrong summary of what he said is the failure class this codebase keeps
+    getting bitten by. Role-prefixed because "Nova: two timers are failing"
+    and "Jeremy: two timers are failing" are different subjects.
+    """
+    who = "Nova" if parent_role == "assistant" else "He"
+    body = " ".join(parent_content.split())
+    if len(body) > THREAD_TITLE_CHARS:
+        body = body[:THREAD_TITLE_CHARS].rstrip() + "…"
+    return f"{who}: {body}" if body else f"{who}: (an empty message)"
+
+
+async def _thread_meta(pool, conversation_id: uuid.UUID) -> dict | None:
+    """`{conversation_id, title}` for a room, None for the hallway.
+
+    Read at ingest time rather than carried down from the turn, because the
+    turn does not otherwise care which kind of conversation it is in — and a
+    field threaded through six call sites for one consumer is six places to
+    forget it.
+    """
+    row = await pool.fetchrow(
+        "SELECT p.role, p.content FROM conversations c "
+        "JOIN messages p ON p.id = c.parent_message_id WHERE c.id = $1",
+        conversation_id,
+    )
+    if row is None:
+        return None
+    return {
+        "conversation_id": str(conversation_id),
+        "title": thread_title(row["role"], row["content"]),
+    }
+
+
+async def _ingest(
+    app,
+    person: Person,
+    conversation_id: uuid.UUID,
+    exchange: dict,
+    thread: dict | None = None,
+) -> None:
     try:
         async with peers.client(app, peers.MEMORY, INGEST_TIMEOUT) as client:
             response = await client.post(
@@ -1886,6 +1934,12 @@ async def _ingest(app, person: Person, conversation_id: uuid.UUID, exchange: dic
                     "person_id": str(person.id),
                     "conversation_id": str(conversation_id),
                     "exchange": exchange,
+                    # S24: present only for a room. Memory writes a room's
+                    # exchanges to their own document under this title, so
+                    # the topic is searchable by every mechanism that
+                    # already exists — the indexer tokenises title and body,
+                    # so recall carries it with no new concept.
+                    **({"thread": thread} if thread else {}),
                 },
             )
             response.raise_for_status()
@@ -1896,7 +1950,12 @@ async def _ingest(app, person: Person, conversation_id: uuid.UUID, exchange: dic
 
 
 def _queue_ingest(
-    app, turn: traces.Turn, person: Person, conversation_id: uuid.UUID, exchange: dict
+    app,
+    turn: traces.Turn,
+    person: Person,
+    conversation_id: uuid.UUID,
+    exchange: dict,
+    pool=None,
 ) -> None:
     with turn.span("memory_ingest") as span:
         try:
@@ -1905,7 +1964,14 @@ def _queue_ingest(
             span.meta.update(queued=False, error=str(exc))
             logger.warning("memory ingest not queued: %s", exc)
             return
-        _spawn(_ingest(app, person, conversation_id, exchange))
+
+        async def _send() -> None:
+            thread = None if pool is None else await _thread_meta(pool, conversation_id)
+            if thread is not None:
+                span.meta["thread_title"] = thread["title"]
+            await _ingest(app, person, conversation_id, exchange, thread)
+
+        _spawn(_send())
         span.meta["queued"] = True
 
 
@@ -4809,7 +4875,16 @@ async def _run_turn(
         # next "what's the latest?" re-fetches.
         if ingest and not plumbing_turn and not read_ephemeral:
             _queue_ingest(
-                app, turn, person, conversation_id, {"user": message, "assistant": persisted}
+                app,
+                turn,
+                person,
+                conversation_id,
+                {"user": message, "assistant": persisted},
+                # S24: so the ingest can ask whether this was a room, and
+                # under what topic. Read there rather than threaded down, so
+                # nothing else in the turn has to carry a field it does not
+                # use.
+                pool,
             )
         decided = "ok"
         emit(DONE_FRAME)

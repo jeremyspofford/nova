@@ -202,26 +202,67 @@ async def resolve(
 
 @router.get("/active")
 async def get_active(person: Person = Depends(identity.require_person)) -> dict:
+    """The HALLWAY, and its live state. Never a room — see
+    `active_conversation`, where a database predicate is what keeps a thread
+    out of this answer."""
     pool = await db.get_pool()
     conversation = await active_conversation(pool, person)
+    return await _conversation_state(pool, conversation)
+
+
+async def _conversation_state(pool: asyncpg.Pool, conversation: asyncpg.Record) -> dict:
+    """The live shape a chat page attaches to, for ANY conversation.
+
+    Lifted out of `/active` verbatim (S24) so a room the URL names gets
+    exactly the same answer the hallway does — pending turn, its id, the
+    queue. A second hand-written version of this is how the reload path and
+    the room path would drift, and the reload path is the one that took ten
+    hours to find on 2026-09-10.
+    """
+    conversation_id = conversation["id"]
     return {
         **as_json(conversation),
         # So a client returning after a hard refresh knows a turn is still
         # finishing server-side and should poll for it, rather than showing a
         # truncated reply (S2c). A just-created conversation has none.
-        "pending_turn": await has_pending_turn(pool, conversation["id"]),
+        "pending_turn": await has_pending_turn(pool, conversation_id),
         # And which one (S15), so that same reloaded client can STOP it. Both
         # are derived from the same two facts; the boolean stays because every
         # existing reader reads it.
-        "pending_turn_id": _or_none(await pending_turn_id(pool, conversation["id"])),
+        "pending_turn_id": _or_none(await pending_turn_id(pool, conversation_id)),
         # The messages core has ACCEPTED and not yet answered (S15), oldest
         # first — so a tab that reloaded still shows what it queued, rather than
         # appearing to have lost it.
         "queued": [
             queued.as_json(row, ahead=i)
-            for i, row in enumerate(await queued.waiting(pool, conversation["id"]))
+            for i, row in enumerate(await queued.waiting(pool, conversation_id))
         ],
+        # S24: null for the hallway, the message it hangs off for a room. The
+        # page needs it to scroll back to the right place on the way out.
+        "parent_message_id": _or_none(conversation.get("parent_message_id")),
     }
+
+
+@router.get("/{conversation_id}/state")
+async def get_conversation_state(
+    conversation_id: uuid.UUID, person: Person = Depends(identity.require_person)
+) -> dict:
+    """The same shape as `/active`, for a conversation the client names.
+
+    A room is addressable (`/chat?thread=<id>`), so a relaunch inside one has
+    to be able to attach to it — including to a turn that is still running in
+    it. Someone else's conversation is a 404, via `owned_conversation`.
+    """
+    pool = await db.get_pool()
+    conversation = await pool.fetchrow(
+        "SELECT id, title, created_at, parent_message_id FROM conversations "
+        "WHERE id = $1 AND person_id = $2",
+        conversation_id,
+        person.id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail=f"no conversation {conversation_id} here")
+    return await _conversation_state(pool, conversation)
 
 
 def _or_none(value: uuid.UUID | None) -> str | None:

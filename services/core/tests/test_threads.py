@@ -320,3 +320,55 @@ async def test_every_notice_a_digest_carried_reaches_its_room(owner_client, pool
     facts = (await chat.thread_seed(pool, room["id"]))[-1]["content"]
     assert "a_check" in facts
     assert "b_check" in facts
+
+
+# ── the topic a room is filed under ──────────────────────────────────────
+#
+# DERIVED from the message the room hangs off, never authored. A generated
+# topic is a summary, and a wrong summary of what he said is the failure
+# class this codebase keeps getting bitten by. Derived, it cannot be wrong —
+# only terse.
+
+
+def test_the_topic_says_who_spoke():
+    """ "Nova: two timers are failing" and "He: two timers are failing" are
+    different subjects, and a room filed under the wrong one is recalled for
+    the wrong question."""
+    assert chat.thread_title("assistant", "two timers are failing").startswith("Nova: ")
+    assert chat.thread_title("user", "two timers are failing").startswith("He: ")
+
+
+def test_the_topic_is_one_line_however_the_message_was_written():
+    """A digest is several paragraphs. A title with newlines in it is not a
+    title."""
+    topic = chat.thread_title("assistant", "line one\n\nline  two\tand three")
+    assert "\n" in topic is False or "\n" not in topic
+    assert topic == "Nova: line one line two and three"
+
+
+def test_a_long_message_is_cut_and_says_so():
+    topic = chat.thread_title("assistant", "x" * 400)
+    assert len(topic) < 140
+    assert topic.endswith("…")
+
+
+def test_an_empty_parent_still_yields_a_title():
+    """No model writes this, so there is no path where it is absent — an
+    empty title would file the room under nothing and make it unfindable."""
+    assert chat.thread_title("assistant", "   ") == "Nova: (an empty message)"
+
+
+async def test_a_room_reports_its_topic_and_the_hallway_reports_none(owner_client, pool):
+    """`_thread_meta` is what decides which document an exchange is written
+    to. None for the hallway is the whole of "nothing changes for an
+    ordinary turn"."""
+    owner = _Person(await _owner(pool))
+    hallway = await _hallway(pool, owner.id)
+    message_id = await _message(pool, hallway, "Two timers have failed twice running.")
+    room, _ = await conversations.open_thread(pool, owner, message_id)
+
+    assert await chat._thread_meta(pool, hallway) is None
+
+    meta = await chat._thread_meta(pool, room["id"])
+    assert meta["conversation_id"] == str(room["id"])
+    assert meta["title"] == "Nova: Two timers have failed twice running."

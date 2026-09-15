@@ -25,6 +25,12 @@ async def test_active_creates_one_then_reuses_it(owner_client, pool):
     # `queued` joined it in S15 too: messages core accepted while a turn was
     # running, so a reloaded tab still shows what it sent rather than appearing
     # to have lost it.
+    # `parent_message_id` joined it in S24: /active and
+    # /{id}/state now answer through ONE builder, so a room the URL names
+    # gets exactly the shape the hallway does. It is always null HERE — a
+    # database predicate keeps a thread out of this route — and pinning that
+    # is the point: if /active ever answers with a parent, a digest is being
+    # delivered into a side room.
     assert set(body) == {
         "id",
         "title",
@@ -32,7 +38,9 @@ async def test_active_creates_one_then_reuses_it(owner_client, pool):
         "pending_turn",
         "pending_turn_id",
         "queued",
+        "parent_message_id",
     }
+    assert body["parent_message_id"] is None
     assert body["created_at"]
     # A brand-new conversation has no turn in flight.
     assert body["pending_turn"] is False

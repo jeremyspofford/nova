@@ -136,8 +136,15 @@ async def window(
     """
     try:
         rows = await pool.fetch(
-            "SELECT m.id, m.role, m.created_at, m.content FROM messages m "
+            "SELECT m.id, m.role, m.created_at, m.content, m.conversation_id, "
+            # S24: which room a row belongs to, and what that room is about.
+            # Selected so the GROUPING below can happen without a second
+            # query, and so a caller can head a thread's block with the
+            # message it hangs off.
+            "       c.parent_message_id, p.content AS parent_content "
+            "FROM messages m "
             "JOIN conversations c ON c.id = m.conversation_id "
+            "LEFT JOIN messages p ON p.id = c.parent_message_id "
             "WHERE c.person_id = $1 AND m.role = ANY($2::text[]) "
             "  AND m.created_at > COALESCE($5::timestamptz, now()) - $3::interval "
             "  AND ($5::timestamptz IS NULL OR m.created_at <= $5) "
@@ -175,7 +182,23 @@ async def window(
         # asyncpg Records are immutable, so a clipped row travels as a plain
         # dict with the same keys every caller already reads.
         kept.append(dict(row, content=content) if content != row["content"] else row)
-    kept.reverse()
+    # OLDEST FIRST, AND GROUPED BY CONVERSATION (S24).
+    #
+    # The SELECTION above stays newest-first and stays global: the budget
+    # should spend itself on the most recent things said, wherever they were
+    # said. Only the ORDER the survivors are handed back in changes.
+    #
+    # It was `kept.reverse()` — created_at alone — which shuffled a room's
+    # exchange into the hallway's at the exact moment memory was written. A
+    # side conversation about one subject, interleaved line by line with the
+    # grocery list, is the shape that made distillation cite the wrong row.
+    # Grouping is what makes a room legible to the reader that turns it into
+    # notes, and it costs one sort.
+    #
+    # `conversation_id` first, then time, then id — so a conversation's rows
+    # are contiguous and in the order they were said, and two rows written in
+    # the same millisecond still have one stable order.
+    kept.sort(key=lambda row: (str(row["conversation_id"]), row["created_at"], str(row["id"])))
     return kept
 
 
