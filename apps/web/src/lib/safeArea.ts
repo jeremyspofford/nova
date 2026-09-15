@@ -48,12 +48,44 @@ export function installedApp(): boolean {
   )
 }
 
-/** Does our viewport cover the whole screen? Compared on the long edge so
- *  the answer survives rotation — iOS reports screen dimensions unrotated. */
+/** Is this app occupying the whole width of the display — i.e. is there a
+ *  status bar over us at all?
+ *
+ *  Compared on the SHORT edge, and that is the whole point. This read the
+ *  LONG edge until 2026-09-15, which made it answer "no" in exactly the case
+ *  that needs a "yes": iOS gave the owner's installed app a view one status
+ *  bar SHORTER than the screen and still drew it from the top edge, so the
+ *  long edge fell 59px short, the substitution below was skipped, and the
+ *  first line of the app was drawn under the clock. Reproduced in
+ *  e2e/short-view.mjs.
+ *
+ *  The short edge is what actually distinguishes the case this guard was
+ *  written for. A split view or a non-full-screen window loses WIDTH, and
+ *  nothing is drawn over it; a full-width view keeps its short edge whether
+ *  or not iOS shortened it, and something is. Short edges also survive
+ *  rotation on their own, which is why the original compared long ones —
+ *  iOS reports screen dimensions unrotated, so comparing min to min is
+ *  orientation-proof too. */
 export function coversScreen(): boolean {
-  const screenLong = Math.max(window.screen?.width ?? 0, window.screen?.height ?? 0)
-  if (!screenLong) return false
-  return Math.max(window.innerWidth, window.innerHeight) >= screenLong - 4
+  return coversRect(
+    window.innerWidth,
+    window.innerHeight,
+    window.screen?.width ?? 0,
+    window.screen?.height ?? 0,
+  )
+}
+
+/** The rule itself, pure, so it is driven by tests rather than restated in
+ *  them — a test that re-implements the comparison measures the test. */
+export function coversRect(
+  viewW: number,
+  viewH: number,
+  screenW: number,
+  screenH: number,
+): boolean {
+  const screenShort = Math.min(screenW, screenH)
+  if (!screenShort) return false
+  return Math.min(viewW, viewH) >= screenShort - 4
 }
 
 /** An open keyboard shrinks the visual viewport and zeroes the bottom inset

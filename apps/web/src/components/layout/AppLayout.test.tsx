@@ -290,7 +290,7 @@ describe('AppLayout — which nav renders', () => {
     // The panel is 300 wide and starts at x=0, so nothing belonging to the
     // grip may begin before 300. jsdom does not lay out, so the assertion is
     // on the declared geometry rather than on a measured rect.
-    expect(grip.style.left).toBe('300px')
+    expect(grip.style.transform).toContain('translate(300px')
     expect(grip.className).not.toMatch(/-ml-/)
     expect(tab.className).not.toMatch(/-ml-|pl-/)
   })
@@ -304,9 +304,9 @@ describe('AppLayout — which nav renders', () => {
     await screen.findByText('page')
     const handle = edgeHandle()!
 
-    // Centred to begin with: positioned by class, with no explicit top.
-    expect(handle.className).toContain('top-1/2')
-    expect(handle.style.top).toBe('')
+    // Centred to begin with: top:50% pulled back by half its own height.
+    expect(handle.style.top).toBe('50%')
+    expect(handle.style.transform).toContain('-50%')
 
     fireEvent.touchStart(handle, { touches: [{ clientX: 20, clientY: 400 }] })
     fireEvent.touchMove(handle, { touches: [{ clientX: 22, clientY: 500 }] })
@@ -315,7 +315,7 @@ describe('AppLayout — which nav renders', () => {
     // jsdom reports a zero rect, so the grip's top starts at 0 and a 100px
     // pull down lands it at 100.
     expect(handle.style.top).toBe('100px')
-    expect(handle.className).not.toContain('top-1/2')
+    expect(handle.style.transform).toContain('0px)')
     expect(localStorage.getItem('nova-grip-y')).toBe('100')
   })
 

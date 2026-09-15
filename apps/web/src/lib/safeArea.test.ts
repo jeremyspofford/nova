@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { topInset } from './safeArea'
+import { coversRect, topInset } from './safeArea'
 
 /**
  * The substitution rule, tested without a device.
@@ -53,5 +53,44 @@ describe('topInset', () => {
 
   it('never invents room when both conditions are merely half-met', () => {
     expect(topInset(0, 0, false, false)).toBe(0)
+  })
+})
+
+/**
+ * The guard that decides whether anything is drawn over us.
+ *
+ * It read the LONG edge until 2026-09-15 and got the owner's phone exactly
+ * backwards: iOS handed the installed app a view one status bar shorter than
+ * the screen and still drew it from the top, so the long edge fell 59px
+ * short, `covers` came back false, `topInset` substituted nothing, and the
+ * first line of the app sat under the clock. He reported it three times as
+ * "I'm missing the top".
+ *
+ * These drive the pure rule with the numbers a device reports, since
+ * `coversScreen()` itself reads window/screen directly.
+ */
+describe('the covers-screen rule, on short edges', () => {
+  const covers = coversRect
+
+  it('says yes when iOS shortened the view but kept it full width', () => {
+    // THE 2026-09-15 CASE. iPhone 14 Pro, 393x852 screen, 793-tall view.
+    expect(covers(393, 793, 393, 852)).toBe(true)
+    // Comparing long edges is what got this wrong: 793 < 848.
+    expect(Math.max(393, 793) >= Math.max(393, 852) - 4).toBe(false)
+  })
+
+  it('says yes for a genuinely full-bleed view, portrait or landscape', () => {
+    expect(covers(393, 852, 393, 852)).toBe(true)
+    // Rotated. iOS reports screen dimensions unrotated, so both mins are 393.
+    expect(covers(852, 393, 393, 852)).toBe(true)
+  })
+
+  it('still says no in a split view, which is what the guard is for', () => {
+    // An iPad giving the app half the width. Nothing is drawn over it.
+    expect(covers(507, 1366, 1024, 1366)).toBe(false)
+  })
+
+  it('says no when the screen reports nothing', () => {
+    expect(covers(393, 852, 0, 0)).toBe(false)
   })
 })

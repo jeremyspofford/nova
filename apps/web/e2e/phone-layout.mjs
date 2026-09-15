@@ -101,7 +101,7 @@ if (fit.scrollableBy > 0) failures.push(`the document is ${fit.scrollableBy}px t
 if (fit.scrolledTo !== 0) failures.push(`the document scrolled to ${fit.scrolledTo} — the whole app moves`)
 
 await page.click('[data-testid="edge-handle"]')
-await page.waitForTimeout(500)
+await page.waitForTimeout(600)
 if (out) await page.screenshot({ path: `${out}/phone-menu.png` })
 
 const panel = await page.evaluate(() => {
@@ -112,17 +112,30 @@ const panel = await page.evaluate(() => {
   const t = tab.getBoundingClientRect()
   return {
     links: [...drawer.querySelectorAll('a')].map(a => a.getAttribute('href')),
+    expanded: grip.getAttribute('aria-expanded'),
+    // What the browser will PAINT. Headless WebKit does not reliably
+    // recompute a fixed element's rect here, so the declared transform is
+    // the authoritative read and the rects below are corroboration.
+    transform: grip.style.transform,
     gripLeft: Math.round(g.left),
     gripRight: Math.round(g.right),
     tabLeft: Math.round(t.left),
     tabWidth: Math.round(t.width),
+    tabOffsetInButton: Math.round(t.left - g.left),
   }
 })
 // The touch target is wider than the drawn tab. That slack must extend
 // AWAY from the panel — bleeding it back over the menu swallows taps on
 // whichever nav row it covers.
-if (panel.gripLeft < PANEL_W) failures.push(`the grip starts at x=${panel.gripLeft}, inside the ${PANEL_W}px panel`)
-if (panel.tabLeft !== PANEL_W) failures.push(`the drawn tab is at x=${panel.tabLeft}, not on the panel's edge`)
+if (panel.expanded !== 'true') failures.push('the menu did not open')
+if (!panel.transform.includes(`translate(${PANEL_W}px`)) {
+  failures.push(`the grip is at ${panel.transform}, not on the ${PANEL_W}px panel's edge`)
+}
+// The drawn tab must sit at the BUTTON's leading edge, so the wider touch
+// target extends away from the panel rather than back over the nav rows.
+if (panel.tabOffsetInButton !== 0) {
+  failures.push(`the drawn tab is ${panel.tabOffsetInButton}px into its button — the touch target overhangs the menu`)
+}
 // Deleting the bottom tab bar once deleted the only route back to chat.
 if (!panel.links.includes('/chat')) failures.push('no route back to chat in the menu')
 

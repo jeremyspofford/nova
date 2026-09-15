@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Run the phone-layout check against the DEPLOYED web service.
+# Run the phone-layout checks against the DEPLOYED web service:
+# phone-layout.mjs (the shell is the viewport, the document cannot scroll)
+# and short-view.mjs (an installed app whose web view iOS made too short).
 #
 # Deliberately not a devDependency: playwright drags several hundred MB of
 # browser binaries behind it, and this runs against the baked nginx image
@@ -28,4 +30,4 @@ fi
 # mounted directory so repeat runs are instant.
 docker run "${args[@]}" "$IMAGE" sh -c \
   '[ -d node_modules/playwright ] || npm i --no-save --silent playwright@1.50.0 >/dev/null 2>&1
-   node phone-layout.mjs'
+   node phone-layout.mjs && node short-view.mjs'

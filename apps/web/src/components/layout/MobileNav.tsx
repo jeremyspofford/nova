@@ -216,9 +216,7 @@ export function MobileNav() {
         onTouchMove={e => moveDrag(e, open ? PANEL_W : 0)}
         onTouchEnd={endDrag}
         className={clsx(
-          'md:hidden fixed z-[60] flex items-center justify-start',
-          // Centred until he moves it, and then wherever he left it.
-          gripY === null && 'top-1/2 -translate-y-1/2',
+          'md:hidden fixed left-0 z-[60] flex items-center justify-start',
           hidden && 'opacity-0 pointer-events-none',
         )}
         style={{
@@ -228,11 +226,25 @@ export function MobileNav() {
           // the same handle that pulls the menu out is visibly the one that
           // pushes it back — what the owner asked for in preference to a
           // "<<" button.
-          left: panelX + PANEL_W,
-          top: gripY ?? undefined,
+          //
+          // Moved by TRANSFORM, not by `left`. Animating `left` forces a
+          // layout pass on every frame of the 220ms slide, on a phone, while
+          // a transform is composited — and the panel it rides has always
+          // moved this way, so the two now animate alike by construction.
+          // (`left` painted correctly too; a detour spent measuring
+          // getBoundingClientRect in headless WebKit was chasing a stale
+          // rect in the harness, not a defect in either version.)
+          //
+          // The vertical half is folded in here too, because an inline
+          // transform would otherwise overwrite Tailwind's -translate-y-1/2:
+          // centred means top:50% with -50%, placed means top:<y> with 0.
+          top: gripY ?? '50%',
+          transform: `translate(${panelX + PANEL_W}px, ${gripY === null ? '-50%' : '0px'})`,
           width: GRIP_HIT_W,
           height: GRIP_H,
-          transition: dragFrom.current ? 'none' : 'left 220ms cubic-bezier(.22,.61,.36,1)',
+          transition: dragFrom.current
+            ? 'none'
+            : 'transform 220ms cubic-bezier(.22,.61,.36,1)',
         }}
       >
         {/* Only this is drawn. The rest of the button is transparent reach,
