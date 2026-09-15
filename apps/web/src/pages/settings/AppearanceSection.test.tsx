@@ -180,3 +180,92 @@ describe('the sidebar mark is its own choice', () => {
     }
   })
 })
+
+/**
+ * The interface font, chosen here (2026-09-15).
+ *
+ * The value ends up inside a `<style>` element's text, which is why the
+ * custom family is scrubbed; `src/lib/fonts.test.ts` drives that rule
+ * directly. What these add is that the CONTROL is wired to it — a picker
+ * that renders but publishes nothing looks identical to a working one until
+ * somebody tries to read the page.
+ */
+describe('AppearanceSection — the interface font', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    document.documentElement.classList.remove('dark')
+  })
+
+  const fontGroup = () => within(screen.getByRole('group', { name: 'Interface font' }))
+
+  it('offers every font and marks the active one', () => {
+    renderSection()
+    for (const key of ['jakarta', 'inter', 'figtree', 'source-serif', 'system', 'custom']) {
+      expect(screen.getByTestId(`font-${key}`), key).toBeTruthy()
+    }
+    expect(screen.getByTestId('font-jakarta').getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('picking one publishes it, so the page is actually set in it', () => {
+    renderSection()
+    fireEvent.click(screen.getByTestId('font-inter'))
+
+    expect(screen.getByTestId('font-inter').getAttribute('aria-pressed')).toBe('true')
+    expect(vars()).toContain('--font-sans:"Inter Variable"')
+  })
+
+  it('each card is set in the face it offers', () => {
+    // A font picker whose options are all drawn in the current font is a
+    // list of names, not a choice.
+    renderSection()
+    const inter = screen.getByTestId('font-inter')
+    expect(within(inter).getByText('Inter').getAttribute('style')).toContain('Inter Variable')
+  })
+
+  it('asks for a family name only when there is one to ask for', () => {
+    renderSection()
+    expect(screen.queryByTestId('custom-font-input')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('font-custom'))
+    expect(screen.getByTestId('custom-font-input')).toBeTruthy()
+  })
+
+  it('an installed family is published, quoted, with a fallback behind it', () => {
+    renderSection()
+    fireEvent.click(screen.getByTestId('font-custom'))
+    fireEvent.change(screen.getByTestId('custom-font-input'), { target: { value: 'Styrene A' } })
+
+    expect(vars()).toContain('--font-sans:"Styrene A", ')
+    expect(vars()).toMatch(/--font-sans:"Styrene A", [^;]*sans-serif/)
+  })
+
+  it('a family name cannot close the rule it is written into', () => {
+    // The stylesheet this lands in is built by string concatenation. Typing
+    // a brace must not end the rule and start another.
+    renderSection()
+    fireEvent.click(screen.getByTestId('font-custom'))
+    fireEvent.change(screen.getByTestId('custom-font-input'), {
+      target: { value: 'X}html{opacity:0' },
+    })
+
+    const published = vars()
+    expect(published).toContain('--font-sans:"Xhtmlopacity0"')
+    expect(published).not.toContain('opacity:0')
+  })
+
+  it('keeps the typed family while another font is selected', () => {
+    // Switching away and back must not make the operator retype it.
+    renderSection()
+    fireEvent.click(screen.getByTestId('font-custom'))
+    fireEvent.change(screen.getByTestId('custom-font-input'), { target: { value: 'Styrene A' } })
+    fireEvent.click(screen.getByTestId('font-inter'))
+    fireEvent.click(screen.getByTestId('font-custom'))
+
+    expect(screen.getByTestId('custom-font-input').getAttribute('value')).toBe('Styrene A')
+  })
+
+  it('the font group exists under a name a screen reader can find', () => {
+    renderSection()
+    expect(fontGroup().getByTestId('font-inter')).toBeTruthy()
+  })
+})
