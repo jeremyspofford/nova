@@ -149,6 +149,25 @@ discussion starts from facts:
   and the control that would change it is the one he could not find. Those
   are the same problem wearing two hats.
 
+**Added to this topic 2026-09-15, deferred with it:** making the home-screen
+icon follow the Appearance choice. I first told him it was impossible; that
+was half an answer. The real constraints are narrower — iOS captures the
+icon at Add-to-Home-Screen time from `apple-touch-icon`, and it must be a
+PNG. So a theme-painted SVG cannot be a home-screen icon, AND an installed
+icon never updates whatever we do. But "pick amber, re-add, get amber" IS
+achievable: render each choice to PNG at build time and have the theme store
+swap the `apple-touch-icon` href. Held for this conversation rather than
+bolted on, along with the smaller honesty fix — the Appearance picker
+currently says nothing about the home screen and so implies it follows.
+
+**Three layout defects found and FIXED on 2026-09-15** while this topic was
+open, because they made the phone unusable rather than merely awkward: the
+mobile nav never rendered (`{!isMobile}` inverted since 2026-08-27), the
+composer sat under the tab bar, and nothing padded `env(safe-area-inset-top)`
+so the heading sat behind the clock. All three were invisible from the code
+and obvious the moment the app was rendered at 393px — which is now part of
+done for anything touching apps/web.
+
 v3's prior art is worth reading first: memory `mobile-chat-first-pwa` (the
 PWA was chat-only by choice), `mobile-pages-not-modals` (full-screen pages
 and drill-down rather than modals, with `Surface`/`useIsMobile`/
@@ -159,10 +178,20 @@ while full-bleed; use `var(--nova-safe-top)`).
 
 ## Order of work
 
-1. The web manifest (item 2) — small, agreed, finishes a closed scope.
-2. **S24, the Inbox** — his daily surface, and the thing his assistant
-   currently files unreadable reports into.
-3. **S25, the quality corpus** — the instrument. Larger, mostly design.
+REVISED 2026-09-15 after the owner proposed threads. He agreed with the
+recommendation to make threads their own slice with the Inbox as its first
+consumer, rather than building a general mechanism through one narrow lens.
+
+1. ~~The web manifest~~ — **DONE**, deployed and verified end to end.
+2. **S24, threads.** A notice opens into an isolated contextual
+   conversation, Teams-style, with the main conversation keeping a stub so
+   the top level stays one long thread. Owner's idea, and it resolves the
+   dead end the Inbox design had hit: "new conversation" accumulates
+   orphans, "inject into the current one" derails it.
+3. **S25, the Inbox.** The defects, human prose, linked subjects, the
+   `notices` tool so she can read her own Inbox, and wiring the skill-draft
+   route. Its conversational half becomes "open a thread" once S24 exists.
+4. **S26, the quality corpus.** The instrument. Largest, mostly design.
 
 Carries riding along, to be folded in where they fit: S16's claimed-deletion
 eval case needs a workspace-file fixture (S25 builds exactly that fixture
