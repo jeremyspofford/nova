@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { SettingsPage } from './SettingsPage'
 import { ChatProvider } from '../../stores/chat-store'
 import { ChatPage } from '../chat/ChatPage'
@@ -87,7 +88,14 @@ function chatApi() {
   }
 }
 
-function renderApp() {
+/**
+ * Settings is tabbed as of 2026-09-15, and the tab lives in the PATH — so
+ * these render it at a route rather than bare, and each caller says which
+ * tab its assertions live under. Rendering bare threw
+ * "Cannot destructure property 'future'", which is react-router's way of
+ * saying there is no Router above it.
+ */
+function renderApp(tab = 'models') {
   // initialModel mirrors what App.tsx's Gate feeds ChatPage in production —
   // its OWN settings fetch, read once at app start. It is exactly the
   // snapshot Fix A's bug left stale after a switch; passing it here (rather
@@ -95,14 +103,18 @@ function renderApp() {
   // below meaningful: the badge already agrees with Settings BEFORE any
   // switch, same as the real app.
   return render(
-    <ThemeProvider>
-      <AuthProvider>
-        <ChatProvider fetchImpl={noopFetch}>
-          <SettingsPage />
-          <ChatPage api={chatApi()} initialModel="qwen3:8b" />
-        </ChatProvider>
-      </AuthProvider>
-    </ThemeProvider>,
+    <MemoryRouter initialEntries={[`/settings/${tab}`]}>
+      <ThemeProvider>
+        <AuthProvider>
+          <ChatProvider fetchImpl={noopFetch}>
+            <Routes>
+              <Route path="/settings/:tab" element={<SettingsPage />} />
+            </Routes>
+            <ChatPage api={chatApi()} initialModel="qwen3:8b" />
+          </ChatProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    </MemoryRouter>,
   )
 }
 
@@ -133,7 +145,7 @@ describe('SettingsPage — the instance default theme', () => {
       { key: 'chat.model', type: 'str', default: '', description: '', value: 'qwen3:8b' },
       { key: 'appearance.default_preset', type: 'str', default: 'nova', description: '', value: 'ocean' },
     ])
-    renderApp()
+    renderApp('appearance')
     const slate = await screen.findByRole('radio', { name: 'Slate' })
     await waitFor(() => expect(within(slate).getByText('Default')).toBeDefined())
     expect(screen.queryByText('ocean')).toBeNull()
@@ -175,7 +187,7 @@ describe('SettingsPage — the proactive section', () => {
 
   it('renders the stored proactive settings when core exposes them', async () => {
     vi.mocked(getSettings).mockResolvedValueOnce([...PROACTIVE])
-    renderApp()
+    renderApp('behaviour')
 
     const hour = (await screen.findByLabelText('Daily digest at')) as HTMLInputElement
     expect(hour.value).toBe('07:15')
@@ -184,9 +196,12 @@ describe('SettingsPage — the proactive section', () => {
   })
 
   it('draws no proactive controls on a core that does not have the keys', async () => {
-    renderApp()
+    renderApp('behaviour')
 
-    await screen.findByTestId('current-chat-model')
+    // Response quality is unconditional on the Behaviour tab, so waiting on
+    // its heading proves the tab RENDERED before concluding the digest
+    // fields are absent — otherwise this passes just as well on a blank page.
+    await screen.findByText('Response quality')
     expect(screen.queryByLabelText('Daily digest at')).toBeNull()
     expect(screen.queryByTestId('proactive-meaning')).toBeNull()
   })

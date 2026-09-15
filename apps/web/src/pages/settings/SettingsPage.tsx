@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { Skeleton } from '../../components/ui'
 import { useAuth } from '../../stores/auth-store'
@@ -15,6 +17,7 @@ import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
 import { RoutingSection } from './RoutingSection'
 import { ProactiveSection } from './ProactiveSection'
+import { SETTINGS_TABS, resolveTab } from './tabs'
 
 /**
  * The S1 settings shell: two sections and no tab machinery yet. The tabs and
@@ -40,6 +43,11 @@ import { ProactiveSection } from './ProactiveSection'
  * now share.
  */
 export function SettingsPage() {
+  // The URL owns which tab is showing. An unrecognised slug — a bookmark
+  // from before a rename, a typo — resolves to the first tab rather than
+  // rendering nothing, because an empty settings page and a settings page
+  // that failed to load look identical.
+  const tab = resolveTab(useParams().tab)
   const { refresh } = useAuth()
   const { state: chatState, setModel } = useChatStore()
   const [settings, setSettings] = useState<SettingDef[] | null>(null)
@@ -128,26 +136,71 @@ export function SettingsPage() {
         </div>
       )}
 
-      <div className="space-y-6">
+      {/* LINKS, not buttons with state. Each tab is a real address, so it
+          can be bookmarked, sent to someone, and survive a refresh — and the
+          browser's back button steps between tabs the way it does everywhere
+          else. `aria-current` is the honest markup for that; the ARIA tab
+          pattern describes in-page panels, which these are not. */}
+      <nav aria-label="Settings sections" className="mb-4 border-b border-border-subtle">
+        <div className="flex gap-1 overflow-x-auto custom-scrollbar -mb-px">
+          {SETTINGS_TABS.map(t => {
+            const current = t.slug === tab
+            return (
+              // A plain Link, NOT NavLink: NavLink decides `aria-current`
+              // from its OWN path match and overrides the prop, so at bare
+              // `/settings` — which resolves to this first tab — it marked
+              // nothing current. `current` here comes from the resolved tab,
+              // which knows about that fallback and about bad slugs.
+              <Link
+                key={t.slug}
+                to={`/settings/${t.slug}`}
+                aria-current={current ? 'page' : undefined}
+                data-testid={`settings-tab-${t.slug}`}
+                className={clsx(
+                  'shrink-0 whitespace-nowrap px-3 py-2 text-compact font-medium border-b-2 transition-colors duration-fast',
+                  current
+                    ? 'border-accent text-accent'
+                    : 'border-transparent text-content-secondary hover:text-content-primary hover:border-border',
+                )}
+              >
+                {t.label}
+              </Link>
+            )
+          })}
+        </div>
+      </nav>
+      <p className="mb-6 text-caption text-content-tertiary" data-testid="settings-tab-blurb">
+        {SETTINGS_TABS.find(t => t.slug === tab)?.blurb}
+      </p>
+
+      <div className="space-y-6" data-testid="settings-panel">
         {settings === null && !error ? (
           <Skeleton lines={6} />
         ) : (
           <>
-            <GeneralSection
-              timezone={timezone}
-              timezoneIsDefault={timezoneIsDefault}
-              onChanged={zone => updateSettingValue('nova.timezone', zone)}
-            />
-            <AppearanceSection
-              storedPreset={storedPreset ?? DEFAULT_PRESET}
-              onStored={preset => updateSettingValue('appearance.default_preset', preset)}
-            />
-            {/* Reads the device, writes nothing. Here because every layout
-                defect this app has had lived in iOS standalone mode, which no
-                harness reproduces — so the numbers have to come from the
-                phone that looks wrong. */}
-            <DisplayDiagnostics />
-            <ModelsSection
+            {tab === 'general' && (
+              <GeneralSection
+                timezone={timezone}
+                timezoneIsDefault={timezoneIsDefault}
+                onChanged={zone => updateSettingValue('nova.timezone', zone)}
+              />
+            )}
+            {tab === 'appearance' && (
+              <>
+                <AppearanceSection
+                  storedPreset={storedPreset ?? DEFAULT_PRESET}
+                  onStored={preset => updateSettingValue('appearance.default_preset', preset)}
+                />
+                {/* Reads the device, writes nothing. Here because every
+                    layout defect this app has had lived in iOS standalone
+                    mode, which no harness reproduces — so the numbers have to
+                    come from the phone that looks wrong. */}
+                <DisplayDiagnostics />
+              </>
+            )}
+            {tab === 'models' && (
+              <>
+                <ModelsSection
               chatModel={chatModel}
               onModelChanged={model => {
                 // Both writes matter: the settings echo keeps this page's
@@ -160,34 +213,43 @@ export function SettingsPage() {
                 updateSettingValue('chat.model', model)
                 setModel(model)
               }}
-              onRerunSetup={handleRerunSetup}
-            />
-            <ProvidersSection
-              chatModel={chatModel}
-              onModelChanged={model => {
-                updateSettingValue('chat.model', model)
-                setModel(model)
-              }}
-            />
-            <RoutingSection chatModel={chatModel} />
-            {proactive && (
-              <ProactiveSection
-                enabled={proactive.enabled}
-                digestAt={proactive.digestAt}
-                maxNoticesPerDay={proactive.maxNoticesPerDay}
-                // The value CORE stored, handed straight back into the one
-                // settings state this page renders from.
-                onChanged={(key, value) => updateSettingValue(key, value)}
-              />
+                  onRerunSetup={handleRerunSetup}
+                />
+                <ProvidersSection
+                  chatModel={chatModel}
+                  onModelChanged={model => {
+                    updateSettingValue('chat.model', model)
+                    setModel(model)
+                  }}
+                />
+                <RoutingSection chatModel={chatModel} />
+              </>
             )}
-            <ResponseQualitySection
-              checked={responsivenessCheck}
-              onChanged={value => updateSettingValue('agents.responsiveness_check', value)}
-            />
-            <DevicesSection />
+            {tab === 'behaviour' && (
+              <>
+                {proactive && (
+                  <ProactiveSection
+                    enabled={proactive.enabled}
+                    digestAt={proactive.digestAt}
+                    maxNoticesPerDay={proactive.maxNoticesPerDay}
+                    // The value CORE stored, handed straight back into the
+                    // one settings state this page renders from.
+                    onChanged={(key, value) => updateSettingValue(key, value)}
+                  />
+                )}
+                <ResponseQualitySection
+                  checked={responsivenessCheck}
+                  onChanged={value => updateSettingValue('agents.responsiveness_check', value)}
+                />
+              </>
+            )}
+            {tab === 'devices' && <DevicesSection />}
           </>
         )}
-        <AccountSection />
+        {/* Signing out is not one of the five errands above, and hunting for
+            it under a tab would be worse than a row at the foot of every one
+            of them. */}
+        {tab === 'general' && <AccountSection />}
       </div>
     </div>
   )

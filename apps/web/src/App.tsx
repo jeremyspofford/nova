@@ -125,7 +125,12 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/models" element={<ModelsPage />} />
         <Route path="/spend" element={<SpendPage />} />
+        {/* The tab is in the PATH, not in component state: a settings
+            page you cannot link to is one you have to give directions to
+            ("scroll down past Models..."), and a refresh drops you back at
+            the top. `/settings` alone lands on the first tab. */}
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/:tab" element={<SettingsPage />} />
         <Route path="/dev/components" element={<ComponentGallery />} />
         <Route path="*" element={<Navigate to="/chat" replace />} />
       </Routes>

@@ -156,3 +156,43 @@ describe('local model ids are provider-qualified (S10-pre)', () => {
     expect(qualified.find(m => m.slug === 'qwen3:8b')?.isCurrent).toBe(true)
   })
 })
+
+// ── engineDisplay ────────────────────────────────────────────────────────
+//
+// Added 2026-09-15. `ENGINE_ICONS[backend.kind]` was read directly, and an
+// unrecognised kind resolves to undefined — rendering undefined as a
+// component throws, which unmounts the WHOLE settings page rather than one
+// row. The day the gateway learns a fourth engine, an operator on an older
+// build would open Settings to a white page with no way to reach the control
+// that sets the engine back.
+describe('engineDisplay', () => {
+  it('gives each known engine its own icon and words', async () => {
+    const { engineDisplay } = await import('./ModelsSection')
+    for (const kind of ['ollama', 'remote', 'cloud']) {
+      const d = engineDisplay(kind)
+      expect(d.Icon, kind).toBeTruthy()
+      expect(d.label, kind).not.toMatch(/unknown/i)
+    }
+  })
+
+  it('still returns a renderable icon for an engine it has never heard of', async () => {
+    const { engineDisplay } = await import('./ModelsSection')
+    const d = engineDisplay('vllm')
+    expect(d.Icon).toBeTruthy()
+    // And says what it saw: the unknown name is the only clue to what changed.
+    expect(d.label).toContain('vllm')
+  })
+
+  it('says so when the backend reported no kind at all', async () => {
+    const { engineDisplay } = await import('./ModelsSection')
+    const d = engineDisplay(undefined)
+    expect(d.Icon).toBeTruthy()
+    expect(d.label).toMatch(/not reported/i)
+  })
+
+  it('does not treat an inherited property as an engine', async () => {
+    const { engineDisplay } = await import('./ModelsSection')
+    expect(engineDisplay('constructor').label).toContain('constructor')
+    expect(engineDisplay('toString').label).toContain('toString')
+  })
+})

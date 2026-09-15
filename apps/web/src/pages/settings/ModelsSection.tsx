@@ -73,6 +73,23 @@ const ENGINE_LABELS: Record<EngineKind, string> = {
   cloud: 'Cloud (OpenAI-compatible)',
 }
 
+/**
+ * The icon and label for an engine kind, INCLUDING one we have never heard
+ * of.
+ *
+ * A bare `ENGINE_ICONS[kind]` returns undefined for an unrecognised kind,
+ * and rendering undefined as a component throws — which unmounts the whole
+ * of Settings, not just this row. So the day the gateway learns a fourth
+ * engine, an operator on an older build would open Settings to a white page
+ * and have no way to reach the control that changes the engine back. The
+ * unknown kind is worth showing; it is the only clue about what happened.
+ */
+export function engineDisplay(kind: string | undefined): { Icon: typeof Cpu; label: string } {
+  const known = kind !== undefined && Object.prototype.hasOwnProperty.call(ENGINE_ICONS, kind)
+  if (!known) return { Icon: Server, label: kind ? `Unknown engine (${kind})` : 'Engine not reported' }
+  return { Icon: ENGINE_ICONS[kind as EngineKind], label: ENGINE_LABELS[kind as EngineKind] }
+}
+
 function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
@@ -348,10 +365,14 @@ export function ModelsSection({
           value: (
             <span className="inline-flex items-center gap-1.5">
               {(() => {
-                const Icon = ENGINE_ICONS[backend.kind]
-                return <Icon size={13} className="text-content-tertiary" />
+                const { Icon, label } = engineDisplay(backend.kind)
+                return (
+                  <>
+                    <Icon size={13} className="text-content-tertiary" />
+                    {label}
+                  </>
+                )
               })()}
-              {ENGINE_LABELS[backend.kind]}
             </span>
           ),
         },

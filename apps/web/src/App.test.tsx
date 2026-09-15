@@ -304,7 +304,10 @@ describe('App gate', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
 
-    window.history.pushState({}, '', '/settings')
+    // Settings is tabbed as of 2026-09-15 and "Re-run setup" sits with the
+    // engine controls it re-runs, on the Models tab. `/settings` alone lands
+    // on General, where it correctly is not.
+    window.history.pushState({}, '', '/settings/models')
     render(<App />)
 
     await waitFor(() => expect(screen.getByText('Re-run setup')).toBeDefined())
