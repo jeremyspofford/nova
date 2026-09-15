@@ -28,6 +28,19 @@ can actually answer, which needs the card free.
 
 Neither needs code. Both need the owner's own session, which is the point.
 
+## PARKED (owner, 2026-09-15): S23, the serving runtime
+
+`docs/plans/rebuild/slice-23-serving-runtime.md`. Nothing built. Listed here
+because a parked spec that is not in this file is invisible — which is
+exactly what happened to the corpus TODO below, and what happened to the S23
+spec itself on the day it was written: it sat on an unmerged branch and the
+owner could not find it.
+
+Every number in it was measured on this host, so it does not rot. The first
+move on any pickup is one cheap experiment, not a migration: does
+`LLAMA_ARG_CACHE_RAM` reach ollama's llama-server child the way
+`LLAMA_ARG_KV_OFFLOAD` was proven to?
+
 ## TODO (owner-requested, unscheduled): a broader AI-quality corpus
 
 Asked for by Jeremy on 2026-09-14, in his words: "add a todo to make more
