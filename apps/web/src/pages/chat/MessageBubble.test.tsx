@@ -13,6 +13,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     streaming: true,
     interrupted: false,
     stoppedNote: null,
+    thinking: '',
     activity: null,
     servedBy: null,
     cost: null,
@@ -216,6 +217,7 @@ function userRow(text: string): MessageRow {
     streaming: false,
     interrupted: false,
     stoppedNote: null,
+    thinking: '',
     activity: null,
     agent: null,
     delegation: null,
@@ -544,5 +546,64 @@ describe('MessageBubble — the delegation line (S12)', () => {
     render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false })} />)
     expect(screen.queryByTestId('delegation-line')).toBeNull()
     expect(screen.queryByTestId('delegation-chips')).toBeNull()
+  })
+})
+
+/**
+ * Thinking, while she thinks (2026-09-15).
+ *
+ * Core dropped the reasoning stream entirely until then, so a model that
+ * thought for two minutes was indistinguishable from a hung one — measured
+ * at 146 s of empty bubble for "what is 2+2". These pin the two properties
+ * that make showing it safe: it appears only while there is no reply yet,
+ * and it never becomes the reply.
+ */
+describe('MessageBubble — a model that is thinking', () => {
+  it('says she is thinking, and shows what she is on', () => {
+    render(
+      <MemoryRouter>
+        <MessageBubble row={assistantRow({ thinking: 'weighing the options', streaming: true })} />
+      </MemoryRouter>,
+    )
+    const line = screen.getByTestId('thinking-line')
+    expect(line.textContent).toContain('Thinking')
+    expect(line.textContent).toContain('weighing the options')
+  })
+
+  it('gives way to the reply the moment one starts', () => {
+    // The answer is the thing to read. Leaving the working on screen beside
+    // it would double the height of every bubble on a thinking model.
+    render(
+      <MemoryRouter>
+        <MessageBubble
+          row={assistantRow({ thinking: 'weighing the options', text: 'four', streaming: true })}
+        />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByTestId('thinking-line')).toBeNull()
+    expect(screen.getByText('four')).toBeTruthy()
+  })
+
+  it('is gone once the turn is over', () => {
+    render(
+      <MemoryRouter>
+        <MessageBubble row={assistantRow({ thinking: 'weighing it', text: '', streaming: false })} />
+      </MemoryRouter>,
+    )
+    expect(screen.queryByTestId('thinking-line')).toBeNull()
+  })
+
+  it('shows the tail of a long think rather than all of it', () => {
+    // Reasoning arrives token by token for minutes. A box that only ever
+    // grows would push the composer off the screen.
+    const long = 'a'.repeat(400) + 'THE LATEST PART'
+    render(
+      <MemoryRouter>
+        <MessageBubble row={assistantRow({ thinking: long, streaming: true })} />
+      </MemoryRouter>,
+    )
+    const line = screen.getByTestId('thinking-line')
+    expect(line.textContent).toContain('THE LATEST PART')
+    expect(line.textContent!.length).toBeLessThan(220)
   })
 })

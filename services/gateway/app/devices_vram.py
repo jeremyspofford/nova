@@ -52,7 +52,12 @@ logger = logging.getLogger("gateway")
 # on; bounded generously anyway so a wedged driver cannot hang a request.
 NVIDIA_SMI_TIMEOUT_S = 10.0
 
-_QUERY = "memory.total,memory.used,memory.free"
+# Utilisation rides along because memory alone answers the wrong question.
+# On 2026-09-15 the card had 6.9 GB free — comfortable — and was pinned at
+# 99% by a process outside every container this machine runs, so ollama was
+# timesharing the shader cores and turns took 100-400 s. A reading that says
+# only "6.9 GB free" describes that card as healthy.
+_QUERY = "memory.total,memory.used,memory.free,utilization.gpu"
 
 
 class Vram:
@@ -63,18 +68,22 @@ class Vram:
     answer "unknown" have a sentence to answer it with.
     """
 
-    __slots__ = ("total_mb", "used_mb", "free_mb", "reason")
+    __slots__ = ("total_mb", "used_mb", "free_mb", "util_pct", "reason")
 
     def __init__(
         self,
         total_mb: float | None = None,
         used_mb: float | None = None,
         free_mb: float | None = None,
+        util_pct: float | None = None,
         reason: str | None = None,
     ) -> None:
         self.total_mb = total_mb
         self.used_mb = used_mb
         self.free_mb = free_mb
+        # None, never 0: a driver that did not report it has not told us the
+        # card is idle.
+        self.util_pct = util_pct
         self.reason = reason
 
     @property
@@ -86,6 +95,7 @@ class Vram:
             "total_mb": self.total_mb,
             "used_mb": self.used_mb,
             "free_mb": self.free_mb,
+            "util_pct": self.util_pct,
             "reason": self.reason,
         }
 
@@ -97,27 +107,38 @@ def parse(stdout: str) -> Vram:
     """The biggest single card out of nvidia-smi's CSV lines.
 
     Pure, so the parsing is testable without a GPU. A line that does not
-    carry three numbers is skipped rather than crashing the read — a driver
-    that prints `[N/A]` for one field on one card must not take out the
-    reading for a card that answered properly.
+    carry the three memory numbers is skipped rather than crashing the read
+    — a driver that prints `[N/A]` for one field on one card must not take
+    out the reading for a card that answered properly.
+
+    Utilisation is read when it is there and left None when it is not. It is
+    the LAST field for that reason: a driver too old to report it, or one
+    printing `[N/A]`, still yields a complete memory reading rather than
+    losing the whole line.
     """
-    best: tuple[float, float, float] | None = None
+    best: tuple[float, float, float, float | None] | None = None
     for line in stdout.splitlines():
         parts = [p.strip() for p in line.split(",")]
-        if len(parts) != 3:
+        if len(parts) < 3:
             continue
         try:
-            total, used, free = (float(p) for p in parts)
+            total, used, free = (float(p) for p in parts[:3])
         except ValueError:
             continue
         if total <= 0:
             continue
+        util: float | None = None
+        if len(parts) > 3:
+            try:
+                util = float(parts[3].rstrip("% ").strip())
+            except ValueError:
+                util = None
         if best is None or total > best[0]:
-            best = (total, used, free)
+            best = (total, used, free, util)
     if best is None:
         return Vram(reason="nvidia-smi printed no usable memory line")
-    total, used, free = best
-    return Vram(total_mb=total, used_mb=used, free_mb=free)
+    total, used, free, util = best
+    return Vram(total_mb=total, used_mb=used, free_mb=free, util_pct=util)
 
 
 async def read_vram() -> Vram:

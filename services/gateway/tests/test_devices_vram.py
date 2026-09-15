@@ -114,6 +114,10 @@ async def test_a_good_read_answers_the_cards_numbers(monkeypatch):
         "total_mb": 24576,
         "used_mb": 9662,
         "free_mb": 14914,
+        # A driver too old to report utilisation, or one printing [N/A],
+        # still yields a complete memory reading — None, not 0, because a
+        # missing reading is not an idle card.
+        "util_pct": None,
         "reason": None,
     }
 
@@ -125,3 +129,39 @@ def test_a_fresh_reading_carries_no_stale_number(field):
     this module exists to end."""
     vram = devices_vram.Vram(reason="nvidia-smi could not be run")
     assert getattr(vram, field) is None
+
+
+# ── Utilisation (2026-09-15) ─────────────────────────────────────────────
+#
+# Memory alone answers the wrong question. The card had 6.9 GB free —
+# comfortable — and sat at 99% against a process outside every container on
+# the machine, so ollama was timesharing the shader cores and chat turns
+# took 100-400 s. A reading that says only "6.9 GB free" describes that card
+# as healthy, and `inference_degraded` reports what this reading says.
+
+
+def test_utilisation_is_read_when_the_driver_reports_it():
+    vram = devices_vram.parse("24576, 17663, 6913, 99\n")
+    assert vram.util_pct == 99
+    assert vram.free_mb == 6913
+
+
+def test_a_driver_that_reports_no_utilisation_still_gives_its_memory():
+    """It is the LAST field for exactly this reason: an old driver, or one
+    printing [N/A], must cost the utilisation and not the whole line."""
+    assert devices_vram.parse("24576, 9662, 14914\n").util_pct is None
+    partial = devices_vram.parse("24576, 9662, 14914, [N/A]\n")
+    assert partial.util_pct is None
+    assert partial.free_mb == 14914
+
+
+def test_the_biggest_card_still_wins_and_brings_its_own_utilisation():
+    vram = devices_vram.parse("8192, 1000, 7192, 5\n24576, 17663, 6913, 99\n")
+    assert vram.total_mb == 24576
+    assert vram.util_pct == 99
+
+
+def test_a_percent_sign_does_not_defeat_the_reading():
+    """nounits is asked for, but a driver that prints one anyway must not
+    turn a busy card into an unknown one."""
+    assert devices_vram.parse("24576, 17663, 6913, 99 %\n").util_pct == 99

@@ -162,6 +162,14 @@ class FakeGateway:
     # to time — the rate would be absent, and a test asserting on it would
     # be asserting on the scheduler.
     delta_delay_s: float = 0.0
+    # Reasoning deltas, emitted BEFORE any content — the shape a thinking
+    # model actually streams. `reasoning_field` is which spelling: ollama
+    # says `reasoning`, vLLM and DeepSeek say `reasoning_content`, and core
+    # has to read both. A fake that only ever emitted content could not
+    # reproduce the 2026-09-15 defect at all, which is why it went unnoticed
+    # until the owner timed a 146-second "what is 2+2".
+    reasoning: tuple[str, ...] = ()
+    reasoning_field: str = "reasoning"
     admin_status: int = 200
     # The model catalogue (S10a): when set, /admin/catalog answers this body
     # and /admin/catalog/hf this page (with hf_status); when None they fall
@@ -268,6 +276,12 @@ class FakeGateway:
             return JSONResponse({"error": {"message": "backend refused"}}, status_code=self.status)
 
         async def stream():
+            for thought in self.reasoning:
+                if self.delta_delay_s:
+                    await asyncio.sleep(self.delta_delay_s)
+                # `content` is empty on every one of these, which is exactly
+                # what ollama sends: {"content": "", "reasoning": "Okay"}.
+                yield _sse({"choices": [{"delta": {"content": "", self.reasoning_field: thought}}]})
             for delta in self.deltas:
                 if self.delta_delay_s:
                     await asyncio.sleep(self.delta_delay_s)
@@ -608,6 +622,11 @@ class ScriptedGateway:
     # prove the detached completion still finishes the remaining rounds.
     hold: asyncio.Event | None = None
     hold_before: int = 0
+    # Seconds between scripted chunks. A round that emits everything in the
+    # same instant has a generation window of zero, and `tok_per_s` is
+    # absent by design when there is no time to divide by — so a test about
+    # throughput has to let the clock move.
+    chunk_delay_s: float = 0.0
 
     def __post_init__(self) -> None:
         self.calls = 0
@@ -640,6 +659,8 @@ class ScriptedGateway:
             if self.hold is not None and index == self.hold_before:
                 await self.hold.wait()
             for chunk in script:
+                if self.chunk_delay_s:
+                    await asyncio.sleep(self.chunk_delay_s)
                 yield _sse(chunk)
             yield "data: [DONE]\n\n"
 

@@ -54,6 +54,13 @@ import { statedReason } from './statedReason'
 export type StreamEvent =
   | { type: 'meta'; conversationId: string; model: string; turnId: string; agent: string | null }
   | { type: 'delta'; text: string }
+  /** A reasoning model's own thinking, streamed BEFORE the reply (2026-09-15).
+   *  Deliberately its own event and not a delta: it is not what she said, so
+   *  it must never join the message body — the transcript, memory and every
+   *  honesty guard read that body. It exists so a model that thinks for two
+   *  minutes reads as working rather than as hung, which is exactly what it
+   *  looked like when core dropped this stream entirely. */
+  | { type: 'thinking'; text: string }
   // status is whatever the server actually sent (chat.py only ever sends
   // start/ok/error) — kept as `string` rather than a narrower literal
   // union so a status this client has not seen yet is still a real event,
@@ -167,6 +174,7 @@ function frameToEvent(payload: string): StreamEvent | null {
 
   const obj = data as Record<string, unknown>
   if (typeof obj.t === 'string') return { type: 'delta', text: obj.t }
+  if (typeof obj.think === 'string') return { type: 'thinking', text: obj.think }
   if (typeof obj.error === 'string') return { type: 'error', reason: obj.error }
   if (typeof obj.stopped === 'string') return { type: 'stopped', note: obj.stopped }
   if (typeof obj.served_by === 'string' && obj.served_by) {

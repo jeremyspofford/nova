@@ -75,6 +75,38 @@ function ActivityLine({ activity }: { activity: NonNullable<MessageRow['activity
 }
 
 /**
+ * A reasoning model's thinking, while it is thinking (2026-09-15).
+ *
+ * Shown ONLY before the reply starts. Once she begins answering, the answer
+ * is the thing to read and this disappears — it is working, not output, and
+ * it is never persisted, so a reload does not show it either.
+ *
+ * It exists because this stream was dropped entirely until 2026-09-15: the
+ * owner watched an empty bubble for as long as the model thought, measured
+ * at 146 s for "what is 2+2", with nothing on screen to say whether she was
+ * working or hung. The tail rather than the whole thing, because the point
+ * is to show that words are still arriving, not to make anyone read them.
+ */
+function ThinkingLine({ text }: { text: string }) {
+  // The last line she is actually on. Reasoning arrives token by token, so
+  // the tail is what changes; a fixed-height box that only ever grows would
+  // push the composer around for a minute.
+  const tail = text.replace(/\s+/g, ' ').trimEnd().slice(-160)
+  return (
+    <p
+      data-testid="thinking-line"
+      className="mt-1.5 flex items-start gap-1.5 text-caption text-content-tertiary italic"
+    >
+      <Loader2 size={12} className="mt-0.5 shrink-0 animate-spin not-italic" />
+      <span className="min-w-0 break-words">
+        <span className="not-italic font-medium">Thinking</span>
+        {tail && <> — {tail}</>}
+      </span>
+    </p>
+  )
+}
+
+/**
  * The label an assistant row earns when a timer firing wrote it (S9): a
  * `reminder` (code delivered his own words — no model) or a `scheduled` turn
  * (an instruction she ran while nobody was watching). Keyed by `turns.kind`
@@ -364,6 +396,10 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
               <DelegationChip key={delegation.agent_turn_id} delegation={delegation} />
             ))}
           </p>
+        )}
+        {/* Before the first word only: the reply supersedes the working. */}
+        {row.thinking !== '' && row.text === '' && row.streaming && (
+          <ThinkingLine text={row.thinking} />
         )}
         {row.activity && !hideActivity && <ActivityLine activity={row.activity} />}
         {/* The owner pressed Stop (S15). A NOTE, not a failure: tertiary text

@@ -101,7 +101,7 @@ async def _card_facts(app) -> dict:
     what ollama holds, which is everything this machine cannot enumerate.
     On the walk that produced the stalled half it was 6.8 GB.
     """
-    blank = {"free_gb": None, "others_gb": None, "reason": None, "facts": {}}
+    blank = {"free_gb": None, "others_gb": None, "util_pct": None, "reason": None, "facts": {}}
     try:
         async with peers.client(app, peers.GATEWAY, VRAM_TIMEOUT) as client:
             resp = await client.get(VRAM_PATH)
@@ -126,9 +126,18 @@ async def _card_facts(app) -> dict:
     facts: dict = {"free_vram_gb": round(float(free), 1)}
     if others_gb is not None:
         facts["non_ollama_vram_gb"] = round(others_gb, 1)
+    # Utilisation, because memory alone answers the wrong question. On
+    # 2026-09-15 the card had 6.9 GB free — comfortable — and sat at 99%
+    # against a process outside every container here, so ollama was
+    # timesharing the shader cores and turns took 100-400 s. A finding that
+    # says only "6.9 GB free" describes that card as healthy.
+    util = body.get("util_pct")
+    if isinstance(util, (int, float)):
+        facts["gpu_utilisation_pct"] = round(float(util))
     return {
         "free_gb": float(free),
         "others_gb": others_gb,
+        "util_pct": float(util) if isinstance(util, (int, float)) else None,
         "reason": None,
         "facts": facts,
     }
@@ -159,9 +168,25 @@ def _stalled_finding(stall: model_speed.Stalls, card: dict) -> Finding:
             title += (
                 f", and {card['others_gb']:.1f} GB of it is held by something that is not ollama"
             )
+        title += _busy_clause(card)
     else:
         title += f". Free VRAM is unknown — {card['reason']}"
     return Finding(key=f"inference_stalled:{stall.model}", title=title, facts=facts)
+
+
+def _busy_clause(card: dict) -> str:
+    """The shader half of "is this card available to me".
+
+    Free memory and utilisation fail in opposite directions and a reader
+    needs both: a card can have room and no cycles (something else is
+    computing on it) or cycles and no room (a model too big to load). Said
+    only when the driver actually reported it — a missing reading is not an
+    idle card.
+    """
+    util = card.get("util_pct")
+    if util is None:
+        return ""
+    return f", and the GPU is {util:.0f}% busy"
 
 
 async def degraded(app, pool) -> list[Finding]:
@@ -211,27 +236,35 @@ async def degraded(app, pool) -> list[Finding]:
         findings.append(
             Finding(
                 key=f"inference_degraded:{speed.model}",
-                title=_title(speed, free_gb, vram_reason),
+                title=_title(speed, card),
                 facts=facts,
             )
         )
     return findings
 
 
-def _title(speed: model_speed.Speed, free_gb: float | None, vram_reason: str | None) -> str:
-    """The sentence, composed in code from the two numbers.
+def _title(speed: model_speed.Speed, card: dict) -> str:
+    """The sentence, composed in code from the numbers.
 
     Never the word "slow" on its own. `0.3 tok/s against a usual 67` is
     something an owner can act on; an adjective is something he has to come
     and check for himself, which is what he had to do on the 12th.
+
+    Free memory AND utilisation, because they fail in opposite directions
+    and the reader needs to know which one this is: on 2026-09-15 the card
+    had 6.9 GB free and was 99% busy, and "6.9 GB free" on its own describes
+    that as a healthy card.
     """
     line = (
         f"{speed.model} is generating at {speed.recent:g} tok/s; "
         f"its usual here is {speed.baseline:g} ({speed.ratio:g}x slower)"
     )
-    if free_gb is not None:
-        return f"{line}. The card has {free_gb:.1f} GB free"
-    return f"{line}. Free VRAM is unknown — {vram_reason}"
+    if card["free_gb"] is None:
+        return f"{line}. Free VRAM is unknown — {card['reason']}"
+    line += f". The card has {card['free_gb']:.1f} GB free"
+    if card["others_gb"] is not None and card["others_gb"] >= 1:
+        line += f", {card['others_gb']:.1f} GB of it held by something that is not ollama"
+    return line + _busy_clause(card)
 
 
 CHECKS: tuple[Check, ...] = (

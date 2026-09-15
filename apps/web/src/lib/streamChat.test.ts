@@ -462,3 +462,31 @@ describe('createSseParser — agents (S12): meta.agent and the delegation relay 
     ).toEqual([{ type: 'activity', tool: 'delegate_to_agent', status: 'progress' }])
   })
 })
+
+/**
+ * The `think` frame (2026-09-15) — a reasoning model's own working.
+ *
+ * Its own event type, never a delta. Core sends it on a separate key for
+ * exactly this reason: a client that appended it to the message body would
+ * put her thinking into the transcript, into memory, and in front of every
+ * honesty guard, all of which read the body to decide what she claimed.
+ */
+describe('thinking frames', () => {
+  it('parses a think frame as its own event, not as a delta', () => {
+    const events = parseAll([
+      'data: {"think":"Okay, so"}\n\n' + 'data: {"t":"four"}\n\n' + 'data: [DONE]\n\n',
+    ])
+    expect(events).toEqual([
+      { type: 'thinking', text: 'Okay, so' },
+      { type: 'delta', text: 'four' },
+      { type: 'done' },
+    ])
+  })
+
+  it('a frame carrying both keeps them apart', () => {
+    const events = parseAll(['data: {"t":"hi","think":"hmm"}\n\n' + 'data: [DONE]\n\n'])
+    // `t` is checked first, so the reply wins the frame; what matters is
+    // that thinking can never be READ as reply text.
+    expect(events[0]).toEqual({ type: 'delta', text: 'hi' })
+  })
+})

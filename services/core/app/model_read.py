@@ -232,8 +232,11 @@ async def complete(
     few milliseconds — so a 110 s read timeout let one distil step stream
     steadily for over sixteen minutes, holding the backfill and the owner's
     whole turn open behind it, with nothing anywhere able to stop it. The
-    reasoning tokens are discarded (`chat._chunk_parts` reads `content` and
-    nothing else), so all of that time bought nothing.
+    reasoning tokens bought nothing, because the answer this reader wants is
+    the content. `chat._chunk_parts` can read them since 2026-09-15 and this
+    reader still drops them deliberately: a distil step's product is its
+    JSON, not the model's working. The budget is what bounds the thinking,
+    and it is the only thing that does.
 
     Past the budget this RAISES rather than returning what it has. Partial
     content is a truncated JSON array, and a caller cannot tell "the model
@@ -282,7 +285,7 @@ async def complete(
                     for choice in chunk.get("choices") or []:
                         if choice.get("finish_reason") == "length":
                             truncated = True
-                    delta, _usage, error, _fragments = chat._chunk_parts(chunk)
+                    delta, _thinking, _usage, error, _fragments = chat._chunk_parts(chunk)
                     if error is not None:
                         raise GatewayRefused(f"the gateway reported: {error}")
                     if delta:

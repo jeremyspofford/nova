@@ -96,3 +96,65 @@ deliberately, not a corpus to start typing.
   6 GB down this is plausibly the cheapest fix for the actual problem.
 - **The 300 s gateway timeout.** It bounds silence and is doing its job;
   the problem was never that it fired.
+
+## CLOSED 2026-09-15: S22's own measurement was reading a fiction
+
+Found by answering the owner's question — "why do Nova responses take so
+long?" — with the trace rather than a guess. Three compounding faults, one
+of them S22's.
+
+**1. The reasoning stream was dropped entirely.** qwen3 thinks by default.
+ollama streams that thinking in a `reasoning` field with `content` empty on
+every chunk, and `chat._chunk_parts` read only `content`. Probed directly
+against the live ollama for "what is 2+2? Answer in one word":
+
+    chunk 1 {"role":"assistant","content":"","reasoning":"Okay"}
+    chunk 2 {"content":"","reasoning":","}
+    data lines: 59   elapsed: 146.6s   first CONTENT delta: never
+
+So the owner watched an empty bubble for the whole time she worked, and a
+round whose token budget went entirely on reasoning was reported as "the
+stream ended with no content" — the same sentence a dead backend produces,
+wanting the opposite response.
+
+Four ways of switching thinking off were tried against this ollama on the
+`/v1` path: `think: false`, `chat_template_kwargs.enable_thinking`,
+`/no_think` in the prompt, and as-sent. **All four still thought, and all
+four produced zero content at `max_tokens=80`.** It cannot be turned off
+here, so it has to be read.
+
+**2. `tok_per_s` was arithmetically impossible.** Generation was measured
+from the first CONTENT delta, so the window excluded every reasoning token
+while `completion_tokens` counted them. Live spans carried 1 777, 1 918 and
+1 927 tok/s on one 24 GB card. `inference_degraded` reads that field: it was
+reading a number that could only ever point upward, which is the direction
+that never raises a finding.
+
+**3. Most rounds recorded no rate at all.** A round that only calls tools
+emits no content, so `t_first_delta` stayed None for the whole round and
+`_note_throughput` returned early. `model_speed`'s query skips a span with
+no rate, and tool rounds are most of a working turn — so the evidence never
+reached the median. At 21:05, with the card pinned at 99% and turns taking
+100-400 s, the beat said:
+
+> inference_degraded — no model has both recent rounds and enough history to
+> compare them against, and none has stalled — nothing to measure
+
+Both (2) and (3) are one fix: **prefill ends at the first token the model
+emits, of any kind** — content, reasoning, or a tool-call fragment. No
+threshold was loosened; the data was wrong, not the rule.
+
+Also shipped: `prefill_ms` / `thinking_ms` / `ttft_ms` as three separate
+fields (they answer three different questions), a `{"think": …}` stream
+frame so a long think reads as work rather than as a hang, a failure
+sentence that distinguishes "thought and never answered" from "produced
+nothing", and `utilization.gpu` on the card reading — the card had 6.9 GB
+free and was 99% busy, and free memory alone describes that as healthy.
+
+### Still open from this
+- **The contention itself.** A process outside every container held ~7.3 GB
+  and 99% of the shader cores. That is the third time (2026-09-12,
+  2026-09-14, 2026-09-15). Nova can now SAY it; nothing stops it.
+- **Thinking cannot be disabled on the `/v1` path.** If a fast path matters
+  more than reasoning quality for chat, that needs `/api/chat` — which is a
+  gateway change, not a core one, and a real decision rather than a fix.

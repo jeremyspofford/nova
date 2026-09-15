@@ -13,12 +13,29 @@ out: the 27B measured 0.25 tok/s during it, and 67.5 tok/s with the game
 closed. A 270-fold collapse, on a card that still had memory free.
 
 ## Generation only
-`tok_per_s` divides completion tokens by the time from the FIRST content
-delta to the end of the stream — not by the whole round. The time before
-the first delta is prompt processing, and folding it in would make a turn
-with a very large prompt look like a degraded card. That time is not
-discarded: it is its own field, `ttft_ms`, so a slow prompt is visible as
-what it actually is.
+`tok_per_s` divides completion tokens by the time from the model's FIRST
+EMITTED TOKEN to the end of the stream — not by the whole round. The time
+before that is prompt processing, and folding it in would make a turn with
+a very large prompt look like a degraded card. That time is not discarded:
+it is its own field, `prefill_ms`.
+
+"First emitted token" means content, reasoning, OR a tool-call fragment,
+and getting that wrong broke this module twice on 2026-09-15:
+
+  * It was the first CONTENT delta. A thinking model emits reasoning first,
+    for as long as it likes, and the gateway counts those tokens in
+    `completion_tokens` — so the numerator included the thinking and the
+    denominator excluded the time spent on it. Rounds were recorded at
+    1 777, 1 918 and 1 927 tok/s on a single 24 GB card. `degraded` reads
+    this field; it was reading a fiction that could only ever point upward,
+    which is the direction that never raises a finding.
+  * A round that only CALLS TOOLS emits no content at all, so it recorded
+    no rate — and `_RATES_SQL` below skips a span without one. Tool rounds
+    are most of a working turn, so most of the evidence was being dropped
+    before it reached the median. That is why, on an evening of 100-400 s
+    turns with the card pinned at 99%, this reported "nothing to measure".
+
+Both are one fix: prefill ends at the first thing the model emits.
 
 ## A card can be too contended to measure at all
 Walked on the live stack 2026-09-14, and this is the limit that walk found.

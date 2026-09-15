@@ -77,6 +77,17 @@ export type MessageRow = {
    * persisted: the server writes the same words into the assistant row, so a
    * reload shows the note as part of the text. */
   stoppedNote: string | null
+  /** A reasoning model's thinking, live and TRANSIENT (2026-09-15).
+   *
+   * Never persisted, for the same reason `activity` is not: it is not what
+   * she said. The durable record of a turn is the transcript and the
+   * Activity page, and putting reasoning in the transcript would put it in
+   * front of every honesty guard and into memory as though she had said it.
+   *
+   * It exists because core dropped this stream entirely until 2026-09-15,
+   * and a model that thinks for two minutes was indistinguishable from a
+   * hung one — measured at 146 s of silence for "what is 2+2". */
+  thinking: string
   activity: ActivityMarker
   /** `provider:model` as the gateway stated it on this turn's trace (the
    * `served_by` frame live, `served_by` on the fetched row after). null
@@ -259,6 +270,9 @@ function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role
     streaming: false,
     interrupted: false,
     stoppedNote: null,
+    // Always '' from history: reasoning is live-only, so a reconciled row
+    // starts blank the same way `activity` does.
+    thinking: '',
     activity: null,
     servedBy: null,
     cost: null,
@@ -392,6 +406,10 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
     case 'delta':
       if (state.pendingId === null) return state
       return withPending(state, row => ({ ...row, text: row.text + event.text }))
+
+    case 'thinking':
+      if (state.pendingId === null) return state
+      return withPending(state, row => ({ ...row, thinking: row.thinking + event.text }))
 
     case 'activity':
       if (state.pendingId === null) return state

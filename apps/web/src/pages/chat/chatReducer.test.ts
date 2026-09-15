@@ -1205,3 +1205,37 @@ describe('chatReducer — the owner stopped the turn', () => {
     expect(messages(state)[1].text).toBe('')
   })
 })
+
+describe('chatReducer — thinking', () => {
+  const think = (state: ChatState, text: string) =>
+    chatReducer(state, { type: 'event', event: { type: 'thinking', text } })
+
+  it('accumulates thinking on the pending row without touching its text', () => {
+    // Two separate fields on purpose. The row's `text` is what gets
+    // persisted and what every honesty guard reads; reasoning is neither.
+    let state = started()
+    state = think(state, 'Okay')
+    state = think(state, ', so')
+
+    const rows = messages(state)
+    const row = rows[rows.length - 1]
+    expect(row.thinking).toBe('Okay, so')
+    expect(row.text).toBe('')
+  })
+
+  it('a reply arriving leaves the thinking where it is, in its own field', () => {
+    let state = think(started(), 'hmm')
+    state = chatReducer(state, { type: 'event', event: { type: 'delta', text: 'four' } })
+
+    const rows = messages(state)
+    const row = rows[rows.length - 1]
+    expect(row.text).toBe('four')
+    expect(row.thinking).toBe('hmm')
+  })
+
+  it('a row reconciled from history carries no thinking at all', () => {
+    // It is live-only, so a reload must not invent one.
+    const rows = messages(started())
+    expect(rows[rows.length - 1].thinking).toBe('')
+  })
+})

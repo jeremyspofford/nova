@@ -7,6 +7,19 @@ Frame contract (each line is `data: <json>`):
                                                    that ran the turn, null when it
                                                    was Nova herself
     {"t": "<delta>"}                              zero or more
+    {"think": "<delta>"}                          zero or more, BEFORE the reply
+                                                   — a reasoning model's own
+                                                   thinking, streamed as it
+                                                   arrives so a long think reads
+                                                   as work rather than as a hang.
+                                                   Never persisted and never part
+                                                   of the reply: it is not what
+                                                   she said, and every honesty
+                                                   guard reads what she said.
+                                                   Dropped entirely until
+                                                   2026-09-15, which is why a
+                                                   turn could show nothing for
+                                                   146 s (see _chunk_parts).
     {"activity": {"tool", "status", "reason"?,
                   "detail"?, "agent"?,
                   "agent_turn_id"?, "step"?,
@@ -1286,13 +1299,34 @@ class ToolCallBuffer:
         return calls
 
 
-def _chunk_parts(data: dict) -> tuple[str, dict | None, str | None, list[dict]]:
-    """(delta text, usage, error, tool-call fragments) out of one chunk."""
+# Where a backend puts a reasoning model's thinking. Two spellings because
+# two conventions exist and neither is ours to choose: ollama emits
+# `reasoning`, vLLM and DeepSeek's own API emit `reasoning_content`. A
+# backend that uses neither simply never matches and costs nothing.
+_REASONING_FIELDS = ("reasoning", "reasoning_content")
+
+
+def _chunk_parts(data: dict) -> tuple[str, str, dict | None, str | None, list[dict]]:
+    """(delta text, reasoning text, usage, error, tool-call fragments).
+
+    REASONING IS READ, not dropped. It was dropped until 2026-09-15, and the
+    cost was not cosmetic: qwen3 thinks by default, ollama streams that
+    thinking in `reasoning` with `content` empty on every chunk, and this
+    function returned nothing for all of it. So a turn showed the owner a
+    spinner for the entire time she was working — measured at 146 s for
+    "what is 2+2" — and when the token budget went entirely on thinking the
+    round ended with `content` never once non-empty and was reported as "the
+    stream ended with no content". Four ways of switching thinking off were
+    tried against this ollama (`think: false`, `chat_template_kwargs`,
+    `/no_think`, and as-sent); all four still thought. It cannot be turned
+    off here, so it has to be read.
+    """
     error = data.get("error")
     if error is not None:
         message = error.get("message") if isinstance(error, dict) else str(error)
-        return "", None, message or "unspecified gateway error", []
+        return "", "", None, message or "unspecified gateway error", []
     delta = ""
+    reasoning = ""
     fragments: list[dict] = []
     for choice in data.get("choices") or []:
         # `delta` while streaming; `message` from a backend that answers a
@@ -1303,11 +1337,15 @@ def _chunk_parts(data: dict) -> tuple[str, dict | None, str | None, list[dict]]:
         piece = payload.get("content")
         if piece:
             delta += piece
+        for field in _REASONING_FIELDS:
+            thought = payload.get(field)
+            if isinstance(thought, str) and thought:
+                reasoning += thought
         calls = payload.get("tool_calls")
         if isinstance(calls, list):
             fragments.extend(item for item in calls if isinstance(item, dict))
     usage = data.get("usage")
-    return delta, usage if isinstance(usage, dict) else None, None, fragments
+    return delta, reasoning, usage if isinstance(usage, dict) else None, None, fragments
 
 
 def _clip(text: str, limit: int) -> str:
@@ -1404,15 +1442,31 @@ def _empty_round_failure(
     data_lines: int,
     stray_lines: int,
     stray_head: str | None,
+    reasoning_chars: int = 0,
 ) -> str:
     """The stated reason for a round that ended with nothing in it — every
-    clause a fact the stream loop counted, never a guess at why."""
+    clause a fact the stream loop counted, never a guess at why.
+
+    A round that THOUGHT and never answered says so. Those two failures look
+    identical from outside and want opposite responses: a round that
+    produced nothing at all points at the backend or the card, while a round
+    that filled its whole budget with reasoning points at the token ceiling
+    or the prompt. Before this they were the same sentence, and the owner
+    was told "no content" about a model that had written 4 000 characters.
+    """
     facts = [
         f"{data_lines} data line(s)",
         "[DONE] seen" if saw_done else "[DONE] never sent",
     ]
     if stray_lines:
         facts.append(f"{stray_lines} non-SSE line(s), the first: {stray_head!r}")
+    if reasoning_chars:
+        return (
+            f"the model spent the whole round thinking and never answered: "
+            f"{reasoning_chars} character(s) of reasoning in {elapsed_s:.1f} s, "
+            f"then the stream ended with no reply and no tool calls "
+            f"({', '.join(facts)})"
+        )
     return (
         f"the stream ended after {elapsed_s:.1f} s with no content and no tool "
         f"calls ({', '.join(facts)})"
@@ -2326,6 +2380,7 @@ async def _gateway_round(
     *,
     round_number: int,
     on_delta: Callable[[str], None] | None,
+    on_reasoning: Callable[[str], None] | None = None,
     purpose: str | None = None,
     role: str | None = None,
 ) -> tuple[str, list[ToolCall], str | None]:
@@ -2347,6 +2402,13 @@ async def _gateway_round(
     it live and accumulates it); passing None collects silently, which is what a
     redirect wants — its text is emitted once, after the note, and only if it is
     actually going to be used.
+
+    `on_reasoning` receives a thinking model's reasoning the same way, and is
+    deliberately a SEPARATE channel rather than more `on_delta`: reasoning is
+    not what she said. Folding it into the reply would put it in the
+    transcript, in memory, and in front of every honesty guard — which read
+    the reply to decide whether she claimed something she did not do. None
+    discards it, which is right for a round nobody is watching.
     """
     # One site covers every round there is — the loop's, the narration
     # round, both redirect shapes — because they all come through here.
@@ -2370,6 +2432,13 @@ async def _gateway_round(
     # here is what lets `tok_per_s` mean tokens per second of generation
     # rather than a figure a very large prompt can drag down on its own.
     t_first_delta: float | None = None
+    # And when the FIRST delta of any kind arrived — reasoning included.
+    # That is where prompt processing actually ends; see _note_throughput.
+    # The first token out of the model, of ANY kind — content, reasoning, or
+    # a tool call. That is where prompt processing ends; everything after it
+    # is generation, and `completion_tokens` counts all three.
+    t_first_any: float | None = None
+    reasoning_chars = 0
     purpose = purpose or _purpose_of(turn)
     role = role if role is not None else _role_of(turn)
     with turn.span("llm_call", model or None) as span:
@@ -2419,7 +2488,7 @@ async def _gateway_round(
                         except json.JSONDecodeError:
                             span.meta["malformed_chunks"] = span.meta.get("malformed_chunks", 0) + 1
                             continue
-                        delta, usage, error, fragments = _chunk_parts(chunk)
+                        delta, reasoning, usage, error, fragments = _chunk_parts(chunk)
                         if error is not None:
                             raise GatewayFailure(f"the gateway reported: {error}")
                         if usage is not None:
@@ -2427,10 +2496,31 @@ async def _gateway_round(
                             # token count is not a measurement.
                             _note_usage(span, usage)
                         for fragment in fragments:
+                            # A tool-call fragment is a generated token too, and
+                            # for a round that ONLY calls tools it is the only
+                            # one there is. Counting it here is what gives such
+                            # a round a rate at all: before this, `t_first_any`
+                            # stayed None through a whole tool round, so
+                            # _note_throughput returned early and the span
+                            # carried `completion_tokens` with no `tok_per_s`
+                            # beside it. Those rounds are most of a working
+                            # turn, and model_speed's query skips a span with no
+                            # rate — so `inference_degraded` reported "nothing
+                            # to measure" on an evening of 100-400 s turns.
+                            if t_first_any is None:
+                                t_first_any = time.perf_counter()
                             buffer.add(fragment)
+                        if reasoning:
+                            if t_first_any is None:
+                                t_first_any = time.perf_counter()
+                            reasoning_chars += len(reasoning)
+                            if on_reasoning is not None:
+                                on_reasoning(reasoning)
                         if delta:
                             if t_first_delta is None:
                                 t_first_delta = time.perf_counter()
+                            if t_first_any is None:
+                                t_first_any = t_first_delta
                             collected.append(delta)
                             if on_delta is not None:
                                 on_delta(delta)
@@ -2449,7 +2539,7 @@ async def _gateway_round(
                 span.meta["timeout_phase"] = phase
                 span.meta["timeout_s"] = getattr(GATEWAY_TIMEOUT, phase)
         elapsed_s = time.perf_counter() - t0
-        _note_throughput(span, t0, t_first_delta, elapsed_s)
+        _note_throughput(span, t0, t_first_any, t_first_delta, elapsed_s, reasoning_chars)
         calls = buffer.finished()
         # A round's content is scanned ONCE, here, so every round in the system
         # — the turn loop's, the out-of-rounds narration round, both of a
@@ -2500,6 +2590,7 @@ async def _gateway_round(
                 data_lines=data_lines,
                 stray_lines=stray_lines,
                 stray_head=stray_head,
+                reasoning_chars=reasoning_chars,
             )
             span.meta["error"] = failure
             span.meta["error_class"] = EMPTY_ROUND
@@ -2539,7 +2630,14 @@ def _note_usage(span, usage: dict) -> None:
         span.meta["usage_recorded"] = False
 
 
-def _note_throughput(span, t0: float, t_first_delta: float | None, elapsed_s: float) -> None:
+def _note_throughput(
+    span,
+    t0: float,
+    t_first_any: float | None,
+    t_first_delta: float | None,
+    elapsed_s: float,
+    reasoning_chars: int = 0,
+) -> None:
     """Time-to-first-token and generation rate, onto the round's own span.
 
     Derived from what is already here — the gateway's `completion_tokens`
@@ -2549,13 +2647,35 @@ def _note_throughput(span, t0: float, t_first_delta: float | None, elapsed_s: fl
     phase to time, and `model_speed.tok_per_s` refuses a token count too
     small to say anything.
 
-    This is what the 2026-09-12 contention would have shown as a number:
-    0.25 tok/s against a machine whose own history says 67.
+    GENERATION STARTS AT THE FIRST DELTA OF ANY KIND, reasoning included.
+    It was measured from the first CONTENT delta until 2026-09-15, on the
+    reasonable-sounding premise that everything before the first delta is
+    prompt processing. With a thinking model that premise is false: the gap
+    is prompt processing PLUS every reasoning token, while
+    `completion_tokens` counts those tokens in the numerator. Dividing a
+    count that includes the thinking by a window that excludes the time
+    spent on it produced rounds recorded at 1 777, 1 918 and 1 927 tok/s on
+    a 24 GB card — and `inference_degraded`, whose whole job is to notice a
+    contended card, reads that field. It was reading a fiction that only
+    ever pointed upward.
+
+    Three separate numbers now, because they answer three questions:
+      prefill_ms   — how long before ANY token came out (the prompt)
+      thinking_ms  — how long it thought before saying anything (absent for
+                     a model that does not think)
+      ttft_ms      — how long the OWNER stared at nothing, which is the
+                     prompt and the thinking together
     """
-    if t_first_delta is None:
+    if t_first_any is None:
         return
-    span.meta["ttft_ms"] = int((t_first_delta - t0) * 1000)
-    generation_ms = int((t0 + elapsed_s - t_first_delta) * 1000)
+    span.meta["prefill_ms"] = int((t_first_any - t0) * 1000)
+    if t_first_delta is not None:
+        span.meta["ttft_ms"] = int((t_first_delta - t0) * 1000)
+        if t_first_delta > t_first_any:
+            span.meta["thinking_ms"] = int((t_first_delta - t_first_any) * 1000)
+    if reasoning_chars:
+        span.meta["reasoning_chars"] = reasoning_chars
+    generation_ms = int((t0 + elapsed_s - t_first_any) * 1000)
     span.meta["generation_ms"] = generation_ms
     rate = model_speed.tok_per_s(span.meta.get("completion_tokens"), generation_ms)
     if rate is not None:
@@ -2671,7 +2791,11 @@ async def _collect_completion(
                             chunk = json.loads(data)
                         except json.JSONDecodeError:
                             continue
-                        delta, usage, error, _fragments = _chunk_parts(chunk)
+                        # `_reasoning` dropped on purpose: this collector is
+                        # for rounds nobody is watching, and its product is
+                        # the text. Named rather than starred so the next
+                        # person sees there IS a reasoning stream here.
+                        delta, _reasoning, usage, error, _fragments = _chunk_parts(chunk)
                         if usage is not None:
                             _note_usage(span, usage)
                         if error is not None:
@@ -3537,6 +3661,22 @@ async def _run_turn(
             parts.append(delta)
             emit(_frame({"t": delta}))
 
+        def _stream_reasoning(delta: str) -> None:
+            """A reasoning model's thinking, streamed and NOT accumulated.
+
+            Not appended to `parts`, which is the turn's durable text: this is
+            not what she said. It exists so a minute of thinking reads as work
+            instead of as a hang — the owner watched a spinner for the whole
+            of it, and a round that spent its entire budget thinking reported
+            "no content" as though nothing had happened.
+
+            A STOP still lands here. A model deep in a thought the owner has
+            already given up on should stop then, not when it finally begins
+            to answer.
+            """
+            _stop_if_asked(turn, "while thinking")
+            emit(_frame({"think": delta}))
+
         served_by_sent = False
         usage_sent = False
         route_sent = False
@@ -3610,6 +3750,7 @@ async def _run_turn(
                 advertised,
                 round_number=round_number,
                 on_delta=_stream_delta,
+                on_reasoning=_stream_reasoning,
             )
             if failure is not None:
                 break
@@ -3709,6 +3850,7 @@ async def _run_turn(
                 (),
                 round_number=0,
                 on_delta=_stream_delta,
+                on_reasoning=_stream_reasoning,
             )
             if final_failure is not None:
                 # FAIL-OPEN: a dead narration round costs the answer, never the
