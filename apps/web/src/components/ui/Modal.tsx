@@ -44,7 +44,10 @@ export function Modal({ open, onClose, size = 'md', title, children, footer }: M
 
   return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in"
+      /* Centred, so nothing hides under the status bar — but the box must
+         still not touch the notch or the home indicator on a full-bleed
+         phone, hence the insets on top of the padding. */
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 animate-fade-in pt-[calc(1rem+var(--nova-safe-top,0px))] pb-[calc(1rem+var(--nova-safe-bottom,0px))]"
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}

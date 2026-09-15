@@ -85,7 +85,12 @@ export function MobileNav() {
 
       {/* Full-screen drawer */}
       {drawerOpen && (
-        <div className="md:hidden fixed inset-0 z-50 bg-surface-root dark:bg-transparent glass-overlay animate-fade-in">
+        /* A `fixed inset-0` overlay sits OUTSIDE <main>, so the top inset
+           <main> carries never reaches it: on a full-bleed phone this header
+           — the title and the only way out — was drawn under the status bar,
+           and the owner was trapped in the drawer (2026-09-15). Every
+           full-screen overlay pads both insets itself. */
+        <div className="md:hidden fixed inset-0 z-50 bg-surface-root dark:bg-transparent glass-overlay animate-fade-in pt-[var(--nova-safe-top,0px)] pb-[var(--nova-safe-bottom,0px)]">
           <div className="flex items-center justify-between px-4 h-14 border-b border-border-subtle">
             <span className="text-h3 text-content-primary">Menu</span>
             <button
@@ -95,7 +100,16 @@ export function MobileNav() {
               <X className="w-5 h-5" />
             </button>
           </div>
-          <div className="overflow-y-auto p-4 space-y-6" style={{ maxHeight: 'calc(100vh - 56px)' }}>
+          {/* 100dvh, not 100vh: iOS's 100vh is the tallest the viewport ever
+              gets, so the last item sat under the home indicator. The insets
+              come off too, since the container now pads for them. */}
+          <div
+            className="overflow-y-auto p-4 space-y-6"
+            style={{
+              maxHeight:
+                'calc(100dvh - 3.5rem - var(--nova-safe-top,0px) - var(--nova-safe-bottom,0px))',
+            }}
+          >
             {moreItems.map((section, sIdx) => {
               const visibleItems = filterNavItemsByPreset(section.items, SURFACE_PRESET)
                 .filter(item => hasMinRole(userRole, item.minRole))

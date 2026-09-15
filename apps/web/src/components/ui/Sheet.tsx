@@ -48,7 +48,12 @@ export function Sheet({ open, onClose, width = 'default', title, children }: She
       {/* Panel */}
       <div
         className={clsx(
+          // A full-height panel is outside <main>, so it pads the insets
+          // itself — otherwise its header (and its close button) is drawn
+          // under the status bar on a full-bleed phone, which is how the
+          // owner got trapped in the mobile drawer on 2026-09-15.
           'fixed right-0 top-0 bottom-0 flex flex-col',
+          'pt-[var(--nova-safe-top,0px)] pb-[var(--nova-safe-bottom,0px)]',
           'bg-surface-card border-l border-border-subtle shadow-lg glass-overlay dark:border-white/[0.10]',
           'animate-slide-in-right',
           WIDTHS[width],
