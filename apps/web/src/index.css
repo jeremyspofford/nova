@@ -16,6 +16,12 @@ input[type="number"] {
 
 /* ── Theme CSS custom properties (defaults = teal accent, stone neutral) ──── */
 :root {
+  /* Safe areas, MEASURED by src/lib/safeArea.ts and published here. Seeded
+     from env() for the first paint; read these, never env() directly — on
+     an installed iOS app env(safe-area-inset-top) can resolve to 0 while the
+     page is drawn under the status bar. */
+  --nova-safe-top: env(safe-area-inset-top, 0px);
+  --nova-safe-bottom: env(safe-area-inset-bottom, 0px);
   /* accent: Nova teal (custom — not stock Tailwind) */
   --accent-50:  236 253 249;
   --accent-100: 204 251 240;

@@ -49,7 +49,7 @@ export function MobileNav() {
     <>
       {/* Bottom tab bar */}
       <nav className={clsx(
-        'md:hidden fixed bottom-0 left-0 right-0 z-40 bg-surface border-t border-border-subtle pb-[env(safe-area-inset-bottom)] glass-nav dark:border-white/[0.06] transition-transform duration-fast',
+        'md:hidden fixed bottom-0 left-0 right-0 z-40 bg-surface border-t border-border-subtle pb-[var(--nova-safe-bottom,0px)] glass-nav dark:border-white/[0.06] transition-transform duration-fast',
         hidden && 'translate-y-full',
       )}>
         <div className="flex items-center justify-around h-14">

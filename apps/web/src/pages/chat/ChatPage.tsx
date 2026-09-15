@@ -376,7 +376,7 @@ export function ChatPage({
           sits UNDER the tab bar — which is what the owner saw on 2026-09-15:
           "Chat" and "More" drawn over the model picker. `md:pb-4` still wins
           on desktop, where no tab bar renders. */}
-      <div className="shrink-0 w-full px-2 md:px-8 pb-[calc(3.5rem+max(env(safe-area-inset-bottom),0.5rem))] md:pb-4">
+      <div className="shrink-0 w-full px-2 md:px-8 pb-[calc(3.5rem+max(var(--nova-safe-bottom,0px),0.5rem))] md:pb-4">
         <div className="mx-auto max-w-none md:max-w-3xl space-y-1.5">
           {/* Stop (S15). Shown whenever a turn is in flight — whether this tab
               is streaming it or found it already running after a reload — and

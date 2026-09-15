@@ -49,7 +49,7 @@ export function AppLayout({
               and the value resolves to 0 there anyway; stating it keeps the
               intent legible. */}
           <main
-            className={`flex-1 min-h-0 pt-[env(safe-area-inset-top)] md:pt-0 ${fullWidth ? 'overflow-hidden' : 'overflow-y-auto custom-scrollbar'}`}
+            className={`flex-1 min-h-0 pt-[var(--nova-safe-top,0px)] md:pt-0 ${fullWidth ? 'overflow-hidden' : 'overflow-y-auto custom-scrollbar'}`}
           >
             {fullWidth ? (
               children
