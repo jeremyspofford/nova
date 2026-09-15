@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { AppLayout } from './AppLayout'
 import { AuthProvider } from '../../stores/auth-store'
@@ -138,8 +138,9 @@ describe('AppLayout — which nav renders', () => {
 
   it('does not open when the touch is really a scroll', async () => {
     // A drag that travels further down than across is the page scrolling,
-    // not the drawer opening — otherwise the menu springs open whenever a
-    // scroll happens to start on the handle.
+    // not the menu opening. The panel mounts during ANY drag so the gesture
+    // has something to pull, so what is asserted is where it SETTLES on
+    // release — mid-gesture presence proves nothing.
     setViewport('mobile')
     renderShell()
     await screen.findByText('page')
@@ -147,17 +148,52 @@ describe('AppLayout — which nav renders', () => {
 
     fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
     fireEvent.touchMove(handle, { touches: [{ clientX: 30, clientY: 300 }] })
+    fireEvent.touchEnd(handle)
 
-    expect(screen.queryByTestId('mobile-drawer')).toBeNull()
+    await waitFor(() => expect(screen.queryByTestId('mobile-drawer')).toBeNull())
   })
 
-  it('carries the unseen count, which the tab bar used to show', async () => {
-    // Removing the bar removed the only signal that anything needs him, so
-    // the number moves onto the handle or it is lost.
+  it('a short pull snaps back rather than opening', async () => {
+    // Released before half the panel's width, it returns — otherwise a
+    // twitch near the edge leaves the menu hanging half-open.
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    const handle = edgeHandle()!
+
+    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
+    fireEvent.touchMove(handle, { touches: [{ clientX: 40, clientY: 402 }] })
+    fireEvent.touchEnd(handle)
+
+    await waitFor(() => expect(screen.queryByTestId('mobile-drawer')).toBeNull())
+  })
+
+  it('a long pull opens it', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    const handle = edgeHandle()!
+
+    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
+    fireEvent.touchMove(handle, { touches: [{ clientX: 260, clientY: 404 }] })
+    fireEvent.touchEnd(handle)
+
+    expect(await screen.findByTestId('mobile-drawer')).toBeTruthy()
+  })
+
+  it('keeps the grip clean and carries the count inside the panel', async () => {
+    // The owner's call (2026-09-15): a count on a closed handle is noise.
+    // The trade is that the number is read rather than glanced at, so it
+    // must genuinely be on the Inbox row when the panel opens.
     setViewport('mobile')
     renderShell(4)
     await screen.findByText('page')
 
-    expect(await screen.findByTestId('edge-handle-badge')).toBeTruthy()
+    expect(screen.queryByTestId('edge-handle-badge')).toBeNull()
+
+    fireEvent.click(edgeHandle()!)
+    const drawer = await screen.findByTestId('mobile-drawer')
+    const inbox = within(drawer).getByRole('link', { name: /inbox/i })
+    expect(within(inbox).getByTestId('nav-count-badge').textContent).toContain('4')
   })
 })
