@@ -41,7 +41,16 @@ export function AppLayout({
       <UnseenNoticesProvider>
         <div className="flex h-dvh bg-surface-root dark:bg-transparent">
           <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
-          <main className={`flex-1 min-h-0 ${fullWidth ? 'overflow-hidden' : 'overflow-y-auto custom-scrollbar'}`}>
+          {/* The top safe-area inset, once, for every page. index.html sets
+              `viewport-fit=cover`, so the layout viewport extends under the
+              status bar and a heading at y=0 sits behind the clock — which is
+              exactly what the owner saw. Only the two BOTTOM insets were
+              handled before this. `md:pt-0` because a desktop has no inset
+              and the value resolves to 0 there anyway; stating it keeps the
+              intent legible. */}
+          <main
+            className={`flex-1 min-h-0 pt-[env(safe-area-inset-top)] md:pt-0 ${fullWidth ? 'overflow-hidden' : 'overflow-y-auto custom-scrollbar'}`}
+          >
             {fullWidth ? (
               children
             ) : (

@@ -5,6 +5,7 @@ import { listAgents as apiListAgents, type AgentSummary } from '../../lib/api'
 import { autocompleteMatches, matchCommand, type Command } from '../../lib/commands'
 import { completeMention, mentionMatches, mentionQuery } from '../../lib/mentions'
 import { readLocal, writeLocal } from '../../lib/storage'
+import { useIsMobile } from '../../hooks/useIsMobile'
 
 /**
  * The chat composer: a textarea, a send button, and two autocompletes. The
@@ -70,6 +71,7 @@ export function ChatInput({
   const [dismissed, setDismissed] = useState(false)
   const [highlight, setHighlight] = useState(0)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const isMobile = useIsMobile()
 
   // The draft. Written on every edit and removed the moment the message is
   // sent, so storage only ever holds text that was NOT sent — a draft cannot
@@ -303,7 +305,14 @@ export function ChatInput({
           value={input}
           onChange={e => changeInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Message Nova…  (type / for commands, @ for an agent)"
+          /* The hint is desktop-only: at 393px the full string wraps inside a
+             rows={1} textarea and is clipped mid-word, so a phone reads
+             "…(type / for commands, @ for" and stops. Seen on the owner's
+             iPhone, 2026-09-15. The affordances still work on mobile; a
+             truncated sentence advertises them worse than silence. */
+          placeholder={
+            isMobile ? 'Message Nova…' : 'Message Nova…  (type / for commands, @ for an agent)'
+          }
           aria-label="Message Nova"
           rows={1}
           className="w-full bg-transparent resize-none text-content-primary placeholder:text-content-tertiary outline-none px-4 pt-4 pb-2"
