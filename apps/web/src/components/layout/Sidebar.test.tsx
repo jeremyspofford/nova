@@ -38,7 +38,7 @@ function renderSidebar(listNotices: () => Promise<NoticeListing>) {
       <ThemeProvider>
         <AuthProvider>
           <UnseenNoticesProvider listNotices={listNotices} pollMs={NEVER}>
-            <Sidebar collapsed={false} onToggle={() => {}} />
+            <Sidebar collapsed={false} onCollapsedChange={() => {}} />
           </UnseenNoticesProvider>
         </AuthProvider>
       </ThemeProvider>
@@ -94,7 +94,7 @@ describe('Sidebar — the Inbox badge (S11)', () => {
       <MemoryRouter>
         <ThemeProvider>
           <AuthProvider>
-            <Sidebar collapsed={false} onToggle={() => {}} />
+            <Sidebar collapsed={false} onCollapsedChange={() => {}} />
           </AuthProvider>
         </ThemeProvider>
       </MemoryRouter>,

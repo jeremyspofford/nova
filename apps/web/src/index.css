@@ -1,4 +1,10 @@
 @import '@fontsource-variable/geist-mono';
+/* The DEFAULT interface face, statically, so the first frame has it. Every
+   other choice is fetched on demand from src/lib/fonts.ts. Self-hosted
+   rather than linked from Google: a font request would tell them the IP of
+   every household running this, and an assistant that must reach the
+   internet to draw its own text is not self-hosted. */
+@import '@fontsource-variable/plus-jakarta-sans';
 
 @tailwind base;
 @tailwind components;

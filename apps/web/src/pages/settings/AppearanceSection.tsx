@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import clsx from 'clsx'
 import { Monitor, Moon, Palette, Sun, Type } from 'lucide-react'
 import { Section } from '../../components/ui'
 import { useTheme } from '../../stores/theme-store'
+import { fontChoices, loadFont } from '../../lib/fonts'
 import { accentPalettes, resolvePalette, themePresets, type ThemePreset } from '../../lib/color-palettes'
 import { putSetting } from '../../lib/api'
 import { InlineSave, type SaveMessage } from './shared'
@@ -295,6 +296,94 @@ function IconPicker({
   )
 }
 
+function FontPicker({
+  value,
+  onPick,
+  customFamily,
+  onCustomFamily,
+}: {
+  value: string
+  onPick: (key: string) => void
+  customFamily: string
+  onCustomFamily: (family: string) => void
+}) {
+  // Every face, so each card is set in the type it offers. Faces are fetched
+  // on demand everywhere else — a picker that previews them all in the
+  // fallback would be a picker you cannot pick from, so this one page pays
+  // for the lot. Four files, once, and only while it is open.
+  useEffect(() => {
+    for (const key of Object.keys(fontChoices)) void loadFont(key)
+  }, [])
+
+  return (
+    <div role="group" aria-label="Interface font">
+      <div className="mb-2 text-caption font-medium text-content-secondary">Interface font</div>
+      <div className="flex flex-wrap gap-2">
+        {Object.entries(fontChoices).map(([key, choice]) => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={value === key}
+            data-testid={`font-${key}`}
+            onClick={() => onPick(key)}
+            className={clsx(
+              'flex items-center gap-3 rounded-sm border px-3 py-2 text-left transition-colors max-w-[22rem]',
+              value === key ? 'border-accent bg-accent-dim' : 'border-border hover:border-border-strong',
+            )}
+          >
+            {/* Set in the face it offers, which is the only description of a
+                typeface anybody reads. */}
+            <span
+              aria-hidden="true"
+              className="shrink-0 text-h2 text-content-primary"
+              style={{ fontFamily: key === 'custom' ? undefined : choice.stack }}
+            >
+              Aa
+            </span>
+            <span className="min-w-0">
+              <span
+                className="block text-compact text-content-primary"
+                style={{ fontFamily: key === 'custom' ? undefined : choice.stack }}
+              >
+                {choice.label}
+              </span>
+              <span className="block text-caption text-content-tertiary">{choice.description}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {value === 'custom' && (
+        <div className="mt-2">
+          <label className="block text-caption text-content-secondary mb-1" htmlFor="custom-font">
+            Family name, as the system knows it
+          </label>
+          <input
+            id="custom-font"
+            data-testid="custom-font-input"
+            value={customFamily}
+            onChange={e => onCustomFamily(e.target.value)}
+            placeholder="Styrene A"
+            spellCheck={false}
+            className="w-full max-w-[22rem] rounded-sm border border-border bg-surface-input px-3 py-2 text-compact text-content-primary outline-none focus:border-border-focus"
+          />
+          <p className="mt-1 text-caption text-content-tertiary">
+            Rendered here in{' '}
+            <span style={{ fontFamily: customFamily ? `"${customFamily}", sans-serif` : undefined }}>
+              this face
+            </span>{' '}
+            if it is installed. Nothing is downloaded — the font has to already be on the device.
+          </p>
+        </div>
+      )}
+
+      <p className="mt-1.5 text-caption text-content-tertiary">
+        Bundled with Nova, not fetched from a font service. This browser only.
+      </p>
+    </div>
+  )
+}
+
 export function AppearanceSection({
   storedPreset,
   onStored,
@@ -307,6 +396,8 @@ export function AppearanceSection({
     preset, setPreset,
     customAccent, setCustomAccent,
     fontScale, setFontScale,
+    font, setFont,
+    customFont, setCustomFont,
     appIcon, setAppIcon,
     brandIcon, setBrandIcon,
     mode,
@@ -437,6 +528,13 @@ export function AppearanceSection({
         mode={mode}
         preset={preset}
         customAccent={customAccent}
+      />
+
+      <FontPicker
+        value={font}
+        onPick={setFont}
+        customFamily={customFont}
+        onCustomFamily={setCustomFont}
       />
 
       <div role="group" aria-label="Text size">

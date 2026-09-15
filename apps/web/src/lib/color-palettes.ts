@@ -82,6 +82,17 @@ export const accentPalettes: Record<string, ColorScale> = {
 
   // ── Community theme accents ──────────────────────────────────────────────
 
+  // Anthropic's clay/terracotta, the one colour Claude's interface is built
+  // around. 500 is #D97757, the orange itself; 600 (#C96442) is what its
+  // buttons sit at, so the tier picker lands on a button-weight colour for
+  // accent text on light grounds.
+  'claude-clay': {
+    50: '253 246 243', 100: '250 234 227', 200: '244 211 198',
+    300: '234 179 157', 400: '222 143 114', 500: '217 119 87',
+    600: '201 100 66',  700: '169 79 51',   800: '138 65 43',
+    900: '113 55 38',   950: '61 27 18',
+  },
+
   'nord-frost': {
     50: '240 248 250', 100: '220 238 245', 200: '200 225 235',
     300: '170 210 220', 400: '143 188 187', 500: '136 192 208',
@@ -146,6 +157,17 @@ export const neutralPalettes: Record<string, ColorScale> = {
     300: '214 211 209', 400: '168 162 158', 500: '120 113 108',
     600: '87 83 78',    700: '68 64 60',    800: '41 37 36',
     900: '28 25 23',    950: '12 10 9',
+  },
+  // Claude's chrome: warm ivory at the light end, warm CHARCOAL at the dark
+  // end rather than near-black. 950 (#1F1E1D) is the dark ground and 900
+  // (#262624) the panel — deliberately close together, which is what makes
+  // that interface read as soft rather than high-contrast. 50 (#FAF9F5) is
+  // the light ground, 100 (#F0EEE6) its sidebar.
+  claude: {
+    50: '250 249 245',  100: '240 238 230', 200: '229 226 216',
+    300: '214 210 196', 400: '176 171 160', 500: '135 131 122',
+    600: '107 104 98',  700: '74 72 68',    800: '48 48 46',
+    900: '38 38 36',    950: '31 30 29',
   },
   slate: {
     50: '246 248 250',  100: '238 243 248', 200: '220 228 236',
@@ -248,6 +270,9 @@ export const cardSurface: Record<string, { light: string; dark: string }> = {
   daylight:     { light: '252 250 246', dark: '33 30 28'  },
   zinc:         { light: '255 255 255', dark: '18 18 22'  },
   gray:         { light: '255 255 255', dark: '14 18 30'  },
+  // #30302E on dark — a card LIGHTER than its ground, which is the opposite
+  // of every other theme here and is exactly how that interface is built.
+  claude:       { light: '255 255 255', dark: '48 48 46'  },
   nord:         { light: '236 239 244', dark: '40 46 60'  },
   'ctp-mocha':  { light: '255 255 255', dark: '30 30 46'  },
   'ctp-latte':  { light: '239 241 245', dark: '55 58 80'  },
@@ -305,6 +330,12 @@ export const themePresets: Record<string, ThemePreset> = {
   },
 
   // Community
+  // A tribute, matched by eye from the running interface — not official
+  // values, and the type is not Styrene (see src/lib/fonts.ts). No
+  // preferredMode: that interface is equally itself in light and dark, so
+  // this one follows whichever mode the operator is in. No secondary: the
+  // clay tints everything, which is what keeps it faithful.
+  claude:         { label: 'Claude',           description: 'Anthropic clay on warm ivory and charcoal.', accent: 'claude-clay',     neutral: 'claude',       group: 'community' },
   nord:           { label: 'Nord',             description: 'Arctic blues on a cool grey.',      accent: 'nord-frost',      neutral: 'nord',         preferredMode: 'dark',  group: 'community' },
   'ctp-mocha':    { label: 'Catppuccin Mocha', description: 'Soft pastels on mocha.',           accent: 'ctp-blue',        neutral: 'ctp-mocha',    preferredMode: 'dark',  group: 'community' },
   'ctp-latte':    { label: 'Catppuccin Latte', description: 'The light Catppuccin.',            accent: 'ctp-latte-blue',  neutral: 'ctp-latte',    preferredMode: 'light', group: 'community' },

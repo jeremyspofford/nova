@@ -49,7 +49,7 @@ export function AppLayout({
             document scroll, taking the top off the screen. Neither can
             happen to an element pinned to the edges. */}
         <div className="fixed inset-0 flex bg-surface-root dark:bg-transparent">
-          <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
+          <Sidebar collapsed={collapsed} onCollapsedChange={setCollapsed} />
           {/* The top safe-area inset, once, for every page. index.html sets
               `viewport-fit=cover`, so the layout viewport extends under the
               status bar and a heading at y=0 sits behind the clock — which is

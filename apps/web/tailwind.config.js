@@ -5,7 +5,10 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['"Plus Jakarta Sans"', 'system-ui', '-apple-system', 'sans-serif'],
+        // The chosen face, published by the theme store (src/lib/fonts.ts).
+        // The fallbacks after it are for the first frame, before the store
+        // mounts and before the font file lands.
+        sans: ['var(--font-sans)', '"Plus Jakarta Sans Variable"', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['"Geist Mono Variable"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       colors: {

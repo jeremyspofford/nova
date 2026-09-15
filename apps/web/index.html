@@ -34,9 +34,12 @@
          which an installed iOS app can report as 0. -->
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Nova" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- No font <link> here on purpose. Every face this app can use is
+         self-hosted through @fontsource-variable and bundled (index.css for
+         the default, src/lib/fonts.ts on demand for the rest): a Google
+         Fonts request would tell them the IP of every household running a
+         private assistant, and this one has to work with no internet at
+         all. -->
     <meta name="theme-color" content="#0c0a09" />
     <!-- The first frame, before React: read the saved mode and paint the
          ground in it. Without this every load of a dark theme flashed white

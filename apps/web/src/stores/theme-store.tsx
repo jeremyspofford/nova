@@ -4,6 +4,7 @@ import {
   type ColorScale,
 } from '../lib/color-palettes'
 import { appIconHref, knownAppIcon, DEFAULT_APP_ICON } from '../lib/app-icon'
+import { DEFAULT_FONT, fontStack, knownFont, loadFont, sanitizeFamily } from '../lib/fonts'
 
 type Mode = 'light' | 'dark'
 type ModePreference = 'light' | 'dark' | 'system'
@@ -18,6 +19,13 @@ interface ThemeState {
   presetChosen: boolean
   customAccent: string
   fontScale: number
+  /** The interface typeface. A key into fontChoices; the face itself is
+   *  self-hosted and fetched on demand (src/lib/fonts.ts). */
+  font: string
+  /** For font === 'custom': a family installed on THIS device. Kept even
+   *  while another font is selected, so switching away and back does not
+   *  make the operator retype it. */
+  customFont: string
   timezone: string                        // IANA timezone (e.g. "America/New_York")
   /** Which mark goes in the browser tab. The default is DERIVED from the
    *  palette, so switching theme moves the tab icon with it; the v2 orb and
@@ -44,6 +52,10 @@ interface ThemeStore {
   setCustomAccent: (name: string) => void
   fontScale: number
   setFontScale: (scale: number) => void
+  font: string
+  setFont: (key: string) => void
+  customFont: string
+  setCustomFont: (family: string) => void
   timezone: string
   setTimezone: (tz: string) => void
   appIcon: string
@@ -75,6 +87,8 @@ function defaultState(): ThemeState {
     brandIcon: DEFAULT_APP_ICON,
     customAccent: 'teal',
     fontScale: 1,
+    font: DEFAULT_FONT,
+    customFont: '',
     timezone: getBrowserTimezone(),
   }
 }
@@ -119,6 +133,13 @@ function loadState(): ThemeState {
     presetChosen,
     customAccent,
     fontScale: typeof parsed.fontScale === 'number' ? parsed.fontScale : 1,
+    // An unknown key — a family removed from the build, a hand-edited value
+    // — falls back to the default face rather than publishing a stack that
+    // names nothing.
+    font: knownFont(parsed.font) ?? DEFAULT_FONT,
+    // Sanitised on the way IN as well as on the way out: this value is
+    // written into a stylesheet, and storage is hand-editable.
+    customFont: typeof parsed.customFont === 'string' ? sanitizeFamily(parsed.customFont) : '',
     timezone: typeof parsed.timezone === 'string' && parsed.timezone ? parsed.timezone : getBrowserTimezone(),
     // An unknown key (a removed icon, a hand-edited value) falls back to the
     // derived mark rather than leaving the tab with a broken href.
@@ -178,7 +199,14 @@ export function legibleTier(base: string, grounds: string[], towards: 'light' | 
  *  index.css that used to name a colour reads one of these instead, so a
  *  theme changes the whole page — atmosphere, glass and scrollbars included
  *  — and not only the elements that happen to say `accent`. */
-export function themeVariables(mode: Mode, preset: string, customAccent: string, fontScale: number): string {
+export function themeVariables(
+  mode: Mode,
+  preset: string,
+  customAccent: string,
+  fontScale: number,
+  font: string = DEFAULT_FONT,
+  customFont = '',
+): string {
   const { accent, neutral, secondary, card } = resolvePalette(preset, customAccent)
   // dark-mode tertiary text: a step between 400 and 500 (weighted toward
   // 400), derived so every family gets one — 500 was 3.5:1 on a card, the
@@ -221,6 +249,9 @@ export function themeVariables(mode: Mode, preset: string, customAccent: string,
     `--glow-1-light:${accent[100]}`,
     `--glow-2-light:${secondary[100]}`,
     `--font-scale:${fontScale}`,
+    // tailwind.config.js reads this for `font-sans`, so it reaches every
+    // element that has not asked for the mono face by name.
+    `--font-sans:${fontStack(font, customFont)}`,
   ].join(';')
 }
 
@@ -249,8 +280,14 @@ function applyTheme(mode: Mode, state: ThemeState) {
     el = document.createElement('style')
     el.id = 'nova-theme-vars'
   }
-  el.textContent = `:root{${themeVariables(mode, state.preset, state.customAccent, state.fontScale)}}`
+  el.textContent = `:root{${themeVariables(mode, state.preset, state.customAccent, state.fontScale, state.font, state.customFont)}}`
   document.head.appendChild(el)
+
+  // Fetch the face itself. Deliberately NOT awaited: the stack above already
+  // names a fallback, so the page renders immediately in the right kind of
+  // type and swaps when the file lands. A font that never arrives leaves a
+  // plainer page, never a blank one.
+  void loadFont(state.font)
 
   const meta = document.querySelector('meta[name="theme-color"]')
   if (meta) meta.setAttribute('content', themeColor(mode, state.preset, state.customAccent))
@@ -345,6 +382,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, fontScale: scale }))
   }, [])
 
+  const setFont = useCallback((key: string) => {
+    const known = knownFont(key)
+    if (known === null) return
+    setState(s => ({ ...s, font: known }))
+  }, [])
+
+  const setCustomFont = useCallback((family: string) => {
+    // Sanitised HERE, not at the point it is written into the stylesheet, so
+    // what is stored is already the value that will be published — nothing
+    // downstream has to remember to clean it again.
+    setState(s => ({ ...s, customFont: sanitizeFamily(family) }))
+  }, [])
+
   const setTimezone = useCallback((tz: string) => {
     setState(s => ({ ...s, timezone: tz }))
   }, [])
@@ -374,6 +424,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       setCustomAccent,
       fontScale: state.fontScale,
       setFontScale,
+      font: state.font,
+      setFont,
+      customFont: state.customFont,
+      setCustomFont,
       timezone: state.timezone,
       setTimezone,
       appIcon: state.appIcon,

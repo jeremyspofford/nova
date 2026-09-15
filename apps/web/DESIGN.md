@@ -18,7 +18,27 @@
 - **UI/Labels:** Plus Jakarta Sans (600 weight, 11-12px uppercase with letter-spacing for section headers).
 - **Data/Tables:** Geist Mono (tabular-nums) — clean monospace with excellent number alignment. Use for durations, counts, token budgets, queue depths.
 - **Code:** Geist Mono — ligature-free, clear 0/O and 1/l/I distinction.
-- **Loading:** `@fontsource-variable/geist-mono` (npm), Plus Jakarta Sans via Google Fonts CDN.
+- **Loading:** every face is self-hosted through `@fontsource-variable` and
+  bundled. Plus Jakarta Sans and Geist Mono are imported statically in
+  `index.css` so the first frame has them; the optional faces below are
+  dynamic imports (`src/lib/fonts.ts`) and vite splits each into its own
+  chunk, so choosing one fetches one file and the others are never
+  downloaded. **No Google Fonts `<link>`** — as of 2026-09-15: a font request
+  tells them the IP of every household running a private assistant, and this
+  one has to work with no internet at all.
+- **Chosen, not fixed (2026-09-15):** the interface face is an Appearance
+  setting published as `--font-sans`, which `tailwind.config.js` reads for
+  `font-sans`. Plus Jakarta Sans stays the default and everything above still
+  describes it. The alternatives are Inter, Figtree, Source Serif 4, the
+  system stack, and `custom` — a family name the operator types, for a
+  licensed face this project cannot ship. That last one is written into a
+  stylesheet, so it is stripped to `[A-Za-z0-9 _-]` on the way in AND on the
+  way out (`sanitizeFamily`); a name needing escapes is a name nobody meant.
+- **On matching another product's type:** Claude's interface is set in
+  Styrene A/B with Tiempos Text, both licensed from Commercial Type and not
+  redistributable here. Inter is the closest freely-licensed neo-grotesque
+  and is what the Claude theme is drawn against. Nothing in the picker claims
+  to be Styrene.
 - **Scale:**
 
 | Token | Size | Weight | Tracking | Use |
@@ -255,3 +275,25 @@ A tiered glass-morphism system with escalating blur, saturation, and teal tintin
    toward white (dark) or black (light) until it clears AA on the ground,
    the card and an input — a no-op for the five built-ins (pinned), the
    thing that makes a community or custom palette read.
+
+### The Claude theme (2026-09-15)
+
+A `community` preset, sitting beside Nord and Dracula: a tribute matched by
+eye from the running interface, not official values.
+
+- **Accent** `claude-clay` — 500 is `#D97757`, the clay Anthropic builds on;
+  600 (`#C96442`) is its button weight, which is where the derived tier
+  picker lands for accent text on light grounds.
+- **Neutral** `claude` — warm ivory at the light end (`#FAF9F5` ground,
+  `#F0EEE6` nav), warm CHARCOAL at the dark end rather than near-black
+  (`#1F1E1D` ground, `#262624` panel). The dark steps sit deliberately close
+  together; that narrow range is most of why that interface reads soft.
+- **Card** `#30302E` on dark — LIGHTER than its own ground, the opposite of
+  every other theme here and exactly how that interface is built.
+- **No `preferredMode`**: it is equally itself light or dark, so it follows
+  whichever mode the operator is in — unlike the community themes, which
+  each are one mode. **No `secondary`**: the clay tints everything, which is
+  what keeps it faithful.
+
+It passes the same derived WCAG AA check as every other non-house theme, in
+both modes, on all three grounds and on the accent-tint blends.

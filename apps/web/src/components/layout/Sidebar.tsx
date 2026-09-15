@@ -1,5 +1,6 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
-import { Activity, BookOpen, Bot, Boxes, CalendarClock, ChevronsLeft, ChevronsRight, Coins, FolderOpen, Gauge, Inbox, MessageSquare, ScrollText, Settings } from 'lucide-react'
+import { Activity, BookOpen, Bot, Boxes, CalendarClock, Coins, FolderOpen, Gauge, GripVertical, Inbox, MessageSquare, ScrollText, Settings } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -25,6 +26,38 @@ export type NavItem = {
 export type NavSection = {
   label?: string
   items: NavItem[]
+}
+
+/** The sidebar's width, in px. COLLAPSED is icons only; DEFAULT is what it
+ *  has always been; the range is where a drag can leave it. */
+export const SIDEBAR = {
+  COLLAPSED: 60,
+  DEFAULT: 240,
+  MIN: 180,
+  MAX: 420,
+  /** Dragged narrower than this, it collapses rather than getting squeezed —
+   *  the same way a desktop editor's panel does, so "drag it shut" works
+   *  without aiming for a 16px target. */
+  COLLAPSE_AT: 140,
+} as const
+
+const WIDTH_KEY = 'nova-sidebar-width'
+
+/** A stored or dragged width, brought into range. Exported pure: a value
+ *  from localStorage was written by some other session, possibly on a much
+ *  wider screen, and a hand-edited one could be anything at all. */
+export function clampSidebarWidth(w: number): number {
+  if (!Number.isFinite(w)) return SIDEBAR.DEFAULT
+  return Math.min(Math.max(Math.round(w), SIDEBAR.MIN), SIDEBAR.MAX)
+}
+
+function readWidth(): number {
+  try {
+    const raw = localStorage.getItem(WIDTH_KEY)
+    return raw === null ? SIDEBAR.DEFAULT : clampSidebarWidth(Number(raw))
+  } catch {
+    return SIDEBAR.DEFAULT
+  }
 }
 
 // S1 nav config: Chat (Core) + Settings (System). Everything else waits on
@@ -113,11 +146,89 @@ function getInitials(name: string): string {
 
 export function Sidebar({
   collapsed,
-  onToggle,
+  onCollapsedChange,
 }: {
   collapsed: boolean
-  onToggle: () => void
+  /** A SETTER rather than a toggle: a drag ends on a definite state — it
+   *  knows whether it finished wide or shut — and a toggle would make it
+   *  guess from the state it started in. */
+  onCollapsedChange: (collapsed: boolean) => void
 }) {
+  const [width, setWidth] = useState(readWidth)
+  const [dragging, setDragging] = useState(false)
+  const drag = useRef<{ x: number; w: number; moved: boolean } | null>(null)
+
+  // Persist only settled widths. Writing on every pointermove would put a
+  // localStorage round-trip in the middle of a drag.
+  useEffect(() => {
+    if (dragging) return
+    try {
+      localStorage.setItem(WIDTH_KEY, String(width))
+    } catch {
+      // A browser with storage off just gets the default width next load.
+    }
+  }, [dragging, width])
+
+  /** One place that decides what a given pixel width MEANS, so the pointer
+   *  drag and the arrow keys cannot drift apart. */
+  const applyWidth = useCallback(
+    (raw: number) => {
+      if (raw < SIDEBAR.COLLAPSE_AT) {
+        onCollapsedChange(true)
+        return
+      }
+      onCollapsedChange(false)
+      setWidth(clampSidebarWidth(raw))
+    },
+    [onCollapsedChange],
+  )
+
+  const beginResize = (e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault()
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    drag.current = { x: e.clientX, w: collapsed ? SIDEBAR.COLLAPSED : width, moved: false }
+    setDragging(true)
+  }
+
+  const resize = (e: React.PointerEvent<HTMLButtonElement>) => {
+    const d = drag.current
+    if (!d) return
+    const dx = e.clientX - d.x
+    // A few pixels of slop, so a click that trembles stays a click.
+    if (!d.moved && Math.abs(dx) < 4) return
+    d.moved = true
+    applyWidth(d.w + dx)
+  }
+
+  const endResize = (e: React.PointerEvent<HTMLButtonElement>) => {
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) {
+      e.currentTarget.releasePointerCapture?.(e.pointerId)
+    }
+    setDragging(false)
+  }
+
+  /** The click that every pointer sequence ends with. It must not toggle
+   *  after a drag, or a drag-to-resize would collapse the panel it just
+   *  sized. */
+  const tapHandle = () => {
+    const moved = drag.current?.moved === true
+    drag.current = null
+    if (moved) return
+    onCollapsedChange(!collapsed)
+  }
+
+  /** The same control, without a pointer. */
+  const nudge = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 48 : 16
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault()
+      applyWidth((collapsed ? SIDEBAR.COLLAPSED : width) - step)
+    } else if (e.key === 'ArrowRight') {
+      e.preventDefault()
+      applyWidth(collapsed ? SIDEBAR.MIN : width + step)
+    }
+  }
+
   const location = useLocation()
   const navigate = useNavigate()
   const { brandIcon, mode, preset, customAccent } = useTheme()
@@ -130,11 +241,49 @@ export function Sidebar({
 
   return (
     <aside
+      data-testid="sidebar"
       className={clsx(
-        'hidden md:flex flex-col h-full bg-surface border-r border-border-subtle transition-[width] duration-200 ease-in-out shrink-0 glass-nav dark:border-white/[0.06]',
-        collapsed ? 'w-[60px]' : 'w-[240px]',
+        'hidden md:flex flex-col h-full bg-surface border-r border-border-subtle shrink-0 glass-nav dark:border-white/[0.06] relative',
+        // No transition while a pointer is down: the edge IS the pointer
+        // then, and easing it makes the drag feel like it is lagging.
+        !dragging && 'transition-[width] duration-200 ease-in-out',
       )}
+      style={{ width: collapsed ? SIDEBAR.COLLAPSED : width }}
     >
+      {/* The EDGE HANDLE, which replaced a "Collapse" row at the foot of the
+          panel (2026-09-15). Three things the row could not do: it is the
+          same shape and gesture as the phone's grip, so one idea covers both
+          surfaces; it is reachable without looking at the bottom of a list
+          that scrolls; and the edge is where a resize has to be anyway, so
+          the control and the thing it controls are the same target.
+
+          Click toggles. Drag sets the width, and dragging it narrower than
+          COLLAPSE_AT shuts it — a desktop panel's usual behaviour, and it
+          means "drag it closed" works without aiming at a 16px tab. Arrow
+          keys do the same for anyone not using a mouse. */}
+      <button
+        type="button"
+        data-testid="sidebar-handle"
+        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        aria-expanded={!collapsed}
+        title={collapsed ? 'Expand — or drag to size' : 'Collapse — or drag to size'}
+        onPointerDown={beginResize}
+        onPointerMove={resize}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+        onClick={tapHandle}
+        onKeyDown={nudge}
+        className={clsx(
+          'absolute top-1/2 -translate-y-1/2 left-full z-30',
+          'flex h-16 w-4 items-center justify-center',
+          'rounded-r-lg border border-l-0 border-border-subtle bg-surface-elevated/60 backdrop-blur',
+          'text-content-tertiary hover:text-content-primary',
+          'opacity-60 hover:opacity-100 transition-opacity duration-fast',
+          'cursor-col-resize touch-none',
+        )}
+      >
+        <GripVertical className="w-3 h-3" />
+      </button>
       {/* The brand mark. Chosen in Appearance, separately from the favicon,
           and drawn from the live palette (src/lib/app-icon.ts) rather than
           hardcoded here — so a theme change moves it and a new icon needs no
@@ -231,26 +380,10 @@ export function Sidebar({
         </div>
       )}
 
-      {/* Collapse toggle */}
-      <div className="px-2 pb-3 shrink-0">
-        <button
-          onClick={onToggle}
-          className={clsx(
-            'flex items-center gap-2 rounded-md text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors duration-fast w-full',
-            collapsed ? 'justify-center px-2 py-2' : 'px-2.5 py-2',
-          )}
-          title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-        >
-          {collapsed ? (
-            <ChevronsRight className="w-[18px] h-[18px]" />
-          ) : (
-            <>
-              <ChevronsLeft className="w-[18px] h-[18px]" />
-              <span className="text-compact">Collapse</span>
-            </>
-          )}
-        </button>
-      </div>
+      {/* The "Collapse" row that stood here until 2026-09-15 is gone: the
+          edge handle above does its job, in the place a resize has to live
+          anyway, and a row at the foot of a scrolling list was the least
+          findable spot on the panel. */}
     </aside>
   )
 }
