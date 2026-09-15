@@ -25,7 +25,15 @@
          a home screen, where a distinctive shape beats a letterform. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- NOT black-translucent. That draws the web view UNDER the status bar,
+         and nothing in this app pads for `env(safe-area-inset-top)` — only
+         the two bottom insets are handled (MobileNav, the chat input). It
+         was set to black-translucent on 2026-09-15 and the owner's phone
+         immediately showed the "Chat" heading behind the clock. v3 hit the
+         same wall from the other side (memory: iOS reports a top inset of 0
+         while full-bleed), so the safe answer is to let iOS reserve the bar
+         until the shell genuinely handles a top inset. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Nova" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

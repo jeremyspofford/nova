@@ -50,7 +50,14 @@ export function AppLayout({
               </div>
             )}
           </main>
-          {!isMobile && <MobileNav />}
+          {/* isMobile is TRUE below 768px. This read `!isMobile` from the
+              2026-08-27 design-system port until 2026-09-15, which rendered
+              the bottom nav only on desktop — where its own `md:hidden`
+              class then hid it. So it appeared nowhere, for three weeks, and
+              the phone had no navigation at all: no tabs, no "More" drawer,
+              no way to reach Settings. The owner reported it as "it's chat
+              only". AppLayout.test.tsx pins both directions. */}
+          {isMobile && <MobileNav />}
         </div>
       </UnseenNoticesProvider>
     </MobileNavProvider>
