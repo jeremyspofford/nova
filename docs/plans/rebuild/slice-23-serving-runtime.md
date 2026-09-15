@@ -303,3 +303,89 @@ Trimming history is a real cost and this slice trades it for headroom
 deliberately. The corpus is the instrument: run it before and after at the
 same suite version, on the same model, and if the score moves the trade is
 not free and the defaults change.
+
+## Late research, after parking (2026-09-15)
+
+Landed after the park. Recorded because it changes what a future pickup
+would do, and because one of it would have caught us out.
+
+**Every number below is DOCUMENTED, not measured here.** The agents were
+barred from loading models. Source-code and git facts were verified
+first-hand at the exact versions (llama.cpp b10630, ollama v0.33.1);
+perplexity and KLD figures are other people's measurements on other
+hardware, and the published perplexity tables are SHORT-CONTEXT (512-token
+chunks), which is the regime where a quantised cache is least stressed.
+
+### 1. q8_0 is not uniformly safe, and it lands badly on models we have
+
+Qwen3 family: q8_0 KV is statistically indistinguishable from f16. On a
+7x7 K-by-V matrix (Qwen3.5-9B, post-rotation) the q8_0/q8_0 mean KLD was
+0.000799 +/- 0.000042 against an f16/f16 floor of 0.000782 +/- 0.000040 —
+the error bars overlap. dPPL +0.007%.
+
+But a 250k-token six-category KLD study found the damage is per-FAMILY and
+concentrated, not uniform:
+
+    Qwen 3.6 27B          under KL 0.04 at q8_0
+    Gemma 4 31B dense           KL 0.108
+    Gemma 4 26B-A4B MoE         KL 0.377
+
+**`gemma4:31b` and `hf.co/google/gemma-4-26B-A4B-it-qat-q4_0-gguf` are both
+installed on this host, and `OLLAMA_KV_CACHE_TYPE` is SERVER-WIDE.** Setting
+q8_0 for the Qwen models' benefit would quietly degrade the Gemmas. That is
+the concrete cost of the knob having no per-model form, and it turns "the
+obvious free win" into a trade nobody would have noticed making.
+
+The same study found the damage concentrates in LONG DOCUMENTS (KL 0.581 at
+q4_0) and TOOL CALLING (0.086) — which is most of what this assistant does.
+Mean perplexity hides it; it lives in the tail.
+
+### 2. Quantising V requires flash attention — and silently disables the
+### probe that would tell you it went wrong
+
+Read from source at b10630:
+
+- A quantised `type_v` with FA set to AUTO **promotes FA to ENABLED**
+  (`llama-context.cpp:3592-3601`); with FA explicitly off, context creation
+  fails outright.
+- But the auto-FA safety probe (`resolve_fused_ops`) only runs when FA is
+  AUTO. Because quantised V promotes AUTO to ENABLED *before* the context is
+  built, **the probe never runs.** If the FA op cannot be placed on CUDA it
+  is simply scheduled onto the CPU — no warning, no disable, no throw.
+  Third-party reports put that fallback at 25-45x slower.
+- A default CUDA build accepts only F32/F16/BF16/Q4_0/Q8_0 for the KV type,
+  and **K and V types must match** unless built with
+  `GGML_CUDA_FA_ALL_QUANTS=ON`. q5_0/q5_1/q4_1 are not claimed by CUDA.
+
+So the free check before ever enabling this: llama.cpp logs `attn_rot_k` and
+`attn_rot_v` at model load, and b10630 carries ggerganov's Hadamard rotation
+(PR #21038, merged 2026-04-01) which only engages for a QUANTISED cache and
+only when `head_dim % 64 == 0`. Qwen3 head_dim is 128, so it applies; a model
+that fails that gate silently reverts to pre-rotation quality. The log line
+is the mechanical check that it engaged.
+
+### 3. Do not migrate to llama-server. The channel is already open.
+
+The premise that ollama hides llama.cpp's flags is false on this host, and
+S23 already disproved it: every llama.cpp argument has a `LLAMA_ARG_*` env
+var, ollama's launcher passes `os.Environ()` to the child and overwrites only
+`LD_LIBRARY_PATH` and its own `LLAMA_ARG_FIT_TARGET`, and
+`LLAMA_ARG_KV_OFFLOAD=0` was verified reaching llama-server end to end.
+Serving-side flags are reachable from the compose env block today.
+
+What a migration would actually cost is the model-management plane the
+gateway is built on: `/api/tags`, `/api/ps`, `/api/show`, `/api/pull`,
+`/api/delete`, keep_alive, automatic model switching and unloading.
+
+**The one genuinely unreachable thing is prompt-cache persistence**, and it
+is the strongest idea in this whole slice for a single user with long-lived
+conversations: `--cache-ram` (default 8192 MiB), `--cache-idle-slots`,
+`--slot-save-path` with `POST /slots/{id}?action=save|restore`,
+`--ctx-checkpoints` (default 32/slot), `--cache-reuse`. Restoring a
+12k-token KV beats re-prefilling it.
+
+**So the first move on any pickup is not a migration and not a knob — it is
+one cheap experiment: does `LLAMA_ARG_CACHE_RAM` reach ollama's child the
+way `LLAMA_ARG_KV_OFFLOAD` did?** If it does, prompt-cache persistence is
+available from a compose line, and the expensive half of this slice
+evaporates.
