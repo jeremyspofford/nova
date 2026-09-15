@@ -1,14 +1,17 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Clock, Square, X } from 'lucide-react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { ArrowLeft, Clock, Square, X } from 'lucide-react'
 import {
   getActiveConversation as apiGetActiveConversation,
+  getConversationState as apiGetConversationState,
   getMessages as apiGetMessages,
+  openThread as apiOpenThread,
 } from '../../lib/api'
 import { useChatStore } from '../../stores/chat-store'
 import { ChatControls } from './ChatControls'
 import { ChatInput } from './ChatInput'
 import { ErrorBubble, MessageBubble } from './MessageBubble'
-import type { Conversation } from '../../lib/api'
+import type { Conversation, ThreadCounts } from '../../lib/api'
 import type { QueuedMessage } from './chatReducer'
 
 /** The server's accepted-but-unanswered list, in the store's own shape. One
@@ -60,11 +63,17 @@ function asQueued(conversation: Conversation): QueuedMessage[] {
 interface ChatApi {
   getActiveConversation: typeof apiGetActiveConversation
   getMessages: typeof apiGetMessages
+  /** S24: the live state of a conversation the URL names, so `?thread=<id>`
+   *  attaches to a room the same way the page attaches to the hallway. */
+  getConversationState: typeof apiGetConversationState
+  openThread: typeof apiOpenThread
 }
 
 const DEFAULT_API: ChatApi = {
   getActiveConversation: apiGetActiveConversation,
   getMessages: apiGetMessages,
+  getConversationState: apiGetConversationState,
+  openThread: apiOpenThread,
 }
 
 // How often to ask core whether the in-flight turn has landed. There is no
@@ -116,6 +125,30 @@ export function ChatPage({
   // change when the poll resolves.
   const [responding, setResponding] = useState(false)
   const [resolvedTick, setResolvedTick] = useState(0)
+  /**
+   * S24 — WHICH ROOM, FROM THE URL.
+   *
+   * `/chat?thread=<conversation-id>`: a query parameter on the existing
+   * route rather than a new path, because a new path would re-break the
+   * three 2026-09-15 phone fixes on arrival (the fullWidth layout, the Chat
+   * highlight in the menu, the composer's bottom padding), all of which
+   * hold by construction on `/chat`.
+   *
+   * Being addressable is what makes the iOS back gesture the OS back, makes
+   * a relaunch inside a room return to the room, and lets a reload mid-turn
+   * recover the reply that is still arriving.
+   */
+  const [search, setSearch] = useSearchParams()
+  const threadId = search.get('thread')
+  /** `{message_id: reply_count}` for every message here that offers a room.
+   *  Counted by the server; absent means no stub. */
+  const [threads, setThreads] = useState<ThreadCounts>({})
+  /** Which message this room hangs off, so backing out can scroll to it. */
+  const [parentMessageId, setParentMessageId] = useState<string | null>(null)
+  /** Set on the way OUT of a room, read once by the scroll effect. Not the
+   *  bottom: the spec's "back at the right position" is the message he left
+   *  from, and this page scrolls to the bottom on every conversation change. */
+  const returnToRef = useRef<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -129,9 +162,23 @@ export function ChatPage({
     let live = true
     ;(async () => {
       try {
-        const conversation = await api.getActiveConversation()
-        const messages = await api.getMessages(conversation.id)
+        // The room the URL names, or the hallway. Both answer the same
+        // shape — one builder serves both on the server — so everything
+        // below is identical either way. A room whose id no longer resolves
+        // (cleared from another device) falls back rather than stranding
+        // the page on an error: the hallway always exists.
+        let conversation: Conversation
+        try {
+          conversation = threadId
+            ? await api.getConversationState(threadId)
+            : await api.getActiveConversation()
+        } catch {
+          conversation = await api.getActiveConversation()
+        }
+        const { messages, threads: stubs } = await api.getMessages(conversation.id)
         if (!live) return
+        setThreads(stubs)
+        setParentMessageId(conversation.parent_message_id ?? null)
         // Reconciled, never blindly loaded: if the store already lived
         // through this conversation (a turn still streaming, or one that
         // finished while this page was unmounted), its own rows are trusted
@@ -176,7 +223,11 @@ export function ChatPage({
         }
         let active
         try {
-          active = await api.getActiveConversation()
+          // THE CONVERSATION ON SCREEN, not `/active`. In a room those are
+          // different, and polling `/active` would read the hallway's
+          // pending turn while displaying the room's — "still responding"
+          // over a room that finished, or silence over one that has not.
+          active = await api.getConversationState(conversationId)
           fetchFailures = 0
         } catch (err) {
           // A transient read failure is not a finished turn — keep polling.
@@ -205,8 +256,9 @@ export function ChatPage({
           // too: pending_turn covers both, so this loop cannot stop while an
           // accepted message is still owed an answer.
           try {
-            const messages = await api.getMessages(conversationId)
+            const { messages, threads: stubs } = await api.getMessages(conversationId)
             if (!live) return
+            setThreads(stubs)
             resolveServerTurn(conversationId, messages)
             setResolvedTick(tick => tick + 1)
           } catch {
@@ -224,7 +276,17 @@ export function ChatPage({
     return () => {
       live = false
     }
-  }, [api, loadConversation, resolveServerTurn, pollIntervalMs, noteServerTurn, syncQueue])
+    // `threadId` is a dependency: walking into a room, or backing out of
+    // one, is a whole conversation change and has to re-run this loader.
+  }, [
+    api,
+    threadId,
+    loadConversation,
+    resolveServerTurn,
+    pollIntervalMs,
+    noteServerTurn,
+    syncQueue,
+  ])
 
   // S9 — the idle poll. The interval EXISTS only while nothing is in flight
   // here: history loaded, no pending-turn poll running, and `state.streaming`
@@ -246,8 +308,13 @@ export function ChatPage({
       const observedRows = rowsRef.current
       api
         .getMessages(conversationId)
-        .then(messages => {
-          if (live) syncFromServer(conversationId, messages, observedRows)
+        .then(({ messages, threads: stubs }) => {
+          if (!live) return
+          // A room opened on another device, or a reply added to one, shows
+          // up on the next idle tick — the stub is server-counted, so this
+          // is the same read that brings new messages.
+          setThreads(stubs)
+          syncFromServer(conversationId, messages, observedRows)
         })
         .catch(() => {})
     }, idlePollMs)
@@ -290,7 +357,50 @@ export function ChatPage({
   // (conversation id + the resolve tick), NOT on every row change, so a
   // mid-stream delta never yanks the view away from someone reading history.
   // A layout effect so the scroll happens after the rows are in the DOM.
+  /** Walk into the room off one message. Idempotent on the server — a
+   *  partial unique index means a double tap cannot fork a message into two
+   *  rooms — so this needs no guard of its own. */
+  const enterThread = useCallback(
+    async (messageId: string) => {
+      const conversationId = state.conversationId
+      if (!conversationId) return
+      try {
+        const room = await api.openThread(conversationId, messageId)
+        setSearch({ thread: room.id })
+      } catch {
+        // The room could not be opened. Say nothing rather than navigating
+        // to a URL that will fall back to the hallway and look like the tap
+        // did nothing on purpose.
+      }
+    },
+    [api, state.conversationId, setSearch],
+  )
+
+  /** Back out to the hallway, remembering where to land. */
+  const leaveThread = useCallback(() => {
+    returnToRef.current = parentMessageId
+    setSearch({})
+  }, [parentMessageId, setSearch])
+
   useLayoutEffect(() => {
+    // BACK OUT LANDS ON THE MESSAGE HE LEFT FROM (S24), not at the bottom.
+    // This page scrolls to the bottom on every conversation change, which
+    // would contradict "back at the right position" — he walked into that
+    // room from a particular message and that is where the conversation was
+    // for him. Read once and cleared, so the next ordinary change still
+    // goes to the bottom.
+    const returnTo = returnToRef.current
+    if (returnTo) {
+      returnToRef.current = null
+      const target = scrollRef.current?.querySelector(`[data-message-id="${returnTo}"]`)
+      if (target) {
+        target.scrollIntoView({ block: 'center' })
+        return
+      }
+      // The message is not on screen — cleared, or scrolled out of the
+      // loaded window. The bottom is where an unanchored conversation
+      // belongs, and it is better than not scrolling at all.
+    }
     bottomRef.current?.scrollIntoView({ block: 'end' })
   }, [state.conversationId, resolvedTick])
 
@@ -329,6 +439,34 @@ export function ChatPage({
         <h1 className="text-h3 text-content-primary">Chat</h1>
       </header>
 
+      {/* A ROOM SAYS SO, AND SAYS THE WAY OUT (S24) — on the phone too,
+          unlike the header above. The iOS back gesture works because the
+          room is a URL, but a gesture is not an affordance: without a
+          visible way back the owner was trapped in the drawer on
+          2026-09-15, and that is the same mistake one surface along.
+
+          It sits INSIDE the safe-area padding <main> already applies, so it
+          does not need its own inset. */}
+      {threadId && (
+        <header
+          data-testid="thread-header"
+          className="shrink-0 flex items-center gap-2 px-4 md:px-8 h-12 border-b border-border-subtle bg-surface-elevated/40"
+        >
+          <button
+            type="button"
+            data-testid="leave-thread"
+            onClick={leaveThread}
+            className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-compact text-content-secondary hover:text-content-primary hover:bg-surface-card transition-colors duration-fast"
+          >
+            <ArrowLeft size={14} className="shrink-0" />
+            Back to chat
+          </button>
+          <span className="text-caption text-content-tertiary truncate">
+            a side conversation — the main chat is not carried in here
+          </span>
+        </header>
+      )}
+
       <div ref={scrollRef} className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
         <div className="mx-auto px-4 md:px-8 py-6 space-y-4 max-w-none md:max-w-3xl">
           {loadError && (
@@ -348,7 +486,16 @@ export function ChatPage({
 
           {state.rows.map(row =>
             row.kind === 'message' ? (
-              <MessageBubble key={row.id} row={row} />
+              <MessageBubble
+                key={row.id}
+                row={row}
+                // A count, never the latest line: previewing the newest
+                // reply would re-introduce exactly the interleaving rooms
+                // exist to remove. undefined means this message offers no
+                // room and draws no stub.
+                replies={threadId ? undefined : threads[row.id]}
+                onOpenThread={threadId ? undefined : enterThread}
+              />
             ) : (
               <ErrorBubble key={row.id} row={row} />
             ),

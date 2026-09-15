@@ -327,14 +327,63 @@ function LoadingDots() {
   )
 }
 
-export const MessageBubble = memo(function MessageBubble({ row }: { row: MessageRow }) {
+/**
+ * The stub under a message that has a room (S24).
+ *
+ *     Nova: qwen3.8:27b produced nothing in 2 of its last 2 rounds.
+ *           └─ 3 replies →
+ *
+ * A COUNT, not the latest line. Previewing the newest reply would put a
+ * room's content back in the hallway and re-introduce exactly the
+ * interleaving rooms exist to remove. It is also what keeps "one long
+ * conversation" true: back out of a room and the hallway still records that
+ * you went in.
+ *
+ * `0 replies` is a real state and reads as an invitation — the room is
+ * opened on the first tap, so a message that offers one but has never been
+ * discussed says so rather than hiding.
+ */
+function ThreadStub({ replies, onOpen }: { replies: number; onOpen: () => void }) {
+  return (
+    <button
+      type="button"
+      data-testid="thread-stub"
+      onClick={onOpen}
+      className="mt-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-caption text-content-tertiary hover:text-accent hover:bg-accent-dim transition-colors duration-fast"
+    >
+      <span aria-hidden="true" className="font-mono">
+        └─
+      </span>
+      {replies === 0 ? 'Talk about this' : `${replies} ${replies === 1 ? 'reply' : 'replies'}`}
+      <ChevronRight size={12} className="shrink-0" />
+    </button>
+  )
+}
+
+export const MessageBubble = memo(function MessageBubble({
+  row,
+  replies,
+  onOpenThread,
+}: {
+  row: MessageRow
+  /** How many messages the room off this message holds. undefined means it
+   *  offers no room — counted by the server, never stored. */
+  replies?: number
+  onOpenThread?: (messageId: string) => void
+}) {
+  const stub =
+    replies !== undefined && onOpenThread ? (
+      <ThreadStub replies={replies} onOpen={() => onOpenThread(row.id)} />
+    ) : null
+
   if (row.role === 'user') {
     return (
-      <div className="flex justify-end" data-testid="message-user">
+      <div className="flex justify-end" data-testid="message-user" data-message-id={row.id}>
         <div className="max-w-[85%] md:max-w-[75%]">
           <div className="glass-card bg-surface-elevated border border-border dark:border-white/[0.08] text-content-primary whitespace-pre-wrap rounded-tl-2xl rounded-tr-sm rounded-br-2xl rounded-bl-2xl px-4 py-3 text-body leading-relaxed">
             {row.text}
           </div>
+          {stub && <div className="flex justify-end">{stub}</div>}
         </div>
       </div>
     )
@@ -357,7 +406,7 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
     row.activity?.tool === DELEGATE_TOOL && row.delegation?.status === 'working'
 
   return (
-    <div className="flex gap-3 items-start" data-testid="message-assistant">
+    <div className="flex gap-3 items-start" data-testid="message-assistant" data-message-id={row.id}>
       <div className="shrink-0 mt-0.5">
         <div
           data-testid="assistant-avatar"
@@ -453,6 +502,9 @@ export const MessageBubble = memo(function MessageBubble({ row }: { row: Message
             Interrupted — the connection dropped before this reply finished.
           </p>
         )}
+        {/* LAST, under everything the turn itself said: the stub is about
+            the message, not part of it. */}
+        {stub}
       </div>
     </div>
   )

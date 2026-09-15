@@ -388,7 +388,16 @@ async def get_messages(
 ) -> dict:
     pool = await db.get_pool()
     await owned_conversation(pool, person, conversation_id)
-    return {"messages": await messages_json(pool, conversation_id)}
+    # S24: `{message_id: reply_count}` for every message in here that has a
+    # room, so the page can draw its stub. Only messages WITH a room appear
+    # — "no room here" and "a room nobody has spoken in" are different
+    # things, and the stub only renders for the second. Counted, never
+    # stored.
+    threads = await thread_reply_counts(pool, conversation_id)
+    return {
+        "messages": await messages_json(pool, conversation_id),
+        "threads": {str(message_id): replies for message_id, replies in threads.items()},
+    }
 
 
 async def clear_messages(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> int:
@@ -486,21 +495,37 @@ async def open_thread(
 async def thread_reply_counts(
     pool: asyncpg.Pool, conversation_id: uuid.UUID
 ) -> dict[uuid.UUID, int]:
-    """Per parent message in this conversation, how many messages its room
-    holds — `{message_id: count}`, and only for messages that have a room.
+    """Which messages in this conversation offer a room, and how many
+    messages that room holds — `{message_id: count}`.
+
+    TWO KINDS OF MESSAGE APPEAR, and it has to be both or the feature has no
+    entrance:
+
+      * one that already HAS a room — the count is its messages;
+      * one that DELIVERED A NOTICE and has no room yet — the count is 0.
+
+    Without the second, nothing could ever be opened: a stub would render
+    only for rooms that exist, and a room only exists once somebody opened
+    one. The second kind is also what keeps the entrance where the design
+    put it — rooms are opened from things she raised, not from arbitrary
+    messages, which stays out of scope until somebody decides otherwise.
 
     DERIVED, never stored. A stored count drifts the first time a message is
-    written by a path that forgets to bump it, and a stub that says "3
-    replies" over an empty room is worse than no stub. The count is what the
-    stub shows instead of the latest line: previewing the newest reply would
-    re-introduce exactly the interleaving rooms exist to remove.
+    written by a path that forgets to bump it, and "3 replies" over an empty
+    room is worse than no stub. A count is also what the stub shows instead
+    of the latest line: previewing the newest reply would re-introduce
+    exactly the interleaving rooms exist to remove.
     """
     rows = await pool.fetch(
-        "SELECT c.parent_message_id AS parent, count(m.id) AS replies "
-        "FROM conversations c "
-        "LEFT JOIN messages m ON m.conversation_id = c.id "
-        "WHERE c.parent_message_id IN (SELECT id FROM messages WHERE conversation_id = $1) "
-        "GROUP BY c.parent_message_id",
+        "SELECT m.id AS parent, "
+        "       count(child.id) FILTER (WHERE child.id IS NOT NULL) AS replies "
+        "  FROM messages m "
+        "  LEFT JOIN conversations room ON room.parent_message_id = m.id "
+        "  LEFT JOIN messages child ON child.conversation_id = room.id "
+        " WHERE m.conversation_id = $1 "
+        "   AND (room.id IS NOT NULL "
+        "        OR EXISTS (SELECT 1 FROM notices n WHERE n.delivered_message_id = m.id)) "
+        " GROUP BY m.id",
         conversation_id,
     )
     return {row["parent"]: row["replies"] for row in rows}

@@ -84,8 +84,19 @@ function chatApi() {
   }
   return {
     getActiveConversation: vi.fn(async () => conversation),
-    getMessages: vi.fn(async (): Promise<StoredMessage[]> => []),
-  }
+    // S24: the transcript read carries each message's room reply-count, so
+    // the page can draw stubs from the same fetch that brings the messages.
+    getMessages: vi.fn(
+      async (): Promise<{ messages: StoredMessage[]; threads: Record<string, number> }> => ({
+        messages: [],
+        threads: {},
+      }),
+    ),
+    getConversationState: vi.fn(async () => conversation),
+    openThread: vi.fn(async () => {
+      throw new Error('this test did not expect a room to be opened')
+    }),
+  } as never
 }
 
 /**

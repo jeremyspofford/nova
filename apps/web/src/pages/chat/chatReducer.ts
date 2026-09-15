@@ -172,7 +172,10 @@ export type ChatAction =
       messages: FetchedMessage[]
     }
   | { type: 'send'; userId: string; assistantId: string; text: string }
-  | { type: 'event'; event: StreamEvent }
+  /** A frame off a stream, and WHICH conversation that stream was started
+   *  for (S24). null means "a brand-new conversation with no id yet", which
+   *  cannot belong to anything else and is always accepted. */
+  | { type: 'event'; event: StreamEvent; conversationId?: string | null }
   | {
       type: 'reconcile'
       conversationId: string
@@ -835,7 +838,24 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         turnId: null,
       }
 
-    case 'event':
+    case 'event': {
+      // A LATE FRAME FROM ANOTHER ROOM IS DROPPED (S24).
+      //
+      // Before threads there was one conversation on screen and every frame
+      // belonged to it. Now: stream in the hallway, tap a stub, and the
+      // hallway's remaining deltas would have been appended to the room's
+      // pending bubble — her answer about the grocery list, arriving inside
+      // a room about a failing timer.
+      //
+      // By IDENTITY, not by arrival order: the owner can be switching back
+      // and forth while both are mid-turn, and there is no ordering rule
+      // that survives that. A stream started before the conversation had an
+      // id (`null`) can only be this one, so it is always accepted.
+      const startedFor = action.conversationId
+      if (startedFor != null && state.conversationId != null && startedFor !== state.conversationId) {
+        return state
+      }
       return applyEvent(state, action.event)
+    }
   }
 }

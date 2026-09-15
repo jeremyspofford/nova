@@ -254,6 +254,10 @@ export interface Conversation {
   // while a turn was running. The server is what runs them, so this list is the
   // truth the page adopts; `ahead` is how many run before each one.
   queued: { id: string; conversation_id: string; body: string; ahead: number }[]
+  /** S24: null for the hallway, the message this ROOM hangs off when it is a
+   *  thread. The page needs it to scroll back to the right place on the way
+   *  out. Optional so a core older than S24 still typechecks. */
+  parent_message_id?: string | null
 }
 
 export interface StoredMessage {
@@ -310,12 +314,40 @@ export interface Delegation {
 
 export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
 
-export async function getMessages(conversationId: string): Promise<StoredMessage[]> {
-  const body = await apiGet<{ messages: StoredMessage[] }>(
+/** The live state of a conversation the client NAMES (S24) — the same shape
+ *  `/active` answers, so a page landing on `?thread=<id>` attaches to a room
+ *  exactly the way it attaches to the hallway, including to a turn already
+ *  running in it. One builder serves both on the server, so they cannot
+ *  drift. */
+export const getConversationState = (conversationId: string) =>
+  apiGet<Conversation>(`/api/v1/conversations/${conversationId}/state`)
+
+/** How many messages each room holds, keyed by the message it hangs off
+ *  (S24). Only messages that HAVE a room appear — "no room here" and "a room
+ *  nobody has spoken in" are different things, and the stub only renders for
+ *  the second. Counted on the server, never stored. */
+export type ThreadCounts = Record<string, number>
+
+export async function getMessages(
+  conversationId: string,
+): Promise<{ messages: StoredMessage[]; threads: ThreadCounts }> {
+  const body = await apiGet<{ messages: StoredMessage[]; threads?: ThreadCounts }>(
     `/api/v1/conversations/${conversationId}/messages`,
   )
-  return body.messages
+  // `threads` is absent on a core older than S24; an empty map draws no
+  // stubs, which is the right answer rather than a crash.
+  return { messages: body.messages, threads: body.threads ?? {} }
 }
+
+/** Open (or re-open) the room off one message. Idempotent on the server — a
+ *  partial unique index means a double tap cannot fork a message into two
+ *  rooms, so this is safe to call from a button with no guard of its own. */
+export const openThread = (conversationId: string, messageId: string) =>
+  apiSend<Conversation & { parent_message_id: string; created: boolean }>(
+    `/api/v1/conversations/${conversationId}/messages/${messageId}/thread`,
+    'POST',
+    {},
+  )
 
 export interface ClearedConversation {
   id: string

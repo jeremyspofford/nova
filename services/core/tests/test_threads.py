@@ -372,3 +372,43 @@ async def test_a_room_reports_its_topic_and_the_hallway_reports_none(owner_clien
     meta = await chat._thread_meta(pool, room["id"])
     assert meta["conversation_id"] == str(room["id"])
     assert meta["title"] == "Nova: Two timers have failed twice running."
+
+
+async def test_a_notice_bearing_message_offers_a_room_before_one_exists(owner_client, pool):
+    """THE ENTRANCE. Without this the feature has no way in: a stub would
+    render only for rooms that exist, and a room only exists once somebody
+    opened one from a stub.
+
+    It also keeps the entrance where the design put it — rooms are opened
+    from things she raised, not from arbitrary messages, which stays out of
+    scope until somebody decides otherwise."""
+    owner = _Person(await _owner(pool))
+    hallway = await _hallway(pool, owner.id)
+    digest = await _message(pool, hallway, "Two timers have failed.")
+    small_talk = await _message(pool, hallway, "Morning.", role="user")
+    await pool.execute(
+        "INSERT INTO notices (check_name, finding_key, fingerprint, title, facts, "
+        "delivered_message_id) VALUES ('c', 'k', 'fp', 't', '{}'::jsonb, $1)",
+        digest,
+    )
+
+    stubs = await conversations.thread_reply_counts(pool, hallway)
+
+    assert stubs == {digest: 0}
+    assert small_talk not in stubs
+
+
+async def test_the_count_moves_once_the_room_is_spoken_in(owner_client, pool):
+    owner = _Person(await _owner(pool))
+    hallway = await _hallway(pool, owner.id)
+    digest = await _message(pool, hallway, "Two timers have failed.")
+    await pool.execute(
+        "INSERT INTO notices (check_name, finding_key, fingerprint, title, facts, "
+        "delivered_message_id) VALUES ('c', 'k', 'fp', 't', '{}'::jsonb, $1)",
+        digest,
+    )
+    room, _ = await conversations.open_thread(pool, owner, digest)
+    await _message(pool, room["id"], "which one?", role="user")
+    await _message(pool, room["id"], "the 7am backup", role="assistant")
+
+    assert await conversations.thread_reply_counts(pool, hallway) == {digest: 2}

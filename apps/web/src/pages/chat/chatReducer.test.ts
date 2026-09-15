@@ -1239,3 +1239,68 @@ describe('chatReducer — thinking', () => {
     expect(rows[rows.length - 1].thinking).toBe('')
   })
 })
+
+/**
+ * S24: a frame belongs to the conversation its stream was started for.
+ *
+ * Before threads there was one conversation on screen and every frame
+ * belonged to it. Now: stream in the hallway, tap a stub, and the hallway's
+ * remaining deltas would be appended to the ROOM's pending bubble — her
+ * answer about the grocery list arriving inside a room about a failing
+ * timer. Dropped by identity rather than by arrival order, because the owner
+ * can switch back and forth while both are mid-turn and no ordering rule
+ * survives that.
+ */
+describe('chatReducer — frames are keyed to their conversation', () => {
+  const inConversation = (id: string): ChatState =>
+    chatReducer(started(), {
+      type: 'event',
+      event: { type: 'meta', conversationId: id, model: 'm', turnId: 't1', agent: null },
+    })
+
+  it('drops a delta from a conversation that is no longer on screen', () => {
+    const state = inConversation('room-1')
+    const after = chatReducer(state, {
+      type: 'event',
+      event: { type: 'delta', text: 'from the hallway' },
+      conversationId: 'hallway',
+    })
+
+    expect(after).toBe(state)
+    const rowsAfter = messages(after)
+    expect(rowsAfter[rowsAfter.length - 1].text).not.toContain('from the hallway')
+  })
+
+  it('keeps a delta from the conversation that IS on screen', () => {
+    const state = inConversation('room-1')
+    const after = chatReducer(state, {
+      type: 'event',
+      event: { type: 'delta', text: 'about this room' },
+      conversationId: 'room-1',
+    })
+
+    const rows = messages(after)
+    expect(rows[rows.length - 1].text).toContain('about this room')
+  })
+
+  it('accepts a stream that started before the conversation had an id', () => {
+    // The first message of a brand-new chat: the id arrives on the meta
+    // frame, so there was nothing to key on and nothing it could belong to.
+    const after = chatReducer(started(), {
+      type: 'event',
+      event: { type: 'delta', text: 'hello' },
+      conversationId: null,
+    })
+    const rows = messages(after)
+    expect(rows[rows.length - 1].text).toContain('hello')
+  })
+
+  it('accepts an unkeyed event, so nothing that predates S24 breaks', () => {
+    const after = chatReducer(started(), {
+      type: 'event',
+      event: { type: 'delta', text: 'hello' },
+    })
+    const rows = messages(after)
+    expect(rows[rows.length - 1].text).toContain('hello')
+  })
+})
