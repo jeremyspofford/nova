@@ -317,9 +317,14 @@ export function ChatPage({
       {/* The header carries the title only now — the model indicator and the
           Clear control both moved to the control row by the input (ChatControls
           below), per the owner's ask. There is exactly one of each. */}
+      {/* Desktop only. On a phone the bottom tab bar already says "Chat", and
+          this header plus the top safe-area inset was 115px of chrome before
+          a single message — the owner's "too much wasted space" (2026-09-15).
+          Hidden rather than removed: the desktop has no tab bar to name the
+          page. */}
       <header
         data-testid="chat-header"
-        className="shrink-0 flex items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle"
+        className="hidden md:flex shrink-0 items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle"
       >
         <h1 className="text-h3 text-content-primary">Chat</h1>
       </header>

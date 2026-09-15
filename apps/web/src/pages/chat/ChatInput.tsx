@@ -300,6 +300,19 @@ export function ChatInput({
         }}
         className="glass-card rounded-3xl border border-border-subtle overflow-hidden"
       >
+        {/* The queue hint gets its own line only while it applies; it used to
+            share a permanent row with the send button, which put the button
+            UNDER the text and made a one-line composer ~120px tall on a
+            phone. The button now sits inline at the end of the text, the way
+            every phone messaging app does it. */}
+        {queueing && (
+          <div className="px-4 pt-3 -mb-1">
+            <span data-testid="will-queue" className="text-caption text-content-tertiary">
+              Nova is working — this will go next
+            </span>
+          </div>
+        )}
+        <div className="flex items-end gap-2 pr-2 pb-2">
         <textarea
           ref={textareaRef}
           value={input}
@@ -315,15 +328,9 @@ export function ChatInput({
           }
           aria-label="Message Nova"
           rows={1}
-          className="w-full bg-transparent resize-none text-content-primary placeholder:text-content-tertiary outline-none px-4 pt-4 pb-2"
+          className="flex-1 min-w-0 bg-transparent resize-none text-content-primary placeholder:text-content-tertiary outline-none px-4 py-3"
           style={{ minHeight: '44px', maxHeight: '240px', fontSize: '16px' }}
         />
-        <div className="flex items-center justify-end gap-2 px-3 pb-3 pt-1">
-          {queueing && (
-            <span data-testid="will-queue" className="text-caption text-content-tertiary">
-              Nova is working — this will go next
-            </span>
-          )}
           <button
             type="submit"
             disabled={!input.trim() || disabled}
