@@ -101,6 +101,13 @@ class Rung:
     channel: str
     verdict: str
     detail: str
+    #: The row this rung wrote, when it wrote one (S24). The chat rung
+    #: already READ THIS BACK to prove the delivery landed and then spent it
+    #: on an audit string — `f"message {id} in conversation {cid}"`. A room
+    #: hangs off a message, so S25's "talk about this" needs the id itself,
+    #: not a sentence containing it. Absent on every other channel: a device
+    #: push writes no message.
+    message_id: uuid.UUID | None = None
 
     def __post_init__(self) -> None:
         if self.verdict not in VERDICTS:
@@ -140,6 +147,21 @@ class Delivered:
     rungs: tuple[Rung, ...]
     reached: bool
     receipt: dict
+
+    @property
+    def message_id(self) -> uuid.UUID | None:
+        """The chat row this delivery wrote, or None (S24).
+
+        Read off the chat rung rather than stored beside it, so it cannot
+        disagree with the rung that actually did the writing. None whenever
+        the chat rung failed — a notice that was never delivered has no room
+        to open, and the Inbox has to say so rather than offer a dead
+        control.
+        """
+        for rung in self.rungs:
+            if rung.channel == CHAT:
+                return rung.message_id
+        return None
 
     def __post_init__(self) -> None:
         chat_rungs = [rung for rung in self.rungs if rung.channel == CHAT]
@@ -276,7 +298,12 @@ async def _chat_rung(
         return Rung(CHAT, FAILED, f"could not read the chat row back: {peers.reason(exc)}")
     if message_id is None:
         return Rung(CHAT, FAILED, NOT_READ_BACK)
-    return Rung(CHAT, OK, f"message {message_id} in conversation {conversation_id}")
+    return Rung(
+        CHAT,
+        OK,
+        f"message {message_id} in conversation {conversation_id}",
+        message_id=message_id,
+    )
 
 
 # -- the device rung -----------------------------------------------------------

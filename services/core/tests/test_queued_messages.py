@@ -380,11 +380,17 @@ async def test_a_message_accepted_into_a_conversation_that_just_went_free_still_
 
     calls = {"n": 0}
 
-    async def busy_once(conn, conversation_id):
+    async def busy_once(conn, person_id):
         calls["n"] += 1
         return calls["n"] == 1
 
-    monkeypatch.setattr(conversations, "conversation_busy", busy_once)
+    # `person_busy` since S24, not `conversation_busy`: the gate is per
+    # person now, because a thread is a different conversation and a
+    # conversation-scoped gate would let a room start a second turn on the
+    # one GPU while the hallway was still answering. The property under test
+    # is unchanged — a message accepted into a conversation nothing will
+    # free must still run.
+    monkeypatch.setattr(conversations, "person_busy", busy_once)
 
     resp = await owner_client.post("/api/v1/chat/stream", json={"message": "do not strand me"})
     assert resp.status_code == 202, resp.text

@@ -50,6 +50,38 @@ async def conversation_busy(
     return any(row["id"] in traces.INFLIGHT or row["id"] in traces.DOING for row in rows)
 
 
+async def person_busy(
+    pool: asyncpg.Pool | asyncpg.Connection,
+    person_id: uuid.UUID,
+) -> bool:
+    """Is ANY turn for this PERSON running right now — hallway or any room?
+
+    S24 widened the gate from the conversation to the person, and the reason
+    is one GPU. `conversation_busy` is exactly right about interleaving in
+    one transcript, and exactly wrong the moment a second conversation can
+    be on screen: a thread is a different conversation, so typing in a room
+    while the hallway is mid-turn would start a SECOND concurrent turn on
+    one card. That is the contention this project spent 2026-09-12 and
+    09-14 measuring — self-inflicted, and by a feature added to make things
+    calmer.
+
+    Same semantics as before, wider scope: the second message QUEUES, which
+    is what S15 already does for a second message in one conversation, and
+    the queued chip that shows it already exists.
+
+    Derived the same way: `turns` joined against the live INFLIGHT/DOING
+    maps, so every kind of turn counts — chat, scheduled, beat, agent — and
+    nothing has to remember to join a set.
+    """
+    rows = await pool.fetch(
+        "SELECT t.id FROM turns t "
+        "JOIN conversations c ON c.id = t.conversation_id "
+        "WHERE c.person_id = $1 AND t.status IS NULL",
+        person_id,
+    )
+    return any(row["id"] in traces.INFLIGHT or row["id"] in traces.DOING for row in rows)
+
+
 async def pending_turn_id(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> uuid.UUID | None:
     """WHICH turn of this conversation is running here, if any (S15).
 
@@ -121,10 +153,20 @@ async def has_pending_turn(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> bo
 
 
 async def active_conversation(pool: asyncpg.Pool, person: Person) -> asyncpg.Record:
-    """The person's active conversation, created on first ask."""
+    """The person's active conversation — THE HALLWAY, created on first ask.
+
+    `parent_message_id IS NULL` is what keeps a thread from becoming it, and
+    it is a database predicate rather than a rule anybody has to remember.
+    Without it the newest row wins this query, a thread is the newest row the
+    moment one is opened, and `delivery.py`'s chat rung would deliver the
+    next digest into whichever side room was opened last — where he is not
+    looking. `active` defaults true, so a thread would have qualified on
+    every other term.
+    """
     row = await pool.fetchrow(
         "SELECT id, title, created_at FROM conversations "
-        "WHERE person_id = $1 AND active ORDER BY created_at DESC LIMIT 1",
+        "WHERE person_id = $1 AND active AND parent_message_id IS NULL "
+        "ORDER BY created_at DESC LIMIT 1",
         person.id,
     )
     if row is not None:
@@ -337,3 +379,109 @@ async def clear_conversation(
     await owned_conversation(pool, person, conversation_id)
     cleared = await clear_messages(pool, conversation_id)
     return {"id": str(conversation_id), "cleared": cleared}
+
+
+# ── Threads (S24) ────────────────────────────────────────────────────────
+#
+# A thread is a conversation that hangs off a message: a room off the
+# hallway. The shape was chosen because ISOLATION IS FREE — a turn's history
+# is `WHERE m.conversation_id = $1`, and a thread is a conversation, so its
+# history is already only its own messages. Nothing in prompt assembly has
+# to remember to exclude the hallway, which means nothing can forget to.
+#
+# What a room is FOR: a long exchange about one subject in the hallway
+# pushes everything else out of the history window, and the digest that
+# started it ages out fastest because it is one message among many. A room
+# keeps that exchange in its own window for as long as the subject is live.
+
+
+async def open_thread(
+    pool: asyncpg.Pool, person: Person, message_id: uuid.UUID
+) -> tuple[asyncpg.Record, bool]:
+    """The room off this message, creating it on first ask. (row, created).
+
+    IDEMPOTENT, and enforced by the partial unique index rather than by
+    checking first: two taps on a stub race each other, and a check-then-
+    insert would let both win. `ON CONFLICT` makes the second one a read.
+
+    The message must be in a conversation this person owns — someone else's
+    is a 404, the same answer `owned_conversation` gives, because "not
+    yours" and "not there" are not distinctions this API makes.
+    """
+    parent = await pool.fetchrow(
+        "SELECT m.id, m.conversation_id FROM messages m "
+        "JOIN conversations c ON c.id = m.conversation_id "
+        "WHERE m.id = $1 AND c.person_id = $2",
+        message_id,
+        person.id,
+    )
+    if parent is None:
+        raise HTTPException(status_code=404, detail=f"no message {message_id} here")
+
+    row = await pool.fetchrow(
+        "INSERT INTO conversations (person_id, parent_message_id) VALUES ($1, $2) "
+        "ON CONFLICT (parent_message_id) WHERE parent_message_id IS NOT NULL "
+        "DO NOTHING RETURNING id, title, created_at, parent_message_id",
+        person.id,
+        message_id,
+    )
+    if row is not None:
+        return row, True
+    existing = await pool.fetchrow(
+        "SELECT id, title, created_at, parent_message_id FROM conversations "
+        "WHERE parent_message_id = $1",
+        message_id,
+    )
+    # Not reachable through the index, but a None here would be a silent
+    # None returned to a caller that is about to render a room.
+    if existing is None:  # pragma: no cover - the index makes this impossible
+        raise HTTPException(
+            status_code=409,
+            detail=f"message {message_id} has no room and one could not be opened",
+        )
+    return existing, False
+
+
+async def thread_reply_counts(
+    pool: asyncpg.Pool, conversation_id: uuid.UUID
+) -> dict[uuid.UUID, int]:
+    """Per parent message in this conversation, how many messages its room
+    holds — `{message_id: count}`, and only for messages that have a room.
+
+    DERIVED, never stored. A stored count drifts the first time a message is
+    written by a path that forgets to bump it, and a stub that says "3
+    replies" over an empty room is worse than no stub. The count is what the
+    stub shows instead of the latest line: previewing the newest reply would
+    re-introduce exactly the interleaving rooms exist to remove.
+    """
+    rows = await pool.fetch(
+        "SELECT c.parent_message_id AS parent, count(m.id) AS replies "
+        "FROM conversations c "
+        "LEFT JOIN messages m ON m.conversation_id = c.id "
+        "WHERE c.parent_message_id IN (SELECT id FROM messages WHERE conversation_id = $1) "
+        "GROUP BY c.parent_message_id",
+        conversation_id,
+    )
+    return {row["parent"]: row["replies"] for row in rows}
+
+
+@router.post("/{conversation_id}/messages/{message_id}/thread")
+async def open_thread_route(
+    conversation_id: uuid.UUID,
+    message_id: uuid.UUID,
+    person: Person = Depends(identity.require_person),
+) -> dict:
+    """Open (or re-open) the room off one message.
+
+    `conversation_id` is in the path because the client has it and because
+    ownership is checked against it — the message must live in a
+    conversation this person owns, which `open_thread` verifies by join.
+    """
+    pool = await db.get_pool()
+    await owned_conversation(pool, person, conversation_id)
+    row, created = await open_thread(pool, person, message_id)
+    return {
+        **as_json(row),
+        "parent_message_id": str(row["parent_message_id"]),
+        "created": created,
+    }

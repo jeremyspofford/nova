@@ -681,6 +681,87 @@ def _past_turn_marker(row) -> str | None:
     return template.format(when=when)
 
 
+# ── The thread seed (S24) ────────────────────────────────────────────────
+
+THREAD_OPENING = (
+    "This is a side conversation about one message from the main chat. The "
+    "message is below. The rest of the main conversation is NOT here — if "
+    "something from it matters, he will say so, the same way a person does "
+    "stepping into a side room. Everything else is unchanged: your tools, "
+    "your memory of him, what you know."
+)
+
+THREAD_FACTS_OPENING = (
+    "These are the facts the check itself recorded for what that message "
+    "reported. They are rows written by code, not a summary of anything:"
+)
+
+
+async def thread_seed(conn, conversation_id: uuid.UUID) -> list[dict]:
+    """What a room starts from: `[parent message] + [the notice facts]`.
+
+    Empty for a hallway conversation, which is every conversation with no
+    `parent_message_id` — so this costs one indexed lookup and changes
+    nothing for an ordinary turn.
+
+    WHY THE FACTS ARE HERE AND NOT JUST THE MESSAGE. The parent is model
+    PROSE. A check composes its finding in code — the timer id, the model
+    name, the consecutive failure count — and those reach the digest as rows
+    through `digest_brief`, surviving into the message only if the model
+    chose to write them down. Open a room off a digest and ask "which timer
+    is failing?" and she would have had her own sentence and nothing else.
+    These are the rows, read back through `delivered_message_id`.
+
+    It is not a summary, so it does not hit this design's own objection to
+    summaries: nothing generated it. A digest carries several notices and
+    they all come, because a digest IS one message about several findings —
+    a room opened from it is a room about the digest.
+    """
+    parent = await conn.fetchrow(
+        "SELECT p.role, p.content FROM conversations c "
+        "JOIN messages p ON p.id = c.parent_message_id "
+        "WHERE c.id = $1",
+        conversation_id,
+    )
+    if parent is None:
+        return []
+    seed: list[dict] = [
+        {"role": "system", "content": THREAD_OPENING},
+        {"role": parent["role"], "content": parent["content"]},
+    ]
+    rows = await conn.fetch(
+        "SELECT check_name, title, facts FROM notices "
+        "WHERE delivered_message_id = (SELECT parent_message_id FROM conversations WHERE id = $1) "
+        "ORDER BY first_seen_at",
+        conversation_id,
+    )
+    if rows:
+        seed.append({"role": "system", "content": _facts_block(rows)})
+    return seed
+
+
+def _facts_block(rows: Sequence) -> str:
+    """The notices' own title and facts, one block, composed here in code.
+
+    `facts` is jsonb written by the check. Rendered as `key: value` lines
+    rather than raw JSON because the model reads prose better than it reads
+    braces, and because a key named in the text is a key she can quote back.
+    """
+    lines = [THREAD_FACTS_OPENING]
+    for row in rows:
+        lines.append(f"\n{row['check_name']}: {row['title']}")
+        facts = row["facts"]
+        if isinstance(facts, str):
+            try:
+                facts = json.loads(facts)
+            except json.JSONDecodeError:
+                facts = None
+        if isinstance(facts, dict):
+            for key, value in facts.items():
+                lines.append(f"  {key}: {value}")
+    return "\n".join(lines)
+
+
 def history_window(
     newest_first: Sequence, budget: int = HISTORY_CHAR_BUDGET
 ) -> list[dict[str, str]]:
@@ -4807,11 +4888,19 @@ async def _run_turn(
             # stop note above reads DOING.
             traces.clear_stop(turn.id)
             emit(None)
-            # The conversation is free, so whatever the owner sent while it was
-            # busy can run now (S15). AFTER the sentinel and the discards, so
-            # the drain's own gate sees this turn as finished and a reader that
-            # saw [DONE] has already seen the record. Its own task, so a drain
-            # that cannot start cannot take this turn's ending down with it.
+            # The PERSON is free, so whatever they sent while she was busy can
+            # run now (S15, widened by S24). AFTER the sentinel and the
+            # discards, so the drain's own gate sees this turn as finished and
+            # a reader that saw [DONE] has already seen the record. Its own
+            # task, so a drain that cannot start cannot take this turn's ending
+            # down with it.
+            #
+            # The queue it drains may belong to a DIFFERENT conversation: the
+            # gate is per person, so a message typed in a room while the
+            # hallway was answering waits for the hallway's turn to end, and
+            # that ending only knows its own conversation. Asking the person's
+            # queues in `seq` order is what keeps a room's message from
+            # waiting for a room that may never be spoken in again.
             _spawn(drain_queue(app, pool, conversation_id))
 
 
@@ -4932,6 +5021,13 @@ async def _open_turn(
             None if agent is None else agent.name,
         )
     )
+    # S24: a room starts from the message it hangs off. Prepended AFTER the
+    # window is trimmed, on purpose — the seed is what the room is ABOUT, so
+    # it must not be the first thing a long exchange evicts. The query above
+    # needs no thread term: a thread IS a conversation, so `WHERE
+    # m.conversation_id = $1` already excludes the hallway. That is the whole
+    # argument for this shape — isolation nobody can forget to apply.
+    history = [*await thread_seed(conn, conversation_id), *history]
 
     if agent is None:
         model = await settings_store.read_value(conn, "chat.model")
@@ -5074,17 +5170,37 @@ async def drain_queue(app, pool: asyncpg.Pool, conversation_id: uuid.UUID) -> No
     # below is not lost: the turn that accepted it is still running, so its own
     # ending drains it.
     if not await queued.any_waiting(pool, conversation_id):
-        return
+        # Nothing here — but the gate is per person (S24), so this turn's
+        # ending may be what releases a message queued in another of their
+        # conversations. One indexed read, and only when this conversation's
+        # own queue was empty.
+        person_id = await pool.fetchval(
+            "SELECT person_id FROM conversations WHERE id = $1", conversation_id
+        )
+        elsewhere = (
+            None if person_id is None else await queued.next_waiting_conversation(pool, person_id)
+        )
+        if elsewhere is None:
+            return
+        conversation_id = elsewhere
     row = None
     started = None
     try:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 await queued.hold_conversation(conn, conversation_id)
-                if await conversations.conversation_busy(conn, conversation_id):
-                    # Someone asked something new in the gap. That turn's own
-                    # ending will drain this row; two at once is the thing the
-                    # gate exists to prevent.
+                person_id = await conn.fetchval(
+                    "SELECT person_id FROM conversations WHERE id = $1", conversation_id
+                )
+                if person_id is not None:
+                    await queued.hold_person(conn, person_id)
+                    if await conversations.person_busy(conn, person_id):
+                        # Someone asked something new in the gap — anywhere.
+                        # That turn's own ending will drain this row; two at
+                        # once is the thing the gate exists to prevent, and
+                        # since S24 "two at once" means two for one PERSON.
+                        return
+                elif await conversations.conversation_busy(conn, conversation_id):
                     return
                 row = await queued.claim_next(conn, conversation_id)
                 if row is None:
@@ -5157,8 +5273,15 @@ async def chat_stream(
                 # is acted on. The check used to be separated from the turn's
                 # registration by seven round trips, which is all the room a
                 # double tap needs to start two turns at once.
+                # PER PERSON, not per conversation (S24). A thread is a
+                # different conversation, so a conversation-scoped gate would
+                # let a message typed in a room start a second turn while the
+                # hallway is still answering — two turns, one GPU. Both locks
+                # are taken because both invariants still hold: one turn per
+                # person, and no two sends racing inside one transcript.
+                await queued.hold_person(conn, person.id)
                 await queued.hold_conversation(conn, conversation_id)
-                if await conversations.conversation_busy(conn, conversation_id):
+                if await conversations.person_busy(conn, person.id):
                     row = await queued.enqueue(conn, conversation_id, person.id, message)
                     ahead = len(await queued.waiting(conn, conversation_id)) - 1
                     accepted = queued.as_json(row, ahead=max(ahead, 0))

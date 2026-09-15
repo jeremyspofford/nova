@@ -62,6 +62,51 @@ async def hold_conversation(conn: asyncpg.Connection, conversation_id: uuid.UUID
     await conn.execute("SELECT pg_advisory_xact_lock($1)", _lock_key(conversation_id))
 
 
+def _person_lock_key(person_id: uuid.UUID) -> int:
+    """The same trick, for a PERSON.
+
+    XORed with a constant so a person's key can never collide with a
+    conversation's — both spaces are derived from uuid bytes into the one
+    advisory-lock namespace postgres has, and a collision would be two
+    unrelated things silently serialising on each other.
+    """
+    return int.from_bytes(person_id.bytes[:8], "big", signed=True) ^ 0x5324_5324_5324_5324
+
+
+async def hold_person(conn: asyncpg.Connection, person_id: uuid.UUID) -> None:
+    """Take this PERSON's lock for the caller's transaction (S24).
+
+    The conversation lock above is exactly right about interleaving within
+    one transcript, and not enough once a second conversation can be on
+    screen: a room and the hallway take DIFFERENT conversation locks, so two
+    sends could each hold their own and both read "not busy". One card, two
+    turns — the contention this project spent two days measuring, caused by
+    a feature meant to make things calmer.
+
+    Same rule as the conversation lock: take it, decide, commit. Never held
+    across a model turn.
+    """
+    await conn.execute("SELECT pg_advisory_xact_lock($1)", _person_lock_key(person_id))
+
+
+async def next_waiting_conversation(pool: asyncpg.Pool, person_id: uuid.UUID) -> uuid.UUID | None:
+    """Which of this person's conversations has the oldest waiting message.
+
+    The gate is per person (S24), so the DRAIN has to be too: a message
+    queued in a room while the hallway was busy is drained by the hallway
+    turn's ending, and that ending only knows its own conversation. Ordered
+    by `seq` so the queue stays first-in-first-out across rooms — he typed
+    them in an order and that order is the only one that is not a surprise.
+    """
+    return await pool.fetchval(
+        "SELECT q.conversation_id FROM queued_messages q "
+        "JOIN conversations c ON c.id = q.conversation_id "
+        "WHERE c.person_id = $1 AND q.claimed_at IS NULL "
+        "ORDER BY q.seq LIMIT 1",
+        person_id,
+    )
+
+
 async def enqueue(
     conn: asyncpg.Connection,
     conversation_id: uuid.UUID,
