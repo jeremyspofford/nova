@@ -1,5 +1,30 @@
 # Slice 23 — the card decides the context, not a constant
 
+> **PARKED 2026-09-15, by Jeremy: "this will be something we revisit in the
+> future, not now."**
+>
+> Nothing here is built. The spec is kept whole because the expensive part
+> is already done — everything below was MEASURED on this host rather than
+> reasoned about, and those numbers do not go stale while the hardware and
+> the model set stay the same. Picking this up later starts from evidence,
+> not from a blank page.
+>
+> The short version of what was learned, so a future reader does not have to
+> re-derive it:
+>
+> - Nobody chose the 32768 context; it is ollama's own default, and it is the
+>   most expensive number on the card.
+> - Context cost is per-model and differs ~2x between two models here, so a
+>   single global setting is wrong for one of them by construction.
+> - `num_ctx` is settable per request, but only on `/api/chat`; the gateway
+>   posts to `/v1/chat/completions`, which silently ignores it.
+> - KV in system RAM works and is not usable: 18x slower at a full cache.
+> - q8_0 KV costs ~12% throughput here and saves ~1 GB at 16k — not free, and
+>   its QUALITY cost on these models is still unmeasured.
+> - v3's `backend/app/local_context.py` already solved context sizing, and
+>   its docstring is the most valuable document involved.
+
+
 Branch `slice/s23` in `.worktrees/s23`, cut from `rebuild/v4` at 4af2ad8a.
 
 **Rewritten 2026-09-15** after Jeremy asked the better question: "could this
