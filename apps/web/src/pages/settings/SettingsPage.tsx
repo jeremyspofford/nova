@@ -6,6 +6,7 @@ import { useChatStore } from '../../stores/chat-store'
 import { getSettings, putSetting, settingValue, type SettingDef } from '../../lib/api'
 import { GeneralSection } from './GeneralSection'
 import { AppearanceSection } from './AppearanceSection'
+import { DisplayDiagnostics } from './DisplayDiagnostics'
 import { DEFAULT_PRESET, normalizePreset } from '../../lib/color-palettes'
 import { AccountSection } from './AccountSection'
 import { ModelsSection } from './ModelsSection'
@@ -141,6 +142,11 @@ export function SettingsPage() {
               storedPreset={storedPreset ?? DEFAULT_PRESET}
               onStored={preset => updateSettingValue('appearance.default_preset', preset)}
             />
+            {/* Reads the device, writes nothing. Here because every layout
+                defect this app has had lived in iOS standalone mode, which no
+                harness reproduces — so the numbers have to come from the
+                phone that looks wrong. */}
+            <DisplayDiagnostics />
             <ModelsSection
               chatModel={chatModel}
               onModelChanged={model => {
