@@ -65,6 +65,53 @@ auto` and logs `Flash Attention enabled`. Setting it changes nothing.
 server-level only, so it stays in compose — the one knob that genuinely is
 static configuration.
 
+## Can the KV cache live somewhere other than VRAM? (asked 2026-09-15)
+
+Yes, it works on this exact stack, and it is not usable. Measured, not argued.
+
+`LLAMA_ARG_KV_OFFLOAD=0` on the ollama container passes straight through to
+llama-server (ollama's `SetupLlamaServerCommandEnv` does `cmd.Env =
+os.Environ()` and overwrites only `LD_LIBRARY_PATH` and its own
+`LLAMA_ARG_FIT_TARGET`; llama.cpp reads `LLAMA_ARG_*` before CLI parsing, and
+ollama never passes the flag, so nothing overrides it). Confirmed live:
+`llama_kv_cache: CPU KV buffer size = 2304.00 MiB`.
+
+qwen3:8b, 16384 context, best of three at each point:
+
+    cache occupancy        KV on GPU      KV in system RAM      ratio
+    ~200 tokens (empty)    124 tok/s      52 tok/s              2.4x
+    ~12,300 tokens (full)   98 tok/s      5.5 tok/s             18x
+
+    VRAM at 16k ctx:       7.00 GB        4.75 GB               saves 2.25 GB
+
+**The penalty scales with what is IN the cache, not with the window's size.**
+That is the whole verdict: it is cheap exactly when you do not need it and
+collapses exactly when you do. A long conversation is precisely the case
+where you would want the memory back, and it is the case that runs at
+5 tok/s — a 200-token reply in 40 seconds.
+
+The mechanism, from llama.cpp's own source: cross-backend split inputs are
+re-copied on every graph compute (`ggml_backend_sched_compute_splits`), with
+no dirty-tracking, so the entire live K and V cross PCIe on every decode
+step. VRAM bandwidth (~936 GB/s) is replaced by PCIe (~25 GB/s). The
+maintainer's own summary on issue #19158: "you will need less VRAM but the
+processing will be slow."
+
+**A trap worth recording:** the first measurement here was taken with a
+33-token prompt and read 2.4x, and it was written up as "flat, does not get
+worse with context". It was flat because the cache was empty. The same test
+over a full cache is 18x. A throughput number measured on an empty cache says
+nothing about a real conversation.
+
+**This is NOT what happened on 2026-09-12.** That 270x collapse was the
+NVIDIA driver's system-memory fallback spilling under VRAM exhaustion —
+uncontrolled thrashing of whatever allocation lost. Deliberate KV placement
+is an orderly 18x tax. Same physical location, different regimes, and neither
+is acceptable.
+
+**Verdict: not a lever. Shrinking beats relocating, which is what the rest of
+this slice does.**
+
 ## The answer to his question: yes, and context is the better lever
 
 Swapping to a smaller model is the blunt version of this, and it should be
@@ -161,14 +208,45 @@ chunk all differ between the two, and S10's metering reads that chunk. It
 needs its own careful pass.
 
 **B. `gateway/app/context_fit.py`** — pure, given (prompt size, model's KV
-cost per 1k, free VRAM, floor and ceiling), returns a context step and a
+cost per token, free VRAM, floor and ceiling), returns a context step and a
 reason. Testable with plain numbers, no I/O, like `fit.py`.
 
-**C. The KV cost per model is MEASURED, not assumed.** The 2x difference
-between the 8B and the 27B is exactly what a hardcoded constant would get
-wrong. `/api/ps` reports `size_vram` at a known `context_length`, so two
-observations of a model give its slope. Recorded per model, derived from
-rows this system already writes — the S22 pattern.
+**MINE v3's `backend/app/local_context.py` FIRST.** It solved this problem
+in July 2026 and its docstring is the most valuable document in this slice.
+Per CLAUDE.md, mine the design, never the code. What it already knows:
+
+- **Every distinct window is a full model reload.** Measured: the same
+  prompt at 12,288 took 4.91 s cold and 0.39 s repeated, and one step to
+  16,384 cost 4.95 s again; that container logged 372 llama-server launches
+  across 12 window sizes in seven days, the slowest 271 s. **This kills
+  "size the context to the turn" as written above** — a free-running number
+  reloads the model nearly every turn. The answer is a short LADDER
+  (v3 used 8192/16384/32768/65536/131072), sticky, with the model's own
+  ceiling as the top rung.
+- **KV bytes/token is COMPUTED exactly**, not learned:
+  `full_attention_layers x head_count_kv x (key_length + value_length) x 2`,
+  verified byte-for-byte against `llama_kv_cache: size =` for every model on
+  that box. Learning it by subtraction (resident minus weights) is
+  structurally wrong — measured 2.39x under-estimate, because the compute
+  buffer, recurrent state and CPU-mapped weights land on the wrong side.
+- **A default constant is worse than nothing.** Its `200_000 B/token`
+  fallback priced gemma4:12b eleven times too high and silently disabled it.
+- **The floor is not an answer.** Returning 8192 when nothing fits asserts a
+  window VRAM does not support; on 2026-08-04 that made four of six models in
+  a tournament unanswerable. Nothing fitting must be reported as None, which
+  means "let ollama decide".
+- **A single `OLLAMA_CONTEXT_LENGTH` was DELETED on 2026-07-31** for exactly
+  the reason measured here: one number is wrong in both directions at once.
+- **Check the answer after the fact.** `note_spill` reads /api/ps after a
+  load and lowers the ceiling when the model spilled. A wrong guess costs one
+  slow turn and corrects itself.
+
+**C. KV quantisation is the free win.** `OLLAMA_KV_CACHE_TYPE=q8_0` halves
+the cache, and decode speed is essentially unaffected — llama.cpp discussion
+#23470 measured a 27B at 850.8 tok/s (bf16), 851.1 (q8_0), 847.3 (q8_0/q5_0)
+and 849.4 (q8_0/q4_0). Unlike relocation, this costs bandwidth nothing: the
+cache is smaller, not further away. Quality at q8_0 still wants a corpus run
+before it becomes the default.
 
 **D. The ladder, derived.** Same family, next smaller measured size, from
 the live catalogue. No hand-kept list to go stale.
