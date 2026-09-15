@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { AppLayout } from './AppLayout'
 import { AuthProvider } from '../../stores/auth-store'
@@ -44,7 +44,7 @@ function setViewport(width: 'mobile' | 'desktop') {
   )
 }
 
-function renderShell() {
+function renderShell(unseen = 0) {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
@@ -52,7 +52,7 @@ function renderShell() {
       const body = url.includes('/auth/state')
         ? { has_users: true }
         : url.includes('/notices')
-          ? { notices: [], unseen_count: 0 }
+          ? { notices: [], unseen_count: unseen }
           : { person: { id: 'p1', name: 'Ada', role: 'owner' } }
       return {
         ok: true,
@@ -75,43 +75,89 @@ function renderShell() {
   )
 }
 
-/** The bottom tab bar's own landmark — MobileNav renders a <nav>. */
-function bottomNav(): HTMLElement | null {
-  return document.querySelector('nav.md\\:hidden')
+/** The phone's way out of chat. Was a bottom tab bar until 2026-09-15; now
+ *  a left-edge handle, because the bar was pinned to an edge this app could
+ *  not reliably control on iOS. */
+function edgeHandle(): HTMLElement | null {
+  return document.querySelector('[data-testid="edge-handle"]')
 }
 
 beforeEach(() => localStorage.clear())
 afterEach(() => vi.unstubAllGlobals())
 
 describe('AppLayout — which nav renders', () => {
-  it('renders the bottom nav on a phone', async () => {
+  it('renders the edge handle on a phone', async () => {
     setViewport('mobile')
     renderShell()
     await screen.findByText('page')
 
-    expect(bottomNav(), 'a phone must get the bottom tab bar').not.toBeNull()
+    expect(edgeHandle(), 'a phone must get a way out of chat').not.toBeNull()
   })
 
-  it('does not render the bottom nav on a desktop', async () => {
+  it('does not render the phone nav on a desktop', async () => {
     // It would be CSS-hidden by `md:hidden` anyway, but rendering a nav that
-    // can never be seen is how the inversion stayed invisible for so long:
-    // it "worked" everywhere and appeared nowhere.
+    // can never be seen is how the 2026-08-27 inversion stayed invisible for
+    // three weeks: it "worked" everywhere and appeared nowhere.
     setViewport('desktop')
     renderShell()
     await screen.findByText('page')
 
-    expect(bottomNav(), 'a desktop must not render the bottom tab bar').toBeNull()
+    expect(edgeHandle(), 'a desktop has the sidebar and must not render this').toBeNull()
   })
 
-  it('the phone nav offers the More control that reaches Settings', async () => {
-    // The owner could not find Settings on his phone. Settings lives in a
-    // labelled nav section, which MobileNav tucks into the "More" drawer —
-    // so if this control is missing, Settings is unreachable on mobile even
-    // when the bar renders.
+  it('the handle opens the drawer, which is how Settings is reached', async () => {
+    // The owner could not find Settings on his phone, and later could not
+    // get OUT of the drawer. Settings lives in a labelled nav section, which
+    // the drawer carries — so the handle is the whole route to it.
     setViewport('mobile')
     renderShell()
     await screen.findByText('page')
 
-    expect(screen.getByRole('button', { name: /more/i })).toBeTruthy()
+    fireEvent.click(edgeHandle()!)
+
+    const drawer = await screen.findByTestId('mobile-drawer')
+    // Scoped to the drawer: the desktop sidebar renders its own Settings
+    // link into the same DOM, so an unscoped query matches both.
+    expect(within(drawer).getByRole('link', { name: /settings/i })).toBeTruthy()
+    // And a way back out, which the drawer lacked visually when its header
+    // was drawn under the status bar.
+    expect(within(drawer).getByText('Menu')).toBeTruthy()
+  })
+
+  it('opens on a rightward swipe from the edge', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    const handle = edgeHandle()!
+
+    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
+    fireEvent.touchMove(handle, { touches: [{ clientX: 60, clientY: 404 }] })
+
+    expect(await screen.findByTestId('mobile-drawer')).toBeTruthy()
+  })
+
+  it('does not open when the touch is really a scroll', async () => {
+    // A drag that travels further down than across is the page scrolling,
+    // not the drawer opening — otherwise the menu springs open whenever a
+    // scroll happens to start on the handle.
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    const handle = edgeHandle()!
+
+    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
+    fireEvent.touchMove(handle, { touches: [{ clientX: 30, clientY: 300 }] })
+
+    expect(screen.queryByTestId('mobile-drawer')).toBeNull()
+  })
+
+  it('carries the unseen count, which the tab bar used to show', async () => {
+    // Removing the bar removed the only signal that anything needs him, so
+    // the number moves onto the handle or it is lost.
+    setViewport('mobile')
+    renderShell(4)
+    await screen.findByText('page')
+
+    expect(await screen.findByTestId('edge-handle-badge')).toBeTruthy()
   })
 })

@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { Ellipsis, X } from 'lucide-react'
+import { EllipsisVertical, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -23,6 +23,10 @@ export const moreItems: NavSection[] = navSections.filter(section => section.lab
 
 const SURFACE_PRESET: SurfacePreset = 'advanced'
 
+/** How far right a touch must travel to count as opening the drawer. Short
+ *  enough to feel immediate, long enough that a tap is a tap. */
+const SWIPE_OPEN_PX = 24
+
 export function MobileNav() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const location = useLocation()
@@ -42,46 +46,101 @@ export function MobileNav() {
     section.items.some(item => isActive(item.to)),
   )
 
-  const visibleTabs = filterNavItemsByPreset(primaryTabs, SURFACE_PRESET)
-    .filter(tab => hasMinRole(userRole, tab.minRole))
+  // Swipe-to-open. Deliberately small and explicit rather than a gesture
+  // library: a touch that starts on the handle and travels right by more
+  // than it travels down is an open. The vertical test is what stops a
+  // scroll that happens to begin on the handle from opening the drawer.
+  // The handle's count is the INBOX item's own badge state, derived through
+  // the same helper the sidebar uses — one source, so the two surfaces over
+  // one nav config cannot disagree about what is waiting.
+  const inboxItem = moreItems
+    .flatMap(section => section.items)
+    .find(item => item.badge === 'unseen_notices')
+  const badge = inboxItem
+    ? navBadgeState(inboxItem, unseen)
+    : { count: null, title: undefined }
+
+  const drag = useRef<{ x: number; y: number } | null>(null)
+
+  const onEdgeTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0]
+    drag.current = { x: t.clientX, y: t.clientY }
+  }
+
+  const onEdgeTouchMove = (e: React.TouchEvent) => {
+    if (!drag.current) return
+    const t = e.touches[0]
+    const dx = t.clientX - drag.current.x
+    const dy = Math.abs(t.clientY - drag.current.y)
+    if (dx > SWIPE_OPEN_PX && dx > dy) {
+      drag.current = null
+      setDrawerOpen(true)
+    }
+  }
+
+  const onEdgeTouchEnd = () => {
+    drag.current = null
+  }
+
 
   return (
     <>
-      {/* Bottom tab bar */}
-      <nav className={clsx(
-        'md:hidden fixed bottom-0 left-0 right-0 z-40 bg-surface border-t border-border-subtle pb-[var(--nova-safe-bottom,0px)] glass-nav dark:border-white/[0.06] transition-transform duration-fast',
-        hidden && 'translate-y-full',
-      )}>
-        <div className="flex items-center justify-around h-14">
-          {visibleTabs.map(tab => {
-            const Icon = tab.icon
-            const active = isActive(tab.to)
-            return (
-              <NavLink
-                key={tab.to}
-                to={tab.to}
-                className={clsx(
-                  'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-fast',
-                  active ? 'text-accent' : 'text-content-tertiary',
-                )}
-              >
-                <Icon className="w-5 h-5" />
-                <span className="text-micro">{tab.label}</span>
-              </NavLink>
-            )
-          })}
-          <button
-            onClick={() => setDrawerOpen(true)}
-            className={clsx(
-              'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors duration-fast',
-              moreActive ? 'text-accent' : 'text-content-tertiary',
-            )}
-          >
-            <Ellipsis className="w-5 h-5" />
-            <span className="text-micro">More</span>
-          </button>
-        </div>
-      </nav>
+      {/* The EDGE HANDLE, replacing a two-item bottom tab bar (2026-09-15).
+          Three reasons it moved, in order of weight:
+
+          1. The bar was pinned to the one edge this app has repeatedly failed
+             to control. On the owner's iPhone the web view is shorter than
+             the screen, so a dead strip sits below anything at bottom:0 —
+             four attempts did not fix it. Nothing is pinned there now, so the
+             strip is background rather than a visible defect.
+          2. One of its two items was "Chat", which on a phone is always the
+             current page. It cost ~90px of a 852px screen for one useful tap.
+          3. It carried the unseen-notice count, which is the only signal that
+             anything needs him — so that count moves onto the handle rather
+             than being lost.
+
+          The handle is BOTH the gesture's affordance and a tap target. The
+          owner chose the swipe knowing it is the least discoverable option;
+          iOS may also claim a left-edge swipe for its own back gesture in a
+          standalone app, which this cannot override. The tap is therefore the
+          path that is guaranteed to work, and the swipe is the fast one. */}
+      <button
+        type="button"
+        aria-label={badge.count ? `Open menu, ${badge.count} waiting` : 'Open menu'}
+        title={badge.title}
+        data-testid="edge-handle"
+        onClick={() => setDrawerOpen(true)}
+        onTouchStart={onEdgeTouchStart}
+        onTouchMove={onEdgeTouchMove}
+        onTouchEnd={onEdgeTouchEnd}
+        className={clsx(
+          'md:hidden fixed left-0 z-40 flex items-center justify-center',
+          // A grip down the left edge: 28px of visible tab, but 44px of
+          // touch target (Apple's minimum) bled off-screen to the left via
+          // the negative margin, so it is easy to hit and quiet to look at.
+          // Vertically centred, so it is reachable whichever hand holds the
+          // phone and it never collides with the composer.
+          'top-1/2 -translate-y-1/2 h-20 w-[44px] -ml-4 pl-4',
+          'rounded-r-xl bg-surface-elevated/70 border border-l-0 border-border-subtle',
+          'backdrop-blur transition-transform duration-fast active:scale-95',
+          hidden && '-translate-x-full',
+        )}
+      >
+        <span className="relative flex items-center justify-center">
+          <EllipsisVertical
+            size={18}
+            className={moreActive ? 'text-accent' : 'text-content-tertiary'}
+          />
+          {badge.count !== null && (
+            // Pinned to the grip's top-right rather than stacked under the
+            // dots: the count is the only signal that anything needs him, and
+            // stacked it read as a separate floating object.
+            <span data-testid="edge-handle-badge" className="absolute -top-3 -right-1">
+              <NavCountBadge count={badge.count} compact />
+            </span>
+          )}
+        </span>
+      </button>
 
       {/* Full-screen drawer */}
       {drawerOpen && (
@@ -90,7 +149,7 @@ export function MobileNav() {
            — the title and the only way out — was drawn under the status bar,
            and the owner was trapped in the drawer (2026-09-15). Every
            full-screen overlay pads both insets itself. */
-        <div className="md:hidden fixed inset-0 z-50 bg-surface-root dark:bg-transparent glass-overlay animate-fade-in pt-[var(--nova-safe-top,0px)] pb-[var(--nova-safe-bottom,0px)]">
+        <div data-testid="mobile-drawer" className="md:hidden fixed inset-0 z-50 bg-surface-root dark:bg-transparent glass-overlay animate-fade-in pt-[var(--nova-safe-top,0px)] pb-[var(--nova-safe-bottom,0px)]">
           <div className="flex items-center justify-between px-4 h-14 border-b border-border-subtle">
             <span className="text-h3 text-content-primary">Menu</span>
             <button

@@ -370,13 +370,10 @@ export function ChatPage({
         </div>
       </div>
 
-      {/* The bottom padding must clear the MOBILE NAV as well as the home
-          indicator. MobileNav is `fixed bottom-0` at h-14 (3.5rem) plus its
-          own safe-area padding, so a composer that pads only for the inset
-          sits UNDER the tab bar — which is what the owner saw on 2026-09-15:
-          "Chat" and "More" drawn over the model picker. `md:pb-4` still wins
-          on desktop, where no tab bar renders. */}
-      <div className="shrink-0 w-full px-2 md:px-8 pb-[calc(3.5rem+max(var(--nova-safe-bottom,0px),0.5rem))] md:pb-4">
+      {/* Only the home indicator to clear now: the bottom tab bar was
+          replaced by a left-edge handle on 2026-09-15, so nothing is pinned
+          across the bottom and the composer reclaims its 3.5rem. */}
+      <div className="shrink-0 w-full px-2 md:px-8 pb-[max(var(--nova-safe-bottom,0px),0.5rem)] md:pb-4">
         <div className="mx-auto max-w-none md:max-w-3xl space-y-1.5">
           {/* Stop (S15). Shown whenever a turn is in flight — whether this tab
               is streaming it or found it already running after a reload — and
