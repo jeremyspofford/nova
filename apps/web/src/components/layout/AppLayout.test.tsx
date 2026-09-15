@@ -4,6 +4,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { AppLayout } from './AppLayout'
 import { AuthProvider } from '../../stores/auth-store'
 import { ThemeProvider } from '../../stores/theme-store'
+import { navSections } from './Sidebar'
 
 /**
  * Which navigation surface renders, at which width.
@@ -177,6 +178,95 @@ describe('AppLayout — which nav renders', () => {
     fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
     fireEvent.touchMove(handle, { touches: [{ clientX: 260, clientY: 404 }] })
     fireEvent.touchEnd(handle)
+
+    expect(await screen.findByTestId('mobile-drawer')).toBeTruthy()
+  })
+
+  it('carries a route back to Chat, which is the whole point of a menu', async () => {
+    // THE 2026-09-15 TRAP. The drawer used to render `moreItems` — the
+    // LABELLED nav sections. "Chat" lives in the unlabelled Core section, so
+    // it was never in the drawer; the bottom tab bar carried it. Deleting
+    // that bar therefore deleted the only route back, and the owner had to
+    // force-quit the app to get out of Settings: "I don't have a way to
+    // actually navigate to the chat window again."
+    //
+    // Nothing caught it. MobileNav.test.ts pins that every Sidebar route
+    // appears in `primaryTabs` OR `moreItems` — which stayed true, because
+    // the lists were fine. What changed was which list the drawer RENDERS.
+    // So the pin has to be on the rendered DOM, not on the config.
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.click(edgeHandle()!)
+    const drawer = await screen.findByTestId('mobile-drawer')
+
+    expect(
+      within(drawer).getByRole('link', { name: /chat/i }).getAttribute('href'),
+    ).toBe('/chat')
+  })
+
+  it('every Sidebar route is in the drawer, since the drawer is now the only nav', async () => {
+    // Generalises the case above: with the tab bar gone there is exactly one
+    // mobile surface, so anything missing from it is unreachable on a phone.
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.click(edgeHandle()!)
+    const drawer = await screen.findByTestId('mobile-drawer')
+    const hrefs = within(drawer)
+      .getAllByRole('link')
+      .map(a => a.getAttribute('href'))
+
+    for (const to of navSections.flatMap(s => s.items.map(i => i.to))) {
+      expect(hrefs, `${to} is unreachable on a phone`).toContain(to)
+    }
+  })
+
+  it('leaves the grip on the panel edge, as the way to push it shut', async () => {
+    // The owner's call (2026-09-15): "leave that small handle there on the
+    // menu bar so it's showing the user that you can drag it close." It used
+    // to fade to opacity-0 when open, so the only way out was the X or the
+    // backdrop — neither of which says "drag me".
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.click(edgeHandle()!)
+    await screen.findByTestId('mobile-drawer')
+
+    const grip = edgeHandle()
+    expect(grip, 'the grip must survive opening').not.toBeNull()
+    expect(grip!.className).not.toContain('pointer-events-none')
+    expect(grip!.getAttribute('aria-label')).toMatch(/close/i)
+  })
+
+  it('a tap on the open grip closes it', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.click(edgeHandle()!)
+    await screen.findByTestId('mobile-drawer')
+    fireEvent.click(edgeHandle()!)
+
+    await waitFor(() => expect(screen.queryByTestId('mobile-drawer')).toBeNull())
+  })
+
+  it('a drag does not have its own click undo it', async () => {
+    // A touch sequence ends with a synthetic click. With the grip toggling
+    // rather than only opening, an unguarded click would close the panel the
+    // instant a pull-open settled.
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    const handle = edgeHandle()!
+
+    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
+    fireEvent.touchMove(handle, { touches: [{ clientX: 260, clientY: 404 }] })
+    fireEvent.touchEnd(handle)
+    fireEvent.click(handle)
 
     expect(await screen.findByTestId('mobile-drawer')).toBeTruthy()
   })

@@ -38,6 +38,8 @@ export function MobileNav() {
    *  null means no drag is in progress and CSS owns the position. */
   const [dragX, setDragX] = useState<number | null>(null)
   const dragFrom = useRef<{ x: number; y: number; axis: 'none' | 'x' | 'y' } | null>(null)
+  /** Did the last touch actually travel? Read by `tap`, below. */
+  const dragged = useRef(false)
 
   const location = useLocation()
   const { user } = useAuth()
@@ -73,6 +75,7 @@ export function MobileNav() {
       start.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
     }
     if (start.axis === 'y') return
+    dragged.current = true
     setDragX(Math.max(0, Math.min(PANEL_W, from + dx)))
   }
 
@@ -81,6 +84,18 @@ export function MobileNav() {
     dragFrom.current = null
     setDragX(null)
     setOpen(settled)
+  }
+
+  /** A tap toggles. Guarded because a touch sequence ends with a synthetic
+   *  click: without this, a drag that settled would immediately be undone by
+   *  its own click. (Browsers suppress the click past their movement slop,
+   *  but the slop is smaller than this panel's and not worth trusting.) */
+  const tap = () => {
+    if (dragged.current) {
+      dragged.current = false
+      return
+    }
+    setOpen(o => !o)
   }
 
   const close = () => {
@@ -106,24 +121,33 @@ export function MobileNav() {
           trade he chose. */}
       <button
         type="button"
-        aria-label="Open menu"
+        aria-label={open ? 'Close menu' : 'Open menu'}
         aria-expanded={open}
         data-testid="edge-handle"
-        onClick={() => setOpen(true)}
-        onTouchStart={e => beginDrag(e, 0)}
-        onTouchMove={e => moveDrag(e, 0)}
+        onClick={tap}
+        onTouchStart={e => beginDrag(e, open ? PANEL_W : 0)}
+        onTouchMove={e => moveDrag(e, open ? PANEL_W : 0)}
         onTouchEnd={endDrag}
         className={clsx(
-          'md:hidden fixed left-0 top-1/2 -translate-y-1/2 z-40',
+          'md:hidden fixed top-1/2 -translate-y-1/2 z-[60]',
           'flex items-center justify-center',
           // 16px of visible tab with a 40px touch target bled off-screen —
           // narrower than the first attempt, which the owner found wide.
           'h-16 w-10 -ml-6 pl-6',
           'rounded-r-lg bg-surface-elevated/60 border border-l-0 border-border-subtle',
-          'backdrop-blur transition-opacity duration-fast active:opacity-100',
-          open ? 'opacity-0 pointer-events-none' : 'opacity-70',
+          'backdrop-blur active:opacity-100 opacity-70',
           hidden && 'opacity-0 pointer-events-none',
         )}
+        style={{
+          // The grip RIDES the panel's right edge rather than disappearing
+          // when it opens: closed it sits at the screen edge, open it sits
+          // on the panel's edge, and mid-gesture it tracks the finger. So
+          // the same handle that pulls the menu out is visibly the one that
+          // pushes it back — what the owner asked for (2026-09-15) in
+          // preference to a "<<" button.
+          left: panelX + PANEL_W,
+          transition: dragX !== null ? 'none' : 'left 220ms cubic-bezier(.22,.61,.36,1)',
+        }}
       >
         <EllipsisVertical
           size={16}
@@ -178,8 +202,13 @@ export function MobileNav() {
                 <X className="w-5 h-5" />
               </button>
             </div>
+            {/* EVERY section, not just the labelled ones. "Chat" lives in
+                the unlabelled Core section, which `moreItems` filters out —
+                so when the bottom tab bar was deleted earlier on 2026-09-15
+                it took the only route back to chat with it, and the owner
+                had to force-quit the app to return to it. */}
             <div className="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
-              {moreItems.map((section, sIdx) => {
+              {navSections.map((section, sIdx) => {
                 const visibleItems = filterNavItemsByPreset(section.items, SURFACE_PRESET).filter(
                   item => hasMinRole(userRole, item.minRole),
                 )

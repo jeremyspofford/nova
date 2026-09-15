@@ -39,7 +39,13 @@ export function AppLayout({
     // through it the moment it marks something seen.
     <MobileNavProvider>
       <UnseenNoticesProvider>
-        <div className="flex h-dvh bg-surface-root dark:bg-transparent">
+        {/* Height from the MEASURED viewport, with 100dvh as the value for
+            the first paint and for anywhere the measurement never runs. See
+            src/lib/safeArea.ts for why dvh is not trusted here. */}
+        <div
+          className="flex bg-surface-root dark:bg-transparent"
+          style={{ height: 'var(--nova-vh, 100dvh)' }}
+        >
           <Sidebar collapsed={collapsed} onToggle={() => setCollapsed(c => !c)} />
           {/* The top safe-area inset, once, for every page. index.html sets
               `viewport-fit=cover`, so the layout viewport extends under the
