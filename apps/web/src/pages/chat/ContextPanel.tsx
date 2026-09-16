@@ -38,23 +38,33 @@ function Row({
   note?: string | null
 }) {
   return (
-    <div className="py-2" data-testid={`panel-row-${label.toLowerCase().replace(/\s+/g, '-')}`}>
-      <div className="flex items-baseline justify-between gap-3">
-        <span className="text-compact text-content-primary">{label}</span>
-        <span className="text-compact text-content-secondary font-mono">{value}</span>
+    <div className="py-2.5" data-testid={`panel-row-${label.toLowerCase().replace(/\s+/g, '-')}`}>
+      {/* The LABEL carries the weight and the value is monospace and
+          secondary — the owner's note (2026-09-16) was that the roles were
+          hard to tell apart, because both sides were the same size in the
+          same colour at 320px. Wider, and with the two sides doing
+          different jobs typographically, the eye lands on the label first
+          and reads across. */}
+      <div className="flex items-baseline justify-between gap-6">
+        <span className="text-compact font-medium text-content-primary whitespace-nowrap">
+          {label}
+        </span>
+        <span className="text-compact text-content-secondary font-mono tabular-nums text-right">
+          {value}
+        </span>
       </div>
       {fraction !== null && fraction !== undefined && (
         <div
           data-testid="panel-row-bar"
-          className="mt-1.5 h-1 w-full rounded-full bg-border overflow-hidden"
+          className="mt-2 h-1.5 w-full rounded-full bg-border/60 overflow-hidden"
         >
           <div
-            className={tone === 'warning' ? 'h-full bg-warning' : 'h-full bg-accent'}
+            className={tone === 'warning' ? 'h-full rounded-full bg-warning' : 'h-full rounded-full bg-accent'}
             style={{ width: `${Math.min(100, Math.max(0, fraction * 100))}%` }}
           />
         </div>
       )}
-      {note && <p className="mt-1 text-caption text-content-tertiary">{note}</p>}
+      {note && <p className="mt-1.5 text-caption text-content-tertiary leading-snug">{note}</p>}
     </div>
   )
 }
@@ -116,7 +126,9 @@ export function ContextPanel({
       role="dialog"
       aria-label="What is available right now"
       data-testid="context-panel"
-      className="absolute bottom-full right-0 mb-2 z-50 w-80 rounded-lg border border-border-subtle bg-surface-elevated shadow-xl p-3 divide-y divide-border-subtle"
+      // Wider than it is tall, like the panel he pointed at. At 320px every
+      // row wrapped and the whole thing read as one column of grey.
+      className="absolute bottom-full right-0 mb-2 z-50 w-[26rem] max-w-[calc(100vw-2rem)] rounded-lg border border-border-subtle bg-surface-elevated shadow-xl px-4 py-2 divide-y divide-border-subtle"
     >
       <Row
         label="Context window"

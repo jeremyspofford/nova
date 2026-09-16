@@ -317,6 +317,16 @@ export interface Delegation {
   files: string[]
 }
 
+/** Change what this person is called (2026-09-16). The name is also the
+ *  login identifier, so it stays unique — a name somebody else holds comes
+ *  back as a stated 409, never a silent no-op. */
+export const renameMe = (name: string) =>
+  apiSend<{ person: { id: string; name: string; role: string } }>(
+    '/api/v1/auth/me',
+    'PATCH',
+    { name },
+  )
+
 export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
 
 /** The live state of a conversation the client NAMES (S24) — the same shape

@@ -1,4 +1,5 @@
 """/api/v1/auth — register the owner, log in, log out, say who you are."""
+
 from __future__ import annotations
 
 import logging
@@ -130,3 +131,48 @@ async def logout(request: Request) -> JSONResponse:
 @router.get("/me")
 async def me(person: Person = Depends(identity.require_person)) -> dict:
     return {"person": person.as_json()}
+
+
+class RenameRequest(BaseModel):
+    """What to call this person. `name` is also the LOGIN identifier, so
+    this is a rename in the full sense, not a nickname beside it."""
+
+    name: str = Field(min_length=1, max_length=120)
+
+
+@router.patch("/me")
+async def rename_me(body: RenameRequest, person: Person = Depends(identity.require_person)) -> dict:
+    """Change what this person is called (2026-09-16).
+
+    The account card said "Name and role are read-only in S1: core has no
+    route that changes either, and a field that silently does nothing is
+    worse than no field." This is that route. Role stays read-only — a
+    person promoting themselves is a different question entirely.
+
+    WHY IT EXISTS: `people.name` is whatever was typed at registration, and
+    on this instance that is an email address. The sidebar can derive
+    "Jeremy" from `jeremy.spofford@…`, and can derive nothing at all from
+    `jeremyspofford@…` — so the only honest way to show somebody their own
+    first name is to let them say what it is.
+
+    The name is also the login identifier, so it must stay unique: the
+    unique index is what refuses, and its violation is reported as a stated
+    conflict rather than a 500.
+    """
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="a name cannot be only whitespace")
+    pool = await db.get_pool()
+    try:
+        row = await pool.fetchrow(
+            "UPDATE people SET name = $1 WHERE id = $2 RETURNING id, name, role",
+            name,
+            person.id,
+        )
+    except UniqueViolationError:
+        raise HTTPException(
+            status_code=409, detail=f"somebody here is already called {name!r}"
+        ) from None
+    if row is None:  # pragma: no cover - the session names a real person
+        raise HTTPException(status_code=404, detail="that account no longer exists")
+    return {"person": identity.Person(id=row["id"], name=row["name"], role=row["role"]).as_json()}

@@ -7,6 +7,7 @@ import { hasMinRole, type Role } from '../../lib/roles'
 import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { useTheme } from '../../stores/theme-store'
+import { AccountMenu } from './AccountMenu'
 import { appIcon, appIconHref } from '../../lib/app-icon'
 
 /** The one count a nav entry can carry (S11). A KEY, not a number: this
@@ -150,12 +151,6 @@ export function navBadgeState(
   return { count: unseen.count, title: undefined }
 }
 
-function getInitials(name: string): string {
-  const parts = name.trim().split(/\s+/)
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
-  return name.slice(0, 2).toUpperCase()
-}
-
 export function Sidebar({
   collapsed,
   onCollapsedChange,
@@ -255,7 +250,15 @@ export function Sidebar({
     <aside
       data-testid="sidebar"
       className={clsx(
-        'hidden md:flex flex-col h-full bg-surface shrink-0 glass-nav relative',
+        // z-20 IS LOAD-BEARING. `glass-nav` sets backdrop-filter, which
+        // makes this element a stacking context — so a z-index on anything
+        // INSIDE it (the edge handle's tooltip, the account menu) is scoped
+        // to this subtree and cannot rise above `main`, which is a later
+        // sibling and therefore paints on top. The owner saw it as a
+        // tooltip appearing behind the Settings page while dragging the
+        // edge. Raising the aside lifts its whole context, once, instead of
+        // escalating z-indexes inside it forever.
+        'hidden md:flex flex-col h-full bg-surface shrink-0 glass-nav relative z-20',
         // No border and no content when closed: a 1px line down the left of
         // the window is the icon rail's ghost.
         collapsed ? 'overflow-hidden' : 'border-r border-border-subtle dark:border-white/[0.06]',
@@ -398,22 +401,10 @@ export function Sidebar({
         })}
       </nav>
 
-      {/* User card — static for now, no session actions until Task 6 wires real auth */}
-      {!collapsed && user && (
-        <div className="px-2 pb-2">
-          <div className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-accent-500 to-accent-700 flex items-center justify-center text-white text-caption font-medium shrink-0">
-              {getInitials(user.name)}
-            </div>
-            <div className="flex-1 min-w-0 text-left">
-              <div className="text-compact font-medium text-content-primary truncate">
-                {user.name}
-              </div>
-              <div className="text-micro text-content-tertiary capitalize">{user.role}</div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Who is signed in, and where to go next. The card was static and
+          showed `people.name` — an email on this instance, so a 240px column
+          read "jeremyspofford@gmail…." and said nothing about who that is. */}
+      {!collapsed && <AccountMenu />}
 
       {/* The "Collapse" row that stood here until 2026-09-15 is gone: the
           edge handle above does its job, in the place a resize has to live

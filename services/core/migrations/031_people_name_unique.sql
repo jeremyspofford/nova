@@ -1,0 +1,15 @@
+-- The name IS the login identifier, so it has to be unique.
+--
+-- `auth_api.login` looks a person up with `WHERE name = $1` and takes one
+-- row. Two people sharing a name makes that lookup ambiguous — whichever
+-- row postgres returned first would be the one you signed into — and the
+-- only reason it has never happened is that nobody has tried.
+--
+-- Found on 2026-09-16 while adding PATCH /auth/me: the route's own
+-- docstring claimed "the unique index is what refuses", and there was no
+-- such index. Rather than delete the claim, the claim is made true.
+--
+-- If this migration fails, duplicates already exist and must be resolved by
+-- hand — which is the right outcome. A rename that silently made two
+-- accounts unreachable would be worse than a failed start.
+CREATE UNIQUE INDEX people_name_unique ON people (name);
