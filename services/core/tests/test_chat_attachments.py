@@ -365,3 +365,79 @@ async def test_a_scanned_pdf_tells_her_there_is_nothing_to_read(
     assert status == 200
     content = _user_content(gateway)
     assert "no text layer" in content
+
+
+WAV = b"RIFF\x24\x00\x00\x00WAVEfmt " + b"\x00" * 40
+
+
+async def test_audio_is_named_and_NEVER_sent_to_the_model(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    """MEASURED on this box, 2026-09-16, not assumed.
+
+    gemma4:12b advertises an `audio` capability and ollama 0.33.1 does not
+    carry it. Native /api/chat ignores an audio field outright — the model
+    answers "please provide the audio file". The OpenAI /v1 path ACCEPTS an
+    `input_audio` part and is far worse: given a 0.4s 440Hz sine tone the
+    model reported "a single, short word... sounds like 'Whoa'", 0.8 seconds
+    long. The control with no audio says "please provide the audio file", so
+    this is not caution — the part makes it believe it heard something.
+
+    A capability the MODEL declares is not one the SERVER carries, and
+    confident fabrication with no signal is the worst failure this project
+    has. So the file lands in the workspace, is named, and the turn says
+    nothing here can listen to it.
+    """
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    gateway = FakeGateway(
+        deltas=("ok",),
+        catalog_body={"rows": [_row("gemma4:12b", "completion", "vision", "audio")]},
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await _set_model(owner_client, "ollama:gemma4:12b")
+    conversation = await _conversation(owner_client)
+    attachment = await _upload(owner_client, conversation, "note.wav", WAV)
+
+    status, _ = await _say(
+        owner_client, "what is in this?", attachment_ids=[attachment], conversation_id=conversation
+    )
+
+    assert status == 200
+    body = _sent(gateway)
+    content = body["messages"][-1]["content"]
+    # A string, not parts: nothing was attached to the model call.
+    assert isinstance(content, str)
+    assert "NOTHING on this machine can listen to audio" in content
+    assert "Say that you cannot hear it" in content
+    # And the whole request carries no audio anywhere, whatever the model
+    # says it can do.
+    assert "input_audio" not in json.dumps(body)
+
+
+async def test_an_image_beside_audio_still_reaches_a_model_that_can_see(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    """Audio being unsendable must not cost him the picture in the same
+    message."""
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    gateway = FakeGateway(
+        deltas=("ok",), catalog_body={"rows": [_row("gemma4:12b", "completion", "vision")]}
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await _set_model(owner_client, "ollama:gemma4:12b")
+    conversation = await _conversation(owner_client)
+    picture = await _upload(owner_client, conversation, "shot.png", PNG)
+    sound = await _upload(owner_client, conversation, "note.wav", WAV)
+
+    status, _ = await _say(
+        owner_client,
+        "what is this?",
+        attachment_ids=[picture, sound],
+        conversation_id=conversation,
+    )
+
+    assert status == 200
+    content = _sent(gateway)["messages"][-1]["content"]
+    assert isinstance(content, list)
+    assert len([p for p in content if p["type"] == "image_url"]) == 1
+    assert "cannot hear it" in content[0]["text"]

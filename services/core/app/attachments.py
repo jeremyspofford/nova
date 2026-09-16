@@ -345,7 +345,32 @@ def _size_words(n: int) -> str:
     return f"{n / 1_048_576:.1f} MB"
 
 
-def facts_block(rows: list[Attachment], *, unseeable: list[Attachment] | None = None) -> str:
+# WHY AUDIO IS NEVER SENT TO THE MODEL, measured 2026-09-16 rather than
+# assumed. gemma4:12b reports an `audio` capability and ollama 0.33.1 does
+# not carry it:
+#
+#   * native /api/chat with an `audio` field on the message: the field is
+#     silently ignored and the model answers "please provide the audio file
+#     so I can tell you what sound is in it" — it knows it got nothing;
+#   * OpenAI-compatible /v1 with an `input_audio` part: ACCEPTED, and far
+#     worse. Given a 0.4s 440Hz sine tone the model answered "a single,
+#     short word... it sounds like 'Whoa'", high-pitched, "0.8 seconds
+#     long". Confident, detailed, and entirely invented. The control — the
+#     same question with no audio at all — gets "please provide the audio
+#     file", so the difference is not the model being cautious: the part
+#     makes it believe it has audio it cannot hear.
+#
+# A capability the MODEL declares is not a capability the SERVER carries,
+# and the failure here is the worst shape there is: fabrication with no
+# signal. So audio lands in the workspace like any other file, is named in
+# the facts, and the turn says plainly that nothing here can listen to it.
+# When ollama carries audio, this becomes a capability check like vision's.
+def facts_block(
+    rows: list[Attachment],
+    *,
+    unseeable: list[Attachment] | None = None,
+    unheard: list[Attachment] | None = None,
+) -> str:
     """What arrived, as FACTS in the turn — never as an instruction.
 
     Each line names the file, what it is, how big, and WHERE IT IS, because
@@ -360,7 +385,7 @@ def facts_block(rows: list[Attachment], *, unseeable: list[Attachment] | None = 
     image silently absent from the turn — is how she ends up describing a
     screenshot from its filename.
     """
-    if not rows and not unseeable:
+    if not rows and not unseeable and not unheard:
         return ""
     lines = []
     if rows:
@@ -386,6 +411,13 @@ def facts_block(rows: list[Attachment], *, unseeable: list[Attachment] | None = 
         lines.append(
             f"- {row.filename} is an image at {row.path}, and NO model installed here can "
             "see images, so it is not in this turn. Say that rather than describing it."
+        )
+    for row in unheard or []:
+        lines.append(
+            f"- {row.filename} is audio at {row.path}. NOTHING on this machine can listen to "
+            "audio — the local runtime does not carry it, whatever a model advertises — so it "
+            "is NOT in this turn. Say that you cannot hear it. Do not describe it, guess at "
+            "its contents, or infer them from its name."
         )
     return "\n".join(lines)
 

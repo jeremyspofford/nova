@@ -3808,7 +3808,11 @@ async def _run_turn(
             # saying both is how she told him no model could see images on a
             # box where one could (the walk, 2026-09-16).
             blind = pictures if (choice.certain and not choice.can_see) else []
-            blocks = [attachments.facts_block(here, unseeable=blind)]
+            # AUDIO IS NEVER SENT (measured, not assumed — see the note above
+            # `facts_block`). ollama 0.33.1 either drops it or, worse, makes
+            # the model believe it heard something it did not.
+            sounds = [row for row in here if row.kind == attachments.AUDIO]
+            blocks = [attachments.facts_block(here, unseeable=blind, unheard=sounds)]
             if choice.note:
                 blocks.append(choice.note)
             if gone:

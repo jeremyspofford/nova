@@ -107,3 +107,33 @@ server.
 
 5. Her attaching a file BACK is left for later — she can already write into
    the workspace, and this slice is about the direction that does not work.
+
+## Audio: measured, and NOT shipped (2026-09-16)
+
+He asked for audio and the honest answer is that this stack cannot carry it
+today. Measured on the box rather than assumed, because `gemma4:12b`
+advertises an `audio` capability and that is exactly the kind of claim this
+project does not take at face value:
+
+* **ollama 0.33.1, native `/api/chat`, `audio` field on the message** — the
+  field is silently ignored. The model answers "please provide the audio
+  file so I can tell you what sound is in it". It knows it got nothing.
+* **ollama 0.33.1, OpenAI-compatible `/v1`, `input_audio` part** — accepted,
+  and far worse. Given a 0.4 second 440 Hz sine tone, gemma4:12b answered:
+  "a single, short word or sound... it sounds like 'Whoa'", high-pitched,
+  "0.8 seconds long". Confident, detailed, entirely invented, and wrong
+  about the duration too.
+* **The control** — the same question with no audio at all — gets "please
+  provide the audio file". So the difference is not a cautious model: the
+  part makes it believe it has audio it cannot hear.
+
+A capability the MODEL declares is not a capability the SERVER carries. The
+failure shape here is the worst one available — fabrication with no signal,
+about a file he sent — so audio lands in the workspace like anything else,
+is named in the facts with its path, and the turn says plainly that nothing
+here can listen to it. `test_audio_is_named_and_NEVER_sent_to_the_model`
+holds that, and the whole request is checked for an `input_audio` part.
+
+When ollama carries audio, this becomes a capability check exactly like
+vision's — the derivation is already written, and only the "nothing here can
+listen" branch has to go.
