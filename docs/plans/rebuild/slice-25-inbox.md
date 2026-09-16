@@ -319,7 +319,36 @@ longer produces, and would have stayed invisible to every future digest. It
 rewrites those rows by their evidence and then tightens the CHECK so the
 state cannot come back.
 
+## The walk, 2026-09-16 — and the two defects it found
+
+All seven steps pass on the deployed stack. Steps 1, 2 and 4 read from the
+database and the trace; 3, 5 and 6 are `e2e/inbox-walk.sh`; 7 is
+`e2e/responsive.sh`.
+
+Neither defect below was visible to any unit test, and both were found by
+doing the thing rather than by reading the code.
+
+**A clear lifted a silence the live row still needed.** The mute keys on the
+CONDITION; "clearing forgets the mute" was applied per ROW. One beat does
+both halves at once — `record` raises the new facts while `reconcile` clears
+the old reading — so muting a timer at four failures and letting a fifth
+arrive left `notice_mutes` EMPTY. He was not told (the state is stamped at
+insert), but the muted view could not show him the silence, the count said
+nothing was muted, and a sixth failure would have come back unmuted. S25.1
+survived one fact change instead of none. Both writers of `cleared_at` now
+share `_FORGET_THE_MUTE`, which keeps a key any live row still depends on.
+
+**Her `unread` view reported conditions that had stopped being true.**
+`VIEWS["unread"]` had no liveness term, so every condition that had ever
+cleared and never been opened came back as news. Asked "what is in my
+inbox?", she named a memory problem and an agent that had both stopped
+weeks earlier — with a real `notices` span on the trace behind the
+sentence, which is what makes this the worse of the two. Re-walked after the
+fix: `state="unread"` returns exactly the three live rows.
+
+The muted view and its count are LIVE silenced rows now, so the number on
+the tab and the list behind it cannot disagree.
+
 ### Still open
 
-Q4's digest view grouped by `delivered_message_id`, and the definition-of-
-done walk (steps 1-7), which is a live-stack job rather than a test.
+Q4's digest view grouped by `delivered_message_id`.

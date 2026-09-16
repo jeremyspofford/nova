@@ -210,3 +210,47 @@ async def test_the_database_refuses_a_seen_state_at_all(pool):
         await pool.execute("UPDATE notices SET state = 'seen' WHERE id = $1", row.id)
 
     assert notices.STATES == ("raised", "delivered", "failed", "muted")
+
+
+async def test_clearing_a_STALE_row_does_not_lift_a_silence_the_live_one_needs(pool):
+    """FOUND BY THE WALK, 2026-09-16 — the half of S25.1 the unit tests missed.
+
+    A mute is keyed on the CONDITION, but "clearing forgets the mute" was
+    applied per ROW. When the facts change, one beat does both things at
+    once: `record` raises a new row for the new facts, and `reconcile`
+    clears the old one, whose fingerprint the check no longer returns. The
+    clear then deleted the key the NEW row depends on.
+
+    On the live stack that read as: he mutes a timer at four failures, the
+    fifth arrives silent (the state was stamped at insert, so he is not
+    told) — but `notice_mutes` is empty, so the muted view cannot show it to
+    him, the count says nothing is silenced, and the SIXTH failure comes
+    back as a fresh unmuted card. The defect this slice exists to fix,
+    surviving one change instead of none.
+
+    The rule is the one Q3 actually states: a mute lasts as long as the
+    CONDITION does. A live row for that condition means the condition is
+    still true, whatever happened to any individual row of it.
+    """
+    first = await _raise(pool, _finding(4))
+    await notices.set_muted(pool, first.id, True)
+
+    # The same beat: the new reading arrives and the old one stops being
+    # found. Order matters — record first, because that is the order a beat
+    # does it in and the bug needs the new row to already exist.
+    fresh = await _raise(pool, _finding(5))
+    cleared = await notices.reconcile(
+        pool,
+        check_name="work_failing_timers",
+        live_fingerprints={fresh.fingerprint},
+    )
+
+    assert [n.id for n in cleared] == [first.id], "the stale reading should clear"
+    assert await notices.muted_keys(pool, "work_failing_timers") == {"timer:0b39fae3"}, (
+        "clearing the stale row lifted a silence the live row still needs"
+    )
+    # And the owner can still FIND it, which is the whole reason the rows
+    # stay rather than being deleted.
+    assert [n.id for n in await notices.recent(pool, muted=True)] == [fresh.id]
+    assert await notices.muted_count(pool) == 1
+    assert await notices.deliverable(pool) == []

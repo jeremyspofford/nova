@@ -274,3 +274,36 @@ def test_none_of_these_tools_waits_on_him(name):
     words = f"{tool.description} {tool.name}".lower()
     for word in ("approve", "approval", "permission", "allow", "deny", "confirm with", "waiting"):
         assert word not in words
+
+
+async def test_unread_is_what_is_STILL_TRUE_and_unread(pool, tmp_path):
+    """FOUND BY THE WALK, 2026-09-16, and the worst kind of defect: it made
+    her say false things with a real tool call behind her.
+
+    `VIEWS["unread"]` was `seen_at IS NULL AND NOT silenced` — no liveness
+    term. So every condition that had ever cleared and never been opened
+    came back as unread, and the owner asking "what is in my inbox?" was
+    told about a memory problem and an agent that had both stopped being
+    true weeks earlier. The trace showed `notices` ran and returned 20 rows,
+    so nothing downstream had any reason to doubt it.
+
+    "Unread" means news he has not read. A condition that has stopped is not
+    news — the fact that it cleared is the record, and `state="cleared"` is
+    where he goes to read it.
+    """
+    stale = await _raise(pool, "timer:gone", "something that stopped being true")
+    live = await _raise(pool, "timer:here", "something that is still true")
+    await notices.clear(pool, stale.id)
+
+    person = await _person(pool)
+    result, ok = await _call("notices", {}, person, tmp_path)
+
+    assert ok is True
+    assert "something that is still true" in result
+    assert "something that stopped being true" not in result, (
+        "a condition that has stopped was reported as unread news"
+    )
+    # And it is still FINDABLE, in the view whose whole subject it is.
+    cleared, _ok = await _call("notices", {"state": "cleared"}, person, tmp_path)
+    assert "something that stopped being true" in cleared
+    assert str(live.id)[:8] not in cleared

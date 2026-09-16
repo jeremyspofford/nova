@@ -164,6 +164,32 @@ OWED = f"{_LIVE} AND state = ANY($1::text[])"
 # of SQL rather than a habit.
 _CLEARABLE = _LIVE
 
+# Forgetting a mute, in SQL: delete the key for a condition this statement
+# has just finished clearing — UNLESS a live row for that same condition
+# remains.
+#
+# FOUND BY THE WALK (2026-09-16). The mute keys on the CONDITION and this
+# rule was being applied per ROW, so one beat could do both halves at once:
+# `record` raises a row for the new facts while `reconcile` clears the old
+# one, whose fingerprint the check no longer returns — and the clear took
+# the silence the new row depends on. He muted a timer at four failures, the
+# fifth arrived silent (the state is stamped at insert) and yet nothing was
+# in the muted view to un-mute, and the sixth would have come back as a
+# fresh unmuted card.
+#
+# `n.id NOT IN (SELECT id FROM cleared)` is load-bearing: a data-modifying
+# CTE reads the snapshot from BEFORE the statement, so the rows being
+# cleared right now still look live to this subquery. Excluding them by id
+# is what makes "is anything still standing" mean what it says.
+_FORGET_THE_MUTE = (
+    "DELETE FROM notice_mutes m USING cleared c "
+    " WHERE m.check_name = c.check_name AND m.finding_key = c.finding_key "
+    "   AND NOT EXISTS ("
+    "     SELECT 1 FROM notices n "
+    "      WHERE n.check_name = c.check_name AND n.finding_key = c.finding_key "
+    f"       AND n.{_LIVE} AND n.id NOT IN (SELECT id FROM cleared))"
+)
+
 # Unmuting has to put the row back into the state its own evidence supports,
 # because the state before the mute is not stored anywhere and remembering it
 # would be a second, weaker copy of the same fact. The precedence is the one
@@ -453,8 +479,7 @@ async def clear(pool: asyncpg.Pool, notice_id: uuid.UUID) -> Notice:
         # comes back months later is news again. This is also what makes
         # muting an URGENT condition safe (Q5) — the silence lasts exactly as
         # long as the thing he already knows about, and no longer.
-        f"  DELETE FROM notice_mutes m USING cleared c "
-        f"   WHERE m.check_name = c.check_name AND m.finding_key = c.finding_key"
+        f"  {_FORGET_THE_MUTE}"
         f") SELECT * FROM cleared",
         notice_id,
     )
@@ -518,8 +543,7 @@ async def reconcile(
         f"), lifted AS ("
         # The silence goes with the condition — see the docstring above and
         # `clear`, which does the same thing for one row.
-        f"  DELETE FROM notice_mutes m USING cleared c "
-        f"   WHERE m.check_name = c.check_name AND m.finding_key = c.finding_key"
+        f"  {_FORGET_THE_MUTE}"
         f") SELECT {_COLUMNS} FROM cleared ORDER BY first_seen_at",
         check_name,
         sorted(live_fingerprints),
@@ -784,9 +808,15 @@ async def recent(pool: asyncpg.Pool, limit: int = 50, *, muted: bool = False) ->
     clicked. One flag and one query, so the two views cannot drift into
     disagreeing about what is muted — the same row set, partitioned.
     """
+    # The muted view is LIVE silenced rows. Cleared ones stay out of it even
+    # while their condition is silenced by a newer reading: a cleared row is
+    # history, there is nothing to lift on it, and one condition would
+    # otherwise show up twice — as the reading that cleared and the reading
+    # that replaced it. The default view keeps its cleared rows, because
+    # "this was true and is not any more" is the record.
+    where = f"{_SILENCED} AND {_LIVE}" if muted else f"NOT {_SILENCED}"
     rows = await pool.fetch(
-        f"SELECT {_COLUMNS} FROM notices WHERE {'' if muted else 'NOT '}{_SILENCED} "
-        f"ORDER BY {_TOLD_AT} DESC LIMIT $1",
+        f"SELECT {_COLUMNS} FROM notices WHERE {where} ORDER BY {_TOLD_AT} DESC LIMIT $1",
         limit,
     )
     return [Notice.from_row(row) for row in rows]
@@ -797,13 +827,24 @@ async def recent(pool: asyncpg.Pool, limit: int = 50, *, muted: bool = False) ->
 # the same word — "unread" has to be the same set she is shown and the same
 # set the badge counts.
 VIEWS: dict[str, str] = {
-    # What he has not read, of what is not silenced. `_SILENCED` rather than
-    # the state, so a row born muted is absent from here the way it is absent
-    # from the page.
-    "unread": f"{_UNREAD} AND NOT {_SILENCED}",
+    # What he has not read, of what is STILL TRUE and not silenced.
+    #
+    # `_LIVE` is here because a walk found it missing (2026-09-16): without
+    # it, every condition that had ever cleared and never been opened came
+    # back as unread, and "what is in my inbox?" was answered with a memory
+    # problem and an agent that had both stopped being true weeks earlier —
+    # with a real tool call on the trace behind the sentence. News he has
+    # not read is the subject here; that something cleared is the record,
+    # and `cleared` below is where it is read.
+    #
+    # `_SILENCED` rather than the state, so a row born muted is absent from
+    # here the way it is absent from the page.
+    "unread": f"{_LIVE} AND {_UNREAD} AND NOT {_SILENCED}",
     # What he silenced and has not lifted — the only place an unmute can be
-    # asked for, which is why it is a view and not a deletion.
-    "muted": _SILENCED,
+    # asked for, which is why it is a view and not a deletion. Live, for the
+    # same reason `recent(muted=True)` is: there is nothing to lift on a row
+    # whose condition has already stopped.
+    "muted": f"{_SILENCED} AND {_LIVE}",
     # Conditions that STOPPED being true. Not "handled": nobody did anything,
     # a check simply stopped finding it.
     "cleared": "cleared_at IS NOT NULL",
@@ -878,7 +919,11 @@ async def muted_count(pool: asyncpg.Pool) -> int:
     reading "Muted" with no number is a tab nobody clicks, and the rows
     behind it stay invisible for the life of the box — which is the same
     outcome as deleting them, reached quietly."""
-    return await pool.fetchval(f"SELECT count(*) FROM notices WHERE {_SILENCED}")
+    # Counted over exactly what the muted VIEW returns (live and silenced),
+    # so the number on the tab and the length of the list behind it cannot
+    # disagree — a count that outruns its own list is how a tab starts
+    # claiming silences nobody can find.
+    return await pool.fetchval(f"SELECT count(*) FROM notices WHERE {_SILENCED} AND {_LIVE}")
 
 
 async def unseen_count(pool: asyncpg.Pool) -> int:

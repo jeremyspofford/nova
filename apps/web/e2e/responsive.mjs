@@ -85,7 +85,7 @@ for (const shape of SHAPES) {
       composer: rect('textarea') ?? rect('[data-testid="chat-input"]'),
       controls: rect('[data-testid="chat-controls"]'),
       sidebar: rect('[data-testid="sidebar"]'),
-      grip: rect('[data-testid="edge-handle"]'),
+      menu: rect('[data-testid="menu-button"]'),
       transcript: scroller ? Math.round(scroller.getBoundingClientRect().height) : null,
       vw,
       vh: window.innerHeight,
@@ -107,13 +107,15 @@ for (const shape of SHAPES) {
     if (r.bottom > seen.vh + 1) say(`the ${what} bottom is at y=${r.bottom}, below the ${seen.vh}px viewport`)
   }
 
-  // One nav surface, and the right one: a grip below `md`, the sidebar at
-  // and above it. Both or neither is a bug either way.
+  // One nav surface, and the right one: a menu button below `md`, the
+  // sidebar at and above it. Both or neither is a bug either way. (It was a
+  // draggable edge grip until 2026-09-16 — the owner asked for a corner
+  // button instead, "more like Claude".)
   const wide = shape.width >= 768
   if (wide && !seen.sidebar) say('no sidebar at a desktop width')
-  if (!wide && !seen.grip) say('no edge grip at a phone width')
+  if (!wide && !seen.menu) say('no menu button at a phone width')
   // And exactly one of them, so a shape cannot quietly grow both.
-  if (seen.sidebar && seen.grip) say('both a sidebar AND an edge grip')
+  if (seen.sidebar && seen.menu) say('both a sidebar AND a menu button')
 
   if (seen.transcript !== null && seen.transcript < MIN_READABLE_PX) {
     say(`only ${seen.transcript}px left to read messages in`)
@@ -135,7 +137,7 @@ for (const shape of SHAPES) {
     overflow: seen.overflow,
     transcript: seen.transcript,
     composerW: seen.composer?.w ?? null,
-    nav: seen.sidebar ? `sidebar ${seen.sidebar.w}px` : seen.grip ? 'grip' : 'NONE',
+    nav: seen.sidebar ? `sidebar ${seen.sidebar.w}px` : seen.menu ? 'menu button' : 'NONE',
     header: seen.header ? `${seen.header.h}px` : 'hidden',
   })
   await ctx.close()
