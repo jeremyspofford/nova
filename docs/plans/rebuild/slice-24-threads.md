@@ -365,6 +365,27 @@ fired for real. The conditions are genuine; only the timing was forced.
     exactly ONE stub reading "2 replies"; the room showed its header, its
     two messages, and no stubs of its own. Zero page errors.
 
-Not yet walked: the phone at 393px (DoD step 8), a reload mid-turn inside a
-room (step 5), and the queue-while-busy path (step 6) — the last needs two
-hands.
+**The phone, 2026-09-16 (DoD step 8).** Walked by the owner on the installed
+app: the stub, opening a room, asking in it, and backing out all behave.
+Two defects were found and fixed BEFORE he looked, by measuring at 393px
+rather than sending him hunting — the context panel was anchored to the
+gauge and began at x=-102, losing its left third off the screen, and the
+stub was a 25px tap target against iOS's 44. Both are pinned in
+`e2e/phone-layout.sh`, whose first version of those assertions found neither
+element and reported OK; the fixtures now produce both and absence is a
+failure.
+
+The device's own numbers, which closed a question that had been open for two
+days: in the PWA `env(top)=59`, `env(bottom)=34`, both published correctly,
+and `innerHeight` 793 against an 852px screen — **852 − 59 = 793 exactly**,
+so iOS reports the SAFE height there, not the viewport's. The panel's old
+"the web view is 59px shorter than the screen" warning was therefore
+describing a figure rather than the app, and has been replaced by a measured
+reading of the shell's own height. In the browser: `installed: no`, insets
+0, 157px of Safari chrome, and no substitution — correct, and it needs
+nothing.
+
+Still not walked: a reload mid-turn inside a room (step 5), and the
+queue-while-busy path (step 6) — the last needs two hands. And the measured
+shell height has not been read back, so "no gap" rests on it looking right
+rather than on a number.
