@@ -27,6 +27,7 @@ from app import (
     db,
     devices_vram,
     hf_hub,
+    machine,
     ollama_registry,
     providers,
     routing,
@@ -83,6 +84,19 @@ def _read_hardware() -> tuple[dict, str | None]:
         return json.loads(raw), None
     except json.JSONDecodeError:
         return {"gpus": []}, "hardware.json unreadable — run install.sh"
+
+
+@router.get("/machine")
+async def machine_route() -> dict:
+    """RAM, CPU and disk as they are RIGHT NOW (2026-09-16).
+
+    Deliberately separate from /hardware, which serves install.sh's
+    one-time `hardware.json` — the right answer to "what is this box" and
+    the wrong answer to every question asked while watching a slow turn.
+    Read every call; cached nowhere; each field degrades on its own with a
+    stated reason rather than a zero.
+    """
+    return machine.read()
 
 
 @router.get("/hardware")

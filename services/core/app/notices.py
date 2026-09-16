@@ -70,7 +70,13 @@ from app import checks
 _COLUMNS = (
     "id, turn_id, firing_id, check_name, finding_key, fingerprint, title, facts, urgent, "
     "acted, acted_turn_id, acted_note, repeats, state, delivery, failed_reason, "
-    "first_seen_at, last_seen_at, cleared_at, delivered_at, seen_at, muted_at"
+    "first_seen_at, last_seen_at, cleared_at, delivered_at, seen_at, muted_at, "
+    # S24: WHICH chat row carried this to him. A room hangs off a message,
+    # so without this the Inbox's "talk about this" has nothing to open one
+    # against. The value was always in hand at delivery time — the chat rung
+    # reads the row back to prove the delivery landed — and was being spent
+    # on an audit string.
+    "delivered_message_id"
 )
 
 # raised (written, nobody told yet) -> delivered | failed, and then seen (he
@@ -452,7 +458,13 @@ async def _update(pool: asyncpg.Pool, notice_id: uuid.UUID, sets: str, *args: An
     return Notice.from_row(row)
 
 
-async def mark_delivered(pool: asyncpg.Pool, notice_id: uuid.UUID, *, delivery: dict) -> Notice:
+async def mark_delivered(
+    pool: asyncpg.Pool,
+    notice_id: uuid.UUID,
+    *,
+    delivery: dict,
+    message_id: uuid.UUID | None = None,
+) -> Notice:
     """Record that a channel took it, with that channel's own receipt.
 
     The receipt may not be empty: `delivered` means a named channel said so,
@@ -472,11 +484,17 @@ async def mark_delivered(pool: asyncpg.Pool, notice_id: uuid.UUID, *, delivery: 
             "a delivery receipt cannot be empty — 'delivered' is only true when a channel "
             "reported it, so mark_delivered records that channel's own result"
         )
+    # `message_id` is written whenever the chat rung produced one. None is a
+    # real answer, not a missing one: a notice pushed to a device and never
+    # written to chat HAS no message, so it has no room — and the Inbox must
+    # say so rather than offer a control that opens nothing.
     return await _update(
         pool,
         notice_id,
-        f"{_state_keeping(DELIVERED, kept=(MUTED,))}, delivered_at = now(), delivery = $2::jsonb",
+        f"{_state_keeping(DELIVERED, kept=(MUTED,))}, delivered_at = now(), "
+        "delivery = $2::jsonb, delivered_message_id = $3",
         delivery,
+        message_id,
     )
 
 

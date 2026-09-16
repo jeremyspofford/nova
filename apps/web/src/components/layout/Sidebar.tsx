@@ -7,6 +7,7 @@ import { hasMinRole, type Role } from '../../lib/roles'
 import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
 import { useTheme } from '../../stores/theme-store'
+import { AccountMenu } from './AccountMenu'
 import { appIcon, appIconHref } from '../../lib/app-icon'
 
 /** The one count a nav entry can carry (S11). A KEY, not a number: this
@@ -31,7 +32,19 @@ export type NavSection = {
 /** The sidebar's width, in px. COLLAPSED is icons only; DEFAULT is what it
  *  has always been; the range is where a drag can leave it. */
 export const SIDEBAR = {
-  COLLAPSED: 60,
+  /**
+   * Collapsed is GONE, not a strip of icons (2026-09-16).
+   *
+   * It was 60px of icon rail, which is a reasonable thing to build and not
+   * what the owner asked for: he pointed at an app whose sidebar closes to
+   * nothing and hands the whole window to the content. An icon rail is a
+   * third state — neither the full list nor the space back — and it keeps
+   * charging 60px for navigation you are not using.
+   *
+   * The way back is the toggle in the header, which is always there, plus
+   * the edge handle, which stays reachable at x=0.
+   */
+  COLLAPSED: 0,
   DEFAULT: 240,
   MIN: 180,
   MAX: 420,
@@ -138,12 +151,6 @@ export function navBadgeState(
   return { count: unseen.count, title: undefined }
 }
 
-function getInitials(name: string): string {
-  const parts = name.trim().split(/\s+/)
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase()
-  return name.slice(0, 2).toUpperCase()
-}
-
 export function Sidebar({
   collapsed,
   onCollapsedChange,
@@ -243,7 +250,18 @@ export function Sidebar({
     <aside
       data-testid="sidebar"
       className={clsx(
-        'hidden md:flex flex-col h-full bg-surface border-r border-border-subtle shrink-0 glass-nav dark:border-white/[0.06] relative',
+        // z-20 IS LOAD-BEARING. `glass-nav` sets backdrop-filter, which
+        // makes this element a stacking context — so a z-index on anything
+        // INSIDE it (the edge handle's tooltip, the account menu) is scoped
+        // to this subtree and cannot rise above `main`, which is a later
+        // sibling and therefore paints on top. The owner saw it as a
+        // tooltip appearing behind the Settings page while dragging the
+        // edge. Raising the aside lifts its whole context, once, instead of
+        // escalating z-indexes inside it forever.
+        'hidden md:flex flex-col h-full bg-surface shrink-0 glass-nav relative z-20',
+        // No border and no content when closed: a 1px line down the left of
+        // the window is the icon rail's ghost.
+        collapsed ? 'overflow-hidden' : 'border-r border-border-subtle dark:border-white/[0.06]',
         // No transition while a pointer is down: the edge IS the pointer
         // then, and easing it makes the drag feel like it is lagging.
         !dragging && 'transition-[width] duration-200 ease-in-out',
@@ -264,9 +282,8 @@ export function Sidebar({
       <button
         type="button"
         data-testid="sidebar-handle"
-        aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        aria-label={collapsed ? 'Show sidebar' : 'Hide sidebar'}
         aria-expanded={!collapsed}
-        title={collapsed ? 'Expand — or drag to size' : 'Collapse — or drag to size'}
         onPointerDown={beginResize}
         onPointerMove={resize}
         onPointerUp={endResize}
@@ -274,15 +291,36 @@ export function Sidebar({
         onClick={tapHandle}
         onKeyDown={nudge}
         className={clsx(
-          'absolute top-1/2 -translate-y-1/2 left-full z-30',
-          'flex h-16 w-4 items-center justify-center',
-          'rounded-r-lg border border-l-0 border-border-subtle bg-surface-elevated/60 backdrop-blur',
-          'text-content-tertiary hover:text-content-primary',
-          'opacity-60 hover:opacity-100 transition-opacity duration-fast',
+          // FULL HEIGHT, not a tab at the midpoint (2026-09-16). The edge
+          // IS the control, so the whole edge should answer to the pointer —
+          // aiming at a 64px tab to resize a panel is a target you have to
+          // find first. 8px of reach, 2px of visible line, and the line only
+          // appears under the pointer: a permanent rule down the window is
+          // furniture.
+          'group absolute inset-y-0 left-full z-30 w-2 -ml-1',
+          'flex items-stretch justify-center',
           'cursor-col-resize touch-none',
         )}
       >
-        <GripVertical className="w-3 h-3" />
+        <span
+          aria-hidden="true"
+          className="w-[2px] rounded-full bg-accent opacity-0 group-hover:opacity-70 group-focus-visible:opacity-70 transition-opacity duration-fast"
+        />
+        {/* Both actions and the shortcut, because the control does two
+            things and neither is guessable from a line: click hides it,
+            drag sizes it. Its own element rather than `title`, so it can say
+            two lines and appear without the browser's half-second delay. */}
+        <span
+          data-testid="sidebar-handle-tip"
+          role="tooltip"
+          className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 z-40 hidden group-hover:block group-focus-visible:block whitespace-nowrap rounded-md border border-border-subtle bg-surface-elevated px-2.5 py-1.5 text-caption text-content-primary shadow-lg"
+        >
+          <span className="block">
+            {collapsed ? 'Show sidebar' : 'Hide sidebar'}{' '}
+            <kbd className="ml-1 text-micro text-content-tertiary">Ctrl+B</kbd>
+          </span>
+          <span className="block text-content-tertiary">Drag to resize</span>
+        </span>
       </button>
       {/* The brand mark. Chosen in Appearance, separately from the favicon,
           and drawn from the live palette (src/lib/app-icon.ts) rather than
@@ -363,22 +401,10 @@ export function Sidebar({
         })}
       </nav>
 
-      {/* User card — static for now, no session actions until Task 6 wires real auth */}
-      {!collapsed && user && (
-        <div className="px-2 pb-2">
-          <div className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md">
-            <div className="h-8 w-8 rounded-lg bg-gradient-to-br from-accent-500 to-accent-700 flex items-center justify-center text-white text-caption font-medium shrink-0">
-              {getInitials(user.name)}
-            </div>
-            <div className="flex-1 min-w-0 text-left">
-              <div className="text-compact font-medium text-content-primary truncate">
-                {user.name}
-              </div>
-              <div className="text-micro text-content-tertiary capitalize">{user.role}</div>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Who is signed in, and where to go next. The card was static and
+          showed `people.name` — an email on this instance, so a 240px column
+          read "jeremyspofford@gmail…." and said nothing about who that is. */}
+      {!collapsed && <AccountMenu />}
 
       {/* The "Collapse" row that stood here until 2026-09-15 is gone: the
           edge handle above does its job, in the place a resize has to live

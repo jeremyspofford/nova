@@ -163,6 +163,16 @@ export interface ChatState {
   turnId: string | null
   /** Messages core accepted while a turn was running, oldest first (S15). */
   queued: QueuedMessage[]
+  /**
+   * How much context the LAST answered turn actually sent (2026-09-16).
+   *
+   * The GATEWAY's own count, off the usage frame — never a client-side
+   * estimate of what it thinks it sent, which stops matching reality the
+   * first time prompt assembly changes and then lies quietly. null until a
+   * turn reports one, and null is rendered as "not measured yet" rather
+   * than as zero.
+   */
+  promptTokens: number | null
 }
 
 export type ChatAction =
@@ -172,7 +182,10 @@ export type ChatAction =
       messages: FetchedMessage[]
     }
   | { type: 'send'; userId: string; assistantId: string; text: string }
-  | { type: 'event'; event: StreamEvent }
+  /** A frame off a stream, and WHICH conversation that stream was started
+   *  for (S24). null means "a brand-new conversation with no id yet", which
+   *  cannot belong to anything else and is always accepted. */
+  | { type: 'event'; event: StreamEvent; conversationId?: string | null }
   | {
       type: 'reconcile'
       conversationId: string
@@ -237,6 +250,9 @@ export type FetchedMessage = {
   served_by?: string | null
   turn_kind?: string | null
   cost_usd?: number | null
+  /** The last round's prompt size, derived server-side off that round's
+   *  llm_call span — what the context gauge fills against after a reload. */
+  prompt_tokens?: number | null
   route_reason?: string | null
   agent?: string | null
   delegations?: Delegation[]
@@ -253,6 +269,7 @@ export function emptyChat(): ChatState {
     pendingId: null,
     turnId: null,
     queued: [],
+    promptTokens: null,
   }
 }
 
@@ -442,7 +459,12 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
 
     case 'usage':
       if (state.pendingId === null) return state
-      return withPending(state, row => ({ ...row, cost: event.usage.cost_usd }))
+      return {
+        ...withPending(state, row => ({ ...row, cost: event.usage.cost_usd })),
+        // `|| null`: a gateway that stated no prompt count has not told us
+        // the context was empty.
+        promptTokens: event.usage.prompt_tokens || null,
+      }
 
     case 'route':
       if (state.pendingId === null) return state
@@ -562,7 +584,23 @@ function fromFetchedMessages(
     // rows must not drop it. Only `queueSynced`, which reads the server's own
     // list, and `unqueued`, which the server has confirmed, change it.
     queued: state.queued,
+    // The context gauge survives a reload (2026-09-16): the newest answered
+    // turn's prompt size, derived server-side off the same span the live
+    // `usage` frame reads. A reload is exactly when somebody wants to know
+    // how full the context is, and a gauge that blanks until the next turn
+    // is one that is missing whenever it is asked.
+    promptTokens: newestPromptTokens(messages),
   }
+}
+
+/** The newest answered turn's prompt size, or null. Walks backwards because
+ *  only the LAST turn's figure describes the context as it now stands. */
+function newestPromptTokens(messages: FetchedMessage[]): number | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const stated = messages[i].prompt_tokens
+    if (typeof stated === 'number' && stated > 0) return stated
+  }
+  return null
 }
 
 /**
@@ -835,7 +873,24 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         turnId: null,
       }
 
-    case 'event':
+    case 'event': {
+      // A LATE FRAME FROM ANOTHER ROOM IS DROPPED (S24).
+      //
+      // Before threads there was one conversation on screen and every frame
+      // belonged to it. Now: stream in the hallway, tap a stub, and the
+      // hallway's remaining deltas would have been appended to the room's
+      // pending bubble — her answer about the grocery list, arriving inside
+      // a room about a failing timer.
+      //
+      // By IDENTITY, not by arrival order: the owner can be switching back
+      // and forth while both are mid-turn, and there is no ordering rule
+      // that survives that. A stream started before the conversation had an
+      // id (`null`) can only be this one, so it is always accepted.
+      const startedFor = action.conversationId
+      if (startedFor != null && state.conversationId != null && startedFor !== state.conversationId) {
+        return state
+      }
       return applyEvent(state, action.event)
+    }
   }
 }

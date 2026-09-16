@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Trash2 } from 'lucide-react'
+import { ContextGauge } from './ContextGauge'
 import { ModelSelector } from './ModelSelector'
 import {
   getInstalledModels as apiGetInstalledModels,
@@ -34,11 +35,15 @@ export function ChatControls({
   onModelChanged,
   clearChat,
   modelApi,
+  promptTokens,
 }: {
   currentModel: string
   onModelChanged: (model: string) => void
   clearChat: () => Promise<void>
   modelApi?: ModelApi
+  /** The gateway's prompt-token count for the last answered turn, or null
+   *  (2026-09-16). null draws nothing — see ContextGauge. */
+  promptTokens?: number | null
 }) {
   const [confirmingClear, setConfirmingClear] = useState(false)
   const [clearError, setClearError] = useState<string | null>(null)
@@ -57,13 +62,12 @@ export function ChatControls({
 
   return (
     <div data-testid="chat-controls">
+      {/* Destructive on the LEFT, what-is-answering on the RIGHT — the
+          arrangement the owner pointed at (2026-09-16). The two things a
+          reader checks mid-conversation are which model is on and how full
+          the context is, and they sit together at the end of the line
+          rather than at opposite ends of it. */}
       <div className="flex items-center justify-between gap-3 px-1">
-        <ModelSelector
-          currentModel={currentModel}
-          onModelChanged={onModelChanged}
-          api={modelApi}
-        />
-
         {confirmingClear ? (
           <span className="flex items-center gap-2" role="group" aria-label="Confirm clear chat">
             <span className="text-micro text-content-tertiary">Clear this chat?</span>
@@ -100,6 +104,15 @@ export function ChatControls({
             <span className="hidden sm:inline">Clear</span>
           </button>
         )}
+
+        <span className="flex items-center gap-3">
+          <ContextGauge promptTokens={promptTokens ?? null} model={currentModel} />
+          <ModelSelector
+            currentModel={currentModel}
+            onModelChanged={onModelChanged}
+            api={modelApi}
+          />
+        </span>
       </div>
 
       {clearError && (

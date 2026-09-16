@@ -357,3 +357,83 @@ describe('AppLayout — which nav renders', () => {
     expect(within(inbox).getByTestId('nav-count-badge').textContent).toContain('4')
   })
 })
+
+/**
+ * The sidebar closes to NOTHING (2026-09-16), so unlike the old 60px icon
+ * rail it leaves nothing behind to click. Two routes back, and they have to
+ * work from every page — hiding it on Settings must not strand anyone.
+ */
+describe('AppLayout — getting the sidebar back', () => {
+  it('shows a control only while the sidebar is hidden', async () => {
+    setViewport('desktop')
+    renderShell()
+    await screen.findByText('page')
+
+    expect(screen.queryByTestId('show-sidebar')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('sidebar-handle'))
+    expect(await screen.findByTestId('show-sidebar')).toBeTruthy()
+
+    fireEvent.click(screen.getByTestId('show-sidebar'))
+    await waitFor(() => expect(screen.queryByTestId('show-sidebar')).toBeNull())
+  })
+
+  it('Ctrl+B toggles it, which is what the handle promises', async () => {
+    setViewport('desktop')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+    expect(await screen.findByTestId('show-sidebar')).toBeTruthy()
+
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+    await waitFor(() => expect(screen.queryByTestId('show-sidebar')).toBeNull())
+  })
+
+  it('Cmd+B does the same, because half the desktops are Macs', async () => {
+    setViewport('desktop')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.keyDown(window, { key: 'b', metaKey: true })
+    expect(await screen.findByTestId('show-sidebar')).toBeTruthy()
+  })
+
+  it('a bare b does not, or typing the letter would close the sidebar', async () => {
+    setViewport('desktop')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.keyDown(window, { key: 'b' })
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true, shiftKey: true })
+    expect(screen.queryByTestId('show-sidebar')).toBeNull()
+  })
+
+  it('offers no sidebar control on a phone, which has no sidebar', async () => {
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+
+    fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
+    expect(screen.queryByTestId('show-sidebar')).toBeNull()
+  })
+})
+
+describe('AppLayout — the show-sidebar control has its own space', () => {
+  it('reserves room for it rather than floating it over the page', async () => {
+    // It floats in the SHELL so it works on every page, including ones
+    // nobody has written yet — which means it lands on top of whatever each
+    // page puts at its top-left. The first screenshot after this shipped had
+    // it sitting on the word "Chat".
+    setViewport('desktop')
+    renderShell()
+    await screen.findByText('page')
+    const main = document.querySelector('main')!
+
+    expect(main.className).not.toContain('md:pl-11')
+
+    fireEvent.click(screen.getByTestId('sidebar-handle'))
+    await screen.findByTestId('show-sidebar')
+    expect(main.className).toContain('md:pl-11')
+  })
+})

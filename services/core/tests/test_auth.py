@@ -1,6 +1,7 @@
 """Owner registration, sessions, and the two ways to be somebody here:
 a session cookie (the browser) or the service bearer (ops/service calls).
 """
+
 from __future__ import annotations
 
 from httpx import ASGITransport, AsyncClient
@@ -153,17 +154,13 @@ async def test_settings_without_any_credential_is_401(client):
 async def test_the_service_bearer_reports_the_owner(client):
     await _register(client)
     client.cookies.clear()
-    resp = await client.get(
-        "/api/v1/auth/me", headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}
-    )
+    resp = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {SERVICE_TOKEN}"})
     assert resp.status_code == 200
     assert resp.json()["person"]["role"] == "owner"
 
 
 async def test_the_service_bearer_has_no_identity_before_the_owner_exists(client):
-    resp = await client.get(
-        "/api/v1/auth/me", headers={"Authorization": f"Bearer {SERVICE_TOKEN}"}
-    )
+    resp = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {SERVICE_TOKEN}"})
     assert resp.status_code == 401
 
 
@@ -182,3 +179,58 @@ async def test_cookie_auth_works_with_service_token_unset(pool, monkeypatch):
         # No cookie and no bearer still refuses, per Task 1's rail.
         client.cookies.clear()
         assert (await client.get("/api/v1/settings")).status_code == 503
+
+
+# ── renaming yourself (2026-09-16) ───────────────────────────────────────
+#
+# The account card said "Name and role are read-only in S1: core has no
+# route that changes either, and a field that silently does nothing is worse
+# than no field." This is that route, and it exists for a reason the UI ran
+# into: `people.name` is whatever was typed at registration, and on the
+# owner's instance that is an email. The sidebar can derive "Jeremy" from
+# `jeremy.spofford@…` and can derive NOTHING from `jeremyspofford@…`, so the
+# only honest way to show somebody their own first name is to let them say
+# what it is.
+
+
+async def test_a_person_can_say_what_they_are_called(owner_client, pool):
+    resp = await owner_client.patch("/api/v1/auth/me", json={"name": "Jeremy"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["person"]["name"] == "Jeremy"
+
+    # Read back, because a route that returns a name it did not write is the
+    # defect this repo keeps finding.
+    again = await owner_client.get("/api/v1/auth/me")
+    assert again.json()["person"]["name"] == "Jeremy"
+    assert await pool.fetchval("SELECT name FROM people WHERE name = 'Jeremy'") == "Jeremy"
+
+
+async def test_the_role_is_not_renamable_by_the_same_route(owner_client):
+    """A person promoting themselves is a different question entirely, and
+    this route must not be a way to ask it."""
+    before = (await owner_client.get("/api/v1/auth/me")).json()["person"]["role"]
+    await owner_client.patch("/api/v1/auth/me", json={"name": "Jeremy", "role": "owner"})
+    after = (await owner_client.get("/api/v1/auth/me")).json()["person"]["role"]
+    assert after == before
+
+
+async def test_an_empty_name_is_refused_with_a_reason(owner_client):
+    # An account with a blank name cannot be logged into: the name IS the
+    # login identifier.
+    assert (await owner_client.patch("/api/v1/auth/me", json={"name": "   "})).status_code == 400
+    assert (await owner_client.patch("/api/v1/auth/me", json={"name": ""})).status_code == 422
+
+
+async def test_a_name_somebody_else_holds_is_a_stated_conflict(owner_client, pool):
+    """The name is the login identifier, so it stays unique — and the index
+    is what refuses, reported as a conflict rather than a 500."""
+    await pool.execute("INSERT INTO people (name, role) VALUES ('taken', 'guest')")
+    resp = await owner_client.patch("/api/v1/auth/me", json={"name": "taken"})
+    assert resp.status_code == 409
+    # Every refusal in this service has the same shape — {"error": reason},
+    # not FastAPI's default {"detail": …}. See main.stated_error.
+    assert "taken" in resp.json()["error"]
+
+
+async def test_a_signed_out_browser_cannot_rename_anybody(client):
+    assert (await client.patch("/api/v1/auth/me", json={"name": "whoever"})).status_code == 401

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { ChatPage } from './ChatPage'
 import { ChatProvider } from '../../stores/chat-store'
 import type { ClearedConversation, Conversation, StoredMessage } from '../../lib/api'
@@ -48,10 +49,48 @@ function renderChat(api: {
   getMessages: (id: string) => Promise<StoredMessage[]>
 }) {
   return render(
-    <ChatProvider fetchImpl={noopFetch}>
-      <ChatPage api={api} pollIntervalMs={5} />
-    </ChatProvider>,
+    <MemoryRouter>
+      <ChatProvider fetchImpl={noopFetch}>
+        <ChatPage api={fakeApi(api)} pollIntervalMs={5} />
+      </ChatProvider>
+    </MemoryRouter>,
   )
+}
+
+/**
+ * A test's api fake, completed (S24).
+ *
+ * ChatPage's surface grew two methods and `getMessages` now answers
+ * `{messages, threads}` — a room's reply counts ride with the transcript,
+ * because they come from the same read. Every test here supplies the two it
+ * cares about and this fills in the rest: `getConversationState` falls back
+ * to the active conversation (no test below lands inside a room), and
+ * `openThread` throws, so a test that unexpectedly opens one fails loudly
+ * instead of silently navigating.
+ */
+function fakeApi(api: {
+  getActiveConversation: () => Promise<Conversation>
+  getMessages: (id: string) => Promise<StoredMessage[]>
+  getConversationState?: (id: string) => Promise<Conversation>
+  openThread?: (
+    conversationId: string,
+    messageId: string,
+  ) => Promise<Conversation & { parent_message_id: string; created: boolean }>
+}) {
+  return {
+    getActiveConversation: api.getActiveConversation,
+    getMessages: async (id: string) => ({
+      messages: await api.getMessages(id),
+      threads: {} as Record<string, number>,
+    }),
+    getConversationState:
+      api.getConversationState ?? (async () => api.getActiveConversation()),
+    openThread:
+      api.openThread ??
+      (async () => {
+        throw new Error('this test did not expect a room to be opened')
+      }),
+  } as never
 }
 
 function assistantBubbles() {
@@ -177,9 +216,11 @@ describe('ChatPage — a turn that ended in error shows the statement core persi
       }
 
       render(
-        <ChatProvider fetchImpl={noopFetch}>
-          <ChatPage api={api} />
-        </ChatProvider>,
+        <MemoryRouter>
+          <ChatProvider fetchImpl={noopFetch}>
+            <ChatPage api={fakeApi(api)} />
+          </ChatProvider>
+        </MemoryRouter>,
       )
       // The mount load resolves: in flight, so the responding line is up.
       await act(async () => {
@@ -218,9 +259,11 @@ describe('ChatPage — a turn that ended in error shows the statement core persi
         getMessages: vi.fn(async () => [stored('u1', 'user', 'list files in my workspace directory')]),
       }
       render(
-        <ChatProvider fetchImpl={noopFetch}>
-          <ChatPage api={api} pollIntervalMs={5} />
-        </ChatProvider>,
+        <MemoryRouter>
+          <ChatProvider fetchImpl={noopFetch}>
+            <ChatPage api={fakeApi(api)} pollIntervalMs={5} />
+          </ChatProvider>
+        </MemoryRouter>,
       )
       await act(async () => {
         await vi.advanceTimersByTimeAsync(0)
@@ -262,9 +305,11 @@ describe('ChatPage — Clear chat button (with a light confirm)', () => {
     clearConversation: (id: string) => Promise<ClearedConversation>,
   ) {
     return render(
-      <ChatProvider fetchImpl={noopFetch} conversationsApi={{ clearConversation }}>
-        <ChatPage api={api} pollIntervalMs={5} />
-      </ChatProvider>,
+      <MemoryRouter>
+        <ChatProvider fetchImpl={noopFetch} conversationsApi={{ clearConversation }}>
+          <ChatPage api={fakeApi(api)} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
     )
   }
 
@@ -369,9 +414,11 @@ describe('ChatPage — the idle poll (S9): a firing that lands while he is looki
     fetchImpl = noopFetch,
   ) {
     return render(
-      <ChatProvider fetchImpl={fetchImpl}>
-        <ChatPage api={api} pollIntervalMs={5} idlePollMs={5} />
-      </ChatProvider>,
+      <MemoryRouter>
+        <ChatProvider fetchImpl={fetchImpl}>
+          <ChatPage api={fakeApi(api)} pollIntervalMs={5} idlePollMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
     )
   }
 
@@ -504,9 +551,11 @@ describe('ChatPage — messages waiting their turn', () => {
       getMessages: vi.fn(async () => [] as StoredMessage[]),
     }
     render(
-      <ChatProvider fetchImpl={fetchImpl as never}>
-        <ChatPage api={api} pollIntervalMs={5} />
-      </ChatProvider>,
+      <MemoryRouter>
+        <ChatProvider fetchImpl={fetchImpl as never}>
+          <ChatPage api={fakeApi(api)} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
     )
     const textarea = await waitFor(() => screen.getByLabelText('Message Nova'))
     fireEvent.change(textarea, { target: { value: 'pull gemma4:26b' } })
@@ -546,9 +595,11 @@ describe('ChatPage — messages waiting their turn', () => {
       getMessages: vi.fn(async () => [] as StoredMessage[]),
     }
     render(
-      <ChatProvider fetchImpl={fetchImpl as never}>
-        <ChatPage api={api} pollIntervalMs={5} />
-      </ChatProvider>,
+      <MemoryRouter>
+        <ChatProvider fetchImpl={fetchImpl as never}>
+          <ChatPage api={fakeApi(api)} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
     )
 
     const chip = await waitFor(() => screen.getByTestId('queued-q1'))
@@ -620,9 +671,11 @@ describe('ChatPage — stopping the turn', () => {
       getMessages: vi.fn(async () => [] as StoredMessage[]),
     }
     render(
-      <ChatProvider fetchImpl={fetchImpl as never}>
-        <ChatPage api={api} pollIntervalMs={5} />
-      </ChatProvider>,
+      <MemoryRouter>
+        <ChatProvider fetchImpl={fetchImpl as never}>
+          <ChatPage api={fakeApi(api)} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
     )
 
     const stop = await waitFor(() => screen.getByTestId('stop-turn'))
@@ -677,3 +730,189 @@ describe('ChatPage — the composer keeps an unsent draft', () => {
   })
 })
 
+
+/**
+ * S24 — a room is a URL.
+ *
+ * `/chat?thread=<conversation-id>`: a query parameter on the existing route
+ * rather than a new path, because a new path would re-break the three
+ * 2026-09-15 phone fixes on arrival (the fullWidth layout, the Chat
+ * highlight, the composer's bottom padding), all of which hold by
+ * construction on `/chat`.
+ */
+describe('ChatPage — rooms', () => {
+  const room: Conversation = {
+    id: 'room-1',
+    title: null,
+    created_at: '',
+    pending_turn: false,
+    pending_turn_id: null,
+    queued: [],
+    parent_message_id: 'a1',
+  }
+
+  function api(overrides: Record<string, unknown> = {}) {
+    return {
+      getActiveConversation: vi.fn(async () => conversation()),
+      getMessages: vi.fn(async () => [
+        stored('u1', 'user', 'morning'),
+        stored('a1', 'assistant', 'Two timers have failed.'),
+      ]),
+      ...overrides,
+    }
+  }
+
+  it('draws a stub under a message that offers a room, and none under one that does not', async () => {
+    const fake = api({
+      getMessages: vi.fn(async () => ({
+        messages: [stored('u1', 'user', 'morning'), stored('a1', 'assistant', 'Two timers have failed.')],
+        threads: { a1: 0 },
+      })),
+    })
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage api={fake as never} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+
+    const stubs = await screen.findAllByTestId('thread-stub')
+    expect(stubs).toHaveLength(1)
+    // 0 replies reads as an invitation, not as a count of nothing: the room
+    // is opened on the first tap.
+    expect(stubs[0].textContent).toContain('Talk about this')
+  })
+
+  it('a stub with replies says how many, and never previews the newest one', async () => {
+    // A count, because previewing the latest reply would put a room's
+    // content back in the hallway — exactly the interleaving rooms remove.
+    const fake = api({
+      getMessages: vi.fn(async () => ({
+        messages: [stored('a1', 'assistant', 'Two timers have failed.')],
+        threads: { a1: 3 },
+      })),
+    })
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage api={fake as never} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+
+    const stub = await screen.findByTestId('thread-stub')
+    expect(stub.textContent).toContain('3 replies')
+  })
+
+  it('opening a stub navigates to the room it made', async () => {
+    const openThread = vi.fn(async () => ({ ...room, created: true }))
+    const getConversationState = vi.fn(async () => room)
+    const fake = api({
+      getMessages: vi.fn(async (id: string) =>
+        id === 'room-1'
+          ? { messages: [stored('r1', 'user', 'which one?')], threads: {} }
+          : {
+              messages: [stored('a1', 'assistant', 'Two timers have failed.')],
+              threads: { a1: 0 },
+            },
+      ),
+      openThread,
+      getConversationState,
+    })
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage api={fake as never} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+
+    fireEvent.click(await screen.findByTestId('thread-stub'))
+
+    await waitFor(() => expect(openThread).toHaveBeenCalledWith('c1', 'a1'))
+    // And the page is now showing the ROOM, with its own way out.
+    expect(await screen.findByTestId('thread-header')).toBeTruthy()
+    await waitFor(() => expect(getConversationState).toHaveBeenCalledWith('room-1'))
+  })
+
+  it('a room the URL names loads without going through the hallway', async () => {
+    // What a relaunch inside a room does, and what makes the iOS back
+    // gesture the OS back.
+    const getConversationState = vi.fn(async () => room)
+    const fake = api({
+      getConversationState,
+      getMessages: vi.fn(async () => ({
+        messages: [stored('r1', 'user', 'which one?')],
+        threads: {},
+      })),
+    })
+    render(
+      <MemoryRouter initialEntries={['/chat?thread=room-1']}>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage api={fake as never} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByTestId('thread-header')).toBeTruthy()
+    expect(getConversationState).toHaveBeenCalledWith('room-1')
+    expect(fake.getActiveConversation).not.toHaveBeenCalled()
+  })
+
+  it('a room shows no stubs of its own — rooms off rooms are a filing system', async () => {
+    const fake = api({
+      getConversationState: vi.fn(async () => room),
+      getMessages: vi.fn(async () => ({
+        messages: [stored('r1', 'assistant', 'the 7am backup')],
+        threads: { r1: 2 },
+      })),
+    })
+    render(
+      <MemoryRouter initialEntries={['/chat?thread=room-1']}>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage api={fake as never} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+
+    await screen.findByTestId('thread-header')
+    expect(screen.queryByTestId('thread-stub')).toBeNull()
+  })
+
+  it('falls back to the hallway when the room the URL names is gone', async () => {
+    // Cleared from another device. Falling back beats stranding the page on
+    // an error: the hallway always exists.
+    const fake = api({
+      getConversationState: vi.fn(async () => {
+        throw new Error('no conversation room-1 here')
+      }),
+      getMessages: vi.fn(async () => ({
+        messages: [stored('a1', 'assistant', 'Two timers have failed.')],
+        threads: {},
+      })),
+    })
+    render(
+      <MemoryRouter initialEntries={['/chat?thread=room-1']}>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage api={fake as never} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+
+    expect(await screen.findByText('Two timers have failed.')).toBeTruthy()
+    expect(fake.getActiveConversation).toHaveBeenCalled()
+  })
+
+  it('the hallway has no room header at all', async () => {
+    render(
+      <MemoryRouter initialEntries={['/chat']}>
+        <ChatProvider fetchImpl={noopFetch}>
+          <ChatPage api={fakeApi(api())} pollIntervalMs={5} />
+        </ChatProvider>
+      </MemoryRouter>,
+    )
+    await screen.findByText('Two timers have failed.')
+    expect(screen.queryByTestId('thread-header')).toBeNull()
+  })
+})

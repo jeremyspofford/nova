@@ -254,6 +254,10 @@ export interface Conversation {
   // while a turn was running. The server is what runs them, so this list is the
   // truth the page adopts; `ahead` is how many run before each one.
   queued: { id: string; conversation_id: string; body: string; ahead: number }[]
+  /** S24: null for the hallway, the message this ROOM hangs off when it is a
+   *  thread. The page needs it to scroll back to the right place on the way
+   *  out. Optional so a core older than S24 still typechecks. */
+  parent_message_id?: string | null
 }
 
 export interface StoredMessage {
@@ -273,6 +277,11 @@ export interface StoredMessage {
    * rows older than the turn link. The chat bubble's "Reminder" /
    * "Scheduled" label reads this and nothing else. */
   turn_kind?: string | null
+  /** The LAST round's prompt size, off that round's llm_call span
+   *  (2026-09-16) — what the context gauge fills against, so a reload shows
+   *  the same figure the live usage frame did. The last round, not the sum:
+   *  each round re-sends the whole prompt. null when no round stated one. */
+  prompt_tokens?: number | null
   /** The turn's cost in USD summed from its llm_call spans (S10) — the
    * gateway's ledger figures, never a stored claim. null when no round was
    * priced (local, unmetered, or unpriced). */
@@ -308,14 +317,96 @@ export interface Delegation {
   files: string[]
 }
 
+/** Change what this person is called (2026-09-16). The name is also the
+ *  login identifier, so it stays unique — a name somebody else holds comes
+ *  back as a stated 409, never a silent no-op. */
+export const renameMe = (name: string) =>
+  apiSend<{ person: { id: string; name: string; role: string } }>(
+    '/api/v1/auth/me',
+    'PATCH',
+    { name },
+  )
+
 export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
 
-export async function getMessages(conversationId: string): Promise<StoredMessage[]> {
-  const body = await apiGet<{ messages: StoredMessage[] }>(
+/** The live state of a conversation the client NAMES (S24) — the same shape
+ *  `/active` answers, so a page landing on `?thread=<id>` attaches to a room
+ *  exactly the way it attaches to the hallway, including to a turn already
+ *  running in it. One builder serves both on the server, so they cannot
+ *  drift. */
+export const getConversationState = (conversationId: string) =>
+  apiGet<Conversation>(`/api/v1/conversations/${conversationId}/state`)
+
+/** How many messages each room holds, keyed by the message it hangs off
+ *  (S24). Only messages that HAVE a room appear — "no room here" and "a room
+ *  nobody has spoken in" are different things, and the stub only renders for
+ *  the second. Counted on the server, never stored. */
+export type ThreadCounts = Record<string, number>
+
+/**
+ * What the context panel shows (2026-09-16). Every half degrades on its own
+ * — the card, the machine and the throughput come from different sources
+ * and fail for different reasons — so each carries a `reason` and a null
+ * figure rather than a zero.
+ *
+ * There is no network throughput here on purpose: nobody measures it, and a
+ * number nobody measured looks exactly as confident as one somebody did.
+ */
+export interface SystemResources {
+  card: {
+    free_gb?: number | null
+    total_gb?: number | null
+    used_gb?: number | null
+    /** Shader busy-ness. Free memory and utilisation fail in OPPOSITE
+     *  directions — 16 GB free at 99% busy is a card that cannot answer. */
+    utilisation_pct?: number | null
+    /** The card's used figure minus what ollama holds: everything on this
+     *  machine Nova cannot enumerate. The actionable half. */
+    non_ollama_gb?: number | null
+    resident?: { model: string; vram_gb: number }[]
+    reason?: string | null
+  }
+  machine: {
+    memory?: { total_mb: number | null; available_mb: number | null; reason: string | null }
+    cpu?: { cores: number | null; load_1m: number | null; reason: string | null }
+    disk?: { free_gb: number | null; total_gb: number | null; reason: string | null }
+    reason?: string | null
+  }
+  /** null when this model has no measured history here — never a zero. */
+  throughput: {
+    model: string
+    recent_tok_per_s: number | null
+    baseline_tok_per_s: number | null
+    recent_rounds: number
+    baseline_rounds: number
+    ratio: number | null
+  } | null
+  model: string | null
+}
+
+export const getSystemResources = () =>
+  apiGet<SystemResources>('/api/v1/system/resources')
+
+export async function getMessages(
+  conversationId: string,
+): Promise<{ messages: StoredMessage[]; threads: ThreadCounts }> {
+  const body = await apiGet<{ messages: StoredMessage[]; threads?: ThreadCounts }>(
     `/api/v1/conversations/${conversationId}/messages`,
   )
-  return body.messages
+  // `threads` is absent on a core older than S24; an empty map draws no
+  // stubs, which is the right answer rather than a crash.
+  return { messages: body.messages, threads: body.threads ?? {} }
 }
+
+/** Open (or re-open) the room off one message. Idempotent on the server — a
+ *  partial unique index means a double tap cannot fork a message into two
+ *  rooms, so this is safe to call from a button with no guard of its own. */
+export const openThread = (conversationId: string, messageId: string) =>
+  apiSend<Conversation & { parent_message_id: string; created: boolean }>(
+    `/api/v1/conversations/${conversationId}/messages/${messageId}/thread`,
+    'POST',
+    {},
+  )
 
 export interface ClearedConversation {
   id: string

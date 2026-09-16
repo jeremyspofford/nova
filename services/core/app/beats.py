@@ -821,6 +821,11 @@ async def _record_push(
     reached: bool,
     receipt: dict,
     reason: str | None,
+    # S24: the chat row this push wrote, so the notice knows which message
+    # carried it and a room can hang off that message. An urgent notice is
+    # delivered as its OWN row, so unlike a digest its room is about exactly
+    # this one notice.
+    message_id: uuid.UUID | None = None,
 ) -> str | None:
     """Write the channel's own verdict back onto the notice. Returns the reason
     it could not be written, if it could not.
@@ -832,7 +837,7 @@ async def _record_push(
     _checks, notices = _proactive()
     try:
         if reached:
-            await notices.mark_delivered(pool, notice_id, delivery=receipt)
+            await notices.mark_delivered(pool, notice_id, delivery=receipt, message_id=message_id)
         else:
             await notices.mark_failed(pool, notice_id, reason or "the delivery stated no reason")
     except Exception as exc:  # noqa: BLE001 - the reason is the record
@@ -872,7 +877,12 @@ async def _push_urgent(
             return Push(notice.id, notice.title, False, {}, _stated(reason, noted))
         span.meta["reached"] = result.reached
         noted = await _record_push(
-            pool, notice.id, reached=result.reached, receipt=result.receipt, reason=result.reason
+            pool,
+            notice.id,
+            reached=result.reached,
+            receipt=result.receipt,
+            reason=result.reason,
+            message_id=result.message_id,
         )
         if noted is not None:
             span.meta["record_error"] = noted
@@ -2052,7 +2062,16 @@ async def _mark_digest(pool: asyncpg.Pool, outstanding: Sequence, result) -> str
     for notice in outstanding:
         try:
             if result.reached:
-                await notices.mark_delivered(pool, notice.id, delivery=result.receipt)
+                await notices.mark_delivered(
+                    pool,
+                    notice.id,
+                    delivery=result.receipt,
+                    # Every notice in one digest shares one row, which is the
+                    # honest unit: a digest IS one message about several
+                    # findings, so a room opened from it is a room about the
+                    # digest. Stated in the spec so nobody files it as a bug.
+                    message_id=result.message_id,
+                )
             else:
                 await notices.mark_failed(pool, notice.id, result.reason)
         except Exception as exc:  # noqa: BLE001 - the reason is the record

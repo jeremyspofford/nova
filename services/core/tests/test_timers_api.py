@@ -577,6 +577,10 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
         "route_reason",
         "agent",
         "delegations",
+        # 2026-09-16: the last round's prompt size, for the context gauge —
+        # derived off the llm_call span like every key above it, so a reload
+        # shows what the live usage frame showed.
+        "prompt_tokens",
     }
 
 

@@ -1239,3 +1239,122 @@ describe('chatReducer — thinking', () => {
     expect(rows[rows.length - 1].thinking).toBe('')
   })
 })
+
+/**
+ * S24: a frame belongs to the conversation its stream was started for.
+ *
+ * Before threads there was one conversation on screen and every frame
+ * belonged to it. Now: stream in the hallway, tap a stub, and the hallway's
+ * remaining deltas would be appended to the ROOM's pending bubble — her
+ * answer about the grocery list arriving inside a room about a failing
+ * timer. Dropped by identity rather than by arrival order, because the owner
+ * can switch back and forth while both are mid-turn and no ordering rule
+ * survives that.
+ */
+describe('chatReducer — frames are keyed to their conversation', () => {
+  const inConversation = (id: string): ChatState =>
+    chatReducer(started(), {
+      type: 'event',
+      event: { type: 'meta', conversationId: id, model: 'm', turnId: 't1', agent: null },
+    })
+
+  it('drops a delta from a conversation that is no longer on screen', () => {
+    const state = inConversation('room-1')
+    const after = chatReducer(state, {
+      type: 'event',
+      event: { type: 'delta', text: 'from the hallway' },
+      conversationId: 'hallway',
+    })
+
+    expect(after).toBe(state)
+    const rowsAfter = messages(after)
+    expect(rowsAfter[rowsAfter.length - 1].text).not.toContain('from the hallway')
+  })
+
+  it('keeps a delta from the conversation that IS on screen', () => {
+    const state = inConversation('room-1')
+    const after = chatReducer(state, {
+      type: 'event',
+      event: { type: 'delta', text: 'about this room' },
+      conversationId: 'room-1',
+    })
+
+    const rows = messages(after)
+    expect(rows[rows.length - 1].text).toContain('about this room')
+  })
+
+  it('accepts a stream that started before the conversation had an id', () => {
+    // The first message of a brand-new chat: the id arrives on the meta
+    // frame, so there was nothing to key on and nothing it could belong to.
+    const after = chatReducer(started(), {
+      type: 'event',
+      event: { type: 'delta', text: 'hello' },
+      conversationId: null,
+    })
+    const rows = messages(after)
+    expect(rows[rows.length - 1].text).toContain('hello')
+  })
+
+  it('accepts an unkeyed event, so nothing that predates S24 breaks', () => {
+    const after = chatReducer(started(), {
+      type: 'event',
+      event: { type: 'delta', text: 'hello' },
+    })
+    const rows = messages(after)
+    expect(rows[rows.length - 1].text).toContain('hello')
+  })
+})
+
+describe('chatReducer — the context gauge survives a reload', () => {
+  const fetched = (id: string, role: string, prompt_tokens?: number) => ({
+    id, role, content: 'x', ...(prompt_tokens === undefined ? {} : { prompt_tokens }),
+  })
+
+  it('adopts the NEWEST answered turn\'s prompt size', () => {
+    // Only the last turn's figure describes the context as it now stands;
+    // an older, smaller one would under-report it.
+    const state = chatReducer(emptyChat(), {
+      type: 'reconcile',
+      conversationId: 'c1',
+      messages: [fetched('a', 'assistant', 4000), fetched('b', 'user'), fetched('c', 'assistant', 9000)],
+    })
+    expect(state.promptTokens).toBe(9000)
+  })
+
+  it('reports null when no turn stated one, rather than zero', () => {
+    // A null is not an empty context — it is a turn nobody measured.
+    const state = chatReducer(emptyChat(), {
+      type: 'reconcile',
+      conversationId: 'c1',
+      messages: [fetched('a', 'user'), fetched('b', 'assistant')],
+    })
+    expect(state.promptTokens).toBeNull()
+  })
+
+  it('a live usage frame replaces it', () => {
+    let state = chatReducer(emptyChat(), {
+      type: 'reconcile',
+      conversationId: 'c1',
+      messages: [fetched('a', 'assistant', 4000)],
+    })
+    state = chatReducer(state, { type: 'send', userId: 'u', assistantId: 'a2', text: 'hi' })
+    state = chatReducer(state, {
+      type: 'event',
+      event: {
+        type: 'usage',
+        usage: {
+          rounds: 1,
+          priced_rounds: 1,
+          cost_usd: 0,
+          cost_basis: [],
+          prompt_tokens: 12_000,
+          completion_tokens: 40,
+          unmetered_rounds: 0,
+          local_rounds: 1,
+          unrecorded_rounds: 0,
+        },
+      },
+    })
+    expect(state.promptTokens).toBe(12_000)
+  })
+})

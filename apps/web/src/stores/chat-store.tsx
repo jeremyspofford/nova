@@ -145,6 +145,11 @@ interface ConversationsApi {
 
 const ChatContext = createContext<ChatStore | null>(null)
 
+/** The abort-map key for a conversation that has no id yet — the very first
+ *  message of a brand-new chat, whose id arrives on the meta frame. A
+ *  sentinel rather than `''` so it cannot collide with a real id. */
+const NEW_CONVERSATION = '(new)'
+
 export function ChatProvider({
   children,
   fetchImpl,
@@ -165,7 +170,31 @@ export function ChatProvider({
   // mid-turn must not restart it with a stale conversationId.
   const stateRef = useRef(state)
   stateRef.current = state
-  const abortRef = useRef<AbortController | null>(null)
+  /**
+   * One controller per conversation (S24), not one for the store.
+   *
+   * A single ref was correct while there was one conversation on screen. A
+   * thread is a different conversation, so with a single ref: stream in the
+   * hallway, open a room, and the room's controller REPLACES the hallway's
+   * — which the hallway's own `finally` then declines to clear, and which
+   * `clearChat` and the identity teardown can no longer reach. The hallway's
+   * request is orphaned: still open, still delivering, unreachable.
+   *
+   * Keyed by conversation id, with a sentinel for the very first message of
+   * a brand-new conversation (which has no id until the meta frame).
+   */
+  const abortsRef = useRef<Map<string, AbortController>>(new Map())
+
+  const abortAll = useCallback(() => {
+    for (const controller of abortsRef.current.values()) controller.abort()
+    abortsRef.current.clear()
+  }, [])
+
+  const abortConversation = useCallback((conversationId: string | null) => {
+    const key = conversationId ?? NEW_CONVERSATION
+    abortsRef.current.get(key)?.abort()
+    abortsRef.current.delete(key)
+  }, [])
 
   // Updated synchronously during render (not in an effect) so it already
   // reflects the new identity by the time any event dispatched THIS render
@@ -192,9 +221,11 @@ export function ChatProvider({
       // Runs on every identity change (before the effect above runs again)
       // AND on unmount — either way, whatever this identity had in flight
       // stops being fetched the moment it stops being current.
-      abortRef.current?.abort()
+      // EVERY conversation's, not just the newest: a room and the hallway
+      // can both have had a request in flight, and this identity owns both.
+      abortAll()
     }
-  }, [personId])
+  }, [personId, abortAll])
 
   const clearChat = useCallback(async () => {
     const conversationId = stateRef.current.conversationId
@@ -205,8 +236,9 @@ export function ChatProvider({
       return
     }
     // Stop any turn in flight first: its late frames must not land into a
-    // transcript we are about to empty.
-    abortRef.current?.abort()
+    // transcript we are about to empty. Only THIS conversation's — clearing
+    // a room must not kill a turn still running in the hallway.
+    abortConversation(conversationId)
     await conversationsApi.clearConversation(conversationId)
     // Only after the server confirms the delete — no fake success.
     dispatch({ type: 'cleared', conversationId })
@@ -340,8 +372,10 @@ export function ChatProvider({
       dispatch({ type: 'send', userId, assistantId, text })
 
       const controller = new AbortController()
-      abortRef.current = controller
       const conversationId = stateRef.current.conversationId
+      const key = conversationId ?? NEW_CONVERSATION
+      abortsRef.current.get(key)?.abort()
+      abortsRef.current.set(key, controller)
       const startedForIdentity = identityRef.current
 
       ;(async () => {
@@ -357,10 +391,16 @@ export function ChatProvider({
             // timing. Breaking here also runs streamChat's own cleanup
             // (its `finally` cancels the reader), so nothing is leaked.
             if (identityRef.current !== startedForIdentity) break
-            dispatch({ type: 'event', event })
+            // WHICH CONVERSATION THIS EVENT IS FOR (S24). The reducer drops
+            // it if that is not the one on screen, so deltas from a turn
+            // started in the hallway can never be appended to a room's
+            // transcript — by identity rather than by arrival order, which
+            // is the only way that holds when the owner is switching
+            // between them mid-stream.
+            dispatch({ type: 'event', event, conversationId })
           }
         } finally {
-          if (abortRef.current === controller) abortRef.current = null
+          if (abortsRef.current.get(key) === controller) abortsRef.current.delete(key)
         }
       })()
     },

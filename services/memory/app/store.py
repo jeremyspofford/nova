@@ -487,6 +487,64 @@ class MemoryStore:
         _atomic_write(path, _render(meta, new_body))
         return path, created_new
 
+    # -- threads (S24) -----------------------------------------------------
+
+    def append_thread(
+        self,
+        person_id: str,
+        conversation_id: str,
+        title: str,
+        entry_body: str,
+        *,
+        when: datetime | None = None,
+    ) -> tuple[Path, bool]:
+        """Append an exchange to ONE room's document.
+
+        `people/<person>/threads/<conversation-id>.md`, one file per room,
+        with the room's topic in frontmatter. Deliberately the same shape as
+        a journal — frontmatter plus `## HH:MM` entries — because then every
+        existing mechanism does the right thing with no new concept: the
+        indexer already tokenises title and body and already splits on those
+        headings, so the topic is searchable and recall carries it.
+
+        Why a separate file at all, rather than the day's journal: a room is
+        one subject held over time. In the journal its exchanges are
+        scattered across however many days it was live and interleaved with
+        everything else said on those days, which is exactly the shuffling
+        the room existed to stop. Keeping them together is the point.
+
+        The TITLE is derived by the caller from the message the room hangs
+        off (core's `chat.thread_title`) and is refreshed on every append —
+        it costs nothing and means a parent that was edited does not leave a
+        stale topic on the file.
+        """
+        moment = when or datetime.now(UTC)
+        if not conversation_id or "/" in conversation_id or "\\" in conversation_id:
+            raise PathEscape(f"invalid conversation_id: {conversation_id!r}")
+        person_root = self.person_root(person_id)
+        path = _resolve_within(person_root, f"threads/{conversation_id}.md")
+        entry = f"## {moment.strftime('%H:%M')}\n\n{entry_body.strip()}\n"
+
+        if path.exists():
+            meta, body = _parse(path.read_text(encoding="utf-8"))
+            meta["title"] = title
+            new_body = (body.rstrip("\n") + "\n\n" + entry) if body.strip() else entry
+            created_new = False
+        else:
+            meta = {
+                "id": str(uuid.uuid4()),
+                "owner": person_id,
+                "kind": "thread",
+                "title": title,
+                "created": moment.date(),
+                "tags": [],
+            }
+            new_body = "\n" + entry
+            created_new = True
+
+        _atomic_write(path, _render(meta, new_body))
+        return path, created_new
+
     # -- topics ------------------------------------------------------------
 
     def write_topic(

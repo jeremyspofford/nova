@@ -447,6 +447,22 @@ def live_tools() -> tuple[tuple, str | None]:
     )
 
 
+# How much of a parent message heads a room's block (S24). Enough to say
+# what the room is about, short enough that a long digest does not eat the
+# window the block itself needs.
+THREAD_HEADER_CHARS = 240
+
+
+def _clip(text: str, limit: int) -> str:
+    """The head of a string, saying so when it cut. Never silently truncated:
+    a header that stops mid-sentence with no marker reads as the whole of a
+    message that was longer."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + " […]"
+
+
 def _tool_line(tool) -> str:
     """One tool, as the model needs to see it: its name, the arguments it
     takes (required ones marked), and its own description clipped."""
@@ -475,7 +491,25 @@ def _brief(person_name: str, window, subjects: Sequence[str], tools_offered: Seq
         "message is what you cite; the name is who wrote it.",
         "",
     ]
+    # S24: a side conversation is rendered as its OWN block, headed by the
+    # message it hangs off. `model_read.window` hands rows back grouped by
+    # conversation; without a header the grouping is invisible to the model
+    # reading this, and a room's exchange reads as an abrupt subject change
+    # in the middle of the day. The header is the parent message itself —
+    # nothing generated it, so it cannot be a wrong summary.
+    seen: set = set()
     for row in window:
+        conversation_id = row["conversation_id"]
+        if conversation_id not in seen:
+            seen.add(conversation_id)
+            parent = row["parent_content"] if "parent_content" in row.keys() else None
+            if parent:
+                lines.append(
+                    "--- a side conversation about this message, which is not part of "
+                    "the main chat: ---"
+                )
+                lines.append(_clip(parent, THREAD_HEADER_CHARS))
+                lines.append("")
         who = "Nova" if row["role"] == "assistant" else person_name
         lines.append(f"[{row['id']}] {who}, {row['created_at'].isoformat(timespec='minutes')}")
         lines.append(row["content"])

@@ -594,10 +594,23 @@ class Exchange(BaseModel):
     assistant: str
 
 
+class Thread(BaseModel):
+    """S24: this exchange happened in a ROOM, not the main chat.
+
+    Present only for a thread. `title` is DERIVED by core from the message
+    the room hangs off — no model writes it, so it cannot be a wrong
+    summary, only a terse one.
+    """
+
+    conversation_id: str
+    title: str
+
+
 class IngestRequest(BaseModel):
     person_id: str
     conversation_id: str
     exchange: Exchange
+    thread: Thread | None = None
 
 
 class RecallRequest(BaseModel):
@@ -679,8 +692,17 @@ async def ingest(req: IngestRequest) -> dict:
     assistant_text = req.exchange.assistant.strip()
     entry = f"User: {user_text}\n\nAssistant: {assistant_text}"
 
+    # A room's exchanges go to the room's own document, not to the day's
+    # journal (S24). In the journal they are scattered across however many
+    # days the room was live and interleaved with everything else said on
+    # those days — which is exactly the shuffling a room exists to stop.
     try:
-        abs_path, _created_new = store.append_journal(req.person_id, entry)
+        if req.thread is not None:
+            abs_path, _created_new = store.append_thread(
+                req.person_id, req.thread.conversation_id, req.thread.title, entry
+            )
+        else:
+            abs_path, _created_new = store.append_journal(req.person_id, entry)
     except PathEscape as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from None
 
