@@ -326,10 +326,45 @@ different conversations, so the reload poll would have read the hallway's
 pending turn while displaying the room's — "still responding" over a room
 that had finished, or silence over one that had not.
 
-### What has NOT been walked
+### WALKED on the live stack, 2026-09-16
 
-The definition of done is a walk on the live stack, and none of it has run
-there yet: nothing is deployed, so steps 1-8 are all outstanding. The suites
-say the machinery holds; only the walk says the feature works. In
-particular, nobody has yet asked a room a question only the notice's FACTS
-can answer, which is the step revision 1 would have passed on her own prose.
+Deployed (migration 030 applied cleanly), then driven end to end against
+real data — no fixtures, the service bearer acting as the owner.
+
+**Setup, stated plainly.** Nothing was owed: the five `raised` notices were
+all `cleared`, so the digest correctly had nothing to say. Two DELIVERED
+notices were still true and still unseen (`work_paused_timers`,
+`skills_repeated_procedure`) and predated the migration, so they carried no
+`delivered_message_id`. Those two were re-armed to `raised` and the digest
+fired for real. The conditions are genuine; only the timing was forced.
+
+1. **The digest delivered both** and each notice recorded the SAME message —
+   one room per delivered message, and a digest room is about the digest.
+2. **The stub read 0** on that message before any room existed, which is the
+   entrance the spec did not settle.
+3. **`open_thread` was idempotent**: a second call returned the same room,
+   `created: false`.
+4. **`active_conversation` still answered the hallway** with the room open.
+5. **The seed carried the check's own facts** —
+   `timer_id: 0b39fae3-4246-472e-89b3-0ec32cf011da`, `consecutive_failures: 1`
+   — neither of which appears anywhere in her prose.
+6. **DoD step 2, the one revision 1 would have faked.** Asked in the room:
+   *"Which timer id is paused, and how many consecutive failures does it
+   have?"* She answered **`0b39fae3, 1`**. From the trace, not the reply:
+   the turn ran with `in_a_room = true`, status ok, 11.3 s.
+7. **The measurement fix reads true.** Those rounds filed `tok_per_s` of
+   99.7, 100.2 and 98.4 — against the 1 777/1 918/1 927 this same field was
+   recording a day earlier. `reasoning_chars` 754/979/941 and a
+   `thinking_ms` of 2 249 were recorded, and the `think` frames streamed to
+   the client.
+8. **The stub moved to 2 replies**, counted.
+9. **Memory wrote the room its own document** —
+   `people/<id>/threads/<room>.md`, `kind: thread`, title derived from the
+   parent message and role-prefixed.
+10. **The UI**, real session, real data: the hallway showed 241 messages and
+    exactly ONE stub reading "2 replies"; the room showed its header, its
+    two messages, and no stubs of its own. Zero page errors.
+
+Not yet walked: the phone at 393px (DoD step 8), a reload mid-turn inside a
+room (step 5), and the queue-while-busy path (step 6) — the last needs two
+hands.
