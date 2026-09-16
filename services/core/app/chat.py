@@ -1153,6 +1153,31 @@ def _live_calls(results: Iterable) -> list[live_facts.LiveCall]:
     return calls
 
 
+def recalled_sources(results: Iterable) -> list[str]:
+    """WHICH notes a recall returned, as their paths — for the trace.
+
+    The span recorded `hits: 4` and nothing else, which is a count of an
+    answer rather than the answer. On 2026-09-16 that gap cost a wrong
+    diagnosis: a sentence she kept repeating looked like conversation
+    history repeating itself, and only a hand-built probe (clear the
+    conversation, ask again, watch it say the same thing) showed it was a
+    recalled JOURNAL line. With the paths on the span, "did this come from a
+    note, and which one" is one query against the ledger.
+
+    PATHS, never bodies. The note already lives in memory; copying its text
+    into the trace would be a second copy free to drift, and a long note
+    would bloat every turn's ledger. A path identifies it, and the memory
+    service can be asked for the rest.
+    """
+    out = []
+    for hit in results:
+        if isinstance(hit, dict):
+            where = hit.get("path") or hit.get("document") or hit.get("title")
+            if where:
+                out.append(str(where))
+    return out
+
+
 def _snippets(results: Iterable, today: date | None = None) -> list[str]:
     """One line per hit, carrying what is mechanically KNOWN about it.
 
@@ -1815,6 +1840,9 @@ async def _recall(
             logger.warning("memory recall failed, continuing without notes: %s", reason)
             return Recalled(unreachable=reason)
         hits: dict[str, list[str]] = {}
+        # The PATHS behind those hits, per scope, for the span — see
+        # recalled_sources.
+        sources: dict[str, list[str]] = {}
         calls: list[live_facts.LiveCall] = []
         said: dict[str, str | None] = {}
         reduced: dict[str, str | None] = {}
@@ -1828,6 +1856,7 @@ async def _recall(
             else:
                 results, statement, degraded = outcome
                 hits[name] = _snippets(results)
+                sources[name] = recalled_sources(results)
                 # From every scope that answered: an agent allowed to read the
                 # household's notes gets the same check on them that Nova does,
                 # because a stale note is stale whoever recalled it.
@@ -1858,6 +1887,12 @@ async def _recall(
             snippets = [*hits["own"], *(f"(shared) {s}" for s in hits["shared"])]
             span.meta["scopes"] = {"own": len(hits["own"]), "shared": len(hits["shared"])}
         span.meta["hits"] = len(snippets)
+        # WHICH ones, not just how many (2026-09-16). See recalled_sources:
+        # a count cannot answer "where did that sentence come from", and the
+        # question is asked exactly when something has already gone wrong.
+        named = [path for scope in sources.values() for path in scope]
+        if named:
+            span.meta["recalled"] = named
         # A scope that failed is named in the prompt even when the other scope
         # answered: notes missing because a partition was unreadable must not
         # read as notes that do not exist.
