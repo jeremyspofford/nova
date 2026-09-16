@@ -584,6 +584,9 @@ export function ChatPage({
           )}
           <ChatInput
             onSubmit={sendMessage}
+            // S28: which conversation a file belongs to. Absent until the
+            // first one resolves, and attaching is not offered until then.
+            conversationId={state.conversationId}
             // Live while a turn runs (S15): a message sent now is QUEUED, not
             // refused, so the box that used to go dead stays usable. `loading`
             // is the one case where there is genuinely nothing to send to yet.

@@ -67,6 +67,9 @@ export function SettingsPage() {
     : null
   const chatModel =
     chatState.model ?? (settings ? settingValue(settings, 'chat.model', '') : '')
+  // S28: which model reads an image. Empty means she picks one herself, which
+  // is the default and what she did before this became selectable.
+  const visionModel = settings ? String(settingValue(settings, 'chat.vision_model', '')) : ''
   // Opt-in, default OFF — reflects the stored value, unset reads false.
   const responsivenessCheck = settings
     ? settingValue(settings, 'agents.responsiveness_check', false)
@@ -202,6 +205,7 @@ export function SettingsPage() {
               <>
                 <ModelsSection
               chatModel={chatModel}
+              visionModel={visionModel}
               onModelChanged={model => {
                 // Both writes matter: the settings echo keeps this page's
                 // OWN state consistent with the PUT that just succeeded

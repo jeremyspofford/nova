@@ -311,3 +311,110 @@ def as_json(attachment: Attachment) -> dict:
         "has_text": attachment.extracted_text is not None,
         "extract_note": attachment.extract_note,
     }
+
+
+def _size_words(n: int) -> str:
+    """A size a person reads. Exact bytes are for a machine; "2.1 MB" is what
+    tells him whether the thing he sent is the thing he meant."""
+    if n < 1024:
+        return f"{n} bytes"
+    if n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    return f"{n / 1_048_576:.1f} MB"
+
+
+def facts_block(rows: list[Attachment], *, unseeable: list[Attachment] | None = None) -> str:
+    """What arrived, as FACTS in the turn — never as an instruction.
+
+    Each line names the file, what it is, how big, and WHERE IT IS, because
+    the path is the whole point: it is the same string `workspace_read_file`
+    takes, so reading what he sent needs no guess and leaves a span. Nothing
+    here tells her to read anything; the prompt is not a control (CLAUDE.md),
+    and a file she never opens is a file the trace will show she never
+    opened.
+
+    `unseeable` names images that could not be shown to any model on this
+    box. Said plainly and in the same breath, because the alternative — an
+    image silently absent from the turn — is how she ends up describing a
+    screenshot from its filename.
+    """
+    if not rows and not unseeable:
+        return ""
+    lines = []
+    if rows:
+        noun = "file" if len(rows) == 1 else "files"
+        lines.append(f"He attached {len(rows)} {noun}, in the workspace:")
+        for row in rows:
+            extra = ""
+            if row.extract_note:
+                extra = f" — {row.extract_note}"
+            elif row.extracted_text is not None:
+                extra = " — its text is below"
+            lines.append(
+                f"- {row.filename} ({row.media_type}, {_size_words(row.size_bytes)}) "
+                f"at {row.path}{extra}"
+            )
+    for row in unseeable or []:
+        lines.append(
+            f"- {row.filename} is an image at {row.path}, and NO model installed here can "
+            "see images, so it is not in this turn. Say that rather than describing it."
+        )
+    return "\n".join(lines)
+
+
+def text_block(rows: list[Attachment], *, limit: int = 20_000) -> str:
+    """The extracted text of anything that has some, inline.
+
+    A PDF he sent is not useful as a path alone — she would have to read it
+    with a tool that cannot parse it. The text goes in the turn, trimmed with
+    the trim STATED: a document cut off silently is one she will answer about
+    as though she saw all of it.
+    """
+    out = []
+    for row in rows:
+        if not row.extracted_text:
+            continue
+        body = row.extracted_text
+        if len(body) > limit:
+            body = body[:limit] + (
+                f"\n[…trimmed here: {row.filename} has {len(row.extracted_text)} characters "
+                f"and this is the first {limit}. The whole file is at {row.path}.]"
+            )
+        out.append(f"--- {row.filename} ---\n{body}")
+    return "\n\n".join(out)
+
+
+def image_parts(rows: list[Attachment], *, root: Path | None = None) -> list[dict]:
+    """Images as the OpenAI-compatible content parts every backend here
+    speaks, read from the workspace at send time.
+
+    Read from DISK rather than carried from the upload: the turn that sends
+    them may be hours after the upload, and the file is the fact. A file that
+    has since gone is skipped rather than sent as an empty string — an empty
+    image part is a 400 from the backend, and the caller's `missing` list is
+    what says so out loud.
+    """
+    import base64
+
+    root = root or root_from_env()
+    parts = []
+    for row in rows:
+        target = root / row.path
+        if not target.exists():
+            continue
+        encoded = base64.b64encode(target.read_bytes()).decode("ascii")
+        parts.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{row.media_type};base64,{encoded}"},
+            }
+        )
+    return parts
+
+
+def missing(rows: list[Attachment], *, root: Path | None = None) -> list[Attachment]:
+    """The ones whose file is no longer there. Never silently dropped: a row
+    pointing at nothing is a thing she must say, not a thing she must guess
+    around."""
+    root = root or root_from_env()
+    return [row for row in rows if not (root / row.path).exists()]

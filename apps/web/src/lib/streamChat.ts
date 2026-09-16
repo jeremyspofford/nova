@@ -317,6 +317,10 @@ export async function statedRefusal(response: Response): Promise<string> {
 export interface StreamChatOptions {
   message: string
   conversationId?: string | null
+  /** S28: ids from `uploadAttachment`, bound to this message when it lands.
+   * The files went up in their own requests already — a photo on a phone
+   * connection must not hold this POST open and delay the turn behind it. */
+  attachmentIds?: string[]
   signal?: AbortSignal
 }
 
@@ -356,11 +360,14 @@ function* queuedFrom(payload: string): Generator<StreamEvent> {
 }
 
 export async function* streamChat(
-  { message, conversationId, signal }: StreamChatOptions,
+  { message, conversationId, attachmentIds, signal }: StreamChatOptions,
   fetchImpl: FetchLike = ((url, init) => fetch(url, init)) as FetchLike,
 ): AsyncGenerator<StreamEvent> {
   const body: Record<string, unknown> = { message }
   if (conversationId) body.conversation_id = conversationId
+  // S28: the uploads this message carries. Omitted entirely when there are
+  // none, so an ordinary turn's request is byte-identical to before.
+  if (attachmentIds && attachmentIds.length > 0) body.attachment_ids = attachmentIds
 
   let response: Response
   try {

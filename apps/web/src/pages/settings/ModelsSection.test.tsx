@@ -84,6 +84,10 @@ function fakeApi({
     // fake echoes the write rather than returning nothing.
     putSetting: vi.fn(async (key: string, value: boolean | string | number) => ({ key, value })),
     pullModel: vi.fn(() => linesOf(pullLines)),
+    // S28: installed models that can SEE. Empty by default — most tests
+    // here are not about vision, and an empty list is the honest state of a
+    // box with only qwen3:8b on it.
+    visionModels: vi.fn(async () => ({ models: [] as string[] })),
   }
 }
 
@@ -351,5 +355,58 @@ describe('ModelsSection', () => {
     expect(within(currentCard).getByText('Current')).toBeDefined()
     expect(within(currentCard).queryByText('Available to pull')).toBeNull()
     expect(within(currentCard).queryByText('Pull')).toBeNull()
+  })
+})
+
+describe('ModelsSection — which model reads an image (S28)', () => {
+  const seeing = (models: string[], reason?: string) => {
+    const api = fakeApi()
+    api.visionModels = vi.fn(async () => (reason ? { models, reason } : { models }))
+    return api
+  }
+
+  it('offers the models that can actually see, and defaults to letting her choose', async () => {
+    const api = seeing(['gemma4:12b', 'qwen3.8:27b'])
+    render(<ModelsSection chatModel="ollama:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
+
+    const picker = (await screen.findByLabelText('Model that reads images')) as HTMLSelectElement
+    expect([...picker.options].map(o => o.value)).toEqual(['', 'gemma4:12b', 'qwen3.8:27b'])
+    // Empty is "choose automatically" — the honest default when he has no
+    // preference, and what she already does.
+    expect(picker.value).toBe('')
+  })
+
+  it('writes his pick to chat.vision_model', async () => {
+    const api = seeing(['gemma4:12b'])
+    render(<ModelsSection chatModel="ollama:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
+    const picker = await screen.findByLabelText('Model that reads images')
+
+    fireEvent.change(picker, { target: { value: 'gemma4:12b' } })
+
+    await waitFor(() =>
+      expect(api.putSetting).toHaveBeenCalledWith('chat.vision_model', 'gemma4:12b'),
+    )
+  })
+
+  it('says plainly when nothing installed can see', async () => {
+    // "State if we don't have one" — and it must not read as a picker with
+    // no options, which looks broken rather than empty.
+    const api = seeing([])
+    render(<ModelsSection chatModel="ollama:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
+
+    const said = await screen.findByTestId('no-vision-model')
+    expect(said.textContent).toContain('No installed model can see images')
+    expect(screen.queryByLabelText('Model that reads images')).toBeNull()
+  })
+
+  it('does not report an unreadable catalogue as "nothing can see"', async () => {
+    // The same distinction the turn had to learn on the live walk: one is a
+    // fact about his machine, the other about a request that failed.
+    const api = seeing([], 'the model catalogue could not be read')
+    render(<ModelsSection chatModel="ollama:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
+
+    const said = await screen.findByTestId('no-vision-model')
+    expect(said.textContent).toContain('Could not tell')
+    expect(said.textContent).not.toContain('No installed model can see')
   })
 })

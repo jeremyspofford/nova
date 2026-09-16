@@ -3,6 +3,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { Agent } from '../../lib/api'
 import { agentFixture } from '../agents/agentFixture'
 import { ChatInput } from './ChatInput'
+import { attachmentFixture } from './attachmentFixture'
 
 /**
  * The composer's slash-command autocomplete. It is a projection of the command
@@ -58,14 +59,14 @@ describe('ChatInput — slash-command autocomplete', () => {
     expect(onSubmit).not.toHaveBeenCalled()
     // Second Enter: the input IS the whole command now, so it runs.
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('/clear')
+    expect(onSubmit).toHaveBeenCalledWith('/clear', [])
   })
 
   it('Enter runs immediately when the input is already the exact command', () => {
     const { onSubmit, textarea, type } = renderInput()
     type('/clear')
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('/clear')
+    expect(onSubmit).toHaveBeenCalledWith('/clear', [])
   })
 
   it('ArrowDown moves the selection, then Enter completes the highlighted command', () => {
@@ -90,14 +91,14 @@ describe('ChatInput — slash-command autocomplete', () => {
     type('/cl')
     // The row runs on pointer-down (before the textarea blurs).
     fireEvent.mouseDown(screen.getByTestId('command-option-/clear'))
-    expect(onSubmit).toHaveBeenCalledWith('/clear')
+    expect(onSubmit).toHaveBeenCalledWith('/clear', [])
   })
 
   it('does not hijack Enter when the dropdown is closed — a normal message sends', () => {
     const { onSubmit, textarea, type } = renderInput()
     type('just a normal message')
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('just a normal message')
+    expect(onSubmit).toHaveBeenCalledWith('just a normal message', [])
   })
 
   it('an unknown /command shows no dropdown and sends as an ordinary message', () => {
@@ -105,7 +106,7 @@ describe('ChatInput — slash-command autocomplete', () => {
     type('/nope')
     expect(screen.queryByTestId('command-autocomplete')).toBeNull()
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('/nope')
+    expect(onSubmit).toHaveBeenCalledWith('/nope', [])
   })
 })
 
@@ -128,10 +129,17 @@ const AGENTS: Agent[] = [
 function renderWithAgents(listAgents: () => Promise<Agent[]> = async () => AGENTS) {
   const onSubmit = vi.fn()
   const spy = vi.fn(listAgents)
-  render(<ChatInput onSubmit={onSubmit} disabled={false} api={{ listAgents: spy }} />)
+  const uploadAttachment = vi.fn(async () => attachmentFixture())
+  render(
+    <ChatInput
+      onSubmit={onSubmit}
+      disabled={false}
+      api={{ listAgents: spy, uploadAttachment }}
+    />,
+  )
   const textarea = screen.getByLabelText('Message Nova') as HTMLTextAreaElement
   const type = (value: string) => fireEvent.change(textarea, { target: { value } })
-  return { onSubmit, textarea, type, listAgents: spy }
+  return { onSubmit, textarea, type, listAgents: spy, uploadAttachment }
 }
 
 /** Let a settled promise's continuation run inside act. */
@@ -176,7 +184,7 @@ describe('ChatInput — the @agent autocomplete (S12)', () => {
     expect(screen.queryByTestId('mention-autocomplete')).toBeNull()
     type('@coder fix the tests')
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('@coder fix the tests')
+    expect(onSubmit).toHaveBeenCalledWith('@coder fix the tests', [])
   })
 
   it('Tab completes too, and does not send', async () => {
@@ -235,7 +243,7 @@ describe('ChatInput — the @agent autocomplete (S12)', () => {
     await settle()
     expect(screen.queryByTestId('mention-autocomplete')).toBeNull()
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('@nobody')
+    expect(onSubmit).toHaveBeenCalledWith('@nobody', [])
   })
 
   it('when the roster cannot be read the menu simply never opens, with no error shown, and Enter still sends', async () => {
@@ -249,7 +257,7 @@ describe('ChatInput — the @agent autocomplete (S12)', () => {
     expect(screen.queryByRole('alert')).toBeNull()
     expect(document.body.textContent).not.toContain('503')
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('@c')
+    expect(onSubmit).toHaveBeenCalledWith('@c', [])
   })
 
   it('the slash menu is untouched: a leading / still offers commands, never agents', async () => {
@@ -298,7 +306,7 @@ describe('ChatInput — the draft survives unmount', () => {
     const { unmount } = render(<ChatInput onSubmit={onSubmit} disabled={false} draftKey={KEY} />)
     fireEvent.keyDown(screen.getByLabelText('Message Nova'), { key: 'Enter' })
 
-    expect(onSubmit).toHaveBeenCalledWith('sent for real')
+    expect(onSubmit).toHaveBeenCalledWith('sent for real', [])
     expect(localStorage.getItem(KEY)).toBeNull()
     unmount()
 
@@ -330,7 +338,7 @@ describe('ChatInput — the draft survives unmount', () => {
     const textarea = screen.getByLabelText('Message Nova')
     fireEvent.change(textarea, { target: { value: 'actually, 12b' } })
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('actually, 12b')
+    expect(onSubmit).toHaveBeenCalledWith('actually, 12b', [])
   })
 
   it('says nothing of the sort when she is idle', () => {
@@ -343,5 +351,129 @@ describe('ChatInput — the draft survives unmount', () => {
     render(<ChatInput onSubmit={vi.fn()} disabled={false} />)
     fireEvent.change(screen.getByLabelText('Message Nova'), { target: { value: 'no key' } })
     expect((screen.getByLabelText('Message Nova') as HTMLTextAreaElement).value).toBe('no key')
+  })
+})
+
+describe('ChatInput — attaching a file (S28)', () => {
+  const PNG = () => new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' })
+
+  function renderComposer(upload?: ReturnType<typeof vi.fn>) {
+    const onSubmit = vi.fn()
+    const uploadAttachment = upload ?? vi.fn(async () => attachmentFixture())
+    render(
+      <ChatInput
+        onSubmit={onSubmit}
+        disabled={false}
+        conversationId="c1"
+        api={{ listAgents: vi.fn(async () => []), uploadAttachment }}
+      />,
+    )
+    return { onSubmit, uploadAttachment, textarea: screen.getByLabelText('Message Nova') }
+  }
+
+  it('PASTES a screenshot straight into the composer', async () => {
+    // The one he asked for by name: copy a screenshot, paste it here.
+    const { uploadAttachment, textarea } = renderComposer()
+
+    fireEvent.paste(textarea, {
+      clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => PNG() }] },
+    })
+
+    await waitFor(() => expect(uploadAttachment).toHaveBeenCalledWith('c1', expect.any(File)))
+    expect(await screen.findByTestId('attachment-ready')).toBeTruthy()
+  })
+
+  it('leaves an ordinary text paste alone', async () => {
+    // This only intercepts when the clipboard carries a FILE. Pasting a
+    // paragraph has to keep working exactly as it did.
+    const { uploadAttachment, textarea } = renderComposer()
+
+    fireEvent.paste(textarea, { clipboardData: { items: [{ kind: 'string', type: 'text/plain' }] } })
+
+    expect(uploadAttachment).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('attachment-chips')).toBeNull()
+  })
+
+  it('takes a dropped file', async () => {
+    const { uploadAttachment } = renderComposer()
+    const form = document.querySelector('form')!
+
+    fireEvent.drop(form, { dataTransfer: { files: [PNG()] } })
+
+    await waitFor(() => expect(uploadAttachment).toHaveBeenCalled())
+  })
+
+  it('sends the ids core gave back, and only the ones that landed', async () => {
+    const { onSubmit, textarea } = renderComposer()
+    fireEvent.paste(textarea, {
+      clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => PNG() }] },
+    })
+    await screen.findByTestId('attachment-ready')
+
+    fireEvent.change(textarea, { target: { value: 'what is this?' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+
+    expect(onSubmit).toHaveBeenCalledWith('what is this?', ['a1'])
+  })
+
+  it('will not send while bytes are still going up', async () => {
+    // A chip that looks ready before its bytes have landed is a message sent
+    // with an id the server has never heard of.
+    let release: (v: unknown) => void = () => {}
+    const slow = vi.fn(() => new Promise(r => (release = r)))
+    const { onSubmit, textarea } = renderComposer(slow as never)
+    fireEvent.paste(textarea, {
+      clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => PNG() }] },
+    })
+    await screen.findByTestId('attachment-uploading')
+
+    fireEvent.change(textarea, { target: { value: 'hurry' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSubmit).not.toHaveBeenCalled()
+
+    release(attachmentFixture())
+    await screen.findByTestId('attachment-ready')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledWith('hurry', ['a1'])
+  })
+
+  it("shows core's own sentence when a file is refused, and does not block the message", async () => {
+    // "Upload failed" with no number is how someone tries the same photo
+    // three times. And a failed chip must not trap him behind a file he
+    // cannot fix.
+    const refuse = vi.fn(async () => {
+      throw new Error('that file is 140.2 MB and the limit is 100 MB')
+    })
+    const { onSubmit, textarea } = renderComposer(refuse as never)
+    fireEvent.paste(textarea, {
+      clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => PNG() }] },
+    })
+
+    const chip = await screen.findByTestId('attachment-failed')
+    expect(chip.textContent).toContain('the limit is 100 MB')
+
+    fireEvent.change(textarea, { target: { value: 'never mind' } })
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    expect(onSubmit).toHaveBeenCalledWith('never mind', [])
+  })
+
+  it('sends a file with no words at all', async () => {
+    // "Here, look at this" with nothing typed is a message people send.
+    const { onSubmit, textarea } = renderComposer()
+    fireEvent.paste(textarea, {
+      clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => PNG() }] },
+    })
+    await screen.findByTestId('attachment-ready')
+
+    fireEvent.click(screen.getByLabelText('Send message'))
+
+    expect(onSubmit).toHaveBeenCalledWith('', ['a1'])
+  })
+
+  it('offers no way to attach before there is a conversation to attach to', () => {
+    // An upload with nowhere to go lands in a folder named after nothing.
+    render(<ChatInput onSubmit={vi.fn()} disabled={false} api={{ listAgents: vi.fn(async () => []), uploadAttachment: vi.fn() }} />)
+
+    expect(screen.queryByLabelText('Attach a file')).toBeNull()
   })
 })

@@ -31,9 +31,13 @@ pytestmark = requires_db
 # looks at all (off, until he turns it on), the hour her one daily message is
 # written, and the ceiling on how many findings that message may carry.
 # Deliberate tripwire update — the number moved because three defs landed.
+# S28 adds a tenth: which model reads an image, when the chat model cannot.
+# Deliberate tripwire update — a setting appearing here without this line
+# moving is exactly what this set exists to catch.
 KNOWN_KEYS = {
     "onboarding.completed",
     "chat.model",
+    "chat.vision_model",
     "appearance.default_preset",
     "agents.max_tool_rounds",
     "agents.responsiveness_check",

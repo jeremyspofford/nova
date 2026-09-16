@@ -32,7 +32,15 @@ async function request(path: string, init: RequestInit = {}): Promise<Response> 
       credentials: 'same-origin',
       ...init,
       headers: {
-        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        // JSON for an ordinary body — but NEVER for FormData (S28). A
+        // multipart request carries a generated boundary in its own
+        // Content-Type, and the browser is the only thing that knows it;
+        // stamping application/json here makes the server parse a multipart
+        // payload as JSON and reject the upload with a shape error that
+        // says nothing about the real cause.
+        ...(init.body && !(init.body instanceof FormData)
+          ? { 'Content-Type': 'application/json' }
+          : {}),
         ...(init.headers ?? {}),
       },
     })
@@ -326,6 +334,60 @@ export const renameMe = (name: string) =>
     'PATCH',
     { name },
   )
+
+// ── attachments (services/core/app/attachments_api.py, S28) ────────────
+
+/** A file he gave her, as core recorded it. The BYTES are in the workspace
+ * at `path` — the same string her `workspace_read_file` tool takes — and
+ * this row is the record of what arrived, never a second copy of it. */
+export interface Attachment {
+  id: string
+  filename: string
+  media_type: string
+  /** The family: `image`, `audio`, `text`, `application`. Derived by core
+   * from the media type it SNIFFED off the bytes, not from the name this
+   * client sent. */
+  kind: string
+  size_bytes: number
+  path: string
+  created_at: string
+  has_text: boolean
+  extract_note: string | null
+}
+
+/** POST /attachments — one file, its own request.
+ *
+ * Separate from sending the message on purpose: a photo on a phone
+ * connection would otherwise hold the chat POST open for its whole upload
+ * and the turn could not start until the last byte landed. The id comes
+ * back, and `sendMessage` names it.
+ *
+ * A refusal is core's own sentence — 413 with the size and the ceiling for
+ * something too big, 400 for a file with nothing in it. */
+export async function uploadAttachment(conversationId: string, file: File): Promise<Attachment> {
+  const form = new FormData()
+  form.append('conversation_id', conversationId)
+  form.append('file', file, file.name)
+  const body = await request('/api/v1/attachments', { method: 'POST', body: form })
+  return (await body.json()).attachment as Attachment
+}
+
+/** What the client should refuse before it starts uploading. Read from the
+ * server rather than carried here: a limit written in two places disagrees
+ * with itself the day one changes, and the half that would be wrong is the
+ * one that tells him. */
+/** GET /models/vision — installed models that can actually SEE (S28).
+ *
+ * Derived by core from the same catalogue and the same helper the TURN
+ * uses, so the list he chooses from and the set she picks within cannot
+ * disagree. `reason` is present only when the catalogue could not be read:
+ * an empty list and an unreadable catalogue are different facts, and a
+ * picker that renders "none" for both tells him something false about his
+ * own machine. */
+export const visionModels = () =>
+  apiGet<{ models: string[]; reason?: string }>('/api/v1/models/vision')
+
+export const attachmentLimits = () => apiGet<{ max_bytes: number }>('/api/v1/attachments/limits')
 
 export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
 

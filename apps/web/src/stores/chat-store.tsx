@@ -64,7 +64,7 @@ const nextId = (prefix: string) => `${prefix}-${Date.now()}-${++seq}`
 
 interface ChatStore {
   state: ChatState
-  sendMessage: (text: string) => void
+  sendMessage: (text: string, attachmentIds?: string[]) => void
   loadConversation: (conversationId: string, messages: FetchedMessage[]) => void
   /**
    * Resolve a turn that finished SERVER-SIDE — one this store never streamed
@@ -348,7 +348,7 @@ export function ChatProvider({
   }, [])
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string, attachmentIds: string[] = []) => {
       const command = matchCommand(text)
       if (command) {
         // A whole-message slash command (e.g. /clear, /help) is a command, not a
@@ -381,7 +381,7 @@ export function ChatProvider({
       ;(async () => {
         try {
           for await (const event of streamChat(
-            { message: text, conversationId, signal: controller.signal },
+            { message: text, conversationId, attachmentIds, signal: controller.signal },
             fetchImpl,
           )) {
             // The identity effect above aborts the underlying request the

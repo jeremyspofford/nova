@@ -12,6 +12,7 @@ equals the bundled ollama row's bare model — never a guessed prefix.
 A gateway refusal is relayed as-is. A malformed gateway body is a stated
 502, never an empty catalogue that reads as "nothing installed".
 """
+
 from __future__ import annotations
 
 import json
@@ -71,9 +72,7 @@ def decorate(body: dict, measured: dict[str, dict[str, dict]], *, read_at: str) 
         if isinstance(sources, list) and not any(
             isinstance(s, dict) and s.get("key") == MEASURED_SOURCE for s in sources
         ):
-            sources.append(
-                {"key": MEASURED_SOURCE, "url": "core eval_runs", "fetched_at": read_at}
-            )
+            sources.append({"key": MEASURED_SOURCE, "url": "core eval_runs", "fetched_at": read_at})
         for suite, entry in entries.items():
             suitability[suite] = {
                 "value": entry["pass_rate"],
@@ -134,3 +133,28 @@ async def catalog(request: Request) -> Response:
         content=json.dumps(decorate(body, measured, read_at=now_iso())),
         media_type="application/json",
     )
+
+
+@router.get("/models/vision")
+async def vision_models(request: Request) -> dict:
+    """Installed models that can actually SEE, for the picker in Settings
+    (owner, 2026-09-16: "I should be able to select a vision model").
+
+    Derived from the same catalogue and the same helper the TURN uses
+    (app/vision.py), so the list he chooses from and the set she picks
+    within cannot disagree. A page that built its own list would offer him a
+    model the turn then silently declined to use.
+
+    `reason` is present only when the catalogue could not be read — an empty
+    list and an unreadable catalogue are different facts, and the page says
+    which rather than rendering "none" for both.
+    """
+    from app import vision
+
+    rows = await vision.catalog_rows(request.app)
+    if rows is None:
+        return {
+            "models": [],
+            "reason": "the model catalogue could not be read, so this list is not the whole truth",
+        }
+    return {"models": [vision.bare(m) for m in vision.capable(rows, "vision")]}

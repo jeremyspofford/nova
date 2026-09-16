@@ -102,6 +102,18 @@ SETTING_DEFS: tuple[SettingDef, ...] = (
         description="Model core asks the gateway for on every chat turn.",
     ),
     SettingDef(
+        key="chat.vision_model",
+        type="str",
+        default="",
+        description=(
+            "Model that answers a turn carrying an image, when the chat model cannot "
+            "see one. Empty means she picks a capable model herself; if none is "
+            "installed she says so rather than guessing. A model named here that "
+            "cannot see, or is not installed, is ignored in favour of one that can — "
+            "the capability is read from the model, never from this string."
+        ),
+    ),
+    SettingDef(
         key="appearance.default_preset",
         type="str",
         default="nova",

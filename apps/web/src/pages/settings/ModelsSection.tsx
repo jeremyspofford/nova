@@ -16,6 +16,7 @@ import {
   getSuggestion as apiGetSuggestion,
   pullModel as apiPullModel,
   putSetting as apiPutSetting,
+  visionModels as apiVisionModels,
   type BackendConfig,
   type EngineKind,
   type PullLine,
@@ -50,6 +51,7 @@ interface ModelsApi {
   getSuggestion: typeof apiGetSuggestion
   getBackend: typeof apiGetBackend
   putSetting: typeof apiPutSetting
+  visionModels: typeof apiVisionModels
   pullModel: typeof apiPullModel
 }
 
@@ -58,6 +60,7 @@ const DEFAULT_API: ModelsApi = {
   getSuggestion: apiGetSuggestion,
   getBackend: apiGetBackend,
   putSetting: apiPutSetting,
+  visionModels: apiVisionModels,
   pullModel: apiPullModel,
 }
 
@@ -236,11 +239,15 @@ function ModelCard({
  */
 export function ModelsSection({
   chatModel,
+  visionModel = '',
   onModelChanged,
   onRerunSetup,
   api = DEFAULT_API,
 }: {
   chatModel: string
+  /** S28: which model answers a turn carrying an image, when the chat model
+   * cannot see one. Empty means she picks a capable one herself. */
+  visionModel?: string
   onModelChanged: (model: string) => void
   onRerunSetup: () => Promise<void>
   api?: ModelsApi
@@ -252,6 +259,11 @@ export function ModelsSection({
   const [installedError, setInstalledError] = useState<string | null>(null)
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null)
   const [suggestionError, setSuggestionError] = useState<string | null>(null)
+  // S28: installed models that can actually SEE, from core — the same list
+  // the turn picks within, so this picker cannot offer one she would decline.
+  const [seers, setSeers] = useState<string[] | null>(null)
+  const [seersReason, setSeersReason] = useState<string | null>(null)
+  const [savingVision, setSavingVision] = useState(false)
   const [backend, setBackend] = useState<BackendConfig | null>(null)
   const [backendError, setBackendError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -279,6 +291,28 @@ export function ModelsSection({
       api.getBackend().then(
         b => !cancelled && setBackend(b),
         err => !cancelled && setBackendError(reasonOf(err)),
+      ),
+      api.visionModels().then(
+        got => {
+          if (cancelled) return
+          // A body that is not the shape promised degrades to "could not
+          // tell" rather than being trusted. Rendering `undefined.length`
+          // throws, and a throw in here unmounts the WHOLE Settings panel —
+          // the same way an unknown backend kind once did (S24). One bad
+          // answer must cost this one control, not the page.
+          const models = Array.isArray(got?.models) ? got.models : null
+          setSeers(models ?? [])
+          setSeersReason(
+            models === null
+              ? 'core did not answer with a list of models'
+              : (got.reason ?? null),
+          )
+        },
+        err => {
+          if (cancelled) return
+          setSeers([])
+          setSeersReason(reasonOf(err))
+        },
       ),
     ]).then(() => !cancelled && setLoaded(true))
     return () => {
@@ -403,6 +437,63 @@ export function ModelsSection({
             >
               {chatModel ? bareLocalModel(chatModel) : 'not set'}
             </p>
+          </div>
+
+          {/* WHICH MODEL LOOKS AT A PICTURE (S28, owner's call).
+              The chat model usually cannot: on this box qwen3:8b has tools
+              and thinking and no vision at all. So a turn carrying an image
+              runs somewhere else, and this is where he says where — or
+              leaves it to her, which is the default and the honest one when
+              he has no preference. The list is core's, derived from the same
+              capability map the turn reads, so this cannot offer a model she
+              would then decline. */}
+          <div data-testid="vision-model">
+            <p className="text-caption text-content-tertiary mb-1">Model that reads images</p>
+            {seers === null ? (
+              <p className="text-compact text-content-tertiary">checking…</p>
+            ) : seers.length === 0 ? (
+              <p className="text-compact text-content-secondary" data-testid="no-vision-model">
+                {seersReason
+                  ? `Could not tell which models can see images — ${seersReason}`
+                  : 'No installed model can see images. Nova will say so rather than describing ' +
+                    'one; pull a vision model in Models to change that.'}
+              </p>
+            ) : (
+              <>
+                <select
+                  aria-label="Model that reads images"
+                  value={visionModel}
+                  disabled={savingVision}
+                  onChange={async e => {
+                    const picked = e.target.value
+                    setSavingVision(true)
+                    try {
+                      const written = await api.putSetting('chat.vision_model', picked)
+                      onModelChanged(String(written.value ?? picked))
+                    } catch {
+                      // The page re-reads settings on its own poll; a failed
+                      // write simply leaves the old value showing rather
+                      // than a choice that did not take looking like it did.
+                    } finally {
+                      setSavingVision(false)
+                    }
+                  }}
+                  className="w-full rounded-sm border border-border bg-surface px-3 py-2 text-compact"
+                >
+                  <option value="">Choose automatically</option>
+                  {seers.map(model => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-caption text-content-tertiary">
+                  {visionModel
+                    ? `Images go to ${visionModel}. She says so in the reply when a turn moves.`
+                    : 'She picks one of these when you send an image, and says which in the reply.'}
+                </p>
+              </>
+            )}
           </div>
 
           <p className="text-caption text-content-tertiary" data-testid="models-catalog-link">

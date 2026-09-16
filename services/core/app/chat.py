@@ -99,6 +99,7 @@ from pydantic import BaseModel
 
 from app import (
     agents,
+    attachments,
     conversations,
     db,
     devices,
@@ -113,6 +114,7 @@ from app import (
     skills,
     tools,
     traces,
+    vision,
 )
 from app.identity import Person
 
@@ -446,6 +448,10 @@ class GatewayFailure(RuntimeError):
 class ChatRequest(BaseModel):
     message: str
     conversation_id: uuid.UUID | None = None
+    # S28: uploads to bind to this message. They were POSTed one at a time
+    # before this, so a photo on a phone connection does not hold the chat
+    # request open for its whole upload and delay the turn behind it.
+    attachment_ids: list[uuid.UUID] = []
 
 
 # Detached work held so it can be awaited at shutdown instead of vanishing
@@ -3523,6 +3529,7 @@ async def _run_turn(
     *,
     ingest: bool = True,
     persona: agents.Persona | None = None,
+    attached: Sequence[attachments.Attachment] = (),
 ) -> None:
     """The whole turn, run to completion regardless of who is still watching.
 
@@ -3762,11 +3769,70 @@ async def _run_turn(
         if recalled.live_calls:
             checked_live = await live_facts.run(list(recalled.live_calls), turn, tool_ctx)
             recalled = dataclasses.replace(recalled, live=tuple(live_facts.lines(checked_live)))
+        # S28 — THE FILES HE SENT.
+        #
+        # Three things happen here and each is stated rather than silent:
+        # the model may CHANGE (an image on a model that cannot see one is
+        # the reason), the facts about every file go into the turn with the
+        # workspace path she reads them by, and anything whose file has gone
+        # missing is named instead of quietly skipped.
+        ask: str | list[dict] = message
+        if attached:
+            gone = attachments.missing(list(attached))
+            here = [row for row in attached if row not in gone]
+            pictures = [row for row in here if row.kind == attachments.IMAGE]
+            choice = vision.Choice(model=model, note=None, can_see=False)
+            if pictures:
+                # HIS pick, if he made one (`chat.vision_model`). Read here
+                # rather than carried on the turn: he can change it between
+                # turns, and the one that matters is the one set now.
+                preferred = await settings_store.read_value(pool, "chat.vision_model")
+                choice = vision.choose(
+                    await vision.catalog_rows(app),
+                    wanted=model,
+                    preferred=str(preferred or ""),
+                )
+                if choice.model != model:
+                    # A SPAN records the swap, which is the only place "she
+                    # answered from a different brain" can be checked after
+                    # the fact. `choice.note` is what says it to him in the
+                    # reply; this is what says it to the trace.
+                    with turn.span("model_swap") as span:
+                        span.meta["from"] = model
+                        span.meta["to"] = choice.model
+                        span.meta["why"] = "vision"
+                    model = choice.model
+            # "Nothing here can see" is a claim about his MACHINE; it may
+            # only be made when the capability was actually read. When the
+            # catalogue could not be read, `choice.note` says that instead —
+            # saying both is how she told him no model could see images on a
+            # box where one could (the walk, 2026-09-16).
+            blind = pictures if (choice.certain and not choice.can_see) else []
+            blocks = [attachments.facts_block(here, unseeable=blind)]
+            if choice.note:
+                blocks.append(choice.note)
+            if gone:
+                names = ", ".join(row.filename for row in gone)
+                blocks.append(
+                    f"These were attached but their files are no longer in the workspace: "
+                    f"{names}. Say so rather than answering as though you had read them."
+                )
+            body = attachments.text_block(here)
+            if body:
+                blocks.append(body)
+            ask = f"{message}\n\n" + "\n\n".join(b for b in blocks if b)
+            if pictures and choice.can_see:
+                # OpenAI-compatible content parts: the text, then the images.
+                # Read from DISK at send time, because the upload may have
+                # been hours ago and the file is the fact.
+                parts = attachments.image_parts(pictures)
+                if parts:
+                    ask = [{"type": "text", "text": ask}, *parts]
         messages = base_messages(
             model,
             recalled,
             history,
-            message,
+            ask,
             persona,
             roster=roster,
             skills_roster=skills_roster,
@@ -5010,6 +5076,10 @@ class _Started:
     model: str
     max_tool_rounds: int
     persona: agents.Persona | None
+    # S28: the files this message carried, already bound to it. Loaded here,
+    # under the same lock that wrote the message, so the turn cannot start
+    # against a half-bound set.
+    attached: Sequence[attachments.Attachment] = ()
 
 
 async def _open_turn(
@@ -5022,6 +5092,7 @@ async def _open_turn(
     message: str,
     *,
     queued_id: uuid.UUID | None = None,
+    attachment_ids: Sequence[uuid.UUID] = (),
 ) -> _Started:
     """Open a chat turn for `message`. THE one place that happens.
 
@@ -5049,6 +5120,18 @@ async def _open_turn(
         "VALUES ($1, 'user', $2) RETURNING id",
         conversation_id,
         message,
+    )
+    # S28: the uploads he sent with it, bound HERE — on the caller's
+    # connection, inside the transaction that holds the conversation's lock
+    # and wrote the row above. Binding afterwards, outside the lock, would
+    # let the turn start against a message whose files had not landed yet,
+    # and the model would be told about an empty attachment set.
+    attached = await attachments.bind(
+        conn,
+        conversation_id=conversation_id,
+        person_id=person.id,
+        message_id=message_id,
+        ids=list(attachment_ids),
     )
     # S12: "@coder fix the tests" runs the WHOLE turn as coder, inside this
     # conversation. The row above is what was said, verbatim; WHO answers is
@@ -5144,6 +5227,7 @@ async def _open_turn(
         model=model,
         max_tool_rounds=max_tool_rounds,
         persona=persona,
+        attached=attached,
     )
 
 
@@ -5177,6 +5261,7 @@ def _spawn_turn(
             started.max_tool_rounds,
             emit,
             persona=started.persona,
+            attached=started.attached,
         )
     )
 
@@ -5361,7 +5446,13 @@ async def chat_stream(
                     ahead = len(await queued.waiting(conn, conversation_id)) - 1
                     accepted = queued.as_json(row, ahead=max(ahead, 0))
                 else:
-                    started = await _open_turn(conn, person, conversation_id, message)
+                    started = await _open_turn(
+                        conn,
+                        person,
+                        conversation_id,
+                        message,
+                        attachment_ids=body.attachment_ids,
+                    )
         committed = True
     finally:
         if started is not None and not committed:

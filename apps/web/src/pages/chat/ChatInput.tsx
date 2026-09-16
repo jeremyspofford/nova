@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
-import { ArrowUp, Bot } from 'lucide-react'
-import { listAgents as apiListAgents, type AgentSummary } from '../../lib/api'
+import { ArrowUp, Bot, Paperclip, X } from 'lucide-react'
+import {
+  listAgents as apiListAgents,
+  uploadAttachment as apiUploadAttachment,
+  type AgentSummary,
+} from '../../lib/api'
+import { pastedName } from './pastedName'
 import { autocompleteMatches, matchCommand, type Command } from '../../lib/commands'
 import { completeMention, mentionMatches, mentionQuery } from '../../lib/mentions'
 import { readLocal, writeLocal } from '../../lib/storage'
@@ -44,9 +49,30 @@ import { useIsMobile } from '../../hooks/useIsMobile'
 
 interface ChatInputApi {
   listAgents: typeof apiListAgents
+  uploadAttachment: typeof apiUploadAttachment
 }
 
-const DEFAULT_API: ChatInputApi = { listAgents: apiListAgents }
+const DEFAULT_API: ChatInputApi = {
+  listAgents: apiListAgents,
+  uploadAttachment: apiUploadAttachment,
+}
+
+/** One file on its way in, or already there (S28).
+ *
+ * `status` exists because an upload takes TIME — a phone photo over a slow
+ * connection is seconds — and a chip that looks ready before its bytes have
+ * landed is a message he can send with an id the server has never heard of.
+ * Sending waits for `ready`. */
+interface Pending {
+  key: string
+  name: string
+  size: number
+  status: 'uploading' | 'ready' | 'failed'
+  /** Core's id, once it exists. This is what the message carries. */
+  id?: string
+  /** Core's own sentence, when it refused. Shown verbatim on the chip. */
+  error?: string
+}
 
 export function ChatInput({
   onSubmit,
@@ -54,8 +80,9 @@ export function ChatInput({
   draftKey,
   queueing = false,
   api = DEFAULT_API,
+  conversationId,
 }: {
-  onSubmit: (text: string) => void
+  onSubmit: (text: string, attachmentIds?: string[]) => void
   disabled: boolean
   draftKey?: string
   /** A turn is running, so sending QUEUES rather than asks (S15). Changes what
@@ -64,8 +91,18 @@ export function ChatInput({
    * request lands. */
   queueing?: boolean
   api?: ChatInputApi
+  /** Which conversation a file belongs to (S28). Absent until the first
+   * conversation loads, and attaching is simply not offered until then —
+   * an upload with nowhere to go is a file that lands in a folder named
+   * after nothing. */
+  conversationId?: string | null
 }) {
   const [input, setInput] = useState(() => (draftKey ? readLocal(draftKey, '') : ''))
+  // S28: files on their way in. Composer state, not page state — they belong
+  // to the message being written, and abandoning a draft abandons them.
+  const [pending, setPending] = useState<Pending[]>([])
+  const [dragging, setDragging] = useState(false)
+  const fileRef = useRef<HTMLInputElement>(null)
   // Esc sets this to hide a dropdown that still has matches; any edit to the
   // input clears it again, so typing more re-opens the suggestions.
   const [dismissed, setDismissed] = useState(false)
@@ -150,15 +187,77 @@ export function ChatInput({
     if (!disabled) textareaRef.current?.focus()
   }, [disabled])
 
+  // An upload still in flight, or one that failed. Sending is held for the
+  // first and not for the second: a failed chip has already said why, and
+  // blocking the message on it would trap him behind a file he cannot fix.
+  const uploading = pending.some(p => p.status === 'uploading')
+  const ready = pending.filter(p => p.status === 'ready' && p.id)
+
   const submit = (raw?: string) => {
     const text = (raw ?? input).trim()
-    if (!text || disabled) return
+    // A file alone is a message: "here, look at this" with no words is a
+    // thing people send. Text is required only when nothing is attached.
+    if ((!text && ready.length === 0) || disabled || uploading) return
     saveDraft('')
     setInput('')
+    setPending([])
     setDismissed(true)
     setHighlight(0)
     requestAnimationFrame(resize)
-    onSubmit(text)
+    onSubmit(text, ready.map(p => p.id!))
+  }
+
+  /** Take one file: show it immediately, upload it, keep whatever core says.
+   *
+   * The chip appears BEFORE the upload finishes, because a phone photo takes
+   * seconds and a composer that does nothing for three seconds reads as
+   * broken. It cannot be sent until the id exists — `submit` waits — so what
+   * he sees is honest about the state without pretending it is done. */
+  const take = async (file: File) => {
+    if (!conversationId) return
+    const key = `${file.name}-${file.size}-${Date.now()}-${Math.random()}`
+    const name = pastedName(file)
+    setPending(prev => [...prev, { key, name, size: file.size, status: 'uploading' }])
+    try {
+      // Renamed on the way IN, so the name core stores, the chip here, and
+      // the name she sees in the turn are one name.
+      const sending = name === file.name ? file : new File([file], name, { type: file.type })
+      const got = await api.uploadAttachment(conversationId, sending)
+      setPending(prev =>
+        prev.map(p => (p.key === key ? { ...p, status: 'ready', id: got.id, name: got.filename } : p)),
+      )
+    } catch (err) {
+      // Core's own sentence — the ceiling and the size for something too
+      // big. "Upload failed" with no number is how someone tries the same
+      // photo three times.
+      const why = err instanceof Error ? err.message : String(err)
+      setPending(prev => prev.map(p => (p.key === key ? { ...p, status: 'failed', error: why } : p)))
+    }
+  }
+
+  const takeAll = (files: FileList | File[] | null | undefined) => {
+    for (const file of Array.from(files ?? [])) void take(file)
+  }
+
+  /** PASTE — the one he asked for by name: copy a screenshot, paste it here.
+   *
+   * `clipboardData.files` is empty for a screenshot in some browsers, so the
+   * items are walked instead. Text pastes fall through untouched: this only
+   * intercepts when the clipboard actually carries a FILE, and pasting a
+   * paragraph must keep working exactly as it did. */
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!conversationId) return
+    const files: File[] = []
+    for (const item of Array.from(e.clipboardData?.items ?? [])) {
+      if (item.kind !== 'file') continue
+      const file = item.getAsFile()
+      if (file) files.push(file)
+    }
+    if (files.length === 0) return
+    // Only now: a clipboard with no file in it is a text paste and belongs
+    // to the textarea.
+    e.preventDefault()
+    takeAll(files)
   }
 
   const changeInput = (value: string) => {
@@ -298,8 +397,69 @@ export function ChatInput({
           e.preventDefault()
           submit()
         }}
-        className="glass-card rounded-3xl border border-border-subtle overflow-hidden"
+        className={clsx(
+          'glass-card rounded-3xl border overflow-hidden transition-colors',
+          dragging ? 'border-accent bg-accent-dim/30' : 'border-border-subtle',
+        )}
+        // DROP: the second way in, and the one with no button to find. The
+        // whole composer is the target rather than a strip inside it —
+        // dropping a file "near" the box is what people actually do.
+        onDragOver={e => {
+          if (!conversationId) return
+          e.preventDefault()
+          setDragging(true)
+        }}
+        onDragLeave={e => {
+          // Only when the pointer has really left the composer: dragging
+          // across a child fires dragleave for the child.
+          if (e.currentTarget.contains(e.relatedTarget as Node)) return
+          setDragging(false)
+        }}
+        onDrop={e => {
+          if (!conversationId) return
+          e.preventDefault()
+          setDragging(false)
+          takeAll(e.dataTransfer?.files)
+        }}
       >
+        {/* WHAT IS ATTACHED, above the text he is writing about it. Each chip
+            says its own state: a spinner while the bytes are still going up
+            (a phone photo is seconds), core's own sentence when it refused,
+            and a name he recognises when it landed. */}
+        {pending.length > 0 && (
+          <div className="flex flex-wrap gap-2 px-4 pt-3" data-testid="attachment-chips">
+            {pending.map(file => (
+              <span
+                key={file.key}
+                data-testid={`attachment-${file.status}`}
+                title={file.error ?? file.name}
+                className={clsx(
+                  'inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-micro',
+                  file.status === 'failed'
+                    ? 'bg-danger-dim text-danger'
+                    : 'bg-surface-card text-content-secondary',
+                )}
+              >
+                <Paperclip size={11} className="shrink-0" />
+                <span className="max-w-[14rem] truncate">{file.name}</span>
+                {file.status === 'uploading' && (
+                  <span className="text-content-tertiary">sending…</span>
+                )}
+                {file.status === 'failed' && (
+                  <span className="max-w-[18rem] truncate">— {file.error}</span>
+                )}
+                <button
+                  type="button"
+                  aria-label={`Remove ${file.name}`}
+                  onClick={() => setPending(prev => prev.filter(p => p.key !== file.key))}
+                  className="ml-0.5 text-content-tertiary hover:text-content-primary"
+                >
+                  <X size={11} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         {/* The queue hint gets its own line only while it applies; it used to
             share a permanent row with the send button, which put the button
             UNDER the text and made a one-line composer ~120px tall on a
@@ -313,11 +473,41 @@ export function ChatInput({
           </div>
         )}
         <div className="flex items-end gap-2 pr-2 pb-2">
+        {/* The paperclip: the way in that can be FOUND. Drop and paste are
+            faster once you know they work, and neither advertises itself. */}
+        {conversationId && (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              multiple
+              hidden
+              data-testid="attach-input"
+              onChange={e => {
+                takeAll(e.target.files)
+                // Cleared so picking the same file twice in a row still
+                // fires a change event.
+                e.target.value = ''
+              }}
+            />
+            <button
+              type="button"
+              aria-label="Attach a file"
+              title="Attach a file — you can also paste a screenshot or drop one here"
+              disabled={disabled}
+              onClick={() => fileRef.current?.click()}
+              className="shrink-0 self-end mb-1.5 ml-2 p-2 rounded-lg text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors disabled:opacity-50"
+            >
+              <Paperclip size={18} />
+            </button>
+          </>
+        )}
         <textarea
           ref={textareaRef}
           value={input}
           onChange={e => changeInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
           /* The hint is desktop-only: at 393px the full string wraps inside a
              rows={1} textarea and is clipped mid-word, so a phone reads
              "…(type / for commands, @ for" and stops. Seen on the owner's
@@ -333,7 +523,7 @@ export function ChatInput({
         />
           <button
             type="submit"
-            disabled={!input.trim() || disabled}
+            disabled={(!input.trim() && ready.length === 0) || disabled || uploading}
             aria-label={queueing ? 'Queue message' : 'Send message'}
             title={
               queueing
