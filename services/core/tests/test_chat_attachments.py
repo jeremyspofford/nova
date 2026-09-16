@@ -312,3 +312,56 @@ async def test_a_reloaded_conversation_still_shows_what_was_attached(
     # should not have to tell "no files" from "this server does not say".
     assert all("attachments" in row for row in rows)
     assert [] in [row["attachments"] for row in rows if row["role"] == "assistant"]
+
+
+async def test_a_pdfs_text_rides_INTO_the_turn(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    """A PDF is not useful as a path alone — she would have to read it with a
+    tool that cannot parse it. The text goes in the turn; the file stays in
+    the workspace for anything else."""
+    from tests.test_attachments import _pdf
+
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    gateway = FakeGateway(deltas=("ok",))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    conversation = await _conversation(owner_client)
+    attachment = await _upload(
+        owner_client, conversation, "report.pdf", _pdf(["the roof is leaking"])
+    )
+
+    status, _ = await _say(
+        owner_client, "summarise this", attachment_ids=[attachment], conversation_id=conversation
+    )
+
+    assert status == 200
+    content = _user_content(gateway)
+    assert "the roof is leaking" in content
+    # WHO read it, said explicitly. Without this she explained the text to
+    # herself on the live stack — "no tool here can read PDFs, possibly a
+    # text file mislabeled as PDF" — a false claim about this system
+    # appended to an otherwise correct answer.
+    assert "the text core extracted from report.pdf" in content
+    assert "core extracted its text when it was uploaded" in content
+
+
+async def test_a_scanned_pdf_tells_her_there_is_nothing_to_read(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    """So she says that, instead of describing a document from its
+    filename."""
+    from tests.test_attachments import _pdf
+
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    gateway = FakeGateway(deltas=("ok",))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    conversation = await _conversation(owner_client)
+    attachment = await _upload(owner_client, conversation, "scan.pdf", _pdf([]))
+
+    status, _ = await _say(
+        owner_client, "what is in this?", attachment_ids=[attachment], conversation_id=conversation
+    )
+
+    assert status == 200
+    content = _user_content(gateway)
+    assert "no text layer" in content

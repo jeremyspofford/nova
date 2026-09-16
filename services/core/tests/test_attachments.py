@@ -278,3 +278,132 @@ def test_the_json_a_client_reads_leaves_the_extracted_text_out():
     assert "extracted_text" not in shape
     assert shape["has_text"] is True
     assert shape["kind"] == "application"
+
+
+# -- reading a PDF (S28) ---------------------------------------------------------
+
+
+def _pdf(pages: list[str]) -> bytes:
+    """A real PDF carrying real text.
+
+    Written by hand rather than by a library, because the first attempt used
+    pypdf's own writer with a content stream referencing /F1 — a font it
+    never declared — so the pages held drawing instructions no reader could
+    resolve and `extract_text` correctly returned nothing. The fixture was
+    testing itself. A PDF needs its font in the page's /Resources for the
+    text to be text, and that is the whole difference here.
+    """
+    objects: list[bytes] = []
+
+    def add(body: bytes) -> int:
+        objects.append(body)
+        return len(objects)
+
+    font = add(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    kids: list[int] = []
+    pages_id = len(objects) + 1 + 2 * len(pages) + 1  # fixed up below
+    for text in pages:
+        escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        stream = f"BT /F1 24 Tf 40 500 Td ({escaped}) Tj ET".encode()
+        content = add(b"<< /Length %d >>\nstream\n%s\nendstream" % (len(stream), stream))
+        kids.append(
+            add(
+                b"<< /Type /Page /Parent %d 0 R /MediaBox [0 0 612 792] "
+                b"/Resources << /Font << /F1 %d 0 R >> >> /Contents %d 0 R >>"
+                % (pages_id, font, content)
+            )
+        )
+    kids_ref = b" ".join(b"%d 0 R" % k for k in kids)
+    pages_obj = add(b"<< /Type /Pages /Kids [%s] /Count %d >>" % (kids_ref, len(kids)))
+    # The /Parent written above has to be the object this actually became.
+    for i, body in enumerate(objects):
+        objects[i] = body.replace(b"/Parent %d 0 R" % pages_id, b"/Parent %d 0 R" % pages_obj)
+    root = add(b"<< /Type /Catalog /Pages %d 0 R >>" % pages_obj)
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for n, body in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += b"%d 0 obj\n" % n + body + b"\nendobj\n"
+    start = len(out)
+    out += b"xref\n0 %d\n" % (len(objects) + 1)
+    out += b"0000000000 65535 f \n"
+    for off in offsets[1:]:
+        out += b"%010d 00000 n \n" % off
+    out += b"trailer\n<< /Size %d /Root %d 0 R >>\nstartxref\n%d\n%%%%EOF\n" % (
+        len(objects) + 1,
+        root,
+        start,
+    )
+    return bytes(out)
+
+
+def test_a_pdf_with_text_gives_up_its_text():
+    body = _pdf(["the disk is full", "and the backup failed"])
+
+    text, note = attachments.extract_pdf(body)
+
+    assert note is None
+    assert "the disk is full" in text
+    assert "and the backup failed" in text
+
+
+def test_a_scanned_pdf_says_it_has_no_text_rather_than_failing():
+    """The most common PDF there is. Not an error — "this is pictures" is the
+    answer, and letting her guess from the filename is the failure this
+    prevents."""
+    body = _pdf([])
+
+    text, note = attachments.extract_pdf(body)
+
+    assert text is None
+    assert "no text layer" in note
+
+
+def test_a_broken_pdf_is_a_stated_reason_and_never_an_exception():
+    """A file that cannot be parsed must not fail the upload: the bytes are
+    still in the workspace and a 500 would lose the whole message he sent it
+    with."""
+    text, note = attachments.extract_pdf(b"%PDF-1.7\nnot really a pdf")
+
+    assert text is None
+    assert "could not be read" in note
+
+
+async def test_uploading_a_pdf_stores_its_text_once(pool, tmp_path, monkeypatch):
+    """Extracted at upload, not on every turn that mentions it: re-parsing a
+    200-page document on five turns is one answer computed five times."""
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    conversation, person = await _conversation(pool)
+
+    got = await _store(pool, conversation, person, "notes.pdf", _pdf(["hello from a pdf"]))
+
+    assert got.media_type == "application/pdf"
+    assert "hello from a pdf" in got.extracted_text
+    assert got.extract_note is None
+    assert attachments.as_json(got)["has_text"] is True
+
+
+async def test_a_scanned_pdf_carries_its_reason_to_the_client(pool, tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    conversation, person = await _conversation(pool)
+
+    got = await _store(pool, conversation, person, "scan.pdf", _pdf([]))
+
+    assert got.extracted_text is None
+    shape = attachments.as_json(got)
+    assert shape["has_text"] is False
+    assert "no text layer" in shape["extract_note"]
+
+
+async def test_a_very_long_pdf_is_trimmed_and_SAYS_so(pool, tmp_path, monkeypatch):
+    """A document cut off silently is one she answers about as though she saw
+    all of it."""
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    monkeypatch.setattr(attachments, "EXTRACT_CHARS", 40)
+    conversation, person = await _conversation(pool)
+
+    got = await _store(pool, conversation, person, "long.pdf", _pdf(["x" * 500]))
+
+    assert len(got.extracted_text) == 40
+    assert "the whole file is at" in got.extract_note

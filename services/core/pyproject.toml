@@ -13,6 +13,12 @@ dependencies = [
     # File/Form parameter without it, at import time, so a missing wheel is
     # a service that will not start rather than a route that 500s.
     "python-multipart",
+    # S28: reading the text out of a PDF he attached. Pure Python, no system
+    # libraries — it has to build in the same slim image as everything else.
+    # A scanned PDF has no text layer and yields nothing; that is a fact the
+    # extraction STATES rather than an error, because "this PDF is pictures"
+    # is the answer in that case.
+    "pypdf",
 ]
 
 [dependency-groups]

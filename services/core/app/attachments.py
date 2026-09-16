@@ -221,16 +221,38 @@ async def store(
     target.write_bytes(body)
     rel = str(target.relative_to(root))
 
+    media_type = sniff(body[:64], filename=name)
+
+    # THE TEXT, extracted once at upload rather than on every turn that
+    # mentions the file. A PDF he sent is not useful as a path alone — she
+    # would have to read it with a tool that cannot parse it — and re-parsing
+    # a 200-page document on each of five turns is the same answer computed
+    # five times. `note` carries why there is none when there is none: a
+    # scanned PDF and a PDF nobody read are different facts.
+    extracted: str | None = None
+    note: str | None = None
+    if media_type == PDF:
+        extracted, note = extract_pdf(body)
+        if extracted is not None and len(extracted) > EXTRACT_CHARS:
+            note = (
+                f"this PDF's text is {len(extracted)} characters; the first "
+                f"{EXTRACT_CHARS} are stored and the whole file is at {rel}"
+            )
+            extracted = extracted[:EXTRACT_CHARS]
+
     row = await pool.fetchrow(
         "INSERT INTO attachments "
-        "(conversation_id, person_id, filename, media_type, size_bytes, path) "
-        "VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+        "(conversation_id, person_id, filename, media_type, size_bytes, path, "
+        " extracted_text, extract_note) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
         conversation_id,
         person_id,
         name,
-        sniff(body[:64], filename=name),
+        media_type,
         len(body),
         rel,
+        extracted,
+        note,
     )
     return Attachment.from_row(row)
 
@@ -349,7 +371,13 @@ def facts_block(rows: list[Attachment], *, unseeable: list[Attachment] | None = 
             if row.extract_note:
                 extra = f" — {row.extract_note}"
             elif row.extracted_text is not None:
-                extra = " — its text is below"
+                # WHO read it, said explicitly. "Its text is below" left the
+                # question of how the text got there unanswered, and on the
+                # live stack she answered it herself: "no tool here can read
+                # PDFs... possibly a text file mislabeled as PDF" — a false
+                # claim about this system, appended to a correct answer. A
+                # gap in the facts is a thing a model fills.
+                extra = " — core extracted its text when it was uploaded; it is below"
             lines.append(
                 f"- {row.filename} ({row.media_type}, {_size_words(row.size_bytes)}) "
                 f"at {row.path}{extra}"
@@ -380,7 +408,7 @@ def text_block(rows: list[Attachment], *, limit: int = 20_000) -> str:
                 f"\n[…trimmed here: {row.filename} has {len(row.extracted_text)} characters "
                 f"and this is the first {limit}. The whole file is at {row.path}.]"
             )
-        out.append(f"--- {row.filename} ---\n{body}")
+        out.append(f"--- the text core extracted from {row.filename} ---\n{body}")
     return "\n\n".join(out)
 
 
@@ -418,3 +446,57 @@ def missing(rows: list[Attachment], *, root: Path | None = None) -> list[Attachm
     around."""
     root = root or root_from_env()
     return [row for row in rows if not (root / row.path).exists()]
+
+
+# How much of a PDF is worth carrying into a turn. Past this the document is
+# a reference she reads with a tool rather than something the prompt holds —
+# and the trim is always STATED, because a document cut off silently is one
+# she answers about as though she saw all of it.
+EXTRACT_CHARS = 200_000
+
+
+def extract_pdf(body: bytes) -> tuple[str | None, str | None]:
+    """(text, note) for a PDF's text layer.
+
+    THREE OUTCOMES, and they are different facts:
+
+      * text — it had a text layer and here it is;
+      * (None, "…no text…") — a SCANNED document: pages of pictures with
+        nothing to read. Not an error, and the most common PDF there is;
+        saying so is the answer, and letting her guess from the filename is
+        the failure this exists to prevent;
+      * (None, "…could not be read — <reason>") — encrypted, truncated,
+        malformed. The reason is the library's own words.
+
+    Never raises. A file that cannot be parsed must not fail the upload: the
+    bytes are still in the workspace, still hers to open with a tool, and a
+    500 on a broken PDF would lose the whole message he sent it with.
+    """
+    try:
+        from io import BytesIO
+
+        from pypdf import PdfReader
+
+        reader = PdfReader(BytesIO(body))
+        if reader.is_encrypted:
+            # An empty password opens most "protected" PDFs; a real one does
+            # not, and that is a fact rather than a failure.
+            try:
+                reader.decrypt("")
+            except Exception:  # noqa: BLE001 - the reason is the record
+                return None, "this PDF is password-protected, so its text could not be read"
+        pages = []
+        for page in reader.pages:
+            try:
+                pages.append(page.extract_text() or "")
+            except Exception as exc:  # noqa: BLE001 - one bad page is not the document
+                pages.append(f"[a page could not be read — {type(exc).__name__}]")
+        text = "\n\n".join(p for p in pages if p.strip())
+    except Exception as exc:  # noqa: BLE001 - the reason is the record
+        return None, f"this PDF could not be read — {type(exc).__name__}: {exc}"
+    if not text.strip():
+        return None, (
+            f"this PDF has no text layer ({len(reader.pages)} page(s) of images, most likely), "
+            "so there is nothing to read from it"
+        )
+    return text, None
