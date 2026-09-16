@@ -59,7 +59,7 @@ describe('Sidebar — the Inbox badge (S11)', () => {
   it('shows the count the SERVER stated, on the Inbox entry only', async () => {
     // 4 unread over rows this page never saw: the badge is the server's
     // number, not a count of anything the browser is holding.
-    renderSidebar(async () => ({ notices: [], unseen_count: 4 }))
+    renderSidebar(async () => ({ notices: [], unseen_count: 4, muted_count: 0 }))
     await waitFor(() => expect(screen.getByTestId('nav-count-badge').textContent).toBe('4'))
     expect(within(inboxLink()).getByTestId('nav-count-badge')).toBeDefined()
     // Exactly one entry carries a count.
@@ -67,7 +67,7 @@ describe('Sidebar — the Inbox badge (S11)', () => {
   })
 
   it('shows no badge when nothing is unread', async () => {
-    renderSidebar(async () => ({ notices: [], unseen_count: 0 }))
+    renderSidebar(async () => ({ notices: [], unseen_count: 0, muted_count: 0 }))
     await waitFor(() => expect(inboxLink()).toBeDefined())
     await new Promise(resolve => setTimeout(resolve, 10))
     expect(screen.queryByTestId('nav-count-badge')).toBeNull()
@@ -109,7 +109,7 @@ describe('the brand mark', () => {
   /** Asked for 2026-09-14: the N beside her name is a choice, not a
    *  hardcoded letter, and it is chosen separately from the favicon. */
   it('is drawn from the palette rather than hardcoded', async () => {
-    renderSidebar(async () => ({ notices: [], unseen_count: 0 }))
+    renderSidebar(async () => ({ notices: [], unseen_count: 0, muted_count: 0 }))
 
     const mark = await screen.findByTestId('brand-mark')
     expect(decodeURIComponent(mark.getAttribute('src') ?? '')).toContain('<svg')
@@ -123,7 +123,7 @@ describe('the brand mark', () => {
       'nova-appearance',
       JSON.stringify({ preset: 'nova', presetChosen: true, brandIcon: 'orb' }),
     )
-    renderSidebar(async () => ({ notices: [], unseen_count: 0 }))
+    renderSidebar(async () => ({ notices: [], unseen_count: 0, muted_count: 0 }))
 
     const mark = await screen.findByTestId('brand-mark')
     expect(mark.className).not.toContain('rounded-lg')

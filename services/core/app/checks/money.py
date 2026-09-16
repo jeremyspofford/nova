@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import httpx
 
 from app import agents, peers, spend_api
-from app.checks import CannotCheck, Check, Finding, NotDue
+from app.checks import CannotCheck, Check, Finding, NotDue, prose
 
 ROUTES_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
@@ -288,7 +288,7 @@ async def daily_spike(app, pool) -> list[Finding]:
         Finding(
             key=f"spend_spike:{target.isoformat()}",
             title=(
-                f"{target.isoformat()} cost {agents.money(usd)} — {multiple}x against "
+                f"{prose.on_date(target)} cost {agents.money(usd)} — {multiple}x against "
                 f"{agents.money(mean)}/day over the previous {span} day(s) "
                 f"(flagged at {SPIKE_MULTIPLE:g}x)"
             ),

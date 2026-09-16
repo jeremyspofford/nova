@@ -52,7 +52,7 @@ function api(overrides: Partial<SkillsApi> = {}): SkillsApi {
   }
 }
 
-function show(props: { api?: SkillsApi } = {}) {
+function show(props: { api?: SkillsApi; fromNotice?: string | null } = {}) {
   return render(
     <MemoryRouter>
       <SkillsPage api={api()} {...props} />
@@ -248,5 +248,37 @@ describe('SkillsPage', () => {
 
     expect((await screen.findAllByRole('alert')).length).toBeGreaterThan(0)
     await waitFor(() => expect(saving.updateSkill).not.toHaveBeenCalled())
+  })
+})
+
+describe('SkillsPage — a draft from a notice (S25.2.5)', () => {
+  it('opens the form by itself and asks only for a name', async () => {
+    const calls = api()
+    show({ api: calls, fromNotice: 'n1' })
+
+    await screen.findByTestId('new-skill')
+    // The steps are composed by the backend from the turns that walked the
+    // procedure. A title or a body typed here would be this form
+    // overwriting a record with a guess.
+    expect(screen.getByTestId('from-notice').textContent).toContain('resolved now')
+    expect(screen.queryByLabelText('Procedure')).toBeNull()
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'clear-stale-timers' } })
+    fireEvent.submit(screen.getByTestId('new-skill'))
+
+    await waitFor(() =>
+      expect(calls.createSkill).toHaveBeenCalledWith({
+        name: 'clear-stale-timers',
+        from_notice: 'n1',
+      }),
+    )
+  })
+
+  it('is the ordinary form when nobody came from a notice', async () => {
+    show()
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New skill' }))
+    expect(screen.queryByTestId('from-notice')).toBeNull()
+    expect(screen.getByLabelText('Procedure')).toBeTruthy()
   })
 })

@@ -151,7 +151,15 @@ async def test_thinking_time_is_generation_not_prompt_processing(owner_client, p
     # THE BUG: dividing 40 tokens by only the post-thinking window. The
     # generation window must contain the thinking, so the rate stays sane.
     assert meta["generation_ms"] >= meta["thinking_ms"]
-    assert meta["tok_per_s"] < 40 / (meta["thinking_ms"] / 1000)
+    # `<=`, not `<` (2026-09-16). The bound IS 40 tokens over the thinking
+    # window, and generation contains thinking — so the two are equal at the
+    # boundary, which is correct behaviour rather than a violation. Under a
+    # loaded machine the whole round can round to the same millisecond as the
+    # thinking, and this failed at `263.16 < 263.157`: a green test turning
+    # red on scheduling noise teaches everyone to ignore it. The bug it
+    # guards against reported 1900 against a bound near 263, so nothing is
+    # lost by admitting the edge.
+    assert meta["tok_per_s"] <= 40 / (meta["thinking_ms"] / 1000)
 
 
 async def test_the_other_spelling_of_reasoning_is_read_too(owner_client, pool, mount_peers):

@@ -28,7 +28,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app import agents, settings_store, timers
-from app.checks import CannotCheck, Check, Finding
+from app.checks import CannotCheck, Check, Finding, prose
 from app.tools.base import ERROR_PREFIX
 
 # One short of the ceiling that pauses a timer, DERIVED from the ceiling
@@ -57,12 +57,13 @@ async def paused_timers(app, pool) -> list[Finding]:
         "SELECT id, kind, title, paused_at, paused_reason, consecutive_failures FROM timers "
         "WHERE paused_at IS NOT NULL ORDER BY paused_at, id"
     )
+    tz = await prose.zone(pool)
     return [
         Finding(
             key=f"timer_paused:{row['id']}",
             title=(
-                f"the {row['kind']} {row['title']!r} is paused since "
-                f"{row['paused_at'].isoformat(timespec='seconds')} — {row['paused_reason']}"
+                f"the {row['kind']} {prose.named(row['title'])} has been paused "
+                f"{prose.since_day(row['paused_at'], tz)} — {row['paused_reason']}"
             ),
             facts={
                 "timer_id": str(row["id"]),
@@ -93,8 +94,8 @@ async def failing_timers(app, pool) -> list[Finding]:
         Finding(
             key=f"timer_failing:{row['id']}",
             title=(
-                f"the {row['kind']} {row['title']!r} has failed "
-                f"{row['consecutive_failures']} times in a row — it pauses itself at "
+                f"the {row['kind']} {prose.named(row['title'])} has failed "
+                f"{prose.times(row['consecutive_failures'])} in a row — it pauses itself at "
                 f"{timers.FAILURES_BEFORE_PAUSE}"
             ),
             facts={
@@ -152,6 +153,7 @@ async def failed_delegations(app, pool) -> list[Finding]:
         agents.DELEGATE_TOOL,
         DELEGATION_WINDOW,
     )
+    tz = await prose.zone(pool)
     findings = []
     for row in rows:
         meta = row["meta"] if isinstance(row["meta"], dict) else {}
@@ -161,8 +163,8 @@ async def failed_delegations(app, pool) -> list[Finding]:
             Finding(
                 key=f"delegation_failed:{row['id']}",
                 title=(
-                    f"the delegation to {name} on "
-                    f"{row['started_at'].isoformat(timespec='seconds')} failed — {head}"
+                    f"the delegation to {name} on {prose.on_day(row['started_at'], tz)} "
+                    f"at {prose.at_clock(row['started_at'], tz)} failed — {head}"
                 ),
                 facts={
                     "span_id": str(row["id"]),

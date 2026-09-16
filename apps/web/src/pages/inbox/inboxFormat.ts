@@ -1,6 +1,7 @@
 import type { SemanticColor } from '../../lib/design-tokens'
 import type { Notice, NoticeState } from '../../lib/api'
 import { deliveryLines, type DeliveryLine } from '../schedules/schedulesFormat'
+import { formatRelativeTime } from '../activity/activityFormat'
 
 /**
  * Pure presentation logic for the Inbox — kept apart from the page, as
@@ -14,7 +15,10 @@ import { deliveryLines, type DeliveryLine } from '../schedules/schedulesFormat'
  * * **Nothing here authorizes anything.** Muting is a NOISE preference and
  *   `seen` is a read receipt (owner ruling 2026-09-03) — the words this file
  *   produces for those two buttons say exactly that, so the page cannot
- *   quietly grow an approve/deny vocabulary it has no right to.
+ *   quietly grow an approve/deny vocabulary it has no right to. Since
+ *   S25.1.3 the read receipt is ALSO the whole of what marking seen does:
+ *   it used to quietly drop the row from the digest as well, which is a
+ *   second meaning the button never said out loud.
  * * **Nothing here invents a fact.** A delivery that failed shows the
  *   server's reason; a notice she acted on with no words says it has none
  *   rather than filling the gap; an unknown state renders verbatim rather
@@ -31,7 +35,9 @@ export function stateBadge(state: NoticeState | string): { label: string; color:
   if (state === 'raised') return { label: 'not told yet', color: 'neutral' }
   if (state === 'delivered') return { label: 'told you', color: 'success' }
   if (state === 'failed') return { label: 'not delivered', color: 'danger' }
-  if (state === 'seen') return { label: 'read', color: 'neutral' }
+  // No `seen` branch: there is no such state any more (S25.1.3). Whether he
+  // has read something is `seen_at`, which `readWords` renders — this badge
+  // is only ever about whether he was TOLD.
   if (state === 'muted') return { label: 'muted', color: 'warning' }
   return { label: state, color: 'neutral' }
 }
@@ -124,18 +130,21 @@ export function sightingsWords(repeats: number): string | null {
  * a noise preference and the title says so in the button itself, because
  * this page reads and silences and never authorizes.
  */
-export function muteWords(notice: Pick<Notice, 'state'>): {
+export function muteWords(notice: Pick<Notice, 'silenced'>): {
   muted: boolean
   label: string
   title: string
   /** What a click asks for — the value handed to muteNotice. */
   next: boolean
 } {
-  if (notice.state === 'muted') {
+  // `silenced`, not the state or the `muted_at` stamp: clearing a condition
+  // forgets its mute and leaves the stamp behind, and offering to "Unmute" a
+  // silence that is already over is a button that does nothing (S25.1).
+  if (notice.silenced) {
     return {
       muted: true,
       label: 'Unmute',
-      title: 'let these facts speak again — the next digest may carry them',
+      title: 'let this speak again — the next digest may carry it',
       next: false,
     }
   }
@@ -143,7 +152,7 @@ export function muteWords(notice: Pick<Notice, 'state'>): {
     muted: false,
     label: 'Mute',
     title:
-      'stop telling you about these exact facts until they change — a noise preference, never permission',
+      'stop telling you about this until it clears — a noise preference, never permission',
     next: true,
   }
 }
@@ -174,18 +183,171 @@ export function readWords(notice: Pick<Notice, 'seen_at'>): {
 }
 
 /**
+ * Fact key → where that subject lives, and the ONE place the mapping is
+ * written (S25.2.2).
+ *
+ * The temptation was a per-check mapping: `work_paused_timers` knows it
+ * emits a timer, so let it say so. That is a list somebody has to maintain,
+ * and the day a new check emits `timer_id` it renders as grey text with
+ * nothing to say why. Keyed on the FACT instead, every check that names a
+ * timer links to it the day it lands, with no edit here.
+ *
+ * Every route in here is one that actually DOES something with the value —
+ * `/schedules?timer=` opens that timer's row, `/activity?turn=` opens that
+ * turn's spans, `/agents/<name>` is a page about that agent. A link to a
+ * parameter no page reads is a promise the destination does not keep, so a
+ * subject whose page cannot yet receive it stays text (see
+ * UNLINKED_SUBJECTS).
+ */
+export const SUBJECT_ROUTES: Record<string, (value: string) => string> = {
+  timer_id: id => `/schedules?timer=${encodeURIComponent(id)}`,
+  turn_id: id => `/activity?turn=${encodeURIComponent(id)}`,
+  agent: name => `/agents/${encodeURIComponent(name)}`,
+}
+
+/**
+ * The subjects that are DELIBERATELY not links, each with the reason. A new
+ * `*_id` fact is one or the other — the core-side guard
+ * (tests/test_checks_prose.py) fails on a third option, so a subject cannot
+ * become quietly unlinkable by nobody noticing it.
+ */
+export const UNLINKED_SUBJECTS: Record<string, string> = {
+  // A span is a row inside a turn, and the Turn Inspector is already reached
+  // by `turn_id` on the same card. Two links to the same place is noise.
+  span_id: 'the turn it belongs to is already linked',
+  // No page shows one chat message on its own. The thread S24 opens against
+  // a notice is the surface that will, and it is reached by its own button.
+  message_id: 'no page addresses a single message yet',
+  // The review check's own row id, meaningful to the check and to nobody
+  // else — it identifies evidence, not a subject he can go and look at.
+  row_id: 'identifies evidence, not a place',
+}
+
+/**
+ * Where a fact's value can be followed, or null if it is just a value.
+ *
+ * An empty or non-string value never becomes a link: a route built from
+ * nothing lands on a page that cannot find what it was asked for, which is
+ * worse than plain text.
+ */
+export function subjectLink(key: string, value: unknown): string | null {
+  const route = SUBJECT_ROUTES[key]
+  if (route === undefined || typeof value !== 'string' || value.trim() === '') return null
+  return route(value)
+}
+
+/**
+ * Who asked for the silence — or null when nothing is silenced (S25 Q2).
+ *
+ * A mute SHE made and a mute HE made are different facts, and a silence he
+ * did not ask for must not be indistinguishable from one he did: that is
+ * how a noise preference quietly becomes something that happened to him.
+ * `muted_by` is his person id, or null meaning hers.
+ */
+export function silenceWords(
+  notice: Pick<Notice, 'silenced' | 'muted_by'>,
+): { text: string; mine: boolean } | null {
+  if (!notice.silenced) return null
+  if (notice.muted_by === null) {
+    return { text: 'Nova silenced this — it is not being reported to you', mine: false }
+  }
+  return { text: 'You silenced this', mine: true }
+}
+
+/**
+ * Whether there is a room to talk in, and what to say when there is not
+ * (S25.2.4).
+ *
+ * A room hangs off the MESSAGE that delivered the notice, so a notice
+ * nobody was told about has nowhere to talk — and so does one delivered by
+ * a device push alone, which has a `delivered_at` and no chat row. Both are
+ * facts about the world rather than decisions about him, which is what
+ * makes this the one place a disabled control is honest: the reason names
+ * what has not happened yet, never what he may not do.
+ */
+export function talkWords(notice: Pick<Notice, 'delivered_message_id'>): {
+  can: boolean
+  title: string
+} {
+  if (notice.delivered_message_id === null) {
+    return {
+      can: false,
+      title: 'nothing has carried this to you yet, so there is no message to talk under',
+    }
+  }
+  return { can: true, title: 'open the thread on the message that told you' }
+}
+
+/**
+ * Whether a skill can be drafted from this notice, and the words for it
+ * (S25.2.5).
+ *
+ * DERIVED FROM THE FACTS, not from the check's name. `POST /api/v1/skills
+ * {from_notice}` composes a draft by reading `facts.steps` and resolving the
+ * turns that walked that procedure NOW — so a notice carrying a list of
+ * steps is exactly a notice the backend would accept, and any check that
+ * starts emitting `steps` gets the button the day it does. Keying on
+ * `skills_repeated_procedure` would have been a second list to maintain,
+ * and one that goes wrong silently: the button would be missing rather
+ * than broken.
+ */
+export function draftWords(notice: Pick<Notice, 'facts'>): { can: boolean; title: string } | null {
+  const steps = (notice.facts ?? {}).steps
+  const usable = Array.isArray(steps) && steps.length > 0 && steps.every(s => typeof s === 'string')
+  if (!usable) return null
+  return {
+    can: true,
+    title: `write these ${(steps as string[]).length} steps down as a skill you can run again`,
+  }
+}
+
+/** A full ISO-8601 instant, which is the only fact shape this file is willing
+ * to re-word. A plain `2026-09-11` (the spend check's `day`) and a
+ * `2026-09` (its `month`) are deliberately NOT matched: they are already the
+ * answer to "which day", and "3 days ago" would be a worse version of it. */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/
+
+/**
  * The derived facts the fingerprint was computed from, as display lines. This
  * is the evidence behind the title, so it is rendered in the order and the
  * words core returned: a value that is not a string is shown as its JSON
  * rather than being coerced into prose that could read as something it is
  * not. An empty facts object yields no lines.
+ *
+ * ONE exception, and it is the other half of S25.2.1. A card's SENTENCE is
+ * composed once, when the check first found the condition, and never
+ * rewritten — so it can only carry a time that stays true ("since Friday 11
+ * September 2026"; see services/core/app/checks/prose.py). The moving
+ * version of the same fact — "3d ago" — belongs here, where it is computed
+ * at render time against the clock in front of him and is therefore right
+ * every time he looks. The exact instant stays on the line as its `title`,
+ * because a relative time with no absolute behind it cannot be checked.
  */
-export function factLines(facts: Record<string, unknown>): { key: string; value: string }[] {
-  return Object.entries(facts ?? {}).map(([key, value]) => ({
-    key,
-    // String() around the stringify because JSON.stringify(undefined) is not
-    // a string, and a fact that came back as nothing should read as
-    // "undefined" rather than crash the row it belongs to.
-    value: typeof value === 'string' ? value : String(JSON.stringify(value)),
-  }))
+export function factLines(
+  facts: Record<string, unknown>,
+  now: Date = new Date(),
+): { key: string; value: string; title?: string; href?: string }[] {
+  return Object.entries(facts ?? {}).map(([key, value]) => {
+    // A subject the owner can go and look at (S25.2.2). The VALUE is still
+    // rendered as core wrote it — a link changes where a click goes, never
+    // what the evidence says.
+    const href = subjectLink(key, value) ?? undefined
+    if (href !== undefined) return { key, value: String(value), href }
+    if (typeof value === 'string' && ISO_INSTANT.test(value)) {
+      const when = new Date(value)
+      // An unparseable string that merely LOOKS like a timestamp is shown
+      // verbatim: a fact this page cannot read is still core's fact, and
+      // "Invalid Date" would be this page inventing one.
+      if (!Number.isNaN(when.getTime())) {
+        return { key, value: formatRelativeTime(value, now), title: value }
+      }
+    }
+    return {
+      key,
+      // String() around the stringify because JSON.stringify(undefined) is not
+      // a string, and a fact that came back as nothing should read as
+      // "undefined" rather than crash the row it belongs to.
+      value: typeof value === 'string' ? value : String(JSON.stringify(value)),
+    }
+  })
 }

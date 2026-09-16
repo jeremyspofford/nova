@@ -311,7 +311,9 @@ async def test_seen_keeps_the_first_read_and_is_idempotent(pool):
     first = await notices.mark_seen(pool, notice.id)
     again = await notices.mark_seen(pool, notice.id)
 
-    assert (first.state, again.state) == (notices.SEEN, notices.SEEN)
+    # S25.1.3: reading writes the RECEIPT and nothing else. The state still
+    # says what happened to the notice — nobody has delivered this one.
+    assert (first.state, again.state) == (notices.RAISED, notices.RAISED)
     assert first.seen_at is not None
     assert again.seen_at == first.seen_at
 
@@ -376,7 +378,12 @@ async def test_the_database_refuses_a_state_with_no_evidence(pool):
     for columns, values, constraint in (
         (", state", ", 'delivered'", "notices_delivered_says_when"),
         (", state", ", 'failed'", "notices_failed_says_why"),
-        (", state", ", 'seen'", "notices_seen_says_when"),
+        # `seen` is refused EARLIER than the others now, by the state CHECK
+        # itself (migration 033): there is no such state, so there is no
+        # "with no evidence" case for it to reach. Its companion constraint
+        # — notices_seen_says_when — went with it, since a rule about a
+        # state that cannot exist is a rule nothing can ever break.
+        (", state", ", 'seen'", "notices_state_check"),
         (", state", ", 'muted'", "notices_muted_says_when"),
         (", acted", ", true", "notices_acted_names_its_turn"),
     ):
@@ -413,9 +420,25 @@ async def test_a_muted_row_still_occupies_its_fingerprint(pool):
     assert await notices.deliverable(pool) == []
 
 
-async def test_changed_facts_speak_again_even_when_the_old_row_is_muted(pool):
-    """Muting the old facts must not mute the world. A different fingerprint
-    is a different row, and it starts raised and unmuted."""
+async def test_changed_facts_stay_muted_because_the_CONDITION_is_muted(pool):
+    """REVERSED 2026-09-16, and this test is the record of why.
+
+    It used to read "changed facts speak again even when the old row is
+    muted", and it pinned that as a feature: "muting the old facts must not
+    mute the world". In use it was the defect the owner reported — mute a
+    failing timer at two failures and the third arrives as a fresh unmuted
+    card, because `consecutive_failures` is IN the facts and the fingerprint
+    is a hash of them. The condition never changed. The count did.
+
+    The mute now keys on `(check_name, finding_key)` — the half that names
+    WHICH condition — so a new reading of a silenced condition is still
+    silenced. A genuinely different condition is still news; that is the
+    test below.
+
+    Worth keeping as a lesson rather than deleting: a test can pin an
+    intention that is wrong, and it will then defend the defect. Nothing
+    about this suite was failing.
+    """
     notice, _ = await notices.record(
         pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
     )
@@ -429,9 +452,11 @@ async def test_changed_facts_speak_again_even_when_the_old_row_is_muted(pool):
         firing_id=None,
     )
 
+    # A new ROW, because the facts really are different and the history is
+    # worth keeping — but born muted, and owed to nobody.
     assert is_new is True
-    assert (fresh.state, fresh.muted_at) == (notices.RAISED, None)
-    assert [n.id for n in await notices.deliverable(pool)] == [fresh.id]
+    assert fresh.state == notices.MUTED
+    assert await notices.deliverable(pool) == []
 
 
 async def test_reading_a_muted_notice_leaves_the_mute_standing(pool):
@@ -468,7 +493,10 @@ async def test_unmuting_derives_the_state_from_the_evidence_on_the_row(pool):
     for notice, expected in (
         (raised, notices.RAISED),
         (delivered, notices.DELIVERED),
-        (read, notices.SEEN),
+        # S25.1.3: `read` was delivered AND read, and it comes back
+        # `delivered` — the delivery is what happened to the notice, the
+        # reading is a timestamp beside it.
+        (read, notices.DELIVERED),
     ):
         await notices.set_muted(pool, notice.id, True)
         back = await notices.set_muted(pool, notice.id, False)
@@ -493,18 +521,27 @@ async def test_deliverable_is_everything_still_true_nobody_was_told_oldest_first
     assert [n.id for n in await notices.deliverable(pool)] == [older.id, newer.id]
 
 
-async def test_recent_is_the_newest_sighting_first_and_honours_its_limit(pool):
+async def test_recent_is_the_newest_TELLING_first_and_honours_its_limit(pool):
+    """REVERSED 2026-09-16 (was "the newest sighting first").
+
+    The comment below used to read "the older row is seen again by a later
+    beat, so it is the fresher news" and the assertion put `first` on top.
+    A beat seeing something again is the CHECK talking, not news for him —
+    so the page was ordered by how often each condition recurs, and the
+    noisiest finding on the box held the top card permanently. Ordering is
+    by when he was TOLD now (notices._TOLD_AT).
+    """
     first, _ = await notices.record(
         pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
     )
     second, _ = await notices.record(
         pool, _finding(key="k2", facts={"a": 1}), check_name=QUIET, turn_id=None, firing_id=None
     )
-    # The older row is seen again by a later beat, so it is the fresher news.
+    # The older row recurs. It does not thereby become the newer news.
     await notices.record(pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None)
 
-    assert [n.id for n in await notices.recent(pool)] == [first.id, second.id]
-    assert [n.id for n in await notices.recent(pool, limit=1)] == [first.id]
+    assert [n.id for n in await notices.recent(pool)] == [second.id, first.id]
+    assert [n.id for n in await notices.recent(pool, limit=1)] == [second.id]
 
 
 async def test_unseen_count_counts_what_he_has_not_read(pool):
@@ -529,7 +566,11 @@ async def test_unseen_count_counts_what_he_has_not_read(pool):
     await notices.set_muted(pool, hushed.id, True)
 
     assert await notices.unseen_count(pool) == 2
-    assert {n.id for n in await notices.deliverable(pool)} == {raised.id}
+    # The badge and the digest part company here, on purpose (S25.1.3). The
+    # badge is about him — he has read `read`, so it is not unread news. The
+    # digest is about the world: that condition is still true and nobody has
+    # successfully told him, so it is still owed.
+    assert {n.id for n in await notices.deliverable(pool)} == {raised.id, read.id}
 
 
 # -- facts the column can actually hold -----------------------------------------
@@ -583,7 +624,9 @@ def test_the_deliverable_and_unseen_sets_are_derived_from_one_another():
     assert notices.DELIVERABLE_STATES == (notices.RAISED, notices.FAILED)
     assert set(notices.UNSEEN_STATES) == set(notices.DELIVERABLE_STATES) | {notices.DELIVERED}
     assert notices.MUTED not in notices.UNSEEN_STATES
-    assert notices.SEEN not in notices.UNSEEN_STATES
+    # And there is no `seen` state to leave out of it (S25.1.3): what he has
+    # read is a timestamp, counted by notices._UNREAD.
+    assert "seen" not in notices.STATES
 
 
 async def test_a_failed_delivery_stays_deliverable_and_unread_through_folds(pool):
@@ -632,15 +675,22 @@ async def test_reading_a_failed_notice_does_not_erase_that_nobody_was_told(pool)
     assert (row["state"], row["failed_reason"]) == (notices.FAILED, "the gateway refused the push")
 
 
-async def test_a_notice_he_has_read_is_no_longer_owed_and_an_unread_one_still_is(pool):
-    """The rule settled 2026-09-08, both ways in one test because the whole
-    value of it is the difference between the two rows.
+async def test_a_notice_he_has_read_is_STILL_owed_because_reading_is_not_acting(pool):
+    """REVERSED 2026-09-16 (S25 Q1). It was settled the other way on
+    2026-09-08: a failed delivery he then read in the Inbox had been told to
+    him by his own eyes, so listing it again would read as a repeat.
 
-    A failed delivery he then READ in the Inbox has been told to him by his own
-    eyes; listing it again in tomorrow's digest would read to him as a repeat.
-    A failed delivery he has NOT read still reached nobody, and is still owed —
-    which is the older rule (`failed` is a deliverable state, not a finished
-    one) and must not be lost to this one."""
+    What that missed is that it gave ONE control two meanings. Opening a card
+    was also how he silenced it — permanently, with no way to find it again
+    and no word anywhere saying that is what the click did — while the urgent
+    push path went on pushing the same row, because it reads different
+    columns.
+
+    So reading stops nothing. A condition leaves the digest when it CLEARS
+    (it stopped being true) or when he MUTES it (he said stop) — the two
+    things that already meant exactly that. The cost is a noisier digest for
+    anything he has read and not acted on, which is the honest trade.
+    """
     read, _ = await notices.record(pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None)
     unread, _ = await notices.record(
         pool, _finding(key="k2", facts={"a": 1}), check_name=QUIET, turn_id=None, firing_id=None
@@ -651,16 +701,19 @@ async def test_a_notice_he_has_read_is_no_longer_owed_and_an_unread_one_still_is
 
     await notices.mark_seen(pool, read.id)
 
-    assert [n.id for n in await notices.deliverable(pool)] == [unread.id]
+    # Still owed — both of them. `failed` is the record that no channel told
+    # him, and that record is not erased by him finding the row himself.
+    assert {n.id for n in await notices.deliverable(pool)} == {read.id, unread.id}
+    # The BADGE is where the receipt lands: one unread of the two.
     assert await notices.unseen_count(pool) == 1
 
-    # And a later sighting of the read one does not put it back: the fold bumps
-    # repeats and touches nothing else, so seen_at still stands.
+    # A later sighting folds as before, and changes neither answer.
     folded, is_new = await notices.record(
         pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
     )
     assert (is_new, folded.id, folded.repeats) == (False, read.id, 2)
-    assert [n.id for n in await notices.deliverable(pool)] == [unread.id]
+    assert {n.id for n in await notices.deliverable(pool)} == {read.id, unread.id}
+    assert await notices.unseen_count(pool) == 1
 
 
 async def test_muting_and_unmuting_is_not_a_laundering_path_for_failed(pool):
@@ -738,8 +791,9 @@ async def test_clearing_frees_the_fingerprint_so_the_same_fault_is_news_again(po
 
     assert cleared.cleared_at is not None
     # What he was TOLD is untouched: state is about the news, cleared_at is
-    # about the condition.
-    assert cleared.state == notices.SEEN
+    # about the condition. It was delivered, and he read it — the delivery is
+    # the state, the reading is `seen_at` (S25.1.3).
+    assert (cleared.state, cleared.seen_at is not None) == (notices.DELIVERED, True)
 
     again, is_new = await notices.record(
         pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
@@ -812,45 +866,57 @@ async def test_a_check_that_ran_and_found_nothing_clears_everything_it_had_raise
     assert await notices.deliverable(pool) == []
 
 
-async def test_reconcile_never_clears_a_muted_notice(pool):
-    """A mute means stop telling me about THIS until the facts change, and
-    identical facts are the same fingerprint whether or not the condition
-    blinked off and on in between. So the muted row holds its fingerprint: the
-    same fault returning folds onto it, silently, as he asked."""
+async def test_a_muted_condition_going_away_clears_it_AND_forgets_the_mute(pool):
+    """REVERSED 2026-09-16 (was "reconcile never clears a muted notice").
+
+    The old rule kept the muted row live forever so a returning fault could
+    fold onto it silently. The cost: mute a condition once and it is muted
+    for the life of the box, with no moment the silence ever expires.
+
+    The owner's rule instead: a mute lasts as long as the condition does.
+    The check stops seeing it, so the row clears like any other and the mute
+    is forgotten with it — the SAME fault arriving next week is news again,
+    because a week of quiet is real evidence it went away.
+
+    This is the only thing that ends a mute other than unmuting it by hand,
+    which is why the forgetting has to happen in the same statement as the
+    clear: a cleared row with a surviving mute key is a permanent gag on a
+    condition nobody can see to unmute.
+    """
     notice, _ = await notices.record(
         pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
     )
     await notices.set_muted(pool, notice.id, True)
 
-    assert await notices.reconcile(pool, check_name=QUIET, live_fingerprints=set()) == []
-    row = await pool.fetchrow("SELECT state, cleared_at FROM notices WHERE id = $1", notice.id)
-    assert (row["state"], row["cleared_at"]) == (notices.MUTED, None)
+    cleared = await notices.reconcile(pool, check_name=QUIET, live_fingerprints=set())
+    assert [n.id for n in cleared] == [notice.id]
+    assert await pool.fetchval("SELECT cleared_at FROM notices WHERE id = $1", notice.id)
+    assert await notices.muted_keys(pool, QUIET) == set()
 
-    folded, is_new = await notices.record(
+    # The same fault, later. A new row, and it SPEAKS.
+    again, is_new = await notices.record(
         pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
     )
-    assert (is_new, folded.id, folded.state, folded.repeats) == (
-        False,
-        notice.id,
-        notices.MUTED,
-        2,
-    )
-    assert await _count(pool) == 1
+    assert (is_new, again.state) == (True, notices.RAISED)
+    assert [n.id for n in await notices.deliverable(pool)] == [again.id]
 
 
-async def test_clearing_a_muted_notice_is_refused_in_words(pool):
-    """The same rule at the other writer of cleared_at, said out loud rather
-    than silently skipped: a caller must not report a clear that did not
-    happen."""
+async def test_clearing_a_muted_notice_by_hand_also_forgets_the_mute(pool):
+    """REVERSED 2026-09-16 (was "clearing a muted notice is refused in
+    words"). The other writer of cleared_at, held to the same rule as
+    reconcile above: muted is not a lock, it is a preference about being
+    told. Clearing says the condition is over, and the mute ends with it —
+    in the same statement, so the two can never disagree.
+    """
     notice, _ = await notices.record(
         pool, _finding(), check_name=QUIET, turn_id=None, firing_id=None
     )
     await notices.set_muted(pool, notice.id, True)
 
-    with pytest.raises(notices.NoticeError, match="never cleared"):
-        await notices.clear(pool, notice.id)
+    await notices.clear(pool, notice.id)
 
-    assert await pool.fetchval("SELECT cleared_at FROM notices WHERE id = $1", notice.id) is None
+    assert await pool.fetchval("SELECT cleared_at FROM notices WHERE id = $1", notice.id)
+    assert await notices.muted_keys(pool, QUIET) == set()
 
 
 async def test_clearing_a_row_that_already_cleared_is_loud(pool):

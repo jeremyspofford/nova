@@ -28,6 +28,7 @@ import asyncio
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -40,6 +41,7 @@ from app.checks import (
     Finding,
     inference,
     money,
+    prose,
     skills,
     stack,
     work,
@@ -612,7 +614,18 @@ async def test_a_paused_timer_is_a_finding_carrying_the_rows_own_reason(pool):
     assert found.key == f"timer_paused:{paused}" and found.urgent is False
     assert found.facts["reason"] == "paused after 5 consecutive failures: the disk is full"
     assert found.facts["timer_id"] == str(paused) and found.facts["kind"] == "scheduled"
-    assert "nightly backup" in found.title
+    # The SENTENCE, pinned (S25.2.1). It used to carry the pause as
+    # `2026-09-11T14:35:29+00:00`, which is accurate and unreadable; the day
+    # is named instead, in his timezone, and the row's own reason keeps its
+    # own words. Composed against prose rather than typed out here, so this
+    # asserts the check used the shared vocabulary and not that someone
+    # copied a format string into two places.
+    paused_at = await pool.fetchval("SELECT paused_at FROM timers WHERE id = $1", paused)
+    assert found.title == (
+        f"the scheduled “nightly backup” has been paused "
+        f"{prose.since_day(paused_at, ZoneInfo('UTC'))} — "
+        "paused after 5 consecutive failures: the disk is full"
+    )
     # The title is NOT in the facts: renaming a timer is not news about its pause.
     assert "title" not in found.facts
 
@@ -640,7 +653,9 @@ async def test_a_timer_one_failure_from_the_ceiling_is_a_finding(pool):
         "consecutive_failures": 4,
         "pause_ceiling": 5,
     }
-    assert "pauses itself at 5" in run.findings[0].title
+    assert run.findings[0].title == (
+        "the scheduled “feed sync” has failed four times in a row — it pauses itself at 5"
+    ), "a count reads as a word here, and the name arrives without Python's quoting"
     assert work.WARN_AT_FAILURES == 4
 
 

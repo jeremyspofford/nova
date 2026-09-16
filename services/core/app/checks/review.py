@@ -83,7 +83,7 @@ from datetime import timedelta
 import httpx
 
 from app import identity, model_read, peers
-from app.checks import CannotCheck, Check, Finding, NotDue
+from app.checks import CannotCheck, Check, Finding, NotDue, prose
 
 CHECK_NAME = "review_commitments"
 
@@ -552,6 +552,7 @@ async def _verified(pool, owner: identity.Person, items, window) -> list[Finding
             f"used — {exc}"
         ) from exc
     findings: list[Finding] = []
+    tz = await prose.zone(pool)
     for row, said in model_read.keep_cited(
         by_id, items, label=CHECK_NAME, what="a finding", whose=owner.name
     ):
@@ -564,8 +565,9 @@ async def _verified(pool, owner: identity.Person, items, window) -> list[Finding
                 # wrote. The title is never hashed, so re-wording it is not
                 # new news.
                 title=(
-                    f"she reads his message of {when.isoformat(timespec='minutes')} as something "
-                    f"he said he would do and has not finished: {said!r} — he wrote: {quote!r}"
+                    f"she reads his message of {prose.on_day(when, tz)} as something he said "
+                    f"he would do and has not finished: {prose.named(said)} — "
+                    f"he wrote: {prose.named(quote)}"
                 ),
                 # Row facts only. The paraphrase is deliberately absent: it is
                 # the one part of this finding a model chose, and putting it

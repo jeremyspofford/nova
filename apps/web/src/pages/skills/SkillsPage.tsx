@@ -53,11 +53,23 @@ function reasonOf(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
-export function SkillsPage({ api = DEFAULT_API }: { api?: SkillsApi } = {}) {
+export function SkillsPage({
+  api = DEFAULT_API,
+  fromNotice = null,
+}: {
+  api?: SkillsApi
+  /** `?from_notice=<id>` off the URL (S25.2.5): the Inbox sent him here to
+   * write down a procedure a check noticed him repeating. The form opens by
+   * itself and asks only for the NAME — everything else in the draft is
+   * composed by the backend from the turns that actually walked it, which
+   * is the point: a procedure typed out by hand is a description, and one
+   * resolved from the ledger is a record. */
+  fromNotice?: string | null
+} = {}) {
   const [skills, setSkills] = useState<SkillInfo[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [openName, setOpenName] = useState<string | null>(null)
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState(fromNotice !== null)
 
   const refresh = useCallback(async () => {
     try {
@@ -96,6 +108,7 @@ export function SkillsPage({ api = DEFAULT_API }: { api?: SkillsApi } = {}) {
       {creating && (
         <NewSkill
           api={api}
+          fromNotice={fromNotice}
           onClose={() => setCreating(false)}
           onCreated={name => {
             setCreating(false)
@@ -170,10 +183,12 @@ export function SkillsPage({ api = DEFAULT_API }: { api?: SkillsApi } = {}) {
  * has read is not one she has been given. */
 function NewSkill({
   api,
+  fromNotice = null,
   onClose,
   onCreated,
 }: {
   api: SkillsApi
+  fromNotice?: string | null
   onClose: () => void
   onCreated: (name: string) => void
 }) {
@@ -190,7 +205,13 @@ function NewSkill({
       onSubmit={async event => {
         event.preventDefault()
         try {
-          const made = await api.createSkill({ name, title, summary, body })
+          // From a notice, the NAME is the only thing he supplies: the
+          // steps come from the turns the backend resolves now, so sending
+          // a title or a body here would be this form overwriting a record
+          // with a guess.
+          const made = fromNotice
+            ? await api.createSkill({ name, from_notice: fromNotice })
+            : await api.createSkill({ name, title, summary, body })
           onCreated(made.name)
         } catch (err) {
           setError(reasonOf(err))
@@ -209,12 +230,19 @@ function NewSkill({
         value={name}
         onChange={e => setName(e.target.value)}
       />
+      {fromNotice !== null && (
+        <p className="text-compact text-content-secondary" data-testid="from-notice">
+          The steps come from the turns that actually walked this — resolved now, so the draft
+          is what has happened rather than what was true when the check noticed. Give it a name.
+        </p>
+      )}
       <input
         aria-label="Title"
         placeholder="What it is"
         className="w-full rounded-sm border border-border bg-surface px-3 py-2 text-compact"
         value={title}
         onChange={e => setTitle(e.target.value)}
+        hidden={fromNotice !== null}
       />
       <input
         aria-label="Summary"
@@ -222,13 +250,16 @@ function NewSkill({
         className="w-full rounded-sm border border-border bg-surface px-3 py-2 text-compact"
         value={summary}
         onChange={e => setSummary(e.target.value)}
+        hidden={fromNotice !== null}
       />
-      <Textarea
-        aria-label="Procedure"
-        rows={6}
-        value={body}
-        onChange={e => setBody(e.target.value)}
-      />
+      {fromNotice === null && (
+        <Textarea
+          aria-label="Procedure"
+          rows={6}
+          value={body}
+          onChange={e => setBody(e.target.value)}
+        />
+      )}
       <div className="flex gap-2">
         <Button size="sm" type="submit">
           Create draft

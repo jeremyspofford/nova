@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { BellOff, Inbox, Radar } from 'lucide-react'
+import { Link, useNavigate } from 'react-router-dom'
+import { BellOff, BookPlus, Inbox, MessageSquare, Radar } from 'lucide-react'
 import clsx from 'clsx'
 import { PageHeader } from '../../components/layout/PageHeader'
 import { Badge, Button, EmptyState, Skeleton } from '../../components/ui'
@@ -7,6 +8,7 @@ import {
   listNotices as apiListNotices,
   markNoticeSeen as apiMarkNoticeSeen,
   muteNotice as apiMuteNotice,
+  talkAboutNotice as apiTalkAboutNotice,
   NOTICES_PAGE_SIZE,
   type Notice,
 } from '../../lib/api'
@@ -19,9 +21,12 @@ import {
   factLines,
   livePill,
   muteWords,
+  draftWords,
   readWords,
   sightingsWords,
+  silenceWords,
   stateBadge,
+  talkWords,
 } from './inboxFormat'
 
 /**
@@ -40,6 +45,13 @@ import {
  * permission (owner ruling 2026-09-03, tests/test_no_approvals.py). She has
  * already acted by the time a row exists; this is where she accounts for it.
  *
+ * The two controls do different things, which they did not always: until
+ * S25.1.3 marking a card seen ALSO dropped it out of every future digest,
+ * so the quiet button and the silencing button were the same button and only
+ * one of them said so. Seen now writes a receipt and nothing else; mute is
+ * the one that silences, it says so, and what it silenced is one tab away
+ * rather than gone.
+ *
  * Both writes re-read the listing rather than patching the row locally, so
  * what is shown is the server's state — a mute the server refused can never
  * look like it took. They also push a fresh read through the shell's unseen
@@ -52,12 +64,14 @@ interface InboxApi {
   listNotices: typeof apiListNotices
   markNoticeSeen: typeof apiMarkNoticeSeen
   muteNotice: typeof apiMuteNotice
+  talkAboutNotice: typeof apiTalkAboutNotice
 }
 
 const DEFAULT_API: InboxApi = {
   listNotices: apiListNotices,
   markNoticeSeen: apiMarkNoticeSeen,
   muteNotice: apiMuteNotice,
+  talkAboutNotice: apiTalkAboutNotice,
 }
 
 /** Never tighter: the watch beat runs hourly, so this is about seeing a
@@ -81,10 +95,17 @@ export function InboxPage({
 } = {}) {
   const [notices, setNotices] = useState<Notice[] | null>(null)
   const [unseenCount, setUnseenCount] = useState<number | null>(null)
+  // Which half of the table is on screen. Muted rows are not deleted and not
+  // in the default view: this toggle is the only place an unmute can be
+  // clicked, so a silence he cannot find is a silence he cannot lift
+  // (S25.1.2).
+  const [showMuted, setShowMuted] = useState(false)
+  const [mutedCount, setMutedCount] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
   const shell = useUnseenNotices()
+  const navigate = useNavigate()
   // Whether this page is still on screen. Declared before the effects that
   // read it so a remount sets it back to true first.
   const mounted = useRef(true)
@@ -98,17 +119,21 @@ export function InboxPage({
 
   const read = useCallback(async () => {
     try {
-      const listing = await api.listNotices({ limit: pageSize })
+      const listing = await api.listNotices({ limit: pageSize, muted: showMuted })
       if (!mounted.current) return
       setNotices(listing.notices)
       setUnseenCount(listing.unseen_count)
+      // Counted by the server over every row, like the unread count beside
+      // it — so the tab can say what the default view is withholding even
+      // while the muted view is the one not on screen.
+      setMutedCount(listing.muted_count)
       setError(null)
     } catch (err) {
       // The last known list stays: a failed read is a failed read, never a
       // reason to render an empty inbox as if she had noticed nothing.
       if (mounted.current) setError(reasonOf(err))
     }
-  }, [api, pageSize])
+  }, [api, pageSize, showMuted])
 
   useEffect(() => {
     void read()
@@ -140,12 +165,61 @@ export function InboxPage({
     [read, shell],
   )
 
+  /** Open the room off the message that told him, and go there (S25.2.4).
+   *
+   * NOT through `write`: that re-reads the listing after every call, and
+   * this one navigates away — a re-read racing an unmount is a state update
+   * on a page nobody is looking at. A refusal is stated on the row it
+   * belongs to, in core's words, exactly as a failed write is.
+   */
+  const talk = useCallback(
+    async (notice: Notice) => {
+      setBusyId(notice.id)
+      try {
+        const room = await api.talkAboutNotice(notice.id)
+        navigate(`/chat?thread=${encodeURIComponent(room.conversation_id)}`)
+      } catch (err) {
+        if (mounted.current) setRowErrors(prev => ({ ...prev, [notice.id]: reasonOf(err) }))
+      } finally {
+        if (mounted.current) setBusyId(null)
+      }
+    },
+    [api, navigate],
+  )
+
   return (
     <div>
       <PageHeader
         title="Inbox"
         description="What she noticed on her own — what each check found, what she did about it, and whether you were ever told."
       />
+
+      {/* The two halves of the table. The muted tab carries its count so it
+          is legible as "there are silenced things over here" rather than an
+          empty-looking option nobody clicks — the rows behind an invisible
+          filter are as gone as deleted ones (S25.1.2). */}
+      {mutedCount !== null && (mutedCount > 0 || showMuted) && (
+        <div className="mb-4 flex gap-1" data-testid="muted-filter">
+          {[
+            { muted: false, label: 'Inbox' },
+            { muted: true, label: `Muted (${mutedCount})` },
+          ].map(tab => (
+            <button
+              key={tab.label}
+              type="button"
+              onClick={() => setShowMuted(tab.muted)}
+              aria-pressed={showMuted === tab.muted}
+              className={`rounded-sm px-3 py-1.5 text-compact transition-colors ${
+                showMuted === tab.muted
+                  ? 'bg-surface-raised text-content-primary'
+                  : 'text-content-secondary hover:text-content-primary'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* The server's count, over every row — not a count of what this page
           happens to be holding. Left off entirely when there is nothing to
@@ -174,11 +248,19 @@ export function InboxPage({
           </div>
         )
       ) : notices.length === 0 ? (
-        <EmptyState
-          icon={Inbox}
-          title="Nothing noticed yet"
-          description="The watch beat writes here every time a check finds something. An empty inbox means the checks ran and found nothing to tell you."
-        />
+        showMuted ? (
+          <EmptyState
+            icon={Inbox}
+            title="Nothing is muted"
+            description="Muting something puts it here rather than deleting it, so you can always find what you silenced and let it speak again."
+          />
+        ) : (
+          <EmptyState
+            icon={Inbox}
+            title="Nothing noticed yet"
+            description="The watch beat writes here every time a check finds something. An empty inbox means the checks ran and found nothing to tell you."
+          />
+        )
       ) : (
         <div className="space-y-3" data-testid="inbox-list">
           {notices.map(notice => (
@@ -189,6 +271,11 @@ export function InboxPage({
               rowError={rowErrors[notice.id]}
               onSeen={() => void write(notice, () => api.markNoticeSeen(notice.id))}
               onMute={next => void write(notice, () => api.muteNotice(notice.id, next))}
+              onTalk={() => void talk(notice)}
+              // A draft needs a NAME, and the Skills page is what knows how
+              // to ask for one — so this carries the notice there rather
+              // than posting a skill called something this page invented.
+              onDraft={() => navigate(`/skills?from_notice=${encodeURIComponent(notice.id)}`)}
             />
           ))}
           {/* A full page is probably not the whole record. Saying so beats a
@@ -197,7 +284,7 @@ export function InboxPage({
               explanation. */}
           {notices.length >= pageSize && (
             <p className="pt-1 text-micro text-content-tertiary" data-testid="page-is-full">
-              These are the {pageSize} most recently seen notices — older ones are not listed here.
+              These are the {pageSize} most recent notices — older ones are not listed here.
             </p>
           )}
         </div>
@@ -212,12 +299,16 @@ function NoticeCard({
   rowError,
   onSeen,
   onMute,
+  onTalk,
+  onDraft,
 }: {
   notice: Notice
   busy: boolean
   rowError: string | undefined
   onSeen: () => void
   onMute: (next: boolean) => void
+  onTalk: () => void
+  onDraft: () => void
 }) {
   const state = stateBadge(notice.state)
   const live = livePill(notice)
@@ -225,6 +316,9 @@ function NoticeCard({
   const sightings = sightingsWords(notice.repeats)
   const mute = muteWords(notice)
   const read = readWords(notice)
+  const silence = silenceWords(notice)
+  const talk = talkWords(notice)
+  const draft = draftWords(notice)
   const lines = deliveryVerdicts(notice)
   const facts = factLines(notice.facts)
 
@@ -267,6 +361,38 @@ function NoticeCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          {/* S25.2.4. Disabled rather than hidden when there is no room: the
+              reason is a fact about the world — nothing has carried this to
+              him yet — and hiding it would leave him wondering why this card
+              is different from the others. */}
+          {/* S25.2.5. Only on a notice that actually carries a procedure —
+              which is the same condition the backend accepts, read off the
+              same facts, so this cannot offer a draft that would be
+              refused. It navigates rather than posting: the draft needs a
+              NAME, and the Skills page is what knows how to ask for one. */}
+          {draft && (
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={<BookPlus size={12} />}
+              title={draft.title}
+              onClick={onDraft}
+              data-testid="draft-skill"
+            >
+              Write this down
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant="ghost"
+            icon={<MessageSquare size={12} />}
+            title={talk.title}
+            disabled={!talk.can || busy}
+            onClick={onTalk}
+            data-testid="talk-about"
+          >
+            Talk about this
+          </Button>
           <Button
             size="sm"
             variant="secondary"
@@ -290,6 +416,12 @@ function NoticeCard({
         </div>
       </div>
 
+      {silence && (
+        <p className="mt-2 text-compact text-content-tertiary" data-testid="silence-line">
+          {silence.text}
+        </p>
+      )}
+
       {acted && (
         <p className="mt-2 text-compact text-content-secondary" data-testid="acted-line">
           <span className="text-content-tertiary">She did: </span>
@@ -312,8 +444,18 @@ function NoticeCard({
       {facts.length > 0 && (
         <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-micro text-content-tertiary" data-testid="notice-facts">
           {facts.map(fact => (
-            <li key={fact.key}>
-              {fact.key}: <span className="text-content-secondary">{fact.value}</span>
+            <li key={fact.key} title={fact.title}>
+              {fact.key}:{' '}
+              {fact.href === undefined ? (
+                <span className="text-content-secondary">{fact.value}</span>
+              ) : (
+                <Link
+                  to={fact.href}
+                  className="text-accent underline decoration-dotted underline-offset-2 hover:decoration-solid"
+                >
+                  {fact.value}
+                </Link>
+              )}
             </li>
           ))}
         </ul>

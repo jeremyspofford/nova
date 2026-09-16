@@ -667,3 +667,28 @@ describe('SchedulesPage — the beats', () => {
     expect(within(digest).getByText('handler: digest')).toBeDefined()
   })
 })
+
+describe('SchedulesPage — arriving from a link (S25.2.2)', () => {
+  it('opens the timer the URL names, without a click', async () => {
+    // What makes `timer_id` on an Inbox card worth linking: the click lands
+    // on that timer's row open, rather than on a list he then has to search.
+    const api = fakeApi([[timer({ id: 't1' }), timer({ id: 't2' })]], { t2: [firing({ timer_id: 't2' })] })
+    render(<SchedulesPage api={api} pollMs={NEVER} initialTimerId="t2" />)
+
+    await waitFor(() =>
+      expect(api.listTimerFirings).toHaveBeenCalledWith('t2', expect.anything()),
+    )
+    expect(api.listTimerFirings).not.toHaveBeenCalledWith('t1', expect.anything())
+  })
+
+  it('opens nothing when the id names no row on this page', async () => {
+    // A card can outlive its timer. Landing on the Schedules page with
+    // nothing open is the honest outcome — never an error about a row that
+    // was deleted last week.
+    const api = fakeApi([[timer({ id: 't1' })]])
+    render(<SchedulesPage api={api} pollMs={NEVER} initialTimerId="gone" />)
+
+    await waitFor(() => expect(api.listTimers).toHaveBeenCalled())
+    expect(api.listTimerFirings).not.toHaveBeenCalled()
+  })
+})

@@ -41,6 +41,7 @@ from app.tools import (
     inference,
     memory_tools,
     models,
+    notices,
     route,
     schema,
     skills,
@@ -101,6 +102,11 @@ REGISTRY: dict[str, Tool] = {
         # them; this is what carries a body, and its span is the ledger's
         # evidence that one was used at all.
         *skills.TOOLS,
+        # S25: her own Inbox. She wrote the digest and could not answer one
+        # question about it — the rows were in a table with no tool over it.
+        # Reads, plus the two noise preferences the page offers him; nothing
+        # here is an approval (owner ruling 2026-09-03).
+        *notices.TOOLS,
     )
 }
 

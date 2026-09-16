@@ -32,7 +32,7 @@ function renderSidebar(collapsed = false) {
     <MemoryRouter>
       <ThemeProvider>
         <AuthProvider>
-          <UnseenNoticesProvider listNotices={async () => ({ notices: [], unseen_count: 0 })} pollMs={1_000_000}>
+          <UnseenNoticesProvider listNotices={async () => ({ notices: [], unseen_count: 0, muted_count: 0 })} pollMs={1_000_000}>
             <Sidebar collapsed={collapsed} onCollapsedChange={onCollapsedChange} />
           </UnseenNoticesProvider>
         </AuthProvider>

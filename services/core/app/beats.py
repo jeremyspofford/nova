@@ -1638,7 +1638,11 @@ async def _delivered_titles(pool: asyncpg.Pool) -> tuple[list[str], str | None]:
         rows = await pool.fetch(
             "SELECT title FROM notices WHERE state = ANY($1::text[]) "
             "ORDER BY last_seen_at DESC LIMIT $2",
-            [notices.DELIVERED, notices.SEEN],
+            # `delivered` only: there is no `seen` state any more (S25.1.3),
+            # and a row he found in the Inbox himself was never TOLD to him by
+            # this digest — an "I already told you" about one would be the
+            # guard asserting something that did not happen.
+            [notices.DELIVERED],
             DIGEST_DELIVERED_LIMIT,
         )
     except Exception as exc:  # noqa: BLE001 - the reason is the record
@@ -1927,19 +1931,22 @@ def _standing_predicate(notices) -> str:
 
     Named states would be a second, weaker copy of that definition — and were
     (2026-09-09): spelling this as `delivered` or `seen` hardcoded two of the
-    five states, and a LIVE notice whose delivery FAILED and which he then
-    marked seen fell between the two halves of the message and was never named
-    again. `deliverable()` is `_LIVE AND _UNREAD AND state = ANY(...)`, so the
-    complement of it inside the live, unmuted rows is exactly what has already
-    been told — including that one. The store's private fragments are read on
-    purpose rather than re-spelled: one definition of live and of unread, so
-    the two halves of one message stay disjoint BY CONSTRUCTION and cannot
-    drift into overlapping or into leaving a row in neither.
+    states there were then, and a LIVE notice whose delivery FAILED and which
+    he then marked seen fell between the two halves of the message and was
+    never named again while it was still true. (`seen` is not even a state
+    any more — S25.1.3 — so that predicate would by now be dead SQL as well
+    as wrong, which is the argument for deriving it made twice over.)
+
+    `notices.OWED` is what the digest still owes him, and the complement of
+    it inside the live, unmuted rows is exactly what has already been told —
+    including that one. That fragment is read rather than
+    re-spelled: ONE definition of what is owed, so the two halves of one
+    message stay disjoint BY CONSTRUCTION and cannot drift into overlapping or
+    into leaving a row in neither. When S25.1.3 took the read receipt out of
+    `OWED`, this half moved with it in the same edit, for free — which is the
+    whole reason it is derived.
     """
-    return (
-        f"{notices._LIVE} AND state <> '{notices.MUTED}' "
-        f"AND NOT ({notices._UNREAD} AND state = ANY($1::text[]))"
-    )
+    return f"{notices._LIVE} AND state <> '{notices.MUTED}' AND NOT ({notices.OWED})"
 
 
 async def _standing(pool: asyncpg.Pool) -> tuple[list, int, str | None]:

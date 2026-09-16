@@ -130,18 +130,25 @@ export function SchedulesPage({
   api = DEFAULT_API,
   pageSize = TIMERS_PAGE_SIZE,
   pollMs = POLL_INTERVAL_MS,
+  initialTimerId = null,
 }: {
   api?: SchedulesApi
   /** Exposed so a test can exercise the "maybe more" boundary without 50
    * fake rows; production always uses the real page size. */
   pageSize?: number
   pollMs?: number
+  /** `?timer=<id>` off the URL — one timer somebody linked to, opened on
+   * arrival (S25.2.2). The same seam Activity uses for `?turn=`. An id that
+   * is not on this page simply opens nothing: a link from a card that has
+   * outlived its timer must land on the Schedules page, never on an error.
+   */
+  initialTimerId?: string | null
 } = {}) {
   const [timers, setTimers] = useState<Timer[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loadingMore, setLoadingMore] = useState(false)
   const [exhausted, setExhausted] = useState(false)
-  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(initialTimerId)
   const [firings, setFirings] = useState<Record<string, FiringsState>>({})
   // Per-row: which action is in flight, its stated failure, and the last
   // "Run now" result — the firing row core answered with, in its own words.
@@ -309,6 +316,13 @@ export function SchedulesPage({
   // A timer's firings are fetched once per id that actually SETTLES.
   useEffect(() => {
     if (expandedId === null || settledRef.current.has(expandedId)) return
+    // And only for a row that is actually on this page (S25.2.2). Toggling
+    // can only name a rendered row, but `?timer=` comes off a URL: an Inbox
+    // card can outlive its timer, and asking the server for the firings of
+    // something that is not here would be a request whose answer nothing
+    // could render. Waiting for the list rather than racing it — `timers` is
+    // null until the first read lands.
+    if (timers === null || !timers.some(row => row.id === expandedId)) return
     const id = expandedId
     let live = true
     setFirings(prev => ({ ...prev, [id]: { status: 'loading' } }))
@@ -337,7 +351,7 @@ export function SchedulesPage({
     return () => {
       live = false
     }
-  }, [api, expandedId, pageSize])
+  }, [api, expandedId, pageSize, timers])
 
   const loadMoreFirings = useCallback(
     (timerId: string) => {

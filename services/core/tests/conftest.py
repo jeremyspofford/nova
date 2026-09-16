@@ -36,6 +36,12 @@ _TABLES = (
     # S11: notices references turns and timer_firings (both ON DELETE SET
     # NULL), so it is a child of two tables further down this list and drops
     # and truncates ahead of either.
+    # S25: notice_mutes references people, and is read alongside notices —
+    # so it drops ahead of both. Left out, the second run of the suite
+    # collides on its CREATE TABLE exactly the way queued_messages would
+    # (see the note below): conftest drops schema_migrations and re-runs
+    # every migration, so a table it did not drop is still there.
+    "notice_mutes",
     "notices",
     "timer_firings",
     "timers",

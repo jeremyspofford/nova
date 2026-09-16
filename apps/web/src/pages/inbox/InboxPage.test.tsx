@@ -1,31 +1,60 @@
 import { describe, it, expect, vi } from 'vitest'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { InboxPage } from './InboxPage'
 import { noticeFixture } from './noticeFixture'
 import type { Notice, NoticeListing } from '../../lib/api'
 
 /** The listing the page reads, with the server's own unseen count. */
-function listing(notices: Notice[], unseen?: number): NoticeListing {
+function listing(notices: Notice[], unseen?: number, muted = 0): NoticeListing {
   return {
     notices,
     // Default to something the page could NOT have derived from the rows, so
     // a test that sees this number knows it came from the server.
     unseen_count: unseen ?? notices.filter(n => n.seen_at === null).length,
+    // Counted by the server over every row, including the ones this page is
+    // not holding — which is the whole point of the muted tab (S25.1.2).
+    muted_count: muted,
   }
 }
 
 function fakeApi(page: () => NoticeListing = () => listing([])) {
   return {
-    listNotices: vi.fn(async (_opts: { limit?: number } = {}) => page()),
+    listNotices: vi.fn(async (_opts: { limit?: number; muted?: boolean } = {}) => page()),
     markNoticeSeen: vi.fn(async () => {}),
+    talkAboutNotice: vi.fn(async () => ({
+      conversation_id: 'room-1',
+      parent_message_id: 'm1',
+      created: true,
+    })),
     muteNotice: vi.fn(async () => {}),
   }
 }
 
 const NEVER = 1_000_000
 
-function renderPage(api: ReturnType<typeof fakeApi>, pollMs = NEVER) {
-  return render(<InboxPage api={api} pollMs={pollMs} />)
+/** Where the router is, rendered into the page so a test can read it. The
+ * app navigates for real; MemoryRouter never touches window.location, so
+ * without this "it went to the room" would be unfalsifiable. */
+function Where() {
+  const location = useLocation()
+  return <span data-testid="where">{`${location.pathname}${location.search}`}</span>
+}
+
+function renderPage(
+  api: ReturnType<typeof fakeApi>,
+  pollMs = NEVER,
+  props: { pageSize?: number } = {},
+) {
+  // A router, because a card's facts carry links (S25.2.2) and "talk about
+  // this" navigates (S25.2.4). The page is always inside one in the app, so
+  // without it these would work in production and throw only here.
+  return render(
+    <MemoryRouter>
+      <InboxPage api={api} pollMs={pollMs} {...props} />
+      <Where />
+    </MemoryRouter>,
+  )
 }
 
 describe('InboxPage — the record of what she noticed', () => {
@@ -154,13 +183,13 @@ describe('InboxPage — the record of what she noticed', () => {
   // why.
   it('says so when the page it asked for came back full', async () => {
     const api = fakeApi(() => listing([noticeFixture({ id: 'n1' })], 12))
-    render(<InboxPage api={api} pollMs={NEVER} pageSize={1} />)
-    expect((await screen.findByTestId('page-is-full')).textContent).toContain('1 most recently seen')
-    expect(api.listNotices).toHaveBeenCalledWith({ limit: 1 })
+    renderPage(api, NEVER, { pageSize: 1 })
+    expect((await screen.findByTestId('page-is-full')).textContent).toContain('1 most recent')
+    expect(api.listNotices).toHaveBeenCalledWith({ limit: 1, muted: false })
   })
 
   it('says nothing about older notices when the page came back short', async () => {
-    render(<InboxPage api={fakeApi(() => listing([noticeFixture({ id: 'n1' })]))} pollMs={NEVER} pageSize={5} />)
+    renderPage(fakeApi(() => listing([noticeFixture({ id: 'n1' })])), NEVER, { pageSize: 5 })
     await screen.findByTestId('notice-row-n1')
     expect(screen.queryByTestId('page-is-full')).toBeNull()
   })
@@ -205,7 +234,13 @@ describe('InboxPage — the two controls, and only those two', () => {
 
   it('mutes and unmutes through the api, re-reading each time', async () => {
     let muted = false
-    const api = fakeApi(() => listing([noticeFixture({ id: 'n1', state: muted ? 'muted' : 'raised' })]))
+    // The server answers with BOTH facts, and the page reads `silenced` for
+    // the button — the state is what the badge renders (S25.1.2).
+    const api = fakeApi(() =>
+      listing([
+        noticeFixture({ id: 'n1', state: muted ? 'muted' : 'raised', silenced: muted }),
+      ]),
+    )
     api.muteNotice = vi.fn(async (_id: string, next: boolean) => {
       muted = next
     })
@@ -261,7 +296,9 @@ describe('InboxPage — the two controls, and only those two', () => {
     const labels = within(row)
       .getAllByRole('button')
       .map(b => b.textContent?.trim())
-    expect(labels).toEqual(['Mark seen', 'Mute'])
+    // "Talk about this" joined them in S25.2.4 and is the same kind of
+    // thing: it opens a conversation. None of the three decides anything.
+    expect(labels).toEqual(['Talk about this', 'Mark seen', 'Mute'])
     for (const forbidden of [/approve/i, /deny/i, /reject/i, /dismiss/i, /allow/i]) {
       expect(within(row).queryByRole('button', { name: forbidden })).toBeNull()
     }
@@ -286,5 +323,134 @@ describe('InboxPage — the light poll', () => {
     const atUnmount = api.listNotices.mock.calls.length
     await new Promise(resolve => setTimeout(resolve, 60))
     expect(api.listNotices.mock.calls.length).toBe(atUnmount)
+  })
+})
+
+describe('InboxPage — the muted half of the table (S25.1.2)', () => {
+  it('offers the muted tab only when the server says something is muted', async () => {
+    const quiet = fakeApi(() => listing([noticeFixture({ id: 'n1' })], 1, 0))
+    const { unmount } = renderPage(quiet)
+    await screen.findByTestId('notice-row-n1')
+    // Nothing is muted, so there is no half to switch to and no tab to
+    // explain — the page does not grow controls for rows that do not exist.
+    expect(screen.queryByTestId('muted-filter')).toBeNull()
+    unmount()
+
+    const api = fakeApi(() => listing([noticeFixture({ id: 'n1' })], 1, 3))
+    renderPage(api)
+    // The COUNT is the point: an unlabelled tab is one nobody clicks, and
+    // rows behind a filter nobody opens are as gone as deleted ones.
+    expect(await screen.findByRole('button', { name: 'Muted (3)' })).toBeTruthy()
+  })
+
+  it('asks the server for the other half rather than filtering the page it holds', async () => {
+    const api = fakeApi(() => listing([noticeFixture({ id: 'n1' })], 1, 2))
+    renderPage(api)
+    fireEvent.click(await screen.findByRole('button', { name: 'Muted (2)' }))
+
+    // A muted row may be far outside this page of rows — the count is over
+    // EVERY row — so the switch is a read, never a client-side filter.
+    await waitFor(() =>
+      expect(api.listNotices).toHaveBeenCalledWith(expect.objectContaining({ muted: true })),
+    )
+  })
+
+  it('says the muted view is empty in its own words, not "nothing noticed yet"', async () => {
+    const api = fakeApi(() => listing([], 0, 1))
+    renderPage(api)
+    fireEvent.click(await screen.findByRole('button', { name: 'Muted (1)' }))
+
+    await waitFor(() => expect(screen.getByText(/nothing is muted/i)).toBeTruthy())
+    expect(screen.queryByText(/nothing noticed yet/i)).toBeNull()
+  })
+})
+
+describe('InboxPage — a subject you can go and look at (S25.2.2)', () => {
+  it('renders a linkable fact as a link to the page that opens it', async () => {
+    const api = fakeApi(() =>
+      listing([noticeFixture({ id: 'n1', facts: { timer_id: '0b39fae3', kind: 'scheduled' } })]),
+    )
+    renderPage(api)
+    const row = await screen.findByTestId('notice-row-n1')
+
+    const link = within(row).getByRole('link', { name: '0b39fae3' })
+    // `?timer=` is a parameter SchedulesPage actually reads (App.tsx's
+    // SchedulesRoute), so following this opens that timer rather than
+    // dropping him on a list to search.
+    expect(link.getAttribute('href')).toBe('/schedules?timer=0b39fae3')
+    // The value is still core's, verbatim — a link changes where a click
+    // goes, never what the evidence says.
+    expect(link.textContent).toBe('0b39fae3')
+  })
+
+  it('leaves a fact with nowhere to go as plain text', async () => {
+    const api = fakeApi(() => listing([noticeFixture({ id: 'n1', facts: { kind: 'scheduled' } })]))
+    renderPage(api)
+    const row = await screen.findByTestId('notice-row-n1')
+
+    expect(within(row).queryByRole('link')).toBeNull()
+    expect(within(row).getByTestId('notice-facts').textContent).toContain('scheduled')
+  })
+})
+
+describe('InboxPage — talk about this (S25.2.4)', () => {
+  it('opens the room off the message that told him, and goes there', async () => {
+    const api = fakeApi(() =>
+      listing([noticeFixture({ id: 'n1', delivered_message_id: 'm7', state: 'delivered' })]),
+    )
+    renderPage(api)
+    const row = await screen.findByTestId('notice-row-n1')
+
+    fireEvent.click(within(row).getByTestId('talk-about'))
+
+    await waitFor(() => expect(api.talkAboutNotice).toHaveBeenCalledWith('n1'))
+    // The room core answered with — never one the page composed from the
+    // message id, which would be the client inventing a conversation.
+    await waitFor(() =>
+      expect(screen.getByTestId('where').textContent).toBe('/chat?thread=room-1'),
+    )
+  })
+
+  it('offers the control disabled when nothing has carried it to him yet', async () => {
+    const api = fakeApi(() => listing([noticeFixture({ id: 'n1', delivered_message_id: null })]))
+    renderPage(api)
+    const row = await screen.findByTestId('notice-row-n1')
+
+    const button = within(row).getByTestId('talk-about')
+    // Disabled rather than hidden: the reason is a fact about the world, and
+    // a control that vanishes leaves him wondering why this card is
+    // different from the one above it.
+    expect((button as HTMLButtonElement).disabled).toBe(true)
+    expect(button.getAttribute('title')).toContain('no message to talk under')
+    fireEvent.click(button)
+    expect(api.talkAboutNotice).not.toHaveBeenCalled()
+  })
+
+  it('states a refusal on the row rather than navigating', async () => {
+    const api = fakeApi(() =>
+      listing([noticeFixture({ id: 'n1', delivered_message_id: 'm7', state: 'delivered' })]),
+    )
+    api.talkAboutNotice = vi.fn(async () => {
+      throw new Error('this notice has not been delivered, so there is no message to talk under')
+    })
+    renderPage(api)
+    const row = await screen.findByTestId('notice-row-n1')
+
+    fireEvent.click(within(row).getByTestId('talk-about'))
+
+    await waitFor(() =>
+      expect(within(row).getByText(/no message to talk under/)).toBeTruthy(),
+    )
+  })
+
+  it('says when NOVA silenced something, not just that it is silenced', async () => {
+    const api = fakeApi(() =>
+      listing([noticeFixture({ id: 'n1', silenced: true, muted_by: null })], 0, 1),
+    )
+    renderPage(api)
+    const row = await screen.findByTestId('notice-row-n1')
+
+    // A silence he did not ask for must not look like one he did.
+    expect(within(row).getByTestId('silence-line').textContent).toContain('Nova silenced this')
   })
 })

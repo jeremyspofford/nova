@@ -104,6 +104,14 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # written-down procedures and carries none of their bodies; this is the
     # call that reads one, and its span is what makes "she used a skill"
     # a fact on the trace instead of a guess about a reply.
+    #
+    # Deliberate snapshot update (slice 25, 2026-09-16): the three Inbox tools
+    # (tools/notices.py — notices, notice_mute, notice_seen), so THIRTY-SIX ->
+    # THIRTY-NINE. She wrote the daily digest into his conversation and could
+    # not then answer one question about it: the rows behind it were in a
+    # table with no tool over it. Neither write is an approval (owner ruling
+    # 2026-09-03) — a read receipt and a noise preference, with nothing
+    # waiting on him, which is why test_no_approvals stays green beside this.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -170,6 +178,10 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # her turn had failed beyond quoting the timeout, and could not tell
         # the owner what to close.
         "inference_health",
+        # S25 (2026-09-16): her own Inbox. THIRTY-SIX -> THIRTY-NINE.
+        "notices",
+        "notice_mute",
+        "notice_seen",
     }
 
 
@@ -526,6 +538,12 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # run unasked when a distilled note needs the present rather than a
         # remembered number.
         "inference_health",
+        # S25: reading the Inbox. Its two companions are deliberately NOT
+        # here — `notice_seen` writes a read receipt and `notice_mute` writes
+        # a silence, and neither is something the backend may do unasked. A
+        # mute nobody asked for is the quietest way to stop telling him
+        # something is broken.
+        "notices",
     }
 
 

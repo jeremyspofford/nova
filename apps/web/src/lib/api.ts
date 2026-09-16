@@ -1296,11 +1296,16 @@ export const bindTimerAgent = (id: string, agent: string | null) =>
 
 /** What happened to one piece of news. `raised` — written down, nobody told
  * yet; `delivered`/`failed` — the digest's chat rung reported, either way,
- * with its evidence on the row; `seen` — he opened it; `muted` — he asked to
- * stop hearing this until the facts change. None of the five is a permission:
- * muting is a NOISE preference and `seen` is a read receipt (owner ruling
- * 2026-09-03, services/core/app/notices.py). */
-export type NoticeState = 'raised' | 'delivered' | 'failed' | 'seen' | 'muted'
+ * with its evidence on the row; `muted` — he asked to stop hearing this
+ * until it clears. None of the four is a permission: muting is a NOISE
+ * preference (owner ruling 2026-09-03, services/core/app/notices.py).
+ *
+ * There is deliberately no `seen` state (S25.1.3): "he read it" is
+ * `seen_at`, a timestamp beside the state rather than a value of it. As a
+ * state it silently meant a second thing — the row left the digest's owed
+ * set — so opening a card in the Inbox silenced it forever. Render read/
+ * unread from `seen_at`. */
+export type NoticeState = 'raised' | 'delivered' | 'failed' | 'muted'
 
 /**
  * One thing a check found, as core recorded it BEFORE anyone was told.
@@ -1344,6 +1349,19 @@ export interface Notice {
   delivered_at: string | null
   seen_at: string | null
   muted_at: string | null
+  /** WHICH chat row carried this to him (S24), or null. Read THIS and not
+   * `delivered_at` to decide whether "talk about this" has anywhere to go:
+   * a notice delivered by a device push alone has a delivery time and no
+   * message, so there is no room to open. */
+  delivered_message_id: string | null
+  /** Whether it is silenced RIGHT NOW. Not the same as `muted_at`, which is
+   * the stamp a cleared row keeps as its history — clearing a condition
+   * forgets its mute (S25.1). */
+  silenced: boolean
+  /** Who asked for the silence: his person id, or null meaning SHE did
+   * (S25 Q2). Meaningful only while `silenced`. A silence he did not ask
+   * for must not look like one he did. */
+  muted_by: string | null
 }
 
 /** The Inbox's page. `unseen_count` is COUNTED BY THE SERVER over every row
@@ -1352,6 +1370,10 @@ export interface Notice {
 export interface NoticeListing {
   notices: Notice[]
   unseen_count: number
+  /** How many rows the muted view holds — on BOTH answers, so the default
+   * view can say what it is withholding. A filter nobody can see is a
+   * disappearance (S25.1.2). */
+  muted_count: number
 }
 
 /** What the Inbox asks for in one read. Mirrors core's own default so the
@@ -1360,14 +1382,24 @@ export interface NoticeListing {
  * agree by coincidence. */
 export const NOTICES_PAGE_SIZE = 50
 
-export async function listNotices(opts: { limit?: number } = {}): Promise<NoticeListing> {
+/** `muted: true` asks for the OTHER half of the table — the rows he
+ * silenced, which the default view leaves out. They are behind a filter
+ * rather than deleted because the muted view is the only place an unmute
+ * can be clicked: a silence he cannot find is a silence he cannot lift. */
+export async function listNotices(
+  opts: { limit?: number; muted?: boolean } = {},
+): Promise<NoticeListing> {
   const params = new URLSearchParams()
   params.set('limit', String(opts.limit ?? NOTICES_PAGE_SIZE))
+  if (opts.muted) params.set('muted', 'true')
   return apiGet<NoticeListing>(`/api/v1/notices?${params.toString()}`)
 }
 
 /**
- * PUT /notices/{id}/seen — the read receipt. This reads no answer back on
+ * PUT /notices/{id}/seen — the read receipt, and ONLY that (S25.1.3): it
+ * stops no digest and silences nothing. To stop hearing about something
+ * there is `muteNotice`, which says so in a word and can be undone from the
+ * muted view. This reads no answer back on
  * purpose: the caller re-reads the listing after a write, so what is shown
  * is the server's row rather than a locally patched copy (the roster idiom
  * on the Agents page). A refusal — an id that names no row — is thrown by
@@ -1376,6 +1408,24 @@ export async function listNotices(opts: { limit?: number } = {}): Promise<Notice
 export async function markNoticeSeen(id: string): Promise<void> {
   await request(`/api/v1/notices/${encodeURIComponent(id)}/seen`, { method: 'PUT' })
 }
+
+/**
+ * POST /notices/{id}/thread — open (or re-open) the room off the message
+ * that delivered this notice (S25.2.4), and answer with the conversation to
+ * navigate to. Idempotent: two taps land in the same room.
+ *
+ * A notice that was never delivered has no message and so no room, and core
+ * answers 409 with that reason in words. The page does not rely on catching
+ * it — it does not offer the control at all when `delivered_message_id` is
+ * null — but the refusal is the thing that is actually true, rather than a
+ * rule the client is trusted to remember.
+ */
+export const talkAboutNotice = (id: string) =>
+  apiSend<{ conversation_id: string; parent_message_id: string; created: boolean }>(
+    `/api/v1/notices/${encodeURIComponent(id)}/thread`,
+    'POST',
+    {},
+  )
 
 /** PUT /notices/{id}/mute {muted} — silence this fingerprint, or let it
  * speak again. A mute is a noise preference and nothing else: the row keeps

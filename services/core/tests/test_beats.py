@@ -1863,16 +1863,18 @@ async def test_a_still_true_notice_he_was_told_about_is_named_again_but_never_ex
 async def test_a_live_notice_whose_delivery_failed_and_was_then_seen_is_still_named(
     pool, only, mount_peers, monkeypatch
 ):
-    """The review's second MAJOR, 2026-09-09. Naming `delivered` and `seen`
-    hardcoded two of the five states, and a live notice that FAILED delivery
-    and which he then opened in the Inbox fell between the two halves of the
-    message: deliverable() drops it the moment `seen_at` is set, and a
-    state-named tail never picked it up — so it was never mentioned again while
-    it was still true.
+    """The review's second MAJOR, 2026-09-09: a live notice that FAILED
+    delivery and which he then opened in the Inbox fell between the two
+    halves of the digest and was never mentioned again while it was still
+    true.
 
-    The predicate is DERIVED now: live, not muted, and not what deliverable()
-    would return. Disjoint by construction, and this row lands in the half that
-    still names it."""
+    It is still pinned, and the row still lands in a half — but S25.1.3 moved
+    WHICH half, so the assertions below moved with it. Reading no longer
+    drops a row from `deliverable()`, so this one is not "already told"
+    material at all: nobody ever told him, and it goes back in the news.
+    That is the stronger answer to the same defect, and the reason this test
+    keeps its name.
+    """
     owner = await _owner(pool)
     his_chat = await conversations.active_conversation(pool, owner)
     only(
@@ -1896,21 +1898,32 @@ async def test_a_live_notice_whose_delivery_failed_and_was_then_seen_is_still_na
     assert await _messages(pool, his_chat["id"]) == [], "nobody was told"
 
     # He opens ONE of them in the Inbox. It stays `failed` — the only record
-    # that nobody was told — and stops being deliverable, because he read it.
+    # that nobody was told — and it is STILL owed, because reading is not
+    # being told (S25.1.3).
     row = await pool.fetchrow("SELECT id FROM notices WHERE finding_key = 'timer_paused:9'")
     await notices.mark_seen(pool, row["id"])
-    assert [n.finding_key for n in await notices.deliverable(pool)] == ["agent_over_cap:coder"]
+    assert {n.finding_key for n in await notices.deliverable(pool)} == {
+        "timer_paused:9",
+        "agent_over_cap:coder",
+    }
 
     broken["disk"] = False
     mount_peers(gateway=FakeGateway(deltas=("The coder agent is over its cap.",)))
     firing = await _run_beat(pool, beats.DIGEST, now=LATER + timedelta(hours=25))
 
     latest = (await _messages(pool, his_chat["id"]))[-1]
-    tail = _line(latest["content"], beats.STANDING_PREFIX)
-    assert tail is not None and "timer_paused:9 is true" in tail
-    assert firing["delivery"]["digest"]["standing"] == 1
-    state = await pool.fetchval("SELECT state FROM notices WHERE id = $1", row["id"])
-    assert state == notices.FAILED, "and its state is untouched by being named"
+    # Nothing is in the standing tail: both rows were owed, so both were
+    # NEWS. The two halves are still disjoint — that is the 2026-09-09 fix,
+    # and it holds from the other side.
+    assert _line(latest["content"], beats.STANDING_PREFIX) is None
+    # The key is written only when something IS standing (beats writes it
+    # under `if standing or standing_more`), so its absence is the record.
+    assert "standing" not in firing["delivery"]["digest"]
+    # And it was finally delivered, which is what ends the debt — not him
+    # having looked at it. The read receipt he left is still on the row.
+    fresh = await pool.fetchrow("SELECT state, seen_at FROM notices WHERE id = $1", row["id"])
+    assert (fresh["state"], fresh["seen_at"] is not None) == (notices.DELIVERED, True)
+    assert await notices.deliverable(pool) == [], "and now nothing is owed"
 
 
 async def test_a_still_standing_notice_is_never_marked_delivered_a_second_time(

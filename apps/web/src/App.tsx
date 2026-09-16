@@ -81,6 +81,26 @@ function ActivityRoute() {
 }
 
 /**
+ * And for Schedules (S25.2.2): `?timer=<id>` names one timer to open on
+ * arrival, which is what makes the `timer_id` on an Inbox card a link worth
+ * following rather than a trip to a list he then has to search.
+ */
+function SchedulesRoute() {
+  const [searchParams] = useSearchParams()
+  return <SchedulesPage initialTimerId={searchParams.get('timer')} />
+}
+
+/**
+ * And for Skills (S25.2.5): `?from_notice=<id>` is the Inbox sending him
+ * here to write down a procedure a check noticed him repeating. The page
+ * opens its draft form and asks only for a name.
+ */
+function SkillsRoute() {
+  const [searchParams] = useSearchParams()
+  return <SkillsPage fromNotice={searchParams.get('from_notice')} />
+}
+
+/**
  * The agents routes' seams (S12), the FilesRoute idiom: the pages read
  * nothing from the router themselves. `/agents` takes the one-time notice an
  * agent page hands over after a delete (the server's own summary of what was
@@ -117,10 +137,10 @@ function AppRoutes({ chatModel }: { chatModel: string }) {
         <Route path="/governance" element={<GovernancePage />} />
         <Route path="/quality" element={<AIQualityPage />} />
         <Route path="/activity" element={<ActivityRoute />} />
-        <Route path="/schedules" element={<SchedulesPage />} />
+        <Route path="/schedules" element={<SchedulesRoute />} />
         <Route path="/agents" element={<AgentsRoute />} />
         <Route path="/agents/:name" element={<AgentRoute />} />
-        <Route path="/skills" element={<SkillsPage />} />
+        <Route path="/skills" element={<SkillsRoute />} />
         <Route path="/inbox" element={<InboxPage />} />
         <Route path="/files" element={<FilesRoute />} />
         <Route path="/models" element={<ModelsPage />} />

@@ -95,6 +95,14 @@ AUTO_RUN = frozenset(
         "list_timers",
         "model_catalog_search",
         "model_check_update",
+        # S25. The same case as list_timers: it reads THIS system's own
+        # records — what the checks found and whether anyone was told — and
+        # reaches nothing outside the host. A recalled note saying the
+        # backup timer is failing is exactly a claim the live Inbox can
+        # settle, and settling it from the rows beats repeating a sentence
+        # from three weeks ago. Its arguments are a fixed set of views and a
+        # row limit, so there is no address a note could choose.
+        "notices",
         "route_explain",
         "spend_report",
         "workspace_list_files",

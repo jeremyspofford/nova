@@ -5,13 +5,14 @@ What she noticed, what she did about it, and the two things he can say back:
 anything. Every write is one store call, every row is read BACK from the
 statement that wrote it, and the store's own words are what a refusal says.
 
-Neither button is a permission (owner ruling 2026-09-03). `seen` is a read
-receipt and `mute` is a NOISE preference — stop telling me about these facts
-until they change — and the store holds the difference: a muted row keeps its
-fingerprint, so identical facts keep folding onto it silently while CHANGED
-facts are a different fingerprint and so a fresh, unmuted notice. Neither
-permits or forbids anything she does, and there is nothing on this router that
-she waits on.
+Neither button is a permission (owner ruling 2026-09-03), and since S25.1.3
+neither one does anything the other does. `seen` is a read receipt and
+ONLY that: it writes `seen_at`, stops no digest and silences nothing. `mute`
+is the one that silences — stop telling me about this condition until it
+clears — and the store holds it in `notice_mutes`, keyed on the CONDITION so
+a failure count going up cannot come back as a fresh unmuted card. Neither
+permits or forbids anything she does, and there is nothing on this router
+that she waits on.
 
 `unseen_count` rides on every answer, including the two writes, because the
 badge is the SERVER's count of what he has not read (`notices.unseen_count`,
@@ -34,7 +35,7 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
-from app import db, identity, notices
+from app import conversations, db, identity, notices
 from app.identity import Person
 from app.notices import Notice, NoticeError
 
@@ -79,6 +80,13 @@ def notice_json(notice: Notice) -> dict:
         "seen_at": notice.seen_at.isoformat() if notice.seen_at else None,
         "muted_at": notice.muted_at.isoformat() if notice.muted_at else None,
         "cleared_at": notice.cleared_at.isoformat() if notice.cleared_at else None,
+        # WHICH chat row carried it to him, or null (S24/S25.2.4). The page
+        # reads THIS and not `delivered_at` to decide whether "talk about
+        # this" is possible: a notice delivered by a device push alone has a
+        # delivery time and no message, so there is nothing to talk under.
+        "delivered_message_id": (
+            str(notice.delivered_message_id) if notice.delivered_message_id else None
+        ),
     }
 
 
@@ -103,17 +111,47 @@ def _not_found(exc: NoticeError) -> HTTPException:
 @router.get("")
 async def list_notices(
     limit: int = Query(DEFAULT_LIMIT, ge=1),
+    muted: bool = Query(False),
     person: Person = Depends(identity.require_person),
 ) -> dict:
-    """The Inbox page: most recently SEEN BY A CHECK first, so what is still
-    true today sits above what stopped recurring last week. Cleared rows are
-    included — "this was true and is not any more" is part of the record —
-    and each carries its own `cleared_at` for the page to render it by."""
+    """The Inbox page: most recently TOLD first (notices._TOLD_AT), so the
+    order is his history of being told rather than a ranking of how noisy
+    each condition is. Cleared rows are included — "this was true and is not
+    any more" is part of the record — and each carries its own `cleared_at`
+    for the page to render it by.
+
+    `?muted=true` is the other half of the same table: the rows he silenced,
+    which the default view leaves out. `muted_count` rides on BOTH answers so
+    the page can label the filter without asking twice — and so the default
+    view can say out loud that something is being withheld, which is the
+    difference between a filter and a disappearance.
+    """
     pool = await db.get_pool()
-    rows = await notices.recent(pool, limit=min(limit, MAX_LIMIT))
+    rows = await notices.recent(pool, limit=min(limit, MAX_LIMIT), muted=muted)
+    # One read of the whole mute table rather than one per row, and attached
+    # here rather than carried on the Notice: a mute is about a CONDITION and
+    # several rows can share one, so it is not a property of any of them.
+    in_force = await notices.mutes(pool)
+    listed = []
+    for row in rows:
+        key = (row.check_name, row.finding_key)
+        silenced = key in in_force
+        listed.append(
+            {
+                **notice_json(row),
+                # Whether it is silenced NOW, which is not the same as the
+                # `muted_at` stamp: clearing a condition forgets its mute and
+                # leaves the stamp, because the stamp is the row's history.
+                "silenced": silenced,
+                # Null means SHE silenced it (S25 Q2) — meaningful only when
+                # `silenced` is true.
+                "muted_by": str(in_force[key]) if silenced and in_force[key] else None,
+            }
+        )
     return {
-        "notices": [notice_json(row) for row in rows],
+        "notices": listed,
         "unseen_count": await notices.unseen_count(pool),
+        "muted_count": await notices.muted_count(pool),
     }
 
 
@@ -146,7 +184,55 @@ async def set_muted(
     read comes back read."""
     pool = await db.get_pool()
     try:
-        notice = await notices.set_muted(pool, notice_id, body.muted)
+        # HIS id, because this is the route he clicks (S25 Q2). Her own tool
+        # passes None, and the Inbox renders the difference — a silence he
+        # did not ask for must not be indistinguishable from one he did.
+        notice = await notices.set_muted(pool, notice_id, body.muted, muted_by=person.id)
     except NoticeError as exc:
         raise _not_found(exc) from exc
     return await _written(pool, notice)
+
+
+@router.post("/{notice_id}/thread")
+async def talk_about_it(
+    notice_id: uuid.UUID, person: Person = Depends(identity.require_person)
+) -> dict:
+    """Open the room off the message that delivered this notice (S25.2.4).
+
+    S24 built the mechanism — a conversation hanging off one message — and
+    this is its first consumer. The room is idempotent: asking twice returns
+    the same one, because `open_thread` leans on the partial unique index
+    rather than checking first.
+
+    A notice that was never DELIVERED has no message, so it has no room, and
+    this says so in those words rather than inventing somewhere to talk.
+    That is a fact about the world — nobody was told, so there is nothing to
+    talk under — and never a decision about him: he can still open the card,
+    read it, mute it, and say anything he likes in the main chat.
+
+    Why this lives here rather than the page calling the chat route: the
+    Inbox holds a `delivered_message_id` and not the conversation that
+    message is in, and handing the page a conversation id just so it can
+    hand it back is a fact the client would then be responsible for keeping
+    true. `open_thread` derives the conversation by join, and checks he owns
+    it in the same query.
+    """
+    pool = await db.get_pool()
+    try:
+        notice = await notices.get(pool, notice_id)
+    except NoticeError as exc:
+        raise _not_found(exc) from exc
+    if notice.delivered_message_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this notice has not been delivered, so there is no message to talk under — "
+                "it gets a room when the digest or a push carries it to you"
+            ),
+        )
+    row, created = await conversations.open_thread(pool, person, notice.delivered_message_id)
+    return {
+        "conversation_id": str(row["id"]),
+        "parent_message_id": str(row["parent_message_id"]),
+        "created": created,
+    }

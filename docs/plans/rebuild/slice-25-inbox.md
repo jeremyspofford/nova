@@ -234,3 +234,92 @@ Read from the trace, not from how the page looks.
   adding rungs is not this slice.
 - **Rewriting checks' findings.** This slice changes how a finding is
   PRESENTED, not what any check looks for.
+
+## What is built, and the one place the spec was wrong
+
+### Done
+
+* **1.1 a mute survives the facts changing.** `notice_mutes (check_name,
+  finding_key)` (migration 032) is the mute, not the row — the fingerprint
+  is a hash of the facts, and `consecutive_failures` is IN the facts, which
+  is how a timer muted at two failures came back unmuted at three. A row is
+  born muted, a fold onto a muted row does not bump `last_seen_at`, and a
+  clear (by hand or by reconcile) deletes the mute key in the SAME
+  statement, so a silenced condition can never outlive the condition.
+* **1.2 the thing he silenced no longer sorts first.** The Inbox orders by
+  when he was TOLD (`COALESCE(delivered_at, first_seen_at)`), not by
+  `last_seen_at`, which a fold bumps — the page was sorted by how noisy each
+  condition is. Muted rows leave the default view for a `?muted=true`
+  filter that carries its own count, because a silence he cannot find is a
+  silence he cannot lift.
+* **1.3 "seen" and "stop telling me" are no longer the same button.** Q1, and
+  it took TWO changes rather than the one the spec named — see below.
+* **2.1 prose that reads**, with the same authorship: `checks/prose.py` is
+  the shared vocabulary, and two source-walking guards refuse the next card
+  that is written for a log (no `isoformat()` and no `!r` in a title, both
+  derived from the live source rather than a list).
+* **2.2 linked subjects, derived.** `SUBJECT_ROUTES` keys on the FACT, so a
+  new check emitting `timer_id` links the day it lands. `/schedules?timer=`
+  is real now (it opens that row) — a link to a parameter no page reads is a
+  promise the destination does not keep.
+* **2.3 the `notices` tool**, plus `notice_mute` and `notice_seen`
+  (`app/tools/notices.py`). She wrote the digest and could not answer one
+  question about it. A mute SHE makes records `muted_by` null and one HE
+  makes records his id — the router was passing null for his, so the two
+  were indistinguishable until this slice. Nothing here waits on him, and
+  `test_no_approvals` is green beside it.
+* **2.4 "talk about this"**, wired to S24: `POST /api/v1/notices/{id}/thread`
+  opens the room off the message that delivered it, idempotently. A notice
+  with no delivering message gets a DISABLED control whose title names what
+  has not happened — and the page reads `delivered_message_id`, not
+  `delivered_at`, because a device push delivers with no chat row at all.
+* **2.5 the skill draft**, wired: the button appears when the notice's facts
+  carry `steps` — the same condition `POST /skills {from_notice}` accepts,
+  read off the same facts — and carries the notice to the Skills page, which
+  asks only for a name.
+
+### Where the spec was wrong: 1.3 needed a second change
+
+The spec said "`deliverable()` drops its `seen_at IS NULL` term" and that
+alone would have left the defect alive. `mark_seen` also moved the row to a
+`seen` STATE, and `seen` is not in `DELIVERABLE_STATES` — so opening an
+undelivered card in the Inbox would still have dropped it from every future
+digest, by the other door.
+
+That state was the "third meaning in between" the spec's own DECIDED
+paragraph names. It is gone: `STATES` is `raised | delivered | failed |
+muted`, "he read it" is `seen_at`, and the digest does not read it at all.
+
+### Where the spec was wrong: prose cannot say "this morning"
+
+2.1's example was `since Thursday morning`. A title is composed ONCE —
+`notices.record` folds a repeat onto the live row and never rewrites
+`title` — so a relative phrase frozen on a Tuesday card is simply false by
+Friday, and false reads as authoritative.
+
+So the split is: the SENTENCE carries a time that stays true ("since Friday
+11 September 2026"), and the moving version he actually wants is rendered by
+the CARD from `facts`, at read time, against the clock in front of him
+(`factLines` → "3d ago", exact instant on the tooltip). Same shape as the
+linked subjects: the fact goes in `facts`, the rendering happens where it
+can be correct.
+
+### A third correction, found while reviewing my own work
+
+The muted VIEW first keyed on the `muted_at` stamp on the row. Clearing a
+condition forgets its mute and leaves that stamp — it is the row's history —
+so a cleared row stayed in the muted list for ever, with an Unmute button
+for a silence that was already over and a count beside the tab that only
+went up. The view and the count read `notice_mutes` now, and the listing
+carries `silenced` (is it quiet NOW) beside `muted_at` (was it ever).
+
+Migration 033 is the other half of 1.3 that a code change could not reach:
+every row a live box has ALREADY marked `seen` is in a state the code no
+longer produces, and would have stayed invisible to every future digest. It
+rewrites those rows by their evidence and then tightens the CHECK so the
+state cannot come back.
+
+### Still open
+
+Q4's digest view grouped by `delivered_message_id`, and the definition-of-
+done walk (steps 1-7), which is a live-stack job rather than a test.

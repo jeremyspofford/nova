@@ -8,7 +8,9 @@ import type { Notice } from '../../lib/api'
  *
  * The default is the honest starting state of a finding: raised (written
  * down, nobody told yet), live (no check has stopped finding it), seen once,
- * with an empty delivery receipt because no rung has reported.
+ * with an empty delivery receipt because no rung has reported — and so with
+ * no message behind it and therefore no room to talk in (S25.2.4), which is
+ * exactly the state a test about the disabled control wants by default.
  */
 export function noticeFixture(overrides: Partial<Notice> = {}): Notice {
   const now = new Date().toISOString()
@@ -31,6 +33,9 @@ export function noticeFixture(overrides: Partial<Notice> = {}): Notice {
     delivered_at: null,
     seen_at: null,
     muted_at: null,
+    delivered_message_id: null,
+    silenced: false,
+    muted_by: null,
     ...overrides,
   }
 }

@@ -36,17 +36,24 @@ Three properties this module exists to hold, each from a measured failure:
   could not be made has watched nothing.
 
 Nothing here is an authorization. `state` tracks whether the news reached
-him and whether he wants to keep hearing it: muting is a NOISE preference
-(stop telling me until the facts change) and `seen` is a read receipt —
-neither permits or forbids anything (owner ruling 2026-09-03). A muted row
-still occupies its fingerprint, which IS the mute: the same facts fold onto
-it silently, changed facts are a different fingerprint and so a fresh,
-unmuted row, and a mute is never cleared, so it holds that fingerprint for
-as long as it stands.
+him; `seen_at` is a read receipt and `muted` is a NOISE preference (stop
+telling me about this until it clears) — neither permits or forbids
+anything (owner ruling 2026-09-03).
+
+THE MUTE IS A CONDITION, NOT A ROW (S25.1, 2026-09-16). It lives in
+`notice_mutes`, keyed on `(check_name, finding_key)`. It used to be the row
+holding its fingerprint, and that fingerprint is a hash of the FACTS — so
+`work_failing_timers` muted at two failures came back as a fresh, unmuted
+card at three, because `consecutive_failures` had moved. The condition had
+not changed; the count had. A new reading of a silenced condition is now
+born muted, and the only things that end a silence are an explicit unmute
+and the condition CLEARING — the latter in the same statement as the clear,
+so a cleared row can never leave a gag behind that nobody can find to
+lift.
 
 Every write reads back what it claims. Each state transition sets its
 evidence in the SAME UPDATE that sets the state — the migration's CHECKs
-demand a time for delivered/seen/muted and a reason for failed, so a
+demand a time for delivered/muted and a reason for failed, so a
 half-written transition is refused by postgres rather than stored as a
 state nobody can prove. A helper that touches no row raises `NoticeError`
 instead of returning quietly: "I marked it delivered" must not be a
@@ -79,38 +86,49 @@ _COLUMNS = (
     "delivered_message_id"
 )
 
-# raised (written, nobody told yet) -> delivered | failed, and then seen (he
-# opened it) or muted (stop telling me until the facts change). Orthogonal to
-# all five: cleared_at, which is about the CONDITION rather than the news.
+# raised (written, nobody told yet) -> delivered | failed, or muted (stop
+# telling me until it clears). Orthogonal to all four: cleared_at, which is
+# about the CONDITION rather than the news, and seen_at, which is about HIM.
 RAISED = "raised"
 DELIVERED = "delivered"
 FAILED = "failed"
-SEEN = "seen"
 MUTED = "muted"
-STATES = (RAISED, DELIVERED, FAILED, SEEN, MUTED)
+# S25.1.3: there is no `seen` state, and its absence is the fix. "He read
+# it" is `seen_at`, a timestamp; duplicating it as a state gave reading a
+# card a SECOND meaning — it silently left DELIVERABLE_STATES, so opening
+# something in the Inbox removed it from every future digest. `cleared`
+# already means "this stopped being true" and `muted` already means "stop
+# telling me"; a third meaning in between was where the confusion came from.
+STATES = (RAISED, DELIVERED, FAILED, MUTED)
 
 # What the digest still owes him, as far as the STATE says. FAILED is in here
 # on purpose: a delivery that failed left nobody told, so a repeat of it is not
 # a repeat — and since a fold never moves a row back off `failed`, a query that
 # read only `raised` let ONE failed push suppress a still-true finding forever.
-# The state is only half of it: `deliverable` also requires the row to be
-# unread (_UNREAD), because a failed notice he has since opened in the Inbox
-# has reached him after all.
+# The state is now the WHOLE of it (S25.1.3): `deliverable` used to also
+# require the row to be unread, which made reading a card a way to silence
+# it forever — while the urgent push path read different columns and pushed
+# it anyway. Two paths, two meanings, one control.
 DELIVERABLE_STATES = (RAISED, FAILED)
 
 # What the Inbox badge counts: news he has not read. DERIVED from
 # DELIVERABLE_STATES plus what landed and is waiting to be opened, so the
-# badge and the digest cannot drift apart — and both queries filter on the same
-# _UNREAD clause. MUTED is absent because it is a preference he already
-# expressed, SEEN because he read it.
+# badge and the digest cannot drift apart. MUTED is absent because it is a
+# preference he already expressed. What he has READ leaves by the _UNREAD
+# clause below, which only this count applies — the digest does not, because
+# a read receipt stops nothing (S25.1.3).
 UNSEEN_STATES = (*DELIVERABLE_STATES, DELIVERED)
 
-# What "nobody has told him" is, in SQL, and the ONE place it is spelled: the
-# digest's query and the Inbox badge both read it, so the two can never drift
-# into disagreeing about whether he has read something. A notice he has SEEN is
-# no longer deliverable whatever its delivery state — a failed delivery he then
-# read in the Inbox has been told to him by his own eyes, and re-listing it in
-# tomorrow's digest would read as a repeat (owner-facing ruling, 2026-09-08).
+# What "he has not read it" is, in SQL. The Inbox badge is the only thing
+# that filters on it now.
+#
+# It used to be in `deliverable()` too, under an owner-facing ruling of
+# 2026-09-08 that a failed delivery he read himself had reached him. REVERSED
+# 2026-09-16 (S25 Q1): the same clause also meant that opening ANY unread
+# card in the Inbox dropped it from every future digest, silently and
+# permanently, while the urgent push path read different columns and would
+# still push it. The digest is noisier for it — a live condition he has read
+# and not acted on is listed again tomorrow — and that is the honest trade.
 _UNREAD = "seen_at IS NULL"
 
 # A LIVE notice is one whose condition is still true. Every fold, every
@@ -120,28 +138,49 @@ _UNREAD = "seen_at IS NULL"
 # FRESH notice instead of folding onto it.
 _LIVE = "cleared_at IS NULL"
 
-# What may be cleared: a live row that is not muted. A muted row is NEVER
-# cleared — a mute means "stop telling me about this until the facts change",
-# and identical facts are the same fingerprint whether or not the condition
-# blinked off and on in between, so the muted row holds its fingerprint for
-# as long as the mute stands. Both writers of cleared_at share this one
-# predicate, so that rule is a line of SQL rather than a habit.
-_CLEARABLE = f"{_LIVE} AND state <> '{MUTED}'"
+# "Still owed", in SQL, and the ONE place it is spelled. `deliverable()`
+# SELECTs it and the digest's standing tail is its complement
+# (beats._standing_predicate), so the two halves of one message are disjoint
+# BY CONSTRUCTION — which only holds while both read this fragment rather
+# than each spelling its own. $1 is the state list.
+OWED = f"{_LIVE} AND state = ANY($1::text[])"
+
+# What may be cleared: any live row, MUTED INCLUDED (changed 2026-09-16).
+#
+# A muted row used to be uncleanable, and the reason was sound under the old
+# design: the mute WAS the row holding its fingerprint, so clearing it would
+# have freed that fingerprint and let identical facts raise a fresh, unmuted
+# card — "the condition blinked off and on" defeating the silence.
+#
+# The mute now lives in `notice_mutes`, keyed on the CONDITION rather than on
+# one reading of it, so clearing the row no longer touches the silence. And
+# the owner's ruling (Q3) is that the silence should lift when the condition
+# genuinely stops being true: a mute is about something currently true, and a
+# condition that returns months later is news. That is also what makes muting
+# an URGENT condition safe (Q5) — the silence lasts exactly as long as the
+# thing he already knows about.
+#
+# Both writers of cleared_at share this one predicate, so the rule is a line
+# of SQL rather than a habit.
+_CLEARABLE = _LIVE
 
 # Unmuting has to put the row back into the state its own evidence supports,
 # because the state before the mute is not stored anywhere and remembering it
 # would be a second, weaker copy of the same fact. The precedence is the one
-# the transitions themselves use: a delivery he then read is `seen`; a
-# delivery he has not read is `delivered`; a FAILED delivery stays failed
-# even when he has since opened the row, because a read receipt does not make
-# a push that never landed have landed; otherwise it is still waiting for the
-# digest. (Before that ordering, mute-then-unmute laundered `failed` into
-# `seen` and lost the only record that nobody was told.)
+# the transitions themselves use: a delivery is `delivered`; a FAILED
+# delivery stays failed, because a read receipt does not make a push that
+# never landed have landed; otherwise it is still waiting for the digest.
+# (Before that ordering, mute-then-unmute laundered `failed` into `seen` and
+# lost the only record that nobody was told. There is no `seen` state to
+# launder into any more — S25.1.3 — but the ordering is still what decides
+# between `delivered` and `failed`, so it stays.)
+#
+# `seen_at` is deliberately absent from the CASE. Whether he has read a row
+# is not a state and never was: it is a timestamp the unmute leaves exactly
+# where it is.
 _STATE_FROM_EVIDENCE = (
-    "CASE WHEN delivered_at IS NOT NULL AND seen_at IS NOT NULL THEN 'seen' "
-    "WHEN delivered_at IS NOT NULL THEN 'delivered' "
+    "CASE WHEN delivered_at IS NOT NULL THEN 'delivered' "
     "WHEN failed_reason IS NOT NULL THEN 'failed' "
-    "WHEN seen_at IS NOT NULL THEN 'seen' "
     "ELSE 'raised' END"
 )
 
@@ -202,6 +241,12 @@ class Notice:
     delivered_at: datetime | None
     seen_at: datetime | None
     muted_at: datetime | None
+    # WHICH chat row carried it to him (S24). The column has been selected
+    # since that slice and was not on this dataclass until S25.2.4 needed
+    # it: a room hangs off a message, so this is the whole of what makes
+    # "talk about this" possible — and its absence is the honest reason a
+    # notice nobody was told about has nowhere to talk.
+    delivered_message_id: uuid.UUID | None
 
     @classmethod
     def from_row(cls, record: asyncpg.Record) -> Notice:
@@ -232,6 +277,7 @@ class Notice:
             delivered_at=record["delivered_at"],
             seen_at=record["seen_at"],
             muted_at=record["muted_at"],
+            delivered_message_id=record["delivered_message_id"],
         )
 
 
@@ -340,11 +386,32 @@ async def record(
     # Serialised here and cast in SQL rather than handed to the pool's jsonb
     # codec, so what is stored is what `fingerprint` hashed — see _facts_json.
     facts_json = _facts_json(finding)
+    # BORN MUTED IF HE ALREADY SILENCED THIS CONDITION (S25.1). The mute
+    # lives on (check_name, finding_key), so a reading with different facts
+    # — a failure count that went up — is the same silenced condition rather
+    # than a fresh unmuted card. Decided in SQL, in the same statement that
+    # writes the row: a mute read first and applied after is a window two
+    # beats can both pass through.
+    #
+    # `last_seen_at` is NOT bumped for a muted row. That was written when the
+    # Inbox ordered by it and a silent fold pushed the thing he silenced to
+    # the top of the list; S25.1.2 moved the ordering onto when he was TOLD
+    # (_TOLD_AT), so this is no longer what holds that property up. It stays
+    # because the column now means what it says on a silenced row — the last
+    # time anything about this reached him — and because a muted row that
+    # keeps climbing any list is the failure this slice is about.
     row = await pool.fetchrow(
         f"INSERT INTO notices (turn_id, firing_id, check_name, finding_key, fingerprint, "
-        f"title, facts, urgent) VALUES ($1, $2, $3, $4, $5, $6, $7::text::jsonb, $8) "
+        f"title, facts, urgent, state, muted_at) "
+        f"SELECT $1, $2, $3, $4, $5, $6, $7::text::jsonb, $8, "
+        f"       CASE WHEN m.finding_key IS NULL THEN 'raised' ELSE 'muted' END, "
+        f"       CASE WHEN m.finding_key IS NULL THEN NULL ELSE now() END "
+        f"  FROM (SELECT 1) AS one "
+        f"  LEFT JOIN notice_mutes m ON m.check_name = $3 AND m.finding_key = $4 "
         f"ON CONFLICT (fingerprint) WHERE {_LIVE} DO UPDATE "
-        f"SET repeats = notices.repeats + 1, last_seen_at = now() "
+        f"SET repeats = notices.repeats + 1, "
+        f"    last_seen_at = CASE WHEN notices.state = 'muted' "
+        f"                        THEN notices.last_seen_at ELSE now() END "
         f"RETURNING {_COLUMNS}, (xmax = 0) AS is_new",
         turn_id,
         firing_id,
@@ -377,8 +444,18 @@ async def clear(pool: asyncpg.Pool, notice_id: uuid.UUID) -> Notice:
     its fingerprint for as long as the mute stands.
     """
     row = await pool.fetchrow(
-        f"UPDATE notices SET cleared_at = now() WHERE id = $1 AND {_CLEARABLE} "
-        f"RETURNING {_COLUMNS}",
+        f"WITH cleared AS ("
+        f"  UPDATE notices SET cleared_at = now() WHERE id = $1 AND {_CLEARABLE} "
+        f"  RETURNING {_COLUMNS}"
+        f"), lifted AS ("
+        # THE SILENCE LIFTS WITH THE CONDITION (owner ruling 2026-09-16, Q3).
+        # A mute is about something that is CURRENTLY true; a condition that
+        # comes back months later is news again. This is also what makes
+        # muting an URGENT condition safe (Q5) — the silence lasts exactly as
+        # long as the thing he already knows about, and no longer.
+        f"  DELETE FROM notice_mutes m USING cleared c "
+        f"   WHERE m.check_name = c.check_name AND m.finding_key = c.finding_key"
+        f") SELECT * FROM cleared",
         notice_id,
     )
     if row is not None:
@@ -394,10 +471,13 @@ async def clear(pool: asyncpg.Pool, notice_id: uuid.UUID) -> Notice:
             f"notice {notice_id} was already cleared at {existing['cleared_at']} — "
             "nothing was written"
         )
+    # Reachable only if `_CLEARABLE` grows a term again; a muted notice is
+    # clearable since 2026-09-16. Kept as a stated refusal rather than
+    # deleted, so a future narrowing of that predicate says why it refused
+    # instead of returning a silent None.
     raise NoticeError(
-        f"notice {notice_id} is muted and a muted notice is never cleared — a mute means stop "
-        "telling me about this until the facts change, and identical facts are the same "
-        "fingerprint whether or not the condition blinked off and on in between"
+        f"notice {notice_id} could not be cleared and is neither missing nor already "
+        "cleared — the clearable predicate refused it"
     )
 
 
@@ -422,8 +502,12 @@ async def reconcile(
     which would clear nothing and return an empty list that reads as "nothing
     had cleared".
 
-    Muted rows are excluded by `_CLEARABLE`, the same predicate `clear` uses,
-    so the mute rule is enforced once in SQL rather than remembered twice.
+    Muted rows ARE cleared, and clearing lifts their silence (2026-09-16,
+    owner ruling Q3). The mute lives on the condition in `notice_mutes`, so
+    a condition that genuinely stopped being true takes its mute with it —
+    and comes back as news if it ever returns. Both writers of `cleared_at`
+    share `_CLEARABLE` and both delete the mute, so the rule is SQL in two
+    places rather than a habit in none.
     """
     _registered(check_name)
     rows = await pool.fetch(
@@ -431,6 +515,11 @@ async def reconcile(
         f"UPDATE notices SET cleared_at = now() "
         f"WHERE check_name = $1 AND {_CLEARABLE} AND NOT (fingerprint = ANY($2::text[])) "
         f"RETURNING {_COLUMNS}"
+        f"), lifted AS ("
+        # The silence goes with the condition — see the docstring above and
+        # `clear`, which does the same thing for one row.
+        f"  DELETE FROM notice_mutes m USING cleared c "
+        f"   WHERE m.check_name = c.check_name AND m.finding_key = c.finding_key"
         f") SELECT {_COLUMNS} FROM cleared ORDER BY first_seen_at",
         check_name,
         sorted(live_fingerprints),
@@ -530,40 +619,82 @@ async def mark_seen(pool: asyncpg.Pool, notice_id: uuid.UUID) -> Notice:
     mutes and re-armed a nag forever, so the rule here is that nothing but
     an explicit unmute clears one.
 
-    A FAILED row also keeps its state, for the same shape of reason: `failed`
-    is the only record that nobody was TOLD by a channel, and him finding the
-    row himself in the Inbox does not make the push that never landed have
-    landed. The state therefore keeps saying so for as long as the row exists.
+    IT WRITES NOTHING BUT THE TIMESTAMP (S25.1.3). It used to also move the
+    row to a `seen` state, and that is what made "I read this" and "stop
+    telling me about this" the same button: leaving `raised` meant leaving
+    DELIVERABLE_STATES, so a card he opened in the Inbox was dropped from
+    every future digest — permanently, silently, and while the urgent push
+    path went on pushing it because it reads different columns.
 
-    It does stop being DELIVERABLE, though, and that is not a contradiction:
-    the delivery failed and he read it anyway, so the news has reached him —
-    putting it in tomorrow's digest would read as a repeat. `deliverable`
-    filters on `seen_at IS NULL` for exactly that, and this timestamp is what
-    the badge counts too.
+    A read receipt stops nothing now. The row keeps saying what actually
+    happened to it — `raised` (nobody delivered it yet), `delivered`, or
+    `failed` (a channel was tried and nobody was told) — and `seen_at` says,
+    separately, that he has laid eyes on it. The badge counts the timestamp;
+    the digest does not read it at all. To stop hearing about something
+    there is `set_muted`, which says so in one word.
     """
-    return await _update(
-        pool,
-        notice_id,
-        f"seen_at = COALESCE(seen_at, now()), {_state_keeping(SEEN, kept=(MUTED, FAILED))}",
-    )
+    return await _update(pool, notice_id, "seen_at = COALESCE(seen_at, now())")
 
 
-async def set_muted(pool: asyncpg.Pool, notice_id: uuid.UUID, muted: bool) -> Notice:
-    """Stop telling him about these facts, or start again.
+async def set_muted(
+    pool: asyncpg.Pool,
+    notice_id: uuid.UUID,
+    muted: bool,
+    *,
+    muted_by: uuid.UUID | None = None,
+) -> Notice:
+    """Stop telling him about this CONDITION, or start again.
 
-    Muting is a noise preference and nothing else: the row keeps its
-    fingerprint, so the same facts keep folding onto it silently and CHANGED
-    facts are a different fingerprint and so a new, unmuted notice. It
-    permits nothing and forbids nothing.
+    Muting is a noise preference and nothing else: it permits nothing and
+    forbids nothing (owner ruling 2026-09-03).
+
+    IT KEYS ON THE CONDITION, not on one reading of it. Until 2026-09-16 the
+    mute was the row, holding its fingerprint — and the fingerprint is a hash
+    of the FACTS, so `work_failing_timers` muted at two failures came back
+    unmuted at three because `consecutive_failures` had moved. The condition
+    had not changed. `finding_key` is the half that names it, and that is
+    what `notice_mutes` holds.
+
+    `muted_by` is null for a mute SHE made (S25 Q2). The Inbox says which,
+    because a silence he did not ask for must not look like one he did.
 
     Unmuting derives the state from the evidence on the row rather than from
     a remembered previous state, so a notice that was never delivered goes
-    back to `raised` and is picked up by the next digest, while one he had
-    already read comes back as `seen`.
+    back to `raised` and is picked up by the next digest, while one a channel
+    reported comes back `delivered`. Whether he had READ it is not part of
+    that derivation: it is `seen_at`, which an unmute leaves alone.
     """
+    row = await pool.fetchrow(
+        "SELECT check_name, finding_key FROM notices WHERE id = $1", notice_id
+    )
+    if row is None:
+        raise NoticeError(f"no notice with id {notice_id} exists — nothing was written")
     if muted:
+        await pool.execute(
+            "INSERT INTO notice_mutes (check_name, finding_key, muted_by) "
+            "VALUES ($1, $2, $3) ON CONFLICT (check_name, finding_key) "
+            "DO UPDATE SET muted_at = now(), muted_by = EXCLUDED.muted_by",
+            row["check_name"],
+            row["finding_key"],
+            muted_by,
+        )
         return await _update(pool, notice_id, "state = 'muted', muted_at = now()")
+    await pool.execute(
+        "DELETE FROM notice_mutes WHERE check_name = $1 AND finding_key = $2",
+        row["check_name"],
+        row["finding_key"],
+    )
     return await _update(pool, notice_id, f"state = {_STATE_FROM_EVIDENCE}, muted_at = NULL")
+
+
+async def muted_keys(pool: asyncpg.Pool, check_name: str) -> set[str]:
+    """Every condition of this check he has silenced. Read once per beat
+    rather than per finding: a check with forty findings must not become
+    forty queries."""
+    rows = await pool.fetch(
+        "SELECT finding_key FROM notice_mutes WHERE check_name = $1", check_name
+    )
+    return {row["finding_key"] for row in rows}
 
 
 async def mark_acted(
@@ -606,35 +737,148 @@ async def deliverable(pool: asyncpg.Pool) -> list[Notice]:
     standing debt — the fact that it cleared is the reconcile's return value,
     said once.
 
-    And `seen_at IS NULL`: a notice the owner has SEEN is no longer
-    deliverable, whatever its delivery state. This is the one place the two
-    halves meet. `mark_seen` deliberately leaves a FAILED row in state `failed`
-    — that state is the only record that nobody was TOLD, and a read receipt
-    does not make a push that never landed have landed — but the receipt itself
-    is a fact about him: he read the row in the Inbox with his own eyes, so
-    listing it again in tomorrow's digest would read to him as a repeat. The
-    record of the failure stands on the row; the debt does not.
+    And NOT `seen_at IS NULL` — not any more (S25.1.3). That third condition
+    made opening a card in the Inbox a permanent silencer, so the two
+    conditions above are the whole of it: a live condition nobody has
+    successfully told him about is still owed, however many times he has
+    looked at it. It leaves this set when it clears (it stopped being true)
+    or when he mutes it (he asked to stop hearing about it) — the two things
+    that already had that meaning.
     """
     rows = await pool.fetch(
-        f"SELECT {_COLUMNS} FROM notices WHERE {_LIVE} AND {_UNREAD} "
-        f"AND state = ANY($1::text[]) ORDER BY first_seen_at",
+        f"SELECT {_COLUMNS} FROM notices WHERE {OWED} ORDER BY first_seen_at",
         list(DELIVERABLE_STATES),
     )
     return [Notice.from_row(row) for row in rows]
 
 
-async def recent(pool: asyncpg.Pool, limit: int = 50) -> list[Notice]:
-    """The Inbox's page: most recently SEEN BY A CHECK first (last_seen_at),
-    so a finding that is still true today sits above one that stopped
-    recurring last week, whatever order they were first raised in.
+# When he was TOLD, which is what the Inbox sorts by (S25.1.2). `delivered_at`
+# where a delivery landed, `first_seen_at` where none has yet — never
+# `last_seen_at`, which a fold bumps. A fold is the CHECK seeing the condition
+# again; ordering by it sorted the page by how noisy each finding was, so
+# muting something made it the top card.
+_TOLD_AT = "COALESCE(delivered_at, first_seen_at)"
+
+# "This condition is silenced", in SQL — read from `notice_mutes`, which IS
+# the mute, and never from the `muted_at` stamp on the row. The two part
+# company the moment a condition clears: clearing forgets the mute and leaves
+# the stamp, because the stamp is the row's history. A view keyed on the
+# stamp would keep a cleared row in the muted list forever, offering to
+# unmute a silence that is already over.
+_SILENCED = (
+    "EXISTS (SELECT 1 FROM notice_mutes m WHERE m.check_name = notices.check_name "
+    "AND m.finding_key = notices.finding_key)"
+)
+
+
+async def recent(pool: asyncpg.Pool, limit: int = 50, *, muted: bool = False) -> list[Notice]:
+    """The Inbox's page: most recently TOLD first.
 
     Cleared rows are included — the Inbox is the record of what she noticed,
     and "this was true and is not any more" is part of it. `cleared_at` on
-    the row is what the page renders it by."""
+    the row is what the page renders it by.
+
+    Muted rows are NOT, unless asked for by `muted=True`. They are behind a
+    filter rather than deleted because a silence he cannot find is a silence
+    he cannot lift: the muted view is the only place an unmute can be
+    clicked. One flag and one query, so the two views cannot drift into
+    disagreeing about what is muted — the same row set, partitioned.
+    """
     rows = await pool.fetch(
-        f"SELECT {_COLUMNS} FROM notices ORDER BY last_seen_at DESC LIMIT $1", limit
+        f"SELECT {_COLUMNS} FROM notices WHERE {'' if muted else 'NOT '}{_SILENCED} "
+        f"ORDER BY {_TOLD_AT} DESC LIMIT $1",
+        limit,
     )
     return [Notice.from_row(row) for row in rows]
+
+
+# The views `listing()` offers, and what each one MEANS in SQL. Spelled once
+# here so her tool and the Inbox page cannot come to mean different things by
+# the same word — "unread" has to be the same set she is shown and the same
+# set the badge counts.
+VIEWS: dict[str, str] = {
+    # What he has not read, of what is not silenced. `_SILENCED` rather than
+    # the state, so a row born muted is absent from here the way it is absent
+    # from the page.
+    "unread": f"{_UNREAD} AND NOT {_SILENCED}",
+    # What he silenced and has not lifted — the only place an unmute can be
+    # asked for, which is why it is a view and not a deletion.
+    "muted": _SILENCED,
+    # Conditions that STOPPED being true. Not "handled": nobody did anything,
+    # a check simply stopped finding it.
+    "cleared": "cleared_at IS NOT NULL",
+    "all": "true",
+}
+
+
+async def listing(
+    pool: asyncpg.Pool,
+    *,
+    view: str = "unread",
+    check_name: str | None = None,
+    limit: int = 50,
+) -> list[Notice]:
+    """One page of the Inbox, for her rather than for the page — the rows
+    behind the digest she wrote, so she can answer a question about it.
+
+    Newest TELLING first, like the page (_TOLD_AT), because the order she
+    reads them in is the order he was told and not a ranking of how noisy
+    each condition is.
+
+    A view this does not know, or a check nobody registered, is a stated
+    CANNOT naming what it does know. Both would otherwise return [] — which
+    reads as "there is nothing", the quietest possible wrong answer, and the
+    one she would then repeat to him as a fact.
+    """
+    if view not in VIEWS:
+        known = ", ".join(sorted(VIEWS))
+        raise NoticeError(f"no view called {view!r} — it is one of: {known}")
+    if check_name is not None:
+        # The same sentence `reconcile` refuses with, from the same helper —
+        # one definition of "that check does not exist".
+        _registered(check_name)
+    where = VIEWS[view]
+    params: list[object] = [max(1, int(limit))]
+    if check_name is not None:
+        params.append(check_name)
+        where = f"{where} AND check_name = $2"
+    rows = await pool.fetch(
+        f"SELECT {_COLUMNS} FROM notices WHERE {where} ORDER BY {_TOLD_AT} DESC LIMIT $1",
+        *params,
+    )
+    return [Notice.from_row(row) for row in rows]
+
+
+async def mutes(pool: asyncpg.Pool) -> dict[tuple[str, str], uuid.UUID | None]:
+    """Every silence in force, and WHO asked for it — his person id, or None
+    for one she made herself (S25 Q2).
+
+    The whole table in one read: it holds one row per silenced condition, and
+    a page that asked per-row would be forty queries to render a list. The
+    Inbox renders the difference because a silence he did not ask for must
+    not be indistinguishable from one he did — that is how a mute stops
+    being a preference and becomes something that happened to him.
+    """
+    rows = await pool.fetch("SELECT check_name, finding_key, muted_by FROM notice_mutes")
+    return {(r["check_name"], r["finding_key"]): r["muted_by"] for r in rows}
+
+
+async def get(pool: asyncpg.Pool, notice_id: uuid.UUID) -> Notice:
+    """One row, or a stated CANNOT naming the id. The same sentence every
+    other helper here refuses a missing row with, so a caller reading "no
+    notice with id … exists" never has to know which call produced it."""
+    row = await pool.fetchrow(f"SELECT {_COLUMNS} FROM notices WHERE id = $1", notice_id)
+    if row is None:
+        raise NoticeError(f"no notice with id {notice_id} exists — nothing was written")
+    return Notice.from_row(row)
+
+
+async def muted_count(pool: asyncpg.Pool) -> int:
+    """How many rows the muted filter holds, so the filter can say so. A tab
+    reading "Muted" with no number is a tab nobody clicks, and the rows
+    behind it stay invisible for the life of the box — which is the same
+    outcome as deleting them, reached quietly."""
+    return await pool.fetchval(f"SELECT count(*) FROM notices WHERE {_SILENCED}")
 
 
 async def unseen_count(pool: asyncpg.Pool) -> int:

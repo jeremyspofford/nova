@@ -298,6 +298,11 @@ def test_every_registry_tool_named_list_declares_the_listing_kind():
     assert set(LISTING_TOOLS) - set(named_list) == {
         "model_catalog_search",
         "delegate_to_agent",
+        # S25 (2026-09-16) added the third: `notices` enumerates the rows
+        # behind the digest, and its name says nothing about listing —
+        # which is precisely why the guard reads the DECLARATION and not
+        # the name.
+        "notices",
     }
 
 
