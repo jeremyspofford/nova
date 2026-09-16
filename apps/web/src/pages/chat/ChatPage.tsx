@@ -432,9 +432,21 @@ export function ChatPage({
           a single message — the owner's "too much wasted space" (2026-09-15).
           Hidden rather than removed: the desktop has no tab bar to name the
           page. */}
+      {/* Desktop only, AND only when there is height to spare.
+
+          `md:` alone is a width test, and a phone in landscape is 852x393 —
+          wide enough to look like a desktop and 393px tall, where this
+          header's 56px is a seventh of everything. Measured at that shape
+          (e2e/responsive.sh): 235px left to read a conversation in, before
+          this is hidden.
+
+          `min-h` is the honest question: the header costs vertical space,
+          so vertical space is what decides whether it is affordable. The
+          sidebar already says which page this is; on a short screen the
+          word "Chat" is the least useful 56px on it. */}
       <header
         data-testid="chat-header"
-        className="hidden md:flex shrink-0 items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle"
+        className="hidden [@media(min-width:768px)_and_(min-height:600px)]:flex shrink-0 items-center justify-between gap-3 px-4 md:px-8 h-14 border-b border-border-subtle"
       >
         <h1 className="text-h3 text-content-primary">Chat</h1>
       </header>
