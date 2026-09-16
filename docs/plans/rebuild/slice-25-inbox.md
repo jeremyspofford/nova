@@ -2,8 +2,9 @@
 
 Branch `slice/s25`, to be cut from `rebuild/v4` (which now carries S24).
 
-**Nothing here is decided.** Five questions at the end are the owner's, and
-three of them change what gets built.
+**Answered 2026-09-16.** All five questions at the end are settled; two
+changed the design and are folded in below. The answers are recorded at the
+end with the reasoning they change.
 
 ## Where this came from
 
@@ -67,18 +68,16 @@ it from the daily digest permanently — while the urgent push path reads
 different columns and will still push it. Two paths, two meanings, one
 control.
 
-**This needs a ruling (Q1).** Two coherent readings:
+**DECIDED (Q1): seen is a read receipt only.** It stops nothing. The digest
+keeps listing a live condition until it clears or is muted, because
+`cleared` already means "this stopped being true" and `muted` already means
+"stop telling me" — a third meaning in between is where the confusion came
+from.
 
-- **Seen is a read receipt only.** It stops nothing; the digest keeps
-  listing a live condition until it clears or is muted. Honest, and
-  noisier.
-- **Seen is "I have dealt with this".** It suppresses the digest — which is
-  what it does today — and then it should suppress the urgent re-push too,
-  because one control doing two different things by channel is the surprise.
-
-I lean to the first: `cleared` already means "this stopped being true" and
-`muted` already means "stop telling me". A third meaning in between is where
-the confusion came from.
+So `deliverable()` drops its `seen_at IS NULL` term. That makes the digest
+NOISIER than today for anything he has read and not acted on, which is the
+honest trade: the alternative was a card silently leaving the digest forever
+because he looked at it.
 
 ## Part 2 — what is missing
 
@@ -132,9 +131,26 @@ page.
     notices(state="unread"|"muted"|"cleared"|"all", check=…, limit=…)
 
 Returning the same rows the page shows: title, facts, state, when, and
-whether it is cleared. **Read-only, in this slice (Q2).** A tool that mutes
-on his behalf is changing his preferences without being asked, and while
-that is not an approval question it is still his call to make.
+whether it is cleared.
+
+**DECIDED (Q2): she can mute and mark seen too.** So the tool writes as well
+as reads:
+
+    notices(...)                      read
+    notice_mute(id, muted=true|false) silence, or lift a silence
+    notice_seen(id)                   a read receipt
+
+Neither is an approval — both are noise preferences, and `test_no_approvals`
+stays green because nothing waits on him. Two consequences worth building
+for rather than discovering:
+
+- **A mute records WHO made it** (`muted_by`: his person id, or null for
+  hers). "Nova muted this" and "you muted this" are different facts, and the
+  Inbox says which — otherwise a silence he did not ask for is
+  indistinguishable from one he did.
+- **Muting is not handling.** She may silence a card and must not then say
+  she dealt with the condition; that is the capability guard's territory
+  already, and the eval corpus should carry the case.
 
 ### 2.4 "Talk about this" — S24, wired
 
@@ -183,20 +199,33 @@ Read from the trace, not from how the page looks.
    names the steps from the notice.
 7. All of it at 280px, 393px and 852x393 — `e2e/responsive.sh`.
 
-## Questions for Jeremy
+## Answers (Jeremy, 2026-09-16)
 
-1. **What does "seen" mean?** Read receipt only, or "I have dealt with
-   this"? (1.3 — changes the digest's behaviour.)
-2. **May she mute and mark seen herself**, or is the tool read-only? (2.3)
-3. **Should a cleared condition clear its mute?** I have specced yes: the
-   mute is about a live condition, and a condition that returns months later
-   is news. The alternative is a mute that holds until he lifts it.
-4. **Does the Inbox need a digest view** — "what you were told on Tuesday" —
-   or only the per-notice list? Not specced; it is the largest optional
-   piece.
-5. **Urgent notices and mute**: should muting silence an urgent push, or is
-   urgent by definition un-mutable? Today mute does not reach that path at
-   all, which is a defect either way.
+1. **Seen is a read receipt only.** Folded into 1.3.
+2. **She can mute and mark seen.** Folded into 2.3 — the tool writes, a mute
+   records who made it, and muting is not handling.
+3. **A cleared condition clears its mute.** As specced: the mute is about a
+   live condition, and one that returns months later is news. This is also
+   what makes answer 5 safe.
+4. **YES to a digest view** — "what you were told on Tuesday".
+
+   This is nearly free because S24 already built the link: every notice
+   records `delivered_message_id`, so a digest IS a group of notices sharing
+   one message. The view groups by that message, newest first, and each
+   group opens the same room the chat stub opens. A notice not yet delivered
+   belongs to no group and appears under "not told yet" — which is the same
+   fact 2.4 renders as a disabled action.
+5. **Urgent notices and mute** — **YES, mute silences an urgent push too**
+   (owner, hedged: "yes, I think so"). Recorded with the consequence,
+   because it is the one answer that can cost him something: a muted urgent
+   condition stays silent for as long as it stays true, so muting "the
+   gateway is down" means not being told the gateway is down.
+
+   What makes that safe rather than reckless is Q3: the mute lifts when the
+   condition CLEARS. So the silence lasts exactly as long as the thing he
+   already knows about, and a recurrence is news again. If this proves wrong
+   in use, the change is one clause and this paragraph is the record of why
+   it was chosen.
 
 ## Out of scope
 
