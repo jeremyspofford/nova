@@ -28,6 +28,8 @@ type Reading = {
   visualViewport: number | null
   standalone: boolean
   covers: boolean
+  /** What the app shell ACTUALLY occupies, measured off the element. */
+  shellHeight: number | null
 }
 
 /** Resolve a CSS length live — env() is not readable from JS any other way. */
@@ -56,7 +58,23 @@ function read(): Reading {
     visualViewport: window.visualViewport ? Math.round(window.visualViewport.height) : null,
     standalone: installedApp(),
     covers: coversScreen(),
+    // THE ONE THAT SETTLES IT (2026-09-16). Everything above is a number
+    // the browser REPORTS; this is the height the shell is actually drawn
+    // at. On the owner's installed app innerHeight read 793 against an
+    // 852px screen — and 852 − 59 is exactly 793, so innerHeight was
+    // reporting the SAFE height rather than the viewport's. A shortfall
+    // computed from it therefore described a gap that may not exist.
+    //
+    // The shell is `position: fixed; inset: 0`, so it is the layout
+    // viewport by construction. Measuring it asks the question directly
+    // instead of inferring it from a figure that has already lied twice.
+    shellHeight: shellRect(),
   }
+}
+
+function shellRect(): number | null {
+  const shell = document.querySelector('[data-testid="app-shell"]')
+  return shell ? Math.round(shell.getBoundingClientRect().height) : null
 }
 
 export function DisplayDiagnostics() {
@@ -93,6 +111,10 @@ export function DisplayDiagnostics() {
     ['installed app (standalone)', r.standalone ? 'yes' : 'no'],
     ['viewport covers screen', r.covers ? 'yes' : 'no'],
     ['screen − innerHeight', `${shortfall}px`],
+    [
+      'app shell height (measured)',
+      r.shellHeight === null ? '(not on this page)' : `${r.shellHeight}px`,
+    ],
   ]
 
   return (
@@ -112,10 +134,26 @@ export function DisplayDiagnostics() {
           </div>
         ))}
       </dl>
-      {r.standalone && shortfall > 4 && (
-        <p className="mt-3 text-caption text-warning" data-testid="display-shortfall">
-          The web view is {shortfall}px shorter than the screen while running as an installed
-          app. Anything pinned to the bottom sits that far above the visible bottom edge.
+      {/* THE VERDICT, from the measured shell rather than from innerHeight.
+          The warning that stood here read the shortfall and announced a gap
+          — but innerHeight on an installed iOS app reports the SAFE height
+          (852 − 59 = 793 on this device), so it was describing a figure,
+          not the app. The shell is `fixed inset-0`, so its own height is
+          the layout viewport; if that reaches the screen there is no gap,
+          whatever innerHeight says. */}
+      {r.shellHeight !== null && r.screenHeight > 0 && (
+        <p
+          className={`mt-3 text-caption ${
+            r.screenHeight - r.shellHeight > 4 ? 'text-warning' : 'text-content-tertiary'
+          }`}
+          data-testid="display-verdict"
+        >
+          {r.screenHeight - r.shellHeight > 4
+            ? `The app is drawn ${r.screenHeight - r.shellHeight}px shorter than the screen, so ` +
+              'there is a real strip at one end that no CSS here can reach.'
+            : 'The app is drawn the full height of the screen. innerHeight being ' +
+              'lower than the screen is iOS reporting the SAFE height, not a gap — ' +
+              'the shell is pinned to the viewport edges, so it does not read that number.'}
         </p>
       )}
     </Section>

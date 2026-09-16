@@ -65,7 +65,10 @@ export function AppLayout({
             `innerHeight` then overshot iOS's layout viewport and let the
             document scroll, taking the top off the screen. Neither can
             happen to an element pinned to the edges. */}
-        <div className="fixed inset-0 flex bg-surface-root dark:bg-transparent">
+        <div
+          data-testid="app-shell"
+          className="fixed inset-0 flex bg-surface-root dark:bg-transparent"
+        >
           <Sidebar collapsed={collapsed} onCollapsedChange={setCollapsed} />
           {/* THE WAY BACK. Collapsed means gone since 2026-09-16, so unlike
               an icon rail the sidebar leaves nothing behind to click — and
