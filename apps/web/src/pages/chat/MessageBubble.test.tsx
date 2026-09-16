@@ -3,6 +3,7 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { MessageBubble } from './MessageBubble'
 import type { LiveDelegation, MessageRow } from './chatReducer'
+import { attachmentFixture } from './attachmentFixture'
 
 function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
   return {
@@ -24,6 +25,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     delegation: null,
     delegationsDone: [],
     delegations: [],
+    attachments: [],
     ...overrides,
   }
 }
@@ -223,6 +225,7 @@ function userRow(text: string): MessageRow {
     delegation: null,
     delegationsDone: [],
     delegations: [],
+    attachments: [],
   }
 }
 
@@ -605,5 +608,29 @@ describe('MessageBubble — a model that is thinking', () => {
     const line = screen.getByTestId('thinking-line')
     expect(line.textContent).toContain('THE LATEST PART')
     expect(line.textContent!.length).toBeLessThan(220)
+  })
+})
+
+describe('MessageBubble — a message that carried a file (S28)', () => {
+  it('draws the attachment under his words', () => {
+    render(
+      <MessageBubble
+        row={{ ...userRow('what is this?'), attachments: [attachmentFixture()] }}
+      />,
+    )
+
+    expect(screen.getByTestId('message-attachments')).toBeTruthy()
+    expect(screen.getByText('what is this?')).toBeTruthy()
+  })
+
+  it('draws no empty bubble when the file WAS the message', () => {
+    // "Here, look at this" with nothing typed is a thing people send. An
+    // empty bubble above the picture is a message he did not write.
+    const { container } = render(
+      <MessageBubble row={{ ...userRow(''), attachments: [attachmentFixture()] }} />,
+    )
+
+    expect(screen.getByTestId('attached-image')).toBeTruthy()
+    expect(container.querySelector('.whitespace-pre-wrap')).toBeNull()
   })
 })

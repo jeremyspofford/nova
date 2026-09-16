@@ -32,6 +32,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     delegation: null,
     delegationsDone: [],
     delegations: [],
+  attachments: [],
     ...overrides,
   }
 }

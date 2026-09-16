@@ -285,3 +285,30 @@ async def test_the_vision_model_he_chose_is_the_one_that_answers(
     # Not gemma4:31b, which is what she would have picked herself.
     assert "qwen3.8:27b" in body["model"]
     assert "qwen3.8:27b" in body["messages"][-1]["content"][0]["text"]
+
+
+async def test_a_reloaded_conversation_still_shows_what_was_attached(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    """The transcript is the record. A file that vanishes from the message on
+    reload leaves him reading "what does this say?" with no way to see what
+    "this" was."""
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    mount_peers(gateway=FakeGateway(deltas=("ok",)), memory=FakeMemory())
+    conversation = await _conversation(owner_client)
+    attachment = await _upload(owner_client, conversation, "shot.png", PNG)
+    await _say(
+        owner_client, "what is this?", attachment_ids=[attachment], conversation_id=conversation
+    )
+
+    resp = await owner_client.get(f"/api/v1/conversations/{conversation}/messages")
+
+    assert resp.status_code == 200, resp.text
+    rows = resp.json()["messages"]
+    mine = [row for row in rows if row["role"] == "user"][-1]
+    assert [file["filename"] for file in mine["attachments"]] == ["shot.png"]
+    assert mine["attachments"][0]["kind"] == "image"
+    # Every row carries the key, empty where nothing was attached — a client
+    # should not have to tell "no files" from "this server does not say".
+    assert all("attachments" in row for row in rows)
+    assert [] in [row["attachments"] for row in rows if row["role"] == "assistant"]

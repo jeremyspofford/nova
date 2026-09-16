@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
+from fastapi.responses import FileResponse
 
 from app import attachments, conversations, db, identity
 from app.attachments import AttachmentError
 from app.identity import Person
+from app.tools.workspace import root_from_env
 
 router = APIRouter(prefix="/api/v1/attachments", tags=["attachments"])
 
@@ -63,6 +65,47 @@ async def upload(
         status = 413 if "limit is" in str(exc) else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
     return {"attachment": attachments.as_json(row), "max_bytes": attachments.MAX_BYTES}
+
+
+@router.get("/{attachment_id}/content")
+async def content(
+    attachment_id: uuid.UUID, person: Person = Depends(identity.require_person)
+) -> Response:
+    """The bytes, so a picture he sent can be drawn in the transcript.
+
+    Scoped to the person who uploaded it: someone else's file is NOT FOUND
+    rather than forbidden, the same answer every conversation route gives.
+
+    `Content-Disposition: inline` with the filename, so an image renders in
+    place and anything else keeps the name he chose when he saves it. The
+    media type is the SNIFFED one from the row, never a guess from the
+    extension here — the same value the turn routed on, so what the browser
+    renders and what she was sent cannot be two different opinions about one
+    file.
+
+    A row whose file has gone is a 410, not a 404: the difference is "this
+    never existed" versus "this existed and the bytes are gone", and only the
+    second one means the workspace was swept or edited underneath it.
+    """
+    pool = await db.get_pool()
+    row = await pool.fetchrow(
+        "SELECT * FROM attachments WHERE id = $1 AND person_id = $2", attachment_id, person.id
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"no attachment {attachment_id} here")
+    file = attachments.Attachment.from_row(row)
+    target = root_from_env() / file.path
+    if not target.exists():
+        raise HTTPException(
+            status_code=410,
+            detail=f"{file.filename} is recorded but its file is no longer in the workspace",
+        )
+    return FileResponse(
+        target,
+        media_type=file.media_type,
+        filename=file.filename,
+        content_disposition_type="inline",
+    )
 
 
 @router.get("/limits")

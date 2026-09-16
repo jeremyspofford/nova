@@ -125,3 +125,52 @@ def test_nginx_and_core_agree_on_the_ceiling():
         f"nginx allows {size} bytes and core states {attachments.MAX_BYTES} — "
         "the smaller wins silently, and only one of them can explain itself"
     )
+
+
+# -- the bytes, so a picture can be drawn (S28) -----------------------------------
+
+
+async def test_the_content_route_serves_the_bytes_with_the_sniffed_type(
+    owner_client, tmp_path, monkeypatch
+):
+    """The media type is the row's — the same value the TURN routed on — so
+    what the browser renders and what she was sent cannot be two opinions
+    about one file."""
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    conversation = await _conversation(owner_client)
+    # Declared as octet-stream by the upload; the bytes say PNG.
+    got = (await _upload(owner_client, conversation, "shot.png", PNG)).json()["attachment"]
+
+    resp = await owner_client.get(f"/api/v1/attachments/{got['id']}/content")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.content == PNG
+    assert resp.headers["content-type"].startswith("image/png")
+    # Inline, so it renders in place rather than downloading.
+    assert "inline" in resp.headers["content-disposition"]
+    assert "shot.png" in resp.headers["content-disposition"]
+
+
+async def test_a_file_whose_bytes_are_gone_is_a_410_not_a_404(owner_client, tmp_path, monkeypatch):
+    """ "This never existed" and "this existed and the bytes are gone" are
+    different facts, and only the second means the workspace was swept or
+    edited underneath it."""
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    conversation = await _conversation(owner_client)
+    got = (await _upload(owner_client, conversation, "shot.png", PNG)).json()["attachment"]
+    (tmp_path / got["path"]).unlink()
+
+    resp = await owner_client.get(f"/api/v1/attachments/{got['id']}/content")
+
+    assert resp.status_code == 410, resp.text
+    assert "no longer in the workspace" in resp.json()["error"]
+
+
+async def test_content_needs_a_session(client):
+    assert (await client.get(f"/api/v1/attachments/{uuid.uuid4()}/content")).status_code == 401
+
+
+async def test_an_attachment_that_is_not_his_is_not_found(owner_client):
+    resp = await owner_client.get(f"/api/v1/attachments/{uuid.uuid4()}/content")
+
+    assert resp.status_code == 404, resp.text

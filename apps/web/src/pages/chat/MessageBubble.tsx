@@ -16,7 +16,8 @@ import {
 } from 'lucide-react'
 import { Badge, ProgressBar } from '../../components/ui'
 import { Markdown } from '../../components/Markdown'
-import type { Delegation } from '../../lib/api'
+import type { Attachment, Delegation } from '../../lib/api'
+import { Attached } from './Attached'
 import { DELEGATE_TOOL, type ErrorRow, type LiveDelegation, type MessageRow } from './chatReducer'
 
 /**
@@ -384,9 +385,15 @@ export const MessageBubble = memo(function MessageBubble({
     return (
       <div className="flex justify-end" data-testid="message-user" data-message-id={row.id}>
         <div className="max-w-[85%] md:max-w-[75%]">
-          <div className="glass-card bg-surface-elevated border border-border dark:border-white/[0.08] text-content-primary whitespace-pre-wrap rounded-tl-2xl rounded-tr-sm rounded-br-2xl rounded-bl-2xl px-4 py-3 text-body leading-relaxed">
-            {row.text}
-          </div>
+          {row.text && (
+            <div className="glass-card bg-surface-elevated border border-border dark:border-white/[0.08] text-content-primary whitespace-pre-wrap rounded-tl-2xl rounded-tr-sm rounded-br-2xl rounded-bl-2xl px-4 py-3 text-body leading-relaxed">
+              {row.text}
+            </div>
+          )}
+          {/* S28: what he attached, under his words — or alone, when "here,
+              look at this" was the whole message. An empty bubble above a
+              picture is a thing he did not send. */}
+          <Attached files={row.attachments ?? []} />
           {stub && <div className="flex justify-end">{stub}</div>}
         </div>
       </div>

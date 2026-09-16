@@ -334,7 +334,7 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
     # Function-local: app.agents imports app.tools, whose timers module
     # imports this module at top level — the same one-way idiom
     # tools/timers.py uses to reach agents.
-    from app import agents
+    from app import agents, attachments
 
     rows = await pool.fetch(
         "SELECT m.id, m.role, m.content, m.created_at, t.kind AS turn_kind, a.name AS agent, "
@@ -370,6 +370,11 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
         conversation_id,
         agents.DELEGATE_TOOL,
     )
+    # S28: the files each message carried, in ONE query for the whole page —
+    # rendering a conversation must not be a round trip per message. Most
+    # conversations have none, and then this is a single query returning
+    # nothing rather than a branch.
+    carried = await attachments.for_messages(pool, [row["id"] for row in rows])
     return [
         {
             "id": str(row["id"]),
@@ -390,6 +395,10 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
             "prompt_tokens": row["prompt_tokens"],
             "agent": row["agent"],
             "delegations": [_delegation_json(span) for span in row["delegate_spans"]],
+            # S28: what he attached to this message. Always present, empty
+            # for every row that carried nothing — a client should not have
+            # to tell "no files" apart from "this server does not say".
+            "attachments": [attachments.as_json(file) for file in carried.get(row["id"], [])],
         }
         for row in rows
     ]

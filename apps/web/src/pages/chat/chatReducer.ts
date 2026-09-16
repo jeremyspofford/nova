@@ -1,4 +1,4 @@
-import type { Delegation } from '../../lib/api'
+import type { Attachment, Delegation } from '../../lib/api'
 import type { StreamEvent } from '../../lib/streamChat'
 
 /**
@@ -124,6 +124,11 @@ export type MessageRow = {
    * fetched row (S12). Only ever set from a fetched row — a streamed row
    * has the live `delegation` instead — and it is what survives a reload. */
   delegations: Delegation[]
+  /** The files this message carried (S28). Present on a row loaded from the
+   * server; empty on a row this store has just sent, which is honest —
+   * the upload's own id is what the send carried, and the record of what
+   * landed is the server's to state. */
+  attachments: Attachment[]
 }
 
 export type ErrorRow = {
@@ -256,6 +261,8 @@ export type FetchedMessage = {
   route_reason?: string | null
   agent?: string | null
   delegations?: Delegation[]
+  /** S28: the files this message carried. Absent on a core older than S28. */
+  attachments?: Attachment[]
 }
 
 export const NO_REPLY = 'the turn finished without a reply'
@@ -299,6 +306,7 @@ function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role
     delegation: null,
     delegationsDone: [],
     delegations: [],
+    attachments: [],
     ...row,
   }
 }
@@ -555,6 +563,10 @@ function serverRow(m: FetchedMessage): MessageRow {
     agent: typeof m.agent === 'string' && m.agent ? m.agent : null,
     // Verbatim: the ledger's derived record is the chip's whole source.
     delegations: Array.isArray(m.delegations) ? m.delegations : [],
+    // Absent on a core older than S28, and absent is not empty — but a row
+    // with no key and a row with no files render identically, so [] is the
+    // honest normalisation here.
+    attachments: Array.isArray(m.attachments) ? m.attachments : [],
   })
 }
 

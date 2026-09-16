@@ -308,6 +308,10 @@ export interface StoredMessage {
    * `served_by` idiom. Empty when she delegated nothing; absent on a core
    * older than S12. */
   delegations?: Delegation[]
+  /** The files this message carried (S28). Always present from a core that
+   * has it, empty where nothing was attached — so "no files" and "this
+   * server does not say" stay distinguishable. */
+  attachments?: Attachment[]
 }
 
 /** One `delegate_to_agent` call as the turn ledger recorded it (S12).
