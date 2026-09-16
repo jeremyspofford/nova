@@ -1,9 +1,12 @@
 # Feature flags — and the three controls that are not built
 
-Author: Fable, 2026-09-16. **Nothing here is decided.** The three features
-below were each declined during the S24 UI work for a stated reason, and one
-of them collides with an owner ruling. This spec says what a flag would be,
-what each feature costs, and which question only Jeremy can answer.
+Author: Fable, 2026-09-16. The three features below were each declined
+during the S24 UI work for a stated reason. This spec says what a flag would
+be and what each feature costs.
+
+**Decided since (Jeremy, 2026-09-16): permission mode stays absent.** See
+item 3 — reading (a). Nothing to build, and the composer row is finished
+without it. Attachments and thinking effort are still open.
 
 ## Where this came from
 
@@ -124,9 +127,17 @@ on and off, on the model she actually uses. If the answer is "nothing worth
 
 ---
 
-## 3. Permission mode — THE ONE THAT NEEDS A RULING
+## 3. Permission mode — DECIDED: it stays absent
 
-**This does not fit behind a flag, and pretending it does would be the
+**Jeremy, 2026-09-16: "let's forget the permission mode, you were correct."**
+Reading (a) below. Nothing is built, nothing is flagged, and this section
+stays as the record of why — so the next person who notices the gap between
+Nova's composer row and Claude Code's finds the answer instead of filling
+it in.
+
+The rest of this section is the reasoning that produced that answer.
+
+**This did not fit behind a flag, and pretending it did would have been the
 wrong kind of clever.**
 
 The ruling (2026-09-03, `docs/plans/rebuild/no-approvals.md`) is not a
@@ -139,10 +150,10 @@ that a call CANNOT run; it may never decide that it MAY not.
 So "Bypass permissions" in Nova has nothing to bypass. Three readings, and
 only Jeremy can pick:
 
-- **(a) It stays absent.** The screenshot's control is an artefact of a tool
-  that HAS permissions. Nova does not, by his own ruling, and the honest
-  answer to "where is that control" is "that idea is not in this product".
-  **This is the default, and needs no work.**
+- **(a) It stays absent.** ← **CHOSEN.** The screenshot's control is an
+  artefact of a tool that HAS permissions. Nova does not, by his own ruling,
+  and the honest answer to "where is that control" is "that idea is not in
+  this product".
 - **(b) It becomes something else that is true.** There IS a real thing
   nearby: which tools are advertised to a turn. A control that narrows her
   toolset for one conversation ("no shell here") is a SCOPE, not an
@@ -168,7 +179,7 @@ the screenshot, and the name is the part that would be false.
 3. **Attachments**, if he wants them — the most self-contained of the three.
 4. **Thinking effort**, only if the measurement says it is worth a second
    client in the gateway.
-5. **Permissions** — not until (a)/(b)/(c) is answered.
+5. ~~**Permissions**~~ — answered: (a), absent. Off the list.
 
 ## What this spec refuses
 
