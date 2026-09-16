@@ -412,3 +412,90 @@ async def test_the_count_moves_once_the_room_is_spoken_in(owner_client, pool):
     await _message(pool, room["id"], "the 7am backup", role="assistant")
 
     assert await conversations.thread_reply_counts(pool, hallway) == {digest: 2}
+
+
+# ── the gate is per person, not per conversation ─────────────────────────
+
+
+async def test_a_turn_in_a_room_makes_the_person_busy_everywhere(owner_client, pool):
+    """ONE GPU. `conversation_busy` is right about interleaving in one
+    transcript and wrong the moment a second conversation can be on screen:
+    a message typed in a room while the hallway is mid-turn would start a
+    SECOND concurrent turn on one card — the contention this project spent
+    2026-09-12 and 09-14 measuring, self-inflicted by a feature meant to
+    make things calmer."""
+    from app import traces
+
+    owner = _Person(await _owner(pool))
+    hallway = await _hallway(pool, owner.id)
+    message_id = await _message(pool, hallway)
+    room, _ = await conversations.open_thread(pool, owner, message_id)
+
+    turn_id = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id, person_id) VALUES ('chat', $1, $2) RETURNING id",
+        room["id"],
+        owner.id,
+    )
+    traces.DOING[turn_id] = "thinking"
+    try:
+        # The room is busy, which the old gate would also have said.
+        assert await conversations.conversation_busy(pool, room["id"]) is True
+        # The HALLWAY is not — and that is exactly the hole: under the old
+        # gate a message typed there would have started a second turn.
+        assert await conversations.conversation_busy(pool, hallway) is False
+        # The person is busy, which is the fact that matters.
+        assert await conversations.person_busy(pool, owner.id) is True
+    finally:
+        traces.DOING.pop(turn_id, None)
+
+
+async def test_a_person_with_nothing_running_is_not_busy(owner_client, pool):
+    """A turn row with a status is a FINISHED turn. Reading rows alone
+    would make the gate permanent after the first message."""
+    owner = _Person(await _owner(pool))
+    hallway = await _hallway(pool, owner.id)
+    await pool.execute(
+        "INSERT INTO turns (kind, conversation_id, person_id, status) "
+        "VALUES ('chat', $1, $2, 'ok')",
+        hallway,
+        owner.id,
+    )
+    assert await conversations.person_busy(pool, owner.id) is False
+
+
+async def test_another_persons_turn_does_not_gate_this_one(owner_client, pool):
+    """One GPU is a real constraint, but the gate is per PERSON — a
+    household where two people chat is S25's problem, and this must not
+    quietly become a global lock."""
+    from app import traces
+
+    owner = _Person(await _owner(pool))
+    stranger = await pool.fetchval(
+        "INSERT INTO people (name, role) VALUES ('other', 'guest') RETURNING id"
+    )
+    theirs = await _hallway(pool, stranger)
+    turn_id = await pool.fetchval(
+        "INSERT INTO turns (kind, conversation_id, person_id) VALUES ('chat', $1, $2) RETURNING id",
+        theirs,
+        stranger,
+    )
+    traces.DOING[turn_id] = "thinking"
+    try:
+        assert await conversations.person_busy(pool, stranger) is True
+        assert await conversations.person_busy(pool, owner.id) is False
+    finally:
+        traces.DOING.pop(turn_id, None)
+
+
+async def test_the_digest_still_lands_in_the_hallway_with_a_room_open(owner_client, pool):
+    """DoD step 7. `active_conversation` is what delivery.py's chat rung
+    writes into, and a room must never be it — however recently it was
+    opened, and however active it is."""
+    owner = _Person(await _owner(pool))
+    hallway = await _hallway(pool, owner.id)
+    message_id = await _message(pool, hallway)
+    room, _ = await conversations.open_thread(pool, owner, message_id)
+    # Speaking in the room does not make it the newest thing that matters.
+    await _message(pool, room["id"], "talking in here", role="user")
+
+    assert (await conversations.active_conversation(pool, owner))["id"] == hallway

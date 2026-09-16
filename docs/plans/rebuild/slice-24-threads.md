@@ -289,3 +289,47 @@ Mechanical, and read from the trace rather than from how a reply sounds.
 - **Per-thread unread state.** Wants the Inbox's seen/unseen work (S25).
 - **One chat row per notice.** Considered and rejected above; revisit only
   if a digest room proves too coarse in use.
+
+---
+
+## Built (2026-09-15/16), on `slice/s24`
+
+All eight items of "what gets built" are in. Three commits, each with its own
+mutation-tested guarantees.
+
+| # | Item | Where |
+|---|---|---|
+| 1 | migration + the hallway predicate | `030_threads.sql`, `conversations.active_conversation` |
+| 2 | delivery records its message | `delivery.Rung.message_id` → `notices.delivered_message_id` |
+| 3 | open-or-fetch a room | `POST /{cid}/messages/{mid}/thread` |
+| 4 | live state for any conversation | `GET /{cid}/state`, sharing `/active`'s builder |
+| 5 | the seed | `chat.thread_seed` |
+| 6 | the chat UI | stub, `?thread=`, keyed store, scroll-to-parent |
+| 7 | the busy gate, per person | `conversations.person_busy`, `queued.hold_person` |
+| 8 | memory | `store.append_thread`, `model_read.window` grouping |
+
+### Two decisions taken during the build
+
+**The stub appears on notice-bearing messages, not only on messages that
+already have a room.** Revision 2 did not say which messages offer a stub,
+and the obvious reading — "messages with a room" — has no entrance: a stub
+would render only for rooms that exist, and a room only exists once somebody
+opened one from a stub. So `thread_reply_counts` returns a message that
+either has a room (count = its messages) or delivered a notice (count = 0,
+rendered "Talk about this"). This also keeps the entrance where the design
+put it: rooms open from things she raised, and "threads on arbitrary
+messages" stays out of scope.
+
+**`pollForReply` polls the conversation on screen, not `/active`.** Not in
+the spec, and a defect the moment a room exists: in a room those are
+different conversations, so the reload poll would have read the hallway's
+pending turn while displaying the room's — "still responding" over a room
+that had finished, or silence over one that had not.
+
+### What has NOT been walked
+
+The definition of done is a walk on the live stack, and none of it has run
+there yet: nothing is deployed, so steps 1-8 are all outstanding. The suites
+say the machinery holds; only the walk says the feature works. In
+particular, nobody has yet asked a room a question only the notice's FACTS
+can answer, which is the step revision 1 would have passed on her own prose.
