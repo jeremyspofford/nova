@@ -36,6 +36,9 @@ _TABLES = (
     # S11: notices references turns and timer_firings (both ON DELETE SET
     # NULL), so it is a child of two tables further down this list and drops
     # and truncates ahead of either.
+    # S28: attachments references conversations, messages AND people, so it
+    # is a child of all three and drops ahead of every one of them.
+    "attachments",
     # S25: notice_mutes references people, and is read alongside notices —
     # so it drops ahead of both. Left out, the second run of the suite
     # collides on its CREATE TABLE exactly the way queued_messages would

@@ -16,6 +16,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import (
     activity,
     agents_api,
+    attachments_api,
     auth_api,
     beats,
     chat,
@@ -139,6 +140,7 @@ app.include_router(timers_api.router)
 app.include_router(agents_api.router)
 app.include_router(notices_api.router)
 app.include_router(skills_api.router)
+app.include_router(attachments_api.router)
 
 
 @app.exception_handler(StarletteHTTPException)

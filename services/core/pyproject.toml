@@ -9,6 +9,10 @@ dependencies = [
     "httpx",
     "argon2-cffi",
     "cryptography",
+    # S28: multipart uploads. FastAPI refuses to even BUILD a route with a
+    # File/Form parameter without it, at import time, so a missing wheel is
+    # a service that will not start rather than a route that 500s.
+    "python-multipart",
 ]
 
 [dependency-groups]

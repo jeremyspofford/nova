@@ -198,6 +198,17 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    # THE CEILING ON AN UPLOAD, and the reason it is written here at all
+    # (S28, owner's call: 100 MB). nginx's default is 1 MiB, and in v3 that
+    # default was the whole bug: the dev server on :5173 accepted a photo
+    # the one-origin build rejected with a 413, so attachments worked on the
+    # laptop and failed on the phone — the only device he actually sends
+    # photos from. `attachments.MAX_BYTES` in core carries the same number
+    # and states it in the refusal; if these two ever disagree, the smaller
+    # one wins silently and the message he gets is whichever one happens to
+    # be nginx's, which says nothing useful.
+    client_max_body_size 100m;
+
     # Fail-closed 401s render this neutral static page instead of Nova's own
     # login or any hint of what's behind the gate. Status stays 401 (no `=`
     # override) so this is still machine-checkable, not just human-readable.
