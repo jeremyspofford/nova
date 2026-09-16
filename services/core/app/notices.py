@@ -795,6 +795,77 @@ _SILENCED = (
 )
 
 
+@dataclass(frozen=True)
+class Digest:
+    """One telling: the message that carried it, and everything it carried.
+
+    A digest is not a stored object and deliberately never becomes one. It is
+    the group of notices sharing a `delivered_message_id` — a fact S24 already
+    records on every row, because the chat rung reads the row back to prove
+    the delivery landed. Storing a digest row beside it would be a second
+    copy of the same truth, free to disagree with the notices it claims to
+    contain.
+    """
+
+    message_id: uuid.UUID
+    # When he was told, which is the message's own time and not any row's:
+    # every notice in a group was delivered by the same write.
+    delivered_at: datetime
+    notices: tuple[Notice, ...]
+
+
+async def digests(pool: asyncpg.Pool, limit: int = 20) -> list[Digest]:
+    """ "What you were told on Tuesday" (S25 Q4), newest telling first.
+
+    Two queries rather than one grouped read: the LIMIT is a number of
+    tellings, not of rows, and a single query with a row limit would cut the
+    last digest in half and present the remainder as the whole of it. The
+    groups are chosen first, then filled.
+
+    Rows whose message has since been swept are not a group: the column is
+    ON DELETE SET NULL, so a notice whose message is gone reads as never
+    delivered, which is the honest answer — there is no telling to show him
+    and no room to open off it.
+    """
+    heads = await pool.fetch(
+        "SELECT delivered_message_id AS id, max(delivered_at) AS at FROM notices "
+        "WHERE delivered_message_id IS NOT NULL "
+        "GROUP BY delivered_message_id ORDER BY at DESC LIMIT $1",
+        max(1, int(limit)),
+    )
+    if not heads:
+        return []
+    rows = await pool.fetch(
+        f"SELECT {_COLUMNS} FROM notices WHERE delivered_message_id = ANY($1::uuid[]) "
+        f"ORDER BY {_TOLD_AT} DESC, first_seen_at",
+        [h["id"] for h in heads],
+    )
+    by_message: dict[uuid.UUID, list[Notice]] = {}
+    for row in rows:
+        by_message.setdefault(row["delivered_message_id"], []).append(Notice.from_row(row))
+    return [
+        Digest(message_id=h["id"], delivered_at=h["at"], notices=tuple(by_message.get(h["id"], ())))
+        for h in heads
+    ]
+
+
+async def not_told_yet(pool: asyncpg.Pool, limit: int = 50) -> list[Notice]:
+    """Live notices that no message has carried — the "not told yet" group
+    that sits under the tellings.
+
+    The SAME fact 2.4 renders as a disabled "talk about this": no message
+    means no room. Said once here and shown in both places, so the list and
+    the button cannot come to disagree about which rows those are.
+    """
+    rows = await pool.fetch(
+        f"SELECT {_COLUMNS} FROM notices "
+        f"WHERE delivered_message_id IS NULL AND {_LIVE} AND NOT {_SILENCED} "
+        f"ORDER BY {_TOLD_AT} DESC LIMIT $1",
+        max(1, int(limit)),
+    )
+    return [Notice.from_row(row) for row in rows]
+
+
 async def recent(pool: asyncpg.Pool, limit: int = 50, *, muted: bool = False) -> list[Notice]:
     """The Inbox's page: most recently TOLD first.
 

@@ -145,6 +145,30 @@ try {
   say(`step 6: ${err.message}`)
 }
 
+// ── Q4: "what you were told, and when" ────────────────────────────────────
+try {
+  await inbox()
+  await page.getByRole('button', { name: 'What you were told' }).click()
+  await page.waitForSelector('[data-testid="digest-list"]', { timeout: 15000 })
+  const groups = await page.locator('[data-testid^="digest-"]:not([data-testid="digest-list"])').count()
+  const waiting = await page.locator('[data-testid="not-told-yet"]').count()
+  if (groups === 0 && waiting === 0) {
+    say('Q4: the view rendered neither a telling nor anything waiting')
+  } else {
+    // A telling has to say HOW MANY it carried — that is what makes it a
+    // telling rather than some adjacent cards.
+    const first = page.locator('[data-testid^="digest-"]:not([data-testid="digest-list"])').first()
+    const heading = groups > 0 ? await first.locator('h2').innerText() : ''
+    if (groups > 0 && !/\d+ thing/.test(heading)) {
+      say(`Q4: a telling did not say what it carried: ${heading}`)
+    }
+    notes.push(`Q4: ${groups} telling(s) rendered${waiting ? ', and a "not told yet" group' : ''}`)
+    if (groups > 0) notes.push(`Q4: the newest reads "${heading.replace(/\s+/g, ' ').trim()}"`)
+  }
+} catch (err) {
+  say(`Q4: ${err.message}`)
+}
+
 await browser.close()
 for (const n of notes) console.log(`  ${n}`)
 if (failures.length) {
@@ -152,4 +176,4 @@ if (failures.length) {
   for (const f of failures) console.log(`  - ${f}`)
   process.exit(1)
 }
-console.log('\nOK: steps 3, 5 and 6 walk')
+console.log('\nOK: steps 3, 5, 6 and the digest view walk')

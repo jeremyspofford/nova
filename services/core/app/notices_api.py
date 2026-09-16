@@ -155,6 +155,43 @@ async def list_notices(
     }
 
 
+@router.get("/digests")
+async def list_digests(
+    limit: int = Query(20, ge=1),
+    person: Person = Depends(identity.require_person),
+) -> dict:
+    """ "What you were told on Tuesday" (S25 Q4) — the Inbox by TELLING
+    rather than by condition.
+
+    A digest is the group of notices one message carried, derived from
+    `delivered_message_id` and never stored. `limit` counts tellings, so the
+    oldest group in the answer is whole rather than a fragment presented as
+    the whole of it.
+
+    `not_told_yet` rides along because it is the other half of the same
+    question: what is standing that no message has carried. It is the same
+    fact the Inbox draws as a disabled "talk about this", said once in the
+    store so the list and the button cannot disagree.
+
+    DECLARED BEFORE `/{notice_id}` on purpose — FastAPI matches in order,
+    and a bare `/digests` would otherwise be read as a notice id and
+    answered with the 422 for a malformed UUID.
+    """
+    pool = await db.get_pool()
+    groups = await notices.digests(pool, limit=min(limit, MAX_LIMIT))
+    return {
+        "digests": [
+            {
+                "message_id": str(group.message_id),
+                "delivered_at": group.delivered_at.isoformat(),
+                "notices": [notice_json(row) for row in group.notices],
+            }
+            for group in groups
+        ],
+        "not_told_yet": [notice_json(row) for row in await notices.not_told_yet(pool)],
+    }
+
+
 @router.put("/{notice_id}/seen")
 async def mark_seen(
     notice_id: uuid.UUID, person: Person = Depends(identity.require_person)

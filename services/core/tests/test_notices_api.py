@@ -473,3 +473,35 @@ async def test_silenced_is_the_live_mute_and_not_the_stamp_left_on_the_row(owner
     assert row["muted_at"] is not None, "the history is still on the row"
     assert row["silenced"] is False and row["muted_by"] is None
     assert (await _listing(owner_client))["muted_count"] == 0
+
+
+# -- the digest view (S25 Q4) ----------------------------------------------------
+
+
+async def test_the_digest_view_groups_by_the_message_that_carried_them(owner_client, pool):
+    """ "What you were told on Tuesday." The group is the telling, and every
+    card in it is the row as the Inbox renders it elsewhere — one shape, so
+    a card cannot say different things on two pages."""
+    notice, _conversation, message = await _delivered(pool, await _owner_id(pool))
+    waiting = await _record(pool, key="k2", facts={"a": 1})
+
+    resp = await owner_client.get("/api/v1/notices/digests")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [g["message_id"] for g in body["digests"]] == [str(message)]
+    assert [n["id"] for n in body["digests"][0]["notices"]] == [str(notice.id)]
+    assert body["digests"][0]["delivered_at"] is not None
+    # The other half of the same question, and the same rows 2.4 draws a
+    # disabled "talk about this" on.
+    assert [n["id"] for n in body["not_told_yet"]] == [str(waiting.id)]
+
+
+async def test_digests_is_a_route_and_not_read_as_a_notice_id(owner_client):
+    """FastAPI matches in declaration order, so `/digests` sitting after
+    `/{notice_id}` would be parsed as a malformed UUID and answered 422.
+    Pinned because the failure is a 422 on a route that plainly exists."""
+    resp = await owner_client.get("/api/v1/notices/digests")
+
+    assert resp.status_code == 200, resp.text
+    assert "digests" in resp.json()

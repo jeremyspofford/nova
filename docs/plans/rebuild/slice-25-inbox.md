@@ -349,6 +349,24 @@ fix: `state="unread"` returns exactly the three live rows.
 The muted view and its count are LIVE silenced rows now, so the number on
 the tab and the list behind it cannot disagree.
 
+### Q4 — what you were told, and when
+
+Built and walked. A third tab on the Inbox: one section per TELLING, newest
+first, with what is still standing and uncarried underneath.
+
+A digest is never stored. S24 already records `delivered_message_id` on
+every row, so the grouping is derived from it — a digest row beside the
+notices would be a second copy of the same truth, free to disagree with
+what it claims to contain.
+
+Two things the tests pin that are easy to get wrong: `limit` counts
+TELLINGS rather than rows (a row limit cuts the oldest group in half and
+presents the remainder as the whole of it — "she told you one thing", when
+she told him four), and a notice nobody was told about belongs to NO group
+rather than drifting into the newest one. A cleared notice stays in the
+telling it was part of: the card says the condition stopped, but a record
+of what he was told does not get edited when the world moves.
+
 ### Still open
 
-Q4's digest view grouped by `delivered_message_id`.
+Nothing. The slice is done.

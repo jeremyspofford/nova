@@ -1395,6 +1395,27 @@ export async function listNotices(
   return apiGet<NoticeListing>(`/api/v1/notices?${params.toString()}`)
 }
 
+/** One TELLING: the message that carried a group of notices, and the group
+ * (S25 Q4). Never a stored object — core derives it from the
+ * `delivered_message_id` every notice already records, so there is no
+ * second copy of the truth to drift. */
+export interface NoticeDigest {
+  message_id: string
+  delivered_at: string
+  notices: Notice[]
+}
+
+/** GET /notices/digests — the Inbox by when he was told rather than by
+ * condition, newest telling first. `limit` counts TELLINGS: the oldest
+ * group in the answer is whole, never a fragment presented as the whole of
+ * it. `not_told_yet` is the other half of the question — what is standing
+ * that no message has carried, which is the same set the Inbox draws a
+ * disabled "talk about this" on. */
+export const listNoticeDigests = (limit = 20) =>
+  apiGet<{ digests: NoticeDigest[]; not_told_yet: Notice[] }>(
+    `/api/v1/notices/digests?limit=${limit}`,
+  )
+
 /**
  * PUT /notices/{id}/seen — the read receipt, and ONLY that (S25.1.3): it
  * stops no digest and silences nothing. To stop hearing about something

@@ -8,9 +8,11 @@ import {
   listNotices as apiListNotices,
   markNoticeSeen as apiMarkNoticeSeen,
   muteNotice as apiMuteNotice,
+  listNoticeDigests as apiListNoticeDigests,
   talkAboutNotice as apiTalkAboutNotice,
   NOTICES_PAGE_SIZE,
   type Notice,
+  type NoticeDigest,
 } from '../../lib/api'
 import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { formatRelativeTime } from '../activity/activityFormat'
@@ -65,6 +67,7 @@ interface InboxApi {
   markNoticeSeen: typeof apiMarkNoticeSeen
   muteNotice: typeof apiMuteNotice
   talkAboutNotice: typeof apiTalkAboutNotice
+  listNoticeDigests: typeof apiListNoticeDigests
 }
 
 const DEFAULT_API: InboxApi = {
@@ -72,6 +75,7 @@ const DEFAULT_API: InboxApi = {
   markNoticeSeen: apiMarkNoticeSeen,
   muteNotice: apiMuteNotice,
   talkAboutNotice: apiTalkAboutNotice,
+  listNoticeDigests: apiListNoticeDigests,
 }
 
 /** Never tighter: the watch beat runs hourly, so this is about seeing a
@@ -95,12 +99,15 @@ export function InboxPage({
 } = {}) {
   const [notices, setNotices] = useState<Notice[] | null>(null)
   const [unseenCount, setUnseenCount] = useState<number | null>(null)
-  // Which half of the table is on screen. Muted rows are not deleted and not
-  // in the default view: this toggle is the only place an unmute can be
-  // clicked, so a silence he cannot find is a silence he cannot lift
-  // (S25.1.2).
-  const [showMuted, setShowMuted] = useState(false)
+  // WHICH QUESTION the page is answering. `inbox` and `muted` are two halves
+  // of one table — a mute is not a deletion, and this is the only place an
+  // unmute can be clicked, so a silence he cannot find is a silence he
+  // cannot lift (S25.1.2). `digests` is a different question entirely: not
+  // "what is true" but "what was I told, and when" (S25 Q4).
+  const [view, setView] = useState<'inbox' | 'muted' | 'digests'>('inbox')
   const [mutedCount, setMutedCount] = useState<number | null>(null)
+  const [digests, setDigests] = useState<NoticeDigest[] | null>(null)
+  const [notTold, setNotTold] = useState<Notice[]>([])
   const [error, setError] = useState<string | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
@@ -119,7 +126,10 @@ export function InboxPage({
 
   const read = useCallback(async () => {
     try {
-      const listing = await api.listNotices({ limit: pageSize, muted: showMuted })
+      // The digest view still reads the listing, for the counts on the tabs
+      // beside it: a badge that only updates while you are looking at its
+      // own tab is a badge that lies on the other two.
+      const listing = await api.listNotices({ limit: pageSize, muted: view === 'muted' })
       if (!mounted.current) return
       setNotices(listing.notices)
       setUnseenCount(listing.unseen_count)
@@ -127,13 +137,19 @@ export function InboxPage({
       // it — so the tab can say what the default view is withholding even
       // while the muted view is the one not on screen.
       setMutedCount(listing.muted_count)
+      if (view === 'digests') {
+        const told = await api.listNoticeDigests()
+        if (!mounted.current) return
+        setDigests(told.digests)
+        setNotTold(told.not_told_yet)
+      }
       setError(null)
     } catch (err) {
       // The last known list stays: a failed read is a failed read, never a
       // reason to render an empty inbox as if she had noticed nothing.
       if (mounted.current) setError(reasonOf(err))
     }
-  }, [api, pageSize, showMuted])
+  }, [api, pageSize, view])
 
   useEffect(() => {
     void read()
@@ -194,32 +210,35 @@ export function InboxPage({
         description="What she noticed on her own — what each check found, what she did about it, and whether you were ever told."
       />
 
-      {/* The two halves of the table. The muted tab carries its count so it
-          is legible as "there are silenced things over here" rather than an
-          empty-looking option nobody clicks — the rows behind an invisible
-          filter are as gone as deleted ones (S25.1.2). */}
-      {mutedCount !== null && (mutedCount > 0 || showMuted) && (
-        <div className="mb-4 flex gap-1" data-testid="muted-filter">
-          {[
-            { muted: false, label: 'Inbox' },
-            { muted: true, label: `Muted (${mutedCount})` },
-          ].map(tab => (
-            <button
-              key={tab.label}
-              type="button"
-              onClick={() => setShowMuted(tab.muted)}
-              aria-pressed={showMuted === tab.muted}
-              className={`rounded-sm px-3 py-1.5 text-compact transition-colors ${
-                showMuted === tab.muted
-                  ? 'bg-surface-raised text-content-primary'
-                  : 'text-content-secondary hover:text-content-primary'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* The three questions this page answers. The muted tab carries its
+          count so it is legible as "there are silenced things over here"
+          rather than an empty-looking option nobody clicks — rows behind an
+          invisible filter are as gone as deleted ones (S25.1.2) — and it is
+          absent entirely when nothing is silenced, because a tab that can
+          only ever be empty is furniture. */}
+      <div className="mb-4 flex gap-1" data-testid="inbox-tabs">
+        {[
+          { key: 'inbox' as const, label: 'Inbox' },
+          { key: 'digests' as const, label: 'What you were told' },
+          ...(mutedCount !== null && (mutedCount > 0 || view === 'muted')
+            ? [{ key: 'muted' as const, label: `Muted (${mutedCount})` }]
+            : []),
+        ].map(tab => (
+          <button
+            key={tab.key}
+            type="button"
+            onClick={() => setView(tab.key)}
+            aria-pressed={view === tab.key}
+            className={`rounded-sm px-3 py-1.5 text-compact transition-colors ${
+              view === tab.key
+                ? 'bg-surface-raised text-content-primary'
+                : 'text-content-secondary hover:text-content-primary'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
       {/* The server's count, over every row — not a count of what this page
           happens to be holding. Left off entirely when there is nothing to
@@ -241,14 +260,27 @@ export function InboxPage({
         </div>
       )}
 
-      {notices === null ? (
+      {view === 'digests' ? (
+        <Digests
+          digests={digests}
+          notTold={notTold}
+          busyId={busyId}
+          rowErrors={rowErrors}
+          onSeen={notice => void write(notice, () => api.markNoticeSeen(notice.id))}
+          onMute={(notice, next) => void write(notice, () => api.muteNotice(notice.id, next))}
+          onTalk={notice => void talk(notice)}
+          onDraft={notice =>
+            navigate(`/skills?from_notice=${encodeURIComponent(notice.id)}`)
+          }
+        />
+      ) : notices === null ? (
         !error && (
           <div data-testid="inbox-skeleton">
             <Skeleton lines={4} />
           </div>
         )
       ) : notices.length === 0 ? (
-        showMuted ? (
+        view === 'muted' ? (
           <EmptyState
             icon={Inbox}
             title="Nothing is muted"
@@ -292,6 +324,101 @@ export function InboxPage({
     </div>
   )
 }
+
+/**
+ * "What you were told, and when" (S25 Q4).
+ *
+ * One section per TELLING — the message that carried a group of notices —
+ * newest first, with what is still waiting to be told underneath. The cards
+ * are the same `NoticeCard` the other two views render, because a card that
+ * says different things on two pages is two cards.
+ *
+ * A digest is not a stored thing: core derives the grouping from the
+ * `delivered_message_id` each notice already carries. So this page cannot
+ * show him a telling that did not happen, and cannot miss one that did.
+ */
+function Digests({
+  digests,
+  notTold,
+  busyId,
+  rowErrors,
+  onSeen,
+  onMute,
+  onTalk,
+  onDraft,
+}: {
+  digests: NoticeDigest[] | null
+  notTold: Notice[]
+  busyId: string | null
+  rowErrors: Record<string, string>
+  onSeen: (notice: Notice) => void
+  onMute: (notice: Notice, next: boolean) => void
+  onTalk: (notice: Notice) => void
+  onDraft: (notice: Notice) => void
+}) {
+  if (digests === null) {
+    return (
+      <div data-testid="digests-skeleton">
+        <Skeleton lines={4} />
+      </div>
+    )
+  }
+
+  const cards = (rows: Notice[]) =>
+    rows.map(notice => (
+      <NoticeCard
+        key={notice.id}
+        notice={notice}
+        busy={busyId === notice.id}
+        rowError={rowErrors[notice.id]}
+        onSeen={() => onSeen(notice)}
+        onMute={next => onMute(notice, next)}
+        onTalk={() => onTalk(notice)}
+        onDraft={() => onDraft(notice)}
+      />
+    ))
+
+  return (
+    <div className="space-y-8" data-testid="digest-list">
+      {digests.length === 0 && notTold.length === 0 && (
+        <EmptyState
+          icon={Inbox}
+          title="Nothing has been carried to you yet"
+          description="When the digest or a push tells you about something, it shows up here as what you were told and when."
+        />
+      )}
+
+      {digests.map(group => (
+        <section key={group.message_id} data-testid={`digest-${group.message_id}`}>
+          <h2 className="mb-2 text-compact text-content-secondary">
+            <span title={formatAbsolute(group.delivered_at)}>
+              Told {formatRelativeTime(group.delivered_at)}
+            </span>
+            <span className="text-content-tertiary">
+              {' '}
+              — {group.notices.length} {group.notices.length === 1 ? 'thing' : 'things'}
+            </span>
+          </h2>
+          <div className="space-y-3">{cards(group.notices)}</div>
+        </section>
+      ))}
+
+      {notTold.length > 0 && (
+        <section data-testid="not-told-yet">
+          {/* The same fact a disabled "talk about this" states on the card:
+              no message has carried these, so there is no telling to file
+              them under and no room to open off one. */}
+          <h2 className="mb-2 text-compact text-content-secondary">
+            Not told yet
+            <span className="text-content-tertiary"> — still standing, nothing has carried it</span>
+          </h2>
+          <div className="space-y-3">{cards(notTold)}</div>
+        </section>
+      )}
+    </div>
+  )
+}
+
 
 function NoticeCard({
   notice,

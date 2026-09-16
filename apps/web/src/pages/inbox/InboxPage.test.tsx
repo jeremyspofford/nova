@@ -3,7 +3,7 @@ import { MemoryRouter, useLocation } from 'react-router-dom'
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { InboxPage } from './InboxPage'
 import { noticeFixture } from './noticeFixture'
-import type { Notice, NoticeListing } from '../../lib/api'
+import type { Notice, NoticeDigest, NoticeListing } from '../../lib/api'
 
 /** The listing the page reads, with the server's own unseen count. */
 function listing(notices: Notice[], unseen?: number, muted = 0): NoticeListing {
@@ -22,6 +22,12 @@ function fakeApi(page: () => NoticeListing = () => listing([])) {
   return {
     listNotices: vi.fn(async (_opts: { limit?: number; muted?: boolean } = {}) => page()),
     markNoticeSeen: vi.fn(async () => {}),
+    listNoticeDigests: vi.fn(
+      async (): Promise<{ digests: NoticeDigest[]; not_told_yet: Notice[] }> => ({
+        digests: [],
+        not_told_yet: [],
+      }),
+    ),
     talkAboutNotice: vi.fn(async () => ({
       conversation_id: 'room-1',
       parent_message_id: 'm1',
@@ -333,7 +339,11 @@ describe('InboxPage — the muted half of the table (S25.1.2)', () => {
     await screen.findByTestId('notice-row-n1')
     // Nothing is muted, so there is no half to switch to and no tab to
     // explain — the page does not grow controls for rows that do not exist.
-    expect(screen.queryByTestId('muted-filter')).toBeNull()
+    // The tab bar is always there — Inbox and "What you were told" are
+    // always meaningful — but the MUTED tab is not, because a tab that can
+    // only ever be empty is furniture.
+    expect(screen.getByTestId('inbox-tabs')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /^Muted/ })).toBeNull()
     unmount()
 
     const api = fakeApi(() => listing([noticeFixture({ id: 'n1' })], 1, 3))
@@ -452,5 +462,71 @@ describe('InboxPage — talk about this (S25.2.4)', () => {
 
     // A silence he did not ask for must not look like one he did.
     expect(within(row).getByTestId('silence-line').textContent).toContain('Nova silenced this')
+  })
+})
+
+describe('InboxPage — what you were told, and when (S25 Q4)', () => {
+  const told = (over: Partial<Notice> = {}) =>
+    noticeFixture({ state: 'delivered', delivered_message_id: 'm7', ...over })
+
+  function withDigests(groups: unknown[], notTold: Notice[] = []) {
+    const api = fakeApi(() => listing([]))
+    api.listNoticeDigests = vi.fn(async () => ({
+      digests: groups as NoticeDigest[],
+      not_told_yet: notTold,
+    }))
+    return api
+  }
+
+  it('groups the cards under the telling that carried them', async () => {
+    const api = withDigests([
+      {
+        message_id: 'm7',
+        delivered_at: new Date(Date.now() - 3 * 60_000).toISOString(),
+        notices: [told({ id: 'n1', title: 'the disk is full' }), told({ id: 'n2' })],
+      },
+    ])
+    renderPage(api)
+    fireEvent.click(await screen.findByRole('button', { name: 'What you were told' }))
+
+    const group = await screen.findByTestId('digest-m7')
+    // The COUNT is the point of a telling: "she told you two things", not
+    // two cards that happen to be adjacent.
+    expect(group.textContent).toContain('2 things')
+    expect(within(group).getByText('the disk is full')).toBeTruthy()
+    // The same card as every other view — a card that says different things
+    // on two pages is two cards.
+    expect(within(group).getAllByTestId(/^notice-row-/)).toHaveLength(2)
+  })
+
+  it('files what nothing has carried under "not told yet", not under the newest telling', async () => {
+    const api = withDigests(
+      [{ message_id: 'm7', delivered_at: new Date().toISOString(), notices: [told({ id: 'n1' })] }],
+      [noticeFixture({ id: 'n9', title: 'nobody has been told this' })],
+    )
+    renderPage(api)
+    fireEvent.click(await screen.findByRole('button', { name: 'What you were told' }))
+
+    const waiting = await screen.findByTestId('not-told-yet')
+    expect(within(waiting).getByText('nobody has been told this')).toBeTruthy()
+    expect(within(screen.getByTestId('digest-m7')).queryByText('nobody has been told this')).toBeNull()
+  })
+
+  it('says nothing has been carried rather than showing an empty page', async () => {
+    renderPage(withDigests([]))
+    fireEvent.click(await screen.findByRole('button', { name: 'What you were told' }))
+
+    await waitFor(() => expect(screen.getByText(/nothing has been carried to you yet/i)).toBeTruthy())
+  })
+
+  it('reads the tellings from the server rather than regrouping the page it holds', async () => {
+    // A digest is derived from `delivered_message_id` on the server. Grouping
+    // client-side would quietly invent tellings out of whatever page of rows
+    // happened to be loaded.
+    const api = withDigests([])
+    renderPage(api)
+    fireEvent.click(await screen.findByRole('button', { name: 'What you were told' }))
+
+    await waitFor(() => expect(api.listNoticeDigests).toHaveBeenCalled())
   })
 })
