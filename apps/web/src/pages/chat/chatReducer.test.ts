@@ -1304,3 +1304,57 @@ describe('chatReducer — frames are keyed to their conversation', () => {
     expect(rows[rows.length - 1].text).toContain('hello')
   })
 })
+
+describe('chatReducer — the context gauge survives a reload', () => {
+  const fetched = (id: string, role: string, prompt_tokens?: number) => ({
+    id, role, content: 'x', ...(prompt_tokens === undefined ? {} : { prompt_tokens }),
+  })
+
+  it('adopts the NEWEST answered turn\'s prompt size', () => {
+    // Only the last turn's figure describes the context as it now stands;
+    // an older, smaller one would under-report it.
+    const state = chatReducer(emptyChat(), {
+      type: 'reconcile',
+      conversationId: 'c1',
+      messages: [fetched('a', 'assistant', 4000), fetched('b', 'user'), fetched('c', 'assistant', 9000)],
+    })
+    expect(state.promptTokens).toBe(9000)
+  })
+
+  it('reports null when no turn stated one, rather than zero', () => {
+    // A null is not an empty context — it is a turn nobody measured.
+    const state = chatReducer(emptyChat(), {
+      type: 'reconcile',
+      conversationId: 'c1',
+      messages: [fetched('a', 'user'), fetched('b', 'assistant')],
+    })
+    expect(state.promptTokens).toBeNull()
+  })
+
+  it('a live usage frame replaces it', () => {
+    let state = chatReducer(emptyChat(), {
+      type: 'reconcile',
+      conversationId: 'c1',
+      messages: [fetched('a', 'assistant', 4000)],
+    })
+    state = chatReducer(state, { type: 'send', userId: 'u', assistantId: 'a2', text: 'hi' })
+    state = chatReducer(state, {
+      type: 'event',
+      event: {
+        type: 'usage',
+        usage: {
+          rounds: 1,
+          priced_rounds: 1,
+          cost_usd: 0,
+          cost_basis: [],
+          prompt_tokens: 12_000,
+          completion_tokens: 40,
+          unmetered_rounds: 0,
+          local_rounds: 1,
+          unrecorded_rounds: 0,
+        },
+      },
+    })
+    expect(state.promptTokens).toBe(12_000)
+  })
+})

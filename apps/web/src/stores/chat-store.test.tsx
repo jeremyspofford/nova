@@ -262,7 +262,10 @@ describe('ChatProvider — the identity boundary (sign-out, or someone else sign
     // The WHOLE state, enumerated on purpose: nothing of the previous person's
     // turn may survive a change of who is signed in. `turnId` joined the shape
     // with Stop (S15), and a stale one here would aim the button at a stranger's
-    // turn — so it is pinned to null like the rest.
+    // turn — so it is pinned to null like the rest. `promptTokens` joined it
+    // with the context gauge (2026-09-16) for the same reason: a count left
+    // over from someone else's turn would draw their context as this
+    // person's.
     expect(probe.store!.state).toEqual({
       rows: [],
       streaming: false,
@@ -271,6 +274,7 @@ describe('ChatProvider — the identity boundary (sign-out, or someone else sign
       pendingId: null,
       turnId: null,
       queued: [],
+      promptTokens: null,
     })
 
     // Whatever was already in flight when the abort fired must not land

@@ -312,6 +312,12 @@ MESSAGE_KEYS = {
     # row — and `delegations` — the agents Nova handed work to in that turn.
     "agent",
     "delegations",
+    # 2026-09-16: `prompt_tokens` — the LAST round's prompt size, so the
+    # context gauge shows the same figure after a reload that the live usage
+    # frame showed. The last round and not the sum: every round re-sends the
+    # whole prompt, so summing them reports a three-round turn as three times
+    # its own context. Derived off the span, like every key above it.
+    "prompt_tokens",
 }
 
 

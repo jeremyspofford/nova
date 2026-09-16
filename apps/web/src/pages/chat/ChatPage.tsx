@@ -588,7 +588,12 @@ export function ChatPage({
           />
           {/* The control row lives with the input, not the header: the model
               selector (switch inline) and the Clear control. */}
-          <ChatControls currentModel={model} onModelChanged={setModel} clearChat={clearChat} />
+          <ChatControls
+            currentModel={model}
+            onModelChanged={setModel}
+            clearChat={clearChat}
+            promptTokens={state.promptTokens}
+          />
         </div>
       </div>
     </div>

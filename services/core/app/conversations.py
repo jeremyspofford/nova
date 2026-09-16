@@ -344,6 +344,16 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
         "  (SELECT SUM((s.meta->>'cost_usd')::numeric) FROM turn_spans s "
         "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' "
         "    AND s.meta->>'cost_usd' IS NOT NULL) AS cost_usd, "
+        # The LAST round's prompt size (2026-09-16) — what the context gauge
+        # fills against. The last, not the sum: each round re-sends the whole
+        # prompt, so summing them would report a three-round turn as three
+        # times its own context. Derived from the span the same way
+        # `served_by` and `cost_usd` are, so a reload shows the same figure
+        # the live usage frame did.
+        "  (SELECT (s.meta->>'prompt_tokens')::int FROM turn_spans s "
+        "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' "
+        "    AND s.meta ? 'prompt_tokens' "
+        "    ORDER BY s.started_at DESC LIMIT 1) AS prompt_tokens, "
         "  (SELECT s.meta->>'route_reason' FROM turn_spans s "
         "    WHERE s.turn_id = m.turn_id AND s.kind = 'llm_call' AND s.meta ? 'route_reason' "
         "    ORDER BY s.started_at DESC LIMIT 1) AS route_reason, "
@@ -375,6 +385,9 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
             # S10-2: the gateway's stated reason when this turn's answer
             # came from a fallback link; null when link 1 served.
             "route_reason": row["route_reason"],
+            # The last round's prompt size, for the context gauge. None when
+            # no round stated one — a null is not a zero-token prompt.
+            "prompt_tokens": row["prompt_tokens"],
             "agent": row["agent"],
             "delegations": [_delegation_json(span) for span in row["delegate_spans"]],
         }

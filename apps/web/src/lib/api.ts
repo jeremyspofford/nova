@@ -277,6 +277,11 @@ export interface StoredMessage {
    * rows older than the turn link. The chat bubble's "Reminder" /
    * "Scheduled" label reads this and nothing else. */
   turn_kind?: string | null
+  /** The LAST round's prompt size, off that round's llm_call span
+   *  (2026-09-16) — what the context gauge fills against, so a reload shows
+   *  the same figure the live usage frame did. The last round, not the sum:
+   *  each round re-sends the whole prompt. null when no round stated one. */
+  prompt_tokens?: number | null
   /** The turn's cost in USD summed from its llm_call spans (S10) — the
    * gateway's ledger figures, never a stored claim. null when no round was
    * priced (local, unmetered, or unpriced). */
