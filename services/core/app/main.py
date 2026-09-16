@@ -29,6 +29,7 @@ from app import (
     notices_api,
     proxies,
     queued,
+    resources_api,
     scheduler,
     settings_store,
     skills_api,
@@ -131,6 +132,7 @@ app.include_router(devices_ws.router)
 app.include_router(evals_api.router)
 app.include_router(proxies.router)
 app.include_router(models_catalog.router)
+app.include_router(resources_api.router)
 app.include_router(spend_api.router)
 app.include_router(workspace_api.router)
 app.include_router(timers_api.router)

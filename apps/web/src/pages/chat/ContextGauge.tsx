@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { getCatalog as apiGetCatalog } from '../../lib/api'
+import { getCatalog as apiGetCatalog, getSystemResources as apiGetSystemResources } from '../../lib/api'
+import { ContextPanel } from './ContextPanel'
 
 /**
  * How full the context is — measured, never estimated.
@@ -27,6 +28,8 @@ export type ContextGaugeProps = {
   model: string
   /** DI seam — production uses the real catalog. */
   getCatalog?: typeof apiGetCatalog
+  /** DI seam for the panel this gauge opens. */
+  getResources?: typeof apiGetSystemResources
 }
 
 const SIZE = 14
@@ -65,8 +68,14 @@ export function windowFor(rows: WindowRow[], model: string): number | null {
   return typeof stated === 'number' && stated > 0 ? stated : null
 }
 
-export function ContextGauge({ promptTokens, model, getCatalog = apiGetCatalog }: ContextGaugeProps) {
+export function ContextGauge({
+  promptTokens,
+  model,
+  getCatalog = apiGetCatalog,
+  getResources,
+}: ContextGaugeProps) {
   const [window_, setWindow] = useState<number | null>(null)
+  const [open, setOpen] = useState(false)
 
   // Looked up ONCE per model, lazily, and never allowed to fail loudly: a
   // catalog read probes every installed model, so the chat page must not
@@ -97,11 +106,27 @@ export function ContextGauge({ promptTokens, model, getCatalog = apiGetCatalog }
       : `the last turn sent ${promptTokens.toLocaleString()} of this model's ${window_!.toLocaleString()}-token context window`
 
   return (
-    <span
-      data-testid="context-gauge"
-      title={title}
-      className="inline-flex items-center gap-1.5 text-micro text-content-tertiary font-mono"
-    >
+    <span className="relative inline-flex">
+      {open && (
+        <ContextPanel
+          promptTokens={promptTokens}
+          contextWindow={window_}
+          onClose={() => setOpen(false)}
+          {...(getResources ? { getResources } : {})}
+        />
+      )}
+      {/* A BUTTON, because it opens something. The gauge was a label until
+          the owner asked it to open the fuller picture (2026-09-16), and a
+          label that reacts to clicks is a control nobody can find. */}
+      <button
+        type="button"
+        data-testid="context-gauge"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        onClick={() => setOpen(o => !o)}
+        title={title}
+        className="inline-flex items-center gap-1.5 rounded-sm px-1 py-0.5 text-micro text-content-tertiary hover:text-content-primary hover:bg-surface-card transition-colors duration-fast font-mono"
+      >
       {fraction !== null && (
         <svg width={SIZE} height={SIZE} viewBox={`0 0 ${SIZE} ${SIZE}`} className="shrink-0" aria-hidden="true">
           <circle
@@ -127,7 +152,8 @@ export function ContextGauge({ promptTokens, model, getCatalog = apiGetCatalog }
           />
         </svg>
       )}
-      <span data-testid="context-gauge-count">{formatTokens(promptTokens)}</span>
+        <span data-testid="context-gauge-count">{formatTokens(promptTokens)}</span>
+      </button>
     </span>
   )
 }

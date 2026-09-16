@@ -333,6 +333,50 @@ export const getConversationState = (conversationId: string) =>
  *  the second. Counted on the server, never stored. */
 export type ThreadCounts = Record<string, number>
 
+/**
+ * What the context panel shows (2026-09-16). Every half degrades on its own
+ * — the card, the machine and the throughput come from different sources
+ * and fail for different reasons — so each carries a `reason` and a null
+ * figure rather than a zero.
+ *
+ * There is no network throughput here on purpose: nobody measures it, and a
+ * number nobody measured looks exactly as confident as one somebody did.
+ */
+export interface SystemResources {
+  card: {
+    free_gb?: number | null
+    total_gb?: number | null
+    used_gb?: number | null
+    /** Shader busy-ness. Free memory and utilisation fail in OPPOSITE
+     *  directions — 16 GB free at 99% busy is a card that cannot answer. */
+    utilisation_pct?: number | null
+    /** The card's used figure minus what ollama holds: everything on this
+     *  machine Nova cannot enumerate. The actionable half. */
+    non_ollama_gb?: number | null
+    resident?: { model: string; vram_gb: number }[]
+    reason?: string | null
+  }
+  machine: {
+    memory?: { total_mb: number | null; available_mb: number | null; reason: string | null }
+    cpu?: { cores: number | null; load_1m: number | null; reason: string | null }
+    disk?: { free_gb: number | null; total_gb: number | null; reason: string | null }
+    reason?: string | null
+  }
+  /** null when this model has no measured history here — never a zero. */
+  throughput: {
+    model: string
+    recent_tok_per_s: number | null
+    baseline_tok_per_s: number | null
+    recent_rounds: number
+    baseline_rounds: number
+    ratio: number | null
+  } | null
+  model: string | null
+}
+
+export const getSystemResources = () =>
+  apiGet<SystemResources>('/api/v1/system/resources')
+
 export async function getMessages(
   conversationId: string,
 ): Promise<{ messages: StoredMessage[]; threads: ThreadCounts }> {
