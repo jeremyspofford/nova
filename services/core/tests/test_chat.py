@@ -117,7 +117,12 @@ async def test_happy_path_frames_persistence_and_trace(owner_client, pool, mount
 
     spans = await _spans(pool, turn["id"])
     assert {"memory_recall", "llm_call", "memory_ingest"} <= set(spans)
-    assert spans["memory_recall"]["meta"] == {"k": 5, "hits": 1}
+    # `recalled` joined this on 2026-09-16: WHICH notes came back, not just
+    # how many. The count alone could not answer "where did she get that",
+    # and the question is asked exactly when something has already gone
+    # wrong — a walk lost an afternoon to it. The fake's one hit is titled
+    # "Kitchen" and has no path, so that is what identifies it here.
+    assert spans["memory_recall"]["meta"] == {"k": 5, "hits": 1, "recalled": ["Kitchen"]}
     assert spans["llm_call"]["meta"]["model"] == "qwen3:8b"
     assert spans["llm_call"]["meta"]["prompt_tokens"] == 11
     assert spans["llm_call"]["meta"]["completion_tokens"] == 2
