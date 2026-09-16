@@ -299,6 +299,21 @@ export interface ThemePreset {
   /** A theme that IS light or IS dark: picking it brings its mode along.
    *  Absent = renders in whichever mode the operator has. */
   preferredMode?: 'light' | 'dark'
+  /**
+   * FLAT: no atmosphere behind the app at all (2026-09-16).
+   *
+   * Every theme here paints two or three large radial glows behind the
+   * page, tinted from the accent — it is most of what gives the Nova set
+   * its depth. Some interfaces are deliberately not like that: they are one
+   * flat near-black with colour used only where something means something,
+   * and a glow washing the whole screen in the accent's hue is the single
+   * thing that stops a tribute reading like its source.
+   *
+   * Flat publishes the ground colour as the glow colour, so the gradients
+   * still exist and paint ground-on-ground. One place decides it, and
+   * `index.css` never learns a theme's name.
+   */
+  atmosphere?: 'flat'
   group: 'nova' | 'community' | 'custom'
 }
 
@@ -335,7 +350,7 @@ export const themePresets: Record<string, ThemePreset> = {
   // preferredMode: that interface is equally itself in light and dark, so
   // this one follows whichever mode the operator is in. No secondary: the
   // clay tints everything, which is what keeps it faithful.
-  claude:         { label: 'Claude',           description: 'Anthropic clay on warm ivory and charcoal.', accent: 'claude-clay',     neutral: 'claude',       group: 'community' },
+  claude:         { label: 'Claude',           description: 'Anthropic clay on warm ivory and charcoal. No atmosphere — flat, the way its own app is.', accent: 'claude-clay',     neutral: 'claude',       atmosphere: 'flat', group: 'community' },
   nord:           { label: 'Nord',             description: 'Arctic blues on a cool grey.',      accent: 'nord-frost',      neutral: 'nord',         preferredMode: 'dark',  group: 'community' },
   'ctp-mocha':    { label: 'Catppuccin Mocha', description: 'Soft pastels on mocha.',           accent: 'ctp-blue',        neutral: 'ctp-mocha',    preferredMode: 'dark',  group: 'community' },
   'ctp-latte':    { label: 'Catppuccin Latte', description: 'The light Catppuccin.',            accent: 'ctp-latte-blue',  neutral: 'ctp-latte',    preferredMode: 'light', group: 'community' },

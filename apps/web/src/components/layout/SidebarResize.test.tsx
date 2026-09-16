@@ -89,9 +89,23 @@ describe('clampSidebarWidth', () => {
 
 describe('the sidebar edge handle', () => {
   it('renders on the panel and says which way it goes', () => {
+    // "Hide"/"Show" since 2026-09-16, matching the app the owner pointed
+    // at — and more honest now that collapsed means GONE rather than an
+    // icon rail: "collapse" describes a panel that shrinks.
     renderSidebar(false)
-    expect(handle().getAttribute('aria-label')).toMatch(/collapse/i)
+    expect(handle().getAttribute('aria-label')).toBe('Hide sidebar')
     expect(handle().getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('says both of the things it does, and the shortcut', () => {
+    // A 2px line is not a guessable control, and it does TWO things: click
+    // hides, drag resizes. Its own element rather than `title`, so it can
+    // say two lines and appear without the browser's delay.
+    renderSidebar(false)
+    const tip = screen.getByTestId('sidebar-handle-tip')
+    expect(tip.textContent).toContain('Hide sidebar')
+    expect(tip.textContent).toContain('Ctrl+B')
+    expect(tip.textContent).toContain('Drag to resize')
   })
 
   it('a click with no movement collapses', () => {
@@ -164,8 +178,12 @@ describe('the sidebar edge handle', () => {
 
   it('a collapsed panel opens from the handle rather than staying stuck', () => {
     const { onCollapsedChange } = renderSidebar(true)
-    expect(aside().style.width).toBe(`${SIDEBAR.COLLAPSED}px`)
-    expect(handle().getAttribute('aria-label')).toMatch(/expand/i)
+    // COLLAPSED IS ZERO. It was 60px of icon rail, which is a third state —
+    // neither the list nor the space back — and still charges for
+    // navigation nobody is using.
+    expect(SIDEBAR.COLLAPSED).toBe(0)
+    expect(aside().style.width).toBe('0px')
+    expect(handle().getAttribute('aria-label')).toBe('Show sidebar')
 
     fireEvent.keyDown(handle(), { key: 'ArrowRight' })
     expect(onCollapsedChange).toHaveBeenCalledWith(false)

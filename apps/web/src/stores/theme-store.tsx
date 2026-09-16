@@ -208,6 +208,10 @@ export function themeVariables(
   customFont = '',
 ): string {
   const { accent, neutral, secondary, card } = resolvePalette(preset, customAccent)
+  // A theme that declares itself flat gets no atmosphere — see ThemePreset.
+  // `themePresets[preset]` rather than the resolved palette because this is a
+  // property of the THEME, not of the colours it happens to use.
+  const flat = themePresets[normalizePreset(preset) ?? DEFAULT_PRESET]?.atmosphere === 'flat'
   // dark-mode tertiary text: a step between 400 and 500 (weighted toward
   // 400), derived so every family gets one — 500 was 3.5:1 on a card, the
   // midpoint 4.4:1 on an input; 400 is the secondary tier
@@ -244,10 +248,15 @@ export function themeVariables(
     // atmosphere: the two families' deep ends tint the dark ground, their
     // palest step tints the light one (the 200 step darkened paper enough to
     // take stone's secondary grey under 4.5:1 — color-palettes.test pins it)
-    `--glow-1:${accent[950]}`,
-    `--glow-2:${secondary[950]}`,
-    `--glow-1-light:${accent[100]}`,
-    `--glow-2-light:${secondary[100]}`,
+    //
+    // A FLAT theme publishes the GROUND as its glow colour, so index.css's
+    // gradients still run and paint ground on ground. The alternative —
+    // teaching index.css which themes are flat — puts a theme's name in the
+    // stylesheet, which is the thing this whole file exists to avoid.
+    `--glow-1:${flat ? neutral[950] : accent[950]}`,
+    `--glow-2:${flat ? neutral[950] : secondary[950]}`,
+    `--glow-1-light:${flat ? neutral[50] : accent[100]}`,
+    `--glow-2-light:${flat ? neutral[50] : secondary[100]}`,
     `--font-scale:${fontScale}`,
     // tailwind.config.js reads this for `font-sans`, so it reaches every
     // element that has not asked for the mono face by name.
