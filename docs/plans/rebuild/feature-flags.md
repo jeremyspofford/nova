@@ -1,8 +1,27 @@
 # Feature flags — and the three controls that are not built
 
 Author: Fable, 2026-09-16. The three features below were each declined
-during the S24 UI work for a stated reason. This spec says what a flag would
-be and what each feature costs.
+during the S24 UI work for a stated reason. This document says what each
+would cost.
+
+> **SUPERSEDED IN PART, and the how it happened matters.** This was written
+> without knowing that `docs/plans/rebuild/slice-27-feature-flags.md`
+> already existed — 691 lines, from a design session with Jeremy the same
+> day, on branch `slice/s27` (commit `f726ff54`, unpushed). S27 IS the flag
+> design: features declared in `services/core/app/features.py` with
+> `alpha` / `beta` / `released` stages, an instance channel, an Advanced
+> settings tab, kills and a changelog.
+>
+> So **the "What a flag is here" section below is withdrawn.** Two
+> mechanisms for one job is precisely the pattern S27 itself cites as its
+> reason for existing ("two lanes built the same workspace delete
+> independently"), and this document managed to reproduce it within hours
+> of that being written down. The lesson is the branch: a spec nobody can
+> see is a spec somebody will write again.
+>
+> What survives is what S27 does not cover: the COST of these three
+> features, and the ruling on permission mode. Read it as three feature
+> briefs, not as a flag design.
 
 **Decided since (Jeremy, 2026-09-16): permission mode stays absent.** See
 item 3 — reading (a). Nothing to build, and the composer row is finished
@@ -26,7 +45,16 @@ class of defect. So: build the capability, or do not draw the control. A
 flag is how a half-built capability stays invisible until it is whole — it
 is **not** a way to ship the control first.
 
-## What a flag is here
+## ~~What a flag is here~~ — WITHDRAWN, see S27
+
+The design that stood here proposed derived capability flags and a
+`GET /api/v1/capabilities` route. S27 answers the same question differently
+and with Jeremy in the room. It is kept below only so the reasoning is not
+lost, and it is NOT to be built.
+
+<details>
+<summary>The withdrawn design</summary>
+
 
 **Derived from the live system wherever the answer is derivable, and stored
 only where it is a genuine preference.** That distinction is the whole
@@ -60,6 +88,8 @@ greyed-out control is still a claim that the feature exists.
 **What refuses when this is wrong:** a test that walks every capability key
 the UI can render and asserts each names a real route or setting. A key that
 nothing serves fails it, so a flag cannot outlive the feature it gates.
+
+</details>
 
 ---
 
