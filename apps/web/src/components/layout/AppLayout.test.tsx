@@ -76,23 +76,24 @@ function renderShell(unseen = 0) {
   )
 }
 
-/** The phone's way out of chat. Was a bottom tab bar until 2026-09-15; now
- *  a left-edge handle, because the bar was pinned to an edge this app could
- *  not reliably control on iOS. */
-function edgeHandle(): HTMLElement | null {
-  return document.querySelector('[data-testid="edge-handle"]')
+/** The phone's way out of chat. A bottom tab bar until 2026-09-15 (pinned to
+ *  an edge this app cannot control on iOS), then a draggable left-edge grip
+ *  for a day, and since 2026-09-16 a menu button in the top-left — the
+ *  owner's call: "make it look and feel more like Claude". */
+function menuButton(): HTMLElement | null {
+  return document.querySelector('[data-testid="menu-button"]')
 }
 
 beforeEach(() => localStorage.clear())
 afterEach(() => vi.unstubAllGlobals())
 
 describe('AppLayout — which nav renders', () => {
-  it('renders the edge handle on a phone', async () => {
+  it('renders the menu button on a phone', async () => {
     setViewport('mobile')
     renderShell()
     await screen.findByText('page')
 
-    expect(edgeHandle(), 'a phone must get a way out of chat').not.toBeNull()
+    expect(menuButton(), 'a phone must get a way out of chat').not.toBeNull()
   })
 
   it('does not render the phone nav on a desktop', async () => {
@@ -103,84 +104,45 @@ describe('AppLayout — which nav renders', () => {
     renderShell()
     await screen.findByText('page')
 
-    expect(edgeHandle(), 'a desktop has the sidebar and must not render this').toBeNull()
+    expect(menuButton(), 'a desktop has the sidebar and must not render this').toBeNull()
   })
 
-  it('the handle opens the drawer, which is how Settings is reached', async () => {
+  it('the menu button opens the drawer, which is how Settings is reached', async () => {
     // The owner could not find Settings on his phone, and later could not
-    // get OUT of the drawer. Settings lives in a labelled nav section, which
-    // the drawer carries — so the handle is the whole route to it.
+    // get OUT of the drawer. Since 2026-09-16 Settings is not a nav row at
+    // all — it is under his NAME, in the account menu at the foot of this
+    // drawer — so the button is the whole route to it and the account menu
+    // must render here or the page is unreachable on a phone.
     setViewport('mobile')
     renderShell()
     await screen.findByText('page')
 
-    fireEvent.click(edgeHandle()!)
+    fireEvent.click(menuButton()!)
 
     const drawer = await screen.findByTestId('mobile-drawer')
-    // Scoped to the drawer: the desktop sidebar renders its own Settings
-    // link into the same DOM, so an unscoped query matches both.
-    expect(within(drawer).getByRole('link', { name: /settings/i })).toBeTruthy()
+    // His name, at the foot — the only home Settings, Usage and "what she
+    // has done" have now.
+    const account = within(drawer).getByTestId('mobile-account')
+    fireEvent.click(within(account).getByTestId('account-button'))
+    // `menuitem`, not `link`: the explicit role on the anchor overrides the
+    // implicit one, which is the whole point of a menu.
+    const settings = within(account).getByRole('menuitem', { name: /settings/i })
+    expect(settings.getAttribute('href')).toBe('/settings')
+    // And the other two that left the nav on the same day, so a phone can
+    // still reach them at all.
+    expect(within(account).getByRole('menuitem', { name: /usage/i })).toBeTruthy()
+    expect(within(account).getByRole('menuitem', { name: /what she has done/i })).toBeTruthy()
     // And a way back out, which the drawer lacked visually when its header
     // was drawn under the status bar.
     expect(within(drawer).getByText('Menu')).toBeTruthy()
   })
 
-  it('opens on a rightward swipe from the edge', async () => {
-    setViewport('mobile')
-    renderShell()
-    await screen.findByText('page')
-    const handle = edgeHandle()!
-
-    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
-    fireEvent.touchMove(handle, { touches: [{ clientX: 60, clientY: 404 }] })
-
-    expect(await screen.findByTestId('mobile-drawer')).toBeTruthy()
-  })
-
-  it('does not open when the touch is really a scroll', async () => {
-    // A drag that travels further down than across is the page scrolling,
-    // not the menu opening. The panel mounts during ANY drag so the gesture
-    // has something to pull, so what is asserted is where it SETTLES on
-    // release — mid-gesture presence proves nothing.
-    setViewport('mobile')
-    renderShell()
-    await screen.findByText('page')
-    const handle = edgeHandle()!
-
-    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
-    fireEvent.touchMove(handle, { touches: [{ clientX: 30, clientY: 300 }] })
-    fireEvent.touchEnd(handle)
-
-    await waitFor(() => expect(screen.queryByTestId('mobile-drawer')).toBeNull())
-  })
-
-  it('a short pull snaps back rather than opening', async () => {
-    // Released before half the panel's width, it returns — otherwise a
-    // twitch near the edge leaves the menu hanging half-open.
-    setViewport('mobile')
-    renderShell()
-    await screen.findByText('page')
-    const handle = edgeHandle()!
-
-    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
-    fireEvent.touchMove(handle, { touches: [{ clientX: 40, clientY: 402 }] })
-    fireEvent.touchEnd(handle)
-
-    await waitFor(() => expect(screen.queryByTestId('mobile-drawer')).toBeNull())
-  })
-
-  it('a long pull opens it', async () => {
-    setViewport('mobile')
-    renderShell()
-    await screen.findByText('page')
-    const handle = edgeHandle()!
-
-    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
-    fireEvent.touchMove(handle, { touches: [{ clientX: 260, clientY: 404 }] })
-    fireEvent.touchEnd(handle)
-
-    expect(await screen.findByTestId('mobile-drawer')).toBeTruthy()
-  })
+  // OPENING BY DRAG IS GONE (2026-09-16). Four tests lived here — a
+  // rightward swipe opened the panel, a mostly-vertical one was read as a
+  // scroll, a short pull snapped back and a long one settled open. All four
+  // drove the grip, and the grip was replaced by a button. The panel still
+  // drags CLOSED (its own touch handlers, and the test below), which is the
+  // half a person actually reaches for once the menu is open.
 
   it('carries a route back to Chat, which is the whole point of a menu', async () => {
     // THE 2026-09-15 TRAP. The drawer used to render `moreItems` — the
@@ -198,7 +160,7 @@ describe('AppLayout — which nav renders', () => {
     renderShell()
     await screen.findByText('page')
 
-    fireEvent.click(edgeHandle()!)
+    fireEvent.click(menuButton()!)
     const drawer = await screen.findByTestId('mobile-drawer')
 
     expect(
@@ -213,7 +175,7 @@ describe('AppLayout — which nav renders', () => {
     renderShell()
     await screen.findByText('page')
 
-    fireEvent.click(edgeHandle()!)
+    fireEvent.click(menuButton()!)
     const drawer = await screen.findByTestId('mobile-drawer')
     const hrefs = within(drawer)
       .getAllByRole('link')
@@ -224,134 +186,58 @@ describe('AppLayout — which nav renders', () => {
     }
   })
 
-  it('leaves the grip on the panel edge, as the way to push it shut', async () => {
-    // The owner's call (2026-09-15): "leave that small handle there on the
-    // menu bar so it's showing the user that you can drag it close." It used
-    // to fade to opacity-0 when open, so the only way out was the X or the
-    // backdrop — neither of which says "drag me".
+  it('hides the button while the panel is open, since the panel has its own way out', async () => {
+    // The grip that used to ride the panel's edge was deliberately kept
+    // visible when open — it was the thing you pushed back. A corner button
+    // is not: leaving it on top of an open panel is two controls for one
+    // state, and the panel already carries an X and a backdrop.
     setViewport('mobile')
     renderShell()
     await screen.findByText('page')
 
-    fireEvent.click(edgeHandle()!)
+    fireEvent.click(menuButton()!)
     await screen.findByTestId('mobile-drawer')
 
-    const grip = edgeHandle()
-    expect(grip, 'the grip must survive opening').not.toBeNull()
-    expect(grip!.className).not.toContain('pointer-events-none')
-    expect(grip!.getAttribute('aria-label')).toMatch(/close/i)
+    expect(menuButton()!.className).toContain('pointer-events-none')
   })
 
-  it('a tap on the open grip closes it', async () => {
+  it('sits inside the top safe inset, not under the status bar', async () => {
+    // index.html sets viewport-fit=cover, so y=0 is behind the clock on the
+    // owner's phone. A menu button drawn there is one he cannot press.
     setViewport('mobile')
     renderShell()
     await screen.findByText('page')
 
-    fireEvent.click(edgeHandle()!)
-    await screen.findByTestId('mobile-drawer')
-    fireEvent.click(edgeHandle()!)
+    expect(menuButton()!.style.top).toContain('var(--nova-safe-top')
+  })
+
+  it('drags the open panel shut', async () => {
+    // The half of the gesture that survived the grip: once the menu is open,
+    // pushing it back with a thumb is what a person reaches for.
+    setViewport('mobile')
+    renderShell()
+    await screen.findByText('page')
+    fireEvent.click(menuButton()!)
+    const panel = await screen.findByTestId('mobile-drawer-panel')
+
+    fireEvent.touchStart(panel, { touches: [{ clientX: 280, clientY: 400 }] })
+    fireEvent.touchMove(panel, { touches: [{ clientX: 40, clientY: 404 }] })
+    fireEvent.touchEnd(panel)
 
     await waitFor(() => expect(screen.queryByTestId('mobile-drawer')).toBeNull())
   })
 
-  it('a drag does not have its own click undo it', async () => {
-    // A touch sequence ends with a synthetic click. With the grip toggling
-    // rather than only opening, an unguarded click would close the panel the
-    // instant a pull-open settled.
-    setViewport('mobile')
-    renderShell()
-    await screen.findByText('page')
-    const handle = edgeHandle()!
-
-    fireEvent.touchStart(handle, { touches: [{ clientX: 2, clientY: 400 }] })
-    fireEvent.touchMove(handle, { touches: [{ clientX: 260, clientY: 404 }] })
-    fireEvent.touchEnd(handle)
-    fireEvent.click(handle)
-
-    expect(await screen.findByTestId('mobile-drawer')).toBeTruthy()
-  })
-
-  it('keeps the whole grip clear of the menu when open', async () => {
-    // The owner's call (2026-09-15): "that handle should only be on the edge
-    // of the menu, I don't like it flowing into the menu items." The touch
-    // target is wider than the drawn tab, and that slack used to bleed LEFT
-    // — free while the grip sat at the screen edge, but once it rides the
-    // panel's edge the same bleed lays 24px of button over the nav rows,
-    // swallowing taps on whichever one it covers. The slack extends right.
-    setViewport('mobile')
-    renderShell()
-    await screen.findByText('page')
-
-    fireEvent.click(edgeHandle()!)
-    await screen.findByTestId('mobile-drawer')
-
-    const grip = edgeHandle()!
-    const tab = screen.getByTestId('edge-handle-tab')
-    // The panel is 300 wide and starts at x=0, so nothing belonging to the
-    // grip may begin before 300. jsdom does not lay out, so the assertion is
-    // on the declared geometry rather than on a measured rect.
-    expect(grip.style.transform).toContain('translate(300px')
-    expect(grip.className).not.toMatch(/-ml-/)
-    expect(tab.className).not.toMatch(/-ml-|pl-/)
-  })
-
-  it('a vertical drag moves the grip and remembers where it was left', async () => {
-    // "I'd like to be able to drag it up or down to move the handle to my
-    // preferred location." A handle fixed at the vertical centre is in the
-    // wrong place for whichever hand is not holding the phone.
-    setViewport('mobile')
-    renderShell()
-    await screen.findByText('page')
-    const handle = edgeHandle()!
-
-    // Centred to begin with: top:50% pulled back by half its own height.
-    expect(handle.style.top).toBe('50%')
-    expect(handle.style.transform).toContain('-50%')
-
-    fireEvent.touchStart(handle, { touches: [{ clientX: 20, clientY: 400 }] })
-    fireEvent.touchMove(handle, { touches: [{ clientX: 22, clientY: 500 }] })
-    fireEvent.touchEnd(handle)
-
-    // jsdom reports a zero rect, so the grip's top starts at 0 and a 100px
-    // pull down lands it at 100.
-    expect(handle.style.top).toBe('100px')
-    expect(handle.style.transform).toContain('0px)')
-    expect(localStorage.getItem('nova-grip-y')).toBe('100')
-  })
-
-  it('a vertical drag does not also open the menu', async () => {
-    setViewport('mobile')
-    renderShell()
-    await screen.findByText('page')
-    const handle = edgeHandle()!
-
-    fireEvent.touchStart(handle, { touches: [{ clientX: 20, clientY: 400 }] })
-    fireEvent.touchMove(handle, { touches: [{ clientX: 26, clientY: 520 }] })
-    fireEvent.touchEnd(handle)
-
-    await waitFor(() => expect(screen.queryByTestId('mobile-drawer')).toBeNull())
-  })
-
-  it('restores the position it was left at', async () => {
-    localStorage.setItem('nova-grip-y', '240')
-    setViewport('mobile')
-    renderShell()
-    await screen.findByText('page')
-
-    expect(edgeHandle()!.style.top).toBe('240px')
-  })
-
-  it('keeps the grip clean and carries the count inside the panel', async () => {
-    // The owner's call (2026-09-15): a count on a closed handle is noise.
+  it('keeps the button clean and carries the count inside the panel', async () => {
+    // The owner's call (2026-09-15): a count on a closed menu is noise.
     // The trade is that the number is read rather than glanced at, so it
     // must genuinely be on the Inbox row when the panel opens.
     setViewport('mobile')
     renderShell(4)
     await screen.findByText('page')
 
-    expect(screen.queryByTestId('edge-handle-badge')).toBeNull()
+    expect(within(menuButton()!).queryByTestId('nav-count-badge')).toBeNull()
 
-    fireEvent.click(edgeHandle()!)
+    fireEvent.click(menuButton()!)
     const drawer = await screen.findByTestId('mobile-drawer')
     const inbox = within(drawer).getByRole('link', { name: /inbox/i })
     expect(within(inbox).getByTestId('nav-count-badge').textContent).toContain('4')

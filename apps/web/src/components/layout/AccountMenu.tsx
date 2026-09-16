@@ -40,7 +40,7 @@ const ITEMS: Item[] = [
   { to: '/activity', label: 'What she has done', icon: ActivityIcon, minRole: 'admin' },
 ]
 
-export function AccountMenu() {
+export function AccountMenu({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { user, logout } = useAuth()
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -103,7 +103,13 @@ export function AccountMenu() {
                 key={item.to}
                 to={item.to}
                 role="menuitem"
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setOpen(false)
+                  // The mobile drawer passes its own close: following a link
+                  // out of a drawer that stays open leaves the destination
+                  // behind a panel (2026-09-16).
+                  onNavigate?.()
+                }}
                 className="flex items-center gap-2.5 px-3 py-2 text-compact text-content-secondary hover:text-content-primary hover:bg-surface-card transition-colors duration-fast"
               >
                 <Icon size={14} className="shrink-0" />

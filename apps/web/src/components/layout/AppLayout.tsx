@@ -98,6 +98,15 @@ export function AppLayout({
           <main
             className={clsx(
               'flex-1 min-h-0 pt-[var(--nova-safe-top,0px)] md:pt-0',
+              // ROOM FOR THE MENU BUTTON, the mobile twin of the md:pl-11
+              // below (2026-09-16). The button floats in the shell so it
+              // works on every page — including the ones nobody has written
+              // yet — and the chat page draws no header at phone sizes, so
+              // without this it would sit on top of the first message.
+              // Reserved DOWNWARD rather than sideways: 44px off the width
+              // of a 393px screen is a real loss, 44px off the top is the
+              // slim bar Claude has there anyway.
+              isMobile && 'pt-[calc(var(--nova-safe-top,0px)+3rem)]',
               fullWidth ? 'overflow-hidden' : 'overflow-y-auto custom-scrollbar',
               // ROOM FOR THE SHOW-SIDEBAR BUTTON. It floats in the shell so
               // it works on every page, and without this it floats ON TOP of

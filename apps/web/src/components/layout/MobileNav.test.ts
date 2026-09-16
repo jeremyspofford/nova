@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { navSections } from './Sidebar'
-import { clampGripY, moreItems, primaryTabs } from './MobileNav'
+import { moreItems, primaryTabs } from './MobileNav'
 
 // The mobile drawer and the sidebar are two surfaces over ONE nav config.
 // They had drifted once (Governance missing from mobile); this pins that
@@ -51,6 +51,12 @@ describe('MobileNav derives its lists from Sidebar.navSections', () => {
     expect(routes.indexOf('/skills')).toBe(routes.indexOf('/agents') + 1)
     expect(routes.indexOf('/inbox')).toBe(routes.indexOf('/skills') + 1)
     expect(routes.indexOf('/files')).toBe(routes.indexOf('/inbox') + 1)
+    // Gone from the nav on 2026-09-16 (owner's call): all three live under
+    // his name in the AccountMenu, which is now their only home. Pinned as
+    // an ABSENCE, because putting one back here would quietly give it two.
+    for (const his of ['/activity', '/spend', '/settings']) {
+      expect(routes).not.toContain(his)
+    }
     expect(system!.items.find(i => i.to === '/agents')?.minRole).toBe('admin')
     expect(system!.items.find(i => i.to === '/inbox')?.minRole).toBe('admin')
   })
@@ -65,23 +71,7 @@ describe('MobileNav derives its lists from Sidebar.navSections', () => {
   })
 })
 
-// The grip's saved position, kept on screen. A number restored from storage
-// was written against whatever viewport was current then — a rotation, or a
-// different device entirely, can put it past the bottom edge.
-describe('clampGripY', () => {
-  it('leaves a position that is already on screen alone', () => {
-    expect(clampGripY(300, 844)).toBe(300)
-  })
-
-  it('never lets the grip run off the top or the bottom', () => {
-    expect(clampGripY(-200, 844)).toBe(8)
-    // 844 − 64 tall − 8 margin.
-    expect(clampGripY(9999, 844)).toBe(772)
-  })
-
-  it('degrades to the top margin on a viewport too short to hold it', () => {
-    // Not a phone, but a zero height is what a viewport reports mid-launch
-    // and the clamp must not return a negative.
-    expect(clampGripY(400, 0)).toBe(8)
-  })
-})
+// The grip, and the position it remembered, were deleted on 2026-09-16 —
+// the owner asked for a menu button in the corner instead ("make it look and
+// feel more like Claude"). `clampGripY` and its three tests went with it: a
+// test for a control nobody can touch is a test that can only ever pass.

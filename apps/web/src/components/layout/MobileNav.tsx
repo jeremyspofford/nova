@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
-import { GripVertical, X } from 'lucide-react'
+import { Menu, X } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
 import { useMobileNav } from '../../hooks/useMobileNav'
 import { useUnseenNotices } from '../../hooks/useUnseenNotices'
 import { filterNavItemsByPreset, type SurfacePreset } from './sidebarFilter'
+import { AccountMenu } from './AccountMenu'
 import { NavCountBadge, navBadgeState, navSections, type NavItem, type NavSection } from './Sidebar'
 
 // The nav config is Sidebar's, DERIVED rather than copied: the unlabelled
@@ -32,49 +33,14 @@ const PANEL_W = 300
  *  back. Half is the least surprising place for it. */
 const SETTLE_AT = 0.5
 
-/** The visible tab, and the touch target around it. The target is
- *  thumb-sized and the tab is not, so the extra width is transparent — and
- *  it extends to the RIGHT of the tab, never to the left. Bleeding it
- *  leftward was free while the grip lived at the screen edge, but the grip
- *  now rides the panel's edge, and there the same bleed laid 24px of button
- *  over the menu items. The owner's call (2026-09-15): the handle belongs
- *  on the edge of the menu, not in it. */
-const GRIP_TAB_W = 16
-const GRIP_HIT_W = 40
-const GRIP_H = 64
-
-/** How far the grip is kept from the top and bottom of the screen. */
-const GRIP_MARGIN = 8
-
-const GRIP_Y_KEY = 'nova-grip-y'
-
-/** Keep the grip wholly on screen wherever it was left. A position saved in
- *  landscape, or before a rotation, must not strand it half off an edge.
- *  Pure, so the rule is testable without a device. */
-export function clampGripY(y: number, viewportH: number): number {
-  const lowest = Math.max(GRIP_MARGIN, viewportH - GRIP_H - GRIP_MARGIN)
-  return Math.min(Math.max(y, GRIP_MARGIN), lowest)
-}
-
-function readGripY(): number | null {
-  try {
-    const raw = localStorage.getItem(GRIP_Y_KEY)
-    if (raw === null) return null
-    const n = Number(raw)
-    return Number.isFinite(n) ? n : null
-  } catch {
-    return null
-  }
-}
-
 type DragStart = {
   x: number
   y: number
+  /** 'y' still exists as a value so a mostly-vertical gesture can be
+   *  RECOGNISED and then ignored — scrolling the panel's own list must not
+   *  drag it sideways a few pixels on the way. Nothing acts on it any more:
+   *  the grip it used to move is gone (2026-09-16). */
   axis: 'none' | 'x' | 'y'
-  /** Where the grip's top edge was when the finger went down. A vertical
-   *  drag moves it relative to this, so the grip does not jump to centre
-   *  itself under the thumb the moment the gesture is recognised. */
-  gripTop: number
 }
 
 export function MobileNav() {
@@ -82,13 +48,9 @@ export function MobileNav() {
   /** How far the panel has been pulled in, in px, while a finger is down.
    *  null means no drag is in progress and CSS owns the position. */
   const [dragX, setDragX] = useState<number | null>(null)
-  /** Where the owner put the grip, in px from the top. null means he has
-   *  never moved it, which centres it. */
-  const [gripY, setGripY] = useState<number | null>(readGripY)
   const dragFrom = useRef<DragStart | null>(null)
   /** Did the last touch actually travel? Read by `tap`, below. */
   const dragged = useRef(false)
-  const gripRef = useRef<HTMLButtonElement>(null)
 
   const location = useLocation()
   const { user } = useAuth()
@@ -98,22 +60,6 @@ export function MobileNav() {
 
   const isActive = (to: string) => location.pathname === to
   const moreActive = moreItems.some(section => section.items.some(item => isActive(item.to)))
-
-  // A rotation can leave a saved position off the screen. Only the PRESENCE
-  // of one is in the dep list — re-running on every pixel of a drag would
-  // fight the drag.
-  const placed = gripY !== null
-  useEffect(() => {
-    if (!placed) return
-    const reclamp = () => setGripY(y => (y === null ? null : clampGripY(y, window.innerHeight)))
-    reclamp()
-    window.addEventListener('resize', reclamp)
-    window.addEventListener('orientationchange', reclamp)
-    return () => {
-      window.removeEventListener('resize', reclamp)
-      window.removeEventListener('orientationchange', reclamp)
-    }
-  }, [placed])
 
   // Where the panel sits right now. During a drag it follows the finger;
   // otherwise CSS moves it and the transition below animates the change.
@@ -126,7 +72,6 @@ export function MobileNav() {
       x: t.clientX,
       y: t.clientY,
       axis: 'none',
-      gripTop: gripRef.current?.getBoundingClientRect().top ?? 0,
     }
   }
 
@@ -144,28 +89,10 @@ export function MobileNav() {
       start.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y'
       dragged.current = true
     }
-    // Across: the panel. Up and down: the grip itself — the owner asked to
-    // be able to put the handle where his thumb actually is (2026-09-15).
-    if (start.axis === 'y') {
-      setGripY(clampGripY(start.gripTop + dy, window.innerHeight))
-      return
-    }
     setDragX(Math.max(0, Math.min(PANEL_W, from + dx)))
   }
 
   const endDrag = () => {
-    const axis = dragFrom.current?.axis
-    dragFrom.current = null
-    if (axis === 'y') {
-      // Remember where he put it. A grip that resets on reload is a
-      // preference he has to keep re-stating, which is not a preference.
-      try {
-        if (gripY !== null) localStorage.setItem(GRIP_Y_KEY, String(gripY))
-      } catch {
-        // A browser with storage off just gets a centred grip next load.
-      }
-      return
-    }
     // A tap ends here too, and `tap` owns that — so a gesture that never
     // became a horizontal drag must not touch `open`.
     if (dragX === null) return
@@ -194,71 +121,40 @@ export function MobileNav() {
 
   return (
     <>
-      {/* The GRIP, replacing a two-item bottom tab bar (2026-09-15).
+      {/* THE WAY IN, top-left (2026-09-16, owner's call).
 
-          The bar was pinned to the one edge this app could not control: on
-          the owner's iPhone the web view is shorter than the screen, so a
-          dead strip sat below anything at bottom:0, and four attempts did
-          not fix it. Nothing is pinned there now.
+          This was an edge GRIP for a day: a tab riding the panel's edge,
+          draggable up and down to sit where his thumb was. He asked for
+          that and then asked for this — "make it look and feel more like
+          Claude" — and a menu button in the corner is what that means.
+
+          It replaced a bottom tab bar before it, which had been pinned to
+          the one edge this app cannot control: on the owner's iPhone the
+          web view is shorter than the screen, so a dead strip sat below
+          anything at bottom:0. Nothing is pinned there now, and this sits
+          INSIDE the top safe inset rather than under the status bar.
 
           NO BADGE HERE, by the owner's call (2026-09-15): a count on a
-          closed handle is noise. The unseen count still rides the Inbox row
-          INSIDE the panel, where it is read rather than glanced at — the
-          trade he chose. */}
+          closed menu is noise. The unseen count still rides the Inbox row
+          inside the panel, where it is read rather than glanced at.
+
+          Hidden while the panel is open — the panel has its own close — so
+          two controls for one state never sit on screen together. */}
       <button
-        ref={gripRef}
         type="button"
-        aria-label={open ? 'Close menu' : 'Open menu'}
+        aria-label="Open menu"
         aria-expanded={open}
-        data-testid="edge-handle"
-        onClick={tap}
-        onTouchStart={beginDrag}
-        onTouchMove={e => moveDrag(e, open ? PANEL_W : 0)}
-        onTouchEnd={endDrag}
+        data-testid="menu-button"
+        onClick={() => setOpen(true)}
         className={clsx(
-          'md:hidden fixed left-0 z-[60] flex items-center justify-start',
-          hidden && 'opacity-0 pointer-events-none',
+          'md:hidden fixed left-3 z-[60] inline-flex items-center justify-center',
+          'h-9 w-9 rounded-md text-content-secondary',
+          'hover:text-content-primary hover:bg-surface-card transition-colors duration-fast',
+          (hidden || open) && 'opacity-0 pointer-events-none',
         )}
-        style={{
-          // The grip RIDES the panel's right edge rather than disappearing
-          // when it opens: closed it sits at the screen edge, open it sits
-          // on the panel's edge, and mid-gesture it tracks the finger. So
-          // the same handle that pulls the menu out is visibly the one that
-          // pushes it back — what the owner asked for in preference to a
-          // "<<" button.
-          //
-          // Moved by TRANSFORM, not by `left`. Animating `left` forces a
-          // layout pass on every frame of the 220ms slide, on a phone, while
-          // a transform is composited — and the panel it rides has always
-          // moved this way, so the two now animate alike by construction.
-          // (`left` painted correctly too; a detour spent measuring
-          // getBoundingClientRect in headless WebKit was chasing a stale
-          // rect in the harness, not a defect in either version.)
-          //
-          // The vertical half is folded in here too, because an inline
-          // transform would otherwise overwrite Tailwind's -translate-y-1/2:
-          // centred means top:50% with -50%, placed means top:<y> with 0.
-          top: gripY ?? '50%',
-          transform: `translate(${panelX + PANEL_W}px, ${gripY === null ? '-50%' : '0px'})`,
-          width: GRIP_HIT_W,
-          height: GRIP_H,
-          transition: dragFrom.current
-            ? 'none'
-            : 'transform 220ms cubic-bezier(.22,.61,.36,1)',
-        }}
+        style={{ top: 'calc(var(--nova-safe-top, 0px) + 0.75rem)' }}
       >
-        {/* Only this is drawn. The rest of the button is transparent reach,
-            extending RIGHT, over the page — never over the menu. */}
-        <span
-          data-testid="edge-handle-tab"
-          className="flex h-full items-center justify-center rounded-r-lg bg-surface-elevated/60 border border-l-0 border-border-subtle backdrop-blur"
-          style={{ width: GRIP_TAB_W }}
-        >
-          <GripVertical
-            size={12}
-            className={moreActive ? 'text-accent' : 'text-content-tertiary'}
-          />
-        </span>
+        <Menu size={20} />
       </button>
 
       {/* The PANEL. Mounted whenever it is open OR mid-drag, so a gesture has
@@ -354,6 +250,15 @@ export function MobileNav() {
                   </div>
                 )
               })}
+            </div>
+            {/* HIS NAME, on the phone too (2026-09-16). It was desktop-only,
+                which left Settings, Usage and "what she has done" reachable
+                on a laptop and nowhere at all on the device he actually
+                carries — and this is now their ONLY home, since the nav
+                above stopped listing them. It sits at the foot, where a
+                person looks for their own account. */}
+            <div className="shrink-0 border-t border-border-subtle p-2" data-testid="mobile-account">
+              <AccountMenu onNavigate={close} />
             </div>
           </div>
         </div>

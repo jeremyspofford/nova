@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocation, NavLink, useNavigate } from 'react-router-dom'
-import { Activity, BookOpen, Bot, Boxes, CalendarClock, Coins, FolderOpen, Gauge, GripVertical, Inbox, MessageSquare, ScrollText, Settings } from 'lucide-react'
+import { BookOpen, Bot, Boxes, CalendarClock, FolderOpen, Gauge, GripVertical, Inbox, MessageSquare, ScrollText } from 'lucide-react'
 import clsx from 'clsx'
 import { useAuth } from '../../stores/auth-store'
 import { hasMinRole, type Role } from '../../lib/roles'
@@ -73,7 +73,10 @@ function readWidth(): number {
   }
 }
 
-// S1 nav config: Chat (Core) + Settings (System). Everything else waits on
+// S1 nav config: Chat (Core) + the household's subjects (System). What
+// belongs to HIM rather than to the household — settings, usage, the record
+// of what she has done — is under his name instead (AccountMenu).
+// Everything else waits on
 // the pages that back it. `SURFACE_PRESET` is hardcoded to 'advanced' until
 // a real feature-flag source lands — see brief adaptation notes.
 export const navSections: NavSection[] = [
@@ -88,7 +91,6 @@ export const navSections: NavSection[] = [
     items: [
       { to: '/governance', label: 'Governance', icon: ScrollText, minRole: 'admin' },
       { to: '/quality', label: 'AI Quality', icon: Gauge, minRole: 'admin' },
-      { to: '/activity', label: 'Activity', icon: Activity, minRole: 'admin' },
       { to: '/schedules', label: 'Schedules', icon: CalendarClock, minRole: 'admin' },
       // S12: the agents the household runs — between what fires and what
       // was written, since an agent is what the one does and what the other
@@ -104,8 +106,13 @@ export const navSections: NavSection[] = [
       { to: '/inbox', label: 'Inbox', icon: Inbox, minRole: 'admin', badge: 'unseen_notices' },
       { to: '/files', label: 'Files', icon: FolderOpen, minRole: 'admin' },
       { to: '/models', label: 'Models', icon: Boxes, minRole: 'admin' },
-      { to: '/spend', label: 'Spend', icon: Coins, minRole: 'admin' },
-      { to: '/settings', label: 'Settings', icon: Settings, minRole: 'admin' },
+      // Activity, Spend and Settings are NOT here (2026-09-16, owner's
+      // call). All three live under his name in the AccountMenu — the
+      // place a person looks for their own account, their usage and what
+      // the assistant has been doing. Listing them twice made the nav a
+      // wall of fifteen rows in which the household's actual subjects
+      // (agents, skills, schedules) were no easier to find than the
+      // settings page. One home each.
     ],
   },
 ]
