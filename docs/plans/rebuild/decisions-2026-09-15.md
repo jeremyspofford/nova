@@ -176,6 +176,56 @@ while full-bleed; use `var(--nova-safe-top)`).
 
 ---
 
+## 10. Flag-first development, without fail → **FUTURE TOPIC, owner-raised 2026-09-16**
+
+Raised 2026-09-16 while S27 (feature flags) was being designed. First: "Will
+you and nova automatically know to develop with feature development flows? I
+don't want to specify each time." Then, when S27 was added to the order of
+work below: "Include discussing about how to ensure nova (and maybe claude)
+would need to be configured to always (without fail) only develop with
+features using feature flags."
+
+This gets discussed **before S27 is built**, because the answer may change
+what S27 contains. What was established while answering, so the discussion
+starts from facts:
+
+- **A written rule is not a control.** By the house rule, a CLAUDE.md line
+  or a prompt is a request. "Without fail" needs a line of code that
+  refuses.
+- **The candidate control is a tripwire test**, which is not yet in the S27
+  spec.
+  - Every tool, API router, page, nav entry and check must be bound to a
+    feature or sit on a short core list.
+  - A new surface with no flag reddens the suite, and the failure names the
+    workflow.
+  - Adding to the core list is a visible diff. Today's unflagged features
+    start on that list and leave it as slice D flags them.
+  - Open: the core list is itself the loophole. Does each entry need a
+    stated reason, and who may add one?
+- **A test only refuses where it runs.** CI is disabled and git hooks are
+  off (owner, 2026-09-07), so today the tripwire would fire only when someone
+  runs the suites by hand. "Without fail" also needs a place that always
+  runs them. Candidates: a pre-merge gate on `rebuild/v4`, a Claude Code hook
+  on `git commit`, or Nova's own landing step.
+- **Claude sessions do not all read the same rules.** The 2026-09-16 design
+  session's desktop worktree was cut from `main`, so it loaded v3's
+  CLAUDE.md, not v4's. Project memory is the one thing every session loads,
+  and the workflow was saved there the same day
+  (`feature-flags-workflow-by-default`). That is still a request, not a
+  control.
+- **Nova does not write code in v4 yet.** When self-coding lands, the master
+  roadmap already puts a tripwire in the landing step ("parses the DIFF,
+  never the report"), and an unbound surface is a natural thing for that
+  step to refuse. Her prompt can carry the workflow; the landing check is
+  what would hold.
+- **Some of the workflow no test can see.** Merging dark early and walking a
+  feature before promoting it are habits of branching and process. One
+  semi-mechanical idea to weigh: a `beta` or `released` stage must name its
+  evidence (a slice doc's walk section that exists), so a promotion with no
+  walk record fails.
+
+---
+
 ## Order of work
 
 REVISED 2026-09-15 after the owner proposed threads. He agreed with the
@@ -192,6 +242,19 @@ consumer, rather than building a general mechanism through one narrow lens.
    `notices` tool so she can read her own Inbox, and wiring the skill-draft
    route. Its conversational half becomes "open a thread" once S24 exists.
 4. **S26, the quality corpus.** The instrument. Largest, mostly design.
+5. **S27, feature flags and the development workflow — deliberately
+   last.** Added 2026-09-16 at the owner's direction ("Add it late").
+   - **Spec:** `slice-27-feature-flags.md`, designed with the owner that
+     day.
+   - **What it builds:** features declared in core with alpha / beta /
+     released stages; a release channel per instance, Released by default;
+     an engineers' Feature flags page where released features stay
+     switchable as kill switches; a fix's deploy clearing its kill; and a
+     generated changelog.
+   - **Its workflow** (declare alpha, merge dark, promote with evidence)
+     applies to every slice after it.
+   - **It opens with the discussion in item 10**, because the answer may
+     add the tripwire to its scope.
 
 Carries riding along, to be folded in where they fit: S16's claimed-deletion
 eval case needs a workspace-file fixture (S25 builds exactly that fixture

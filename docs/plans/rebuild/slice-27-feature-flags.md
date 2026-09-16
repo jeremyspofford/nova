@@ -1,11 +1,21 @@
 # Slice 27 — feature flags: what runs here, and how a feature grows up
 
-Branch `slice/s27`, cut from `rebuild/v4`. The spec is committed now; the
-implementation starts after S24 (threads) merges, because S24 rewrote
-`chat.py`, conversations and the sidebar, which this slice also edits.
+Branch `slice/s27`, cut from `rebuild/v4`. Nothing is built; the spec is
+on `rebuild/v4` so it can be found.
 
-**Order:** after S24, before S25. S25 (the Inbox) is the first feature
-born alpha under the workflow this slice defines.
+**Order: deliberately last** (owner, 2026-09-16: "Add it late"). It comes
+after S26 in the order of work (decisions-2026-09-15.md), so S24, S25 and
+S26 all land first. The first slice after S27 is the first feature born
+alpha under the workflow it defines.
+
+When implementation starts, the branch is re-cut from that day's
+`rebuild/v4`, and every path, line reference and migration number below is
+re-checked against it.
+
+**It opens with a discussion, not code:** whether flag-first development can
+be guaranteed without fail, for Nova and for Claude sessions
+(decisions-2026-09-15.md, item 10). The answer may add a tripwire test to
+this slice's scope.
 
 **Behaviour-changing:** yes. Scripted skills goes dark on deploy until the
 channel is moved to Beta, and that is the first step of the walk.
@@ -151,7 +161,8 @@ rank(channel)`.
 
 ## Instance state
 
-Migration `031_features.sql` (030 is S24's):
+Migration `031_features.sql` (the number is re-checked at pickup — see
+"Coordination"):
 
 ```sql
 CREATE TABLE feature_channel (
@@ -680,12 +691,15 @@ On the live stack, in a real browser and a real chat:
 
 ## Coordination
 
-- **Another session's tree.** `.worktrees/v4` (on `slice/s24`) holds
-  another session's uncommitted edits to `Sidebar.tsx`, `AppLayout.tsx`,
-  `color-palettes.ts` and `theme-store.tsx`. This slice edits the first two,
-  so it merges after that work lands. It never builds or deploys from that
-  tree; images come from this branch's commits (`git archive
-  HEAD:<dir> | docker build`).
-- **Migrations.** The slice uses 031. If S24 has not merged when
-  implementation starts, the gap stays; gaps are permanent by the migration
-  rules.
+- **Other lanes.** S24, S25 and S26 all land before this slice, and they
+  touch files it edits: `chat.py`, `Sidebar.tsx`, `AppLayout.tsx`, and the
+  skills and Inbox code.
+  - S25 wires the Inbox's draft-a-skill action, which becomes one more
+    Skills part to bind.
+  - The implementation plan is written when the slice starts, against that
+    day's tree, not today's.
+  - Images always come from this branch's commits (`git archive
+    HEAD:<dir> | docker build`), never from a shared working tree.
+- **Migrations.** 031 was the next free number on 2026-09-16. Use the next
+  free number when implementation starts; gaps are permanent by the
+  migration rules.

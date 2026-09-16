@@ -41,6 +41,21 @@ move on any pickup is one cheap experiment, not a migration: does
 `LLAMA_ARG_CACHE_RAM` reach ollama's llama-server child the way
 `LLAMA_ARG_KV_OFFLOAD` was proven to?
 
+## SCHEDULED LAST (owner, 2026-09-16): S27, feature flags
+
+`docs/plans/rebuild/slice-27-feature-flags.md`. Nothing is built. It was
+designed with the owner on 2026-09-16 and placed last in the order of work
+(decisions-2026-09-15.md, "Order of work", item 5).
+
+It is listed here for the same reason S23 is. Its spec first sat on an
+unpushed branch, and another session wrote a separate flag design the same
+day (`feature-flags.md` on `slice/s24`). That session withdrew it in S27's
+favour once it found the branch.
+
+The first move on pickup is a discussion, not code: whether flag-first
+development can be guaranteed without fail, for Nova and for Claude sessions
+(decisions-2026-09-15.md, item 10).
+
 ## TODO (owner-requested, unscheduled): a broader AI-quality corpus
 
 Asked for by Jeremy on 2026-09-14, in his words: "add a todo to make more
