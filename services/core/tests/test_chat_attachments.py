@@ -9,6 +9,7 @@ about it anyway.
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from tests import fakes
@@ -441,3 +442,68 @@ async def test_an_image_beside_audio_still_reaches_a_model_that_can_see(
     assert isinstance(content, list)
     assert len([p for p in content if p["type"] == "image_url"]) == 1
     assert "cannot hear it" in content[0]["text"]
+
+
+async def test_a_capability_reading_never_becomes_a_durable_belief(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    """FOUND BY THE WALK, 2026-09-16, and the subtlest defect in this slice.
+
+    While the `rows`/`models` key bug was live, one turn said "the model
+    catalog could not be read this turn". That reply was ingested into her
+    journal — and afterwards recall served it back on every image and audio
+    turn, long after the bug was fixed. A CLEAN conversation repeated it
+    too, because memory is not per-conversation. A bug that existed for one
+    turn had become a belief.
+
+    Every sentence a capability note can carry is about a MOMENT: which
+    model ran, that a swap happened, that the catalogue was unreadable just
+    then. So the turn is ephemeral, exactly as a web fetch is — the machinery
+    and the argument already existed, one gate away.
+    """
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    memory = FakeMemory()
+    gateway = FakeGateway(
+        deltas=("ok",),
+        catalog_body={
+            "rows": [
+                _row("qwen3:8b", "completion", "tools"),
+                _row("gemma4:12b", "completion", "vision"),
+            ]
+        },
+    )
+    mount_peers(gateway=gateway, memory=memory)
+    await _set_model(owner_client, "ollama:qwen3:8b")
+    conversation = await _conversation(owner_client)
+    attachment = await _upload(owner_client, conversation, "shot.png", PNG)
+
+    status, _ = await _say(
+        owner_client, "what is this?", attachment_ids=[attachment], conversation_id=conversation
+    )
+
+    assert status == 200
+    # The swap happened and was said — and none of it was written down.
+    assert "gemma4:12b" in _sent(gateway)["model"]
+    assert memory.ingests == [], "a momentary capability reading was ingested as knowledge"
+
+
+async def test_an_ordinary_attachment_turn_is_still_remembered(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    """The gate has to be narrow. A file he sent and what she said about it
+    is ordinary knowledge — only the capability READING is momentary, and
+    suppressing every attachment turn would quietly cost him his own
+    history."""
+    monkeypatch.setenv("WORKSPACE_ROOT", str(tmp_path))
+    memory = FakeMemory()
+    mount_peers(gateway=FakeGateway(deltas=("ok",)), memory=memory)
+    conversation = await _conversation(owner_client)
+    attachment = await _upload(owner_client, conversation, "notes.txt", b"the roof leaks\n")
+
+    status, _ = await _say(
+        owner_client, "remember this", attachment_ids=[attachment], conversation_id=conversation
+    )
+
+    assert status == 200
+    await asyncio.wait_for(memory.ingested.wait(), timeout=5)
+    assert memory.ingests, "an ordinary attachment turn was dropped from memory"

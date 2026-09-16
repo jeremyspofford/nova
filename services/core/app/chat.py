@@ -3777,6 +3777,11 @@ async def _run_turn(
         # workspace path she reads them by, and anything whose file has gone
         # missing is named instead of quietly skipped.
         ask: str | list[dict] = message
+        # Whether this turn's facts carried a reading of what the MACHINE can
+        # do right now. Set in the block below, folded into `read_ephemeral`
+        # after it is computed — assigning it here would be overwritten by
+        # the live-facts line that follows.
+        capability_note = False
         if attached:
             gone = attachments.missing(list(attached))
             here = [row for row in attached if row not in gone]
@@ -3815,6 +3820,20 @@ async def _run_turn(
             blocks = [attachments.facts_block(here, unseeable=blind, unheard=sounds)]
             if choice.note:
                 blocks.append(choice.note)
+                # AND THE TURN IS EPHEMERAL, for the same reason a web fetch
+                # is (the gate near the end of this function).
+                #
+                # Every sentence this note can carry is about a MOMENT: which
+                # model ran, that a swap happened, or that the catalogue
+                # could not be read just then. Ingested, it becomes durable
+                # knowledge — and the owner's walk on 2026-09-16 caught
+                # exactly that: a `rows`/`models` key bug made one turn say
+                # "the model catalog could not be read this turn", that reply
+                # went into her journal, and afterwards recall served it back
+                # on every image and audio turn. A CLEAN conversation still
+                # repeated it, because memory is not per-conversation. A bug
+                # that lived for one turn had become a belief.
+                capability_note = True
             if gone:
                 names = ", ".join(row.filename for row in gone)
                 blocks.append(
@@ -3856,7 +3875,7 @@ async def _run_turn(
         # had made it. Otherwise her reply quoting the fresh figure is ingested
         # as a new note with no live source, and the staleness this whole step
         # exists to kill comes back laundered through her own words.
-        read_ephemeral = live_facts.ephemeral(checked_live)
+        read_ephemeral = live_facts.ephemeral(checked_live) or capability_note
 
         # A round is one gateway call plus the tool calls it asks for. The
         # cap counts gateway calls: reaching it with tools still pending
