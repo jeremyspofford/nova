@@ -69,8 +69,14 @@ async def _messages(pool):
 async def _connect(pool, *, name: str) -> tuple[FakeDevice, FakeWSConn, asyncio.Task]:
     """Enroll and drive serve() to a registered socket (test_scheduler's shape)."""
     device = FakeDevice()
+    # A DISTINCT NAME per call. `_connect` is called more than once in a
+    # test (several devices, several owners of them), and since migration
+    # 031 the name is unique — it is the login identifier, and `login` reads
+    # `WHERE name = $1` and takes one row, so two people sharing one made
+    # sign-in ambiguous. Naming everybody 'adult' was fine until it wasn't.
     creator = await pool.fetchval(
-        "INSERT INTO people (name, role) VALUES ('adult', 'adult') RETURNING id"
+        "INSERT INTO people (name, role) VALUES ($1, 'adult') RETURNING id",
+        f"adult-{uuid.uuid4().hex[:8]}",
     )
     code = await devices.mint_pairing_code(pool, created_by=creator)
     enrolled = await devices.enroll(

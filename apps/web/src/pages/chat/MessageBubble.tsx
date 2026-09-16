@@ -349,7 +349,11 @@ function ThreadStub({ replies, onOpen }: { replies: number; onOpen: () => void }
       type="button"
       data-testid="thread-stub"
       onClick={onOpen}
-      className="mt-1.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-caption text-content-tertiary hover:text-accent hover:bg-accent-dim transition-colors duration-fast"
+      // A THUMB-SIZED TARGET on a phone: this was 25px tall, and iOS asks
+      // for 44. It is the only way into a thread, so a stub you have to aim
+      // at is a feature you have to aim at. Compact again above `md`, where
+      // the pointer is precise and the vertical space is worth more.
+      className="mt-1.5 inline-flex items-center gap-1.5 rounded-md px-2 py-2.5 min-h-11 md:min-h-0 md:px-1.5 md:py-1 text-caption text-content-tertiary hover:text-accent hover:bg-accent-dim transition-colors duration-fast"
     >
       <span aria-hidden="true" className="font-mono">
         └─

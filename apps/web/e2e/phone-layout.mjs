@@ -40,10 +40,30 @@ const FIXTURES = [
   [/\/settings/, { settings: [
     { key: 'onboarding.completed', type: 'bool', default: false, description: '', value: true },
   ] }],
-  [/\/conversations\/[^/]+\/messages/, { messages: [
-    { id: 'm1', role: 'user', content: 'what is the gpu doing?', created_at: NOW },
-    { id: 'm2', role: 'assistant', content: 'The card has 17.7 GB free of 24.0 GB.', created_at: NOW },
-  ] }],
+  // `threads` makes a stub render and `prompt_tokens` makes the gauge
+  // render. Without both, the two assertions at the end of this file
+  // measure nothing and report OK — which is the failure mode this repo
+  // keeps finding, so their absence is a FAILURE below rather than a pass.
+  [/\/conversations\/[^/]+\/messages/, {
+    messages: [
+      { id: 'm1', role: 'user', content: 'what is the gpu doing?', created_at: NOW },
+      {
+        id: 'm2',
+        role: 'assistant',
+        content: 'The card has 17.7 GB free of 24.0 GB.',
+        created_at: NOW,
+        prompt_tokens: 10240,
+      },
+    ],
+    threads: { m2: 2 },
+  }],
+  [/\/models\/catalog/, { rows: [{ id: 'ollama:qwen3:8b', model: 'qwen3:8b', facts: { context_length: { value: 40960 } } }] }],
+  [/\/system\/resources/, {
+    card: { free_gb: 21.1, total_gb: 24, used_gb: 2.9, util_pct: 4, non_ollama_gb: 0, resident: [], reason: null },
+    machine: { memory: { total_mb: 32768, available_mb: 27000, reason: null }, cpu: { cores: 20, load_1m: 2.3, reason: null }, disk: { free_gb: 904, total_gb: 1007, reason: null } },
+    throughput: null,
+    model: 'qwen3:8b',
+  }],
   [/\/conversations\/active/, { id: 'c1', title: 'Chat', created_at: NOW, pending_turn: false, pending_turn_id: null, queued: [] }],
 ]
 
@@ -139,7 +159,50 @@ if (panel.tabOffsetInButton !== 0) {
 // Deleting the bottom tab bar once deleted the only route back to chat.
 if (!panel.links.includes('/chat')) failures.push('no route back to chat in the menu')
 
-console.log(JSON.stringify({ fit, panel }, null, 1))
+// NOTHING MAY HANG OFF THE SIDE OF A PHONE (2026-09-16). The context panel
+// is anchored to the gauge, which sits near the right of the control row —
+// at 393px a 361px panel began at x=-102 and lost its left third off the
+// edge. And the thread stub is the only way into a room, so it has to be a
+// thumb-sized target: it was 25px tall against iOS's 44.
+await page.keyboard.press('Escape')
+await page.waitForTimeout(200)
+const thumbs = await page.evaluate(async () => {
+  const out = { panel: null, stub: null }
+  const stub = document.querySelector('[data-testid="thread-stub"]')
+  if (stub) {
+    const r = stub.getBoundingClientRect()
+    out.stub = { height: Math.round(r.height) }
+  }
+  const gauge = document.querySelector('[data-testid="context-gauge"]')
+  if (gauge) {
+    gauge.click()
+    await new Promise(r => setTimeout(r, 400))
+    const el = document.querySelector('[data-testid="context-panel"]')
+    if (el) {
+      const r = el.getBoundingClientRect()
+      out.panel = { left: Math.round(r.left), right: Math.round(r.right), viewport: window.innerWidth }
+    }
+  }
+  return out
+})
+// Absence is a FAILURE, not a quiet pass: a check that cannot find the
+// thing it measures is indistinguishable from one that measured it and
+// found it fine.
+if (!thumbs.stub) failures.push('no thread stub rendered — this check measured nothing')
+if (!thumbs.panel) failures.push('the context panel did not open — this check measured nothing')
+if (thumbs.panel) {
+  if (thumbs.panel.left < 0) failures.push(`the context panel starts at x=${thumbs.panel.left}, off the left edge`)
+  if (thumbs.panel.right > thumbs.panel.viewport) {
+    failures.push(`the context panel ends at x=${thumbs.panel.right}, past the ${thumbs.panel.viewport}px screen`)
+  }
+}
+// 44 is iOS's minimum; 40 leaves room for a rounding difference between
+// engines without letting a 25px target through.
+if (thumbs.stub && thumbs.stub.height < 40) {
+  failures.push(`the thread stub is ${thumbs.stub.height}px tall — a thumb needs 44`)
+}
+
+console.log(JSON.stringify({ fit, panel, thumbs }, null, 1))
 await browser.close()
 
 if (failures.length) {

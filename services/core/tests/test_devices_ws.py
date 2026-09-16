@@ -19,6 +19,7 @@ never looked" without sniffing a refusal string.
 The fake WS conn (tests/device_fakes.py) makes all of this testable with no
 socket; test_devices_e2e.py walks the whole lifecycle through it.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -54,10 +55,18 @@ def _clean_hub():
 async def _person(pool, role: str = "adult") -> Person:
     # role 'adult' (not 'owner') so a test can make several people — the
     # people_one_owner partial unique index allows exactly one owner.
+    #
+    # And a DISTINCT NAME per person, which the name is now required to be
+    # (migration 031): the name is the login identifier, and `login` reads
+    # `WHERE name = $1` and takes one row, so two people sharing one made
+    # sign-in ambiguous. This helper named everybody after their role, so
+    # "several people" were all called 'adult' — which is what the index
+    # caught the day it landed.
+    name = f"{role}-{uuid.uuid4().hex[:8]}"
     pid = await pool.fetchval(
-        "INSERT INTO people (name, role) VALUES ($1, $2) RETURNING id", role, role
+        "INSERT INTO people (name, role) VALUES ($1, $2) RETURNING id", name, role
     )
-    return Person(id=pid, name=role, role=role)
+    return Person(id=pid, name=name, role=role)
 
 
 async def _enroll(pool, *, name: str = "laptop") -> tuple[uuid.UUID, FakeDevice]:
@@ -679,9 +688,7 @@ async def test_a_missing_facts_sink_changes_nothing(pool):
     assert "not connected" in result
 
 
-async def test_a_device_gone_by_send_time_ends_the_facts_on_connected_false(
-    pool, monkeypatch
-):
+async def test_a_device_gone_by_send_time_ends_the_facts_on_connected_false(pool, monkeypatch):
     """N3: `_require_connected` determines connectivity inside `_admit`, BEFORE
     anything is sent, and never sees a socket that dies in the window between
     that check and hub.command's actual write. hub.command has its OWN re-check
@@ -811,7 +818,5 @@ async def test_replaying_stored_entries_is_idempotent(pool):
     await devices_ws.ingest_audit(pool, device_id, [e0, e1])
     res = await devices_ws.ingest_audit(pool, device_id, [e0, e1])  # a full replay
     assert res == {"stored": 2, "break": None}
-    count = await pool.fetchval(
-        "SELECT count(*) FROM device_audit WHERE device_id = $1", device_id
-    )
+    count = await pool.fetchval("SELECT count(*) FROM device_audit WHERE device_id = $1", device_id)
     assert count == 2  # ON CONFLICT DO NOTHING — no duplicates

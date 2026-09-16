@@ -128,7 +128,13 @@ export function ContextPanel({
       data-testid="context-panel"
       // Wider than it is tall, like the panel he pointed at. At 320px every
       // row wrapped and the whole thing read as one column of grey.
-      className="absolute bottom-full right-0 mb-2 z-50 w-[26rem] max-w-[calc(100vw-2rem)] rounded-lg border border-border-subtle bg-surface-elevated shadow-xl px-4 py-2 divide-y divide-border-subtle"
+      //
+      // ON A PHONE IT IS PINNED TO THE VIEWPORT, not to the gauge. Anchored
+      // `right-0` against a control that sits near the right of a 393px
+      // screen, a 361px panel began at x=-102 and lost its left third off
+      // the edge — measured, not guessed. Above `md` there is room for it
+      // to hang off the gauge, which is where it belongs.
+      className="fixed inset-x-3 bottom-20 z-50 md:absolute md:inset-x-auto md:right-0 md:bottom-full md:mb-2 md:w-[26rem] rounded-lg border border-border-subtle bg-surface-elevated shadow-xl px-4 py-2 divide-y divide-border-subtle"
     >
       <Row
         label="Context window"
