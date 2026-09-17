@@ -1,0 +1,298 @@
+"""The tool registry, and the single path a tool is ever called through.
+
+The registry is code, not configuration: a tool exists because a module in
+this package declares it, and there is no database row, no grant and no
+per-person allow-list — anywhere. Every registered tool runs for every turn
+that calls it (owner ruling 2026-09-03: v4 makes no authorization decisions;
+nothing here asks the owner or refuses on his behalf). What contains the blast
+radius is the toolset itself — a dedicated workspace volume, memory calls
+scoped to the turn's own person, a fetch that cannot reach this machine or
+this network, and device commands that only a paired, connected machine will
+verify and execute.
+
+dispatch() is the only entry point on purpose. Two properties hold there
+and nowhere else:
+
+  * arguments are validated against the tool's own advertised schema
+    BEFORE the executor is looked at, so a call that does not match
+    executes nothing at all and comes back as a retryable error;
+  * an executor cannot throw into the caller. Every failure — a stated
+    refusal, an unreachable peer, a bug — becomes an `Error: ...` result
+    plus ok=False, because the caller is a token stream and an exception
+    there is a truncated reply with no reason in it.
+
+A refusal an executor states is a fact about whether the call CAN run (the
+path is outside the workspace, the device is offline, the fetch would reach
+this network) — never a judgment about whether it MAY. tests/test_no_approvals.py
+pins that dispatch awaits nothing but the executor and imports nothing outside
+this package: the day someone rebuilds a gate here, that suite is what refuses.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections.abc import Iterable
+from pathlib import Path
+
+from app.tools import (
+    agents,
+    devices,
+    inference,
+    memory_tools,
+    models,
+    notices,
+    route,
+    schema,
+    skills,
+    spend,
+    timers,
+    util,
+    web,
+    web_search,
+    workspace,
+)
+from app.tools.base import (
+    ERROR_PREFIX,
+    RESULT_KIND_LISTING,
+    Tool,
+    ToolContext,
+    ToolFailure,
+    TurnStopped,
+)
+
+__all__ = [
+    "ERROR_PREFIX",
+    "REGISTRY",
+    "RESULT_KIND_LISTING",
+    "Tool",
+    "ToolContext",
+    "ToolFailure",
+    "advertised_tools",
+    "context_for",
+    "dispatch",
+    "tool_names",
+    "tool_names_by_result_kind",
+]
+
+logger = logging.getLogger("core")
+
+REGISTRY: dict[str, Tool] = {
+    tool.name: tool
+    for tool in (
+        *workspace.TOOLS,
+        *memory_tools.TOOLS,
+        *util.TOOLS,
+        *web.TOOLS,
+        *web_search.TOOLS,
+        *devices.TOOLS,
+        *models.TOOLS,
+        # S22: one read of the GPU — free VRAM, what is resident, and this
+        # model's throughput against its own history. She could not see a
+        # contended card on 2026-09-12 and could not tell the owner what to
+        # close; this is that gap, not a demo of it.
+        *inference.TOOLS,
+        *timers.TOOLS,
+        *spend.TOOLS,
+        *route.TOOLS,
+        # S12: delegation and agent CRUD (tools/agents.py). Same funnel; the
+        # executors reach app.agents function-locally (see that module).
+        *agents.TOOLS,
+        # S17: reading a written-down procedure. The roster in the prompt names
+        # them; this is what carries a body, and its span is the ledger's
+        # evidence that one was used at all.
+        *skills.TOOLS,
+        # S25: her own Inbox. She wrote the digest and could not answer one
+        # question about it — the rows were in a table with no tool over it.
+        # Reads, plus the two noise preferences the page offers him; nothing
+        # here is an approval (owner ruling 2026-09-03).
+        *notices.TOOLS,
+    )
+}
+
+
+def tool_names() -> list[str]:
+    return sorted(REGISTRY)
+
+
+def tool_names_reporting_spend() -> list[str]:
+    """The registered tools whose result carries a ledger figure, sorted.
+
+    Read from the live registry every call, so a tool that declares
+    `reports_spend` backs a spend claim by that declaration alone and the guard
+    never keeps a list of names (S15 — `list_agents` reports each agent's cap
+    and spend, and a figure quoted from it was being retracted as unread)."""
+    return sorted(name for name, tool in REGISTRY.items() if tool.reports_spend)
+
+
+def tool_names_by_result_kind(kind: str) -> list[str]:
+    """The registered tools declaring `Tool.result_kind == kind`, sorted.
+    Derived from the live registry every call, so a tool added (or
+    monkeypatched in) with the declaration is counted by that fact alone."""
+    return sorted(name for name, tool in REGISTRY.items() if tool.result_kind == kind)
+
+
+def context_for(
+    app,
+    person,
+    *,
+    facts_sink: list[dict] | None = None,
+    workspace_root: Path | None = None,
+) -> ToolContext:
+    """The context a turn hands its tools. The workspace root is decided
+    once, here, so a single decision sets the boundary for every filesystem
+    call that turn makes: by default it is read from the environment (Nova's
+    own turns), and a caller may hand in a different root instead. An
+    agent's folder is exactly that — a different root on the SAME
+    containment (workspace._resolve_within is relative to whatever root the
+    context carries), so an agent turn scoped to `<root>/agents/<name>/`
+    cannot reach past its folder any more than Nova can reach past hers,
+    and nothing in the workspace tools has to know an agent exists. A root
+    given here is used as-is: this function does not check that it lies
+    under the env root, because the caller that derived it is the one place
+    that knows why it is where it is. `facts_sink` collects the facts a call
+    DETERMINED even when it refused (see ToolContext).
+
+    `person` must be a real identity: every route resolves one before a turn
+    starts (identity.require_person) and the memory tools scope to it. A None
+    here is a caller bug stated at the call site, not a permission decision —
+    nothing downstream would refuse on its behalf."""
+    if person is None:
+        raise ValueError("context_for needs the turn's person — no route runs a turn without one")
+    return ToolContext(
+        app=app,
+        person=person,
+        workspace_root=workspace.root_from_env() if workspace_root is None else workspace_root,
+        facts_sink=facts_sink,
+    )
+
+
+def advertised_tools(names: Iterable[str] | None = None) -> list[dict]:
+    """The OpenAI `tools` array, derived from the registry rather than
+    written out beside it — a tool added to a module is advertised by that
+    fact alone, and can never be advertised with a schema different from
+    the one dispatch validates against.
+
+    `names` is a subset to advertise (an agent's toolset); None means the
+    whole registry, in tool_names() order, exactly as before. A subset is
+    SCOPE at advertisement time and nothing more: the model is shown fewer
+    tools, so an honest "I don't have that tool" is true of what it was
+    shown, while dispatch is unchanged — a call naming a registered tool
+    outside the subset still runs (the trace marks it as outside the
+    subset; chat owns that). Order is still tool_names() order, never the
+    caller's, so two callers advertising the same set send the same bytes.
+    A name that is not in the registry is skipped here, not stated: the
+    caller that holds the agent's list is the one that can say "[tool X: no
+    longer exists]" in the prompt where the model will read it, and a
+    dropped name in a wire array would say nothing to anyone."""
+    if names is None:
+        chosen = tool_names()
+    else:
+        wanted = set(names)
+        chosen = [name for name in tool_names() if name in wanted]
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.parameters,
+            },
+        }
+        for tool in (REGISTRY[name] for name in chosen)
+    ]
+
+
+def _retryable(problem: str) -> str:
+    """A refusal the model can fix by calling again — so it is told to."""
+    return f"{ERROR_PREFIX}{problem} — re-issue the call"
+
+
+def _parse_arguments(arguments: object) -> tuple[dict | None, str | None]:
+    """(parsed arguments, problem). Backends differ: most send the
+    arguments as a JSON string, some send them already parsed, and a call
+    with no arguments arrives as "" about as often as it arrives as "{}"."""
+    if isinstance(arguments, dict):
+        return arguments, None
+    if arguments is None:
+        return {}, None
+    if isinstance(arguments, str):
+        text = arguments.strip()
+        if not text:
+            return {}, None
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError as exc:
+            return None, f"the arguments were not valid JSON ({exc.msg} at position {exc.pos})"
+        if not isinstance(parsed, dict):
+            return None, (
+                f"the arguments must be a JSON object, got {schema.json_type_name(parsed)}"
+            )
+        return parsed, None
+    return None, f"the arguments must be a JSON object, got {schema.json_type_name(arguments)}"
+
+
+async def dispatch(name: str, arguments: object, ctx: ToolContext) -> tuple[str, bool]:
+    """Run one tool call. Returns (result text for the model, ok).
+
+    `ok` is decided mechanically here and never by reading the text back:
+    a caller writing a span or an activity frame must not have to guess
+    from prose whether the call worked.
+
+    The whole path is: registry lookup, argument parsing, schema validation,
+    executor. Nothing in between reads a table, asks anyone, or decides
+    whether the call may happen — a registered tool with valid arguments runs,
+    every time. The only things that stop a call are the ones that make it
+    impossible to run honestly (no such tool, arguments that do not match the
+    schema) and the executor's own stated refusals, and each of those comes
+    back as an `Error:` result the model can read.
+    """
+    tool = REGISTRY.get(name)
+    if tool is None:
+        return (
+            _retryable(
+                f"there is no tool named {name!r} — the tools you have are: "
+                f"{', '.join(tool_names())}"
+            ),
+            False,
+        )
+
+    parsed, problem = _parse_arguments(arguments)
+    if problem is not None:
+        return _retryable(problem), False
+
+    problem = schema.validate(tool.parameters, parsed)
+    if problem is not None:
+        return _retryable(problem), False
+
+    try:
+        result = await tool.executor(parsed, ctx)
+        ok = True
+    except TurnStopped:
+        # The owner stopped the turn (S15) — not a refusal and not a bug, so it
+        # is neither reported to the model as an `Error:` (the call did not
+        # fail) nor logged as one. It is the turn's control flow passing
+        # through: re-raised so _run_turn's single stop exit records it, and
+        # deliberately BEFORE the two handlers below, which would otherwise
+        # swallow it and let the loop carry on spending on a turn that was
+        # told to quit.
+        raise
+    except ToolFailure as exc:
+        result, ok = f"{ERROR_PREFIX}{exc}", False
+    except Exception as exc:
+        # Not a refusal anybody wrote — a bug. It is reported to the log in
+        # full and to the model in one line, and it still cannot reach the
+        # stream as an exception.
+        logger.exception("tool %s raised", name)
+        result = f"{ERROR_PREFIX}{name} failed unexpectedly — {type(exc).__name__}: {exc}"
+        ok = False
+    else:
+        if not isinstance(result, str) or not result.strip():
+            # An empty tool result reads to the model as "it worked, and
+            # there was nothing to say" — which is a claim nothing checked.
+            # A tool that has nothing to report says so in words or it failed.
+            logger.error("tool %s returned an empty result", name)
+            result = f"{ERROR_PREFIX}{name} returned an empty result, so nothing was confirmed"
+            ok = False
+
+    return result, ok

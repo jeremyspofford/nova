@@ -1,0 +1,351 @@
+name: nova
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    volumes:
+      - v4_pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  core:
+    build:
+      context: ../services/core
+    restart: unless-stopped
+    # How long a redeploy waits after SIGTERM before SIGKILL. Compose's
+    # default is 10s; a 27B chat turn runs 13-55s, so every `up -d core`
+    # mid-turn killed the process before it could close the turn's trace
+    # (measured 2026-09-01: one turn left status NULL, and the chat read it
+    # as "still responding" for a day). 300s is the gateway read timeout —
+    # the longest one gateway call can hold a turn open, and the uvicorn
+    # --timeout-graceful-shutdown in services/core/Dockerfile — plus 30s
+    # for the lifespan drain (close_turn, memory ingest) that uvicorn runs
+    # only after that wait. Startup still sweeps whatever a SIGKILL leaves
+    # (traces.sweep_orphaned_turns); this is what makes the sweep rare.
+    stop_grace_period: 330s
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      DATABASE_URL: postgresql://core:${POSTGRES_PASSWORD}@postgres:5432/nova_core
+      SERVICE_TOKEN: ${CORE_TOKEN}
+      GATEWAY_URL: http://gateway:8001
+      CORE_GATEWAY_TOKEN: ${CORE_GATEWAY_TOKEN}
+      MEMORY_URL: http://memory:8002
+      CORE_MEMORY_TOKEN: ${CORE_MEMORY_TOKEN}
+      # The bundled metasearch service, reached in-network by the web_search
+      # tool. Keyless (a stock battery, not a bearer peer) and loopback-only,
+      # so this is a plain URL, not a token pair. Search is best-effort: core
+      # does NOT depend_on it, so a slow or missing searxng never blocks core
+      # from starting — web_search states "unavailable" instead of faking a
+      # result (app/tools/web_search.py).
+      SEARXNG_URL: http://searxng:8080
+      # Where the workspace tools may write, and the only place they may.
+      # Stated here rather than left to the code's default so the boundary
+      # is visible next to the mount that backs it.
+      WORKSPACE_ROOT: /data/workspace
+    volumes:
+      # Nova's own scratch space, on a volume of its own: not the memory
+      # store, not the repo, not the host. A file she writes lives here and
+      # survives a rebuild, and nothing outside this volume is reachable
+      # from a workspace tool.
+      - v4_workspace:/data/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    build:
+      context: ../services/gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8001:8001"
+    environment:
+      DATABASE_URL: postgresql://gateway:${POSTGRES_PASSWORD}@postgres:5432/nova_gateway
+      SERVICE_TOKEN: ${CORE_GATEWAY_TOKEN}
+      OLLAMA_URL: http://ollama:11434
+    volumes:
+      # Ruling R2: install.sh writes <repo>/data/hardware.json on the host;
+      # this compose file lives in deploy/, so the repo root is one level up.
+      - ../data:/data:ro
+      - v4_models:/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  memory:
+    build:
+      context: ../services/memory
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8002:8002"
+    environment:
+      DATABASE_URL: postgresql://memory:${POSTGRES_PASSWORD}@postgres:5432/nova_memory
+      SERVICE_TOKEN: ${CORE_MEMORY_TOKEN}
+    volumes:
+      - v4_memdata:/data/memory
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health/live')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  web:
+    build:
+      context: ../apps/web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:80"
+    networks:
+      default:
+        # Fixed, in the upper half of the subnet (see `networks:` at the
+        # bottom): the address the tailnet sidecar's `tailscale serve`
+        # targets (S5b T1), so a recreated web keeps the address the sidecar
+        # already knows — nothing to re-resolve, nothing to go stale.
+        ipv4_address: ${NOVA_WEB_ADDR:-172.18.128.10}
+    environment:
+      # Blank = the pre-auth gate is OFF and nginx behaves exactly as before
+      # this existed. Set to a `openssl rand -hex 32` value only when
+      # temporarily exposing this origin on a public URL (e.g. a cloudflared
+      # quick tunnel) — every path then needs a matching `nova_gate` cookie,
+      # minted by visiting /gate?token=<the value>. install.sh deliberately
+      # does not generate this: it's opt-in, never a default secret. See
+      # apps/web/nginx.conf.template for the mechanism.
+      NOVA_PUBLIC_GATE_TOKEN: ${NOVA_PUBLIC_GATE_TOKEN:-}
+      # The ONE source address nginx believes a Tailscale-User-* identity
+      # header from — the tailnet sidecar's fixed address (S5b T1 pins the
+      # sidecar to it; a tailnet peer is exempt from the gate on that basis).
+      # Rendered into the conf by envsubst at container start (the image's
+      # ^NOVA_ filter), which is why it is passed here and not only read by
+      # the sidecar; blank means nobody is trusted.
+      NOVA_TAILSCALE_ADDR: ${NOVA_TAILSCALE_ADDR:-172.18.128.20}
+    # Start ordering only, deliberately not `condition: service_healthy`: if
+    # core is sick the UI must still come up to say so, rather than leaving
+    # the operator with nothing at all to look at.
+    depends_on:
+      - core
+    healthcheck:
+      # Self-only, deliberately not `/` — `/` sits behind the pre-auth gate
+      # (nginx.conf.template), so with the gate on a plain `GET /` would 401
+      # and mark this container UNHEALTHY even though nginx is serving
+      # correctly, breaking install.sh's wait_for_health and the e2e
+      # waitForHealthy. `/healthz` is nginx's ONE ungated location — a
+      # static "ok" with no proxy_pass, so this still touches no other
+      # service and a red `web` still means nginx, never core, gate on or
+      # off.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  searxng:
+    # Nova's bundled web search. A stock metasearch engine — no key, no build,
+    # just the upstream image plus our settings.yml. It comes up with the base
+    # stack (no profile) so "what's the latest on X" always has a real search
+    # behind it instead of the model guessing a URL. The image is `latest`
+    # deliberately: it is not one of our built services, carries no state we
+    # own, and a metasearch engine that lags upstream quietly stops matching
+    # the sites it scrapes — pinning it would be a maintenance burden with no
+    # reproducibility payoff here.
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    environment:
+      # The image's entrypoint substitutes this into settings.yml's
+      # server.secret_key. A default keeps a bare `docker compose up` (no
+      # install.sh) working; install.sh generates a real one into .env.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-nova-searxng-dev-secret}
+    volumes:
+      # The DIRECTORY, not the single settings.yml file. A single-file bind
+      # resolves to a host inode at container-create time, so when Docker
+      # Desktop recycled its WSL mount the v3 container died with exit 127 and
+      # `restart: unless-stopped` retried it forever without ever repairing it
+      # (v3 lost web search for 43h that way). Read-only: the service never
+      # writes its own config.
+      - ../searxng:/etc/searxng:ro
+    ports:
+      # Loopback only, like every other host bind here. Publishing is not
+      # required — core reaches it in-network at http://searxng:8080 — but it
+      # lets the operator eyeball the JSON API directly while verifying.
+      - "127.0.0.1:8380:8080"
+    healthcheck:
+      # searxng/searxng ships wget and exposes /healthz; this touches only the
+      # search service itself, so a red `searxng` means searxng, never core.
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  ollama:
+    # PINNED, not `latest`. An untagged image is only pulled when it is absent,
+    # so a host that already had `ollama/ollama:latest` from months ago keeps
+    # running it — and the registry answers a current model's manifest with
+    # `412: requires a newer version of Ollama`, which reads as "this model is
+    # broken" rather than "this host is stale". That is exactly what happened
+    # on the first DoD walk (2026-08-28): a cached 0.31.2 could not pull
+    # qwen3.8:27b at all. Bump this deliberately.
+    image: ollama/ollama:0.33.1
+    restart: unless-stopped
+    # The profile is kept so the container can be left out deliberately, but
+    # install.sh turns it on: the wizard's first and default engine is
+    # "Bundled Ollama", and core refuses to save an engine it cannot reach —
+    # so without this container running, the bundled path is filtered out of
+    # the wizard as dead and there is no local inference to choose at all.
+    profiles: ["inference"]
+    ports:
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - v4_ollama:/root/.ollama
+    healthcheck:
+      # `ollama list` goes through the server's own API, so this is red until
+      # the server is actually accepting requests — which is the moment the
+      # gateway's liveness check would start passing too.
+      test: ["CMD-SHELL", "ollama list > /dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  tailscale:
+    # Nova's own node on the owner's tailnet (S5b): ONE durable HTTPS origin,
+    # https://<TAILNET_HOSTNAME>.<tailnet>.ts.net, that serves the UI, the API
+    # and the device WebSocket to phones, laptops and remote novad daemons.
+    # Opt-in: `NOVA_TAILNET=1 ./install` turns the profile on, asks for the
+    # one thing only the owner holds (a TS_AUTHKEY, unless the state volume
+    # already carries a logged-in node), and writes COMPOSE_PROFILES so a
+    # bare `docker compose up -d` keeps converging it. install.sh REFUSES the
+    # profile up front when it cannot log the node in — an engine you cannot
+    # start is not an engine. See deploy/README.md, "Tailnet access".
+    #
+    # PINNED (2026-08-19 release). `latest` is what the old sidecar ran and
+    # what changed under it; bump deliberately.
+    image: tailscale/tailscale:v1.102.3
+    profiles: ["tailnet"]
+    restart: unless-stopped
+    # An ordinary container at a FIXED address — no tun device, no
+    # capabilities, no network namespace shared with anything (the pod shape
+    # was measured to strand web on `docker restart`; see the plan). The
+    # address is the one nginx trusts a Tailscale-User-* identity header
+    # from (web's NOVA_TAILSCALE_ADDR above must be the same value — one
+    # .env key feeds both). Userspace networking is what the old node ran
+    # for months.
+    networks:
+      default:
+        ipv4_address: ${NOVA_TAILSCALE_ADDR:-172.18.128.20}
+    hostname: ${TAILNET_HOSTNAME:-nova}
+    # tini as PID 1 so the wrapper is an ordinary child: signals reach its
+    # trap and containerboot's orphans get reaped.
+    init: true
+    environment:
+      # The node's name on the tailnet, i.e. the left-most label of the URL.
+      TS_HOSTNAME: ${TAILNET_HOSTNAME:-nova}
+      # Identity lives on the named volume below, so a restart, a recreate
+      # or an image bump keeps the same node (same MagicDNS name, same cert)
+      # without a new key: TS_AUTH_ONCE only logs in when that state is not
+      # already logged in.
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_AUTH_ONCE: "true"
+      # Userspace (netstack) networking is also what lets `tailscale serve`
+      # proxy to a REMOTE target (web's address): in kernel mode without
+      # net_admin the CLI refuses a non-loopback target outright. Flipping
+      # this to false means adding /dev/net/tun + cap_add net_admin, or the
+      # mapping is never applied.
+      TS_USERSPACE: "true"
+      # Blank by default; install.sh asks for it (never generates one — only
+      # the owner can mint it, at https://login.tailscale.com/admin/settings/
+      # keys). It is used ONCE, on the first login, and then lingers in .env,
+      # which is why a non-reusable key is the recommendation.
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      # Deliberately NO TS_SERVE_CONFIG: containerboot's serve path clears the
+      # config on every start and re-applies it through a racy watcher (open
+      # upstream bug). The serve mapping has ONE writer — tailscale/start.sh,
+      # on every start, verified — and it targets web's fixed address.
+      NOVA_WEB_ADDR: ${NOVA_WEB_ADDR:-172.18.128.10}
+    volumes:
+      - v4_tailscale:/var/lib/tailscale
+      # The DIRECTORY, read-only — never a single-file bind (a single-file
+      # mount resolves to a host inode at create time and dies with exit 127
+      # when Docker Desktop recycles its WSL mount; searxng above says why).
+      - ./tailscale:/config:ro
+    # `sh` explicitly, so the wrapper does not depend on an executable bit
+    # surviving the bind mount.
+    command: ["sh", "/config/start.sh"]
+    healthcheck:
+      # The SAME two facts the wrapper verifies, read from tailscaled each
+      # time (tailscale/serve_check.sh): BackendState Running, and the serve
+      # config mapping HTTPS 443 to http://$NOVA_WEB_ADDR:80. So `compose ps`
+      # and install.sh's health table say "healthy" only when a tailnet peer
+      # would actually get web — a green tailscale never means less than
+      # that. start_period covers the first login.
+      test: ["CMD", "sh", "/config/serve_check.sh"]
+      interval: 15s
+      timeout: 10s
+      retries: 4
+      start_period: 90s
+
+networks:
+  # Declared so the project network's addressing is a fact of this file
+  # rather than whatever docker handed out. The tailnet sidecar (S5b T1)
+  # targets web at a FIXED address, and web's nginx trusts an identity
+  # header from the sidecar's FIXED address alone (apps/web/
+  # nginx.conf.template, $from_sidecar): on a bridge a TCP connection cannot
+  # be completed with a spoofed source address, so the address IS the trust
+  # boundary — and it has to be one nothing else can ever be handed.
+  #
+  # The subnet matches the network the live instance already has
+  # (172.18.0.0/16, gateway .1; every container so far at .2–.9), so
+  # declaring it moves nothing. Dynamic allocation is confined to the lower
+  # half (ip_range /17); the fixed addresses live in the upper half
+  # (172.18.128.x), where the allocator never reaches.
+  #
+  # Changing IPAM on a network that already exists is NOT applied in place —
+  # compose will say so. It is a one-time `docker compose down && docker
+  # compose up -d` at deploy: the network is recreated, volumes are
+  # untouched. A RUNNING container that is not this project's but is
+  # attached to the network (the old nova4-tailscale-1 was `docker network
+  # connect`ed) blocks the recreate with "network has active endpoints" and
+  # leaves web down — stop or disconnect it FIRST.
+  default:
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
+          ip_range: 172.18.0.0/17
+          gateway: 172.18.0.1
+
+volumes:
+  v4_pgdata:
+  v4_models:
+  v4_memdata:
+  v4_workspace:
+  v4_ollama:
+  # The tailnet node's identity (tailscaled.state, certs, MagicDNS name).
+  # Compose names it <project>_v4_tailscale. Deliberately NOT `tailscale_state`:
+  # a volume of THAT name already exists under this project name
+  # (`nova_tailscale_state`, created by the v3 stack) and the old "nova" node
+  # — `nova4-tailscale-1`, still running — mounts it as its state dir
+  # (measured 2026-09-03). A v4 key of the same name would attach a second
+  # tailscaled to a live node key, and the two flap. The old node's state is
+  # MIGRATED into this volume at T3 with the old container stopped
+  # (deploy/README.md), never shared live.
+  v4_tailscale:

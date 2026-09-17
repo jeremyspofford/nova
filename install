@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# The documented entry point: `./install` from the repo root.
+#
+# The implementation lives in deploy/install.sh, next to the compose file and
+# the env template it manages. This wrapper exists so the command in the slice
+# plan and the README is the command that runs — a path people have to be told
+# is a path they can get wrong.
+#
+#   ./install          preflight -> hardware -> secrets -> up -> health table
+#   ./install update   the update path (arrives in a later slice)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+REAL="$ROOT/deploy/install.sh"
+
+if [ ! -x "$REAL" ]; then
+  echo "ERROR: $REAL is missing or not executable" >&2
+  exit 1
+fi
+
+exec "$REAL" "$@"

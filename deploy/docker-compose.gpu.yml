@@ -1,0 +1,57 @@
+# GPU override for the bundled ollama container, and the gateway container's
+# own nvidia-smi access — which since S22 is how the product knows anything
+# about the card at all.
+#
+# Merged by install.sh ONLY when `docker info` reports the NVIDIA runtime — the
+# same fact it records as docker_gpu_runtime in data/hardware.json. Kept as a
+# separate file rather than folded into the base compose because a device
+# reservation on a host without the container toolkit makes `up` fail outright,
+# and a machine with no GPU has to keep working out of the box.
+#
+# Without this, a box with a 24 GB card runs its "local model" on the CPU and
+# nothing anywhere says so.
+#
+# Two things keep that from happening silently (2026-09-04, after it did):
+# install.sh writes this file into COMPOSE_FILE in .env — absolute paths — so
+# a plain `docker compose up` from deploy/ merges it too (a bare -f REPLACES
+# that list); and after the health table it reads ollama's own
+# `msg="inference compute"` line and refuses to report success unless it says
+# library=CUDA (check_inference_compute). A container that lost this
+# reservation is healthy by every check and only shows up as the next chat
+# turn timing out.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  # THIS container needs the same device reservation ollama has, purely to
+  # run the `nvidia-smi` binary the nvidia container runtime injects — no
+  # CUDA libraries and no ML workload run here (app/devices_vram.py).
+  #
+  # S22 made this load-bearing rather than incidental. Every live VRAM number
+  # in the product now comes from one nvidia-smi call in this container: the
+  # fit verdicts on the Models page, the `inference_degraded` beat check, and
+  # her own `inference_health` tool. Before S22 total VRAM came from
+  # data/hardware.json — written once by install.sh and never refreshed — and
+  # free VRAM was computed from a flag nothing ever set, so it equalled total
+  # forever. On 2026-09-12 a video game held 7 GB of this card for six hours
+  # and the product reported the full 24 GB free the entire time.
+  #
+  # Without this override merged the gateway has no GPU device at all, and
+  # every one of those numbers degrades to a stated reason in nvidia-smi's
+  # own words — never a crash and never a guess (app/devices_vram.py's
+  # `read_vram`).
+  gateway:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

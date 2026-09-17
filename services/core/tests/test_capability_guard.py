@@ -1,0 +1,480 @@
+"""The capability-claim guard, tested in isolation: pure (text, tools) -> verdict.
+
+capability_claim_check is a pure function — no database, no gateway — so this is
+the fast corpus that pins its precision. The expensive failure is a
+wrongly-corrected HONEST reply (a false positive makes the guard itself the
+liar), so the must-NOT-fire cases below are as load-bearing as the fabrications.
+
+Every case from the S3 walk-fix (T7) brief's calibration section is here, plus
+the registry TOGGLE proving the SAME sentence flips verdict on whether the
+satisfying tool is actually available — the derived-not-hardcoded property.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from app import guards, tools
+
+# The live registry — the real tool set the running loop exposes. Using it
+# (rather than a hand-written list) is the point: the guard reads the tools the
+# system actually has, so these tests break the day fetch_url/workspace_* leave
+# the registry, which is the intended alarm.
+ALL_TOOLS = tools.tool_names()
+
+
+def tgt(correction) -> list:
+    return [claim.target for claim in correction.claims]
+
+
+# -- MUST FIRE (the satisfying tool is registered) -------------------------
+#
+# The exact owner reply plus every calibration case from the brief. Each denies
+# a GENERAL ability whose tool is in the live registry, so each is a false
+# denial the guard must contradict.
+
+MUST_FIRE = [
+    (
+        "owner_exact_reply",
+        "I cannot access external websites or real-time data, including bigblueview.com.",
+        "fetch_url",
+    ),
+    ("cant_browse_the_web", "I can't browse the web.", "fetch_url"),
+    ("unable_to_access_the_internet", "I'm unable to access the internet.", "fetch_url"),
+    (
+        "capabilities_dont_include_web_browsing",
+        "My capabilities don't include web browsing.",
+        "fetch_url",
+    ),
+    ("no_ability_to_fetch_urls", "I don't have the ability to fetch URLs.", "fetch_url"),
+    ("cant_read_files", "I can't read files.", "workspace_read_file"),
+    ("not_able_to_save_files", "I'm not able to save files.", "workspace_write_file"),
+    # S10a-3: her model tools.
+    ("cant_download_models", "I can't download models.", "model_pull"),
+    ("unable_to_install_a_model", "I'm unable to install a new model.", "model_pull"),
+    ("cant_search_for_models", "I can't search for models.", "model_catalog_search"),
+    ("cant_list_installed_models", "I cannot list the installed models.", "model_catalog_search"),
+    ("cant_remove_models", "I can't remove models.", "model_remove"),
+    (
+        "unable_to_delete_installed_model",
+        "I'm unable to delete an installed model.",
+        "model_remove",
+    ),
+    ("cant_check_for_updates", "I can't check for updates to a model.", "model_check_update"),
+    ("cant_update_models", "I cannot update models.", "model_check_update"),
+    # S9: the reminder tools are registered, so disowning them is a false denial.
+    ("cant_set_reminders", "I can't set reminders.", "create_timer"),
+    ("unable_to_remind_you", "I'm unable to remind you later.", "create_timer"),
+    # "yet" is a denial of an unshipped feature, not a condition on this call.
+    ("cant_set_reminders_yet", "I can't set reminders yet.", "create_timer"),
+    ("cant_set_reminder_for_you", "I can't set a reminder for you.", "create_timer"),
+    (
+        "scheduling_tasks_trailing_denial",
+        "Scheduling tasks is not something I can do.",
+        "create_timer",
+    ),
+]
+
+
+@pytest.mark.parametrize("label,reply,tool", MUST_FIRE, ids=[c[0] for c in MUST_FIRE])
+def test_must_fire_when_the_tool_is_registered(label, reply, tool):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None, f"{label!r} should have fired but did not"
+    assert tgt(correction) == [tool]
+    # The correction NAMES the real tool, derived from the passed registry.
+    assert tool in correction.text, correction.text
+    assert correction.text.startswith("Correction: I can do that")
+
+
+# -- MUST NOT FIRE (has the tools; still honest) ---------------------------
+#
+# A capability with no registered tool is HONEST (there is genuinely no such
+# tool). A specific failed attempt is an honest result about ONE try, not a
+# denial of the ability. A hedge/question asserts no inability. Correcting any
+# of these makes the guard the liar.
+
+MUST_NOT_FIRE = [
+    # No registered tool -> the denial is HONEST (proven by passing the REAL
+    # registry, which has no email/phone/bank tool).
+    ("no_tool_send_emails", "I can't send emails."),
+    ("no_tool_phone_calls", "I can't make phone calls."),
+    ("no_tool_bank_account", "I don't have access to your bank account."),
+    # A SPECIFIC failed attempt, not an ability denial (the precision crux).
+    ("specific_404", "I couldn't fetch that page — it returned a 404."),
+    ("specific_missing_file", "I can't find a file named report.md."),
+    ("specific_url_didnt_load", "That URL didn't load."),
+    # S9: the store's own refusal, relayed — one time, not the ability.
+    (
+        "specific_reminder_in_the_past",
+        "I can't set a reminder for a time that has already passed.",
+    ),
+    ("specific_reminder_past_tense", "I couldn't set the reminder — the time had passed."),
+    # S9: the tools' own refusals RELAYED, and a memory statement — a
+    # condition/target tail on the ability phrase. A correction under any of
+    # these would make the guard the liar (review of T2, 2026-09-07).
+    (
+        "relayed_no_timezone_until",
+        "I can't set a reminder until a timezone is set for this instance — it is set in "
+        "Settings → General.",
+    ),
+    (
+        "relayed_no_timezone_absolute",
+        "I can't set a reminder at an absolute time yet: no timezone is set for this instance.",
+    ),
+    ("relayed_past_schedule", "I can't schedule anything for a time that has already passed."),
+    ("specific_reminder_yesterday", "I can't set a reminder for yesterday."),
+    (
+        "specific_reminder_quoted_object_relay",
+        "I can't set a reminder for 'stretch' until a timezone is set.",
+    ),
+    (
+        "remind_about_past_relay",
+        "I can't remind you about that — the time you gave has already passed.",
+    ),
+    (
+        "memory_not_a_timer",
+        "I can't remind you of what you said last week; my memory search found nothing.",
+    ),
+    # A hedge / conditional / question describes what MIGHT or WOULD be, not what
+    # is; a question asserts nothing at all.
+    ("hedge_guarantee", "I can't guarantee that's accurate."),
+    ("hedge_might_not_reach", "I might not be able to reach that site."),
+    ("question_would_you_like", "Would you like me to try?"),
+    # An honest plain reply carries no denial.
+    ("plain_reply", "The capital of France is Paris."),
+]
+
+
+@pytest.mark.parametrize("label,reply", MUST_NOT_FIRE, ids=[c[0] for c in MUST_NOT_FIRE])
+def test_must_not_fire_on_honest_replies(label, reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
+
+
+def test_the_correction_text_itself_never_fires():
+    """Self-reference: running the guard on its own honest correction must be
+    clean — the correction is worded to carry no inability lead."""
+    correction = guards.capability_claim_check("I can't browse the web.", ALL_TOOLS)
+    assert correction is not None
+    assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
+
+
+# -- the registry TOGGLE: derived-not-hardcoded ----------------------------
+
+
+def test_the_same_denial_fires_only_when_the_tool_is_registered():
+    """'I can't browse the web' is a FALSE denial when fetch_url is available and
+    an HONEST one when it is not — the verdict flips on the live tool set alone,
+    which is the whole derived-not-hardcoded point (CLAUDE.md)."""
+    reply = "I can't browse the web."
+    fired = guards.capability_claim_check(reply, ["fetch_url"])
+    assert fired is not None
+    assert tgt(fired) == ["fetch_url"]
+    # fetch_url removed from the registry -> the denial is honest -> silent.
+    without_fetch = [t for t in ALL_TOOLS if t != "fetch_url"]
+    assert guards.capability_claim_check(reply, without_fetch) is None
+    # And with no tools at all.
+    assert guards.capability_claim_check(reply, []) is None
+
+
+# -- edges precision demands -----------------------------------------------
+
+
+def test_an_empty_or_blank_reply_never_fires():
+    assert guards.capability_claim_check("", ALL_TOOLS) is None
+    assert guards.capability_claim_check("   \n ", ALL_TOOLS) is None
+
+
+def test_a_past_tense_or_other_subject_denial_is_not_a_capability_claim():
+    # Past tense is a report of one attempt, not a denial of the ability.
+    assert guards.capability_claim_check("I couldn't browse the web.", ALL_TOOLS) is None
+    # Another subject — not the model disowning its OWN capability.
+    assert guards.capability_claim_check("You can't browse the web from here.", ALL_TOOLS) is None
+    assert guards.capability_claim_check("It cannot access websites.", ALL_TOOLS) is None
+
+
+def test_the_trailing_denial_form_fires():
+    """'<capability> is not something I can do' — the capability comes first."""
+    correction = guards.capability_claim_check("Web browsing is not something I can do.", ALL_TOOLS)
+    assert correction is not None
+    assert tgt(correction) == ["fetch_url"]
+
+
+def test_the_guard_is_pure_same_inputs_same_verdict():
+    reply = "I can't browse the web."
+    first = guards.capability_claim_check(reply, ALL_TOOLS)
+    second = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert (first is None) == (second is None)
+    assert first is not None
+    assert tgt(first) == tgt(second)
+    assert first.text == second.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't \\((((.md and [unbalanced",
+        "cannot cannot cannot",
+        "创建 web browsing 文件",  # non-ascii around a real phrase
+        "\n\n\n",
+        "I can't " + "web browsing " * 200,
+    ],
+)
+def test_the_matcher_never_raises_on_odd_input(reply):
+    # We do not care about the verdict here — only that it returns cleanly.
+    guards.capability_claim_check(reply, ALL_TOOLS)
+
+
+# -- the agent tools (S12, 2026-09-08) --------------------------------------
+#
+# Added from a live walk, not from imagination: asked to hand a task to the
+# agent she had just created, she answered "delegating to an agent needs a
+# delegate_to_agent tool, and that capability isn't in my toolset right now"
+# — with delegate_to_agent in her advertised list AND the roster line naming
+# the agent in the same prompt. The prompt carried the truth and she denied
+# it anyway, which is the whole reason this table exists beside the prompt.
+@pytest.mark.parametrize(
+    ("reply", "tool"),
+    [
+        (
+            "I can't do that one — delegating to an agent needs a tool, "
+            "so I can't hand off work to coder.",
+            "delegate_to_agent",
+        ),
+        ("I cannot delegate to an agent right now.", "delegate_to_agent"),
+        ("I'm unable to hand this off to coder.", "delegate_to_agent"),
+        ("I don't have the ability to create an agent.", "create_agent"),
+        ("I can't list your agents.", "list_agents"),
+        ("I am not able to delete an agent.", "delete_agent"),
+    ],
+)
+def test_a_denied_agent_capability_is_corrected_and_names_the_tool(reply, tool):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None, f"a false denial of {tool} must be corrected"
+    assert tool in tgt(correction)
+    assert tool in correction.text
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # Backed relays and offers assert no inability.
+        "I asked coder to write it and it did.",
+        "Want me to delegate that to coder?",
+        "I'll delegate it to coder and report back.",
+        # A specific failure, not a disowned capability.
+        "I couldn't delegate to coder — it is over its monthly cap.",
+    ],
+)
+def test_honest_delegation_sentences_are_left_alone(reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None
+
+
+def test_an_agent_denying_a_tool_outside_its_subset_is_honest():
+    """The symmetry the persona feed buys: the SAME sentence is a lie from
+    Nova (who holds the tool) and the truth from an agent (whose subset never
+    contains delegate_to_agent — agents.validate_spec refuses it), because the
+    verdict reads the live list the caller was actually given."""
+    subset = ["workspace_read_file", "workspace_write_file", "workspace_list_files"]
+    assert guards.capability_claim_check("I can't delegate to an agent.", subset) is None
+    assert guards.capability_claim_check("I can't delegate to an agent.", ALL_TOOLS) is not None
+
+
+def test_the_agent_corrections_are_clean_over_themselves():
+    for reply in ("I can't delegate to an agent.", "I can't create an agent."):
+        correction = guards.capability_claim_check(reply, ALL_TOOLS)
+        assert correction is not None
+        assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
+
+
+# -- a scope limit is not a disowned capability (S12, 2026-09-08) -----------
+#
+# From the live walk: an agent is contained to its own folder, so "I can't
+# write files outside my folder" is TRUE — the tool exists and
+# _resolve_within refuses the path. Correcting it would tell the owner the
+# agent can write anywhere, which is the opposite of the fact. Nova's root
+# is contained too, so the same sentence is protected from her.
+#
+# THE LIST MOVED 6 -> 11 (2026-09-09). The first fix read only the 40
+# characters IMMEDIATELY after the capability phrase, so it excused the six
+# phrasings below that happen to put the scope word there and CORRECTED every
+# honest containment sentence with any words in between. Measured over these
+# eleven that day: 9 silent, 2 corrected into "Correction: I can do that — I
+# have a tool for it (workspace_write_file)", i.e. the guard telling the owner
+# she can write anywhere. The two that were wrong are #2 and #3 and they are
+# pinned here by name; the window is gone (guards._denial_tail) and all
+# eleven now measure silent. This list IS the re-measurement — a phrasing
+# added here is a phrasing someone checked.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't write files outside my workspace.",
+        # The two live FALSE CORRECTIONS the 40-char window left behind:
+        "I can't write files to paths outside the workspace.",
+        "I can't write files there — /etc/nova/notes.md is outside my workspace.",
+        "I can't list files outside my folder.",
+        "I cannot read files outside agents/coder/.",
+        "I can't write files anywhere except my own folder.",
+        "I'm unable to read files from another person's workspace.",
+        "I can't write files elsewhere.",
+        "I can't search the web or list files from external sources.",
+        "I can't write files anywhere other than my workspace root.",
+        "I can't create files beyond my sandbox.",
+    ],
+)
+def test_a_scope_limit_on_a_capability_is_honest(reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None, (
+        "a truthful containment sentence was corrected into 'I can do that' — "
+        "the guard is the liar, the worse of the two failures"
+    )
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't list files.",
+        "I can't write files.",
+        "I'm unable to read a file for you.",
+        # 2026-09-09: the tail is THIS denial's, and it ends where the NEXT
+        # denial starts — the scope word belongs to the second clause's
+        # denial, so the first is still the flat false denial it looks like.
+        "I can't write files and I can't work outside the sandbox.",
+    ],
+)
+def test_a_bare_denial_of_a_held_capability_is_still_corrected(reply):
+    """The qualifier must excuse a SCOPE, never the capability itself."""
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is not None
+
+
+# -- the trailing denial forms (2026-09-09) --------------------------------
+#
+# The walk's OWN sentence did not reach the guard. She said "delegating to an
+# agent needs a delegate_to_agent tool, and that capability isn't in my
+# toolset right now" while HOLDING delegate_to_agent, and every denial lead in
+# the set is a first-person present ability form ("I can't", "I'm unable to",
+# "my capabilities don't include") — none of which that sentence contains. The
+# 2026-09-08 fix caught her only because a LATER clause said "so I can't hand
+# off work to coder": a second phrasing, not the one she used. A denial does
+# not stop being a denial for being said about a possession rather than an
+# ability, so the whole negated-copula family is read now.
+
+
+@pytest.mark.parametrize(
+    ("reply", "tool"),
+    [
+        # THE WALK, verbatim (2026-09-08) — the sentence the guard missed.
+        (
+            "delegating to an agent needs a delegate_to_agent tool, and that capability "
+            "isn't in my toolset right now",
+            "delegate_to_agent",
+        ),
+        ("Delegating to an agent is not in my toolset.", "delegate_to_agent"),
+        ("Delegating to an agent is not a capability I have.", "delegate_to_agent"),
+        ("Web browsing isn't available to me.", "fetch_url"),
+        ("Reading files is not one of my tools.", "workspace_read_file"),
+        ("Listing files isn't among my tools.", "workspace_list_files"),
+        ("Creating an agent is not part of my capabilities.", "create_agent"),
+        ("Writing files isn't something I'm able to do.", "workspace_write_file"),
+        # The original form, still read.
+        ("Scheduling tasks is not something I can do.", "create_timer"),
+    ],
+)
+def test_a_trailing_denial_of_a_held_capability_is_corrected(reply, tool):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None, "a trailing denial is a denial"
+    assert tool in tgt(correction)
+    assert tool in correction.text
+
+
+def test_a_trailing_denial_is_not_read_as_its_own_scope_limit():
+    """A trailing denial's own "not in my toolset" is the DENIAL, not a scope
+    on the capability — the tail a scope word may live in ends where the next
+    denial begins, so the two cannot be confused for each other."""
+    fired = guards.capability_claim_check("Reading files is not in my toolset.", ALL_TOOLS)
+    assert fired is not None and tgt(fired) == ["workspace_read_file"]
+    # ...while a REAL scope qualifier in front of the same denial is honest.
+    assert (
+        guards.capability_claim_check(
+            "Writing files outside my workspace is not something I can do.", ALL_TOOLS
+        )
+        is None
+    )
+
+
+def test_the_trailing_forms_stay_derived_from_the_live_tool_set():
+    """The same sentence flips on the registry alone, exactly as the lead
+    forms do — the trailing family is not a second, hardcoded verdict."""
+    reply = "Delegating to an agent isn't in my toolset."
+    assert guards.capability_claim_check(reply, ["delegate_to_agent"]) is not None
+    assert guards.capability_claim_check(reply, []) is None
+
+
+def test_the_trailing_correction_is_clean_over_itself():
+    correction = guards.capability_claim_check(
+        "Delegating to an agent isn't in my toolset.", ALL_TOOLS
+    )
+    assert correction is not None
+    assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
+
+
+# -- deleting a file (S16) -------------------------------------------------
+#
+# The sentence that started the slice, said to the owner on 2026-09-11 when he
+# asked her to delete a file: "there is no delete operation in my toolbox."
+# It was TRUE then. With workspace_delete registered it is a false denial, and
+# this guard is what refuses it.
+
+
+def test_the_owners_exact_no_delete_reply_is_contradicted():
+    reply = "I can list it and read it, but there is no delete operation in my toolbox."
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None
+    assert tgt(correction) == ["workspace_delete"]
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I can't delete files.",
+        "I'm unable to delete files.",
+        "I don't have the ability to remove files.",
+        "My capabilities don't include deleting files.",
+        "Deleting files isn't in my toolset.",
+        "Removing files is not something I can do.",
+    ],
+)
+def test_a_general_denial_of_deletion_is_contradicted(reply):
+    correction = guards.capability_claim_check(reply, ALL_TOOLS)
+    assert correction is not None
+    assert tgt(correction) == ["workspace_delete"]
+
+
+def test_the_delete_denial_stays_derived_from_the_live_tool_set():
+    reply = "I can't delete files."
+    assert guards.capability_claim_check(reply, ["workspace_delete"]) is not None
+    assert guards.capability_claim_check(reply, []) is None
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # a SPECIFIC failed attempt, not a denial of the ability
+        "I couldn't delete groceries.md — there is nothing at that path.",
+        "I can't delete groceries.md because it is a symbolic link.",
+        # a true statement about containment
+        "I can't delete files outside my workspace.",
+        # a question, a future form, another subject
+        "Would you like me to delete those files?",
+        "I'll delete them once you confirm.",
+        "You can't delete files from here.",
+    ],
+)
+def test_an_honest_sentence_about_deletion_is_left_alone(reply):
+    assert guards.capability_claim_check(reply, ALL_TOOLS) is None
+
+
+def test_the_delete_correction_is_clean_over_itself():
+    correction = guards.capability_claim_check("I can't delete files.", ALL_TOOLS)
+    assert correction is not None
+    assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None

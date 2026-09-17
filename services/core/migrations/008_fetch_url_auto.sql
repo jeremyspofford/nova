@@ -1,0 +1,27 @@
+-- Owner-directed disposition edit (2026-08-30): fetch_url moves consent -> auto.
+--
+-- The owner does not want to approve web reads ("if I ask it about some webpage,
+-- or data that it should get by searching the internet, I don't want to need to
+-- approve that"). fetch_url is a read-only, SSRF-guarded fetch (app/tools/web.py:
+-- it cannot reach this machine or this network, GET-only, http/https-only,
+-- capped and time-bounded), so a public fetch is a contained, reversible read —
+-- exactly the shape ruling S3-R1 seeds as auto for every OTHER tool. This flips
+-- the one exception S3-R1 kept.
+--
+-- This is DATA, not code: disposition is the knob the action_classes table
+-- exists to turn (migration 004's own header). The KERNEL (app/policy.py) is
+-- unchanged — it still reads disposition, still burns a consent for any
+-- consent-tier class, still DENIES an unclassified tool by absence (fail-closed).
+-- The whole consent-card machinery stays in place and available: the day a
+-- genuinely risky (irreversible / spend / egress-with-write) tool is added, its
+-- migration row seeds it 'consent' and the card flow is exactly as before.
+--
+-- earned stays false: this is an owner-directed seeded-auto, NOT a graduated
+-- one, so it must never demote itself on a single failure (policy.authorize
+-- only tracks earned autos). Any class can be set back to consent from
+-- Settings -> Autonomy (revoke) later — this edit is fully revocable.
+--
+-- Idempotent: an UPDATE that matches the current value is a no-op, and re-running
+-- it changes nothing.
+UPDATE action_classes SET disposition = 'auto', updated_at = now()
+    WHERE action_class = 'fetch_url';

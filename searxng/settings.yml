@@ -1,6 +1,22 @@
 # Nova's bundled metasearch service. Inherits SearXNG defaults; overrides only
-# what Nova needs: JSON output for the backend, limiter off (internal callers
-# only — the service is not exposed beyond the compose network + loopback).
+# the two things a HEADLESS caller (core's web_search tool, a plain httpx GET —
+# no browser, no cookies, no CSRF token) needs for /search?format=json to
+# actually return results instead of a 403:
+#
+#   * search.formats must list `json`. Upstream defaults to html only, and a
+#     format not on this list is refused outright — the JSON API simply does
+#     not exist until json is added here.
+#   * server.limiter must be false. The limiter bundles SearXNG's botdetection,
+#     which blocks requests that don't look like a browser (missing Accept /
+#     Accept-Language, no prior GET, JSON format from a bare client) — exactly
+#     what an internal httpx call looks like — so with the limiter on, the JSON
+#     call comes back 429/403. It is safe to disable because this instance is
+#     never exposed beyond the compose network + loopback (docker-compose.yml
+#     binds 127.0.0.1 only); the limiter defends PUBLIC instances from abuse,
+#     which this is not.
+#
+# secret_key is substituted from $SEARXNG_SECRET by the image entrypoint;
+# image_proxy is off (nothing renders remote images from here).
 use_default_settings: true
 
 server:
@@ -12,3 +28,22 @@ search:
   formats:
     - html
     - json
+
+# Engine selection. SearXNG's default general engines (brave, duckduckgo,
+# startpage) all CAPTCHA/rate-limit a headless, IP-static instance like this one,
+# so a stock config returns ZERO results — measured live 2026-08-30: brave "too
+# many requests", duckduckgo/startpage "CAPTCHA". bing was the one general web
+# engine that answered (10 results for "openai"); github answers for code. So we
+# explicitly ENABLE bing as the reliable general workhorse. The blocked defaults
+# are left enabled too (they self-suspend when blocked and cost nothing, and may
+# recover), and wikipedia/duckduckgo are re-asserted enabled so any that DO
+# answer add to the merge. Engine blocking is volatile: if bing later returns
+# nothing, enable more here (mojeek, qwant, brave, google) and re-measure with
+# `/search?q=…&format=json&engines=<name>`.
+engines:
+  - name: bing
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: wikipedia
+    disabled: false

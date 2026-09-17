@@ -1,0 +1,469 @@
+[
+ {
+  "id": "Q01",
+  "q": "how much graphics memory does my machine have?",
+  "targets": [
+   "topics/hardware-spec-local-llm-box.md",
+   "journals/2026-08-31.md"
+  ],
+  "rank": 4,
+  "fact_rank": 4,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-03.md",
+   "journals/2026-09-01.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-08.md"
+  ],
+  "scores": [
+   10.05,
+   6.14,
+   4.84,
+   4.25,
+   2.55
+  ]
+ },
+ {
+  "id": "Q02",
+  "q": "what kind of computer are you running on?",
+  "targets": [
+   "journals/2026-09-01.md"
+  ],
+  "rank": 2,
+  "fact_rank": 2,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-01.md",
+   "journals/2026-09-07.md",
+   "journals/2026-09-08.md",
+   "journals/2026-09-02.md"
+  ],
+  "scores": [
+   6.57,
+   4.44,
+   3.72,
+   3.68,
+   3.25
+  ]
+ },
+ {
+  "id": "Q03",
+  "q": "what have I been working on lately?",
+  "targets": [
+   "journals/2026-09-09.md"
+  ],
+  "rank": 4,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-08-31.md",
+   "journals/2026-09-02.md",
+   "journals/2026-09-01.md",
+   "journals/2026-09-09.md",
+   "journals/2026-09-08.md"
+  ],
+  "scores": [
+   6.25,
+   3.9,
+   3.49,
+   2.31,
+   2.29
+  ]
+ },
+ {
+  "id": "Q04",
+  "q": "did I ask you to nudge me about anything on a repeating basis?",
+  "targets": [
+   "journals/2026-09-07.md"
+  ],
+  "rank": 2,
+  "fact_rank": 2,
+  "returned": [
+   "journals/2026-09-08.md",
+   "journals/2026-09-07.md",
+   "journals/2026-09-09.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-01.md"
+  ],
+  "scores": [
+   10.43,
+   8.65,
+   8.55,
+   7.72,
+   2.76
+  ]
+ },
+ {
+  "id": "Q05",
+  "q": "what did we decide about keeping my credentials safe?",
+  "targets": [
+   "journals/2026-09-09.md"
+  ],
+  "rank": 1,
+  "fact_rank": 1,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-08.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-07.md",
+   "journals/2026-09-02.md"
+  ],
+  "scores": [
+   11.09,
+   8.16,
+   3.55,
+   1.98,
+   1.6
+  ]
+ },
+ {
+  "id": "Q06",
+  "q": "which little helper did I set up to take notes for me?",
+  "targets": [
+   "journals/2026-09-08.md"
+  ],
+  "rank": 2,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-08.md",
+   "journals/2026-09-07.md",
+   "journals/2026-09-01.md",
+   "journals/2026-09-02.md"
+  ],
+  "scores": [
+   10.92,
+   10.6,
+   7.6,
+   5.34,
+   4.4
+  ]
+ },
+ {
+  "id": "Q07",
+  "q": "what happened to the assistant that was writing files for me?",
+  "targets": [
+   "journals/2026-09-08.md",
+   "journals/2026-09-09.md"
+  ],
+  "rank": 1,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-08.md",
+   "journals/2026-09-09.md",
+   "journals/2026-09-02.md",
+   "journals/2026-09-01.md",
+   "journals/2026-08-31.md"
+  ],
+  "scores": [
+   7.53,
+   6.55,
+   5.36,
+   5.17,
+   4.56
+  ]
+ },
+ {
+  "id": "Q08",
+  "q": "read me back that short poem about the cold season",
+  "targets": [
+   "journals/2026-09-08.md"
+  ],
+  "rank": 1,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-08.md",
+   "journals/2026-09-09.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-02.md",
+   "journals/2026-09-01.md"
+  ],
+  "scores": [
+   10.56,
+   4.9,
+   2.86,
+   2.41,
+   2.2
+  ]
+ },
+ {
+  "id": "Q09",
+  "q": "how should I be installing command line programs from now on?",
+  "targets": [
+   "journals/2026-09-09.md"
+  ],
+  "rank": 1,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-01.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-08.md",
+   "journals/2026-09-02.md"
+  ],
+  "scores": [
+   9.62,
+   9.08,
+   8.14,
+   7.62,
+   5.74
+  ]
+ },
+ {
+  "id": "Q10",
+  "q": "is that vault app set up on my desktop yet?",
+  "targets": [
+   "journals/2026-09-09.md"
+  ],
+  "rank": 1,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-08.md",
+   "journals/2026-09-07.md",
+   "journals/2026-09-02.md",
+   "journals/2026-09-01.md"
+  ],
+  "scores": [
+   12.16,
+   7.43,
+   7.01,
+   3.97,
+   3.12
+  ]
+ },
+ {
+  "id": "Q11",
+  "q": "did you ever write up that document I asked you for?",
+  "targets": [
+   "journals/2026-09-09.md"
+  ],
+  "rank": 1,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-08.md",
+   "journals/2026-09-01.md",
+   "journals/2026-09-07.md",
+   "journals/2026-09-02.md"
+  ],
+  "scores": [
+   11.08,
+   10.31,
+   3.77,
+   3.75,
+   3.69
+  ]
+ },
+ {
+  "id": "Q12",
+  "q": "when does caching ahead of time stop being worth it?",
+  "targets": [
+   "journals/2026-09-09.md"
+  ],
+  "rank": 1,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-02.md",
+   "journals/2026-09-07.md",
+   "journals/2026-09-08.md"
+  ],
+  "scores": [
+   8.31,
+   7.7,
+   7.23,
+   4.16,
+   3.96
+  ]
+ },
+ {
+  "id": "Q13",
+  "q": "which brain is answering me right now?",
+  "targets": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-08.md"
+  ],
+  "rank": 1,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-08.md",
+   "journals/2026-09-01.md",
+   "journals/2026-09-02.md",
+   "journals/2026-08-31.md"
+  ],
+  "scores": [
+   6.39,
+   5.64,
+   5.62,
+   4.57,
+   4.25
+  ]
+ },
+ {
+  "id": "Q14",
+  "q": "how much money have I burned through so far?",
+  "targets": [
+   "journals/2026-09-08.md"
+  ],
+  "rank": 3,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-03.md",
+   "journals/2026-09-08.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-01.md"
+  ],
+  "scores": [
+   5.77,
+   5.75,
+   3.52,
+   3.35,
+   3.23
+  ]
+ },
+ {
+  "id": "Q15",
+  "q": "what's my desktop called?",
+  "targets": [
+   "journals/2026-09-01.md",
+   "journals/2026-09-02.md",
+   "journals/2026-09-03.md"
+  ],
+  "rank": 4,
+  "fact_rank": 4,
+  "returned": [
+   "journals/2026-09-08.md",
+   "journals/2026-09-09.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-02.md",
+   "journals/2026-09-01.md"
+  ],
+  "scores": [
+   5.21,
+   4.02,
+   2.53,
+   2.3,
+   1.32
+  ]
+ },
+ {
+  "id": "Q16",
+  "q": "where do I keep all my projects?",
+  "targets": [
+   "journals/2026-09-02.md",
+   "journals/2026-09-03.md"
+  ],
+  "rank": 4,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-01.md",
+   "journals/2026-09-02.md",
+   "journals/2026-09-08.md"
+  ],
+  "scores": [
+   12.24,
+   6.03,
+   4.04,
+   3.57,
+   3.5
+  ]
+ },
+ {
+  "id": "Q17",
+  "q": "is there a program on my box for showing folder layouts?",
+  "targets": [
+   "journals/2026-09-03.md"
+  ],
+  "rank": null,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-08.md",
+   "journals/2026-09-09.md",
+   "topics/hardware-spec-local-llm-box.md",
+   "journals/2026-09-02.md",
+   "journals/2026-08-31.md"
+  ],
+  "scores": [
+   8.32,
+   7.71,
+   5.0,
+   4.45,
+   4.37
+  ]
+ },
+ {
+  "id": "Q18",
+  "q": "how many goes does my note taker get on a job?",
+  "targets": [
+   "journals/2026-09-08.md"
+  ],
+  "rank": 2,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-09.md",
+   "journals/2026-09-08.md",
+   "journals/2026-08-31.md",
+   "journals/2026-09-03.md",
+   "journals/2026-09-01.md"
+  ],
+  "scores": [
+   9.74,
+   8.62,
+   5.33,
+   3.21,
+   2.47
+  ]
+ },
+ {
+  "id": "Q19",
+  "q": "how much am I letting that note taker spend each month?",
+  "targets": [
+   "journals/2026-09-08.md"
+  ],
+  "rank": 1,
+  "fact_rank": null,
+  "returned": [
+   "journals/2026-09-08.md",
+   "journals/2026-09-09.md",
+   "journals/2026-09-03.md",
+   "journals/2026-09-07.md",
+   "journals/2026-08-31.md"
+  ],
+  "scores": [
+   11.31,
+   10.8,
+   5.75,
+   3.82,
+   2.57
+  ]
+ },
+ {
+  "id": "Q20",
+  "q": "how much regular memory does this box have besides the card?",
+  "targets": [
+   "topics/hardware-spec-local-llm-box.md",
+   "journals/2026-08-31.md"
+  ],
+  "rank": 1,
+  "fact_rank": 1,
+  "returned": [
+   "journals/2026-08-31.md",
+   "journals/2026-09-09.md",
+   "journals/2026-09-03.md",
+   "topics/hardware-spec-local-llm-box.md",
+   "journals/2026-09-08.md"
+  ],
+  "scores": [
+   8.84,
+   8.31,
+   5.04,
+   4.56,
+   2.39
+  ]
+ }
+]

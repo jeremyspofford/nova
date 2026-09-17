@@ -1,0 +1,1968 @@
+/**
+ * Every call the browser makes. Core (:8000) is the only backend a browser
+ * ever sees — nginx and the vite dev server both send /api there — so there
+ * is no base URL to configure and no second origin to get wrong.
+ *
+ * A refusal keeps its stated reason — see lib/statedReason.ts for where in a
+ * response that reason lives — because "something went wrong" is not a fact
+ * anyone can act on.
+ */
+import type { Role } from './roles'
+import type { Person } from './gate'
+import { failureReason } from './streamChat'
+import { statedReason } from './statedReason'
+import { createLineBuffer } from './lineBuffer'
+
+/** The three backends core's PUT /inference/backend accepts. */
+export type EngineKind = 'ollama' | 'remote' | 'cloud'
+
+export class ApiError extends Error {
+  readonly status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
+async function request(path: string, init: RequestInit = {}): Promise<Response> {
+  let response: Response
+  try {
+    response = await fetch(path, {
+      credentials: 'same-origin',
+      ...init,
+      headers: {
+        // JSON for an ordinary body — but NEVER for FormData (S28). A
+        // multipart request carries a generated boundary in its own
+        // Content-Type, and the browser is the only thing that knows it;
+        // stamping application/json here makes the server parse a multipart
+        // payload as JSON and reject the upload with a shape error that
+        // says nothing about the real cause.
+        ...(init.body && !(init.body instanceof FormData)
+          ? { 'Content-Type': 'application/json' }
+          : {}),
+        ...(init.headers ?? {}),
+      },
+    })
+  } catch (err) {
+    throw new ApiError(0, `could not reach Nova — ${failureReason(err)}`)
+  }
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      statedReason(await response.text().catch(() => ''), response.status),
+    )
+  }
+  return response
+}
+
+export async function apiGet<T>(path: string): Promise<T> {
+  return (await request(path)).json() as Promise<T>
+}
+
+export async function apiSend<T>(path: string, method: string, body?: unknown): Promise<T> {
+  const response = await request(path, {
+    method,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  return response.json() as Promise<T>
+}
+
+// ── auth ────────────────────────────────────────────────────────────────
+
+export interface AuthState {
+  has_users: boolean
+}
+
+export const getAuthState = () => apiGet<AuthState>('/api/v1/auth/state')
+
+const asPerson = (body: { person: { id: string; name: string; role: string } }): Person => ({
+  id: body.person.id,
+  name: body.person.name,
+  role: body.person.role as Role,
+})
+
+export async function getMe(): Promise<Person> {
+  return asPerson(await apiGet('/api/v1/auth/me'))
+}
+
+export async function postLogin(name: string, password: string): Promise<Person> {
+  return asPerson(await apiSend('/api/v1/auth/login', 'POST', { name, password }))
+}
+
+export async function postRegister(name: string, password: string): Promise<Person> {
+  return asPerson(await apiSend('/api/v1/auth/register', 'POST', { name, password }))
+}
+
+export async function postLogout(): Promise<void> {
+  await apiSend('/api/v1/auth/logout', 'POST')
+}
+
+// ── settings ────────────────────────────────────────────────────────────
+
+export interface SettingDef {
+  key: string
+  // Mirrors core's settings registry (services/core/app/settings_store.py).
+  // 'int' arrived with the tool loop's round cap; a union that lies about
+  // what the API can return is worse than no union at all.
+  type: 'bool' | 'str' | 'int'
+  default: unknown
+  description: string
+  value: unknown
+}
+
+export async function getSettings(): Promise<SettingDef[]> {
+  const body = await apiGet<{ settings: SettingDef[] }>('/api/v1/settings')
+  return body.settings
+}
+
+export function settingValue<T>(settings: SettingDef[], key: string, fallback: T): T {
+  const found = settings.find(s => s.key === key)
+  return found === undefined ? fallback : (found.value as T)
+}
+
+/**
+ * What PUT /api/v1/settings answers (2026-09-08, S11): the key and the value
+ * core ACTUALLY stored, and — for a setting whose write moves something
+ * server-side — the note saying what that move did.
+ *
+ * `value` is what came back, never what was sent: a page that renders the
+ * echo is showing storage, not its own optimism. `note` is core's own
+ * sentence (settings_store.write_setting → beats.retime_digest): where the
+ * digest beat landed, that it is paused, or why it could not be moved. It is
+ * absent for every other key, and it is words — never parsed, only shown.
+ */
+export interface SettingWritten {
+  key: string
+  value: unknown
+  note?: string
+}
+
+export async function putSetting(
+  key: string,
+  value: boolean | string | number,
+): Promise<SettingWritten> {
+  return apiSend<SettingWritten>('/api/v1/settings', 'PUT', { key, value })
+}
+
+// ── hardware, models, backend ───────────────────────────────────────────
+
+export interface Gpu {
+  name?: string
+  vram_mb?: number
+}
+
+export interface HardwareInfo {
+  gpus: Gpu[]
+  ram_mb?: number
+  disk_free_gb?: number
+  docker_gpu_runtime?: boolean
+  /** Present when hardware.json could not be read — an absence, stated. */
+  note?: string
+}
+
+export const getHardware = () => apiGet<HardwareInfo>('/api/v1/system/hardware')
+
+/** comfortable/tight/wont_fit are only ever computed from a REAL free-VRAM
+ * reading; 'unknown' (with a stated reason) is what the gateway answers when
+ * it cannot determine one — never a guess. See services/gateway/app/fit.py. */
+export type FitVerdict = 'comfortable' | 'tight' | 'wont_fit' | 'unknown'
+
+/** 'verified' means a real POST /admin/probe measured this model's VRAM on
+ * THIS host; 'estimated' means the curated catalog's min_vram_gb floor. */
+export type FitSource = 'verified' | 'estimated'
+
+export interface ModelFit {
+  verdict: FitVerdict
+  needed_gb: number | null
+  free_gb: number | null
+  total_gb: number | null
+  source: FitSource
+  reason: string | null
+}
+
+export interface SuggestedModel {
+  slug: string
+  label: string
+  params_b: number
+  min_vram_gb: number
+  note: string
+  /** Optional: older/test fixtures may omit it. A real gateway response
+   * always attaches one per model — see GET /admin/suggest in T2. */
+  fit?: ModelFit
+}
+
+export interface Suggestion {
+  tier: string
+  engine_suggestion: string
+  models: SuggestedModel[]
+  rationale: string
+}
+
+export const getSuggestion = () => apiGet<Suggestion>('/api/v1/models/suggest')
+
+/** One entry of the gateway's OpenAI-compat GET /v1/models list. */
+export interface InstalledModel {
+  id: string
+}
+
+/**
+ * The models actually installed on the active backend (core's passthrough
+ * to the gateway's GET /v1/models — ollama's tags, or a remote/cloud
+ * endpoint's own list). Settings -> Models uses this to mark which curated
+ * slugs are already usable versus still needing a pull.
+ */
+export async function getInstalledModels(): Promise<string[]> {
+  const body = await apiGet<{ data: InstalledModel[] }>('/api/v1/models')
+  return body.data.map(m => m.id)
+}
+
+export interface BackendConfig {
+  kind: EngineKind
+  url: string | null
+  provider: string | null
+  model: string | null
+  /** Masked by core; never the real key. */
+  api_key: string | null
+}
+
+export interface BackendWrite {
+  kind: EngineKind
+  url?: string
+  provider?: string
+  model?: string
+  api_key?: string
+}
+
+export const getBackend = () => apiGet<BackendConfig>('/api/v1/inference/backend')
+
+/** Core verifies the backend is live before saving; a 502 means unsaved. */
+export const putBackend = (config: BackendWrite) =>
+  apiSend<BackendConfig>('/api/v1/inference/backend', 'PUT', config)
+
+// ── conversations ───────────────────────────────────────────────────────
+
+export interface Conversation {
+  id: string
+  title: string | null
+  created_at: string
+  // True when this conversation's newest turn is still running server-side
+  // (turns.status NULL). A client returning after a hard refresh reads this
+  // to know a reply is still on its way and to poll for it, rather than
+  // showing a truncated answer — see services/core/app/conversations.py and
+  // ChatPage's in-flight poll. (S2c.)
+  pending_turn: boolean
+  // WHICH turn is still running, when one is (S15). A tab that reloaded into a
+  // turn never saw its meta frame, so without this it can show "still
+  // responding" over a turn it has no way to stop — which is exactly how a
+  // hung turn once held a conversation for ten and a half hours. null whenever
+  // pending_turn is false.
+  pending_turn_id: string | null
+  // Messages core has ACCEPTED but not yet answered, oldest first (S15) — sent
+  // while a turn was running. The server is what runs them, so this list is the
+  // truth the page adopts; `ahead` is how many run before each one.
+  queued: { id: string; conversation_id: string; body: string; ahead: number }[]
+  /** S24: null for the hallway, the message this ROOM hangs off when it is a
+   *  thread. The page needs it to scroll back to the right place on the way
+   *  out. Optional so a core older than S24 still typechecks. */
+  parent_message_id?: string | null
+}
+
+export interface StoredMessage {
+  id: string
+  role: string
+  content: string
+  created_at: string
+  /** `provider:model` as the gateway stated it on this turn's llm_call span
+   * (S10-pre) — DERIVED from the trace server-side, never stored on the row.
+   * null for user rows, for rows older than the turn link, and for a turn
+   * whose gateway call never stated one. */
+  served_by?: string | null
+  /** `turns.kind` of the turn that wrote this row (S9) — 'chat' for an
+   * ordinary reply, 'reminder' / 'scheduled' for a row a timer firing
+   * landed here, DERIVED server-side from `messages.turn_id` the same way
+   * `served_by` is, never stored on the message. null for user rows and for
+   * rows older than the turn link. The chat bubble's "Reminder" /
+   * "Scheduled" label reads this and nothing else. */
+  turn_kind?: string | null
+  /** The LAST round's prompt size, off that round's llm_call span
+   *  (2026-09-16) — what the context gauge fills against, so a reload shows
+   *  the same figure the live usage frame did. The last round, not the sum:
+   *  each round re-sends the whole prompt. null when no round stated one. */
+  prompt_tokens?: number | null
+  /** The turn's cost in USD summed from its llm_call spans (S10) — the
+   * gateway's ledger figures, never a stored claim. null when no round was
+   * priced (local, unmetered, or unpriced). */
+  cost_usd?: number | null
+  /** The gateway's stated reason when this turn's answer came from a
+   * fallback link (S10-2); null when link 1 served. */
+  route_reason?: string | null
+  /** The agent whose turn wrote this row (S12, the `@name` path) —
+   * `agents.name` joined through the turn's `agent_id`, the `turn_kind`
+   * idiom: DERIVED on read, never a stored label, so a deleted agent's
+   * rows simply lose the badge. null for user rows and for Nova's own
+   * replies. Absent on a core older than S12. */
+  agent?: string | null
+  /** The delegations Nova's turn made while writing this row (S12) —
+   * derived from her `delegate_to_agent` spans' `meta.facts`, the
+   * `served_by` idiom. Empty when she delegated nothing; absent on a core
+   * older than S12. */
+  delegations?: Delegation[]
+  /** The files this message carried (S28). Always present from a core that
+   * has it, empty where nothing was attached — so "no files" and "this
+   * server does not say" stay distinguishable. */
+  attachments?: Attachment[]
+}
+
+/** One `delegate_to_agent` call as the turn ledger recorded it (S12).
+ * `status` is the CHILD turn's close and `files` the paths of its
+ * successful workspace_write_file spans — both derived from spans, never
+ * from the agent's own report of what it did. */
+export interface Delegation {
+  agent: string
+  /** Null when the call was refused before any child turn ran. */
+  agent_turn_id: string | null
+  /** 'refused' = the delegate call never started a run (unknown agent,
+   * empty task, an agent trying to delegate) — a stated refusal, not a run
+   * that failed. */
+  status: 'ok' | 'error' | 'interrupted' | 'refused'
+  files: string[]
+}
+
+/** Change what this person is called (2026-09-16). The name is also the
+ *  login identifier, so it stays unique — a name somebody else holds comes
+ *  back as a stated 409, never a silent no-op. */
+export const renameMe = (name: string) =>
+  apiSend<{ person: { id: string; name: string; role: string } }>(
+    '/api/v1/auth/me',
+    'PATCH',
+    { name },
+  )
+
+// ── attachments (services/core/app/attachments_api.py, S28) ────────────
+
+/** A file he gave her, as core recorded it. The BYTES are in the workspace
+ * at `path` — the same string her `workspace_read_file` tool takes — and
+ * this row is the record of what arrived, never a second copy of it. */
+export interface Attachment {
+  id: string
+  filename: string
+  media_type: string
+  /** The family: `image`, `audio`, `text`, `application`. Derived by core
+   * from the media type it SNIFFED off the bytes, not from the name this
+   * client sent. */
+  kind: string
+  size_bytes: number
+  path: string
+  created_at: string
+  has_text: boolean
+  extract_note: string | null
+}
+
+/** POST /attachments — one file, its own request.
+ *
+ * Separate from sending the message on purpose: a photo on a phone
+ * connection would otherwise hold the chat POST open for its whole upload
+ * and the turn could not start until the last byte landed. The id comes
+ * back, and `sendMessage` names it.
+ *
+ * A refusal is core's own sentence — 413 with the size and the ceiling for
+ * something too big, 400 for a file with nothing in it. */
+export async function uploadAttachment(conversationId: string, file: File): Promise<Attachment> {
+  const form = new FormData()
+  form.append('conversation_id', conversationId)
+  form.append('file', file, file.name)
+  const body = await request('/api/v1/attachments', { method: 'POST', body: form })
+  return (await body.json()).attachment as Attachment
+}
+
+/** What the client should refuse before it starts uploading. Read from the
+ * server rather than carried here: a limit written in two places disagrees
+ * with itself the day one changes, and the half that would be wrong is the
+ * one that tells him. */
+/** GET /models/vision — installed models that can actually SEE (S28).
+ *
+ * Derived by core from the same catalogue and the same helper the TURN
+ * uses, so the list he chooses from and the set she picks within cannot
+ * disagree. `reason` is present only when the catalogue could not be read:
+ * an empty list and an unreadable catalogue are different facts, and a
+ * picker that renders "none" for both tells him something false about his
+ * own machine. */
+export const visionModels = () =>
+  apiGet<{ models: string[]; reason?: string }>('/api/v1/models/vision')
+
+export const attachmentLimits = () => apiGet<{ max_bytes: number }>('/api/v1/attachments/limits')
+
+export const getActiveConversation = () => apiGet<Conversation>('/api/v1/conversations/active')
+
+/** The live state of a conversation the client NAMES (S24) — the same shape
+ *  `/active` answers, so a page landing on `?thread=<id>` attaches to a room
+ *  exactly the way it attaches to the hallway, including to a turn already
+ *  running in it. One builder serves both on the server, so they cannot
+ *  drift. */
+export const getConversationState = (conversationId: string) =>
+  apiGet<Conversation>(`/api/v1/conversations/${conversationId}/state`)
+
+/** How many messages each room holds, keyed by the message it hangs off
+ *  (S24). Only messages that HAVE a room appear — "no room here" and "a room
+ *  nobody has spoken in" are different things, and the stub only renders for
+ *  the second. Counted on the server, never stored. */
+export type ThreadCounts = Record<string, number>
+
+/**
+ * What the context panel shows (2026-09-16). Every half degrades on its own
+ * — the card, the machine and the throughput come from different sources
+ * and fail for different reasons — so each carries a `reason` and a null
+ * figure rather than a zero.
+ *
+ * There is no network throughput here on purpose: nobody measures it, and a
+ * number nobody measured looks exactly as confident as one somebody did.
+ */
+export interface SystemResources {
+  card: {
+    free_gb?: number | null
+    total_gb?: number | null
+    used_gb?: number | null
+    /** Shader busy-ness. Free memory and utilisation fail in OPPOSITE
+     *  directions — 16 GB free at 99% busy is a card that cannot answer. */
+    utilisation_pct?: number | null
+    /** The card's used figure minus what ollama holds: everything on this
+     *  machine Nova cannot enumerate. The actionable half. */
+    non_ollama_gb?: number | null
+    resident?: { model: string; vram_gb: number }[]
+    reason?: string | null
+  }
+  machine: {
+    memory?: { total_mb: number | null; available_mb: number | null; reason: string | null }
+    cpu?: { cores: number | null; load_1m: number | null; reason: string | null }
+    disk?: { free_gb: number | null; total_gb: number | null; reason: string | null }
+    reason?: string | null
+  }
+  /** null when this model has no measured history here — never a zero. */
+  throughput: {
+    model: string
+    recent_tok_per_s: number | null
+    baseline_tok_per_s: number | null
+    recent_rounds: number
+    baseline_rounds: number
+    ratio: number | null
+  } | null
+  model: string | null
+}
+
+export const getSystemResources = () =>
+  apiGet<SystemResources>('/api/v1/system/resources')
+
+export async function getMessages(
+  conversationId: string,
+): Promise<{ messages: StoredMessage[]; threads: ThreadCounts }> {
+  const body = await apiGet<{ messages: StoredMessage[]; threads?: ThreadCounts }>(
+    `/api/v1/conversations/${conversationId}/messages`,
+  )
+  // `threads` is absent on a core older than S24; an empty map draws no
+  // stubs, which is the right answer rather than a crash.
+  return { messages: body.messages, threads: body.threads ?? {} }
+}
+
+/** Open (or re-open) the room off one message. Idempotent on the server — a
+ *  partial unique index means a double tap cannot fork a message into two
+ *  rooms, so this is safe to call from a button with no guard of its own. */
+export const openThread = (conversationId: string, messageId: string) =>
+  apiSend<Conversation & { parent_message_id: string; created: boolean }>(
+    `/api/v1/conversations/${conversationId}/messages/${messageId}/thread`,
+    'POST',
+    {},
+  )
+
+export interface ClearedConversation {
+  id: string
+  /** How many message rows were removed — a real count from the server, never
+   * a bare "ok". */
+  cleared: number
+}
+
+/**
+ * Clear this conversation's transcript (POST .../clear). Deletes the messages
+ * only — turns/turn_spans and the governance ledger (Activity + audit) and
+ * long-term memory are deliberately left intact server-side
+ * (services/core/app/conversations.py). The store resets the UI only AFTER this
+ * resolves, so there is no fake success.
+ */
+export async function clearConversation(conversationId: string): Promise<ClearedConversation> {
+  return apiSend<ClearedConversation>(`/api/v1/conversations/${conversationId}/clear`, 'POST')
+}
+
+// ── spend (S10): the gateway's ledger, rolled up ────────────────────────
+
+export type SpendWindow = 'today' | '7d' | '30d' | 'month'
+
+export interface SpendRollup {
+  key: string | null
+  local: boolean
+  usd: number | null
+  calls: number
+  unmetered: number
+  prompt_tokens: number
+  completion_tokens: number
+  gpu_seconds: number
+  /** by_person only: named by core; null for a call with no person;
+   * "(no longer exists)" for a deleted one. */
+  person?: { name: string; role: string | null } | null
+  [key: string]: unknown
+}
+
+export interface SpendProvider {
+  provider: string
+  local: boolean
+  usd: number | null
+  calls: number
+  unmetered: number
+  refusals: number
+  gpu_seconds: number | null
+  month_usd: number | null
+  cap_usd: number | null
+  remaining_usd: number | null
+}
+
+export interface SpendReport {
+  window: SpendWindow
+  since: string
+  until: string
+  timezone: string
+  totals: {
+    usd: number | null
+    usd_by_basis: Record<string, number | null>
+    gpu_seconds: number
+    calls: number
+    unmetered: number
+    refusals: number
+    probes: number
+    ledger_write_failures: number
+    month_usd: number | null
+    month_cap_usd: number | null
+    in_flight_note: string
+  }
+  by_provider: SpendProvider[]
+  by_model: SpendRollup[]
+  by_purpose: SpendRollup[]
+  by_role: SpendRollup[]
+  by_person: SpendRollup[]
+  by_day: {
+    day: string
+    usd: number | null
+    calls: number
+    gpu_seconds: number
+    /** Each model's share of the day (served_by), for the stacked bar. */
+    models: { key: string; local: boolean; usd: number | null; calls: number; gpu_seconds: number }[]
+  }[]
+  unpriced: { provider: string; model: string; calls: number }[]
+  recent_refusals: { at: string; provider: string; model: string; status: number; error: string | null; purpose: string }[]
+  caps: Record<string, number | null>
+}
+
+export interface SpendCap {
+  provider: string
+  monthly_usd: number | null
+  spent_usd: number
+  remaining_usd: number | null
+}
+
+export interface SpendPrice {
+  provider: string
+  model: string
+  basis: 'owner' | 'listing' | 'curated'
+  prompt_usd_per_token: number
+  completion_usd_per_token: number
+  cache_read_multiplier: number | null
+  cache_write_multiplier: number | null
+  verified_at: string
+  source: string | null
+}
+
+export const getSpend = (window: SpendWindow = 'month') => apiGet<SpendReport>(`/api/v1/spend?window=${window}`)
+export const getSpendCaps = () => apiGet<{ caps: SpendCap[]; month_since: string; timezone: string }>('/api/v1/spend/caps')
+export const putSpendCap = (provider: string, monthly_usd: number | null) =>
+  apiSend<{ provider: string; monthly_usd: number | null }>('/api/v1/spend/caps', 'PUT', { provider, monthly_usd })
+export const getSpendPrices = () => apiGet<{ prices: SpendPrice[] }>('/api/v1/spend/prices')
+export const putOwnerPrice = (provider: string, model: string, prompt_usd_per_token: number, completion_usd_per_token: number) =>
+  apiSend<{ provider: string; model: string; basis: 'owner' }>('/api/v1/spend/prices', 'PUT', {
+    provider,
+    model,
+    prompt_usd_per_token,
+    completion_usd_per_token,
+  })
+export const deleteOwnerPrice = (provider: string, model: string) =>
+  apiSend<{ removed: boolean }>(`/api/v1/spend/prices?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}`, 'DELETE')
+
+// ── routing (S10-2): the role chains, the walk explained, the walls ─────
+
+/** The five roles the gateway ships with; every other role is derived — a
+ * core-side agent named `x` owns `agent_x` (S12). */
+export type BuiltinRole = 'chat' | 'scheduled' | 'judge' | 'coding' | 'vision'
+/** Any routing role: a built-in or an agent's derived `agent_<name>`. */
+export type RouteRole = BuiltinRole | string
+
+export interface RouteVerdict {
+  link: number
+  id: string
+  provider?: string
+  model?: string
+  local?: boolean
+  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'unreachable' | 'unknown' | 'refused' | string
+  reason: string | null
+  walled_until?: string
+}
+
+export interface RouteExplain {
+  role: RouteRole
+  chain: RouteVerdict[]
+  would_serve: { role: string; link: number; reason: string | null; served_by: string; standby: boolean } | null
+  reason: string | null
+}
+
+export interface RouteWall {
+  provider: string
+  walled_until: string
+  reason: string
+  status: number
+  strikes: number
+}
+
+export interface Routes {
+  roles: { role: RouteRole; chain: string[]; reserved: boolean; builtin?: boolean }[]
+  walls: RouteWall[]
+}
+
+export const getRoutes = () => apiGet<Routes>('/api/v1/routes')
+export const putRoute = (role: RouteRole, chain: string[]) =>
+  apiSend<{ role: RouteRole; chain: string[] }>(`/api/v1/routes/${role}`, 'PUT', { chain })
+export const explainRoute = (role: RouteRole, model?: string) =>
+  apiGet<RouteExplain>(`/api/v1/routes/explain?role=${role}${model ? `&model=${encodeURIComponent(model)}` : ''}`)
+export const clearWall = (provider: string) =>
+  apiSend<{ provider: string; cleared: boolean }>(`/api/v1/routes/walls/${encodeURIComponent(provider)}`, 'DELETE')
+/** DELETE /routes/{role} drops the role's stored chain — nothing to read
+ * back; a built-in (400) or a role with no row (404) is thrown by `request`
+ * with the gateway's stated reason. */
+export async function deleteRoute(role: string): Promise<void> {
+  await request(`/api/v1/routes/${encodeURIComponent(role)}`, { method: 'DELETE' })
+}
+
+// ── agents (S12): the live agents, each owning a derived routing role ───
+
+/** The three fields every consumer of the roster needs (the `@` menu, the
+ * Routing page's labels). A subset of `Agent`, so a full row satisfies it. */
+export interface AgentSummary {
+  name: string
+  purpose: string
+  /** the routing role derived from the name: `agent_<name>` */
+  role: string
+}
+
+/** One skill the agent names, checked against `<root>/skills/` AT THE CALL —
+ * a file that has since gone is flagged (`present: false`), never dropped. */
+export interface AgentSkill {
+  name: string
+  present: boolean
+}
+
+/** Whether the agent is working RIGHT NOW, and on what — derived server-side
+ * from the process-local `traces.DOING` map, never a stored flag (a stored
+ * "working" would still say so a day after the process died). Idle is
+ * `working: false` with the rest null. */
+export interface AgentState {
+  working: boolean
+  doing: string | null
+  since: string | null
+  turn_id: string | null
+}
+
+/** A timer bound to the agent (`timers.agent_id`) — what a delete pauses. */
+export interface AgentTimerRef {
+  id: string
+  title: string
+}
+
+/** What the gateway did with the agent's `agent_<name>` role on a create,
+ * update or delete, in words fit to show. `registered` is true only when the
+ * gateway holds the state the call asked for. */
+export interface AgentRoute {
+  registered: boolean
+  detail: string
+}
+
+/**
+ * One agent as GET /api/v1/agents returns it (services/core/app/agents_api.py).
+ * The row's own columns plus the facts DERIVED at the request: `state`,
+ * `last_active`, `bound_timers`, `skills` (present or not), `unknown_tools`
+ * (subset entries naming no registered tool), and `spent_month_usd` from the
+ * gateway's ledger for the derived role — null with `spend_note` saying why
+ * when the ledger could not be read, NEVER shown as 0 (0 is a real figure).
+ */
+export interface Agent extends AgentSummary {
+  id: string
+  instructions: string
+  tools: string[]
+  skills: AgentSkill[]
+  unknown_tools: string[]
+  monthly_cap_usd: number | null
+  max_tool_rounds: number
+  read_shared_memory: boolean
+  /** `agents/<name>/` — the workspace folder its files live under. */
+  folder: string
+  /** null until the first delegation creates it — /log is then empty. */
+  log_conversation_id: string | null
+  created_via: string
+  created_at: string
+  updated_at: string
+  bound_timers: AgentTimerRef[]
+  spent_month_usd: number | null
+  spend_note: string | null
+  last_active: string | null
+  state: AgentState
+}
+
+/** POST /agents body — the AgentSpec fields by name. `name` is immutable
+ * after create (the store refuses a rename in its own words). */
+export interface AgentWrite {
+  name: string
+  purpose: string
+  instructions: string
+  tools: string[]
+  skills?: string[]
+  monthly_cap_usd?: number | null
+  max_tool_rounds?: number
+  read_shared_memory?: boolean
+  model_chain?: string[]
+}
+
+/** PUT /agents/{name} body — the subset being changed. */
+export type AgentChanges = Partial<Omit<AgentWrite, 'name'>>
+
+/** A create/update answers with the row read back after the commit, plus
+ * `text` — the sentence the store composed from what it READ BACK, the
+ * same one Nova's own tools return — and the gateway's route outcome. */
+export interface AgentSaved extends Agent {
+  text: string
+  route: AgentRoute
+}
+
+/** What DELETE /agents/{name} answers: which timers it paused
+ * (`already_paused` is null for one THIS delete paused, else the reason it
+ * already carried), the route outcome, and `remains` — the store's own
+ * sentence about what was left in place (folder, notes, log). */
+export interface AgentDeleted {
+  deleted: string
+  paused_timers: { id: string; title: string; already_paused: string | null }[]
+  route: AgentRoute
+  remains: string
+  text: string
+}
+
+/** One entry of the live tool registry (GET /api/v1/tools), in
+ * `tool_names()` order — the checkbox list the agent form offers. */
+export interface ToolInfo {
+  name: string
+  description: string
+  result_kind: string
+  ephemeral: boolean
+}
+
+/** One entry of GET /api/v1/skills (S17): a skill ROW, or a file under
+ * `<WORKSPACE_ROOT>/skills/` that nobody has made a row for.
+ *
+ * A file with no row is listed with `status: null` — a file is not a
+ * lifecycle — and it is still offerable to an agent, which is why the agent
+ * form reads this same list. Everything beyond the row's own columns is
+ * derived at the request: `file_present` is the file checked at the call, and
+ * `uses` is the ledger, whose unwatched count is separate from its clean one
+ * because a turn nobody watched finish is not evidence that it went well. */
+export interface SkillInfo {
+  name: string
+  title: string | null
+  summary: string | null
+  status: 'draft' | 'active' | 'flagged' | 'retired' | null
+  created_via: 'beat' | 'page' | null
+  step_names: string[]
+  flagged_reason: string | null
+  /** S18: this skill RUNS. Derived server-side from the script's presence, so
+   * the list and the detail cannot disagree about what a script is. */
+  scripted: boolean
+  script: SkillScript | null
+  inputs: Record<string, unknown> | null
+  file_present: boolean
+  uses: SkillUses | null
+  created_at: string | null
+  updated_at: string | null
+  size: number | null
+  modified: string | null
+}
+
+/** A step program: steps in order, each a real tool call, a step optionally
+ * repeating over a list the caller supplied. No branching — tool results are
+ * prose, and a condition over prose is the guesswork scripts exist to remove. */
+export interface SkillScript {
+  version: number
+  steps: {
+    tool: string
+    args: Record<string, unknown>
+    for_each?: string
+    as?: string
+  }[]
+}
+
+/** What the derivation proposed, and what it could not know. */
+export interface SkillScriptDraft {
+  script: SkillScript
+  inputs: Record<string, unknown>
+  note: string
+}
+
+export interface SkillUses {
+  total: number
+  watched: number
+  rough: number
+  unwatched: number
+  last_used: string | null
+}
+
+/** One skill in full: the list row plus the body on disk and where it came
+ * from. A source turn swept by retention comes back `present: false` rather
+ * than as a link that 404s. */
+export interface SkillDetail extends SkillInfo {
+  body: string | null
+  source_turns: { id: string; present: boolean }[]
+}
+
+/** What one side of a trial DID, read from its turn's spans — never from
+ * what the reply said it did. */
+export interface SkillTrialSide {
+  calls: number | null
+  failed_calls: number | null
+  guard_fires?: number | null
+  read_the_skill: boolean | null
+  seconds: number | null
+  ungradeable: boolean
+  no_unbacked_claim: boolean | null
+  turn_id: string | null
+}
+
+export interface SkillTrial {
+  skill: string
+  model: string
+  message: string
+  sides: { with: SkillTrialSide; without: SkillTrialSide }
+}
+
+export const listAgents = () => apiGet<Agent[]>('/api/v1/agents')
+
+/** A 404 (no agent by that name) is thrown by `request` with core's words. */
+export const getAgent = (name: string) =>
+  apiGet<Agent>(`/api/v1/agents/${encodeURIComponent(name)}`)
+
+/** A refusal (400) is the store's own sentence — shown verbatim in the form. */
+export const createAgent = (body: AgentWrite) =>
+  apiSend<AgentSaved>('/api/v1/agents', 'POST', body)
+
+export const updateAgent = (name: string, changes: AgentChanges) =>
+  apiSend<AgentSaved>(`/api/v1/agents/${encodeURIComponent(name)}`, 'PUT', changes)
+
+export const deleteAgent = (name: string) =>
+  apiSend<AgentDeleted>(`/api/v1/agents/${encodeURIComponent(name)}`, 'DELETE')
+
+/** The agent's log conversation — the briefs it was handed (user rows) and
+ * the reports it wrote (assistant rows), oldest first, in the chat
+ * transcript's own row shape. [] for an agent that has never been delegated
+ * to (its log conversation does not exist yet). */
+export const getAgentLog = (name: string) =>
+  apiGet<StoredMessage[]>(`/api/v1/agents/${encodeURIComponent(name)}/log`)
+
+export const listTools = () => apiGet<ToolInfo[]>('/api/v1/tools')
+
+export const listSkills = () => apiGet<SkillInfo[]>('/api/v1/skills')
+
+export const getSkill = (name: string) =>
+  apiGet<SkillDetail>(`/api/v1/skills/${encodeURIComponent(name)}`)
+
+/** A refusal (400) is the store's own sentence — shown verbatim. */
+export const createSkill = (body: {
+  name: string
+  title?: string
+  summary?: string
+  body?: string
+  from_notice?: string
+}) => apiSend<SkillDetail>('/api/v1/skills', 'POST', body)
+
+export const updateSkill = (
+  name: string,
+  changes: {
+    title?: string
+    summary?: string
+    body?: string
+    status?: string
+    reason?: string
+    script?: SkillScript | null
+    inputs?: Record<string, unknown> | null
+  },
+) => apiSend<SkillDetail>(`/api/v1/skills/${encodeURIComponent(name)}`, 'PATCH', changes)
+
+/** Proposes a script from the calls the skill's source turns made. Saves
+ * nothing: the owner edits and saves deliberately. */
+export const draftSkillScript = (name: string) =>
+  apiSend<SkillScriptDraft>(`/api/v1/skills/${encodeURIComponent(name)}/script/draft`, 'POST')
+
+export const deleteSkill = (name: string) =>
+  apiSend<{ name: string; deleted: boolean; text: string }>(
+    `/api/v1/skills/${encodeURIComponent(name)}`,
+    'DELETE',
+  )
+
+/** Slow by construction: two real turns against a real model. */
+export const trialSkill = (name: string, model?: string) =>
+  apiSend<SkillTrial>(`/api/v1/skills/${encodeURIComponent(name)}/trial`, 'POST', { model })
+
+// ── activity (the turn ledger, read-only) ───────────────────────────────
+
+export interface ActivityTurn {
+  id: string
+  kind: string
+  model: string | null
+  // NULL means unfinished — never coerced by this client into 'ok' or
+  // 'error'; see services/core/app/activity.py and pages/activity.
+  status: 'ok' | 'error' | 'interrupted' | null
+  started_at: string
+  duration_ms: number | null
+  tool_call_count: number
+  llm_round_count: number
+  conversation_id: string | null
+  /** Who the turn ran for (S10); null for rows older than the column. */
+  person_id?: string | null
+  /** WHO did the work (S12): the agent's name read off the agents row the
+   * turn's agent_id points at — derived on every read, so a deleted agent's
+   * turns come back null. null for Nova's own turns. Absent on a core older
+   * than S12. */
+  agent?: string | null
+  /** The routing role the turn's gateway rounds walked (S12) — `agent_<name>`
+   * for an agent's turn, kept as the turn recorded it even after the agent
+   * is deleted; null = Nova's own turn, routed by kind. */
+  role?: string | null
+}
+
+export interface ActivitySpan {
+  kind: string
+  name: string | null
+  started_at: string
+  duration_ms: number | null
+  // Shape varies by span kind, and args_redacted inside a tool span's meta
+  // is itself polymorphic (object or clipped string) — see
+  // pages/activity/activityFormat.ts's viewArgs, which is where that
+  // quirk is actually handled.
+  meta: Record<string, unknown>
+}
+
+export interface ActivityTurnDetail {
+  turn: ActivityTurn
+  spans: ActivitySpan[]
+}
+
+export const ACTIVITY_PAGE_SIZE = 50
+
+/**
+ * A page is "the last one" when it comes back shorter than the limit asked
+ * for — there is no separate has-more flag, so a caller never has more to
+ * track than the rows it already fetched.
+ */
+export async function getActivity(
+  opts: { limit?: number; before?: string; agent?: string } = {},
+): Promise<ActivityTurn[]> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? ACTIVITY_PAGE_SIZE))
+  if (opts.before) params.set('before', opts.before)
+  // S12: one agent's turns, matched server-side on the agents row's name. A
+  // name no agent holds is an EMPTY list, not a 404 — a fresh agent's Traces
+  // tab has simply done nothing yet.
+  if (opts.agent !== undefined) params.set('agent', opts.agent)
+  const body = await apiGet<{ turns: ActivityTurn[] }>(`/api/v1/activity?${params.toString()}`)
+  return body.turns
+}
+
+export const getActivityTurn = (turnId: string) =>
+  apiGet<ActivityTurnDetail>(`/api/v1/activity/${turnId}`)
+
+// ── workspace files (read-only view over Nova's workspace volume) ───────
+
+export interface WorkspaceFileEntry {
+  path: string
+  size: number
+  modified: string
+}
+
+export interface WorkspaceFileListing {
+  files: WorkspaceFileEntry[]
+  total: number
+  truncated: boolean
+}
+
+/** `prefix` (S12) narrows the walk to one folder — an agent's `agents/<name>/`
+ * for its Artifacts tab. It goes through core's same containment gate as
+ * every path; a folder that is not there yet is an EMPTY listing, not an
+ * error. Entries stay relative to the ROOT so each links to /file?path=
+ * unchanged. */
+export const getWorkspaceFiles = (prefix?: string) =>
+  apiGet<WorkspaceFileListing>(
+    prefix === undefined
+      ? '/api/v1/workspace/files'
+      : `/api/v1/workspace/files?prefix=${encodeURIComponent(prefix)}`,
+  )
+
+export interface WorkspaceFileDetail {
+  path: string
+  size: number
+  modified: string
+  // Mutually exclusive with binary/too_large: text is the file's contents
+  // only when core actually decoded it as UTF-8 under the size cap — see
+  // services/core/app/workspace_api.py. Never a truncated fragment
+  // presented as the whole file.
+  text: string | null
+  binary: boolean
+  too_large: boolean
+}
+
+export const getWorkspaceFile = (path: string) =>
+  apiGet<WorkspaceFileDetail>(`/api/v1/workspace/file?path=${encodeURIComponent(path)}`)
+
+/** Not fetched through apiGet — this is handed straight to an <a href>,
+ * so the browser's own download machinery (and core's Content-Disposition
+ * header) does the work, same origin, same session cookie. */
+export function workspaceRawUrl(path: string): string {
+  return `/api/v1/workspace/raw?path=${encodeURIComponent(path)}`
+}
+
+// ── model pull (newline-delimited JSON, not SSE) ────────────────────────
+
+export interface PullLine {
+  status?: string
+  digest?: string
+  total?: number
+  completed?: number
+  error?: string
+  note?: string
+  required_gb?: number
+  free_gb?: number
+  ok?: boolean
+  /** S10a: where the preflight size came from (`hf-hub` | `ollama-registry`). */
+  size_source?: string
+  /** S10a: what a typed ref resolved to before the pull. */
+  resolved?: { quant?: string; family?: string; params_b?: number }
+}
+
+/**
+ * One line of the pull stream. A line that will not parse becomes an error
+ * object rather than being dropped: the download step decides it is finished
+ * by seeing `{"status":"success"}`, so a parser that quietly skipped a line it
+ * did not understand could turn a failed pull into a silent one.
+ */
+export function parsePullLine(line: string): PullLine {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(line)
+  } catch {
+    return { error: `unreadable progress line: ${line.slice(0, 200)}` }
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { error: `unexpected progress line: ${line.slice(0, 200)}` }
+  }
+  return parsed as PullLine
+}
+
+/**
+ * POST /api/v1/models/pull, yielding one parsed progress object per line.
+ *
+ * Newline-delimited JSON, not SSE — no `data:` prefix and no terminator — so
+ * the framing is its own, but the chunk reassembly underneath is the same
+ * problem as the chat stream and uses the same tested buffer.
+ */
+export async function* pullModel(
+  model: string,
+  signal?: AbortSignal,
+): AsyncGenerator<PullLine> {
+  const response = await request('/api/v1/models/pull', {
+    method: 'POST',
+    body: JSON.stringify({ model }),
+    signal,
+  })
+  if (!response.body) {
+    yield { error: 'the server answered the pull with no stream to read' }
+    return
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  const lines = createLineBuffer()
+  const parsed = (batch: string[]) =>
+    batch.filter(line => line.trim() !== '').map(parsePullLine)
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      for (const line of parsed(lines.push(decoder.decode(value, { stream: true })))) yield line
+    }
+    // A stream that ended without a final newline still owes us its last line.
+    for (const line of parsed(lines.flush())) yield line
+  } finally {
+    reader.cancel().catch(() => {})
+  }
+}
+
+// ── devices (services/core/app/devices_api.py) ──────────────────────────
+
+/**
+ * A machine paired to this Nova. Pairing is the whole of it: a paired device
+ * does everything the user novad runs as can do, and there is no per-device
+ * grant to edit (owner ruling 2026-09-03) — the only things an operator
+ * changes here are the name and whether the pairing still stands. `last_seen`
+ * is core's clock at the last heartbeat, or null before the first — the ONLY
+ * liveness fact the REST list carries: `connected` is ALWAYS false on this
+ * route by design (only the model-facing device_list tool overwrites it from
+ * live WS hub membership), so the tile derives liveness from `last_seen`
+ * freshness, never from `connected`. See pages/settings/devicesFormat.ts. A
+ * revoked device is still listed — a machine that was revoked is part of what
+ * the operator needs to see.
+ */
+export interface Device {
+  id: string
+  name: string
+  platform: string
+  hostname: string
+  enrolled_at: string
+  last_seen: string | null
+  revoked_at: string | null
+  connected: boolean
+}
+
+/** A freshly minted pairing code — shown ONCE (core stores only its hash). */
+export interface PairingCode {
+  code: string
+  expires_at: string
+}
+
+export async function listDevices(): Promise<Device[]> {
+  const body = await apiGet<{ devices: Device[] }>('/api/v1/devices')
+  return body.devices
+}
+
+/** POST /devices/pairing-code — the code is returned once and never again. */
+export const mintPairingCode = () =>
+  apiSend<PairingCode>('/api/v1/devices/pairing-code', 'POST')
+
+export async function renameDevice(id: string, name: string): Promise<Device> {
+  const body = await apiSend<{ device: Device }>(
+    `/api/v1/devices/${encodeURIComponent(id)}`,
+    'PATCH',
+    { name },
+  )
+  return body.device
+}
+
+/** POST /devices/{id}/revoke — core also drops the device's live socket. */
+export async function revokeDevice(id: string): Promise<Device> {
+  const body = await apiSend<{ device: Device }>(
+    `/api/v1/devices/${encodeURIComponent(id)}/revoke`,
+    'POST',
+  )
+  return body.device
+}
+
+// ── governance audit (services/core/app/governance_api.py) ──────────────
+
+/** One row of the append-only ledger: what happened, verbatim — a record,
+ * never a decision. Never derived or filtered by this client — see
+ * governance.py's own docstring. */
+export interface GovernanceEvent {
+  id: string
+  kind: string
+  actor: string | null
+  subject_ref: string | null
+  meta: Record<string, unknown>
+  created_at: string
+}
+
+export const GOVERNANCE_PAGE_SIZE = 50
+
+export async function getGovernanceEvents(
+  opts: { limit?: number; before?: string } = {},
+): Promise<GovernanceEvent[]> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? GOVERNANCE_PAGE_SIZE))
+  if (opts.before) params.set('before', opts.before)
+  const body = await apiGet<{ events: GovernanceEvent[] }>(
+    `/api/v1/governance?${params.toString()}`,
+  )
+  return body.events
+}
+
+// ── timers / schedules (services/core/app/timers_api.py, S9) ────────────
+
+/** A timer is a row; its kind says what a firing does. `reminder` — code
+ * delivers his words to chat and every connected paired device, no model.
+ * `scheduled` — an instruction run as a real model turn. `job` — a code
+ * handler bound by name (retention). `beat` — S11's proactive engine: the
+ * hourly `watch` that runs the checks and the daily `digest` that composes
+ * the one message, each bound by `payload.handler` exactly as a job is.
+ * Nothing here is a heartbeat. */
+export type TimerKind = 'reminder' | 'scheduled' | 'job' | 'beat'
+
+/** timer_firings.status — `running` while the firing holds it, then exactly
+ * one of ok / error / refused / interrupted (the CHECK constraint's set). A
+ * firing that could not verify its own outcome is `error` with a reason. */
+export type TimerFiringStatus = 'running' | 'ok' | 'error' | 'refused' | 'interrupted'
+
+export interface TimerLastFiring {
+  status: TimerFiringStatus
+  ended_at: string | null
+  reason: string | null
+}
+
+export interface Timer {
+  id: string
+  kind: TimerKind
+  title: string
+  /** reminder: {message, device?}; scheduled: {instruction}; job: {handler}. */
+  payload: Record<string, unknown>
+  /** The validated spec (app/schedule.py). Shown only through
+   * `schedule_words` — this client never recomputes a recurrence. */
+  schedule: Record<string, unknown>
+  /** `describe()`'s words, computed server-side by the SAME function her
+   * chat confirmation uses, so the page and her reply cannot disagree
+   * about one row. Rendered verbatim. */
+  schedule_words: string
+  /** IANA zone the spec is computed in. */
+  timezone: string
+  /** null = finished (a once that has fired) — never a flag that could drift. */
+  next_fire_at: string | null
+  paused_at: string | null
+  /** Set whenever paused_at is (DB CHECK): the owner's pause, or core's own
+   * "paused after 5 consecutive failures: <last reason>". */
+  paused_reason: string | null
+  consecutive_failures: number
+  created_via: 'chat' | 'page' | 'system'
+  created_at: string
+  /** The newest firing's outcome, or null when it has never fired. */
+  last_firing: TimerLastFiring | null
+  /** S12: the agent a scheduled firing runs as (the agents row's NAME,
+   * derived from `timers.agent_id` on read), or null — Nova herself. A
+   * deleted agent SETs it null, so a firing never runs as a name no row
+   * holds. */
+  agent: string | null
+}
+
+/** One channel's delivery verdict — `ok` only from the channel's own result
+ * (the chat row persisted; the device's own result frame), never assumed. */
+export interface TimerChannelDelivery {
+  ok: boolean
+  reason?: string
+}
+
+export interface TimerDeviceDelivery extends TimerChannelDelivery {
+  name: string
+}
+
+/** {"chat": {ok, reason?}, "devices": [{name, ok, reason?}], "note"?} — a
+ * reminder with no connected device has an EMPTY devices list and a stated
+ * note; that is a fact, not a failure. A job's delivery is {}. */
+export interface TimerDelivery {
+  chat?: TimerChannelDelivery
+  devices?: TimerDeviceDelivery[]
+  note?: string
+}
+
+export interface TimerFiring {
+  id: string
+  timer_id: string
+  /** The next_fire_at this firing was claimed at. */
+  scheduled_for: string
+  started_at: string
+  ended_at: string | null
+  status: TimerFiringStatus
+  reason: string | null
+  /** The turn this firing opened — every firing is a traced turn. */
+  turn_id: string | null
+  delivery: TimerDelivery
+}
+
+export const TIMERS_PAGE_SIZE = 50
+
+/** A page is the last one when it comes back shorter than the limit asked
+ * for — the same cursor contract as getActivity (cursor = the last row's id). */
+export async function listTimers(
+  opts: { limit?: number; before?: string } = {},
+): Promise<Timer[]> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? TIMERS_PAGE_SIZE))
+  if (opts.before) params.set('before', opts.before)
+  const body = await apiGet<{ timers: Timer[] }>(`/api/v1/timers?${params.toString()}`)
+  return body.timers
+}
+
+export async function listTimerFirings(
+  timerId: string,
+  opts: { limit?: number; before?: string } = {},
+): Promise<TimerFiring[]> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? TIMERS_PAGE_SIZE))
+  if (opts.before) params.set('before', opts.before)
+  const body = await apiGet<{ firings: TimerFiring[] }>(
+    `/api/v1/timers/${encodeURIComponent(timerId)}/firings?${params.toString()}`,
+  )
+  return body.firings
+}
+
+/** POST /timers/{id}/pause → the updated row. `reason` is what the row
+ * will say it was paused for; core records one either way (paused_reason
+ * is NOT NULL whenever paused_at is). */
+export const pauseTimer = (id: string, reason?: string) =>
+  apiSend<Timer>(
+    `/api/v1/timers/${encodeURIComponent(id)}/pause`,
+    'POST',
+    reason === undefined ? {} : { reason },
+  )
+
+/** POST /timers/{id}/resume → the updated row (a paused once still in the
+ * future keeps its instant; a repeat is recomputed from now, server-side). */
+export const resumeTimer = (id: string) =>
+  apiSend<Timer>(`/api/v1/timers/${encodeURIComponent(id)}/resume`, 'POST')
+
+/** POST /timers/{id}/fire — "Run now". Core sets next_fire_at = now() and
+ * runs one scheduler tick INLINE, so the answer is the firing row that tick
+ * produced (claim + run history included), not an acknowledgement. */
+export async function fireTimer(id: string): Promise<TimerFiring> {
+  const body = await apiSend<{ firing: TimerFiring }>(
+    `/api/v1/timers/${encodeURIComponent(id)}/fire`,
+    'POST',
+  )
+  return body.firing
+}
+
+/** DELETE /timers/{id} → 204, no body — so this reads nothing back; a
+ * non-2xx is thrown by `request` with core's stated reason. */
+export async function deleteTimer(id: string): Promise<void> {
+  await request(`/api/v1/timers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+/** PUT /timers/{id}/agent {agent} (S12) — rebind which agent a scheduled
+ * timer runs as; null = Nova herself. The answer is the row as written (the
+ * pause/resume idiom), and the Schedules page re-reads the list after it so
+ * the column only ever shows a binding the server confirmed. A refusal (an
+ * unknown name — the 404 names the agents that exist; a reminder or job row
+ * — the store's 400) is thrown by `request` with core's stated reason. */
+export const bindTimerAgent = (id: string, agent: string | null) =>
+  apiSend<Timer>(`/api/v1/timers/${encodeURIComponent(id)}/agent`, 'PUT', { agent })
+
+// ── notices / the Inbox (services/core/app/notices.py, S11) ─────────────
+
+/** What happened to one piece of news. `raised` — written down, nobody told
+ * yet; `delivered`/`failed` — the digest's chat rung reported, either way,
+ * with its evidence on the row; `muted` — he asked to stop hearing this
+ * until it clears. None of the four is a permission: muting is a NOISE
+ * preference (owner ruling 2026-09-03, services/core/app/notices.py).
+ *
+ * There is deliberately no `seen` state (S25.1.3): "he read it" is
+ * `seen_at`, a timestamp beside the state rather than a value of it. As a
+ * state it silently meant a second thing — the row left the digest's owed
+ * set — so opening a card in the Inbox silenced it forever. Render read/
+ * unread from `seen_at`. */
+export type NoticeState = 'raised' | 'delivered' | 'failed' | 'muted'
+
+/**
+ * One thing a check found, as core recorded it BEFORE anyone was told.
+ *
+ * Every field here is a fact core derived, and this client renders them as
+ * given: `facts` is what the fingerprint was computed from (never the model's
+ * sentence about them), `repeats` is a SIGHTING count and not a delivery
+ * count, and `cleared_at` is about the CONDITION — orthogonal to `state`,
+ * which is about the news. A cleared row still lists: "this was true and is
+ * not any more" is part of the record.
+ */
+export interface Notice {
+  id: string
+  /** The check that found it — the registry's own name, not a label. */
+  check_name: string
+  title: string
+  /** The derived facts the fingerprint was computed from. Shape is the
+   * check's own, so this client only ever displays it as key/value. */
+  facts: Record<string, unknown>
+  /** Declared by the CHECK in code (the stack family only). Nothing a model
+   * writes can promote a finding, so this is never inferred from words. */
+  urgent: boolean
+  acted: boolean
+  /** What she did about it, in her own words on the turn that did it. */
+  acted_note: string | null
+  /** The turn that acted — the trace is the account of the claim above. */
+  acted_turn_id: string | null
+  repeats: number
+  state: NoticeState
+  /** The delivery receipt, in the SAME shape a timer firing carries — core's
+   * delivery ladder builds the Schedules page's vocabulary on purpose (see
+   * services/core/app/delivery.py), so `deliveryLines` renders both. `{}`
+   * until a rung has actually reported. */
+  delivery: TimerDelivery
+  /** Why nobody was reached, when state is `failed`. */
+  failed_reason: string | null
+  first_seen_at: string
+  last_seen_at: string
+  /** When a check that RAN stopped finding these facts; null = still true. */
+  cleared_at: string | null
+  delivered_at: string | null
+  seen_at: string | null
+  muted_at: string | null
+  /** WHICH chat row carried this to him (S24), or null. Read THIS and not
+   * `delivered_at` to decide whether "talk about this" has anywhere to go:
+   * a notice delivered by a device push alone has a delivery time and no
+   * message, so there is no room to open. */
+  delivered_message_id: string | null
+  /** Whether it is silenced RIGHT NOW. Not the same as `muted_at`, which is
+   * the stamp a cleared row keeps as its history — clearing a condition
+   * forgets its mute (S25.1). */
+  silenced: boolean
+  /** Who asked for the silence: his person id, or null meaning SHE did
+   * (S25 Q2). Meaningful only while `silenced`. A silence he did not ask
+   * for must not look like one he did. */
+  muted_by: string | null
+}
+
+/** The Inbox's page. `unseen_count` is COUNTED BY THE SERVER over every row
+ * (notices.unseen_count), not over the page it happens to return — a badge
+ * derived from `notices` here would silently cap at the page size. */
+export interface NoticeListing {
+  notices: Notice[]
+  unseen_count: number
+  /** How many rows the muted view holds — on BOTH answers, so the default
+   * view can say what it is withholding. A filter nobody can see is a
+   * disappearance (S25.1.2). */
+  muted_count: number
+}
+
+/** What the Inbox asks for in one read. Mirrors core's own default so the
+ * page's "these are the newest N" line and the server's page are the same
+ * number — the caller passes it explicitly rather than trusting the two to
+ * agree by coincidence. */
+export const NOTICES_PAGE_SIZE = 50
+
+/** `muted: true` asks for the OTHER half of the table — the rows he
+ * silenced, which the default view leaves out. They are behind a filter
+ * rather than deleted because the muted view is the only place an unmute
+ * can be clicked: a silence he cannot find is a silence he cannot lift. */
+export async function listNotices(
+  opts: { limit?: number; muted?: boolean } = {},
+): Promise<NoticeListing> {
+  const params = new URLSearchParams()
+  params.set('limit', String(opts.limit ?? NOTICES_PAGE_SIZE))
+  if (opts.muted) params.set('muted', 'true')
+  return apiGet<NoticeListing>(`/api/v1/notices?${params.toString()}`)
+}
+
+/** One TELLING: the message that carried a group of notices, and the group
+ * (S25 Q4). Never a stored object — core derives it from the
+ * `delivered_message_id` every notice already records, so there is no
+ * second copy of the truth to drift. */
+export interface NoticeDigest {
+  message_id: string
+  delivered_at: string
+  notices: Notice[]
+}
+
+/** GET /notices/digests — the Inbox by when he was told rather than by
+ * condition, newest telling first. `limit` counts TELLINGS: the oldest
+ * group in the answer is whole, never a fragment presented as the whole of
+ * it. `not_told_yet` is the other half of the question — what is standing
+ * that no message has carried, which is the same set the Inbox draws a
+ * disabled "talk about this" on. */
+export const listNoticeDigests = (limit = 20) =>
+  apiGet<{ digests: NoticeDigest[]; not_told_yet: Notice[] }>(
+    `/api/v1/notices/digests?limit=${limit}`,
+  )
+
+/**
+ * PUT /notices/{id}/seen — the read receipt, and ONLY that (S25.1.3): it
+ * stops no digest and silences nothing. To stop hearing about something
+ * there is `muteNotice`, which says so in a word and can be undone from the
+ * muted view. This reads no answer back on
+ * purpose: the caller re-reads the listing after a write, so what is shown
+ * is the server's row rather than a locally patched copy (the roster idiom
+ * on the Agents page). A refusal — an id that names no row — is thrown by
+ * `request` with core's stated reason.
+ */
+export async function markNoticeSeen(id: string): Promise<void> {
+  await request(`/api/v1/notices/${encodeURIComponent(id)}/seen`, { method: 'PUT' })
+}
+
+/**
+ * POST /notices/{id}/thread — open (or re-open) the room off the message
+ * that delivered this notice (S25.2.4), and answer with the conversation to
+ * navigate to. Idempotent: two taps land in the same room.
+ *
+ * A notice that was never delivered has no message and so no room, and core
+ * answers 409 with that reason in words. The page does not rely on catching
+ * it — it does not offer the control at all when `delivered_message_id` is
+ * null — but the refusal is the thing that is actually true, rather than a
+ * rule the client is trusted to remember.
+ */
+export const talkAboutNotice = (id: string) =>
+  apiSend<{ conversation_id: string; parent_message_id: string; created: boolean }>(
+    `/api/v1/notices/${encodeURIComponent(id)}/thread`,
+    'POST',
+    {},
+  )
+
+/** PUT /notices/{id}/mute {muted} — silence this fingerprint, or let it
+ * speak again. A mute is a noise preference and nothing else: the row keeps
+ * standing, the checks keep folding onto it, and it never permits or forbids
+ * anything. Reads no answer back for the same reason `markNoticeSeen` does. */
+export async function muteNotice(id: string, muted: boolean): Promise<void> {
+  await request(`/api/v1/notices/${encodeURIComponent(id)}/mute`, {
+    method: 'PUT',
+    body: JSON.stringify({ muted }),
+  })
+}
+
+// ── AI Quality / evals (services/core/app/evals_api.py) ─────────────────
+
+/** One suite the git corpus defines. `suite_version` pins comparability — a
+ * score is only ever compared across runs of the SAME version. */
+export interface EvalSuite {
+  suite: string
+  suite_version: number
+  case_count: number
+}
+
+export async function getEvalSuites(): Promise<EvalSuite[]> {
+  const body = await apiGet<{ suites: EvalSuite[] }>('/api/v1/evals/suites')
+  return body.suites
+}
+
+/** One predicate's outcome inside a scored case — WHAT the contract checked
+ * (predicate + optional arg) and whether it held. Mirrors the runner's
+ * detail.predicates; extra explanatory fields the scorer may add are kept. */
+export interface EvalPredicateResult {
+  predicate: string
+  arg?: string | null
+  passed: boolean
+  [k: string]: unknown
+}
+
+/** The persisted detail of one scored case: for a gradeable run, the reply
+ * excerpt and each predicate's outcome; for an ungradeable one, the turn's
+ * stated error reason instead. */
+export interface EvalCaseDetail {
+  reply?: string
+  predicates?: EvalPredicateResult[]
+  reason?: string
+  status?: string
+  [k: string]: unknown
+}
+
+export interface EvalCaseResult {
+  case_id: string
+  /** The replayed message, joined from the suite by case_id — null only if the
+   * case no longer exists at this version. */
+  message: string | null
+  /** null EXACTLY when ungradeable (the turn errored) — never coerced to false.
+   * An ungradeable case is excluded from the pass rate, not scored 0. */
+  passed: boolean | null
+  ungradeable: boolean
+  detail: EvalCaseDetail
+  turn_id: string | null
+  /** When the row was persisted — present on every stored case. */
+  created_at?: string
+}
+
+export interface EvalScoreSummary {
+  total: number
+  gradeable: number
+  ungradeable: number
+  passed: number
+  /** null when nothing is gradeable — an empty state, never a fabricated 0. */
+  pass_rate: number | null
+}
+
+/** One suite run's record (eval_suite_runs, migration 016): the server-side
+ * job's truth. `status` is the fact the page reads — 'running' while the job
+ * holds it, then exactly one of 'done' (every case scored), 'error' (the job
+ * failed; `error` says why) or 'interrupted' (the core process running it
+ * exited first; `error` says so). */
+/** 'cancelled' (S22) is deliberately its own state rather than a flavour of
+ * 'interrupted': the process dying under a run and a person pressing Stop are
+ * different facts about the record, and a reader of a half-finished run
+ * should not have to guess which happened. */
+export type EvalRunStatus = 'running' | 'done' | 'error' | 'interrupted' | 'cancelled'
+
+export interface EvalSuiteRun {
+  id: string
+  suite: string
+  suite_version: number
+  model: string
+  status: EvalRunStatus
+  case_count: number
+  error: string | null
+  started_at: string
+  ended_at: string | null
+  /** What loading the model cost, paid before case one (S21). Null means no
+   * number was measured — never a 0, which would read as "loaded instantly". */
+  warmup_ms?: number | null
+  warmup_note?: string | null
+  /** When someone asked this run to stop (S22). Set while it is still running
+   * and winding down, so the page can say "stopping" instead of looking like
+   * the button did nothing for a case's worth of time. */
+  cancel_requested_at?: string | null
+}
+
+export interface EvalRunResult {
+  suite: string
+  suite_version: number
+  model: string
+  /** The complete run these cases belong to — null when none has finished
+   * for this (suite, version, model), in which case `cases` is empty. */
+  run: EvalSuiteRun | null
+  cases: EvalCaseResult[]
+  summary: EvalScoreSummary
+}
+
+/**
+ * The latest COMPLETE run for (suite, model) at the suite's CURRENT version —
+ * so the page shows prior results without re-running, only ever within one
+ * suite_version, and never a partial (interrupted/errored) run's rows blended
+ * with an older complete one's. Empty `cases` with a null pass_rate is the
+ * honest "no finished run yet" state, never a 0/0 score.
+ */
+export async function getEvalRuns(suite: string, model: string): Promise<EvalRunResult> {
+  const params = new URLSearchParams({ suite, model })
+  return apiGet<EvalRunResult>(`/api/v1/evals/runs?${params.toString()}`)
+}
+
+/** What POST /evals/run answers (202): the run's id to poll. */
+export interface EvalRunStarted {
+  run_id: string
+  status: 'running'
+  case_count: number
+  suite: string
+  suite_version: number
+  model: string
+}
+
+/**
+ * POST /api/v1/evals/run — start a suite run as a SERVER-SIDE job and return
+ * at once. The run's truth is its database row, detached from this request:
+ * reloading, closing the tab or backgrounding the PWA no longer cancels a case
+ * mid-turn. Poll `getEvalRun(run_id)` for progress. A 409 (an ApiError with
+ * status 409) means a run is already active — one runs at a time, the GPU is
+ * shared — and the page attaches to that run (getActiveEvalRun) instead of
+ * showing an error.
+ */
+export async function startEvalRun(suite: string, model: string): Promise<EvalRunStarted> {
+  return apiSend<EvalRunStarted>('/api/v1/evals/run', 'POST', { suite, model })
+}
+
+/**
+ * POST /api/v1/evals/runs/{id}/cancel — ask a running suite to stop at its
+ * next case boundary.
+ *
+ * Before this the only way to stop a suite was restarting core, which is what
+ * actually happened on 2026-09-12 while a two-hour run produced twenty-three
+ * ungradeable cases. It STATES a request; the job does the stopping, between
+ * cases, where its scratch person and fixture agents have been torn down.
+ */
+export async function cancelEvalRun(runId: string): Promise<EvalSuiteRun> {
+  return apiSend<EvalSuiteRun>(`/api/v1/evals/runs/${runId}/cancel`, 'POST')
+}
+
+/** GET /api/v1/evals/runs/repeated — how a model did across its last few
+ * COMPLETE runs of one suite version (2026-09-14).
+ *
+ * A single run's pass rate is a sample of one: the same model disagreed with
+ * itself about one case an hour apart, and the difference between two
+ * headline numbers that afternoon was mostly which run you read. `stable` is
+ * null with only one run, because a lone run cannot say. */
+export interface EvalRepeatedCase {
+  case_id: string
+  passed: number
+  of: number
+  graded: number
+  stable: boolean | null
+  outcomes: ('pass' | 'fail' | 'ungradeable')[]
+}
+
+export interface EvalRepeatedRuns {
+  suite: string
+  suite_version: number
+  model: string
+  runs_read: number
+  runs: EvalSuiteRun[]
+  cases: EvalRepeatedCase[]
+  /** Cases that passed in EVERY run — the number that does not flatter. */
+  every_run: { passed: number }
+  floor: { passed: number }
+  best: { passed: number }
+  per_run: EvalScoreSummary[]
+}
+
+export const getRepeatedRuns = (suite: string, model: string, last = 3) => {
+  const params = new URLSearchParams({ suite, model, last: String(last) })
+  return apiGet<EvalRepeatedRuns>(`/api/v1/evals/runs/repeated?${params.toString()}`)
+}
+
+/** GET /api/v1/evals/runs/active — the running suite run, or null. Read on
+ * mount so navigating away and back re-attaches to the same run. */
+export async function getActiveEvalRun(): Promise<EvalSuiteRun | null> {
+  return apiGet<EvalSuiteRun | null>('/api/v1/evals/runs/active')
+}
+
+/** One run's record: the row, the cases persisted so far (suite order), and a
+ * summary ONLY once status is 'done' — null otherwise, so a partial run is
+ * never read as a score. */
+export interface EvalRunRecord {
+  run: EvalSuiteRun
+  cases: EvalCaseResult[]
+  summary: EvalScoreSummary | null
+}
+
+export async function getEvalRun(runId: string): Promise<EvalRunRecord> {
+  return apiGet<EvalRunRecord>(`/api/v1/evals/runs/${encodeURIComponent(runId)}`)
+}
+
+// ── providers (S10-pre) ─────────────────────────────────────────────────
+
+/** The wire protocols a provider row can name. Vendors are not the unit;
+ * protocols are: everything OpenAI-shaped (OpenAI, OpenRouter, Groq, Azure
+ * v1, Bedrock, Gemini's compat layer, …) is `openai-chat`. */
+export type ProviderAdapter = 'ollama' | 'openai-chat' | 'anthropic-messages'
+export type ProviderAuthShape = 'none' | 'static-bearer' | 'api-key-header'
+export type ProviderListingState = 'available' | 'unavailable' | 'unknown'
+
+export interface Provider {
+  name: string
+  adapter: ProviderAdapter
+  base_url: string
+  auth_shape: ProviderAuthShape
+  /** Masked by the gateway; never the real key. */
+  api_key: string | null
+  default_model: string | null
+  model_note: string | null
+  preset: string | null
+  builtin: boolean
+  is_default: boolean
+  verified_at: string | null
+  /** What the LAST model listing learned — rewritten by every listing fetch. */
+  listing: ProviderListingState
+  listing_note: string | null
+  /** The save's verdict on the KEY, written only by a save: true = accepted
+   * (the listing required it, or a 1-token completion came back as a
+   * completion); false = a completion was refused for a non-auth reason;
+   * null = never tested. `verify_note` says how, in the gateway's words. */
+  key_proven: boolean | null
+  verify_note: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ProviderWrite {
+  name?: string
+  adapter: ProviderAdapter
+  base_url: string
+  auth_shape: ProviderAuthShape
+  api_key?: string
+  default_model?: string
+  model_note?: string
+  preset?: string
+}
+
+export interface ProviderPreset {
+  name: string
+  label: string
+  adapter: ProviderAdapter
+  base_url: string
+  auth_shape: ProviderAuthShape
+  docs_url?: string
+  model_note?: string
+  quirks?: string
+  /** `{resource}`, `{region}` … the owner fills in before saving. */
+  placeholders?: string[]
+}
+
+export interface ProviderModel {
+  id: string
+  owned_by: string
+  name?: string
+  context_length?: number
+  /** USD per token, as the provider stated it. Absent when it stated none. */
+  pricing?: { prompt?: number; completion?: number }
+}
+
+/** A live listing — always labelled with where and when it came from. */
+export interface ProviderListing {
+  source: string
+  fetched_at: string
+  models: ProviderModel[]
+}
+
+export async function getProviders(): Promise<Provider[]> {
+  const body = await apiGet<{ providers: Provider[] }>('/api/v1/providers')
+  return body.providers
+}
+
+export async function getProviderPresets(): Promise<ProviderPreset[]> {
+  const body = await apiGet<{ presets: ProviderPreset[] }>('/api/v1/providers/presets')
+  return body.presets
+}
+
+/** The gateway verifies the provider live BEFORE saving; a 502 means the
+ * row never landed and the message is the provider's own reason. */
+export const createProvider = (provider: ProviderWrite & { name: string }) =>
+  apiSend<Provider>('/api/v1/providers', 'POST', provider)
+
+export const updateProvider = (name: string, patch: Partial<ProviderWrite>) =>
+  apiSend<Provider>(`/api/v1/providers/${encodeURIComponent(name)}`, 'PUT', patch)
+
+export const deleteProvider = (name: string) =>
+  apiSend<{ deleted: string }>(`/api/v1/providers/${encodeURIComponent(name)}`, 'DELETE')
+
+export const makeDefaultProvider = (name: string) =>
+  apiSend<Provider>(`/api/v1/providers/${encodeURIComponent(name)}/default`, 'PUT')
+
+export const getProviderModels = (name: string) =>
+  apiGet<ProviderListing>(`/api/v1/providers/${encodeURIComponent(name)}/models`)
+
+// ── the model catalogue (S10a) ───────────────────────────────────────────
+
+/** How a fact is known. `declared` = the source stated it; `inferred` = a
+ * heuristic (name, tags), drawn dashed with a `?` and off by default in
+ * filters; `vetted` = a dated human annotation; `measured` = Nova ran it. */
+export type CatalogBasis = 'declared' | 'inferred' | 'vetted' | 'measured'
+
+export interface CatalogFact<T = unknown> {
+  value: T
+  basis: CatalogBasis
+  /** A key into the row's `sources[]`. */
+  source: string
+  note?: string
+  at?: string
+  detail?: Record<string, unknown>
+}
+
+export interface CatalogSource {
+  key: string
+  url?: string
+  fetched_at?: string
+  cached?: boolean
+  ok?: boolean
+  note?: string
+  rows?: number
+}
+
+export type CatalogKind = 'local' | 'cloud' | 'hub'
+export type CatalogAction = 'use' | 'pull' | 'probe' | 'check_update' | 'update' | 'remove'
+
+export type CatalogRow = {
+  /** provider:model — what Use writes to chat.model. */
+  id: string
+  provider: string
+  model: string
+  label: string
+  kind: CatalogKind
+  installed?: boolean
+  sources: CatalogSource[]
+  facts: Record<string, CatalogFact>
+  capabilities: Record<string, CatalogFact<boolean>>
+  /** One entry per (name, basis): keys are `name` or `name:basis` when two bases exist. */
+  suitability: Record<string, CatalogFact<number | boolean>>
+  /** The vetted note, a failure note (a show that did not answer), or "installed as …" on a Hub row. */
+  note?: string | null
+  fit?: ModelFit | null
+  probe?: { ok: boolean; latency_ms: number | null; vram_mb: number | null; created_at: string } | null
+  drift?: {
+    checked_at: string
+    installed_digest: string | null
+    upstream_digest: string | null
+    moved: boolean | null
+    basis: string
+    note?: string
+  } | null
+  pull?: { target: string; quants: PullOption[] } | null
+  actions: CatalogAction[]
+}
+
+export interface PullOption {
+  tag: string
+  filename: string
+  size_bytes: number
+  sha256?: string
+  is_default: boolean
+  mmproj_bytes?: number
+}
+
+export interface Catalog {
+  fetched_at: string
+  sources: CatalogSource[]
+  rows: CatalogRow[]
+}
+
+export interface HfPage {
+  rows: CatalogRow[]
+  next_cursor: string | null
+  fetched_at: string
+  cached: boolean
+  budget?: { remaining: number; resets_in_s: number }
+}
+
+/** What a typed ref (`qwen3:4b`, `hf.co/org/repo:Q4_K_M`) resolves to before a pull. */
+export interface ResolvedRef {
+  model: string
+  source: string
+  fetched_at: string
+  facts: Record<string, CatalogFact>
+  pull?: { target: string; quants: PullOption[] } | null
+  note?: string
+}
+
+export const getCatalog = () => apiGet<Catalog>('/api/v1/models/catalog')
+
+export function searchHf(query: string, sort = 'downloads', cursor?: string, limit = 30) {
+  const params = new URLSearchParams({ q: query, sort, limit: String(limit) })
+  if (cursor) params.set('cursor', cursor)
+  return apiGet<HfPage>(`/api/v1/models/catalog/hf?${params.toString()}`)
+}
+
+export const getHfRepo = (org: string, repo: string) =>
+  apiGet<CatalogRow>(`/api/v1/models/catalog/hf/${encodeURIComponent(org)}/${encodeURIComponent(repo)}`)
+
+export const resolveModel = (model: string) =>
+  apiGet<ResolvedRef>(`/api/v1/models/catalog/resolve?model=${encodeURIComponent(model)}`)
+
+export interface ProbeResult {
+  id: number
+  model: string
+  kind: string
+  ok: boolean
+  latency_ms: number | null
+  vram_mb: number | null
+  error: string | null
+  created_at: string
+}
+
+/** POST /api/v1/models/probe — a real 1-token completion through the same
+ * adapter a turn uses; the gateway records the result in its probes table. */
+export const probeModel = (model: string) =>
+  apiSend<ProbeResult>('/api/v1/models/probe', 'POST', { model })
+
+/** Has the source moved since this model was pulled? The installed weights
+ * digest against the registry's / the Hub's current one. Never pulls. */
+export type DriftResult = NonNullable<CatalogRow['drift']> & { model: string; source: string | null; retry_after_s?: number }
+/** Remove an installed model from the bundled ollama; the gateway verifies
+ * against /api/tags before it says removed. */
+export const removeModel = (model: string) =>
+  apiSend<{ removed: string; verified: boolean; installed_now: number }>(
+    `/api/v1/models?model=${encodeURIComponent(model)}`,
+    'DELETE',
+  )
+
+export const checkDrift = (model: string) =>
+  apiSend<DriftResult>('/api/v1/models/catalog/drift', 'POST', { model })

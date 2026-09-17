@@ -1,0 +1,77 @@
+import { describe, it, expect } from 'vitest'
+import { navSections } from './Sidebar'
+import { moreItems, primaryTabs } from './MobileNav'
+
+// The mobile drawer and the sidebar are two surfaces over ONE nav config.
+// They had drifted once (Governance missing from mobile); this pins that
+// every Sidebar entry is reachable on mobile, in the same order.
+describe('MobileNav derives its lists from Sidebar.navSections', () => {
+  it('every labelled Sidebar section is in "More", same items, same order', () => {
+    const sidebarSystem = navSections.filter(s => s.label !== undefined)
+    expect(moreItems.map(s => s.label)).toEqual(sidebarSystem.map(s => s.label))
+    expect(moreItems.map(s => s.items.map(i => i.to))).toEqual(
+      sidebarSystem.map(s => s.items.map(i => i.to)),
+    )
+  })
+
+  it('the unlabelled (Core) items are the primary tabs, and nothing is dropped between the two', () => {
+    const everySidebarRoute = navSections.flatMap(s => s.items.map(i => i.to))
+    const everyMobileRoute = [...primaryTabs, ...moreItems.flatMap(s => s.items)].map(i => i.to)
+    expect(everyMobileRoute).toEqual(everySidebarRoute)
+    expect(primaryTabs.map(i => i.to)).toContain('/chat')
+    expect(everyMobileRoute).toContain('/schedules')
+    // S12 (2026-09-08): the Agents page joined the System group, between
+    // Schedules and Files — pinned here in the same breath as /schedules so
+    // a mobile drawer that drops it is caught the way Governance's absence
+    // once was not.
+    expect(everyMobileRoute).toContain('/agents')
+    // S11 (2026-09-08): and the Inbox, for the same reason — it is where her
+    // proactive notices land, so a phone that cannot reach it cannot read
+    // what she did overnight.
+    expect(everyMobileRoute).toContain('/inbox')
+  })
+
+  // Pin moved 2026-09-08 (S11): the chain was Schedules → Agents → Files.
+  // The Inbox took the place directly after Agents — the beats are the last
+  // thing that acts on its own and this is the record of those actions — so
+  // Files now follows Inbox. The property being pinned has not changed: the
+  // System group's order is deliberate and a drawer that reorders or drops an
+  // entry is caught here.
+  //
+  // Pin moved again 2026-09-11 (S17): Skills goes between Agents and Inbox.
+  // Agents and Skills are the two answers to "what does this household know
+  // how to do" — one a who, the other a how — and reading them apart would
+  // make the pair look unrelated. The Inbox keeps its place as the record of
+  // what acted on its own; it is now one entry further down.
+  it('Schedules → Agents → Skills → Inbox → Files hold their order in the System group', () => {
+    const system = navSections.find(s => s.label === 'System')
+    expect(system).toBeDefined()
+    const routes = system!.items.map(i => i.to)
+    expect(routes.indexOf('/agents')).toBe(routes.indexOf('/schedules') + 1)
+    expect(routes.indexOf('/skills')).toBe(routes.indexOf('/agents') + 1)
+    expect(routes.indexOf('/inbox')).toBe(routes.indexOf('/skills') + 1)
+    expect(routes.indexOf('/files')).toBe(routes.indexOf('/inbox') + 1)
+    // Gone from the nav on 2026-09-16 (owner's call): all three live under
+    // his name in the AccountMenu, which is now their only home. Pinned as
+    // an ABSENCE, because putting one back here would quietly give it two.
+    for (const his of ['/activity', '/spend', '/settings']) {
+      expect(routes).not.toContain(his)
+    }
+    expect(system!.items.find(i => i.to === '/agents')?.minRole).toBe('admin')
+    expect(system!.items.find(i => i.to === '/inbox')?.minRole).toBe('admin')
+  })
+
+  // The count on the nav badge is the SERVER's (notices.unseen_count). This
+  // pins that the config carries a key and never a number: a number here
+  // would be a client's guess at what is waiting.
+  it('only the Inbox entry declares a badge, and it declares a key rather than a count', () => {
+    const badged = navSections.flatMap(s => s.items).filter(i => i.badge !== undefined)
+    expect(badged.map(i => i.to)).toEqual(['/inbox'])
+    expect(badged[0].badge).toBe('unseen_notices')
+  })
+})
+
+// The grip, and the position it remembered, were deleted on 2026-09-16 —
+// the owner asked for a menu button in the corner instead ("make it look and
+// feel more like Claude"). `clampGripY` and its three tests went with it: a
+// test for a control nobody can touch is a test that can only ever pass.

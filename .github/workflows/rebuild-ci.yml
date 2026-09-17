@@ -1,0 +1,163 @@
+name: rebuild-ci
+
+on:
+  push:
+    branches: ["rebuild/**"]
+  pull_request:
+    branches: ["rebuild/**"]
+
+jobs:
+  services:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [core, gateway, memory]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    # Without a database the DB-backed suites skip themselves with a stated
+    # reason — honest, but a green run that proved almost nothing. Each
+    # matrix leg gets its own throwaway postgres so they actually run.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run pytest
+
+  # The installer is the real install path, so its decisions get a real suite.
+  # No docker and no network: install_test.sh sources install.sh (whose entry
+  # point is guarded) and stubs only what touches the outside world.
+  # tailnet_topology_test.sh (S5b's DoD 2 pin) is only LINTED here — it needs
+  # docker and throwaway compose projects, so running it belongs in a
+  # docker-backed job like web's gate_test.sh, not in this one.
+  installer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash -n deploy/install.sh && bash -n deploy/install_test.sh && bash -n deploy/tailnet_topology_test.sh
+      - run: shellcheck -S warning deploy/install.sh deploy/install_test.sh deploy/tailnet_topology_test.sh install
+      - run: ./deploy/install_test.sh
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test -- --run
+      # Builds the real Dockerfile and curls the pre-auth gate's fail-closed
+      # matrix against throwaway containers — see apps/web/gate_test.sh. No
+      # stack dependency, so it's cheap here: image build + a couple of
+      # short-lived containers on ports docker picks itself.
+      - run: bash gate_test.sh
+      # S5b's topology pin: a reverse proxy targeting web by a FIXED address
+      # keeps answering across every restart shape (recreate, compose
+      # restart, docker restart of either side), and the pod shape's
+      # owner-restart strand is reproduced as a negative control so the test
+      # cannot pass vacuously. Throwaway compose projects on 10.98.x only.
+      - run: bash ../../deploy/tailnet_topology_test.sh
+      # S5b's sidecar wrapper: containerboot in the background, serve applied
+      # by us and READ back — the cases run inside the real tailscale image
+      # against fake tailscale/containerboot binaries, plus a compose `create`
+      # of the service on a throwaway project (never started). Docker-backed.
+      - run: bash ../../deploy/tailscale/start_test.sh
+
+  # The daemon is the first code that runs OUTSIDE the compose stack, and its
+  # whole interop risk is one encoder that must be byte-identical to core's
+  # canonical JSON. The suite asserts that against the committed core fixture
+  # (services/core/tests/fixtures/envelope_vectors.json), so the full repo
+  # checkout is deliberate — the Go test reaches the Python-owned fixture
+  # read-only, which is the cross-language pin working. CGO_ENABLED=0 is the
+  # real ship shape (a static binary with no libc dependency), and the arm64
+  # cross-build is a smoke that the syscall/statfs paths still compile off-amd64.
+  novad:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/novad
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.27"
+          cache-dependency-path: apps/novad/go.sum
+      - run: go vet ./...
+      - run: go test ./...
+      - run: CGO_ENABLED=0 go build ./...
+      - run: GOARCH=arm64 CGO_ENABLED=0 go build ./...
+
+  # DISABLED ON PURPOSE — needs a GPU-less profile decision, enable deliberately.
+  #
+  # The e2e walk pulls a model into the bundled ollama and waits for a real
+  # streamed reply. GitHub's hosted runners have no GPU, so on CPU this is
+  # either far past the job timeout or has to be cut down until it no longer
+  # proves the thing it exists to prove. A job that is red on every push helps
+  # nobody, and one trimmed into a fake green is worse. The suite runs locally
+  # with one command — see tests/e2e/README.md.
+  #
+  # Timing, measured on this project's own hardware so the decision is made
+  # against a number: the first ten scenarios ran in ~4.2 minutes end to end
+  # with qwen3:1.7b on the CPU, from a first-run instance including the
+  # 1.4 GB model pull. Three more (11-13, slice-02e-model-surface) were
+  # authored later and have not been timed yet — re-measure before using this
+  # number to size a job timeout. That original figure is inside a hosted
+  # runner's budget; what is not yet decided is whether a 1.7B's answers are
+  # stable enough to gate a push on.
+  #
+  # To enable: decide the profile (a tiny CPU model? a hosted GPU runner? a
+  # remote-endpoint backend instead of the bundled one?), then drop `if: false`.
+  #
+  # There is deliberately no list of scenario files here. playwright's
+  # testDir glob picks up everything in tests/e2e/tests/, so a scenario added
+  # to the suite is inherited by this job the moment it exists — a list would
+  # be a second place to keep in step, and the one that silently skips new
+  # walks when somebody forgets.
+  e2e:
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The isolated project, not `./install`: the walk mints an owner,
+      # restarts every container and stops the gateway, so it runs against a
+      # stack of its own with no published ports and its own volumes. On a
+      # throwaway runner that is merely tidy; on a machine with a real
+      # instance on it, it is the whole reason the script exists.
+      - name: Bring the isolated stack up
+        run: tests/e2e/isolated.sh up
+      - name: Walk it
+        run: tests/e2e/isolated.sh walk
+      - name: Tear it down
+        if: always()
+        run: tests/e2e/isolated.sh down
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-traces
+          path: |
+            tests/e2e/playwright-report
+            tests/e2e/test-results

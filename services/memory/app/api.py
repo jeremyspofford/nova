@@ -1,0 +1,1120 @@
+"""HTTP surface: /ingest, /recall, /forget, /export.
+
+store.py and index.py are pure concerns that know nothing about each
+other or about HTTP; this module is the only place that wires them
+together, and it owns keeping the index consistent with the filesystem
+after every write/delete (the brief: "updated on every write/delete").
+
+Bearer auth on every one of these routes is handled upstream by
+app.auth.bearer_auth_middleware (mounted once in main.py) — nothing here
+re-checks it.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import logging
+import os
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Literal
+
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+from starlette.responses import StreamingResponse
+
+from app.embedding import (
+    CORE_RECALL_TIMEOUT,
+    MIN_QUERY_BUDGET,
+    RANK_SECONDS_PER_UNIT_SEED,
+    RECALL_RESERVE,
+    BackfillReport,
+    EmbedConfig,
+    Embedder,
+    EmbedderUnavailable,
+    VectorCache,
+    backfill,
+    cache_path,
+)
+from app.index import BM25Index, RetrieverReport
+from app.store import MemoryStore, PathEscape, StoredFile, is_superseded, split_entries
+
+logger = logging.getLogger("memory.api")
+
+router = APIRouter()
+
+DEFAULT_ROOT = "/data/memory"
+
+# Keyed by resolved root path. A real deployment has exactly one
+# MEMORY_ROOT for the process's whole life, so the first request that
+# needs it does the "full rescan at startup" the brief asks for — see
+# warm_context(), called from main.py's lifespan, for making that
+# literally true rather than merely true-on-first-request. Tests use a
+# fresh tmp-dir root per test, so they always hit a cold build here too,
+# which is exactly how "restart rescan" is exercised without any special
+# reset hook.
+_contexts: dict[str, Context] = {}
+
+
+@dataclass
+class Context:
+    """Everything one MEMORY_ROOT needs to answer with: the files, the index
+    over them, the embedder, and the vector cache beside them."""
+
+    store: MemoryStore
+    index: BM25Index
+    embedder: Embedder
+    cache: VectorCache
+
+
+def _current_root() -> Path:
+    return Path(os.environ.get("MEMORY_ROOT", DEFAULT_ROOT)).resolve()
+
+
+def _index_document(index: BM25Index, stored: StoredFile) -> list[str]:
+    """Put one file into the index as its EXCHANGES, and return their unit ids.
+
+    A day of conversation is one file — up to 21 KB of it — and indexing it
+    whole was measured (docs/plans/rebuild/slice-13-memory.md) to put the
+    400-character excerpt an average of thousands of characters away from the
+    answer, because the excerpt centres on wherever the question's ordinary
+    words happen to cluster and in a transcript that is almost never near the
+    fact. So the INDEX is chunked at the '## HH:MM' headings the store already
+    writes; the file on disk is untouched, iter_all still yields whole files,
+    and /forget still deletes whole files.
+
+    Every unit keeps the file's title, kind and date, so a hit still says which
+    day it came from, and carries the file as its `document` so scope, deletion
+    and re-indexing all still work on files.
+
+    Units already indexed for this document and no longer present (a journal
+    re-read after an append, an exchange edited out by hand) are retired first:
+    an index that only ever gains chunks would go on citing spans that are not
+    in the file any more.
+
+    A SUPERSEDED NOTE IS TAKEN OUT AND NOT PUT BACK (S14-1). The file keeps
+    its date, its body and its citation, so what was believed before is still
+    readable; it is simply not a thing recall may answer from. Returning []
+    here rather than the unit ids is the same rule as everywhere else in this
+    service — a step reports what LANDED, and nothing landed.
+    """
+    entries = split_entries(stored.body)
+    title = stored.meta.get("title", "")
+    kind = stored.meta.get("kind", "topic")
+    created = stored.meta.get("created")
+    source = stored.meta.get("source")
+    if not isinstance(source, dict):
+        source = None
+    live_source = stored.meta.get("live_source")
+    if not isinstance(live_source, dict):
+        live_source = None
+    if is_superseded(stored.meta):
+        # The whole file leaves the index: a topic note is one unit but a
+        # journal is many, and remove() is what takes a document. index.upsert
+        # refuses a superseded UNIT for the same reason, one layer down.
+        index.remove(stored.rel_path)
+        return []
+    if not entries:
+        # A topic note has no headings: one unit, id == the file's own path,
+        # exactly as before chunking existed.
+        index.remove(stored.rel_path)
+        index.upsert(
+            stored.rel_path,
+            title=title,
+            kind=kind,
+            created=created,
+            body=stored.body,
+            source=source,
+            live_source=live_source,
+        )
+        return [stored.rel_path]
+    live = set()
+    for entry in entries:
+        unit_id = f"{stored.rel_path}#{entry.fragment}"
+        live.add(unit_id)
+        index.upsert(
+            unit_id,
+            title=title,
+            kind=kind,
+            created=created,
+            body=entry.text,
+            document=stored.rel_path,
+            fragment=entry.fragment,
+            source=source,
+            live_source=live_source,
+        )
+    for stale in index.units_for(stored.rel_path):
+        if stale not in live:
+            index.remove_unit(stale)
+    return [f"{stored.rel_path}#{entry.fragment}" for entry in entries]
+
+
+def _build_context(root: Path) -> Context:
+    store = MemoryStore(root)
+    index = BM25Index()
+    for stored in store.iter_all():
+        # store.iter_all() only guarantees the YAML frontmatter block
+        # parsed as a mapping — it does not validate individual fields.
+        # A file with valid structure but a missing/unparseable
+        # `created` (hand-edited, corrupted, from a future schema) makes
+        # index.upsert()'s date coercion raise. That is exactly the same
+        # class of problem as a file that fails to parse at all: log it,
+        # name it, skip it, and keep the rest of the store intact —
+        # never let one bad file take down a full rescan (startup via
+        # warm_context(), or a request via the lazy path here).
+        try:
+            _index_document(index, stored)
+        except ValueError as exc:
+            logger.warning("skipping unindexable memory file %s: %s", stored.rel_path, exc)
+    config = EmbedConfig.from_env()
+    cache = VectorCache(cache_path(root, config))
+    # Vectors that were paid for on an earlier run, handed straight to the
+    # index. Only the ones whose text is still indexed are applied — a cache
+    # that outlived its note contributes nothing and is pruned below.
+    live = index.live_digests()
+    for digest, windows in cache.load().items():
+        if digest in live:
+            index.set_vectors(digest, windows)
+    return Context(store=store, index=index, embedder=Embedder(config), cache=cache)
+
+
+def _context() -> Context:
+    root = _current_root()
+    key = str(root)
+    ctx = _contexts.get(key)
+    if ctx is None:
+        ctx = _build_context(root)
+        _contexts[key] = ctx
+    return ctx
+
+
+def warm_context() -> None:
+    """Force the full rescan now instead of on the first request. Called
+    from main.py's lifespan so "built by full rescan at startup" is true
+    of the real deployment, not just of the lazy-init fallback."""
+    _context()
+
+
+# THE BACKGROUND EMBEDDING PASS, and the failure that made it one.
+#
+# Until 2026-09-09 the backlog was filled by a bounded pass awaited at boot and
+# again on every write. Measured on the running stack the day the model was
+# pulled, that shape produced this in the log:
+#
+#     embedding pass covered 16/75 units and then stopped:
+#     the embedding service did not answer within 5s (ReadTimeout)
+#
+# Nothing was broken. The service answered every call; a batch of sixteen
+# contended chunks simply took longer than the five seconds the pass allowed
+# itself, and the pass then treated its own budget as a fault and gave up
+# until the next restart. Recall afterwards was correct and useless: 0 of 49
+# notes embedded, so semantic matching honestly refused to run, for ever.
+#
+# Three things fix it, and all three are here rather than in a bigger number:
+#
+#   1. the budget is per CALL (embedding.DEFAULT_TIMEOUT), so it means "this
+#      call is not coming back" and nothing else;
+#   2. the pass runs in the BACKGROUND and boot does not wait for it, so it
+#      may take as long as the work takes;
+#   3. it RETRIES a stated failure instead of parking it until the next boot,
+#      because the failures it actually meets — the model is not pulled yet, a
+#      27B is holding the GPU — resolve on their own.
+#
+# What makes all of that safe to re-run is the content-keyed cache: a re-run
+# costs one dictionary lookup per unit already embedded, so continuing is
+# always cheaper than deciding whether to continue.
+#
+# MEASURED, both shapes, on a read-only copy of the real notes with the local
+# 27B chat model resident and the GPU contended:
+#
+#   old shape (5 s whole-pass budget, batch 16, 5 s per call)
+#       "embedding pass covered 64/75 units and then stopped: the embedding
+#        service did not answer within 5s (ReadTimeout)" — coverage 38 of 49
+#       in Jeremy's scope, so recall still refuses to match by meaning. Under
+#       the heavier contention of the original run it was 16 of 75.
+#
+#   this shape (per-call 30 s, batch 8, background, no pass budget)
+#       start_vector_backfill returned in 0.1 ms with the task not yet run —
+#       boot was not waiting — and the pass finished the whole corpus in
+#       35.6 s. Coverage 0 of 49 -> 49 of 49.
+_passes: dict[str, asyncio.Task] = {}
+
+# Roots with a pass mid-flight. Set and cleared with no await between, so this
+# is a mutual exclusion in asyncio without a lock, and it is what stops a
+# write-path slice and the background pass from paying for the same vector
+# twice.
+_filling: set[str] = set()
+
+# Digests the embedder has REFUSED — a unit past the model's context with no
+# white space to split on. Learned from the pass that met them, never guessed.
+# Without this the background pass would ask for them again on every round and
+# never reach "done"; with it they stay unembedded and every recall over that
+# scope keeps saying so through vector_coverage.
+_unembeddable: dict[str, set[str]] = {}
+
+
+async def warm_vectors(*, slice_seconds: float | None = None) -> BackfillReport:
+    """Fill the backlog now, awaited, and prune what the notes no longer hold.
+
+    This is the pass itself. `start_vector_backfill` is what the running
+    service uses — it puts this on a background task so boot does not wait —
+    and this is what a caller that genuinely wants to wait for the vectors
+    (a measurement, a test) calls directly.
+
+    Deliberately NOT fatal and deliberately NOT silent. The embedding model is
+    pulled by the owner, not installed by this service, so "no embedder yet"
+    is an ordinary state for a running deployment — memory must serve lexical
+    recall through it and every /recall must SAY that is what it is doing. So
+    the pass logs which of the stated unavailabilities it hit and returns;
+    what it must never do is fail quietly and leave recall calling itself
+    semantic over an empty vector space.
+    """
+    ctx = _context()
+    key = str(_current_root())
+    report = await _fill_vectors(ctx, key, slice_seconds=slice_seconds)
+    if not report.deferred:
+        _prune_vectors(ctx)
+    return report
+
+
+def start_vector_backfill() -> asyncio.Task | None:
+    """Put the backlog pass on a background task and return immediately.
+
+    Called from main.py's lifespan INSTEAD of awaiting the pass, so a corpus
+    that takes four minutes to embed does not hold up a startup a healthcheck
+    is waiting on — and called again from the write paths, so an embedder that
+    appears while the service is running (the owner pulls the model) is picked
+    up without a restart.
+
+    Returns the task rather than swallowing it: a caller that wants to wait —
+    a test, a measurement — can, and the running service simply does not.
+    Never starts a second pass over the same root.
+    """
+    key = str(_current_root())
+    running = _passes.get(key)
+    if running is not None and not running.done():
+        return running
+    task = asyncio.ensure_future(_backfill_loop(key))
+    _passes[key] = task
+    return task
+
+
+async def _backfill_loop(key: str) -> None:
+    """Embed until there is nothing left to embed, retrying stated failures.
+
+    The loop's own honesty rule: it may retry, and it may give up, but it may
+    never end quietly. Every exit writes a log line saying which of the three
+    it was — finished, gave up after N attempts and why, or the notes it is
+    working on were rebuilt underneath it.
+    """
+    # ATTEMPTS SINCE THE LAST ONE THAT EMBEDDED ANYTHING, not attempts total
+    # (2026-09-10). It counted every failure until the review named the shape:
+    # at the scale the cache comment plans for — about 4,700 chunks — a pass
+    # embeds hundreds of units and then meets the per-call budget, so twenty
+    # attempts that each did real work would abandon a corpus that was filling
+    # normally, and the log line would say "gave up after 20 attempts" about a
+    # service that never failed to do anything. The cap is for a pass getting
+    # NOWHERE, which is what it says, so progress resets it.
+    attempts = 0
+    while True:
+        ctx = _contexts.get(key)
+        if ctx is None:
+            # The context was cleared (a rebuild, a test). Whatever rebuilt it
+            # starts its own pass; this one has nothing left to work on.
+            logger.info("embedding pass for %s stopped: its index was rebuilt", key)
+            return
+        switched_off = ctx.embedder.unavailable_reason()
+        if switched_off:
+            # Read from configuration, so it cannot become true while this
+            # process runs. Retrying it twenty times over twenty minutes would
+            # be a loop that could never succeed, and the deployment already
+            # knows: every /recall says the search was the reduced one.
+            logger.info("embedding pass not started: %s", switched_off)
+            return
+        report = await _fill_vectors(ctx, key)
+        if report.deferred:
+            logger.info("embedding pass stopped: %s", report.deferred)
+            return
+        if report.embedded:
+            # Real work landed. Whatever happens next, this pass is not the
+            # one the cap below is about.
+            attempts = 0
+        if report.failed:
+            attempts += 1
+            config = ctx.embedder.config
+            if attempts >= config.max_attempts:
+                logger.warning(
+                    "embedding pass gave up after %d attempts that embedded nothing, with %d "
+                    "note(s) still unembedded: %s — recall keeps saying it matched words alone "
+                    "until this is fixed and the service restarted or another note written",
+                    attempts,
+                    report.remaining,
+                    report.failed,
+                )
+                return
+            logger.warning(
+                "embedding pass stopped with %d note(s) left (attempt %d of %d since the last "
+                "one that embedded anything), retrying in %.0fs: %s",
+                report.remaining,
+                attempts,
+                config.max_attempts,
+                config.retry_seconds,
+                report.failed,
+            )
+            await asyncio.sleep(config.retry_seconds)
+            continue
+        if report.stale_width:
+            # The model's width changed under us and _fill_vectors invalidated
+            # the vectors that can no longer be compared to anything. There is
+            # work again; it was logged there, and this goes and does it.
+            continue
+        if report.remaining:
+            # Only a slice budget can leave work behind without a failure, and
+            # this pass sets none. Named rather than looped on, because a loop
+            # that cannot say why it is going round again is a spin.
+            logger.warning(
+                "embedding pass ended with %d note(s) unembedded and no reason given — "
+                "not retrying",
+                report.remaining,
+            )
+            return
+        _prune_vectors(ctx)
+        if not report.embedded:
+            # Nothing needed embedding, so no call was made, so the model is
+            # still cold — and the next thing to ask for it is a turn, under a
+            # budget that a cold load does not fit (embedding.py's comment on
+            # DEFAULT_QUERY_TIMEOUT). One throwaway embed here pays the ~1.5 s
+            # load off the critical path and leaves it resident.
+            #
+            # It is ALSO the only look at the live model a boot over a fully
+            # cached corpus ever gets, and that is the case the width bug hides
+            # in: every vector read off disk, nothing to embed, so nothing to
+            # learn a width from. The warm-up's own answer settles it, and if
+            # the model has changed dimension the whole cache is invalidated
+            # here and the pass goes round again to re-embed it. 2026-09-10.
+            width = await _warm_model(ctx)
+            if width and _invalidate_stale_width(ctx, width):
+                continue
+        logger.info(
+            "embedding pass finished: %d embedded, %d already cached, %d note(s) the model "
+            "cannot read",
+            report.embedded,
+            report.from_cache,
+            len(_unembeddable.get(key, ())),
+        )
+        return
+
+
+async def _warm_model(ctx: Context) -> int | None:
+    """One call whose only purpose is to leave the model loaded.
+
+    Reported, never assumed: this is also the first honest answer to "is the
+    embedding model actually installed", asked at boot instead of on the
+    owner's first question — and, since 2026-09-10, the width of the vectors it
+    answers with, which is returned so a cached corpus of another width can be
+    invalidated rather than believed.
+    """
+    try:
+        # The BACKFILL's per-call budget, not the query's. This call is on
+        # nobody's critical path, and the whole point of it is to absorb a cold
+        # load that the query budget deliberately cannot — putting it under
+        # 1.6 s would make it fail exactly when it was most needed.
+        vectors = await ctx.embedder.embed(["warm"])
+    except EmbedderUnavailable as exc:
+        logger.warning("the embedding model could not be warmed: %s", exc)
+        return None
+    keep_alive = ctx.embedder.config.keep_alive_seconds
+    width = len(vectors[0]) if vectors and vectors[0] else None
+    logger.info(
+        "the embedding model %s answered with %s and is asked to stay resident for %s",
+        ctx.embedder.config.model,
+        f"{width}-wide vectors" if width else "no vector at all",
+        "as long as it can" if keep_alive < 0 else f"{keep_alive:g}s",
+    )
+    return width
+
+
+def _invalidate_stale_width(ctx: Context, width: int) -> int:
+    """Forget every vector the live model can no longer produce a match for.
+
+    In the index and in the cache file, because either one on its own puts the
+    corpus back where it started on the next boot. Returns how many notes have
+    to be embedded again — 0 is the ordinary case and says nothing.
+    """
+    stale = ctx.index.set_vector_width(width)
+    if not stale:
+        return 0
+    forgotten = ctx.cache.drop(set(stale))
+    logger.warning(
+        "the embedding model now answers with %d-wide vectors: %d note(s) held a vector of "
+        "another width, which cannot be compared to any question, so they were dropped from the "
+        "index and %d from %s and will be embedded again",
+        width,
+        len(stale),
+        forgotten,
+        ctx.cache.path,
+    )
+    return len(stale)
+
+
+def _prune_vectors(ctx: Context) -> None:
+    """Drop vectors for text the notes no longer hold.
+
+    Run at the end of a pass, when the live set is complete and nothing else
+    is writing. A cache that is never pruned keeps a vector for every exchange
+    ever edited and every note ever forgotten.
+    """
+    live = ctx.index.live_digests()
+    dropped_memory = ctx.index.retain_vectors(live)
+    dropped_disk = ctx.cache.prune(live)
+    if dropped_memory or dropped_disk:
+        logger.info(
+            "embedding cache pruned: %d vectors dropped from memory, %d from %s",
+            dropped_memory,
+            dropped_disk,
+            ctx.cache.path,
+        )
+
+
+async def _fill_vectors(
+    ctx: Context,
+    key: str,
+    scope_prefix: str = "",
+    *,
+    slice_seconds: float | None = None,
+) -> BackfillReport:
+    """One embedding pass over the units that have no vector yet.
+
+    `slice_seconds` is the wall clock the CALLER is prepared to wait, and only
+    the write paths pass one — the background pass runs unbounded, because
+    nothing is waiting on it. Never called from /recall: /recall embeds the
+    question and nothing else.
+    """
+    refused = _unembeddable.setdefault(key, set())
+    missing = [
+        (digest, text)
+        for digest, text in ctx.index.missing_vectors(scope_prefix)
+        if digest not in refused
+    ]
+    if not missing:
+        return BackfillReport()
+    if key in _filling:
+        # No await between this check and the add below, so two coroutines
+        # cannot both get past it.
+        return BackfillReport(
+            requested=len(missing),
+            remaining=len(missing),
+            deferred=(
+                f"another embedding pass over these notes is already running, so this call "
+                f"left the remaining {len(missing)} note(s) to it"
+            ),
+        )
+    _filling.add(key)
+    try:
+        report = await backfill(
+            ctx.embedder,
+            ctx.cache,
+            missing,
+            apply=ctx.index.set_vectors,
+            slice_seconds=slice_seconds,
+        )
+    finally:
+        _filling.discard(key)
+    refused.update(report.unembeddable)
+    # THE LIVE WIDTH, learned from what the model actually just answered with —
+    # the one moment it is a fact rather than a configuration. A corpus
+    # embedded by an earlier model at another width is invalidated here, in the
+    # index AND on disk, so the next round re-embeds it. Without this, the day
+    # the embedding model changes, every unit goes on counting as embedded, the
+    # pass logs "0 embedded", and semantic recall is dead in a way nothing
+    # reports. 2026-09-10.
+    if report.width:
+        report.stale_width = _invalidate_stale_width(ctx, report.width)
+    if report.too_long:
+        # Not a failure of the pass, and not silent either: these units have
+        # no vector, so every recall over this scope reports its coverage as
+        # short of the whole. The sentences say which notes and why.
+        logger.warning(
+            "%d note(s) could not be embedded at all: %s",
+            len(report.too_long),
+            "; ".join(report.too_long),
+        )
+    if report.failed:
+        # Named, at warning level, every time. This is the line that turns "we
+        # shipped semantic recall and it never ran" into something visible.
+        logger.warning(
+            "embedding pass covered %d/%d units and then stopped: %s",
+            report.embedded + report.from_cache,
+            report.requested,
+            report.failed,
+        )
+    elif report.out_of_budget:
+        # A budget that cut real work, said as a budget. It is NOT logged at
+        # warning level and it does not carry a failure sentence, because the
+        # service did nothing wrong — the caller was simply not prepared to
+        # wait, and the background pass has the rest.
+        logger.info("embedding pass: %s", report.budget_note)
+    elif report.embedded:
+        logger.info(
+            "embedding pass: %d embedded, %d from cache, %d requested, %.2fs",
+            report.embedded,
+            report.from_cache,
+            report.requested,
+            report.seconds,
+        )
+    return report
+
+
+async def _fill_after_write(ctx: Context) -> BackfillReport:
+    """What a write path does about vectors: a short slice, then hand over.
+
+    core awaits /ingest inside a 10 s budget and the new exchange is one call
+    (~25 ms warm), so a one-second slice embeds it and forty more like it
+    without making anyone wait. Anything still missing goes to the background
+    pass, which is started here — so an owner who pulls the embedding model
+    mid-session gets the whole corpus filled from the next turn, with no
+    restart.
+    """
+    report = await _fill_vectors(
+        ctx, str(_current_root()), slice_seconds=ctx.embedder.config.slice_seconds
+    )
+    # `stale_width` as well as `remaining`: a write whose embed came back at a
+    # new width has just invalidated the whole corpus, and there is nothing
+    # left in `remaining` to say so. Without this the notes would sit
+    # uncomparable until the next restart. 2026-09-10.
+    if report.remaining or report.stale_width:
+        start_vector_backfill()
+    return report
+
+
+class Exchange(BaseModel):
+    user: str
+    assistant: str
+
+
+class Thread(BaseModel):
+    """S24: this exchange happened in a ROOM, not the main chat.
+
+    Present only for a thread. `title` is DERIVED by core from the message
+    the room hangs off — no model writes it, so it cannot be a wrong
+    summary, only a terse one.
+    """
+
+    conversation_id: str
+    title: str
+
+
+class IngestRequest(BaseModel):
+    person_id: str
+    conversation_id: str
+    exchange: Exchange
+    thread: Thread | None = None
+
+
+class RecallRequest(BaseModel):
+    query: str
+    person_id: str
+    k: int = 5
+
+
+class SourceRef(BaseModel):
+    """The citation a distilled note carries: the row, and WHOSE row it was.
+
+    `role` is a closed set, so a citation that cannot say whose words it
+    stands on is a 422 rather than a note that reads like evidence. That
+    matters because the two roles are not the same evidence at all: a fact
+    supported only by an assistant row is supported by something the model
+    itself produced. store.normalize_source refuses the same shape again, one
+    layer down, for callers that never come through HTTP.
+    """
+
+    message_id: str
+    role: Literal["user", "assistant"]
+
+
+class LiveSourceRef(BaseModel):
+    """The read-only call that answers this fact NOW, when one exists.
+
+    Owner ruling 2026-09-10: a fact a tool can look up ad hoc — a machine's
+    memory, the models installed, this month's spend — should be found ad hoc,
+    and the ad-hoc answer is the truth. A note about such a fact is history
+    worth keeping for "did that change?", and never the current answer.
+
+    WHAT THIS ENDPOINT CHECKS, AND WHAT IT CANNOT. Shape only: a tool name and
+    an argument mapping. Whether `tool` is a registered tool and whether
+    `args` satisfy that tool's advertised schema are facts about core's LIVE
+    tool registry, which this service does not import and must not — see
+    store.normalize_live_source for why a copy of the tool list here would be
+    a hand-maintained list that rots. The caller checks that against the
+    registry before it ever posts here
+    (core: app/tools/memory_tools.validate_live_source).
+    """
+
+    tool: str
+    args: dict = {}
+
+
+class SaveRequest(BaseModel):
+    person_id: str
+    title: str
+    content: str
+    # What the fact is ABOUT — the superseding key. A note written on a
+    # subject retires this person's earlier live note on the same subject.
+    # Omitted (the shape every caller had before S14-1) means nothing is
+    # superseded and the note is simply another note.
+    subject: str | None = None
+    # The date of the EXCHANGE this fact came from. `created` follows it, so a
+    # fact distilled today out of a conversation twelve days ago is twelve
+    # days old to the ranker and to the age the prompt prints.
+    said_at: date | None = None
+    # `created` outright, for a caller that has a reason to date a note
+    # differently from the exchange it cites. Wins over said_at when both are
+    # given; when neither is, the note is dated today exactly as before.
+    created: date | None = None
+    source: SourceRef | None = None
+    # The call that answers this fact now, when one exists. Its presence is
+    # what tells a reader the note is HISTORY rather than the current answer.
+    live_source: LiveSourceRef | None = None
+
+
+class ForgetRequest(BaseModel):
+    person_id: str
+    path: str
+
+
+@router.post("/ingest")
+async def ingest(req: IngestRequest) -> dict:
+    ctx = _context()
+    store, index = ctx.store, ctx.index
+    user_text = req.exchange.user.strip()
+    assistant_text = req.exchange.assistant.strip()
+    entry = f"User: {user_text}\n\nAssistant: {assistant_text}"
+
+    # A room's exchanges go to the room's own document, not to the day's
+    # journal (S24). In the journal they are scattered across however many
+    # days the room was live and interleaved with everything else said on
+    # those days — which is exactly the shuffling a room exists to stop.
+    try:
+        if req.thread is not None:
+            abs_path, _created_new = store.append_thread(
+                req.person_id, req.thread.conversation_id, req.thread.title, entry
+            )
+        else:
+            abs_path, _created_new = store.append_journal(req.person_id, entry)
+    except PathEscape as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    # Verify mechanically before reporting success: re-read the file
+    # from disk and confirm both halves of the exchange actually landed.
+    # Never report an append that was not checked.
+    on_disk = abs_path.read_text(encoding="utf-8")
+    if user_text not in on_disk or assistant_text not in on_disk:
+        raise HTTPException(status_code=500, detail="ingest write did not verify")
+
+    stored = store.read(abs_path)
+    units = _index_document(index, stored)
+    # State what is true, then check it anyway. append_journal writes the
+    # "## HH:MM" heading and split_entries reads it; if those two ever stop
+    # agreeing, this file falls back to being indexed whole and chunking is
+    # silently off — recall gets worse and nothing says why. A journal that
+    # did not come out as exchanges is a fault, not a quieter success.
+    if not any("#" in unit for unit in units):
+        raise HTTPException(
+            status_code=500,
+            detail="the exchange was written but the journal was not indexed as exchanges",
+        )
+    # The new exchange's vector, and any the corpus is still missing. Off the
+    # reply path (core awaits /ingest after the turn, with a 10 s budget) and
+    # bounded, so this is where a corpus catches up after the owner pulls the
+    # embedding model — no restart, and no embedding on /recall.
+    await _fill_after_write(ctx)
+    return {"path": stored.rel_path, "appended": True}
+
+
+@router.post("/save")
+async def save(req: SaveRequest) -> dict:
+    """Write one topic note for a person and confirm it landed.
+
+    This is what a caller uses to record something deliberately, as
+    opposed to /ingest's automatic journalling of an exchange. It never
+    replaces an existing note: a title whose slug is taken gets a
+    numbered sibling, because the caller asked to save something, not to
+    lose something.
+
+    SUPERSEDING (S14-1) is the one thing that changes an existing note, and
+    it changes only its frontmatter. A note saved with a `subject` retires
+    this person's earlier live note on that same subject: the old file keeps
+    its body, its date and its citation and gains `superseded_by`, and it
+    leaves the index, so recall answers from the current fact while "what did
+    I have before" is still on disk. The old note is never deleted and the
+    new note never overwrites it.
+
+    Nothing here judges that two notes contradict each other — the subject
+    string is the whole comparison. Deciding by meaning is exactly the
+    judgement a model would get wrong quietly.
+    """
+    ctx = _context()
+    store, index = ctx.store, ctx.index
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is empty — a note needs a name")
+    content = req.content.strip()
+    if not content:
+        # Nothing to write means nothing to verify, and a save that cannot
+        # be checked must not answer "saved".
+        raise HTTPException(status_code=400, detail="content is empty — there is nothing to save")
+    subject = (req.subject or "").strip()
+
+    try:
+        abs_path = store.create_topic(
+            req.person_id,
+            title,
+            content,
+            created=req.created or req.said_at,
+            subject=subject or None,
+            said_at=req.said_at,
+            source=req.source.model_dump() if req.source else None,
+            live_source=req.live_source.model_dump() if req.live_source else None,
+        )
+    except PathEscape as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
+    except ValueError as exc:
+        # A citation that does not name its row and its role — refused by the
+        # store, named back to the caller rather than stored half-formed.
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"could not write the note: {exc}") from None
+
+    # Verify mechanically before reporting success — re-read from disk and
+    # confirm the body is actually in the file, exactly as /ingest does.
+    if not abs_path.is_file():
+        raise HTTPException(status_code=500, detail="the save did not verify — no file on disk")
+    if content not in abs_path.read_text(encoding="utf-8"):
+        raise HTTPException(
+            status_code=500, detail="the save did not verify — the note's content is not in it"
+        )
+
+    stored = store.read(abs_path)
+    _index_document(index, stored)
+    superseded = _retire_earlier_notes(store, index, req.person_id, subject, stored)
+    await _fill_after_write(ctx)
+    return {"path": stored.rel_path, "saved": True, "superseded": superseded}
+
+
+def _retire_earlier_notes(
+    store: MemoryStore, index: BM25Index, person_id: str, subject: str, stored: StoredFile
+) -> list[str]:
+    """Mark this person's earlier live notes on `subject` superseded by the
+    note just written, drop them from the index, and CHECK that they are gone.
+
+    The order is deliberate: the new note is on disk and indexed first, so a
+    failure anywhere below leaves two live notes — the state this service was
+    already in before superseding existed — rather than a subject with no
+    current note at all.
+
+    Every failure here is a 500 that names what happened, including the path
+    that WAS written. A save that answered "saved" while leaving a
+    contradicting note live and recallable would be the exact defect
+    superseding exists to remove, reported as a success.
+    """
+    if not subject:
+        return []
+    try:
+        stamped = store.supersede_by_subject(
+            person_id, subject, superseded_by=stored.rel_path, exclude=stored.abs_path
+        )
+    except (OSError, PathEscape, ValueError) as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"the note was written to {stored.rel_path}, but an earlier note on "
+                f"{subject!r} could not be marked superseded: {exc}"
+            ),
+        ) from None
+
+    retired: list[str] = []
+    for path in stamped:
+        older = store.read(path)
+        _index_document(index, older)
+        # The load-bearing line. "Recall skips a superseded note" is worth
+        # nothing as an intention: this asks the index whether the units are
+        # actually gone, and a note still indexed is a fault, not a note.
+        left = index.units_for(older.rel_path)
+        if left:
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"the note was written to {stored.rel_path} and {older.rel_path} was marked "
+                    f"superseded, but it is still in the index as {left} and would still be "
+                    "recalled"
+                ),
+            )
+        retired.append(older.rel_path)
+    return retired
+
+
+@router.post("/recall")
+async def recall(req: RecallRequest) -> dict:
+    """What these notes hold on a question — or a stated nothing.
+
+    The answer is {hits, found, statement, retrievers}, not a bare list,
+    because a bare list could only ever say "no hits" and this route has four
+    different things to say: here is what matched; the notes hold no answer,
+    and here is why; here is what matched but only ONE of the two searches
+    ran, so a note phrased differently may have been missed; and (as an HTTP
+    failure, never as an empty list) the notes could not be read at all.
+
+    `retrievers` is the mechanical half of that. It says which searches
+    actually ran on THIS call — not which are configured, not which are
+    intended — and names the reason for any that did not. Whether the
+    embedding model is installed is a fact this service can only learn by
+    asking, so it asks on every recall, and what it learns travels: an answer
+    found by word matching alone is marked as one, and core turns that into a
+    sentence in the prompt. Degrading to lexical while still calling itself
+    semantic is the single easiest lie in this feature, and this is the line
+    of code that refuses to tell it.
+
+    `statement` is the sentence a caller can repeat — the relevance floor and
+    the embedder are both this service's business, so the words for them
+    belong here and not in whatever calls it.
+    """
+    ctx = _context()
+    store, index = ctx.store, ctx.index
+    try:
+        person_root = store.person_root(req.person_id)
+    except PathEscape as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    # The question, embedded — the ONE embedding call on a turn's critical
+    # path, under its own tighter budget (see DEFAULT_QUERY_TIMEOUT). A
+    # failure here is never fatal and never silent: it becomes the sentence
+    # the semantic retriever reports for not having run.
+    scope_prefix = store.rel_path(person_root) + "/"
+    # What is left for the model once ranking this scope is paid for. Derived,
+    # because ranking grows with the corpus and the budget it leaves does not
+    # (see embedding.RECALL_RESERVE).
+    budget, budget_note = _query_budget(index, scope_prefix, ctx.embedder.config)
+    query_vector = None
+    semantic_unavailable = None
+    if budget is None:
+        semantic_unavailable = budget_note
+    else:
+        try:
+            query_vector = await ctx.embedder.embed_query(req.query, timeout=budget)
+        except EmbedderUnavailable as exc:
+            semantic_unavailable = str(exc)
+
+    outcome = index.search_detail(
+        req.query,
+        scope_prefix=scope_prefix,
+        k=max(req.k, 0),
+        query_vector=query_vector,
+        semantic_unavailable=semantic_unavailable,
+    )
+    hits = outcome.hits
+
+    # Scope is mechanical: re-assert the resolved path of every hit
+    # before it leaves the process, even though the index was only ever
+    # asked to search inside scope_prefix. This is the load-bearing
+    # check, not the index's own filtering.
+    safe_hits = []
+    for hit in hits:
+        # A hit's id names an exchange ("...md#16:32"); the FILE is what the
+        # scope check resolves, and the index hands it over as its own field
+        # rather than the check re-splitting the id and getting the rule
+        # slightly different from the one that built it.
+        try:
+            resolved = store.resolve_in_person(req.person_id, hit["document"])
+        except PathEscape:
+            logger.error("index produced an out-of-scope hit: %s", hit["document"])
+            continue
+        if not resolved.is_file():
+            continue
+        safe_hits.append(hit)
+
+    if query_vector is not None:
+        # The one live fact about the model's output width on this path. Done
+        # AFTER the search, so this call's own report still says "a vector of a
+        # different width" about the notes it could not compare — and then the
+        # backfill is told, so the next call has real vectors instead of the
+        # same sentence for ever. 2026-09-10.
+        if _invalidate_stale_width(ctx, len(query_vector)):
+            start_vector_backfill()
+
+    retrievers = [_retriever_payload(report) for report in outcome.retrievers]
+    caveat = _search_caveat(outcome.retrievers)
+    if budget_note and budget is not None:
+        # The budget was cut and the search still ran. Said anyway: a recall
+        # that got less time than the deployment configured because the corpus
+        # grew is a fact about this answer, not a detail of the plumbing.
+        caveat = f"{caveat} {budget_note}" if caveat else budget_note
+
+    if safe_hits:
+        statement = (
+            f"{len(safe_hits)} note(s) matched and cleared the relevance floor, best match first."
+        )
+        if caveat:
+            statement = f"{statement} {caveat}"
+        return {
+            "hits": safe_hits,
+            "found": True,
+            "statement": statement,
+            "retrievers": retrievers,
+        }
+    # No hits: say WHICH nothing this is. index.search_detail gives the reason
+    # when it found nothing; when it found something and every hit was then
+    # dropped by the scope re-check above, the index and the disk disagree, and
+    # that is a fault to name rather than an answer to report as an empty one.
+    reason = outcome.reason or (
+        "the notes that matched are no longer on disk, so this search could not be completed"
+    )
+    statement = f"These notes hold no answer to that — {reason}."
+    if caveat:
+        statement = f"{statement} {caveat}"
+    return {
+        "hits": [],
+        "found": False,
+        "statement": statement,
+        "retrievers": retrievers,
+    }
+
+
+def _query_budget(
+    index: BM25Index, scope_prefix: str, config: EmbedConfig
+) -> tuple[float | None, str | None]:
+    """How long the question may spend being embedded, and what to say about it.
+
+    THE FIXED RESERVE WAS A PROMISE THAT EXPIRES (2026-09-10). core gives the
+    whole of /recall 2.0 s; memory reserved a flat 0.4 s of it for its own
+    ranking and handed the rest to the embedder. Ranking is linear in the scope
+    and measured 48 ms at 1,000 units, 267 ms at 5,000 and 504 ms at 10,000, so
+    past roughly 8,000 units the reserve is gone, the embedder is given time
+    /recall has already spent, and core times the call out with nothing
+    anywhere saying the corpus size was the reason.
+
+    So the reserve is the measured floor PLUS the live scope times what ranking
+    one unit actually costs here — this process's own measurement
+    (BM25Index.note_rank_seconds), or the measured seed until a search has been
+    timed, whichever is larger, because a budget sized on the optimistic figure
+    is the budget that overruns.
+
+    Returns (budget, note). A None budget means there is not enough of core's
+    two seconds left to ask the model at all, and the note is then the stated
+    reason the semantic retriever did not run — never a silent lexical answer.
+    """
+    units = index.scope_units(scope_prefix)
+    measured = index.rank_seconds_per_unit()
+    per_unit = max(measured or 0.0, RANK_SECONDS_PER_UNIT_SEED)
+    ranking = units * per_unit
+    budget = min(config.query_timeout, CORE_RECALL_TIMEOUT - RECALL_RESERVE - ranking)
+    if budget < MIN_QUERY_BUDGET:
+        return None, (
+            f"ranking the {units} note(s) in this scope takes about {ranking:.2f}s of the "
+            f"{CORE_RECALL_TIMEOUT:g}s this whole search is given, which leaves less time than "
+            f"the embedding model needs to read the question at all — so the question was "
+            f"matched by its words alone, and this is a limit of the corpus size and not of "
+            f"the notes"
+        )
+    # Said only when the number actually MOVED at the precision it is stated
+    # at: a scope small enough that its ranking rounds away has nothing to
+    # report, and a caveat printed on every recall saying "1.60s instead of
+    # 1.60s" would be noise that trains a reader to skip the line that matters.
+    if round(budget, 2) >= round(config.query_timeout, 2):
+        return budget, None
+    return budget, (
+        f"The question was given {budget:.2f}s to be matched by meaning instead of "
+        f"{config.query_timeout:.2f}s, because ranking the {units} note(s) in this scope takes "
+        f"about {ranking:.2f}s of the {CORE_RECALL_TIMEOUT:g}s this whole search is given."
+    )
+
+
+def _retriever_payload(report: RetrieverReport) -> dict:
+    """One retriever's report, as facts. `ranked` is a count of units, never a
+    score, and no similarity of any kind appears here: a cosine is not a
+    confidence and must not be handed to anything that would show it as one."""
+    payload: dict = {"name": report.name, "ran": report.ran}
+    if report.ran:
+        payload["ranked"] = report.ranked
+    if report.reason:
+        payload["reason"] = report.reason
+    if report.coverage:
+        payload["coverage"] = report.coverage
+    return payload
+
+
+def _search_caveat(reports: tuple[RetrieverReport, ...]) -> str | None:
+    """The sentence that says this search was not the search it could have been.
+
+    Composed here rather than in core because the reason belongs to this
+    service — it is the one that knows whether the embedding model is
+    installed. It says what was NOT done and why; it never claims the notes
+    hold nothing, because a search that could not run properly has established
+    nothing at all about the notes.
+
+    COVERAGE IS RELAYED FOR A RETRIEVER THAT DID NOT RUN TOO (2026-09-10). It
+    used to be included only for one that RAN, and the sentence that reached
+    the owner in its place was false in the case that mattered most: with all
+    47 notes embedded by a model of another width, the semantic half does not
+    run, and the reason alone said nothing about the 47 vectors sitting there
+    unusable. How much of the scope could be reached is a separate fact from
+    why the search stopped, and both of them are true at once.
+    """
+    absent = [report for report in reports if not report.ran and report.reason]
+    partial = [report for report in reports if report.ran and report.coverage]
+    parts = []
+    if absent:
+        missed = ", ".join(
+            f"{report.name} ({report.reason}"
+            + (f"; {report.coverage}" if report.coverage else "")
+            + ")"
+            for report in absent
+        )
+        parts.append(
+            f"This search did not use every retriever it has: {missed}. A note that says the "
+            "same thing in different words could have been missed."
+        )
+    for report in partial:
+        parts.append(
+            f"The {report.name} search covered only part of the notes — {report.coverage}."
+        )
+    return " ".join(parts) or None
+
+
+@router.post("/forget")
+async def forget(req: ForgetRequest) -> dict:
+    ctx = _context()
+    store, index = ctx.store, ctx.index
+    try:
+        resolved = store.resolve_in_person(req.person_id, req.path)
+    except PathEscape as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="no such memory file")
+
+    canonical = store.rel_path(resolved)
+    store.delete(resolved)
+    if resolved.exists():
+        raise HTTPException(status_code=500, detail="forget did not verify deletion")
+
+    index.remove(canonical)
+    return {"path": canonical, "deleted": True}
+
+
+@router.get("/export")
+async def export(person_id: str = Query(...)) -> StreamingResponse:
+    store = _context().store
+    try:
+        data = store.export_tar_gz(person_id)
+    except PathEscape as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    return StreamingResponse(
+        io.BytesIO(data),
+        media_type="application/gzip",
+        headers={"Content-Disposition": f'attachment; filename="{person_id}.tar.gz"'},
+    )

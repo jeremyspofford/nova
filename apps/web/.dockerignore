@@ -1,0 +1,7 @@
+# A host node_modules copied into the build stage would shadow `npm ci`'s
+# install and can carry the wrong platform's binaries; dist would let a stale
+# host build ship instead of the one built here.
+node_modules
+dist
+.vite
+*.tsbuildinfo

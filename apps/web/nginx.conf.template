@@ -1,0 +1,466 @@
+# The one origin the browser ever sees: static build here, /api relayed to
+# core. Nothing else is exposed — gateway and memory are not reachable from a
+# browser at all.
+#
+# ── Temporary public exposure gate ──────────────────────────────────────
+# This file is an envsubst TEMPLATE (nginx:alpine's built-in
+# /etc/nginx/templates -> /etc/nginx/conf.d mechanism — see apps/web/
+# Dockerfile), rendered to a real nginx conf at container start. The ONLY
+# substitutions that happen are NOVA_PUBLIC_GATE_TOKEN and
+# NOVA_TAILSCALE_ADDR: the image sets NGINX_ENVSUBST_FILTER=^NOVA_ so
+# envsubst only touches env vars whose name starts with NOVA_, which means
+# every nginx `$var` below ($host, $scheme, $http_upgrade, $request_uri,
+# $remote_addr, $core_upstream, $arg_token, the gate's own $gate_* map
+# outputs, ...) is left completely alone. Verified by diffing the rendered
+# conf against this file's own history — see apps/web/gate_test.sh.
+#
+# NOVA_PUBLIC_GATE_TOKEN is blank by default (gate OFF, and every location
+# below behaves exactly as it did before this gate existed — install.sh
+# deliberately does not generate this secret; it's opt-in for the one
+# scenario where the operator is putting this origin on a public URL, e.g. a
+# `cloudflared` quick tunnel, and cannot use Tailscale on the viewing
+# device). Set it to a >=32-hex random value (same `openssl rand -hex 32`
+# recipe as every other secret in deploy/.env.example) to turn the gate on:
+# every request to every location on this server then needs a matching
+# `nova_gate` cookie or gets a neutral 401 page, obtained by visiting
+# `/gate?token=<the value you set>` once per browser.
+#
+# The comparison is plain nginx string equality (map, below) against a
+# random secret with well over 128 bits of entropy — no timing-safe
+# comparison, no session state, no rate limiting. That is enough here
+# because the threat this defends against is "someone finds the tunnel URL
+# and looks at it before the operator takes it back down", not a motivated
+# attacker who can already read the token off the wire or has unlimited
+# guesses against this one process. Rotate by changing the env var and
+# recreating the container; the token also lives in plain sight in browser
+# history the moment someone visits /gate?token=..., which is the other
+# reason this is meant to be temporary.
+#
+# novad (the paired-device daemon) does NOT send cookies. PAIRING a device
+# (`/api/v1/devices/enroll`) still goes through the generic gated /api/
+# location below, so enrolling a new device through a GATED public origin
+# (the tunnel, or funnel) will not work; pair via the tailnet or localhost
+# instead — from the tailnet it works precisely because a tailnet peer is
+# exempt from the gate (next section), so `/api/` from the sidecar with the
+# identity header is ungated. CONNECTING an already-paired device
+# (`/api/v1/devices/ws`) is the one exception — see that location's own
+# comment — it is carved out of the gate entirely because the socket
+# authenticates itself by ed25519 challenge, not by cookie, so gating it
+# would only take real daemons offline for no security benefit.
+#
+# ── Tailnet peers are exempt: trust by SOURCE ADDRESS (S5b) ─────────────
+# `tailscale serve` (the sidecar, S5b T1) injects `Tailscale-User-Login`
+# (and -Name, -Profile-Pic) for a tailnet peer, STRIPS any copy the client
+# sent, and never sets them on funnel (public internet) traffic. That makes
+# the header a fact about the caller — but only when the request really came
+# from serve, and a header alone cannot prove that: a cloudflared tunnel
+# forwards whatever the client sent, and so would any container that can
+# reach this port. What CAN prove it is where the connection came from. On
+# a docker bridge a TCP connection cannot be completed with a spoofed source
+# address, and the sidecar sits at a FIXED address (NOVA_TAILSCALE_ADDR,
+# pinned by deploy/docker-compose.yml's IPAM in a range the allocator never
+# hands out), so `$remote_addr == that address` means "this came through
+# serve" — and nothing else does: traffic from the published host port
+# arrives from docker's gateway, traffic from any other container from that
+# container's own address. $from_sidecar below is that test; $tailnet_peer
+# is "from the sidecar AND the header is present", and only $tailnet_peer
+# is exempt from the gate. With NOVA_TAILSCALE_ADDR unset the map key
+# renders as the empty string, which no $remote_addr ever equals: nobody is
+# trusted (the Dockerfile bakes an empty default so "unset" cannot leave a
+# literal placeholder in the conf).
+#
+# Consequences worth knowing: a funnel visitor arrives FROM the sidecar
+# address WITHOUT the header ⇒ gated by the same rule, no extra
+# configuration; a TAGGED tailnet node (a server, not a person) carries no
+# identity headers ⇒ gated too; the identity headers are forwarded to core
+# only when $from_sidecar (empty otherwise, and nginx drops an empty
+# proxy_set_header), so the only copies core can ever see are serve's —
+# nothing in core reads them yet (S8 does). The /healthz and
+# /api/v1/devices/ws carve-outs are unchanged and apply from every source.
+# Pinned by apps/web/gate_test.sh with real client containers at the trusted
+# and an untrusted address on a private network.
+#
+# ── The forwarded scheme ────────────────────────────────────────────────
+# nginx terminates no TLS here, so `$scheme` is always `http`, and the
+# usual `proxy_set_header X-Forwarded-Proto $scheme` would ERASE what serve
+# or cloudflared (the hop that did terminate TLS) told us. $fwd_proto keeps
+# an incoming `https` (any case) and defaults to $scheme otherwise; core's
+# identity.set_session_cookie reads that one header to decide the session
+# cookie's Secure flag, and the /gate cookie below derives its own Secure
+# from the same map. A client can only ever influence its OWN request's
+# copy (serve/cloudflared overwrite it for real visitors; browsers never
+# send it), and the only thing a liar can do with it is give itself a Secure
+# cookie on plain http that its own browser then drops — so trusting `https`
+# is safe, and `http` can never strip Secure on a TLS path because that hop
+# sets `https`.
+
+# nginx's default map hash bucket is sized for short keys; a >=32-hex token
+# used as a literal map key is longer than that default and nginx refuses to
+# start ("could not build map_hash, you should increase
+# map_hash_bucket_size") without this. 128 comfortably covers a 64-hex token
+# with room to spare.
+map_hash_bucket_size 128;
+
+map $cookie_nova_gate $gate_cookie_ok {
+    default 0;
+    "${NOVA_PUBLIC_GATE_TOKEN}" 1;
+}
+
+# An empty configured token is the opt-in switch in its off position.
+map "${NOVA_PUBLIC_GATE_TOKEN}" $gate_enabled {
+    default 1;
+    "" 0;
+}
+
+# The sidecar, as a fact about the network: see "trust by SOURCE ADDRESS"
+# in the header. Unset renders the key as "" — nobody is trusted.
+map $remote_addr $from_sidecar {
+    default 0;
+    "${NOVA_TAILSCALE_ADDR}" 1;
+}
+
+map $http_tailscale_user_login $ts_login_present {
+    default 1;
+    "" 0;
+}
+
+# A tailnet peer: FROM the sidecar AND carrying the identity header serve
+# injects. Two maps because nginx map has no AND: presence, then the pair.
+# The same header from any other address counts for nothing.
+map "$from_sidecar:$ts_login_present" $tailnet_peer {
+    default 0;
+    "1:1" 1;
+}
+
+# Block iff the gate is enabled AND the cookie didn't match AND the caller is
+# not a tailnet peer. String concatenation + map is nginx's stock idiom for
+# an AND of booleans: "1" enabled, "0" no cookie, "0" not a peer.
+map "$gate_enabled$gate_cookie_ok$tailnet_peer" $gate_block {
+    default 0;
+    "100" 1;
+}
+
+# The scheme the BROWSER used, from the hop that terminated TLS (serve and
+# cloudflared send `https`; matched case-insensitively, a proxy's spelling
+# is not a fact); anything else falls back to this hop's own $scheme, which
+# is `http`. See "The forwarded scheme" in the header.
+map $http_x_forwarded_proto $fwd_proto {
+    default $scheme;
+    "~*^https$" https;
+}
+
+# The /gate cookie's own Secure attribute, from the same fact rather than
+# hardcoded: a Secure cookie minted on plain http would be dropped by the
+# browser and the login would silently not stick.
+map $fwd_proto $gate_cookie_secure {
+    default "";
+    https "; Secure";
+}
+
+# The identity headers as forwarded upstream: pass-through when the request
+# came from the sidecar (where only serve can have written them), EMPTY
+# otherwise — and nginx drops a proxy_set_header whose value is empty, so a
+# forged copy from any other source never reaches core.
+map $from_sidecar $ts_user_login_upstream {
+    default "";
+    1 $http_tailscale_user_login;
+}
+
+map $from_sidecar $ts_user_name_upstream {
+    default "";
+    1 $http_tailscale_user_name;
+}
+
+map $from_sidecar $ts_user_pic_upstream {
+    default "";
+    1 $http_tailscale_user_profile_pic;
+}
+
+# The /gate login's own token check — same equality recipe as the cookie.
+map $arg_token $gate_token_ok {
+    default 0;
+    "${NOVA_PUBLIC_GATE_TOKEN}" 1;
+}
+
+# Login only succeeds when the gate is enabled AND the token matched. (The
+# two maps above already default an absent/empty value to 0 on their own;
+# this makes the AND explicit instead of relying on that coincidence, so a
+# `/gate?token=` with the gate off can never mint a working cookie.)
+map "$gate_enabled$gate_token_ok" $gate_login_ok {
+    default 0;
+    "11" 1;
+}
+
+server {
+    listen 80;
+    server_name _;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # THE CEILING ON AN UPLOAD, and the reason it is written here at all
+    # (S28, owner's call: 100 MB). nginx's default is 1 MiB, and in v3 that
+    # default was the whole bug: the dev server on :5173 accepted a photo
+    # the one-origin build rejected with a 413, so attachments worked on the
+    # laptop and failed on the phone — the only device he actually sends
+    # photos from. `attachments.MAX_BYTES` in core carries the same number
+    # and states it in the refusal; if these two ever disagree, the smaller
+    # one wins silently and the message he gets is whichever one happens to
+    # be nginx's, which says nothing useful.
+    client_max_body_size 100m;
+
+    # Fail-closed 401s render this neutral static page instead of Nova's own
+    # login or any hint of what's behind the gate. Status stays 401 (no `=`
+    # override) so this is still machine-checkable, not just human-readable.
+    error_page 401 /gate-page.html;
+
+    # Docker's embedded DNS. Resolving `core` through a variable (below) rather
+    # than at config-load time buys two things: nginx starts even when core is
+    # not up yet, and a recreated core container's new IP is picked up within
+    # `valid=` instead of 502ing until nginx is restarted.
+    resolver 127.0.0.11 ipv6=off valid=10s;
+
+    # ── Ungated liveness ─────────────────────────────────────────────────
+    # Docker's own healthcheck (deploy/docker-compose.yml) has to be able to
+    # tell "nginx is up" apart from "the gate is blocking me" — otherwise
+    # turning the gate on marks `web` UNHEALTHY even though it's serving
+    # correctly, and install.sh's wait_for_health / the e2e waitForHealthy
+    # would spin forever waiting for a green status that fail-closed design
+    # makes impossible. This is the ONE location on this whole server
+    # without `include /etc/nginx/gate/gate_check.conf;` — deliberately: it
+    # is a static string with no proxy_pass, no upstream, and no app data,
+    # so leaving it ungated reveals nothing the gate exists to protect
+    # (compare the neutral 401 gate page, which also gives nothing away —
+    # this carve-out isn't even a downgrade from that). It must stay
+    # exactly that: self-only and static. Never point this at core or any
+    # other upstream — that would turn a harmless liveness ping into an
+    # ungated hole straight through the gate.
+    location = /healthz {
+        access_log off;
+        add_header Content-Type text/plain;
+        return 200 "ok\n";
+    }
+
+    # ── The gate itself ─────────────────────────────────────────────────
+
+    # The static gate page. NOT behind $gate_block (that would recurse
+    # through error_page into a redirect loop) — it is what a blocked
+    # visitor is shown, so it must always be servable. `internal` keeps it
+    # from being a second, ungated, always-200 route: it only answers as the
+    # body of the 401 above, never as a direct 200.
+    location = /gate-page.html {
+        internal;
+        access_log off;
+    }
+
+    # GET /gate?token=<T> — the only way to mint the cookie. Never logged:
+    # the token rides in the URL, and this is the one place nginx sees it.
+    location = /gate {
+        access_log off;
+        if ($gate_login_ok) {
+            add_header Set-Cookie "nova_gate=${NOVA_PUBLIC_GATE_TOKEN}; Path=/; HttpOnly$gate_cookie_secure; SameSite=Lax; Max-Age=2592000" always;
+            return 302 /;
+        }
+        return 401;
+    }
+
+    # Rail 12: `/health/live` flat and self-only on every service. web's own
+    # compose healthcheck asks `/healthz` above (deliberately ungated — see
+    # that location's comment), but the same flat path every other service
+    # answers on belongs here too rather than being the one service without
+    # it — self-only means nginx answers this itself, touching no upstream,
+    # so a red result here can only ever mean nginx.
+    #
+    # This location IS behind the gate like everything else on this origin
+    # (fail-closed means no carve-outs) — which means when the gate is on,
+    # this path 401s for ungated visitors same as any other. It is not what
+    # Docker's healthcheck polls (that's the ungated /healthz above,
+    # precisely because this one would false-negative the container the
+    # moment the gate is turned on) — this remains the general "ask nginx if
+    # it's alive" path for anything willing to authenticate first.
+    location = /health/live {
+        include /etc/nginx/gate/gate_check.conf;
+        default_type application/json;
+        return 200 '{"status":"live"}';
+    }
+
+    # ── The two long-lived streams ─────────────────────────────────────────
+    # Buffering here would hold tokens back until nginx felt like flushing,
+    # which is exactly the "it looks hung then dumps everything" bug. The long
+    # read timeout is for a model that thinks for minutes, or a multi-GB pull
+    # between progress lines.
+
+    location = /api/v1/chat/stream {
+        include /etc/nginx/gate/gate_check.conf;
+        set $core_upstream http://core:8000;
+        proxy_pass $core_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;
+        proxy_set_header Tailscale-User-Login $ts_user_login_upstream;
+        proxy_set_header Tailscale-User-Name $ts_user_name_upstream;
+        proxy_set_header Tailscale-User-Profile-Pic $ts_user_pic_upstream;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        gzip off;
+        chunked_transfer_encoding on;
+    }
+
+    location = /api/v1/models/pull {
+        include /etc/nginx/gate/gate_check.conf;
+        set $core_upstream http://core:8000;
+        proxy_pass $core_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;
+        proxy_set_header Tailscale-User-Login $ts_user_login_upstream;
+        proxy_set_header Tailscale-User-Name $ts_user_name_upstream;
+        proxy_set_header Tailscale-User-Profile-Pic $ts_user_pic_upstream;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        gzip off;
+        chunked_transfer_encoding on;
+    }
+
+    # "Run now" on a `scheduled` timer runs a whole model turn INLINE (S9 T3: the
+    # firing goes through the same claim as the tick's and the page renders the
+    # firing row core returns), which routinely outlasts the generic /api/
+    # location's 60 s read timeout — nginx would 504 the page while core keeps
+    # running the firing, and the page would show a failed "Run now" for a
+    # firing that then reads ok on the next poll. Same long timeouts as the
+    # chat stream. Regex locations are matched after the prefix ones, so this
+    # wins over `/api/` for exactly these URIs.
+    location ~ ^/api/v1/timers/[^/]+/fire$ {
+        include /etc/nginx/gate/gate_check.conf;
+        set $core_upstream http://core:8000;
+        proxy_pass $core_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;
+        proxy_set_header Tailscale-User-Login $ts_user_login_upstream;
+        proxy_set_header Tailscale-User-Name $ts_user_name_upstream;
+        proxy_set_header Tailscale-User-Profile-Pic $ts_user_pic_upstream;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        gzip off;
+        chunked_transfer_encoding on;
+    }
+
+    # ── The daemon WebSocket ───────────────────────────────────────────────
+    # A paired device (novad) holds an outbound WebSocket to core through this
+    # one origin — the same origin the phone uses. This is the ONLY
+    # Upgrade-aware location: it forwards the HTTP/1.1 Upgrade + Connection
+    # headers so nginx switches the connection to a WebSocket instead of
+    # buffering it as a normal request. Buffering off and a long read timeout
+    # keep an idle-but-alive socket (the daemon heartbeats ~every 20s) from
+    # being culled between frames. Same variable-upstream + server-level
+    # resolver trick as the streams above, so a recreated core's new IP is
+    # re-picked-up within `valid=` instead of 502ing until nginx restarts.
+    #
+    # The SECOND deliberate carve-out from the gate (see /healthz above) —
+    # and this one is a correctness fix, not just a liveness convenience: a
+    # paired device sends no cookie, so gating this location 401s every
+    # daemon's connection attempt the instant the gate turns on, silently
+    # taking every paired device offline even though nothing about the
+    # daemon's own credentials changed. It doesn't need the gate: this
+    # socket is self-authenticating by construction, not by cookie — core
+    # challenges the connection with a nonce the device must sign with its
+    # pinned ed25519 key (see services/core/app/devices_ws.py), and a socket
+    # that can't produce a valid signature gets auth_error and is closed
+    # before it can do anything, gate or no gate. The gate protects the
+    # BROWSER surface (a session no one has proven ownership of yet); this
+    # endpoint already proves the caller mechanically, so the gate would add
+    # a second lock in front of one that already works and only serves to
+    # lock out legitimate daemons. Pairing (`/api/v1/devices/enroll`, which
+    # mints the key this challenge later checks) is NOT carved out — it
+    # stays behind the generic /api/ location's gate below, so enrolling a
+    # new device through a gated public origin remains unsupported; pair via
+    # the tailnet (exempt: from the sidecar with serve's identity header) or
+    # localhost instead, same as ever. This carve-out applies from every
+    # source: a same-host daemon on the published port with no cookie, a
+    # funnel daemon from the sidecar address with no identity header — both
+    # must still connect.
+    location = /api/v1/devices/ws {
+        set $core_upstream http://core:8000;
+        proxy_pass $core_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;
+        proxy_set_header Tailscale-User-Login $ts_user_login_upstream;
+        proxy_set_header Tailscale-User-Name $ts_user_name_upstream;
+        proxy_set_header Tailscale-User-Profile-Pic $ts_user_pic_upstream;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # ── Everything else on the API ─────────────────────────────────────────
+
+    location /api/ {
+        include /etc/nginx/gate/gate_check.conf;
+        set $core_upstream http://core:8000;
+        proxy_pass $core_upstream$request_uri;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $fwd_proto;
+        proxy_set_header Tailscale-User-Login $ts_user_login_upstream;
+        proxy_set_header Tailscale-User-Name $ts_user_name_upstream;
+        proxy_set_header Tailscale-User-Profile-Pic $ts_user_pic_upstream;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 60s;
+    }
+
+    # ── The single-page app ────────────────────────────────────────────────
+
+    # Hashed filenames, so these can never go stale.
+    location /assets/ {
+        include /etc/nginx/gate/gate_check.conf;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    # `.webmanifest` is NOT in nginx's mime.types, so without this block the
+    # file is served as the default type. Chrome then refuses to parse it and
+    # Add-to-Home-Screen silently falls back to a bookmark — no error, no
+    # console entry the owner would look for. `try_files $uri =404` rather
+    # than the SPA fallback below for the same reason: a manifest request
+    # that answers with index.html is a 200 that means "broken".
+    location = /manifest.webmanifest {
+        include /etc/nginx/gate/gate_check.conf;
+        default_type application/manifest+json;
+        add_header Cache-Control "no-cache";
+        try_files $uri =404;
+    }
+
+    # index.html must NOT be cached: a phone holding yesterday's shell while
+    # /assets serves today's chunks is the classic "the feature isn't there".
+    location / {
+        include /etc/nginx/gate/gate_check.conf;
+        add_header Cache-Control "no-cache";
+        try_files $uri $uri/ /index.html;
+    }
+}

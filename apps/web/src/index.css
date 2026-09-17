@@ -1,0 +1,468 @@
+@import '@fontsource-variable/geist-mono';
+/* The DEFAULT interface face, statically, so the first frame has it. Every
+   other choice is fetched on demand from src/lib/fonts.ts. Self-hosted
+   rather than linked from Google: a font request would tell them the IP of
+   every household running this, and an assistant that must reach the
+   internet to draw its own text is not self-hosted. */
+@import '@fontsource-variable/plus-jakarta-sans';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Hide number input spinners globally ──────────────────────────────────── */
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+/* ── Theme CSS custom properties (defaults = teal accent, stone neutral) ──── */
+:root {
+  /* Safe areas, MEASURED by src/lib/safeArea.ts and published here. Seeded
+     from env() for the first paint; read these, never env() directly — on
+     an installed iOS app env(safe-area-inset-top) can resolve to 0 while the
+     page is drawn under the status bar. */
+  --nova-safe-top: env(safe-area-inset-top, 0px);
+  --nova-safe-bottom: env(safe-area-inset-bottom, 0px);
+  /* accent: Nova teal (custom — not stock Tailwind) */
+  --accent-50:  236 253 249;
+  --accent-100: 204 251 240;
+  --accent-200: 150 243 227;
+  --accent-300: 92 232 208;
+  --accent-400: 36 201 184;
+  --accent-500: 25 168 158;
+  --accent-600: 22 142 133;
+  --accent-700: 20 116 108;
+  --accent-800: 17 93 87;
+  --accent-900: 16 77 72;
+  --accent-950: 8 45 42;
+
+  /* card surface (light: white, dark: a step above neutral-900) */
+  --card: 255 255 255;
+
+  /* atmosphere: the deep end of the accent (and Nova's amber) tints the
+     dark ground, the pale end tints the light one. The theme store rewrites
+     these with the active preset's families — nothing below names a hue. */
+  --glow-1: 8 45 42;
+  --glow-2: 69 26 3;
+  --glow-1-light: 204 251 240;
+  --glow-2-light: 254 243 199;
+  --neutral-450: 154 147 143;
+  --neutral-550: 104 98 93;
+
+  /* neutral: stone */
+  --neutral-50:  250 250 249;
+  --neutral-100: 245 245 244;
+  --neutral-200: 231 229 228;
+  --neutral-300: 214 211 209;
+  --neutral-400: 168 162 158;
+  --neutral-500: 120 113 108;
+  --neutral-600: 87 83 78;
+  --neutral-700: 68 64 60;
+  --neutral-800: 41 37 36;
+  --neutral-900: 28 25 23;
+  --neutral-950: 12 10 9;
+}
+
+/* ── Semantic design tokens (aliases into the palette scale above) ──────── */
+/* Light mode defaults */
+:root {
+  --surface-root: var(--neutral-50);
+  --surface-default: var(--card, 255 255 255);
+  --surface-card: var(--card, 255 255 255);
+  --surface-card-hover: var(--neutral-100);
+  --surface-elevated: var(--neutral-100);
+  --surface-input: var(--card, 255 255 255);
+  /* Every text tier clears WCAG AA on the ground AND on a card in every
+     built-in theme (color-palettes.test.ts computes it): secondary is the
+     600 step, tertiary a derived 550 — the 400 that used to be tertiary was
+     2.4:1 on white, the 500 is 4.4:1 on an input. */
+  --text-primary: var(--neutral-900);
+  --text-secondary: var(--tier-secondary, var(--neutral-600));
+  --text-tertiary: var(--tier-tertiary, var(--neutral-550));
+  --text-disabled: var(--neutral-300);
+  --border-default: var(--neutral-200);
+  --border-subtle: var(--neutral-100);
+  --border-focus: var(--accent-700);
+  /* accent as TEXT and as a FILL: the 500 step that reads on a dark ground
+     is 2-3:1 on paper (teal 2.8, amber 2.1), so light mode uses the 700 step
+     (every family clears 4.5:1 there), hovers 800, presses 900. */
+  --accent-ui: var(--tier-accent, var(--accent-700));
+  --accent-ui-hover: var(--accent-800);
+  --accent-ui-active: var(--accent-900);
+  /* text ON an accent or status fill — white on the deep light-mode fills */
+  --on-accent: 255 255 255;
+  /* status colours: fixed hues, but the step follows the mode — the 400s
+     that read on black are 1.9-2.8:1 on white */
+  --status-success: var(--tier-success, 6 95 70);
+  --status-warning: var(--tier-warning, 146 64 14);
+  --status-danger: var(--tier-danger, 185 28 28);
+  --status-info: var(--tier-info, 29 78 216);
+}
+/* Dark mode */
+html.dark {
+  --surface-root: var(--neutral-950);
+  --surface-default: var(--neutral-900);
+  --surface-card: var(--card, var(--neutral-900));
+  --surface-card-hover: var(--neutral-800);
+  --surface-elevated: var(--neutral-800);
+  --surface-input: var(--neutral-900);
+  --text-primary: var(--neutral-50);
+  /* --tier-*: the store proves these against the ground, the card and an
+     input for the palette in play (a community grey that misses gets
+     nudged); the raw steps are the fallback */
+  --text-secondary: var(--tier-secondary, var(--neutral-400));
+  --text-tertiary: var(--tier-tertiary, var(--neutral-450));
+  --text-disabled: var(--neutral-700);
+  --border-default: var(--neutral-800);
+  --border-subtle: var(--neutral-800);
+  --border-focus: var(--accent-400);
+  /* DESIGN.md "Dark Mode Strategy": 400 for text in dark, not 500 — 500 on
+     the active-nav tint was 4.2:1 */
+  --accent-ui: var(--tier-accent, var(--accent-400));
+  --accent-ui-hover: var(--accent-300);
+  --accent-ui-active: var(--accent-500);
+  --on-accent: var(--neutral-950);
+  --status-success: var(--tier-success, 52 211 153);
+  --status-warning: var(--tier-warning, 251 191 36);
+  --status-danger: var(--tier-danger, 248 113 113);
+  --status-info: var(--tier-info, 96 165 250);
+}
+
+@layer base {
+  /* The document NEVER scrolls. Every scrollable region in this app is an
+     overflow-y-auto box inside the shell, so the only thing document scroll
+     can do here is move the whole app — which is exactly what it did.
+
+     A `min-height` floor stood here for one commit (2026-09-15) to stop a
+     short shell leaving a bare strip at the bottom. It made the document
+     TALLER than iOS's layout viewport instead, so the app could be scrolled
+     up: the top ran off the screen and the overscrolled strip showed at the
+     bottom. "The entire PWA app is still shifted high." A box that cannot
+     scroll cannot be scrolled to the wrong place. */
+  html, body {
+    height: 100%;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  body {
+    background:
+      radial-gradient(ellipse at 15% 50%, rgb(var(--glow-1-light) / 0.18) 0%, transparent 50%),
+      radial-gradient(ellipse at 85% 20%, rgb(var(--glow-2-light) / 0.18) 0%, transparent 50%),
+      rgb(var(--neutral-50));
+    color: rgb(var(--neutral-900));
+  }
+  .dark body,
+  html.dark body {
+    background:
+      radial-gradient(ellipse at 15% 50%, rgb(var(--glow-1) / 0.45) 0%, transparent 50%),
+      radial-gradient(ellipse at 85% 20%, rgb(var(--glow-1) / 0.3) 0%, transparent 50%),
+      radial-gradient(ellipse at 50% 100%, rgb(var(--glow-2) / 0.3) 0%, transparent 50%),
+      rgb(var(--neutral-950));
+    color: rgb(var(--neutral-200));
+  }
+}
+
+/* ── Glass morphism ──────────────────────────────────────────────────────── */
+
+.glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.glass-strong {
+  background: rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(24px) saturate(1.3);
+  -webkit-backdrop-filter: blur(24px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+/* ── Liquid glass tiers (dark mode) ────────────────────────────────────── */
+
+html.dark .glass-card {
+  background: rgb(var(--neutral-950) / 0.70);
+  backdrop-filter: blur(40px) saturate(1.4);
+  -webkit-backdrop-filter: blur(40px) saturate(1.4);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.25),
+              inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+html.dark .glass-nav {
+  background: rgb(var(--glow-1) / 0.30);
+  backdrop-filter: blur(40px) saturate(1.6);
+  -webkit-backdrop-filter: blur(40px) saturate(1.6);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+html.dark .glass-overlay {
+  background: rgb(var(--glow-1) / 0.30);
+  backdrop-filter: blur(60px) saturate(1.8);
+  -webkit-backdrop-filter: blur(60px) saturate(1.8);
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.5),
+              inset 0 1px 0 rgba(255, 255, 255, 0.12),
+              inset 0 -1px 0 rgba(0, 0, 0, 0.15);
+}
+
+html.dark .glass-surface {
+  background: rgb(var(--neutral-950) / 0.50);
+  backdrop-filter: blur(20px) saturate(1.2);
+  -webkit-backdrop-filter: blur(20px) saturate(1.2);
+}
+
+/* ── Accent glow ─────────────────────────────────────────────────────────── */
+
+.glow-accent {
+  box-shadow: 0 0 0 1px rgb(var(--accent-500) / 0.1),
+              0 0 20px rgb(var(--accent-500) / 0.06),
+              0 0 40px rgb(var(--accent-500) / 0.03);
+}
+
+.glow-accent-hover:hover {
+  box-shadow: 0 0 0 1px rgb(var(--accent-500) / 0.2),
+              0 0 24px rgb(var(--accent-500) / 0.1),
+              0 0 48px rgb(var(--accent-500) / 0.05);
+}
+
+/* ── Card glow effect (matches docs site aesthetic) ────────────────────────── */
+.card-glow {
+  position: relative;
+  transition: border-color 0.3s, box-shadow 0.3s, transform 0.2s;
+}
+.card-glow::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, rgb(var(--accent-500) / 0.2), transparent 50%, rgb(var(--accent-500) / 0.1));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0;
+  transition: opacity 0.3s;
+  pointer-events: none;
+}
+.card-glow:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 0 20px rgb(var(--accent-500) / 0.08);
+}
+.card-glow:hover::before {
+  opacity: 1;
+}
+
+/* ── Prevent iOS Safari auto-zoom on input focus ──────────────────────────── */
+@supports (-webkit-touch-callout: none) {
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+  /* Restore visual sizes on desktop */
+  @media (min-width: 640px) {
+    input, textarea, select {
+      font-size: inherit !important;
+    }
+  }
+}
+
+/* ── Safe area for mobile (iPhone home indicator) ─────────────────────────── */
+.safe-area-pb {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+/* ── Custom scrollbars (thin, auto-hide) ───────────────────────────────── */
+
+/* Firefox */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+  transition: scrollbar-color 0.3s;
+}
+.custom-scrollbar:hover {
+  scrollbar-color: rgb(var(--neutral-300)) transparent;
+}
+.dark .custom-scrollbar:hover {
+  scrollbar-color: rgb(var(--neutral-600)) transparent;
+}
+
+/* Webkit (Chrome, Safari, Edge) */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 3px;
+  transition: background 0.3s;
+}
+.custom-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: rgb(var(--neutral-300) / 0.6);
+}
+.dark .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+  background: rgb(var(--neutral-600) / 0.6);
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--neutral-400));
+}
+.dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--neutral-500));
+}
+
+/* Hidden scrollbar (scroll works, no visible track) */
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Thin scrollbar for textarea (legacy) */
+textarea::-webkit-scrollbar { width: 4px; }
+textarea::-webkit-scrollbar-thumb { background: rgb(var(--neutral-300)); border-radius: 2px; }
+.dark textarea::-webkit-scrollbar-thumb { background: rgb(var(--neutral-600)); }
+
+/* ── Skeleton shimmer loading ───────────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(90deg, rgb(var(--neutral-200)) 25%, rgb(var(--neutral-100)) 50%, rgb(var(--neutral-200)) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+html.dark .skeleton {
+  background: linear-gradient(90deg, rgb(var(--neutral-800)) 25%, rgb(var(--neutral-700)) 50%, rgb(var(--neutral-800)) 75%);
+  background-size: 200% 100%;
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes scaleIn {
+  0% { opacity: 0; transform: scale(0.95); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes slideInLeft {
+  0% { opacity: 0; transform: translateX(-12px); }
+  100% { opacity: 1; transform: translateX(0); }
+}
+
+/* ── Markdown rendering in chat bubbles ──────────────────────────────────── */
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child  { margin-bottom: 0; }
+
+.markdown-body p { margin: 0.5em 0; }
+.markdown-body p:first-child { margin-top: 0; }
+.markdown-body p:last-child  { margin-bottom: 0; }
+
+.markdown-body code {
+  font-size: 0.8em;
+  background: rgb(var(--neutral-200));
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+}
+.dark .markdown-body code {
+  background: rgb(var(--neutral-800));
+  color: rgb(var(--neutral-300));
+}
+
+.markdown-body pre {
+  margin: 0.5em 0;
+  padding: 0.75em 1em;
+  background: rgb(var(--neutral-900));
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.dark .markdown-body pre {
+  background: rgb(var(--neutral-950));
+}
+
+.markdown-body pre code {
+  background: none;
+  padding: 0;
+  color: rgb(var(--neutral-200));
+  font-size: 0.8em;
+  line-height: 1.6;
+}
+
+.markdown-body ul, .markdown-body ol {
+  margin: 0.4em 0;
+  padding-left: 1.5em;
+}
+
+.markdown-body ul { list-style: disc; }
+.markdown-body ol { list-style: decimal; }
+.markdown-body li  { margin: 0.15em 0; }
+
+.markdown-body blockquote {
+  margin: 0.5em 0;
+  padding: 0.25em 0.75em;
+  border-left: 3px solid rgb(var(--neutral-300));
+  color: rgb(var(--neutral-500));
+}
+.dark .markdown-body blockquote {
+  border-left-color: rgb(var(--neutral-600));
+  color: rgb(var(--neutral-400));
+}
+
+.markdown-body h1, .markdown-body h2, .markdown-body h3,
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  font-weight: 600;
+  margin: 0.6em 0 0.3em;
+}
+.markdown-body h1 { font-size: 1.2em; }
+.markdown-body h2 { font-size: 1.1em; }
+.markdown-body h3 { font-size: 1.05em; }
+
+.markdown-body table {
+  display: block;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.9em;
+  width: auto;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.markdown-body th, .markdown-body td {
+  border: 1px solid rgb(var(--neutral-300)) !important;
+  padding: 0.3em 0.6em;
+}
+.dark .markdown-body th, .dark .markdown-body td {
+  border-color: rgb(var(--neutral-700)) !important;
+}
+.markdown-body th {
+  background: rgb(var(--neutral-100));
+  font-weight: 600;
+}
+.dark .markdown-body th {
+  background: rgb(var(--neutral-800));
+}
+.markdown-body tr:nth-child(even) {
+  background: rgb(var(--neutral-50));
+}
+.dark .markdown-body tr:nth-child(even) {
+  background: rgb(var(--neutral-900));
+}
+
+.markdown-body a {
+  color: rgb(var(--accent-700));
+  text-decoration: underline;
+}
+.dark .markdown-body a {
+  color: rgb(var(--accent-400));
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid rgb(var(--neutral-200));
+  margin: 0.75em 0;
+}
+.dark .markdown-body hr {
+  border-top-color: rgb(var(--neutral-700));
+}

@@ -1,0 +1,13 @@
+{
+  "id": "searches-for-latest-pixel",
+  "suite": "agent_quality",
+  "suite_version": 13,
+  "message": "what's the latest with the pixel phone?",
+  "contract": [
+    {
+      "predicate": "tool_called",
+      "arg": "web_search"
+    }
+  ],
+  "comment": "MIRRORS the S3 owner walk's Pixel deflection (docs/plans/rebuild/slice-04-evals.md lists it among the corpus source failures; this exact message is already the real turn message test_chat_deferral.py's _say() drives for the same scenario): asked for the latest on a fast-moving topic, the model answered from its training data instead of calling web_search. MECHANICAL, not a proxy — tool_called('web_search') is a direct trace fact, true or false with no interpretation. It does NOT check whether the search query was good or the synthesized answer actually used the results; that is a later judged predicate, out of scope for T2. suite_version moved 6 -> 7 because two S9 scheduling cases joined the suite (remind-me-in-twenty-minutes, list-my-reminders; 2026-09-07). suite_version moved 7 -> 8 because four S12 agent cases joined the suite (delegates-the-write-to-an-agent, no-fabricated-agent-work, no-disowned-delegation-tool, scope-limit-is-not-a-disowned-capability; 2026-09-09). MESSAGE DISAMBIGUATED 2026-09-14, one word, for the same reason scope-limit-is-not-a-disowned-capability moved the day before: the corpus was written for a stack with fewer capabilities, and 'the pixel' now collides with the device registry. On the v12 run qwen3.8:27b read it as a paired machine — 'I don't see a pixel in your paired devices; the only one connected is DELL-XPS-8950' — searched memory, found nothing, said the search was the reduced one, and asked which Pixel was meant. That is not the defect this case exists for (answering a fast-moving question out of training data); it is an honest clarifying question about a genuinely ambiguous noun, and it scored red. The same case had PASSED an hour earlier on v11 with the same model, which is the other thing this run taught: a single run is not a measurement. 'the pixel phone' cannot be read as a device, keeps his phrasing otherwise intact, and leaves the measured property exactly where it was — a question about a fast-moving topic has to reach the web."
+}

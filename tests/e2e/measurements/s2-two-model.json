@@ -1,0 +1,77 @@
+{
+  "what": "One model, one run of the Slice 2 definition-of-done turn (tests/e2e/tests/07-tool-loop.spec.ts: 'create a file called groceries.md with five items, then read it back and confirm'), on the GPU, recorded per model. Data only — no conclusions, no tier changes; that is a later decision and this file is its input.",
+  "recorded_at": "2026-08-29T03:15:00Z",
+  "how": {
+    "stack": "compose project nova-e2e (deploy/docker-compose.yml + tests/e2e/docker-compose.isolated.yml + tests/e2e/docker-compose.isolated-gpu.yml), no published host ports, volumes nova-e2e_*",
+    "host": "one NVIDIA GeForce RTX 3090, 24576 MiB total; ollama 0.33.1 reported 22.8 GiB available at startup",
+    "gpu_precondition": "the other stack's ollama (127.0.0.1:11434) reported {\"models\":[]} on a read-only GET immediately before each load, and again after the last turn",
+    "load_s": "wall time of POST /api/generate {prompt: \"\", keep_alive: \"20m\"} against the isolated ollama, from an empty /api/ps",
+    "wall_s": "turns.ended_at - turns.started_at for the turn the scenario produced, out of the core ledger",
+    "rounds": "count of kind='llm_call' spans on that turn",
+    "tool_calls": "count of kind='tool' spans on that turn",
+    "vram_mb": "size_vram for the model in the isolated ollama's /api/ps, after the load",
+    "context_length": "as reported by the isolated ollama's /api/ps for the loaded model"
+  },
+  "models": [
+    {
+      "model": "qwen3:8b",
+      "pull_s": 90,
+      "loaded": true,
+      "load_s": 39.6,
+      "vram_mb": 9508,
+      "size_vram_equals_size": true,
+      "context_length": 32768,
+      "quantization": "Q4_K_M",
+      "parameter_size": "8.2B",
+      "turn_id": "8ab2f05b-bc29-4cf0-9fe7-a66f22cc7970",
+      "wall_s": 45.53,
+      "rounds": 2,
+      "round_ms": [42726, 2753],
+      "tool_calls": 2,
+      "tool_names": ["workspace_write_file", "workspace_read_file"],
+      "tool_ok": [true, true],
+      "success": true,
+      "file_bytes_on_disk": 33,
+      "request_bytes_per_round": [6260, 6849],
+      "notes": "Scenario 07 passed. Both tool calls succeeded on the first attempt; the write and the read were issued in the same round. Round 1 was 42.7s of the 45.5s turn. The reply's five items were Oat Milk, Eggs, Bread, Apples, Banana."
+    },
+    {
+      "model": "qwen3.8:27b",
+      "pull_s": 309,
+      "loaded": true,
+      "load_s": 46.5,
+      "vram_mb": 16594,
+      "size_vram_equals_size": true,
+      "context_length": 32768,
+      "quantization": "Q4_K_M",
+      "parameter_size": "27.3B",
+      "turn_id": "e69c7a24-c8f2-4c9a-bd05-b22786cd6b43",
+      "wall_s": 28.58,
+      "rounds": 3,
+      "round_ms": [25927, 907, 1696],
+      "tool_calls": 2,
+      "tool_names": ["workspace_write_file", "workspace_read_file"],
+      "tool_ok": [true, true],
+      "success": true,
+      "file_bytes_on_disk": 31,
+      "request_bytes_per_round": [6605, 6924, 7190],
+      "nvidia_smi_used_mib_before_load": 13671,
+      "nvidia_smi_used_mib_after_load": 23670,
+      "notes": "Scenario 07 passed. The model loaded fully into VRAM (size_vram == size) at the default 32768 context, on a card whose reported free memory at ollama startup was 22.8 GiB. tests/e2e/README.md records an earlier occasion on this same box where a runner for this slug could not be started at all; the desktop was holding about 7.5 GiB then. One tool call per round: write in round 1, read in round 2, final text in round 3."
+    }
+  ],
+  "cpu_reference": {
+    "model": "qwen3:1.7b",
+    "where": "the same isolated stack with the GPU reservation removed (tests/e2e/docker-compose.isolated.yml), CPU only",
+    "full_suite_s": 252,
+    "scenarios": "10 files, 12 tests, from a first-run instance including the 1.4 GB model pull",
+    "dod_turn_rounds_observed": [2, 2, 3],
+    "notes": "Included because the functional walk runs here by design and these are the same scenario's numbers under the configuration the suite defaults to. Not measured with the load/VRAM instrumentation above."
+  },
+  "prompt_growth": {
+    "method": "reconstructed inside the core container with core's own app.chat.base_messages / completion_payload / history_window over the rows and spans each turn actually used; the recall snippet text is the one thing not accounted (both turns recorded hits=1, so each round's real body is one snippet larger than the number below)",
+    "tools_schema_bytes": 2788,
+    "qwen3:8b": {"history_chars": 1991, "request_bytes_per_round": [6260, 6849]},
+    "qwen3.8:27b": {"history_chars": 2249, "request_bytes_per_round": [6605, 6924, 7190]}
+  }
+}

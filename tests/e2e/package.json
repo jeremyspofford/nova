@@ -1,0 +1,16 @@
+{
+  "name": "nova-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Slice 1 end-to-end walks: wizard, chat, restart persistence, gallery, honest failure.",
+  "scripts": {
+    "e2e": "playwright test",
+    "e2e:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.1",
+    "@types/node": "^22.10.2",
+    "typescript": "^5.4.5"
+  }
+}
