@@ -13,32 +13,49 @@
   `.worktrees/<name>` (gitignored) — never as a sibling folder.
 - A deleted lane called `nova-v3-dev` used to exist; it's archived at tag
   `archive/v3-vite-scaffold`. If you see references to it or to
-  `NOVA_PLAN.md`, that lane is dead — `ROADMAP.md` in this repo is the only
-  roadmap.
-- Tags `v0.1.0-alpha` (v1) and `v0.5.0-alpha` (v2 final) are **reference
-  only**: mine them for ideas/designs (e.g.
-  `git show v0.5.0-alpha:DESIGN.md`), never build from their code. Policy
-  and harvest list are in `ROADMAP.md`.
+  `NOVA_PLAN.md`, that lane is dead.
+- **The roadmap is `docs/plans/rebuild/ROADMAP.md`** (v4) — the "master
+  roadmap" the slice docs cite. Root `ROADMAP.md` is a pointer. v3's backlog
+  moved to `docs/archive/ROADMAP-v3.md` on 2026-09-17, unchanged; until then
+  it sat at the root while every v4 slice was tracked elsewhere, so "read the
+  ordered backlog" sent people to the wrong product.
+- Release tags are **reference only**: mine them for ideas/designs (e.g.
+  `git show v0.5.0-alpha:DESIGN.md`), never build from their code.
+  `v0.1.0-alpha` is v1 and `v0.5.0-alpha` is v2 final — but **they are not the
+  last two.** `v0.6.0` (2026-07-21, the MCP client) and `v2.0.0-alpha`
+  (2026-08-09, v3 final) are later and carry more. What each version was, and
+  what v4 does not carry, is in `docs/history/releases.md`.
 
 ## The running stack
 
-The live stack is the `nova-*` docker compose containers (compose project
-`nova`, pinned in `docker-compose.yml`):
+**v4's stack is `deploy/docker-compose.yml`**, brought up by `./install`:
 
-| Service  | Port  | Notes                                    |
-|----------|-------|------------------------------------------|
-| frontend | :5173 | dev UI (vite, HMR, proxies /api)         |
-| web      | :8080 | built PWA + API, one origin (phone path) |
-| backend  | :8000 | FastAPI                                  |
-| postgres | :5432 |                                          |
-| searxng  | :8380 | keyless web search                       |
-| ollama   | :11434| optional `inference` profile             |
+| Service  | Port  | Notes                                     |
+|----------|-------|-------------------------------------------|
+| web      | :3000 | the PWA                                   |
+| core     | :8000 | FastAPI — chat, tools, memory calls        |
+| gateway  | :8001 | model routing, provider catalog, spend    |
+| memory   | :8002 | the notes                                 |
+| postgres | :5432 | one server, three databases               |
+| searxng  |       | keyless web search (in-network)           |
+| ollama   |       | local inference                           |
+| tailscale|       | the tailnet                               |
 
-All host ports bind 127.0.0.1 only. NOVA_AUTH_TOKEN in .env gates the API —
-API calls need `Authorization: Bearer <token>` (read it from .env).
+All host ports bind 127.0.0.1 only. Auth is a session cookie from
+`POST /api/v1/auth/login` against a row in `people` — **not** the v3
+`NOVA_AUTH_TOKEN` bearer.
 
-Read `README.md` for what works and `ROADMAP.md` for the ordered backlog
-("Next up" is the priority order).
+Root `docker-compose.yml` is **v3's** stack (`backend`, `frontend`,
+`mcp-runner`, `coder`, …). `main` carries both codebases: v4 added `apps/`,
+`services/`, `deploy/`, `install` and `tests/` on top of v3's tree and removed
+nothing. `backend/`, `frontend/`, `coder/`, `git-landing/`, `media/`,
+`workloads/`, `inference-control/` and `mcp-runner/` are all v3's — a mining
+source, not the live system.
+
+Read `docs/plans/rebuild/ROADMAP.md` for the ordered backlog. **`README.md` is
+still v3's** (last touched 2026-08-07, describes the brain-graph home screen and
+`frontend/`) — it has not been rewritten for v4, so do not trust it for what
+works.
 
 ## How Nova is built: mechanical over prompts
 
