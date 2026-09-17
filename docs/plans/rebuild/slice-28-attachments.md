@@ -180,8 +180,28 @@ Three poisoned journal lines from before that fix are LEFT IN PLACE (owner,
 day of real conversation to delete three sentences — and the journal is a
 faithful record that she said them.
 
+**The probe, made a command.** The recall span recorded `hits: 4` — a count,
+not the notes — which is why (4) had to be diagnosed by hand. It now records
+the note PATHS (`meta.recalled`, never bodies), and
+`tools/where-did-that-come-from.sh "a phrase"` asks the three places a
+sentence can come from: the transcript, the notes recent turns recalled, and
+the notes themselves.
+
+**How it was verified, and how it was not.** Targeted core suites (187 tests
+across chat, attachments, vision, conversations and settings), web at 1111,
+and six live walks. NOT a full core run: the full suite wedged at about 12%,
+in the chat tests, three times on 2026-09-16, and one run ignored the SIGTERM
+from its own `timeout`. The hang first showed up while S25 was being gated,
+before this slice began, so it is not this slice's defect — but no full-suite
+number exists for this slice. Merged to `rebuild/v4` and `main` on that
+evidence, at the owner's call (2026-09-17).
+
 ### Still open
 
 Audio, if ollama gains it. Her attaching a file back to him (question 5),
 which was deferred: she can already write into the workspace, and this
 slice was about the direction that did not work.
+
+The full core suite hang, above. Until it is found, no slice can show a
+full-suite green, and a suite that wedges will eventually hide a real
+failure.
