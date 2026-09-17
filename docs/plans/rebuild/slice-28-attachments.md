@@ -137,3 +137,51 @@ holds that, and the whole request is checked for an `input_audio` part.
 When ollama carries audio, this becomes a capability check exactly like
 vision's — the derivation is already written, and only the "nothing here can
 listen" branch has to go.
+
+## What shipped, and what the walks found
+
+Built in four pieces, each walked on the deployed stack before the next:
+the spine (upload, workspace, binding), the turn (facts, vision routing),
+the transcript (images drawn, files named), and PDFs. Audio was measured and
+deliberately not shipped — see above.
+
+**The design decision that paid off.** A file lands in the workspace she
+already has tools over, so nothing needed a "hand the model the file" path
+except images. The trace from the first walk is the whole argument:
+`workspace_read_file {"path": "attachments/<conversation>/note.txt"} ok=true`
+— she read it with the tool she already had, and the read is a fact rather
+than a claim.
+
+**Four defects, none of which any test caught.** Each one is now pinned:
+
+1. The gateway publishes its catalogue under `rows`; core republishes it as
+   `models`, and the vision helper read the wrong one. Every turn decided
+   the catalogue was unreadable, so no image was ever looked at.
+2. That failure was then reported as "no model installed here can see
+   images" — a claim about his MACHINE when the truth was "I could not
+   tell". `Choice.certain` separates them.
+3. She read a PDF correctly and appended "no tool here can read PDFs...
+   possibly a text file mislabeled as PDF". Both false. The facts had not
+   said WHO extracted the text, and a gap in the facts is a thing a model
+   fills.
+4. A capability reading was ingested into her journal and recalled
+   afterwards as current fact — a bug that lived for one turn became a
+   belief. Turns carrying such a note are ephemeral now, the same gate a
+   web fetch already used.
+
+The first diagnosis of (4) was wrong: it looked like conversation history
+repeating itself, and a clean-context probe — a cleared conversation, zero
+messages — said the same sentence again. Memory is not per-conversation.
+Probing before blaming the model is what turned a plausible story into the
+cause.
+
+Three poisoned journal lines from before that fix are LEFT IN PLACE (owner,
+2026-09-16). `/forget` deletes whole files, so removing them would cost a
+day of real conversation to delete three sentences — and the journal is a
+faithful record that she said them.
+
+### Still open
+
+Audio, if ollama gains it. Her attaching a file back to him (question 5),
+which was deferred: she can already write into the workspace, and this
+slice was about the direction that did not work.
