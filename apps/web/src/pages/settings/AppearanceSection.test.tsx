@@ -135,6 +135,25 @@ describe('the icon pickers', () => {
     )
   })
 
+  it('says what a phone will do with the choice, and when', async () => {
+    // 2026-09-17: the hint promised "a phone's home screen" while the code
+    // moved only the tab. An installed iOS app keeps the icon it was added
+    // with; the choice reaches the phone on the next add, and the hint has
+    // to say so or the setting looks broken.
+    renderSection()
+    await screen.findByTestId('app-icon-mark')
+    expect(screen.getByText(/keeps the icon it was added with/)).toBeDefined()
+    expect(screen.queryByText(/and on a phone's home screen\./)).toBeNull()
+  })
+
+  it('picking one moves the home-screen icon as well as the tab', async () => {
+    renderSection()
+    fireEvent.click(await screen.findByTestId('app-icon-cosmic'))
+    expect(document.querySelector('link[rel="apple-touch-icon"]')?.getAttribute('href')).toBe(
+      '/icons/touch/cosmic.png',
+    )
+  })
+
   it('each option previews itself, so the choice is visible before it is made', async () => {
     renderSection()
 

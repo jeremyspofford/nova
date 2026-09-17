@@ -510,7 +510,7 @@ export function AppearanceSection({
 
       <IconPicker
         label="App icon"
-        hint="Shown in the browser tab and on a phone's home screen."
+        hint="Shown in the browser tab. An iPhone takes it the next time Nova is added to the home screen: an installed app keeps the icon it was added with, so remove and re-add Nova to change it."
         testIdPrefix="app-icon"
         value={appIcon}
         onPick={setAppIcon}

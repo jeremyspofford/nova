@@ -272,3 +272,51 @@ it('creates the icon link when the document has none, rather than silently skipp
   const href = document.querySelector('link[rel="icon"]')?.getAttribute('href')
   expect(decodeURIComponent(href ?? '')).toContain('<svg')
 })
+
+describe('the home-screen link follows the choice too', () => {
+  /**
+   * 2026-09-17. The tab icon moved with the choice; the phone's did not,
+   * because <link rel="apple-touch-icon"> was never touched. iOS reads that
+   * link when the app is added (a real PNG, never an SVG or a data: URI), so
+   * it has to name the file for the choice AND the theme on screen.
+   */
+  const touch = () => document.querySelector('link[rel="apple-touch-icon"]')?.getAttribute('href')
+
+  beforeEach(() => {
+    localStorage.clear()
+    document.getElementById('nova-theme-vars')?.remove()
+    document.querySelector('link[rel="apple-touch-icon"]')?.remove()
+  })
+
+  it('names the default mark in the default theme, creating the link when index.html has none', () => {
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+    expect(touch()).toBe('/icons/touch/mark-teal-stone-dark.png')
+  })
+
+  it('moves with the theme and the mode', () => {
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+    click('nebula')
+    expect(touch()).toBe('/icons/touch/mark-violet-nebula-dark.png')
+    click('mode-light')
+    expect(touch()).toBe('/icons/touch/mark-violet-nebula-light.png')
+  })
+
+  it('moves with the choice, and a fixed choice stays put across themes', () => {
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+    click('icon-cosmic')
+    expect(touch()).toBe('/icons/touch/cosmic.png')
+    click('nebula')
+    expect(touch()).toBe('/icons/touch/cosmic.png')
+  })
+
+  it('replaces the href index.html shipped rather than adding a second link', () => {
+    const link = document.createElement('link')
+    link.rel = 'apple-touch-icon'
+    link.href = '/icons/touch/mark-teal-stone-dark.png'
+    document.head.appendChild(link)
+    render(<ThemeProvider><Probe /></ThemeProvider>)
+    click('icon-cosmic')
+    expect(document.querySelectorAll('link[rel="apple-touch-icon"]').length).toBe(1)
+    expect(touch()).toBe('/icons/touch/cosmic.png')
+  })
+})

@@ -1,11 +1,14 @@
+/// <reference types="vite/client" />
 import { describe, it, expect } from 'vitest'
 import {
   APP_ICONS,
   DEFAULT_APP_ICON,
+  allTouchIcons,
   appIconHref,
   knownAppIcon,
   markDataUri,
   orbDataUri,
+  touchIconHref,
 } from './app-icon'
 import { resolvePalette } from './color-palettes'
 
@@ -137,5 +140,72 @@ describe('the v2 orb, redrawn', () => {
     const following = APP_ICONS.find(i => i.key === 'orb')!.href('dark', 'nova', 'teal')
     const pinned = APP_ICONS.find(i => i.key === 'orb-amber')!.href('dark', 'nova', 'teal')
     expect(following).not.toEqual(pinned)
+  })
+})
+
+describe('the home-screen icon', () => {
+  /**
+   * 2026-09-17. Jeremy: "why isn't my PWA ever updating the Nova icon on my
+   * iphone? I need that to change when I change settings."
+   *
+   * Two things were true at once. The Appearance hint said the choice was
+   * "shown ... on a phone's home screen", and the code moved only
+   * <link rel="icon">; <link rel="apple-touch-icon"> was a fixed PNG. And
+   * iOS copies that PNG ONCE, when the app is added, and never fetches it
+   * again — so nothing served later can move an installed icon.
+   *
+   * What CAN be true: the choice decides which file iOS is handed the next
+   * time Nova is added. That takes a real PNG per reachable (choice, theme),
+   * because iOS will not take an SVG or a data: URI there, and a matching
+   * touch link that follows the choice.
+   */
+  it('is a file, named for exactly the inputs the picture depends on', () => {
+    // The mark: accent fill, glyph from the neutral (dark) or white (light).
+    expect(touchIconHref('mark', 'dark', 'nova', 'teal')).toBe('/icons/touch/mark-teal-stone-dark.png')
+    expect(touchIconHref('mark', 'light', 'nova', 'teal')).toBe('/icons/touch/mark-teal-stone-light.png')
+    expect(touchIconHref('mark', 'dark', 'ember', 'teal')).toBe('/icons/touch/mark-amber-ember-dark.png')
+    // A custom theme takes the browser's own accent on the Nova neutrals.
+    expect(touchIconHref('mark', 'dark', 'custom', 'rose')).toBe('/icons/touch/mark-rose-stone-dark.png')
+    // The orb has no ground to flip, so mode is not in its name.
+    expect(touchIconHref('orb', 'dark', 'nova', 'teal')).toBe('/icons/touch/orb-teal.png')
+    expect(touchIconHref('orb', 'light', 'nova', 'teal')).toBe('/icons/touch/orb-teal.png')
+    expect(touchIconHref('orb', 'dark', 'nebula', 'teal')).toBe('/icons/touch/orb-violet.png')
+    // Fixed means fixed.
+    expect(touchIconHref('orb-amber', 'light', 'nova', 'teal')).toBe('/icons/touch/orb-amber.png')
+    expect(touchIconHref('cosmic', 'dark', 'ember', 'rose')).toBe('/icons/touch/cosmic.png')
+    // An unknown key lands on the default's file, like the tab icon does.
+    expect(touchIconHref('nope', 'dark', 'nova', 'teal')).toBe(
+      touchIconHref(DEFAULT_APP_ICON, 'dark', 'nova', 'teal'),
+    )
+  })
+
+  it('a theme-following file differs from the fixed amber one off the amber themes', () => {
+    expect(touchIconHref('orb', 'dark', 'nova', 'teal')).not.toBe(touchIconHref('orb-amber', 'dark', 'nova', 'teal'))
+    expect(touchIconHref('orb', 'dark', 'ember', 'teal')).toBe(touchIconHref('orb-amber', 'dark', 'ember', 'teal'))
+  })
+
+  it('every file the app can hand a phone exists, and nothing else is there', () => {
+    // The tripwire. A new preset, accent or icon choice widens the set the
+    // store can name; the files are committed output of
+    // scripts/make-icons.mjs, so this is the line that goes red until it
+    // has been re-run — rather than iOS quietly showing a broken image.
+    const named = new Set([...allTouchIcons().keys()].map(n => `${n}.png`))
+    // vite lists the directory at transform time (the same TOUCH_ICON_DIR,
+    // spelled as a literal because a glob has to be one).
+    const onDisk = new Set(
+      Object.keys(import.meta.glob('../../public/icons/touch/*.png')).map(f => f.split('/').pop()!),
+    )
+    expect([...named].filter(f => !onDisk.has(f))).toEqual([])
+    expect([...onDisk].filter(f => !named.has(f))).toEqual([])
+    expect(named.size).toBeGreaterThan(APP_ICONS.length)
+  })
+
+  it('the reachable set covers every preset, both modes and every custom accent', () => {
+    const all = allTouchIcons()
+    expect(all.get('mark-teal-stone-dark')).toEqual({ key: 'mark', mode: 'dark', preset: 'nova', customAccent: 'teal' })
+    expect(all.has('mark-teal-stone-light')).toBe(true)
+    expect(all.has('mark-rose-stone-light')).toBe(true)
+    expect(all.has('orb-rose')).toBe(true)
+    expect(all.has('cosmic')).toBe(true)
   })
 })

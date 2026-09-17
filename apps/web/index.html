@@ -3,28 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
-    <!-- The first frame's icon, before React. The theme store replaces this
-         href with the mark painted from the live palette (src/lib/app-icon.ts)
-         a beat later, or with whichever icon this browser has chosen; this
-         only has to be a Nova mark rather than the browser's blank page
-         glyph. Since 2026-09-15 that file is the amber orb, which is also
-         what a home screen gets; the v3 swirl kept its own file
-         (cosmic-192.png) and is still one of the choices in Appearance.
-         Files live in apps/web/public/, which vite copies to the build root,
-         so :5173 and the baked nginx image answer the same paths. -->
+    <!-- The first frame's icons, before React. The theme store replaces both
+         hrefs a beat later with the icon this browser has chosen, in the
+         palette on screen (src/lib/app-icon.ts): the tab gets an SVG painted
+         live, the touch link gets the matching file under /icons/touch/.
+         These only have to be Nova marks rather than the browser's blank
+         page glyph. icon-192.png is the amber orb (also the manifest's);
+         the v3 swirl kept its own file (cosmic-192.png) and is one of the
+         choices in Appearance. Files live in apps/web/public/, which vite
+         copies to the build root, so :5173 and the baked nginx image answer
+         the same paths. -->
     <link rel="icon" type="image/png" href="/icons/icon-192.png" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" href="/icons/touch/mark-teal-stone-dark.png" />
     <!-- Add to Home Screen. The manifest gives Android/Chromium the name,
-         the standalone display mode, the ground colour and a maskable icon;
-         iOS reads almost none of it and needs the two apple- metas below for
-         the same effect.
+         the standalone display mode, the ground colour and a maskable icon
+         (the amber orb — a manifest is static, so Android does not follow
+         the Appearance choice); iOS reads almost none of it and needs the
+         apple-touch-icon above plus the two apple- metas below.
 
-         NOTE, because it will look like a bug otherwise: the home-screen
-         icon CANNOT follow the theme. A manifest takes static PNGs, while
-         the in-app mark is an SVG painted from the live palette
-         (src/lib/app-icon.ts). So the phone shows the v3 swirl whatever
-         icon is chosen in Appearance — which is also the better choice for
-         a home screen, where a distinctive shape beats a letterform. -->
+         NOTE, because it will look like a bug otherwise: an INSTALLED iOS
+         app never changes its icon. iOS copies the apple-touch-icon once,
+         when the app is added, and never fetches it again. What the
+         Appearance choice controls is which file the phone is handed on
+         the NEXT add (a real PNG per reachable choice and palette, made by
+         scripts/make-icons.mjs); to change an installed icon, remove Nova
+         from the home screen and add it again. The Appearance hint says
+         the same. (2026-09-17, after the owner asked why it never moved.) -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <!-- black-translucent: the web view fills the whole screen. With

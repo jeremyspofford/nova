@@ -1,4 +1,4 @@
-import { resolvePalette } from './color-palettes'
+import { accentPalettes, resolvePalette, resolvePaletteKeys, themePresets } from './color-palettes'
 
 /**
  * Nova's marks: the one in the browser tab and the one beside her name in
@@ -35,6 +35,16 @@ import { resolvePalette } from './color-palettes'
  * drawn rather than shipped: the original is a fixed teal PNG, and a fixed
  * anything is stranded the moment the palette moves. As an SVG it is the
  * same orb on the Nova theme, and an amber one on Ember.
+ *
+ * ## The home screen is the one place that cannot take an SVG
+ * iOS reads <link rel="apple-touch-icon"> when Nova is added to the home
+ * screen — a real PNG, never a data: URI — copies it, and never fetches it
+ * again. So the touch icon is a FILE per reachable (choice, palette):
+ * `touchName` says which, `allTouchIcons` enumerates them, and
+ * scripts/make-icons.mjs rasterises exactly that set from the same
+ * functions that paint the tab. The test pins that every name has its
+ * file. (2026-09-17: until then only the tab link moved with the choice,
+ * while the Appearance hint promised the phone would too.)
  */
 
 export interface AppIconChoice {
@@ -53,7 +63,15 @@ export interface AppIconChoice {
   /** The href for <link rel="icon">, given the live theme. A fixed asset
    *  ignores its arguments; a derived one paints itself from them. */
   href: (mode: 'light' | 'dark', preset: string, customAccent: string) => string
+  /** The file (no directory, no extension) under TOUCH_ICON_DIR that is
+   *  this icon rasterised for the live theme — named from exactly the
+   *  inputs the picture depends on, so two themes that paint the same
+   *  picture share a file. */
+  touchName: (mode: 'light' | 'dark', preset: string, customAccent: string) => string
 }
+
+/** Where the home-screen rasterisations live, under public/. */
+export const TOUCH_ICON_DIR = '/icons/touch'
 
 export const DEFAULT_APP_ICON = 'mark'
 
@@ -154,6 +172,11 @@ export const APP_ICONS: AppIconChoice[] = [
     description: "The app's own N, in whatever accent the current theme uses.",
     filled: true,
     href: markDataUri,
+    // Accent fill, glyph from the neutral in dark and white in light.
+    touchName: (mode, preset, customAccent) => {
+      const { accent, neutral } = resolvePaletteKeys(preset, customAccent)
+      return `mark-${accent}-${neutral}-${mode}`
+    },
   },
   {
     key: 'orb',
@@ -161,6 +184,8 @@ export const APP_ICONS: AppIconChoice[] = [
     description: "The v2 orb, redrawn: a soft glow in the theme's accent.",
     filled: false,
     href: orbDataUri,
+    // No ground to flip, so the mode is not part of the picture.
+    touchName: (_mode, preset, customAccent) => `orb-${resolvePaletteKeys(preset, customAccent).accent}`,
   },
   {
     // Asked for by name, twice. The theme-following orb above gives a
@@ -171,6 +196,9 @@ export const APP_ICONS: AppIconChoice[] = [
     description: 'The same orb, pinned to amber whatever the theme is.',
     filled: false,
     href: (mode, _preset, _customAccent) => orbDataUri(mode, 'ember', 'amber'),
+    // The same picture as the theme-following orb on an amber theme, and
+    // deliberately the same file: the name is the picture, not the choice.
+    touchName: () => 'orb-amber',
   },
   {
     key: 'cosmic',
@@ -182,6 +210,7 @@ export const APP_ICONS: AppIconChoice[] = [
     // would have quietly started showing an orb, and nothing in the code
     // would have looked wrong.
     href: () => '/icons/cosmic-192.png',
+    touchName: () => 'cosmic',
   },
 ]
 
@@ -200,4 +229,44 @@ export function appIconHref(
   customAccent: string,
 ): string {
   return appIcon(key).href(mode, preset, customAccent)
+}
+
+export function touchIconHref(
+  key: string,
+  mode: 'light' | 'dark',
+  preset: string,
+  customAccent: string,
+): string {
+  return `${TOUCH_ICON_DIR}/${appIcon(key).touchName(mode, preset, customAccent)}.png`
+}
+
+/** One theme that produces a given touch icon. */
+export interface TouchIconSource {
+  key: string
+  mode: 'light' | 'dark'
+  preset: string
+  customAccent: string
+}
+
+/**
+ * Every home-screen file the store can ever name, each with one theme that
+ * paints it: every choice, in both modes, on every preset, and on every
+ * accent a custom preset can take. Walked from the registries rather than
+ * written down, so a new preset or accent widens this by itself — and
+ * turns the on-disk test red until scripts/make-icons.mjs has been re-run.
+ */
+export function allTouchIcons(): Map<string, TouchIconSource> {
+  const out = new Map<string, TouchIconSource>()
+  for (const choice of APP_ICONS) {
+    for (const mode of ['dark', 'light'] as const) {
+      for (const [preset, def] of Object.entries(themePresets)) {
+        const accents = def.group === 'custom' ? Object.keys(accentPalettes) : ['teal']
+        for (const customAccent of accents) {
+          const name = choice.touchName(mode, preset, customAccent)
+          if (!out.has(name)) out.set(name, { key: choice.key, mode, preset, customAccent })
+        }
+      }
+    }
+  }
+  return out
 }

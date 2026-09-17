@@ -392,14 +392,31 @@ export interface ResolvedPalette {
   card: { light: string; dark: string }
 }
 
+/** The NAMES of the scales a preset paints with, after every fallback has
+ *  been applied: a custom preset takes the browser's accent, an accent or
+ *  neutral nobody has heard of lands on Nova's. Anything that files a
+ *  picture per palette (the home-screen icons, src/lib/app-icon.ts) is
+ *  named from these, so two inputs that paint the same thing share a file. */
+export function resolvePaletteKeys(
+  presetKey: string,
+  customAccent = 'teal',
+): { accent: string; neutral: string } {
+  const preset = themePresets[normalizePreset(presetKey) ?? DEFAULT_PRESET]
+  const wanted = preset.group === 'custom' ? customAccent : preset.accent
+  return {
+    accent: Object.prototype.hasOwnProperty.call(accentPalettes, wanted) ? wanted : 'teal',
+    neutral: Object.prototype.hasOwnProperty.call(neutralPalettes, preset.neutral) ? preset.neutral : 'stone',
+  }
+}
+
 /** The scales a preset paints with — one function, so the store and the
  *  picker's swatches can never disagree about what a theme looks like. An
  *  unknown preset resolves to Nova rather than to nothing. */
 export function resolvePalette(presetKey: string, customAccent = 'teal'): ResolvedPalette {
   const preset = themePresets[normalizePreset(presetKey) ?? DEFAULT_PRESET]
-  const accentKey = preset.group === 'custom' ? customAccent : preset.accent
-  const accent = accentPalettes[accentKey] ?? accentPalettes.teal
-  const neutral = neutralPalettes[preset.neutral] ?? neutralPalettes.stone
+  const keys = resolvePaletteKeys(presetKey, customAccent)
+  const accent = accentPalettes[keys.accent]
+  const neutral = neutralPalettes[keys.neutral]
   const secondary = (preset.secondary && accentPalettes[preset.secondary]) || accent
   const card = cardSurface[preset.neutral] ?? cardSurface.stone
   return { accent, neutral, secondary, card }

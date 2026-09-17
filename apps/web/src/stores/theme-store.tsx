@@ -3,7 +3,7 @@ import {
   accentPalettes, themePresets, resolvePalette, normalizePreset, DEFAULT_PRESET,
   type ColorScale,
 } from '../lib/color-palettes'
-import { appIconHref, knownAppIcon, DEFAULT_APP_ICON } from '../lib/app-icon'
+import { appIconHref, knownAppIcon, touchIconHref, DEFAULT_APP_ICON } from '../lib/app-icon'
 import { DEFAULT_FONT, fontStack, knownFont, loadFont, sanitizeFamily } from '../lib/fonts'
 
 type Mode = 'light' | 'dark'
@@ -319,6 +319,21 @@ function applyTheme(mode: Mode, state: ThemeState) {
     link.setAttribute('href', href)
     link.setAttribute('type', href.startsWith('data:') ? 'image/svg+xml' : 'image/png')
   }
+
+  // The home-screen icon follows the same choice (2026-09-17 — it did not,
+  // and the Appearance hint said it did). iOS reads this link at "Add to
+  // Home Screen", wants a real PNG there, and never fetches it again, so it
+  // names the rasterised file for the choice and the theme on screen; the
+  // phone takes it the next time Nova is added. Same create-when-absent
+  // rule as the tab icon, for the same reason.
+  let touch = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]')
+  if (!touch) {
+    touch = document.createElement('link')
+    touch.rel = 'apple-touch-icon'
+    document.head.appendChild(touch)
+  }
+  const touchHref = touchIconHref(state.appIcon, mode, state.preset, state.customAccent)
+  if (touch.getAttribute('href') !== touchHref) touch.setAttribute('href', touchHref)
 }
 
 const ThemeContext = createContext<ThemeStore | null>(null)

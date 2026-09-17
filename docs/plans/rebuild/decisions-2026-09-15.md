@@ -160,6 +160,19 @@ swap the `apple-touch-icon` href. Held for this conversation rather than
 bolted on, along with the smaller honesty fix — the Appearance picker
 currently says nothing about the home screen and so implies it follows.
 
+**SHIPPED 2026-09-17**, after the owner asked why the phone's icon never
+moved when he changed settings. Exactly the shape above: `touchName` in
+`app-icon.ts` names a PNG per reachable (choice, palette), `allTouchIcons()`
+enumerates the set from the preset and accent registries, `make-icons.mjs`
+rasterises it into `public/icons/touch/`, the theme store swaps the
+`apple-touch-icon` href with the tab icon, and `app-icon.test.ts` pins that
+the directory holds exactly the enumerated set (a new preset or accent goes
+red until the script is re-run). The Appearance hint now says an installed
+app keeps the icon it was added with and that re-adding Nova changes it. The
+part that remains true and cannot be coded around: iOS never re-fetches an
+installed icon. Android still gets the manifest's amber orb; a manifest is
+static and this was an iPhone ask.
+
 **Three layout defects found and FIXED on 2026-09-15** while this topic was
 open, because they made the phone unusable rather than merely awkward: the
 mobile nav never rendered (`{!isMobile}` inverted since 2026-08-27), the
