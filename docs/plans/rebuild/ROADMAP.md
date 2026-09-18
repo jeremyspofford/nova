@@ -195,145 +195,22 @@ llama-server child the way `LLAMA_ARG_KV_OFFLOAD` was proven to?
 
 ---
 
-## Mined from v1–v3 — proposals, 2026-09-17
+## The arcs — what Nova is becoming
 
-Full archaeology: `docs/history/releases.md`. Nothing below is scheduled; each
-is a proposal with an ROI judgement, so it can be accepted or killed once rather
-than re-surfacing every quarter.
+**→ [`ARCS.md`](ARCS.md)**
 
-Every proposal answers `CLAUDE.md`'s question: **which line of code refuses when
-the model is wrong?**
+Ten arcs, what each has already decided, where v4 is along it, and the next
+move. Plus a browser of her own, and Jev.
 
-### Checked and NOT gaps — do not re-propose
+This file answers *what is next*. That one answers *what is Nova becoming*.
 
-Three things assumed missing and found present, which is why this list reads
-from code:
+*What was here before, and why it is gone:* a "Mined from v1–v3 — proposals"
+section that diffed old shipped code against v4's and called every difference
+a gap. It reported unbuilt plans as defects, and it retired three capabilities
+the owner intends to have — the autonomous goal loop, IDE integration and the
+friction log — which was never a call for this document to make. `ARCS.md`
+replaces it, built from the intent corpus instead.
 
-- **Onboarding.** `apps/web/src/pages/onboarding/OnboardingWizard.tsx` — eight
-  steps, Welcome → CreateAccount → Timezone → HardwareDetection → ChooseEngine →
-  PickModel → Downloading → Ready — plus `./install` → `deploy/install.sh`.
-  Better than v1's shell wizard.
-- **The design system.** v1's custom teal survives verbatim:
-  `--accent-500: 25 168 158` is `#19A89E`, v1's `teal-500`
-  (`apps/web/src/index.css:32-39`). Amber-for-thinking survives too.
-- **A quality page.** `apps/web/src/pages/quality/AIQualityPage.tsx` exists.
-  S26 is about what the corpus measures, not about building a page.
-
-### A — Secrets at rest. **High ROI. Recommended next after S26.**
-
-**The gap.** Provider API keys are stored as plaintext `text` in the gateway
-database (`services/gateway/migrations/003_providers.sql:22`), masked only on
-the way out (`providers.py:62`). There is no `cryptography` import anywhere in
-`services/gateway/app/`. Anyone with a DB read has every key.
-
-v3 shipped this on 2026-07-30 (ROADMAP #32, phases 1–3): an encrypted store,
-`{{secret:name}}` resolved at the outbound call so plaintext never sits in a
-prompt or a row, Settings → Secrets, `list_secret_names` (names only, never
-values), provider keys diverted out of the plaintext column, and a master key at
-`/state/secret.key` — **not** `data/`, which is overlay fs. Spec:
-`docs/plans/secrets-management.md`. The design is done and measured.
-
-**Which line refuses:** a test asserting no secret-shaped column is readable in
-plaintext, and a resolver that substitutes only at the outbound call — so a
-prompt that contains `{{secret:…}}` is a bug the diff shows, not a leak.
-
-**On "password managers":** v3's external-source seam (`file` / `env` live,
-1Password and Bitwarden gated on a binary decision plus an account to verify
-against) is the right shape. Ship the store first; the manager is a source
-behind the same seam, not a separate feature.
-
-### B — MCP client. **High ROI, but read the ruling first.**
-
-v3 shipped it at `v0.6.0`: HTTP **and** stdio servers, a lazy tool index and
-meta-tool (~15 prompt tokens until used), and the **`mcp-runner` sidecar with no
-docker socket and no DB credentials** — that containment design is the valuable
-part and it already exists in this tree.
-
-**The complication.** `docs/plans/README.md` marks `mcp-client.md` **"v3 only —
-not carried to v4 (owner ruling 2026-09-03)"** — because v3's version was built
-on per-agent grants and an approve step. v4 has no grants: every registered tool
-is hers the moment it is registered.
-
-So this is not a port. It is a redesign around one question: **what bounds an
-MCP server's tools when there is no grant to withhold?** v4's answer elsewhere
-is the toolset itself — a scoped workspace, a fetch that cannot reach this
-network, a device that must be paired. An MCP server is a third party's code
-with none of those properties by default.
-
-**Recommendation:** worth doing, and worth a design conversation before any
-code — the same shape as S27's opening discussion. Do not start by porting
-`backend/app/mcp_client.py`.
-
-### C — A second person. **Medium-high ROI. Smaller than it looks.**
-
-**The plumbing is already there.** `people` carries
-`role IN ('owner','adult','kid','guest')` with a unique index enforcing one
-owner (`services/core/migrations/002_core_schema.sql:4-14`), and `person_id`
-scopes conversations, turns, timers, queued messages and attachments. Memory
-calls are scoped to the turn's own person.
-
-**What is missing is the door.** `/register` refuses once any person exists
-(`auth_api.py:79-83`: "registration is closed — this instance already has an
-owner"), no other route creates a person, and Settings has five tabs — General,
-Appearance, Models, Behaviour, Devices — none of them people.
-
-So the schema is a household and the product is one man. Adding the second
-person is mostly a route, a Settings tab and a decision about what `kid` and
-`guest` actually mean at the tool layer.
-
-**Careful:** "what a guest may do" is one keystroke from an authorization
-system, which the 2026-09-03 ruling forbids. The v4-shaped version is that a
-person's *scope* is structural — whose memory, whose conversations, whose
-workspace — never a gate that asks or refuses on the owner's behalf.
-`speaker-id.md`'s locked principle is the right phrasing:
-**personalization never authentication.**
-
-**Which line refuses:** `test_no_approvals.py`, already. Extend it so a
-per-person capability table reddens it.
-
-### D — Backups. **Medium ROI, high blast-radius value.**
-
-v1 had a whole `recovery` service (`:8888`) with backup, restore, factory reset
-and service management. v3 spec'd it as ROADMAP #31 Wave 1, "blast-radius
-insurance before Nova acts anywhere", with a restore drill as phase 5. v4 has
-nothing.
-
-The v3 cautionary tale is already recorded: `backups.every_hours` vanished from
-the settings table on 2026-08-08/09, nightly backups were silently off, and it
-was found only because a heartbeat complained about staleness — which is what
-`v2.0.0-alpha`'s tip commit was written to prevent.
-
-**Which line refuses:** the restore drill. A backup nobody has restored is a
-belief. v3 knew this and made it a phase.
-
-### E — The Vault / files view. **Medium ROI.**
-
-v3 ROADMAP #41, an Obsidian-style view over the files she can reach. v4 has
-`/files`; it is a list, not a graph. Worth having once memory is bigger than one
-person can hold in their head — which is a "later, when it hurts" trigger rather
-than a date.
-
-### F — Low ROI or superseded — recorded so they are not re-proposed
-
-- **The autonomous goal loop (v1 `cortex`).** Drives, budget, thinking loop.
-  v4's beats and checks cover the useful half (she looks around on her own), and
-  v1's own `TODOS.md` admitted the loop had **zero test coverage** and repeated
-  its mistakes because it never read its own reflections back. Superseded by
-  S11, and by the ruling: a goal loop that acts without asking is exactly the
-  thing the no-approvals ruling makes dangerous rather than easy.
-- **IDE integration (v1's `:8000/v1`, `editor-vscode`, `editor-neovim`).** Nova
-  is a household assistant in v4, not a coding backend. The `coder/` directory
-  is v3 leftover.
-- **The friction log (v1 `Friction` page).** A user-filed defect list. The Inbox
-  and `/activity` cover the ground that matters, and a second queue nobody reads
-  is worse than none.
-- **v2's approvals, and every authorization shape.** `/approvals`, consent
-  cards, dispositions, earned autonomy, per-agent and per-device grants,
-  `fs_roots`, deny-roots. Owner ruling 2026-09-03
-  (`no-approvals.md`); `services/core/tests/test_no_approvals.py` is what refuses their
-  return. **History, not backlog.**
-
----
 
 ## Housekeeping this pass turned up
 
@@ -354,7 +231,8 @@ than a date.
 
 ## Index — `docs/plans/rebuild/`
 
-**Rulings and cross-cutting:** `no-approvals.md` (the 2026-09-03 owner ruling —
+**Rulings and cross-cutting:** `ARCS.md` (the product map — the ten arcs and
+where v4 is along each), `no-approvals.md` (the 2026-09-03 owner ruling —
 read before designing anything that gates), `decisions-2026-09-15.md` (eight
 scopes and the order of work), `feature-flags.md` (a withdrawn parallel design,
 kept for the record).

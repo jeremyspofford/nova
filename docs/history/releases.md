@@ -52,19 +52,36 @@ product, with a marketing site (`website/`) and a docs domain.
 | postgres | 5432 | pgvector — agents, tasks, pods, config, engrams |
 | redis | 6379 | agent state, task queue, rate limiting |
 
-### Capabilities v4 does not have
+### Capabilities v4 has not rebuilt yet
+
+Positions on the map, not defects — see [`../plans/rebuild/ARCS.md`](../plans/rebuild/ARCS.md)
+for which arc each belongs to.
 
 - **An autonomous goal loop.** Cortex decomposed a goal, executed, evaluated,
-  re-planned, with drives and a budget tracker. v4 has timers, beats and
-  checks — scheduled work — but nothing that sets and pursues its own goal.
-- **A recovery service** with backup, restore and factory reset behind an API.
-- **`./install` and `./uninstall` wizards.** Three inference modes
-  (hybrid / local-only / cloud-only), starter-model pulls, and an uninstaller
-  that reported disk reclaimed and deliberately left shared upstream images
-  alone.
-- **IDE integration** — an OpenAI-compatible endpoint at `:8000/v1` for
-  Cursor, Continue.dev and Aider, plus `editor-vscode/` and `editor-neovim/`.
-- **`screenpipe-bridge/`** — desktop capture.
+  re-planned, with drives and a budget tracker (arc 1). Its own `TODOS.md`
+  admitted the loop never read its reflections back and had "zero test
+  coverage" — so what v4 wants from it is the *grading and reversal*
+  machinery, which v3 #47 later specified properly.
+- **A recovery service** with backup, restore and factory reset behind an API
+  (arc 8).
+- **An `./uninstall` wizard** that reported disk reclaimed and deliberately
+  left shared upstream images alone. (v1's `./install` *is* rebuilt — v4's is
+  better.)
+- **IDE integration** — an OpenAI-compatible endpoint any editor can point at,
+  plus `editor-vscode/` and `editor-neovim/` (arc 6). **Closer than it looks:**
+  v4's gateway already serves `POST /v1/chat/completions`. v1's own doc says
+  "`apiBase` is the only thing that matters".
+- **The `Friction` page** — the owner logs what annoyed him and "Fix This"
+  dispatches a task with service logs attached; planned next steps were a
+  friction→memory pipeline and GitHub issue export (arc 1). This is a *work
+  intake*, not a second inbox: the Inbox carries what she noticed, and nothing
+  carries what he noticed.
+- **`Sources`** — the `intel-worker`'s RSS / Reddit / GitHub-trending poller
+  feeding her knowledge (arc 4).
+- **`CapturePage`** / **`screenpipe-bridge/`** — desktop capture (arc 5; v3
+  re-scoped this as `device-activity-monitoring.md`).
+- **`Goals`, `Tasks`, `Usage`, `Pods`** — the goal/budget surface, the pipeline
+  queue, cost charts, and inference backends (arcs 1, 6, 7).
 
 ### UI — 29 dashboard pages
 
@@ -204,50 +221,63 @@ did to itself.
 
 ---
 
-## What v4 carries, and what it does not
+## Where v4 is along each arc
 
-Checked against `main` at `0996a31`. **Three things I expected to be gaps are
-not** — which is the reason this section reads from code rather than from the
-v3 roadmap.
+Checked against `main`. The per-arc detail — what each arc already decided,
+what v4 has of it, and the next move — lives in
+**[`../plans/rebuild/ARCS.md`](../plans/rebuild/ARCS.md)**. This section only
+records what reading the tags corrected.
 
-### Already in v4 (do not re-propose)
+### Assumed missing, found present
+
+Each of these was nearly written up as a gap:
 
 - **Onboarding.** `apps/web/src/pages/onboarding/OnboardingWizard.tsx` — an
   eight-step wizard: Welcome → CreateAccount → Timezone → HardwareDetection →
-  ChooseEngine → PickModel → Downloading → Ready. Plus `./install` →
-  `deploy/install.sh` (preflight → hardware → secrets → up → health table).
-  This is *better* than v1's shell wizard, not a regression.
+  ChooseEngine → PickModel → Downloading → Ready, whose Ready step performs a
+  real inference round-trip and cannot be reached on a fake. Plus `./install` →
+  `deploy/install.sh`. Better than v1's shell wizard.
 - **The design system.** v1's palette and type scale survive in
-  `apps/web/src/index.css`.
+  `apps/web/src/index.css` — `--accent-500: 25 168 158` is `#19A89E`, v1's
+  `teal-500`, verbatim.
 - **A quality page.** `apps/web/src/pages/quality/AIQualityPage.tsx` exists —
   S26 is about what the corpus *measures*, not about building a page.
 - **Activity / audit.** `/activity`, backed by `services/core/app/activity.py`.
-- **The person model.** `people` with `role IN ('owner','adult','kid','guest')`
-  and a unique index enforcing one owner
-  (`services/core/migrations/002_core_schema.sql:4-14`); `person_id` scoping on
-  conversations, turns, timers, queued messages and attachments.
+- **Computer control.** `apps/novad` is a Go daemon on a paired Linux box
+  executing ed25519 one-use signed envelopes verified *on that machine*, with
+  nine device tools registered including `device_run`, `device_write_file` and
+  `device_launch_app`. What is absent is browser automation and GUI control —
+  not "computer control".
+- **The person model, and the rule that governs it.** `people` with
+  `role IN ('owner','adult','kid','guest')` and a unique index enforcing one
+  owner (`services/core/migrations/002_core_schema.sql`); `person_id` scoping
+  on conversations, turns, timers, queued messages and attachments. And
+  `services/core/app/identity.py` already states the rule: "every
+  authenticated person sees every route (Person.role is carried, never
+  branched on for access)" — `speaker-id.md`'s *personalization never
+  authentication*, honoured in code.
 
-### Genuinely absent from v4
+### The one live regression
 
-| Capability | Where it existed | v4 evidence |
-|---|---|---|
-| **Encrypted secret store** | v3 #32, shipped 2026-07-30 | gateway stores provider keys as plaintext `text` (`services/gateway/migrations/003_providers.sql:22`), masked only on read (`providers.py:62`). No `cryptography` import anywhere in `services/gateway/app/`. |
-| **MCP client** | v2 (lazy loading) + v3 `v0.6.0` (full) | no `mcp` module in `services/core/app/`; `mcp-runner/` is v3 leftover, not wired to v4 core. |
-| **A second person** | v1 `Users`/`Invite` | `/register` refuses once any person exists (`auth_api.py:79-83`); no route creates another; Settings has five tabs, none for people. |
-| **Backups / restore / factory reset** | v1 `recovery` service, v3 #31 | nothing in `services/`. |
-| **Autonomous goal loop** | v1 `cortex` | v4 has timers/beats/checks — scheduled, not self-directed. |
-| **A files/Vault view** | v3 #41 | `/files` exists; the Obsidian-style graph does not. |
-| **Friction log** | v1 `Friction` page | nothing. |
-| **IDE integration** | v1 `:8000/v1` + editor plugins | nothing. |
+Not "v4 hasn't got to it" — something v3 shipped and v4 handles worse today:
+**provider API keys are plaintext `text` in the gateway database**
+(`services/gateway/migrations/003_providers.sql`), masked only on read
+(`providers.py`), with no `cryptography` import anywhere in
+`services/gateway/app/`. v3 shipped an encrypted store on 2026-07-30 with
+`{{secret:name}}` resolved at the outbound call. Arc 8.
 
 ### Not carried, on purpose
 
 Approvals, consent cards, dispositions, earned autonomy, per-agent or
 per-device grants, `fs_roots` and deny-roots — every authorization shape from
 v1/v2/v3. Owner ruling 2026-09-03
-(`docs/plans/rebuild/no-approvals.md`); `services/core/tests/test_no_approvals.py` refuses
-their return. v1's `PendingApprovals` page and v2's `/approvals` are history,
-not backlog.
+(`docs/plans/rebuild/no-approvals.md`); `services/core/tests/test_no_approvals.py`
+refuses their return. v1's `PendingApprovals` page and v2's `/approvals` are
+history, not backlog.
+
+**But the ruling killed one v3 item outright and only a *mechanism* inside
+fourteen others** — the capability under each survived, and v3 usually built a
+non-approval rail beside the dead gate. `ARCS.md` separates the two.
 
 ---
 
