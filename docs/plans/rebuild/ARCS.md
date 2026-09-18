@@ -352,6 +352,11 @@ of the question (the fictional `swappable` flag was **deleted, not repaired**);
 `prefill_ms`/`ttft_ms`/`thinking_ms` as three separate fields with the
 reasoning stream read.
 
+**Planned in the hub lane** (2026-09-18, [`hub-topology.md`](hub-topology.md)):
+local models on any machine, with ids that name the machine (`hub:`, `dell:`),
+served through the Nova agent on that machine, and woken over LAN when asleep.
+Every speed and fit number becomes keyed by the compute it was measured on.
+
 **Next move** — S23, parked with every number already measured on this host.
 The first move on pickup is one cheap experiment, not a migration: does
 `LLAMA_ARG_CACHE_RAM` reach ollama's llama-server child the way
@@ -387,6 +392,10 @@ secrets → up → health table, refusing to report success on a line it cannot
 read), compose profiles, one durable HTTPS origin on the tailnet that survives
 restarts and reboots. No backups. **Provider API keys are plaintext `text` in
 the gateway database**, masked only on read.
+
+**Planned in the hub lane** (2026-09-18, [`hub-topology.md`](hub-topology.md)):
+S41 builds verified backup and restore to the rules above, and S45 uses them to
+move Nova from the Dell to an always-on hub, which is the first real restore.
 
 **Next move** — the restore drill is the part that makes the rest true. A
 backup nobody has restored is a belief; v3 knew that and made it a phase.

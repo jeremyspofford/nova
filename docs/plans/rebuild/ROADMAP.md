@@ -151,7 +151,7 @@ claimed it.
 | GPU contention: she can say it, nothing stops it | **STILL VALID, by design** | `services/core/app/checks/inference.py` states; routing around a contended card is S10's mode switch and a decision on his behalf (ruling 2026-09-03). Third occurrence 2026-09-15. |
 | S16 eval case needs a file fixture | **STILL VALID** | `cases.py:261-277` — no `files` field. |
 | `no-fabricated-agent-work` unstable | **STILL VALID** | case present; no stability work since. |
-| Full core suite hang | **STILL VALID** | see item 0 and the incident doc. |
+| Full core suite hang | **RESOLVED 2026-09-18** | `drain_background` spin over a finished task (CPython 3.12 eager `gather`); full suite 2,957/2,957 twice. See item 0 and the incident doc. |
 
 ### Deferred, needing the owner's own session
 

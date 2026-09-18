@@ -249,6 +249,23 @@ each one selects go in `docs/plans/rebuild/hub-p0-measurements.md`.
 
 ### S41: portable hub + verified backup/restore drill (operator tooling)
 
+> **Reconcile with `ARCS.md` arc 8 before building (added 2026-09-18, after the
+> product map landed in PR #66).** Arc 8 lists these as *already decided* by the
+> owner (v3 #31/#32). S41 is built to them, not to the plain-tar sketch below:
+> - a **complete, encrypted** bundle, with the passphrase behind a **resolver
+>   seam** ("eventually it'll get it from a secrets manager");
+> - the standalone restore script travels **inside every bundle**;
+> - coverage is **derived from the compose file**: an unclassified volume
+>   **refuses** rather than silently skipping (this replaces the hand-kept
+>   `BACKUP_EXCLUDE_DATA` list);
+> - a **weekly restore drill** (her capability, on the S9 scheduler; S41 builds the verb, the schedule may follow).
+>
+> Because the bundle is encrypted, **secrets travel in it**. That reverses D15's
+> "`network_credentials` excluded from backups", which existed only because a
+> plaintext archive would leak it. Arc 8's closing note, "secrets and backups
+> are the same slice in practice", means S41 and Proposal A (secrets at rest)
+> should be planned together.
+
 **`deploy/backup.sh` + `install.sh`, bash-3.2 portable:**
 - **`backup`:**
   - stop the writers and verify they stopped;
