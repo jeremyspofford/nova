@@ -4,6 +4,7 @@ Every gateway concern that touches postgres (backend_config, probes) needs
 a real one: TEST_DATABASE_URL, same contract as Task 1's migration test.
 Unset means skip with a stated reason — never a pass that proved nothing.
 """
+
 from __future__ import annotations
 
 import os
@@ -30,6 +31,10 @@ _TABLES = (
     "spend_caps",
     "provider_prices",
     "probes",
+    # S40 (migration 009): before `providers`, whose rows they hang off —
+    # left out, the suite's rebuild would keep an FK-less `engines` table.
+    "engine_models",
+    "engines",
     "providers",
 )
 

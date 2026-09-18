@@ -119,6 +119,12 @@ async def test_a_good_read_answers_the_cards_numbers(monkeypatch):
         # missing reading is not an idle card.
         "util_pct": None,
         "reason": None,
+        # S40: three fields, no uuid — a card with no identity, counted.
+        "uuid": None,
+        "name": None,
+        "uuids": [],
+        "cards": 1,
+        "absent": False,
     }
 
 
@@ -165,3 +171,72 @@ def test_a_percent_sign_does_not_defeat_the_reading():
     """nounits is asked for, but a driver that prints one anyway must not
     turn a busy card into an unknown one."""
     assert devices_vram.parse("24576, 17663, 6913, 99 %\n").util_pct == 99
+
+
+# ── Which card (S40, D10) ────────────────────────────────────────────────
+#
+# A measurement is only meaningful with the hardware it was taken on. The
+# uuid names the card; `cards` counts every line nvidia-smi printed, so a
+# card that printed no uuid is still a card; `absent` says there is no GPU
+# at all, which is a different fact from "the GPU could not be read".
+
+UUID = "GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"
+UUID_B = "GPU-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+
+
+def test_the_query_appends_uuid_and_name_after_utilisation():
+    """Appended, never inserted: memory stays fields 1-3 and utilisation 4 on
+    every driver, so an old answer still lines up field by field."""
+    assert devices_vram._QUERY == "memory.total,memory.used,memory.free,utilization.gpu,uuid,name"
+
+
+def test_the_card_says_which_card_it_is():
+    vram = devices_vram.parse(f"24576, 2662, 21914, 3, {UUID}, NVIDIA GeForce RTX 3090\n")
+    assert (vram.uuid, vram.name) == (UUID, "NVIDIA GeForce RTX 3090")
+    assert vram.uuids == (UUID,) and vram.cards == 1 and vram.absent is False
+
+
+def test_the_biggest_card_brings_its_own_uuid_and_every_card_is_listed():
+    vram = devices_vram.parse(
+        f"8192, 1000, 7192, 5, {UUID_B}, Small\n24576, 17663, 6913, 99, {UUID}, Big\n"
+    )
+    assert (vram.total_mb, vram.uuid, vram.name) == (24576, UUID, "Big")
+    assert vram.uuids == (UUID_B, UUID) and vram.cards == 2
+
+
+def test_a_name_with_a_comma_is_kept_whole():
+    vram = devices_vram.parse(f"24576, 2662, 21914, 3, {UUID}, Some Card, Rev 2\n")
+    assert vram.name == "Some Card, Rev 2"
+
+
+def test_a_line_without_a_uuid_is_a_card_with_no_identity():
+    vram = devices_vram.parse("24576, 2662, 21914, 3\n")
+    assert vram.known and vram.cards == 1 and vram.uuids == () and vram.uuid is None
+
+
+def test_an_unreadable_card_still_counts_as_a_card():
+    vram = devices_vram.parse(
+        f"[N/A], [N/A], [N/A], [N/A], {UUID_B}, Broken\n24576, 2662, 21914, 3, {UUID}, Big\n"
+    )
+    assert vram.cards == 2 and vram.uuids == (UUID_B, UUID) and vram.uuid == UUID
+
+
+async def test_no_binary_means_no_gpu_was_passed_through(monkeypatch):
+    async def _missing(*args, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "nvidia-smi")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _missing)
+    vram = await devices_vram.read_vram()
+    assert vram.absent is True and not vram.known and vram.cards == 0
+
+
+async def test_a_binary_that_cannot_run_is_unknown_not_absent(monkeypatch):
+    """The card is there and unreadable: saying "no GPU" about it would be
+    the guess that fits a 24 GB model against system RAM."""
+
+    async def _denied(*args, **kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", _denied)
+    vram = await devices_vram.read_vram()
+    assert vram.absent is False and "Permission denied" in vram.reason

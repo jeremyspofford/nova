@@ -559,7 +559,9 @@ async def _migrate_to(tmp_path, upto: int) -> None:
 
     conn = await asyncpg.connect(TEST_DSN)
     try:
-        await conn.execute("DROP TABLE IF EXISTS providers, probes, backend_config CASCADE")
+        await conn.execute(
+            "DROP TABLE IF EXISTS providers, probes, backend_config, engines, engine_models CASCADE"
+        )
         await conn.execute("DROP TABLE IF EXISTS schema_migrations")
     finally:
         await conn.close()
@@ -650,7 +652,8 @@ async def test_migration_003_converts_the_active_backend_into_the_default_provid
 
     assert gone is None
     by_name = {r["name"]: dict(r) for r in rows}
-    assert by_name["ollama"]["builtin"] is True and by_name["ollama"]["is_default"] is False
+    # The whole set now runs through 009: the builtin 003 created arrives as `hub`.
+    assert by_name["hub"]["builtin"] is True and by_name["hub"]["is_default"] is False
     converted = by_name[expect_name]
     assert converted["adapter"] == "openai-chat"
     assert converted["base_url"] == expect_url
@@ -660,7 +663,7 @@ async def test_migration_003_converts_the_active_backend_into_the_default_provid
     assert converted["is_default"] is True
 
 
-async def test_migration_003_on_a_fresh_or_ollama_install_leaves_ollama_default(tmp_path):
+async def test_migration_003_then_009_on_a_fresh_or_ollama_install_leaves_hub_default(tmp_path):
     import asyncpg
 
     import tests.conftest as conftest
@@ -680,7 +683,7 @@ async def test_migration_003_on_a_fresh_or_ollama_install_leaves_ollama_default(
     finally:
         await conn.close()
         conftest._schema_built = False
-    assert [(r["name"], r["is_default"]) for r in rows] == [("ollama", True)]
+    assert [(r["name"], r["is_default"]) for r in rows] == [("hub", True)]
 
 
 async def test_backends_kind_is_derived_not_stored():
