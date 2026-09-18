@@ -35,12 +35,20 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | 2 | **S24** threads | done |
 | 3 | **S25** the Inbox | done |
 | — | **S28** attachments | done (inserted) |
-| 0 | **The suite hang** (below) | **NEXT.** Owner, 2026-09-18: fix it before the hub lane |
-| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **Approved 2026-09-18, after item 0 and ahead of S26.** An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. Nothing built yet. |
+| 0 | **The suite hang** (below) | **DONE 2026-09-18**: root-caused and fixed; full core suite 2,957/2,957 green twice |
+| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **NEXT. Approved 2026-09-18, ahead of S26.** An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. Nothing built yet. |
 | 4 | **S26 — the quality corpus** | Nothing built, nothing spec'd. After the hub lane. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
 
 ### 0. Before S26 — the suite hang
+
+**RESOLVED 2026-09-18.** `drain_background()` spun synchronously over one
+finished task: since CPython 3.12, `gather` over already-done children
+completes without yielding, so the queued done-callback that removes the task
+never ran. The fix yields; `pytest-timeout` now bounds every test; full suite
+2,957/2,957 twice. Measured write-up in
+`docs/incidents/2026-09-16-core-suite-wedge.md`. What follows is the original
+entry.
 
 **Not a slice, and ahead of all of them.** The full core suite wedges at ~12%,
 in the chat tests. It first appeared while S25 was being gated, so it belongs to

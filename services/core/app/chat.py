@@ -470,9 +470,24 @@ def _spawn(coro) -> asyncio.Task:
 
 
 async def drain_background() -> None:
-    """Wait for everything fired and forgotten so far."""
+    """Wait for everything fired and forgotten so far.
+
+    Every round must YIELD to the loop. A task that has finished but whose
+    done-callback (the `discard` in `_spawn`) has not run yet is a normal state
+    for one loop iteration, and since CPython 3.12 `asyncio.gather` over
+    children that are all done completes eagerly and does not yield. Gathering
+    the whole set therefore spun for ever on one finished task: the loop never
+    ran again, so its discard never ran, so the set never emptied. That was the
+    core suite's ~12% wedge (item 0, 2026-09-18), and the same loop ran at
+    shutdown. So: gather only what is still running, and when nothing is, give
+    the loop one turn so the queued discards can land.
+    """
     while _BACKGROUND:
-        await asyncio.gather(*list(_BACKGROUND), return_exceptions=True)
+        running = [t for t in _BACKGROUND if not t.done()]
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)
+        else:
+            await asyncio.sleep(0)
 
 
 async def settle_detached(spawned_before: set[asyncio.Task]) -> None:
