@@ -30,6 +30,7 @@ vi.mock('../../lib/api', async () => {
     getCatalog: vi.fn(async () => []),
     getRoutes: vi.fn(async () => ({ roles: [], walls: [] })),
     listAgents: vi.fn(async () => []),
+    getMachines: vi.fn(async () => ({ machines: [] })),
   }
 })
 
@@ -47,7 +48,7 @@ vi.mock('../../lib/api', async () => {
 const SECTIONS_BY_TAB: Record<string, string[]> = {
   general: ['General', 'Account'],
   appearance: ['Appearance', 'Display diagnostics'],
-  models: ['Models', 'Providers', 'Routing'],
+  models: ['Machines', 'Models', 'Providers', 'Routing'],
   behaviour: ['Response quality'],
   devices: ['Devices'],
 }
@@ -115,6 +116,13 @@ describe('resolveTab', () => {
 })
 
 describe('the settings tabs', () => {
+  it('Machines is the first thing on the Models tab', async () => {
+    renderAt('/settings/models')
+    await panel().findByText('Machines')
+    const headings = [...screen.getByTestId('settings-panel').querySelectorAll('h2')].map(h => h.textContent)
+    expect(headings[0]).toBe('Machines')
+  })
+
   it('every tab in the strip is one the page can resolve', () => {
     // A tab that links to a slug the page does not know would silently show
     // the first tab while looking selected somewhere else.
@@ -146,8 +154,13 @@ describe('the settings tabs', () => {
     'the %s tab carries its sections and none of the others',
     async slug => {
       renderAt(`/settings/${slug}`)
+      // By HEADING, not by text: a section's title can also be a word in
+      // another section's prose — ModelsSection links "Models" once its data
+      // loads — and a text match then finds two and throws, depending only on
+      // how long the sections before it took to load. (It started throwing
+      // when Machines went first on the Models tab, 2026-09-18.)
       for (const heading of SECTIONS_BY_TAB[slug]) {
-        expect(await panel().findByText(heading), `${slug} should carry ${heading}`).toBeTruthy()
+        expect(await panel().findByRole('heading', { level: 2, name: heading }), `${slug} should carry ${heading}`).toBeTruthy()
       }
       // Sections belonging to a DIFFERENT tab must not also be here — the
       // point of tabs is that each one is short.
@@ -156,7 +169,7 @@ describe('the settings tabs', () => {
         .flatMap(([, headings]) => headings)
         .filter(h => !SECTIONS_BY_TAB[slug].includes(h))
       for (const heading of elsewhere) {
-        expect(panel().queryByText(heading), `${slug} should not carry ${heading}`).toBeNull()
+        expect(panel().queryByRole('heading', { level: 2, name: heading }), `${slug} should not carry ${heading}`).toBeNull()
       }
     },
   )

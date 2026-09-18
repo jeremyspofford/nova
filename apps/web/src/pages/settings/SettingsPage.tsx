@@ -11,6 +11,7 @@ import { AppearanceSection } from './AppearanceSection'
 import { DisplayDiagnostics } from './DisplayDiagnostics'
 import { DEFAULT_PRESET, normalizePreset } from '../../lib/color-palettes'
 import { AccountSection } from './AccountSection'
+import { MachinesSection } from './MachinesSection'
 import { ModelsSection } from './ModelsSection'
 import { DevicesSection } from './DevicesSection'
 import { ProvidersSection } from './ProvidersSection'
@@ -203,6 +204,8 @@ export function SettingsPage() {
             )}
             {tab === 'models' && (
               <>
+                {/* First: where the models run, before which one answers. */}
+                <MachinesSection />
                 <ModelsSection
               chatModel={chatModel}
               visionModel={visionModel}
