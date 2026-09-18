@@ -137,7 +137,7 @@ describe('MessageBubble — the live tool-call line', () => {
   it('shows the turn\'s cost beside who answered, and nothing when no round was priced', () => {
     render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false, servedBy: 'openrouter:openai/gpt-x', cost: 0.0013 })} />)
     expect(screen.getByTestId('turn-cost').textContent).toContain('$0.0013')
-    render(<MessageBubble row={assistantRow({ id: 'a2', text: 'hi', streaming: false, servedBy: 'ollama:qwen3:8b', cost: null })} />)
+    render(<MessageBubble row={assistantRow({ id: 'a2', text: 'hi', streaming: false, servedBy: 'hub:qwen3:8b', cost: null })} />)
     expect(screen.getAllByTestId('served-by')).toHaveLength(2)
     expect(screen.getAllByTestId('turn-cost')).toHaveLength(1)
   })
@@ -145,7 +145,7 @@ describe('MessageBubble — the live tool-call line', () => {
   it('states a fallback in the gateway\'s own words when a later link answered', () => {
     render(
       <MessageBubble
-        row={assistantRow({ text: 'hi', streaming: false, servedBy: 'ollama:qwen3:8b', routeReason: 'fell back to link 2 (ollama:qwen3:8b) — openrouter over its monthly cap $10.00' })}
+        row={assistantRow({ text: 'hi', streaming: false, servedBy: 'hub:qwen3:8b', routeReason: 'fell back to link 2 (hub:qwen3:8b) — openrouter over its monthly cap $10.00' })}
       />,
     )
     expect(screen.getByTestId('route-fallback').textContent).toContain('fell back to link 2')
