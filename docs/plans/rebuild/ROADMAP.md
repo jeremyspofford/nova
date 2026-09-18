@@ -35,7 +35,9 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | 2 | **S24** threads | done |
 | 3 | **S25** the Inbox | done |
 | — | **S28** attachments | done (inserted) |
-| 4 | **S26 — the quality corpus** | **NEXT. Nothing built, nothing spec'd.** |
+| 0 | **The suite hang** (below) | **NEXT.** Owner, 2026-09-18: fix it before the hub lane |
+| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **Approved 2026-09-18, after item 0 and ahead of S26.** An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. Nothing built yet. |
+| 4 | **S26 — the quality corpus** | Nothing built, nothing spec'd. After the hub lane. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
 
 ### 0. Before S26 — the suite hang
@@ -161,6 +163,8 @@ longer sufficient.
 - **Watching stops when the machine sleeps** (S11). WSL-on-Windows host; nine of
   twelve hours had no pass on the first night. The digest says so rather than
   implying cover. Where Nova runs is a bigger question than that slice.
+  **Answered by the hub lane** (S40–S49, [`hub-topology.md`](hub-topology.md)):
+  an always-on hub, with the GPU machine woken on demand.
 - **`review_commitments` is the only check that spends money** (S11). On a cloud
   chain, a metered line item every six hours. v3's watchdog burned 6.3M tokens
   in one night while its ledger read $0.
@@ -378,6 +382,7 @@ kept for the record).
 | S26 | quality corpus | **no document yet** |
 | S27 | feature flags | `slice-27-feature-flags.md` — **last** |
 | S28 | attachments | `slice-28-attachments.md` |
+| S40–S49 | the hub lane: engines, backup/restore, agent on every OS, Tailscale join, models role, the move, wake, thin clients, Headscale, LAN | [`hub-topology.md`](hub-topology.md) + `hub/` (maps, two design rounds, critiques) — **approved 2026-09-18, not built** |
 
 **What S10a was cited for** (`slice-02e-carries.md:87`): live catalog +
 provenance. The owner's hand-pulled `muse-glimmer:latest` showed no metadata —
