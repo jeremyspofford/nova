@@ -98,6 +98,24 @@ describe('MachinesSection', () => {
     expect(badge.textContent).toBe('ready')
   })
 
+  it('an empty reason is no reason: the state stays a badge', async () => {
+    renderSection({ getMachines: vi.fn(async () => ({ machines: [machine({ state: 'unreachable', reason: '' })] })) })
+    const tile = await screen.findByTestId('machine-hub')
+    const badge = within(tile).getByTestId('machine-hub-state')
+    expect(badge.tagName).toBe('SPAN')
+    expect(badge.textContent).toBe('not answering')
+  })
+
+  it('Refresh asks the gateway to look again, not for its cached reading', async () => {
+    const { api } = renderSection()
+    await screen.findByTestId('machine-hub')
+    expect(api.getMachines).toHaveBeenLastCalledWith()
+    api.getMachines.mockResolvedValueOnce({ machines: [machine({ state: 'unreachable', reason: 'ConnectError: connection refused' })] })
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(api.getMachines).toHaveBeenLastCalledWith({ live: true }))
+    await waitFor(() => expect(screen.getByTestId('machine-hub').textContent).toContain('not answering — ConnectError: connection refused'))
+  })
+
   it('switching it off writes serving=false and shows what was read back', async () => {
     const { api } = renderSection()
     const tile = await screen.findByTestId('machine-hub')

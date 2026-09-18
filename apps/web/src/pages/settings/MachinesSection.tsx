@@ -68,9 +68,11 @@ export function MachinesSection({ api = DEFAULT_API }: { api?: MachinesApi } = {
     }
   }, [api, apply])
 
+  // Refresh looks again: a button that re-reads the gateway's cached
+  // reading would say "checked" about a check it did not make.
   const refresh = useCallback(async () => {
     try {
-      apply(await api.getMachines())
+      apply(await api.getMachines({ live: true }))
     } catch (err) {
       setLoadError(reasonOf(err))
     }
@@ -128,7 +130,7 @@ function MachineTile({ machine, api, onStored }: { machine: Machine; api: Machin
   const state = machineStateLabel(machine)
   // A reason can be a sentence with a URL in it. A badge is one fixed line
   // and cannot wrap, so a label that carries one gets a line of its own.
-  const carriesReason = machine.reason !== null && state.text.includes(machine.reason)
+  const carriesReason = !!machine.reason && state.text.includes(machine.reason)
 
   async function setServing(asked: boolean) {
     setSaving(true)

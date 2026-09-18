@@ -608,7 +608,8 @@ export interface RouteVerdict {
   provider?: string
   model?: string
   local?: boolean
-  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'unreachable' | 'unknown' | 'refused' | string
+  // switched_off (S40): the link's machine was switched off by the owner.
+  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'switched_off' | 'unreachable' | 'unknown' | 'refused' | string
   reason: string | null
   walled_until?: string
 }
@@ -1196,8 +1197,11 @@ export type Machine = {
   models: { name: string; size_bytes: number | null }[]
 }
 
-export async function getMachines(): Promise<{ machines: Machine[] }> {
-  return apiGet<{ machines: Machine[] }>('/api/v1/machines')
+/** The gateway's cached reading by default (a short TTL; failures cached
+ * too); `live` makes it look again before answering — what a Refresh
+ * button must mean. */
+export async function getMachines({ live = false }: { live?: boolean } = {}): Promise<{ machines: Machine[] }> {
+  return apiGet<{ machines: Machine[] }>(`/api/v1/machines${live ? '?live=true' : ''}`)
 }
 
 /** PATCH, and the answer is the row core READ BACK after the write. The
