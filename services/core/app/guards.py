@@ -2932,10 +2932,14 @@ _ATTRIBUTE_KEY = (
     r"(?:status|state|connection|connectivity|network|reachable|reachability|power"
     r"|online|availability|link|health)"
 )
-_LINE_LEAD = r"^\s*(?:[-+•]|\d+[.)])?\s*(?:[^\w\s]+\s*)?"
+# Possessive (S40b final fix wave, D2): with `^\s*(?:…)?\s*` the two runs of
+# leading padding overlap, and _KEY_VALUE_LINE's key and `\s*` after it add two
+# more — 0.4 s for a line of 200 spaces, and no answer at 1,000. A key never
+# begins with whitespace, so nothing is given back that could matter.
+_LINE_LEAD = r"^\s*+(?:[-+•]|\d+[.)])?\s*+(?:[^\w\s]++\s*+)?"
 _OWN_STATE_LINE = re.compile(
     rf"{_LINE_LEAD}(?:"
-    rf"{_ATTRIBUTE_KEY}\s*[:=—–]\s*[^\w\s]*\s*(?:(?:currently|now|still)\s+)?"
+    rf"{_ATTRIBUTE_KEY}\s*+[:=—–]\s*+[^\w\s]*+\s*+(?:(?:currently|now|still)\s+)?"
     rf"(?:(?:not|no\s+longer)\s+)?"
     rf"(?:{_MACHINE_NEG_WORDS}|{_MACHINE_LINK_WORDS}|yes|no|true|false|on|off)\b"
     rf"|(?:{_MACHINE_NEG_WORDS}|{_MACHINE_LINK_WORDS}){_OUTAGE_ANCHOR})",
@@ -2944,7 +2948,7 @@ _OWN_STATE_LINE = re.compile(
 # Any key/value line: the lines of one subject's block ("- Compute: Uses GPU
 # …", "- Runtime: Containerized", "- Serving: On"). A colon or "=" only: "- Dell
 # — the laptop" is a label with its description.
-_KEY_VALUE_LINE = re.compile(rf"{_LINE_LEAD}[^:=\n]{{1,40}}?\s*[:=]\s*\S")
+_KEY_VALUE_LINE = re.compile(rf"{_LINE_LEAD}[^:=\n]{{1,40}}?\s*+[:=]\s*+\S")
 _NEGATING_ADVERB = re.compile(r"\b(?:not|no\s+longer)\b", re.I)
 # A reading's time: an ISO-ish stamp, a clock time with its zone, or "just now".
 _READING_TS = (
@@ -6090,10 +6094,20 @@ _IN_USE_CONJUNCT = re.compile(r",?\s+(?:and|while|whereas|plus)\s+", re.I)
 #     ("✅ in use: qwen3.8:27b is idle", "in use: qwen3:8b on hub", "in use:
 #     qwen3.8:27b (idle)") the marker may be said of either, so it binds
 #     nothing unless both name the same model.
-_IN_USE_SIZE = r"\d[\d.,]*\s*[KMGT]i?B\b"
-_IN_USE_BADGE = rf"(?:\s+|\([^()\n]{{1,40}}\)|{_IN_USE_SIZE}|[(|:=✅✔☑⭐←⬅—–-]|️)"
+#
+# S40b final fix wave (D2): each repetition below is UNAMBIGUOUS. A starred
+# alternation takes whitespace ONE character at a time (never `\s+`, whose
+# runs split 2^(n-1) ways), the size's own quantifiers are possessive, and the
+# star itself is possessive (`*+`). Written as `(?:\s+|…)*` it backtracked
+# exponentially when the fullmatch failed: a padded markdown table row —
+# "| qwen3:8b             | 4.9 GB   | loaded, in use |" — took 15.7 s at
+# 20-wide columns and hours at 24, blocking core's only event loop. Nothing
+# that can end a gap or a label is a character the star consumes, so giving
+# none back changes no verdict. Pinned in test_guard_regex_timing.
+_IN_USE_SIZE = r"\d[\d.,]*+\s*+[KMGT]i?B\b"
+_IN_USE_BADGE = rf"(?:\s|\([^()\n]{{1,40}}\)|{_IN_USE_SIZE}|[(|:=✅✔☑⭐←⬅—–-]|️)"
 _IN_USE_BEFORE_GAP = re.compile(
-    rf"{_IN_USE_BADGE}*"
+    rf"{_IN_USE_BADGE}*+"
     r"(?P<copula>(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+)?(?:(?:chat\s+)?(?:model|one)\s+)?)?",
     re.I,
 )
@@ -6104,7 +6118,7 @@ _IN_USE_AFTER_GAP = re.compile(
 # bracketed, a badge, a bar, a dash, closing punctuation. A WORDED bracket
 # says something of the ref ("in use: qwen3.8:27b (idle)"), so it does not.
 _IN_USE_LABEL_ENDS = re.compile(
-    rf"(?:\s+|\(\s*{_IN_USE_SIZE}\s*\)|{_IN_USE_SIZE}|[|:=✅✔☑⭐←⬅—–.,;!-]|️)*", re.I
+    rf"(?:\s|\(\s*+{_IN_USE_SIZE}\s*+\)|{_IN_USE_SIZE}|[|:=✅✔☑⭐←⬅—–.,;!-]|️)*+", re.I
 )
 #   * A label whose VALUE says no ("— in use: no", "current model: ❌") says
 #     the model before it is NOT in use (found fixing round 2; it fired at
