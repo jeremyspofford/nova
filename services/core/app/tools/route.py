@@ -43,7 +43,8 @@ def describe(body: dict) -> str:
             "over_cap": "skipped — over its cap",
             "walled": "skipped — the provider refused recently",
             "not_installed": "skipped — not installed",
-            "unreachable": "skipped — ollama could not be asked",
+            "unreachable": "skipped — its machine did not answer",
+            "switched_off": "skipped — its machine is switched off for models",
             "unknown": "skipped — no such provider",
             "refused": "refused this request",
         }.get(verdict, str(verdict))

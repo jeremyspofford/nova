@@ -177,3 +177,15 @@ async def test_a_run_of_another_suite_version_is_not_this_measurement(
     resp = await owner_client.get("/api/v1/models/catalog")
     assert resp.json()["rows"][0]["suitability"] == {}
     assert isinstance(uuid.UUID(str(run_id)), uuid.UUID)
+
+
+def test_a_bare_measurement_belongs_to_a_local_row_on_any_engine_never_by_name():
+    """S40: the local row is `kind: local` in the catalogue's own word — hub,
+    or a machine added tomorrow — never a provider name kept in core."""
+    measured = {"qwen3:8b": {SUITE: {"pass_rate": 0.5}}}
+    for provider in ("hub", "dell"):
+        row = {**_row(f"{provider}:qwen3:8b", provider, "qwen3:8b"), "kind": "local"}
+        assert measured_for(row, measured) == {SUITE: {"pass_rate": 0.5}}
+    # And a cloud row never takes a bare measurement, whatever its model is called.
+    cloud = _row("openrouter:qwen3:8b", "openrouter", "qwen3:8b")
+    assert measured_for(cloud, measured) == {}

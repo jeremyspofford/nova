@@ -141,7 +141,7 @@ PULLED_4B = {
 
 @pytest.fixture
 def gateway(mount_peers, tmp_path):
-    fake = fakes.FakeGateway(catalog_body=CATALOG, hf_body=HF_PAGE)
+    fake = fakes.FakeGateway(catalog_body=CATALOG, hf_body=HF_PAGE, engines=[fakes.engine_view()])
     mount_peers(gateway=fake)
     reports: list[str | dict] = []
     ctx = ToolContext(app=app, person=None, workspace_root=tmp_path, progress=reports.append)
@@ -254,11 +254,12 @@ async def test_bad_scope_and_sort_are_refused_in_words(gateway):
 # ── model_pull ────────────────────────────────────────────────────────────
 
 
-async def test_a_cloud_id_is_refused_before_the_gateway_is_touched(gateway):
+async def test_a_cloud_id_is_refused_before_anything_is_pulled(gateway):
     fake, ctx, _ = gateway
     text, ok = await _run(models.model_pull, ctx, model="openrouter:openai/gpt-6-astra")
-    assert not ok and "only the bundled ollama can pull" in text
-    assert fake.seen == []
+    assert not ok and "is a cloud provider's model" in text and "(hub)" in text
+    # Only the machine list was read (S40: needed to tell a machine from a cloud).
+    assert [path for path, _ in fake.seen] == ["/admin/engines"]
     text, ok = await _run(models.model_pull, ctx, model="   ")
     assert not ok and "needs a model reference" in text
 
@@ -319,7 +320,7 @@ async def test_a_confirmed_pull_reports_progress_and_states_what_the_catalogue_l
     assert "digest sha256:2bfd38a7daaf" in text
     assert "Preflight: 2.3 GB needed, 100 GB free (size from ollama-registry)" in text
     assert "chat.model" not in text
-    assert [p for p, _ in fake.seen] == ["/admin/pull", "/admin/catalog"]
+    assert [p for p, _ in fake.seen] == ["/admin/engines", "/admin/pull", "/admin/catalog"]
     # Progress: the preflight, one report per whole percentage point reached,
     # then the catalogue check. The lines that know a fraction report it as a
     # NUMBER beside the words (S15), because a bar cannot be drawn from prose;
@@ -449,7 +450,7 @@ async def test_check_update_reads_the_gateways_verdict_out_in_words(gateway):
     text, ok = await _run(models.model_check_update, ctx, model="nope:1b")
     assert not ok and "not installed — nothing to compare" in text
     text, ok = await _run(models.model_check_update, ctx, model="openrouter:openai/gpt-x")
-    assert not ok and "only the bundled ollama" in text
+    assert not ok and "is a cloud provider's model" in text
 
 
 @requires_db
@@ -478,6 +479,70 @@ async def test_remove_is_verified_by_the_gateway_and_refuses_the_current_chat_mo
     calls = len(fake.seen)
     text, ok = await _run(models.model_remove, ctx, model="qwen3:8b")
     assert not ok and "is the current chat model" in text
-    assert len(fake.seen) == calls
+    # The machine list is read first (S40); nothing is removed.
+    assert "/admin/models" not in [p for p, _ in fake.seen[calls:]]
     text, ok = await _run(models.model_remove, ctx, model="openrouter:openai/gpt-x")
-    assert not ok and "only the bundled ollama" in text
+    assert not ok and "is a cloud provider's model" in text
+
+
+# ── S40: machine-qualified ids, derived from the gateway's machine list ─────
+
+
+async def test_a_model_on_a_named_machine_goes_to_the_gateway_whole(gateway):
+    fake, ctx, _ = gateway
+    fake.pull_lines = ('{"status":"success"}',)
+    fake.catalog_body = {
+        **CATALOG,
+        "rows": [{**PULLED_4B, "id": "hub:qwen3:4b", "provider": "hub"}],
+    }
+    text, ok = await _run(models.model_pull, ctx, model="hub:qwen3:4b")
+    assert ok, text
+    assert ("/admin/pull", {"model": "hub:qwen3:4b"}) in fake.seen
+    assert text.startswith("Pulled hub:qwen3:4b")
+
+
+async def test_the_catalogue_confirms_a_pull_only_on_the_machine_it_was_asked_for(gateway):
+    fake, ctx, _ = gateway
+    fake.engines.append(fakes.engine_view("box"))
+    fake.pull_lines = ('{"status":"success"}',)
+    fake.catalog_body = {
+        **CATALOG,
+        "rows": [{**PULLED_4B, "id": "box:qwen3:4b", "provider": "box"}],
+    }
+    text, ok = await _run(models.model_pull, ctx, model="hub:qwen3:4b")
+    assert not ok and "does not list hub:qwen3:4b as installed" in text
+
+
+async def test_a_library_id_or_an_old_ollama_id_pulls_the_model_after_the_colon(gateway):
+    fake, ctx, _ = gateway
+    fake.pull_lines = ('{"status":"success"}',)
+    fake.catalog_body = {**CATALOG, "rows": [PULLED_4B]}
+    for given in ("library:qwen3:4b", "ollama:qwen3:4b"):
+        text, ok = await _run(models.model_pull, ctx, model=given)
+        assert ok, text
+        assert fake.seen[-2] == ("/admin/pull", {"model": "qwen3:4b"})
+
+
+async def test_an_unreadable_machine_list_stops_the_pull_before_anything_moves(gateway):
+    fake, ctx, _ = gateway
+    fake.engines = None  # the admin echo: a body that names no engines
+    text, ok = await _run(models.model_pull, ctx, model="qwen3:4b")
+    assert not ok and "could not ask the model gateway which machines run models" in text
+    assert "/admin/pull" not in [p for p, _ in fake.seen]
+
+
+@requires_db
+async def test_remove_refuses_the_chat_model_on_its_machine_and_nowhere_else(gateway, pool):
+    fake, ctx, _ = gateway
+    fake.engines.append(fakes.engine_view("box"))
+    await pool.execute(
+        "INSERT INTO settings (key, value) VALUES ('chat.model', '\"hub:qwen3:8b\"'::jsonb) "
+        "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+    )
+    for given in ("hub:qwen3:8b", "qwen3:8b"):
+        text, ok = await _run(models.model_remove, ctx, model=given)
+        assert not ok and "is the current chat model" in text, given
+    fake.admin_body = {"removed": "box:qwen3:8b", "verified": True, "installed_now": 0}
+    text, ok = await _run(models.model_remove, ctx, model="box:qwen3:8b")
+    assert ok, text
+    assert fake.queries[-1] == b"model=box%3Aqwen3%3A8b"

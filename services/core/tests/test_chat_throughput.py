@@ -159,7 +159,14 @@ async def test_thinking_time_is_generation_not_prompt_processing(owner_client, p
     # red on scheduling noise teaches everyone to ignore it. The bug it
     # guards against reported 1900 against a bound near 263, so nothing is
     # lost by admitting the edge.
-    assert meta["tok_per_s"] <= 40 / (meta["thinking_ms"] / 1000)
+    #
+    # And the bound is ROUNDED the way the rate is (2026-09-19). The stored
+    # rate is model_speed.tok_per_s — round(tokens / seconds, 2) — so at that
+    # same edge 40 / 0.152 s is stored as 263.16 and compared with an unrounded
+    # 263.157…; `<=` alone never admitted it, and the suite kept failing on
+    # the very numbers quoted above (about one run in three when both windows
+    # land on the same millisecond). Same edge, same arithmetic on both sides.
+    assert meta["tok_per_s"] <= round(40 / (meta["thinking_ms"] / 1000), 2)
 
 
 async def test_the_other_spelling_of_reasoning_is_read_too(owner_client, pool, mount_peers):

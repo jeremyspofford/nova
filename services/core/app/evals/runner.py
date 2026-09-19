@@ -62,6 +62,14 @@ Three properties are enforced mechanically, not by intention:
     plus the prefix app/agents.py reserves, which is what keeps the sweep off
     a row the owner made. (2026-09-09)
 
+    THE DECLARED MACHINES (S40). A case may declare machines
+    (cases.FixtureMachine); they are the gateway's rows, and an eval never
+    writes the gateway. So nothing is built: _install_fixture_plant sets
+    machines.PLANT to a FixturePlant for this case only, and the finally
+    resets it before anything else. It answers for `eval_*` names from the
+    declaration and refuses a write to any other. There is no orphan sweep
+    because there is nothing to orphan.
+
   * NO TEST-AWARENESS LEAKAGE. _run_turn builds the prompt from the normal
     stable/volatile system prompt — this module injects nothing. No "eval mode"
     string reaches the model; the only eval-ness is the turn's kind='eval' tag
@@ -123,6 +131,7 @@ import logging
 import shutil
 import uuid
 from collections.abc import Sequence
+from contextvars import Token
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -130,7 +139,7 @@ from typing import Any
 import asyncpg
 import httpx
 
-from app import agents, chat, peers, settings_store, skills, traces
+from app import agents, chat, machines, peers, settings_store, skills, traces
 from app.evals import cases as cases_mod
 from app.evals import predicates
 from app.identity import Person
@@ -364,6 +373,17 @@ FIXTURE_CREATED_VIA = "page"
 
 def _fixture_actor(case: cases_mod.Case) -> str:
     return f"eval harness (case {case.id})"
+
+
+def _install_fixture_plant(case: cases_mod.Case) -> Token | None:
+    """Make the case's declared machines THIS task's plant (S40), and hand
+    back the token that removes them. None — and app.machines untouched —
+    for a case that declares none. Nothing is written anywhere: the plant is
+    a ContextVar, so the turn (and every task it spawns, which copies the
+    context) sees it, and nothing else in the process ever does."""
+    if not case.machines:
+        return None
+    return machines.PLANT.set(machines.FixturePlant({m.name: m.as_row() for m in case.machines}))
 
 
 async def _create_fixture_agents(
@@ -943,6 +963,9 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # The declared skills' teardown plan, run in the finally below whatever
     # happens. Empty for a case that declares none.
     fixture_skills: list[tuple[str, str | None]] = []
+    # The declared machines' plant, reset first thing in the finally below.
+    # None for a case that declares none — machines.PLANT is never touched.
+    plant_token: Token | None = None
 
     # Everything from here on runs against this case's OWN fresh scratch
     # person — the finally below tears it down (person + its conversation +
@@ -962,6 +985,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         try:
             await _create_fixture_agents(app, pool, case, fixture_agents)
             fixture_skills = await _build_fixture_skills(pool, case)
+            plant_token = _install_fixture_plant(case)
         except Exception as exc:
             logger.exception(
                 "eval run_case: the declared world for case %s could not be built", case.id
@@ -1097,6 +1121,12 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
                     result = _base(passed, False, detail)
         return result
     finally:
+        # The declared machines leave FIRST, synchronously, before any await
+        # and in the context that installed them: the shielded cleanup below
+        # and whatever this task runs next must never see a case's plant.
+        if plant_token is not None:
+            machines.PLANT.reset(plant_token)
+
         # The cleanup must not race the turn's queued ingest (/forget before
         # the journal is written leaves the journal behind). The settle above
         # runs on the scored and the _run_turn-raised paths, but NOT on a

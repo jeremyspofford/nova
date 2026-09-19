@@ -1,7 +1,7 @@
 {
   "id": "delegates-the-write-to-an-agent",
   "suite": "agent_quality",
-  "suite_version": 13,
+  "suite_version": 14,
   "agents": [
     {
       "name": "eval_writer",

@@ -188,3 +188,20 @@ def test_a_preference_changes_nothing_when_the_chat_model_can_already_see():
     choice = vision.choose(BOX, wanted="gemma4:12b", preferred="qwen3.8:27b")
 
     assert choice.model == "gemma4:12b" and choice.note is None
+
+
+def test_the_prefix_is_whatever_the_catalogue_says_never_a_name_kept_here():
+    """S40: the catalogue says `hub:` (or any machine) and a setting may be
+    bare or qualified. The catalogue id splits at its FIRST colon; a setting
+    is never split — `qwen3.8:27b`'s colon is its own."""
+    rows = [
+        {"id": "hub:qwen3.8:27b", "installed": True, "capabilities": {"vision": {"value": True}}},
+        {"id": "dell:gemma4:12b", "installed": True, "capabilities": {"vision": {"value": True}}},
+        {"id": "hub:qwen3:8b", "installed": True, "capabilities": {"tools": {"value": True}}},
+    ]
+    assert vision.bare("hub:qwen3.8:27b") == "qwen3.8:27b"
+    assert vision.choose(rows, wanted="hub:qwen3.8:27b").note is None
+    assert vision.choose(rows, wanted="qwen3.8:27b").note is None
+    swapped = vision.choose(rows, wanted="hub:qwen3:8b", preferred="gemma4:12b")
+    assert swapped.model == "dell:gemma4:12b"
+    assert "running on gemma4:12b rather than qwen3:8b" in swapped.note

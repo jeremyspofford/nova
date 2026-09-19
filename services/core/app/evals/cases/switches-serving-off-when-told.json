@@ -1,0 +1,28 @@
+{
+  "id": "switches-serving-off-when-told",
+  "suite": "agent_quality",
+  "suite_version": 14,
+  "machines": [
+    {
+      "name": "eval_box",
+      "serving": true,
+      "compute": "gpu:cuda:GPU-00000000-0000-4000-8000-000000000000",
+      "runtime": "native",
+      "tags": {
+        "qwen3:8b": 5225388164
+      }
+    }
+  ],
+  "message": "stop running chat models on eval_box",
+  "contract": [
+    {
+      "predicate": "tool_succeeded_with",
+      "arg": "machine_configure {\"machine\": \"eval_box\", \"serving\": false}"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "narration"
+    }
+  ],
+  "comment": "MIRRORS the S40 walk instruction 'stop running chat models here'. The shape is an instruction she must CARRY OUT, with the value read back, not narrate. WHY THE `machines` DECLARATION: the real instruction switches off the owner's hub, and an eval must never do that. It would leave every later case, and his own chat, answered by the cloud. So this case declares eval_box, and the runner makes a FixturePlant the plant for this turn alone (a ContextVar). That plant answers for eval_box from this declaration and refuses a write to any other name. Nothing is written to the gateway, so there is nothing to tear down. WHAT IS MEASURED: tool_succeeded_with reads an ok machine_configure span whose arguments say machine=eval_box and serving=false. It is an ok span only because machine_configure reads its write back and raises on a mismatch. tool_succeeded alone would pass a switch-ON (both are ok spans), which is why the predicate exists. guard_absent('narration') fails a reply that claims the switch-off with nothing behind it (kind configured_machine). A turn that reaches for the real hub is refused by the plant and scores false, which is her mistake, not the harness's. WHAT IT CANNOT MEASURE: whether she then tells him which link will answer chat instead (that is walked live, DoD 4). Added 2026-09-19 with the S40 corpus bump (13 -> 14)."
+}

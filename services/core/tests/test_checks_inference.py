@@ -18,13 +18,29 @@ import pytest
 from app import model_speed
 from app.checks import CannotCheck, inference
 from app.main import app as core_app
+from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway, FakeMemory
 
 pytestmark = requires_db
 
 
-async def _rounds(pool, *, model: str, rate: float, count: int, hours_ago: float) -> None:
+GPU = fakes.ENGINE_GPU
+CPU = "cpu:intel-n150|4c|16g"
+
+
+async def _rounds(
+    pool,
+    *,
+    model: str,
+    rate: float,
+    count: int,
+    hours_ago: float,
+    served_on: str | None = GPU,
+    runtime: str = "container",
+) -> None:
+    """Rounds as chat.py files them since S40: with where they ran. A round
+    the gateway could not place carries no served_on and is not measured."""
     for _ in range(count):
         turn_id = uuid.uuid4()
         when = datetime.now(UTC) - timedelta(hours=hours_ago)
@@ -33,13 +49,21 @@ async def _rounds(pool, *, model: str, rate: float, count: int, hours_ago: float
             turn_id,
             when,
         )
+        meta: dict = {
+            "model": model,
+            "served_by": f"hub:{model}",
+            "served_runtime": runtime,
+            "tok_per_s": rate,
+        }
+        if served_on is not None:
+            meta["served_on"] = served_on
         await pool.execute(
             "INSERT INTO turn_spans (turn_id, kind, name, started_at, duration_ms, meta) "
             "VALUES ($1, 'llm_call', $2, $3, 1000, $4)",
             turn_id,
             model,
             when,
-            {"model": model, "tok_per_s": rate},
+            meta,
         )
 
 
@@ -354,3 +378,81 @@ async def test_a_stall_says_so_even_when_the_card_cannot_be_read(pool, card):
 
     assert "produced nothing at all" in finding.title
     assert "Free VRAM is unknown" in finding.title
+
+
+async def test_the_finding_names_where_the_rounds_ran(pool, card):
+    await _healthy_history(pool)
+    await _rounds(pool, model="qwen3.8:27b", rate=0.25, count=5, hours_ago=0.5)
+    finding = (await inference.degraded(core_app, pool))[0]
+    assert finding.key == "inference_degraded:qwen3.8:27b"
+    assert finding.facts["served_on"] == GPU and finding.facts["runtime"] == "container"
+
+
+async def test_one_model_slow_on_two_computes_is_one_finding_the_worse_one(pool, card):
+    await _rounds(pool, model="qwen3:8b", rate=100.0, count=20, hours_ago=48)
+    await _rounds(pool, model="qwen3:8b", rate=10.0, count=20, hours_ago=48, served_on=CPU)
+    await _rounds(pool, model="qwen3:8b", rate=1.0, count=5, hours_ago=0.5)
+    await _rounds(pool, model="qwen3:8b", rate=1.0, count=5, hours_ago=0.5, served_on=CPU)
+    findings = await inference.degraded(core_app, pool)
+    assert [f.key for f in findings] == ["inference_degraded:qwen3:8b"]
+    assert findings[0].facts["served_on"] == GPU  # 100x on the GPU beats 10x on the CPU
+
+
+async def test_rounds_the_gateway_could_not_place_are_never_compared(pool, card):
+    await _rounds(pool, model="qwen3:8b", rate=100.0, count=20, hours_ago=48, served_on=None)
+    await _rounds(pool, model="qwen3:8b", rate=1.0, count=5, hours_ago=0.5, served_on=None)
+    with pytest.raises(CannotCheck):
+        await inference.degraded(core_app, pool)
+
+
+VRAM = {
+    "total_mb": 24576.0,
+    "used_mb": 24166.4,
+    "free_mb": 409.6,
+    "util_pct": 99.0,
+    "reason": None,
+    "resident": [{"model": "qwen3.8:27b", "vram_mb": 17203.2}],
+    "resident_reason": None,
+    "free_after_switch_gb": 17.2,
+}
+
+
+async def test_the_card_is_read_from_the_machine_the_gateway_lists(mount_peers):
+    mount_peers(
+        gateway=FakeGateway(
+            engines=[fakes.engine_view()],
+            engine_details={"hub": {"vram": VRAM, "fit_frame": "vram"}},
+        ),
+        memory=FakeMemory(),
+    )
+    card = await inference._card_facts(core_app)
+    assert card["free_gb"] == 17.2 and card["util_pct"] == 99.0
+    assert card["facts"] == {
+        "free_vram_gb": 17.2,
+        "non_ollama_vram_gb": 6.8,
+        "gpu_utilisation_pct": 99,
+    }
+
+
+async def test_two_readable_cards_are_not_guessed_between(mount_peers):
+    mount_peers(
+        gateway=FakeGateway(
+            engines=[fakes.engine_view(), fakes.engine_view("box")],
+            engine_details={"hub": {"vram": VRAM}, "box": {"vram": VRAM}},
+        ),
+        memory=FakeMemory(),
+    )
+    card = await inference._card_facts(core_app)
+    assert card["free_gb"] is None and "2 machines report a card" in card["reason"]
+
+
+async def test_a_gateway_that_names_no_machines_costs_the_card_with_its_reason(mount_peers):
+    """The admin echo names no engines: the card is unknown and says why —
+    never a finding that silently drops the fact."""
+    mount_peers(gateway=FakeGateway(), memory=FakeMemory())
+    card = await inference._card_facts(core_app)
+    assert card["free_gb"] is None
+    assert card["reason"] == (
+        "the gateway could not be asked about the card — "
+        "the gateway's engine list did not name its engines"
+    )

@@ -24,10 +24,10 @@ import anyio
 import asyncpg
 import pytest
 
-from app import chat, tools
+from app import chat, machines, tools
 from app.evals import cases as cases_mod
 from app.evals import runner
-from app.evals.cases import Case, CaseError, FixtureAgent, PredicateSpec
+from app.evals.cases import Case, CaseError, FixtureAgent, FixtureMachine, PredicateSpec
 from app.main import MIGRATIONS_DIR, app
 from app.migrations_runner import discover_migrations
 from app.tools import web
@@ -1396,3 +1396,163 @@ async def test_cancelling_a_finished_run_is_not_an_error_it_is_already_true(pool
 
 async def test_cancelling_a_run_that_does_not_exist_answers_nothing(pool):
     assert await runner.request_cancel(pool, uuid.uuid4()) is None
+
+
+# -- the declared machines: a plant for the turn, and nothing else (S40) ----
+
+GET_TIME = tools.REGISTRY["get_time"]
+
+
+def _machine_case(*declared: FixtureMachine, cid: str = "declared-machine") -> Case:
+    return Case(
+        id=cid,
+        suite="corpus",
+        suite_version=1,
+        message="what time is it?",
+        contract=(PredicateSpec("tool_called", "get_time"),),
+        machines=tuple(declared),
+    )
+
+
+def _time_turn() -> ScriptedGateway:
+    return ScriptedGateway(rounds=((_call("get_time", "c1", {}),), (text("It is noon."),)))
+
+
+def _tool_reading_the_plant(monkeypatch, executor) -> None:
+    """get_time, real schema, with an executor that reads machines.plant() --
+    the question is what a tool INSIDE the replayed turn sees."""
+    monkeypatch.setitem(
+        tools.REGISTRY,
+        "get_time",
+        Tool("get_time", "d", GET_TIME.parameters, executor, ephemeral=GET_TIME.ephemeral),
+    )
+
+
+async def test_a_case_that_declares_no_machines_never_builds_a_plant(
+    pool, mount_peers, monkeypatch
+):
+    """The pinned no-op, the agents hook's promise again: a corpus that
+    declares no machines replays exactly as before."""
+
+    def _never(*args, **kwargs):
+        raise AssertionError("a case that declares no machines must not build a FixturePlant")
+
+    monkeypatch.setattr(runner.machines, "FixturePlant", _never)
+    seen: list = []
+
+    async def peek(args: dict, ctx: ToolContext) -> str:
+        seen.append(machines.plant())
+        return "It is 12:00."
+
+    _tool_reading_the_plant(monkeypatch, peek)
+    mount_peers(gateway=_time_turn(), memory=FakeMemory())
+    run = await runner.run_case(app, pool, _machine_case(cid="no-machines"), MODEL)
+
+    assert run.passed is True, run.detail
+    assert len(seen) == 1 and type(seen[0]) is machines.GatewayPlant
+
+
+async def test_a_declared_machine_is_the_plant_for_the_turn_and_gone_after(
+    pool, mount_peers, monkeypatch
+):
+    """End to end. Inside the turn a tool reads a FixturePlant that answers
+    for the declared name with no gateway (the ScriptedGateway serves
+    completions and nothing else); after the case, the process's plant is
+    exactly the one it was before."""
+    before = machines.plant()
+    seen: list = []
+
+    async def peek(args: dict, ctx: ToolContext) -> str:
+        seen.append(machines.plant())
+        return "It is 12:00."
+
+    _tool_reading_the_plant(monkeypatch, peek)
+    mount_peers(gateway=_time_turn(), memory=FakeMemory())
+    run = await runner.run_case(app, pool, _machine_case(FixtureMachine(name="eval_box")), MODEL)
+
+    assert run.passed is True, run.detail
+    [during] = seen
+    assert isinstance(during, machines.FixturePlant)
+    stored = await during.set_serving(app, "eval_box", False)
+    assert (stored["name"], stored["serving"], stored["state"]) == (
+        "eval_box",
+        False,
+        "switched_off",
+    )
+    assert machines.plant() is before
+
+
+async def test_every_replay_starts_from_the_declaration(pool, mount_peers, monkeypatch):
+    """A suite replays a case every run, and the repeated report reads
+    several runs: a switch-off made in one replay must not be the world the
+    next is scored in."""
+
+    async def _no_real_machines(self, app, *, live):
+        return []
+
+    monkeypatch.setattr(machines.GatewayPlant, "engines", _no_real_machines)
+    seen: list[dict] = []
+
+    async def switch_off(args: dict, ctx: ToolContext) -> str:
+        plant = machines.plant()
+        rows = await plant.engines(ctx.app, live=False)
+        seen.append({row["name"]: row["serving"] for row in rows})
+        await plant.set_serving(ctx.app, "eval_box", False)
+        return "It is 12:00."
+
+    _tool_reading_the_plant(monkeypatch, switch_off)
+    case = _machine_case(FixtureMachine(name="eval_box"))
+    for _ in range(2):
+        mount_peers(gateway=_time_turn(), memory=FakeMemory())
+        run = await runner.run_case(app, pool, case, MODEL)
+        assert run.passed is True, run.detail
+    assert seen == [{"eval_box": True}, {"eval_box": True}]
+
+
+async def test_a_plant_that_cannot_be_built_is_ungradeable_and_leaves_none(
+    pool, mount_peers, monkeypatch
+):
+    def _broken(fixtures):
+        raise RuntimeError("the plant would not build")
+
+    monkeypatch.setattr(runner.machines, "FixturePlant", _broken)
+    before = machines.plant()
+    gateway = ScriptedGateway(rounds=())
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    run = await runner.run_case(app, pool, _machine_case(FixtureMachine(name="eval_box")), MODEL)
+
+    assert run.ungradeable is True and run.passed is None
+    assert "declared world could not be built" in run.detail["reason"]
+    assert "the plant would not build" in run.detail["reason"]
+    assert gateway.calls == 0  # the model was never asked anything
+    assert machines.plant() is before
+
+
+async def test_the_plant_goes_even_when_the_turn_errors(pool, mount_peers):
+    before = machines.plant()
+    mount_peers(
+        gateway=ScriptedGateway(rounds=(Refusal(status=500, body={"error": {"message": "down"}}),)),
+        memory=FakeMemory(),
+    )
+    run = await runner.run_case(app, pool, _machine_case(FixtureMachine(name="eval_box")), MODEL)
+    assert run.ungradeable is True
+    assert machines.plant() is before
+
+
+async def test_an_eval_can_never_switch_off_a_real_machine(monkeypatch):
+    """CONTRACT (ruling C8): FixturePlant takes writes for its declared eval_*
+    names ONLY. A model that misreads a case and switches off 'hub' gets a
+    refusal in the plant's words, saying it CANNOT -- never a hand-off to the
+    gateway, which would switch off the owner's engine for every later case
+    and for his chat. The real writer is replaced by an alarm, so a hand-off
+    fails here even if the gateway happened to be unreachable."""
+
+    async def _alarm(self, app, name, serving):
+        raise AssertionError(f"an eval reached the REAL plant: set_serving({name!r}, {serving!r})")
+
+    monkeypatch.setattr(machines.GatewayPlant, "set_serving", _alarm)
+    plant = machines.FixturePlant({"eval_box": FixtureMachine(name="eval_box").as_row()})
+    with pytest.raises(machines.PlantUnavailable, match="cannot"):
+        await plant.set_serving(app, "hub", False)
+    assert (await plant.set_serving(app, "eval_box", False))["serving"] is False
