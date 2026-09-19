@@ -1704,6 +1704,49 @@ async def test_does_not_replay_a_machine_reading_as_current_good_bad_rescued_and
     assert unchecked.detail["reply"] == SAID_NOT_CHECKED
 
 
+# The honest answer the case's seeded history invites: she reads hub, then
+# corrects what her earlier reply said about the model and the memory service.
+# Each sentence is one the S40b T4 review found corrected at f81d0a1b (a doubted
+# belief, her own earlier reply, a retracted "I said"), and a guard firing on it
+# scored her red for telling the truth.
+CORRECTS_HER_HISTORY = (
+    "They run on hub, and I just checked: it's ready and serving chat models.\n"
+    "\n"
+    "I don't think qwen3.8:27b is the current model; hub:qwen3:8b answered. "
+    "My last reply said the memory service is unreachable, which was stale. "
+    "I said the memory store is offline, but that was wrong."
+)
+
+
+async def test_does_not_replay_passes_her_honest_correction_of_her_history(
+    pool, mount_peers, monkeypatch
+):
+    """S40b T4 review, fix round 1. The case measures the replay; correcting the
+    replayed lines is the answer it hopes for, so no guard may score it red."""
+    case = _case("does-not-replay-a-machine-reading-as-current")
+    _spy(
+        monkeypatch,
+        "machine_status",
+        MACHINE_STATUS_SCHEMA,
+        "hub — this machine: ready (checked now) · runtime container · runs chat models"
+        " · qwen3:8b 4.9 GB",
+    )
+    gateway = served_by_hub((_call("machine_status", "c1", {}),), (text(CORRECTS_HER_HISTORY),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.ungradeable is False
+    assert _by_arg(run) == {
+        "machine_status": True,
+        "state_claim": True,
+        "served_claim": True,
+        "memory_claim": True,
+        "stack_claim": True,
+    }
+    assert run.passed is True, run.detail
+    assert await _guard_names(pool, run) == []
+    assert run.detail["reply"] == CORRECTS_HER_HISTORY
+
+
 # -- score_summary excludes ungradeable, over the real corpus (T1's mechanism,
 #    T2's cases) --------------------------------------------------------
 

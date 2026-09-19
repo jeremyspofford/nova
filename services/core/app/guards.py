@@ -5890,6 +5890,77 @@ _IN_USE_DENIED = re.compile(
 )
 
 
+# S40b T4 review, fix round 1: what she says ABOUT a claim, before it. The v15
+# case seeds the walk's false "Current model in use" and memory lines as her
+# own history, and the answer it hopes for corrects them. Both guards
+# corrected that correction, reading the claim inside "I don't think …", "It's
+# false that …", "My previous answer said …" and "I told you …, which was
+# wrong" as hers. These cuts are the served and memory guards' own, read on
+# the prefix of each claim's match within its clause: the shared _STATE_HEDGE
+# was measured over the machine and device corpus, and is not re-measured.
+#   * A doubted or denied belief. "Not sure WHY X" presupposes X, and "no
+#     doubt X" asserts it, so both still fire.
+_WH_WORD = r"(?!\s+(?:why|how|when|where|what|which|who)\b)"
+_EPISTEMIC_FRAME = re.compile(
+    r"\b(?:do|does|did)\s*n['’]?o?t\s+(?:think|believe)\b"
+    rf"|\bnot\s+(?:sure|certain)\b{_WH_WORD}"
+    rf"|\bun(?:sure|certain)\b{_WH_WORD}"
+    r"|(?<!\bno\s)(?<!\bwithout\s)(?<!\bbeyond\s)(?<!\ba\s)\bdoubt(?:s|ed)?\b"
+    r"|(?:\bnot|n['’]t)\s+true\s+(?:to\s+say\s+)?that\b"
+    r"|\b(?:untrue|false|wrong)\s+(?:to\s+say\s+)?that\b",
+    re.I,
+)
+#   * Her own earlier reply (_HER_EARLIER_REPLY), or a first-person retraction
+#     verb: "I wrongly said", "I mistakenly marked".
+_HER_RETRACTION = (
+    r"(?<![\w'’])I\s+(?:wrongly|mistakenly|incorrectly|falsely)\s+"
+    r"(?:said|claimed|stated|marked|wrote|reported|told\s+you)\b"
+)
+_HER_EARLIER_CLAIM = re.compile(rf"{_HER_EARLIER_REPLY}|{_HER_RETRACTION}", re.I)
+#   * A bare "I said X" or "I told you X" is a reassertion, unless she retracts
+#     it in what follows, in the same sentence or the next: "I told you X,
+#     which was wrong." / "I said X. That was stale." / "… — it isn't." "As I
+#     said" and "like I told you" are reassertions whatever follows.
+_HER_SAYING = re.compile(
+    r"(?<![\w'’])(?<!\bas\s)(?<!\blike\s)I\s+"
+    r"(?:said|wrote|stated|claimed|reported|marked|told\s+you)\b",
+    re.I,
+)
+_RETRACTED = re.compile(
+    r"\b(?:that|which|this|it)\s*(?:was|is|['’]s)"
+    r"(?:\s+(?:(?:simply|just|plainly|also)\s+)?(?:wrong|false|incorrect|mistaken|untrue|stale"
+    r"|outdated|out\s+of\s+date|a\s+mistake|an\s+error)\b"
+    r"|(?:\s+not|n['’]t)(?:\s+(?:true|right|correct|accurate|current))?"
+    r"(?=\s*(?:[.!;,:)—–-]|$)))",
+    re.I,
+)
+
+
+def _clauses_with_rest(line: str):
+    """_clauses, each with what follows it: the rest of its sentence and the
+    next sentence on the line — where she retracts what she just said."""
+    sentences = [s for s in _sentences(line) if s.strip()]
+    for i, sentence in enumerate(sentences):
+        is_question = sentence.rstrip().endswith("?")
+        following = sentences[i + 1] if i + 1 < len(sentences) else ""
+        start = 0
+        cuts = [(sep.start(), sep.end()) for sep in _CLAUSE_SPLIT.finditer(sentence)]
+        for end, resume in [*cuts, (len(sentence), len(sentence))]:
+            clause = sentence[start:end]
+            if clause.strip():
+                yield clause, is_question, sentence[end:] + following
+            start = resume
+
+
+def _not_her_claim(before: str, after: str) -> bool:
+    """Does what leads up to a served or memory claim in its clause (`before`)
+    say she does not assert it now: a doubted belief, her own earlier reply,
+    or an "I said" she retracts in what follows (`after`)?"""
+    if _EPISTEMIC_FRAME.search(before) or _HER_EARLIER_CLAIM.search(before):
+        return True
+    return _HER_SAYING.search(before) is not None and _RETRACTED.search(after) is not None
+
+
 @dataclass(frozen=True)
 class ServedClaim:
     """A claim about which model wrote this reply that the turn's own rounds
@@ -5981,12 +6052,15 @@ def _in_use_ref(clause: str, marker: re.Match[str], lo: int, hi: int) -> re.Matc
     return label if _same_model(said, other) and _same_model(other, said) else None
 
 
-def _served_claims(clause: str, *, in_use: bool):
+def _served_claims(clause: str, *, in_use: bool, rest: str = ""):
     """(shape, claimed ref or None, phrase) for every served-model claim this
-    clause makes, each already cut by the hedge, intent and skip rules."""
+    clause makes, each already cut by the hedge, intent and skip rules, and by
+    what she says about it (_not_her_claim; `rest` is what follows the clause)."""
     for pattern in _SERVED_SENTENCES:
         for m in pattern.finditer(clause):
             if _state_prefix_blocks(clause[: m.start()]):
+                continue
+            if _not_her_claim(clause[: m.start()], clause[m.end() :] + rest):
                 continue
             if _SERVED_SKIP.search(clause[: m.end()]) or _SERVED_SETTING.search(clause[: m.end()]):
                 continue
@@ -6016,9 +6090,13 @@ def _served_claims(clause: str, *, in_use: bool):
             if _IN_USE_UNSAID.search(lead):
                 continue
             start, end = min(said.start(), m.start()), max(said.end(), m.end())
+            if _not_her_claim(clause[:start], clause[end:] + rest):
+                continue
             yield "in_use", _strip_trailing_punct(said.group("ref")), clause[start:end]
     for m in _NO_MODEL.finditer(clause):
         if _state_prefix_blocks(clause[: m.start()]):
+            continue
+        if _not_her_claim(clause[: m.start()], clause[m.end() :] + rest):
             continue
         yield "no_model", None, m.group(0)
 
@@ -6050,10 +6128,10 @@ def served_claim_check(
             continue
         label = _LINE_LABEL.match(line)
         in_use = label is None or _LABEL_OK.fullmatch(label.group("label").strip()) is not None
-        for clause, is_question in _clauses(line):
+        for clause, is_question, rest in _clauses_with_rest(line):
             if is_question or _REPORTED.search(clause) or _PRIOR_TIME.search(clause):
                 continue
-            for shape, claimed, phrase in _served_claims(clause, in_use=in_use):
+            for shape, claimed, phrase in _served_claims(clause, in_use=in_use, rest=rest):
                 phrase = _strip_trailing_punct(phrase.strip())
                 claim = _served_verdict(shape, claimed, phrase, served, writer, answered)
                 if claim is not None:
@@ -6260,12 +6338,14 @@ def memory_claim_check(
     for line in _own_lines(reply_text):
         if not line.strip():
             continue
-        for clause, is_question in _clauses(line):
+        for clause, is_question, rest in _clauses_with_rest(line):
             if is_question or _REPORTED.search(clause) or _PRIOR_TIME.search(clause):
                 continue
             for pattern in (_MEMORY_DOWN, _MEMORY_UNREACHED):
                 for m in pattern.finditer(clause):
                     if _state_prefix_blocks(clause[: m.start()]):
+                        continue
+                    if _not_her_claim(clause[: m.start()], clause[m.end() :] + rest):
                         continue
                     if _SERVED_SKIP.search(clause[: m.end()]):
                         continue

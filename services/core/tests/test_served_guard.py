@@ -831,3 +831,108 @@ def test_the_vetting_runs_the_new_checks_in_the_turns_order():
         < source.index('"memory_claim"')
         < source.index('"state_claim"')
     )
+
+
+# -- S40b T4 review, fix round 1: what she says ABOUT the claim, before it ---------
+#
+# The v15 case seeds the walk's false "Current model in use" line as her own
+# history, and the answer it hopes for corrects it. Each sentence below FIRED at
+# f81d0a1b in a chat turn served by hub:qwen3:8b (the reviewer's probes,
+# verbatim), appending "this reply was written by hub:qwen3:8b … not by
+# qwen3.8:27b" to a reply that already said so, and keeping it out of memory.
+# The cut reads the prefix of each claim's match in its clause; it is the
+# served and memory guards' own, so the shared _STATE_HEDGE is not re-measured.
+
+# A doubted or denied belief before the claim (finding 1).
+SERVED_DOUBTED = [
+    (
+        "dont_think_then_served",
+        "I don't think qwen3.8:27b is the current model; hub:qwen3:8b answered.",
+    ),
+    ("dont_believe", "I don't believe qwen3.8:27b is the current model."),
+    ("not_sure", "I'm not sure qwen3.8:27b is the current model."),
+    ("false_that", "It's false that qwen3.8:27b is the current model."),
+    # The same frames, spelled the other ways she writes them.
+    ("do_not_think", "I do not think qwen3.8:27b is the current model."),
+    ("isnt_true_that", "It isn't true that qwen3.8:27b is the current model."),
+    ("doubt", "I doubt qwen3.8:27b is the current model."),
+]
+
+# Her retraction of her own earlier reply (finding 2).
+SERVED_RETRACTED = [
+    (
+        "previous_answer_said_that_was_wrong",
+        "My previous answer said qwen3.8:27b is the current model; that was wrong.",
+    ),
+    ("i_said_but_that_was_wrong", "I said qwen3.8:27b is the current model, but that was wrong."),
+    # The same retraction, as she would write it over the seeded line.
+    ("i_wrongly_said", "I wrongly said qwen3.8:27b is the current model."),
+    ("i_said_then_retracted", "I said qwen3.8:27b is the current model. That was wrong."),
+    (
+        "last_reply_marked_the_in_use_line",
+        "My last reply marked `qwen3.8:27b` (16.5 GB) ✅ Current model in use; that was stale.",
+    ),
+    # 60834ccf's line, retracted.
+    (
+        "last_reply_said_no_model",
+        "My last reply said no model was needed for this calculation; that was wrong.",
+    ),
+]
+
+# What must keep firing: the plain claim, a reassertion of an earlier reply
+# ("As I said", "Like I said", a bare "I said"), a stated belief, a doubt
+# that is no doubt, and "not sure WHY", which presupposes the claim.
+SERVED_STILL_ASSERTED = [
+    ("plain_claim", "qwen3.8:27b is the current model."),
+    ("as_i_said", "As I said, qwen3.8:27b is the current model."),
+    ("like_i_said", "Like I said, qwen3.8:27b is the current model."),
+    ("bare_i_said", "I said qwen3.8:27b is the current model."),
+    ("as_i_told_you", "As I told you, qwen3.8:27b is the current model."),
+    ("i_think", "I think qwen3.8:27b is the current model."),
+    ("no_doubt", "No doubt qwen3.8:27b is the current model."),
+    ("not_sure_why", "I'm not sure why qwen3.8:27b is the current model."),
+    (
+        "i_said_and_it_still_is",
+        "I said qwen3.8:27b is the current model, and that is still true.",
+    ),
+    (
+        "retraction_then_a_new_claim",
+        "My last reply named hub:qwen3:8b, which is wrong; qwen3.8:27b is the current model.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SERVED_DOUBTED + SERVED_RETRACTED,
+    ids=[c[0] for c in SERVED_DOUBTED + SERVED_RETRACTED],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_doubted_or_retracted_served_claim_is_not_corrected(purpose, label, reply):
+    spans = [_llm(purpose=purpose), RECALLED]
+    assert guards.served_claim_check(reply, spans, purpose=purpose) is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_STILL_ASSERTED, ids=[c[0] for c in SERVED_STILL_ASSERTED]
+)
+def test_a_reasserted_or_believed_served_claim_still_fires(label, reply):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None, label
+    assert claim.claimed == "qwen3.8:27b"
+    assert claim.text == named_text("qwen3.8:27b")
+
+
+# The cost of reading the frame anywhere in the claim's clause (as the shared
+# hedge cut does), pinned so it is a choice: a frame about something else,
+# before a colon, reads as the claim's.
+FRAME_ACCEPTED_MISSES = [
+    ("frame_before_a_colon", "I don't think it matters: qwen3.8:27b is the current model."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", FRAME_ACCEPTED_MISSES, ids=[c[0] for c in FRAME_ACCEPTED_MISSES]
+)
+def test_the_frame_accepted_misses_stay_missed(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label

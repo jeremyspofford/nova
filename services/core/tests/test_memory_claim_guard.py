@@ -511,3 +511,113 @@ def test_the_corrections_trip_no_guard_of_their_own(text):
         # finding. It never meets it: the memory guard is armed in chat and
         # eval only, and observation_check runs over beats only (app/beats).
         assert guards.observation_check(text, [], []) is None
+
+
+# -- S40b T4 review, fix round 1: what she says ABOUT the claim, before it ---------
+#
+# The v15 case seeds the walk's false memory line as her own history, and the
+# answer it hopes for corrects it. Each sentence below FIRED at f81d0a1b with
+# the recall answered (the reviewer's probes, verbatim), appending "the memory
+# service answered this turn" to a reply that already said so, and keeping it
+# out of memory. The cut reads the prefix of each claim's match in its clause;
+# it is the served and memory guards' own, so the shared _STATE_HEDGE is not
+# re-measured.
+
+# A doubted or denied belief before the claim (finding 1).
+MEMORY_DOUBTED = [
+    ("dont_think_down", "I don't think the memory service is down."),
+    ("not_true_that", "It is not true that the memory service is unreachable."),
+    ("doubt", "I doubt the memory service is unreachable."),
+    ("not_certain", "I'm not certain the memory service is unreachable."),
+]
+
+# Her retraction of her own earlier reply (finding 2).
+MEMORY_RETRACTED = [
+    (
+        "last_reply_said_stale",
+        "My last reply said the memory service is unreachable, which was stale.",
+    ),
+    (
+        "in_my_last_reply_i_said",
+        "In my last reply I said the memory service is unreachable; that was wrong.",
+    ),
+    ("i_told_you_wrong", "I told you the memory service is unreachable, which was wrong."),
+    (
+        "note_previous_answer_it_isnt",
+        "Note: my previous answer said the memory store is offline — it isn't.",
+    ),
+    # The same retraction, with a bare "I said" retracted in what follows.
+    ("i_said_then_retracted", "I said the memory service is unreachable. That was wrong."),
+]
+
+# Already quiet at f81d0a1b: someone's reply reported, and a prior time. Kept
+# quiet.
+MEMORY_REPORTED_CONTROLS = [
+    ("the_previous_reply_said", "The previous reply said the memory service is unreachable."),
+    ("last_time_i_said", "Last time I said the memory service is unreachable."),
+]
+
+# What must keep firing: a reassertion of an earlier reply ("As I said", "Like
+# I said", "As I told you", a bare "I said"), a stated belief, a doubt that is
+# no doubt, "not sure WHY" (which presupposes the outage), a message FROM the
+# service, and her own plain claim.
+MEMORY_STILL_ASSERTED = [
+    ("as_i_said", "As I said, the memory service is unreachable."),
+    ("like_i_said", "Like I said, the memory service is unreachable."),
+    ("as_i_told_you", "As I told you, the memory service is unreachable."),
+    ("bare_i_said", "I said the memory service is unreachable."),
+    ("bare_i_told_you", "I told you the memory service is unreachable."),
+    (
+        "as_i_said_despite_a_retraction_after",
+        "As I said, the memory service is unreachable. Your note said otherwise, and that was "
+        "wrong.",
+    ),
+    ("i_think", "I think the memory service is down."),
+    ("no_doubt", "No doubt the memory service is unreachable."),
+    ("without_a_doubt", "Without a doubt, the memory service is down."),
+    ("not_sure_why", "I'm not sure why the memory service is unreachable."),
+    (
+        "last_response_from_the_service",
+        "The last response from the memory service timed out, and the memory service is "
+        "unreachable now.",
+    ),
+    ("cant_reach", "I can't reach the memory service right now."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    MEMORY_DOUBTED + MEMORY_RETRACTED + MEMORY_REPORTED_CONTROLS,
+    ids=[c[0] for c in MEMORY_DOUBTED + MEMORY_RETRACTED + MEMORY_REPORTED_CONTROLS],
+)
+@pytest.mark.parametrize("hits", [0, 5])
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_doubted_or_retracted_memory_claim_is_not_corrected(purpose, hits, label, reply):
+    spans = [LLM, _recall(hits=hits)]
+    assert guards.memory_claim_check(reply, spans, purpose=purpose) is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", MEMORY_STILL_ASSERTED, ids=[c[0] for c in MEMORY_STILL_ASSERTED]
+)
+def test_a_reasserted_or_believed_memory_claim_still_fires(label, reply):
+    claim = guards.memory_claim_check(reply, ANSWERED, purpose="chat")
+    assert claim is not None, label
+    assert claim.text == CORRECTION
+
+
+# The cost of reading a retraction in the next sentence, pinned so it is a
+# choice: a retraction there about something else reads as hers.
+RETRACTION_ACCEPTED_MISSES = [
+    (
+        "retraction_about_the_note",
+        "I said the memory service is unreachable. Your note said otherwise, and that was wrong.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", RETRACTION_ACCEPTED_MISSES, ids=[c[0] for c in RETRACTION_ACCEPTED_MISSES]
+)
+def test_the_retraction_accepted_misses_stay_missed(label, reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None, label
