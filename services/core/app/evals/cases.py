@@ -23,6 +23,7 @@ Fixture JSON (one file per case, under app/evals/cases/):
       "setup": [{"user": "...", "assistant": "..."}],   # optional; default []
       "agents": [{"name": "eval_writer", "purpose": "...",   # optional; default []
                   "instructions": "...", "tools": ["workspace_write_file"]}],
+      "machines": [{"name": "eval_box", "serving": true}],   # optional; default []
       "message": "what's the latest on the pixel camera?",
       "contract": [
         {"predicate": "tool_called", "arg": "web_search"},
@@ -32,7 +33,9 @@ Fixture JSON (one file per case, under app/evals/cases/):
 
 `setup` declares the HISTORY a case is replayed against; `agents` declares the
 WORLD it is replayed in (see FixtureAgent) — the same spirit, one file, and
-both are torn down with the rest of the scratch state.
+both are torn down with the rest of the scratch state. `machines` (S40) is the
+one declaration that is never built: they are the gateway's rows, so the
+runner answers for them from the declaration instead (see FixtureMachine).
 
 `suite_version` is pinned on every case so a score is only ever compared across
 runs of the SAME version (comparability rail): change a suite's cases, bump its
@@ -61,6 +64,9 @@ KNOWN_PREDICATES = frozenset(
         "guard_absent",
         "reply_matches",
         "reply_absent",
+        # S40: tool_succeeded plus the ARGUMENTS it ran with, because an ok
+        # span alone cannot say which way a switch was set.
+        "tool_succeeded_with",
     }
 )
 
@@ -87,6 +93,8 @@ class PredicateSpec:
             )
         if not self.arg:
             raise CaseError(f"predicate {self.predicate!r} requires a non-empty arg")
+        if self.predicate == "tool_succeeded_with":
+            parse_tool_with(self.arg)  # refused at LOAD, by name
 
     def as_json(self) -> dict:
         out: dict = {"predicate": self.predicate}
@@ -257,6 +265,136 @@ def skill_from_dict(raw: object) -> FixtureSkill:
     )
 
 
+def parse_tool_with(arg: str) -> tuple[str, dict]:
+    """`<tool> <json object>` — the one predicate argument with two parts.
+
+    tool_succeeded('machine_configure') is true whichever way she switched a
+    machine: both are an ok span. A case about the DIRECTION of a write names
+    the arguments too, and they are parsed here so a typo is a load error."""
+    name, _, raw = arg.strip().partition(" ")
+    if not name or not raw.strip():
+        raise CaseError(f"tool_succeeded_with takes '<tool> <json object>', got {arg!r}")
+    try:
+        wanted = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise CaseError(f"tool_succeeded_with: {raw!r} is not JSON — {exc}") from exc
+    if not isinstance(wanted, dict) or not wanted:
+        raise CaseError(
+            f"tool_succeeded_with: the arguments must be a non-empty JSON object, got {raw!r}"
+        )
+    return name, wanted
+
+
+@dataclass(frozen=True)
+class FixtureMachine:
+    """One machine that must EXIST in the plant for a case's replay (S40).
+
+    The third declaration of its kind, and the one that is never built.
+    Agents and skills are core's rows, so the runner writes them through
+    their own writers and deletes them after. A machine is the GATEWAY's row,
+    and an eval must never write the owner's gateway: a case that switched
+    off the real hub would leave every later case, and his chat, answered by
+    the cloud. So the runner installs machines.FixturePlant as the plant for
+    this case alone (a ContextVar — nothing else in the process sees it). It
+    answers for the declared names from this declaration, overlays them on
+    the real plant's listing, and refuses a write to any other name. Nothing
+    is created, so there is nothing to tear down and nothing to sweep.
+
+    The name carries the fixture prefix for the same reason an agent's does:
+    the harness answers for that name instead of the real plant, so it must
+    be a name no real machine can hold."""
+
+    name: str
+    serving: bool = True
+    lifecycle: str = "always_on"
+    compute: str | None = None
+    runtime: str | None = None
+    tags: dict | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name.startswith(FIXTURE_AGENT_PREFIX):
+            raise CaseError(
+                f"a case's machine name must start with {FIXTURE_AGENT_PREFIX!r} (the harness "
+                f"answers for it instead of the real plant, so it must never be a real "
+                f"machine's name), got {self.name!r}"
+            )
+
+    def as_row(self) -> dict:
+        """The gateway's EngineView shape — what GatewayPlant.engines() hands
+        back from GET /admin/engines — built FRESH on every call, so a replay
+        never inherits the previous replay's write. `state` is derived, never
+        declared: serving=false is switched_off whatever else is true (the
+        gateway's own rule), so a fixture cannot describe a machine the
+        gateway could never report."""
+        return {
+            "name": self.name,
+            "lifecycle": self.lifecycle,
+            "serving": self.serving,
+            "state": "ready" if self.serving else "switched_off",
+            "reason": None,
+            "observed_at": None,
+            "tags": dict(self.tags or {}),
+            "tags_as_of": None,
+            "compute": self.compute,
+            "runtime": self.runtime,
+            "facts": {},
+        }
+
+    def as_json(self) -> dict:
+        out: dict = {"name": self.name, "serving": self.serving, "lifecycle": self.lifecycle}
+        for key in ("compute", "runtime", "tags"):
+            if getattr(self, key) is not None:
+                out[key] = getattr(self, key)
+        return out
+
+
+# The keys a declared machine may carry — FixtureMachine's own fields, read
+# off the dataclass rather than restated. A key outside them ("servng", a
+# `state` the gateway derives) is refused at LOAD: silently ignoring it would
+# replay a machine the case did not describe.
+_MACHINE_KEYS = frozenset(FixtureMachine.__dataclass_fields__)
+
+
+def machine_from_dict(raw: object) -> FixtureMachine:
+    """Parse one declared machine, refusing a malformed one by name at LOAD."""
+    if not isinstance(raw, dict):
+        raise CaseError(f"a case's machine must be a JSON object, got {type(raw).__name__}")
+    unknown = sorted(set(raw) - _MACHINE_KEYS)
+    if unknown:
+        raise CaseError(
+            f"a case machine takes only {', '.join(sorted(_MACHINE_KEYS))}, got "
+            f"{', '.join(map(repr, unknown))}"
+        )
+    serving = raw.get("serving", True)
+    if not isinstance(serving, bool):
+        raise CaseError(f"a case machine's serving must be true or false, got {serving!r}")
+    for key in ("lifecycle", "compute", "runtime"):
+        value = raw.get(key)
+        if value is not None and not isinstance(value, str):
+            raise CaseError(f"a case machine's {key} must be text, got {value!r}")
+    tags = raw.get("tags")
+    if tags is not None and (
+        not isinstance(tags, dict)
+        or any(
+            not isinstance(k, str)
+            or (v is not None and (isinstance(v, bool) or not isinstance(v, int)))
+            for k, v in tags.items()
+        )
+    ):
+        raise CaseError(
+            f"a case machine's tags must map a model name to its size in bytes (or null), "
+            f"got {tags!r}"
+        )
+    return FixtureMachine(
+        name=_require(raw, "name", str),
+        serving=serving,
+        lifecycle=raw.get("lifecycle") or "always_on",
+        compute=raw.get("compute"),
+        runtime=raw.get("runtime"),
+        tags=dict(tags) if tags is not None else None,
+    )
+
+
 @dataclass(frozen=True)
 class Case:
     """One eval case. `contract` passes iff EVERY predicate passes (subset match
@@ -275,6 +413,8 @@ class Case:
     # would measure a world where there is nothing to read. The runner creates
     # what is missing and deletes it after, and restores what already existed.
     skills: tuple[FixtureSkill, ...] = ()
+    # S40: the machines the plant must answer for (see FixtureMachine).
+    machines: tuple[FixtureMachine, ...] = ()
 
     def as_json(self) -> dict:
         return {
@@ -285,6 +425,7 @@ class Case:
             "setup": [{"user": t.user, "assistant": t.assistant} for t in self.setup],
             "agents": [a.as_json() for a in self.agents],
             "skills": [s.as_json() for s in self.skills],
+            "machines": [m.as_json() for m in self.machines],
             "contract": [p.as_json() for p in self.contract],
         }
 
@@ -348,6 +489,15 @@ def case_from_dict(raw: dict) -> Case:
     if not isinstance(fixture_skills_raw, list):
         raise CaseError(f"a case's skills must be a list, got {type(fixture_skills_raw).__name__}")
     fixture_skills = tuple(skill_from_dict(entry) for entry in fixture_skills_raw)
+    machines_raw = raw.get("machines", [])
+    if not isinstance(machines_raw, list):
+        raise CaseError(f"a case's machines must be a list, got {type(machines_raw).__name__}")
+    fixture_machines = tuple(machine_from_dict(entry) for entry in machines_raw)
+    seen: set[str] = set()
+    for machine in fixture_machines:
+        if machine.name in seen:
+            raise CaseError(f"a case declares the machine {machine.name!r} more than once")
+        seen.add(machine.name)
     return Case(
         id=_require(raw, "id", str),
         suite=_require(raw, "suite", str),
@@ -357,6 +507,7 @@ def case_from_dict(raw: dict) -> Case:
         setup=setup,
         agents=fixture_agents,
         skills=fixture_skills,
+        machines=fixture_machines,
     )
 
 
