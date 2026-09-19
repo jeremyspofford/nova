@@ -1183,10 +1183,13 @@ def test_the_not_current_cut_accepted_misses_stay_missed(label, reply):
 
 # -- 3. a state limited to a place, a schedule or a count is not an outage -------
 #
-# Every machine state word now carries _MACHINE_ANCHOR — the negative ones, and
-# the positive link words a "not"/"no longer" turns negative — so "offline"
-# counts only where the sentence ends it or says "right now"/"again"/"for chat
-# models", never "unreachable from your phone" or "offline twice a week".
+# Every machine state word now carries an anchor, including the negative ones
+# and the positive link words that "not"/"no longer" turn negative. So
+# "offline" counts only where the sentence ends it or says "right now",
+# "again" or "for chat models". It never counts in "unreachable from your
+# phone" or "offline twice a week". Since fix round 2 the outage words take
+# _OUTAGE_ANCHOR, which is the verdict's anchor plus clause connectors and
+# present-time phrases (see the round 2 section below).
 
 LIMITED_STATES = [
     (
@@ -1264,3 +1267,187 @@ def test_a_status_line_that_names_the_machine_still_binds():
     )
     assert claim is not None and claim.device == "hub"
     assert claim.phrase == "- Last checked: just now"
+
+
+# ================================================================================
+# T1 review, fix round 2
+# ================================================================================
+#
+# Two fixes from round 1 went further than their findings did, and each one
+# silenced a present claim that it should have kept.
+
+# -- 1. hub's OWN status line does not unbind its reading --------------------------
+#
+# Round 1 ended the upward walk at any line that states a connectivity and names
+# no machine, so that the reading under "- Dell: offline" is not read as hub's.
+# Within b02a5694's own block, a "- Status: Offline" line between `Name: hub` and
+# `Last Reported` also names no machine. It states the block's OWN attribute,
+# and the replay under it went silent. That includes machine_status's own
+# wording, "switched off for models" (tools/machines.py).
+#
+# Now a line whose key is a generic attribute (status, state, connection,
+# reachable, power, …) and whose value begins with a state lets the walk go on.
+# So does a keyless line that is only a state. Past such a line, the walk
+# crosses only the block's key/value lines up to the line that heads the block.
+# A label or sentence that names no machine ("- Dell") leaves the reading
+# unbound.
+
+HUB_BLOCK_HEAD = (
+    "The models run on a machine called **`hub`**, and its current status is:  \n"
+    "\n"
+    "### 🏗️ **Machine Status**  \n"
+    "- **Name**: `hub`  \n"
+)
+HUB_BLOCK_READING = "- **Last Reported**: `2026-09-19T05:15:39+00:00`  "
+WALK_PHRASE = "- Last Reported: 2026-09-19T05:15:39+00:00"
+
+OWN_STATUS_LINES = [
+    ("status_switched_off_for_models", "- **Status**: Switched off for models"),
+    ("status_green_online", "- **Status**: 🟢 Online"),
+    ("status_offline", "- **Status**: Offline"),
+    ("connection_connected", "- **Connection**: Connected"),
+    ("reachable_yes", "- **Reachable**: Yes"),
+    ("power_powered_on", "- **Power**: Powered on"),
+    ("status_answering", "- **Status**: Answering"),
+    ("state_not_reachable", "- **State**: not reachable"),
+    ("connection_status_em_dash", "- **Connection status** — Disconnected"),
+    ("bare_state_line", "- 🟢 Online"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,status_line", OWN_STATUS_LINES, ids=[c[0] for c in OWN_STATUS_LINES]
+)
+def test_hubs_own_status_line_keeps_the_replay_bound(label, status_line):
+    reply = f"{HUB_BLOCK_HEAD}{status_line}  \n{HUB_BLOCK_READING}"
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+    assert claim.phrase == WALK_PHRASE
+    assert claim.text == MACHINE_CORRECTION_HUB
+
+
+def test_the_walk_replay_with_a_status_line_is_still_corrected():
+    """b02a5694 verbatim, with a Status line under `Name: hub`: the walk goes up
+    past the Status, Serving, Compute and Runtime lines to `Name: hub`."""
+    name_line = "- **Name**: `hub`  \n"
+    reply = B02A5694.replace(name_line, name_line + "- **Status**: Switched off for models  \n")
+    assert reply != B02A5694
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.phrase == WALK_PHRASE
+
+
+# A status line that is some other thing's still ends the walk unbound. Each of
+# these fired at b3d4f73b and was silent at 8cc0d4ae. Each turn ran device_list,
+# so only a wrong binding could fire.
+OTHER_SUBJECTS_STATUS = [
+    (
+        "label_heads_the_status_line",
+        "Models run on hub.\n- Dell\n- Status: offline\n- Last seen: 2026-09-18 16:48 UTC",
+    ),
+    (
+        "status_value_names_another_subject",
+        "Models run on hub.\n- Status: the Dell is offline\n- Last seen: 2026-09-18 16:48 UTC",
+    ),
+    (
+        "state_word_heads_a_list",
+        "Models run on hub.\n- Offline devices: Dell\n- Last seen: 2026-09-18 16:48 UTC",
+    ),
+    (
+        "subject_em_dash_state",
+        "Models run on hub.\n- Dell — offline\n- Last seen: 2026-09-18 16:48 UTC",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", OTHER_SUBJECTS_STATUS, ids=[c[0] for c in OTHER_SUBJECTS_STATUS]
+)
+def test_another_subjects_status_line_still_unbinds_the_reading(label, reply):
+    assert guards.state_claim_check(reply, DEVICE_CHECKED, NAMES, purpose="chat") is None, label
+
+
+# This is the cost of the heads-the-block rule. Past a status line, the walk
+# crosses only key/value lines. A keyless line such as "- Always on" reads the
+# same as the "- Dell" label, so hub's reading under it goes unbound. It was
+# silent at 8cc0d4ae too.
+OWN_STATUS_ACCEPTED_MISSES = [
+    (
+        "keyless_attribute_above_the_status",
+        f"{HUB_BLOCK_HEAD}- Always on\n- **Status**: Offline\n{HUB_BLOCK_READING}",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", OWN_STATUS_ACCEPTED_MISSES, ids=[c[0] for c in OWN_STATUS_ACCEPTED_MISSES]
+)
+def test_the_own_status_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+# -- 2. a clause connector or a present-time phrase ends an outage claim ----------
+#
+# Round 1 anchored every state word so that a place, a schedule or a count after
+# it limits the claim. The verdict's anchor, however, lists only punctuation,
+# "right now"/"now"/"again"/"at the moment", "and" and "for chat models". So a
+# present outage followed by "so", "because", "which", "since", "for now", "at
+# present" or "today" went silent. None of those words limits the state; each
+# one ends the claim.
+#
+# The outage words (the negative ones, and the link words that "not" or
+# "no longer" turns into an outage) now also end at a clause connector or a
+# present-time phrase. "answering", "ready" and "serving" keep exactly the
+# verdict's anchor, and the corpus measured them with it.
+
+PRESENT_OUTAGES = [
+    ("so_no_comma", "hub is offline so I can't run local models right now."),
+    ("for_now", "hub is switched off for now, so I used the cloud."),
+    ("at_present", "hub is unreachable at present."),
+    ("since_a_time", "hub is offline since 05:15 UTC."),
+    ("because", "hub is offline because its GPU is busy."),
+    ("which", "hub is unreachable which is why chat is slow."),
+    ("today", "hub is offline today."),
+    ("currently_after", "hub is disconnected currently."),
+    ("negated_link_so", "hub is not online so I used the cloud."),
+    ("negated_link_because", "hub is not reachable because the tailnet is down."),
+]
+
+
+@pytest.mark.parametrize("label,reply", PRESENT_OUTAGES, ids=[c[0] for c in PRESENT_OUTAGES])
+def test_a_present_outage_ended_by_a_connector_or_a_time_fires(label, reply):
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None and claim.device == "hub", label
+    assert claim.text == MACHINE_CORRECTION_HUB + HUB_SERVED_CLAUSE
+
+
+# The new anchor words stop where the words after them limit the state again.
+CONNECTOR_LIMITED = [
+    # "so" as a degree word is a frequency, not a connector.
+    ("so_often", "hub is offline so often that I stopped relying on it."),
+    ("so_rarely", "hub is switched off so rarely that nobody notices."),
+    # "today" counts only where it ends the claim, not in a schedule for later.
+    ("today_at_a_time", "hub is switched off today at 18:00 for updates."),
+    ("today_from_a_time", "hub is offline today from 18:00 to 20:00."),
+    # "as" is left out: "as a chat machine" is a role, and "as of <time>" is a
+    # stamp.
+    ("as_a_role", "hub is switched off as a chat machine on weekends."),
+    # "ready" keeps the verdict's anchor: "not ready" is readiness for something.
+    ("ready_keeps_its_anchor", "hub is not ready since you have not added a model."),
+]
+
+
+@pytest.mark.parametrize("label,reply", CONNECTOR_LIMITED, ids=[c[0] for c in CONNECTOR_LIMITED])
+def test_a_connector_word_that_limits_the_state_does_not_fire(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+def test_the_verdicts_anchor_is_kept_verbatim_inside_the_outage_anchor():
+    """The verdict's _MACHINE_ANCHOR is unchanged, and the outage anchor only
+    adds to it."""
+    assert guards._MACHINE_ANCHOR == (
+        r"(?=\s*(?:[.,;:!?)\]}—–]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment|and\b"
+        r"|for\s+(?:chat\s+)?(?:models|chat|requests)\b))"
+    )
+    assert guards._OUTAGE_ANCHOR.startswith(guards._MACHINE_ANCHOR[:-1] + "|")

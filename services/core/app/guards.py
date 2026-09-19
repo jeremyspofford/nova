@@ -2866,10 +2866,24 @@ _LEAD_WORD = re.compile(r"(\w[\w'’-]*)$")
 # Where an ambiguous positive state word must end to be a claim about the
 # machine ("hub is ready." / "ready right now" / "ready for chat models"), and
 # not "ready for you to add a model".
-_MACHINE_ANCHOR = (
-    r"(?=\s*(?:[.,;:!?)\]}—–]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment|and\b"
-    r"|for\s+(?:chat\s+)?(?:models|chat|requests)\b))"
+_ANCHOR_ENDS = (
+    r"\s*(?:[.,;:!?)\]}—–]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment|and\b"
+    r"|for\s+(?:chat\s+)?(?:models|chat|requests)\b)"
 )
+_MACHINE_ANCHOR = rf"(?={_ANCHOR_ENDS})"  # the verdict's, verbatim
+# An OUTAGE word also ends at a clause connector or a present-time phrase (T1
+# review, fix round 2): "hub is offline so I can't run local models", "…
+# because its GPU is busy", "… which is why chat is slow", "… since 05:15 UTC",
+# "… for now", "… at present", "… today." None of these limits the state. A
+# degree "so" ("so often") is a frequency, "today" counts only where it ends
+# the claim ("today at 18:00" is a schedule), and "as" is left out ("as a chat
+# machine" is a role, "as of 05:15" a stamp).
+_OUTAGE_ENDS = (
+    r"so\b(?!\s+(?:often|rarely|seldom|frequently|much|many|long|little)\b)"
+    r"|because\b|which\b|since\b|for\s+now\b|at\s+present\b|currently\b|as\s+of\s+now\b"
+    r"|today(?=\s*(?:[.,;:!?)\]}—–]|$))"
+)
+_OUTAGE_ANCHOR = rf"(?={_ANCHOR_ENDS}|\s+(?:{_OUTAGE_ENDS}))"
 _MACHINE_NEG_WORDS = (
     r"(?:offline|disconnected|unreachable|not\s+reachable|out\s+of\s+contact"
     r"|powered\s+off|switched\s+off)"
@@ -2877,17 +2891,49 @@ _MACHINE_NEG_WORDS = (
 # The positive words that are about the LINK — the ones a "not"/"no longer"
 # turns into an outage claim, and the ones a device's status line carries.
 _MACHINE_LINK_WORDS = r"(?:online|reachable|powered\s+on|switched\s+on|connected)"
-# EVERY state word carries the anchor, the negative ones included (T1 review,
+# EVERY state word carries an anchor, the negative ones included (T1 review,
 # fix round 1): "hub is unreachable from your phone", "hub is switched off
 # overnight", "hub is offline twice a week" and "hub is not online on
 # weekends" limit the state to a place, a schedule or a count — none says hub
-# is down now, and this guard REPLACES what it corrects.
-_MACHINE_NEG = rf"{_MACHINE_NEG_WORDS}{_MACHINE_ANCHOR}"
-_MACHINE_POS = rf"(?:{_MACHINE_LINK_WORDS}|answering|ready|serving){_MACHINE_ANCHOR}"
+# is down now, and this guard REPLACES what it corrects. The outage words take
+# the outage anchor; "answering", "ready" and "serving" keep the verdict's,
+# the one the corpus measured them with ("not ready since you have not added a
+# model" is readiness FOR something).
+_MACHINE_NEG = rf"{_MACHINE_NEG_WORDS}{_OUTAGE_ANCHOR}"
+_MACHINE_POS = (
+    rf"(?:{_MACHINE_LINK_WORDS}{_OUTAGE_ANCHOR}|(?:answering|ready|serving){_MACHINE_ANCHOR})"
+)
 _MACHINE_NEG_STATE = re.compile(_MACHINE_NEG_WORDS, re.I)
 # A line that states something's connectivity. One that names no machine is
-# some other thing's status line, so a reading under it is that thing's.
+# some other thing's status line, so a reading under it is that thing's —
+# unless it is the block's OWN attribute line (below).
 _CONNECTIVITY_WORD = re.compile(rf"\b(?:{_MACHINE_NEG_WORDS}|{_MACHINE_LINK_WORDS})\b", re.I)
+# A connectivity line that has no subject of its own, and so belongs to whatever
+# heads its block (T1 review, fix round 2: b02a5694's block with a "- Status:
+# Offline" line under `Name: hub` went unbound, and machine_status's own
+# "switched off for models" with it). Either the key is a generic attribute
+# and the value BEGINS with a state ("- Status: 🟢 Online", "- Reachable: Yes",
+# "- Power: Powered on"; never "- Status: the Dell is offline" or "- Dell:
+# offline"), or the line is nothing but an anchored state ("- 🟢 Online"; never
+# "- Offline devices: Dell").
+_ATTRIBUTE_KEY = (
+    r"(?:(?:current|overall|machine|connection|network|power|link)\s+)?"
+    r"(?:status|state|connection|connectivity|network|reachable|reachability|power"
+    r"|online|availability|link|health)"
+)
+_LINE_LEAD = r"^\s*(?:[-+•]|\d+[.)])?\s*(?:[^\w\s]+\s*)?"
+_OWN_STATE_LINE = re.compile(
+    rf"{_LINE_LEAD}(?:"
+    rf"{_ATTRIBUTE_KEY}\s*[:=—–]\s*[^\w\s]*\s*(?:(?:currently|now|still)\s+)?"
+    rf"(?:(?:not|no\s+longer)\s+)?"
+    rf"(?:{_MACHINE_NEG_WORDS}|{_MACHINE_LINK_WORDS}|yes|no|true|false|on|off)\b"
+    rf"|(?:{_MACHINE_NEG_WORDS}|{_MACHINE_LINK_WORDS}){_OUTAGE_ANCHOR})",
+    re.I,
+)
+# Any key/value line: the lines of one subject's block ("- Compute: Uses GPU
+# …", "- Runtime: Containerized", "- Serving: On"). A colon or "=" only: "- Dell
+# — the laptop" is a label with its description.
+_KEY_VALUE_LINE = re.compile(rf"{_LINE_LEAD}[^:=\n]{{1,40}}?\s*[:=]\s*\S")
 _NEGATING_ADVERB = re.compile(r"\b(?:not|no\s+longer)\b", re.I)
 # A reading's time: an ISO-ish stamp, a clock time with its zone, or "just now".
 _READING_TS = (
@@ -3130,13 +3176,20 @@ def _bind_reading(
     reading unbound when it carries a paired device's name, ends in ":", is a
     subject line ("- Name: …"), or states a connectivity (T1 review, fix round
     1: "- Dell: offline" is the Dell's status line, and the reading under it is
-    the Dell's, not hub's, however the reply spells the device)."""
+    the Dell's, not hub's, however the reply spells the device).
+
+    A connectivity line with no subject of its own (_OWN_STATE_LINE: "- Status:
+    Offline") is the block's own attribute, so the walk goes on (fix round 2).
+    Past one, it crosses only the block's key/value lines, up to the line that
+    heads the block: a label or sentence there that names no machine ("- Dell"
+    above "- Status: offline") leaves the reading unbound."""
     line = lines[index]
     own = _machine_mentioned(line, mention)
     if own is not None:
         return own
     if devices is not None and devices.search(line):
         return None
+    past_a_state_line = False
     for above in reversed(lines[:index]):
         if _is_run_break(above):
             break
@@ -3145,11 +3198,13 @@ def _bind_reading(
         named = _machine_mentioned(above, mention)
         if named is not None:
             return named
-        if (
-            above.rstrip().endswith(":")
-            or _SUBJECT_KEY_LINE.match(above)
-            or _CONNECTIVITY_WORD.search(above)
-        ):
+        if above.rstrip().endswith(":") or _SUBJECT_KEY_LINE.match(above):
+            return None
+        if _CONNECTIVITY_WORD.search(above):
+            if _OWN_STATE_LINE.match(above) is None:
+                return None
+            past_a_state_line = True
+        elif past_a_state_line and _KEY_VALUE_LINE.match(above) is None:
             return None
     return None
 
