@@ -30,6 +30,20 @@ const theSwitch = (tile: HTMLElement) =>
   within(tile).getByRole('switch', { name: 'This machine runs chat models' }) as HTMLInputElement
 
 describe('MachinesSection', () => {
+  it('says only what the switch does: it governs the role walk, not a call that names its model', () => {
+    // The gateway's serving switch is read by the role walk alone (S40 T3's
+    // decision, carried as G6). A request with no role, an eval or a
+    // model_read naming its model, is still served on a switched-off
+    // machine, and a role whose chain has no other link gets a stated 503.
+    // "Sent no model calls" would promise a wall the gateway does not build.
+    renderSection({ getMachines: vi.fn(() => new Promise(() => {})) })
+    const text = screen.getByText(/^Where Nova's models run\./).textContent ?? ''
+    expect(text).not.toMatch(/sent no model calls/i)
+    expect(text).toMatch(/next link in the role's chain answers/)
+    expect(text).toMatch(/no other link.*says why/)
+    expect(text).toMatch(/names its model.*still served there/)
+  })
+
   it('shows a skeleton while loading', () => {
     renderSection({ getMachines: vi.fn(() => new Promise(() => {})) })
     expect(screen.getByTestId('machines-skeleton')).toBeTruthy()

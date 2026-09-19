@@ -17,6 +17,12 @@ import { lifecycleLabel, machineStateLabel, readBackMismatch } from './machinesF
  * optimistic: the tile shows the row core read back after the write, and a
  * read-back that disagrees with the request is said in words. `api` is
  * DevicesSection's injection seam.
+ *
+ * The section's description words only what the gateway enforces: the
+ * switch is read by the role walk alone (S40 T3's decision, carried as G6).
+ * A request with no role (an eval or a model_read naming its model) is
+ * still served on a switched-off machine, and a role with no other link
+ * gets a stated 503, so "sent no model calls" would be a claim, not a fact.
  */
 interface MachinesApi {
   getMachines: typeof apiGetMachines
@@ -86,7 +92,7 @@ export function MachinesSection({ api = DEFAULT_API }: { api?: MachinesApi } = {
     <Section
       icon={Server}
       title="Machines"
-      description="Where Nova's models run. A machine that is switched off is sent no model calls; the next link in each chain answers instead."
+      description="Where Nova's models run. Routing passes over a machine that is switched off: the next link in the role's chain answers instead, and a role with no other link fails and says why. A call that names its model directly is still served there."
     >
       {loadError && (
         <div role="alert" className={bannerClass}>
