@@ -36,6 +36,7 @@ never had to ask: what may the backend run when NOBODY asked it to.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -236,7 +237,27 @@ async def _run_one(call: LiveCall, turn, ctx) -> Checked:
     Its own timeout rather than one over the whole gather: a check that
     finished must be reported as finished, and cancelling a completed answer
     to report it as a timeout is under-claiming, which is still lying.
+
+    ITS OWN FACTS, too (S40b). A call can DETERMINE a fact and then refuse — a
+    device check that finds the device offline records that it is not
+    connected, then refuses — and the guards read that fact off the span, the
+    way `chat._run_tool` copies each call's slice onto its own. A check runs
+    under gather beside the others, so a slice of the shared sink could hold
+    another check's facts: each check gets a sink of its own, and what it
+    determined is copied onto its span and then into the turn's sink —
+    whether it answered, refused or timed out. Before this nothing was copied
+    at all, and an honest "the Dell is offline" after an unasked refusal was
+    corrected as unchecked.
     """
+    shared = ctx.facts_sink
+    call_ctx = dataclasses.replace(ctx, facts_sink=[]) if shared is not None else ctx
+
+    def _keep_facts(span) -> None:
+        facts = call_ctx.facts_sink
+        if shared is not None and facts:
+            span.meta["facts"] = list(facts)
+            shared.extend(facts)
+
     with turn.span("tool", call.tool) as span:
         span.meta["args_redacted"] = dict(call.args)
         # Not her call. Nobody asked for it; a recalled note named it and the
@@ -246,12 +267,14 @@ async def _run_one(call: LiveCall, turn, ctx) -> Checked:
         span.meta["result_head"] = "(the turn ended before this check returned)"
         try:
             async with asyncio.timeout(CHECK_TIMEOUT):
-                result, ok = await tools.dispatch(call.tool, call.args, ctx)
+                result, ok = await tools.dispatch(call.tool, call.args, call_ctx)
         except TimeoutError:
             problem = f"the check did not answer within {CHECK_TIMEOUT:g}s"
             span.meta["error"] = problem
             span.meta["result_head"] = problem
+            _keep_facts(span)
             return Checked(call, problem=problem)
+        _keep_facts(span)
         span.meta["ok"] = ok
         span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
         if not ok:
