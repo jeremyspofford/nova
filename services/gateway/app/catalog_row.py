@@ -12,6 +12,13 @@ row from EVERY source.
 
 from __future__ import annotations
 
+# The provider name of rows on no machine yet — a curated pick or a Hub repo:
+# pullable, not installed, served by nothing. Reserved (providers.RESERVED_NAMES
+# and migration 009's CHECK), so an id `library:x` can never be read as a
+# provider's model. Defined once, in providers (S40 ruling C6); providers
+# imports nothing from app, so there is no cycle.
+from app.providers import LIBRARY  # noqa: F401 — re-exported for catalog and hf_hub
+
 ROW_KEYS = frozenset(
     {
         "id",

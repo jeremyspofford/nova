@@ -7,6 +7,8 @@ Hub search and repo routes; a typed ref resolved live."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
@@ -85,7 +87,7 @@ async def test_installed_rows_carry_ollamas_own_facts_and_the_vetted_layer(clien
     assert resp.status_code == 200, resp.text
     body = resp.json()
     rows = _rows_by_id(body)
-    row = rows["ollama:qwen3:8b"]
+    row = rows["hub:qwen3:8b"]
     assert row["kind"] == "local" and row["installed"] is True
     assert set(row) == catalog.ROW_KEYS
     for name, fact in row["facts"].items():
@@ -115,11 +117,12 @@ async def test_installed_rows_carry_ollamas_own_facts_and_the_vetted_layer(clien
     assert row["actions"] == ["use", "probe", "check_update", "remove"]
     assert row["fit"]["verdict"] in {"comfortable", "tight", "wont_fit", "unknown"}
     sources = {s["key"]: s for s in body["sources"]}
-    assert sources["ollama"]["ok"] is True and sources["ollama"]["rows"] == 2
+    assert sources["hub"]["ok"] is True and sources["hub"]["rows"] == 2
+    assert sources["hub"]["kind"] == "engine"
     # Each tag's facts are ITS OWN /api/show answer, not the first one's.
-    assert rows["ollama:qwen3:8b"]["facts"]["params_b"]["value"] == 8.19
-    assert rows["ollama:qwen3:4b"]["facts"]["params_b"]["value"] == 4.02
-    assert rows["ollama:qwen3:4b"]["facts"]["family"]["value"] == "qwen3"
+    assert rows["hub:qwen3:8b"]["facts"]["params_b"]["value"] == 8.19
+    assert rows["hub:qwen3:4b"]["facts"]["params_b"]["value"] == 4.02
+    assert rows["hub:qwen3:4b"]["facts"]["family"]["value"] == "qwen3"
 
 
 async def test_uncurated_installed_models_still_list_with_an_honest_fit(client, local):
@@ -131,7 +134,7 @@ async def test_uncurated_installed_models_still_list_with_an_honest_fit(client, 
     # stated download size would now reach the fit and size it.
     local.tag_rows["muse-glimmer:latest"] = {"size": None}
     resp = await client.get("/admin/catalog")
-    row = _rows_by_id(resp.json())["ollama:muse-glimmer:latest"]
+    row = _rows_by_id(resp.json())["hub:muse-glimmer:latest"]
     assert row["installed"] is True
     assert row["fit"]["verdict"] == "unknown"
     assert "never probed" in row["fit"]["reason"]
@@ -147,6 +150,8 @@ async def test_curated_picks_not_installed_are_library_rows(client, local):
     assert row["actions"] == ["pull"]
     assert row["facts"]["params_b"]["basis"] == "vetted"
     assert row["capabilities"] == {}  # nothing declared until it is pulled
+    # S40: a pick on no machine yet is `library:{slug}` — never an engine's id.
+    assert row["id"] == f"library:{row['model']}" and row["provider"] == catalog.LIBRARY
 
 
 async def test_fit_agrees_with_admin_suggest_for_the_same_slug(
@@ -176,20 +181,25 @@ async def test_fit_agrees_with_admin_suggest_for_the_same_slug(
     assert by_slug["qwen3:8b"]["source"] == "verified"
     assert by_slug["qwen3:8b"]["needed_gb"] == 9.3
     for slug, fit in by_slug.items():
-        assert cat[f"ollama:{slug}"]["fit"] == fit, slug
-    row = cat["ollama:qwen3:8b"]
+        row = cat.get(f"hub:{slug}") or cat[f"library:{slug}"]
+        assert row["fit"] == fit, slug
+    row = cat["hub:qwen3:8b"]
     assert row["probe"]["latency_ms"] == 500 and row["probe"]["vram_mb"] is None
     assert row["facts"]["vram_gb"]["value"] == 9.3
 
 
-async def test_another_backends_probe_of_the_same_tag_is_not_this_rows(client, local, pool):
+async def test_another_backends_probe_of_the_same_tag_is_not_this_rows(
+    client, local, pool, monkeypatch
+):
     """A second ollama host registered as a provider probes bare tags too;
-    its numbers are not the bundled ollama's."""
+    its numbers are not the bundled ollama's. S40: the probe block is keyed
+    by the engine that ran it (`probes.provider`), fit by the card (compute)."""
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
     await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
-        "VALUES ('qwen3:8b', 'openai-chat', true, 812, 9318, NULL)"
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, provider) "
+        "VALUES ('qwen3:8b', 'openai-chat', true, 812, 9318, NULL, 'remote')"
     )
-    row = _rows_by_id((await client.get("/admin/catalog")).json())["ollama:qwen3:8b"]
+    row = _rows_by_id((await client.get("/admin/catalog")).json())["hub:qwen3:8b"]
     assert row["probe"] is None
     assert "vram_gb" not in row["facts"] or row["facts"]["vram_gb"]["basis"] == "vetted"
     assert row["fit"]["source"] != "verified"
@@ -204,8 +214,9 @@ async def test_a_probe_surfaces_as_a_measured_fact(client, local, pool, monkeypa
         "VALUES ('qwen3:8b', 'ollama', true, 812, 9318, NULL, 'hub', $1)",
         COMPUTE,
     )
-    row = _rows_by_id((await client.get("/admin/catalog")).json())["ollama:qwen3:8b"]
+    row = _rows_by_id((await client.get("/admin/catalog")).json())["hub:qwen3:8b"]
     assert row["probe"]["latency_ms"] == 812 and row["probe"]["vram_mb"] == 9318
+    assert row["probe"]["compute"] == COMPUTE
     assert row["facts"]["vram_gb"] == {**row["facts"]["vram_gb"], "value": 9.1, "basis": "measured"}
     assert row["fit"]["source"] == "verified"
 
@@ -253,7 +264,7 @@ async def test_a_refusing_provider_is_a_stated_source_not_a_broken_page(
     body = resp.json()
     source = {s["key"]: s for s in body["sources"]}["flaky"]
     assert source["ok"] is False and "key revoked" in source["note"]
-    assert "ollama:qwen3:8b" in _rows_by_id(body)
+    assert "hub:qwen3:8b" in _rows_by_id(body)
     assert not any(r["provider"] == "flaky" for r in body["rows"])
 
 
@@ -293,7 +304,7 @@ async def test_a_tags_body_that_is_not_an_object_is_a_stated_refusal(
 
     body = (await client.get("/admin/catalog")).json()
 
-    source = {s["key"]: s for s in body["sources"]}["ollama"]
+    source = {s["key"]: s for s in body["sources"]}["hub"]
     assert source["ok"] is False and "not an object" in source["note"]
 
 
@@ -306,9 +317,9 @@ async def test_a_stalled_show_fan_out_still_yields_rows_with_a_note(client, loca
 
     body = (await client.get("/admin/catalog")).json()
 
-    source = {s["key"]: s for s in body["sources"]}["ollama"]
+    source = {s["key"]: s for s in body["sources"]}["hub"]
     assert source["ok"] is True and "did not answer within 0.05 s" in source["note"]
-    row = _rows_by_id(body)["ollama:qwen3:8b"]
+    row = _rows_by_id(body)["hub:qwen3:8b"]
     assert row["installed"] is True and row["facts"]["size_bytes"]["basis"] == "declared"
     assert not any(f["source"] == "ollama-show" for f in row["facts"].values()), (
         "show facts are absent, never invented"
@@ -328,7 +339,7 @@ async def test_hub_search_rows_are_labelled_and_inferred_tags_say_so(client, mou
     assert body["next_cursor"] is None and body["budget"]["remaining"] >= 0
     row = body["rows"][0]
     assert set(row) == catalog.ROW_KEYS, "a hub row carries EVERY key the page dereferences"
-    assert row["id"] == "ollama:hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    assert row["id"] == "library:hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
     assert row["kind"] == "hub" and row["actions"] == ["pull"]
     assert row["installed"] is None, "ollama was not reachable here: unstated, not False"
     assert row["facts"]["params_b"]["basis"] == "declared"
@@ -351,7 +362,7 @@ async def test_hub_rows_say_installed_from_ollamas_own_tags(client, local, mount
     rows = (await client.get("/admin/catalog/hf?q=qwen")).json()["rows"]
 
     assert rows[0]["installed"] is True
-    assert rows[0]["note"] == f"installed as hf.co/{repo}:Q4_K_M"
+    assert rows[0]["note"] == f"installed as hub:hf.co/{repo}:Q4_K_M"
     assert rows[1]["installed"] is False and rows[1]["note"] is None
 
 
@@ -377,7 +388,7 @@ async def test_a_hub_detail_without_an_id_still_maps_under_the_asked_ref(client,
 
     assert resp.status_code == 200, resp.text
     row = resp.json()
-    assert row["id"] == f"ollama:hf.co/{HUB_ENTRY['id']}"
+    assert row["id"] == f"library:hf.co/{HUB_ENTRY['id']}"
     assert set(row) == catalog.ROW_KEYS
 
 
@@ -538,7 +549,8 @@ async def test_remove_deletes_and_verifies_against_tags(client, local):
     assert resp.json() == {"removed": "qwen3:4b", "verified": True, "installed_now": 1}
     assert ("/api/delete", {"model": "qwen3:4b"}) in local.seen
     rows = _rows_by_id((await client.get("/admin/catalog")).json())
-    assert rows["ollama:qwen3:4b"]["installed"] is False, "back to a library row"
+    assert rows["library:qwen3:4b"]["installed"] is False, "back to a library row"
+    assert "hub:qwen3:4b" not in rows
 
     gone = await client.delete("/admin/models?model=qwen3:4b")
     assert gone.status_code == 404 and "not installed" in gone.json()["error"]
@@ -557,3 +569,109 @@ async def test_a_delete_ollama_claims_but_tags_still_list_is_a_stated_502(
     monkeypatch.setattr(ollama_mod, "delete", lying_delete)
     resp = await client.delete("/admin/models?model=qwen3:4b")
     assert resp.status_code == 502 and "still lists 'qwen3:4b'" in resp.json()["error"]
+
+
+# ── S40: one section per machine; library rows; what each machine said ─────
+
+
+async def test_each_machine_is_its_own_source_and_names_its_own_rows(client, local, second_engine):
+    """S40: every site that assumed ONE builtin named 'ollama' reads engines.
+    Two engines are two sources keyed by their names, and each installed model's
+    id is `{engine}:{tag}` — the id a chain link or chat.model names it by. dell
+    is a machine, never a cloud listing: its rows are `local`, and its fit never
+    borrows the hub's card."""
+    body = (await client.get("/admin/catalog")).json()
+
+    sources = {s["key"]: s for s in body["sources"]}
+    assert "ollama" not in sources
+    assert sources["hub"]["kind"] == "engine" and sources["hub"]["rows"] == 2
+    assert sources["dell"]["kind"] == "engine" and sources["dell"]["rows"] == 1
+    assert [s["key"] for s in body["sources"]].count("dell") == 1
+    installed = {r["id"] for r in body["rows"] if r["kind"] == "local" and r["installed"]}
+    assert installed == {"hub:qwen3:8b", "hub:qwen3:4b", "dell:qwen3.8:27b"}
+    dell = _rows_by_id(body)["dell:qwen3.8:27b"]
+    assert dell["provider"] == "dell" and dell["model"] == "qwen3.8:27b"
+    assert set(dell) == catalog.ROW_KEYS
+    assert dell["fit"]["verdict"] == "unknown"
+    assert "dell's card cannot be read from this hub" in dell["fit"]["reason"]
+
+
+async def test_a_library_row_is_a_curated_pick_no_machine_holds(client, local, second_engine):
+    body = (await client.get("/admin/catalog")).json()
+
+    library = [r for r in body["rows"] if r["provider"] == catalog.LIBRARY]
+
+    assert {r["model"] for r in library} == {"qwen3:14b", "gemma4:12b", "llama3.1:8b", "qwen3:1.7b"}
+    for row in library:
+        assert row["id"] == f"library:{row['model']}"
+        assert row["kind"] == "local" and row["installed"] is False and row["actions"] == ["pull"]
+
+
+async def test_a_reading_with_no_compute_is_never_this_rows_measurement(
+    client, local, pool, monkeypatch
+):
+    """A probe row from before migration 009 names neither the engine nor the
+    card that ran it: it is nobody's probe block and never a measured fact."""
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
+    await pool.execute(
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
+        "VALUES ('qwen3:8b', 'ollama', true, 100, 19000, NULL)"
+    )
+
+    row = _rows_by_id((await client.get("/admin/catalog")).json())["hub:qwen3:8b"]
+
+    assert row["probe"] is None, "a row from before 009 names no engine"
+    assert row["fit"]["source"] == "estimated"
+    assert row["facts"].get("vram_gb", {}).get("basis") != "measured"
+
+
+async def test_hub_rows_say_installed_on_which_machine(client, local, second_engine, mount_backend):
+    repo = HUB_ENTRY["id"]
+    second_engine.tags = (f"hf.co/{repo}:Q8_0",)
+    mount_backend(hf_hub.HF_BASE, FakeHFHub(pages=([HUB_ENTRY],)).app)
+
+    row = (await client.get("/admin/catalog/hf?q=qwen")).json()["rows"][0]
+
+    assert row["installed"] is True
+    assert row["note"] == f"installed as dell:hf.co/{repo}:Q8_0"
+
+
+async def test_what_each_machine_said_of_its_models_is_kept_per_machine(
+    client, local, pool, second_engine
+):
+    """S40 ruling G1: `engine_models` is written from the /api/show answers
+    the catalogue reads — per engine, keyed by name, with the digest the
+    answer is about. A re-read updates the row; it never adds a second."""
+    await client.get("/admin/catalog")
+
+    rows = await pool.fetch(
+        "SELECT provider, name, digest, capabilities, context_length, read_at "
+        "FROM engine_models ORDER BY provider, name"
+    )
+    got = {(r["provider"], r["name"]): r for r in rows}
+    assert set(got) == {("dell", "qwen3.8:27b"), ("hub", "qwen3:4b"), ("hub", "qwen3:8b")}
+    hub_8b = got[("hub", "qwen3:8b")]
+    assert hub_8b["digest"] == local._tag_row("qwen3:8b")["digest"]
+    assert json.loads(hub_8b["capabilities"]) == ["completion", "tools", "thinking"]
+    assert hub_8b["context_length"] == 40960
+    assert hub_8b["read_at"] is not None
+
+    moved = "sha256:" + "f" * 64
+    local.tag_rows["qwen3:8b"] = {"digest": moved}
+    await client.get("/admin/catalog")
+
+    again = await pool.fetch("SELECT digest FROM engine_models WHERE provider = 'hub'")
+    assert len(again) == 2
+    assert moved in {r["digest"] for r in again}
+
+
+async def test_a_show_that_failed_writes_nothing_it_did_not_read(client, local, pool):
+    """A model whose /api/show could not be read has no facts to keep: no row
+    is written for it (a NULL capabilities column means "show stated none",
+    never "show could not be asked")."""
+    del local.show["qwen3:4b"]
+
+    await client.get("/admin/catalog")
+
+    names = {r["name"] for r in await pool.fetch("SELECT name FROM engine_models")}
+    assert names == {"qwen3:8b"}
