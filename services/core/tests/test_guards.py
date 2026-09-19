@@ -1697,6 +1697,44 @@ def test_a_machine_qualified_remove_is_read_whole_too():
     assert guards.narration_check(reply, [tool_span("model_remove", model="dell:qwen3.8:27b")])
 
 
+def _resolved(name: str, given: str, resolved: str):
+    """A pull/remove span as the executor leaves it: the argument she gave,
+    and the machine-qualified id the tool actually acted on in its facts."""
+    span = tool_span(name, model=given)
+    span.meta["facts"] = [{guards.RESOLVED_MODEL_FACT: resolved}]
+    return span
+
+
+def test_a_pull_is_backed_by_the_id_the_tool_resolved_not_the_raw_argument():
+    """(S40 fix wave A2) model_pull takes the catalogue's `library:<tag>` id and
+    the pre-rename `ollama:<tag>` and pulls onto the default machine; its
+    result says `Pulled hub:qwen3:4b`, and she repeats that line. Reading the
+    raw argument's `library:`/`ollama:` as a machine contradicted a true,
+    read-back report."""
+    reply = "I pulled hub:qwen3:4b."
+    for given in ("library:qwen3:4b", "ollama:qwen3:4b"):
+        span = _resolved("model_pull", given, "hub:qwen3:4b")
+        assert guards.narration_check(reply, [span]) is None, given
+    # Another machine still does not back it — by argument or by resolution.
+    assert guards.narration_check(reply, [tool_span("model_pull", model="dell:qwen3:4b")])
+    assert guards.narration_check(reply, [_resolved("model_pull", "qwen3:4b", "dell:qwen3:4b")])
+    # A different model resolved on the same machine does not either.
+    assert guards.narration_check(reply, [_resolved("model_pull", "qwen3:8b", "hub:qwen3:8b")])
+    # A failed pull backs nothing, whatever it recorded.
+    failed = _resolved("model_pull", "library:qwen3:4b", "hub:qwen3:4b")
+    failed.meta["ok"] = False
+    assert guards.narration_check(reply, [failed])
+
+
+def test_a_remove_is_backed_by_the_id_the_tool_resolved_not_the_raw_argument():
+    reply = "I removed hub:qwen3:4b."
+    for given in ("library:qwen3:4b", "ollama:qwen3:4b", "qwen3:4b"):
+        span = _resolved("model_remove", given, "hub:qwen3:4b")
+        assert guards.narration_check(reply, [span]) is None, given
+    assert guards.narration_check(reply, [tool_span("model_remove", model="dell:qwen3:4b")])
+    assert guards.narration_check(reply, [_resolved("model_remove", "qwen3:4b", "dell:qwen3:4b")])
+
+
 def test_a_switch_claim_with_no_configure_span_is_flagged():
     for reply in (
         "I've switched chat models off on hub.",

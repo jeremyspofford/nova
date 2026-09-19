@@ -23,7 +23,7 @@ import logging
 
 import httpx
 
-from app import db, machines, peers, settings_store
+from app import db, guards, machines, peers, settings_store
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 logger = logging.getLogger("core")
@@ -643,6 +643,12 @@ async def model_remove(args: dict, ctx: ToolContext) -> str:
         raise ToolFailure(f"the removal failed — {body.get('error') or status}")
     if body.get("verified") is not True:
         raise ToolFailure(f"the gateway did not verify the removal of {target}: {body}")
+    engine, removed = body.get("engine"), body.get("removed")
+    if ctx.facts_sink is not None and engine and removed:
+        # The machine the gateway verified against, and what it removed there
+        # — the narration guard backs "I removed hub:x" with this, never with
+        # the argument's prefix (guards.RESOLVED_MODEL_FACT).
+        ctx.facts_sink.append({guards.RESOLVED_MODEL_FACT: f"{engine}:{removed}"})
     return (
         f"Removed {body.get('removed') or target} — verified against ollama's own list; "
         f"{body.get('installed_now')} model(s) remain installed."
@@ -751,6 +757,11 @@ async def model_pull(args: dict, ctx: ToolContext) -> str:
         if key in facts and (line := _fact_line(key, facts[key]))
     ]
     digest = facts.get("digest", {}).get("value") if isinstance(facts.get("digest"), dict) else None
+    if ctx.facts_sink is not None:
+        # What was pulled, machine-qualified, as the catalogue confirmed it
+        # (guards.RESOLVED_MODEL_FACT) — `library:`/`ollama:` in the argument
+        # named no machine.
+        ctx.facts_sink.append({guards.RESOLVED_MODEL_FACT: row["id"]})
     result = f"Pulled {row['id']} — the catalogue now lists it as installed"
     if bits:
         result += ": " + "; ".join(bits)

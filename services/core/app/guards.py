@@ -148,6 +148,14 @@ _REMOVED_MODEL = re.compile(
     re.I,
 )
 _MODEL_CLAIMS = frozenset({"pulled_model", "removed_model"})
+# The span fact model_pull / model_remove record once the gateway CONFIRMED
+# what they acted on: the machine-qualified id (`hub:qwen3:4b`), read off the
+# catalogue row or the removal's verified answer (S40 fix wave A2). The raw
+# argument is not that: `library:qwen3:4b` (a catalogue id) and
+# `ollama:qwen3:4b` (the name before the rename) both resolve to the default
+# machine, and reading their prefix as a machine contradicted a true report.
+# Written by app/tools/models.py through ToolContext.facts_sink.
+RESOLVED_MODEL_FACT = "resolved_model"
 
 # "I switched chat models off on hub", "I turned off models for hub", "I
 # stopped hub from running chat models", "I switched hub off for chat models",
@@ -1038,7 +1046,14 @@ def _target_of(span: Any) -> str | None:
     treats the span as backing any claim of its kind rather than risk
     correcting an honest reply it cannot fully see (ruling S2d-R2).
     """
-    args = (getattr(span, "meta", None) or {}).get("args_redacted")
+    meta = getattr(span, "meta", None) or {}
+    if span.name in ("model_pull", "model_remove"):
+        # What the tool resolved and confirmed outranks what it was handed.
+        for fact in meta.get("facts") or ():
+            resolved = fact.get(RESOLVED_MODEL_FACT) if isinstance(fact, dict) else None
+            if isinstance(resolved, str) and resolved:
+                return resolved
+    args = meta.get("args_redacted")
     if not isinstance(args, dict):
         return None
     if span.name in ("workspace_write_file", "workspace_read_file", "workspace_delete"):

@@ -11,8 +11,11 @@ lists the model — with set_as_chat_model read back."""
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
+from app import guards
 from app.main import app
 from app.tools import models
 from app.tools.base import ERROR_PREFIX, ToolContext, ToolFailure
@@ -521,6 +524,53 @@ async def test_a_library_id_or_an_old_ollama_id_pulls_the_model_after_the_colon(
         text, ok = await _run(models.model_pull, ctx, model=given)
         assert ok, text
         assert fake.seen[-2] == ("/admin/pull", {"model": "qwen3:4b"})
+
+
+async def test_a_confirmed_pull_records_the_machine_qualified_id_it_acted_on(gateway):
+    """(S40 fix wave A2) The raw argument may be `library:qwen3:4b` or the
+    pre-rename `ollama:qwen3:4b`; what was pulled is the row the catalogue
+    confirmed, `hub:qwen3:4b`. That id goes on the span's facts, so the
+    narration guard backs her report with the machine the tool resolved."""
+    fake, ctx, _ = gateway
+    fake.pull_lines = ('{"status":"success"}',)
+    fake.catalog_body = {
+        **CATALOG,
+        "rows": [{**PULLED_4B, "id": "hub:qwen3:4b", "provider": "hub"}],
+    }
+    for given in ("library:qwen3:4b", "ollama:qwen3:4b", "qwen3:4b"):
+        sink: list[dict] = []
+        text, ok = await _run(
+            models.model_pull, dataclasses.replace(ctx, facts_sink=sink), model=given
+        )
+        assert ok, text
+        assert sink == [{guards.RESOLVED_MODEL_FACT: "hub:qwen3:4b"}], given
+    # Nothing confirmed, nothing recorded.
+    fake.catalog_body = {**CATALOG, "rows": [CLOUD]}
+    sink = []
+    text, ok = await _run(
+        models.model_pull, dataclasses.replace(ctx, facts_sink=sink), model="qwen3:4b"
+    )
+    assert not ok and sink == []
+
+
+@requires_db
+async def test_a_verified_remove_records_the_machine_and_model_it_removed(gateway, pool):
+    fake, ctx, _ = gateway
+    await pool.execute("DELETE FROM settings WHERE key = 'chat.model'")
+    fake.admin_body = {"engine": "hub", "removed": "qwen3:4b", "verified": True, "installed_now": 1}
+    sink: list[dict] = []
+    text, ok = await _run(
+        models.model_remove, dataclasses.replace(ctx, facts_sink=sink), model="library:qwen3:4b"
+    )
+    assert ok, text
+    assert sink == [{guards.RESOLVED_MODEL_FACT: "hub:qwen3:4b"}]
+    # Unverified is not removed, and records nothing.
+    fake.admin_body = {"engine": "hub", "removed": "qwen3:4b"}
+    sink = []
+    text, ok = await _run(
+        models.model_remove, dataclasses.replace(ctx, facts_sink=sink), model="qwen3:4b"
+    )
+    assert not ok and sink == []
 
 
 async def test_an_unreadable_machine_list_stops_the_pull_before_anything_moves(gateway):
