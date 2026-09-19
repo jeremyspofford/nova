@@ -936,3 +936,180 @@ FRAME_ACCEPTED_MISSES = [
 )
 def test_the_frame_accepted_misses_stay_missed(label, reply):
     assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+# -- S40b T4 review, fix round 2: a mention of her earlier reply is not a label ------
+#
+# Fix round 1 cut a served claim on ANY mention of her earlier reply before it
+# in its clause. Each sentence below FIRED at f81d0a1b and was SILENT at
+# c9538364 in a chat turn served by hub:qwen3:8b (the reviewer's probes,
+# verbatim first): a reassertion that cites the earlier reply ("As I said in my
+# last reply"), a correction or update that states the claim anew, a report
+# she reaffirms, and a new claim after a retraction. In chat the false line was
+# persisted and ingested with no correction, and a regeneration that said it
+# passed the vetting. The history cut now reads a LABEL (guards._history_framed):
+#   * her earlier reply reported: "my last reply said/named/marked X";
+#   * an attribution: "from my previous answer", "in my last reply";
+#   * a heading at the clause's start: "My previous answer:", "According to
+#     my last reply,";
+# never after "as"/"like"/"unlike"/"same as" or "unchanged"/"updated", never
+# past a retraction between it and the claim, and never when what follows
+# reaffirms the claim ("…, and that is still true").
+SERVED_REASSERTED_OVER_HISTORY = [
+    (
+        "as_i_said_in_my_last_reply",
+        "As I said in my last reply, qwen3.8:27b is the current model.",
+    ),
+    (
+        "correction_to_my_last_reply",
+        "Correction to my last reply: qwen3.8:27b is the current model.",
+    ),
+    (
+        "last_reply_said_and_still_true",
+        "My last reply said qwen3.8:27b is the current model, and that is still true.",
+    ),
+    (
+        "named_then_wrong_then_a_new_claim",
+        "My last reply named hub:qwen3:8b, which is wrong — qwen3.8:27b is the current model.",
+    ),
+    # The memory probes' forms, over the served claim.
+    (
+        "as_mentioned_in_my_previous_response",
+        "As mentioned in my previous response, qwen3.8:27b is the current model.",
+    ),
+    ("as_in_my_last_reply", "As in my last reply, qwen3.8:27b is the current model."),
+    ("update_on_my_last_answer", "Update on my last answer: qwen3.8:27b is the current model."),
+    (
+        "previous_answer_still_holds",
+        "My previous answer still holds — qwen3.8:27b is the current model.",
+    ),
+    # The same limits, spelled the other ways.
+    ("as_my_last_reply_said", "As my last reply said, qwen3.8:27b is the current model."),
+    ("per_my_last_reply", "Per my last reply, qwen3.8:27b is the current model."),
+    (
+        "reaffirmed_in_the_next_sentence",
+        "My last reply said qwen3.8:27b is the current model. That is still true.",
+    ),
+    (
+        "unchanged_from_my_last_reply",
+        "Unchanged from my last reply: qwen3.8:27b is the current model.",
+    ),
+    # "I was wrong" is the verdict's _SERVED_SKIP ("was"); "got it wrong" is not.
+    (
+        "in_my_last_reply_i_got_it_wrong",
+        "In my last reply I got it wrong: qwen3.8:27b is the current model.",
+    ),
+    (
+        "what_i_said_in_it_still_holds",
+        "What I said in my last reply still holds: qwen3.8:27b is the current model.",
+    ),
+]
+
+# Her earlier reply, labelled as such: what she said then, not a claim about
+# this turn. Already cut at c9538364; kept cut by the label rule. Each carries
+# the same claim without its label, which fires — so the pin cannot pass on a
+# claim the guard never read. "My last reply said X." is reported speech, cut
+# like _REPORTED's "The previous reply said X."; a bare "I said X." stays a
+# reassertion (SERVED_STILL_ASSERTED).
+SERVED_LABELLED_AS_HISTORY = [
+    (
+        "plain_report_of_her_last_reply",
+        "My last reply said qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "listed_then_who_answered",
+        "My last reply listed `qwen3.8:27b` ✅ Current model in use; hub:qwen3:8b answered "
+        "this one.",
+        "`qwen3.8:27b` ✅ Current model in use; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "from_my_previous_answer_heading",
+        "From my previous answer: qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "my_previous_answer_label",
+        "My previous answer: qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "according_to_my_last_reply",
+        "According to my last reply, qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "in_my_last_reply_i_wrote_that",
+        "In my last reply I wrote that qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "I wrote that qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "retracted_then_a_still_about_something_else",
+        "My last reply said qwen3.8:27b is the current model; that was stale. It is still the "
+        "case that hub:qwen3:8b answered.",
+        "qwen3.8:27b is the current model.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SERVED_REASSERTED_OVER_HISTORY,
+    ids=[c[0] for c in SERVED_REASSERTED_OVER_HISTORY],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_served_claim_that_only_cites_her_earlier_reply_still_fires(purpose, label, reply):
+    spans = [_llm(purpose=purpose), RECALLED]
+    claim = guards.served_claim_check(reply, spans, purpose=purpose)
+    assert claim is not None, label
+    assert claim.claimed == "qwen3.8:27b"
+    assert claim.text == named_text("qwen3.8:27b")
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    SERVED_LABELLED_AS_HISTORY,
+    ids=[c[0] for c in SERVED_LABELLED_AS_HISTORY],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_served_claim_labelled_as_her_history_is_not_corrected(purpose, label, reply, bare):
+    spans = [_llm(purpose=purpose), RECALLED]
+    assert guards.served_claim_check(reply, spans, purpose=purpose) is None, label
+    claim = guards.served_claim_check(bare, spans, purpose=purpose)
+    assert claim is not None and claim.claimed == "qwen3.8:27b", label
+
+
+# The verdict's _REPORTED cut reads the whole clause, so "The last reply said
+# X" is someone's reported speech whatever follows it — a cut this fix does not
+# re-measure. Pinned so it is a choice.
+SERVED_REPORTED_ACCEPTED_MISSES = [
+    (
+        "the_last_reply_said_and_still_true",
+        "The last reply said qwen3.8:27b is the current model, and that is still true.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SERVED_REPORTED_ACCEPTED_MISSES,
+    ids=[c[0] for c in SERVED_REPORTED_ACCEPTED_MISSES],
+)
+def test_the_reported_speech_accepted_misses_stay_missed(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "regen",
+    [
+        "As I said in my last reply, qwen3.8:27b is the current model.",
+        "Correction to my last reply: qwen3.8:27b is the current model.",
+        "My last reply said qwen3.8:27b is the current model, and that is still true.",
+    ],
+)
+def test_a_regeneration_that_reasserts_her_earlier_served_claim_is_refused(regen):
+    """The redirect's output replaces the durable record and is ingested; a
+    regeneration that cites her last reply to restate the claim clears no
+    lower bar than the reply did."""
+    assert _vet(regen, [_llm(), RECALLED]) == "served_claim"

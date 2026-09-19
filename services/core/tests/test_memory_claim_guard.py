@@ -621,3 +621,108 @@ RETRACTION_ACCEPTED_MISSES = [
 )
 def test_the_retraction_accepted_misses_stay_missed(label, reply):
     assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None, label
+
+
+# -- S40b T4 review, fix round 2: a mention of her earlier reply is not a label ------
+#
+# Fix round 1 cut a memory claim on ANY mention of her earlier reply before it
+# in its clause. Each sentence below FIRED at f81d0a1b and was SILENT at
+# c9538364 with the recall answered (the reviewer's probes, verbatim first): a
+# reassertion that cites the earlier reply, an update that states the outage
+# anew, a report she reaffirms, and a new claim after a retraction. The history
+# cut now reads a LABEL (guards._history_framed; see test_served_guard.py's
+# fix round 2 for the rule).
+MEMORY_REASSERTED_OVER_HISTORY = [
+    (
+        "as_mentioned_in_my_previous_response",
+        "As mentioned in my previous response, the memory service is currently unreachable.",
+    ),
+    ("as_in_my_last_reply", "As in my last reply, the memory service is unreachable."),
+    (
+        "update_on_my_last_answer",
+        "Update on my last answer: the memory service is now unreachable.",
+    ),
+    (
+        "previous_answer_still_holds",
+        "My previous answer still holds — the memory service is unreachable.",
+    ),
+    # The served probes' forms, over the memory claim.
+    (
+        "as_i_said_in_my_last_reply",
+        "As I said in my last reply, the memory service is unreachable.",
+    ),
+    (
+        "correction_to_my_last_reply",
+        "Correction to my last reply: the memory service is unreachable.",
+    ),
+    (
+        "last_reply_said_and_still_true",
+        "My last reply said the memory service is unreachable, and that is still true.",
+    ),
+    (
+        "named_then_wrong_then_a_new_claim",
+        "My last reply named the gateway, which is wrong — the memory service is unreachable.",
+    ),
+    ("unchanged_from_my_last_reply", "Unchanged from my last reply: the memory service is down."),
+    (
+        "reaffirmed_in_the_next_sentence",
+        "My last reply said I can't reach the memory service. That is still the case.",
+    ),
+]
+
+# Her earlier reply, labelled as such. Each carries the same claim without its
+# label, which fires, so the pin cannot pass on a claim the guard never read.
+MEMORY_LABELLED_AS_HISTORY = [
+    (
+        "plain_report_of_her_last_reply",
+        "My last reply said the memory service is unreachable.",
+        "The memory service is unreachable.",
+    ),
+    (
+        "from_my_previous_answer_heading",
+        "From my previous answer: the memory service is unreachable.",
+        "The memory service is unreachable.",
+    ),
+    (
+        "according_to_my_last_reply",
+        "According to my last reply, I can't reach the memory service.",
+        "I can't reach the memory service.",
+    ),
+    (
+        "in_my_last_reply_i_wrote_that",
+        "In my last reply I wrote that the memory service is unreachable; this turn's recall "
+        "answered.",
+        "I wrote that the memory service is unreachable; this turn's recall answered.",
+    ),
+    (
+        "retracted_then_a_still_about_something_else",
+        "My last reply said the memory service is unreachable; that was stale. It is still the "
+        "case that recall answered.",
+        "The memory service is unreachable.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    MEMORY_REASSERTED_OVER_HISTORY,
+    ids=[c[0] for c in MEMORY_REASSERTED_OVER_HISTORY],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_memory_claim_that_only_cites_her_earlier_reply_still_fires(purpose, label, reply):
+    spans = [LLM, _recall(hits=5)]
+    claim = guards.memory_claim_check(reply, spans, purpose=purpose)
+    assert claim is not None, label
+    assert claim.text == CORRECTION
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    MEMORY_LABELLED_AS_HISTORY,
+    ids=[c[0] for c in MEMORY_LABELLED_AS_HISTORY],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_memory_claim_labelled_as_her_history_is_not_corrected(purpose, label, reply, bare):
+    spans = [LLM, _recall(hits=5)]
+    assert guards.memory_claim_check(reply, spans, purpose=purpose) is None, label
+    assert guards.memory_claim_check(bare, spans, purpose=purpose) is not None, label

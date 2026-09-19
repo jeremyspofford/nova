@@ -1607,3 +1607,197 @@ def test_a_regeneration_that_labels_the_reading_as_history_is_not_refused():
         agent_names=[],
     )
     assert rejected == "state_claim"
+
+
+# ================================================================================
+# S40b T4 review, fix round 2: a mention of her earlier reply is not a label
+# ================================================================================
+#
+# Fix round 1's history cut read only whether a phrase naming her earlier reply
+# was PRESENT — on the reading's lead-in, heading, run and trailing line, and
+# anywhere in a copula's clause. So a replay that says it is CURRENT while
+# citing her history went silent: the replay-as-current the v15 case and this
+# branch exist for. Each block below FIRED at f81d0a1b and was SILENT at
+# c9538364 with only hub's served round (the reviewer's probes, verbatim
+# first). "Unchanged from my last reply" asserts the current state without a
+# read; it does not label the reading as history. In chat each was a missed
+# REPLACE-class correction of a replay.
+#
+# The cut now reads a LABEL (guards._history_framed / _labelled_as_history):
+#   * her earlier reply reported: "my previous answer said/showed X";
+#   * an attribution: "from history", "(from my previous answer)", "the
+#     reading I gave in my last reply";
+#   * a heading at the start of its line or clause: "My previous answer:",
+#     "In the previous turn:", "According to my last reply,";
+# never after "as"/"like"/"unlike"/"same as" or "unchanged"/"different"/
+# "updated", never past a retraction, and never when what follows reaffirms
+# the claim ("…, and that is still true").
+STATE_REPLAYED_AS_CURRENT = [
+    (
+        "current_status_unchanged_from_my_last_reply",
+        f"Here is hub's current status (unchanged from my last reply):\n{NAME_RUN}",
+    ),
+    (
+        "current_status_same_as_in_my_previous_answer",
+        f"Hub's current status, same as in my previous answer:\n{NAME_RUN}",
+    ),
+    (
+        "unlike_my_previous_answer_current_status",
+        f"Unlike my previous answer, here is hub's current status:\n{NAME_RUN}",
+    ),
+    ("correction_to_my_last_reply", "Correction to my last reply: hub is offline."),
+    ("as_in_my_last_reply", "As in my last reply, hub is offline."),
+    ("same_as_in_my_last_reply_after", "hub is offline, same as in my last reply."),
+    ("since_the_last_turn", "Since the last turn, hub has been offline."),
+    # The same limits, spelled the other ways.
+    ("as_i_said_in_my_last_reply", "As I said in my last reply, hub is offline."),
+    ("previous_answer_still_holds", "My previous answer still holds — hub is offline."),
+    ("per_my_last_reply", "Per my last reply, hub is offline."),
+    # "said hub" is never read (the verdict's lead-word rule); "said: hub" is.
+    (
+        "previous_answer_said_and_still_true",
+        "My previous answer said: hub is offline, and that is still true.",
+    ),
+    (
+        "previous_answer_showed_and_still_true",
+        f"My previous answer showed:\n{NAME_RUN}\nThat is still true.",
+    ),
+    (
+        "from_my_previous_answer_and_still_true",
+        "From my previous answer: hub is switched off, and that is still true.",
+    ),
+    ("unchanged_from_my_last_reply_after", "hub is offline, unchanged from my last reply."),
+    ("in_my_last_reply_i_was_wrong", "In my last reply I was wrong: hub is offline."),
+    (
+        "a_retracted_report_then_the_current_status",
+        f"My previous answer said hub was ready, which was wrong. Here is hub's current "
+        f"status:\n{NAME_RUN}",
+    ),
+    (
+        "the_reading_from_my_last_reply_is_still_current",
+        f"The reading from my last reply is still current:\n{NAME_RUN}",
+    ),
+    ("nothing_changed_from_my_last_reply", "Nothing changed from my last reply: hub is offline."),
+    ("like_my_previous_answer_said", "Like my previous answer said: hub is offline."),
+    ("which_i_reported_in_my_last_reply", "hub is offline, which I reported in my last reply."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    STATE_REPLAYED_AS_CURRENT,
+    ids=[c[0] for c in STATE_REPLAYED_AS_CURRENT],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_replay_that_only_cites_her_earlier_reply_still_fires(purpose, label, reply):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    claim = guards.state_claim_check(reply, spans, NAMES, purpose=purpose)
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+
+
+# Her earlier reply, labelled as such. Each carries the same claim without its
+# label, which fires, so the pin cannot pass on a claim the guard never read.
+STATE_LABELLED_AS_HISTORY = [
+    (
+        "plain_report_of_her_previous_answer",
+        "My previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "according_to_my_last_reply",
+        "According to my last reply, hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "attribution_after_the_claim",
+        "hub is switched off, from my previous answer.",
+        "hub is switched off.",
+    ),
+    (
+        "attribution_after_a_prose_reading",
+        "hub last reported at 05:15 UTC (from my previous answer).",
+        "hub last reported at 05:15 UTC.",
+    ),
+    (
+        "the_reading_i_gave_in_my_last_reply",
+        f"This is the reading I gave in my last reply:\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    (
+        "copied_from_my_previous_answer_after_the_block",
+        f"{NAME_RUN}\n\nThat block is copied from my previous answer.",
+        NAME_RUN,
+    ),
+    (
+        "my_previous_answer_showed",
+        f"My previous answer showed:\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    (
+        "what_i_reported_in_my_previous_answer",
+        f"Here is what I reported in my previous answer:\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    ("as_of_my_last_reply", "As of my last reply, hub is offline.", "hub is offline."),
+    ("as_of_my_last_reply_lead_in", f"As of my last reply:\n{NAME_RUN}", NAME_RUN),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    STATE_LABELLED_AS_HISTORY,
+    ids=[c[0] for c in STATE_LABELLED_AS_HISTORY],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_claim_labelled_as_her_history_is_not_corrected(purpose, label, reply, bare):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    assert guards.state_claim_check(reply, spans, NAMES, purpose=purpose) is None, label
+    claim = guards.state_claim_check(bare, spans, NAMES, purpose=purpose)
+    assert claim is not None and claim.device == "hub", label
+
+
+# The cost of reading a heading label over its whole clause, pinned so it is
+# a choice: a second claim joined by "and" (not "but", which splits the
+# clause) reads as part of what her last reply said.
+HISTORY_HEAD_ACCEPTED_MISSES = [
+    ("and_joined_second_claim", "In my last reply hub was ready, and hub is offline now."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    HISTORY_HEAD_ACCEPTED_MISSES,
+    ids=[c[0] for c in HISTORY_HEAD_ACCEPTED_MISSES],
+)
+def test_the_history_head_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+    # …and the same sentence split by "but" fires.
+    split = reply.replace(", and ", ", but ")
+    assert guards.state_claim_check(split, [HUB_SERVED], NAMES, purpose="chat") is not None
+
+
+@pytest.mark.parametrize(
+    "regen",
+    [
+        "Correction to my last reply: hub is offline.",
+        f"Here is hub's current status (unchanged from my last reply):\n{NAME_RUN}",
+    ],
+)
+def test_a_regeneration_that_replays_as_current_while_citing_history_is_refused(regen):
+    """The regeneration the nudge asks for is vetted by the same state check:
+    citing her last reply to restate the reading as current is refused by
+    name, as the bare block is."""
+    from app import agents
+
+    turn = SimpleNamespace(spans=[HUB_SERVED], kind="chat")
+    rejected = chat._regen_rejected_by(
+        regen,
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected == "state_claim"

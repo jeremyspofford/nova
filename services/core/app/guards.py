@@ -706,6 +706,17 @@ def _sentences(text: str) -> list[str]:
     return out
 
 
+def _split_clauses(sentence: str):
+    """(clause, rest) for each clause of one sentence, split as _clauses
+    splits it: `rest` is the sentence after the clause, separator included —
+    where she retracts or reaffirms what the clause said."""
+    start = 0
+    cuts = [(sep.start(), sep.end()) for sep in _CLAUSE_SPLIT.finditer(sentence)]
+    for end, resume in [*cuts, (len(sentence), len(sentence))]:
+        yield sentence[start:end], sentence[end:]
+        start = resume
+
+
 def _clauses(text: str):
     """(clause, is_question) pairs — negation scoped to a clause, '?' to its
     whole sentence (an offer is a question even mid-sentence)."""
@@ -2974,12 +2985,78 @@ _HER_EARLIER_REPLY = (
     r"\b(?:my|the)\s+(?:last|previous|earlier|first)\s+"
     r"(?:reply|answer|message|response|turn)\b(?!\s+from\b)"
 )
-# A reading or a state she labels as history: "(from history)", "from my
-# previous answer", "My previous answer:", "In the previous turn:". The answer
-# the machine nudge asks for, not a replay stated as current.
-_HISTORY_LABEL = re.compile(
-    r"\bfrom\s+(?:(?:my|the|our|this)\s+)?(?:(?:chat|conversation)\s+)?history\b"
-    rf"|{_HER_EARLIER_REPLY}",
+# S40b T4 review, fix round 2: a MENTION of her earlier reply is not a label.
+# Round 1 cut on any mention, so a claim that cites her history to say the
+# state holds NOW went silent: "As I said in my last reply, X", "Correction to
+# my last reply: X", "(unchanged from my last reply)", "X, same as in my last
+# reply", "Since the last turn, X". A history LABEL is one of:
+#   * an attribution: "from history", "(from my previous answer)", "(as of my
+#     last reply)";
+#   * her earlier reply reported: "my previous answer said/showed X", or her
+#     own report located in it: "the reading I gave in my last reply";
+#   * a heading at the start of a line or clause: "My previous answer:", "In
+#     the previous turn:", "From my previous answer:", "As of my last reply,",
+#     "According to my last reply,".
+# The first two never count after a word that says the state is the same, new
+# or compared, or that restates it: "unchanged from", "different from",
+# "updated from", "as/like/unlike/since … in/from", "As my last reply said".
+# A label reaches only up to a retraction or a "still holds" (_REPORT_CLOSED),
+# and a claim reaffirmed after it is hers again (_REAFFIRMED). Shared by the
+# machine branch below and the served and memory guards' claim cut:
+# _labelled_as_history, _history_framed.
+_HISTORY_SOURCE = (
+    r"(?:(?:(?:my|the|our|this)\s+)?(?:(?:chat|conversation)\s+)?history\b"
+    rf"|{_HER_EARLIER_REPLY})"
+)
+_FROM_HISTORY = re.compile(rf"\b(?:from|as\s+of)\s+{_HISTORY_SOURCE}", re.I)
+_HER_REPLY_REPORTED = re.compile(
+    rf"{_HER_EARLIER_REPLY}\s+(?:said|says|stated|states|claimed|claims|named|names|marked"
+    r"|marks|listed|lists|showed|shows|reported|reports|read|reads|called|calls|wrote|gave)\b"
+    r"|(?<![\w'’])I\s+(?:gave|showed|shown|reported|wrote|listed|said|stated|marked|posted"
+    rf"|shared|quoted|put)\b[^.;:!?\n]{{0,40}}?\bin\s+{_HER_EARLIER_REPLY}",
+    re.I,
+)
+_HISTORY_HEAD = re.compile(
+    r"^[^\w]*(?:(?:in|from|as\s+of|according\s+to)\s+"
+    rf"{_HER_EARLIER_REPLY}|{_HER_EARLIER_REPLY}\s*:)",
+    re.I,
+)
+_NOT_A_LABEL_LEAD = re.compile(
+    r"(?:\b(?:unchanged|changed?|changes|different(?:ly)?|differs?|updated?|updates|varies"
+    r"|vary|new)|\b(?:as|like|unlike|since)(?:\s+[\w'’]+){0,2})\W*$",
+    re.I,
+)
+# What she says of an earlier claim right after it: "I told you X, which was
+# wrong." / "I said X. That was stale." / "… — it isn't." (T4 review, fix
+# round 1; the served and memory guards' "I said" cut reads it too.)
+_RETRACTED = re.compile(
+    r"\b(?:that|which|this|it)\s*(?:was|is|['’]s)"
+    r"(?:\s+(?:(?:simply|just|plainly|also)\s+)?(?:wrong|false|incorrect|mistaken|untrue|stale"
+    r"|outdated|out\s+of\s+date|a\s+mistake|an\s+error)\b"
+    r"|(?:\s+not|n['’]t)(?:\s+(?:true|right|correct|accurate|current))?"
+    r"(?=\s*(?:[.!;,:)—–-]|$)))",
+    re.I,
+)
+# A label reaches a claim only if nothing between them retracts what it
+# labels ("My last reply named hub:qwen3:8b, which is wrong — X": X is said
+# anew; "In my last reply I was wrong: X") or says it still holds ("What I
+# said in my last reply still holds: X").
+_REPORT_CLOSED = re.compile(
+    rf"{_RETRACTED.pattern}|\bI\s+was\s+(?:wrong|mistaken)\b"
+    r"|\bI\s+got\s+(?:it|that|this)\s+wrong\b"
+    r"|\bstill\s+(?:holds|stands|applies|true|valid|current|the\s+case)\b",
+    re.I,
+)
+# …and a claim she reaffirms after it is hers again: "…, and that is still
+# true", "That is still the case.", "which remains true", "it still holds".
+# Said of it — a pronoun, and the sentence ends there: "It is still the case
+# that recall answered" is about something else.
+_REAFFIRMED = re.compile(
+    r"\b(?:that|which|this|it)\s*(?:(?:is|['’]s|remains)\s+still"
+    r"(?:\s+(?:true|right|correct|accurate|current|valid|the\s+case|so))?"
+    r"|still\s+(?:is|holds|stands|applies)(?:\s+(?:true|the\s+case))?"
+    r"|(?:remains|holds|stands)\s+(?:true|correct|accurate|valid|the\s+case))"
+    r"(?=\s*(?:[.!;,:)—–-]|$))",
     re.I,
 )
 _HEADING = re.compile(r"^\s*#{1,6}\s")
@@ -3265,13 +3342,59 @@ def _reading_context(lines: list[str], index: int) -> list[str]:
     return context
 
 
-def _not_a_current_reading(texts: Sequence[str]) -> bool:
+def _history_label_ends(text: str) -> list[int]:
+    """Where each history label in `text` ends (see _HISTORY_SOURCE's
+    comment): a heading at its start, an attribution or a report of her
+    earlier reply not led by a word that restates or compares it."""
+    ends = []
+    head = _HISTORY_HEAD.match(text)
+    if head is not None:
+        ends.append(head.end())
+    for pattern in (_FROM_HISTORY, _HER_REPLY_REPORTED):
+        for m in pattern.finditer(text):
+            if _NOT_A_LABEL_LEAD.search(text, 0, m.start()) is None:
+                ends.append(m.end())
+    return ends
+
+
+def _labelled_as_history(text: str) -> bool:
+    """Does `text` carry a history label that nothing after it retracts or
+    says still holds?"""
+    return any(_REPORT_CLOSED.search(text, end) is None for end in _history_label_ends(text))
+
+
+def _history_framed(before: str, tail: str = "", after: str = "") -> bool:
+    """Is a claim framed as her history (S40b T4 review, fix round 2)? A label
+    in its clause before it (`before`) that reaches it, or an attribution
+    after it in its clause (`tail`: "hub last reported at 05:15 UTC (from my
+    previous answer)"; never "…, unchanged from my last reply") — and nothing
+    in what follows (`after`) reaffirms it as true now ("…, and that is still
+    true"). The served and memory guards pass no tail: their cut reads only
+    what leads up to the claim, as in fix round 1."""
+    if _REAFFIRMED.search(after) is not None:
+        return False
+    if _labelled_as_history(before):
+        return True
     return any(
-        _PRIOR_TIME.search(text)
-        or _NOT_CURRENT.search(text)
-        or _REPORTED.search(text)
-        or _HISTORY_LABEL.search(text)
+        _NOT_A_LABEL_LEAD.search(tail, 0, m.start()) is None
+        and _REPORT_CLOSED.search(tail, m.end()) is None
+        for m in _FROM_HISTORY.finditer(tail)
+    )
+
+
+def _not_a_current_reading(texts: Sequence[str]) -> bool:
+    """Does a reading's context (_reading_context) say it is not current: a
+    prior time, a not-current word, someone's report — or a history label no
+    line of it reaffirms (fix round 2: a mention of her earlier reply is not
+    a label, and "Here is hub's current status (unchanged from my last
+    reply):" is a replay stated as current)?"""
+    if any(
+        _PRIOR_TIME.search(text) or _NOT_CURRENT.search(text) or _REPORTED.search(text)
         for text in texts
+    ):
+        return True
+    return any(_labelled_as_history(text) for text in texts) and not any(
+        _REAFFIRMED.search(text) for text in texts
     )
 
 
@@ -3316,29 +3439,37 @@ def _machine_state_claim(
     # below keep theirs — a reading line that opens with a quote never
     # matches, and `Last Reported: "2026-…"` is her reading, quote marks and all.
     prose = _QUOTED.sub(lambda q: " " * len(q.group(0)), "\n".join(lines))
-    for sentence in _sentences(prose):
+    sentences = _sentences(prose)
+    for i, sentence in enumerate(sentences):
         if not sentence.strip() or sentence.rstrip().endswith("?"):
             continue  # "is hub ready?" asserts nothing
         # A sentence that says its own state is not current ("…, but I have
         # not checked it this turn") is the answer the machine nudge asks for.
         if _NOT_CURRENT.search(sentence) is not None:
             continue
-        for clause in _CLAUSE_SPLIT.split(sentence):
-            if not clause or not clause.strip():
+        # The next sentence on its line, where she may reaffirm the claim.
+        following = (
+            sentences[i + 1] if i + 1 < len(sentences) and not sentence.endswith("\n") else ""
+        )
+        for clause, rest in _split_clauses(sentence):
+            if not clause.strip():
                 continue
             if _REPORTED.search(clause) is not None:
                 continue  # "you said hub is offline" — someone else's claim
             if _PRIOR_TIME.search(clause) is not None:
-                continue
-            # "From my previous answer: hub is switched off." — her history,
-            # labelled as such (T4 review, fix round 1), like _PRIOR_TIME.
-            if _HISTORY_LABEL.search(clause) is not None:
                 continue
             for m in assertion.finditer(clause):
                 machine = m.group("mach")
                 if not _lead_ok(clause, m.start("mach")):
                     continue
                 if _state_prefix_blocks(clause[: m.start()]):
+                    continue
+                # "From my previous answer: hub is switched off." — her
+                # history, labelled as such (T4 review, fix rounds 1 and 2),
+                # like _PRIOR_TIME; "As in my last reply, hub is offline." is
+                # not a label.
+                tail = clause[m.end() :]
+                if _history_framed(clause[: m.start()], tail, tail + rest + following):
                     continue
                 negative = (_MACHINE_NEG_STATE.fullmatch(m.group("state")) is not None) != (
                     _NEGATING_ADVERB.search(m.group("adv")) is not None
@@ -3352,6 +3483,9 @@ def _machine_state_claim(
                 if not _lead_ok(clause, r.start("mach")):
                     continue
                 if _state_prefix_blocks(clause[: r.start()]):
+                    continue
+                tail = clause[r.end() :]
+                if _history_framed(clause[: r.start()], tail, tail + rest + following):
                     continue
                 if not _machine_read(spans, machine):
                     return _machine_claim(machine, r.group(0), spans, purpose, negative=False)
@@ -5910,13 +6044,15 @@ _EPISTEMIC_FRAME = re.compile(
     r"|\b(?:untrue|false|wrong)\s+(?:to\s+say\s+)?that\b",
     re.I,
 )
-#   * Her own earlier reply (_HER_EARLIER_REPLY), or a first-person retraction
-#     verb: "I wrongly said", "I mistakenly marked".
-_HER_RETRACTION = (
+#   * A first-person retraction verb: "I wrongly said", "I mistakenly marked".
+#   * Her earlier reply, LABELLED as the claim's source (_history_framed; fix
+#     round 2 — round 1 cut on any mention of it, so "As I said in my last
+#     reply, X" and "Correction to my last reply: X" went silent).
+_HER_RETRACTION = re.compile(
     r"(?<![\w'’])I\s+(?:wrongly|mistakenly|incorrectly|falsely)\s+"
-    r"(?:said|claimed|stated|marked|wrote|reported|told\s+you)\b"
+    r"(?:said|claimed|stated|marked|wrote|reported|told\s+you)\b",
+    re.I,
 )
-_HER_EARLIER_CLAIM = re.compile(rf"{_HER_EARLIER_REPLY}|{_HER_RETRACTION}", re.I)
 #   * A bare "I said X" or "I told you X" is a reassertion, unless she retracts
 #     it in what follows, in the same sentence or the next: "I told you X,
 #     which was wrong." / "I said X. That was stale." / "… — it isn't." "As I
@@ -5924,14 +6060,6 @@ _HER_EARLIER_CLAIM = re.compile(rf"{_HER_EARLIER_REPLY}|{_HER_RETRACTION}", re.I
 _HER_SAYING = re.compile(
     r"(?<![\w'’])(?<!\bas\s)(?<!\blike\s)I\s+"
     r"(?:said|wrote|stated|claimed|reported|marked|told\s+you)\b",
-    re.I,
-)
-_RETRACTED = re.compile(
-    r"\b(?:that|which|this|it)\s*(?:was|is|['’]s)"
-    r"(?:\s+(?:(?:simply|just|plainly|also)\s+)?(?:wrong|false|incorrect|mistaken|untrue|stale"
-    r"|outdated|out\s+of\s+date|a\s+mistake|an\s+error)\b"
-    r"|(?:\s+not|n['’]t)(?:\s+(?:true|right|correct|accurate|current))?"
-    r"(?=\s*(?:[.!;,:)—–-]|$)))",
     re.I,
 )
 
@@ -5943,20 +6071,19 @@ def _clauses_with_rest(line: str):
     for i, sentence in enumerate(sentences):
         is_question = sentence.rstrip().endswith("?")
         following = sentences[i + 1] if i + 1 < len(sentences) else ""
-        start = 0
-        cuts = [(sep.start(), sep.end()) for sep in _CLAUSE_SPLIT.finditer(sentence)]
-        for end, resume in [*cuts, (len(sentence), len(sentence))]:
-            clause = sentence[start:end]
+        for clause, rest in _split_clauses(sentence):
             if clause.strip():
-                yield clause, is_question, sentence[end:] + following
-            start = resume
+                yield clause, is_question, rest + following
 
 
 def _not_her_claim(before: str, after: str) -> bool:
     """Does what leads up to a served or memory claim in its clause (`before`)
-    say she does not assert it now: a doubted belief, her own earlier reply,
-    or an "I said" she retracts in what follows (`after`)?"""
-    if _EPISTEMIC_FRAME.search(before) or _HER_EARLIER_CLAIM.search(before):
+    say she does not assert it now: a doubted belief, a retraction verb, her
+    earlier reply labelled as its source and not reaffirmed in what follows
+    (`after`), or an "I said" she retracts in what follows?"""
+    if _EPISTEMIC_FRAME.search(before) or _HER_RETRACTION.search(before):
+        return True
+    if _history_framed(before, after=after):
         return True
     return _HER_SAYING.search(before) is not None and _RETRACTED.search(after) is not None
 
