@@ -1082,3 +1082,109 @@ def test_a_struck_memory_claim_is_not_corrected():
 )
 def test_a_general_statement_about_memory_is_not_corrected(reply):
     assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None, reply
+
+
+# -- A5: a fronted scope, or a limit after the anchor, limits the outage -----------
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "From outside the tailnet, the memory service is unreachable.",
+        "Off the tailnet, the memory service is unreachable.",
+        "The memory service is unreachable, as far as your phone is concerned.",
+    ],
+)
+def test_a_scoped_memory_outage_is_not_corrected(reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None, reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "For now, the memory service is unreachable.",
+        "The memory service is unreachable, so notes were not searched.",
+    ],
+)
+def test_an_unscoped_memory_outage_still_fires(reply):
+    assert _memory_fires(reply), reply
+
+
+# -- A7: the memory noun must be the outage's SUBJECT -------------------------------
+#
+# Her honest description of a degraded recall — the very state the correction's
+# own "What did not work" suffix reports — was corrected as "not unreachable
+# now" (final-review #7).
+DEGRADED_SPANS = [LLM, _recall(hits=3, retrievers_missing=DEGRADED)]
+MEMORY_NOUN_NOT_THE_SUBJECT = [
+    (
+        "search_in_the_memory_service",
+        "Semantic search in the memory service is unavailable right now, so notes were "
+        "matched by keyword.",
+    ),
+    ("part_of", "Part of the memory service is unavailable: semantic search timed out."),
+    (
+        "reachable_though_search_in",
+        "The memory service is reachable, though semantic search in the memory service is "
+        "unavailable right now.",
+    ),
+    ("search_on", "Search on the memory service is unavailable right now."),
+    ("index_of", "The vector index of the memory service is offline, so recall used keywords."),
+    ("some_of", "Some of the memory service is down right now."),
+    ("search_on_down", "Semantic search on the memory service is down."),
+    (
+        "recall_from_then_search_in",
+        "Recall from the memory service is degraded: semantic search in the memory service is "
+        "unavailable.",
+    ),
+]
+# The memory noun as the object of "to"/"with" is still a claim that she
+# cannot reach it — the reviewer's caveat.
+MEMORY_ACCESS_STILL_FIRES = [
+    ("access_to", "Access to the memory service is unavailable right now."),
+    ("connection_to", "My connection to the memory service is down."),
+    ("link_to", "The link to the memory service is offline."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", MEMORY_NOUN_NOT_THE_SUBJECT, ids=[c[0] for c in MEMORY_NOUN_NOT_THE_SUBJECT]
+)
+def test_a_memory_noun_that_is_not_the_subject_is_not_corrected(label, reply):
+    assert guards.memory_claim_check(reply, DEGRADED_SPANS, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", MEMORY_ACCESS_STILL_FIRES, ids=[c[0] for c in MEMORY_ACCESS_STILL_FIRES]
+)
+def test_an_access_to_memory_outage_still_fires(label, reply):
+    assert _memory_fires(reply, DEGRADED_SPANS), label
+
+
+def test_the_walk_sentence_still_fires_beside_the_degraded_ones():
+    assert _memory_fires(WALK, DEGRADED_SPANS)
+
+
+# -- C5: a limiting parenthetical ends nothing; "down" takes the bracket anchor ----
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The memory service is unreachable (by design) from outside the tailnet.",
+        "The memory service is unreachable (by design).",
+        "The memory service is offline (for maintenance tonight).",
+        "The memory service is down (on weekends).",
+    ],
+)
+def test_a_limiting_parenthetical_is_not_a_present_outage(reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None, reply
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The memory service is down (`ConnectError`).",
+        "- The **memory service** (`memory`) is currently down (`ConnectError`), but this is "
+        "unrelated to the model-running machine (`hub`).",
+        WALK,
+    ],
+)
+def test_a_reason_in_brackets_still_anchors_the_outage(reply):
+    assert _memory_fires(reply), reply

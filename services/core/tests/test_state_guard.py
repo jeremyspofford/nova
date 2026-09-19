@@ -2484,3 +2484,120 @@ def test_a_struck_machine_claim_is_not_corrected(label, reply):
     assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
     # …and the same text unstruck fires.
     assert _fires_on_hub(reply.replace("~~", "")), label
+
+
+# -- A5: a scope fronted before the name, or after the anchor, limits the state ----
+#
+# T1 fixed only the trailing "from X" form; the same limit written first, or
+# after an anchoring comma or "right now", was REPLACE-corrected
+# (final-review #5). "hub" is the builtin engine name on every install.
+FRONTED_OR_TRAILING_SCOPE = [
+    ("off_the_tailnet", "Off the tailnet, hub is unreachable."),
+    ("outside_your_home_network", "Outside your home network, hub is unreachable."),
+    ("from_your_phone", "From your phone, hub is unreachable right now — you're off the tailnet."),
+    ("for_your_phone", "For your phone, hub is unreachable now."),
+    ("to_the_outside_world", "To the outside world, hub is offline."),
+    ("from_the_internet", "From the internet, hub is not reachable."),
+    ("from_outside_the_tailnet", "From outside the tailnet, hub is unreachable."),
+    ("publicly", "Publicly, hub is unreachable."),
+    ("as_far_as_your_phone", "hub is offline, as far as your phone is concerned."),
+    ("from_the_public_internet", "hub is disconnected, from the public internet's point of view."),
+    (
+        "right_now_from_your_phone",
+        "hub is unreachable right now from your phone, because you're off the tailnet.",
+    ),
+    ("for_chat_models_on_weekends", "hub is switched off for chat models on weekends."),
+    ("by_schedule_overnight", "hub is offline, by schedule, overnight."),
+]
+# A present-tense claim led or followed by a phrase that limits nothing.
+UNSCOPED_STILL_FIRES = [
+    ("for_now", "For now, hub is offline."),
+    ("to_be_clear", "To be clear, hub is offline."),
+    ("for_the_moment", "For the moment, hub is offline."),
+    ("currently_comma", "Currently, hub is offline."),
+    ("from_what_i_can_tell", "From what I can tell, hub is offline."),
+    ("so_i_cant", "hub is offline, so I can't run local models."),
+    ("comma_for_now", "hub is offline, for now."),
+    ("comma_to_be_clear", "hub is offline, to be clear."),
+    ("right_now", "hub is offline right now."),
+    ("at_the_moment_comma", "hub is offline, at the moment."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", FRONTED_OR_TRAILING_SCOPE, ids=[c[0] for c in FRONTED_OR_TRAILING_SCOPE]
+)
+def test_a_scoped_machine_state_is_not_a_present_outage(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", UNSCOPED_STILL_FIRES, ids=[c[0] for c in UNSCOPED_STILL_FIRES]
+)
+def test_an_unscoped_machine_outage_still_fires(label, reply):
+    assert _fires_on_hub(reply), label
+
+
+# -- A10: the object of a preposition is not the copula's subject ------------------
+#
+# "X on hub is not answering" is about X. A preposition lead binds a machine
+# only in the relative form the corpus pins ("run on hub, which is currently
+# switched off").
+PREPOSITION_OBJECT = [
+    ("27b_on_hub_offline", "hub itself is fine, but the 27B on hub is offline at the moment."),
+    (
+        "model_on_hub_not_answering",
+        "qwen3.8:27b on hub is not answering right now, so chat fell back to qwen3:8b.",
+    ),
+    (
+        "27b_on_hub_unreachable",
+        "The 27B on hub is unreachable at the moment, so the gateway fell back to qwen3:8b.",
+    ),
+    ("gemma_on_hub_switched_off", "gemma4:31b on hub is switched off."),
+    ("chat_via_hub", "Chat via hub is unreachable right now, so I'm on the fallback."),
+    ("plex_on_hub", "Your Plex server on hub is offline."),
+    ("model_at_hub", "The 27B model at hub is not answering."),
+    ("traffic_from_hub", "Traffic from hub is not reachable."),
+    ("model_on_hub_cloud", "The model on hub is offline, so I used the cloud."),
+]
+ROUTE_READ = _span("tool", "route_explain", ok=True, args_redacted={"role": "chat"})
+
+
+@pytest.mark.parametrize("label,reply", PREPOSITION_OBJECT, ids=[c[0] for c in PREPOSITION_OBJECT])
+@pytest.mark.parametrize(
+    "spans", [[HUB_SERVED], [ROUTE_READ, HUB_SERVED], []], ids=["served", "route", "none"]
+)
+def test_a_machine_that_is_a_prepositions_object_is_not_the_subject(label, reply, spans):
+    assert guards.state_claim_check(reply, spans, NAMES, purpose="chat") is None, label
+
+
+def test_the_relative_form_after_a_preposition_still_fires():
+    assert _fires_on_hub("The models run on hub, which is currently switched off.")
+    assert _fires_on_hub("Your models run on hub (the GPU box), which is switched off.")
+
+
+# -- C1: a clause-initial "while" is a hedge; an -ly lead only opens a clause ------
+LEAD_WORD_MISUSED = [
+    ("while_clause_initial", "While hub is switched off, routing skips every link on it."),
+    ("family_hub", "The family hub is offline."),
+    ("my_family_hub", "My family hub is offline."),
+    ("family_hub_reading", f"The family hub:\n- Last Reported: {WALK_TS}"),
+]
+LEAD_WORD_STILL_FIRES = [
+    ("currently_opens", "Currently hub is offline."),
+    ("apparently_opens", "Apparently hub is switched off."),
+    ("while_mid_clause", "Chat is slow while hub is offline."),
+    ("and_lead", "The Dell is fine and hub is offline."),
+]
+
+
+@pytest.mark.parametrize("label,reply", LEAD_WORD_MISUSED, ids=[c[0] for c in LEAD_WORD_MISUSED])
+def test_a_misused_lead_word_does_not_bind_the_machine(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", LEAD_WORD_STILL_FIRES, ids=[c[0] for c in LEAD_WORD_STILL_FIRES]
+)
+def test_a_lead_word_that_opens_the_claim_still_binds(label, reply):
+    assert _fires_on_hub(reply), label

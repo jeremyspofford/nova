@@ -2909,6 +2909,49 @@ _OUTAGE_ENDS = (
     r"|today(?=\s*(?:[.,;:!?)\]}—–]|$))"
 )
 _OUTAGE_ANCHOR = rf"(?={_ANCHOR_ENDS}|\s+(?:{_OUTAGE_ENDS}))"
+# S40b final fix wave (A5): a SCOPE limits an outage wherever it is written.
+# T1 cut the trailing "unreachable from your phone"; the same limit fronted —
+# "Off the tailnet, hub is unreachable", "From your phone, …", "Publicly, …" —
+# or written after an anchoring comma, dash or "right now" — "hub is offline,
+# as far as your phone is concerned", "…unreachable right now from your
+# phone", "…switched off for chat models on weekends" — was REPLACE-corrected.
+# A fronted scope is a place or reach preposition over a determined noun
+# phrase, closed by a comma; "For now,", "For the moment,", "To be clear,",
+# "From what I can tell," and "Currently," are not scopes and still fire.
+_SCOPE_DET = r"(?:the|your|my|his|her|their|our|a|an|any|every|each|some|this|that)"
+_NOT_A_SCOPE = r"(?!(?:moment|time|record|rest|most|last|past|next|first|same)\b)"
+_FRONTED_SCOPE = re.compile(
+    r"\W*+(?:(?:publicly|remotely|externally)"
+    r"|(?:from|off|outside|beyond|over|across|via|through|within|inside|to|for|on)"
+    rf"(?:\s+(?:outside|inside|within|beyond|off))?\s+{_SCOPE_DET}\s+{_NOT_A_SCOPE}"
+    r"[^,;:\n]{1,40}?)\s*,\s*$",
+    re.I,
+)
+# What limits a state when it follows the anchor: a vantage ("as far as your
+# phone is concerned" — never "as far as I know"), a place, a schedule, an
+# exception. Never "for now", "to be clear" or "from what I can see", and a
+# "from" naming her history is a history label, not a place (B2's "No change:
+# X (from my previous answer)" still reaffirms X).
+_NOT_HISTORY = (
+    r"(?!(?:(?:my|the|our|this)\s+)?(?:(?:chat|conversation)\s+)?history\b"
+    r"|(?:my|the)\s+(?:last|previous|earlier|first)\s)"
+)
+_TRAILING_LIMIT = (
+    rf"(?:as\s+far\s+as\s+(?!I\b|we\b)|from\s+(?!now\b|what\b){_NOT_HISTORY}"
+    r"|by\s+(?:schedule|design)"
+    r"|on\s+(?:weekends?|weekdays?|(?:a\s+)?schedule)|overnight|outside\b|except\b"
+    r"|only\s+(?:from|for|to|on|at|when|during)\b|during\b"
+    rf"|(?:for|to)\s+{_SCOPE_DET}\s+{_NOT_A_SCOPE}|in\s+the\s+(?:eyes|view)\s+of\b"
+    rf"|per\s+{_SCOPE_DET}\b)"
+)
+# The anchoring separators a limit may follow (one or more), then the limit.
+# Possessive throughout (D2): each separator run is taken whole.
+_LIMITED_AFTER = re.compile(
+    r"(?:\s*+(?:[,—–]|(?:right\s+now|now|at\s+the\s+moment"
+    r"|for\s+(?:chat\s+)?(?:models|chat|requests))\b))++"
+    rf"\s*+{_TRAILING_LIMIT}",
+    re.I,
+)
 _MACHINE_NEG_WORDS = (
     r"(?:offline|disconnected|unreachable|not\s+reachable|out\s+of\s+contact"
     r"|powered\s+off|switched\s+off)"
@@ -3400,7 +3443,7 @@ def _machine_patterns(
     subject = rf"{_NAME_LEFT}(?P<mach>(?-i:{alternation})){_NAME_RIGHT}"
     mention = re.compile(subject)
     assertion = re.compile(
-        rf"{subject}(?:\s*\([^()\n]{{1,40}}\))?(?:\s*,?\s+which)?"
+        rf"{subject}(?:\s*\([^()\n]{{1,40}}\))?(?:\s*,?\s+(?P<which>which))?"
         rf"(?:\s+{_PRESENT_COPULA}|['’]s)(?P<adv>(?:\s+{_STATE_ADVERB})*)"
         rf"\s+(?P<state>{_MACHINE_NEG}|{_MACHINE_POS})",
         re.I,
@@ -3421,18 +3464,50 @@ def _device_mention(names: tuple[str, ...]) -> re.Pattern[str] | None:
     return re.compile(rf"(?<![\w.-])(?:{alternation})(?![\w-])", re.I)
 
 
+def _lead(text: str, start: int) -> tuple[str, bool] | None:
+    """The word right before a name at `start`, lowercased, and whether it
+    opens `text` (only punctuation or markdown before it); None when no word
+    sits right before the name."""
+    before = text[:start].rstrip()
+    lead = _LEAD_WORD.search(before) if before else None
+    if lead is None:
+        return None
+    return lead.group(1).lower(), not re.search(r"\w", before[: lead.start()])
+
+
 def _lead_ok(text: str, start: int) -> bool:
     """May the word right before a name at `start` lead a machine's name?
     Nothing, punctuation or markdown before it is fine; a word must be one of
-    _MACHINE_LEAD_OK or end in -ly ("currently hub is…")."""
-    before = text[:start].rstrip()
-    if not before:
-        return True
-    lead = _LEAD_WORD.search(before)
+    _MACHINE_LEAD_OK, or end in -ly and OPEN the text ("Currently hub is…").
+    S40b final fix wave (C1): an -ly word inside a phrase is an adjective, so
+    "the family hub" is some other hub."""
+    lead = _lead(text, start)
     if lead is None:
         return True
-    word = lead.group(1).lower()
-    return word in _MACHINE_LEAD_OK or word.endswith("ly")
+    word, opens = lead
+    return word in _MACHINE_LEAD_OK or (opens and word.endswith("ly"))
+
+
+# S40b final fix wave (A10): a PREPOSITION before the name makes it that
+# preposition's object — "qwen3.8:27b on hub is not answering", "Chat via hub
+# is unreachable", "Your Plex server on hub is offline" are about the model,
+# the route and the server. Such a lead binds a machine as the copula's subject
+# only in the relative form the corpus pins: "…run on hub, which is currently
+# switched off".
+_PREPOSITION_LEADS = frozenset({"on", "at", "from", "via"})
+
+
+def _not_the_subject(clause: str, match: re.Match[str]) -> bool:
+    """Is the machine in a state assertion not the subject of its copula (A10),
+    or the assertion led by a clause-opening "while" — a hedge, not a claim
+    about now (C1: "While hub is switched off, routing skips it")?"""
+    lead = _lead(clause, match.start("mach"))
+    if lead is None:
+        return False
+    word, opens = lead
+    if word in _PREPOSITION_LEADS:
+        return match.group("which") is None
+    return word == "while" and opens
 
 
 def _machine_mentioned(line: str, mention: re.Pattern[str]) -> str | None:
@@ -3721,9 +3796,14 @@ def _machine_state_claim(
                 continue
             for m in assertion.finditer(clause):
                 machine = m.group("mach")
-                if not _lead_ok(clause, m.start("mach")):
+                if not _lead_ok(clause, m.start("mach")) or _not_the_subject(clause, m):
                     continue
                 if _state_prefix_blocks(clause[: m.start()]):
+                    continue
+                # A scope fronted before it or following its anchor (A5).
+                if _FRONTED_SCOPE.match(clause[: m.start()]) or _LIMITED_AFTER.match(
+                    clause, m.end()
+                ):
                     continue
                 # "From my previous answer: hub is switched off." — her
                 # history, labelled as such (T4 review, fix rounds 1 and 2),
@@ -6676,11 +6756,29 @@ _MEMORY_NOUN = (
 # property — each true, none contradicted by a recall — and were corrected by
 # the verbatim pattern. Pinned in test_memory_claim_guard.
 _MEMORY_OUTAGE_ANCHOR = rf"(?=\s*\(|{_ANCHOR_ENDS}|\s+(?:{_OUTAGE_ENDS}))"
+# S40b final fix wave (C5): "down" takes the bracket anchor the other outage
+# words have, so the walk's shape with a bracketed reason fires in either word:
+# "down (`ConnectError`)".
 _MEMORY_STATE = (
     r"(?:(?:unreachable|not\s+reachable|offline|unavailable|not\s+responding|unresponsive"
     rf"|not\s+answering|disconnected){_MEMORY_OUTAGE_ANCHOR}"
-    r"|down(?=\s*(?:[.,;:!?)\]]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment)\b))"
+    r"|down(?=\s*\(|\s*(?:[.,;:!?)\]]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment)\b))"
 )
+# …but a bracket that LIMITS the state is not its reason (C5): "(by design)",
+# "(for maintenance tonight)", "(on weekends)", "(from outside the tailnet)".
+_LIMITING_BRACKET = re.compile(
+    r"\s*+\(\s*+(?:by\s+design|on\s+purpose|intentionally|deliberately|planned|scheduled"
+    r"|for\s+(?!now\b|the\s+moment\b|the\s+time\s+being\b)"
+    rf"|{_TRAILING_LIMIT})",
+    re.I,
+)
+# S40b final fix wave (A7): the memory noun must be the outage's SUBJECT. As
+# the object of a part-of preposition or a partitive — "semantic search IN the
+# memory service is unavailable", "part OF the memory service" — the outage is
+# something else's: her honest account of a degraded recall, the very state
+# the correction's "What did not work" suffix reports. Never "to" or "with":
+# "Access to the memory service is unavailable" says she cannot reach it.
+_MEMORY_NOT_THE_SUBJECT = re.compile(r"\b(?:of|in|on|from|within|inside|behind)\s*$", re.I)
 _MEMORY_DOWN = re.compile(
     rf"\b(?P<subj>{_MEMORY_NOUN})(?:\s*\([^()\n]{{1,40}}\))?"
     rf"(?:\s+{_PRESENT_COPULA}|['’]s)(?:\s+{_SERVING_ADVERB})*\s+(?P<state>{_MEMORY_STATE})\b",
@@ -6787,6 +6885,18 @@ def memory_claim_check(
             for pattern in (_MEMORY_DOWN, _MEMORY_UNREACHED):
                 for m in pattern.finditer(clause):
                     if _claim_prefix_blocks(clause[: m.start()]):
+                        continue
+                    # A scope fronted or following (A5), a limiting bracket
+                    # (C5), or the noun as a preposition's object (A7).
+                    if _FRONTED_SCOPE.match(clause[: m.start()]) or _LIMITED_AFTER.match(
+                        clause, m.end()
+                    ):
+                        continue
+                    if _LIMITING_BRACKET.match(clause, m.end()):
+                        continue
+                    if pattern is _MEMORY_DOWN and _MEMORY_NOT_THE_SUBJECT.search(
+                        clause[: m.start()]
+                    ):
                         continue
                     if _not_her_claim(clause[: m.start()], clause[m.end() :], rest):
                         continue
