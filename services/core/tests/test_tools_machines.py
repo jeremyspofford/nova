@@ -47,6 +47,9 @@ async def test_status_reads_every_machine_live_and_leaves_a_fact_for_each(mount_
     assert f"computes on {fakes.ENGINE_GPU}" in said and "runtime container" in said
     assert "qwen3.8:27b (16.6 GB)" in said and "qwen3:8b (4.9 GB)" in said
     assert "hub:<model> runs on hub" in said
+    # (S40 fix wave B4) The header states the true rule, never the false one.
+    assert TRUE_RULE in said.replace("A model id", "a model id")
+    assert FALSE_RULE not in said
     assert sink == [
         {"machine": "hub", "answering": True, "checked_now": True, "at": fakes.ENGINE_AT}
     ]
@@ -195,13 +198,32 @@ async def test_an_eval_machine_is_switched_in_the_fixture_never_at_the_gateway(m
         machines.PLANT.reset(token)
 
 
+# The TRUE rule (S40 fix wave B4): "a model id names its machine before its
+# first colon" was false for a bare id, whose first colon is its tag's own
+# (the live chat.vision_model qwen3.8:27b names no machine called qwen3.8).
+# The qualified form names its machine; a bare one means the default machine.
+TRUE_RULE = (
+    "a model id qualified with a machine's name (machine:model) names that machine; "
+    "a bare id, whose own colon is its tag (qwen3.8:27b), means the default machine"
+)
+FALSE_RULE = "names its machine before its first colon"
+
+
 def test_the_prompt_says_where_models_run_from_the_tools_own_names():
     prompt = chat.stable_system_prompt("m", tools.tool_names())
-    assert "a model id names its machine before its first colon" in prompt
+    assert TRUE_RULE in prompt.replace("A model id", "a model id")
+    assert FALSE_RULE not in prompt
     assert "only from machine_status" in prompt
     assert "only with machine_configure, reporting the value it read back" in prompt
-    assert "names its machine" not in chat.stable_system_prompt("m", ("get_time",))
+    assert "names that machine" not in chat.stable_system_prompt("m", ("get_time",))
     only_status = chat.stable_system_prompt("m", ("machine_status",))
     assert "only from machine_status" in only_status and "machine_configure" not in only_status
     source = inspect.getsource(chat.stable_system_prompt)
     assert '"machine_status"' not in source and '"machine_configure"' not in source
+
+
+def test_machine_status_describes_the_true_rule_for_ids():
+    """(S40 fix wave B4) Her tool's own description is read on every turn."""
+    description = tools.REGISTRY["machine_status"].description
+    assert TRUE_RULE in description.replace("A model id", "a model id")
+    assert FALSE_RULE not in description

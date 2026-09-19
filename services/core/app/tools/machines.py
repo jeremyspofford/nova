@@ -26,6 +26,13 @@ from datetime import UTC, datetime
 from app import machines
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
+# How a model id says where it runs — the TRUE rule (S40 fix wave B4). A bare
+# id's first colon is its tag's own, so the part before it is not a machine.
+_ID_RULE = (
+    "A model id qualified with a machine's name (machine:model) names that machine; a bare "
+    "id, whose own colon is its tag (qwen3.8:27b), means the default machine"
+)
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
@@ -108,8 +115,8 @@ async def machine_status(args: dict, ctx: ToolContext) -> str:
         return "The gateway lists no machine that runs models."
     first = views[0]["name"]
     lines = [
-        f"{len(views)} machine(s) run models for Nova, read from the gateway now. A model "
-        f"id names its machine before its first colon ({first}:<model> runs on {first})."
+        f"{len(views)} machine(s) run models for Nova, read from the gateway now. {_ID_RULE} "
+        f"({first}:<model> runs on {first})."
     ]
     for view in views:
         checked_now = view.get("state") != "unobserved"
@@ -162,9 +169,8 @@ MACHINE_STATUS = Tool(
         "Where Nova's models run, read from the gateway right now: every machine that runs "
         "models, whether it is answering (checked now), whether it is switched on for "
         "models, what it computes on and in which runtime, and which models it has "
-        "installed. A model id names its machine before its first colon. Use it before "
-        "saying where a model runs, whether a machine is up, or what is installed on it. "
-        "Reads only."
+        f"installed. {_ID_RULE}. Use it before saying where a model runs, whether a machine "
+        "is up, or what is installed on it. Reads only."
     ),
     parameters={
         "type": "object",
