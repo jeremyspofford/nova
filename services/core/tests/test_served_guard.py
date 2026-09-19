@@ -1003,6 +1003,10 @@ SERVED_REASSERTED_OVER_HISTORY = [
         "what_i_said_in_it_still_holds",
         "What I said in my last reply still holds: qwen3.8:27b is the current model.",
     ),
+    (
+        "correction_to_my_last_replys_model_line",
+        "Correction to my last reply's model line: qwen3.8:27b is the current model.",
+    ),
 ]
 
 # Her earlier reply, labelled as such: what she said then, not a claim about
@@ -1048,6 +1052,21 @@ SERVED_LABELLED_AS_HISTORY = [
         "retracted_then_a_still_about_something_else",
         "My last reply said qwen3.8:27b is the current model; that was stale. It is still the "
         "case that hub:qwen3:8b answered.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "label_then_it_isnt_current",
+        "From my previous answer (it isn't current): qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "recap_of_my_last_reply",
+        "Recap of my last reply: qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "my_previous_answers_model_line",
+        "My previous answer's model line: qwen3.8:27b is the current model.",
         "qwen3.8:27b is the current model.",
     ),
 ]

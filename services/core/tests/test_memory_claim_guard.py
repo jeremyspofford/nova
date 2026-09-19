@@ -668,6 +668,7 @@ MEMORY_REASSERTED_OVER_HISTORY = [
         "reaffirmed_in_the_next_sentence",
         "My last reply said I can't reach the memory service. That is still the case.",
     ),
+    ("repeating_my_last_reply", "Repeating my last reply: the memory service is unreachable."),
 ]
 
 # Her earlier reply, labelled as such. Each carries the same claim without its
@@ -698,6 +699,21 @@ MEMORY_LABELLED_AS_HISTORY = [
         "retracted_then_a_still_about_something_else",
         "My last reply said the memory service is unreachable; that was stale. It is still the "
         "case that recall answered.",
+        "The memory service is unreachable.",
+    ),
+    (
+        "label_which_is_outdated",
+        "From my previous answer, which is outdated: the memory service is unreachable.",
+        "The memory service is unreachable.",
+    ),
+    (
+        "report_with_an_outdated_aside",
+        "My last reply said, and this is outdated, that the memory service is unreachable.",
+        "The memory service is unreachable.",
+    ),
+    (
+        "based_on_my_previous_response",
+        "Based on my previous response, the memory service is unreachable.",
         "The memory service is unreachable.",
     ),
 ]

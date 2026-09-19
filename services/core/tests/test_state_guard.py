@@ -1680,6 +1680,17 @@ STATE_REPLAYED_AS_CURRENT = [
     ("nothing_changed_from_my_last_reply", "Nothing changed from my last reply: hub is offline."),
     ("like_my_previous_answer_said", "Like my previous answer said: hub is offline."),
     ("which_i_reported_in_my_last_reply", "hub is offline, which I reported in my last reply."),
+    # …and the same sources, corrected, updated or repeated: a claim anew.
+    (
+        "correction_to_my_last_replys_reading",
+        "Correction to my last reply's reading: hub is offline.",
+    ),
+    ("update_on_my_last_replys_status", f"Update on my last reply's status:\n{NAME_RUN}"),
+    ("repeating_my_last_reply", "Repeating my last reply: hub is offline."),
+    (
+        "summary_of_my_previous_answer_still_current",
+        f"Summary of my previous answer, still current:\n{NAME_RUN}",
+    ),
 ]
 
 
@@ -1741,6 +1752,40 @@ STATE_LABELLED_AS_HISTORY = [
     ),
     ("as_of_my_last_reply", "As of my last reply, hub is offline.", "hub is offline."),
     ("as_of_my_last_reply_lead_in", f"As of my last reply:\n{NAME_RUN}", NAME_RUN),
+    # A label with a staleness disclaimer after it: old, as the label says —
+    # not a retraction that closes it (only "wrong"-class words do).
+    (
+        "label_then_it_isnt_current",
+        f"From my previous answer (it isn't current):\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    (
+        "label_then_it_isnt_current_copula",
+        "From my previous answer (it isn't current): hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "attribution_which_is_outdated",
+        f"{NAME_RUN} (from my previous answer, which is outdated)",
+        NAME_RUN,
+    ),
+    ("from_history_which_is_outdated", f"From history, which is outdated:\n{NAME_RUN}", NAME_RUN),
+    # The other ways she names her earlier reply as the source: a recap or
+    # copy OF it, its possessive, a source lead at the start.
+    ("recap_of_my_last_reply", f"Recap of my last reply:\n{NAME_RUN}", NAME_RUN),
+    (
+        "summary_of_my_previous_answer",
+        "Summary of my previous answer: hub is offline.",
+        "hub is offline.",
+    ),
+    ("my_last_replys_status_block", f"My last reply's status block:\n{NAME_RUN}", NAME_RUN),
+    (
+        "based_on_my_previous_response",
+        "Based on my previous response, hub is offline.",
+        "hub is offline.",
+    ),
+    ("going_by_my_last_reply", "Going by my last reply, hub is offline.", "hub is offline."),
+    ("quoting_my_last_reply", f"Quoting my last reply:\n{NAME_RUN}", NAME_RUN),
 ]
 
 
@@ -1755,6 +1800,31 @@ def test_a_claim_labelled_as_her_history_is_not_corrected(purpose, label, reply,
     assert guards.state_claim_check(reply, spans, NAMES, purpose=purpose) is None, label
     claim = guards.state_claim_check(bare, spans, NAMES, purpose=purpose)
     assert claim is not None and claim.device == "hub", label
+
+
+# The cost of letting only a "wrong"-class retraction close a label (a
+# staleness word says the labelled reading is old, which is the label's
+# point), pinned so it is a choice: a report called outdated, then the same
+# reading presented as current in the next sentence, reads as labelled.
+STALE_THEN_CURRENT_ACCEPTED_MISSES = [
+    (
+        "outdated_then_current_status",
+        f"My previous answer said hub was ready, which is outdated. Here is hub's current "
+        f"status:\n{NAME_RUN}",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    STALE_THEN_CURRENT_ACCEPTED_MISSES,
+    ids=[c[0] for c in STALE_THEN_CURRENT_ACCEPTED_MISSES],
+)
+def test_the_stale_then_current_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+    # …and the same report called wrong fires (STATE_REPLAYED_AS_CURRENT).
+    wrong = reply.replace("which is outdated", "which was wrong")
+    assert guards.state_claim_check(wrong, [HUB_SERVED], NAMES, purpose="chat") is not None
 
 
 # The cost of reading a heading label over its whole clause, pinned so it is

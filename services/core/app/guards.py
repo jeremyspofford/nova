@@ -2991,15 +2991,17 @@ _HER_EARLIER_REPLY = (
 # my last reply: X", "(unchanged from my last reply)", "X, same as in my last
 # reply", "Since the last turn, X". A history LABEL is one of:
 #   * an attribution: "from history", "(from my previous answer)", "(as of my
-#     last reply)";
+#     last reply)", "Recap of my last reply:", "My last reply's status block:";
 #   * her earlier reply reported: "my previous answer said/showed X", or her
 #     own report located in it: "the reading I gave in my last reply";
 #   * a heading at the start of a line or clause: "My previous answer:", "In
 #     the previous turn:", "From my previous answer:", "As of my last reply,",
-#     "According to my last reply,".
+#     "According to / Based on / Going by my last reply,", "Quoting my last
+#     reply:".
 # The first two never count after a word that says the state is the same, new
-# or compared, or that restates it: "unchanged from", "different from",
-# "updated from", "as/like/unlike/since … in/from", "As my last reply said".
+# or compared, or that restates or corrects it: "unchanged from", "different
+# from", "updated from", "as/like/unlike/since … in/from", "As my last reply
+# said", "Correction to / Update on my last reply's reading".
 # A label reaches only up to a retraction or a "still holds" (_REPORT_CLOSED),
 # and a claim reaffirmed after it is hers again (_REAFFIRMED). Shared by the
 # machine branch below and the served and memory guards' claim cut:
@@ -3009,6 +3011,14 @@ _HISTORY_SOURCE = (
     rf"|{_HER_EARLIER_REPLY})"
 )
 _FROM_HISTORY = re.compile(rf"\b(?:from|as\s+of)\s+{_HISTORY_SOURCE}", re.I)
+# The attributions a label reads anywhere: the above, a recap or copy OF her
+# history ("Recap of my last reply:"), and its possessive ("My last reply's
+# status block:").
+_HISTORY_ATTRIBUTION = re.compile(
+    rf"\b(?:from|as\s+of|(?:recap|summary|copy|excerpt|quote)\s+of)\s+{_HISTORY_SOURCE}"
+    rf"|{_HER_EARLIER_REPLY}['’]s\b",
+    re.I,
+)
 _HER_REPLY_REPORTED = re.compile(
     rf"{_HER_EARLIER_REPLY}\s+(?:said|says|stated|states|claimed|claims|named|names|marked"
     r"|marks|listed|lists|showed|shows|reported|reports|read|reads|called|calls|wrote|gave)\b"
@@ -3017,13 +3027,15 @@ _HER_REPLY_REPORTED = re.compile(
     re.I,
 )
 _HISTORY_HEAD = re.compile(
-    r"^[^\w]*(?:(?:in|from|as\s+of|according\s+to)\s+"
+    r"^[^\w]*(?:(?:in|from|as\s+of|according\s+to|based\s+on|going\s+by|quoting)\s+"
     rf"{_HER_EARLIER_REPLY}|{_HER_EARLIER_REPLY}\s*:)",
     re.I,
 )
 _NOT_A_LABEL_LEAD = re.compile(
     r"(?:\b(?:unchanged|changed?|changes|different(?:ly)?|differs?|updated?|updates|varies"
-    r"|vary|new)|\b(?:as|like|unlike|since)(?:\s+[\w'’]+){0,2})\W*$",
+    r"|vary|new)|\b(?:as|like|unlike|since)(?:\s+[\w'’]+){0,2}"
+    r"|\b(?:correction|correcting|updating|fix|fixing|amendment)(?:\s+(?:to|on|of|for))?"
+    r"|\bupdates?\s+(?:to|on|of|for))\W*$",
     re.I,
 )
 # What she says of an earlier claim right after it: "I told you X, which was
@@ -3037,13 +3049,18 @@ _RETRACTED = re.compile(
     r"(?=\s*(?:[.!;,:)—–-]|$)))",
     re.I,
 )
-# A label reaches a claim only if nothing between them retracts what it
-# labels ("My last reply named hub:qwen3:8b, which is wrong — X": X is said
-# anew; "In my last reply I was wrong: X") or says it still holds ("What I
-# said in my last reply still holds: X").
+# A label reaches a claim only if nothing between them says what it labels
+# was WRONG ("My last reply named hub:qwen3:8b, which is wrong — X": X is said
+# anew; "In my last reply I was wrong: X") or still holds ("What I said in my
+# last reply still holds: X"). Never a staleness word — "(it isn't current)",
+# "which is outdated": that the labelled reading is old is the label's point,
+# so _RETRACTED's "stale"/"not current" class does not close it.
 _REPORT_CLOSED = re.compile(
-    rf"{_RETRACTED.pattern}|\bI\s+was\s+(?:wrong|mistaken)\b"
-    r"|\bI\s+got\s+(?:it|that|this)\s+wrong\b"
+    r"\b(?:that|which|this|it)\s*(?:was|is|['’]s)"
+    r"(?:\s+(?:(?:simply|just|plainly|also)\s+)?(?:wrong|false|incorrect|mistaken|untrue"
+    r"|a\s+mistake|an\s+error)\b"
+    r"|(?:\s+not|n['’]t)(?:\s+(?:true|right|correct|accurate))?(?=\s*(?:[.!;,:)—–-]|$)))"
+    r"|\bI\s+was\s+(?:wrong|mistaken)\b|\bI\s+got\s+(?:it|that|this)\s+wrong\b"
     r"|\bstill\s+(?:holds|stands|applies|true|valid|current|the\s+case)\b",
     re.I,
 )
@@ -3350,7 +3367,7 @@ def _history_label_ends(text: str) -> list[int]:
     head = _HISTORY_HEAD.match(text)
     if head is not None:
         ends.append(head.end())
-    for pattern in (_FROM_HISTORY, _HER_REPLY_REPORTED):
+    for pattern in (_HISTORY_ATTRIBUTION, _HER_REPLY_REPORTED):
         for m in pattern.finditer(text):
             if _NOT_A_LABEL_LEAD.search(text, 0, m.start()) is None:
                 ends.append(m.end())
