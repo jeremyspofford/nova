@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Settings → Models → Machines at phone widths: runs machines-layout.mjs
-# (the Machines tile at 393px and at a folded 280px: nothing wider than the
-# screen, a switch big enough to hit, and the section first on the tab)
-# against the DEPLOYED web service, with every API call intercepted.
+# (the Machines tile at 393px and at a folded 280px: nothing in a tile past
+# the tile, no tile past what clips it, nothing wider than the screen, a
+# switch big enough to hit, the section first on the tab, and each of those
+# layout checks shown to fire on a cut it must see: `cuts 3/3`) against the
+# DEPLOYED web service, with every API call intercepted.
 #
 # Deliberately not a devDependency: playwright drags several hundred MB of
 # browser binaries behind it, and this runs against the baked nginx image
