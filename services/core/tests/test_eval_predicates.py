@@ -32,6 +32,10 @@ from app.evals.cases import (
 )
 from app.evals.predicates import PREDICATES, score_contract
 
+ENGINE_VIEW_CONTRACT = (
+    Path(__file__).resolve().parents[3] / "docs" / "contracts" / "engine_view.json"
+)
+
 
 def span(kind: str, name: str | None = None, **meta) -> traces.Span:
     return traces.Span(
@@ -311,19 +315,11 @@ def test_a_declared_machine_name_must_carry_the_reserved_prefix():
 
 def test_a_declared_machine_is_the_gateways_row_shape_with_state_derived():
     row = FixtureMachine(name="eval_box", tags={"qwen3:8b": 5_225_388_164}).as_row()
-    assert set(row) == {
-        "name",
-        "lifecycle",
-        "serving",
-        "state",
-        "reason",
-        "observed_at",
-        "tags",
-        "tags_as_of",
-        "compute",
-        "runtime",
-        "facts",
-    }
+    # Moved (S40 fix wave A1/B9): the literal field list became the contract
+    # file itself, which gained `builtin` and `answered` — one list to move,
+    # held from both sides (gateway test_engines, core test_machines).
+    assert set(row) == set(json.loads(ENGINE_VIEW_CONTRACT.read_text())["fields"])
+    assert (row["builtin"], row["answered"]) == (False, True)
     assert (row["serving"], row["state"]) == (True, "ready")
     assert FixtureMachine(name="eval_box", serving=False).as_row()["state"] == "switched_off"
     # Fresh on every call: a replay never inherits the last replay's write.

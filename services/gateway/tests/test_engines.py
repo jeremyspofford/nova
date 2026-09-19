@@ -225,6 +225,8 @@ async def test_a_ready_engine_states_its_models_and_what_it_runs_on(pool, hub):
     assert view.facts["gpu"]["name"] == "NVIDIA GeForce RTX 3090"
     assert view.facts["unreadable"] == []
     assert view.observed_at and view.tags_as_of
+    # (S40 fix wave A1) Stated, never left for a reader to infer from tags.
+    assert (view.builtin, view.answered) == (True, True)
     stored = await pool.fetchrow(
         "SELECT last_ready_at, last_tags, last_tags_at, last_facts, last_facts_at "
         "FROM engines WHERE provider = 'hub'"
@@ -241,6 +243,7 @@ async def test_a_failure_is_cached_ten_seconds_and_a_ready_reading_thirty(pool, 
     hub.tags_status = 500
     first = await _observe(pool)
     assert first.state == "unreachable" and first.tags is None
+    assert first.answered is False
     assert first.reason.startswith("hub could not be asked what is installed")
     hub.tags_status = 200
     clock.now = 1009.5
@@ -280,6 +283,7 @@ async def test_switched_off_is_the_owners_word_and_takes_effect_at_once(pool, hu
     off = await _observe(pool)
     assert off.state == "switched_off" and off.reason == engines.switched_off_reason("hub")
     assert set(off.tags) == {"qwen3:8b", "nomic-embed-text:latest"}  # installed ≠ used
+    assert off.answered is True, "the switch is the owner's word; the engine still answered"
     await engines.set_serving(pool, "hub", True)
     assert (await _observe(pool)).state == "ready"
     assert _tag_reads(hub) == 1, "the switch is read from the row, never waits out a cache"
@@ -293,6 +297,10 @@ async def test_a_switched_off_engine_that_cannot_be_asked_says_both(pool, hub):
     assert view.state == "switched_off"
     assert view.reason.startswith(engines.switched_off_reason("hub"))
     assert "could not be asked what is installed" in view.reason
+    # (S40 fix wave A1) The state is the switch's; whether it answered is its
+    # own fact — the embedder can be down while the switch reads off, and a
+    # check that reads only `state` would call that no outage.
+    assert (view.builtin, view.answered) == (True, False)
 
 
 @requires_db
@@ -399,9 +407,13 @@ async def test_a_wake_on_lan_engine_is_never_asked_unless_live(pool, hub, mount_
     )
     assert view.tags == {"qwen3.8:27b": 17000000000}
     assert view.tags_as_of.startswith("2026-09-18T03:00:00")
+    # Not asked is neither answering nor silent: null, never a stored list
+    # read as a fresh answer (S40 fix wave A1).
+    assert (view.builtin, view.answered) == (False, None)
     assert dell.seen == []
     live = await _observe(pool, "dell", live=True)
     assert live.state == "ready" and [path for path, _ in dell.seen] == ["/api/tags"]
+    assert (live.builtin, live.answered) == (False, True)
 
 
 # ── resident: one /api/ps reader (ruling C2) ─────────────────────────────

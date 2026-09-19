@@ -1379,11 +1379,13 @@ def test_the_denial_the_checks_case_invites_really_fires_the_capability_guard():
 def _hub_row() -> dict:
     return {
         "name": "hub",
+        "builtin": True,
         "lifecycle": "always_on",
         "serving": True,
         "state": "ready",
         "reason": None,
         "observed_at": None,
+        "answered": True,
         "tags": {"qwen3:8b": 5_225_388_164},
         "tags_as_of": None,
         "compute": None,

@@ -149,11 +149,14 @@ ENGINE_GPU = "gpu:cuda:GPU-8d3c5a2e-7f41-4b8e-9c55-000000000001"
 def engine_view(name: str = "hub", **over) -> dict:
     view = {
         "name": name,
+        # The gateway's own rule (migration 009's providers_hub_is_the_builtin).
+        "builtin": name == "hub",
         "lifecycle": "always_on",
         "serving": True,
         "state": "ready",
         "reason": None,
         "observed_at": ENGINE_AT,
+        "answered": True,
         "tags": {"qwen3:8b": 5_225_388_164},
         "tags_as_of": ENGINE_AT,
         "compute": ENGINE_GPU,
@@ -161,7 +164,14 @@ def engine_view(name: str = "hub", **over) -> dict:
         "facts": {},
     }
     view.update(over)
+    if "answered" not in over:
+        # Follows the state a test names, as the gateway's reading would: an
+        # unreachable engine did not answer, an unobserved one was not asked.
+        view["answered"] = _ANSWERED_BY_STATE.get(view["state"], True)
     return view
+
+
+_ANSWERED_BY_STATE = {"unreachable": False, "unobserved": None}
 
 
 @dataclass

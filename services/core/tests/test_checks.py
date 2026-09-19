@@ -476,11 +476,56 @@ async def test_an_engine_that_did_not_answer_is_read_from_the_gateways_engine_li
     assert run.findings[0].urgent is True
 
 
+# Moved (S40 fix wave A1): this used to pin EVERY switched-off engine as no
+# outage. The switch only stops chat routing — the bundled engine is still
+# the embedder (D8; memory embeds straight against it), so hub switched off
+# AND not answering is recall failing, and the old pin hid it (and cleared an
+# open peer_down:hub as an all-clear). The pair below replaces it.
 @requires_db
-async def test_a_machine_switched_off_on_purpose_is_not_an_outage(pool, mount_peers):
+async def test_a_machine_switched_off_on_purpose_that_still_answers_is_not_an_outage(
+    pool, mount_peers
+):
     """The owner's switch (S40): a machine he told to stop running models is
     not down, and an urgent push at 3am saying so would be the lie."""
-    view = fakes.engine_view(serving=False, state="switched_off")
+    view = fakes.engine_view(serving=False, state="switched_off", answered=True)
+    mount_peers(gateway=FakeGateway(engines=[view]), memory=FakeMemory())
+    run = await checks.run_one(core_app, pool, "stack_ollama")
+    assert run.ran and run.findings == ()
+
+
+@requires_db
+async def test_the_bundled_machine_switched_off_and_not_answering_is_still_down(pool, mount_peers):
+    """The switch is the owner's; whether the engine answered is the
+    gateway's reading, and the bundled one still embeds for memory while
+    switched off. So it is still peer_down, and the title says both."""
+    reason = (
+        "hub is switched off (serving=false): it runs no models until switched back on; "
+        "hub could not be asked what is installed — could not reach ollama — ConnectError"
+    )
+    view = fakes.engine_view(
+        serving=False, state="switched_off", answered=False, tags=None, reason=reason
+    )
+    mount_peers(gateway=FakeGateway(engines=[view]), memory=FakeMemory())
+    run = await checks.run_one(core_app, pool, "stack_ollama")
+    assert run.ran and [f.key for f in run.findings] == ["peer_down:hub"]
+    found = run.findings[0]
+    assert found.urgent is True
+    assert found.facts == {
+        "peer": "hub",
+        "reason": reason,
+        "basis": "the gateway's own engine reading",
+        "serving": False,
+    }
+    assert found.title.startswith("hub is switched off and not answering the gateway — ")
+
+
+@requires_db
+async def test_another_machine_switched_off_and_not_answering_stays_silent(pool, mount_peers):
+    """Only the bundled engine embeds. Any other machine the owner switched
+    off is his to have turned off at the wall too."""
+    view = fakes.engine_view(
+        "dell", builtin=False, serving=False, state="switched_off", answered=False, tags=None
+    )
     mount_peers(gateway=FakeGateway(engines=[view]), memory=FakeMemory())
     run = await checks.run_one(core_app, pool, "stack_ollama")
     assert run.ran and run.findings == ()

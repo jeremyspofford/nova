@@ -170,13 +170,16 @@ async def cards(app) -> list[tuple[dict, dict | None]]:
     return out
 
 
-# A declared eval machine starts as a live, always-on one that answered now.
+# A declared eval machine starts as a live, always-on one that answered now —
+# never the bundled engine, which is the owner's real hub.
 _FIXTURE_DEFAULTS: dict = {
+    "builtin": False,
     "lifecycle": "always_on",
     "serving": True,
     "state": "ready",
     "reason": None,
     "observed_at": None,
+    "answered": True,
     "tags": {},
     "tags_as_of": None,
     "compute": None,
@@ -227,6 +230,13 @@ class FixturePlant(GatewayPlant):
         for name, spec in self._specs.items():
             view = {**copy.deepcopy(_FIXTURE_DEFAULTS), **copy.deepcopy(spec), "name": name}
             view["state"] = _fixture_state(spec, view["serving"])
+            if "answered" not in spec:
+                # What the declared state says about the reading, as the
+                # gateway's would: unreachable did not answer, unobserved was
+                # not asked; anything else answered.
+                view["answered"] = {"unreachable": False, "unobserved": None}.get(
+                    spec.get("state", "ready"), True
+                )
             self._views[name] = view
 
     def _mine(self, name: str) -> bool:

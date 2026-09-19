@@ -328,11 +328,14 @@ class FixtureMachine:
         gateway could never report."""
         return {
             "name": self.name,
+            # Never the bundled engine: that is the owner's real hub.
+            "builtin": False,
             "lifecycle": self.lifecycle,
             "serving": self.serving,
             "state": "ready" if self.serving else "switched_off",
             "reason": None,
             "observed_at": None,
+            "answered": True,
             "tags": dict(self.tags or {}),
             "tags_as_of": None,
             "compute": self.compute,

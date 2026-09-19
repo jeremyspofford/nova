@@ -90,11 +90,19 @@ class UnknownEngine(LookupError):
 @dataclass(frozen=True)
 class EngineView:
     name: str
+    #: The bundled engine — the one that is also the embedder (D8), so a
+    #: reader can tell it from a machine that only serves chat.
+    builtin: bool
     lifecycle: str
     serving: bool
     state: str  # one of STATES
     reason: str | None
     observed_at: str | None
+    #: Did the engine answer THIS reading? True/False when it was asked, None
+    #: when it was not (a wake-on-LAN engine left asleep). Independent of the
+    #: switch: `state` says switched_off whether or not the engine answered,
+    #: and the embedder being down while switched off is still an outage.
+    answered: bool | None
     tags: dict[str, int | None] | None
     tags_as_of: str | None
     compute: str | None
@@ -443,11 +451,13 @@ def _view(row: dict, reading: _Reading) -> EngineView:
             state, reason = "switched_off", f"{switched_off_reason(name)}; {unreachable}"
     return EngineView(
         name=name,
+        builtin=bool(row["builtin"]),
         lifecycle=row["lifecycle"],
         serving=row["serving"],
         state=state,
         reason=reason,
         observed_at=reading.observed_at,
+        answered=reading.ok,
         tags=reading.tags,
         tags_as_of=reading.tags_as_of,
         compute=reading.compute,
@@ -469,11 +479,13 @@ def _unobserved(row: dict) -> EngineView:
         state, reason = "switched_off", switched_off_reason(name)
     return EngineView(
         name=name,
+        builtin=bool(row["builtin"]),
         lifecycle=row["lifecycle"],
         serving=row["serving"],
         state=state,
         reason=reason,
         observed_at=None,
+        answered=None,
         tags=row["last_tags"],
         tags_as_of=as_of,
         compute=None,

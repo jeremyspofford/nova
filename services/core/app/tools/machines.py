@@ -42,17 +42,12 @@ def _switch(serving: bool) -> str:
 
 
 def _answering(view: dict) -> bool | None:
-    """Did it answer the gateway? Only what the reading says: True or False
-    from the state, True for a switched-off machine whose list came back,
-    None when nothing tells — never guessed."""
-    state = view.get("state")
-    if state == "ready":
-        return True
-    if state == "unreachable":
-        return False
-    if state == "switched_off" and view.get("tags") is not None:
-        return True
-    return None
+    """Did it answer the gateway? Only what the reading says — the view's own
+    `answered` (the EngineView contract): True or False when the gateway
+    asked it, None when it did not (a machine left asleep), whatever its
+    switch reads. Never inferred from a stored list."""
+    answered = view.get("answered")
+    return answered if isinstance(answered, bool) else None
 
 
 def _describe(view: dict, checked_now: bool) -> str:

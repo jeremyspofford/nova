@@ -6,13 +6,26 @@ reads as "no machines"."""
 
 from __future__ import annotations
 
+import inspect
+import json
+import re
+from pathlib import Path
+
 import httpx
 import pytest
 
 from app import machines
+from app.checks import stack
+from app.evals.cases import FixtureMachine
 from app.main import app as core_app
+from app.tools import machines as machine_tools
 from tests import fakes
 from tests.fakes import FakeGateway
+
+# The gateway pins its EngineView dataclass to this file
+# (services/gateway/tests/test_engines.py); core pins its own mirrors here, so
+# the contract is held from both sides (S40 fix wave B9).
+CONTRACT = Path(__file__).resolve().parents[3] / "docs" / "contracts" / "engine_view.json"
 
 CARD = {
     "total_mb": 24576.0,
@@ -263,3 +276,47 @@ def test_the_web_shape_lists_models_by_name_with_their_size_or_none():
         ],
     }
     assert machines.machine_json(fakes.engine_view(tags=None))["models"] == []
+
+
+# -- the EngineView contract, from core's side (S40 fix wave B9) -------------
+
+
+def test_cores_mirrors_of_the_engine_view_are_the_contract():
+    """Every place core writes an EngineView by hand — the tests' fake, the
+    eval plant's defaults, a declared eval machine's row — carries exactly
+    the contract's fields. A field the gateway adds or renames without core
+    moving is red here, never a silent None in a reader."""
+    contract = json.loads(CONTRACT.read_text())
+    fields = contract["fields"]
+    assert list(fakes.engine_view()) == fields
+    assert set(machines._FIXTURE_DEFAULTS) | {"name"} == set(fields)
+    assert "name" not in machines._FIXTURE_DEFAULTS  # the plant sets it from the key
+    assert set(FixtureMachine(name="eval_box").as_row()) == set(fields)
+    plant = machines.FixturePlant({"eval_box": {}})
+    assert set(plant._views["eval_box"]) == set(fields)
+
+
+def test_every_state_core_writes_or_reads_is_one_the_gateway_can_state():
+    """The states core emits (the fake's, the plant's) and the ones its
+    readers branch on are all in the contract's `states`: a reader keyed on a
+    word the gateway never says is a branch that never runs."""
+    states = set(json.loads(CONTRACT.read_text())["states"])
+    emitted = {
+        fakes.engine_view()["state"],
+        machines._fixture_state({}, True),
+        machines._fixture_state({}, False),
+        FixtureMachine(name="eval_box").as_row()["state"],
+        FixtureMachine(name="eval_box", serving=False).as_row()["state"],
+    }
+    assert emitted <= states
+    read: set[str] = set()
+    for module in (machine_tools, stack, machines):
+        source = inspect.getsource(module)
+        # `.get("state") == "x"`, `state == "x"` and `.get("state") in ("x", "y")`.
+        read |= set(re.findall(r'state"\)\s*(?:==|!=)\s*"(\w+)"', source))
+        read |= set(re.findall(r'state\s*(?:==|!=)\s*"(\w+)"', source))
+        for group in re.findall(r'state"\)\s*(?:not\s+)?in\s*\(([^)]*)\)', source):
+            read |= set(re.findall(r'"(\w+)"', group))
+    # Not vacuous: the readers do branch on the gateway's words.
+    assert {"ready", "unreachable", "switched_off", "unobserved"} <= read
+    assert read <= states, read - states

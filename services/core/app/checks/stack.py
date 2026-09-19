@@ -229,6 +229,19 @@ async def _fetch_catalogue(app) -> dict:
     return body
 
 
+def _embedder_down(view: dict) -> bool:
+    """The bundled engine, switched off, that the gateway ASKED and that did
+    not answer. The switch stops chat routing only: the bundled engine is
+    still the embedder (D8 — memory embeds straight against it), so it going
+    down while switched off is recall failing, not the owner's choice. Read
+    from the view's own `builtin` and `answered`, never a name kept here."""
+    return (
+        view.get("state") == "switched_off"
+        and view.get("builtin") is True
+        and view.get("answered") is False
+    )
+
+
 async def ollama(app, pool) -> list[Finding]:
     """Does every machine that runs models answer the gateway?
 
@@ -236,23 +249,27 @@ async def ollama(app, pool) -> list[Finding]:
     that did not answer, keyed by its name. Two states are deliberately NOT
     findings. `switched_off` is the owner's switch: a machine he told to stop
     running models is not down, and an urgent push at 3am saying so would be
-    the lie. `unobserved` is a machine that sleeps on its own and was not
+    the lie — EXCEPT the bundled engine when the gateway asked it and it did
+    not answer, because it still embeds for memory while switched off
+    (`_embedder_down`); that finding carries serving=false so its title says
+    both. `unobserved` is a machine that sleeps on its own and was not
     contacted: nothing was learned about it, and it is never woken just to be
     checked.
     """
     findings: list[Finding] = []
     for view in await _engines(app):
-        if view.get("state") != "unreachable":
+        down = view.get("state") == "unreachable"
+        switched_off = _embedder_down(view)
+        if not (down or switched_off):
             continue
         name = view["name"]
         why = str(view.get("reason") or "").strip() or "the gateway stated no reason"
-        findings.append(
-            Finding(
-                key=f"peer_down:{name}",
-                title=f"{name} did not answer the gateway — {why}",
-                facts={"peer": name, "reason": why, "basis": "the gateway's own engine reading"},
-            )
-        )
+        facts = {"peer": name, "reason": why, "basis": "the gateway's own engine reading"}
+        title = f"{name} did not answer the gateway — {why}"
+        if switched_off:
+            facts["serving"] = False
+            title = f"{name} is switched off and not answering the gateway — {why}"
+        findings.append(Finding(key=f"peer_down:{name}", title=title, facts=facts))
     return findings
 
 
@@ -387,7 +404,10 @@ CHECKS: tuple[Check, ...] = (
     ),
     Check(
         name="stack_ollama",
-        describe="Every machine that runs models, unless it is switched off, answers the gateway.",
+        describe=(
+            "Every machine that runs models answers the gateway — one switched off is left "
+            "alone, except the bundled one, which still embeds for memory."
+        ),
         urgent=True,
         run=ollama,
     ),

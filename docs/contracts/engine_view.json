@@ -1,19 +1,25 @@
 {
-  "version": 1,
+  "version": 2,
   "about": "The EngineView the gateway answers GET /admin/engines with (services/gateway/app/engines.py, S40), field by field and in order. services/gateway/tests/test_engines.py pins the dataclass to this file; core's machines reader (T5 engine_view, T7 as_row) and the web Machine type read these names. A field renamed on one side without this file moving is a red test, never a silent None on the other.",
   "fields": [
     "name",
+    "builtin",
     "lifecycle",
     "serving",
     "state",
     "reason",
     "observed_at",
+    "answered",
     "tags",
     "tags_as_of",
     "compute",
     "runtime",
     "facts"
   ],
+  "meanings": {
+    "builtin": "true for the bundled engine (hub) alone — the machine that is also the embedder (D8)",
+    "answered": "true when the engine answered the reading this view is from, false when it was asked and did not, null when it was not asked (a wake-on-LAN engine left asleep); independent of the serving switch"
+  },
   "states": ["ready", "unreachable", "switched_off", "unobserved"],
   "builtin_facts": ["gpu", "accelerators", "cpu", "unreadable"],
   "one_engine_adds": ["vram", "fit_frame"],
