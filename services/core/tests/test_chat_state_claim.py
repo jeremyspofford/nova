@@ -13,6 +13,7 @@ still claims unchecked is refused and keeps the correction, an unredirected turn
 stays out of memory, and the single redirect budget is shared with the consent
 guard (one redirect, both corrections when it fails).
 """
+
 from __future__ import annotations
 
 import json
@@ -93,8 +94,7 @@ async def _pair(pool, name: str = DEVICE) -> None:
     """A paired machine, straight into the registry — the guard's names come
     from devices.list_devices, so this is the only fact it needs."""
     await pool.execute(
-        "INSERT INTO devices (name, platform, hostname, pubkey) "
-        "VALUES ($1, 'linux', 'dell', $2)",
+        "INSERT INTO devices (name, platform, hostname, pubkey) VALUES ($1, 'linux', 'dell', $2)",
         name,
         "a" * 64,
     )
@@ -243,9 +243,7 @@ async def test_the_same_sentence_is_clean_when_a_device_tool_really_ran(
     No guard fires, no redirect runs (a third gateway call would be a loud 500),
     and the reply stands untouched."""
     await _pair(pool)
-    gateway = ScriptedGateway(
-        rounds=((tool_call("d1", "device_list", {}),), (text(OWNER_CASE),))
-    )
+    gateway = ScriptedGateway(rounds=((tool_call("d1", "device_list", {}),), (text(OWNER_CASE),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     sent = await _say(owner_client)
@@ -256,9 +254,7 @@ async def test_the_same_sentence_is_clean_when_a_device_tool_really_ran(
     assert await _stored(pool) == OWNER_CASE
 
 
-async def test_nothing_paired_means_the_guard_never_fires(
-    owner_client, pool, mount_peers
-):
+async def test_nothing_paired_means_the_guard_never_fires(owner_client, pool, mount_peers):
     """DERIVED, not hardcoded: with no device in the registry there is no machine
     to be wrong about, so the identical sentence stands and the turn is ordinary
     knowledge."""
@@ -276,9 +272,7 @@ async def test_nothing_paired_means_the_guard_never_fires(
     assert len(memory.ingests) == 1
 
 
-async def test_a_revoked_device_does_not_arm_the_guard(
-    owner_client, pool, mount_peers
-):
+async def test_a_revoked_device_does_not_arm_the_guard(owner_client, pool, mount_peers):
     """A revoked machine is not paired. Its name must not keep arming a check
     forever — the registry read excludes it, so the guard is silent again."""
     await _pair(pool)
@@ -296,9 +290,7 @@ async def test_a_revoked_device_does_not_arm_the_guard(
 # -- precision, through the real route -------------------------------------
 
 
-async def test_hedged_and_past_phrasings_are_never_redirected(
-    owner_client, pool, mount_peers
-):
+async def test_hedged_and_past_phrasings_are_never_redirected(owner_client, pool, mount_peers):
     """Precision first: a past report, a conditional and an intent-to-check all
     ship untouched. One gateway call each — a redirect would be a loud 500."""
     honest = [
@@ -334,9 +326,7 @@ async def test_both_claims_get_one_redirect_and_both_corrections_on_failure(
     both corrections in the durable record, and the turn stays out of memory."""
     await _pair(pool)
     both = "That's awaiting your approval. The device is still offline anyway."
-    gateway = ScriptedGateway(
-        rounds=((text(both),), (text("It is still pending your approval."),))
-    )
+    gateway = ScriptedGateway(rounds=((text(both),), (text("It is still pending your approval."),)))
     memory = FakeMemory()
     mount_peers(gateway=gateway, memory=memory)
 
@@ -350,9 +340,7 @@ async def test_both_claims_get_one_redirect_and_both_corrections_on_failure(
     assert spans[1]["meta"]["not_redirected_because"] == "redirect_spent"
 
     stored = await _stored(pool)
-    assert stored == (
-        f"{guards.CONSENT_CLAIM_CORRECTION}\n\n{guards.STATE_CLAIM_CORRECTION}"
-    )
+    assert stored == (f"{guards.CONSENT_CLAIM_CORRECTION}\n\n{guards.STATE_CLAIM_CORRECTION}")
     assert _corrections(sent) == [
         guards.CONSENT_CLAIM_CORRECTION,
         guards.STATE_CLAIM_CORRECTION,
