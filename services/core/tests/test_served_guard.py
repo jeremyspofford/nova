@@ -1260,3 +1260,195 @@ def test_a_vouched_reaffirmation_or_a_joined_lead_still_fires_on_the_served_clai
 @pytest.mark.parametrize("regen", [c[1] for c in SERVED_LABELLED_THEN_DOUBTED_OR_HEADED[:2]])
 def test_a_regeneration_that_doubts_or_heads_her_served_history_passes(regen):
     assert _vet(regen, [_llm(), RECALLED]) is None
+
+
+# ================================================================================
+# S40b final fix wave (fix-wave-brief.md; reproductions in final-review.md)
+# ================================================================================
+#
+# Directive D1: each fix REMOVES a fire on an honest sentence. The walk's own
+# FALSE lines (b851aa91, b02a5694, 60834ccf) keep firing — MUST_FIRE above.
+
+
+def _served_fires(reply: str, spans=None) -> bool:
+    return guards.served_claim_check(reply, spans or SERVED, purpose="chat") is not None
+
+
+# -- A4: a line attributed to his notes is not her claim ---------------------------
+SERVED_ATTRIBUTED_TO_HIS_NOTES = [
+    (
+        "your_notes_say_out_of_date",
+        "Your notes say the current model is qwen3.8:27b, but that's out of date — "
+        "hub:qwen3:8b answered this turn.",
+    ),
+    (
+        "an_older_note_says",
+        "An older note says qwen3.8:27b is the current model; this reply actually came from "
+        "hub:qwen3:8b.",
+    ),
+    (
+        "from_your_notes_heading",
+        "From your notes: qwen3.8:27b is the current model. That's stale: hub:qwen3:8b answered.",
+    ),
+    (
+        "according_to_your_notes",
+        "According to your notes, the current model is qwen3.8:27b — but hub:qwen3:8b wrote "
+        "this reply.",
+    ),
+    (
+        "a_note_of_yours_reads_no_model",
+        "A note of yours reads: no model was needed for this calculation. That's false; a "
+        "model wrote every reply.",
+    ),
+]
+SERVED_ATTRIBUTED_STILL_FIRES = [
+    (
+        "notes_say_and_still_true",
+        "The notes say qwen3.8:27b is the current model — and that is still true.",
+    ),
+    ("notes_then_her_own_claim", "Your notes mention gemma. qwen3.8:27b is the current model."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SERVED_ATTRIBUTED_TO_HIS_NOTES,
+    ids=[c[0] for c in SERVED_ATTRIBUTED_TO_HIS_NOTES],
+)
+def test_a_served_line_attributed_to_his_notes_is_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_ATTRIBUTED_STILL_FIRES, ids=[c[0] for c in SERVED_ATTRIBUTED_STILL_FIRES]
+)
+def test_a_reaffirmed_or_separate_served_claim_beside_a_note_still_fires(label, reply):
+    assert _served_fires(reply), label
+
+
+# -- A8: a denial frame is not her assertion ---------------------------------------
+SERVED_DENIED = [
+    ("its_not_that", "It's not that qwen3.8:27b is the current model — hub:qwen3:8b wrote this."),
+    ("nothing_says", "Nothing says qwen3.8:27b is the current model."),
+    ("it_isnt_the_case_that", "It isn't the case that qwen3.8:27b is the current model."),
+    ("it_is_not_the_case_that", "It is not the case that qwen3.8:27b is the current model."),
+    ("no_sign_that", "There is no sign that qwen3.8:27b is the current model."),
+]
+SERVED_NOT_DENIED = [
+    ("it_is_the_case_that", "It is the case that qwen3.8:27b is the current model."),
+    ("its_that", "It's that qwen3.8:27b is the current model."),
+]
+
+
+@pytest.mark.parametrize("label,reply", SERVED_DENIED, ids=[c[0] for c in SERVED_DENIED])
+def test_a_denied_served_claim_is_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize("label,reply", SERVED_NOT_DENIED, ids=[c[0] for c in SERVED_NOT_DENIED])
+def test_an_affirmed_frame_still_fires_on_the_served_claim(label, reply):
+    assert _served_fires(reply), label
+
+
+# -- A12: an attribution or a retraction AFTER the claim closes it -----------------
+SERVED_CLOSED_AFTER = [
+    ("in_use_from_my_previous_answer", f"{IN_USE_LINE} (from my previous answer)"),
+    ("in_use_incorrect", f"{IN_USE_LINE} (incorrect — it's qwen3:8b)"),
+    ("sentence_from_my_last_answer", "qwen3.8:27b is the current model (from my last answer)."),
+    ("in_use_outdated", f"{IN_USE_LINE} (outdated)"),
+    ("in_use_stale_from_my_last_answer", f"{IN_USE_LINE} (stale — from my last answer)"),
+    ("which_is_wrong_bracketed", f"{IN_USE_LINE} (which is wrong)"),
+    ("which_was_wrong", "qwen3.8:27b is the current model, which was wrong."),
+    ("dash_this_is_wrong", f"{IN_USE_LINE} — this is wrong; hub:qwen3:8b answered."),
+]
+SERVED_NOT_CLOSED_AFTER = [
+    (
+        "unchanged_from_my_last_answer",
+        "qwen3.8:27b is the current model (unchanged from my last answer).",
+    ),
+    ("bare_in_use_line", IN_USE_LINE),
+    ("wrong_about_something_else", "qwen3.8:27b is the current model. The Dell reading was wrong."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_CLOSED_AFTER, ids=[c[0] for c in SERVED_CLOSED_AFTER]
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_served_claim_closed_after_it_is_not_corrected(purpose, label, reply):
+    assert guards.served_claim_check(reply, [_llm(purpose=purpose)], purpose=purpose) is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_NOT_CLOSED_AFTER, ids=[c[0] for c in SERVED_NOT_CLOSED_AFTER]
+)
+def test_a_served_claim_not_closed_after_it_still_fires(label, reply):
+    assert _served_fires(reply), label
+
+
+# -- B1 / B2 (T4 breaker OPEN-1, OPEN-2) --------------------------------------------
+# The served and memory guards read a label in the claim's own line (their
+# scan is per line), so the doubt sits there too.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "From my previous answer (if it still holds): qwen3.8:27b is the current model.",
+        "From my previous answer (whether that still holds I can't say): qwen3.8:27b is the "
+        "current model.",
+        f"From my previous answer (if it still holds): {IN_USE_LINE[2:]}",
+    ],
+)
+def test_a_doubt_that_names_its_subject_keeps_the_served_history_label(reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, reply
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        "No change:",
+        "No changes:",
+        "Nothing has changed —",
+        "Nothing new —",
+        "No update:",
+        "No updates:",
+    ],
+)
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{head} my previous answer said qwen3.8:27b is the current model.",
+        "{head} from my previous answer, qwen3.8:27b is the current model.",
+        "{head} qwen3.8:27b is the current model (from my previous answer).",
+    ],
+)
+def test_a_negated_sameness_head_reaffirms_the_served_claim(head, body):
+    assert _served_fires(body.format(head=head)), (head, body)
+
+
+# -- C11: a struck span is visibly retracted ---------------------------------------
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "- ~~`qwen3.8:27b` (16.5 GB) ✅ **Current model in use**~~ — it's `qwen3:8b`.",
+        "~~qwen3.8:27b is the current model.~~ hub:qwen3:8b answered this turn.",
+        "~~No model was needed for this calculation.~~ A model wrote this reply.",
+    ],
+)
+def test_a_struck_served_claim_is_not_corrected(reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, reply
+    assert _served_fires(reply.replace("~~", "")), reply
+
+
+# -- C16: a general statement is a hedge -------------------------------------------
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Whenever qwen3.8:27b is the current model, replies are slower.",
+        "Any time qwen3.8:27b is in use, replies are slower.",
+        "Every time qwen3.8:27b is the current model, the card fills up.",
+        "Each time qwen3.8:27b is answering you, the card runs hot.",
+        "In the event qwen3.8:27b is the current model, replies slow down.",
+    ],
+)
+def test_a_general_statement_about_a_model_is_not_corrected(reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, reply

@@ -2374,3 +2374,113 @@ def test_a_tool_that_does_not_state_machine_state_is_not_a_read():
     for tool in ("web_search", "memory_search", "model_pull"):
         span = _span("tool", tool, ok=True, args_redacted={})
         assert _fires_on_hub("hub is switched off.", [HUB_SERVED, span]), tool
+
+
+# -- A4: a line attributed to his notes is not her claim ---------------------------
+#
+# Recall hands her his notes, and verdict §9 records they carry exactly these
+# false lines; the honest way to cite (and retract) one was REPLACE-corrected
+# (final-review #4). A reaffirmation after it makes the claim hers again.
+STATE_ATTRIBUTED_TO_HIS_NOTES = [
+    ("your_note_says_colon", "Your note says: hub is offline."),
+    ("per_your_notes", "Per your notes, hub is offline."),
+    ("according_to_my_notes", "According to my notes, hub is switched off."),
+    (
+        "note_says_then_retracted",
+        "Your note says: hub is offline. That's out of date — hub served this reply.",
+    ),
+    (
+        "per_your_journal_no_longer_true",
+        "Per your journal, hub is offline — that's no longer true.",
+    ),
+    ("notes_say_above_a_block", f"Your notes say:\n{HUB_BLOCK}"),
+]
+STATE_ATTRIBUTED_STILL_FIRES = [
+    ("notes_say_and_still_true", "Your notes say: hub is offline, and that is still true."),
+    ("a_note_about_something_else", "Your notes say the Dell sleeps at night; hub is offline."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", STATE_ATTRIBUTED_TO_HIS_NOTES, ids=[c[0] for c in STATE_ATTRIBUTED_TO_HIS_NOTES]
+)
+def test_a_machine_line_attributed_to_his_notes_is_not_corrected(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", STATE_ATTRIBUTED_STILL_FIRES, ids=[c[0] for c in STATE_ATTRIBUTED_STILL_FIRES]
+)
+def test_a_reaffirmed_or_separate_machine_claim_beside_a_note_still_fires(label, reply):
+    assert _fires_on_hub(reply), label
+
+
+# -- A12 (aside): a retraction AFTER the claim closes it ---------------------------
+def test_a_machine_claim_retracted_after_it_is_not_corrected():
+    for reply in (
+        "hub is switched off — this was wrong.",
+        "hub is switched off (which was wrong).",
+        "hub is switched off (incorrect).",
+    ):
+        assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, reply
+    # …and a retraction of something else in another sentence does not reach it.
+    assert _fires_on_hub("hub is switched off. The Dell reading was wrong.")
+
+
+# -- B1 (T4 breaker OPEN-1): a doubt may name what it doubts -----------------------
+STATE_DOUBT_WITH_A_SUBJECT = [
+    ("if_it_still_holds", f"From my previous answer (if it still holds):\n{NAME_RUN}"),
+    (
+        "whether_that_still_holds",
+        f"From my previous answer (whether that still holds I can't say):\n{NAME_RUN}",
+    ),
+    ("sentence_if_it_still_holds", "From my previous answer (if it still holds), hub is offline."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", STATE_DOUBT_WITH_A_SUBJECT, ids=[c[0] for c in STATE_DOUBT_WITH_A_SUBJECT]
+)
+def test_a_doubt_that_names_its_subject_keeps_the_history_label(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+# -- B2 (T4 breaker OPEN-2): "No change:" reaffirms, it does not label -------------
+NEGATED_SAMENESS_HEADS = [
+    "No change:",
+    "No changes:",
+    "Nothing has changed —",
+    "Nothing new —",
+    "No update:",
+    "No updates:",
+]
+# The machine branch's own shapes: a state after a lead-in comma, and a
+# reading block. ("my previous answer said hub is …" never binds — "said" is
+# not a lead word — and "hub is switched off (…)" is not an anchored state.)
+STATE_UNDER_A_SAMENESS_HEAD = [
+    "{head} from my previous answer, hub is switched off.",
+    "{head} as of my last reply, hub is switched off.",
+    "{head}\nFrom my previous answer:\n" + NAME_RUN,
+    "{head} from my previous answer:\n" + NAME_RUN,
+]
+
+
+@pytest.mark.parametrize("head", NEGATED_SAMENESS_HEADS)
+@pytest.mark.parametrize("body", STATE_UNDER_A_SAMENESS_HEAD)
+def test_a_negated_sameness_head_reaffirms_the_reading(head, body):
+    assert _fires_on_hub(body.format(head=head)), (head, body)
+
+
+# -- C11: a struck span is visibly retracted ---------------------------------------
+STATE_STRUCK = [
+    ("struck_sentence", "~~hub is switched off.~~ It answered this turn."),
+    ("struck_reading", f"- Name: hub\n- ~~Last Reported: {WALK_TS}~~"),
+    ("struck_block_lines", "~~- Name: hub~~\n~~- Last Reported: " + WALK_TS + "~~"),
+]
+
+
+@pytest.mark.parametrize("label,reply", STATE_STRUCK, ids=[c[0] for c in STATE_STRUCK])
+def test_a_struck_machine_claim_is_not_corrected(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+    # …and the same text unstruck fires.
+    assert _fires_on_hub(reply.replace("~~", "")), label

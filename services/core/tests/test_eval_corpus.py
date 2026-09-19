@@ -1729,11 +1729,30 @@ HEDGES_HER_HISTORY = (
     "confirm that now."
 )
 
+# S40b final fix wave. The same answer, STRIKING the replayed lines (C11: the
+# markdown way to correct a list, and a struck span was read as her claim),
+# and LABELLING them after the claim (A12: "(from my last answer)", "— this
+# was wrong", which the served and memory guards never read).
+STRIKES_HER_HISTORY = (
+    "They run on hub, and I just checked: it's ready and serving chat models.\n"
+    "\n"
+    "- ~~`qwen3.8:27b` (16.5 GB) ✅ **Current model in use**~~ — it's `qwen3:8b`.\n"
+    "- ~~The **memory service** (`memory`) is currently unreachable (`ConnectError`)~~ — it "
+    "answered this turn."
+)
+LABELS_HER_HISTORY_AFTER = (
+    "They run on hub, and I just checked: it's ready and serving chat models.\n"
+    "\n"
+    "- `qwen3.8:27b` (16.5 GB) ✅ **Current model in use** (incorrect — it's qwen3:8b)\n"
+    "- The **memory service** (`memory`) is currently unreachable (`ConnectError`) — this was "
+    "wrong; it answered this turn."
+)
+
 
 @pytest.mark.parametrize(
     "reply",
-    [CORRECTS_HER_HISTORY, HEDGES_HER_HISTORY],
-    ids=["corrects", "hedges"],
+    [CORRECTS_HER_HISTORY, HEDGES_HER_HISTORY, STRIKES_HER_HISTORY, LABELS_HER_HISTORY_AFTER],
+    ids=["corrects", "hedges", "strikes", "labels_after"],
 )
 async def test_does_not_replay_passes_her_honest_correction_of_her_history(
     pool, mount_peers, monkeypatch, reply

@@ -3217,9 +3217,51 @@ _DOUBTED = re.compile(
     rf"|be\s+(?:sure|certain))\b{_WH_WORD}"
     r"|\b(?:unclear|unknown|no\s+idea|hard\s+to\s+(?:say|tell|know))\b"
     r"|(?:\bnot|n['’]t)\s+clear\b"
-    r"|\b(?:whether|if)(?:\s+or\s+not)?\s*$",
+    # S40b final fix wave (B1, the T4 breaker's OPEN-1): the doubt may name
+    # what it doubts — "(if it still holds)", "(whether that still holds I
+    # can't say)" — and was read as her vouching for the label's reading.
+    r"|\b(?:whether|if)(?:\s+or\s+not)?(?:\s+(?:it|that|this|which))?\s*$",
     re.I,
 )
+# S40b final fix wave (B2, the T4 breaker's OPEN-2): a NEGATED-SAMENESS head
+# — "No change:", "Nothing has changed —", "Nothing new —", "No updates:" —
+# says the state is the same NOW, so a history label under it does not make
+# the claim a record of then: it reaffirms it, like "…, and that is still
+# true". Read on what leads up to a claim (_history_framed) and on a
+# reading's context (_not_a_current_reading).
+_SAME_HEAD = re.compile(
+    r"(?:^|[.;:—–]\s)\W*(?:no\s+(?:changes?|updates?)|nothing\s+(?:has\s+)?(?:changed|new))\b",
+    re.I,
+)
+# S40b final fix wave (A4): a line attributed to HIS notes or journal is his
+# record read back, not her claim — "Your notes say X", "An older note says
+# X", "A note of yours reads: X", "According to/Per your notes, X", "From your
+# notes: X". Recall hands her his notes, and verdict §9 records that they carry
+# exactly the walk's false lines (qwen3.8:27b as current, "No model was
+# needed…"), so the honest way to cite and retract one was corrected. A
+# reaffirmation after it ("…, and that is still true") makes it hers again.
+_RECORD_NOUN = r"(?:notes?|journal(?:\s+entr(?:y|ies))?|entry|entries|records?)"
+_RECORD_DET = r"(?:your|my|his|her|the|an?|one|older|old|this|that|these|those)"
+_RECORD_ATTRIBUTION = re.compile(
+    rf"\b{_RECORD_DET}\s+(?:[\w'’-]+\s+){{0,3}}?{_RECORD_NOUN}(?:\s+of\s+(?:yours|mine|his))?\s+"
+    r"(?:say|says|said|read|reads|list|lists|listed|claim|claims|claimed|call|calls|called"
+    r"|mark|marks|marked|state|states|stated|show|shows|showed)\b"
+    rf"|\b(?:according\s+to|per)\s+{_RECORD_DET}\s+(?:[\w'’-]+\s+){{0,2}}?{_RECORD_NOUN}\b"
+    rf"|\bfrom\s+{_RECORD_DET}\s+(?:[\w'’-]+\s+){{0,2}}?{_RECORD_NOUN}\s*[:—–]",
+    re.I,
+)
+# S40b final fix wave (A12): what she says of a claim right AFTER it, in its
+# own clause, retracting it — "(incorrect — it's qwen3:8b)", "(outdated)",
+# "— this was wrong", "(which is wrong)". The pronoun forms are _RETRACTED's;
+# a bare bracketed verdict uses the same words (_WRONG_WORDS), no new label.
+_WRONG_WORDS = (
+    r"(?:wrong|false|incorrect|mistaken|untrue|stale|outdated|out\s+of\s+date"
+    r"|no\s+longer\s+(?:true|current|accurate))"
+)
+_BRACKETED_RETRACTION = re.compile(rf"\(\s*(?:simply\s+|just\s+)?{_WRONG_WORDS}\b", re.I)
+# S40b final fix wave (C11): a markdown strikethrough on one line — visibly
+# retracted when rendered, so never her claim (and no lie can hide in one).
+_STRUCK = re.compile(r"~~[^~\n]+~~")
 _HEADING = re.compile(r"^\s*#{1,6}\s")
 _FENCE = re.compile(r"^\s*(?:```|~~~)")
 # A double-quoted span on one line: someone else's words ("Your note reads
@@ -3405,7 +3447,8 @@ def _machine_lines(reply_text: str) -> list[str]:
     `>` quote are someone else's text, so their lines are blanked — kept, as
     empty lines, so a key/value run still ends where they begin — and emphasis
     and code marks are stripped from the rest. A stamp she copied to the start
-    is dropped, as the persist boundary drops it (without_leading_stamp)."""
+    is dropped, as the persist boundary drops it (without_leading_stamp), and
+    a struck ~~span~~ is emptied: she retracted it where he can see it."""
     lines: list[str] = []
     fenced = False
     for line in without_leading_stamp(reply_text).split("\n"):
@@ -3415,7 +3458,9 @@ def _machine_lines(reply_text: str) -> list[str]:
         elif fenced or line.lstrip().startswith(">"):
             lines.append("")
         else:
-            lines.append(_MD_NOISE.sub("", line))
+            # A struck span keeps only its marks, so a struck line still
+            # belongs to its run but says nothing (C11).
+            lines.append(_MD_NOISE.sub("", _STRUCK.sub("~~", line)))
     return lines
 
 
@@ -3569,9 +3614,10 @@ def _history_framed(before: str, tail: str = "", after: str = "") -> bool:
     after it in its clause (`tail`: "hub last reported at 05:15 UTC (from my
     previous answer)"; never "…, unchanged from my last reply") — and nothing
     in what follows (`after`) reaffirms it as true now ("…, and that is still
-    true"). The served and memory guards pass no tail: their cut reads only
-    what leads up to the claim, as in fix round 1."""
-    if _reaffirmed(after):
+    true"), and no negated-sameness head leads up to it ("No change: …";
+    _SAME_HEAD, the final fix wave's B2). The served and memory guards pass
+    their claim's tail too since the final fix wave (A12)."""
+    if _reaffirmed(after) or _SAME_HEAD.search(before) is not None:
         return False
     if _labelled_as_history(before):
         return True
@@ -3579,6 +3625,21 @@ def _history_framed(before: str, tail: str = "", after: str = "") -> bool:
         _NOT_A_LABEL_LEAD.search(tail, 0, m.start()) is None and not _report_closed(tail, m.end())
         for m in _FROM_HISTORY.finditer(tail)
     )
+
+
+def _record_attributed(before: str, after: str) -> bool:
+    """Is a claim his record read back — "Your notes say", "Per your journal,"
+    leading up to it in its clause (_RECORD_ATTRIBUTION, A4) — and not
+    reaffirmed as true now in what follows?"""
+    return _RECORD_ATTRIBUTION.search(before) is not None and not _reaffirmed(after)
+
+
+def _retracted_in_tail(tail: str) -> bool:
+    """Does what follows a claim in its own clause retract it (A12)? "— this
+    was wrong", "(which is wrong)", "(incorrect — it's qwen3:8b)",
+    "(outdated)" — _RETRACTED's pronoun forms, or a bracket opening on one of
+    its words."""
+    return _RETRACTED.search(tail) is not None or _BRACKETED_RETRACTION.search(tail) is not None
 
 
 def _not_a_current_reading(texts: Sequence[str]) -> bool:
@@ -3592,9 +3653,10 @@ def _not_a_current_reading(texts: Sequence[str]) -> bool:
         for text in texts
     ):
         return True
-    return any(_labelled_as_history(text) for text in texts) and not any(
-        _reaffirmed(text) for text in texts
-    )
+    # A history label, or his notes named as the source (A4) — unless a line
+    # reaffirms it, or heads it with "No change:" (B2).
+    labelled = any(_labelled_as_history(text) or _RECORD_ATTRIBUTION.search(text) for text in texts)
+    return labelled and not any(_reaffirmed(text) or _SAME_HEAD.search(text) for text in texts)
 
 
 def _machine_claim(
@@ -3670,6 +3732,13 @@ def _machine_state_claim(
                 tail = clause[m.end() :]
                 if _history_framed(clause[: m.start()], tail, tail + rest + following):
                     continue
+                # His notes named as its source (A4), or retracted right after
+                # it (A12): "Per your notes, hub is offline", "hub is switched
+                # off — this was wrong".
+                if _record_attributed(clause[: m.start()], tail + rest + following):
+                    continue
+                if _retracted_in_tail(tail):
+                    continue
                 negative = (_MACHINE_NEG_STATE.fullmatch(m.group("state")) is not None) != (
                     _NEGATING_ADVERB.search(m.group("adv")) is not None
                 )
@@ -3685,6 +3754,10 @@ def _machine_state_claim(
                     continue
                 tail = clause[r.end() :]
                 if _history_framed(clause[: r.start()], tail, tail + rest + following):
+                    continue
+                if _record_attributed(clause[: r.start()], tail + rest + following):
+                    continue
+                if _retracted_in_tail(tail):
                     continue
                 if not _machine_read(spans, machine):
                     return _machine_claim(machine, r.group(0), spans, purpose, negative=False)
@@ -6250,7 +6323,14 @@ _EPISTEMIC_FRAME = re.compile(
     rf"|\bun(?:sure|certain)\b{_WH_WORD}"
     r"|(?<!\bno\s)(?<!\bwithout\s)(?<!\bbeyond\s)(?<!\ba\s)\bdoubt(?:s|ed)?\b"
     r"|(?:\bnot|n['’]t)\s+true\s+(?:to\s+say\s+)?that\b"
-    r"|\b(?:untrue|false|wrong)\s+(?:to\s+say\s+)?that\b",
+    r"|\b(?:untrue|false|wrong)\s+(?:to\s+say\s+)?that\b"
+    # S40b final fix wave (A8): a DENIAL frame — "It's not that X", "It isn't
+    # the case that X", "Nothing says X", "No sign/evidence (that) X". The
+    # negation is required: "It is the case that X" asserts X.
+    r"|\bit(?:['’]s|\s+is)\s+not\s+(?:that|the\s+case\s+that)\b"
+    r"|\bit\s+isn['’]t\s+(?:that|the\s+case\s+that)\b"
+    r"|\b(?:nothing|no\s+(?:sign|evidence|indication|reason\s+to\s+think))"
+    r"(?:\s+(?:says|suggests|indicates|shows|means))?(?:\s+that)?\s*$",
     re.I,
 )
 #   * A first-person retraction verb: "I wrongly said", "I mistakenly marked".
@@ -6285,14 +6365,39 @@ def _clauses_with_rest(line: str):
                 yield clause, is_question, rest + following
 
 
-def _not_her_claim(before: str, after: str) -> bool:
-    """Does what leads up to a served or memory claim in its clause (`before`)
-    say she does not assert it now: a doubted belief, a retraction verb, her
-    earlier reply labelled as its source and not reaffirmed in what follows
-    (`after`), or an "I said" she retracts in what follows?"""
+# S40b final fix wave (C16): a GENERAL statement — "Whenever the memory service
+# is unreachable, …", "Any time qwen3.8:27b is in use, …" — asserts nothing
+# about now. These subordinators are missing from the shared _STATE_HEDGE,
+# which was measured over the device and machine corpus and is not
+# re-measured here; the served and memory guards read them beside it.
+_GENERAL_HEDGE = re.compile(
+    r"\b(?:whenever|any\s*time|every\s+time|each\s+time|in\s+the\s+event)\b", re.I
+)
+
+
+def _claim_prefix_blocks(before: str) -> bool:
+    """_state_prefix_blocks, and a general statement (_GENERAL_HEDGE): the
+    served and memory guards' hedge cut on what leads up to a claim."""
+    return _state_prefix_blocks(before) or _GENERAL_HEDGE.search(before) is not None
+
+
+def _not_her_claim(before: str, tail: str, rest: str = "") -> bool:
+    """Does what surrounds a served or memory claim say she does not assert it
+    now? Leading up to it in its clause (`before`): a doubted belief or a
+    denial, a retraction verb, his notes named as its source (A4), or her
+    earlier reply labelled as its source — none reaffirmed in what follows.
+    Right after it in its clause (`tail`, S40b final fix wave A12, as the
+    machine branch reads it): a history attribution ("(from my last answer)")
+    or a retraction ("(incorrect)", "— this was wrong"). Or an "I said" she
+    retracts in what follows (`tail` + `rest`)."""
+    after = tail + rest
     if _EPISTEMIC_FRAME.search(before) or _HER_RETRACTION.search(before):
         return True
-    if _history_framed(before, after=after):
+    if _record_attributed(before, after):
+        return True
+    if _history_framed(before, tail, after):
+        return True
+    if _retracted_in_tail(tail):
         return True
     return _HER_SAYING.search(before) is not None and _RETRACTED.search(after) is not None
 
@@ -6394,9 +6499,9 @@ def _served_claims(clause: str, *, in_use: bool, rest: str = ""):
     what she says about it (_not_her_claim; `rest` is what follows the clause)."""
     for pattern in _SERVED_SENTENCES:
         for m in pattern.finditer(clause):
-            if _state_prefix_blocks(clause[: m.start()]):
+            if _claim_prefix_blocks(clause[: m.start()]):
                 continue
-            if _not_her_claim(clause[: m.start()], clause[m.end() :] + rest):
+            if _not_her_claim(clause[: m.start()], clause[m.end() :], rest):
                 continue
             if _SERVED_SKIP.search(clause[: m.end()]) or _SERVED_SETTING.search(clause[: m.end()]):
                 continue
@@ -6408,6 +6513,8 @@ def _served_claims(clause: str, *, in_use: bool, rest: str = ""):
     if in_use:
         for m in _IN_USE.finditer(clause):
             if _STATE_HEDGE.search(clause) or _STATE_INTENT.search(clause[: m.start()]):
+                continue
+            if _GENERAL_HEDGE.search(clause):
                 continue
             if _SERVED_SKIP.search(clause) or _SERVED_SETTING.search(clause):
                 continue
@@ -6426,13 +6533,13 @@ def _served_claims(clause: str, *, in_use: bool, rest: str = ""):
             if _IN_USE_UNSAID.search(lead):
                 continue
             start, end = min(said.start(), m.start()), max(said.end(), m.end())
-            if _not_her_claim(clause[:start], clause[end:] + rest):
+            if _not_her_claim(clause[:start], clause[end:], rest):
                 continue
             yield "in_use", _strip_trailing_punct(said.group("ref")), clause[start:end]
     for m in _NO_MODEL.finditer(clause):
-        if _state_prefix_blocks(clause[: m.start()]):
+        if _claim_prefix_blocks(clause[: m.start()]):
             continue
-        if _not_her_claim(clause[: m.start()], clause[m.end() :] + rest):
+        if _not_her_claim(clause[: m.start()], clause[m.end() :], rest):
             continue
         yield "no_model", None, m.group(0)
 
@@ -6679,9 +6786,9 @@ def memory_claim_check(
                 continue
             for pattern in (_MEMORY_DOWN, _MEMORY_UNREACHED):
                 for m in pattern.finditer(clause):
-                    if _state_prefix_blocks(clause[: m.start()]):
+                    if _claim_prefix_blocks(clause[: m.start()]):
                         continue
-                    if _not_her_claim(clause[: m.start()], clause[m.end() :] + rest):
+                    if _not_her_claim(clause[: m.start()], clause[m.end() :], rest):
                         continue
                     if _SERVED_SKIP.search(clause[: m.end()]):
                         continue

@@ -927,3 +927,158 @@ def test_a_regeneration_that_doubts_or_heads_her_memory_history_passes(regen):
         agent_names=[],
     )
     assert rejected is None
+
+
+# ================================================================================
+# S40b final fix wave (fix-wave-brief.md; reproductions in final-review.md)
+# ================================================================================
+
+
+def _memory_fires(reply: str, spans=None) -> bool:
+    return guards.memory_claim_check(reply, spans or ANSWERED, purpose="chat") is not None
+
+
+# -- A4: a line attributed to his notes is not her claim ---------------------------
+MEMORY_ATTRIBUTED_TO_HIS_NOTES = [
+    (
+        "older_note_says_out_of_date",
+        "Yes. Your older note says the memory service is unreachable, but that's out of date.",
+    ),
+    (
+        "notes_say_but_it_answered",
+        "Your notes say the memory service is unreachable, but it answered this turn.",
+    ),
+    ("according_to_your_notes", "According to your notes, the memory service is down."),
+    ("per_your_journal", "Per your journal, the memory service is offline."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    MEMORY_ATTRIBUTED_TO_HIS_NOTES,
+    ids=[c[0] for c in MEMORY_ATTRIBUTED_TO_HIS_NOTES],
+)
+def test_a_memory_line_attributed_to_his_notes_is_not_corrected(label, reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None, label
+
+
+def test_a_reaffirmed_memory_claim_beside_a_note_still_fires():
+    assert _memory_fires(
+        "The notes say the memory service is unreachable — and that is still true."
+    )
+
+
+# -- A8: a denial frame is not her assertion ---------------------------------------
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "It's not that the memory service is down; recall just found nothing.",
+        "Nothing says the memory service is down.",
+        "It isn't the case that the memory service is down.",
+        "There is no evidence that the memory service is unreachable.",
+    ],
+)
+def test_a_denied_memory_claim_is_not_corrected(reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None, reply
+
+
+def test_an_affirmed_frame_still_fires_on_the_memory_claim():
+    assert _memory_fires("It is the case that the memory service is down.")
+
+
+# -- A12: an attribution or a retraction AFTER the claim closes it -----------------
+MEMORY_CLOSED_AFTER = [
+    ("from_my_last_answer", "The memory service is currently unreachable (from my last answer)."),
+    (
+        "walk_line_this_was_wrong",
+        "- The **memory service** (`memory`) is currently unreachable (`ConnectError`) — this "
+        "was wrong; it answered this turn.",
+    ),
+    (
+        "correction_to_my_last_answer_that_was_wrong",
+        "Correction to my last answer: the memory service is currently unreachable — that was "
+        "wrong.",
+    ),
+    (
+        "stale_from_my_last_answer",
+        "- The memory service is currently unreachable (stale — from my last answer)",
+    ),
+    ("outdated", "The memory service is currently unreachable (outdated)."),
+    ("incorrect", "The memory service is currently unreachable (incorrect)."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", MEMORY_CLOSED_AFTER, ids=[c[0] for c in MEMORY_CLOSED_AFTER]
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_memory_claim_closed_after_it_is_not_corrected(purpose, label, reply):
+    spans = [_span("llm_call", "hub:qwen3:8b", purpose=purpose, served_by="hub:qwen3:8b"), RECALL]
+    assert guards.memory_claim_check(reply, spans, purpose=purpose) is None, label
+
+
+def test_a_memory_claim_not_closed_after_it_still_fires():
+    for reply in (
+        "The memory service is currently unreachable (unchanged from my last answer).",
+        "The memory service is currently unreachable. The Dell reading was wrong.",
+        WALK,
+    ):
+        assert _memory_fires(reply), reply
+
+
+# -- B1 / B2 (T4 breaker OPEN-1, OPEN-2) --------------------------------------------
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "From my previous answer (if it still holds): the memory service is unreachable.",
+        "From my previous answer (whether that still holds I can't say): the memory service "
+        "is unreachable.",
+    ],
+)
+def test_a_doubt_that_names_its_subject_keeps_the_memory_history_label(reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None, reply
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        "No change:",
+        "No changes:",
+        "Nothing has changed —",
+        "Nothing new —",
+        "No update:",
+        "No updates:",
+    ],
+)
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{head} my previous answer said the memory service is unreachable.",
+        "{head} from my previous answer, the memory service is unreachable.",
+        "{head} the memory service is unreachable (from my previous answer).",
+    ],
+)
+def test_a_negated_sameness_head_reaffirms_the_memory_claim(head, body):
+    assert _memory_fires(body.format(head=head)), (head, body)
+
+
+# -- C11: a struck span is visibly retracted ---------------------------------------
+def test_a_struck_memory_claim_is_not_corrected():
+    reply = "~~The memory service is currently unreachable~~ — it answered this turn."
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None
+    assert _memory_fires(reply.replace("~~", ""))
+
+
+# -- C16: a general statement is a hedge -------------------------------------------
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Whenever the memory service is unreachable, I keep the note here.",
+        "Any time the memory service is down, recall is skipped.",
+        "Every time the memory service is offline, notes wait in a queue.",
+        "Each time the memory service is unavailable, the turn goes on without recall.",
+        "In the event the memory service is unreachable, nothing is lost.",
+    ],
+)
+def test_a_general_statement_about_memory_is_not_corrected(reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None, reply
