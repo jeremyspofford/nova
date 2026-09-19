@@ -33,7 +33,7 @@ from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 # one — rather than after the bare-id clause, where it read as though the
 # filtered machine were the default (S40 fix wave: example placement).
 _ID_RULE_QUALIFIED = "A model id qualified with a machine's name (machine:model) names that machine"
-_ID_RULE_BARE = "a bare id, whose own colon is its tag (qwen3.8:27b), means the default machine"
+_ID_RULE_BARE = "a bare id, whose own colon is its tag (<name>:<tag>), means the default machine"
 _ID_RULE = f"{_ID_RULE_QUALIFIED}; {_ID_RULE_BARE}"
 
 

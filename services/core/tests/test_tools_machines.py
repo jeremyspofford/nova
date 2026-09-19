@@ -58,6 +58,19 @@ async def test_status_reads_every_machine_live_and_leaves_a_fact_for_each(mount_
     ]
 
 
+async def test_status_header_names_no_real_model_as_its_id_rule_example(mount_peers):
+    """(S40 text fix, 2026-09-19) A real installed model's name used as the
+    ID-rule example reads as a fact, not an illustration — the local 8B
+    model told the owner 'qwen3.8:27b (Current model in use)' from this
+    header alone (turn b851aa91). This fixture's engine lists only qwen3:8b
+    (fakes.engine_view's default), so 'qwen3.8:27b' surfacing in the header
+    could only be the example text, never read data — and it must not."""
+    gateway = FakeGateway(engines=[fakes.engine_view()])
+    mount_peers(gateway=gateway)
+    said = await _call("machine_status", {})
+    assert "qwen3.8:27b" not in said
+
+
 async def test_a_machine_that_did_not_answer_is_said_in_the_gateways_words(mount_peers):
     view = fakes.engine_view(
         state="unreachable", reason="ConnectError: connection refused", tags=None
@@ -207,7 +220,7 @@ async def test_an_eval_machine_is_switched_in_the_fixture_never_at_the_gateway(m
 # The qualified form names its machine; a bare one means the default machine.
 TRUE_RULE = (
     "a model id qualified with a machine's name (machine:model) names that machine; "
-    "a bare id, whose own colon is its tag (qwen3.8:27b), means the default machine"
+    "a bare id, whose own colon is its tag (<name>:<tag>), means the default machine"
 )
 FALSE_RULE = "names its machine before its first colon"
 
@@ -219,7 +232,7 @@ FALSE_RULE = "names its machine before its first colon"
 # above and a `machine="dell"` filtered call).
 HEADER_RULE = (
     "a model id qualified with a machine's name (machine:model) names that machine "
-    "(hub:<model> runs on hub); a bare id, whose own colon is its tag (qwen3.8:27b), "
+    "(hub:<model> runs on hub); a bare id, whose own colon is its tag (<name>:<tag>), "
     "means the default machine"
 )
 
@@ -228,6 +241,7 @@ def test_the_prompt_says_where_models_run_from_the_tools_own_names():
     prompt = chat.stable_system_prompt("m", tools.tool_names())
     assert TRUE_RULE in prompt.replace("A model id", "a model id")
     assert FALSE_RULE not in prompt
+    assert "qwen3.8:27b" not in prompt  # no real model as the ID-rule example
     assert "only from machine_status" in prompt
     assert "only with machine_configure, reporting the value it read back" in prompt
     assert "names that machine" not in chat.stable_system_prompt("m", ("get_time",))

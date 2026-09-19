@@ -873,12 +873,14 @@ def stable_system_prompt(
     configure_tool = tools.machines.MACHINE_CONFIGURE.name
     if status_tool in tool_names:
         # The TRUE rule (S40 fix wave B4): a bare id's first colon is its
-        # tag's own (qwen3.8:27b), so "the part before the first colon is the
-        # machine" was false for every bare id.
+        # tag's own (<name>:<tag>), so "the part before the first colon is
+        # the machine" was false for every bare id. The example is a
+        # placeholder, never a real model name — a real one here reads as a
+        # fact, not an illustration (S40 text fix, turn b851aa91, 2026-09-19).
         prompt += (
             " Models run on machines: a model id qualified with a machine's name "
             "(machine:model) names that machine; a bare id, whose own colon is its tag "
-            "(qwen3.8:27b), means the default machine. Say where a model runs, or whether a "
+            "(<name>:<tag>), means the default machine. Say where a model runs, or whether a "
             f"machine is answering, only from {status_tool}"
             + (
                 f", and switch a machine's models on or off only with {configure_tool}, "
