@@ -3137,7 +3137,14 @@ def _every_correction() -> list[tuple[str, str]]:
         value = getattr(guards, name)
         if not isinstance(value, str):
             continue
-        out.append((name, value.format(agent="coder", repeats=4, unrun=1, total=3, found=2)))
+        # `machine` (S40b): the state guard's machine correction names the
+        # machine it did not check, so its template joins the tripwire here.
+        out.append(
+            (
+                name,
+                value.format(agent="coder", repeats=4, unrun=1, total=3, found=2, machine="hub"),
+            )
+        )
     return sorted(out)
 
 

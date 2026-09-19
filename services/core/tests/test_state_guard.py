@@ -497,3 +497,516 @@ def _find(tree: ast.AST, qualname: str) -> ast.AST:
     found = _walk(tree, parts)
     assert found is not None, f"could not locate {qualname} in the module"
     return found
+
+
+# ============================================================================
+# S40b: MACHINES (design-verdict §3.1 A, corpus §4 "state_claim — machine")
+# ============================================================================
+#
+# The S40 live walk, turn b02a5694: asked "Where do your models run, and is
+# that machine ready?" a second time, she replayed the previous turn's
+# machine_status reading from history — `Last Reported: 2026-09-19T05:15:39`,
+# twenty minutes old — as the current status, without checking anything. The
+# guard learns machine subjects, DERIVED from this turn's own spans (the head of
+# a served round's `served_by`, machine_status facts and args), and corrects a
+# negative state or a reading time about a machine this turn did not read.
+#
+# Armed only in the turn kinds its precision was measured in (STACK_CLAIM_KINDS:
+# chat and eval); every existing call — `purpose` omitted — is unchanged.
+#
+# The corpus sentences below are the verdict's, verbatim. Additions beyond it
+# are in their own lists, labelled.
+
+from types import SimpleNamespace  # noqa: E402
+
+from app.tools import machines as machine_tools  # noqa: E402
+from tests.s40_walk import B02A5694, B851AA91  # noqa: E402
+
+
+def _span(kind: str, name: str, **meta):
+    return SimpleNamespace(kind=kind, name=name, meta=dict(meta))
+
+
+def _llm(served_by: str, *, local: bool | None = True, purpose: str = "chat", **meta):
+    """A served round as chat._gateway_round records it: `served_by` from the
+    gateway's header, `local` from its usage chunk."""
+    fields = {"purpose": purpose, "served_by": served_by, **meta}
+    if local is not None:
+        fields["local"] = local
+    return _span("llm_call", served_by, **fields)
+
+
+def _status(*, machine: str | None = None, facts: list | None = None, ok: bool = True, **meta):
+    args = {} if machine is None else {"machine": machine}
+    fields = {"ok": ok, "args_redacted": args, **meta}
+    if facts is not None:
+        fields["facts"] = facts
+    return _span("tool", "machine_status", **fields)
+
+
+def _fact(machine: str, *, checked_now: bool = True) -> dict:
+    return {
+        "machine": machine,
+        "answering": True,
+        "checked_now": checked_now,
+        "at": "2026-09-19T05:15:39.282993+00:00",
+    }
+
+
+HUB_SERVED = _llm("hub:qwen3:8b")
+HUB_READ = _status(facts=[_fact("hub")])
+CFG = _span(
+    "tool",
+    "machine_configure",
+    ok=True,
+    args_redacted={"machine": "hub", "serving": False},
+)
+DELL_READ = _status(machine="dell", facts=[_fact("dell")])
+
+NAME_BLOCK = (
+    "### Machine Status\n- **Name**: `hub`\n- **Last Reported**: `2026-09-19T05:15:39+00:00`"
+)
+
+MACHINE_CORRECTION_HUB = (
+    "Correction: I did not check hub this turn — I have no record of doing so, so what "
+    "I said about it is not a current reading."
+)
+HUB_SERVED_CLAUSE = " hub answered this turn: this reply came from hub:qwen3:8b."
+
+# (label, reply, spans, purpose, the machine it names)
+MACHINE_MUST_FIRE = [
+    ("b02a5694_full", B02A5694, [HUB_SERVED], "chat", "hub"),
+    ("switched_off", "hub is switched off.", [HUB_SERVED], "chat", "hub"),
+    ("code_not_answering", "`hub` is not answering right now.", [HUB_SERVED], "chat", "hub"),
+    ("bold_code_offline", "**`hub`** is offline.", [HUB_SERVED], "chat", "hub"),
+    (
+        "which_is_currently_switched_off",
+        "The models run on hub, which is currently switched off.",
+        [HUB_SERVED],
+        "chat",
+        "hub",
+    ),
+    ("name_last_reported_block", NAME_BLOCK, [HUB_SERVED], "chat", "hub"),
+    (
+        "last_checked_kv",
+        "The models run on hub.\n- **Last Checked**: 05:15 UTC",
+        [HUB_SERVED],
+        "chat",
+        "hub",
+    ),
+    (
+        "last_checked_just_now",
+        "hub runs models.\n- Last checked: just now",
+        [HUB_SERVED],
+        "chat",
+        "hub",
+    ),
+    ("no_longer_answering", "hub is no longer answering.", [HUB_SERVED], "chat", "hub"),
+    ("not_ready_right_now", "hub is not ready right now.", [HUB_SERVED], "chat", "hub"),
+    (
+        "read_of_another_machine_copula",
+        "hub is switched off for models.",
+        [HUB_SERVED, DELL_READ],
+        "chat",
+        "hub",
+    ),
+    (
+        "read_of_another_machine_block",
+        NAME_BLOCK,
+        [HUB_SERVED, DELL_READ],
+        "chat",
+        "hub",
+    ),
+    (
+        "eval_box_in_an_eval",
+        "Your models run on eval_box, which is switched off for chat models.",
+        [_llm("eval_box:qwen3:8b", purpose="eval")],
+        "eval",
+        "eval_box",
+    ),
+]
+
+# (label, reply, spans) — every one in a chat turn.
+MACHINE_MUST_NOT = [
+    ("b851aa91_full", B851AA91, [HUB_SERVED, HUB_READ]),
+    (
+        "called_ready_and_active",
+        "The models run on a machine called **hub**, which is currently ready and active.",
+        [HUB_SERVED],
+    ),
+    (
+        "serving_on_block",
+        "### Machine Status\n- **Name**: `hub`\n- **Serving**: ✅ **On** (always on)",
+        [HUB_SERVED],
+    ),
+    ("usb_hub", "Your USB hub is offline.", [HUB_SERVED]),
+    ("smart_home_hub", "The smart-home hub is offline.", [HUB_SERVED]),
+    ("possessive_hub", "Jeremy's hub is offline.", [HUB_SERVED]),
+    ("past_when_i_checked", "When I checked at 05:15, hub was answering.", [HUB_SERVED]),
+    ("past_earlier_today", "Earlier today hub was switched off for chat models.", [HUB_SERVED]),
+    ("intent_check_whether", "Let me check whether hub is ready.", [HUB_SERVED]),
+    (
+        "conditional_if",
+        "If hub is switched off, chat falls back to the next link.",
+        [HUB_SERVED],
+    ),
+    ("question", "Is hub ready?", [HUB_SERVED]),
+    ("reported_speech", "You said hub is offline.", [HUB_SERVED]),
+    ("not_ready_for_you", "hub is not ready for you to add a model.", [HUB_SERVED]),
+    ("configured_this_turn", "hub is switched off for models.", [HUB_SERVED, CFG]),
+    (
+        "read_not_checked_now",
+        "hub is not answering (not checked now).",
+        [HUB_SERVED, _status(facts=[_fact("hub", checked_now=False)])],
+    ),
+    ("unasked_read_no_facts", NAME_BLOCK, [HUB_SERVED, _status(unasked=True)]),
+    (
+        "last_updated_is_not_a_reading",
+        "hub runs models.\n- **Last updated**: 2026-08-29 10:00 UTC",
+        [HUB_SERVED],
+    ),
+    (
+        "heading_ends_the_run",
+        "hub runs models.\n### Devices\n- **Last seen**: 2026-09-18 16:48 UTC",
+        [HUB_SERVED],
+    ),
+    (
+        "paired_device_line_unbinds",
+        "hub runs models.\n- DELL-XPS-8950\n- **Last seen**: 2026-09-18 16:48 UTC",
+        [HUB_SERVED],
+    ),
+    (
+        "colon_line_unbinds",
+        "Models run on hub.\nYour Dell:\n- Status: offline\n- Last seen: 2026-09-18 16:48 UTC",
+        [HUB_SERVED],
+    ),
+    ("fenced_block", f"```\n{NAME_BLOCK}\n```", [HUB_SERVED]),
+    ("fenced_copula", "```\nhub is offline.\n```", [HUB_SERVED]),
+    (
+        "quoted_block",
+        "\n".join(f"> {line}" for line in NAME_BLOCK.splitlines()),
+        [HUB_SERVED],
+    ),
+    ("quoted_copula", "> hub is offline.", [HUB_SERVED]),
+    ("the_machine_existing_pin", "The machine is unreachable.", [HUB_SERVED]),
+    ("negated_offline", "hub is not offline.", [HUB_SERVED]),
+    ("negated_switched_off", "hub is not switched off.", [HUB_SERVED]),
+    (
+        "lead_in_checked_earlier",
+        f"Here is what hub reported when I checked earlier:\n\n{NAME_BLOCK}",
+        [HUB_SERVED],
+    ),
+    ("not_checked_since", f"{NAME_BLOCK} (I have not checked since)", [HUB_SERVED]),
+    (
+        "could_not_be_asked",
+        f"{NAME_BLOCK} (the gateway could not be asked now)",
+        [HUB_SERVED],
+    ),
+    (
+        "cloud_served_only",
+        "hub is offline.",
+        [_llm("openrouter:anthropic/claude-sonnet-4.6", local=False)],
+    ),
+    ("github", "The GitHub is offline.", [HUB_SERVED]),
+    ("hostname", "hub.example.com is unreachable.", [HUB_SERVED]),
+    ("positive_ready", "hub is ready.", [HUB_SERVED]),
+    ("positive_answering", "hub is answering.", [HUB_SERVED]),
+    ("positive_online_and_serving", "hub is online and serving.", [HUB_SERVED]),
+]
+
+# The misses this precision buys (verdict §4), pinned so each is a choice.
+MACHINE_ACCEPTED_MISSES = [
+    ("case_exact", "Hub is offline.", [HUB_SERVED]),
+    ("determiner_the", "The hub is offline.", [HUB_SERVED]),
+    (
+        "no_negative_key_value_branch",
+        "### Machine Status\n- **Name**: `hub`\n- **Serving**: ❌ **Off**",
+        [HUB_SERVED],
+    ),
+    ("past_tense_last_checked", "hub was last checked at 05:15 UTC.", [HUB_SERVED]),
+    # S44 lists machine names from the gateway; until then a machine that
+    # neither served nor was read this turn is not a subject.
+    ("unnamed_machine_s44", "hub is ready.", [_llm("dell:qwen3:8b")]),
+    (
+        "read_plus_replayed_older_stamp",
+        NAME_BLOCK.replace("2026-09-19T05:15:39", "2026-09-18T22:01:07"),
+        [HUB_SERVED, HUB_READ],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans,purpose,machine",
+    MACHINE_MUST_FIRE,
+    ids=[c[0] for c in MACHINE_MUST_FIRE],
+)
+def test_machine_must_fire(label, reply, spans, purpose, machine):
+    claim = guards.state_claim_check(reply, spans, NAMES, purpose=purpose)
+    assert claim is not None, f"{label!r} should have fired but did not"
+    assert claim.subject_kind == "machine"
+    assert claim.device == machine
+    assert claim.phrase
+    assert claim.text.startswith(guards.STATE_CLAIM_MACHINE_CORRECTION.format(machine=machine)), (
+        claim.text
+    )
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans",
+    MACHINE_MUST_NOT,
+    ids=[c[0] for c in MACHINE_MUST_NOT],
+)
+def test_machine_must_not_fire(label, reply, spans):
+    assert guards.state_claim_check(reply, spans, NAMES, purpose="chat") is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans",
+    MACHINE_ACCEPTED_MISSES,
+    ids=[c[0] for c in MACHINE_ACCEPTED_MISSES],
+)
+def test_machine_accepted_misses_stay_missed(label, reply, spans):
+    assert guards.state_claim_check(reply, spans, NAMES, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans,purpose,machine",
+    MACHINE_MUST_FIRE,
+    ids=[c[0] for c in MACHINE_MUST_FIRE],
+)
+def test_machine_must_fire_is_silent_with_no_spans(label, reply, spans, purpose, machine):
+    """DERIVED, not hardcoded: with nothing served and nothing read this turn,
+    there is no machine to be wrong about."""
+    assert guards.state_claim_check(reply, [], NAMES, purpose=purpose) is None
+
+
+@pytest.mark.parametrize("unarmed", ["scheduled", "agent", "beat", None])
+@pytest.mark.parametrize(
+    "label,reply,spans,purpose,machine",
+    MACHINE_MUST_FIRE,
+    ids=[c[0] for c in MACHINE_MUST_FIRE],
+)
+def test_machine_must_fire_is_silent_where_the_guard_is_not_armed(
+    label, reply, spans, purpose, machine, unarmed
+):
+    """Armed only where its precision was measured (STACK_CLAIM_KINDS). A
+    scheduled or agent turn is not read live and the correction REPLACES, so a
+    false one there IS the persisted row; `None` is every pre-S40b caller."""
+    if unarmed is None:
+        assert guards.state_claim_check(reply, spans, NAMES) is None
+    assert guards.state_claim_check(reply, spans, NAMES, purpose=unarmed) is None
+
+
+# -- the walk turn, pinned exactly ---------------------------------------------
+
+
+def test_the_walk_replay_is_corrected_on_its_reading_line():
+    """b02a5694: the `Last Reported` line binds to hub through the `Name: hub`
+    line above it, and nothing read hub this turn. A reading time is not a
+    negative state, so the served clause is not appended: the correction says
+    only what is mechanically true."""
+    claim = guards.state_claim_check(B02A5694, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.phrase == "- Last Reported: 2026-09-19T05:15:39+00:00"
+    assert claim.text == MACHINE_CORRECTION_HUB
+    assert claim.served_by is None
+    assert claim.evidence == "unchecked"
+
+
+def test_a_negative_claim_about_a_machine_that_served_says_so():
+    claim = guards.state_claim_check("hub is switched off.", [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.text == MACHINE_CORRECTION_HUB + HUB_SERVED_CLAUSE
+    assert claim.served_by == "hub:qwen3:8b"
+    assert claim.evidence == "served"
+    assert claim.phrase == "hub is switched off"
+
+
+def test_the_honest_walk_turn_is_silent_because_it_read_hub():
+    """b851aa91: the same block, the same timestamp — and her own machine_status
+    call behind it. Silence here is the read, and removing the read fires."""
+    assert guards.state_claim_check(B851AA91, [HUB_SERVED, HUB_READ], NAMES, purpose="chat") is None
+    assert guards.state_claim_check(B851AA91, [HUB_SERVED], NAMES, purpose="chat") is not None
+
+
+# -- beyond the verdict corpus: the other shapes its regexes name ---------------
+
+MACHINE_MUST_FIRE_EXTRA = [
+    # The `last_reading` prose form (verdict §3.1 A).
+    ("prose_last_reported_at", "hub last reported at 05:15 UTC.", [HUB_SERVED]),
+    ("prose_last_seen_iso", "hub is last seen 2026-09-19 05:15 UTC.", [HUB_SERVED]),
+    # finditer, not search: a positive claim about one machine does not hide a
+    # negative one about another in the same clause.
+    ("second_subject_in_clause", "dell is ready and hub is offline.", [HUB_SERVED, DELL_READ]),
+    # A parenthetical between the name and the copula.
+    ("parenthetical", "hub (the bundled engine) is unreachable.", [HUB_SERVED]),
+    ("contraction", "hub's not answering right now.", [HUB_SERVED]),
+]
+
+MACHINE_MUST_NOT_EXTRA = [
+    (
+        "prose_not_checked_since",
+        "hub last reported at 05:15 UTC, and I have not checked since.",
+        [HUB_SERVED],
+    ),
+    ("prose_prior_time", "Earlier, hub last reported at 05:15 UTC.", [HUB_SERVED]),
+    ("model_id_is_not_a_subject", "hub:qwen3:8b is offline.", [HUB_SERVED]),
+    ("prose_read_this_turn", "hub last reported at 05:15 UTC.", [HUB_SERVED, HUB_READ]),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans", MACHINE_MUST_FIRE_EXTRA, ids=[c[0] for c in MACHINE_MUST_FIRE_EXTRA]
+)
+def test_machine_must_fire_extra(label, reply, spans):
+    claim = guards.state_claim_check(reply, spans, NAMES, purpose="chat")
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans", MACHINE_MUST_NOT_EXTRA, ids=[c[0] for c in MACHINE_MUST_NOT_EXTRA]
+)
+def test_machine_must_not_fire_extra(label, reply, spans):
+    assert guards.state_claim_check(reply, spans, NAMES, purpose="chat") is None, label
+
+
+# -- the two branches are independent -------------------------------------------
+
+
+def test_a_device_check_does_not_back_a_machine_claim():
+    """`_checked_a_device` short-circuits the DEVICE branch only: a device_list
+    this turn says nothing about hub."""
+    spans = [HUB_SERVED, Span("device_list")]
+    claim = guards.state_claim_check("hub is switched off.", spans, NAMES, purpose="chat")
+    assert claim is not None and claim.subject_kind == "machine"
+
+
+def test_a_machine_read_does_not_back_a_device_claim():
+    claim = guards.state_claim_check(OWNER_CASE, [HUB_SERVED, HUB_READ], NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.subject_kind == "device"
+    assert claim.text == guards.STATE_CLAIM_CORRECTION
+
+
+def test_machine_claims_fire_with_nothing_paired():
+    """The early exit needs NEITHER device names NOR machine names now."""
+    claim = guards.state_claim_check("hub is switched off.", [HUB_SERVED], [], purpose="chat")
+    assert claim is not None and claim.device == "hub"
+
+
+def test_the_device_branch_is_unchanged_by_purpose():
+    for purpose in (None, "chat", "eval", "scheduled", "agent"):
+        claim = guards.state_claim_check(OWNER_CASE, [], NAMES, purpose=purpose)
+        assert claim is not None and claim.subject_kind == "device"
+        assert claim.text == guards.STATE_CLAIM_CORRECTION
+
+
+# -- machine_names: derived from the turn's own spans ---------------------------
+
+
+def test_machine_names_are_derived_from_served_rounds_reads_and_configures():
+    spans = [
+        _llm("hub:qwen3:8b"),  # local
+        _llm("dell:qwen3:8b", local=None, served_on="gpu:cuda:GPU-<uuid>"),
+        _llm("spark:gemma4:12b", local=None, served_runtime="container"),
+        _status(facts=[_fact("eval_box")]),
+        _status(machine="named_arg"),
+        _span("tool", "machine_configure", ok=True, args_redacted={"machine": "cfg_box"}),
+    ]
+    assert guards.machine_names(spans) == (
+        "cfg_box",
+        "dell",
+        "eval_box",
+        "hub",
+        "named_arg",
+        "spark",
+    )
+
+
+def test_machine_names_ignore_failed_spans_and_non_local_rounds():
+    spans = [
+        _llm("hub:qwen3:8b", error="the gateway reported: boom"),  # failed round
+        _llm("openrouter:anthropic/claude-sonnet-4.6", local=False),  # a cloud round
+        _llm("cloudy:model:tag", local=None),  # nothing says it ran on an engine
+        _llm("x:qwen3:8b"),  # a one-character name
+        _status(machine="ghost", ok=False, facts=[_fact("ghost")]),
+        _span("tool", "machine_configure", ok=False, args_redacted={"machine": "ghost2"}),
+        _span("tool", "fetch_url", ok=True, args_redacted={"machine": "not_a_machine_tool"}),
+    ]
+    assert guards.machine_names(spans) == ()
+
+
+def test_every_derived_machine_is_read_or_served_so_no_positive_claim_fires():
+    """The PROPERTY the verdict pins (§3.1 A): a name only ever comes from a
+    read of it or a round it served, so a positive claim about a derived
+    machine is always backed — in S40b the machine branch fires only on a
+    negative state or an unread reading time. S44 (gateway-listed names) is
+    the change that makes this go red, deliberately."""
+    span_sets = [
+        [HUB_SERVED],
+        [HUB_READ],
+        [CFG],
+        [DELL_READ],
+        [HUB_SERVED, DELL_READ],
+        [_llm("dell:qwen3:8b", local=None, served_on="gpu:x")],
+        [_status(machine="spark"), _llm("hub:qwen3:8b")],
+    ]
+    for spans in span_sets:
+        names = guards.machine_names(spans)
+        assert names, spans
+        for name in names:
+            assert guards._machine_read(spans, name) or guards._machine_served(spans, name), name
+            for positive in (f"{name} is ready.", f"{name} is online.", f"{name} is answering."):
+                assert guards.state_claim_check(positive, spans, [], purpose="chat") is None
+
+
+# -- the constants and the texts --------------------------------------------------
+
+
+def test_the_machine_tool_names_are_the_registry_names():
+    """Derived, never retyped: a rename in the registry turns this red."""
+    assert guards._MACHINE_READ_TOOLS == frozenset({machine_tools.MACHINE_STATUS.name})
+    assert guards._CONFIGURE_TOOLS == frozenset({machine_tools.MACHINE_CONFIGURE.name})
+    from app import tools
+
+    assert machine_tools.MACHINE_STATUS.name in tools.REGISTRY
+    assert machine_tools.MACHINE_CONFIGURE.name in tools.REGISTRY
+
+
+def test_the_machine_texts_trip_no_guard_of_their_own():
+    """The correction PERSISTS and the note streams, so a text that tripped a
+    guard would be corrected forever; the nudge is what the model is told."""
+    texts = [
+        MACHINE_CORRECTION_HUB,
+        MACHINE_CORRECTION_HUB + HUB_SERVED_CLAUSE,
+        chat.MACHINE_REDIRECT_NOTE,
+        chat.state_redirect_nudge(device="hub", ran_a_tool=False, kind="machine"),
+    ]
+    for text in texts:
+        for purpose in ("chat", "eval"):
+            assert guards.state_claim_check(text, [HUB_SERVED], NAMES, purpose=purpose) is None
+            assert guards.stack_claim_check(text, [HUB_SERVED], purpose=purpose) is None
+        assert guards.narration_check(text, []) is None
+        assert guards.consent_claim_check(text) is None
+        assert guards.capability_claim_check(text, ["machine_status", "device_list"]) is None
+        assert guards.deferral_check(text, [], ["fetch_url", "web_search"]) is None
+        assert guards.presented_listing_check(text, [], ["workspace_list_files"]) is None
+        assert guards.bare_intent_check(text, []) is None
+        assert guards.observation_check(text, [], []) is None
+        assert guards.delivery_claim_check(text, []) is None
+
+
+def test_the_machine_nudge_names_the_registry_tool_and_refuses_a_false_premise():
+    nudge = chat.state_redirect_nudge(device="hub", ran_a_tool=False, kind="machine")
+    assert nudge == (
+        f"You have not checked hub this turn. Check it now with "
+        f"{machine_tools.MACHINE_STATUS.name} before describing it, or say plainly "
+        "that you did not check."
+    )
+    with pytest.raises(ValueError):
+        chat.state_redirect_nudge(device="hub", ran_a_tool=True, kind="machine")
+    # The device nudge is what it was.
+    assert "device tool" in chat.state_redirect_nudge(device=DEVICE, ran_a_tool=False)

@@ -227,19 +227,31 @@ def consent_redirect_nudge(*, ran_a_tool: bool) -> str:
 # pending-state phrase, and no assertion about the device's state — so running
 # any guard over it, this turn's included, comes back clean.
 STATE_REDIRECT_NOTE = "Checking the device now instead of describing it unchecked."
+# The same note when the unchecked subject is a MACHINE (S40b): the S40 walk's
+# replayed machine_status reading. Same properties, pinned in test_state_guard.
+MACHINE_REDIRECT_NOTE = "Checking the machine now instead of describing it unchecked."
 
 
-def state_redirect_nudge(*, device: str, ran_a_tool: bool) -> str:
+def state_redirect_nudge(*, device: str, ran_a_tool: bool, kind: str = "device") -> str:
     """The state-claim redirect's nudge, DERIVED from the fact the caller
     measured. It asserts one thing about the turn — nothing has run — so it is
     built from that boolean rather than written out as a constant that could
     drift away from the truth. If a tool DID run, the sentence would be a lie,
     and a lie told to the model is how you get a second dispatch; so this
     REFUSES rather than emitting it. The caller's fail-open turns that refusal
-    into the ordinary correction, never an error frame."""
+    into the ordinary correction, never an error frame.
+
+    `kind` is the claim's subject_kind (S40b). For a machine the nudge names
+    the tool that reads one — the registry's own name, never retyped here."""
     if ran_a_tool:
         raise ValueError(
             f"the state redirect nudge asserts nothing has run this turn; ran_a_tool={ran_a_tool}"
+        )
+    if kind == "machine":
+        return (
+            f"You have not checked {device} this turn. Check it now with "
+            f"{tools.machines.MACHINE_STATUS.name} before describing it, or say plainly "
+            "that you did not check."
         )
     return (
         f"You have not checked {device}'s state this turn. Check it now with a "
@@ -3355,7 +3367,12 @@ def _regen_rejected_by(
         ),
         (
             "state_claim",
-            lambda: guards.state_claim_check(corrected, turn.spans, device_names),
+            # The turn's kind arms the machine branch exactly as it was armed
+            # over the reply this regeneration replaces (S40b): a regen that
+            # repeats an unchecked machine claim is refused by name.
+            lambda: guards.state_claim_check(
+                corrected, turn.spans, device_names, purpose=_purpose_of(turn)
+            ),
         ),
         (
             "presented_listing",
@@ -4460,22 +4477,39 @@ async def _run_turn(
         # the durable text is then the regeneration, which `_regen_rejected_by`
         # already vetted with this very check against the now-live spans, so
         # judging the discarded prose would file a span about text nobody reads.
+        #
+        # S40b: the turn's kind arms its MACHINE branch too (chat and eval, the
+        # kinds it was measured in) — the S40 walk, where a replayed
+        # machine_status reading was stated as hub's current status. Machines
+        # are derived from this turn's own spans, never passed in.
         state_claim = None
         state_redirected = False
         state_text: str | None = None
         if not consent_redirected:
             try:
-                state_claim = guards.state_claim_check(text, turn.spans, device_names)
+                state_claim = guards.state_claim_check(
+                    text, turn.spans, device_names, purpose=_purpose_of(turn)
+                )
             except Exception:
                 logger.exception("state-claim guard raised; shipping the reply uncorrected")
                 state_claim = None
         if state_claim is not None:
+            state_is_machine = state_claim.subject_kind == "machine"
             claim_meta = {
                 "detected": True,
-                "device": state_claim.device,
+                "subject_kind": state_claim.subject_kind,
                 "phrase": state_claim.phrase,
                 "paired_devices": len(device_names),
             }
+            if state_is_machine:
+                claim_meta.update(
+                    machine=state_claim.device,
+                    machines=len(guards.machine_names(turn.spans)),
+                    evidence=state_claim.evidence,
+                    served_by=state_claim.served_by,
+                )
+            else:
+                claim_meta["device"] = state_claim.device
             if redirect_spent:
                 # The consent guard took the turn's one redirect and its own
                 # regeneration did not stand. Both claims are still contradicted
@@ -4497,9 +4531,13 @@ async def _run_turn(
                     correction_text=state_claim.text,
                     span_meta=claim_meta,
                     nudge_for=lambda ran: state_redirect_nudge(
-                        device=state_claim.device, ran_a_tool=ran
+                        device=state_claim.device,
+                        ran_a_tool=ran,
+                        kind=state_claim.subject_kind,
                     ),
-                    redirect_note=STATE_REDIRECT_NOTE,
+                    redirect_note=(
+                        MACHINE_REDIRECT_NOTE if state_is_machine else STATE_REDIRECT_NOTE
+                    ),
                     out_of_rounds=out_of_rounds,
                     messages=messages,
                     advertised=advertised,

@@ -63,6 +63,10 @@ _FETCH_TOOLS = frozenset({"fetch_url"})
 _PULL_TOOLS = frozenset({"model_pull"})
 _REMOVE_TOOLS = frozenset({"model_remove"})
 _CONFIGURE_TOOLS = frozenset({"machine_configure"})
+# S40b: a READ of a machine, for the state guard's machine branch. test_state_
+# guard pins it equal to tools.machines.MACHINE_STATUS.name, and _CONFIGURE_TOOLS
+# to MACHINE_CONFIGURE.name, so a rename in the registry turns that red.
+_MACHINE_READ_TOOLS = frozenset({"machine_status"})
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -2629,7 +2633,10 @@ def deferral_check(
 #
 # state_claim_check(reply_text, spans, device_names) fires ONLY when the reply
 # ASSERTS the CURRENT connectivity/availability state of a PAIRED device AND no
-# successful device tool span ran this turn. Both halves are mechanical:
+# successful device tool span ran this turn. (S40b adds a second subject, the
+# MACHINES that run models, in chat and eval turns only — its own section below
+# StateClaim; nothing in this paragraph changed for devices.) Both halves are
+# mechanical:
 #
 #   * `device_names` is DERIVED at the call site from the live registry
 #     (devices.list_devices), never a list kept here — a household with no
@@ -2745,17 +2752,482 @@ _STATE_INTENT = re.compile(
 
 @dataclass(frozen=True)
 class StateClaim:
-    """An unchecked assertion about a paired device's CURRENT state.
+    """An unchecked assertion about the CURRENT state of a paired device or of
+    a machine that runs models (S40b).
 
-    `device` is the device reference the reply used (what the redirect nudge
-    names back), `phrase` the matched assertion for the guard span, and `text`
-    the stated correction — the same shape the other guards' Correction carries,
-    so the turn's composition reads it identically.
+    `device` is the subject the reply named — a device reference, or a
+    machine's name when `subject_kind` is "machine" — which is what the
+    redirect nudge names back. `phrase` is the matched assertion for the guard
+    span, and `text` the stated correction — the same shape the other guards'
+    Correction carries, so the turn's composition reads it identically.
+    `served_by` is set only when a NEGATIVE machine claim is contradicted by a
+    round that machine served this turn; the correction then says so.
     """
 
     device: str
     phrase: str
     text: str = STATE_CLAIM_CORRECTION
+    subject_kind: str = "device"
+    served_by: str | None = None
+
+    @property
+    def evidence(self) -> str:
+        """What the guard span records it fired on: a round the subject served
+        this turn contradicting the claim, or no check of the subject at all."""
+        return "served" if self.served_by else "unchecked"
+
+
+# -- S40b: MACHINES as subjects ------------------------------------------------
+#
+# The S40 live walk (2026-09-19, turn b02a5694). Asked "Where do your models
+# run, and is that machine ready?" a second time, she replayed the previous
+# turn's machine_status reading from history — `Last Reported: 2026-09-19T05:
+# 15:39`, twenty minutes old — as the machine's current status, and nothing in
+# the turn had read the machine. The device branch above could not see it: a
+# machine is not a paired device.
+#
+# The subjects are DERIVED from the turn's own spans (`machine_names`), never
+# listed: a round the gateway says ran on an engine names the machine it ran on,
+# and a machine_status/machine_configure call names what it read or set. So
+# the guard needs no gateway call and no threading, and a machine nobody served
+# or read this turn is not a subject (S44 adds gateway-listed names).
+#
+# Two claim shapes, per machine M, and one piece of evidence each:
+#
+#   * A NEGATIVE present state — "hub is switched off", "hub is not answering
+#     right now". Fires when nothing read M this turn. A round M served this
+#     turn is not a read, it is a CONTRADICTION, and the correction says so.
+#   * A READING TIME — a `Last Reported: <timestamp>` line bound to M, or
+#     "hub last reported at 05:15 UTC". Fires when nothing read M this turn: a
+#     served round proves M answered, never when it was last read.
+#
+# A POSITIVE state never fires, by construction rather than by a rule: every
+# derived machine was either read or served this turn, and a served round backs
+# "hub is ready". test_state_guard pins that property; S44 is what breaks it.
+#
+# Armed only in STACK_CLAIM_KINDS (chat, and the eval that replays it), the
+# kinds its precision was measured in over 649 real replies (s40b/design-
+# verdict.md). Precision cuts, each pinned by the corpus: the name is matched
+# case-exact, with edges that keep `hub:qwen3:8b` and `hub.example.com` out; the
+# word before it must be one that can lead a machine's name ("on hub", "called
+# hub") so "your USB hub" and "the smart-home hub" never match; code and quote
+# blocks are someone else's text; and the usual question, reported-speech,
+# hedge, intent and prior-time cuts apply, plus a not-current cut for a reading
+# that says it is old.
+
+STATE_CLAIM_MACHINE_CORRECTION = (
+    "Correction: I did not check {machine} this turn — I have no record of doing so, "
+    "so what I said about it is not a current reading."
+)
+# Appended when the claim was NEGATIVE and the machine served this turn: the
+# one thing about its state the turn does prove.
+STATE_CLAIM_MACHINE_SERVED = " {machine} answered this turn: this reply came from {served_by}."
+
+# Emphasis and code marks, stripped before matching. Never "_": `eval_box` is a
+# machine's name.
+_MD_NOISE = re.compile(r"[*`]+")
+_NAME_LEFT = r"(?<![\w.-])"
+# "hub." ends a sentence; "hub.example.com" is a host and "hub:qwen3:8b" a model.
+_NAME_RIGHT = r"(?![\w-]|\.\w|:\w)"
+# The words that may sit right before a machine's name. Checked in code (see
+# _lead_ok): "Your USB hub", "The smart-home hub", "Jeremy's hub" are about
+# something else, and this guard REPLACES what it corrects.
+_MACHINE_LEAD_OK = frozenset(
+    {
+        "called",
+        "named",
+        "machine",
+        "engine",
+        "on",
+        "at",
+        "and",
+        "or",
+        "but",
+        "so",
+        "while",
+        "because",
+        "since",
+        "also",
+        "currently",
+        "now",
+        "today",
+        "from",
+        "via",
+    }
+)
+# The trailing word of the text before a name, apostrophes and hyphens kept so
+# "Jeremy's" and "smart-home" are read whole.
+_LEAD_WORD = re.compile(r"(\w[\w'’-]*)$")
+# Where an ambiguous positive state word must end to be a claim about the
+# machine ("hub is ready." / "ready right now" / "ready for chat models"), and
+# not "ready for you to add a model".
+_MACHINE_ANCHOR = (
+    r"(?=\s*(?:[.,;:!?)\]}—–]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment|and\b"
+    r"|for\s+(?:chat\s+)?(?:models|chat|requests)\b))"
+)
+_MACHINE_NEG = (
+    r"(?:offline|disconnected|unreachable|not\s+reachable|out\s+of\s+contact"
+    r"|powered\s+off|switched\s+off)"
+)
+_MACHINE_POS = (
+    rf"(?:online|reachable|powered\s+on|switched\s+on|connected{_MACHINE_ANCHOR}"
+    rf"|answering{_MACHINE_ANCHOR}|ready{_MACHINE_ANCHOR}|serving{_MACHINE_ANCHOR})"
+)
+_MACHINE_NEG_STATE = re.compile(_MACHINE_NEG, re.I)
+_NEGATING_ADVERB = re.compile(r"\b(?:not|no\s+longer)\b", re.I)
+# A reading's time: an ISO-ish stamp, a clock time with its zone, or "just now".
+_READING_TS = (
+    r"(?:\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
+    r"(?:\s*(?:Z|UTC|[+-]\d{2}:?\d{2}))?"
+    r"|\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:UTC|Z|am|pm)\b|just\s+now)"
+)
+# "Last updated" is deliberately absent: a catalogue lists "vetted"/"updated"
+# dates that are not readings of a machine.
+_READING_KEY = (
+    r"(?:last\s+(?:reported|checked|seen|observed|read|heard(?:\s+from)?|contact(?:ed)?)"
+    r"|(?:reported|checked|observed|seen|read)\s+at|checked)"
+)
+_READING_LINE = re.compile(
+    rf"^\s*(?:[-+•]|\d+[.)])?\s*(?P<key>{_READING_KEY})\s*[:=]\s*[^\w\s]{{0,6}}\s*"
+    rf"(?P<ts>{_READING_TS})",
+    re.I,
+)
+# A line that names what the lines under it are about ("- Name: …"). One that
+# names no machine ends the upward walk unbound.
+_SUBJECT_KEY_LINE = re.compile(
+    r"^\s*(?:[-+•]|\d+[.)])?\s*(?:name|machine|engine|host|device)\s*[:=]", re.I
+)
+# A reading the reply itself says is not current.
+_NOT_CURRENT = re.compile(
+    r"\b(?:not\s+(?:re-?)?checked|(?:have|has)(?:\s+not|n['’]t)\s+(?:re-?)?checked"
+    r"|did(?:\s+not|n['’]t)\s+(?:re-?)?check|without\s+(?:re-?)?checking"
+    r"|could(?:\s+not|n['’]t)\s+(?:be\s+)?(?:check|read|reach|ask)\w*|unchecked|stale"
+    r"|out\s+of\s+date|may\s+have\s+changed|not\s+(?:a\s+)?(?:current|fresh|live))\b",
+    re.I,
+)
+_HEADING = re.compile(r"^\s*#{1,6}\s")
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
+
+
+def _span_meta(span: Any) -> Mapping[str, Any]:
+    meta = getattr(span, "meta", None)
+    return meta if isinstance(meta, Mapping) else {}
+
+
+def _ok_tool_span(span: Any, names: frozenset[str]) -> bool:
+    return (
+        getattr(span, "kind", None) == "tool"
+        and getattr(span, "name", None) in names
+        and _span_meta(span).get("ok") is True
+    )
+
+
+def _machine_arg(span: Any) -> str | None:
+    """The `machine` argument a machine tool was called with; "" when the call
+    named none; None when the argument record cannot be read (a flooded record
+    degrades to a clipped string — lenient, like _target_of)."""
+    args = _span_meta(span).get("args_redacted")
+    if not isinstance(args, Mapping):
+        return None
+    machine = args.get("machine")
+    return machine.strip() if isinstance(machine, str) else ""
+
+
+def _fact_machines(span: Any) -> list[str]:
+    facts = _span_meta(span).get("facts")
+    if not isinstance(facts, list):
+        return []
+    return [
+        fact["machine"].strip()
+        for fact in facts
+        if isinstance(fact, dict) and isinstance(fact.get("machine"), str)
+    ]
+
+
+def _engine_served_head(span: Any) -> str | None:
+    """The machine an error-free round RAN ON, when the gateway said it ran on
+    an engine: `local` in its usage, or a served-on/served-runtime stamp (the
+    stamp is omitted past a 2 s budget, `local` is not). None for a cloud
+    round, a failed one, or one that says nothing about where it ran."""
+    if getattr(span, "kind", None) != "llm_call":
+        return None
+    meta = _span_meta(span)
+    if meta.get("error"):
+        return None
+    if not (meta.get("local") is True or meta.get("served_on") or meta.get("served_runtime")):
+        return None
+    served_by = meta.get("served_by")
+    if not isinstance(served_by, str):
+        return None
+    head, sep, _rest = served_by.partition(":")
+    return head.strip() if sep else None
+
+
+def machine_names(spans: Sequence[Any]) -> tuple[str, ...]:
+    """The machines this turn can say something checkable about — DERIVED from
+    its own spans, never a list (S40b). The union of:
+
+      * the machine an error-free round ran on (`_engine_served_head`);
+      * each machine an ok machine_status reported (`facts[].machine`);
+      * the `machine` argument of an ok machine_status or machine_configure.
+
+    A failed span adds nothing: a refused call's argument can name a machine
+    that does not exist. Names shorter than two characters are dropped. Public
+    so chat.py can record how many there were on the guard span."""
+    found: set[str] = set()
+    for span in spans:
+        head = _engine_served_head(span)
+        if head:
+            found.add(head)
+        if _ok_tool_span(span, _MACHINE_READ_TOOLS):
+            found.update(_fact_machines(span))
+        if _ok_tool_span(span, _MACHINE_READ_TOOLS | _CONFIGURE_TOOLS):
+            arg = _machine_arg(span)
+            if arg:
+                found.add(arg)
+    return tuple(sorted(name for name in found if len(name) >= 2))
+
+
+def _machine_read(spans: Sequence[Any], machine: str) -> bool:
+    """Did this turn READ `machine`? An ok machine_status that asked for every
+    machine or for this one (or reported it), asked or unasked, facts or none —
+    or an ok machine_configure that set it. A record that cannot be read backs
+    the claim rather than risk correcting an honest reply (_target_of's rule)."""
+    for span in spans:
+        if _ok_tool_span(span, _MACHINE_READ_TOOLS):
+            arg = _machine_arg(span)
+            if not arg or arg == machine or machine in _fact_machines(span):
+                return True
+        elif _ok_tool_span(span, _CONFIGURE_TOOLS):
+            arg = _machine_arg(span)
+            if arg is None or arg == machine:
+                return True
+    return False
+
+
+def _machine_served(spans: Sequence[Any], machine: str, purpose: str | None = None) -> str | None:
+    """The `served_by` of a round `machine` answered this turn without an error
+    — the turn's own latest round when there is one (`purpose`), else the
+    latest of any purpose. None when it served nothing this turn."""
+    own: list[str] = []
+    other: list[str] = []
+    for span in spans:
+        if getattr(span, "kind", None) != "llm_call":
+            continue
+        meta = _span_meta(span)
+        served_by = meta.get("served_by")
+        if meta.get("error") or not isinstance(served_by, str):
+            continue
+        head, sep, _rest = served_by.partition(":")
+        if not sep or head.strip() != machine:
+            continue
+        (own if meta.get("purpose") in (None, purpose) else other).append(served_by)
+    if own:
+        return own[-1]
+    return other[-1] if other else None
+
+
+@lru_cache(maxsize=64)
+def _machine_patterns(
+    names: tuple[str, ...],
+) -> tuple[re.Pattern[str], re.Pattern[str], re.Pattern[str]]:
+    """(mention, state assertion, last-reading prose) for one set of machine
+    names — a pure function of the names, cached like _state_patterns. The
+    name is matched CASE-EXACT inside an otherwise case-blind pattern."""
+    alternation = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    subject = rf"{_NAME_LEFT}(?P<mach>(?-i:{alternation})){_NAME_RIGHT}"
+    mention = re.compile(subject)
+    assertion = re.compile(
+        rf"{subject}(?:\s*\([^()\n]{{1,40}}\))?(?:\s*,?\s+which)?"
+        rf"(?:\s+{_PRESENT_COPULA}|['’]s)(?P<adv>(?:\s+{_STATE_ADVERB})*)"
+        rf"\s+(?P<state>{_MACHINE_NEG}|{_MACHINE_POS})",
+        re.I,
+    )
+    last_reading = re.compile(
+        rf"{subject}\s+(?:is\s+|has\s+been\s+)?last\s+(?:reported|checked|seen|read"
+        rf"|heard\s+from)\b\s*(?:at|on|:)?\s*{_READING_TS}",
+        re.I,
+    )
+    return mention, assertion, last_reading
+
+
+@lru_cache(maxsize=64)
+def _device_mention(names: tuple[str, ...]) -> re.Pattern[str] | None:
+    if not names:
+        return None
+    alternation = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    return re.compile(rf"(?<![\w.-])(?:{alternation})(?![\w-])", re.I)
+
+
+def _lead_ok(text: str, start: int) -> bool:
+    """May the word right before a name at `start` lead a machine's name?
+    Nothing, punctuation or markdown before it is fine; a word must be one of
+    _MACHINE_LEAD_OK or end in -ly ("currently hub is…")."""
+    before = text[:start].rstrip()
+    if not before:
+        return True
+    lead = _LEAD_WORD.search(before)
+    if lead is None:
+        return True
+    word = lead.group(1).lower()
+    return word in _MACHINE_LEAD_OK or word.endswith("ly")
+
+
+def _machine_mentioned(line: str, mention: re.Pattern[str]) -> str | None:
+    for m in mention.finditer(line):
+        if _lead_ok(line, m.start("mach")):
+            return m.group("mach")
+    return None
+
+
+def _machine_lines(reply_text: str) -> list[str]:
+    """The reply's lines as the machine branch reads them. A fenced block and a
+    `>` quote are someone else's text, so their lines are blanked — kept, as
+    empty lines, so a key/value run still ends where they begin — and emphasis
+    and code marks are stripped from the rest."""
+    lines: list[str] = []
+    fenced = False
+    for line in reply_text.split("\n"):
+        if _FENCE.match(line):
+            fenced = not fenced
+            lines.append("")
+        elif fenced or line.lstrip().startswith(">"):
+            lines.append("")
+        else:
+            lines.append(_MD_NOISE.sub("", line))
+    return lines
+
+
+def _is_run_break(line: str) -> bool:
+    return not line.strip() or _HEADING.match(line) is not None
+
+
+def _bind_reading(
+    lines: list[str],
+    index: int,
+    mention: re.Pattern[str],
+    devices: re.Pattern[str] | None,
+) -> tuple[str | None, list[str]]:
+    """Which machine a reading line at `index` is about, and the lines walked
+    to decide it. Its own line first; then upward through the same unbroken
+    run (a blank line or a heading ends it). A paired device's name, a line
+    ending in ":" or a subject line ("- Name: …") that names no machine leaves
+    it unbound; a machine's name binds."""
+    line = lines[index]
+    own = _machine_mentioned(line, mention)
+    if own is not None:
+        return own, []
+    if devices is not None and devices.search(line):
+        return None, []
+    walked: list[str] = []
+    for above in reversed(lines[:index]):
+        if _is_run_break(above):
+            break
+        walked.append(above)
+        if devices is not None and devices.search(above):
+            return None, walked
+        named = _machine_mentioned(above, mention)
+        if named is not None:
+            return named, walked
+        if above.rstrip().endswith(":") or _SUBJECT_KEY_LINE.match(above):
+            return None, walked
+    return None, walked
+
+
+def _lead_in(lines: list[str], index: int) -> str | None:
+    """The line that introduces the run holding `index`: the last non-blank,
+    non-heading line above the run, when it ends in ":" ("Here is what hub
+    reported when I checked earlier:")."""
+    top = index
+    while top > 0 and not _is_run_break(lines[top - 1]):
+        top -= 1
+    for above in reversed(lines[:top]):
+        if _is_run_break(above):
+            continue
+        return above if above.rstrip().endswith(":") else None
+    return None
+
+
+def _not_a_current_reading(texts: Sequence[str]) -> bool:
+    return any(
+        _PRIOR_TIME.search(text) or _NOT_CURRENT.search(text) or _REPORTED.search(text)
+        for text in texts
+    )
+
+
+def _machine_claim(
+    machine: str,
+    phrase: str,
+    spans: Sequence[Any],
+    purpose: str | None,
+    *,
+    negative: bool,
+) -> StateClaim:
+    served_by = _machine_served(spans, machine, purpose) if negative else None
+    text = STATE_CLAIM_MACHINE_CORRECTION.format(machine=machine)
+    if served_by:
+        text += STATE_CLAIM_MACHINE_SERVED.format(machine=machine, served_by=served_by)
+    return StateClaim(
+        device=machine,
+        phrase=phrase.strip()[:80],
+        text=text,
+        subject_kind="machine",
+        served_by=served_by,
+    )
+
+
+def _machine_state_claim(
+    reply_text: str,
+    spans: Sequence[Any],
+    machines: tuple[str, ...],
+    device_names: tuple[str, ...],
+    purpose: str | None,
+) -> StateClaim | None:
+    """The machine branch of state_claim_check (see the section header)."""
+    mention, assertion, last_reading = _machine_patterns(machines)
+    lines = _machine_lines(reply_text)
+    for clause, is_question in _clauses("\n".join(lines)):
+        if is_question:
+            continue  # "is hub ready?" asserts nothing
+        if _REPORTED.search(clause) is not None:
+            continue  # "you said hub is offline" — someone else's claim
+        prior = _PRIOR_TIME.search(clause) is not None
+        for m in assertion.finditer(clause):
+            machine = m.group("mach")
+            if not _lead_ok(clause, m.start("mach")) or prior:
+                continue
+            if _state_prefix_blocks(clause[: m.start()]):
+                continue
+            negative = (_MACHINE_NEG_STATE.fullmatch(m.group("state")) is not None) != (
+                _NEGATING_ADVERB.search(m.group("adv")) is not None
+            )
+            # A positive state is backed by construction (every derived
+            # machine was read or served), so only a negative one can fire.
+            if negative and not _machine_read(spans, machine):
+                return _machine_claim(machine, m.group(0), spans, purpose, negative=True)
+        for r in last_reading.finditer(clause):
+            machine = r.group("mach")
+            if not _lead_ok(clause, r.start("mach")) or prior:
+                continue
+            if _state_prefix_blocks(clause[: r.start()]) or _NOT_CURRENT.search(clause):
+                continue
+            if not _machine_read(spans, machine):
+                return _machine_claim(machine, r.group(0), spans, purpose, negative=False)
+    devices = _device_mention(device_names)
+    for index, line in enumerate(lines):
+        reading = _READING_LINE.match(line)
+        if reading is None:
+            continue
+        machine, walked = _bind_reading(lines, index, mention, devices)
+        if machine is None:
+            continue
+        lead_in = _lead_in(lines, index)
+        if _not_a_current_reading([line, *walked, *([lead_in] if lead_in else [])]):
+            continue
+        # A served round proves the machine answered, never when it was read.
+        if not _machine_read(spans, machine):
+            return _machine_claim(machine, reading.group(0), spans, purpose, negative=False)
+    return None
 
 
 @lru_cache(maxsize=64)
@@ -2825,9 +3297,13 @@ def _state_prefix_blocks(before: str) -> bool:
 
 
 def state_claim_check(
-    reply_text: str, spans: Sequence[Any], device_names: Sequence[str]
+    reply_text: str,
+    spans: Sequence[Any],
+    device_names: Sequence[str],
+    *,
+    purpose: str | None = None,
 ) -> StateClaim | None:
-    """Contradict a live-device-state claim no device check backs this turn.
+    """Contradict a live-state claim no check backs this turn.
 
     Returns a StateClaim when the reply asserts the CURRENT connectivity or
     availability of a paired device and NO successful device_* span ran this
@@ -2836,16 +3312,32 @@ def state_claim_check(
     and precision-first (see the section header). Derived from `device_names`:
     with no paired devices there is no such claim to make, so the guard is
     silent by construction rather than by a special case.
+
+    S40b: in a turn whose kind is in STACK_CLAIM_KINDS (`purpose`, the turn's
+    kind — chat._purpose_of), it also reads MACHINES, derived from the turn's
+    own spans (machine_names): a negative state, or a reading time, about a
+    machine nothing read this turn (see the machine section above). `purpose`
+    defaults to None, which leaves every pre-S40b call exactly as it was.
     """
     if not reply_text or not reply_text.strip():
         return None
     names = tuple(sorted({str(name).strip() for name in device_names if str(name).strip()}))
-    if not names:
+    machines = machine_names(spans) if purpose in STACK_CLAIM_KINDS else ()
+    if not names and not machines:
         return None
-    if _checked_a_device(spans):
-        # A real check happened: whatever the reply says about the device is
-        # backed by a span, and this guard has nothing to say about accuracy.
-        return None
+    # A real device check backs whatever the reply says about a DEVICE — and
+    # only a device: it says nothing about a machine.
+    if names and not _checked_a_device(spans):
+        claim = _device_state_claim(reply_text, names)
+        if claim is not None:
+            return claim
+    if machines:
+        return _machine_state_claim(reply_text, spans, machines, names, purpose)
+    return None
+
+
+def _device_state_claim(reply_text: str, names: tuple[str, ...]) -> StateClaim | None:
+    """The device branch of state_claim_check, unchanged since 2026-09-03."""
     assertion, last_seen = _state_patterns(names)
     for clause, is_question in _clauses(reply_text):
         if is_question:
