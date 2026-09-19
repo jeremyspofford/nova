@@ -78,3 +78,71 @@ The walk is hers, in chat. Every turn is read with `turn_spans WHERE turn_id=…
 6. **Measured through the eval runner:** agent_quality v15 on `hub:qwen3:8b`, N≥3.
 
 If the history stamps stop the replay from happening, report that plainly and point to the new eval case and the corpus as the proof that the guard fires.
+
+---
+
+## Close-out (2026-09-19/20): built, reviewed, deployed, walked
+
+**Status: SHIPPED to the live Dell stack** (core `s40b-f3b8696a`; no migrations).
+Carries: [`slice-40b-carries.md`](slice-40b-carries.md). Rulings:
+[`s40b/rulings.md`](s40b/rulings.md). Review trail: `s40b/review-trail/`.
+
+### How it was built
+
+- **Design first, measured:** three read-only maps, two competing designs (guard-only and guard-plus-provision) and a critic that ran the recommended guards over **649 real replies**. Both input designs misfired on honest replies; the synthesis dropped what misfired and kept what held.
+- **Four tasks, one stream** (they share `guards.py` and `chat.py`), each implementer TDD against the verdict's corpus, each reviewed, with fix rounds:
+  - T1 (machines in `state_claim`, per-call facts in `live_facts`): 2 rounds;
+  - T2 (`served_claim`, `memory_claim`, the `stack_claim` negation fix, composition, the prompt truth line): 2 rounds;
+  - T3 (history stamps): clean;
+  - T4 (corpus v15, predicates): the breaker tripped at 3 rounds, and both open findings were adjudicated into the final wave.
+- **Whole-branch review** in three areas with adversarial verification: **12 confirmed, 0 refuted**, including a **critical** one.
+- **One fix wave (32 items)**, then its re-review (all 32 addressed, 2 new items), then one small follow-up. Three review passes in total, each ending green.
+
+### What the reviews caught that tests would not have
+
+- **A catastrophic backtracking hang (critical).** An honest reply containing a padded markdown table row took 15.4 s to check, growing 16× per 2 characters of padding, synchronously in core's single event loop. Now 0.06 ms. The follow-up's 1,500-character sweep found three more quadratic patterns, and `tests/test_guard_regex_timing.py` now sweeps **every** compiled pattern in `guards.py` at two lengths.
+- **Eleven false corrections of honest replies**, each reproduced by the reviewer before it was believed: "I haven't verified hub this turn", "hub (last known status):", her own history-stamp wording, "According to your notes…", "From your phone, hub is unreachable", "Timers run without a model", "X on hub is not answering".
+- **A narrowing that overshot**, found by the re-review: 21 real lies had gone silent ("To your question, hub is offline."). A fronted scope must now name a reach.
+
+### Precision, measured on real traffic
+
+The guards were run as pure functions over every eval reply and every live
+assistant row with that turn's own spans and purpose — **662 replies before the
+fix wave, 663 after**:
+
+| When | Fires | Turns |
+|---|---|---|
+| The verdict's design (pre-build) | 3 | the 3 walk turns |
+| After the fix wave | 8 | 4 turns |
+| After the follow-up | 8 | the same 4 turns |
+
+All 8 are **false sentences**. The fourth turn (`bc92475c`) is a later live chat
+turn repeating the same two lies the walk found, so the guards catch a real
+repeat rather than an honest reply. The re-reviewer re-ran the probe and got a
+byte-identical result, and invented 16 honest sentences of its own: **none fired**.
+
+### Suites
+
+| Point | Full core suite |
+|---|---|
+| Base (main, after S40) | 3,166 |
+| T1 | 3,318 |
+| T2 | 3,760 |
+| T4 (all four tasks) | 4,375 |
+| After the fix wave | 4,830 |
+| After the follow-up | **5,016** |
+
+### The walk (2026-09-19, live, her words; traces read by turn id)
+
+| Step | Turn | Result |
+|---|---|---|
+| 1. "Where do your models run, and is that machine ready?" — the exact question that produced the replay, in the same conversation | `31ff98ff` | **She checked.** Her own `machine_status` (`unasked=false`, facts `checked_now: true`), "checked live just now (22:43 UTC)". No replayed timestamp, no wrong current model, no memory claim. **0 guard spans.** |
+| 2. "What's 17 times 23?" | `c5bfdf8b` | "391", and no "no model was needed" claim. 0 guards. |
+| 3. "Which model is answering you right now?" | `2090b8af` | "qwen3.8:27b on hub" — exactly `served_by`. 0 guards. |
+| 5. "Is your memory service working?" | `4bd455f7` | "Working — I just ran a search … three notes without error", with the old outage put in the past. 0 guards. |
+
+**No guard fired on any honest reply in the walk.** The replay did not recur: the
+history stamp now tells her that the old row was a record of its moment, so the
+guard was not needed. That is the right order — the truth half first, the guard
+as the backstop — and the firing half is proven by the pinned corpus, the new
+eval case, and the 8 real-traffic fires on her own past lies.

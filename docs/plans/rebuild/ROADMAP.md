@@ -20,7 +20,8 @@ source for anything v4 has not rebuilt.
 ## Where things stand
 
 v4 merged to `main` on 2026-09-17 (`0996a31`). Shipped slices: S01–S05b, S09,
-S10/S10a/S10pre, S11–S19, S22, S24, S25, S28, **S40** (2026-09-19). Parked: S23. Unbuilt: S26, S27, S41–S49.
+S10/S10a/S10pre, S11–S19, S22, S24, S25, S28, **S40** and **S40b** (2026-09-19). Parked:
+S23. Unbuilt: S26, S27, S41–S49.
 
 ---
 
@@ -36,7 +37,7 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | 3 | **S25** the Inbox | done |
 | — | **S28** attachments | done (inserted) |
 | 0 | **The suite hang** (below) | **DONE 2026-09-18**: root-caused and fixed; full core suite 2,957/2,957 green twice |
-| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b next**: the walk showed her stating a machine's live state without checking it, so `state_claim` gains machine subjects, and possibly `where_served_claim`. **Then S41** (portable hub plus verified backup and restore). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
+| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b shipped 2026-09-19** — the honesty guards the S40 walk showed were missing: machine subjects in `state_claim`, new `served_claim` and `memory_claim`, and history stamps that mark an old live reading as a record of its moment. **S41 next** (portable hub plus verified backup and restore). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
 | 4 | **S26 — the quality corpus** | Nothing built, nothing spec'd. After the hub lane. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
 
@@ -269,6 +270,7 @@ kept for the record).
 | S27 | feature flags | `slice-27-feature-flags.md` — **last** |
 | S28 | attachments | `slice-28-attachments.md` |
 | S40 | engines and measurement identity | `slice-40-engines.md`, `-carries`, `s40/` (task files + review rulings) |
+| S40b | honest claims about machines, models and memory | `slice-40b-honest-machine-claims.md`, `-carries`, `s40b/` (design verdict, rulings, review trail) |
 | S41–S49 | the rest of the hub lane: backup/restore, agent on every OS, Tailscale join, models role, the move, wake, thin clients, Headscale, LAN | [`hub-topology.md`](hub-topology.md) + `hub/` (maps, two design rounds, critiques) — **approved 2026-09-18** |
 
 **What S10a was cited for** (`slice-02e-carries.md:87`): live catalog +

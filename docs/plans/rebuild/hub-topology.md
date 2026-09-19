@@ -1,5 +1,6 @@
-**Status:** APPROVED by Jeremy 2026-09-18. Nothing built yet. Next up: roadmap item 0 (the
-core suite wedge), then Phase 0 measurements and S40.
+**Status:** APPROVED by Jeremy 2026-09-18. Item 0 is done (the core suite runs to the end),
+**S40 and S40b are shipped, deployed and walked** (2026-09-19), and **S41 is next**. Phase 0
+is measured just before the slice each measurement gates.
 
 **How this was made:** six code maps, then two design rounds. Each round had three designers,
 one adversarial critic per design, and an integrator. Round 1 was designed for Jeremy's machines.
@@ -248,6 +249,32 @@ each one selects go in `docs/plans/rebuild/hub-p0-measurements.md`.
 2. "Where do your models run?" → she calls `machine_status`.
 3. The probe row reads `gpu:cuda:<uuid>`, `runtime=container`.
 4. "Stop running chat models here" → the route frame names the link that answered.
+
+### S40b: honest claims about machines, models and memory (unplanned; the S40 walk found it)
+
+**Status: SHIPPED and walked 2026-09-19.** Plan and close-out in
+[`slice-40b-honest-machine-claims.md`](slice-40b-honest-machine-claims.md); the design authority
+is [`s40b/design-verdict.md`](s40b/design-verdict.md); carries in
+[`slice-40b-carries.md`](slice-40b-carries.md). No migrations.
+
+The S40 walk ended with three false sentences in her replies and no guard firing on any of them:
+she replayed an earlier machine reading as current (timestamp included) without calling
+`machine_status`, named a model as current that did not serve the turn, and called memory
+unreachable in a turn whose recall had answered.
+
+- `state_claim_check` gains **machine subjects**, derived per turn from that turn's spans, armed
+  on chat and eval turns only. Its evidence is a read of that machine this turn or a served round
+  on it.
+- New `served_claim_check` and `memory_claim_check`, both APPEND.
+- `stack_claim` stops correcting honest negations; `live_facts` keeps each auto-run's facts; the
+  prompt line about "the model answering" is made true instead of guessed.
+- **History stamps** mark scheduled and beat rows, and rows that read live facts, as records of
+  their moment — so an old reading is not handed back to her as current.
+- Eval predicates stop counting unasked backend spans as her calls; corpus v15 adds
+  `does-not-replay-a-machine-reading-as-current`.
+
+This is the guard half of what S44 needs: S44 adds a machine that can be **asleep**, and the same
+subjects then carry the 409 as evidence.
 
 ### S41: portable hub + verified backup/restore drill (operator tooling)
 
