@@ -139,6 +139,31 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+# S40: one engine exactly as the gateway's GET /admin/engines lists it
+# (services/gateway/app/engines.py EngineView). A mirror, not an invention: a
+# test that needs another state says so by name, over these defaults.
+ENGINE_AT = "2026-09-18T10:00:00+00:00"
+ENGINE_GPU = "gpu:cuda:GPU-8d3c5a2e-7f41-4b8e-9c55-000000000001"
+
+
+def engine_view(name: str = "hub", **over) -> dict:
+    view = {
+        "name": name,
+        "lifecycle": "always_on",
+        "serving": True,
+        "state": "ready",
+        "reason": None,
+        "observed_at": ENGINE_AT,
+        "tags": {"qwen3:8b": 5_225_388_164},
+        "tags_as_of": ENGINE_AT,
+        "compute": ENGINE_GPU,
+        "runtime": "container",
+        "facts": {},
+    }
+    view.update(over)
+    return view
+
+
 @dataclass
 class FakeGateway:
     """An OpenAI-compatible completions endpoint plus the admin surface."""
@@ -199,6 +224,20 @@ class FakeGateway:
     # main.py). The stack checks probe it, so a test can make the peer answer
     # something other than 200 without unmounting it.
     health_status: int = 200
+    # S40: where a served round ran — X-Nova-Served-On / -Runtime on a
+    # completion. None sends no header, which is what the gateway does when it
+    # cannot tell (a cloud model, more than one accelerator).
+    served_on: str | None = None
+    served_runtime: str | None = None
+    # S40: the engines GET /admin/engines lists (EngineView dicts, see
+    # engine_view), and per name the detail-only keys GET /admin/engines/{name}
+    # adds (vram, fit_frame). None falls back to the admin echo, like the
+    # catalogue — a body that names no engines.
+    engines: list[dict] | None = None
+    engine_details: dict[str, dict] = field(default_factory=dict)
+    # Names listed by /admin/engines whose own read then 404s — a machine gone
+    # between the list and its card, which is the gateway's own words for it.
+    engine_missing: set[str] = field(default_factory=set)
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -236,6 +275,8 @@ class FakeGateway:
                 Route("/admin/routes/{role}", self._admin, methods=["PUT", "DELETE"]),
                 Route("/admin/route/explain", self._explain, methods=["GET"]),
                 Route("/admin/routes/walls/{provider}", self._admin, methods=["DELETE"]),
+                Route("/admin/engines", self._engines, methods=["GET"]),
+                Route("/admin/engines/{name}", self._engine, methods=["GET"]),
             ]
         )
 
@@ -297,6 +338,10 @@ class FakeGateway:
             yield "data: [DONE]\n\n"
 
         headers = {"X-Nova-Served-By": self.served_by}
+        if self.served_on is not None:
+            headers["X-Nova-Served-On"] = self.served_on
+        if self.served_runtime is not None:
+            headers["X-Nova-Served-Runtime"] = self.served_runtime
         if self.route_header is not None:
             headers["X-Nova-Route"] = self.route_header
         return StreamingResponse(stream(), media_type="text/event-stream", headers=headers)
@@ -314,6 +359,26 @@ class FakeGateway:
         if not _bearer_ok(request, GATEWAY_TOKEN):
             return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
         return JSONResponse(self.catalog_body)
+
+    async def _engines(self, request):
+        if self.engines is None:
+            return await self._admin(request)
+        await self._record(request)
+        if not _bearer_ok(request, GATEWAY_TOKEN):
+            return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+        return JSONResponse({"engines": self.engines})
+
+    async def _engine(self, request):
+        if self.engines is None:
+            return await self._admin(request)
+        await self._record(request)
+        if not _bearer_ok(request, GATEWAY_TOKEN):
+            return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+        name = request.path_params["name"]
+        view = next((e for e in self.engines if e["name"] == name), None)
+        if view is None or name in self.engine_missing:
+            return JSONResponse({"error": f"no engine named {name!r}"}, status_code=404)
+        return JSONResponse({**view, **self.engine_details.get(name, {})})
 
     async def _hf(self, request):
         if self.hf_body is None:

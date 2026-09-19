@@ -22,7 +22,9 @@ from app import tools
 from app.identity import Person
 from app.main import app as core_app
 from app.tools.base import ToolFailure
+from tests import fakes
 from tests.conftest import requires_db
+from tests.fakes import FakeGateway
 
 pytestmark = requires_db
 
@@ -46,14 +48,25 @@ def _owner() -> Person:
 
 
 class _Gateway:
-    """The one route this tool reads, as a local ASGI stand-in. `mount_peers`
-    takes an object carrying `.app`, the same shape tests/fakes.py uses."""
+    """The two routes this tool reads (S40: the engine list and one engine's
+    card; /admin/vram is gone), as a local ASGI stand-in. `mount_peers` takes
+    an object carrying `.app`, the same shape tests/fakes.py uses."""
 
     def __init__(self, body: dict, status: int = 200) -> None:
-        async def vram(_request):
-            return JSONResponse(body, status_code=status)
+        async def listing(_request):
+            return JSONResponse({"engines": [fakes.engine_view()]})
 
-        self.app = Starlette(routes=[Route("/admin/vram", vram, methods=["GET"])])
+        async def card(_request):
+            return JSONResponse(
+                {**fakes.engine_view(), "vram": body, "fit_frame": "vram"}, status_code=status
+            )
+
+        self.app = Starlette(
+            routes=[
+                Route("/admin/engines", listing, methods=["GET"]),
+                Route("/admin/engines/{name}", card, methods=["GET"]),
+            ]
+        )
 
 
 @pytest.fixture
@@ -84,7 +97,13 @@ async def _rounds(pool, *, model: str, rate: float, count: int, hours_ago: float
             turn_id,
             model,
             when,
-            {"model": model, "tok_per_s": rate},
+            {
+                "model": model,
+                "served_by": f"hub:{model}",
+                "served_on": fakes.ENGINE_GPU,
+                "served_runtime": "container",
+                "tok_per_s": rate,
+            },
         )
 
 
@@ -237,7 +256,7 @@ async def test_a_gateway_that_cannot_be_asked_is_a_stated_refusal(mount_peers, p
         raise httpx.ConnectError("connection refused")
 
     dead = _Gateway({})
-    dead.app = Starlette(routes=[Route("/admin/vram", boom, methods=["GET"])])
+    dead.app = Starlette(routes=[Route("/admin/engines", boom, methods=["GET"])])
     mount_peers(gateway=dead)
     ctx = tools.context_for(core_app, _owner())
 
@@ -279,3 +298,24 @@ async def test_walled_rounds_are_said_rather_than_reported_as_nothing_measured(a
     assert "produced nothing at all in 2 of its last 2 round(s)" in said
     assert "cannot currently serve this model" in said
     assert "not measured yet" not in said
+
+
+async def test_every_machines_card_is_named(ask):
+    said = await ask(CARD)
+    assert said.startswith("hub: The card has 21.4 GB free of 24.0 GB")
+
+
+async def test_a_machine_that_sleeps_on_its_own_is_not_woken_to_read_its_card(mount_peers, pool):
+    gateway = FakeGateway(
+        engines=[
+            fakes.engine_view(),
+            fakes.engine_view("dell", lifecycle="wake_on_lan", state="unobserved"),
+        ],
+        engine_details={"hub": {"vram": CARD, "fit_frame": "vram"}},
+    )
+    mount_peers(gateway=gateway)
+    said = await tools.REGISTRY["inference_health"].executor(
+        {}, tools.context_for(core_app, _owner())
+    )
+    assert "dell: its card was not read — it is unobserved" in said
+    assert "/admin/engines/dell" not in [path for path, _ in gateway.seen]

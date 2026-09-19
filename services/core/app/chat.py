@@ -2657,9 +2657,7 @@ async def _gateway_round(
                     json=completion_payload(model, messages, advertised),
                     headers=peers.attribution_headers(turn, purpose, role),
                 ) as response:
-                    served_by = response.headers.get("x-nova-served-by")
-                    if served_by:
-                        span.meta["served_by"] = served_by
+                    _note_served(span, response.headers)
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         span.meta["gateway_status"] = response.status_code
@@ -2898,6 +2896,28 @@ def _note_route(span, header: str | None) -> None:
         span.meta["route_reason"] = unquote(fields["reason"])
 
 
+def _note_served(span, headers) -> None:
+    """WHO served this round, and WHERE (S40, D10), off the gateway's headers.
+
+    X-Nova-Served-By is `provider:model`. X-Nova-Served-On is the compute id
+    the gateway stamped (`gpu:cuda:<uuid>`, `cpu:<slug>|<n>c|<GiB>g`, joined
+    with `+` on a partial offload) and X-Nova-Served-Runtime the runtime it ran
+    in. Each is recorded ONLY when the gateway said it: an omitted header means
+    the gateway could not tell (more than one accelerator, a cloud model), and
+    model_speed keys every rate by these — a guessed compute would file a round
+    under a machine it never ran on.
+    """
+    served_by = headers.get("x-nova-served-by")
+    if served_by:
+        span.meta["served_by"] = served_by
+    served_on = headers.get("x-nova-served-on")
+    if served_on:
+        span.meta["served_on"] = served_on
+    runtime = headers.get("x-nova-served-runtime")
+    if runtime:
+        span.meta["served_runtime"] = runtime
+
+
 def _purpose_of(turn: traces.Turn) -> str:
     """What the ledger records a turn's own rounds as: its kind."""
     kind = getattr(turn, "kind", None)
@@ -2973,9 +2993,7 @@ async def _collect_completion(
                     json=payload,
                     headers=peers.attribution_headers(turn, purpose, turn.role or "judge"),
                 ) as response:
-                    served_by = response.headers.get("x-nova-served-by")
-                    if served_by:
-                        span.meta["served_by"] = served_by
+                    _note_served(span, response.headers)
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         detail = (await response.aread()).decode(errors="replace")[:200]

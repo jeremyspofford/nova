@@ -13,11 +13,11 @@ asks — which is the difference between a feature that looks shipped and one
 that makes her able.
 
 ## One read, no arguments
-The card and the resident table come from the gateway's /admin/vram (core
-has no route to the GPU of its own); the throughput comes from the
-`llm_call` spans this turn's own rounds are already filing. Nothing is
-computed twice and nothing is cached, so the answer is about the moment she
-was asked.
+Every machine's card and resident table come from the gateway's engine
+readings (GET /admin/engines, then /admin/engines/{name}, through
+app/machines.py — core has no route to a GPU of its own; /admin/vram is gone
+since S40); the throughput comes from the `llm_call` spans, keyed by where
+the chat model's rounds last ran (model_speed.latest_serving).
 
 ## It states, it never decides
 `reads_only=True`. Every half degrades independently and says why: the card
@@ -28,13 +28,8 @@ baseline, and the answer says so rather than inventing a normal for it.
 
 from __future__ import annotations
 
-import httpx
-
-from app import db, model_speed, peers, settings_store
+from app import db, machines, model_speed, settings_store
 from app.tools.base import Tool, ToolContext, ToolFailure
-
-VRAM_PATH = "/admin/vram"
-VRAM_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
 
 
 def _gb(mb: float | None) -> str:
@@ -130,26 +125,41 @@ def _speed_lines(
 
 
 async def inference_health(_args: dict, ctx: ToolContext) -> str:
-    """The card, what is on it, and how fast this model is actually going."""
+    """Every machine's card, what is on it, and how fast the chat model is going."""
     pool = await db.get_pool()
     try:
-        async with peers.client(ctx.app, peers.GATEWAY, VRAM_TIMEOUT) as client:
-            resp = await client.get(VRAM_PATH)
-            resp.raise_for_status()
-    except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
+        pairs = await machines.cards(ctx.app)
+    except machines.PlantUnavailable as exc:
         # A stated refusal, in the Error: shape every tool uses when a call
         # CANNOT run. Not a guess about the card, and not a silent empty.
-        raise ToolFailure(
-            f"the gateway could not be asked about the GPU — {peers.reason(exc)}"
-        ) from exc
+        raise ToolFailure(f"the gateway could not be asked about the GPU — {exc}") from exc
 
-    lines = _card_lines(resp.json())
+    lines: list[str] = []
+    if not pairs:
+        lines.append("The gateway lists no machine that runs models, so there is no card to read.")
+    for view, detail in pairs:
+        if detail is None:
+            lines.append(
+                f"{view['name']}: its card was not read — it is {view.get('state')}, and a "
+                "machine that sleeps on its own is never woken just to be read."
+            )
+            continue
+        vram = detail.get("vram") if isinstance(detail.get("vram"), dict) else {}
+        lines.append(f"{view['name']}: " + " ".join(_card_lines(vram)))
 
     model = await settings_store.read_value(pool, "chat.model")
     if model:
         factor = await settings_store.read_value(pool, "inference.degraded_factor")
         stall = (await model_speed.stalls(pool)).get(model)
-        lines.extend(_speed_lines(await model_speed.speed_of(pool, model), factor, stall))
+        # Where the chat model's rounds last ran decides which history is its
+        # normal (S40, D10) — the same model on another card is another Speed.
+        serving = await model_speed.latest_serving(pool, model)
+        speed = (
+            await model_speed.speed_of(pool, *serving.key)
+            if serving is not None
+            else model_speed.Speed(model, None, 0, None, 0)
+        )
+        lines.extend(_speed_lines(speed, factor, stall))
     else:
         lines.append("No chat model is configured, so there is no throughput to report.")
 
@@ -160,11 +170,11 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="inference_health",
         description=(
-            "How the GPU is doing right now: how much VRAM is free of the card's total, "
-            "which models ollama is holding and how big they are, whether something "
-            "other than ollama is using the card, and how fast the chat model is "
-            "generating compared with its usual speed on this machine. Use it when a "
-            "reply is taking a long time, when asked why things are slow, before "
+            "How the GPU is doing right now on every machine that runs models: how much "
+            "VRAM is free of the card's total, which models ollama is holding and how big "
+            "they are, whether something other than ollama is using the card, and how fast "
+            "the chat model is generating compared with its usual speed where it runs. Use "
+            "it when a reply is taking a long time, when asked why things are slow, before "
             "starting something heavy, or when asked what is on the GPU."
         ),
         parameters={"type": "object", "properties": {}, "additionalProperties": False},
