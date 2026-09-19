@@ -209,6 +209,8 @@ each one selects go in `docs/plans/rebuild/hub-p0-measurements.md`.
 
 ### S40: engines and measurement identity (Dell hub; builtin engine only)
 
+**Status: SHIPPED and walked 2026-09-19.** Close-out in [`slice-40-engines.md`](slice-40-engines.md); carries in [`slice-40-carries.md`](slice-40-carries.md). Core 035 and gateway 009 are used.
+
 **Gateway migration `009_engines`:**
 - delete the `ollama` walls; rename the builtin `ollama` → `hub` and rewrite the `routes.chain` links;
 - new tables `engines` (lifecycle, serving, hold_s, cached tags and facts, with dated-pair CHECKs) and `engine_models`;
