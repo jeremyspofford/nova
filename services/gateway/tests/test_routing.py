@@ -596,6 +596,60 @@ async def test_the_standby_is_only_ever_a_serving_engine(client, pool, local, mo
     assert not [p for p, _ in local.seen if p.endswith("/chat/completions")]
 
 
+def _shown(fake) -> list[str]:
+    return [
+        (body or {}).get("model") or (body or {}).get("name")
+        for p, body in fake.seen
+        if p == "/api/show"
+    ]
+
+
+async def test_the_standby_asks_about_its_default_model_alone_first(
+    client, pool, local, mount_backend
+):
+    """(S40 fix wave C1) After a restart the /api/show cache is empty, and the
+    standby asked about EVERY installed model under one deadline — so one
+    slow show (a model loading) turned a standby that worked into a 503,
+    even with the default installed. The default is asked about alone first;
+    nothing else is shown when it chats."""
+    ollama_mod.SHOW_CACHE.clear()
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/judge", json={"chain": ["openrouter:remote-model"]})
+    await usage.set_cap(pool, "openrouter", Decimal("0"))
+
+    resp = await _chat(client, "judge")
+
+    assert resp.status_code == 200
+    route = _route_chunk(resp.content)
+    assert route["standby"] is True and route["served_by"] == "hub:qwen3:8b"
+    assert _shown(local) == ["qwen3:8b"]
+
+
+async def test_a_default_that_does_not_chat_fans_out_to_the_rest(
+    client, pool, mount_backend, monkeypatch
+):
+    """The fan-out is still there when the default cannot take a chat turn
+    (an embedder set as the default): the default first, then the rest."""
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(tags=("all-minilm:latest", "zz-chat:1b"))
+    fake.show["all-minilm:latest"]["capabilities"] = ["embedding"]
+    mount_backend("http://ollama.test", fake.app)
+    await backends.save_config(pool, {"kind": "ollama", "model": "all-minilm"})
+    ollama_mod.SHOW_CACHE.clear()
+    engines.clear_cache()
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/judge", json={"chain": ["openrouter:remote-model"]})
+    await usage.set_cap(pool, "openrouter", Decimal("0"))
+
+    resp = await _chat(client, "judge")
+
+    assert resp.status_code == 200
+    route = _route_chunk(resp.content)
+    assert route["standby"] is True and route["served_by"] == "hub:zz-chat:1b"
+    shown = _shown(fake)
+    assert shown[0] == "all-minilm:latest" and "zz-chat:1b" in shown[1:]
+
+
 async def test_the_standby_never_hands_a_chat_turn_to_an_embedding_model(
     client, pool, mount_backend, monkeypatch
 ):

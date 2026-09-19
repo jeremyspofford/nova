@@ -425,12 +425,17 @@ async def standby(
         view = seen.get(name) or await engines.observe(app, pool, row, live=False)
         if not view.tags:
             continue
-        chat = await _chat_models(app, row, set(view.tags))
+        default = row.get("default_model")
+        # The default alone first (S40 fix wave C1): after a restart the show
+        # cache is empty, and asking about every installed model under one
+        # deadline let a single slow show 503 a standby whose default was
+        # installed and chats. The rest are asked about only when it is not.
+        mine = {tag for tag in view.tags if default and _installed({tag}, default)}
+        if mine and _installed(await _chat_models(app, row, mine), default):
+            return row, default, f"{name}'s default model {default}"
+        chat = await _chat_models(app, row, set(view.tags) - mine)
         if not chat:
             continue
-        default = row.get("default_model")
-        if default and _installed(chat, default):
-            return row, default, f"{name}'s default model {default}"
         for entry in curated:
             slug = entry["slug"]
             if not _installed(chat, slug):
