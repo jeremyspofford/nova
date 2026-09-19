@@ -46,9 +46,12 @@ async def test_status_reads_every_machine_live_and_leaves_a_fact_for_each(mount_
     assert "serving is on" in said and "always on" in said
     assert f"computes on {fakes.ENGINE_GPU}" in said and "runtime container" in said
     assert "qwen3.8:27b (16.6 GB)" in said and "qwen3:8b (4.9 GB)" in said
-    assert "hub:<model> runs on hub" in said
-    # (S40 fix wave B4) The header states the true rule, never the false one.
-    assert TRUE_RULE in said.replace("A model id", "a model id")
+    # (S40 fix wave B4) The header states the true rule, never the false one
+    # — and the {first}:<model> example follows the QUALIFIED clause it
+    # illustrates, never the bare-id clause, so a filtered machine's header
+    # never reads as though it were the default (S40 fix wave: example
+    # placement).
+    assert HEADER_RULE in said.replace("A model id", "a model id")
     assert FALSE_RULE not in said
     assert sink == [
         {"machine": "hub", "answering": True, "checked_now": True, "at": fakes.ENGINE_AT}
@@ -207,6 +210,18 @@ TRUE_RULE = (
     "a bare id, whose own colon is its tag (qwen3.8:27b), means the default machine"
 )
 FALSE_RULE = "names its machine before its first colon"
+
+# The live machine_status header interleaves the {first}:<model> example
+# INTO the true rule, after the clause it illustrates ("names that machine")
+# rather than after the unrelated bare-id clause — so filtering on one
+# machine never reads as though that machine were the default (S40 fix wave:
+# example placement, following a mismatch between the fixed no-machine case
+# above and a `machine="dell"` filtered call).
+HEADER_RULE = (
+    "a model id qualified with a machine's name (machine:model) names that machine "
+    "(hub:<model> runs on hub); a bare id, whose own colon is its tag (qwen3.8:27b), "
+    "means the default machine"
+)
 
 
 def test_the_prompt_says_where_models_run_from_the_tools_own_names():
