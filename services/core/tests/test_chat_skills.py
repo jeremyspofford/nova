@@ -305,3 +305,135 @@ def test_a_row_with_no_status_column_is_left_exactly_as_it_was():
 
     rows = [{"role": "assistant", "content": "hi", "agent": None}]
     assert chat.attributed_history(rows, None) == [{"role": "assistant", "content": "hi"}]
+
+
+# ── a reading is a record of its moment (S40b) ─────────────────────────────
+#
+# The S19 stamp above marks a row whose turn FAILED. The S40 walk (turn
+# b02a5694) found the other half: a row whose turn READ something live — "hub
+# is ready", from a machine_status call — and a row a timer or a beat wrote,
+# reached the next turn as bare prose in the present tense, and she replayed
+# the reading as current without checking. So those rows arrive stamped too,
+# and the stamp is derived from the turn behind the row (its kind, and whether
+# one of its tool spans is a live read that answered — see
+# test_chat_history_stamps for the query half), never from the row's words.
+#
+# Precision is the product here as much as in a guard: an ordinary reply must
+# reach her byte-identical, or every conversation she has ever had changes.
+
+_READ_AT = "2026-09-19 05:15 UTC"
+_MOMENT = "a record of that moment, not of now]"
+
+
+def _history_row(**over) -> dict:
+    from datetime import UTC, datetime
+
+    row = {
+        "role": "assistant",
+        "content": "hub is ready and serving.",
+        "agent": None,
+        "status": "ok",
+        "created_at": datetime(2026, 9, 19, 5, 15, 39, tzinfo=UTC),
+        "turn_kind": "chat",
+        "read_live": False,
+    }
+    row.update(over)
+    return row
+
+
+def _beat_kind() -> str:
+    # Read from the module that fires beats, so a rename of the kind turns
+    # this red instead of leaving beat rows silently unstamped.
+    from app import beats
+
+    return beats.BEAT_KIND
+
+
+MUST_STAMP = [
+    pytest.param(
+        {"turn_kind": "beat"},
+        f"[a beat message from {_READ_AT}; {_MOMENT} hub is ready and serving.",
+        id="a beat's row",
+    ),
+    pytest.param(
+        {"turn_kind": "scheduled"},
+        f"[a scheduled message from {_READ_AT}; {_MOMENT} hub is ready and serving.",
+        id="a scheduled firing's row",
+    ),
+    pytest.param(
+        {"read_live": True},
+        f"[written at {_READ_AT} from readings taken then; {_MOMENT} hub is ready and serving.",
+        id="a chat row whose turn read something live",
+    ),
+    pytest.param(
+        {"read_live": True, "agent": "coder"},
+        f"[written at {_READ_AT} from readings taken then; {_MOMENT} "
+        "[coder] hub is ready and serving.",
+        id="an agent's reading row keeps its speaker after the stamp",
+    ),
+    pytest.param(
+        {"turn_kind": "scheduled", "read_live": True},
+        f"[a scheduled message from {_READ_AT}; {_MOMENT} hub is ready and serving.",
+        id="a firing that read live says it was a firing — one stamp, never two",
+    ),
+    pytest.param(
+        {"turn_kind": "beat", "status": "interrupted"},
+        f"[a beat message from {_READ_AT}; {_MOMENT} hub is ready and serving.",
+        id="an interrupted beat is still a beat",
+    ),
+    pytest.param(
+        {"status": "error", "read_live": True},
+        f"[that turn failed at {_READ_AT}; {_MOMENT} hub is ready and serving.",
+        id="a failed turn's stamp comes first, whatever it read",
+    ),
+    pytest.param(
+        {"status": "stopped", "turn_kind": "scheduled"},
+        f"[you stopped that turn at {_READ_AT}; {_MOMENT} hub is ready and serving.",
+        id="a stopped turn's stamp comes first, whatever kind it was",
+    ),
+]
+
+
+@pytest.mark.parametrize(("over", "expected"), MUST_STAMP)
+def test_a_record_of_its_moment_is_stamped_as_one(over, expected):
+    from app import chat
+
+    assert chat.attributed_history([_history_row(**over)], None) == [
+        {"role": "assistant", "content": expected}
+    ]
+
+
+def test_the_beat_stamp_follows_the_kind_the_beat_fires_under():
+    from app import chat
+
+    (out,) = chat.attributed_history([_history_row(turn_kind=_beat_kind())], None)
+    assert out["content"].startswith(f"[a {_beat_kind()} message from {_READ_AT};")
+
+
+MUST_NOT_STAMP = [
+    pytest.param({}, id="an ordinary chat reply that read nothing live"),
+    pytest.param({"read_live": None}, id="a row whose turn has no spans to read"),
+    pytest.param({"turn_kind": None, "status": None}, id="a row whose turn is gone"),
+    pytest.param(
+        {"role": "user", "turn_kind": "beat", "read_live": True},
+        id="his own words, whatever the turn behind them did",
+    ),
+    # A reminder is the owner's own text delivered by code — no model wrote
+    # it and nothing was read to write it (scheduler._fire_reminder).
+    pytest.param({"turn_kind": "reminder"}, id="a reminder the scheduler delivered"),
+    pytest.param({"turn_kind": "job"}, id="a job firing"),
+    pytest.param({"turn_kind": "eval"}, id="an eval turn"),
+    # Only a real True counts: the column is an EXISTS, and anything else is
+    # a hand-built row that said nothing about the turn's spans.
+    pytest.param({"read_live": "true"}, id="a truthy string is not a read"),
+]
+
+
+@pytest.mark.parametrize("over", MUST_NOT_STAMP)
+def test_an_ordinary_row_reaches_her_byte_identical(over):
+    from app import chat
+
+    row = _history_row(**over)
+    assert chat.attributed_history([row], None) == [
+        {"role": row["role"], "content": "hub is ready and serving."}
+    ]

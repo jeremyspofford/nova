@@ -696,22 +696,57 @@ _PAST_TURN_MARKERS = {
     "stopped": "[you stopped that turn at {when}; a record of that moment, not of now]",
 }
 
+# S40b (verdict §3.3, provision c — the truth half). The S40 walk found the
+# other rows history handed her in the present tense: turn b851aa91 read hub
+# with machine_status and said it was ready, and the next time the owner asked,
+# turn b02a5694 replayed that reply — "Last Reported: 05:15:39" and all — as
+# the machine's current state, without checking. Nothing had told her the row
+# was a reading taken earlier. So a row is stamped, too, when the turn behind it
+# was a timer's or a beat's firing (written while nobody was talking to her,
+# about whatever was true then), or READ something live: one of its tool spans
+# is a live reading (tools.live_reading_tool_names) that answered. Both are
+# derived by `_open_turn`'s query from the turn's kind and its spans, never
+# from the row's words. The state guard is what refuses when she replays a
+# reading anyway; this half only makes sure she was told the truth first.
+#
+# The kinds are chat.py's own words for them (as _ROLE_BY_KIND spells them);
+# test_chat_skills pins "beat" against beats.BEAT_KIND. A reminder is not here:
+# it is the owner's own text, delivered by code, with no model and no reading.
+_RECORD_KINDS = frozenset({"scheduled", "beat"})
+_RECORD_KIND_MARKER = "[a {kind} message from {when}; a record of that moment, not of now]"
+_LIVE_READING_MARKER = (
+    "[written at {when} from readings taken then; a record of that moment, not of now]"
+)
+
 
 def _past_turn_marker(row) -> str | None:
-    """The stamp an assistant row from a failed or stopped turn carries into
-    the next turn's history, or None for every ordinary row.
+    """The stamp an assistant row carries into the next turn's history, or
+    None for every ordinary row.
 
-    Tolerant of a row that carries neither column, because two callers build
-    these dicts by hand in tests and a missing key is not a failed turn.
+    One stamp at most, in this order: a failed or stopped turn (S19) says so
+    whatever else it did; then a scheduled or beat firing says it was one;
+    then a turn that read something live (`read_live`, S40b) says its reply
+    was written from readings taken then.
+
+    Tolerant of a row that carries none of these columns, because callers
+    build these dicts by hand in tests and a missing key is not a failed turn,
+    a firing or a reading. `read_live` counts only when it is exactly True —
+    the query's EXISTS — so a hand-built row that said nothing about the
+    turn's spans is never read as one that read the world.
     """
     if row.get("role") != "assistant":
         return None
     template = _PAST_TURN_MARKERS.get(row.get("status") or "")
+    kind = row.get("turn_kind")
+    if template is None and kind in _RECORD_KINDS:
+        template = _RECORD_KIND_MARKER
+    if template is None and row.get("read_live") is True:
+        template = _LIVE_READING_MARKER
     if template is None:
         return None
     written = row.get("created_at")
     when = written.strftime("%Y-%m-%d %H:%M UTC") if written is not None else "an earlier turn"
-    return template.format(when=when)
+    return template.format(when=when, kind=kind)
 
 
 # ── The thread seed (S24) ────────────────────────────────────────────────
@@ -5405,10 +5440,21 @@ async def _open_turn(
     # Read INSIDE the lock (S15): a window read before the gate could miss the
     # previous turn's reply, because that reply is persisted only moments before
     # the turn lets go of the conversation.
+    #
+    # S40b: `turn_kind` and `read_live` are what _past_turn_marker stamps a row
+    # from — the turn behind it was a firing, or one of its tool spans is a
+    # live reading that answered. Asked or unasked alike: an unasked check's
+    # result was handed to her before she wrote that reply. The reading set is
+    # read from the registry here, per turn, never frozen at import.
     history = history_window(
         attributed_history(
             await conn.fetch(
-                "SELECT m.role, m.content, m.created_at, t.status, a.name AS agent FROM messages m "
+                "SELECT m.role, m.content, m.created_at, t.status, t.kind AS turn_kind, "
+                "a.name AS agent, "
+                "EXISTS (SELECT 1 FROM turn_spans s WHERE s.turn_id = m.turn_id "
+                "AND s.kind = 'tool' AND s.name = ANY($4::text[]) "
+                "AND s.meta->>'ok' = 'true') AS read_live "
+                "FROM messages m "
                 "LEFT JOIN turns t ON t.id = m.turn_id "
                 "LEFT JOIN agents a ON a.id = t.agent_id "
                 "WHERE m.conversation_id = $1 AND m.id <> $2 "
@@ -5416,6 +5462,7 @@ async def _open_turn(
                 conversation_id,
                 message_id,
                 HISTORY_MAX_MESSAGES,
+                tools.live_reading_tool_names(),
             ),
             None if agent is None else agent.name,
         )
