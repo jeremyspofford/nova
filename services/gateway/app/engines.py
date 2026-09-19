@@ -153,8 +153,11 @@ def is_engine(row: dict) -> bool:
 
 def switched_off_reason(name: str) -> str:
     """The one sentence for an engine its owner switched off (ruling C10):
-    observe's reason and routing's `switched_off` verdict both say this."""
-    return f"{name} is switched off (serving=false): it runs no models until switched back on"
+    observe's reason and routing's `switched_off` verdict both say this. It
+    says only what the switch enforces — the role walk passes over it — never
+    that the engine runs no models: a call outside any role still runs
+    there, and a model already loaded stays loaded (S40 fix wave B5)."""
+    return f"{name} is switched off (serving=false): chat routing passes over it"
 
 
 def compute_of(reading: dict, accelerators: list[str], cpu: str | None) -> str | None:

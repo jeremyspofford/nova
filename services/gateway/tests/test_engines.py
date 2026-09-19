@@ -139,6 +139,11 @@ def test_switched_off_has_one_wording():
     """(ruling C10) routing's `switched_off` verdict reads this same sentence."""
     reason = engines.switched_off_reason("hub")
     assert reason.startswith("hub is switched off")
+    # (S40 fix wave B5) Only what is enforced: the role walk is the switch's
+    # one reader, so a call outside any role still runs there and a loaded
+    # model stays loaded — "it runs no models" was a claim, not a fact.
+    assert "runs no models" not in reason
+    assert reason == "hub is switched off (serving=false): chat routing passes over it"
 
 
 def test_the_engine_view_fields_are_the_contract():

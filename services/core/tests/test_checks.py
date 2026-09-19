@@ -499,7 +499,7 @@ async def test_the_bundled_machine_switched_off_and_not_answering_is_still_down(
     gateway's reading, and the bundled one still embeds for memory while
     switched off. So it is still peer_down, and the title says both."""
     reason = (
-        "hub is switched off (serving=false): it runs no models until switched back on; "
+        "hub is switched off (serving=false): chat routing passes over it; "
         "hub could not be asked what is installed — could not reach ollama — ConnectError"
     )
     view = fakes.engine_view(
