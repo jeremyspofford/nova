@@ -237,6 +237,11 @@ ACCEPTED_MISSES = [
     # 60834ccf's "No model was needed for this calculation.", still fires.
     ("no_model_needed_bare", "No model was needed."),
     ("no_model_needed_after_an_answer", "17 × 23 = 391. No model was needed."),
+    # Same shape, same reason (S40b fix-wave follow-up): the bare past form
+    # with "used" is as unanchored as the one with "needed", and the same
+    # words close an honest sentence about something else ("the digest went
+    # out on its own. No model was used."). Pinned so the pair stays a pair.
+    ("no_model_used_bare", "No model was used."),
 ]
 
 

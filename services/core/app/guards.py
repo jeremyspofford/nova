@@ -673,8 +673,16 @@ _REPORTED = re.compile(
 
 # Within a sentence, split on separators that bound the reach of a negation:
 # a semicolon, a contrastive conjunction, or an explicit "then".
+# Possessive, and each whitespace run may only be entered at its front
+# (S40b fix-wave follow-up, D2): `\s+<word>` re-entered a run of padding at
+# every one of its n positions and backtracked the whole tail at each — 56 ms
+# at 1,500 characters. A connector is a word, so the run always had to be
+# swallowed whole; entering it later can match nothing entering it at the
+# front cannot.
 _CLAUSE_SPLIT = re.compile(
-    r";|\s+(?:but|however|though|although|whereas|yet)\s+|,?\s+then\s+", re.I
+    r";|(?<!\s)\s++(?:but|however|though|although|whereas|yet)\s++"
+    r"|,?(?<!\s)\s++then\s++",
+    re.I,
 )
 
 
@@ -2938,11 +2946,36 @@ _OUTAGE_ANCHOR = rf"(?={_ANCHOR_ENDS}|\s+(?:{_OUTAGE_ENDS}))"
 # "From what I can tell," and "Currently," are not scopes and still fire.
 _SCOPE_DET = r"(?:the|your|my|his|her|their|our|a|an|any|every|each|some|this|that)"
 _NOT_A_SCOPE = r"(?!(?:moment|time|record|rest|most|last|past|next|first|same)\b)"
+# A SCOPE MUST NAME A REACH (S40b fix-wave follow-up). The first cut of A5 was
+# "<place preposition> <determiner> <=40 characters>," minus a short exclusion
+# list, which is the shape of every fronted discourse marker in English: "To
+# your question, hub is offline.", "On that note, …", "For your information,
+# …", "From my side, …" — 28 sentences that fired before A5 went silent with
+# it in, on the state and memory branches alike. A limit only limits when it
+# says WHERE: a place, a network, a device, a vantage. The word may sit
+# anywhere in the phrase ("outside your home network", "the public
+# internet's point of view"); a bare "side"/"end" is a reach only when it is
+# someone ELSE's ("from your side" is his vantage, "from my side" is a
+# stance, and "From my side, hub is offline." is a claim about hub).
+_REACH_WORD = (
+    r"(?:phones?|mobiles?|handsets?|laptops?|desktops?|tablets?|browsers?|screens?"
+    r"|devices?|machines?|boxes?|servers?|hosts?"
+    r"|networks?|lan|wan|subnets?|wi-?fi|vpn|tailnet|tailscale|internet|intranet|web"
+    r"|router|gateway|firewall|proxy|dns|cloud|tunnel"
+    r"|home|house|apartment|flat|office|desk|work|school|campus|room|garage"
+    r"|car|road|hotel|cafe|caf[eé]|airport|abroad|overseas"
+    r"|outside|inside|indoors|outdoors|public|private|world|here|there|away|elsewhere"
+    r"|coverage|range|reach|vantage"
+    r"|(?:your|that|their|his|her|its|the\s+other)\s+(?:side|end))"
+)
+# The reach word within the phrase the scope covers (bounded, so the lookahead
+# cannot walk a long line: the phrase itself is at most 40 characters).
+_HAS_REACH = rf"(?=[^,;:\n]{{0,48}}?\b{_REACH_WORD}\b)"
 _FRONTED_SCOPE = re.compile(
     r"\W*+(?:(?:publicly|remotely|externally)"
     r"|(?:from|off|outside|beyond|over|across|via|through|within|inside|to|for|on)"
-    rf"(?:\s+(?:outside|inside|within|beyond|off))?\s+{_SCOPE_DET}\s+{_NOT_A_SCOPE}"
-    r"[^,;:\n]{1,40}?)\s*,\s*$",
+    rf"(?:\s+(?:outside|inside|within|beyond|off))?\s+{_HAS_REACH}{_SCOPE_DET}\s+"
+    rf"{_NOT_A_SCOPE}[^,;:\n]{{1,40}}?)\s*,\s*$",
     re.I,
 )
 # What limits a state when it follows the anchor: a vantage ("as far as your
@@ -2954,13 +2987,19 @@ _NOT_HISTORY = (
     r"(?!(?:(?:my|the|our|this)\s+)?(?:(?:chat|conversation)\s+)?history\b"
     r"|(?:my|the)\s+(?:last|previous|earlier|first)\s)"
 )
+# The three branches that take an open noun phrase ("from …", "for/to <det>
+# …", "per <det> …") carry the same reach requirement as the fronted scope
+# (S40b fix-wave follow-up) — without it "hub is offline, for your
+# information.", "…, from the look of it." and "…, per your question." were
+# silenced exactly as the fronted markers were. "as far as X is concerned" is
+# left open: that frame marks a vantage by itself.
 _TRAILING_LIMIT = (
-    rf"(?:as\s+far\s+as\s+(?!I\b|we\b)|from\s+(?!now\b|what\b){_NOT_HISTORY}"
+    rf"(?:as\s+far\s+as\s+(?!I\b|we\b)|from\s+(?!now\b|what\b){_NOT_HISTORY}{_HAS_REACH}"
     r"|by\s+(?:schedule|design)"
     r"|on\s+(?:weekends?|weekdays?|(?:a\s+)?schedule)|overnight|outside\b|except\b"
     r"|only\s+(?:from|for|to|on|at|when|during)\b|during\b"
-    rf"|(?:for|to)\s+{_SCOPE_DET}\s+{_NOT_A_SCOPE}|in\s+the\s+(?:eyes|view)\s+of\b"
-    rf"|per\s+{_SCOPE_DET}\b)"
+    rf"|(?:for|to)\s+{_HAS_REACH}{_SCOPE_DET}\s+{_NOT_A_SCOPE}"
+    rf"|in\s+the\s+(?:eyes|view)\s+of\b|per\s+{_HAS_REACH}{_SCOPE_DET}\b)"
 )
 # The anchoring separators a limit may follow (one or more), then the limit.
 # Possessive throughout (D2): each separator run is taken whole.
@@ -4327,16 +4366,29 @@ _TREE_LEAD = re.compile(r"^[\s│|]*(?:├|└|\|--|`--|\+--)[─-]*\s*")
 _BULLET_LEAD = re.compile(r"^(?:[-*•+]|\d{1,3}[.)])\s+")
 # A size: "12.4 KB", "905.6 GiB", "1,234 bytes", "1.2K", "48 B". Case-SENSITIVE
 # on purpose (no re.I anywhere below): "27b" is a parameter count, not bytes.
-_SIZE = r"\d[\d,]*(?:\.\d+)?\s?(?:[Bb]ytes?|[KMGTP]i?B|[KMGTP]|B)"
+_SIZE = r"\d[\d,]*+(?:\.\d++)?\s?(?:[Bb]ytes?|[KMGTP]i?B|[KMGTP]|B)"
 # A size trailing the name and SET OFF from it: a spaced dash, two spaces, a
 # tab, or parentheses. A single space or a colon is not a separator.
+#
+# LINEAR, and it has to be (S40b fix-wave follow-up, D2): written as
+# `(?:\s+[—–-]\s+|\s{2,}|\t+)\s*` this read a padded entry in O(n³) — a run of
+# n spaces can be entered at n positions, each splitting the rest n ways
+# between `\s{2,}` and `\s*`, each split walked again — 7 ms at 200 characters
+# of padding (UNDER the sweep's budget, which is why it survived A1's audit),
+# 3.0 s at 1,500, and 8.8 s through `presented_listing_check` itself, on
+# core's only process, on every reply. The rewrite matches exactly the same
+# text: a separator may only START a whitespace run (`(?<!\s)` — entering the
+# same run later can never match what entering it at the front cannot), and
+# every run is taken whole and possessively, which is what the old one had to
+# do anyway since `_SIZE` opens with a digit.
 _TRAILING_SIZE = re.compile(
-    r"(?:\s+[—–-]\s+|\s{2,}|\t+)\s*" + _SIZE + r"\s*$" + r"|\s*\(" + _SIZE + r"\)\s*$"
+    r"(?<!\s)(?:\s++[—–-]\s++|\s\s++|\t\s*+)" + _SIZE + r"\s*+$"
+    r"|(?<!\s)\s*+\(" + _SIZE + r"\)\s*+$"
 )
 # Under a TREE lead a single space will do ("├── backups/ 905.6 GiB"): the
 # tree markup is the listing's own idiom, and there is no cache/DIMM/container
 # line that draws itself as a tree.
-_TRAILING_SIZE_TREE = re.compile(r"\s+" + _SIZE + r"\s*$")
+_TRAILING_SIZE_TREE = re.compile(r"(?<!\s)\s++" + _SIZE + r"\s*+$")
 _SIZE_ONLY = re.compile("^" + _SIZE + "$")
 # An `ls -l` line: a mode string then at least four more fields.
 _PERMS_LINE = re.compile(r"^[-dlbcps][rwxsStT-]{9}[+@.]?\s+\S+(?:\s+\S+){3,}$")
@@ -5529,7 +5581,8 @@ _OBS_ADVERB = (
 # keeps the match starting AFTER the subject, so the text before it is the
 # subject phrase.
 _FAULT_COPULA = re.compile(
-    rf"(?:\s+(?:{_PRESENT_COPULA})|['’]s)(?:\s+{_OBS_ADVERB})*\s+(?P<state>{_FAULT_STATE})\b",
+    rf"(?:(?<!\s)\s++(?:{_PRESENT_COPULA})|['’]s)(?:\s++{_OBS_ADVERB})*+"
+    rf"\s++(?P<state>{_FAULT_STATE})\b",
     re.I,
 )
 # The fault stated as a VERB rather than a state. Only shapes that can only be
@@ -6353,7 +6406,11 @@ _SERVED_SETTING = re.compile(r"\b(?:settings?|config\w*)\b", re.I)
 #     role — "the current model on dell", "the active model in the catalog",
 #     "in use elsewhere" — as the verdict's own "in use by/for/…" and "current
 #     model for/in/on" (sentence shape 7) already are, for every marker.
-_IN_USE_LIMITED = re.compile(r"\s+(?:for|in|on|by|as|with|when|if|elsewhere)\b", re.I)
+# Possessive (S40b fix-wave follow-up, D2). No run-start lookbehind here,
+# unlike `_CLAUSE_SPLIT` and `_FAULT_COPULA`: this one is used as
+# `.match(clause, m.end())`, where a lookbehind would read the character
+# before the match it is continuing from, not a run boundary.
+_IN_USE_LIMITED = re.compile(r"\s++(?:for|in|on|by|as|with|when|if|elsewhere)\b", re.I)
 #   * Leading up to the ref and its marker (from the conjunct's start when the
 #     ref comes first, between the two when it follows), a negation, the past
 #     or a change of state says the ref is NOT in use, WAS, or would BECOME

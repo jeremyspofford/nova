@@ -11,10 +11,12 @@ stalls every conversation, health check and eval turn with it.
 These pins time the guards on adversarial padding. The first set is the
 review's own reproductions through the public guard functions; the sweep runs
 EVERY compiled pattern the module holds (module constants, pattern tuples and
-the per-name builders) over 200-character padding inputs, so a regex added
-later is timed the day it lands rather than the day it hangs core. Budget: 50
-ms per call — the exponential forms took seconds to hours at these sizes; a
-linear or low-order polynomial one takes microseconds to a few ms.
+the per-name builders) over padding inputs at TWO widths, 200 and 1,500
+characters, so a regex added later is timed the day it lands rather than the
+day it hangs core. Budget: 50 ms per call — the exponential forms took seconds
+to hours at these sizes; a linear or low-order polynomial one takes
+microseconds to a few ms. Why two widths is at `_sweep_inputs` below: a cubic
+pattern shipped under the budget at 200 characters and took 3 s at 1,500.
 """
 
 from __future__ import annotations
@@ -133,37 +135,55 @@ def _every_pattern() -> dict[str, re.Pattern[str]]:
     return found
 
 
-PAD = " " * 200
-# 200-character padding inputs, each built around a token a guard pattern
-# anchors on, so the padding is what the engine has to walk past.
-SWEEP_INPUTS = {
-    "spaces": PAD + "x",
-    "tabs": "\t " * 100 + "x",
-    "dash_then_spaces": "- " + PAD + "x",
-    "key_between_spaces": " " * 100 + "Status" + " " * 100 + "x",
-    "key_colon_then_spaces": "- Status:" + PAD + "x",
-    "reading_key_then_spaces": "- Last Reported:" + PAD + "x",
-    "machine_then_spaces": "hub" + PAD + "x",
-    "machine_copula_then_spaces": "hub is" + PAD + "x",
-    "machine_which": "hub" + " " * 100 + "," + " " * 100 + "which",
-    "ref_then_spaces": "qwen3:8b" + PAD + "loaded, ",
-    "ref_copula_then_spaces": "qwen3:8b is" + PAD + "x",
-    "label_then_spaces": "qwen3.8:27b ✅ in use: qwen3:8b" + PAD + "idle",
-    "size_then_spaces": "4.9" + PAD + "x",
-    "bracketed_size_padding": "(" + " " * 100 + "4.9 GB" + " " * 100 + "x",
-    "badges": "qwen3:8b" + " ✅ —" * 50 + " x",
-    "sizes": "qwen3:8b" + " 4.9 GB" * 28 + " x",
-    "memory_then_spaces": "the memory service" + PAD + "x",
-    "memory_copula_then_spaces": "the memory service is" + PAD + "x",
-    "lead_word_then_spaces": "as" + PAD + "x",
-    "subordinator_then_spaces": "if" + PAD + "x",
-    "strike_then_spaces": "~~" + PAD + "x",
-    "digits": "1" * 200 + "x",
-    "word": "a" * 200 + "!",
-    "words": "a " * 100 + "!",
-    "negations": "hub is " + "not " * 48 + "x",
-    "said_that": "I said that " * 16 + "x",
-}
+def _sweep_inputs(n: int) -> dict[str, str]:
+    """Padding inputs `n` characters wide, each built around a token a guard
+    pattern anchors on, so the padding is what the engine has to walk past."""
+    pad = " " * n
+    half = " " * (n // 2)
+    return {
+        "spaces": pad + "x",
+        "tabs": "\t " * (n // 2) + "x",
+        "dash_then_spaces": "- " + pad + "x",
+        "key_between_spaces": half + "Status" + half + "x",
+        "key_colon_then_spaces": "- Status:" + pad + "x",
+        "reading_key_then_spaces": "- Last Reported:" + pad + "x",
+        "machine_then_spaces": "hub" + pad + "x",
+        "machine_copula_then_spaces": "hub is" + pad + "x",
+        "machine_which": "hub" + half + "," + half + "which",
+        "ref_then_spaces": "qwen3:8b" + pad + "loaded, ",
+        "ref_copula_then_spaces": "qwen3:8b is" + pad + "x",
+        "label_then_spaces": "qwen3.8:27b ✅ in use: qwen3:8b" + pad + "idle",
+        "size_then_spaces": "4.9" + pad + "x",
+        "bracketed_size_padding": "(" + half + "4.9 GB" + half + "x",
+        "badges": "qwen3:8b" + " ✅ —" * (n // 4) + " x",
+        "sizes": "qwen3:8b" + " 4.9 GB" * (n // 7) + " x",
+        "memory_then_spaces": "the memory service" + pad + "x",
+        "memory_copula_then_spaces": "the memory service is" + pad + "x",
+        "lead_word_then_spaces": "as" + pad + "x",
+        "subordinator_then_spaces": "if" + pad + "x",
+        "strike_then_spaces": "~~" + pad + "x",
+        "digits": "1" * n + "x",
+        "word": "a" * n + "!",
+        "words": "a " * (n // 2) + "!",
+        "negations": "hub is " + "not " * (n // 4) + "x",
+        "said_that": "I said that " * (n // 12) + "x",
+        # A listing entry whose name is set off from the padding: the shape
+        # `presented_listing_check` reads on every reply (follow-up, below).
+        "bullet_name_then_spaces": "- report.md" + pad + "x",
+    }
+
+
+# TWO LENGTHS, ONE BUDGET, and the second is why this pair exists (S40b
+# fix-wave follow-up): `_TRAILING_SIZE` read a padded listing entry in O(n³)
+# and was UNDER the budget at 200 characters (7 ms) while taking 3.0 s at
+# 1,500 — 8.8 s through `presented_listing_check`, synchronously, on core's
+# only process, on every reply. A single short length cannot tell a linear
+# pattern from a cubic one; at 7.5x the width a linear pattern is still
+# microseconds, a quadratic one a few ms, and anything worse is over budget.
+# Keep both: the short length is the one the review's own reproductions use
+# and it keeps the sweep fast, the long one is the shape tripwire.
+SWEEP_INPUTS = _sweep_inputs(200)
+LONG_SWEEP_INPUTS = _sweep_inputs(1500)
 
 
 @pytest.mark.parametrize("pattern_name", sorted(_every_pattern()))
@@ -175,6 +195,28 @@ def test_every_guard_pattern_walks_200_characters_of_padding_in_milliseconds(pat
             assert took < BUDGET_S, (
                 f"{pattern_name}.{method.__name__}({label}): {took * 1000:.1f} ms"
             )
+
+
+@pytest.mark.parametrize("pattern_name", sorted(_every_pattern()))
+def test_every_guard_pattern_walks_1500_characters_of_padding_in_milliseconds(pattern_name):
+    pattern = _every_pattern()[pattern_name]
+    for label, text in LONG_SWEEP_INPUTS.items():
+        for method in (pattern.search, pattern.match, pattern.fullmatch):
+            took = _best_of(lambda method=method, text=text: method(text), runs=2)
+            assert took < BUDGET_S, (
+                f"{pattern_name}.{method.__name__}({label}): {took * 1000:.1f} ms"
+            )
+
+
+# The whole guard, on the listing shape the cubic pattern was reached through:
+# a bullet list of three entries, each padded, is an ordinary reply to read.
+@pytest.mark.parametrize("width", [200, 1500], ids=["200", "1500"])
+def test_a_padded_listing_is_judged_in_milliseconds(width):
+    reply = "\n".join(
+        f"- {name}" + " " * width + "x" for name in ("report.md", "notes.md", "config.json")
+    )
+    took = _best_of(lambda: guards.presented_listing_check(reply, [], []))
+    assert took < BUDGET_S, f"padded_listing_{width}: {took * 1000:.1f} ms"
 
 
 def test_the_sweep_reaches_the_in_use_and_line_patterns():

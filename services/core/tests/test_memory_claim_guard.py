@@ -1108,6 +1108,7 @@ def test_a_general_statement_about_memory_is_not_corrected(reply):
     [
         "From outside the tailnet, the memory service is unreachable.",
         "Off the tailnet, the memory service is unreachable.",
+        "From your phone, the memory service is unreachable.",
         "The memory service is unreachable, as far as your phone is concerned.",
     ],
 )
@@ -1123,6 +1124,46 @@ def test_a_scoped_memory_outage_is_not_corrected(reply):
     ],
 )
 def test_an_unscoped_memory_outage_still_fires(reply):
+    assert _memory_fires(reply), reply
+
+
+# -- A5, narrowed: a scope has to NAME A REACH (fix-wave follow-up) ----------------
+#
+# The memory half of the overshoot pinned in test_state_guard.py: A5's first
+# cut read any "<place-preposition> <determiner> <=40 chars>," as a scope, so
+# every fronted discourse marker silenced the outage claim. Each of these fired
+# at 9927da34 and went silent with A5 in.
+FRONTED_MARKERS = [
+    "To your question,",
+    "On that note,",
+    "For your information,",
+    "From the look of it,",
+    "On the whole,",
+    "For this reason,",
+    "To some extent,",
+    "To my knowledge,",
+    "On your behalf,",
+    "For that matter,",
+    "To this day,",
+    "From my side,",
+    "For a start,",
+    "On a related note,",
+]
+
+
+@pytest.mark.parametrize("lead", FRONTED_MARKERS)
+def test_a_fronted_discourse_marker_does_not_limit_the_memory_outage(lead):
+    assert _memory_fires(f"{lead} the memory service is down."), lead
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The memory service is down, for your information.",
+        "The memory service is down, from the look of it.",
+    ],
+)
+def test_a_trailing_discourse_marker_does_not_limit_the_memory_outage(reply):
     assert _memory_fires(reply), reply
 
 

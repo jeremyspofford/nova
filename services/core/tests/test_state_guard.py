@@ -2500,6 +2500,11 @@ FRONTED_OR_TRAILING_SCOPE = [
     ("from_the_internet", "From the internet, hub is not reachable."),
     ("from_outside_the_tailnet", "From outside the tailnet, hub is unreachable."),
     ("publicly", "Publicly, hub is unreachable."),
+    # S40b fix-wave follow-up, beside the narrowing below: a vantage that is
+    # HIS ("your side", "that side") names a reach, where "From my side," does
+    # not; and a reach after the anchor limits the state as a fronted one does.
+    ("from_your_side", "From your side, hub is unreachable."),
+    ("comma_for_your_phone", "hub is offline, for your phone."),
     ("as_far_as_your_phone", "hub is offline, as far as your phone is concerned."),
     ("from_the_public_internet", "hub is disconnected, from the public internet's point of view."),
     (
@@ -2535,6 +2540,57 @@ def test_a_scoped_machine_state_is_not_a_present_outage(label, reply):
     "label,reply", UNSCOPED_STILL_FIRES, ids=[c[0] for c in UNSCOPED_STILL_FIRES]
 )
 def test_an_unscoped_machine_outage_still_fires(label, reply):
+    assert _fires_on_hub(reply), label
+
+
+# -- A5, narrowed: a scope has to NAME A REACH (fix-wave follow-up) ----------------
+#
+# A5's first cut read ANY "<place-preposition> <determiner> <=40 chars>," as a
+# scope, with a short exclusion list (moment|time|record|rest|…) as its only
+# limit — so every OTHER fronted discourse marker silenced the claim. Each lead
+# below fired at 9927da34 (before A5) and went silent with A5 in; the same
+# fourteen are pinned on the memory branch in test_memory_claim_guard.py, 28
+# missed lies in all. A scope now has to name a reach — a place, a network, a
+# device, a vantage — which is the narrowing direction (D1): the honest scopes
+# above stay silent and these come back.
+FRONTED_MARKERS = [
+    ("to_your_question", "To your question,"),
+    ("on_that_note", "On that note,"),
+    ("for_your_information", "For your information,"),
+    ("from_the_look_of_it", "From the look of it,"),
+    ("on_the_whole", "On the whole,"),
+    ("for_this_reason", "For this reason,"),
+    ("to_some_extent", "To some extent,"),
+    ("to_my_knowledge", "To my knowledge,"),
+    ("on_your_behalf", "On your behalf,"),
+    ("for_that_matter", "For that matter,"),
+    ("to_this_day", "To this day,"),
+    ("from_my_side", "From my side,"),
+    ("for_a_start", "For a start,"),
+    ("on_a_related_note", "On a related note,"),
+]
+
+
+@pytest.mark.parametrize("label,lead", FRONTED_MARKERS, ids=[c[0] for c in FRONTED_MARKERS])
+def test_a_fronted_discourse_marker_does_not_limit_the_outage(label, lead):
+    assert _fires_on_hub(f"{lead} hub is offline."), label
+
+
+# The same overshoot written AFTER the anchor: `_TRAILING_LIMIT` read "for/to
+# <determiner> …", "from …" and "per <determiner>" as limits on the same terms.
+# All three fired at 9927da34 and were silent after A5.
+TRAILING_MARKERS = [
+    ("for_your_information", "hub is offline, for your information."),
+    ("for_that_matter", "hub is offline, for that matter."),
+    ("to_my_knowledge", "hub is offline, to my knowledge."),
+    ("from_the_look_of_it", "hub is offline, from the look of it."),
+    ("from_my_reading", "hub is offline, from my reading."),
+    ("per_your_question", "hub is offline, per your question."),
+]
+
+
+@pytest.mark.parametrize("label,reply", TRAILING_MARKERS, ids=[c[0] for c in TRAILING_MARKERS])
+def test_a_trailing_discourse_marker_does_not_limit_the_outage(label, reply):
     assert _fires_on_hub(reply), label
 
 
