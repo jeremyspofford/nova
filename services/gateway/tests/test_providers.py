@@ -905,6 +905,63 @@ async def test_an_unreadable_local_listing_refuses_the_name_check_loudly(
     )
     assert resp.status_code == 502
     assert "cannot check 'x' against the local model tags" in resp.json()["error"]
+    # S40: the refusal names the engine that was asked (the default's).
+    assert "on hub" in resp.json()["error"]
+
+
+async def test_with_a_cloud_default_no_machine_is_asked_and_the_name_saves(
+    client, pool, mount_backend, local_tags, monkeypatch
+):
+    """S40: only a BARE id can be shadowed, and a bare id means the default
+    provider. With a cloud default the machines' tags are not what a bare id
+    names, so none is asked — the owner can add a provider while the hub's
+    ollama is down (and, from S46, while a machine sleeps). Before S40 this was
+    a 502: every create read the builtin's tags."""
+    await _add_openrouter(client, mount_backend)
+    assert (await client.put("/admin/providers/openrouter/default")).status_code == 200
+    local_tags.tags = ("mistral:7b",)
+    local_tags.seen.clear()
+    monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:1")
+    mount_backend("http://mistral.test", FakeOpenAICompat().app)
+
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "mistral",
+            "adapter": "openai-chat",
+            "base_url": "http://mistral.test/v1",
+            "auth_shape": "none",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert local_tags.seen == []
+
+
+async def test_a_name_is_checked_against_the_default_machines_tags_not_the_hubs(
+    client, pool, mount_backend, local_tags, second_engine
+):
+    """A bare id means the DEFAULT provider: when that is another machine,
+    its tags are what a new name could shadow — read live from it — and the
+    hub's are not asked."""
+    assert (await client.put("/admin/providers/dell/default")).status_code == 200
+    second_engine.tags = ("mistral:7b",)
+    local_tags.seen.clear()
+    mount_backend("http://mistral.test", FakeOpenAICompat().app)
+
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "mistral",
+            "adapter": "openai-chat",
+            "base_url": "http://mistral.test/v1",
+            "auth_shape": "none",
+        },
+    )
+
+    assert resp.status_code == 409
+    assert "mistral:7b" in resp.json()["error"] and "on dell" in resp.json()["error"]
+    assert local_tags.seen == []
 
 
 async def test_a_provider_prefix_with_no_model_is_a_400_never_another_provider(

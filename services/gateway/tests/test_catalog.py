@@ -14,7 +14,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
-from app import admin, catalog, hf_hub, ollama_registry
+from app import admin, backends, catalog, engines, hf_hub, ollama_registry
 from app import curated as curated_mod
 from tests.conftest import requires_db
 from tests.fakes import FakeHFHub, FakeOllama, FakeOllamaRegistry, FakeOpenAICompat
@@ -546,7 +546,13 @@ async def test_drift_says_why_when_a_side_cannot_be_read(client, local, mount_ba
 async def test_remove_deletes_and_verifies_against_tags(client, local):
     resp = await client.delete("/admin/models?model=qwen3:4b")
     assert resp.status_code == 200, resp.text
-    assert resp.json() == {"removed": "qwen3:4b", "verified": True, "installed_now": 1}
+    # S40: the answer names the machine it verified the removal against.
+    assert resp.json() == {
+        "engine": "hub",
+        "removed": "qwen3:4b",
+        "verified": True,
+        "installed_now": 1,
+    }
     assert ("/api/delete", {"model": "qwen3:4b"}) in local.seen
     rows = _rows_by_id((await client.get("/admin/catalog")).json())
     assert rows["library:qwen3:4b"]["installed"] is False, "back to a library row"
@@ -675,3 +681,67 @@ async def test_a_show_that_failed_writes_nothing_it_did_not_read(client, local, 
 
     names = {r["name"] for r in await pool.fetch("SELECT name FROM engine_models")}
     assert names == {"qwen3:8b"}
+
+
+# ── S40: remove and drift take the machine's name ──────────────────────────
+
+
+async def test_remove_takes_a_qualified_id_and_names_the_machine(client, local, second_engine):
+    resp = await client.delete("/admin/models?model=dell:qwen3.8:27b")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "engine": "dell",
+        "removed": "qwen3.8:27b",
+        "verified": True,
+        "installed_now": 0,
+    }
+    assert ("/api/delete", {"model": "qwen3.8:27b"}) in second_engine.seen
+    assert not any(path == "/api/delete" for path, _ in local.seen), "hub was never asked"
+    bare = await client.delete("/admin/models?model=qwen3:4b")
+    assert bare.status_code == 400
+    assert "hub:qwen3:4b" in bare.json()["error"] and "dell:qwen3:4b" in bare.json()["error"]
+
+
+async def test_nothing_is_removed_from_a_cloud(client, local, pool):
+    await backends.save_config(pool, {"kind": "remote", "url": "http://remote.test"})
+
+    resp = await client.delete("/admin/models?model=remote:qwen3:4b")
+
+    assert resp.status_code == 400
+    assert "'remote' is not a machine that runs models" in resp.json()["error"]
+    assert not any(path == "/api/delete" for path, _ in local.seen)
+
+
+async def test_a_removal_forgets_that_machines_cached_tags(client, local, monkeypatch):
+    forgotten: list[str] = []
+    monkeypatch.setattr(engines, "forget", forgotten.append)
+
+    assert (await client.delete("/admin/models?model=hub:qwen3:4b")).status_code == 200
+    assert forgotten == ["hub"]
+
+
+async def test_drift_takes_a_qualified_id(client, local, mount_backend):
+    local.show["qwen3:8b"]["modelfile"] = WEIGHTS_BLOB
+    registry = FakeOllamaRegistry(manifests={"library/qwen3/8b": MANIFEST})
+    mount_backend(ollama_registry.REGISTRY_BASE, registry.app)
+
+    body = (await client.post("/admin/catalog/drift", json={"model": "hub:qwen3:8b"})).json()
+
+    assert body["engine"] == "hub" and body["model"] == "qwen3:8b"
+    assert body["moved"] is False
+
+
+async def test_drift_on_another_machine_reads_that_machines_install(
+    client, local, second_engine, mount_backend
+):
+    second_engine.show["qwen3.8:27b"]["modelfile"] = WEIGHTS_BLOB
+    registry = FakeOllamaRegistry(manifests={"library/qwen3.8/27b": MANIFEST})
+    mount_backend(ollama_registry.REGISTRY_BASE, registry.app)
+
+    body = (await client.post("/admin/catalog/drift", json={"model": "dell:qwen3.8:27b"})).json()
+
+    assert body["engine"] == "dell" and body["installed_digest"] == "sha256:" + "a" * 64
+    assert not any(path == "/api/show" for path, _ in local.seen), "hub was never asked"
+    missing = await client.post("/admin/catalog/drift", json={"model": "dell:qwen3:8b"})
+    assert missing.status_code == 404 and "not installed on dell" in missing.json()["error"]

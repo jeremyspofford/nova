@@ -17,7 +17,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import admin, backends, hf_hub, ollama_registry, pulls
+from app import admin, backends, engines, hf_hub, ollama_registry, pulls
 from tests.conftest import requires_db
 from tests.fakes import FakeHFHub, FakeOllama, FakeOllamaRegistry
 
@@ -97,17 +97,6 @@ async def ollama(pool, monkeypatch, mount_backend):
 
 
 # ── the S1 contract, unchanged ─────────────────────────────────────────────
-
-
-async def test_pull_is_refused_for_a_non_ollama_backend(client, pool):
-    await backends.save_config(
-        pool, {"kind": "cloud", "url": "https://x", "api_key": "sk-x", "model": "m"}
-    )
-
-    resp = await client.post("/admin/pull", json={"model": "qwen3:8b"})
-
-    assert resp.status_code == 400
-    assert "ollama" in resp.json()["error"].lower()
 
 
 async def test_pull_streams_ollamas_progress_lines_through_after_a_preflight_line(client, ollama):
@@ -347,7 +336,21 @@ async def test_a_tag_the_library_does_not_have_is_refused_before_ollama_is_calle
 
 @pytest.mark.parametrize(
     "model",
-    ["../etc", "-bad", "qwen3:8b:extra", "qwen3 8b", "hf.co/org/repo?x=1", "", 42, "a:b/c"],
+    [
+        "../etc",
+        "-bad",
+        "qwen3:8b:extra",
+        "qwen3 8b",
+        "hf.co/org/repo?x=1",
+        "",
+        42,
+        "a:b/c",
+        # S40: an engine prefix is split off BEFORE the ref is validated, so
+        # the ref still gets exactly one colon of its own — and an engine
+        # named with no model is no ref at all.
+        "hub:qwen3:8b:extra",
+        "hub:",
+    ],
 )
 async def test_a_malformed_model_string_is_a_400_before_anything_is_called(
     client, ollama, upstreams, model
@@ -373,10 +376,13 @@ async def test_a_second_pull_of_the_same_model_while_one_streams_is_a_409(
 
     first = asyncio.create_task(client.post("/admin/pull", json={"model": "qwen3:8b"}))
     for _ in range(500):
-        if fake.seen and "library/qwen3:8b" in admin._PULLS_IN_FLIGHT:
+        if fake.seen and ("hub", "library/qwen3:8b") in admin._PULLS_IN_FLIGHT:
             break
         await asyncio.sleep(0.01)
-    assert "library/qwen3:8b" in admin._PULLS_IN_FLIGHT, "keyed on the CANONICAL ref"
+    # S40: keyed per machine — the same ref onto two machines is two downloads.
+    assert ("hub", "library/qwen3:8b") in admin._PULLS_IN_FLIGHT, (
+        "keyed on the ENGINE and the CANONICAL ref"
+    )
 
     second = await client.post("/admin/pull", json={"model": "qwen3:8b"})
     assert second.status_code == 409
@@ -441,3 +447,104 @@ async def test_an_unreadable_registry_config_is_said_on_the_preflight_line(
     assert "resolved" not in line
     assert "config blob could not be read" in line["note"]
     assert _lines(resp.content)[-1] == {"status": "success"}
+
+
+# ── S40: a pull is about a machine ─────────────────────────────────────────
+
+
+async def test_a_cloud_default_no_longer_blocks_a_pull_to_the_machine(client, pool, ollama):
+    """Replaces test_pull_is_refused_for_a_non_ollama_backend (S40, on purpose).
+
+    That pinned "pull is only supported for the ollama backend" — a rule about
+    which provider was the DEFAULT, from when the default was the only backend.
+    A pull is about a machine: with a cloud default the hub still runs models,
+    and a bare ref means the one machine there is."""
+    await backends.save_config(
+        pool, {"kind": "cloud", "url": "https://x", "api_key": "sk-x", "model": "m"}
+    )
+
+    resp = await client.post("/admin/pull", json={"model": "qwen3:8b"})
+
+    assert resp.status_code == 200
+    assert _lines(resp.content)[0]["engine"] == "hub"
+    assert ollama.seen[-1] == ("/api/pull", {"model": "qwen3:8b"})
+
+
+async def test_a_cloud_providers_prefix_names_no_machine(client, pool, ollama):
+    await backends.save_config(
+        pool, {"kind": "cloud", "url": "https://x", "api_key": "sk-x", "model": "m"}
+    )
+
+    resp = await client.post("/admin/pull", json={"model": "cloud:qwen3:8b"})
+
+    assert resp.status_code == 400
+    assert "'cloud' is not a machine that runs models" in resp.json()["error"]
+    assert ollama.seen == []
+
+
+async def test_a_bare_ref_with_two_machines_is_refused_naming_both(
+    client, ollama, second_engine, upstreams
+):
+    resp = await client.post("/admin/pull", json={"model": "qwen3:8b"})
+
+    assert resp.status_code == 400
+    error = resp.json()["error"]
+    assert "hub:qwen3:8b" in error and "dell:qwen3:8b" in error
+    assert ollama.seen == [] and second_engine.seen == []
+    assert upstreams.registry.seen == [], "refused before anything was sized"
+
+
+async def test_a_qualified_pull_goes_to_that_machine(
+    client, ollama, second_engine, monkeypatch, tmp_path
+):
+    monkeypatch.setattr(admin, "MODELS_DIR", tmp_path)
+
+    resp = await client.post("/admin/pull", json={"model": "dell:qwen3:8b"})
+
+    assert resp.status_code == 200
+    line = _lines(resp.content)[0]
+    assert line["engine"] == "dell" and line["size_source"] == "ollama-registry"
+    assert "required_gb" not in line, "this hub's disk is not dell's"
+    assert "free space on dell cannot be read from this hub" in line["note"]
+    assert second_engine.seen[-1] == ("/api/pull", {"model": "qwen3:8b"})
+    assert not any(path == "/api/pull" for path, _ in ollama.seen)
+
+
+async def test_the_same_ref_onto_two_machines_is_two_pulls(
+    client, pool, monkeypatch, mount_backend, second_engine
+):
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    gate = asyncio.Event()
+    hub = FakeOllama(pull_gate=gate)
+    mount_backend("http://ollama.test", hub.app)
+
+    first = asyncio.create_task(client.post("/admin/pull", json={"model": "hub:qwen3:8b"}))
+    for _ in range(500):
+        if ("hub", "library/qwen3:8b") in admin._PULLS_IN_FLIGHT:
+            break
+        await asyncio.sleep(0.01)
+    assert ("hub", "library/qwen3:8b") in admin._PULLS_IN_FLIGHT
+
+    onto_dell = await client.post("/admin/pull", json={"model": "dell:qwen3:8b"})
+    assert onto_dell.status_code == 200, "a download onto dell is not the hub's download"
+    again = await client.post("/admin/pull", json={"model": "hub:qwen3:8b"})
+    assert again.status_code == 409
+    assert "on hub" in again.json()["error"]
+
+    gate.set()
+    assert (await first).status_code == 200
+    assert admin._PULLS_IN_FLIGHT == {}
+
+
+async def test_a_finished_pull_forgets_that_machines_cached_tags(client, ollama, monkeypatch):
+    """Routing reads installed tags through the engines cache (30 s when
+    ready): a model just pulled must not read `not_installed` for that long.
+    Only the machine that changed is forgotten (the other engines keep their
+    readings — S40 ruling C11's rule)."""
+    forgotten: list[str] = []
+    monkeypatch.setattr(engines, "forget", forgotten.append)
+
+    resp = await client.post("/admin/pull", json={"model": "qwen3:8b"})
+
+    assert _lines(resp.content)[-1] == {"status": "success"}
+    assert forgotten == ["hub"]

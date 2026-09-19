@@ -275,16 +275,17 @@ async def suggest_route(request: Request) -> dict:
     return result
 
 
-# Pulls in flight, model string -> when it started (ISO). A second POST for
-# the same model while one streams is a 409 naming that time: ollama would
-# run two downloads against the same blobs and the second stream's progress
-# would be a story about the first. Process-local — this gateway is the one
-# thing that pulls into the bundled ollama — and cleared in the relay's
-# finally, so an aborted stream releases it too.
-_PULLS_IN_FLIGHT: dict[str, str] = {}
+# Pulls in flight, (engine, canonical ref) -> when it started (ISO). A second
+# POST for the same ref onto the same machine while one streams is a 409
+# naming that time: ollama on ONE machine would run two downloads against the
+# same blobs and the second stream's progress would be a story about the
+# first. The same ref onto two machines is two downloads (S40). Process-local
+# — this gateway is the one thing that pulls into its engines — and cleared
+# in the relay's finally, so an aborted stream releases it too.
+_PULLS_IN_FLIGHT: dict[tuple[str, str], str] = {}
 
 
-async def _preflight_line(app, model: str) -> dict:
+async def _preflight_line(app, model: str, row: dict) -> dict:
     """The pull stream's mandatory first line: the download's size, DERIVED
     live from the source ollama will pull from (`size_source` says which:
     the registry manifest for a library tag, the Hugging Face sibling for
@@ -293,9 +294,12 @@ async def _preflight_line(app, model: str) -> dict:
     guess dressed up as a measurement, and never a stale curated number.
     `required_gb` and `free_gb` are both GiB (the same unit, so `ok` is a
     real comparison); `size_bytes` is the exact figure; `resolved` is what
-    the source stated of quant / family / params_b."""
+    the source stated of quant / family / params_b. `engine` names the
+    machine the download lands on (S40); the free-space check reads THIS
+    hub's models volume, so it runs for the builtin only and says so for
+    any other machine."""
     sized = await pulls_mod.pull_size(app, model)
-    line: dict = {"status": "preflight"}
+    line: dict = {"status": "preflight", "engine": row["name"]}
     if sized["resolved"]:
         line["resolved"] = sized["resolved"]
     if sized["size_bytes"] is None:
@@ -312,6 +316,18 @@ async def _preflight_line(app, model: str) -> dict:
     # A sized pull can still carry the source's own note (the registry's
     # config blob unreadable, say); it is kept, never overwritten below.
     notes = [sized["note"]] if sized.get("note") else []
+    if not row.get("builtin"):
+        # This hub's /models is its own disk; another machine's free space is
+        # read on that machine (its agent, S44). Sizing a pull against ours
+        # would compare dell's download with the hub's disk.
+        notes.append(
+            f"free space on {row['name']} cannot be read from this hub; "
+            "skipping the free-space check"
+        )
+        line["note"] = "; ".join(notes)
+        line["size_bytes"] = size_bytes
+        line["size_source"] = sized["size_source"]
+        return line
     try:
         stat = os.statvfs(MODELS_DIR)
         free_bytes = stat.f_bavail * stat.f_frsize
@@ -337,45 +353,43 @@ async def _preflight_line(app, model: str) -> dict:
 
 @router.post("/pull")
 async def pull(request: Request) -> Response:
+    """Pull a model onto the named engine (`hub:qwen3:8b`; a bare ref means
+    the only machine there is, and is refused by name when there are
+    several — catalog.engine_and_model). A pull is about a MACHINE, so the
+    default provider's kind no longer matters (S40)."""
     body = await request.json()
-    model = body.get("model") if isinstance(body, dict) else None
-    if not model:
+    raw = body.get("model") if isinstance(body, dict) else None
+    if not raw:
         raise HTTPException(status_code=400, detail="model is required")
+    pool = await db.get_pool()
     try:
-        model = pulls_mod.validate_model(model)
+        row, model = await catalog.engine_and_model(pool, raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    key = pulls_mod.canonical_ref(model)
+    key = (row["name"], pulls_mod.canonical_ref(model))
     started_at = _PULLS_IN_FLIGHT.get(key)
     if started_at is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"a pull of {model!r} has been in flight since {started_at} — "
-            "wait for it to finish",
+            detail=f"a pull of {model!r} has been in flight since {started_at} on "
+            f"{row['name']} — wait for it to finish",
         )
     _PULLS_IN_FLIGHT[key] = datetime.now(UTC).isoformat()
     # Until the relay takes over, this frame owns the release.
     released = False
     try:
-        pool = await db.get_pool()
-        config = await backends.read_config(pool)
-        if config["kind"] != "ollama":
+        if not providers.base_url_of(row):
             raise HTTPException(
-                status_code=400,
-                detail=(
-                    "pull is only supported for the ollama backend "
-                    f"(current backend: {config['kind']})"
-                ),
+                status_code=502,
+                detail="OLLAMA_URL is unset — cannot reach ollama"
+                if row.get("builtin")
+                else f"{row['name']} has no address — cannot reach it",
             )
-
-        ollama_url = backends.resolve_base_url(config)
-        if not ollama_url:
-            raise HTTPException(status_code=502, detail="OLLAMA_URL is unset — cannot reach ollama")
 
         # Sized BEFORE the stream opens, so the first line is the size and
         # the download never starts in the dark; bounded inside pull_size.
-        preflight = await _preflight_line(request.app, model)
+        preflight = await _preflight_line(request.app, model, row)
         if preflight.get("absent"):
             # The registry has already said this tag does not exist, so opening
             # a stream to ollama can only fail there, in ollama's words, after
@@ -392,7 +406,8 @@ async def pull(request: Request) -> Response:
             )
             raise HTTPException(status_code=404, detail=f"{preflight['note']}{suffix}")
 
-        client = backends.http_client(request.app, PULL_TIMEOUT, base_url=ollama_url)
+        # The engine's own address and headers (engines.client, ruling G2).
+        client = engines.client(request.app, row, PULL_TIMEOUT)
         try:
             upstream = await client.send(
                 client.build_request("POST", "/api/pull", json={"model": model}), stream=True
@@ -400,7 +415,8 @@ async def pull(request: Request) -> Response:
         except httpx.HTTPError as exc:
             await client.aclose()
             raise HTTPException(
-                status_code=502, detail=f"could not reach ollama — {backends.reason(exc)}"
+                status_code=502,
+                detail=f"could not reach {row['name']}'s ollama — {backends.reason(exc)}",
             ) from exc
 
         if upstream.status_code != 200:
@@ -426,6 +442,10 @@ async def pull(request: Request) -> Response:
                 await upstream.aclose()
                 await client.aclose()
                 _PULLS_IN_FLIGHT.pop(key, None)
+                # What this machine has installed changed (or may have): its
+                # cached tags, which routing reads, are dropped — never served
+                # stale for their 30 s. The other machines keep theirs.
+                engines.forget(row["name"])
 
         released = True
         return StreamingResponse(
@@ -673,17 +693,25 @@ async def _verify_or_502(app, name: str, shape: dict) -> dict:
 
 async def _refuse_name_that_shadows_a_local_tag(app, pool, name: str) -> None:
     """A model id is split on its FIRST colon against the provider names, so
-    a provider called `mistral` would turn the local tag `mistral:7b` into
-    "model 7b on Mistral's cloud". Checked against what the bundled ollama
-    LISTS right now — derived, never a maintained list — and a listing that
-    cannot be read is a stated refusal, not a skipped check."""
-    builtin = await providers.get_row(pool, providers.BUILTIN)
+    a provider called `mistral` would turn the bare id `mistral:7b` into
+    "model 7b on Mistral's cloud". Only a BARE id can be shadowed, and a
+    bare id means the DEFAULT provider (S40) — so the tags that matter are
+    the default's, and only when the default is a machine that runs models
+    (a qualified `hub:mistral:7b` is split on `hub`, never on `mistral`). A
+    cloud default has no tags to shadow and no machine is asked: a machine
+    that is down or asleep never blocks adding a cloud provider. The default
+    engine's listing is read LIVE — derived, never a maintained list — and
+    one that cannot be read is a stated refusal, not a skipped check."""
+    default = await providers.default_row(pool)
+    if not engines.is_engine(default):
+        return
     try:
-        listing = await adapters.for_row(builtin).list_models(app, builtin)
+        listing = await adapters.for_row(default).list_models(app, default)
     except adapters.ProviderRefused as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"cannot check {name!r} against the local model tags — {exc.detail}",
+            detail=f"cannot check {name!r} against the local model tags on "
+            f"{default['name']} — {exc.detail}",
         ) from exc
     shadowed = sorted(
         m["id"] for m in listing.models if m["id"].partition(":")[0] == name and ":" in m["id"]
@@ -691,8 +719,9 @@ async def _refuse_name_that_shadows_a_local_tag(app, pool, name: str) -> None:
     if shadowed:
         raise HTTPException(
             status_code=409,
-            detail=f"{name!r} would shadow the local model tag(s) {', '.join(shadowed)} — "
-            f"a bare id like {shadowed[0]!r} would stop meaning the local model; pick another name",
+            detail=f"{name!r} would shadow the local model tag(s) {', '.join(shadowed)} on "
+            f"{default['name']} — a bare id like {shadowed[0]!r} would stop meaning that "
+            "model; pick another name",
         )
 
 
@@ -1147,42 +1176,56 @@ async def catalog_hf_repo(org: str, repo: str, request: Request) -> dict:
 
 @router.delete("/models")
 async def remove_model(request: Request) -> dict:
-    """Remove an installed model from the bundled ollama (`?model=`). The
-    answer is VERIFIED: after ollama's 200, /api/tags is re-read and the
+    """Remove an installed model from the named engine (`?model=hub:x`; a
+    bare id means the only one — catalog.engine_and_model). The answer is
+    VERIFIED: after ollama's 200, that engine's /api/tags is re-read and the
     name must be gone — a 200 that still lists the model is a stated 502,
-    never "removed". Never touches a cloud model (nothing to remove) and
-    refuses a name that is not installed with ollama's own 404."""
-    model = request.query_params.get("model") or ""
+    never "removed" — and it names the machine it verified against. Never
+    touches a cloud model (nothing to remove) and refuses a name that is not
+    installed with a 404 naming the machine."""
+    raw = request.query_params.get("model") or ""
+    pool = await db.get_pool()
     try:
-        model = pulls_mod.validate_model(model)
+        row, model = await catalog.engine_and_model(pool, raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    pool = await db.get_pool()
-    builtin = await providers.get_row(pool, providers.BUILTIN)
-    base_url = providers.base_url_of(builtin)
+    base_url = providers.base_url_of(row)
     try:
-        before = await ollama.ADAPTER.list_models(request.app, builtin)
+        before = await ollama.ADAPTER.list_models(request.app, row)
         name = catalog.installed_name(before.models, model)
         if name is None:
-            raise HTTPException(status_code=404, detail=f"{model!r} is not installed")
+            raise HTTPException(
+                status_code=404, detail=f"{model!r} is not installed on {row['name']}"
+            )
         await ollama.delete(request.app, base_url, name)
-        after = await ollama.ADAPTER.list_models(request.app, builtin)
+        # What is installed changed (or ollama claims so): the cached tags
+        # routing reads for THIS machine are dropped either way, never served
+        # stale.
+        engines.forget(row["name"])
+        after = await ollama.ADAPTER.list_models(request.app, row)
     except adapters.ProviderRefused as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
     if catalog.installed_name(after.models, name) is not None:
         raise HTTPException(
             status_code=502,
-            detail=f"ollama answered 200 to the delete but /api/tags still lists {name!r}",
+            detail=f"ollama on {row['name']} answered 200 to the delete but /api/tags still "
+            f"lists {name!r}",
         )
-    logger.info("model removed: %s", name)
-    return {"removed": name, "verified": True, "installed_now": len(after.models)}
+    logger.info("model removed: %s from %s", name, row["name"])
+    return {
+        "engine": row["name"],
+        "removed": name,
+        "verified": True,
+        "installed_now": len(after.models),
+    }
 
 
 @router.post("/catalog/drift")
 async def catalog_drift(request: Request) -> dict:
-    """Has the source moved since this model was pulled? Installed weights
-    digest vs the source's current one (app/catalog.py: check_drift).
-    Never pulls. `moved` is null with a note when a side could not be read."""
+    """Has the source moved since this model was pulled onto the named
+    engine (`hub:x`; a bare id means the only one)? Installed weights digest
+    vs the source's current one (app/catalog.py: check_drift). Never pulls.
+    `moved` is null with a note when a side could not be read."""
     body = await request.json() if await request.body() else {}
     model = body.get("model") if isinstance(body, dict) else None
     if not model:

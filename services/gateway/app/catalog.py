@@ -673,22 +673,54 @@ async def _upstream_weights(app, name: str) -> tuple[str | None, str, str | None
     return None, ollama_registry.SOURCE_KEY, "the registry manifest carries no model layer"
 
 
+async def engine_and_model(pool, raw: object) -> tuple[dict, str]:
+    """(engine row, bare model) for the model a pull, a removal or an update
+    check names (S40). `hub:qwen3:8b` names its engine; a bare `qwen3:8b`
+    means the one machine there is, and is refused by name when there are
+    several — which machine would be a guess. A cloud provider's prefix is
+    refused: a cloud model is used directly. The ref is validated AFTER the
+    engine prefix is split off (pulls.MODEL_RE allows one colon, the tag's
+    own). The machines are read live (engines.rows), never a list anyone
+    keeps. Raises ValueError with the reason (a 400)."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("model is required — e.g. hub:qwen3:8b")
+    raw = raw.strip()
+    machines = {row["name"]: row for row in await engines.rows(pool)}
+    names = {row["name"] for row in await providers.list_rows(pool)} | set(machines)
+    prefix, bare = providers.split_model_id(raw, names)
+    model = pulls.validate_model(bare)
+    if prefix is not None:
+        if prefix not in machines:
+            raise ValueError(
+                f"{prefix!r} is not a machine that runs models — a cloud model is used "
+                "directly; it cannot be pulled, removed or checked for updates"
+            )
+        return machines[prefix], model
+    if not machines:
+        raise ValueError("no machine here runs models — there is nothing to pull to or remove from")
+    if len(machines) > 1:
+        named = " or ".join(f"{name}:{raw}" for name in machines)
+        raise ValueError(f"{raw!r} does not say which machine — name it: {named}")
+    return next(iter(machines.values())), model
+
+
 async def check_drift(app, pool, model: str) -> dict:
-    """Has the source's weights blob changed since `model` was pulled?
-    Compares the installed Modelfile's blob digest with the source's
-    current one. NEVER pulls, never re-resolves the tag to another model:
-    `moved` is True/False only when both digests were read, else None with
-    the reason. The catalogue's `drift` block is exactly this shape."""
-    model = pulls.validate_model(model)
-    builtin = await providers.get_row(pool, providers.BUILTIN)
-    listing = await ollama.ADAPTER.list_models(app, builtin)
+    """Has the source's weights blob changed since `model` was pulled onto
+    the named engine (`hub:x`; a bare id means the only one)? Compares the
+    installed Modelfile's blob digest — read from THAT engine — with the
+    source's current one. NEVER pulls, never re-resolves the tag to another
+    model: `moved` is True/False only when both digests were read, else None
+    with the reason. The catalogue's `drift` block is exactly this shape."""
+    row, model = await engine_and_model(pool, model)
+    listing = await ollama.ADAPTER.list_models(app, row)
     name = installed_name(listing.models, model)
     if name is None:
-        raise NotInstalled(f"{model!r} is not installed on the bundled ollama")
+        raise NotInstalled(f"{model!r} is not installed on {row['name']}")
     checked_at = _now()
-    show = await ollama.show(app, providers.base_url_of(builtin), name)
+    show = await ollama.show(app, providers.base_url_of(row), name)
     installed = installed_weights_digest(show)
     result = {
+        "engine": row["name"],
         "model": name,
         "checked_at": checked_at,
         "installed_digest": installed,
