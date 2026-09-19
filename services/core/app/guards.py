@@ -2965,6 +2965,23 @@ _NOT_CURRENT = re.compile(
     r"|out\s+of\s+date|may\s+have\s+changed|not\s+(?:a\s+)?(?:current|fresh|live))\b",
     re.I,
 )
+# S40b T4 review, fix round 1: her own earlier reply — "my last reply", "the
+# previous answer", "in the previous turn". What she said then, named as then.
+# The v15 case seeds the walk's replay as her history, and the honest answer
+# labels it so. "The last response FROM hub" is a message from the machine, not
+# her reply. Shared with the served and memory guards' own claim cut.
+_HER_EARLIER_REPLY = (
+    r"\b(?:my|the)\s+(?:last|previous|earlier|first)\s+"
+    r"(?:reply|answer|message|response|turn)\b(?!\s+from\b)"
+)
+# A reading or a state she labels as history: "(from history)", "from my
+# previous answer", "My previous answer:", "In the previous turn:". The answer
+# the machine nudge asks for, not a replay stated as current.
+_HISTORY_LABEL = re.compile(
+    r"\bfrom\s+(?:(?:my|the|our|this)\s+)?(?:(?:chat|conversation)\s+)?history\b"
+    rf"|{_HER_EARLIER_REPLY}",
+    re.I,
+)
 _HEADING = re.compile(r"^\s*#{1,6}\s")
 _FENCE = re.compile(r"^\s*(?:```|~~~)")
 # A double-quoted span on one line: someone else's words ("Your note reads
@@ -3218,23 +3235,42 @@ def _reading_context(lines: list[str], index: int) -> list[str]:
       * the run holding it, from the run's top down to the reading line;
       * the heading that opens the run (blank lines between them skipped);
       * the lead-in: the last non-blank, non-heading line above the run, when
-        it ends in ":" ("Here is what hub reported when I checked earlier:")."""
+        it ends in ":" ("Here is what hub reported when I checked earlier:").
+
+    S40b T4 review, fix round 1: a disclaimer written AFTER the block ("…\\nI
+    have not checked it this turn.") was never read, so the same honest answer
+    was corrected when it came last instead of first. The context now also
+    holds:
+
+      * the rest of the run, below the reading line;
+      * the first non-blank line after the run, unless it is a heading or a
+        lead-in ending in ":" — those open the next section, and what they say
+        is about it, not about this reading."""
     top = index
     while top > 0 and not _is_run_break(lines[top - 1]):
         top -= 1
-    context = lines[top : index + 1]
+    bottom = index
+    while bottom + 1 < len(lines) and not _is_run_break(lines[bottom + 1]):
+        bottom += 1
+    context = lines[top : bottom + 1]
     above = [line for line in reversed(lines[:top]) if line.strip()]
     if above and _HEADING.match(above[0]):
         context.append(above[0])
     lead_in = next((line for line in above if not _HEADING.match(line)), None)
     if lead_in is not None and lead_in.rstrip().endswith(":"):
         context.append(lead_in)
+    after = next((line for line in lines[bottom + 1 :] if line.strip()), None)
+    if after is not None and not _HEADING.match(after) and not after.rstrip().endswith(":"):
+        context.append(after)
     return context
 
 
 def _not_a_current_reading(texts: Sequence[str]) -> bool:
     return any(
-        _PRIOR_TIME.search(text) or _NOT_CURRENT.search(text) or _REPORTED.search(text)
+        _PRIOR_TIME.search(text)
+        or _NOT_CURRENT.search(text)
+        or _REPORTED.search(text)
+        or _HISTORY_LABEL.search(text)
         for text in texts
     )
 
@@ -3293,6 +3329,10 @@ def _machine_state_claim(
             if _REPORTED.search(clause) is not None:
                 continue  # "you said hub is offline" — someone else's claim
             if _PRIOR_TIME.search(clause) is not None:
+                continue
+            # "From my previous answer: hub is switched off." — her history,
+            # labelled as such (T4 review, fix round 1), like _PRIOR_TIME.
+            if _HISTORY_LABEL.search(clause) is not None:
                 continue
             for m in assertion.finditer(clause):
                 machine = m.group("mach")

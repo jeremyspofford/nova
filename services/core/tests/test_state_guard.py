@@ -1451,3 +1451,159 @@ def test_the_verdicts_anchor_is_kept_verbatim_inside_the_outage_anchor():
         r"|for\s+(?:chat\s+)?(?:models|chat|requests)\b))"
     )
     assert guards._OUTAGE_ANCHOR.startswith(guards._MACHINE_ANCHOR[:-1] + "|")
+
+
+# ================================================================================
+# S40b T4 review, fix round 1: a reading she labels as her history
+# ================================================================================
+#
+# The v15 case seeds b851aa91's reading as her own history, and the answer the
+# machine nudge asks for says plainly that she did not check. Each block below
+# FIRED at f81d0a1b with only hub's served round (the reviewer's probes,
+# verbatim): a REPLACE-class correction of a reply that already said the
+# reading was history. The not-current cut read the run above the reading line,
+# its heading and its lead-in, but never a history label, and never a
+# disclaimer written after the block. It now reads:
+#   * a history label: "from history", "from my previous answer", "My previous
+#     answer:", "In the previous turn:";
+#   * the rest of the run below the reading line, and the first non-blank line
+#     after the run (unless that line is a heading or a lead-in ending in ":",
+#     which belong to what follows).
+
+HISTORY_LABELLED = [
+    (
+        "same_line_from_my_previous_answer",
+        f"{NAME_RUN} (from my previous answer)",
+    ),
+    ("same_line_from_history", f"{NAME_RUN} (from history)"),
+    (
+        "heading_from_my_previous_answer",
+        f"### Machine Status (from my previous answer)\n{NAME_RUN}",
+    ),
+    ("lead_in_from_history", f"The last reading I have is from history:\n{NAME_RUN}"),
+    ("lead_in_my_previous_answer", f"My previous answer:\n{NAME_RUN}"),
+    ("lead_in_from_my_previous_answer", f"From my previous answer:\n{NAME_RUN}"),
+    ("lead_in_in_the_previous_turn", f"In the previous turn:\n{NAME_RUN}"),
+    (
+        "lead_in_then_trailing_disclaimer",
+        f"From my previous answer:\n{NAME_RUN}\nI have not checked it this turn.",
+    ),
+]
+
+# A disclaimer written after the block, with no label above it.
+TRAILING_DISCLAIMERS = [
+    ("disclaimer_in_the_run", f"{NAME_RUN}\nI have not checked it this turn."),
+    ("disclaimer_after_a_blank", f"{NAME_RUN}\n\nI have not checked it this turn."),
+    ("disclaimer_after_the_heading_block", f"{NAME_BLOCK}\n\nThat reading may have changed."),
+    (
+        "disclaimer_on_a_line_below_the_reading",
+        f"{NAME_BLOCK}\n- **Serving**: On (not checked this turn)",
+    ),
+]
+
+# The same copula a history label frames, in her own sentence.
+HISTORY_LABELLED_COPULA = [
+    ("copula_after_a_history_lead_in", "From my previous answer: hub is switched off."),
+    ("copula_after_from_history", "From history: hub is offline."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    HISTORY_LABELLED + TRAILING_DISCLAIMERS + HISTORY_LABELLED_COPULA,
+    ids=[c[0] for c in HISTORY_LABELLED + TRAILING_DISCLAIMERS + HISTORY_LABELLED_COPULA],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_reading_labelled_as_history_is_not_corrected(purpose, label, reply):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    assert guards.state_claim_check(reply, spans, NAMES, purpose=purpose) is None, label
+
+
+# What must keep firing. The bare block (the replay, b02a5694's own shape) and
+# b02a5694 itself are pinned above; these are the new context's limits: a
+# heading or a lead-in after the run opens the NEXT section, so its words are
+# not about hub's reading; a clause that says hub is offline after a history
+# clause is its own claim; and a response FROM hub is not her earlier reply.
+HISTORY_CONTEXT_STILL_FIRES = [
+    (
+        "next_heading_is_another_section",
+        f"{NAME_BLOCK}\n\n### Devices (not checked this turn)\n- Dell: offline",
+    ),
+    (
+        "next_lead_in_is_another_block",
+        f"{NAME_BLOCK}\n\nThe Dell, which I have not checked this turn:\n- Status: offline",
+    ),
+    (
+        "copula_after_a_history_clause",
+        "My previous answer said hub was ready; hub is offline.",
+    ),
+    ("a_response_from_hub", f"The last response from hub:\n{NAME_RUN}"),
+    ("block_then_an_unrelated_line", f"{NAME_BLOCK}\n\nWant me to pull another model?"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    HISTORY_CONTEXT_STILL_FIRES,
+    ids=[c[0] for c in HISTORY_CONTEXT_STILL_FIRES],
+)
+def test_a_reading_the_new_context_does_not_frame_still_fires(label, reply):
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+
+
+def test_the_bare_replay_still_fires_beside_the_labelled_ones():
+    """The pins the not-current cut must never reach: the bare block and the
+    walk's replay, word for word."""
+    for reply in (NAME_BLOCK, NAME_RUN, B02A5694):
+        claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+        assert claim is not None and claim.device == "hub"
+
+
+# The cost of reading the line after the run, pinned so it is a choice: a
+# sentence there that says something else is not current reads as the
+# reading's disclaimer.
+TRAILING_LINE_ACCEPTED_MISSES = [
+    ("another_subjects_disclaimer", f"{NAME_BLOCK}\n\nThe Dell was not checked this turn."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    TRAILING_LINE_ACCEPTED_MISSES,
+    ids=[c[0] for c in TRAILING_LINE_ACCEPTED_MISSES],
+)
+def test_the_trailing_line_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+def test_a_regeneration_that_labels_the_reading_as_history_is_not_refused():
+    """The nudge's alternative passed only because it opened with "I did not
+    check". Without that opener, the history label alone was refused when the
+    regeneration was vetted, and the persisted row became the correction."""
+    from app import agents
+
+    regen = f"The last reading I have is from history:\n{NAME_RUN}"
+    turn = SimpleNamespace(spans=[HUB_SERVED], kind="chat")
+    rejected = chat._regen_rejected_by(
+        regen,
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected is None
+    # …and the bare block is still refused by the state check.
+    rejected = chat._regen_rejected_by(
+        NAME_RUN,
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected == "state_claim"
