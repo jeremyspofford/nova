@@ -1735,6 +1735,26 @@ def test_a_remove_is_backed_by_the_id_the_tool_resolved_not_the_raw_argument():
     assert guards.narration_check(reply, [_resolved("model_remove", "qwen3:4b", "dell:qwen3:4b")])
 
 
+def test_a_pull_is_also_backed_by_echoing_the_raw_argument_she_was_given():
+    """(S40 fix wave: echo backing) The resolved id is not the ONLY thing a
+    true reply can say: model_pull is called with the catalogue's
+    `library:<tag>` id, or the pre-rename `ollama:<tag>`, and a reply that
+    reads that argument straight back is just as honest as one that reads
+    back what the gateway resolved it to. Reading ONLY the resolved id as
+    backing corrected a gateway-confirmed pull as though she had not done
+    the thing the span proves she did."""
+    for given in ("ollama:qwen3:4b", "library:qwen3:4b"):
+        reply = f"I pulled {given}."
+        span = _resolved("model_pull", given, "hub:qwen3:4b")
+        assert guards.narration_check(reply, [span]) is None, given
+
+
+def test_a_remove_is_also_backed_by_echoing_the_raw_argument_she_was_given():
+    reply = "I removed ollama:qwen3:4b."
+    span = _resolved("model_remove", "ollama:qwen3:4b", "hub:qwen3:4b")
+    assert guards.narration_check(reply, [span]) is None
+
+
 def test_a_switch_claim_with_no_configure_span_is_flagged():
     for reply in (
         "I've switched chat models off on hub.",

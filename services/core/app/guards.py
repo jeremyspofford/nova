@@ -1087,6 +1087,31 @@ def _same_model(claimed: str, touched: str) -> bool:
     return c_bare.rsplit("/", 1)[-1].lower() in t_bare.lower()
 
 
+def _raw_model_arg_of(span: Any) -> str | None:
+    """The bare `model` argument a pull/remove span was CALLED with, ignoring
+    any resolved fact — the counterpart to `_target_of`'s resolved-preferring
+    read, for the one place both readings matter (see `_backed`)."""
+    meta = getattr(span, "meta", None) or {}
+    args = meta.get("args_redacted")
+    if not isinstance(args, dict):
+        return None
+    model = args.get("model")
+    return model if isinstance(model, str) else None
+
+
+def _argument_echoes(target: str, raw: str) -> bool:
+    """True when the raw argument a pull/remove tool was actually called
+    with is what the claim names — engine-STRICT, unlike `_same_model`: a
+    bare raw argument does not back a machine-qualified claim here, because
+    this only runs after the resolved id (the authoritative source) already
+    said no, and a bare argument is not evidence against that."""
+    t_engine, t_bare = _model_parts(target)
+    r_engine, r_bare = _model_parts(raw)
+    if t_engine != r_engine:
+        return False
+    return t_bare.rsplit("/", 1)[-1].lower() in r_bare.lower()
+
+
 def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
     matching = [span for span in successful if span.name in _tools_for_kind(kind)]
     if not matching:
@@ -1097,7 +1122,16 @@ def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
     if any(t is None for t in span_targets) or not target:
         return True
     if kind in _MODEL_CLAIMS:
-        return any(_same_model(target, t) for t in span_targets)
+        if any(_same_model(target, t) for t in span_targets):
+            return True
+        # The id the tool RESOLVED and confirmed didn't back it — but a
+        # reply that echoes exactly the raw argument she was called with
+        # (`library:<tag>`, the pre-rename `ollama:<tag>`) is just as true,
+        # and reading ONLY the resolved id as backing corrected that honest
+        # echo as though the gateway-confirmed action never happened (S40
+        # fix wave: echo backing).
+        raw_args = [_raw_model_arg_of(span) for span in matching]
+        return any(raw is not None and _argument_echoes(target, raw) for raw in raw_args)
     if kind == "configured_machine":
         return any(target.strip().lower() == (t or "").strip().lower() for t in span_targets)
     # Normalise both sides for trailing punctuation/whitespace, so an honest
