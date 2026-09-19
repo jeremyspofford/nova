@@ -186,11 +186,16 @@ _FIXTURE_DEFAULTS: dict = {
 
 
 def _fixture_state(spec: dict, serving: object) -> str:
-    """The gateway's own rule (r1-engines, "Engine state"): a machine switched
-    off reads `switched_off`; one switched on reads what it was declared as —
-    `ready` unless the case said otherwise. Never a state the switch did not
-    decide."""
-    return "switched_off" if not serving else spec.get("state", "ready")
+    """The gateway's own rule (r1-engines, "Engine state"; ruling C8): a
+    machine switched off reads `switched_off`; one switched on reads what it
+    was declared as — `ready` unless the case said otherwise. A declared
+    `switched_off` was the SWITCH's state, not the machine's (T7's
+    FixtureMachine(serving=False) declares both), so switched on it reads
+    `ready`: never serving true and switched off at once."""
+    if not serving:
+        return "switched_off"
+    declared = spec.get("state", "ready")
+    return "ready" if declared == "switched_off" else declared
 
 
 class FixturePlant(GatewayPlant):

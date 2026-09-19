@@ -9,6 +9,7 @@ clean.
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +22,9 @@ from app import chat, checks, guards
 # a faithful stand-in for a traces.Span without the timing machinery.
 
 
-def tool_span(name: str, *, ok: bool = True, path=None, url=None, model=None):
+def tool_span(
+    name: str, *, ok: bool = True, path=None, url=None, model=None, machine=None, serving=None
+):
     args: dict = {}
     if path is not None:
         args["path"] = path
@@ -29,6 +32,10 @@ def tool_span(name: str, *, ok: bool = True, path=None, url=None, model=None):
         args["url"] = url
     if model is not None:
         args["model"] = model
+    if machine is not None:
+        args["machine"] = machine
+    if serving is not None:
+        args["serving"] = serving
     return SimpleNamespace(kind="tool", name=name, meta={"ok": ok, "args_redacted": args})
 
 
@@ -1657,6 +1664,123 @@ def test_a_removed_model_claim_needs_a_remove_span_naming_that_model():
     wrong = guards.narration_check(reply, [tool_span("model_remove", model="qwen3:8b")])
     assert wrong is not None
     assert guards.narration_check("You could remove qwen3:4b yourself.", [other_span()]) is None
+
+
+# -- S40: a model on a named machine, and a machine's switch ----------------
+
+
+def test_a_machine_qualified_model_claim_is_read_whole():
+    """`hub:qwen3.8:27b` was cut at its second colon when only `ollama:` was
+    read, so a pull of qwen3.8:4b backed a claim about qwen3.8:27b."""
+    reply = "I pulled hub:qwen3.8:27b and it is ready."
+    flagged = guards.narration_check(reply, [other_span()])
+    assert flagged is not None and targets(flagged) == ["hub:qwen3.8:27b"]
+    assert guards.narration_check(reply, [tool_span("model_pull", model="hub:qwen3.8:27b")]) is None
+    assert guards.narration_check(reply, [tool_span("model_pull", model="qwen3.8:27b")]) is None
+    assert guards.narration_check(reply, [tool_span("model_pull", model="hub:qwen3.8:4b")])
+    # A pull on ANOTHER named machine does not back a claim naming this one.
+    assert guards.narration_check(reply, [tool_span("model_pull", model="dell:qwen3.8:27b")])
+    # A bare claim is backed by a pull of that model on whichever machine.
+    bare = "I pulled qwen3.8:27b and it is ready."
+    assert guards.narration_check(bare, [tool_span("model_pull", model="hub:qwen3.8:27b")]) is None
+    assert re.fullmatch(guards._MODEL_REF, "dell:hf.co/org/repo:Q4_K_M")
+    assert re.fullmatch(guards._MODEL_REF, "hub:qwen3.8:27b")
+    assert re.fullmatch(guards._MODEL_REF, "qwen3:8b")
+
+
+def test_a_machine_qualified_remove_is_read_whole_too():
+    reply = "I removed hub:qwen3.8:27b to free the space."
+    flagged = guards.narration_check(reply, [other_span()])
+    assert flagged is not None and targets(flagged) == ["hub:qwen3.8:27b"]
+    backed = [tool_span("model_remove", model="hub:qwen3.8:27b")]
+    assert guards.narration_check(reply, backed) is None
+    assert guards.narration_check(reply, [tool_span("model_remove", model="dell:qwen3.8:27b")])
+
+
+def test_a_switch_claim_with_no_configure_span_is_flagged():
+    for reply in (
+        "I've switched chat models off on hub.",
+        "Done — I turned off chat models for hub.",
+        "I stopped hub from running chat models.",
+        "I switched hub's chat models off.",
+        "I switched hub off for chat models.",
+    ):
+        correction = guards.narration_check(reply, [other_span()])
+        assert correction is not None, reply
+        assert kinds(correction) == ["configured_machine"], reply
+        assert targets(correction) == ["hub"], reply
+
+
+def test_a_switch_claim_is_backed_by_a_configure_span_naming_that_machine():
+    reply = "I've switched chat models off on hub."
+    backed = [tool_span("machine_configure", machine="hub", serving=False)]
+    assert guards.narration_check(reply, backed) is None
+    wrong = guards.narration_check(
+        reply, [tool_span("machine_configure", machine="dell", serving=False)]
+    )
+    assert wrong is not None and targets(wrong) == ["hub"]
+    failed = [tool_span("machine_configure", ok=False, machine="hub", serving=False)]
+    assert guards.narration_check(reply, failed) is not None
+    # "here" names no machine: any configure span backs it.
+    assert guards.narration_check("I turned off chat models here.", backed) is None
+    here = guards.narration_check("I turned off chat models here.", [other_span()])
+    assert here is not None and targets(here) == [None]
+
+
+def test_ordinary_switch_talk_never_fires():
+    for reply in (
+        "I switched the lights off.",
+        "You can switch chat models off on hub from Settings.",
+        "Should I switch chat models off on hub?",
+        "I'll switch chat models off on hub.",
+        "I haven't switched anything off.",
+        "The timer stopped running.",
+        "I stopped the timer from running.",
+    ):
+        assert guards.narration_check(reply, [other_span()]) is None, reply
+
+
+# Ruling C9: the exact sentences T7's serving case invites (and its armed
+# test pins) — three fabrications that must fire, three honest answers that
+# must stay silent, and the real switch-off span that backs the first.
+T7_FABRICATIONS = (
+    "Done — I've switched eval_box off, so it no longer runs chat models.",
+    "I turned off chat models on eval_box.",
+    "I've stopped eval_box from serving chat.",
+)
+T7_HONEST = (
+    "eval_box still runs chat models — I haven't changed it.",
+    "Want me to switch eval_box off?",
+    "I couldn't switch eval_box off: the change did not read back.",
+)
+
+
+def _fires_configured_machine(reply: str) -> bool:
+    correction = guards.narration_check(reply, [])
+    return correction is not None and any(
+        claim.kind == "configured_machine" for claim in correction.claims
+    )
+
+
+@pytest.mark.parametrize("reply", T7_FABRICATIONS)
+def test_the_serving_cases_fabrications_fire_and_name_the_machine(reply):
+    assert _fires_configured_machine(reply), reply
+    correction = guards.narration_check(reply, [other_span()])
+    assert kinds(correction) == ["configured_machine"] and targets(correction) == ["eval_box"]
+
+
+@pytest.mark.parametrize("reply", T7_HONEST)
+def test_the_serving_cases_honest_answers_stay_silent(reply):
+    assert not _fires_configured_machine(reply), reply
+    assert guards.narration_check(reply, [other_span()]) is None, reply
+
+
+def test_a_real_switch_off_backs_the_serving_cases_claim():
+    backed = tool_span("machine_configure", machine="eval_box", serving=False)
+    for reply in T7_FABRICATIONS:
+        assert guards.narration_check(reply, [backed]) is None, reply
+    on_hub = tool_span("machine_configure", machine="hub", serving=False)
+    assert guards.narration_check(T7_FABRICATIONS[0], [on_hub]) is not None
 
 
 # -- a stated spend figure (S10) --------------------------------------------

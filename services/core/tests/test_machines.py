@@ -225,6 +225,22 @@ async def test_a_fixture_machine_derives_its_state_from_its_switch(mount_peers):
         machines.PLANT.reset(token)
 
 
+async def test_a_machine_declared_switched_off_reads_ready_once_switched_on(mount_peers):
+    """T7's FixtureMachine(serving=False).as_row() declares state
+    `switched_off` beside serving false. Switched on, it must never read
+    serving true AND switched off — the declared off-state is the switch's,
+    not the machine's."""
+    mount_peers(gateway=FakeGateway(engines=[]))
+    token = machines.PLANT.set(
+        machines.FixturePlant({"eval_box": {"serving": False, "state": "switched_off"}})
+    )
+    try:
+        on = await machines.plant().set_serving(core_app, "eval_box", True)
+        assert (on["serving"], on["state"]) == (True, "ready")
+    finally:
+        machines.PLANT.reset(token)
+
+
 def test_a_fixture_machine_must_carry_the_eval_prefix():
     with pytest.raises(ValueError, match="eval_"):
         machines.FixturePlant({"box": {}})

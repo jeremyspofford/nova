@@ -62,6 +62,7 @@ _CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
 _FETCH_TOOLS = frozenset({"fetch_url"})
 _PULL_TOOLS = frozenset({"model_pull"})
 _REMOVE_TOOLS = frozenset({"model_remove"})
+_CONFIGURE_TOOLS = frozenset({"machine_configure"})
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -71,6 +72,7 @@ _KIND_TOOLS: dict[str, frozenset[str]] = {
     "fetched_url": _FETCH_TOOLS,
     "pulled_model": _PULL_TOOLS,
     "removed_model": _REMOVE_TOOLS,
+    "configured_machine": _CONFIGURE_TOOLS,
 }
 
 
@@ -115,14 +117,26 @@ SPEND_CORRECTION_TEXT = (
 )
 
 # "I pulled / downloaded / installed <model ref>": a completed-pull claim,
-# anchored on a MODEL REFERENCE token (name:tag, user/name:tag, hf.co/org/
-# repo[:quant], optionally ollama:-qualified) — never a bare noun, so "I
-# installed the update" is ordinary chat and never fires. Backed only by a
-# successful model_pull span whose `model` argument names that ref.
+# anchored on a MODEL REFERENCE token — never a bare noun, so "I installed the
+# update" is ordinary chat and never fires. Backed only by a successful
+# model_pull span whose `model` argument names that ref.
+#
+# A model reference, optionally machine-qualified: `qwen3:4b`, `user/name:tag`,
+# `hf.co/org/repo[:quant]`, or any of those behind the name of the machine
+# (the provider) that runs it — `hub:qwen3.8:27b`, `dell:qwen3:8b` (S40). The
+# prefix is a SHAPE, never a list of names: machines are whatever the gateway
+# lists, and a guard that knew them would be wrong the day one is added.
+# Before S40 only `ollama:` was read, so `hub:qwen3.8:27b` was cut at its
+# second colon and a claim about one tag was backed by a pull of another.
+_ENGINE_PREFIX = r"[a-z0-9][a-z0-9_-]{0,31}:"
+_MODEL_BODY = r"(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+)"
+_ENGINE_QUALIFIED = re.compile(
+    r"(?P<engine>[a-z0-9][a-z0-9_-]{0,31}):(?P<bare>" + _MODEL_BODY + r")", re.I
+)
 _PULLED_MODEL = re.compile(
     r"\bi(?:'ve|\s+have|\s+just|\s+have\s+just)?\s+(?:just\s+)?"
     r"(?:pulled|downloaded|installed)\s+(?:the\s+)?(?:model\s+)?"
-    r"(?P<ref>(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+))",
+    r"(?P<ref>(?:" + _ENGINE_PREFIX + r")?" + _MODEL_BODY + r")",
     re.I,
 )
 # "I removed / deleted / uninstalled <model ref>": the same anchor, backed
@@ -130,8 +144,71 @@ _PULLED_MODEL = re.compile(
 _REMOVED_MODEL = re.compile(
     r"\bi(?:'ve|\s+have|\s+just|\s+have\s+just)?\s+(?:just\s+)?"
     r"(?:removed|deleted|uninstalled)\s+(?:the\s+)?(?:model\s+)?"
-    r"(?P<ref>(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+))",
+    r"(?P<ref>(?:" + _ENGINE_PREFIX + r")?" + _MODEL_BODY + r")",
     re.I,
+)
+_MODEL_CLAIMS = frozenset({"pulled_model", "removed_model"})
+
+# "I switched chat models off on hub", "I turned off models for hub", "I
+# stopped hub from running chat models", "I switched hub off for chat models",
+# "I've switched eval_box off, so it no longer runs chat models", "I've
+# stopped eval_box from serving chat" (S40): a completed change to a machine's
+# serving switch. Anchored on a SERVING noun so "I switched the lights off"
+# stays ordinary chat; backed only by a successful machine_configure span
+# naming that machine. A clause that names no machine ("here", "this
+# machine") still claims the kind, and any configure span backs it.
+_MACHINE_SERVING = r"(?:(?:the|chat|local|ai)\s+){0,2}(?:models?|model\s+serving|serving|inference)"
+_CONFIGURED_MACHINE = re.compile(
+    r"\bi(?:['’]ve|\s+have|\s+just|\s+have\s+just)?\s+(?:just\s+)?(?:"
+    + r"(?:switched|turned)\s+(?:off|on)\s+"
+    + _MACHINE_SERVING
+    + r"(?:\s+(?:on|for|at)\s+(?:the\s+)?(?P<m1>[\w.-]+))?"
+    + r"|(?:switched|turned)\s+"
+    + _MACHINE_SERVING
+    + r"\s+(?:off|on)"
+    + r"(?:\s+(?:on|for|at)\s+(?:the\s+)?(?P<m2>[\w.-]+))?"
+    + r"|(?:switched|turned)\s+(?P<m3>[\w.-]+)['’]s\s+"
+    + _MACHINE_SERVING
+    + r"\s+(?:off|on)"
+    + r"|(?:switched|turned)\s+(?:the\s+)?(?P<m4>[\w.-]+)\s+(?:off|on)\s+for\s+"
+    + _MACHINE_SERVING
+    + r"|stopped\s+(?:the\s+)?(?P<m5>[\w.-]+)\s+from\s+(?:running|serving)\s+(?:"
+    + _MACHINE_SERVING
+    + r"|chat\b)"
+    # Ruling C9 (review m6): "switched eval_box off, so it no longer runs chat
+    # models" — the serving noun trails the switch, within the same clause.
+    + r"|(?:switched|turned)\s+(?:the\s+)?(?P<m6>[\w.-]+)\s+(?:off|on)\b[^.!?;]{0,40}?\b"
+    + r"(?:no\s+longer\s+)?(?:runs?|running|serves?|serving)\s+"
+    + _MACHINE_SERVING
+    + r")",
+    re.I,
+)
+_MACHINE_GROUPS = ("m1", "m2", "m3", "m4", "m5", "m6")
+# Words that sit where a machine's name would and name none.
+_NOT_A_MACHINE = frozenset(
+    {
+        "here",
+        "there",
+        "it",
+        "this",
+        "that",
+        "them",
+        "you",
+        "me",
+        "us",
+        "now",
+        "chat",
+        "all",
+        "every",
+        "everything",
+        "machine",
+        "computer",
+        "box",
+        "pc",
+        "server",
+        "host",
+        "engine",
+    }
 )
 
 # The stated correction, appended to the reply and streamed as its own frame.
@@ -824,6 +901,14 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
     for rm in _REMOVED_MODEL.finditer(clause):
         claims.append(("removed_model", _strip_trailing_punct(rm.group("ref")), rm.group(0)))
 
+    # changed a machine's serving switch (S40): the machine when one is named.
+    for cm in _CONFIGURED_MACHINE.finditer(clause):
+        named = next((cm.group(g) for g in _MACHINE_GROUPS if cm.group(g)), None)
+        named = _strip_trailing_punct(named) if named else None
+        if named and named.lower() in _NOT_A_MACHINE:
+            named = None
+        claims.append(("configured_machine", named, cm.group(0)))
+
     return claims
 
 
@@ -887,7 +972,26 @@ def _target_of(span: Any) -> str | None:
     if span.name in ("model_pull", "model_remove", "model_check_update"):
         model = args.get("model")
         return model if isinstance(model, str) else None
+    if span.name == "machine_configure":
+        machine = args.get("machine")
+        return machine if isinstance(machine, str) else None
     return None
+
+
+def _model_parts(ref: str) -> tuple[str | None, str]:
+    """(machine, model) of a model reference — the machine only when the ref
+    carries one (`hub:qwen3:8b`); a bare tag's colon is its own (`qwen3:8b`)."""
+    ref = _strip_trailing_punct(ref.strip())
+    m = _ENGINE_QUALIFIED.fullmatch(ref)
+    return (m.group("engine").lower(), m.group("bare")) if m else (None, ref)
+
+
+def _same_model(claimed: str, touched: str) -> bool:
+    c_engine, c_bare = _model_parts(claimed)
+    t_engine, t_bare = _model_parts(touched)
+    if c_engine and t_engine and c_engine != t_engine:
+        return False  # a pull on another machine does not back this one
+    return c_bare.rsplit("/", 1)[-1].lower() in t_bare.lower()
 
 
 def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
@@ -899,6 +1003,10 @@ def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
     # file: kind-level presence is enough — do not flag on what we cannot see.
     if any(t is None for t in span_targets) or not target:
         return True
+    if kind in _MODEL_CLAIMS:
+        return any(_same_model(target, t) for t in span_targets)
+    if kind == "configured_machine":
+        return any(target.strip().lower() == (t or "").strip().lower() for t in span_targets)
     # Normalise both sides for trailing punctuation/whitespace, so an honest
     # backed fetch is clean regardless of the sentence punctuation the URL
     # was written with ("…/data." vs the span's "…/data").
@@ -1360,6 +1468,41 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
             re.I,
         ),
         "delete_agent",
+    ),
+    # S40 (the hub lane): her machine tools. "Where do your models run?" and
+    # "stop running chat models here" are hers to answer and to do the moment
+    # machine_status / machine_configure are registered, and a denial of either
+    # is the S12 failure again. GENERAL nouns only (machines, models) — never a
+    # machine's name — so an honest report about one machine is left alone.
+    (
+        re.compile(
+            r"(?:see|seeing|check|checking|tell|telling|know|knowing|say|saying|find\s+out)\s+"
+            r"(?:where|which\s+machines?|what\s+machines?|on\s+which\s+machines?)\s+"
+            r"(?:(?:my|your|the|our|local|ai|language|chat)\s+){0,2}models?\s+"
+            r"(?:run|runs|are\s+running|is\s+running|live|lives|are|is)\b"
+            r"|(?:the\s+)?(?:status|state)\s+of\s+(?:(?:my|your|the|our|any)\s+)?machines\b"
+            # Ruling C9: the verb before the noun — "check which machine runs
+            # my models", the denial T7's checks case scores.
+            r"|(?:see|seeing|check|checking|tell|telling|know|knowing|say|saying|find\s+out)\s+"
+            r"(?:which|what)\s+machines?\s+(?:runs?|serves?|hosts?)\s+"
+            r"(?:(?:my|your|the|our|local|ai|language|chat)\s+){0,2}models?\b",
+            re.I,
+        ),
+        "machine_status",
+    ),
+    (
+        re.compile(
+            r"(?:switch|switching|turn|turning)\s+(?:off|on)\s+"
+            r"(?:(?:the|local|chat|ai)\s+){0,2}(?:models?|model\s+serving|serving|inference)\s+"
+            r"(?:on|for)\s+(?:a|any|the|your|my|this|that)\s+machines?\b"
+            r"|(?:stop|stopping|start|starting)\s+(?:(?:a|any|the|your|this)\s+)?machines?\s+"
+            r"from\s+(?:running|serving)\s+(?:(?:chat|local|ai)\s+)?models?\b"
+            r"|(?:change|changing|control|controlling|configure|configuring|choose|choosing)\s+"
+            r"(?:which|what)\s+machines?\s+(?:runs?|serves?)\s+"
+            r"(?:(?:the|chat|local|your|my)\s+){0,2}models?\b",
+            re.I,
+        ),
+        "machine_configure",
     ),
 )
 
@@ -1859,7 +2002,7 @@ _CHECK_DEVICE = _ActionClass(
 # "pull / download / install <a model ref | the model>": her pull, anchored on a
 # model reference or the word model, so a URL/page fetch ("pull up the page",
 # _FETCH_URL) and a file read are never swept in.
-_MODEL_REF = r"(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+)"
+_MODEL_REF = r"(?:" + _ENGINE_PREFIX + r")?" + _MODEL_BODY
 _PULL_MODEL = _ActionClass(
     re.compile(
         r"\b(?:pull|download|install|grab|get)\b(?:\s+(?:me|us|down))?"
