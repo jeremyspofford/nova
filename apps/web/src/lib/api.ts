@@ -1183,7 +1183,9 @@ export async function revokeDevice(id: string): Promise<Device> {
  * string so a state added later is shown rather than hidden. `compute` is
  * the measurement identity in the D10 grammar, and null when it could not
  * be identified: never guessed. `runtime` is 'container' | 'native' | 'wsl'.
- * `serving` is the owner's switch.
+ * `serving` is the owner's switch. `models` is null when the machine could
+ * not be asked what it holds — never an empty list, which is a machine that
+ * answered and holds nothing.
  */
 export type Machine = {
   name: string
@@ -1194,7 +1196,7 @@ export type Machine = {
   observed_at: string | null
   compute: string | null
   runtime: string | null
-  models: { name: string; size_bytes: number | null }[]
+  models: { name: string; size_bytes: number | null }[] | null
 }
 
 /** The gateway's cached reading by default (a short TTL; failures cached

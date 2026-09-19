@@ -297,7 +297,10 @@ class FixturePlant(GatewayPlant):
 
 def machine_json(view: dict) -> dict:
     """One machine in the shape the Settings tile reads (web api.ts Machine).
-    A size the gateway did not state is None, never a zero nobody measured."""
+    A size the gateway did not state is None, never a zero nobody measured;
+    and `models` is None when the machine could not be asked what it holds
+    (tags None), never [] — an empty list is a machine that answered and
+    holds nothing, and the tile says those two differently."""
     tags = view.get("tags")
     models = (
         [
@@ -310,7 +313,7 @@ def machine_json(view: dict) -> dict:
             for model, size in sorted(tags.items())
         ]
         if isinstance(tags, dict)
-        else []
+        else None
     )
     return {
         "name": view["name"],

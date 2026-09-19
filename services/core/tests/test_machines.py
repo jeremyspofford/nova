@@ -294,7 +294,12 @@ def test_the_web_shape_lists_models_by_name_with_their_size_or_none():
             {"name": "qwen3:8b", "size_bytes": 5_225_388_164},
         ],
     }
-    assert machines.machine_json(fakes.engine_view(tags=None))["models"] == []
+    # Moved (S40 fix wave B8): "could not be asked" is not "holds nothing".
+    # tags None (the engine did not answer what it holds) used to become [],
+    # which the tile drew as "No models listed." — silence read as a
+    # measured empty list. It is None now; a real empty listing stays [].
+    assert machines.machine_json(fakes.engine_view(tags=None))["models"] is None
+    assert machines.machine_json(fakes.engine_view(tags={}))["models"] == []
 
 
 # -- the EngineView contract, from core's side (S40 fix wave B9) -------------

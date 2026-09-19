@@ -19,10 +19,16 @@ import { lifecycleLabel, machineStateLabel, readBackMismatch } from './machinesF
  * DevicesSection's injection seam.
  *
  * The section's description words only what the gateway enforces: the
- * switch is read by the role walk alone (S40 T3's decision, carried as G6).
- * A request with no role (an eval or a model_read naming its model) is
- * still served on a switched-off machine, and a role with no other link
- * gets a stated 503, so "sent no model calls" would be a claim, not a fact.
+ * switch is read by the role walk alone (S40 T3's decision, carried as G6),
+ * so chat routing passes over a switched-off machine and a role with no
+ * other link gets a stated 503. A request with no role (an eval, a Probe)
+ * is still served there, so "sent no model calls" would be a claim, not a
+ * fact — and "a call that names its model directly is still served there"
+ * was wrong too: the chat model is link 1 of the chat role's chain.
+ *
+ * A write whose answer did not come back is UNCONFIRMED, never "failed":
+ * core's read-back can fail after the gateway stored the switch. The tile
+ * says so and reads the machines again, showing what they say now.
  */
 interface MachinesApi {
   getMachines: typeof apiGetMachines
@@ -84,6 +90,13 @@ export function MachinesSection({ api = DEFAULT_API }: { api?: MachinesApi } = {
     }
   }, [api, apply])
 
+  // After a write whose answer did not come back: what the machines say
+  // now (the stored switch), read without waking anything. Throws when that
+  // read fails too, so the tile can say so.
+  const reread = useCallback(async () => {
+    apply(await api.getMachines())
+  }, [api, apply])
+
   const onStored = useCallback((row: Machine) => {
     setMachines(prev => (prev ? prev.map(m => (m.name === row.name ? row : m)) : prev))
   }, [])
@@ -92,11 +105,23 @@ export function MachinesSection({ api = DEFAULT_API }: { api?: MachinesApi } = {
     <Section
       icon={Server}
       title="Machines"
-      description="Where Nova's models run. Routing passes over a machine that is switched off: the next link in the role's chain answers instead, and a role with no other link fails and says why. A call that names its model directly is still served there."
+      description="Where Nova's models run. Chat routing passes over a machine that is switched off: the next link in the role's chain answers instead, and a role with no other link fails and says why."
     >
       {loadError && (
         <div role="alert" className={bannerClass}>
           Could not read the machines: {loadError}
+        </div>
+      )}
+      {/* Refresh is there whenever there is something to look at again: a
+          list, an empty list, or a failed read (C4). */}
+      {(machines !== null || loadError) && (
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-caption text-content-tertiary">
+            {machines !== null && `${machines.length} ${machines.length === 1 ? 'machine' : 'machines'}`}
+          </span>
+          <Button size="sm" variant="ghost" icon={<RefreshCw size={12} />} onClick={() => void refresh()}>
+            Refresh
+          </Button>
         </div>
       )}
       {machines === null ? (
@@ -110,33 +135,32 @@ export function MachinesSection({ api = DEFAULT_API }: { api?: MachinesApi } = {
           No machine runs models for Nova right now.
         </p>
       ) : (
-        <>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-caption text-content-tertiary">
-              {machines.length} {machines.length === 1 ? 'machine' : 'machines'}
-            </span>
-            <Button size="sm" variant="ghost" icon={<RefreshCw size={12} />} onClick={() => void refresh()}>
-              Refresh
-            </Button>
-          </div>
-          <div className="divide-y divide-border-subtle">
-            {machines.map(m => (
-              <MachineTile key={m.name} machine={m} api={api} onStored={onStored} />
-            ))}
-          </div>
-        </>
+        <div className="divide-y divide-border-subtle">
+          {machines.map(m => (
+            <MachineTile key={m.name} machine={m} api={api} onStored={onStored} reread={reread} />
+          ))}
+        </div>
       )}
     </Section>
   )
 }
 
-function MachineTile({ machine, api, onStored }: { machine: Machine; api: MachinesApi; onStored: (row: Machine) => void }) {
+function MachineTile({
+  machine,
+  api,
+  onStored,
+  reread,
+}: {
+  machine: Machine
+  api: MachinesApi
+  onStored: (row: Machine) => void
+  reread: () => Promise<void>
+}) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A sentence (a reason with a URL in it, what the switch does) gets a line
+  // of its own: a badge is one fixed line and cannot wrap.
   const state = machineStateLabel(machine)
-  // A reason can be a sentence with a URL in it. A badge is one fixed line
-  // and cannot wrap, so a label that carries one gets a line of its own.
-  const carriesReason = !!machine.reason && state.text.includes(machine.reason)
 
   async function setServing(asked: boolean) {
     setSaving(true)
@@ -146,7 +170,15 @@ function MachineTile({ machine, api, onStored }: { machine: Machine; api: Machin
       onStored(stored) // what the machine READ BACK, never `asked`
       setError(readBackMismatch(machine.name, asked, stored))
     } catch (err) {
-      setError(`Could not change ${machine.name}: ${reasonOf(err)}`)
+      // Not "could not change": the gateway may have stored it and only the
+      // read-back failed. Say what is unconfirmed, then show the true state.
+      const unconfirmed = `Could not confirm ${machine.name}'s switch: ${reasonOf(err)}`
+      setError(unconfirmed)
+      try {
+        await reread()
+      } catch (again) {
+        setError(`${unconfirmed} — reading it again failed too: ${reasonOf(again)}`)
+      }
     } finally {
       setSaving(false)
     }
@@ -156,7 +188,7 @@ function MachineTile({ machine, api, onStored }: { machine: Machine; api: Machin
     <div className="py-3 space-y-2 min-w-0" data-testid={`machine-${machine.name}`}>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="font-medium text-content-primary">{machine.name}</span>
-        {!carriesReason && (
+        {!state.line && (
           <span data-testid={`machine-${machine.name}-state`}>
             <Badge size="sm" color={state.color} dot={state.color === 'success'}>
               {state.text}
@@ -170,7 +202,7 @@ function MachineTile({ machine, api, onStored }: { machine: Machine; api: Machin
           </span>
         )}
       </div>
-      {carriesReason && (
+      {state.line && (
         <p className={`text-caption break-words ${STATE_TEXT[state.color]}`} data-testid={`machine-${machine.name}-state`}>
           {state.text}
         </p>
@@ -178,7 +210,12 @@ function MachineTile({ machine, api, onStored }: { machine: Machine; api: Machin
       <p className="font-mono text-micro text-content-secondary break-all" data-testid={`machine-${machine.name}-compute`}>
         {machine.compute ?? 'compute not identified'}
       </p>
-      {machine.models.length > 0 ? (
+      {machine.models === null ? (
+        // Could not be asked is not "holds nothing" (B8): say which it is.
+        <p className="text-caption text-content-tertiary break-words" data-testid={`machine-${machine.name}-models-unread`}>
+          Could not list its models: {machine.reason || 'the gateway gave no reason'}
+        </p>
+      ) : machine.models.length > 0 ? (
         <ul className="space-y-0.5 text-caption text-content-secondary" data-testid={`machine-${machine.name}-models`}>
           {machine.models.map(model => (
             <li key={model.name} className="flex flex-wrap gap-x-2 min-w-0">
@@ -192,7 +229,9 @@ function MachineTile({ machine, api, onStored }: { machine: Machine; api: Machin
       )}
       <Toggle
         id={`machine-serving-${machine.name}`}
-        label="This machine runs chat models"
+        // Named for its machine, so a screen reader hears which one (B7), and
+        // worded as what it controls: whether chat routing uses it.
+        label={`${machine.name}: chat routing uses this machine`}
         checked={machine.serving}
         disabled={saving}
         onChange={value => void setServing(value)}

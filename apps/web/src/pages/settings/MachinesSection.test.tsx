@@ -26,22 +26,27 @@ function renderSection(api: Partial<{ getMachines: ReturnType<typeof vi.fn>; set
   return { ...render(<MachinesSection api={full} />), api: full }
 }
 
-const theSwitch = (tile: HTMLElement) =>
-  within(tile).getByRole('switch', { name: 'This machine runs chat models' }) as HTMLInputElement
+// B7 (S40 fix wave): each switch is named for its machine, so a screen
+// reader hears which machine it controls.
+const theSwitch = (tile: HTMLElement, name = 'hub') =>
+  within(tile).getByRole('switch', { name: `${name}: chat routing uses this machine` }) as HTMLInputElement
 
 describe('MachinesSection', () => {
-  it('says only what the switch does: it governs the role walk, not a call that names its model', () => {
+  it('says only what the switch does: chat routing passes over a switched-off machine', () => {
     // The gateway's serving switch is read by the role walk alone (S40 T3's
-    // decision, carried as G6). A request with no role, an eval or a
-    // model_read naming its model, is still served on a switched-off
-    // machine, and a role whose chain has no other link gets a stated 503.
-    // "Sent no model calls" would promise a wall the gateway does not build.
+    // decision, carried as G6), and a role whose chain has no other link
+    // gets a stated 503. "Sent no model calls" would promise a wall the
+    // gateway does not build. Moved (S40 fix wave B5): the sentence "a call
+    // that names its model directly is still served there" is gone — the
+    // chat model the owner picks is link 1 of the chat role's chain, so
+    // every chat turn names its model and is passed over like any link.
     renderSection({ getMachines: vi.fn(() => new Promise(() => {})) })
     const text = screen.getByText(/^Where Nova's models run\./).textContent ?? ''
-    expect(text).not.toMatch(/sent no model calls/i)
+    expect(text).not.toMatch(/sent no model calls|no model calls/i)
+    expect(text).toMatch(/Chat routing passes over a machine that is switched off/)
     expect(text).toMatch(/next link in the role's chain answers/)
     expect(text).toMatch(/no other link.*says why/)
-    expect(text).toMatch(/names its model.*still served there/)
+    expect(text).not.toMatch(/still served there/)
   })
 
   it('shows a skeleton while loading', () => {
@@ -136,7 +141,8 @@ describe('MachinesSection', () => {
     fireEvent.click(theSwitch(tile))
     await waitFor(() => expect(api.setMachineServing).toHaveBeenCalledWith('hub', false))
     await waitFor(() => expect(theSwitch(tile).checked).toBe(false))
-    expect(tile.textContent).toContain('not running chat models')
+    expect(within(tile).getByTestId('machine-hub-state').textContent).toBe('switched off — chat routing passes over it')
+    expect(within(tile).getByTestId('machine-hub-state').tagName).toBe('P')
     expect(within(tile).queryByRole('alert')).toBeNull()
   })
 
@@ -148,12 +154,70 @@ describe('MachinesSection', () => {
     expect(theSwitch(tile).checked).toBe(true)
   })
 
-  it('a refused write leaves the switch where the machine is and says why', async () => {
-    renderSection({ setMachineServing: vi.fn(async () => { throw new Error('the gateway refused the write (502)') }) })
+  it('a failed write is not called a failed change: it says what could not be confirmed and reads the machine again', async () => {
+    // B6 (S40 fix wave): core's read-back can fail AFTER the gateway stored
+    // the switch, so "Could not change hub" could be false. The tile says
+    // the change is unconfirmed and shows what a fresh read says.
+    const { api } = renderSection({ setMachineServing: vi.fn(async () => { throw new Error('the gateway refused the write (502)') }) })
     const tile = await screen.findByTestId('machine-hub')
     fireEvent.click(theSwitch(tile))
-    await waitFor(() => expect(within(tile).getByRole('alert').textContent).toContain('502'))
+    await waitFor(() => expect(within(tile).getByRole('alert').textContent).toBe("Could not confirm hub's switch: the gateway refused the write (502)"))
+    await waitFor(() => expect(api.getMachines).toHaveBeenCalledTimes(2))
     expect(theSwitch(tile).checked).toBe(true)
+  })
+
+  it('a write that was stored but not read back shows the stored position after the re-read', async () => {
+    const { api } = renderSection({ setMachineServing: vi.fn(async () => { throw new Error('the gateway could not be reached — ReadTimeout') }) })
+    const tile = await screen.findByTestId('machine-hub')
+    api.getMachines.mockResolvedValueOnce({ machines: [machine({ serving: false, state: 'switched_off' })] })
+    fireEvent.click(theSwitch(tile))
+    await waitFor(() => expect(theSwitch(screen.getByTestId('machine-hub')).checked).toBe(false))
+    expect(within(screen.getByTestId('machine-hub')).getByRole('alert').textContent).toBe("Could not confirm hub's switch: the gateway could not be reached — ReadTimeout")
+  })
+
+  it('a re-read that fails too says so beside the unconfirmed switch', async () => {
+    const { api } = renderSection({ setMachineServing: vi.fn(async () => { throw new Error('ReadTimeout') }) })
+    const tile = await screen.findByTestId('machine-hub')
+    api.getMachines.mockRejectedValueOnce(new Error('core refused (502)'))
+    fireEvent.click(theSwitch(tile))
+    await waitFor(() => expect(within(tile).getByRole('alert').textContent).toBe("Could not confirm hub's switch: ReadTimeout — reading it again failed too: core refused (502)"))
+    expect(theSwitch(tile).checked).toBe(true)
+  })
+
+  it("each machine's switch is named for its machine", async () => {
+    renderSection({ getMachines: vi.fn(async () => ({ machines: [machine(), machine({ name: 'dell' })] })) })
+    expect(theSwitch(await screen.findByTestId('machine-hub'), 'hub')).toBeTruthy()
+    expect(theSwitch(screen.getByTestId('machine-dell'), 'dell')).toBeTruthy()
+  })
+
+  it('a machine that could not be asked what it holds says so, never "No models listed." (B8)', async () => {
+    const reason = 'hub could not be asked what is installed — ConnectError'
+    renderSection({ getMachines: vi.fn(async () => ({ machines: [machine({ models: null, state: 'unreachable', reason })] })) })
+    const tile = await screen.findByTestId('machine-hub')
+    expect(within(tile).getByTestId('machine-hub-models-unread').textContent).toBe(`Could not list its models: ${reason}`)
+    expect(tile.textContent).not.toContain('No models listed.')
+  })
+
+  it('an answer that lists nothing is said as nothing listed', async () => {
+    renderSection({ getMachines: vi.fn(async () => ({ machines: [machine({ models: [] })] })) })
+    const tile = await screen.findByTestId('machine-hub')
+    expect(tile.textContent).toContain('No models listed.')
+  })
+
+  it('Refresh is there after a failed load, and a good read clears the failure (C4)', async () => {
+    const { api } = renderSection({ getMachines: vi.fn(async () => { throw new Error('core refused (502)') }) })
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('502'))
+    api.getMachines.mockResolvedValueOnce({ machines: [machine()] })
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    await waitFor(() => expect(api.getMachines).toHaveBeenLastCalledWith({ live: true }))
+    await screen.findByTestId('machine-hub')
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('Refresh is there when no machine was listed (C4)', async () => {
+    renderSection({ getMachines: vi.fn(async () => ({ machines: [] })) })
+    await screen.findByTestId('machines-none')
+    expect(screen.getByRole('button', { name: 'Refresh' })).toBeTruthy()
   })
 
   it('the switch is held while the write is in flight', async () => {
