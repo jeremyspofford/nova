@@ -27,7 +27,7 @@ from app.tools.base import Tool, ToolContext
 from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
-from tests.s40_walk import B02A5694
+from tests.s40_walk import B02A5694, B851AA91
 
 pytestmark = requires_db
 
@@ -712,10 +712,121 @@ async def test_a_regen_that_says_plainly_it_did_not_check_ships(owner_client, po
     assert await _stored(pool) == SAID_NOT_CHECKED
     # S40b T2: the replay's served-model and memory-outage corrections stream
     # first (see the replayed-reading test above).
-    assert _corrections(sent) == [*REPLAY_APPENDED, chat.MACHINE_REDIRECT_NOTE]
+    #
+    # Pin moved in the S40b final fix wave (C14): this regeneration dispatched
+    # NOTHING — it said plainly that it did not check — so the note that
+    # follows it may not say "Checking the machine now". The note is derived
+    # from what the redirect did, the way the nudge is derived from
+    # ran_a_tool.
+    assert _corrections(sent) == [*REPLAY_APPENDED, chat.STATE_REDIRECT_NOTE_NO_CALL]
+    assert chat.STATE_REDIRECT_NOTE_NO_CALL != chat.MACHINE_REDIRECT_NOTE
     spans = await _guard_spans(pool)
     assert [s["name"] for s in spans] == ["served_claim", "memory_claim", "state_claim"]
     meta = spans[-1]["meta"]
     assert meta["subject_kind"] == "machine"
     assert meta["redirected"] is True
     assert "regen_rejected_by" not in meta
+
+
+# ── S40b final fix wave (A9, C14) ────────────────────────────────────────────
+#
+# The verifier's reproduction (final-review #9): the redirect READ hub with its
+# own machine_status call and relayed the reading — b851aa91, the walk's real
+# relay — and served_claim rejected that regeneration for the "Current model in
+# use" line it also carries. The whole reply, reading and all, was thrown away,
+# and what persisted was "I did not check hub this turn — I have no record of
+# doing so", with an ok machine_status span beside it in the same turn.
+
+
+async def test_a_redirect_that_read_the_machine_keeps_its_reading(owner_client, pool, mount_peers):
+    """b851aa91 verbatim as the regeneration: its APPEND-class lines are
+    corrected beside it (A9), and the reading its own call took stands."""
+    gateway = EngineGateway(
+        rounds=(
+            (text(B02A5694), LOCAL),
+            (tool_call("r1", "machine_status", {}), LOCAL),
+            (text(B851AA91), LOCAL),
+        ),
+        served_by=HUB,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    (tool,) = await _tool_spans(pool)
+    assert tool["name"] == "machine_status" and tool["meta"]["ok"] is True
+    stored = await _stored(pool)
+    assert stored.startswith(B851AA91)
+    assert stored == "\n\n".join([B851AA91, *REPLAY_APPENDED])
+    assert HUB_CORRECTION not in stored
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == [
+        "served_claim",
+        "memory_claim",
+        "state_claim",
+        "served_claim",
+        "memory_claim",
+    ]
+    state = spans[2]["meta"]
+    assert state["redirected"] is True
+    assert state["regen_appended"] == ["served_claim", "memory_claim"]
+    assert "regen_rejected_by" not in state
+    # The note says a check happened, because one did (C14).
+    assert _corrections(sent) == [
+        *REPLAY_APPENDED,
+        chat.MACHINE_REDIRECT_NOTE,
+        *REPLAY_APPENDED,
+    ]
+
+
+async def test_a_rejected_regen_after_a_real_read_does_not_claim_nothing_was_checked(
+    owner_client, pool, mount_peers
+):
+    """A9's other half: the regeneration reads hub, then a REPLACE-class guard
+    refuses what it wrote. The correction that persists may not say "I did not
+    check hub this turn" — the turn's own record shows the read — so it names
+    what ran instead."""
+    fabricated = "That's still awaiting your approval — I can't run it until you OK it."
+    gateway = EngineGateway(
+        rounds=(
+            (text(B02A5694), LOCAL),
+            (tool_call("r1", "machine_status", {}), LOCAL),
+            (text(fabricated), LOCAL),
+        ),
+        served_by=HUB,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    (tool,) = await _tool_spans(pool)
+    assert tool["name"] == "machine_status" and tool["meta"]["ok"] is True
+    note = chat._bare_intent_ran_but_unreported_note("machine_status")
+    stored = await _stored(pool)
+    assert note in stored
+    assert HUB_CORRECTION not in stored
+    assert _corrections(sent)[-1] == note
+    state = [s for s in await _guard_spans(pool) if s["name"] == "state_claim"][0]["meta"]
+    assert state["redirected"] is False
+    assert state["regen_rejected_by"] == "consent_claim"
+    assert state["correction_replaced_by"] == "ran_but_unreported"
+
+
+async def test_a_rejected_regen_that_read_nothing_still_says_it_did_not_check(
+    owner_client, pool, mount_peers
+):
+    """The control: no call, so the claim is still unbacked and the
+    correction stands exactly as before."""
+    fabricated = "That's still awaiting your approval — I can't run it until you OK it."
+    gateway = ScriptedGateway(
+        rounds=((text(B02A5694), LOCAL), (text(fabricated), LOCAL)), served_by=HUB
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, MACHINE_QUESTION)
+
+    stored = await _stored(pool)
+    assert HUB_CORRECTION in stored
+    state = [s for s in await _guard_spans(pool) if s["name"] == "state_claim"][0]["meta"]
+    assert state["regen_rejected_by"] == "consent_claim"
+    assert "correction_replaced_by" not in state

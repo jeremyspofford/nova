@@ -20,7 +20,7 @@ from datetime import timedelta
 
 import pytest
 
-from app import chat, guards, scheduler
+from app import chat, scheduler
 from app.main import app
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
@@ -186,30 +186,42 @@ async def test_the_walk_replay_persists_the_three_corrections(owner_client, pool
     assert memory.ingests == []
 
 
-async def test_a_consent_regen_that_names_the_wrong_model_is_refused(
+async def test_a_consent_regen_that_names_the_wrong_model_is_corrected_beside_it(
     owner_client, pool, mount_peers
 ):
     """The redirect's output REPLACES the record and would be ingested, so it
-    is vetted by the new checks too: a regeneration that claims the wrong
-    model is refused by name and the correction persists alone."""
+    is judged by the new checks too.
+
+    Pin moved in the S40b final fix wave (A9): a served-model or memory-outage
+    claim is APPEND-class, and it is APPEND-class over a regeneration as well.
+    Before, one line of it threw the whole regeneration away — including any
+    reading the redirect's own call had just taken — and what persisted was
+    the REPLACE correction about a reply nobody would read. Now the
+    regeneration stands (the consent fabrication is gone) and the side line is
+    corrected beside it, exactly as over an original reply; the turn is still
+    kept out of memory."""
+    regen = "Done. I'm running on qwen3.8:27b."
     gateway = ScriptedGateway(
         rounds=(
             (text("That's still awaiting your approval — I can't run it until you OK it."),),
-            (text("Done. I'm running on qwen3.8:27b."),),
+            (text(regen),),
         ),
         served_by=HUB,
     )
     memory = FakeMemory()
     mount_peers(gateway=gateway, memory=memory)
 
-    await _say(owner_client, "try again")
+    sent = await _say(owner_client, "try again")
 
     assert gateway.calls == 2
-    assert await _stored(pool) == guards.CONSENT_CLAIM_CORRECTION
+    assert await _stored(pool) == f"{regen}\n\n{SERVED_CORRECTION}"
     spans = await _guard_spans(pool)
-    assert [s["name"] for s in spans] == ["consent_claim"]
-    assert spans[0]["meta"]["redirected"] is False
-    assert spans[0]["meta"]["regen_rejected_by"] == "served_claim"
+    assert [s["name"] for s in spans] == ["consent_claim", "served_claim"]
+    assert spans[0]["meta"]["redirected"] is True
+    assert spans[0]["meta"]["regen_appended"] == ["served_claim"]
+    assert "regen_rejected_by" not in spans[0]["meta"]
+    assert spans[1]["meta"]["claimed"] == "qwen3.8:27b"
+    assert _corrections(sent)[-1] == SERVED_CORRECTION
     await chat.drain_background()
     assert memory.ingests == []
 

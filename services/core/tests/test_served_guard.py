@@ -787,22 +787,33 @@ def _vet(corrected: str, spans, kind: str = "chat") -> str | None:
     )
 
 
+def test_a_regeneration_that_repeats_a_serving_state_lie_is_refused():
+    """The redirect's output REPLACES the durable record and is ingested, so a
+    REPLACE-class claim in it is refused by name, armed by the turn's own kind
+    exactly as over the reply."""
+    assert _vet("The model is unreachable right now.", [_llm(), RECALLED]) == "stack_claim"
+
+
 @pytest.mark.parametrize(
-    "regen,rejected_by",
+    "regen,appended",
     [
-        ("The model is unreachable right now.", "stack_claim"),
-        ("I'm running on qwen3.8:27b.", "served_claim"),
+        ("I'm running on qwen3.8:27b.", ["served_claim"]),
         # The anchored form (A6: the bare "No model was needed." is no longer
         # a claim about this reply).
-        ("No model was needed for this calculation.", "served_claim"),
-        ("I can't reach the memory service right now.", "memory_claim"),
+        ("No model was needed for this calculation.", ["served_claim"]),
+        ("I can't reach the memory service right now.", ["memory_claim"]),
     ],
 )
-def test_a_regeneration_that_repeats_a_served_or_memory_lie_is_refused(regen, rejected_by):
-    """The redirect's output REPLACES the durable record and is ingested, so it
-    clears the same bar the reply did — the three S40b/S19 claims included,
-    armed by the turn's own kind exactly as over the reply."""
-    assert _vet(regen, [_llm(), RECALLED]) == rejected_by
+def test_a_regeneration_that_repeats_a_served_or_memory_lie_is_corrected_beside_it(regen, appended):
+    """Pin moved in the S40b final fix wave (A9): these two are APPEND-class
+    over a regeneration as they are over a reply. Refusing the whole
+    regeneration threw away whatever the redirect's own call had just read,
+    and the REPLACE correction that persisted instead was then false. The
+    regeneration stands and the side line is corrected beside it."""
+    spans = [_llm(), RECALLED]
+    assert _vet(regen, spans) is None
+    turn = SimpleNamespace(spans=spans, kind="chat")
+    assert [name for name, _ in chat._append_class_claims(regen, turn)] == appended
 
 
 @pytest.mark.parametrize(
@@ -825,19 +836,37 @@ def test_an_honest_regeneration_passes_the_new_checks():
     )
 
 
-def test_the_vetting_runs_the_new_checks_in_the_turns_order():
-    """Cheapest-first, in the order the turn runs them: after the capability
-    check, before the state check."""
-    import inspect
-
-    source = inspect.getsource(chat._regen_rejected_by)
-    assert (
-        source.index('"capability_claim"')
-        < source.index('"stack_claim"')
-        < source.index('"served_claim"')
-        < source.index('"memory_claim"')
-        < source.index('"state_claim"')
+def test_the_vetting_names_the_first_guard_that_refuses():
+    """Pin replaced in the S40b final fix wave (C6): reading the function's
+    SOURCE for the order of its string literals pinned the text, not the
+    behaviour. This runs regenerations that trip two guards each and names
+    which one the vetting reports — the order the turn runs them in."""
+    spans = [_llm(), RECALLED]
+    # capability before stack: a denial of a tool she holds, beside an outage.
+    both = "I am unable to browse the web. The model is unreachable right now."
+    assert _vet(both, spans) == "capability_claim"
+    # stack before state: an outage claim beside an unchecked machine reading
+    # (the machine is derived from a round the gateway says ran on an engine).
+    engine = [_llm(local=True), RECALLED]
+    assert _vet("hub is switched off.", engine) == "state_claim"
+    assert _vet("The model is unreachable right now. hub is switched off.", engine) == (
+        "stack_claim"
     )
+
+
+def test_the_append_class_guards_are_not_rejectors():
+    """A9: served_claim and memory_claim never refuse a regeneration; they
+    correct it beside its prose (_append_class_claims)."""
+    spans = [_llm(), RECALLED]
+    for regen in ("I'm running on qwen3.8:27b.", "I can't reach the memory service right now."):
+        assert _vet(regen, spans) is None
+    turn = SimpleNamespace(spans=spans, kind="chat")
+    assert [name for name, _ in chat._append_class_claims("I'm qwen3.8:27b.", turn)] == [
+        "served_claim"
+    ]
+    # …and in a kind they are not armed in, nothing fires either way.
+    scheduled = SimpleNamespace(spans=[_llm(purpose="scheduled"), RECALLED], kind="scheduled")
+    assert chat._append_class_claims("I'm qwen3.8:27b.", scheduled) == []
 
 
 # -- S40b T4 review, fix round 1: what she says ABOUT the claim, before it ---------
@@ -1134,11 +1163,15 @@ def test_the_reported_speech_accepted_misses_stay_missed(label, reply):
         "My last reply said qwen3.8:27b is the current model, and that is still true.",
     ],
 )
-def test_a_regeneration_that_reasserts_her_earlier_served_claim_is_refused(regen):
+def test_a_regeneration_that_reasserts_her_earlier_served_claim_is_corrected(regen):
     """The redirect's output replaces the durable record and is ingested; a
     regeneration that cites her last reply to restate the claim clears no
-    lower bar than the reply did."""
-    assert _vet(regen, [_llm(), RECALLED]) == "served_claim"
+    lower bar than the reply did — and clears it the same way (A9): the
+    correction is appended, not the whole reply refused."""
+    spans = [_llm(), RECALLED]
+    assert _vet(regen, spans) is None
+    turn = SimpleNamespace(spans=spans, kind="chat")
+    assert [name for name, _ in chat._append_class_claims(regen, turn)] == ["served_claim"]
 
 
 # -- S40b T4 review, fix round 3: a doubt is not a reaffirmation, a heading is not a lead

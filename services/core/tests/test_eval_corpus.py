@@ -1660,7 +1660,11 @@ async def test_does_not_replay_a_machine_reading_as_current_good_bad_rescued_and
         "memory_claim": False,
         "stack_claim": True,
     }
-    assert await _guard_names(pool, bad) == ["served_claim", "memory_claim", "state_claim"]
+    # A SET (S40b final fix wave, C6): which guards fired is what the case
+    # scores; the ORDER they run in is pinned behaviourally beside the frames
+    # in test_chat_state_claim, and this query's ORDER BY started_at could tie
+    # on a microsecond.
+    assert set(await _guard_names(pool, bad)) == {"served_claim", "memory_claim", "state_claim"}
     assert bad.detail["reply"].startswith("Correction:")
     for replayed in ("Last Reported", "Current model in use", "ConnectError"):
         assert replayed not in bad.detail["reply"]

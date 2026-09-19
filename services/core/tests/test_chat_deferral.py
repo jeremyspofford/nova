@@ -11,6 +11,7 @@ the redirect budget is SHARED with the responsiveness check (total ≤ 1 redirec
 deferral first); a redirect that still defers degrades to an honest note (no
 second redirect); and every failure mode ships the reply (fail-OPEN).
 """
+
 from __future__ import annotations
 
 import json
@@ -81,9 +82,7 @@ async def _deferral_spans(pool) -> list:
 
 
 async def _responsiveness_spans(pool) -> list:
-    rows = await pool.fetch(
-        "SELECT name FROM turn_spans WHERE kind = 'guard' ORDER BY started_at"
-    )
+    rows = await pool.fetch("SELECT name FROM turn_spans WHERE kind = 'guard' ORDER BY started_at")
     return [row for row in rows if row["name"] == "responsiveness"]
 
 
@@ -202,9 +201,7 @@ async def test_the_shared_redirect_budget_stops_responsiveness_redirecting_too(
     assert sent[-1] == DONE
 
 
-async def test_a_redirect_that_still_defers_appends_an_honest_note(
-    owner_client, pool, mount_peers
-):
+async def test_a_redirect_that_still_defers_appends_an_honest_note(owner_client, pool, mount_peers):
     """Bounded to ONE redirect: if the regeneration STILL commits without acting,
     it is not retried — an honest one-sentence note is appended so the operator
     is never left waiting. Exactly two gateway calls."""
@@ -548,9 +545,7 @@ async def test_a_completion_claim_with_no_timer_call_redirects_with_tools_and_th
 ):
     spy = _arm_create_timer(monkeypatch)
     done = "Set — I'll nudge you to blink in 5 minutes; it lands here and on your devices."
-    gateway = ScriptedGateway(
-        rounds=((text(COMPLETION),), (_timer_call("r1"),), (text(done),))
-    )
+    gateway = ScriptedGateway(rounds=((text(COMPLETION),), (_timer_call("r1"),), (text(done),)))
     memory = FakeMemory()
     mount_peers(gateway=gateway, memory=memory)
 
@@ -598,3 +593,65 @@ async def test_a_completion_regen_that_still_claims_appends_the_honest_note(
 
     await chat.drain_background()
     assert memory.ingests == []
+
+
+# ── S40b final fix wave (A11) ────────────────────────────────────────────────
+#
+# served_claim and memory_claim are APPEND-class side lines: the prose stays,
+# and any fabrication in it stays with it. Counting them in
+# mechanical_guard_fired silenced the completion, offer and bare-intent
+# handling of the SAME reply — the fabricated "your blink reminder is now
+# running" persisted with only "the memory service answered this turn" beside
+# it, no timer, no honest note and not even a deferral span. Those three
+# redirects regenerate with tools through _claim_redirect, which vets (and
+# corrects) its regeneration with those very guards.
+COMPLETION_WITH_A_SIDE_LINE = (
+    "Verified — your blink reminder is now running. The memory service is currently "
+    "unreachable, but that does not affect it."
+)
+MEMORY_CORRECTION = (
+    "Correction: the memory service answered this turn — this turn's recall was read from "
+    "it — so it is not unreachable now."
+)
+
+
+async def test_an_append_only_correction_does_not_silence_the_completion_redirect(
+    owner_client, pool, mount_peers, monkeypatch
+):
+    spy = _arm_create_timer(monkeypatch)
+    done = "Set — I'll nudge you to blink in 5 minutes; it lands here and on your devices."
+    gateway = ScriptedGateway(
+        rounds=((text(COMPLETION_WITH_A_SIDE_LINE),), (_timer_call("r1"),), (text(done),))
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, REMINDER_INSTRUCTION)
+
+    # The memory correction streams (APPEND), and the completion redirect
+    # still runs: the row is written this time.
+    assert spy.calls == [{"text": "blink", "in_minutes": 5}]
+    assert await _stored_reply(pool) == done
+    assert _corrections(sent) == [MEMORY_CORRECTION, chat.DEFERRAL_NOTE]
+    spans = await _deferral_spans(pool)
+    assert len(spans) == 1 and spans[0]["meta"]["kind"] == "completion"
+    assert spans[0]["meta"]["redirected"] is True
+
+
+async def test_an_append_only_correction_still_yields_the_text_only_redirect(
+    owner_client, pool, mount_peers
+):
+    """The commitment shape's redirect re-runs only deferral_check, so it
+    could bring back the line the APPEND guard just corrected: that one still
+    yields, and the correction stands beside the prose."""
+    commitment = (
+        "I'll search the web for that. The memory service is currently unreachable, so I "
+        "can't check my notes."
+    )
+    gateway = ScriptedGateway(rounds=((text(commitment),),))
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, "what's the latest on the pixel 12?")
+
+    assert gateway.calls == 1  # no redirect
+    assert await _stored_reply(pool) == f"{commitment}\n\n{MEMORY_CORRECTION}"
+    assert _corrections(sent) == [MEMORY_CORRECTION]
