@@ -5812,16 +5812,41 @@ _IN_USE_CONJUNCT = re.compile(r",?\s+(?:and|while|whereas|plus)\s+", re.I)
 #     across copula, parenthetical or badge material — a size or runtime in
 #     brackets, ✅, a dash, a table cell's bar, the marker's own "(" and one
 #     "is (the) (model)" — and the ref AFTER it only when the marker is a
-#     label or a subject ("Current model: X", "The model in use is X"). The
-#     ref said before the marker wins when both qualify ("qwen3:8b is the
-#     model in use: qwen3.8:27b is idle"): the marker is then a predicate.
+#     label or a subject ("Current model: X", "The model in use is X").
+#   * T2 review, round 2: when both qualify, which one the marker is said of
+#     depends on what joins the ref before to it. Across a COPULA the marker
+#     is that ref's predicate and the ref before wins ("qwen3:8b is the model
+#     in use: qwen3.8:27b is idle"). Across badge material only, the marker
+#     is a LABEL on a list line, and a label names the ref after its colon
+#     ("- `gemma4:12b` (7.0 GB) — current model: `qwen3:8b`", "qwen3.8:27b
+#     (idle) — answering you: qwen3:8b"): round 1's before-wins corrected
+#     those true lines against the idle model listed before the label. The
+#     ref after is the label's value when only a size, a badge or closing
+#     punctuation follows it to the clause's end; when anything else does
+#     ("✅ in use: qwen3.8:27b is idle", "in use: qwen3:8b on hub", "in use:
+#     qwen3.8:27b (idle)") the marker may be said of either, so it binds
+#     nothing unless both name the same model.
+_IN_USE_SIZE = r"\d[\d.,]*\s*[KMGT]i?B\b"
+_IN_USE_BADGE = rf"(?:\s+|\([^()\n]{{1,40}}\)|{_IN_USE_SIZE}|[(|:=✅✔☑⭐←⬅—–-]|️)"
 _IN_USE_BEFORE_GAP = re.compile(
-    r"(?:\s+|\([^()\n]{1,40}\)|\d[\d.,]*\s*[KMGT]i?B\b|[(|:=✅✔☑⭐←⬅—–-]|️)*"
-    r"(?:(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+)?(?:(?:chat\s+)?(?:model|one)\s+)?)?",
+    rf"{_IN_USE_BADGE}*"
+    r"(?P<copula>(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+)?(?:(?:chat\s+)?(?:model|one)\s+)?)?",
     re.I,
 )
 _IN_USE_AFTER_GAP = re.compile(
     r"(?:\s+(?:right\s+now|now|currently))?(?:\s*[:=]\s*|\s+(?:is|['’]s)\s+)", re.I
+)
+# What may follow the label's ref for it to close the label: a size, bare or
+# bracketed, a badge, a bar, a dash, closing punctuation. A WORDED bracket
+# says something of the ref ("in use: qwen3.8:27b (idle)"), so it does not.
+_IN_USE_LABEL_ENDS = re.compile(
+    rf"(?:\s+|\(\s*{_IN_USE_SIZE}\s*\)|{_IN_USE_SIZE}|[|:=✅✔☑⭐←⬅—–.,;!-]|️)*", re.I
+)
+#   * A label whose VALUE says no ("— in use: no", "current model: ❌") says
+#     the model before it is NOT in use (found fixing round 2; it fired at
+#     4c62f5c9 and e102b80b alike).
+_IN_USE_DENIED = re.compile(
+    r"(?:\s+(?:right\s+now|now|currently))?\s*[:=]\s*(?:no|none|false|❌|✗|✘|✖)(?!\w)", re.I
 )
 
 
@@ -5880,23 +5905,40 @@ def _conjunct(clause: str, start: int, end: int) -> tuple[int, int]:
 
 def _in_use_ref(clause: str, marker: re.Match[str], lo: int, hi: int) -> re.Match[str] | None:
     """The model ref an in-use marker is SAID of, within its conjunct
-    clause[lo:hi], or None: the last ref before the marker when only copula,
-    parenthetical or badge material separates them; otherwise, when NO ref
-    comes before it in the conjunct, the first ref after it when the marker
-    labels or is the subject of it (see _IN_USE_BEFORE_GAP). A marker with a
-    ref before it is that ref's predicate, however many words sit between
-    ("hub:qwen3:8b is, right now, the model in use: qwen3.8:27b is idle"), so
-    a colon after it binds nothing. Never merely the nearest ref."""
+    clause[lo:hi], or None (see _IN_USE_BEFORE_GAP). Never merely the nearest
+    ref.
+
+    * The last ref BEFORE the marker, when only copula, parenthetical or
+      badge material separates them. A marker with a ref before it across
+      anything else is that ref's predicate, however many words sit between
+      ("hub:qwen3:8b is, right now, the model in use: qwen3.8:27b is idle"),
+      so it binds nothing.
+    * The first ref AFTER it, when the marker labels or is the subject of it
+      ("Current model: X") and no ref comes before it.
+    * Both: a copula keeps the ref before (the marker is its predicate); a
+      badge makes the marker a label, which names the ref after — when that
+      ref closes the label (only a size, a badge or closing punctuation
+      follows it to the clause's end — see _IN_USE_LABEL_ENDS), or names the
+      same model as the ref before."""
     refs = [r for r in _SERVED_REF_RE.finditer(clause) if r.start() >= lo and r.end() <= hi]
     before = [r for r in refs if r.end() <= marker.start()]
-    if before:
-        if _IN_USE_BEFORE_GAP.fullmatch(clause, before[-1].end(), marker.start()):
-            return before[-1]
-        return None
     after = [r for r in refs if r.start() >= marker.end()]
-    if after and _IN_USE_AFTER_GAP.fullmatch(clause, marker.end(), after[0].start()):
-        return after[0]
-    return None
+    label = (
+        after[0]
+        if after and _IN_USE_AFTER_GAP.fullmatch(clause, marker.end(), after[0].start())
+        else None
+    )
+    if not before:
+        return label
+    gap = _IN_USE_BEFORE_GAP.fullmatch(clause, before[-1].end(), marker.start())
+    if gap is None:
+        return None
+    if gap.group("copula") or label is None:
+        return before[-1]
+    if _IN_USE_LABEL_ENDS.fullmatch(clause, label.end()):
+        return label
+    said, other = label.group("ref"), before[-1].group("ref")
+    return label if _same_model(said, other) and _same_model(other, said) else None
 
 
 def _served_claims(clause: str, *, in_use: bool):
@@ -5919,7 +5961,7 @@ def _served_claims(clause: str, *, in_use: bool):
                 continue
             if _SERVED_SKIP.search(clause) or _SERVED_SETTING.search(clause):
                 continue
-            if _IN_USE_LIMITED.match(clause, m.end()):
+            if _IN_USE_LIMITED.match(clause, m.end()) or _IN_USE_DENIED.match(clause, m.end()):
                 continue
             lo, hi = _conjunct(clause, m.start(), m.end())
             said = _in_use_ref(clause, m, lo, hi)

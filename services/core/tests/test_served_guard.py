@@ -448,6 +448,134 @@ def test_review_round_1_cuts_leave_the_claims_firing(label, reply, shape, claime
     assert claim.claimed == claimed
 
 
+# -- T2 review, round 2: a trailing LABEL names the model after it ------------------
+#
+# Round 1 made the ref BEFORE an in-use marker win whenever only badge material
+# (a size, a parenthetical, a dash, a table bar) separated them. On a model
+# list with sizes that bound a trailing label — "— in use: Y", "| current
+# model: Y" — backward to the idle model listed before it, and corrected a true
+# status line against that model. Each of the first eight (the reviewer's,
+# verbatim) was quiet at 4c62f5c9 and FIRED at e102b80b with hub:qwen3:8b
+# serving; the next six are the same shape, probed while fixing, and all six
+# fired at e102b80b. A label names the ref after its colon; the ref before
+# wins only across a copula ("X is the model in use: Y is idle"); and when
+# anything but a size, a badge or closing punctuation follows the label's ref
+# ("in use: Y is idle", "in use: Y on hub", "in use: Y (idle)") and it names
+# another model than the badge's, nothing is claimed.
+TRAILING_LABEL_NAMES_THE_MODEL = [
+    (
+        "listing_then_in_use_label",
+        "- hub (ready): `qwen3.8:27b` (16.5 GB), `gemma4:12b` (7.0 GB) — in use: `qwen3:8b`",
+    ),
+    ("sized_item_then_current_label", "- `gemma4:12b` (7.0 GB) — current model: `qwen3:8b`"),
+    (
+        "table_bar_then_current_label",
+        "**hub** is ready. `qwen3.8:27b` (16.5 GB) | current model: `hub:qwen3:8b`",
+    ),
+    (
+        "two_sized_then_current_label",
+        "`qwen3.8:27b` (16.5 GB) and `gemma4:12b` (7.0 GB) — current model: `qwen3:8b`",
+    ),
+    ("arrow_then_bold_label", "hub → `qwen3.8:27b` (16.5 GB) — **current model:** `qwen3:8b`"),
+    ("bar_then_sized_label", "- qwen3.8:27b (16.5 GB)  |  in use: qwen3:8b (5.2 GB)"),
+    ("idle_then_current_label", "qwen3.8:27b (idle) — current model: hub:qwen3:8b"),
+    ("idle_then_answering_label", "qwen3.8:27b (idle) — answering you: qwen3:8b"),
+    # Probed while fixing, same shape.
+    ("table_cell_label", "| qwen3.8:27b | 16.5 GB | current model: qwen3:8b |"),
+    (
+        "equals_label",
+        "- hub (ready): `qwen3.8:27b` (16.5 GB), `gemma4:12b` (7.0 GB) — current model = "
+        "`qwen3:8b`",
+    ),
+    (
+        "currently_answering_label_sized",
+        "- `gemma4:12b` (7.0 GB) — currently answering you: `hub:qwen3:8b` (5.2 GB).",
+    ),
+    ("in_use_right_now_label", "- `gemma4:12b` (7.0 GB) — in use right now: `qwen3:8b`"),
+    # The label's ref starts a predicate of its own and names another model
+    # than the badge's: which one the marker is said of is unknown, so nothing.
+    ("label_ref_answering_you", "qwen3.8:27b (16.5 GB) — in use: qwen3:8b is answering you"),
+    ("label_ref_on_hub", "gemma4:12b (idle) — in use: qwen3:8b on hub"),
+    # Quiet at e102b80b (all three fired at 4c62f5c9): the badge's ref is the one
+    # in use and the colon opens the next clause — kept quiet. The label's
+    # value is read to the clause's end, not the conjunct's: "and" does not
+    # close it.
+    ("badge_then_colon_clause", "hub:qwen3:8b ✅ in use: qwen3.8:27b is idle"),
+    ("badge_then_colon_and_clause", "hub:qwen3:8b ✅ in use: qwen3.8:27b and gemma4:12b sit idle."),
+    # A worded bracket after the label's ref says something of it ("(idle)"),
+    # so it does not close the label either; only a size does.
+    ("badge_then_label_ref_idle", "hub:qwen3:8b ✅ in use: qwen3.8:27b (idle)"),
+]
+
+# Found fixing the above (it fired at 4c62f5c9 and e102b80b alike): a label
+# whose VALUE says no says the model before it is not in use.
+IN_USE_LABEL_SAYS_NO = [
+    ("in_use_no", "- `qwen3.8:27b` (16.5 GB) — in use: no"),
+    ("current_model_cross", "- `qwen3.8:27b` (16.5 GB) — current model: ❌"),
+    ("table_in_use_none", "| qwen3.8:27b | 16.5 GB | in use: none |"),
+]
+
+REVIEW_ROUND_2_HONEST = TRAILING_LABEL_NAMES_THE_MODEL + IN_USE_LABEL_SAYS_NO
+
+
+@pytest.mark.parametrize(
+    "label,reply", REVIEW_ROUND_2_HONEST, ids=[c[0] for c in REVIEW_ROUND_2_HONEST]
+)
+def test_review_round_2_honest_sentences_are_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+# The claims the same lines make when they are false: the label naming a model
+# that did not serve (e102b80b named the badge's model in the correction, or
+# said nothing), the copula form keeping the ref before (4c62f5c9 said nothing
+# on both), a label that says yes, and a label naming the badge's own model.
+REVIEW_ROUND_2_STILL_FIRE = [
+    (
+        "listing_then_in_use_label",
+        "- hub (ready): `qwen3:8b` (5.2 GB), `gemma4:12b` (7.0 GB) — in use: `qwen3.8:27b`",
+        "qwen3.8:27b",
+    ),
+    (
+        "sized_item_then_current_label",
+        "- `hub:qwen3:8b` (5.2 GB) — current model: `qwen3.8:27b`",
+        "qwen3.8:27b",
+    ),
+    ("idle_then_answering_label", "qwen3:8b (idle) — answering you: qwen3.8:27b", "qwen3.8:27b"),
+    (
+        "bar_then_sized_label",
+        "- qwen3:8b (5.2 GB)  |  in use: qwen3.8:27b (16.5 GB)",
+        "qwen3.8:27b",
+    ),
+    ("table_cell_label", "| gemma4:12b | 7.0 GB | current model: qwen3.8:27b |", "qwen3.8:27b"),
+    (
+        "copula_keeps_the_ref_before",
+        "qwen3.8:27b is the model in use: qwen3:8b is idle.",
+        "qwen3.8:27b",
+    ),
+    ("copula_in_use_colon", "qwen3.8:27b is in use: hub:qwen3:8b is idle.", "qwen3.8:27b"),
+    ("in_use_yes", "- `qwen3.8:27b` (16.5 GB) — in use: yes", "qwen3.8:27b"),
+    ("label_names_the_badges_model", "qwen3.8:27b (16.5 GB) — in use: qwen3.8:27b", "qwen3.8:27b"),
+    (
+        "label_ref_with_predicate_same_model",
+        "- `qwen3.8:27b` ✅ in use: qwen3.8:27b on hub",
+        "qwen3.8:27b",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,claimed",
+    REVIEW_ROUND_2_STILL_FIRE,
+    ids=[c[0] for c in REVIEW_ROUND_2_STILL_FIRE],
+)
+def test_review_round_2_trailing_labels_still_fire_on_the_model_they_name(label, reply, claimed):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None, label
+    assert claim.shape == "in_use"
+    assert claim.claimed == claimed
+    assert claim.text == named_text(claimed)
+
+
 @pytest.mark.parametrize(
     "label,reply",
     STILL_FIRE_BEYOND_THE_CORPUS,
