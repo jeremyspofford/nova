@@ -866,6 +866,24 @@ def stable_system_prompt(
             "the agent did not finish when the result starts with Error:, and never say an "
             "agent did something the facts line does not show or claim its work as your own."
         )
+    # S40: the machine sentence, keyed on the tools' own constants like the
+    # delegation one — a rename moves the sentence with it, and an agent whose
+    # subset lacks the tool is never told to use it.
+    status_tool = tools.machines.MACHINE_STATUS.name
+    configure_tool = tools.machines.MACHINE_CONFIGURE.name
+    if status_tool in tool_names:
+        prompt += (
+            " Models run on machines, and a model id names its machine before its first "
+            f"colon: say where a model runs, or whether a machine is answering, only from "
+            f"{status_tool}"
+            + (
+                f", and switch a machine's models on or off only with {configure_tool}, "
+                "reporting the value it read back"
+                if configure_tool in tool_names
+                else ""
+            )
+            + "."
+        )
     if agent_block:
         prompt = f"{prompt}\n\n{agent_block}"
     return prompt

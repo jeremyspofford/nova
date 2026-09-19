@@ -238,6 +238,9 @@ class FakeGateway:
     # Names listed by /admin/engines whose own read then 404s — a machine gone
     # between the list and its card, which is the gateway's own words for it.
     engine_missing: set[str] = field(default_factory=set)
+    # A PUT that does not store what was asked — the read-back mismatch a
+    # write must never report as done.
+    engine_put_sticks: bool = True
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -276,7 +279,7 @@ class FakeGateway:
                 Route("/admin/route/explain", self._explain, methods=["GET"]),
                 Route("/admin/routes/walls/{provider}", self._admin, methods=["DELETE"]),
                 Route("/admin/engines", self._engines, methods=["GET"]),
-                Route("/admin/engines/{name}", self._engine, methods=["GET"]),
+                Route("/admin/engines/{name}", self._engine, methods=["GET", "PUT"]),
             ]
         )
 
@@ -371,13 +374,24 @@ class FakeGateway:
     async def _engine(self, request):
         if self.engines is None:
             return await self._admin(request)
-        await self._record(request)
+        body = await self._record(request)
         if not _bearer_ok(request, GATEWAY_TOKEN):
             return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
         name = request.path_params["name"]
         view = next((e for e in self.engines if e["name"] == name), None)
         if view is None or name in self.engine_missing:
             return JSONResponse({"error": f"no engine named {name!r}"}, status_code=404)
+        if request.method == "PUT":
+            if not isinstance(body, dict) or not isinstance(body.get("serving"), bool):
+                return JSONResponse(
+                    {"error": "serving (true or false) is required"}, status_code=400
+                )
+            if self.engine_put_sticks:
+                view["serving"] = body["serving"]
+                view["state"] = "ready" if body["serving"] else "switched_off"
+            return JSONResponse(
+                {"provider": name, "serving": view["serving"], "lifecycle": view.get("lifecycle")}
+            )
         return JSONResponse({**view, **self.engine_details.get(name, {})})
 
     async def _hf(self, request):

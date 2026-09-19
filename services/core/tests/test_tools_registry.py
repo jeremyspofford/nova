@@ -112,6 +112,15 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # table with no tool over it. Neither write is an approval (owner ruling
     # 2026-09-03) — a read receipt and a noise preference, with nothing
     # waiting on him, which is why test_no_approvals stays green beside this.
+    #
+    # Deliberate snapshot update (slice 40, 2026-09-19): machine_status and
+    # machine_configure (tools/machines.py), so THIRTY-NINE -> FORTY-ONE:
+    # machines. The hub lane names every model by the machine that runs it
+    # (hub:qwen3:8b), and she could neither say where a model ran nor take a
+    # machine out of the chains — the owner would have opened Settings for a
+    # question he had asked her. The switch is availability, never permission
+    # (D2): the gateway's routing is its only reader and nothing waits on him,
+    # which is why test_no_approvals stays green beside this.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -182,6 +191,10 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         "notices",
         "notice_mute",
         "notice_seen",
+        # S40 (2026-09-19): where models run, and the one switch per machine.
+        # THIRTY-NINE -> FORTY-ONE.
+        "machine_status",
+        "machine_configure",
     }
 
 
@@ -544,6 +557,9 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # mute nobody asked for is the quietest way to stop telling him
         # something is broken.
         "notices",
+        # S40: reading the gateway's engine list changes nothing. Its twin,
+        # machine_configure, is deliberately NOT here — it flips a switch.
+        "machine_status",
     }
 
 
@@ -567,5 +583,6 @@ def test_every_tool_that_writes_says_it_changes_something():
         "update_agent",
         "delete_agent",
         "delegate_to_agent",
+        "machine_configure",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"

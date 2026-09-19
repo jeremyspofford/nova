@@ -18,13 +18,18 @@ HOW CORE KNOWS WHICH PROVIDERS ARE ENGINES — never a name written in core:
 
 `PLANT` says which reader a task talks to. A ContextVar, so an eval replay
 can put its own `eval_*` machines in front of the real list for its own task
-and nothing else in the process sees them.
+and nothing else in the process sees them (`FixturePlant`). A write through
+the plant is the serving switch, and what it returns is the gateway's READ
+BACK, never the value sent. `machine_json` is the one shape the Settings tile
+reads (web api.ts `Machine`).
 """
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Collection
 from contextvars import ContextVar
+from datetime import UTC, datetime
 from urllib.parse import quote
 
 import httpx
@@ -111,6 +116,19 @@ class GatewayPlant:
             raise PlantUnavailable(f"the gateway refused {path} — {_error_of(response)}")
         return self._object(response, f"reading of {name}")
 
+    async def set_serving(self, app, name: str, serving: bool) -> dict:
+        """Set one machine's serving switch, then READ IT BACK: PUT, then GET,
+        and what is returned is the GET — never the value that was sent."""
+        path = _engine_path(name)
+        response = await self._request(app, "PUT", path, json={"serving": serving})
+        if response.status_code == 404:
+            raise UnknownMachine(_error_of(response))
+        if response.status_code != 200:
+            raise PlantUnavailable(
+                f"the gateway refused to set {name}'s switch — {_error_of(response)}"
+            )
+        return await self.engine(app, name)
+
 
 PLANT: ContextVar[GatewayPlant] = ContextVar("machines_plant", default=GatewayPlant())
 
@@ -150,3 +168,128 @@ async def cards(app) -> list[tuple[dict, dict | None]]:
             detail = {**view, "vram": {"total_mb": None, "reason": str(exc)}}
         out.append((view, detail))
     return out
+
+
+# A declared eval machine starts as a live, always-on one that answered now.
+_FIXTURE_DEFAULTS: dict = {
+    "lifecycle": "always_on",
+    "serving": True,
+    "state": "ready",
+    "reason": None,
+    "observed_at": None,
+    "tags": {},
+    "tags_as_of": None,
+    "compute": None,
+    "runtime": None,
+    "facts": {},
+}
+
+
+def _fixture_state(spec: dict, serving: object) -> str:
+    """The gateway's own rule (r1-engines, "Engine state"): a machine switched
+    off reads `switched_off`; one switched on reads what it was declared as —
+    `ready` unless the case said otherwise. Never a state the switch did not
+    decide."""
+    return "switched_off" if not serving else spec.get("state", "ready")
+
+
+class FixturePlant(GatewayPlant):
+    """The eval harness's world: named `eval_*` machines that exist only for
+    one replay, overlaid on the real list.
+
+    READS of anything else are the gateway's, delegated untouched — a case
+    measures her real tools against the machines it declared, beside the real
+    ones. A WRITE to anything else is refused before any HTTP (ruling C8): a
+    live eval in which the model misreads the case and reaches for `hub` would
+    otherwise switch off the owner's real engine, and every later case and his
+    own chat would be answered by the cloud. The refusal says CANNOT, in words
+    machine_configure relays; it is a fact about this replay, not a judgment."""
+
+    def __init__(self, fixtures: dict[str, dict]) -> None:
+        # The roster's own reserved prefix (agents.EVAL_FIXTURE_PREFIX), read
+        # here rather than retyped. Imported in the call: app.agents imports
+        # app.tools, which imports the tool module that imports this one.
+        from app import agents
+
+        self._prefix = agents.EVAL_FIXTURE_PREFIX
+        wrong = sorted(name for name in fixtures if not name.startswith(self._prefix))
+        if wrong:
+            raise ValueError(
+                f"a fixture machine must be named {self._prefix}…, got {', '.join(wrong)}"
+            )
+        self._specs = {name: copy.deepcopy(spec) for name, spec in fixtures.items()}
+        self._views: dict[str, dict] = {}
+        for name, spec in self._specs.items():
+            view = {**copy.deepcopy(_FIXTURE_DEFAULTS), **copy.deepcopy(spec), "name": name}
+            view["state"] = _fixture_state(spec, view["serving"])
+            self._views[name] = view
+
+    def _mine(self, name: str) -> bool:
+        return name.startswith(self._prefix)
+
+    @staticmethod
+    def _stamped(view: dict) -> dict:
+        out = copy.deepcopy(view)
+        if out["observed_at"] is None:
+            out["observed_at"] = datetime.now(UTC).isoformat()
+        return out
+
+    async def engines(self, app, *, live: bool) -> list[dict]:
+        real = [
+            view for view in await super().engines(app, live=live) if not self._mine(view["name"])
+        ]
+        return real + [self._stamped(view) for view in self._views.values()]
+
+    async def engine(self, app, name: str) -> dict:
+        if not self._mine(name):
+            return await super().engine(app, name)
+        if name not in self._views:
+            raise UnknownMachine(f"no engine named {name!r}")
+        return {
+            **self._stamped(self._views[name]),
+            "vram": {"total_mb": None, "reason": "a declared eval machine has no card"},
+            "fit_frame": None,
+        }
+
+    async def set_serving(self, app, name: str, serving: bool) -> dict:
+        if not self._mine(name):
+            raise PlantUnavailable(
+                f"cannot: {name!r} is not one of this case's declared machines — "
+                "an eval never changes a real machine"
+            )
+        if name not in self._views:
+            raise UnknownMachine(f"no engine named {name!r}")
+        view = self._views[name]
+        view["serving"] = serving
+        view["state"] = _fixture_state(self._specs[name], serving)
+        return await self.engine(app, name)
+
+
+def machine_json(view: dict) -> dict:
+    """One machine in the shape the Settings tile reads (web api.ts Machine).
+    A size the gateway did not state is None, never a zero nobody measured."""
+    tags = view.get("tags")
+    models = (
+        [
+            {
+                "name": model,
+                "size_bytes": size
+                if isinstance(size, int) and not isinstance(size, bool)
+                else None,
+            }
+            for model, size in sorted(tags.items())
+        ]
+        if isinstance(tags, dict)
+        else []
+    )
+    return {
+        "name": view["name"],
+        "lifecycle": view.get("lifecycle"),
+        "serving": view.get("serving"),
+        "state": view.get("state"),
+        "reason": view.get("reason"),
+        "observed_at": view.get("observed_at"),
+        "compute": view.get("compute"),
+        "runtime": view.get("runtime"),
+        "models": models,
+    }

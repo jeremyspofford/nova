@@ -117,3 +117,133 @@ async def test_a_card_one_machine_could_not_give_is_carried_with_its_reason(moun
     assert box["vram"] == {"total_mb": None, "reason": "no engine named 'box'"}
     assert box["name"] == "box"  # the reading keeps the view it was asked for
     assert pairs[0][1]["vram"] == CARD and pairs[2][1]["vram"] == CARD
+
+
+# -- S40 T6: the switch, read back, and the eval world ----------------------
+
+
+async def test_the_switch_is_set_and_what_comes_back_is_the_read_back(mount_peers):
+    gateway = FakeGateway(engines=[fakes.engine_view()])
+    mount_peers(gateway=gateway)
+    back = await machines.plant().set_serving(core_app, "hub", False)
+    assert back["serving"] is False and back["state"] == "switched_off"
+    assert gateway.seen[-2:] == [
+        ("/admin/engines/hub", {"serving": False}),
+        ("/admin/engines/hub", None),
+    ]
+
+
+async def test_a_switch_that_did_not_stick_comes_back_as_it_reads(mount_peers):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()], engine_put_sticks=False))
+    back = await machines.plant().set_serving(core_app, "hub", False)
+    assert back["serving"] is True  # the read-back, never the value sent
+
+
+async def test_an_unknown_machine_cannot_be_switched(mount_peers):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    with pytest.raises(machines.UnknownMachine, match="no engine named 'dell'"):
+        await machines.plant().set_serving(core_app, "dell", False)
+
+
+async def test_a_switch_the_gateway_cannot_be_asked_to_set_is_stated(mount_peers):
+    mount_peers(gateway=FakeGateway(engines=[]))
+    core_app.state.peer_transports[fakes.GATEWAY_URL] = _Dead()
+    with pytest.raises(machines.PlantUnavailable, match="could not be reached — ConnectError"):
+        await machines.plant().set_serving(core_app, "hub", False)
+
+
+async def test_the_eval_world_overlays_only_eval_names_and_never_writes_a_real_one(mount_peers):
+    """Ruling C8: reads delegate and overlay; a WRITE to a name without the
+    eval_ prefix is refused before any HTTP — a live eval in which the model
+    reaches for `hub` must never switch off the owner's real engine."""
+    gateway = FakeGateway(engines=[fakes.engine_view()])
+    mount_peers(gateway=gateway)
+    token = machines.PLANT.set(
+        machines.FixturePlant(
+            {"eval_box": {"compute": "cpu:eval|4c|16g", "tags": {"qwen3:4b": 2_497_293_444}}}
+        )
+    )
+    try:
+        views = await machines.plant().engines(core_app, live=True)
+        assert [view["name"] for view in views] == ["hub", "eval_box"]
+        assert views[1]["state"] == "ready" and views[1]["observed_at"]
+        back = await machines.plant().set_serving(core_app, "eval_box", False)
+        assert back["serving"] is False and back["state"] == "switched_off"
+        assert "/admin/engines/eval_box" not in [path for path, _ in gateway.seen]
+        with pytest.raises(machines.PlantUnavailable, match="cannot"):
+            await machines.plant().set_serving(core_app, "hub", False)
+        assert not any(path.startswith("/admin/engines/hub") for path, _ in gateway.seen)
+        with pytest.raises(machines.UnknownMachine):
+            await machines.plant().set_serving(core_app, "eval_other", True)
+        # A read of a real machine is still the gateway's own.
+        assert (await machines.plant().engine(core_app, "hub"))["name"] == "hub"
+    finally:
+        machines.PLANT.reset(token)
+    assert type(machines.plant()) is machines.GatewayPlant
+
+
+async def test_the_refusal_names_the_machine_and_why_in_words(mount_peers):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    token = machines.PLANT.set(machines.FixturePlant({"eval_box": {}}))
+    try:
+        with pytest.raises(machines.PlantUnavailable) as caught:
+            await machines.plant().set_serving(core_app, "hub", True)
+    finally:
+        machines.PLANT.reset(token)
+    assert str(caught.value) == (
+        "cannot: 'hub' is not one of this case's declared machines — "
+        "an eval never changes a real machine"
+    )
+
+
+async def test_a_fixture_machine_derives_its_state_from_its_switch(mount_peers):
+    """Ruling C8 / T7 CONTRACT PROBLEM 2: the gateway's own rule — a machine
+    switched off reads `switched_off` — holds for a declared one too, when it
+    is declared and again after every write."""
+    mount_peers(gateway=FakeGateway(engines=[]))
+    token = machines.PLANT.set(
+        machines.FixturePlant(
+            {
+                "eval_off": {"serving": False},
+                "eval_down": {"state": "unreachable", "reason": "ConnectError: refused"},
+            }
+        )
+    )
+    try:
+        views = {
+            view["name"]: view for view in await machines.plant().engines(core_app, live=False)
+        }
+        assert views["eval_off"]["state"] == "switched_off"
+        assert views["eval_down"]["state"] == "unreachable"
+        down = await machines.plant().set_serving(core_app, "eval_down", False)
+        assert down["state"] == "switched_off"
+        back = await machines.plant().set_serving(core_app, "eval_down", True)
+        assert back["state"] == "unreachable"  # its declared state, not a guessed "ready"
+        on = await machines.plant().set_serving(core_app, "eval_off", True)
+        assert on["serving"] is True and on["state"] == "ready"
+    finally:
+        machines.PLANT.reset(token)
+
+
+def test_a_fixture_machine_must_carry_the_eval_prefix():
+    with pytest.raises(ValueError, match="eval_"):
+        machines.FixturePlant({"box": {}})
+
+
+def test_the_web_shape_lists_models_by_name_with_their_size_or_none():
+    view = fakes.engine_view(tags={"qwen3:8b": 5_225_388_164, "nomic-embed-text:latest": None})
+    assert machines.machine_json(view) == {
+        "name": "hub",
+        "lifecycle": "always_on",
+        "serving": True,
+        "state": "ready",
+        "reason": None,
+        "observed_at": fakes.ENGINE_AT,
+        "compute": fakes.ENGINE_GPU,
+        "runtime": "container",
+        "models": [
+            {"name": "nomic-embed-text:latest", "size_bytes": None},
+            {"name": "qwen3:8b", "size_bytes": 5_225_388_164},
+        ],
+    }
+    assert machines.machine_json(fakes.engine_view(tags=None))["models"] == []

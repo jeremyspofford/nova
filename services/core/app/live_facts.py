@@ -93,6 +93,14 @@ AUTO_RUN = frozenset(
         "inference_health",
         "list_agents",
         "list_timers",
+        # S40. Where a model runs is answered by the gateway's own reading of
+        # its machines, and a recalled "the 27B runs on hub" is exactly a claim
+        # this settles. Its one argument is a machine name checked against that
+        # same list, so a wrong name is a stated failure; in S40 every machine
+        # it reads is the bundled engine on this host. (Carried to S44/S46: once
+        # a machine can be asleep, re-decide whether an UNASKED live read may
+        # reach it.)
+        "machine_status",
         "model_catalog_search",
         "model_check_update",
         # S25. The same case as list_timers: it reads THIS system's own
