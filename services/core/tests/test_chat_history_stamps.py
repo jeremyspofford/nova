@@ -306,3 +306,47 @@ async def test_the_stored_row_is_untouched(owner_client, pool, mount_peers):
     assert stamp == _READING
     stored = await pool.fetch("SELECT content FROM messages WHERE role = 'assistant'")
     assert not any(row["content"].startswith("[written at") for row in stored)
+
+
+# ── S40b final fix wave ─────────────────────────────────────────────────────
+#
+# C7: a stamp she COPIES to the start of her reply is the backend's label on
+# an older row, with that row's time on it. The persist boundary drops it,
+# mechanically (chat._persist_assistant, guards.without_leading_stamp) — never
+# by asking her not to — and the guards read the reply the same way, so none
+# honours a label the record will not carry.
+
+
+@requires_db
+async def test_a_copied_leading_stamp_is_stripped_at_the_persist_boundary(
+    owner_client, pool, mount_peers
+):
+    from app import chat
+    from tests.fakes import ScriptedGateway
+    from tests.test_chat_state_claim import text
+
+    copied = chat._LIVE_READING_MARKER.format(when=_WHEN)
+    reply = f"{copied} 17 multiplied by 23 is 391."
+    gateway = ScriptedGateway(rounds=((text(reply),),), served_by="hub:qwen3:8b")
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    status, _ = await _say(owner_client, "What's 17 times 23?")
+
+    assert status == 200
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == "17 multiplied by 23 is 391."
+
+
+def test_only_a_leading_stamp_is_stripped():
+    """A stamp she quotes later in the reply labels what it sits beside, and
+    a bracket that is not the stamp's shape is her own words."""
+    from app import chat, guards
+
+    stamp = chat._LIVE_READING_MARKER.format(when=_WHEN)
+    later = f"Here is what I had.\n{stamp}\n- Last Reported: 05:15 UTC"
+    assert guards.without_leading_stamp(later) == later
+    own = "[Note] hub is answering."
+    assert guards.without_leading_stamp(own) == own
+    for template in (*chat._PAST_TURN_MARKERS.values(), chat._RECORD_KIND_MARKER):
+        copied = template.format(when=_WHEN, kind="beat")
+        assert guards.without_leading_stamp(f"  {copied}\n\nThe reply.") == "The reply."

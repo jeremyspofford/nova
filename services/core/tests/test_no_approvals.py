@@ -116,6 +116,13 @@ def test_tool_carries_no_precheck_or_gate_field():
     # hand-kept list of one name, so a true figure quoted out of `list_agents`
     # was retracted as one nobody read. Nothing reads it to refuse a call; the
     # guard reads it AFTER the fact, to decide whether a sentence is backed.
+    # 2026-09-19 (S40b final fix wave, C2): `reads_machines` joins on the same
+    # terms as `reports_spend`. It is a fact about the RESULT — does a
+    # successful call state the machines' state as the gateway reports it now
+    # — and it exists because the state guard's read set was a hand-kept list
+    # of one name, so an honest "hub is switched off" after inference_health
+    # was replaced with "I did not check hub". Nothing reads it to refuse a
+    # call; the guard reads it AFTER the fact (and dispatch never does — below).
     assert set(Tool.__dataclass_fields__) == {
         "name",
         "description",
@@ -125,6 +132,7 @@ def test_tool_carries_no_precheck_or_gate_field():
         "result_kind",
         "reads_only",
         "reports_spend",
+        "reads_machines",
     }
 
 
@@ -141,6 +149,12 @@ def test_dispatch_never_reads_reads_only():
     names = [node.attr for node in ast.walk(_dispatch_def(tree)) if isinstance(node, ast.Attribute)]
     assert "reads_only" not in names, (
         "dispatch reads Tool.reads_only — a property dispatch consults to decide "
+        "is a gate, whatever it is named"
+    )
+    # The same line for S40b's `reads_machines`: a fact the state guard reads
+    # after the call, never one dispatch consults before it.
+    assert "reads_machines" not in names, (
+        "dispatch reads Tool.reads_machines — a property dispatch consults to decide "
         "is a gate, whatever it is named"
     )
 

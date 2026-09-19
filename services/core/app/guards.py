@@ -63,10 +63,9 @@ _FETCH_TOOLS = frozenset({"fetch_url"})
 _PULL_TOOLS = frozenset({"model_pull"})
 _REMOVE_TOOLS = frozenset({"model_remove"})
 _CONFIGURE_TOOLS = frozenset({"machine_configure"})
-# S40b: a READ of a machine, for the state guard's machine branch. test_state_
-# guard pins it equal to tools.machines.MACHINE_STATUS.name, and _CONFIGURE_TOOLS
-# to MACHINE_CONFIGURE.name, so a rename in the registry turns that red.
-_MACHINE_READ_TOOLS = frozenset({"machine_status"})
+# test_state_guard pins _CONFIGURE_TOOLS to MACHINE_CONFIGURE.name, so a
+# rename in the registry turns that red. The READ of a machine is derived from
+# the registry instead (_machine_read_tools, S40b final fix wave C2).
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -96,6 +95,21 @@ def _spend_tools() -> frozenset[str]:
     from app import tools
 
     return frozenset(tools.tool_names_reporting_spend())
+
+
+def _machine_read_tools() -> frozenset[str]:
+    """Which tools' successful spans are a READ of a machine, for the state
+    guard's machine branch — DERIVED from the live registry
+    (`Tool.reads_machines`), never a list kept here (S40b final fix wave, C2).
+
+    It was one name, machine_status. inference_health reads the same engine
+    list and states every machine's card and state, and route_explain states
+    each link's machine verdict; after either, an honest "hub is switched off"
+    was REPLACED with "I did not check hub this turn". Imported inside the
+    call because app.tools imports this module (_spend_tools' rule)."""
+    from app import tools
+
+    return frozenset(tools.machine_read_tool_names())
 
 
 def _tools_for_kind(kind: str) -> frozenset[str]:
@@ -2972,14 +2986,99 @@ _READING_LINE = re.compile(
 _SUBJECT_KEY_LINE = re.compile(
     r"^\s*(?:[-+•]|\d+[.)])?\s*(?:name|machine|engine|host|device)\s*[:=]", re.I
 )
+# The history stamp's own words (S40b final fix wave, A3). chat builds every
+# stamp it hands her from these (_PAST_TURN_MARKERS, _RECORD_KIND_MARKER,
+# _LIVE_READING_MARKER), and the not-current cut below reads the same pieces:
+# T3's stamp told her a replayed row was "a record of that moment, not of now"
+# and T1's cut did not know the words, so the reply that labelled a reading
+# exactly as it had been labelled to her was REPLACE-corrected. One constant,
+# read by both halves, so the two cannot drift apart again.
+_STAMP_MOMENT = "record of that moment"
+_STAMP_NOT_NOW = "not of now"
+_STAMP_TAKEN_THEN = "taken then"
+HISTORY_STAMP_RECORD = f"a {_STAMP_MOMENT}, {_STAMP_NOT_NOW}"
+HISTORY_STAMP_READINGS = f"from readings {_STAMP_TAKEN_THEN}"
+
+
+def _phrase(words: str) -> str:
+    """A fixed phrase as a pattern: its words escaped, any whitespace between."""
+    return r"\s+".join(re.escape(word) for word in words.split())
+
+
+# "have/has/did not", as the not-current forms below open.
+_NOT_DONE = r"(?:have|has|did)(?:\s+not|n['’]t)"
 # A reading the reply itself says is not current.
+#
+# S40b final fix wave, A2: the verdict's cut knew only "check". The machine
+# nudge asks her to "say plainly that you did not check", and the other plain
+# ways of saying it — not verified, not confirmed, not looked at, not re-read,
+# "unverified" — and the common staleness labels — "last known", "most recent
+# reading", "(old reading)", "may no longer hold", "(20 min ago)", "when I last
+# looked" — were REPLACE-corrected, and a regeneration that said them refused.
+# The widening stops at the READING: a bare "haven't read" or "haven't run" is
+# about anything ("…read your notes", "…run the backup"), so "run" counts only
+# with a machine-read tool's name (_not_run_a_machine_read), "read" only as
+# "re-read", and "last checked/read" only after "I" — "Last Checked:" and
+# "Last read:" are reading KEYS (_READING_KEY), which the cut must not eat.
 _NOT_CURRENT = re.compile(
     r"\b(?:not\s+(?:re-?)?checked|(?:have|has)(?:\s+not|n['’]t)\s+(?:re-?)?checked"
     r"|did(?:\s+not|n['’]t)\s+(?:re-?)?check|without\s+(?:re-?)?checking"
     r"|could(?:\s+not|n['’]t)\s+(?:be\s+)?(?:check|read|reach|ask)\w*|unchecked|stale"
-    r"|out\s+of\s+date|may\s+have\s+changed|not\s+(?:a\s+)?(?:current|fresh|live))\b",
+    r"|out\s+of\s+date|may\s+have\s+changed|not\s+(?:a\s+)?(?:current|fresh|live)"
+    rf"|{_NOT_DONE}\s+(?:re-?)?(?:verif|confirm)\w*"
+    rf"|{_NOT_DONE}\s+(?:re-?)?look(?:ed)?\s+at|{_NOT_DONE}\s+re-?read"
+    r"|not\s+(?:been\s+)?(?:re-?)?(?:verified|confirmed)|un(?:verified|confirmed)"
+    r"|last\s+known|most\s+recent\s+reading|old(?:er)?\s+reading|may\s+no\s+longer"
+    r"|(?:mins?|hrs?)\s+ago|I\s+last\s+(?:looked|read|saw|checked)"
+    rf"|{_phrase(_STAMP_MOMENT)}|{_phrase(_STAMP_NOT_NOW)}|{_phrase(_STAMP_TAKEN_THEN)}"
+    r")\b",
     re.I,
 )
+
+
+@lru_cache(maxsize=8)
+def _not_run_pattern(names: tuple[str, ...]) -> re.Pattern[str]:
+    """The "I have not run machine_status" form — for one set of machine-read tool
+    names, cached like _machine_patterns."""
+    alternation = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    return re.compile(
+        rf"\b{_NOT_DONE}\s+(?:re-?)?(?:run|ran|called|used)\s+(?:the\s+)?(?:{alternation})\b",
+        re.I,
+    )
+
+
+def _says_not_current(text: str) -> bool:
+    """Does `text` say what it reports is not current (_NOT_CURRENT), or that
+    she has not run a tool that reads a machine — the read set DERIVED from
+    the registry (_machine_read_tools), never retyped here?"""
+    if _NOT_CURRENT.search(text) is not None:
+        return True
+    names = tuple(sorted(_machine_read_tools()))
+    return bool(names) and _not_run_pattern(names).search(text) is not None
+
+
+# A stamp she copied to the START of her reply (S40b final fix wave, C7): a
+# bracket that ends in the stamp's own record phrase. The persist boundary
+# strips it (chat._persist_assistant) — it is the backend's label on an OLDER
+# row, and its time is that row's — and every claim scan reads the reply the
+# same way (_machine_lines), so no guard honours a label the record will not
+# carry (final-review #3's caveat): a replay under a copied leading stamp is
+# persisted bare, and is judged bare.
+_LEADING_STAMP = re.compile(rf"\A\s*+\[[^\[\]\n]*{_phrase(HISTORY_STAMP_RECORD)}\]\s*+", re.I)
+
+
+def without_leading_stamp(text: str) -> str:
+    """`text` without a stamp-shaped bracket at its very start (see
+    _LEADING_STAMP). Nothing else is touched: a stamp she quotes later in
+    the reply labels what it sits beside."""
+    return _LEADING_STAMP.sub("", text, count=1)
+
+
+# A line that is wholly one bracketed label — "[written at … ; a record of
+# that moment, not of now]", "(from readings taken then)". Above a reading's
+# run it is a lead-in, like a line ending in ":" (A3: the stamp above a
+# heading was never read).
+_BRACKET_LINE = re.compile(r"^\s*[\[(][^\n]*[\])]\s*$")
 # S40b T4 review, fix round 1: her own earlier reply — "my last reply", "the
 # previous answer", "in the previous turn". What she said then, named as then.
 # The v15 case seeds the walk's replay as her history, and the honest answer
@@ -3194,13 +3293,14 @@ def machine_names(spans: Sequence[Any]) -> tuple[str, ...]:
     that does not exist. Names shorter than two characters are dropped. Public
     so chat.py can record how many there were on the guard span."""
     found: set[str] = set()
+    reads = _machine_read_tools()
     for span in spans:
         head = _engine_served_head(span)
         if head:
             found.add(head)
-        if _ok_tool_span(span, _MACHINE_READ_TOOLS):
+        if _ok_tool_span(span, reads):
             found.update(_fact_machines(span))
-        if _ok_tool_span(span, _MACHINE_READ_TOOLS | _CONFIGURE_TOOLS):
+        if _ok_tool_span(span, reads | _CONFIGURE_TOOLS):
             arg = _machine_arg(span)
             if arg:
                 found.add(arg)
@@ -3208,12 +3308,14 @@ def machine_names(spans: Sequence[Any]) -> tuple[str, ...]:
 
 
 def _machine_read(spans: Sequence[Any], machine: str) -> bool:
-    """Did this turn READ `machine`? An ok machine_status that asked for every
+    """Did this turn READ `machine`? An ok machine read (_machine_read_tools:
+    machine_status, inference_health, route_explain) that asked for every
     machine or for this one (or reported it), asked or unasked, facts or none —
     or an ok machine_configure that set it. A record that cannot be read backs
     the claim rather than risk correcting an honest reply (_target_of's rule)."""
+    reads = _machine_read_tools()
     for span in spans:
-        if _ok_tool_span(span, _MACHINE_READ_TOOLS):
+        if _ok_tool_span(span, reads):
             arg = _machine_arg(span)
             if not arg or arg == machine or machine in _fact_machines(span):
                 return True
@@ -3302,10 +3404,11 @@ def _machine_lines(reply_text: str) -> list[str]:
     """The reply's lines as the machine branch reads them. A fenced block and a
     `>` quote are someone else's text, so their lines are blanked — kept, as
     empty lines, so a key/value run still ends where they begin — and emphasis
-    and code marks are stripped from the rest."""
+    and code marks are stripped from the rest. A stamp she copied to the start
+    is dropped, as the persist boundary drops it (without_leading_stamp)."""
     lines: list[str] = []
     fenced = False
-    for line in reply_text.split("\n"):
+    for line in without_leading_stamp(reply_text).split("\n"):
         if _FENCE.match(line):
             fenced = not fenced
             lines.append("")
@@ -3396,7 +3499,9 @@ def _reading_context(lines: list[str], index: int) -> list[str]:
     if above and _HEADING.match(above[0]):
         context.append(above[0])
     lead_in = next((line for line in above if not _HEADING.match(line)), None)
-    if lead_in is not None and lead_in.rstrip().endswith(":"):
+    if lead_in is not None and (
+        lead_in.rstrip().endswith(":") or _BRACKET_LINE.match(lead_in) is not None
+    ):
         context.append(lead_in)
     after = next((line for line in lines[bottom + 1 :] if line.strip()), None)
     if after is not None and not _HEADING.match(after) and not after.rstrip().endswith(":"):
@@ -3483,7 +3588,7 @@ def _not_a_current_reading(texts: Sequence[str]) -> bool:
     a label, and "Here is hub's current status (unchanged from my last
     reply):" is a replay stated as current)?"""
     if any(
-        _PRIOR_TIME.search(text) or _NOT_CURRENT.search(text) or _REPORTED.search(text)
+        _PRIOR_TIME.search(text) or _says_not_current(text) or _REPORTED.search(text)
         for text in texts
     ):
         return True
@@ -3539,7 +3644,7 @@ def _machine_state_claim(
             continue  # "is hub ready?" asserts nothing
         # A sentence that says its own state is not current ("…, but I have
         # not checked it this turn") is the answer the machine nudge asks for.
-        if _NOT_CURRENT.search(sentence) is not None:
+        if _says_not_current(sentence):
             continue
         # The next sentence on its line, where she may reaffirm the claim.
         following = (

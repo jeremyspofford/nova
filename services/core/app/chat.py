@@ -691,9 +691,12 @@ def attributed_history(rows: Sequence, runner: str | None) -> list[dict[str, str
 # the guesswork this codebase keeps removing. The guard on the other side
 # (guards.stack_claim_check) is what refuses when she asserts it anyway: this
 # half only makes sure she was told the truth first.
+# The record phrase is guards.HISTORY_STAMP_RECORD (S40b final fix wave, A3):
+# the state guard's not-current cut reads the same constant, so the words that
+# label a row for her are the words that label a reading as not current.
 _PAST_TURN_MARKERS = {
-    "error": "[that turn failed at {when}; a record of that moment, not of now]",
-    "stopped": "[you stopped that turn at {when}; a record of that moment, not of now]",
+    "error": f"[that turn failed at {{when}}; {guards.HISTORY_STAMP_RECORD}]",
+    "stopped": f"[you stopped that turn at {{when}}; {guards.HISTORY_STAMP_RECORD}]",
 }
 
 # S40b (verdict §3.3, provision c — the truth half). The S40 walk found the
@@ -713,9 +716,9 @@ _PAST_TURN_MARKERS = {
 # test_chat_skills pins "beat" against beats.BEAT_KIND. A reminder is not here:
 # it is the owner's own text, delivered by code, with no model and no reading.
 _RECORD_KINDS = frozenset({"scheduled", "beat"})
-_RECORD_KIND_MARKER = "[a {kind} message from {when}; a record of that moment, not of now]"
+_RECORD_KIND_MARKER = f"[a {{kind}} message from {{when}}; {guards.HISTORY_STAMP_RECORD}]"
 _LIVE_READING_MARKER = (
-    "[written at {when} from readings taken then; a record of that moment, not of now]"
+    f"[written at {{when}} {guards.HISTORY_STAMP_READINGS}; {guards.HISTORY_STAMP_RECORD}]"
 )
 
 
@@ -2283,8 +2286,14 @@ async def _persist_assistant(
 ) -> None:
     """The assistant row, linked to the turn that produced it (S10-pre): the
     link is what lets a transcript be badged from the trace rather than
-    from anything the reply says about itself."""
-    text = without_markup(text)
+    from anything the reply says about itself.
+
+    S40b final fix wave (C7): a history stamp she COPIED to the start of her
+    reply is dropped here, mechanically — it is the backend's label on an
+    older row, carrying that row's time, and the next turn stamps this row
+    itself if it earns one. Every guard reads a reply the same way
+    (guards.without_leading_stamp), so none honoured the label either."""
+    text = guards.without_leading_stamp(without_markup(text))
     await pool.execute(
         "INSERT INTO messages (conversation_id, role, content, turn_id) "
         "VALUES ($1, 'assistant', $2, $3)",

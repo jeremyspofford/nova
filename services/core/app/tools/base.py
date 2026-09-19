@@ -171,3 +171,15 @@ class Tool:
     # `result_kind` already uses for the listing guard. A fact about the
     # OUTPUT, never a permission: nothing reads it to refuse a call.
     reports_spend: bool = False
+    # Does a successful result STATE the machines' state — what runs models,
+    # whether it answers, what is on its card — as the gateway reports it now?
+    # (S40b final fix wave, C2.)
+    #
+    # The state guard corrects "hub is switched off" when nothing read hub this
+    # turn, and its read set was one name kept in the guard, machine_status. So
+    # after inference_health (the same engine list, every card and state) or
+    # route_explain (each link's machine verdict), an honest report was
+    # REPLACED with "I did not check hub this turn". The guard derives its set
+    # from this field (tools.machine_read_tool_names), as the spend guard does
+    # from `reports_spend`. A fact about the OUTPUT, never a permission.
+    reads_machines: bool = False

@@ -129,6 +129,7 @@ def _every_pattern() -> dict[str, re.Pattern[str]]:
     device = guards._device_mention(("DELL-XPS-8950",))
     if device is not None:
         found["_device_mention"] = device
+    found["_not_run_pattern"] = guards._not_run_pattern(tuple(sorted(guards._machine_read_tools())))
     return found
 
 

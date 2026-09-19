@@ -970,8 +970,12 @@ def test_every_derived_machine_is_read_or_served_so_no_positive_claim_fires():
 
 
 def test_the_machine_tool_names_are_the_registry_names():
-    """Derived, never retyped: a rename in the registry turns this red."""
-    assert guards._MACHINE_READ_TOOLS == frozenset({machine_tools.MACHINE_STATUS.name})
+    """Derived, never retyped: a rename in the registry turns this red.
+
+    Pin moved in the S40b final fix wave (C2): the read set was a hand-kept
+    {machine_status}; it is now every tool that DECLARES its result states
+    the machines' state (Tool.reads_machines) — see the fix-wave section."""
+    assert machine_tools.MACHINE_STATUS.name in guards._machine_read_tools()
     assert guards._CONFIGURE_TOOLS == frozenset({machine_tools.MACHINE_CONFIGURE.name})
     from app import tools
 
@@ -2138,3 +2142,235 @@ def test_a_regeneration_that_doubts_or_heads_her_history_is_not_refused(regen):
         agent_names=[],
     )
     assert rejected is None
+
+
+# ================================================================================
+# S40b final fix wave (fix-wave-brief.md; reproductions in final-review.md)
+# ================================================================================
+#
+# Precision is the product (directive D1): each fix below REMOVES a fire on an
+# honest sentence by a cut, an anchor or a skipped shape, and the three real
+# walk turns' FALSE sentences (tests/s40_walk.py) keep firing — pinned again at
+# the end of this section.
+
+WALK_TS = "2026-09-19T05:15:39+00:00"
+HUB_BLOCK = f"- Name: hub\n- Serving: On (always on)\n- Last Reported: {WALK_TS}"
+
+
+def _fires_on_hub(reply: str, spans=None) -> bool:
+    claim = guards.state_claim_check(reply, spans or [HUB_SERVED], NAMES, purpose="chat")
+    return claim is not None and claim.device == "hub"
+
+
+# -- A2: the not-current cut knows more than "check" -------------------------------
+#
+# The machine nudge tells her to "say plainly that you did not check"; these
+# are the other plain ways of saying so, and the common staleness labels. Each
+# was REPLACE-corrected at 9927da34 (final-review #2, the verifier's probes),
+# and a regeneration saying it was refused by name.
+SAID_NOT_CURRENT_OTHERWISE = [
+    (
+        "have_not_run_the_read_tool",
+        f"I have not run machine_status this turn. The last reading I have:\n{HUB_BLOCK}",
+    ),
+    (
+        "have_not_verified",
+        f"I haven't verified hub this turn. The last reading I have:\n{HUB_BLOCK}",
+    ),
+    (
+        "have_not_looked_at",
+        f"I haven't looked at hub this turn. The last reading I have:\n{HUB_BLOCK}",
+    ),
+    ("unverified", f"Unverified this turn. The last reading I have:\n{HUB_BLOCK}"),
+    (
+        "last_known_status",
+        f"hub (last known status):\n- Serving: On\n- Last Reported: {WALK_TS}",
+    ),
+    ("most_recent_reading", f"hub's most recent reading:\n- Last Reported: {WALK_TS}"),
+    ("min_ago", f"{HUB_BLOCK} (20 min ago)"),
+    ("have_not_re_read_after", f"{HUB_BLOCK}\n\nI haven't re-read hub this turn."),
+    (
+        "may_no_longer_hold_after_the_block",
+        f"{HUB_BLOCK}\n\nThis reading was taken at 05:15 UTC; it may no longer hold.",
+    ),
+    ("may_no_longer_hold_prose", "hub last reported at 05:15 UTC; it may no longer hold."),
+    (
+        "when_i_last_looked",
+        f"The models run on hub. When I last looked, at 05:15 UTC:\n- Serving: On\n"
+        f"- Last Reported: {WALK_TS}",
+    ),
+    ("have_not_verified_it_but", "I haven't verified it this turn, but hub is switched off."),
+    ("old_reading", f"{HUB_BLOCK} (old reading)"),
+    ("not_confirmed", "hub is switched off — not confirmed this turn."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", SAID_NOT_CURRENT_OTHERWISE, ids=[c[0] for c in SAID_NOT_CURRENT_OTHERWISE]
+)
+def test_saying_it_is_not_current_in_other_words_is_not_corrected(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+# The widening stops at what says the READING is not current. A bare "read" or
+# "run" is about anything ("I haven't read your notes", "I haven't run the
+# backup"), so those sentences still assert the outage.
+NOT_CURRENT_STILL_FIRES = [
+    ("have_not_read_your_notes", "hub is offline; I haven't read your notes yet."),
+    ("have_not_run_the_backup", "hub is offline, and I haven't run the backup."),
+    ("run_another_tool", "I have not run web_search this turn, but hub is switched off."),
+    ("bare_block", HUB_BLOCK),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", NOT_CURRENT_STILL_FIRES, ids=[c[0] for c in NOT_CURRENT_STILL_FIRES]
+)
+def test_an_unrelated_not_read_or_not_run_does_not_cut_the_claim(label, reply):
+    assert _fires_on_hub(reply), label
+
+
+def test_the_not_current_tool_names_are_the_machine_read_tools():
+    """The "I have not run machine_status" form names a tool that reads a machine —
+    DERIVED from the read set, so a read tool added there is recognised
+    here without a second list."""
+    for name in guards._machine_read_tools():
+        reply = f"I have not run {name} this turn. The last reading I have:\n{HUB_BLOCK}"
+        assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, name
+
+
+def test_a_regeneration_that_says_it_did_not_verify_passes_its_vetting():
+    """The nudge's alternative in other words: refused as state_claim at
+    9927da34, so the correction became the record."""
+    from app import agents
+
+    turn = SimpleNamespace(spans=[HUB_SERVED], kind="chat")
+    rejected = chat._regen_rejected_by(
+        f"I haven't verified hub this turn. The last reading I have:\n{HUB_BLOCK}",
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected is None
+
+
+# -- A3: the history stamp's own wording is not-current ----------------------------
+#
+# T3's stamp tells her a replayed row is "a record of that moment, not of now"
+# and "from readings taken then"; T1's cut did not know those words, so the
+# reply that labelled the reading exactly the way it was labelled to her was
+# REPLACE-corrected (final-review #3). The vocabulary is DERIVED from the stamp
+# constants (guards.HISTORY_STAMP_*), which chat builds its stamps from.
+STAMP_WORDED = [
+    (
+        "record_of_that_moment_lead_in",
+        f"This is a record of that moment, not of now:\n\n### Machine Status\n{HUB_BLOCK}",
+    ),
+    (
+        "written_from_readings_taken_then_lead_in",
+        "Written at 05:15 UTC from readings taken then — a record of that moment, not of "
+        f"now:\n\n### Machine Status\n{HUB_BLOCK}",
+    ),
+    (
+        "record_of_a_time_after",
+        f"### Machine Status\n{HUB_BLOCK}\n\n(A record of 05:15 UTC, not of now.)",
+    ),
+    (
+        "taken_then_not_now_after",
+        f"### Machine Status\n{HUB_BLOCK}\n\nThese readings were taken then, not now.",
+    ),
+]
+
+
+@pytest.mark.parametrize("label,reply", STAMP_WORDED, ids=[c[0] for c in STAMP_WORDED])
+def test_the_stamps_own_wording_labels_a_reading_not_current(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+def _live_stamp() -> str:
+    return chat._LIVE_READING_MARKER.format(when="2026-09-19 05:15 UTC")
+
+
+def test_every_history_stamp_is_worded_from_the_shared_constants():
+    """The stamps chat hands her and the cut that honours them read one
+    constant: a change to the stamp's wording reaches the guard by itself."""
+    stamps = [
+        *chat._PAST_TURN_MARKERS.values(),
+        chat._RECORD_KIND_MARKER,
+        chat._LIVE_READING_MARKER,
+    ]
+    for stamp in stamps:
+        assert guards.HISTORY_STAMP_RECORD in stamp, stamp
+        assert guards._NOT_CURRENT.search(stamp.format(when="05:15", kind="beat")), stamp
+    assert guards.HISTORY_STAMP_READINGS in chat._LIVE_READING_MARKER
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    [
+        ("stamp_after_an_intro", "Here is what I had.\n{stamp}\n\n### Machine Status\n{block}"),
+        ("stamp_above_the_heading", "Here is what I had.\n\n{stamp}\n### Machine Status\n{block}"),
+        ("stamp_after_the_block", "### Machine Status\n{block}\n\n{stamp}"),
+    ],
+)
+def test_a_copied_stamp_that_is_not_leading_labels_the_reading(label, reply):
+    reply = reply.format(stamp=_live_stamp(), block=HUB_BLOCK)
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "{stamp}\n### Machine Status\n{block}",
+        "{stamp}\n\n### Machine Status\n{block}",
+        "{stamp}\n{block}",
+        "{stamp} hub is switched off.",
+    ],
+)
+def test_a_copied_leading_stamp_labels_nothing(reply):
+    """C7 strips a LEADING stamp-shaped bracket at the persist boundary, so
+    what persists is the bare replay: the guard reads the reply the same way
+    (final-review #3's caveat) — it never honours a label the record will not
+    carry."""
+    reply = reply.format(stamp=_live_stamp(), block=HUB_BLOCK)
+    assert _fires_on_hub(reply), reply
+    assert guards.without_leading_stamp(reply) == reply[len(_live_stamp()) :].lstrip()
+
+
+# -- C2: every tool whose result states the machines' state is a read -------------
+#
+# inference_health reads the same engine list machine_status does and states
+# each machine's card and state; route_explain states each link's machine
+# verdict ("skipped — its machine did not answer"). Before, only the hand-kept
+# name machine_status counted, so after either read an honest "hub is
+# switched off" was REPLACE-corrected as unchecked. The set is DERIVED from
+# the registry's declaration (Tool.reads_machines), never a list in guards.
+
+
+def test_the_machine_read_set_is_derived_from_the_registry():
+    from app import tools
+
+    assert guards._machine_read_tools() == frozenset(tools.machine_read_tool_names())
+    # A named pin, so the derivation cannot drift silently either way.
+    assert guards._machine_read_tools() == frozenset(
+        {"machine_status", "inference_health", "route_explain"}
+    )
+
+
+@pytest.mark.parametrize("tool", ["inference_health", "route_explain"])
+def test_a_read_through_any_machine_read_tool_backs_the_claim(tool):
+    read = _span("tool", tool, ok=True, args_redacted={})
+    for reply in ("hub is switched off.", HUB_BLOCK):
+        assert guards.state_claim_check(reply, [HUB_SERVED, read], NAMES, purpose="chat") is None
+        # …and a FAILED one reads nothing.
+        failed = _span("tool", tool, ok=False, args_redacted={}, error="Error: …")
+        assert _fires_on_hub(reply, [HUB_SERVED, failed]), (tool, reply)
+
+
+def test_a_tool_that_does_not_state_machine_state_is_not_a_read():
+    for tool in ("web_search", "memory_search", "model_pull"):
+        span = _span("tool", tool, ok=True, args_redacted={})
+        assert _fires_on_hub("hub is switched off.", [HUB_SERVED, span]), tool

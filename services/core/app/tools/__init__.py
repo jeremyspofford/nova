@@ -73,6 +73,7 @@ __all__ = [
     "context_for",
     "dispatch",
     "live_reading_tool_names",
+    "machine_read_tool_names",
     "tool_names",
     "tool_names_by_result_kind",
 ]
@@ -128,6 +129,16 @@ def tool_names_reporting_spend() -> list[str]:
     never keeps a list of names (S15 — `list_agents` reports each agent's cap
     and spend, and a figure quoted from it was being retracted as unread)."""
     return sorted(name for name, tool in REGISTRY.items() if tool.reports_spend)
+
+
+def machine_read_tool_names() -> list[str]:
+    """The registered tools whose successful result states the machines'
+    state as the gateway reports it now (`Tool.reads_machines`), sorted.
+
+    S40b final fix wave (C2): the state guard's read of a machine. Derived
+    from the declarations every call, so a tool that states machine state
+    backs a machine claim by declaring it, and the guard keeps no names."""
+    return sorted(name for name, tool in REGISTRY.items() if tool.reads_machines)
 
 
 def tool_names_by_result_kind(kind: str) -> list[str]:

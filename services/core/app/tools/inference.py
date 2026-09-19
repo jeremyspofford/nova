@@ -184,5 +184,9 @@ TOOLS: tuple[Tool, ...] = (
         # `ephemeral` exists to prevent.
         ephemeral=True,
         reads_only=True,
+        # It reads the gateway's engine list and states every machine's card
+        # and state: a read of each machine for the state guard (S40b fix
+        # wave C2 — "hub is switched off" after it is not unchecked).
+        reads_machines=True,
     ),
 )
