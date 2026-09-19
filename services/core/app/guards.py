@@ -4861,6 +4861,27 @@ STACK_CLAIM_CORRECTION = (
     "asked for can be attempted."
 )
 
+# The turn kinds this guard is ARMED in: the kinds its precision was measured
+# in, and no others.
+#
+#   * `chat` is S19's own, where the 2026-09-12 walk happened.
+#   * `eval` replays chat's path with nothing injected (the turn's kind is its
+#     only eval-ness, evals/runner), so an eval case scoring
+#     guard_absent('stack_claim') measures exactly what chat would do. Armed by
+#     S40 T7 (2026-09-19): before, the guard read only rounds stamped 'chat',
+#     and that half of every eval case scored green by construction.
+#
+# NOT armed: `scheduled` and `agent`. Nobody reads those streams live and the
+# correction is REPLACE-class, so a false one IS the persisted row. The S40 T7
+# review measured three true outage reports contradicted there ("Your
+# website's backend is down — the fetch returned 502." among them), and a
+# scheduled "check my machines" turn answered by a cloud link while hub is
+# down is reachable from S40 on. Arming a kind is a line here, after its
+# MUST_NOT set is measured in it (test_guards); carried in slice-40-carries
+# with the owner's question. `beat` never reaches this guard (beats do not run
+# chat._run_turn) and is not armed either.
+STACK_CLAIM_KINDS = frozenset({"chat", "eval"})
+
 # The serving path, as the words a reply reaches for. A vocabulary, not a
 # policy list: these are the nouns that mean "the thing that answers", and the
 # model actually in play is added from the turn's own spans.
@@ -4912,9 +4933,10 @@ def served_this_turn(spans: Sequence[Any], purpose: str) -> bool:
     `purpose` is what the turn's own rounds are recorded under — its kind
     (chat._purpose_of): `chat`, and equally `scheduled`, `beat`, `agent` or
     `eval`, each of them a turn a model answers. It is the caller's to state,
-    never a default: reading only `chat` left this guard silent in every
-    other kind, and every eval case scoring guard_absent('stack_claim') green
-    by construction (found by S40 T7, 2026-09-19).
+    never a default: reading only `chat` left every eval case scoring
+    guard_absent('stack_claim') green by construction (found by S40 T7,
+    2026-09-19). Which kinds the GUARD runs in is a separate question,
+    answered by STACK_CLAIM_KINDS.
 
     Judge and redirect rounds are llm_call spans too and are deliberately not
     evidence: they carry their own purpose, they are the backend's own second
@@ -4934,8 +4956,11 @@ def served_this_turn(spans: Sequence[Any], purpose: str) -> bool:
 def stack_claim_check(reply_text: str, spans: Sequence[Any], *, purpose: str) -> StackClaim | None:
     """Contradict a present-tense claim that the serving path is down, made in
     a turn the model served. None otherwise — pure, precision-first, fail-open
-    at the call site like every other guard here. `purpose` is the turn's own
-    rounds' purpose (see served_this_turn)."""
+    at the call site like every other guard here. `purpose` is the turn's kind,
+    which is its own rounds' purpose (see served_this_turn). In a kind outside
+    STACK_CLAIM_KINDS it says nothing: its precision there is unmeasured."""
+    if purpose not in STACK_CLAIM_KINDS:
+        return None
     if not reply_text or not reply_text.strip():
         return None
     if not served_this_turn(spans, purpose):

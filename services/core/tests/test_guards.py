@@ -3258,19 +3258,59 @@ def test_a_judge_round_alone_does_not_count_as_having_served():
     assert guards.stack_claim_check("The model is unreachable.", judge, purpose="chat") is None
 
 
-@pytest.mark.parametrize("kind", ["chat", "scheduled", "beat", "agent", "eval"])
-def test_a_round_of_the_turns_own_kind_is_the_evidence_whatever_the_kind(kind):
+@pytest.mark.parametrize("kind", ["chat", "eval"])
+def test_a_round_of_the_turns_own_kind_is_the_evidence_where_the_guard_is_armed(kind):
     """A turn's own rounds are recorded under its KIND (chat._purpose_of), not
-    under the word 'chat': a scheduled turn, a beat, an agent's turn and an
-    eval replay are all answered by a model, and the reply in hand is the
-    proof. Reading only 'chat' left the guard silent in every other kind --
-    and every eval case scoring guard_absent('stack_claim') green by
-    construction, whatever the model said (found by S40 T7's corpus test,
-    2026-09-19). A judge round is still no evidence, in any kind."""
+    under the word 'chat'. An eval replays chat's path with nothing injected
+    (the kind tag is its only eval-ness), so its own rounds are the evidence
+    there exactly as a chat round is in chat. Reading only 'chat' left every
+    eval case scoring guard_absent('stack_claim') green by construction,
+    whatever the model said (found by S40 T7's corpus test, 2026-09-19). A
+    judge round is still no evidence."""
     own = [SimpleNamespace(kind="llm_call", name="qwen3:8b", meta={"purpose": kind})]
     assert guards.stack_claim_check("The model is unreachable.", own, purpose=kind) is not None
     judge = [SimpleNamespace(kind="llm_call", name="qwen3:8b", meta={"purpose": "judge"})]
     assert guards.stack_claim_check("The model is unreachable.", judge, purpose=kind) is None
+
+
+def test_the_guard_is_armed_in_chat_and_in_the_eval_that_replays_it_and_nowhere_else():
+    """The kinds the serving-state guard runs in are the kinds its precision
+    was MEASURED in. Arming another is a deliberate move: measure its MUST_NOT
+    set in that kind first (see the test below), then change this pin.
+
+    The eval's kind is read from the runner, not restated: an eval that did
+    not run the guard it scores would score it green by construction again."""
+    from app.evals import runner
+
+    assert guards.STACK_CLAIM_KINDS == frozenset({"chat", runner.EVAL_TURN_KIND})
+    assert chat._purpose_of(SimpleNamespace(kind="chat")) in guards.STACK_CLAIM_KINDS
+
+
+# The S40 T7 review's probe (2026-09-19): three TRUE reports, each of which the
+# guard contradicted once it read scheduled and agent turns. A REPLACE-class
+# correction there is read by nobody live, so the persisted row became
+# "Correction: the model answered this turn … Whatever was asked for can be
+# attempted." and the real outage report was gone. S40 makes the last two
+# reachable: a scheduled "check my machines" turn answered by a cloud link
+# while hub is down.
+TRUE_OUTAGE_REPORTS = (
+    "Your website's backend is down — the fetch returned 502.",
+    "The local model is unavailable, so a cloud model answered.",
+    "Ollama is not responding right now, so chat went to the cloud.",
+)
+
+
+@pytest.mark.parametrize("reply", TRUE_OUTAGE_REPORTS)
+@pytest.mark.parametrize("kind", ["scheduled", "agent", "beat"])
+def test_a_true_outage_report_in_an_unmeasured_kind_is_never_contradicted(kind, reply):
+    """MUST_NOT, in every kind the guard is not armed in — and not only for
+    these sentences: nothing it says there has been measured, so it says
+    nothing. Carried (slice-40-carries): arming scheduled and agent turns,
+    with the pattern tightened so a third party's subject and a true statement
+    about another engine stay silent; the owner's question is in the carry."""
+    own = [SimpleNamespace(kind="llm_call", name="qwen3:8b", meta={"purpose": kind})]
+    assert guards.stack_claim_check(reply, own, purpose=kind) is None
+    assert guards.stack_claim_check("The model is unreachable.", own, purpose=kind) is None
 
 
 def test_the_claim_names_what_it_matched_for_the_span():

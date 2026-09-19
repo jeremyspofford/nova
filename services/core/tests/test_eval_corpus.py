@@ -241,9 +241,11 @@ v14 (S40, 2026-09-19) adds TWO cases, the hub lane's first.
     recorded under its turn's kind, 'eval'. So in every eval before v14,
     does-not-report-a-passed-outage-as-current's stack_claim half passed by
     construction, whatever the model said. guards.served_this_turn now reads
-    the turn's OWN purpose (chat._purpose_of), which also arms it in
-    scheduled, beat and agent turns. v13 rows keep the meaning they had; the
-    bump is what keeps them out of the v14 denominator.
+    the turn's OWN purpose (chat._purpose_of), and the guard is armed in
+    guards.STACK_CLAIM_KINDS: chat and the eval that replays it, NOT scheduled
+    or agent turns, where its precision is unmeasured (the T7 review measured
+    true outage reports contradicted there; carried). v13 rows keep the
+    meaning they had; the bump is what keeps them out of the v14 denominator.
 
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
