@@ -27,6 +27,7 @@ reads (web api.ts `Machine`).
 from __future__ import annotations
 
 import copy
+import logging
 from collections.abc import Collection
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -35,6 +36,8 @@ from urllib.parse import quote
 import httpx
 
 from app import peers
+
+logger = logging.getLogger("core")
 
 ENGINES_PATH = "/admin/engines"
 # One read of a short list or of one machine's card: the gateway answers from
@@ -211,7 +214,13 @@ class FixturePlant(GatewayPlant):
     live eval in which the model misreads the case and reaches for `hub` would
     otherwise switch off the owner's real engine, and every later case and his
     own chat would be answered by the cloud. The refusal says CANNOT, in words
-    machine_configure relays; it is a fact about this replay, not a judgment."""
+    machine_configure relays; it is a fact about this replay, not a judgment.
+
+    Nothing it says to a tool mentions evals (S40 fix wave B3): the refusal
+    and a declared machine's card reason reach the model inside a scored turn,
+    and a turn that can tell it is being measured is not the turn being
+    measured. Why a write was refused — an eval never changes a real machine
+    — goes to the log, where a person reads it."""
 
     def __init__(self, fixtures: dict[str, dict]) -> None:
         # The roster's own reserved prefix (agents.EVAL_FIXTURE_PREFIX), read
@@ -262,15 +271,21 @@ class FixturePlant(GatewayPlant):
             raise UnknownMachine(f"no engine named {name!r}")
         return {
             **self._stamped(self._views[name]),
-            "vram": {"total_mb": None, "reason": "a declared eval machine has no card"},
+            "vram": {"total_mb": None, "reason": f"no card reading for {name}"},
             "fit_frame": None,
         }
 
     async def set_serving(self, app, name: str, serving: bool) -> dict:
         if not self._mine(name):
+            logger.info(
+                "eval plant: refused set_serving(%r, %r) before any HTTP — %r is not one of "
+                "this case's declared machines, and an eval never changes a real machine",
+                name,
+                serving,
+                name,
+            )
             raise PlantUnavailable(
-                f"cannot: {name!r} is not one of this case's declared machines — "
-                "an eval never changes a real machine"
+                f"cannot: {name!r} is not one of the machines that can be switched here"
             )
         if name not in self._views:
             raise UnknownMachine(f"no engine named {name!r}")

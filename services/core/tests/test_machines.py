@@ -203,10 +203,29 @@ async def test_the_refusal_names_the_machine_and_why_in_words(mount_peers):
             await machines.plant().set_serving(core_app, "hub", True)
     finally:
         machines.PLANT.reset(token)
-    assert str(caught.value) == (
-        "cannot: 'hub' is not one of this case's declared machines — "
-        "an eval never changes a real machine"
-    )
+    # Moved (S40 fix wave B3): the refusal reaches the model inside a scored
+    # eval turn (machine_configure relays it), so it says what is true without
+    # saying "eval" — that explanation stays in the log.
+    assert str(caught.value) == "cannot: 'hub' is not one of the machines that can be switched here"
+
+
+async def test_nothing_the_fixture_plant_says_to_a_tool_mentions_evals(mount_peers, caplog):
+    """(S40 fix wave B3) No test-awareness leakage: every string the plant
+    produces that can reach a tool result — the write refusal, a declared
+    machine's card reason — reads the same as a real hub's words would, and
+    names nothing eval but the declared machine itself."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    plant = machines.FixturePlant({"eval_box": {}})
+    card = await plant.engine(core_app, "eval_box")
+    with caplog.at_level("INFO", logger="core"):
+        with pytest.raises(machines.PlantUnavailable) as caught:
+            await plant.set_serving(core_app, "hub", False)
+    said = [card["vram"]["reason"], str(caught.value)]
+    assert said[0] == "no card reading for eval_box"
+    for text in said:
+        assert "eval" not in text.replace("eval_box", "").lower(), text
+    # The eval-specific reason is kept where a person reads it, not the model.
+    assert any("an eval never changes a real machine" in r.getMessage() for r in caplog.records)
 
 
 async def test_a_fixture_machine_derives_its_state_from_its_switch(mount_peers):

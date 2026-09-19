@@ -31,7 +31,7 @@ from app.evals.cases import Case, CaseError, FixtureAgent, FixtureMachine, Predi
 from app.main import MIGRATIONS_DIR, app
 from app.migrations_runner import discover_migrations
 from app.tools import web
-from app.tools.base import Tool, ToolContext
+from app.tools.base import Tool, ToolContext, ToolFailure
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, Refusal, ScriptedGateway
 
@@ -1428,28 +1428,46 @@ def _tool_reading_the_plant(monkeypatch, executor) -> None:
     )
 
 
-async def test_a_case_that_declares_no_machines_never_builds_a_plant(
+async def test_every_case_runs_under_a_plant_so_no_eval_switches_a_real_machine(
     pool, mount_peers, monkeypatch
 ):
-    """The pinned no-op, the agents hook's promise again: a corpus that
-    declares no machines replays exactly as before."""
+    """Moved (S40 fix wave B2). This used to pin that a case declaring no
+    machines never builds a plant — which left machine_configure, advertised
+    in EVERY eval turn, writing the owner's real gateway in every case that
+    declared none (24 of 25 in v14). "An eval never changes a real machine"
+    was an assumption nothing enforced. Every case now runs under a
+    FixturePlant — empty when it declares none — so reads are still the
+    gateway's, and a write to a real machine is refused, in words, before any
+    HTTP; the real writer is an alarm here to prove nothing reached it."""
 
-    def _never(*args, **kwargs):
-        raise AssertionError("a case that declares no machines must not build a FixturePlant")
+    async def _alarm(self, app, name, serving):
+        raise AssertionError(f"an eval reached the REAL plant: set_serving({name!r}, {serving!r})")
 
-    monkeypatch.setattr(runner.machines, "FixturePlant", _never)
+    monkeypatch.setattr(machines.GatewayPlant, "set_serving", _alarm)
+    before = machines.plant()
     seen: list = []
+    refused: list[str] = []
 
-    async def peek(args: dict, ctx: ToolContext) -> str:
+    async def switch_hub_off(args: dict, ctx: ToolContext) -> str:
         seen.append(machines.plant())
+        try:
+            await tools.machines.machine_configure({"machine": "hub", "serving": False}, ctx)
+        except ToolFailure as exc:
+            refused.append(str(exc))
         return "It is 12:00."
 
-    _tool_reading_the_plant(monkeypatch, peek)
+    _tool_reading_the_plant(monkeypatch, switch_hub_off)
     mount_peers(gateway=_time_turn(), memory=FakeMemory())
     run = await runner.run_case(app, pool, _machine_case(cid="no-machines"), MODEL)
 
     assert run.passed is True, run.detail
-    assert len(seen) == 1 and type(seen[0]) is machines.GatewayPlant
+    [during] = seen
+    assert isinstance(during, machines.FixturePlant)
+    assert refused == [
+        "hub's switch is not confirmed set — cannot: 'hub' is not one of the machines that "
+        "can be switched here"
+    ]
+    assert machines.plant() is before
 
 
 async def test_a_declared_machine_is_the_plant_for_the_turn_and_gone_after(

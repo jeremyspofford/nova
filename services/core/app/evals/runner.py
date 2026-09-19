@@ -65,10 +65,13 @@ Three properties are enforced mechanically, not by intention:
     THE DECLARED MACHINES (S40). A case may declare machines
     (cases.FixtureMachine); they are the gateway's rows, and an eval never
     writes the gateway. So nothing is built: _install_fixture_plant sets
-    machines.PLANT to a FixturePlant for this case only, and the finally
-    resets it before anything else. It answers for `eval_*` names from the
-    declaration and refuses a write to any other. There is no orphan sweep
-    because there is nothing to orphan.
+    machines.PLANT to a FixturePlant for EVERY case — empty when it declares
+    none, because machine_configure is advertised in every eval turn — and
+    the finally resets it before anything else. It answers for `eval_*`
+    names from the declaration and refuses a write to any other before any
+    HTTP, which is what makes "an eval never changes a real machine" a line
+    of code rather than an assumption (S40 fix wave B2). There is no orphan
+    sweep because there is nothing to orphan.
 
   * NO TEST-AWARENESS LEAKAGE. _run_turn builds the prompt from the normal
     stable/volatile system prompt — this module injects nothing. No "eval mode"
@@ -375,14 +378,16 @@ def _fixture_actor(case: cases_mod.Case) -> str:
     return f"eval harness (case {case.id})"
 
 
-def _install_fixture_plant(case: cases_mod.Case) -> Token | None:
+def _install_fixture_plant(case: cases_mod.Case) -> Token:
     """Make the case's declared machines THIS task's plant (S40), and hand
-    back the token that removes them. None — and app.machines untouched —
-    for a case that declares none. Nothing is written anywhere: the plant is
-    a ContextVar, so the turn (and every task it spawns, which copies the
-    context) sees it, and nothing else in the process ever does."""
-    if not case.machines:
-        return None
+    back the token that removes them. Installed for every case, with no
+    machines when it declares none: reads still reach the real gateway, and a
+    write to any real machine is refused before any HTTP — every eval turn is
+    offered machine_configure, and a model that reaches for `hub` in a case
+    about something else must not switch off the owner's engine (S40 fix
+    wave B2). Nothing is written anywhere: the plant is a ContextVar, so the
+    turn (and every task it spawns, which copies the context) sees it, and
+    nothing else in the process ever does."""
     return machines.PLANT.set(machines.FixturePlant({m.name: m.as_row() for m in case.machines}))
 
 
@@ -963,8 +968,9 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # The declared skills' teardown plan, run in the finally below whatever
     # happens. Empty for a case that declares none.
     fixture_skills: list[tuple[str, str | None]] = []
-    # The declared machines' plant, reset first thing in the finally below.
-    # None for a case that declares none — machines.PLANT is never touched.
+    # The case's plant (every case has one — empty when it declares no
+    # machines), reset first thing in the finally below. None only until it
+    # is installed: a world that failed to build before it leaves nothing.
     plant_token: Token | None = None
 
     # Everything from here on runs against this case's OWN fresh scratch

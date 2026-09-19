@@ -186,8 +186,8 @@ async def test_an_eval_machine_is_switched_in_the_fixture_never_at_the_gateway(m
             await machines.plant().set_serving(core_app, "hub", False)
         with pytest.raises(
             ToolFailure,
-            match="hub's switch is not confirmed set — cannot: 'hub' is not one of this "
-            "case's declared machines",
+            match="hub's switch is not confirmed set — cannot: 'hub' is not one of the "
+            "machines that can be switched here",
         ):
             await _call("machine_configure", {"machine": "hub", "serving": False})
         assert not any(path.startswith("/admin/engines/") for path, _ in gateway.seen)
