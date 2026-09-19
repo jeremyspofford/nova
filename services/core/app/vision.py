@@ -101,16 +101,29 @@ def rows_of(body: object) -> list[dict] | None:
 
 
 def bare(model: str) -> str:
-    """The name a person and a settings row use, without the catalogue's
-    `ollama:` prefix. Public because the picker in Settings writes what this
-    returns and `choose` matches either spelling."""
-    return _named(model)
+    """A catalogue id without its provider. The gateway builds every id as
+    `<provider>:<model>` (catalog_row.base_row), so the FIRST colon is the
+    provider's — `hub:qwen3.8:27b` -> `qwen3.8:27b`, whatever the machine is
+    called (S40). Only for catalogue ids: a setting may be bare (`qwen3.8:27b`),
+    whose first colon is the tag's own, and `choose` matches it against both
+    halves instead of splitting it. What a person reads; the Settings picker
+    writes the row's own fields instead (models_catalog.vision_models)."""
+    _provider, sep, rest = model.partition(":")
+    return rest if sep and rest else model
 
 
-def _named(model: str) -> str:
-    """The catalogue says `ollama:qwen3.8:27b`; a turn talks about
-    `qwen3.8:27b`. One prefix, stripped in one place."""
-    return model.split("ollama:", 1)[-1] if model.startswith("ollama:") else model
+def _said(model: str, rows: list[dict]) -> str:
+    """How a person reads a model named in a SETTING: without its provider
+    when the catalogue lists a row under that provider, as-is otherwise — only
+    the rows can tell `hub:` (a machine) from `qwen3.8:` (a model's own name)."""
+    head, sep, rest = model.partition(":")
+    if (
+        sep
+        and rest
+        and any(isinstance(r, dict) and str(r.get("id") or "").startswith(f"{head}:") for r in rows)
+    ):
+        return rest
+    return model
 
 
 def choose(
@@ -154,8 +167,11 @@ def choose(
             certain=False,
         )
     able = capable(rows, capability)
-    bare = {_named(m) for m in able}
-    if wanted in bare or _named(wanted) in bare:
+    bares = {bare(m) for m in able}
+    # A setting names a catalogue row exactly (`hub:qwen3.8:27b`) or by its
+    # model alone (`qwen3.8:27b`). Never split: its first colon may be the
+    # tag's own.
+    if wanted in able or wanted in bares:
         return Choice(model=wanted, note=None, can_see=True)
     if not able:
         return Choice(
@@ -172,14 +188,15 @@ def choose(
     picked = able[0]
     if preferred:
         for model in able:
-            if model == preferred or _named(model) == _named(preferred):
+            if model == preferred or bare(model) == preferred:
                 picked = model
                 break
+    said = _said(wanted, rows)
     return Choice(
         model=picked,
         note=(
-            f"This turn is running on {_named(picked)} rather than {_named(wanted)}, because "
-            f"{_named(wanted)} cannot see images and {_named(picked)} can. Say so in the reply."
+            f"This turn is running on {bare(picked)} rather than {said}, because "
+            f"{said} cannot see images and {bare(picked)} can. Say so in the reply."
         ),
         can_see=True,
     )

@@ -1,4 +1,4 @@
-"""Her model tools: search the catalogue, pull a model into the bundled ollama.
+"""Her model tools: search the catalogue, pull a model onto a machine that runs models.
 
 Both read the SAME gateway routes the Models page reads (`/admin/catalog`,
 `/admin/catalog/hf`, `/admin/pull`), so what she sees and what the owner
@@ -23,7 +23,7 @@ import logging
 
 import httpx
 
-from app import db, peers, settings_store
+from app import db, machines, peers, settings_store
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 logger = logging.getLogger("core")
@@ -40,7 +40,6 @@ SCOPES = ("installed", "local", "cloud", "hf", "all")
 CAPABILITIES = ("tools", "vision", "audio", "thinking", "embedding")
 SORTS = ("size", "context", "price", "downloads", "name")
 HF_SORTS = {"downloads": "downloads", "likes": "likes", "name": "downloads"}
-LOCAL_PROVIDER = "ollama"
 
 # How a source is named when a fact is read out — words, never the key.
 SOURCE_WORDS = {
@@ -436,26 +435,88 @@ async def model_catalog_search(args: dict, ctx: ToolContext) -> str:
 # ── model_pull ────────────────────────────────────────────────────────────
 
 
-def _target_of(model: str) -> str:
-    """The bare ref ollama pulls. A cloud-qualified id is refused: only
-    the bundled ollama can pull, and a cloud model needs no pull."""
-    model = model.strip()
+# The shapes a Hugging Face GGUF ref starts with (the gateway's
+# pulls.HUB_PREFIXES): a path, never a cloud provider's model.
+_HUB_REFS = ("hf.co/", "huggingface.co/")
+
+
+async def _engines(ctx: ToolContext) -> frozenset[str]:
+    """The machines that run models, as the gateway lists them now (S40) —
+    the only way to tell `hub:qwen3:4b` (qwen3:4b on hub) from `qwen3:4b` (a
+    tag whose colon is its own), and never a name kept here. Unreadable is a
+    stated failure BEFORE anything moves: a guess would pull onto the wrong
+    machine or remove the chat model from under the next turn."""
+    try:
+        views = await machines.plant().engines(ctx.app, live=False)
+    except machines.PlantUnavailable as exc:
+        raise ToolFailure(
+            f"could not ask the model gateway which machines run models — {exc}"
+        ) from exc
+    return frozenset(view["name"] for view in views)
+
+
+def _given(args: dict) -> str:
+    model = str(args.get("model") or "").strip()
     if not model:
         raise ToolFailure("model_pull needs a model reference, e.g. qwen3:4b or hf.co/org/repo")
-    provider, sep, rest = model.partition(":")
-    if sep and provider == LOCAL_PROVIDER and rest:
-        return rest
-    if sep and rest and provider.isalnum() and "/" not in provider and "." not in provider:
-        # `openrouter:openai/gpt-x` — a registered cloud provider's model.
-        # A bare `qwen3:4b` also has this shape; ollama tags never carry a
-        # slash BEFORE the colon while cloud ids usually do, so only refuse
-        # when the remainder looks like a provider path.
-        if "/" in rest and not rest.startswith("hf.co/") and not rest.startswith("huggingface.co/"):
-            raise ToolFailure(
-                f"{model!r} is a cloud provider's model — only the bundled ollama can pull, "
-                "and a cloud model is used directly, never pulled"
-            )
     return model
+
+
+def _cloud_shaped(rest: str) -> bool:
+    """A cloud provider's model is a path (`openai/gpt-x`); an ollama tag
+    never carries a slash before its colon, and a Hub ref is a path that
+    names Hugging Face."""
+    return "/" in rest and not rest.startswith(_HUB_REFS)
+
+
+def _parts(model: str, engines: frozenset[str]) -> tuple[str | None, str]:
+    """(machine, model as that machine names it).
+
+    `hub:qwen3:4b` -> ("hub", "qwen3:4b") because hub is a machine. A prefix
+    that is NOT a machine but is followed by a whole model ref — the curated
+    library's catalogue ids (`library:qwen3:4b`), an id from before the
+    builtin was renamed (`ollama:qwen3:4b`) — names the model after it, bound
+    for the gateway's default machine. Anything else is the model as given:
+    `qwen3:4b`, `llama3.2:3b`, `user/model:tag`, `hf.co/org/repo:Q4_K_M`."""
+    engine, rest = machines.split(model, engines)
+    if engine is not None:
+        return engine, rest
+    head, sep, rest = model.partition(":")
+    if (
+        sep
+        and head.isalnum()
+        and (":" in rest or rest.startswith(_HUB_REFS))
+        and not _cloud_shaped(rest)
+    ):
+        return None, rest
+    return None, model
+
+
+def _target_of(model: str, engines: frozenset[str]) -> str:
+    """The ref the gateway is sent: machine-qualified when she named a machine
+    (so the gateway acts on THAT one), the bare model otherwise (the gateway's
+    default). A cloud-qualified id is refused — a cloud model is used, never
+    pulled."""
+    head, sep, rest = model.partition(":")
+    if sep and rest and head not in engines and head.isalnum() and _cloud_shaped(rest):
+        raise ToolFailure(
+            f"{model!r} is a cloud provider's model — only a machine that runs models "
+            f"({', '.join(sorted(engines)) or 'none is listed'}) can pull one, and a cloud "
+            "model is used directly, never pulled"
+        )
+    engine, ref = _parts(model, engines)
+    return f"{engine}:{ref}" if engine else ref
+
+
+def _same_model(a: str, b: str, engines: frozenset[str]) -> bool:
+    """Do two ids name the same model on the same machine? A side that names
+    no machine could be on any (a bare id is the gateway's default), so only
+    two DIFFERENT named machines make two models."""
+    a_engine, a_ref = _parts(a, engines)
+    b_engine, b_ref = _parts(b, engines)
+    if a_engine and b_engine and a_engine != b_engine:
+        return False
+    return a_ref in (b_ref, f"{b_ref}:latest") or b_ref in (a_ref, f"{a_ref}:latest")
 
 
 def _preflight_words(line: dict, target: str) -> str:
@@ -467,15 +528,19 @@ def _preflight_words(line: dict, target: str) -> str:
     return f"{size} GB needed, {free} GB free" + (f" (size from {source})" if source else "")
 
 
-def _installed_row(catalog: dict, target: str) -> dict | None:
-    wanted = {target, f"{target}:latest"}
+def _installed_row(catalog: dict, target: str, engines: frozenset[str]) -> dict | None:
+    """The row that confirms `target` installed: a local row (the catalogue's
+    own word) for that model, on the machine the target names — or on any
+    machine when it names none (the gateway's default took it)."""
+    engine, ref = _parts(target, engines)
+    wanted = {ref, f"{ref}:latest"}
     for row in catalog.get("rows") or []:
         if (
             isinstance(row, dict)
             and row.get("kind") == "local"
             and row.get("installed") is True
-            and row.get("provider") == LOCAL_PROVIDER
             and row.get("model") in wanted
+            and (engine is None or row.get("provider") == engine)
         ):
             return row
     return None
@@ -527,7 +592,7 @@ async def model_check_update(args: dict, ctx: ToolContext) -> str:
     """Has the source moved since this model was pulled? The gateway
     compares the installed weights digest with the source's current one
     and never pulls; this reads the answer out in words."""
-    target = _target_of(str(args.get("model") or ""))
+    target = _target_of(_given(args), await _engines(ctx))
     status, body = await _send(ctx, "POST", "/admin/catalog/drift", json={"model": target})
     if status == 404:
         raise ToolFailure(f"{target} is not installed — nothing to compare")
@@ -558,14 +623,15 @@ async def model_check_update(args: dict, ctx: ToolContext) -> str:
 
 
 async def model_remove(args: dict, ctx: ToolContext) -> str:
-    """Remove an installed model from the bundled ollama. The gateway
+    """Remove an installed model from a machine that runs models. The gateway
     verifies against /api/tags before it says removed; the current chat
     model is refused (a cannot: the next turn would have nothing to run)."""
-    target = _target_of(str(args.get("model") or ""))
+    model = _given(args)
+    engines = await _engines(ctx)
+    target = _target_of(model, engines)
     pool = await db.get_pool()
-    current = await settings_store.read_value(pool, "chat.model")
-    bare = str(current or "").removeprefix(f"{LOCAL_PROVIDER}:")
-    if bare and bare in (target, f"{target}:latest") or target in (bare, f"{bare}:latest"):
+    current = str(await settings_store.read_value(pool, "chat.model") or "")
+    if current and _same_model(current, target, engines):
         raise ToolFailure(
             f"{target} is the current chat model (chat.model = {current!r}) — switch to "
             "another model first, then remove it"
@@ -584,7 +650,9 @@ async def model_remove(args: dict, ctx: ToolContext) -> str:
 
 
 async def model_pull(args: dict, ctx: ToolContext) -> str:
-    target = _target_of(str(args.get("model") or ""))
+    model = _given(args)
+    engines = await _engines(ctx)
+    target = _target_of(model, engines)
     progress = ctx.progress
     saw_success = False
     preflight: str | None = None
@@ -671,7 +739,7 @@ async def model_pull(args: dict, ctx: ToolContext) -> str:
     # ollama said success. The catalogue is the fact.
     report(f"ollama reported success — checking the catalogue for {target}")
     catalog = await _catalog(ctx)
-    row = _installed_row(catalog, target)
+    row = _installed_row(catalog, target, engines)
     if row is None:
         raise ToolFailure(
             f"ollama reported success but the catalogue does not list {target} as installed"
@@ -713,7 +781,7 @@ TOOLS: tuple[Tool, ...] = (
         name="model_catalog_search",
         description=(
             "List and filter the models Nova can run or reach: what is installed on "
-            "the local ollama, the curated picks that can be pulled, every registered "
+            "each machine that runs models, the curated picks that can be pulled, every registered "
             "cloud provider's models, and (with a query) Hugging Face GGUF repos. "
             "Every fact comes with its basis in words — declared by the source, "
             "inferred, vetted on a date, or measured on this machine. Use it for "
@@ -789,12 +857,13 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="model_pull",
         description=(
-            "Download a model into the local ollama so it can be used: a library tag "
-            "like qwen3:4b, a namespaced user/model:tag, or a Hugging Face GGUF repo "
-            "as hf.co/org/repo[:QUANT]. Downloads gigabytes and reports progress as it "
-            "runs. The result line states what the catalogue lists as installed "
-            "(size, quant, digest) — say what was pulled only from that line. Cloud "
-            "models are never pulled; use them directly."
+            "Download a model onto a machine that runs models so it can be used: a library "
+            "tag like qwen3:4b (onto the default machine), the same behind a machine's name "
+            "(<machine>:qwen3:4b), a namespaced user/model:tag, or a Hugging Face GGUF repo "
+            "as hf.co/org/repo[:QUANT]. Downloads gigabytes and reports progress as it runs. "
+            "The result line states what the catalogue lists as installed (size, quant, "
+            "digest) — say what was pulled only from that line. Cloud models are never "
+            "pulled; use them directly."
         ),
         parameters={
             "type": "object",
@@ -809,7 +878,7 @@ TOOLS: tuple[Tool, ...] = (
                     "type": "boolean",
                     "description": (
                         "After a confirmed install, make it the chat model (chat.model = "
-                        "ollama:<model>), read back."
+                        "the catalogue id, <machine>:<model>), read back."
                     ),
                 },
             },
@@ -844,7 +913,8 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="model_remove",
         description=(
-            "Remove an installed model from the local ollama, freeing its disk space. "
+            "Remove an installed model from a machine that runs models (name it "
+            "<machine>:<model> to pick one), freeing its disk space. "
             "Verified against ollama's own list before it is reported removed. The "
             "current chat model cannot be removed — switch first. Cloud models are never "
             "removed (there is nothing on disk)."
