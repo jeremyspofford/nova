@@ -341,6 +341,17 @@ def _history_row(**over) -> dict:
     return row
 
 
+def test_the_record_kinds_are_the_schedulers():
+    """Derived, never a second list (S40b final fix wave, C9): the kinds whose
+    reply is a record of the moment it fired are the scheduler's own — the two
+    it hands to a model."""
+    from app import beats, chat, scheduler
+
+    assert chat._record_kinds() == frozenset(scheduler.MODEL_TURN_KINDS)
+    assert chat._record_kinds() == {"scheduled", beats.BEAT_KIND}
+    assert "reminder" not in chat._record_kinds()
+
+
 def _beat_kind() -> str:
     # Read from the module that fires beats, so a rename of the kind turns
     # this red instead of leaving beat rows silently unstamped.

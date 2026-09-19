@@ -718,14 +718,24 @@ _PAST_TURN_MARKERS = {
 # from the row's words. The state guard is what refuses when she replays a
 # reading anyway; this half only makes sure she was told the truth first.
 #
-# The kinds are chat.py's own words for them (as _ROLE_BY_KIND spells them);
-# test_chat_skills pins "beat" against beats.BEAT_KIND. A reminder is not here:
-# it is the owner's own text, delivered by code, with no model and no reading.
-_RECORD_KINDS = frozenset({"scheduled", "beat"})
+# The kinds are the scheduler's own (scheduler.MODEL_TURN_KINDS: a timer's
+# firing and a beat — the two it hands to a model), read at the call rather
+# than retyped here (S40b final fix wave, C9). Imported inside the function
+# because the scheduler imports THIS module at module level. A reminder is not
+# among them: it is the owner's own text, delivered by code, with no model and
+# no reading.
 _RECORD_KIND_MARKER = f"[a {{kind}} message from {{when}}; {guards.HISTORY_STAMP_RECORD}]"
 _LIVE_READING_MARKER = (
     f"[written at {{when}} {guards.HISTORY_STAMP_READINGS}; {guards.HISTORY_STAMP_RECORD}]"
 )
+
+
+def _record_kinds() -> frozenset[str]:
+    """The turn kinds whose reply is a RECORD of the moment it fired — the
+    scheduler's own set (C9), never a second list here."""
+    from app import scheduler
+
+    return frozenset(scheduler.MODEL_TURN_KINDS)
 
 
 def _past_turn_marker(row) -> str | None:
@@ -747,7 +757,7 @@ def _past_turn_marker(row) -> str | None:
         return None
     template = _PAST_TURN_MARKERS.get(row.get("status") or "")
     kind = row.get("turn_kind")
-    if template is None and kind in _RECORD_KINDS:
+    if template is None and kind in _record_kinds():
         template = _RECORD_KIND_MARKER
     if template is None and row.get("read_live") is True:
         template = _LIVE_READING_MARKER
@@ -794,17 +804,32 @@ async def thread_seed(conn, conversation_id: uuid.UUID) -> list[dict]:
     they all come, because a digest IS one message about several findings —
     a room opened from it is a room about the digest.
     """
+    #
+    # S40b final fix wave (C8): the parent row is stamped the way history
+    # stamps any other — the turn behind it was a firing, or it read something
+    # live — so a room opened off a machine reading does not hand her that
+    # reading in the present tense. Same columns, same _past_turn_marker.
     parent = await conn.fetchrow(
-        "SELECT p.role, p.content FROM conversations c "
+        "SELECT p.role, p.content, p.created_at, t.status, t.kind AS turn_kind, "
+        "EXISTS (SELECT 1 FROM turn_spans s WHERE s.turn_id = p.turn_id "
+        "AND s.kind = 'tool' AND s.name = ANY($2::text[]) "
+        "AND s.meta->>'ok' = 'true') AS read_live "
+        "FROM conversations c "
         "JOIN messages p ON p.id = c.parent_message_id "
+        "LEFT JOIN turns t ON t.id = p.turn_id "
         "WHERE c.id = $1",
         conversation_id,
+        tools.live_reading_tool_names(),
     )
     if parent is None:
         return []
+    content = parent["content"]
+    marker = _past_turn_marker(parent)
+    if marker:
+        content = f"{marker} {content}"
     seed: list[dict] = [
         {"role": "system", "content": THREAD_OPENING},
-        {"role": parent["role"], "content": parent["content"]},
+        {"role": parent["role"], "content": content},
     ]
     rows = await conn.fetch(
         "SELECT check_name, title, facts FROM notices "

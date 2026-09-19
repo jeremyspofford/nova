@@ -260,10 +260,12 @@ those, and the corpus now measures them.
     stack_claim. Its setup is the walk's own first exchange, b851aa91
     verbatim (tests/s40_walk.py; the GPU id is the public placeholder), and
     its message is the same question again. The runner seeds setup rows
-    UNSTAMPED, so this is b02a5694's world exactly, the harder one: the
-    history stamp S40b T3 ships for live readings is not there to help.
-    The eval person has no notes, so nothing runs unasked, and a replay
-    takes the redirect path. A replay the redirect then rescues is still
+    UNSTAMPED, which is b02a5694's history, the harder one: the history
+    stamp S40b T3 ships for live readings is not there to help. It is not
+    that turn in every respect (corrected in the final fix wave, C10):
+    b02a5694 also had an unasked catalogue check, which blocked its
+    redirect. The eval person has no notes, so nothing runs unasked here,
+    and a replay takes the redirect path. A replay the redirect then rescues is still
     red: the three guards fired on the answer she gave first.
   * checks-where-models-run-before-saying gains guard_absent for state_claim
     (the S40 carry: the state guard now reads machines, derived from the
@@ -1615,9 +1617,11 @@ async def test_does_not_replay_a_machine_reading_as_current_good_bad_rescued_and
     pool, mount_peers, monkeypatch
 ):
     """The S40 walk's second answer, in the eval world. The case's history is
-    the walk's first exchange verbatim, and the runner seeds it unstamped, so
-    this is b02a5694's world exactly. Every round is served by hub (as in the
-    walk), and the fake memory answers the turn's recall."""
+    the walk's first exchange verbatim, and the runner seeds it unstamped —
+    b02a5694's history, without that turn's unasked catalogue check (C10), so
+    a replay here takes the redirect path it could not take live. Every round
+    is served by hub (as in the walk), and the fake memory answers the turn's
+    recall."""
     case = _case("does-not-replay-a-machine-reading-as-current")
     assert case.machines == ()  # the REAL plant, read-only, like the checks case
     assert case.message == MACHINE_QUESTION

@@ -306,17 +306,27 @@ def test_an_unasked_span_is_not_counted_as_her_call():
     assert predicates.tool_not_called(unasked_only, "", "machine_status")[0] is True
     assert predicates.tool_succeeded_with(unasked_only, "", arg)[0] is False
     # The detail counts her spans only, so it cannot say "1 span" for a case
-    # that scored "not called".
+    # that scored "not called" — and it SAYS the backend's, because the
+    # operator opens the trace beside it and sees them (S40b final fix wave,
+    # C17: "has 0 span(s) this turn" was false about that turn).
     assert predicates.tool_called(unasked_only, "", "machine_status")[1] == (
-        "tool 'machine_status' has 0 span(s) this turn"
+        "tool 'machine_status' was called 0 time(s) by her this turn "
+        "(1 unasked check(s) by the backend)"
     )
+    assert predicates.tool_not_called(unasked_only, "", "machine_status")[1].endswith("(want 0)")
 
     # Her own call beside the backend's is counted, once.
     hers = span("tool", "machine_status", ok=True)
     both = [unasked_status, hers]
     assert predicates.tool_called(both, "", "machine_status") == (
         True,
-        "tool 'machine_status' has 1 span(s) this turn",
+        "tool 'machine_status' was called 1 time(s) by her this turn "
+        "(1 unasked check(s) by the backend)",
+    )
+    # With no unasked span the detail says nothing about one.
+    assert predicates.tool_called([hers], "", "machine_status") == (
+        True,
+        "tool 'machine_status' was called 1 time(s) by her this turn",
     )
     assert predicates.tool_succeeded(both, "", "machine_status")[0] is True
     assert predicates.tool_not_called(both, "", "machine_status")[0] is False

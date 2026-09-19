@@ -42,12 +42,22 @@ from tests.test_chat import _say, _set_model
 def test_a_live_reading_tool_is_ephemeral_and_reads_only():
     """Both declarations, from the live registry: ephemeral says the result
     goes stale, reads_only says running it changed nothing — so what it
-    returned is a reading of the world at that moment."""
-    expected = sorted(
-        name for name, tool in tools.REGISTRY.items() if tool.ephemeral and tool.reads_only
-    )
-    assert tools.live_reading_tool_names() == expected
-    assert MACHINE_STATUS.name in expected
+    returned is a reading of the world at that moment.
+
+    Pin replaced in the S40b final fix wave (C18): it recomputed the
+    implementation's own expression over the registry and asserted equality,
+    which could not fail independently of live_reading_tool_names. These are
+    NAMED members and non-members — each one a decision about the tool, and
+    each one red the day the derivation or the declaration moves."""
+    names = tools.live_reading_tool_names()
+    for member in (MACHINE_STATUS.name, "inference_health", "fetch_url", "device_info"):
+        assert member in names, member
+    for outsider in ("device_notify", "memory_search", "list_timers", "workspace_write_file"):
+        assert outsider not in names, outsider
+    assert names == sorted(names)
+    for name in names:
+        tool = tools.REGISTRY[name]
+        assert tool.ephemeral and tool.reads_only, name
 
 
 def test_device_notify_is_not_a_reading():
@@ -252,12 +262,19 @@ async def test_an_ordinary_row_reaches_her_unstamped(owner_client, pool, mount_p
 # What the stamp deliberately does not catch, pinned so a change to any of
 # them is a decision rather than a drift.
 ACCEPTED_MISSES = [
-    # b02a5694's own shape: a reply that REPLAYS an earlier reading and read
-    # nothing itself has no reading behind it. Its source row is stamped; this
-    # one is refused by state_claim, not marked here.
+    # The REPLAY shape: a reply that repeats an earlier reading and takes no
+    # reading of its own has none behind it, so it is not stamped. Its source
+    # row is; the replay is refused by state_claim, not marked here.
+    #
+    # Corrected in the S40b final fix wave (C10): b02a5694 itself is NOT this
+    # shape. That turn DID carry a tool span — an unasked machine-catalogue
+    # check a recalled note triggered — which is why its redirect was blocked
+    # as tools_already_ran and its reply was REPLACED without regenerating
+    # (verdict §3.4). An unasked live reading stamps the row like any other
+    # (see MUST_STAMP above): she was handed its result before she wrote.
     pytest.param(
         {"spans": (("llm_call", None, {"served_by": "hub:qwen3:8b", "local": True}),)},
-        id="a replay of an earlier reading, with no read of its own",
+        id="a replay of an earlier reading, with no read of its own at all",
     ),
     # reads_only but not ephemeral: by declaration its result does not go
     # stale, so a row reporting a timer's state is unstamped even after the
