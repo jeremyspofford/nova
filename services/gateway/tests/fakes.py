@@ -118,6 +118,22 @@ class StreamingASGITransport(httpx.AsyncBaseTransport):
         )
 
 
+class FailingTransport(httpx.AsyncBaseTransport):
+    """A peer whose every request fails before any response exists, with
+    `failure` — the shapes httpx's own transport raises: ConnectError (the
+    connection refused), ConnectTimeout (nothing answered), ProxyError, or
+    ReadTimeout / RemoteProtocolError / WriteError (it took the request and
+    then failed). Counted, so a test can prove how often the gateway asked."""
+
+    def __init__(self, failure: type[httpx.TransportError] = httpx.ConnectError) -> None:
+        self.failure = failure
+        self.requests: list[tuple[str, str]] = []
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append((request.method, request.url.path))
+        raise self.failure("simulated: no answer", request=request)
+
+
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -212,6 +228,9 @@ class FakeOllama:
     show_in_flight: int = 0
     show_max_in_flight: int = 0
     version_status: int = 200
+    # /api/tags answers this status when it is not 200 (S40: an engine that
+    # cannot be asked what is installed).
+    tags_status: int = 200
     pull_status: int = 200
     pull_lines: tuple[str, ...] = ('{"status":"pulling"}', '{"status":"success"}')
     probe_status: int = 200
@@ -228,6 +247,9 @@ class FakeOllama:
     # explicit list lets a test say exactly what's resident, including
     # more than one model or none at all.
     ps_models: list[dict] | None = None
+    # /api/ps answers this status when it is not 200 (S40: a resident list
+    # that cannot be read costs the served-on stamp, never the reply).
+    ps_status: int = 200
     # When set, /api/pull emits every line but the last, then waits for the
     # event before finishing — the only way a test can observe a pull that
     # is genuinely still in flight (the ASGI test transport buffers a whole
@@ -349,6 +371,8 @@ class FakeOllama:
 
     async def _tags(self, request):
         await self._record(request)
+        if self.tags_status != 200:
+            return JSONResponse({"error": "ollama is not ready"}, status_code=self.tags_status)
         return JSONResponse({"models": [self._tag_row(name) for name in self.tags]})
 
     async def _version(self, request):
@@ -372,6 +396,8 @@ class FakeOllama:
 
     async def _ps(self, request):
         await self._record(request)
+        if self.ps_status != 200:
+            return JSONResponse({"error": "ps unavailable"}, status_code=self.ps_status)
         if self.ps_models is not None:
             models = self.ps_models
         else:

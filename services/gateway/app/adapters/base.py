@@ -1,4 +1,5 @@
 """What every adapter provides, and the one outbound HTTP client they share."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -24,6 +25,35 @@ class ProviderRefused(RuntimeError):
         super().__init__(detail)
         self.status = status
         self.detail = detail
+
+
+class ProviderUnreachable(ProviderRefused):
+    """An ENGINE that could not be reached at all: the connect phase failed
+    (CONNECT_PHASE_ERRORS), so nothing was learned about any model on it.
+
+    A ProviderRefused, so every path that relays a refusal still relays this
+    one in the same words. It exists for one decision: data_plane never walls
+    it (D21). A wall outlives the outage it describes — a local model's wall
+    is never cleared by a success (routing.note_success clears cloud rows
+    only) — while the engine's own observation (engines.observe, a failure
+    cached 10 s) is the fact the next walk reads.
+
+    Raised only for an engine. A cloud provider's connect failure stays a
+    plain ProviderRefused and walls as it always has."""
+
+
+# The failures that happen before a peer has taken the request at all. A
+# ReadTimeout is NOT one of them: the engine accepted the request and then did
+# not answer inside the read budget — on the bundled engine that is a model
+# still loading, which walls THAT model (routing.OUTAGE_STEPS_S; the
+# 2026-09-10 incident in migrations/007_wall_scope.sql). A ReadTimeout before
+# headers means "unreachable" only on a proxied dial (a tunnel that was never
+# set up), which S43a adds for those dials alone (S40 ruling C12).
+CONNECT_PHASE_ERRORS: tuple[type[httpx.HTTPError], ...] = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ProxyError,
+)
 
 
 class ListingUnavailable(RuntimeError):

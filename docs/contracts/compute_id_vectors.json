@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "about": "D10 compute identity (docs/plans/rebuild/hub/r2-integration.md). services/gateway/tests/test_compute_id.py reads this file now; the Go agent's tests read the same file from S44, so both implementations are pinned by the same cases. Every uuid, CPU and memory size here is synthetic: the repo is public.",
+  "grammar": "served_on := dev(\"+\"dev)* sorted, unique, at most 4, at most one cpu; dev := gpu:cuda:<uuid|pci-vvvv-dddd|<GiB>g> | gpu:rocm:<uuid|pci-vvvv-dddd|<GiB>g> | gpu:vulkan:pci-vvvv-dddd|<GiB>g | gpu:metal:<chip>|<gc>gc|<GiB>g | cpu:<slug>|<n>c|<GiB>g",
+  "gib_rounding": "half up: floor(MemTotal_kB / 1048576 + 0.5)",
+  "max_devices": 4,
+  "cpu_slug": [
+    {"name": "x86 in a WSL2 VM", "cpuinfo": "processor\t: 0\nvendor_id\t: GenuineIntel\nmodel\t\t: 151\nmodel name\t: 12th Gen Intel(R) Core(TM) i9-12900K\n", "meminfo": "MemTotal:       32767128 kB\nMemFree:         1048576 kB\n", "nproc": 24, "expect": "cpu:12th-gen-intel-core-i9-12900k|24c|31g"},
+    {"name": "mini PC", "cpuinfo": "processor\t: 0\nmodel name\t: Intel(R) N150\n", "meminfo": "MemTotal:       16106744 kB\n", "nproc": 4, "expect": "cpu:intel-n150|4c|15g"},
+    {"name": "exactly half a GiB rounds up", "cpuinfo": "model name\t: Intel(R) N150\n", "meminfo": "MemTotal:       16252928 kB\n", "nproc": 4, "expect": "cpu:intel-n150|4c|16g"},
+    {"name": "just under half rounds down", "cpuinfo": "model name\t: Intel(R) N150\n", "meminfo": "MemTotal:       16252927 kB\n", "nproc": 4, "expect": "cpu:intel-n150|4c|15g"},
+    {"name": "AMD", "cpuinfo": "model name\t: AMD Ryzen 9 5900X 12-Core Processor\n", "meminfo": "MemTotal:       65755000 kB\n", "nproc": 24, "expect": "cpu:amd-ryzen-9-5900x-12-core-processor|24c|63g"},
+    {"name": "trademarks and a clock speed", "cpuinfo": "model name\t: Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz\n", "meminfo": "MemTotal:      131915000 kB\n", "nproc": 56, "expect": "cpu:intel-xeon-cpu-e5-2680-v4-2-40ghz|56c|126g"},
+    {"name": "arm64 with only a Model line", "cpuinfo": "processor\t: 0\nBogoMIPS\t: 108.00\n\nModel\t\t: Raspberry Pi 5 Model B Rev 1.0\n", "meminfo": "MemTotal:        8245632 kB\n", "nproc": 4, "expect": "cpu:raspberry-pi-5-model-b-rev-1-0|4c|8g"}
+  ],
+  "cpu_slug_errors": [
+    {"name": "no model line", "cpuinfo": "processor\t: 0\n", "meminfo": "MemTotal: 16106744 kB\n", "nproc": 4},
+    {"name": "no MemTotal", "cpuinfo": "model name\t: Intel(R) N150\n", "meminfo": "MemFree: 5 kB\n", "nproc": 4},
+    {"name": "no CPUs", "cpuinfo": "model name\t: Intel(R) N150\n", "meminfo": "MemTotal: 16106744 kB\n", "nproc": 0},
+    {"name": "a model that slugs to nothing", "cpuinfo": "model name\t: (R)(TM)\n", "meminfo": "MemTotal: 16106744 kB\n", "nproc": 4}
+  ],
+  "gpu_cuda": [
+    {"name": "as nvidia-smi prints it", "uuid": "GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f", "expect": "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"},
+    {"name": "upper-case hex", "uuid": "GPU-5F3B8B36-0D6E-4C1A-9F2E-7A1B2C3D4E5F", "expect": "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"},
+    {"name": "padded", "uuid": " GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f ", "expect": "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"}
+  ],
+  "gpu_cuda_errors": ["[N/A]", "", "MIG-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f", "GPU-5f3b8b36", "5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"],
+  "served_on": [
+    {"name": "fully on the one GPU", "size": 5000000000, "size_vram": 5000000000, "accelerators": ["gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"], "cpu": "cpu:intel-n150|4c|15g", "expect": "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"},
+    {"name": "partial offload names both", "size": 20000000000, "size_vram": 15000000000, "accelerators": ["gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"], "cpu": "cpu:intel-n150|4c|15g", "expect": "cpu:intel-n150|4c|15g+gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"},
+    {"name": "size_vram 0 is the cpu even beside a GPU", "size": 5000000000, "size_vram": 0, "accelerators": ["gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"], "cpu": "cpu:intel-n150|4c|15g", "expect": "cpu:intel-n150|4c|15g"},
+    {"name": "no accelerator, on the cpu", "size": 5000000000, "size_vram": 0, "accelerators": [], "cpu": "cpu:intel-n150|4c|15g", "expect": "cpu:intel-n150|4c|15g"},
+    {"name": "more than one accelerator is omitted", "size": 5000000000, "size_vram": 5000000000, "accelerators": ["gpu:cuda:GPU-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"], "cpu": "cpu:intel-n150|4c|15g", "expect": null},
+    {"name": "on a GPU nobody can name is omitted", "size": 5000000000, "size_vram": 5000000000, "accelerators": [], "cpu": "cpu:intel-n150|4c|15g", "expect": null},
+    {"name": "partial with the cpu unknown is omitted", "size": 20000000000, "size_vram": 15000000000, "accelerators": ["gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"], "cpu": null, "expect": null},
+    {"name": "no size_vram reading is omitted", "size": 5000000000, "size_vram": null, "accelerators": ["gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"], "cpu": "cpu:intel-n150|4c|15g", "expect": null},
+    {"name": "on the cpu with the cpu unknown is omitted", "size": 5000000000, "size_vram": 0, "accelerators": [], "cpu": null, "expect": null},
+    {"name": "size unknown cannot tell partial from full", "size": null, "size_vram": 5000000000, "accelerators": ["gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"], "cpu": "cpu:intel-n150|4c|15g", "expect": null},
+    {"name": "size_vram above size is still fully on the GPU", "size": 4000000000, "size_vram": 5000000000, "accelerators": ["gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"], "cpu": "cpu:intel-n150|4c|15g", "expect": "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"}
+  ],
+  "parse_valid": [
+    {"value": "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f", "expect": ["gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"]},
+    {"value": "cpu:intel-n150|4c|15g+gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f", "expect": ["cpu:intel-n150|4c|15g", "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"]},
+    {"value": "gpu:metal:apple-m2-max|38gc|64g", "expect": ["gpu:metal:apple-m2-max|38gc|64g"]},
+    {"value": "gpu:rocm:GPU-5b2e33f4b5c4d7a9", "expect": ["gpu:rocm:GPU-5b2e33f4b5c4d7a9"]},
+    {"value": "gpu:vulkan:pci-8086-46d0|15g", "expect": ["gpu:vulkan:pci-8086-46d0|15g"]},
+    {"value": "gpu:cuda:pci-10de-2204|24g", "expect": ["gpu:cuda:pci-10de-2204|24g"]},
+    {"value": "cpu:intel-n150|4c|15g+gpu:cuda:GPU-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d+gpu:cuda:GPU-1a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d+gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f", "expect": ["cpu:intel-n150|4c|15g", "gpu:cuda:GPU-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "gpu:cuda:GPU-1a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d", "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"]}
+  ],
+  "parse_invalid": [
+    "",
+    "gpu:cuda:GPU-5f3b8b36",
+    "gpu:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f",
+    "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f+cpu:intel-n150|4c|15g",
+    "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f+gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f",
+    "cpu:intel-n150|0c|15g",
+    "cpu:Intel-N150|4c|15g",
+    "cpu:amd-x|8c|16g+cpu:intel-n150|4c|15g",
+    "gpu:vulkan:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f",
+    "gpu:cuda:GPU-5F3B8B36-0D6E-4C1A-9F2E-7A1B2C3D4E5F",
+    "tpu:x",
+    "gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f ",
+    "cpu:intel-n150|4c|15g+",
+    "cpu:intel-n150|4c|15g+gpu:cuda:GPU-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d+gpu:cuda:GPU-1a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d+gpu:cuda:GPU-2a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d+gpu:cuda:GPU-5f3b8b36-0d6e-4c1a-9f2e-7a1b2c3d4e5f"
+  ]
+}

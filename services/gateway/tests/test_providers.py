@@ -85,14 +85,14 @@ async def _add_openrouter(client, mount_backend, *, name="openrouter", key=SECRE
 
 
 def test_split_model_id_only_honours_a_registered_prefix():
-    names = {"ollama", "openrouter"}
+    names = {"hub", "openrouter"}
     assert providers.split_model_id("openrouter:anthropic/claude-sonnet-5", names) == (
         "openrouter",
         "anthropic/claude-sonnet-5",
     )
     # An ollama tag's own colon is not a provider prefix.
     assert providers.split_model_id("qwen3.8:27b", names) == (None, "qwen3.8:27b")
-    assert providers.split_model_id("ollama:qwen3.8:27b", names) == ("ollama", "qwen3.8:27b")
+    assert providers.split_model_id("hub:qwen3.8:27b", names) == ("hub", "qwen3.8:27b")
     assert providers.split_model_id("plain", names) == (None, "plain")
     # A prefix with nothing after it names the provider and no model — handed
     # back as such so resolve() refuses it instead of routing elsewhere.
@@ -171,9 +171,54 @@ def test_presets_load_and_name_the_openrouter_first():
 # ── registry + routing (DB) ──────────────────────────────────────────────
 
 
-async def test_startup_seeds_the_builtin_ollama_as_default(pool):
+async def test_startup_seeds_the_bundled_engine_as_hub_and_default(pool):
     rows = await providers.list_rows(pool)
-    assert [(r["name"], r["builtin"], r["is_default"]) for r in rows] == [("ollama", True, True)]
+    assert [(r["name"], r["builtin"], r["is_default"]) for r in rows] == [("hub", True, True)]
+    assert rows[0]["name"] == providers.BUILTIN
+    engine = await pool.fetchrow("SELECT provider, lifecycle, serving, hold_s FROM engines")
+    assert tuple(engine) == ("hub", "always_on", True, 600)
+    # A second startup is a no-op: one builtin, one engine row.
+    await providers.ensure_builtin(pool)
+    assert await pool.fetchval("SELECT count(*) FROM providers WHERE builtin") == 1
+    assert await pool.fetchval("SELECT count(*) FROM engines") == 1
+
+
+def test_base_url_of_reads_the_env_only_for_the_bundled_engine(monkeypatch):
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.live:11434/")
+    builtin = {"adapter": "ollama", "builtin": True, "base_url": "http://stale.example"}
+    assert providers.base_url_of(builtin) == "http://ollama.live:11434"
+    # Another machine's engine (S44) is its stored address, never this host's env.
+    node = {"adapter": "ollama", "builtin": False, "base_url": "https://dell.example:11435/"}
+    assert providers.base_url_of(node) == "https://dell.example:11435"
+    # The ollama adapter re-dresses the builtin as openai-chat at {OLLAMA_URL}/v1 to
+    # chat (adapters/ollama.py completions); that row keeps builtin=True and its /v1.
+    chat = {"adapter": "openai-chat", "builtin": True, "base_url": "http://ollama.live:11434/v1"}
+    assert providers.base_url_of(chat) == "http://ollama.live:11434/v1"
+
+
+def test_the_engine_adapter_is_refused_here_and_says_what_is_one():
+    with pytest.raises(HTTPException) as excinfo:
+        providers.validate_shape(
+            {"adapter": "ollama", "base_url": "https://dell.example", "auth_shape": "none"}
+        )
+    assert excinfo.value.status_code == 400
+    assert "'hub'" in excinfo.value.detail and "adapter=openai-chat" in excinfo.value.detail
+
+
+async def test_the_wizard_never_names_a_cloud_provider_after_a_reserved_name(pool):
+    for typed in ("Hub", "library", "ollama"):
+        await backends.save_config(
+            pool,
+            {
+                "kind": "cloud",
+                "url": "http://x.test",
+                "api_key": "sk-x",
+                "model": "m",
+                "provider": typed,
+            },
+        )
+        assert (await backends.read_config(pool))["provider"] == "cloud"
+    assert sorted(r["name"] for r in await providers.list_rows(pool)) == ["cloud", "hub"]
 
 
 async def test_create_lists_and_gets_a_provider_with_the_key_masked(client, pool, mount_backend):
@@ -191,7 +236,7 @@ async def test_create_lists_and_gets_a_provider_with_the_key_masked(client, pool
     assert not any(path == "/v1/chat/completions" for path, _ in fake.seen)
 
     listed = (await client.get("/admin/providers")).json()["providers"]
-    assert [p["name"] for p in listed] == ["ollama", "openrouter"]
+    assert [p["name"] for p in listed] == ["hub", "openrouter"]
     assert all(p["api_key"] in (None, "•••4242") for p in listed)
 
     one = (await client.get("/admin/providers/openrouter")).json()
@@ -223,7 +268,7 @@ async def test_a_refused_key_is_a_502_with_the_providers_words_and_no_row(
 
     assert resp.status_code == 502
     assert "Invalid API key" in resp.json()["error"]
-    assert [r["name"] for r in await providers.list_rows(pool)] == ["ollama"]
+    assert [r["name"] for r in await providers.list_rows(pool)] == ["hub"]
 
 
 async def test_a_provider_without_a_listing_saves_as_unavailable_not_an_empty_list(
@@ -264,10 +309,10 @@ async def test_an_unreachable_provider_is_a_502_and_never_saved(client, pool):
     )
     assert resp.status_code == 502
     assert "could not verify provider 'dead'" in resp.json()["error"]
-    assert [r["name"] for r in await providers.list_rows(pool)] == ["ollama"]
+    assert [r["name"] for r in await providers.list_rows(pool)] == ["hub"]
 
 
-async def test_create_refuses_a_duplicate_and_the_builtin_name(client, mount_backend):
+async def test_create_refuses_a_duplicate_and_the_reserved_names(client, mount_backend):
     await _add_openrouter(client, mount_backend)
     again = await client.post(
         "/admin/providers",
@@ -280,16 +325,20 @@ async def test_create_refuses_a_duplicate_and_the_builtin_name(client, mount_bac
         },
     )
     assert again.status_code == 409
-    ollama = await client.post(
-        "/admin/providers",
-        json={
-            "name": "ollama",
-            "adapter": "openai-chat",
-            "base_url": "http://x/v1",
-            "auth_shape": "none",
-        },
-    )
-    assert ollama.status_code == 409
+    # hub is the bundled engine, library names the model library, and ollama
+    # is the name pre-S40 usage rows carry (ruling G3).
+    for reserved in ("hub", "library", "ollama"):
+        refused = await client.post(
+            "/admin/providers",
+            json={
+                "name": reserved,
+                "adapter": "openai-chat",
+                "base_url": "http://x/v1",
+                "auth_shape": "none",
+            },
+        )
+        assert refused.status_code == 409
+        assert "is reserved" in refused.json()["error"]
 
 
 async def test_live_listing_is_labelled_and_carries_context_and_price(client, mount_backend):
@@ -336,13 +385,15 @@ async def test_chat_routes_by_prefix_and_badges_the_canonical_identity(
     assert fake.seen[-1][1]["model"] == "anthropic/claude-sonnet-5"
     assert fake.seen_auth[-1] == f"Bearer {SECRET}"
 
-    # A bare model still goes to the default (ollama), colon and all.
+    # A bare model still goes to the default (hub), colon and all.
     local = await client.post(
         "/v1/chat/completions", json={"model": "qwen3.8:27b", "messages": [], "stream": True}
     )
     assert local.status_code == 200
-    assert local.headers["x-nova-served-by"] == "ollama:qwen3.8:27b"
-    assert ollama.seen[-1][1]["model"] == "qwen3.8:27b"
+    assert local.headers["x-nova-served-by"] == "hub:qwen3.8:27b"
+    # Moved (S40 T3): the served-on stamp reads /api/ps AFTER the completion,
+    # so the last request the engine saw is no longer the completion.
+    assert [b for p, b in ollama.seen if p == "/v1/chat/completions"][-1]["model"] == "qwen3.8:27b"
 
 
 async def test_a_failing_provider_answers_with_its_own_status_never_another_providers_reply(
@@ -370,12 +421,12 @@ async def test_a_failing_provider_answers_with_its_own_status_never_another_prov
 async def test_delete_refuses_the_builtin_and_the_default_then_deletes(client, pool, mount_backend):
     await _add_openrouter(client, mount_backend)
 
-    assert (await client.delete("/admin/providers/ollama")).status_code == 400
+    assert (await client.delete("/admin/providers/hub")).status_code == 400
     made_default = await client.put("/admin/providers/openrouter/default")
     assert made_default.status_code == 200 and made_default.json()["is_default"] is True
     assert (await client.delete("/admin/providers/openrouter")).status_code == 409
 
-    await client.put("/admin/providers/ollama/default")
+    await client.put("/admin/providers/hub/default")
     assert (await client.delete("/admin/providers/openrouter")).status_code == 200
     assert (await client.get("/admin/providers/openrouter")).status_code == 404
     assert (await client.delete("/admin/providers/openrouter")).status_code == 404
@@ -519,11 +570,11 @@ async def test_put_backend_cloud_upserts_a_provider_and_makes_it_default(
     assert row["is_default"] is True
     assert row["default_model"] == "gpt-x"
 
-    # And back to ollama: the cloud row stays registered, ollama is default.
+    # And back to the bundled engine: the cloud row stays registered, hub is default.
     back = await client.put("/admin/backend", json={"kind": "ollama"})
     assert back.status_code == 200, back.text
     names = {r["name"]: r["is_default"] for r in await providers.list_rows(pool)}
-    assert names == {"ollama": True, "my-cloud": False}
+    assert names == {"hub": True, "my-cloud": False}
 
 
 async def test_get_backend_is_derived_from_the_default_row(client, pool, mount_backend):
@@ -559,7 +610,9 @@ async def _migrate_to(tmp_path, upto: int) -> None:
 
     conn = await asyncpg.connect(TEST_DSN)
     try:
-        await conn.execute("DROP TABLE IF EXISTS providers, probes, backend_config CASCADE")
+        await conn.execute(
+            "DROP TABLE IF EXISTS providers, probes, backend_config, engines, engine_models CASCADE"
+        )
         await conn.execute("DROP TABLE IF EXISTS schema_migrations")
     finally:
         await conn.close()
@@ -650,7 +703,8 @@ async def test_migration_003_converts_the_active_backend_into_the_default_provid
 
     assert gone is None
     by_name = {r["name"]: dict(r) for r in rows}
-    assert by_name["ollama"]["builtin"] is True and by_name["ollama"]["is_default"] is False
+    # The whole set now runs through 009: the builtin 003 created arrives as `hub`.
+    assert by_name["hub"]["builtin"] is True and by_name["hub"]["is_default"] is False
     converted = by_name[expect_name]
     assert converted["adapter"] == "openai-chat"
     assert converted["base_url"] == expect_url
@@ -660,7 +714,7 @@ async def test_migration_003_converts_the_active_backend_into_the_default_provid
     assert converted["is_default"] is True
 
 
-async def test_migration_003_on_a_fresh_or_ollama_install_leaves_ollama_default(tmp_path):
+async def test_migration_003_then_009_on_a_fresh_or_ollama_install_leaves_hub_default(tmp_path):
     import asyncpg
 
     import tests.conftest as conftest
@@ -680,7 +734,7 @@ async def test_migration_003_on_a_fresh_or_ollama_install_leaves_ollama_default(
     finally:
         await conn.close()
         conftest._schema_built = False
-    assert [(r["name"], r["is_default"]) for r in rows] == [("ollama", True)]
+    assert [(r["name"], r["is_default"]) for r in rows] == [("hub", True)]
 
 
 async def test_backends_kind_is_derived_not_stored():
@@ -749,7 +803,7 @@ async def test_a_public_listing_does_not_prove_the_key_so_a_completion_does(
     assert wrong.status_code == 502
     assert "refused on a test completion" in wrong.json()["error"]
     assert "User not found" in wrong.json()["error"]
-    assert [r["name"] for r in await providers.list_rows(pool)] == ["ollama"]
+    assert [r["name"] for r in await providers.list_rows(pool)] == ["hub"]
 
     right = await client.post("/admin/providers", json={**body, "api_key": "sk-or-right"})
 
@@ -851,6 +905,63 @@ async def test_an_unreadable_local_listing_refuses_the_name_check_loudly(
     )
     assert resp.status_code == 502
     assert "cannot check 'x' against the local model tags" in resp.json()["error"]
+    # S40: the refusal names the engine that was asked (the default's).
+    assert "on hub" in resp.json()["error"]
+
+
+async def test_with_a_cloud_default_no_machine_is_asked_and_the_name_saves(
+    client, pool, mount_backend, local_tags, monkeypatch
+):
+    """S40: only a BARE id can be shadowed, and a bare id means the default
+    provider. With a cloud default the machines' tags are not what a bare id
+    names, so none is asked — the owner can add a provider while the hub's
+    ollama is down (and, from S46, while a machine sleeps). Before S40 this was
+    a 502: every create read the builtin's tags."""
+    await _add_openrouter(client, mount_backend)
+    assert (await client.put("/admin/providers/openrouter/default")).status_code == 200
+    local_tags.tags = ("mistral:7b",)
+    local_tags.seen.clear()
+    monkeypatch.setenv("OLLAMA_URL", "http://127.0.0.1:1")
+    mount_backend("http://mistral.test", FakeOpenAICompat().app)
+
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "mistral",
+            "adapter": "openai-chat",
+            "base_url": "http://mistral.test/v1",
+            "auth_shape": "none",
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert local_tags.seen == []
+
+
+async def test_a_name_is_checked_against_the_default_machines_tags_not_the_hubs(
+    client, pool, mount_backend, local_tags, second_engine
+):
+    """A bare id means the DEFAULT provider: when that is another machine,
+    its tags are what a new name could shadow — read live from it — and the
+    hub's are not asked."""
+    assert (await client.put("/admin/providers/dell/default")).status_code == 200
+    second_engine.tags = ("mistral:7b",)
+    local_tags.seen.clear()
+    mount_backend("http://mistral.test", FakeOpenAICompat().app)
+
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "mistral",
+            "adapter": "openai-chat",
+            "base_url": "http://mistral.test/v1",
+            "auth_shape": "none",
+        },
+    )
+
+    assert resp.status_code == 409
+    assert "mistral:7b" in resp.json()["error"] and "on dell" in resp.json()["error"]
+    assert local_tags.seen == []
 
 
 async def test_a_provider_prefix_with_no_model_is_a_400_never_another_provider(
@@ -1074,7 +1185,7 @@ async def test_an_anthropic_shaped_proxy_with_a_public_listing_gets_a_message_pr
     wrong = await client.post("/admin/providers", json=body)
     assert wrong.status_code == 502
     assert "refused on a test message" in wrong.json()["error"]
-    assert [r["name"] for r in await providers.list_rows(pool)] == ["ollama"]
+    assert [r["name"] for r in await providers.list_rows(pool)] == ["hub"]
 
     right = await client.post("/admin/providers", json={**body, "api_key": "sk-ant-real"})
     assert right.status_code == 200, right.text

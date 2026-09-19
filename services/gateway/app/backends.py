@@ -8,6 +8,7 @@ row, and saving a kind upserts a provider row and makes it the default.
 Nothing here is a second store. The names below are the ones admin.py and
 the probe path call; the registry itself lives in app/providers.py.
 """
+
 from __future__ import annotations
 
 import asyncpg
@@ -53,7 +54,7 @@ def legacy_view(row: dict) -> dict:
     return {
         "kind": kind_of(row),
         "url": _origin(providers.base_url_of(row)),
-        "provider": None if row["adapter"] == "ollama" else row["name"],
+        "provider": None if row.get("builtin") else row["name"],
         "model": row.get("default_model"),
         "api_key": row.get("api_key"),
         "adapter": row["adapter"],
@@ -75,7 +76,7 @@ def resolve_base_url(view: dict) -> str:
     """Where the default backend's calls go — the ollama kind always resolves
     to the live OLLAMA_URL (never a stored column)."""
     if view["kind"] == "ollama":
-        return providers.base_url_of({"adapter": "ollama"})
+        return providers.base_url_of({"adapter": "ollama", "builtin": True})
     return (view.get("url") or "").rstrip("/")
 
 
@@ -105,12 +106,14 @@ def validate_shape(payload: dict) -> None:
 def _slug_for(payload: dict) -> str:
     kind = payload["kind"]
     if kind == "ollama":
-        return "ollama"
+        return providers.BUILTIN
     if kind == "remote":
         return "remote"
     raw = (payload.get("provider") or "cloud").strip().lower()
     slug = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in raw).strip("-_")
-    if not slug or slug == "ollama" or not providers.NAME_RE.match(slug):
+    # A reserved name is never a cloud provider's: `hub` is the bundled engine,
+    # `library` names the model library, `ollama` is what pre-S40 usage rows carry.
+    if not slug or slug in providers.RESERVED_NAMES or not providers.NAME_RE.match(slug):
         slug = "cloud"
     return slug
 
@@ -122,7 +125,13 @@ def _row_for(payload: dict) -> dict:
     migration did for the row it converted."""
     kind = payload["kind"]
     if kind == "ollama":
-        return {"adapter": "ollama", "base_url": "", "auth_shape": "none", "name": "ollama"}
+        return {
+            "adapter": "ollama",
+            "base_url": "",
+            "auth_shape": "none",
+            "name": providers.BUILTIN,
+            "builtin": True,
+        }
     url = payload["url"].rstrip("/")
     if not url.endswith("/v1"):
         url = f"{url}/v1"
@@ -165,9 +174,9 @@ async def save_config(
     (key_proven NULL, no note) rather than a verdict it never had."""
     row = _row_for(payload)
     name = row["name"]
-    if name == "ollama":
+    if name == providers.BUILTIN:
         await providers.ensure_builtin(pool)
-        await providers.set_default_model(pool, "ollama", payload.get("model"))
+        await providers.set_default_model(pool, providers.BUILTIN, payload.get("model"))
     else:
         try:
             existing = await providers.get_row(pool, name)
@@ -195,8 +204,8 @@ async def save_config(
 
 
 async def ensure_default_row(pool: asyncpg.Pool) -> None:
-    """The startup seed, S1's name kept: the bundled ollama row exists and
-    something is the default."""
+    """The startup seed, S1's name kept: the bundled engine `hub` exists with
+    its engines row, and something is the default."""
     await providers.ensure_builtin(pool)
 
 

@@ -24,8 +24,10 @@ from app import (
     adapters,
     backends,
     catalog,
+    compute_id,
     db,
     devices_vram,
+    engines,
     hf_hub,
     machine,
     ollama_registry,
@@ -107,41 +109,30 @@ async def hardware() -> dict:
     return data
 
 
-async def _resident_models(app, base_url: str) -> tuple[list[dict] | None, str | None]:
-    """(every model ollama's /api/ps reports resident, reason-if-unreadable).
+async def _resident_models(app, row: dict) -> tuple[list[dict] | None, str | None]:
+    """(every model THIS ENGINE's /api/ps reports resident, reason-if-unreadable).
 
-    Each entry is `{"model": name, "vram_mb": float}` — a per-model TABLE,
-    not a pre-summed total, because two callers need the rows themselves:
-    `fit.free_gb_after_switch` adds back what a switch would evict, and
-    `_footprint_vram_mb` picks out the ONE model that just answered. It is
+    Each entry is `{"model", "vram_mb", "size", "size_vram"}` — a per-model
+    TABLE, not a pre-summed total, because two callers need the rows
+    themselves: `fit.free_gb_after_switch` adds back what a switch would
+    evict, and `_footprint` picks out the ONE model that just answered. It is
     also the only per-model VRAM figure on this host that can be attributed
     to anything: the card's own counter sees every process and, under WSL2,
     can name none of them.
+
+    S40: read from the ENGINE's own address, so sizing or probing `dell:x`
+    never reads the hub's /api/ps, and through the one /api/ps reader
+    (engines.resident, ruling C2), whose entries keep ollama's own `size` /
+    `size_vram` — the two numbers the D10 stamp decides offload from.
     """
-    client = backends.http_client(app, PS_TIMEOUT, base_url=base_url)
-    try:
-        async with client as c:
-            resp = await c.get("/api/ps")
-            resp.raise_for_status()
-    except httpx.HTTPError as exc:
-        return None, f"could not reach ollama's /api/ps — {backends.reason(exc)}"
-    resident = []
-    for entry in resp.json().get("models", []):
-        size_vram = entry.get("size_vram")
-        if size_vram is not None:
-            resident.append(
-                {
-                    "model": entry.get("name") or entry.get("model"),
-                    "vram_mb": size_vram / (1024 * 1024),
-                }
-            )
-    return resident, None
+    return await engines.resident(app, row)
 
 
 async def _free_and_total_vram_gb(
-    app, config: dict
-) -> tuple[float | None, float | None, str | None]:
-    """(free_gb, total_gb, reason-if-free-is-unknown) — read from the card.
+    app, row: dict
+) -> tuple[float | None, float | None, str | None, devices_vram.Vram]:
+    """(free_gb, total_gb, reason-if-free-is-unknown, the card reading) for
+    ONE engine — read from the card.
 
     Both numbers come from ONE live `nvidia-smi` call (app/devices_vram.py)
     at the moment of the question. Not hardware.json: that file is written
@@ -162,73 +153,33 @@ async def _free_and_total_vram_gb(
     Note the asymmetry, and that it is deliberate: `total_gb` survives every
     degrade below, because the card's capacity is known the moment
     nvidia-smi answers and does not depend on ollama at all.
+
+    S40: the question is about an ENGINE, not about whichever provider is
+    the default — a cloud default no longer hides the hub's card (before
+    S40 this answered "the active backend is remote … free VRAM isn't
+    observable" while the bundled engine sat holding 17 GB). The hub reads
+    exactly one card, its own: another machine's is on that machine, and
+    reading this one for it would describe the hub's GPU as that machine's
+    (engines.NOT_THIS_CARD) — a stated unknown until its agent reports it
+    (S44). (GET /admin/vram, which answered the same question for "the
+    active backend", was deleted in S40; its card lives on GET
+    /admin/engines/{name}.)
     """
+    if not row.get("builtin"):
+        vram = devices_vram.Vram(reason=engines.NOT_THIS_CARD.format(name=row["name"]))
+        return None, None, vram.reason, vram
     vram = await devices_vram.read_vram()
     if not vram.known:
-        return None, None, vram.reason or "the GPU could not be read"
+        return None, None, vram.reason or "the GPU could not be read", vram
     total_gb = vram.total_mb / 1024
-    if config["kind"] != "ollama":
-        return (
-            None,
-            total_gb,
-            (
-                f"the active backend is {config['kind']}, not local ollama — "
-                "free VRAM isn't observable"
-            ),
-        )
-    base_url = backends.resolve_base_url(config)
-    if not base_url:
-        return None, total_gb, "OLLAMA_URL is unset — cannot read what's resident"
-    resident, reason = await _resident_models(app, base_url)
+    resident, reason = await _resident_models(app, row)
     if resident is None:
-        return None, total_gb, reason
-    return fit_mod.free_gb_after_switch(vram.free_mb, resident), total_gb, None
+        return None, total_gb, reason, vram
+    return fit_mod.free_gb_after_switch(vram.free_mb, resident), total_gb, None, vram
 
 
-@router.get("/vram")
-async def vram_route(request: Request) -> dict:
-    """The card right now, plus what ollama is holding on it.
-
-    One route so everything that asks gets the SAME instant: core's
-    `inference_health` tool, the `inference_degraded` beat check, and
-    anything an operator curls. Both halves degrade independently and each
-    carries its own reason — the card can be readable while ollama is down,
-    and `free_after_switch_gb` is simply absent when it is, because a
-    number that needs the resident table cannot be invented without it.
-
-    Nothing here decides anything. It reports (owner ruling 2026-09-03).
-    """
-    vram = await devices_vram.read_vram()
-    out: dict = vram.as_dict()
-    out["total_gb"] = round(vram.total_mb / 1024, 1) if vram.total_mb is not None else None
-    out["free_gb"] = round(vram.free_mb / 1024, 1) if vram.free_mb is not None else None
-    out["used_gb"] = round(vram.used_mb / 1024, 1) if vram.used_mb is not None else None
-
-    pool = await db.get_pool()
-    config = await backends.read_config(pool)
-    base_url = backends.resolve_base_url(config) if config["kind"] == "ollama" else None
-    if not base_url:
-        out["resident"] = None
-        out["resident_reason"] = (
-            f"the active backend is {config['kind']}, not local ollama"
-            if config["kind"] != "ollama"
-            else "OLLAMA_URL is unset"
-        )
-        out["free_after_switch_gb"] = None
-        return out
-    resident, reason = await _resident_models(request.app, base_url)
-    out["resident"] = resident
-    out["resident_reason"] = reason
-    out["free_after_switch_gb"] = (
-        round(fit_mod.free_gb_after_switch(vram.free_mb, resident), 1)
-        if resident is not None and vram.free_mb is not None
-        else None
-    )
-    return out
-
-
-async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
-    """The newest OK probe row per slug, IN THE CURRENT FRAME.
+async def _latest_probes(pool, slugs: list[str], *, compute: str | None) -> dict[str, dict]:
+    """The newest OK probe row per slug, IN THE CURRENT FRAME, TAKEN ON `compute`.
 
     A failed probe (ok=false) never counts as a measurement, and an older
     successful one loses to a newer one for the same model.
@@ -243,37 +194,58 @@ async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
     frame falls back to its download size or the curated estimate until it
     is re-probed, which is the honest answer: nobody has measured it the way
     we now measure.
+
+    `compute = $2` is S40's (D10: fit is keyed by (compute, model)). A reading
+    belongs to the card that held it: one from another card, or from before
+    migration 009 with no compute at all, is not a measurement of THIS
+    engine's card and is never read — the model falls back to its download
+    size or the curated estimate until it is re-probed, exactly as 008 did.
+    A partly-offloaded probe is stamped `cpu:…+gpu:…` and so never matches a
+    card either: its size_vram understates what the model needs. `compute`
+    None (a card that cannot be named) reads nothing — omitted, never guessed.
     """
-    if not slugs:
+    if not slugs or compute is None:
         return {}
     rows = await pool.fetch(
         "SELECT DISTINCT ON (model) model, vram_mb, created_at FROM probes "
-        "WHERE model = ANY($1) AND ok = true AND vram_mb IS NOT NULL "
-        "AND kind = 'ollama' AND frame = 'model' "
+        "WHERE model = ANY($1) AND compute = $2 AND ok = true AND vram_mb IS NOT NULL "
+        "AND frame = 'model' "
         "ORDER BY model, created_at DESC",
         slugs,
+        compute,
     )
     return {row["model"]: dict(row) for row in rows}
 
 
-async def _fit_context(app, pool) -> dict:
-    """The numbers every fit verdict is computed against — read ONCE per
-    request and shared by /admin/suggest and the catalogue, so the two can
-    never disagree about the same card, or about how big a model is.
+async def _fit_context(app, pool, row: dict | None = None) -> dict:
+    """The numbers every fit verdict for ONE engine is computed against —
+    read once per request and shared by /admin/suggest, the catalogue and
+    the routing standby, so no two surfaces disagree about the same card or
+    about how big a model is.
 
-    `sizes` is the installed models' own download bytes from ollama's
-    /api/tags (cached TAGS_TTL_S). It sits here rather than being read
-    per-surface for exactly the reason the card does: two pages that size
-    the same model differently are two pages one of which is wrong.
+    `row` is the engine; None means the builtin (what /admin/suggest asks
+    about). `compute` is the D10 id a model fully resident on this engine is
+    stamped with — the key `_latest_probes` reads by — and `sizes` is this
+    engine's installed download bytes from its /api/tags. Both come from ONE
+    engines.observe (cached as observe caches, ruling C4), so the fit key is
+    the same fact GET /admin/engines states. `fit_frame` says which memory
+    the verdicts are about (engines.fit_frame): None for a machine whose
+    card this hub cannot read. S40 computes verdicts in the `vram` frame
+    only; a `ram` frame's verdicts stay `unknown` with the card's own reason
+    until a CPU engine exists to walk it (S44/S45).
     """
-    config = await backends.read_config(pool)
-    free_gb, total_gb, reason = await _free_and_total_vram_gb(app, config)
-    sizes = await routing.installed_sizes(app, pool)
+    if row is None:
+        row = await engines.get(pool, engines.BUILTIN)
+    view = await engines.observe(app, pool, row, live=False)
+    free_gb, total_gb, reason, vram = await _free_and_total_vram_gb(app, row)
     return {
+        "engine": row["name"],
+        "compute": view.compute,
+        "fit_frame": engines.fit_frame(row, vram.as_dict() if row.get("builtin") else None),
         "free_gb": free_gb,
         "total_gb": total_gb,
         "reason": reason,
-        "sizes": sizes or {},
+        "sizes": view.tags or {},
     }
 
 
@@ -289,7 +261,9 @@ async def suggest_route(request: Request) -> dict:
     data, _note = _read_hardware()
     result = suggest_mod.suggest(data, curated_mod.load_curated(), ctx["total_gb"])
 
-    probes_by_model = await _latest_probes(pool, [m["slug"] for m in result["models"]])
+    probes_by_model = await _latest_probes(
+        pool, [m["slug"] for m in result["models"]], compute=ctx["compute"]
+    )
 
     for model in result["models"]:
         needed_gb, source = fit_mod.needed_gb_for(
@@ -301,16 +275,17 @@ async def suggest_route(request: Request) -> dict:
     return result
 
 
-# Pulls in flight, model string -> when it started (ISO). A second POST for
-# the same model while one streams is a 409 naming that time: ollama would
-# run two downloads against the same blobs and the second stream's progress
-# would be a story about the first. Process-local — this gateway is the one
-# thing that pulls into the bundled ollama — and cleared in the relay's
-# finally, so an aborted stream releases it too.
-_PULLS_IN_FLIGHT: dict[str, str] = {}
+# Pulls in flight, (engine, canonical ref) -> when it started (ISO). A second
+# POST for the same ref onto the same machine while one streams is a 409
+# naming that time: ollama on ONE machine would run two downloads against the
+# same blobs and the second stream's progress would be a story about the
+# first. The same ref onto two machines is two downloads (S40). Process-local
+# — this gateway is the one thing that pulls into its engines — and cleared
+# in the relay's finally, so an aborted stream releases it too.
+_PULLS_IN_FLIGHT: dict[tuple[str, str], str] = {}
 
 
-async def _preflight_line(app, model: str) -> dict:
+async def _preflight_line(app, model: str, row: dict) -> dict:
     """The pull stream's mandatory first line: the download's size, DERIVED
     live from the source ollama will pull from (`size_source` says which:
     the registry manifest for a library tag, the Hugging Face sibling for
@@ -319,9 +294,12 @@ async def _preflight_line(app, model: str) -> dict:
     guess dressed up as a measurement, and never a stale curated number.
     `required_gb` and `free_gb` are both GiB (the same unit, so `ok` is a
     real comparison); `size_bytes` is the exact figure; `resolved` is what
-    the source stated of quant / family / params_b."""
+    the source stated of quant / family / params_b. `engine` names the
+    machine the download lands on (S40); the free-space check reads THIS
+    hub's models volume, so it runs for the builtin only and says so for
+    any other machine."""
     sized = await pulls_mod.pull_size(app, model)
-    line: dict = {"status": "preflight"}
+    line: dict = {"status": "preflight", "engine": row["name"]}
     if sized["resolved"]:
         line["resolved"] = sized["resolved"]
     if sized["size_bytes"] is None:
@@ -338,6 +316,18 @@ async def _preflight_line(app, model: str) -> dict:
     # A sized pull can still carry the source's own note (the registry's
     # config blob unreadable, say); it is kept, never overwritten below.
     notes = [sized["note"]] if sized.get("note") else []
+    if not row.get("builtin"):
+        # This hub's /models is its own disk; another machine's free space is
+        # read on that machine (its agent, S44). Sizing a pull against ours
+        # would compare dell's download with the hub's disk.
+        notes.append(
+            f"free space on {row['name']} cannot be read from this hub; "
+            "skipping the free-space check"
+        )
+        line["note"] = "; ".join(notes)
+        line["size_bytes"] = size_bytes
+        line["size_source"] = sized["size_source"]
+        return line
     try:
         stat = os.statvfs(MODELS_DIR)
         free_bytes = stat.f_bavail * stat.f_frsize
@@ -363,45 +353,43 @@ async def _preflight_line(app, model: str) -> dict:
 
 @router.post("/pull")
 async def pull(request: Request) -> Response:
+    """Pull a model onto the named engine (`hub:qwen3:8b`; a bare ref means
+    the only machine there is, and is refused by name when there are
+    several — catalog.engine_and_model). A pull is about a MACHINE, so the
+    default provider's kind no longer matters (S40)."""
     body = await request.json()
-    model = body.get("model") if isinstance(body, dict) else None
-    if not model:
+    raw = body.get("model") if isinstance(body, dict) else None
+    if not raw:
         raise HTTPException(status_code=400, detail="model is required")
+    pool = await db.get_pool()
     try:
-        model = pulls_mod.validate_model(model)
+        row, model = await catalog.engine_and_model(pool, raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    key = pulls_mod.canonical_ref(model)
+    key = (row["name"], pulls_mod.canonical_ref(model))
     started_at = _PULLS_IN_FLIGHT.get(key)
     if started_at is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"a pull of {model!r} has been in flight since {started_at} — "
-            "wait for it to finish",
+            detail=f"a pull of {model!r} has been in flight since {started_at} on "
+            f"{row['name']} — wait for it to finish",
         )
     _PULLS_IN_FLIGHT[key] = datetime.now(UTC).isoformat()
     # Until the relay takes over, this frame owns the release.
     released = False
     try:
-        pool = await db.get_pool()
-        config = await backends.read_config(pool)
-        if config["kind"] != "ollama":
+        if not providers.base_url_of(row):
             raise HTTPException(
-                status_code=400,
-                detail=(
-                    "pull is only supported for the ollama backend "
-                    f"(current backend: {config['kind']})"
-                ),
+                status_code=502,
+                detail="OLLAMA_URL is unset — cannot reach ollama"
+                if row.get("builtin")
+                else f"{row['name']} has no address — cannot reach it",
             )
-
-        ollama_url = backends.resolve_base_url(config)
-        if not ollama_url:
-            raise HTTPException(status_code=502, detail="OLLAMA_URL is unset — cannot reach ollama")
 
         # Sized BEFORE the stream opens, so the first line is the size and
         # the download never starts in the dark; bounded inside pull_size.
-        preflight = await _preflight_line(request.app, model)
+        preflight = await _preflight_line(request.app, model, row)
         if preflight.get("absent"):
             # The registry has already said this tag does not exist, so opening
             # a stream to ollama can only fail there, in ollama's words, after
@@ -418,7 +406,8 @@ async def pull(request: Request) -> Response:
             )
             raise HTTPException(status_code=404, detail=f"{preflight['note']}{suffix}")
 
-        client = backends.http_client(request.app, PULL_TIMEOUT, base_url=ollama_url)
+        # The engine's own address and headers (engines.client, ruling G2).
+        client = engines.client(request.app, row, PULL_TIMEOUT)
         try:
             upstream = await client.send(
                 client.build_request("POST", "/api/pull", json={"model": model}), stream=True
@@ -426,7 +415,8 @@ async def pull(request: Request) -> Response:
         except httpx.HTTPError as exc:
             await client.aclose()
             raise HTTPException(
-                status_code=502, detail=f"could not reach ollama — {backends.reason(exc)}"
+                status_code=502,
+                detail=f"could not reach {row['name']}'s ollama — {backends.reason(exc)}",
             ) from exc
 
         if upstream.status_code != 200:
@@ -452,6 +442,10 @@ async def pull(request: Request) -> Response:
                 await upstream.aclose()
                 await client.aclose()
                 _PULLS_IN_FLIGHT.pop(key, None)
+                # What this machine has installed changed (or may have): its
+                # cached tags, which routing reads, are dropped — never served
+                # stale for their 30 s. The other machines keep theirs.
+                engines.forget(row["name"])
 
         released = True
         return StreamingResponse(
@@ -462,9 +456,13 @@ async def pull(request: Request) -> Response:
             _PULLS_IN_FLIGHT.pop(key, None)
 
 
-async def _footprint_vram_mb(app, base_url: str, model: str) -> int | None:
-    """The just-loaded model's own VRAM, in MiB: ollama's `/api/ps`
-    `size_vram` for the model that just answered.
+async def _footprint(app, row: dict, model: str) -> dict | None:
+    """The just-answered model's own /api/ps entry on THIS engine:
+    `{"vram_mb": int | None, "size", "size_vram"}` — one reading, so the
+    VRAM figure and the D10 stamp (compute_id.served_on, which decides
+    offload from exactly `size` and `size_vram`) describe the same instant.
+    `vram_mb` is ollama's `size_vram` for the model that just answered, in
+    MiB.
 
     THE FRAME (S22, see app/fit.py): `needed_gb` is what the MODEL costs —
     weights plus its KV cache at the serving context — never the machine's
@@ -485,17 +483,26 @@ async def _footprint_vram_mb(app, base_url: str, model: str) -> int | None:
     what /api/ps names, regardless of what was loaded before it. A model
     that is not in the table (evicted between the answer and this read, or
     an engine that reports no size_vram) is None — unknown, never zero.
+
+    S40: read from THIS engine's /api/ps (the one reader, engines.resident),
+    never the default provider's address — probing hub:x while a cloud
+    provider is the default is still a question about the hub, and probing
+    dell:x never reads the hub's table. A non-positive size_vram is not a
+    VRAM measurement (vram_mb None) but IS the fact the stamp reads: the
+    model is wholly in system memory.
     """
-    resident, _reason = await _resident_models(app, base_url)
-    if not resident:
-        return None
-    for entry in resident:
+    resident, _reason = await _resident_models(app, row)
+    for entry in resident or []:
         if entry.get("model") == model:
             vram_mb = entry.get("vram_mb")
             # A resident model always occupies SOME VRAM; a non-positive
             # figure means the engine's own accounting is unreliable right
             # now, which is not a measurement.
-            return int(vram_mb) if vram_mb and vram_mb > 0 else None
+            return {
+                "vram_mb": int(vram_mb) if vram_mb and vram_mb > 0 else None,
+                "size": entry.get("size"),
+                "size_vram": entry.get("size_vram"),
+            }
     return None
 
 
@@ -509,6 +516,16 @@ async def probe(request: Request) -> dict:
     pool = await db.get_pool()
     row, target_model = await providers.resolve(pool, model)
     kind = backends.kind_of(row)
+    on_engine = engines.is_engine(row)
+    # Where the call ran, on the row (D10). The engine's name always. The
+    # bundled engine is by definition the container on the compose network
+    # (D8/D9), so its runtime and path are known; another machine's arrive
+    # with its agent (S44) — absent until then, never guessed. A cloud call
+    # ran on no device of this host: all three stay None.
+    bundled = on_engine and bool(row.get("builtin"))
+    runtime = engines.BUILTIN_RUNTIME if bundled else None
+    path = "internal" if bundled else None
+    compute: str | None = None
 
     ok = True
     error: str | None = None
@@ -548,13 +565,22 @@ async def probe(request: Request) -> dict:
             # but not with a completion.
             ok = False
             error = content.decode(errors="replace")[:400]
-        elif kind == "ollama":
-            # Only meaningful for a local ollama model — a remote/cloud
-            # backend consumes no VRAM on this host at all. Read AFTER the
-            # request answers, so the model is certainly resident.
-            base_url = backends.resolve_base_url(await backends.read_config(pool))
-            if base_url:
-                vram_mb = await _footprint_vram_mb(request.app, base_url, target_model)
+        elif on_engine:
+            # Only meaningful for an engine — a remote/cloud backend consumes
+            # no VRAM on any machine here. Read AFTER the request answers, so
+            # the model is certainly resident, from THIS engine's /api/ps —
+            # never the default provider's address.
+            footprint = await _footprint(request.app, row, target_model)
+            if footprint is not None:
+                vram_mb = footprint["vram_mb"]
+                if bundled:
+                    # The hub's devices, read now (the one live reader,
+                    # engines.bundled_devices, ruling C1); another machine's
+                    # devices are its agent's to state (S44).
+                    accelerators, cpu = await engines.bundled_devices()
+                    compute = compute_id.served_on(
+                        footprint["size"], footprint["size_vram"], accelerators, cpu
+                    )
     except adapters.ProviderRefused as exc:
         ok = False
         error = exc.detail
@@ -574,17 +600,26 @@ async def probe(request: Request) -> dict:
         started=started,
         purpose="probe",
         error=error,
+        served_on=compute,
     )
+    # The row carries where it ran (D10): fit reads a reading only by the
+    # compute it was taken on (_latest_probes), and the row is read back
+    # (RETURNING), so the answer is what was stored, never what was meant.
     row_out = await pool.fetchrow(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
-        "VALUES ($1, $2, $3, $4, $5, $6) "
-        "RETURNING id, model, kind, ok, latency_ms, vram_mb, error, created_at",
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, provider, compute, "
+        "runtime, path) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
+        "RETURNING id, model, kind, ok, latency_ms, vram_mb, error, provider, compute, "
+        "runtime, path, created_at",
         target_model,
         kind,
         ok,
         latency_ms,
         vram_mb,
         error,
+        row["name"],
+        compute,
+        runtime,
+        path,
     )
     return dict(row_out)
 
@@ -658,17 +693,25 @@ async def _verify_or_502(app, name: str, shape: dict) -> dict:
 
 async def _refuse_name_that_shadows_a_local_tag(app, pool, name: str) -> None:
     """A model id is split on its FIRST colon against the provider names, so
-    a provider called `mistral` would turn the local tag `mistral:7b` into
-    "model 7b on Mistral's cloud". Checked against what the bundled ollama
-    LISTS right now — derived, never a maintained list — and a listing that
-    cannot be read is a stated refusal, not a skipped check."""
-    builtin = await providers.get_row(pool, "ollama")
+    a provider called `mistral` would turn the bare id `mistral:7b` into
+    "model 7b on Mistral's cloud". Only a BARE id can be shadowed, and a
+    bare id means the DEFAULT provider (S40) — so the tags that matter are
+    the default's, and only when the default is a machine that runs models
+    (a qualified `hub:mistral:7b` is split on `hub`, never on `mistral`). A
+    cloud default has no tags to shadow and no machine is asked: a machine
+    that is down or asleep never blocks adding a cloud provider. The default
+    engine's listing is read LIVE — derived, never a maintained list — and
+    one that cannot be read is a stated refusal, not a skipped check."""
+    default = await providers.default_row(pool)
+    if not engines.is_engine(default):
+        return
     try:
-        listing = await adapters.for_row(builtin).list_models(app, builtin)
+        listing = await adapters.for_row(default).list_models(app, default)
     except adapters.ProviderRefused as exc:
         raise HTTPException(
             status_code=502,
-            detail=f"cannot check {name!r} against the local model tags — {exc.detail}",
+            detail=f"cannot check {name!r} against the local model tags on "
+            f"{default['name']} — {exc.detail}",
         ) from exc
     shadowed = sorted(
         m["id"] for m in listing.models if m["id"].partition(":")[0] == name and ":" in m["id"]
@@ -676,8 +719,9 @@ async def _refuse_name_that_shadows_a_local_tag(app, pool, name: str) -> None:
     if shadowed:
         raise HTTPException(
             status_code=409,
-            detail=f"{name!r} would shadow the local model tag(s) {', '.join(shadowed)} — "
-            f"a bare id like {shadowed[0]!r} would stop meaning the local model; pick another name",
+            detail=f"{name!r} would shadow the local model tag(s) {', '.join(shadowed)} on "
+            f"{default['name']} — a bare id like {shadowed[0]!r} would stop meaning that "
+            "model; pick another name",
         )
 
 
@@ -699,8 +743,13 @@ async def create_provider(request: Request) -> dict:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="request body must be a JSON object")
     name = providers.validate_name(body.get("name"))
-    if name == "ollama":
-        raise HTTPException(status_code=409, detail="'ollama' is the builtin provider")
+    if name in providers.RESERVED_NAMES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name!r} is reserved — {providers.BUILTIN!r} is the bundled engine, "
+            f"{providers.LIBRARY!r} names the model library and {providers.LEGACY_BUILTIN!r} "
+            "is the name pre-S40 usage rows carry; pick another name",
+        )
     pool = await db.get_pool()
     try:
         await providers.get_row(pool, name)
@@ -1127,42 +1176,56 @@ async def catalog_hf_repo(org: str, repo: str, request: Request) -> dict:
 
 @router.delete("/models")
 async def remove_model(request: Request) -> dict:
-    """Remove an installed model from the bundled ollama (`?model=`). The
-    answer is VERIFIED: after ollama's 200, /api/tags is re-read and the
+    """Remove an installed model from the named engine (`?model=hub:x`; a
+    bare id means the only one — catalog.engine_and_model). The answer is
+    VERIFIED: after ollama's 200, that engine's /api/tags is re-read and the
     name must be gone — a 200 that still lists the model is a stated 502,
-    never "removed". Never touches a cloud model (nothing to remove) and
-    refuses a name that is not installed with ollama's own 404."""
-    model = request.query_params.get("model") or ""
+    never "removed" — and it names the machine it verified against. Never
+    touches a cloud model (nothing to remove) and refuses a name that is not
+    installed with a 404 naming the machine."""
+    raw = request.query_params.get("model") or ""
+    pool = await db.get_pool()
     try:
-        model = pulls_mod.validate_model(model)
+        row, model = await catalog.engine_and_model(pool, raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    pool = await db.get_pool()
-    builtin = await providers.get_row(pool, "ollama")
-    base_url = providers.base_url_of(builtin)
+    base_url = providers.base_url_of(row)
     try:
-        before = await ollama.ADAPTER.list_models(request.app, builtin)
+        before = await ollama.ADAPTER.list_models(request.app, row)
         name = catalog.installed_name(before.models, model)
         if name is None:
-            raise HTTPException(status_code=404, detail=f"{model!r} is not installed")
+            raise HTTPException(
+                status_code=404, detail=f"{model!r} is not installed on {row['name']}"
+            )
         await ollama.delete(request.app, base_url, name)
-        after = await ollama.ADAPTER.list_models(request.app, builtin)
+        # What is installed changed (or ollama claims so): the cached tags
+        # routing reads for THIS machine are dropped either way, never served
+        # stale.
+        engines.forget(row["name"])
+        after = await ollama.ADAPTER.list_models(request.app, row)
     except adapters.ProviderRefused as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
     if catalog.installed_name(after.models, name) is not None:
         raise HTTPException(
             status_code=502,
-            detail=f"ollama answered 200 to the delete but /api/tags still lists {name!r}",
+            detail=f"ollama on {row['name']} answered 200 to the delete but /api/tags still "
+            f"lists {name!r}",
         )
-    logger.info("model removed: %s", name)
-    return {"removed": name, "verified": True, "installed_now": len(after.models)}
+    logger.info("model removed: %s from %s", name, row["name"])
+    return {
+        "engine": row["name"],
+        "removed": name,
+        "verified": True,
+        "installed_now": len(after.models),
+    }
 
 
 @router.post("/catalog/drift")
 async def catalog_drift(request: Request) -> dict:
-    """Has the source moved since this model was pulled? Installed weights
-    digest vs the source's current one (app/catalog.py: check_drift).
-    Never pulls. `moved` is null with a note when a side could not be read."""
+    """Has the source moved since this model was pulled onto the named
+    engine (`hub:x`; a bare id means the only one)? Installed weights digest
+    vs the source's current one (app/catalog.py: check_drift). Never pulls.
+    `moved` is null with a note when a side could not be read."""
     body = await request.json() if await request.body() else {}
     model = body.get("model") if isinstance(body, dict) else None
     if not model:

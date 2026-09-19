@@ -33,7 +33,7 @@ import httpx
 
 from app.adapters.base import ProviderRefused, http_client, reason, refusal_detail
 from app.cache import TTLCache
-from app.catalog_row import base_row
+from app.catalog_row import LIBRARY, base_row
 
 HF_BASE = "https://huggingface.co"
 HF_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
@@ -569,9 +569,11 @@ def to_catalog_row(
             True, basis="inferred", source="name", note=f"name matches /{CODING_NAME_PATTERN}/i"
         )
 
-    row = base_row(f"ollama:{model}", "ollama", model, repo_id.rpartition("/")[2], "hub")
-    # The Hub cannot know what THIS host has installed: `installed` stays
-    # None here and the catalogue routes derive it from ollama's own tags.
+    # A Hub repo is on no machine: named `library:` like a curated pick not
+    # installed (S40). The Hub cannot know what THIS hub's machines hold:
+    # `installed` stays None here and the catalogue routes derive it per
+    # engine from each engine's own tags.
+    row = base_row(f"{LIBRARY}:{model}", LIBRARY, model, repo_id.rpartition("/")[2], "hub")
     row["sources"] = [
         {"key": SOURCE_KEY, "url": SOURCE_URL, "fetched_at": fetched_at, "cached": cached}
     ]

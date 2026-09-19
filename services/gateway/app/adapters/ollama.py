@@ -228,6 +228,19 @@ def show_to_facts(show: dict) -> tuple[dict, dict]:
     return facts, capabilities
 
 
+def suits_chat(capabilities: dict) -> bool:
+    """ollama's own manifest says this model can hold a chat: `completion`
+    declared and `embedding` not — the rule catalog.local_row applies to a
+    row's suitability.chat. `capabilities` is show_to_facts' second half. A
+    model that declares nothing is never assumed to chat."""
+
+    def declared(key: str) -> bool:
+        entry = capabilities.get(key)
+        return isinstance(entry, dict) and entry.get("value") is True
+
+    return declared("completion") and not declared("embedding")
+
+
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -343,13 +356,15 @@ class Ollama:
         )
 
     async def completions(self, request: Request, row: dict, model: str, body: dict) -> Response:
-        # Chat rides ollama's OpenAI-compatible surface at {OLLAMA_URL}/v1.
+        # Chat rides ollama's OpenAI-compatible surface at {OLLAMA_URL}/v1, as
+        # an ENGINE: a connection that is never accepted is ProviderUnreachable
+        # (never a wall), not a refusal.
         if not base_url_of(row):
             raise ProviderRefused(502, "OLLAMA_URL is unset — cannot reach ollama")
         chat_row = dict(
             row, adapter="openai-chat", base_url=f"{base_url_of(row)}/v1", auth_shape="none"
         )
-        return await openai_chat.ADAPTER.completions(request, chat_row, model, body)
+        return await openai_chat.ADAPTER.completions(request, chat_row, model, body, engine=True)
 
 
 ADAPTER = Ollama()
