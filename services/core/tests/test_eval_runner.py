@@ -16,6 +16,7 @@ read back only for reporting.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import uuid
 from datetime import UTC, datetime
@@ -1399,6 +1400,24 @@ async def test_cancelling_a_run_that_does_not_exist_answers_nothing(pool):
 
 
 # -- the declared machines: a plant for the turn, and nothing else (S40) ----
+
+
+def test_the_fixture_plant_docstring_scopes_its_guarantee_to_the_serving_switch():
+    """(S40 fix wave: wording) 'an eval never changes a real machine' reads as
+    a blanket claim; what's actually enforced is narrower: FixturePlant only
+    ever intercepts machine_configure's serving switch. model_pull and
+    model_remove are also offered in every eval turn and reach the real
+    gateway exactly as a normal turn's do (pre-existing, unchanged by this
+    fix) — the docstring must say that, not imply the wider claim."""
+    doc = inspect.getdoc(runner._install_fixture_plant) or ""
+    assert "model_pull" in doc and "model_remove" in doc
+    assert "serving" in doc.lower()
+
+
+def test_the_module_docstring_scopes_the_never_changes_a_real_machine_claim():
+    doc = inspect.getdoc(runner) or ""
+    assert "model_pull" in doc and "model_remove" in doc
+
 
 GET_TIME = tools.REGISTRY["get_time"]
 

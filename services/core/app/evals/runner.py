@@ -63,15 +63,20 @@ Three properties are enforced mechanically, not by intention:
     a row the owner made. (2026-09-09)
 
     THE DECLARED MACHINES (S40). A case may declare machines
-    (cases.FixtureMachine); they are the gateway's rows, and an eval never
-    writes the gateway. So nothing is built: _install_fixture_plant sets
-    machines.PLANT to a FixturePlant for EVERY case — empty when it declares
-    none, because machine_configure is advertised in every eval turn — and
-    the finally resets it before anything else. It answers for `eval_*`
-    names from the declaration and refuses a write to any other before any
-    HTTP, which is what makes "an eval never changes a real machine" a line
-    of code rather than an assumption (S40 fix wave B2). There is no orphan
-    sweep because there is nothing to orphan.
+    (cases.FixtureMachine); they are the gateway's rows, and machine_configure
+    — the one SERVING SWITCH a case can flip — never reaches a real one. So
+    nothing is built: _install_fixture_plant sets machines.PLANT to a
+    FixturePlant for EVERY case — empty when it declares none, because
+    machine_configure is advertised in every eval turn — and the finally
+    resets it before anything else. It answers for `eval_*` names from the
+    declaration and refuses a SERVING write to any other before any HTTP,
+    which is what makes "an eval never flips a real machine's serving
+    switch" a line of code rather than an assumption (S40 fix wave B2) —
+    scoped to that one switch: model_pull and model_remove are ALSO
+    advertised in every eval turn and DO reach the real gateway, pulling or
+    removing a real model exactly as a normal turn's would (pre-existing,
+    unchanged by this note). There is no orphan sweep for the plant because
+    there is nothing to orphan.
 
   * NO TEST-AWARENESS LEAKAGE. _run_turn builds the prompt from the normal
     stable/volatile system prompt — this module injects nothing. No "eval mode"
@@ -382,12 +387,16 @@ def _install_fixture_plant(case: cases_mod.Case) -> Token:
     """Make the case's declared machines THIS task's plant (S40), and hand
     back the token that removes them. Installed for every case, with no
     machines when it declares none: reads still reach the real gateway, and a
-    write to any real machine is refused before any HTTP — every eval turn is
-    offered machine_configure, and a model that reaches for `hub` in a case
-    about something else must not switch off the owner's engine (S40 fix
-    wave B2). Nothing is written anywhere: the plant is a ContextVar, so the
-    turn (and every task it spawns, which copies the context) sees it, and
-    nothing else in the process ever does."""
+    SERVING-SWITCH write (machine_configure) to any real machine is refused
+    before any HTTP — every eval turn is offered machine_configure, and a
+    model that reaches for `hub` in a case about something else must not
+    switch off the owner's engine (S40 fix wave B2). That is the plant's
+    whole jurisdiction: model_pull and model_remove are also offered in
+    every eval turn, are NOT intercepted here, and reach the real gateway
+    exactly as they would in a normal turn (pre-existing, unchanged by this
+    note). Nothing is written anywhere by the plant itself: it is a
+    ContextVar, so the turn (and every task it spawns, which copies the
+    context) sees it, and nothing else in the process ever does."""
     return machines.PLANT.set(machines.FixturePlant({m.name: m.as_row() for m in case.machines}))
 
 
