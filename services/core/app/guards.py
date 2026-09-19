@@ -6879,10 +6879,22 @@ def _recall_answered(span: Any) -> bool:
     return True
 
 
+def _went_to_memory(span: Any) -> bool:
+    """Did this memory tool call send its request through the door
+    (memory_tools.MEMORY_CALL_FACT on the span's facts), whatever came back?
+    Imported inside the call because app.tools imports this module."""
+    from app.tools import memory_tools
+
+    facts = _span_meta(span).get("facts")
+    return isinstance(facts, list) and any(
+        isinstance(fact, dict) and memory_tools.MEMORY_CALL_FACT in fact for fact in facts
+    )
+
+
 def _memory_answered(spans: Sequence[Any]) -> tuple[Any, str | None] | None:
     """(the recall span that answered or None, the memory tool that answered
     or None) — None when memory did not answer this turn, or when a memory
-    tool failed this turn."""
+    tool failed this turn (one through the door only if it reached it)."""
     recall = None
     tool: str | None = None
     for span in spans:
@@ -6895,6 +6907,12 @@ def _memory_answered(spans: Sequence[Any]) -> tuple[Any, str | None] | None:
         if not name.startswith(_MEMORY_TOOL_PREFIX):
             continue
         if _span_meta(span).get("ok") is not True:
+            # S40b final fix wave (C15): a call through the one door that never
+            # reached it — refused by the schema, for want of an identity, or
+            # by a live-source check — is her own malformed call, not evidence
+            # memory is down. The door records every request it sends.
+            if name in _MEMORY_ANSWER_TOOLS and not _went_to_memory(span):
+                continue
             return None
         if name in _MEMORY_ANSWER_TOOLS:
             tool = tool or name

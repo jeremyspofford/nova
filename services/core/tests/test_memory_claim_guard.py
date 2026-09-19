@@ -37,6 +37,13 @@ def _tool(name: str, *, ok: bool):
     return _span("tool", name, ok=ok, args_redacted={})
 
 
+def _failed_at_the_door(name: str, *, reached: bool = False):
+    """A memory tool call that went through memory_tools._call_memory and
+    failed there: the door records that it tried (C15)."""
+    fact = {memory_tools.MEMORY_CALL_FACT: "/recall", "reached": reached}
+    return _span("tool", name, ok=False, args_redacted={}, facts=[fact])
+
+
 LLM = _span("llm_call", "hub:qwen3:8b", purpose="chat", served_by="hub:qwen3:8b")
 RECALL = _recall(hits=5)
 ANSWERED = [LLM, RECALL]
@@ -71,7 +78,9 @@ MUST_FIRE = [
 
 MUST_NOT = [
     ("walk_recall_failed", WALK, [LLM, _recall(error="ConnectError: memory:8002")]),
-    ("walk_memory_search_failed", WALK, [LLM, RECALL, _tool("memory_search", ok=False)]),
+    # A memory_search that went through the door and failed (S40b final fix
+    # wave, C15: the span carries the door's reached fact, as a real one does).
+    ("walk_memory_search_failed", WALK, [LLM, RECALL, _failed_at_the_door("memory_search")]),
     ("walk_no_recall_span", WALK, [LLM]),
     (
         "long_term_memory_operations",
@@ -358,10 +367,19 @@ def test_a_memory_tool_that_succeeded_is_memory_answering():
 
 def test_any_memory_tool_that_failed_leaves_the_report_alone():
     """A failure this turn is evidence the report may be true — even beside an
-    answered recall."""
-    for name in ("memory_search", "memory_save", "memory_backfill"):
-        spans = [LLM, RECALL, _tool(name, ok=False)]
-        assert guards.memory_claim_check(WALK, spans, purpose="chat") is None, name
+    answered recall.
+
+    Pin moved in the S40b final fix wave (C15): for the tools that go through
+    the one door (memory_search, memory_save), a failure is that evidence only
+    when the call REACHED the door — the span carries the door's structured
+    fact, for a transport failure and for memory's own refusal alike. The
+    backfill's failure cannot be placed, and still counts."""
+    for name in ("memory_search", "memory_save"):
+        for reached in (False, True):
+            spans = [LLM, RECALL, _failed_at_the_door(name, reached=reached)]
+            assert guards.memory_claim_check(WALK, spans, purpose="chat") is None, name
+    spans = [LLM, RECALL, _tool("memory_backfill", ok=False)]
+    assert guards.memory_claim_check(WALK, spans, purpose="chat") is None
 
 
 def test_a_non_memory_tool_neither_answers_nor_fails_for_memory():
@@ -1188,3 +1206,50 @@ def test_a_limiting_parenthetical_is_not_a_present_outage(reply):
 )
 def test_a_reason_in_brackets_still_anchors_the_outage(reply):
     assert _memory_fires(reply), reply
+
+
+# -- C15: a call refused before it reached memory says nothing about memory --------
+#
+# A schema-refused call never runs its executor, and a live-source or identity
+# refusal stops before the door's request: none reached memory, so none is
+# evidence it is down — and her own malformed call could otherwise void the
+# recall's answer. Read from the door's structured fact, never from the
+# refusal's words.
+@pytest.mark.parametrize("name", ["memory_search", "memory_save"])
+def test_a_memory_call_refused_before_the_door_leaves_the_recall_standing(name):
+    spans = [LLM, RECALL, _tool(name, ok=False)]
+    claim = guards.memory_claim_check(WALK, spans, purpose="chat")
+    assert claim is not None and claim.text == CORRECTION
+
+
+async def test_the_door_records_every_call_that_reached_it(memory_link):
+    """Unconfigured and unreachable are a request that never arrived; a
+    refusal and an answer arrived. Each records exactly one fact."""
+    from tests import fakes
+
+    for memory, reached in (
+        (None, False),
+        (fakes.FakeMemory(recall_status=500), True),
+        (fakes.FakeMemory(), True),
+    ):
+        ctx = memory_link(memory)
+        ctx = type(ctx)(**{**ctx.__dict__, "facts_sink": []})
+        await tools.dispatch("memory_search", {"query": "coffee"}, ctx)
+        assert ctx.facts_sink == [{memory_tools.MEMORY_CALL_FACT: "/recall", "reached": reached}]
+
+
+async def test_a_call_refused_before_the_door_records_nothing(memory_link):
+    from tests import fakes
+
+    ctx = memory_link(fakes.FakeMemory())
+    ctx = type(ctx)(**{**ctx.__dict__, "facts_sink": []})
+    # The schema refuses it: the executor never runs.
+    _, ok = await tools.dispatch("memory_search", {}, ctx)
+    assert ok is False and ctx.facts_sink == []
+    # A live source that names no tool is refused inside the door, before the
+    # request is sent.
+    with pytest.raises(tools.ToolFailure):
+        await memory_tools._call_memory(
+            ctx, "/save", {"title": "a", "content": "b", "live_source": {"tool": "nope"}}
+        )
+    assert ctx.facts_sink == []
