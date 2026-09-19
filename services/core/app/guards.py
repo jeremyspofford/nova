@@ -2760,8 +2760,9 @@ class StateClaim:
     redirect nudge names back. `phrase` is the matched assertion for the guard
     span, and `text` the stated correction — the same shape the other guards'
     Correction carries, so the turn's composition reads it identically.
-    `served_by` is set only when a NEGATIVE machine claim is contradicted by a
-    round that machine served this turn; the correction then says so.
+    `served_by` is set only when a NEGATIVE machine claim is contradicted by
+    the round that wrote this reply, served on that machine; the correction
+    then says so.
     """
 
     device: str
@@ -2796,7 +2797,8 @@ class StateClaim:
 #
 #   * A NEGATIVE present state — "hub is switched off", "hub is not answering
 #     right now". Fires when nothing read M this turn. A round M served this
-#     turn is not a read, it is a CONTRADICTION, and the correction says so.
+#     turn is not a read, it is a CONTRADICTION — and when M served the round
+#     that wrote the reply, the correction says so.
 #   * A READING TIME — a `Last Reported: <timestamp>` line bound to M, or
 #     "hub last reported at 05:15 UTC". Fires when nothing read M this turn: a
 #     served round proves M answered, never when it was last read.
@@ -2811,16 +2813,19 @@ class StateClaim:
 # case-exact, with edges that keep `hub:qwen3:8b` and `hub.example.com` out; the
 # word before it must be one that can lead a machine's name ("on hub", "called
 # hub") so "your USB hub" and "the smart-home hub" never match; code and quote
-# blocks are someone else's text; and the usual question, reported-speech,
-# hedge, intent and prior-time cuts apply, plus a not-current cut for a reading
-# that says it is old.
+# blocks, and double-quoted spans, are someone else's text; every state word
+# must END the claim (a place, a schedule or a count after it limits it); and
+# the usual question, reported-speech, hedge, intent and prior-time cuts apply,
+# plus a not-current cut — over a claim's whole sentence, and over a reading's
+# whole run, heading and lead-in — for a reply that says it did not check.
 
 STATE_CLAIM_MACHINE_CORRECTION = (
     "Correction: I did not check {machine} this turn — I have no record of doing so, "
     "so what I said about it is not a current reading."
 )
-# Appended when the claim was NEGATIVE and the machine served this turn: the
-# one thing about its state the turn does prove.
+# Appended when the claim was NEGATIVE and the machine served the round that
+# WROTE this reply (_reply_served_by): the one thing about its state the turn
+# proves, and the only served_by "this reply came from" may truthfully quote.
 STATE_CLAIM_MACHINE_SERVED = " {machine} answered this turn: this reply came from {served_by}."
 
 # Emphasis and code marks, stripped before matching. Never "_": `eval_box` is a
@@ -2865,15 +2870,24 @@ _MACHINE_ANCHOR = (
     r"(?=\s*(?:[.,;:!?)\]}—–]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment|and\b"
     r"|for\s+(?:chat\s+)?(?:models|chat|requests)\b))"
 )
-_MACHINE_NEG = (
+_MACHINE_NEG_WORDS = (
     r"(?:offline|disconnected|unreachable|not\s+reachable|out\s+of\s+contact"
     r"|powered\s+off|switched\s+off)"
 )
-_MACHINE_POS = (
-    rf"(?:online|reachable|powered\s+on|switched\s+on|connected{_MACHINE_ANCHOR}"
-    rf"|answering{_MACHINE_ANCHOR}|ready{_MACHINE_ANCHOR}|serving{_MACHINE_ANCHOR})"
-)
-_MACHINE_NEG_STATE = re.compile(_MACHINE_NEG, re.I)
+# The positive words that are about the LINK — the ones a "not"/"no longer"
+# turns into an outage claim, and the ones a device's status line carries.
+_MACHINE_LINK_WORDS = r"(?:online|reachable|powered\s+on|switched\s+on|connected)"
+# EVERY state word carries the anchor, the negative ones included (T1 review,
+# fix round 1): "hub is unreachable from your phone", "hub is switched off
+# overnight", "hub is offline twice a week" and "hub is not online on
+# weekends" limit the state to a place, a schedule or a count — none says hub
+# is down now, and this guard REPLACES what it corrects.
+_MACHINE_NEG = rf"{_MACHINE_NEG_WORDS}{_MACHINE_ANCHOR}"
+_MACHINE_POS = rf"(?:{_MACHINE_LINK_WORDS}|answering|ready|serving){_MACHINE_ANCHOR}"
+_MACHINE_NEG_STATE = re.compile(_MACHINE_NEG_WORDS, re.I)
+# A line that states something's connectivity. One that names no machine is
+# some other thing's status line, so a reading under it is that thing's.
+_CONNECTIVITY_WORD = re.compile(rf"\b(?:{_MACHINE_NEG_WORDS}|{_MACHINE_LINK_WORDS})\b", re.I)
 _NEGATING_ADVERB = re.compile(r"\b(?:not|no\s+longer)\b", re.I)
 # A reading's time: an ISO-ish stamp, a clock time with its zone, or "just now".
 _READING_TS = (
@@ -2907,6 +2921,9 @@ _NOT_CURRENT = re.compile(
 )
 _HEADING = re.compile(r"^\s*#{1,6}\s")
 _FENCE = re.compile(r"^\s*(?:```|~~~)")
+# A double-quoted span on one line: someone else's words ("Your note reads
+# “hub is offline…”"), never her claim — blanked for the sentence scan.
+_QUOTED = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”")
 
 
 def _span_meta(span: Any) -> Mapping[str, Any]:
@@ -3005,26 +3022,25 @@ def _machine_read(spans: Sequence[Any], machine: str) -> bool:
     return False
 
 
-def _machine_served(spans: Sequence[Any], machine: str, purpose: str | None = None) -> str | None:
-    """The `served_by` of a round `machine` answered this turn without an error
-    — the turn's own latest round when there is one (`purpose`), else the
-    latest of any purpose. None when it served nothing this turn."""
-    own: list[str] = []
-    other: list[str] = []
+def _reply_served_by(spans: Sequence[Any], purpose: str | None) -> str | None:
+    """The `served_by` of the round that WROTE the reply: the turn's last
+    error-free round of its own purpose (served_this_turn's rule — a judge's or
+    a redirect's round is the backend's, never the reply). None when that round
+    carries no served_by.
+
+    Only this round may be quoted as "this reply came from …" (T1 review, fix
+    round 1): an earlier round on the machine, or a judge round it served, is a
+    true fact about the turn and a false one about the reply."""
+    writer: str | None = None
     for span in spans:
         if getattr(span, "kind", None) != "llm_call":
             continue
         meta = _span_meta(span)
+        if meta.get("error") or meta.get("purpose") not in (None, purpose):
+            continue
         served_by = meta.get("served_by")
-        if meta.get("error") or not isinstance(served_by, str):
-            continue
-        head, sep, _rest = served_by.partition(":")
-        if not sep or head.strip() != machine:
-            continue
-        (own if meta.get("purpose") in (None, purpose) else other).append(served_by)
-    if own:
-        return own[-1]
-    return other[-1] if other else None
+        writer = served_by if isinstance(served_by, str) else None
+    return writer
 
 
 @lru_cache(maxsize=64)
@@ -3107,45 +3123,58 @@ def _bind_reading(
     index: int,
     mention: re.Pattern[str],
     devices: re.Pattern[str] | None,
-) -> tuple[str | None, list[str]]:
-    """Which machine a reading line at `index` is about, and the lines walked
-    to decide it. Its own line first; then upward through the same unbroken
-    run (a blank line or a heading ends it). A paired device's name, a line
-    ending in ":" or a subject line ("- Name: …") that names no machine leaves
-    it unbound; a machine's name binds."""
+) -> str | None:
+    """Which machine a reading line at `index` is about. Its own line first;
+    then upward through the same unbroken run (a blank line or a heading ends
+    it). A machine's name binds. A line that names no machine leaves the
+    reading unbound when it carries a paired device's name, ends in ":", is a
+    subject line ("- Name: …"), or states a connectivity (T1 review, fix round
+    1: "- Dell: offline" is the Dell's status line, and the reading under it is
+    the Dell's, not hub's, however the reply spells the device)."""
     line = lines[index]
     own = _machine_mentioned(line, mention)
     if own is not None:
-        return own, []
+        return own
     if devices is not None and devices.search(line):
-        return None, []
-    walked: list[str] = []
+        return None
     for above in reversed(lines[:index]):
         if _is_run_break(above):
             break
-        walked.append(above)
         if devices is not None and devices.search(above):
-            return None, walked
+            return None
         named = _machine_mentioned(above, mention)
         if named is not None:
-            return named, walked
-        if above.rstrip().endswith(":") or _SUBJECT_KEY_LINE.match(above):
-            return None, walked
-    return None, walked
+            return named
+        if (
+            above.rstrip().endswith(":")
+            or _SUBJECT_KEY_LINE.match(above)
+            or _CONNECTIVITY_WORD.search(above)
+        ):
+            return None
+    return None
 
 
-def _lead_in(lines: list[str], index: int) -> str | None:
-    """The line that introduces the run holding `index`: the last non-blank,
-    non-heading line above the run, when it ends in ":" ("Here is what hub
-    reported when I checked earlier:")."""
+def _reading_context(lines: list[str], index: int) -> list[str]:
+    """Every line that frames the reading at `index`, for the not-current cut
+    (T1 review, fix round 1 — her plain "I did not check hub this turn" sat in
+    lines this never read, so the answer the machine nudge asks for was
+    corrected, and its regeneration refused):
+
+      * the run holding it, from the run's top down to the reading line;
+      * the heading that opens the run (blank lines between them skipped);
+      * the lead-in: the last non-blank, non-heading line above the run, when
+        it ends in ":" ("Here is what hub reported when I checked earlier:")."""
     top = index
     while top > 0 and not _is_run_break(lines[top - 1]):
         top -= 1
-    for above in reversed(lines[:top]):
-        if _is_run_break(above):
-            continue
-        return above if above.rstrip().endswith(":") else None
-    return None
+    context = lines[top : index + 1]
+    above = [line for line in reversed(lines[:top]) if line.strip()]
+    if above and _HEADING.match(above[0]):
+        context.append(above[0])
+    lead_in = next((line for line in above if not _HEADING.match(line)), None)
+    if lead_in is not None and lead_in.rstrip().endswith(":"):
+        context.append(lead_in)
+    return context
 
 
 def _not_a_current_reading(texts: Sequence[str]) -> bool:
@@ -3163,7 +3192,12 @@ def _machine_claim(
     *,
     negative: bool,
 ) -> StateClaim:
-    served_by = _machine_served(spans, machine, purpose) if negative else None
+    served_by = None
+    if negative:
+        writer = _reply_served_by(spans, purpose)
+        head, sep, _rest = (writer or "").partition(":")
+        if sep and head.strip() == machine:
+            served_by = writer
     text = STATE_CLAIM_MACHINE_CORRECTION.format(machine=machine)
     if served_by:
         text += STATE_CLAIM_MACHINE_SERVED.format(machine=machine, served_by=served_by)
@@ -3186,43 +3220,55 @@ def _machine_state_claim(
     """The machine branch of state_claim_check (see the section header)."""
     mention, assertion, last_reading = _machine_patterns(machines)
     lines = _machine_lines(reply_text)
-    for clause, is_question in _clauses("\n".join(lines)):
-        if is_question:
+    # The sentence scan reads her own words only: a double-quoted span is
+    # blanked, like a `>` line (T1 review, fix round 1). The key/value lines
+    # below keep theirs — a reading line that opens with a quote never
+    # matches, and `Last Reported: "2026-…"` is her reading, quote marks and all.
+    prose = _QUOTED.sub(lambda q: " " * len(q.group(0)), "\n".join(lines))
+    for sentence in _sentences(prose):
+        if not sentence.strip() or sentence.rstrip().endswith("?"):
             continue  # "is hub ready?" asserts nothing
-        if _REPORTED.search(clause) is not None:
-            continue  # "you said hub is offline" — someone else's claim
-        prior = _PRIOR_TIME.search(clause) is not None
-        for m in assertion.finditer(clause):
-            machine = m.group("mach")
-            if not _lead_ok(clause, m.start("mach")) or prior:
+        # A sentence that says its own state is not current ("…, but I have
+        # not checked it this turn") is the answer the machine nudge asks for.
+        if _NOT_CURRENT.search(sentence) is not None:
+            continue
+        for clause in _CLAUSE_SPLIT.split(sentence):
+            if not clause or not clause.strip():
                 continue
-            if _state_prefix_blocks(clause[: m.start()]):
+            if _REPORTED.search(clause) is not None:
+                continue  # "you said hub is offline" — someone else's claim
+            if _PRIOR_TIME.search(clause) is not None:
                 continue
-            negative = (_MACHINE_NEG_STATE.fullmatch(m.group("state")) is not None) != (
-                _NEGATING_ADVERB.search(m.group("adv")) is not None
-            )
-            # A positive state is backed by construction (every derived
-            # machine was read or served), so only a negative one can fire.
-            if negative and not _machine_read(spans, machine):
-                return _machine_claim(machine, m.group(0), spans, purpose, negative=True)
-        for r in last_reading.finditer(clause):
-            machine = r.group("mach")
-            if not _lead_ok(clause, r.start("mach")) or prior:
-                continue
-            if _state_prefix_blocks(clause[: r.start()]) or _NOT_CURRENT.search(clause):
-                continue
-            if not _machine_read(spans, machine):
-                return _machine_claim(machine, r.group(0), spans, purpose, negative=False)
+            for m in assertion.finditer(clause):
+                machine = m.group("mach")
+                if not _lead_ok(clause, m.start("mach")):
+                    continue
+                if _state_prefix_blocks(clause[: m.start()]):
+                    continue
+                negative = (_MACHINE_NEG_STATE.fullmatch(m.group("state")) is not None) != (
+                    _NEGATING_ADVERB.search(m.group("adv")) is not None
+                )
+                # A positive state is backed by construction (every derived
+                # machine was read or served), so only a negative one can fire.
+                if negative and not _machine_read(spans, machine):
+                    return _machine_claim(machine, m.group(0), spans, purpose, negative=True)
+            for r in last_reading.finditer(clause):
+                machine = r.group("mach")
+                if not _lead_ok(clause, r.start("mach")):
+                    continue
+                if _state_prefix_blocks(clause[: r.start()]):
+                    continue
+                if not _machine_read(spans, machine):
+                    return _machine_claim(machine, r.group(0), spans, purpose, negative=False)
     devices = _device_mention(device_names)
     for index, line in enumerate(lines):
         reading = _READING_LINE.match(line)
         if reading is None:
             continue
-        machine, walked = _bind_reading(lines, index, mention, devices)
+        machine = _bind_reading(lines, index, mention, devices)
         if machine is None:
             continue
-        lead_in = _lead_in(lines, index)
-        if _not_a_current_reading([line, *walked, *([lead_in] if lead_in else [])]):
+        if _not_a_current_reading(_reading_context(lines, index)):
             continue
         # A served round proves the machine answered, never when it was read.
         if not _machine_read(spans, machine):

@@ -672,3 +672,34 @@ async def test_no_engine_served_round_means_no_machine_to_be_wrong_about(
     assert [s["name"] for s in await _guard_spans(pool)] == []
     assert _corrections(sent) == []
     assert await _stored(pool) == HUB_OFF
+
+
+# S40b T1 review, fix round 1: the machine nudge offers "…or say plainly that
+# you did not check". A regeneration that does exactly that — the disclaimer in
+# the same run as the replayed block — must pass the vetting it is held to, or
+# the guard refuses the honest answer its own nudge asked for.
+SAID_NOT_CHECKED = (
+    "I did not check hub this turn. The last reading I have is from history:\n"
+    "- **Name**: `hub`\n"
+    "- **Last Reported**: `2026-09-19T05:15:39+00:00`"
+)
+
+
+async def test_a_regen_that_says_plainly_it_did_not_check_ships(owner_client, pool, mount_peers):
+    gateway = ScriptedGateway(
+        rounds=((text(B02A5694), LOCAL), (text(SAID_NOT_CHECKED), LOCAL)),
+        served_by=HUB,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    assert gateway.calls == 2  # the replay, and the one redirect
+    assert await _stored(pool) == SAID_NOT_CHECKED
+    assert _corrections(sent) == [chat.MACHINE_REDIRECT_NOTE]
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["state_claim"]
+    meta = spans[0]["meta"]
+    assert meta["subject_kind"] == "machine"
+    assert meta["redirected"] is True
+    assert "regen_rejected_by" not in meta
