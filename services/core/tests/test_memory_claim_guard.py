@@ -3,8 +3,8 @@
 
 The S40 live walk (2026-09-19): in turns b851aa91 and b02a5694 she reported
 "The memory service (`memory`) is currently unreachable (`ConnectError`)" —
-replayed from an old stack-check note — in turns whose own recall had just been
-answered by that service (hits: 5). The fact the claim is checked against is
+an outage from some earlier moment, stated as now — in turns whose own recall
+had just been answered by that service (hits: 5). The fact the claim is checked against is
 the turn's own memory_recall span: an int `hits` with no `error` means memory
 answered, zero hits included. A recall that failed, a memory tool that failed
 this turn, or no recall at all leaves an outage report alone.
@@ -146,6 +146,66 @@ def test_a_reduced_search_is_named_in_the_correction():
 @pytest.mark.parametrize("label,reply,spans", MUST_NOT, ids=[c[0] for c in MUST_NOT])
 def test_memory_must_not_fire(label, reply, spans):
     assert guards.memory_claim_check(reply, spans, purpose="chat") is None
+
+
+# -- T2 precision beyond the verdict's corpus ------------------------------------
+#
+# Honest sentences the verbatim pattern CORRECTED, found probing past the
+# corpus while building T2: an outage word that does not end the claim is
+# limited to a place, a schedule, a subject or a property ("unreachable from
+# outside the tailnet" is TRUE — the stack binds 127.0.0.1 — and a recall from
+# core does not contradict it). Every outage word now ends the claim, as the
+# verdict's "down" already had to. The §4 MUST_FIRE set is unchanged.
+
+HONEST_BEYOND_THE_CORPUS = [
+    ("from_outside", "The memory service is unreachable from outside the tailnet."),
+    ("from_your_phone", "The memory service is unreachable from your phone."),
+    ("offline_for_maintenance", "The memory service is offline for maintenance tonight."),
+    ("offline_on_weekends", "The memory service is offline on weekends."),
+    ("unavailable_to_agents", "The memory service is unavailable to agents without shared notes."),
+    (
+        "not_reachable_from_the_internet",
+        "The memory service is not reachable from the internet, by design.",
+    ),
+    ("offline_when_restarting", "The memory service is offline when the stack restarts."),
+    ("over_the_tunnel", "The memory service is unavailable over the public tunnel."),
+    (
+        "disconnected_from_the_internet",
+        "The memory service is disconnected from the internet but serves locally.",
+    ),
+    ("in_the_offline_build", "The memory service is unavailable in the offline build."),
+    ("offline_capable", "Your memory service is offline-capable."),
+    (
+        "unresponsive_to_health_checks",
+        "The memory service is unresponsive to health checks from the gateway.",
+    ),
+]
+
+STILL_FIRE_BEYOND_THE_CORPUS = [
+    ("right_now", "The memory service is unreachable right now."),
+    ("so_connector", "The memory service is offline, so I can't save notes."),
+    ("bracketed_reason", "The memory service is unavailable (timeout)."),
+    ("and_connector", "The memory service is unreachable and recall failed."),
+    ("at_the_moment", "The memory service is unresponsive at the moment."),
+    ("because_connector", "The memory service is offline because the container stopped."),
+    ("dash_reason", "The memory service is disconnected — ConnectError."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", HONEST_BEYOND_THE_CORPUS, ids=[c[0] for c in HONEST_BEYOND_THE_CORPUS]
+)
+def test_honest_sentences_beyond_the_corpus_are_not_corrected(label, reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    STILL_FIRE_BEYOND_THE_CORPUS,
+    ids=[c[0] for c in STILL_FIRE_BEYOND_THE_CORPUS],
+)
+def test_an_outage_word_that_ends_the_claim_still_fires(label, reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is not None
 
 
 @pytest.mark.parametrize("label,reply", ACCEPTED_MISSES, ids=[c[0] for c in ACCEPTED_MISSES])

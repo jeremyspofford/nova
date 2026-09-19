@@ -5642,8 +5642,8 @@ def stack_claim_check(reply_text: str, spans: Sequence[Any], *, purpose: str) ->
 #
 # The S40 live walk (2026-09-19). Asked where her models run, she marked
 # `qwen3.8:27b` "Current model in use" in two turns hub:qwen3:8b served
-# (b851aa91, b02a5694) — read out of old notes, and out of a prompt line that
-# stated the chat SETTING as "the model answering". And asked 17 × 23, she
+# (b851aa91, b02a5694) — a line his older notes also carry, beside a prompt
+# line that stated the chat SETTING as "the model answering". Asked 17 × 23, she
 # answered and added "No model was needed for this calculation." (60834ccf) —
 # which went into his notes, because nothing stopped the turn being ingested.
 #
@@ -5745,6 +5745,37 @@ _NO_MODEL = re.compile(
 )
 _LATEST_TAG = ":latest"
 
+# -- T2 precision cuts, beyond the verdict's corpus -------------------------
+#
+# Each removes fires only (every §4 MUST_FIRE still fires), each is pinned by
+# honest sentences in test_served_guard that the verbatim patterns corrected:
+#
+#   * A SETTING is not this reply: "The chat setting's current model is X",
+#     "…names X as the current model". The verdict counts a settings claim as
+#     an accepted miss ("The chat model is X"); these are the same claim.
+_SERVED_SETTING = re.compile(r"\b(?:settings?|config\w*)\b", re.I)
+#   * An in-use marker LIMITED by what follows it is about another place or
+#     role — "the current model on dell", "the active model in the catalog",
+#     "in use elsewhere" — as the verdict's own "in use by/for/…" and "current
+#     model for/in/on" (sentence shape 7) already are, for every marker.
+_IN_USE_LIMITED = re.compile(r"\s+(?:for|in|on|by|as|with|when|if|elsewhere)\b", re.I)
+#   * Leading up to the ref and its marker (from the conjunct's start when the
+#     ref comes first, between the two when it follows), a negation, the past
+#     or a change of state says the ref is NOT in use, WAS, or would BECOME
+#     it: "X isn't in use",
+#     "X is no longer the current model", "X used to be the current model",
+#     "the current model is not X", "make X the current model", "names X as
+#     the current model".
+_IN_USE_UNSAID = re.compile(
+    r"\b(?:not|never|no\s+longer|no\s+more|used\s+to|had|make|making|set|setting"
+    r"|switch\w*|chang\w*|becom\w*|to\s+be|as)\b|n['’]t\b",
+    re.I,
+)
+#   * A coordinated clause is its own claim: in "hub:qwen3:8b is the current
+#     model and qwen3.8:27b is installed" the nearest ref across "and" is the
+#     installed one. The marker's candidates are the refs in its own conjunct.
+_IN_USE_CONJUNCT = re.compile(r",?\s+(?:and|while|whereas|plus)\s+", re.I)
+
 
 @dataclass(frozen=True)
 class ServedClaim:
@@ -5787,6 +5818,18 @@ def _own_lines(reply_text: str) -> list[str]:
     return _machine_lines(reply_text)
 
 
+def _conjunct(clause: str, start: int, end: int) -> tuple[int, int]:
+    """The bounds of the coordinated conjunct holding clause[start:end]."""
+    lo, hi = 0, len(clause)
+    for c in _IN_USE_CONJUNCT.finditer(clause):
+        if c.end() <= start:
+            lo = c.end()
+        elif c.start() >= end:
+            hi = c.start()
+            break
+    return lo, hi
+
+
 def _served_claims(clause: str, *, in_use: bool):
     """(shape, claimed ref or None, phrase) for every served-model claim this
     clause makes, each already cut by the hedge, intent and skip rules."""
@@ -5794,16 +5837,19 @@ def _served_claims(clause: str, *, in_use: bool):
         for m in pattern.finditer(clause):
             if _state_prefix_blocks(clause[: m.start()]):
                 continue
-            if _SERVED_SKIP.search(clause[: m.end()]):
+            if _SERVED_SKIP.search(clause[: m.end()]) or _SERVED_SETTING.search(clause[: m.end()]):
                 continue
             yield "sentence", _strip_trailing_punct(m.group("ref")), m.group(0)
     if in_use:
         for m in _IN_USE.finditer(clause):
             if _STATE_HEDGE.search(clause) or _STATE_INTENT.search(clause[: m.start()]):
                 continue
-            if _SERVED_SKIP.search(clause):
+            if _SERVED_SKIP.search(clause) or _SERVED_SETTING.search(clause):
                 continue
-            refs = list(_SERVED_REF_RE.finditer(clause))
+            if _IN_USE_LIMITED.match(clause, m.end()):
+                continue
+            lo, hi = _conjunct(clause, m.start(), m.end())
+            refs = [r for r in _SERVED_REF_RE.finditer(clause) if r.start() >= lo and r.end() <= hi]
             if not refs:
                 continue
             # The ref nearest the marker is the one it is about.
@@ -5811,6 +5857,14 @@ def _served_claims(clause: str, *, in_use: bool):
                 refs,
                 key=lambda r, m=m: min(abs(r.start() - m.end()), abs(m.start() - r.end())),
             )
+            # What leads up to the pair, within its conjunct: the words before
+            # the ref ("make X the current model") and between the two.
+            if near.end() <= m.start():
+                lead = clause[lo : m.start()]
+            else:
+                lead = clause[m.end() : near.start()]
+            if _IN_USE_UNSAID.search(lead):
+                continue
             start, end = min(near.start(), m.start()), max(near.end(), m.end())
             yield "in_use", _strip_trailing_punct(near.group("ref")), clause[start:end]
     for m in _NO_MODEL.finditer(clause):
@@ -5891,9 +5945,9 @@ def _served_verdict(
 # ── S40b: the MEMORY-outage claim — "memory is unreachable" while it answered ──
 #
 # The same walk: b851aa91 and b02a5694 reported "The memory service (`memory`)
-# is currently unreachable (`ConnectError`)" — an old stack-check notice,
-# replayed — in turns whose own recall that service had just answered (hits:
-# 5). The evidence is the turn's memory_recall span: an int `hits` with no
+# is currently unreachable (`ConnectError`)" — an outage from some earlier
+# moment, stated as now — in turns whose own recall that service had just
+# answered (hits: 5). The evidence is the turn's memory_recall span: an int `hits` with no
 # `error`, and `errors` (an agent's two-scope recall) not naming every scope —
 # zero hits is an answer. Or any memory_* tool that succeeded this turn. A
 # memory_* tool that FAILED this turn is evidence the report may be true, so
@@ -5927,9 +5981,19 @@ _MEMORY_NOUN = (
     r"(?:(?:the|my|your|her|its|nova['’]s)\s+)?(?:long[-\s]term\s+)?memory\s+"
     r"(?:service|server|container|backend|api|store|database)"
 )
+# T2 precision cut, beyond the verdict's corpus: every outage word ENDS the
+# claim, as the verdict's "down" already must — at punctuation (a bracketed
+# reason included: the walk's "unreachable (`ConnectError`)"), a present-time
+# phrase, or a connector (the machine guard's anchors, T1). "The memory service
+# is unreachable from outside the tailnet", "… offline for maintenance
+# tonight", "… unavailable to agents", "… disconnected from the internet" and
+# "… offline-capable" limit the state to a place, a schedule, a subject or a
+# property — each true, none contradicted by a recall — and were corrected by
+# the verbatim pattern. Pinned in test_memory_claim_guard.
+_MEMORY_OUTAGE_ANCHOR = rf"(?=\s*\(|{_ANCHOR_ENDS}|\s+(?:{_OUTAGE_ENDS}))"
 _MEMORY_STATE = (
-    r"(?:unreachable|not\s+reachable|offline|unavailable|not\s+responding|unresponsive"
-    r"|not\s+answering|disconnected"
+    r"(?:(?:unreachable|not\s+reachable|offline|unavailable|not\s+responding|unresponsive"
+    rf"|not\s+answering|disconnected){_MEMORY_OUTAGE_ANCHOR}"
     r"|down(?=\s*(?:[.,;:!?)\]]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment)\b))"
 )
 _MEMORY_DOWN = re.compile(

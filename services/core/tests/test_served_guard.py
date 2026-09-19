@@ -241,6 +241,77 @@ def test_served_must_not_fire(label, reply):
     assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
 
 
+# -- T2 precision beyond the verdict's corpus ------------------------------------
+#
+# Honest sentences the verbatim in-use shape CORRECTED, found probing past the
+# corpus while building T2 (the T1 review's lesson: the verdict's corpus is a
+# floor, not the whole of what an honest reply says). Each fix only removes
+# fires; the §4 MUST_FIRE set above is unchanged, and the sentences that must
+# still fire are pinned beside them.
+
+HONEST_BEYOND_THE_CORPUS = [
+    # A negation, the past or a change of state between the ref and its marker.
+    ("isnt_in_use", "qwen3.8:27b isn't in use right now."),
+    ("not_currently_in_use", "qwen3.8:27b is not currently in use."),
+    ("listing_not_currently_in_use", "- `qwen3.8:27b` (16.5 GB) — not currently in use"),
+    ("no_longer_current", "qwen3.8:27b is no longer the current model."),
+    ("used_to_be_current", "qwen3.8:27b used to be the current model."),
+    ("current_is_not", "The current model is not qwen3.8:27b."),
+    ("make_it_current", "Ask me to make qwen3.8:27b the current model and I will."),
+    ("to_make_it_current", "To make qwen3.8:27b the current model, change the chat setting."),
+    (
+        "switching_to_be_current",
+        "Switching qwen3.8:27b to be the current model needs a setting change.",
+    ),
+    # A setting is not this reply.
+    (
+        "setting_names_it_as_current",
+        "Your chat setting names qwen3.8:27b as the current model, but hub:qwen3:8b answered.",
+    ),
+    ("settings_current_model", "The chat setting's current model is qwen3.8:27b."),
+    # A marker limited to another place or role.
+    ("current_model_on_dell", "qwen3.8:27b is the current model on dell."),
+    ("active_model_in_the_catalog", "The active model in the catalog is qwen3.8:27b."),
+    ("in_use_elsewhere", "qwen3.8:27b is in use elsewhere."),
+    # The nearest ref across a coordinator is another conjunct's.
+    (
+        "coordinated_installed",
+        "hub:qwen3:8b is the current model and qwen3.8:27b is installed.",
+    ),
+]
+
+STILL_FIRE_BEYOND_THE_CORPUS = [
+    ("currently_in_use", "qwen3.8:27b is currently in use."),
+    (
+        "coordinated_current",
+        "hub:qwen3:8b is installed and qwen3.8:27b is the current model in use.",
+    ),
+    ("coordinated_in_use", "hub:qwen3:8b is installed, and qwen3.8:27b is in use."),
+    ("in_use_right_now_line", "- `qwen3.8:27b` ✅ in use right now"),
+    ("active_model_label", "Active model: qwen3.8:27b"),
+    ("bare_current_model", "qwen3.8:27b (current model)"),
+    ("current_chat_model_label", "Current chat model: hub:qwen3.8:27b"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", HONEST_BEYOND_THE_CORPUS, ids=[c[0] for c in HONEST_BEYOND_THE_CORPUS]
+)
+def test_honest_sentences_beyond_the_corpus_are_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    STILL_FIRE_BEYOND_THE_CORPUS,
+    ids=[c[0] for c in STILL_FIRE_BEYOND_THE_CORPUS],
+)
+def test_the_precision_cuts_leave_a_plain_in_use_claim_firing(label, reply):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None and claim.shape == "in_use"
+    assert claim.claimed in ("qwen3.8:27b", "hub:qwen3.8:27b")
+
+
 def test_the_model_that_served_is_named_without_a_correction():
     """Truth is per turn: in a turn the 27B served, naming it is honest (the
     eval run on hub:qwen3.8:27b)."""
