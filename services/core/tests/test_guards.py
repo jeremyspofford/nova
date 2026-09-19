@@ -3215,7 +3215,7 @@ DID_NOT_SERVE = [_llm_span(round=1, error="nothing arrived from the gateway for 
     ],
 )
 def test_a_present_tense_serving_claim_is_contradicted_when_the_model_just_answered(reply):
-    claim = guards.stack_claim_check(reply, SERVED)
+    claim = guards.stack_claim_check(reply, SERVED, purpose="chat")
     assert claim is not None
     assert "answered this turn" in claim.text
 
@@ -3237,7 +3237,7 @@ def test_a_present_tense_serving_claim_is_contradicted_when_the_model_just_answe
     ],
 )
 def test_an_honest_or_hedged_form_is_left_alone(reply):
-    assert guards.stack_claim_check(reply, SERVED) is None
+    assert guards.stack_claim_check(reply, SERVED, purpose="chat") is None
 
 
 def test_a_turn_the_model_did_not_serve_is_not_second_guessed():
@@ -3245,7 +3245,9 @@ def test_a_turn_the_model_did_not_serve_is_not_second_guessed():
     nothing to say. (In practice such a turn has no reply to judge — the
     failure statement is composed by the backend — but the guard must not
     depend on that.)"""
-    assert guards.stack_claim_check("The model is unreachable.", DID_NOT_SERVE) is None
+    assert (
+        guards.stack_claim_check("The model is unreachable.", DID_NOT_SERVE, purpose="chat") is None
+    )
 
 
 def test_a_judge_round_alone_does_not_count_as_having_served():
@@ -3253,10 +3255,25 @@ def test_a_judge_round_alone_does_not_count_as_having_served():
     spans too. Only a CHAT round is evidence that the reply in hand came from
     the model."""
     judge = [SimpleNamespace(kind="llm_call", name="qwen3:8b", meta={"purpose": "judge"})]
-    assert guards.stack_claim_check("The model is unreachable.", judge) is None
+    assert guards.stack_claim_check("The model is unreachable.", judge, purpose="chat") is None
+
+
+@pytest.mark.parametrize("kind", ["chat", "scheduled", "beat", "agent", "eval"])
+def test_a_round_of_the_turns_own_kind_is_the_evidence_whatever_the_kind(kind):
+    """A turn's own rounds are recorded under its KIND (chat._purpose_of), not
+    under the word 'chat': a scheduled turn, a beat, an agent's turn and an
+    eval replay are all answered by a model, and the reply in hand is the
+    proof. Reading only 'chat' left the guard silent in every other kind --
+    and every eval case scoring guard_absent('stack_claim') green by
+    construction, whatever the model said (found by S40 T7's corpus test,
+    2026-09-19). A judge round is still no evidence, in any kind."""
+    own = [SimpleNamespace(kind="llm_call", name="qwen3:8b", meta={"purpose": kind})]
+    assert guards.stack_claim_check("The model is unreachable.", own, purpose=kind) is not None
+    judge = [SimpleNamespace(kind="llm_call", name="qwen3:8b", meta={"purpose": "judge"})]
+    assert guards.stack_claim_check("The model is unreachable.", judge, purpose=kind) is None
 
 
 def test_the_claim_names_what_it_matched_for_the_span():
-    claim = guards.stack_claim_check("The gateway is down.", SERVED)
+    claim = guards.stack_claim_check("The gateway is down.", SERVED, purpose="chat")
     assert claim.subject
     assert "down" in claim.phrase

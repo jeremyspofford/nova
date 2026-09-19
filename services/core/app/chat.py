@@ -4428,7 +4428,10 @@ async def _run_turn(
         # while the model was answering him.
         stack_claim = None
         try:
-            stack_claim = guards.stack_claim_check(text, turn.spans)
+            # The turn's own rounds are stamped with its kind, not with
+            # "chat": a scheduled turn, a beat, an agent's turn and an eval
+            # replay are answered by a model too.
+            stack_claim = guards.stack_claim_check(text, turn.spans, purpose=_purpose_of(turn))
         except Exception:
             logger.exception("serving-state guard raised; shipping the reply uncorrected")
             stack_claim = None

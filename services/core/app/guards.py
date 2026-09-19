@@ -4905,31 +4905,40 @@ class StackClaim:
     text: str = STACK_CLAIM_CORRECTION
 
 
-def served_this_turn(spans: Sequence[Any]) -> bool:
-    """Did the model answer THIS turn? A chat round with no error on it.
+def served_this_turn(spans: Sequence[Any], purpose: str) -> bool:
+    """Did the model answer THIS turn? One of the turn's OWN rounds with no
+    error on it.
+
+    `purpose` is what the turn's own rounds are recorded under — its kind
+    (chat._purpose_of): `chat`, and equally `scheduled`, `beat`, `agent` or
+    `eval`, each of them a turn a model answers. It is the caller's to state,
+    never a default: reading only `chat` left this guard silent in every
+    other kind, and every eval case scoring guard_absent('stack_claim') green
+    by construction (found by S40 T7, 2026-09-19).
 
     Judge and redirect rounds are llm_call spans too and are deliberately not
-    evidence: they are the backend's own second opinions, and the claim under
-    test is about the reply in hand.
+    evidence: they carry their own purpose, they are the backend's own second
+    opinions, and the claim under test is about the reply in hand.
     """
     for span in spans:
         if getattr(span, "kind", None) != "llm_call":
             continue
         meta = getattr(span, "meta", None) or {}
-        if meta.get("purpose") not in (None, "chat"):
+        if meta.get("purpose") not in (None, purpose):
             continue
         if not meta.get("error"):
             return True
     return False
 
 
-def stack_claim_check(reply_text: str, spans: Sequence[Any]) -> StackClaim | None:
+def stack_claim_check(reply_text: str, spans: Sequence[Any], *, purpose: str) -> StackClaim | None:
     """Contradict a present-tense claim that the serving path is down, made in
     a turn the model served. None otherwise — pure, precision-first, fail-open
-    at the call site like every other guard here."""
+    at the call site like every other guard here. `purpose` is the turn's own
+    rounds' purpose (see served_this_turn)."""
     if not reply_text or not reply_text.strip():
         return None
-    if not served_this_turn(spans):
+    if not served_this_turn(spans, purpose):
         return None
     for clause, is_question in _clauses(reply_text):
         if is_question:
