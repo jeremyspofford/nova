@@ -6,6 +6,7 @@ verdict is deterministic and owes nothing to a model. The runner tests
 (test_eval_runner.py) then prove the SAME predicates over a trace a REAL turn
 left via a ScriptedGateway.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,13 +21,20 @@ from app.evals import runner as eval_runner
 from app.evals.cases import (
     KNOWN_PREDICATES,
     CaseError,
+    FixtureMachine,
     PredicateSpec,
     PriorTurn,
     case_from_dict,
     load_cases,
     load_suite,
+    machine_from_dict,
+    parse_tool_with,
 )
 from app.evals.predicates import PREDICATES, score_contract
+
+ENGINE_VIEW_CONTRACT = (
+    Path(__file__).resolve().parents[3] / "docs" / "contracts" / "engine_view.json"
+)
 
 
 def span(kind: str, name: str | None = None, **meta) -> traces.Span:
@@ -234,3 +242,136 @@ def test_load_suite_refuses_to_mix_versions(tmp_path):
     with pytest.raises(CaseError) as exc:
         load_suite("corpus", tmp_path)
     assert "comparable" in str(exc.value)
+
+
+# -- S40: the direction of a write, and the declared machines -------------
+
+
+def test_tool_succeeded_with_reads_the_arguments_of_a_successful_span():
+    """tool_succeeded cannot tell "switched it off" from "switched it on" --
+    both are an ok machine_configure span. A case about the DIRECTION of a
+    write needs the arguments: a subset match, type-exact (False is not 0),
+    over successful spans only."""
+    arg = 'machine_configure {"machine": "eval_box", "serving": false}'
+    off = span(
+        "tool",
+        "machine_configure",
+        ok=True,
+        args_redacted={"machine": "eval_box", "serving": False},
+    )
+    on = span(
+        "tool", "machine_configure", ok=True, args_redacted={"machine": "eval_box", "serving": True}
+    )
+    failed = span(
+        "tool",
+        "machine_configure",
+        ok=False,
+        args_redacted={"machine": "eval_box", "serving": False},
+    )
+    zero = span(
+        "tool", "machine_configure", ok=True, args_redacted={"machine": "eval_box", "serving": 0}
+    )
+    clipped = span("tool", "machine_configure", ok=True, args_redacted='{"machine": "eval_bo')
+    assert predicates.tool_succeeded_with([off], "", arg)[0] is True
+    assert predicates.tool_succeeded_with([on], "", arg)[0] is False
+    assert predicates.tool_succeeded_with([failed], "", arg)[0] is False
+    assert predicates.tool_succeeded_with([zero], "", arg)[0] is False
+    assert predicates.tool_succeeded_with([clipped], "", arg)[0] is False
+    assert predicates.tool_succeeded_with([on, off], "", arg)[0] is True
+
+
+def test_tool_succeeded_with_refuses_a_malformed_arg_at_load():
+    """A typo in the one two-part argument must fail at LOAD, never score as
+    a predicate that silently never matches."""
+    for bad in (
+        "machine_configure",
+        'machine_configure {"serving": fals}',
+        "machine_configure []",
+        "machine_configure {}",
+    ):
+        with pytest.raises(CaseError):
+            PredicateSpec("tool_succeeded_with", bad)
+    assert parse_tool_with('machine_configure {"serving": false}') == (
+        "machine_configure",
+        {"serving": False},
+    )
+
+
+def test_a_declared_machine_name_must_carry_the_reserved_prefix():
+    """The same rule as agents and skills, for the same reason: the harness
+    answers for these names instead of the real plant, so a declared name
+    must be one no real machine can hold."""
+    with pytest.raises(CaseError, match="must start with 'eval_'"):
+        FixtureMachine(name="hub")
+    with pytest.raises(CaseError, match="must start with 'eval_'"):
+        machine_from_dict({"name": "dell"})
+    with pytest.raises(CaseError, match="serving"):
+        machine_from_dict({"name": "eval_box", "serving": "no"})
+    with pytest.raises(CaseError, match="tags"):
+        machine_from_dict({"name": "eval_box", "tags": {"qwen3:8b": "5 GB"}})
+    parsed = machine_from_dict({"name": "eval_box"})
+    assert parsed == FixtureMachine(name="eval_box")
+
+
+def test_a_declared_machine_is_the_gateways_row_shape_with_state_derived():
+    row = FixtureMachine(name="eval_box", tags={"qwen3:8b": 5_225_388_164}).as_row()
+    # Moved (S40 fix wave A1/B9): the literal field list became the contract
+    # file itself, which gained `builtin` and `answered` — one list to move,
+    # held from both sides (gateway test_engines, core test_machines).
+    assert set(row) == set(json.loads(ENGINE_VIEW_CONTRACT.read_text())["fields"])
+    assert (row["builtin"], row["answered"]) == (False, True)
+    assert (row["serving"], row["state"]) == (True, "ready")
+    assert FixtureMachine(name="eval_box", serving=False).as_row()["state"] == "switched_off"
+    # Fresh on every call: a replay never inherits the last replay's write.
+    machine = FixtureMachine(name="eval_box")
+    assert machine.as_row() is not machine.as_row()
+    assert machine.as_row()["tags"] is not machine.as_row()["tags"]
+
+
+def test_case_from_dict_reads_declared_machines():
+    case = case_from_dict(
+        {
+            "id": "m",
+            "suite": "s",
+            "suite_version": 1,
+            "message": "x",
+            "machines": [{"name": "eval_box", "serving": True, "runtime": "native"}],
+            "contract": [{"predicate": "tool_called", "arg": "machine_status"}],
+        }
+    )
+    assert case.machines == (FixtureMachine(name="eval_box", runtime="native"),)
+    assert case.as_json()["machines"][0]["name"] == "eval_box"
+    with pytest.raises(CaseError, match="machines must be a list"):
+        case_from_dict(
+            {
+                "id": "m",
+                "suite": "s",
+                "suite_version": 1,
+                "message": "x",
+                "machines": {"name": "eval_box"},
+                "contract": [{"predicate": "tool_called", "arg": "x"}],
+            }
+        )
+
+
+def test_a_declared_machine_refuses_what_it_cannot_replay():
+    """Two load-time refusals the parser owes its cases. A key the declaration
+    does not take ("servng", or a `state` the gateway derives) would otherwise
+    be dropped silently and the case replayed against a machine it did not
+    describe; and two declarations of one name would collapse into whichever
+    the plant read last."""
+    with pytest.raises(CaseError, match="servng"):
+        machine_from_dict({"name": "eval_box", "servng": False})
+    with pytest.raises(CaseError, match="state"):
+        machine_from_dict({"name": "eval_box", "state": "unreachable"})
+    with pytest.raises(CaseError, match="eval_box.*more than once"):
+        case_from_dict(
+            {
+                "id": "m",
+                "suite": "s",
+                "suite_version": 1,
+                "message": "x",
+                "machines": [{"name": "eval_box"}, {"name": "eval_box", "serving": False}],
+                "contract": [{"predicate": "tool_called", "arg": "machine_status"}],
+            }
+        )

@@ -7,12 +7,15 @@ import type { Catalog, CatalogRow, HfPage, PullLine, ResolvedRef, SettingDef } f
 
 function row(overrides: Partial<CatalogRow> & { id: string }): CatalogRow {
   const [provider, ...rest] = overrides.id.split(':')
+  // S40: `hub` is the bundled engine and `library` a model on no machine
+  // yet; both are local. `ollama-show` names Ollama's API, not a provider.
+  const local = provider === 'hub' || provider === 'library'
   return {
     provider,
     model: rest.join(':'),
     label: overrides.id,
-    kind: provider === 'ollama' ? 'local' : 'cloud',
-    sources: [{ key: provider === 'ollama' ? 'ollama-show' : 'provider-listing', fetched_at: '2026-09-06T12:00:00Z' }],
+    kind: local ? 'local' : 'cloud',
+    sources: [{ key: local ? 'ollama-show' : 'provider-listing', fetched_at: '2026-09-06T12:00:00Z' }],
     facts: {},
     capabilities: {},
     suitability: {},
@@ -22,7 +25,7 @@ function row(overrides: Partial<CatalogRow> & { id: string }): CatalogRow {
 }
 
 const INSTALLED = row({
-  id: 'ollama:qwen3:8b',
+  id: 'hub:qwen3:8b',
   label: 'Qwen3 8B',
   installed: true,
   facts: {
@@ -34,7 +37,7 @@ const INSTALLED = row({
   fit: { verdict: 'comfortable', needed_gb: 10, free_gb: 24, total_gb: 24, source: 'estimated', reason: null },
   actions: ['use', 'probe', 'check_update', 'remove'],
 })
-const AVAILABLE = row({ id: 'ollama:qwen3:4b', label: 'Qwen3 4B', installed: false, actions: ['pull'] })
+const AVAILABLE = row({ id: 'library:qwen3:4b', label: 'Qwen3 4B', installed: false, actions: ['pull'] })
 const CLOUD = row({
   id: 'openrouter:openai/gpt-x',
   label: 'GPT X',
@@ -48,7 +51,7 @@ const CLOUD = row({
   actions: ['use'],
 })
 const HUB = row({
-  id: 'ollama:hf.co/unsloth/Qwen3-Coder-GGUF',
+  id: 'library:hf.co/unsloth/Qwen3-Coder-GGUF',
   label: 'Qwen3-Coder-GGUF',
   kind: 'hub',
   installed: false,
@@ -61,14 +64,14 @@ const HUB = row({
 const CATALOG: Catalog = {
   fetched_at: '2026-09-06T12:00:00Z',
   sources: [
-    { key: 'ollama', ok: true, rows: 2, fetched_at: '2026-09-06T12:00:00Z' },
+    { key: 'hub', ok: true, rows: 2, fetched_at: '2026-09-06T12:00:00Z' },
     { key: 'openrouter', ok: true, rows: 1, fetched_at: '2026-09-06T12:00:00Z' },
     { key: 'anthropic', ok: false, rows: 0, note: 'the listing was refused (401): invalid x-api-key' },
   ],
   rows: [INSTALLED, AVAILABLE, CLOUD],
 }
 
-const SETTINGS: SettingDef[] = [{ key: 'chat.model', type: 'str', default: '', description: '', value: 'ollama:qwen3:8b' }]
+const SETTINGS: SettingDef[] = [{ key: 'chat.model', type: 'str', default: '', description: '', value: 'hub:qwen3:8b' }]
 
 async function* lines(items: PullLine[]) {
   for (const line of items) yield line
@@ -138,7 +141,7 @@ describe('ModelsPage', () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('catalog-sources')).toBeTruthy())
     const chips = screen.getByTestId('catalog-sources').textContent ?? ''
-    expect(chips).toContain('ollama · 2')
+    expect(chips).toContain('hub · 2')
     expect(chips).toContain('anthropic · 0 · the listing was refused (401): invalid x-api-key')
   })
 
@@ -194,7 +197,7 @@ describe('ModelsPage', () => {
     await waitFor(() => expect(api.searchHf).toHaveBeenCalledWith('qwen coder', 'downloads', undefined))
     await waitFor(() => expect(screen.getByText('Qwen3-Coder-GGUF')).toBeTruthy())
     expect(screen.getByText('tools?').getAttribute('data-basis')).toBe('inferred')
-    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:hf.co/unsloth/Qwen3-Coder-GGUF' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pull library:hf.co/unsloth/Qwen3-Coder-GGUF' }))
     await waitFor(() => expect(screen.getByTestId('quant-menu')).toBeTruthy())
     const menu = screen.getByTestId('quant-menu')
     expect(within(menu).getByText('Q4_K_M')).toBeTruthy()
@@ -208,10 +211,12 @@ describe('ModelsPage', () => {
     const { api } = renderPage()
     await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'pull library:qwen3:4b' })).toBeTruthy())
     // The re-read after the pull lists the model as installed.
-    api.getCatalog.mockResolvedValue({ ...CATALOG, rows: [INSTALLED, { ...AVAILABLE, installed: true, actions: ['use', 'probe'] }, CLOUD] })
-    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    // After a pull the model is a row on the engine (`hub:`); its `library:`
+    // row is gone, because a library row is a model on no machine.
+    api.getCatalog.mockResolvedValue({ ...CATALOG, rows: [INSTALLED, row({ id: 'hub:qwen3:4b', label: 'Qwen3 4B', installed: true, actions: ['use', 'probe'] }), CLOUD] })
+    fireEvent.click(screen.getByRole('button', { name: 'pull library:qwen3:4b' }))
     await waitFor(() => expect(screen.getByTestId('pull-panel').textContent).toContain('installed'))
     expect(screen.getByTestId('pull-panel').textContent).toContain('size from registry.ollama.ai')
     expect(api.getCatalog).toHaveBeenCalledTimes(2)
@@ -224,8 +229,8 @@ describe('ModelsPage', () => {
     const { api } = renderPage({ pullModel: vi.fn(() => lines([{ status: 'pulling manifest' }])) })
     await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'pull library:qwen3:4b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'pull library:qwen3:4b' }))
     await waitFor(() =>
       expect(screen.getByTestId('pull-panel').textContent).toContain('ended without ollama reporting success'),
     )
@@ -236,8 +241,8 @@ describe('ModelsPage', () => {
     const { api } = renderPage()
     await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'pull library:qwen3:4b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'pull library:qwen3:4b' }))
     await waitFor(() =>
       expect(screen.getByTestId('pull-panel').textContent).toContain('does not list qwen3:4b as installed'),
     )
@@ -247,16 +252,19 @@ describe('ModelsPage', () => {
     // A re-read that fails is stated too.
     api.getCatalog.mockRejectedValue(new Error('gateway down'))
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
-    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pull library:qwen3:4b' }))
     await waitFor(() => expect(screen.getByTestId('pull-panel').textContent).toContain('could not be re-read'))
   })
 
   it('listsInstalled matches the bare tag, its :latest form, and only installed local rows', () => {
-    const cat = { ...CATALOG, rows: [{ ...AVAILABLE, installed: true }, row({ id: 'ollama:gemma', model: 'gemma:latest', installed: true })] }
+    const cat = { ...CATALOG, rows: [row({ id: 'hub:qwen3:4b', installed: true }), row({ id: 'hub:gemma', model: 'gemma:latest', installed: true })] }
     expect(listsInstalled(cat, 'qwen3:4b')).toBe(true)
     expect(listsInstalled(cat, 'gemma')).toBe(true)
     expect(listsInstalled(CATALOG, 'qwen3:4b')).toBe(false)
     expect(listsInstalled({ ...CATALOG, rows: [row({ id: 'openrouter:qwen3:4b', installed: true })] }, 'qwen3:4b')).toBe(false)
+    // A `library:` row is on no machine, so it never confirms a pull — even
+    // one that (wrongly) said installed.
+    expect(listsInstalled({ ...CATALOG, rows: [{ ...AVAILABLE, installed: true }] }, 'qwen3:4b')).toBe(false)
   })
 
   it('Cancel aborts the stream: no catalogue re-read, no "installed", and a new pull can start', async () => {
@@ -274,8 +282,8 @@ describe('ModelsPage', () => {
     })
     await waitFor(() => expect(screen.getByText('Qwen3 8B')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: /^Available/ }))
-    await waitFor(() => expect(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'pull library:qwen3:4b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'pull library:qwen3:4b' }))
     await waitFor(() => expect(screen.getByTestId('pull-panel').textContent).toContain('pulling sha256:ab'))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     await waitFor(() => expect(screen.getByTestId('pull-panel').textContent).toContain('cancelled'))
@@ -284,7 +292,7 @@ describe('ModelsPage', () => {
     expect(screen.getByTestId('pull-panel').textContent).not.toContain('installed')
     expect(api.getCatalog).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
-    fireEvent.click(screen.getByRole('button', { name: 'pull ollama:qwen3:4b' }))
+    fireEvent.click(screen.getByRole('button', { name: 'pull library:qwen3:4b' }))
     await waitFor(() => expect(api.pullModel).toHaveBeenCalledTimes(2))
   })
 
@@ -306,7 +314,7 @@ describe('ModelsPage', () => {
       resolveFirst = resolve
     })
     const later: HfPage = {
-      rows: [row({ id: 'ollama:hf.co/org/Later-GGUF', label: 'Later-GGUF', kind: 'hub', installed: false, actions: ['pull'] })],
+      rows: [row({ id: 'library:hf.co/org/Later-GGUF', label: 'Later-GGUF', kind: 'hub', installed: false, actions: ['pull'] })],
       next_cursor: null,
       fetched_at: '2026-09-06T12:00:00Z',
       cached: false,
@@ -374,19 +382,19 @@ describe('ModelsPage', () => {
 
   it('Probe records the measurement and re-reads the catalogue', async () => {
     const { api } = renderPage()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'probe ollama:qwen3:8b' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'probe ollama:qwen3:8b' }))
-    await waitFor(() => expect(api.probeModel).toHaveBeenCalledWith('ollama:qwen3:8b'))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'probe hub:qwen3:8b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'probe hub:qwen3:8b' }))
+    await waitFor(() => expect(api.probeModel).toHaveBeenCalledWith('hub:qwen3:8b'))
     await waitFor(() => expect(screen.getByText('812 ms · 9.1 GB')).toBeTruthy())
     expect(api.getCatalog).toHaveBeenCalledTimes(2)
   })
 
   it('Details opens the sheet with every fact\'s basis and source', async () => {
     renderPage()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'details ollama:qwen3:8b' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'details ollama:qwen3:8b' }))
-    await waitFor(() => expect(screen.getByTestId('model-details-ollama:qwen3:8b')).toBeTruthy())
-    const sheet = screen.getByTestId('model-details-ollama:qwen3:8b').textContent ?? ''
+    await waitFor(() => expect(screen.getByRole('button', { name: 'details hub:qwen3:8b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'details hub:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByTestId('model-details-hub:qwen3:8b')).toBeTruthy())
+    const sheet = screen.getByTestId('model-details-hub:qwen3:8b').textContent ?? ''
     expect(sheet).toContain('4.9 GB')
     expect(sheet).toContain('declared · ollama-tags')
     expect(sheet).toContain('name matches /coder/')
@@ -403,10 +411,10 @@ describe('ModelsPage', () => {
 
   it('Check for updates compares digests without pulling, and a moved source offers Update', async () => {
     const { api } = renderPage()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'check updates ollama:qwen3:8b' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'check updates ollama:qwen3:8b' }))
-    await waitFor(() => expect(screen.getByTestId('drift-ollama:qwen3:8b').textContent).toContain('up to date'))
-    expect(api.checkDrift).toHaveBeenCalledWith('qwen3:8b')
+    await waitFor(() => expect(screen.getByRole('button', { name: 'check updates hub:qwen3:8b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'check updates hub:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByTestId('drift-hub:qwen3:8b').textContent).toContain('up to date'))
+    expect(api.checkDrift).toHaveBeenCalledWith('hub:qwen3:8b')
     expect(api.pullModel).not.toHaveBeenCalled()
 
     api.checkDrift.mockResolvedValue({
@@ -418,9 +426,9 @@ describe('ModelsPage', () => {
       basis: 'weights-digest',
       source: 'ollama-registry',
     })
-    fireEvent.click(screen.getByRole('button', { name: 'check updates ollama:qwen3:8b' }))
-    await waitFor(() => expect(screen.getByTestId('drift-ollama:qwen3:8b').textContent).toContain('update available'))
-    fireEvent.click(screen.getByRole('button', { name: 'update ollama:qwen3:8b' }))
+    fireEvent.click(screen.getByRole('button', { name: 'check updates hub:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByTestId('drift-hub:qwen3:8b').textContent).toContain('update available'))
+    fireEvent.click(screen.getByRole('button', { name: 'update hub:qwen3:8b' }))
     await waitFor(() => expect(api.pullModel).toHaveBeenCalled())
     expect(api.pullModel.mock.calls[0][0]).toBe('qwen3:8b')
 
@@ -435,8 +443,8 @@ describe('ModelsPage', () => {
       note: 'the source could not be read — registry.ollama.ai timed out',
     })
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
-    fireEvent.click(screen.getByRole('button', { name: 'check updates ollama:qwen3:8b' }))
-    await waitFor(() => expect(screen.getByTestId('drift-ollama:qwen3:8b').textContent).toContain('could not tell: the source could not be read'))
+    fireEvent.click(screen.getByRole('button', { name: 'check updates hub:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByTestId('drift-hub:qwen3:8b').textContent).toContain('could not tell: the source could not be read'))
   })
 
   it('a measured suitability tag links to the quality page', async () => {
@@ -457,15 +465,15 @@ describe('ModelsPage', () => {
     expect(compare.hasAttribute('disabled')).toBe(true)
     fireEvent.click(screen.getByRole('button', { name: /^All/ }))
     await waitFor(() => expect(screen.getByLabelText('compare openrouter:openai/gpt-x')).toBeTruthy())
-    fireEvent.click(screen.getByLabelText('compare ollama:qwen3:8b'))
+    fireEvent.click(screen.getByLabelText('compare hub:qwen3:8b'))
     fireEvent.click(screen.getByLabelText('compare openrouter:openai/gpt-x'))
     await waitFor(() => expect(screen.getByRole('button', { name: 'compare selected' }).hasAttribute('disabled')).toBe(false))
     fireEvent.click(screen.getByRole('button', { name: 'compare selected' }))
     const view = await screen.findByTestId('compare-view')
-    expect(within(view).getByText('ollama:qwen3:8b')).toBeTruthy()
+    expect(within(view).getByText('hub:qwen3:8b')).toBeTruthy()
     expect(within(view).getByText('openrouter:openai/gpt-x')).toBeTruthy()
     // Context: both stated; the cloud row is the larger and draws the full bar.
-    const local = within(view).getByTestId('compare-context_length-ollama:qwen3:8b')
+    const local = within(view).getByTestId('compare-context_length-hub:qwen3:8b')
     const cloud = within(view).getByTestId('compare-context_length-openrouter:openai/gpt-x')
     expect(local.textContent).toContain('41K')
     expect(cloud.textContent).toContain('1.05M')
@@ -474,20 +482,20 @@ describe('ModelsPage', () => {
     // Size: only the local row states one; the cloud cell says so.
     expect(within(view).getByTestId('compare-size_bytes-openrouter:openai/gpt-x').textContent).toBe('not stated')
     // Suitability: coding is inferred on one and a third-party index on the other.
-    expect(within(view).getByTestId('compare-coding-ollama:qwen3:8b').textContent).toContain('coding?')
+    expect(within(view).getByTestId('compare-coding-hub:qwen3:8b').textContent).toContain('coding?')
     expect(within(view).getByTestId('compare-coding-openrouter:openai/gpt-x').textContent).toContain('coding 77')
   })
 
   it('Remove asks first, then deletes, and installed is what the re-read catalogue says', async () => {
     const { api } = renderPage()
-    await waitFor(() => expect(screen.getByRole('button', { name: 'remove ollama:qwen3:8b' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'remove ollama:qwen3:8b' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'remove hub:qwen3:8b' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'remove hub:qwen3:8b' }))
     expect(api.removeModel).not.toHaveBeenCalled()
     api.getCatalog.mockResolvedValue({ ...CATALOG, rows: [{ ...INSTALLED, installed: false, actions: ['pull'] }, AVAILABLE, CLOUD] })
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
-    await waitFor(() => expect(api.removeModel).toHaveBeenCalledWith('qwen3:8b'))
+    await waitFor(() => expect(api.removeModel).toHaveBeenCalledWith('hub:qwen3:8b'))
     await waitFor(() => expect(api.getCatalog).toHaveBeenCalledTimes(2))
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'remove ollama:qwen3:8b' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'remove hub:qwen3:8b' })).toBeNull())
 
     // A 200 the gateway did not verify is not a removal.
     api.removeModel.mockResolvedValue({ removed: 'qwen3:4b', verified: false, installed_now: 1 })

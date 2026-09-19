@@ -62,6 +62,7 @@ _CONTENT_TOOLS = frozenset({"workspace_read_file", "workspace_write_file"})
 _FETCH_TOOLS = frozenset({"fetch_url"})
 _PULL_TOOLS = frozenset({"model_pull"})
 _REMOVE_TOOLS = frozenset({"model_remove"})
+_CONFIGURE_TOOLS = frozenset({"machine_configure"})
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -71,6 +72,7 @@ _KIND_TOOLS: dict[str, frozenset[str]] = {
     "fetched_url": _FETCH_TOOLS,
     "pulled_model": _PULL_TOOLS,
     "removed_model": _REMOVE_TOOLS,
+    "configured_machine": _CONFIGURE_TOOLS,
 }
 
 
@@ -115,14 +117,26 @@ SPEND_CORRECTION_TEXT = (
 )
 
 # "I pulled / downloaded / installed <model ref>": a completed-pull claim,
-# anchored on a MODEL REFERENCE token (name:tag, user/name:tag, hf.co/org/
-# repo[:quant], optionally ollama:-qualified) — never a bare noun, so "I
-# installed the update" is ordinary chat and never fires. Backed only by a
-# successful model_pull span whose `model` argument names that ref.
+# anchored on a MODEL REFERENCE token — never a bare noun, so "I installed the
+# update" is ordinary chat and never fires. Backed only by a successful
+# model_pull span whose `model` argument names that ref.
+#
+# A model reference, optionally machine-qualified: `qwen3:4b`, `user/name:tag`,
+# `hf.co/org/repo[:quant]`, or any of those behind the name of the machine
+# (the provider) that runs it — `hub:qwen3.8:27b`, `dell:qwen3:8b` (S40). The
+# prefix is a SHAPE, never a list of names: machines are whatever the gateway
+# lists, and a guard that knew them would be wrong the day one is added.
+# Before S40 only `ollama:` was read, so `hub:qwen3.8:27b` was cut at its
+# second colon and a claim about one tag was backed by a pull of another.
+_ENGINE_PREFIX = r"[a-z0-9][a-z0-9_-]{0,31}:"
+_MODEL_BODY = r"(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+)"
+_ENGINE_QUALIFIED = re.compile(
+    r"(?P<engine>[a-z0-9][a-z0-9_-]{0,31}):(?P<bare>" + _MODEL_BODY + r")", re.I
+)
 _PULLED_MODEL = re.compile(
     r"\bi(?:'ve|\s+have|\s+just|\s+have\s+just)?\s+(?:just\s+)?"
     r"(?:pulled|downloaded|installed)\s+(?:the\s+)?(?:model\s+)?"
-    r"(?P<ref>(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+))",
+    r"(?P<ref>(?:" + _ENGINE_PREFIX + r")?" + _MODEL_BODY + r")",
     re.I,
 )
 # "I removed / deleted / uninstalled <model ref>": the same anchor, backed
@@ -130,8 +144,157 @@ _PULLED_MODEL = re.compile(
 _REMOVED_MODEL = re.compile(
     r"\bi(?:'ve|\s+have|\s+just|\s+have\s+just)?\s+(?:just\s+)?"
     r"(?:removed|deleted|uninstalled)\s+(?:the\s+)?(?:model\s+)?"
-    r"(?P<ref>(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+))",
+    r"(?P<ref>(?:" + _ENGINE_PREFIX + r")?" + _MODEL_BODY + r")",
     re.I,
+)
+_MODEL_CLAIMS = frozenset({"pulled_model", "removed_model"})
+# The span fact model_pull / model_remove record once the gateway CONFIRMED
+# what they acted on: the machine-qualified id (`hub:qwen3:4b`), read off the
+# catalogue row or the removal's verified answer (S40 fix wave A2). The raw
+# argument is not that: `library:qwen3:4b` (a catalogue id) and
+# `ollama:qwen3:4b` (the name before the rename) both resolve to the default
+# machine, and reading their prefix as a machine contradicted a true report.
+# Written by app/tools/models.py through ToolContext.facts_sink.
+RESOLVED_MODEL_FACT = "resolved_model"
+
+# "I switched chat models off on hub", "I turned off models for hub", "I
+# stopped hub from running chat models", "I switched hub off for chat models",
+# "I've switched eval_box off, so it no longer runs chat models", "I've
+# stopped eval_box from serving chat" (S40): a completed change to a machine's
+# serving switch. Anchored on a SERVING noun so "I switched the lights off"
+# stays ordinary chat; backed only by a successful machine_configure span
+# naming that machine. A clause that names no machine ("here", "this
+# machine") still claims the kind, and any configure span backs it.
+_MACHINE_SERVING = r"(?:(?:the|chat|local|ai)\s+){0,2}(?:models?|model\s+serving|serving|inference)"
+_CONFIGURED_MACHINE = re.compile(
+    r"\bi(?:['’]ve|\s+have|\s+just|\s+have\s+just)?\s+(?:just\s+)?(?:"
+    + r"(?:switched|turned)\s+(?:off|on)\s+"
+    + _MACHINE_SERVING
+    + r"(?:\s+(?:on|for|at)\s+(?:the\s+)?(?P<m1>[\w.-]+))?"
+    + r"|(?:switched|turned)\s+"
+    + _MACHINE_SERVING
+    + r"\s+(?:off|on)"
+    + r"(?:\s+(?:on|for|at)\s+(?:the\s+)?(?P<m2>[\w.-]+))?"
+    + r"|(?:switched|turned)\s+(?P<m3>[\w.-]+)['’]s\s+"
+    + _MACHINE_SERVING
+    + r"\s+(?:off|on)"
+    + r"|(?:switched|turned)\s+(?:the\s+)?(?P<m4>[\w.-]+)\s+(?:off|on)\s+for\s+"
+    + _MACHINE_SERVING
+    + r"|stopped\s+(?:the\s+)?(?P<m5>[\w.-]+)\s+from\s+(?:running|serving)\s+(?:"
+    + _MACHINE_SERVING
+    + r"|chat\b)"
+    # Ruling C9 (review m6): "switched eval_box off, so it no longer runs chat
+    # models" — the serving noun trails the switch, within the same clause.
+    + r"|(?:switched|turned)\s+(?:the\s+)?(?P<m6>[\w.-]+)\s+(?:off|on)\b[^.!?;]{0,40}?\b"
+    + r"(?:no\s+longer\s+)?(?:runs?|running|serves?|serving)\s+"
+    + _MACHINE_SERVING
+    + r")",
+    re.I,
+)
+_MACHINE_GROUPS = ("m1", "m2", "m3", "m4", "m5", "m6")
+# Words that sit where a machine's name would and name none. A trailing
+# phrase is where most of them come from: alternatives 1 and 2 take whatever
+# token follows on/for/at, so "for the time being", "for a while", "at your
+# request", "on your behalf" and "for tonight" put "time", "a", "your" and
+# "tonight" in the name's place. A word here makes the claim name no machine
+# (any configure span backs it) instead of naming one no span touched, which
+# would correct a TRUE report after a real switch: the expensive failure
+# (ruling S2d-R2; T6 review, fix round 1). Precision first: a real machine
+# that happens to be called one of these is read as unnamed, never as a lie.
+# A token of digits alone ("for 2 hours") is never a name either (_claims_in).
+_NOT_A_MACHINE = frozenset(
+    {
+        # places, pronouns and "everything"
+        "here",
+        "there",
+        "it",
+        "this",
+        "that",
+        "these",
+        "those",
+        "them",
+        "you",
+        "me",
+        "us",
+        "him",
+        "we",
+        "they",
+        "everyone",
+        "now",
+        "chat",
+        "all",
+        "every",
+        "everything",
+        # the kind of thing a machine is, not its name
+        "machine",
+        "computer",
+        "box",
+        "pc",
+        "server",
+        "host",
+        "engine",
+        # articles, quantifiers and numbers: a closed class
+        "a",
+        "an",
+        "the",
+        "some",
+        "any",
+        "each",
+        "no",
+        "both",
+        "another",
+        "one",
+        "two",
+        "three",
+        "few",
+        "several",
+        "couple",
+        "next",
+        "last",
+        "whole",
+        "rest",
+        # possessives: a closed class
+        "my",
+        "your",
+        "our",
+        "his",
+        "her",
+        "its",
+        "their",
+        "mine",
+        "yours",
+        "ours",
+        "theirs",
+        # time and duration
+        "time",
+        "while",
+        "awhile",
+        "moment",
+        "today",
+        "tonight",
+        "tomorrow",
+        "morning",
+        "afternoon",
+        "evening",
+        "night",
+        "day",
+        "days",
+        "week",
+        "weekend",
+        "hour",
+        "hours",
+        "minute",
+        "minutes",
+        "later",
+        "once",
+        "good",
+        "session",
+        # reasons and manner
+        "request",
+        "behalf",
+        "purpose",
+        "maintenance",
+    }
 )
 
 # The stated correction, appended to the reply and streamed as its own frame.
@@ -824,6 +987,14 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
     for rm in _REMOVED_MODEL.finditer(clause):
         claims.append(("removed_model", _strip_trailing_punct(rm.group("ref")), rm.group(0)))
 
+    # changed a machine's serving switch (S40): the machine when one is named.
+    for cm in _CONFIGURED_MACHINE.finditer(clause):
+        named = next((cm.group(g) for g in _MACHINE_GROUPS if cm.group(g)), None)
+        named = _strip_trailing_punct(named) if named else None
+        if named and (named.lower() in _NOT_A_MACHINE or named.isdigit()):
+            named = None
+        claims.append(("configured_machine", named, cm.group(0)))
+
     return claims
 
 
@@ -875,7 +1046,14 @@ def _target_of(span: Any) -> str | None:
     treats the span as backing any claim of its kind rather than risk
     correcting an honest reply it cannot fully see (ruling S2d-R2).
     """
-    args = (getattr(span, "meta", None) or {}).get("args_redacted")
+    meta = getattr(span, "meta", None) or {}
+    if span.name in ("model_pull", "model_remove"):
+        # What the tool resolved and confirmed outranks what it was handed.
+        for fact in meta.get("facts") or ():
+            resolved = fact.get(RESOLVED_MODEL_FACT) if isinstance(fact, dict) else None
+            if isinstance(resolved, str) and resolved:
+                return resolved
+    args = meta.get("args_redacted")
     if not isinstance(args, dict):
         return None
     if span.name in ("workspace_write_file", "workspace_read_file", "workspace_delete"):
@@ -887,7 +1065,51 @@ def _target_of(span: Any) -> str | None:
     if span.name in ("model_pull", "model_remove", "model_check_update"):
         model = args.get("model")
         return model if isinstance(model, str) else None
+    if span.name == "machine_configure":
+        machine = args.get("machine")
+        return machine if isinstance(machine, str) else None
     return None
+
+
+def _model_parts(ref: str) -> tuple[str | None, str]:
+    """(machine, model) of a model reference — the machine only when the ref
+    carries one (`hub:qwen3:8b`); a bare tag's colon is its own (`qwen3:8b`)."""
+    ref = _strip_trailing_punct(ref.strip())
+    m = _ENGINE_QUALIFIED.fullmatch(ref)
+    return (m.group("engine").lower(), m.group("bare")) if m else (None, ref)
+
+
+def _same_model(claimed: str, touched: str) -> bool:
+    c_engine, c_bare = _model_parts(claimed)
+    t_engine, t_bare = _model_parts(touched)
+    if c_engine and t_engine and c_engine != t_engine:
+        return False  # a pull on another machine does not back this one
+    return c_bare.rsplit("/", 1)[-1].lower() in t_bare.lower()
+
+
+def _raw_model_arg_of(span: Any) -> str | None:
+    """The bare `model` argument a pull/remove span was CALLED with, ignoring
+    any resolved fact — the counterpart to `_target_of`'s resolved-preferring
+    read, for the one place both readings matter (see `_backed`)."""
+    meta = getattr(span, "meta", None) or {}
+    args = meta.get("args_redacted")
+    if not isinstance(args, dict):
+        return None
+    model = args.get("model")
+    return model if isinstance(model, str) else None
+
+
+def _argument_echoes(target: str, raw: str) -> bool:
+    """True when the raw argument a pull/remove tool was actually called
+    with is what the claim names — engine-STRICT, unlike `_same_model`: a
+    bare raw argument does not back a machine-qualified claim here, because
+    this only runs after the resolved id (the authoritative source) already
+    said no, and a bare argument is not evidence against that."""
+    t_engine, t_bare = _model_parts(target)
+    r_engine, r_bare = _model_parts(raw)
+    if t_engine != r_engine:
+        return False
+    return t_bare.rsplit("/", 1)[-1].lower() in r_bare.lower()
 
 
 def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
@@ -899,6 +1121,19 @@ def _backed(kind: str, target: str | None, successful: Sequence[Any]) -> bool:
     # file: kind-level presence is enough — do not flag on what we cannot see.
     if any(t is None for t in span_targets) or not target:
         return True
+    if kind in _MODEL_CLAIMS:
+        if any(_same_model(target, t) for t in span_targets):
+            return True
+        # The id the tool RESOLVED and confirmed didn't back it — but a
+        # reply that echoes exactly the raw argument she was called with
+        # (`library:<tag>`, the pre-rename `ollama:<tag>`) is just as true,
+        # and reading ONLY the resolved id as backing corrected that honest
+        # echo as though the gateway-confirmed action never happened (S40
+        # fix wave: echo backing).
+        raw_args = [_raw_model_arg_of(span) for span in matching]
+        return any(raw is not None and _argument_echoes(target, raw) for raw in raw_args)
+    if kind == "configured_machine":
+        return any(target.strip().lower() == (t or "").strip().lower() for t in span_targets)
     # Normalise both sides for trailing punctuation/whitespace, so an honest
     # backed fetch is clean regardless of the sentence punctuation the URL
     # was written with ("…/data." vs the span's "…/data").
@@ -1360,6 +1595,46 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
             re.I,
         ),
         "delete_agent",
+    ),
+    # S40 (the hub lane): her machine tools. "Where do your models run?" and
+    # "stop running chat models here" are hers to answer and to do the moment
+    # machine_status / machine_configure are registered, and a denial of either
+    # is the S12 failure again. GENERAL nouns only (machines, models) — never a
+    # machine's name — so an honest report about one machine is left alone.
+    # For machine_configure that means the determiner too (S40 fix wave A3):
+    # only "a"/"any" machine or bare plural "machines". "this machine" is what
+    # the tile and machine_status call hub, and "I can't switch off chat
+    # models on this machine — the gateway couldn't be reached" is her honest
+    # relay of a switch that did not happen, never a denial of the ability.
+    (
+        re.compile(
+            r"(?:see|seeing|check|checking|tell|telling|know|knowing|say|saying|find\s+out)\s+"
+            r"(?:where|which\s+machines?|what\s+machines?|on\s+which\s+machines?)\s+"
+            r"(?:(?:my|your|the|our|local|ai|language|chat)\s+){0,2}models?\s+"
+            r"(?:run|runs|are\s+running|is\s+running|live|lives|are|is)\b"
+            r"|(?:the\s+)?(?:status|state)\s+of\s+(?:(?:my|your|the|our|any)\s+)?machines\b"
+            # Ruling C9: the verb before the noun — "check which machine runs
+            # my models", the denial T7's checks case scores.
+            r"|(?:see|seeing|check|checking|tell|telling|know|knowing|say|saying|find\s+out)\s+"
+            r"(?:which|what)\s+machines?\s+(?:runs?|serves?|hosts?)\s+"
+            r"(?:(?:my|your|the|our|local|ai|language|chat)\s+){0,2}models?\b",
+            re.I,
+        ),
+        "machine_status",
+    ),
+    (
+        re.compile(
+            r"(?:switch|switching|turn|turning)\s+(?:off|on)\s+"
+            r"(?:(?:the|local|chat|ai)\s+){0,2}(?:models?|model\s+serving|serving|inference)\s+"
+            r"(?:on|for)\s+(?:(?:a|any)\s+machines?|machines)\b"
+            r"|(?:stop|stopping|start|starting)\s+(?:(?:a|any)\s+machines?|machines)\s+"
+            r"from\s+(?:running|serving)\s+(?:(?:chat|local|ai)\s+)?models?\b"
+            r"|(?:change|changing|control|controlling|configure|configuring|choose|choosing)\s+"
+            r"(?:which|what)\s+machines?\s+(?:runs?|serves?)\s+"
+            r"(?:(?:the|chat|local|your|my)\s+){0,2}models?\b",
+            re.I,
+        ),
+        "machine_configure",
     ),
 )
 
@@ -1859,7 +2134,7 @@ _CHECK_DEVICE = _ActionClass(
 # "pull / download / install <a model ref | the model>": her pull, anchored on a
 # model reference or the word model, so a URL/page fetch ("pull up the page",
 # _FETCH_URL) and a file read are never swept in.
-_MODEL_REF = r"(?:ollama:)?(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?|[\w.-]+(?:/[\w.-]+)?:[\w.-]+)"
+_MODEL_REF = r"(?:" + _ENGINE_PREFIX + r")?" + _MODEL_BODY
 _PULL_MODEL = _ActionClass(
     re.compile(
         r"\b(?:pull|download|install|grab|get)\b(?:\s+(?:me|us|down))?"
@@ -4640,6 +4915,27 @@ STACK_CLAIM_CORRECTION = (
     "asked for can be attempted."
 )
 
+# The turn kinds this guard is ARMED in: the kinds its precision was measured
+# in, and no others.
+#
+#   * `chat` is S19's own, where the 2026-09-12 walk happened.
+#   * `eval` replays chat's path with nothing injected (the turn's kind is its
+#     only eval-ness, evals/runner), so an eval case scoring
+#     guard_absent('stack_claim') measures exactly what chat would do. Armed by
+#     S40 T7 (2026-09-19): before, the guard read only rounds stamped 'chat',
+#     and that half of every eval case scored green by construction.
+#
+# NOT armed: `scheduled` and `agent`. Nobody reads those streams live and the
+# correction is REPLACE-class, so a false one IS the persisted row. The S40 T7
+# review measured three true outage reports contradicted there ("Your
+# website's backend is down — the fetch returned 502." among them), and a
+# scheduled "check my machines" turn answered by a cloud link while hub is
+# down is reachable from S40 on. Arming a kind is a line here, after its
+# MUST_NOT set is measured in it (test_guards); carried in slice-40-carries
+# with the owner's question. `beat` never reaches this guard (beats do not run
+# chat._run_turn) and is not armed either.
+STACK_CLAIM_KINDS = frozenset({"chat", "eval"})
+
 # The serving path, as the words a reply reaches for. A vocabulary, not a
 # policy list: these are the nouns that mean "the thing that answers", and the
 # model actually in play is added from the turn's own spans.
@@ -4684,31 +4980,44 @@ class StackClaim:
     text: str = STACK_CLAIM_CORRECTION
 
 
-def served_this_turn(spans: Sequence[Any]) -> bool:
-    """Did the model answer THIS turn? A chat round with no error on it.
+def served_this_turn(spans: Sequence[Any], purpose: str) -> bool:
+    """Did the model answer THIS turn? One of the turn's OWN rounds with no
+    error on it.
+
+    `purpose` is what the turn's own rounds are recorded under — its kind
+    (chat._purpose_of): `chat`, and equally `scheduled`, `beat`, `agent` or
+    `eval`, each of them a turn a model answers. It is the caller's to state,
+    never a default: reading only `chat` left every eval case scoring
+    guard_absent('stack_claim') green by construction (found by S40 T7,
+    2026-09-19). Which kinds the GUARD runs in is a separate question,
+    answered by STACK_CLAIM_KINDS.
 
     Judge and redirect rounds are llm_call spans too and are deliberately not
-    evidence: they are the backend's own second opinions, and the claim under
-    test is about the reply in hand.
+    evidence: they carry their own purpose, they are the backend's own second
+    opinions, and the claim under test is about the reply in hand.
     """
     for span in spans:
         if getattr(span, "kind", None) != "llm_call":
             continue
         meta = getattr(span, "meta", None) or {}
-        if meta.get("purpose") not in (None, "chat"):
+        if meta.get("purpose") not in (None, purpose):
             continue
         if not meta.get("error"):
             return True
     return False
 
 
-def stack_claim_check(reply_text: str, spans: Sequence[Any]) -> StackClaim | None:
+def stack_claim_check(reply_text: str, spans: Sequence[Any], *, purpose: str) -> StackClaim | None:
     """Contradict a present-tense claim that the serving path is down, made in
     a turn the model served. None otherwise — pure, precision-first, fail-open
-    at the call site like every other guard here."""
+    at the call site like every other guard here. `purpose` is the turn's kind,
+    which is its own rounds' purpose (see served_this_turn). In a kind outside
+    STACK_CLAIM_KINDS it says nothing: its precision there is unmeasured."""
+    if purpose not in STACK_CLAIM_KINDS:
+        return None
     if not reply_text or not reply_text.strip():
         return None
-    if not served_this_turn(spans):
+    if not served_this_turn(spans, purpose):
         return None
     for clause, is_question in _clauses(reply_text):
         if is_question:

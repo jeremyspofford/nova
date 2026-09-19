@@ -60,6 +60,7 @@ import {
   type Facets,
   type SortKey,
 } from './catalogFormat'
+import { LOCAL_PROVIDER } from '../settings/modelsFormat'
 import { ModelDetails } from './ModelDetails'
 import { CompareView } from './CompareView'
 import { BenchmarkCharts } from './BenchmarkCharts'
@@ -133,11 +134,11 @@ function actionsOf(row: CatalogRow): CatalogAction[] {
 }
 
 /** Does the re-read catalogue list `target` as installed on the bundled
- * ollama? A pull of `qwen3:4b` shows up as `ollama:qwen3:4b`; a pull of a
- * bare `qwen3` as `qwen3:latest`. */
+ * engine? A pull of `qwen3:4b` shows up as `hub:qwen3:4b`; a pull of a bare
+ * `qwen3` as `qwen3:latest`. */
 export function listsInstalled(cat: Catalog, target: string): boolean {
   const wanted = new Set([target, `${target}:latest`])
-  return cat.rows.some(r => r.kind === 'local' && r.installed === true && r.provider === 'ollama' && wanted.has(r.model))
+  return cat.rows.some(r => r.kind === 'local' && r.installed === true && r.provider === LOCAL_PROVIDER && wanted.has(r.model))
 }
 
 const bannerClass = 'rounded-sm border border-danger/30 bg-danger-dim px-4 py-3 text-compact text-danger'
@@ -305,8 +306,10 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
     setRemoveBusy(true)
     setActionError(null)
     try {
-      const result = await api.removeModel(row.model)
-      if (result.verified !== true) throw new Error(`the gateway did not verify the removal of ${row.model}`)
+      // The qualified id (`hub:qwen3:8b`) names the engine the model is
+      // removed from; the gateway verifies against that engine's own list.
+      const result = await api.removeModel(row.id)
+      if (result.verified !== true) throw new Error(`the gateway did not verify the removal of ${row.id}`)
       setRemoving(null)
       // Installed is what the re-read catalogue says, never the 200.
       await load()
@@ -321,7 +324,8 @@ export function ModelsPage({ api = DEFAULT_API }: { api?: ModelsApi } = {}) {
   const checkUpdate = async (row: CatalogRow) => {
     setDrift(prev => ({ ...prev, [row.id]: 'checking' }))
     try {
-      const result = await api.checkDrift(row.model)
+      // The gateway takes the qualified id, so the engine is named.
+      const result = await api.checkDrift(row.id)
       setDrift(prev => ({ ...prev, [row.id]: result }))
     } catch (err) {
       setDrift(prev => ({ ...prev, [row.id]: { error: reasonOf(err) } }))

@@ -49,7 +49,7 @@ function turn(overrides: Partial<ActivityTurn> = {}): ActivityTurn {
   return {
     id: 't1',
     kind: 'agent',
-    model: 'ollama:qwen3:8b',
+    model: 'hub:qwen3:8b',
     status: 'ok',
     started_at: new Date().toISOString(),
     duration_ms: 1200,
@@ -311,7 +311,7 @@ describe('AgentPage — Log', () => {
     const api = fakeApi(undefined, {
       log: [
         message({ id: 'm1', role: 'user', content: 'write a haiku to haiku.md' }),
-        message({ id: 'm2', role: 'assistant', content: 'Wrote haiku.md: cold pond…', served_by: 'ollama:qwen3:8b' }),
+        message({ id: 'm2', role: 'assistant', content: 'Wrote haiku.md: cold pond…', served_by: 'hub:qwen3:8b' }),
         message({ id: 'm3', role: 'user', content: 'review it' }),
       ],
     })
@@ -323,7 +323,7 @@ describe('AgentPage — Log', () => {
     expect(pairs).toHaveLength(2)
     expect(within(pairs[0]).getByTestId('log-brief').textContent).toBe('write a haiku to haiku.md')
     expect(within(pairs[0]).getByTestId('log-report').textContent).toBe('Wrote haiku.md: cold pond…')
-    expect(within(pairs[0]).getByText('ollama:qwen3:8b')).toBeDefined()
+    expect(within(pairs[0]).getByText('hub:qwen3:8b')).toBeDefined()
     expect(within(pairs[1]).getByTestId('log-brief').textContent).toBe('review it')
     expect(within(pairs[1]).getByText(/no report yet/i)).toBeDefined()
   })

@@ -6,8 +6,9 @@ Hugging Face, each provider) and never sees eval data. Core forwards that
 answer and adds one `measured` suitability entry per eval suite whose
 newest complete run, at the suite's current version, names the row's
 model. The match is DERIVED against the live rows — a stored id equals the
-row's `provider:model`, or (a run recorded before the registry existed)
-equals the bundled ollama row's bare model — never a guessed prefix.
+row's `provider:model`, or (a run recorded with a bare id) equals a LOCAL
+row's bare model — local in the catalogue's own word, on whichever engine
+lists it — never a guessed prefix.
 
 A gateway refusal is relayed as-is. A malformed gateway body is a stated
 502, never an empty catalogue that reads as "nothing installed".
@@ -31,14 +32,15 @@ router = APIRouter(prefix="/api/v1", tags=["catalog"])
 logger = logging.getLogger("core")
 
 CATALOG_TIMEOUT = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
-LOCAL_PROVIDER = "ollama"
 MEASURED_SOURCE = "core-evals"
 
 
 def measured_for(row: dict, measured: dict[str, dict[str, dict]]) -> dict[str, dict]:
-    """The measured entries that belong to `row`, keyed by suite."""
+    """The measured entries that belong to `row`, keyed by suite. A bare id
+    measured whatever local engine answered it; a row on an engine says so in
+    its own `kind` (S40) — never a provider name kept here."""
     candidates = [row.get("id")]
-    if row.get("provider") == LOCAL_PROVIDER:
+    if row.get("kind") == "local":
         candidates.append(row.get("model"))
     found: dict[str, dict] = {}
     for key in candidates:
@@ -157,4 +159,16 @@ async def vision_models(request: Request) -> dict:
             "models": [],
             "reason": "the model catalogue could not be read, so this list is not the whole truth",
         }
-    return {"models": [vision.bare(m) for m in vision.capable(rows, "vision")]}
+    # What the picker writes into chat.vision_model (ruling E6, S40): a LOCAL
+    # row's bare model, which resolves on whichever machine holds it — and a
+    # cloud row's whole id, because `openai/gpt-4o` without its provider
+    # names nothing the gateway can route. Read off the row's own fields, not
+    # split out of its id.
+    able = set(vision.capable(rows, "vision"))
+    return {
+        "models": [
+            row["model"] if row.get("kind") == "local" and row.get("model") else row["id"]
+            for row in rows
+            if isinstance(row, dict) and row.get("id") in able
+        ]
+    }

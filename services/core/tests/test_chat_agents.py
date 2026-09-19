@@ -548,7 +548,10 @@ async def test_recall_asks_one_partition_or_two_under_one_span(pool, mount_peers
     turn, _ = await _agent_turn(pool, agent, owner)
     assert memory.recalls == [{"query": "do the task", "person_id": str(agent.id), "k": 5}]
     (recall,) = [s for s in await _spans(pool, turn.id) if s["kind"] == "memory_recall"]
-    assert recall["meta"] == {"k": 5, "hits": 1}
+    # `recalled` joined the span in f0693c35 (2026-09-16), which moved
+    # test_chat.py's pin and missed these two; the full suite was wedged at the
+    # time, so nothing reported it until item 0 (2026-09-18).
+    assert recall["meta"] == {"k": 5, "hits": 1, "recalled": ["Kitchen"]}
     volatile = gateway.payloads[0]["messages"][1]["content"]
     assert "- Kitchen: the kettle is new" in volatile and "(shared)" not in volatile
 
@@ -560,7 +563,14 @@ async def test_recall_asks_one_partition_or_two_under_one_span(pool, mount_peers
     assert [r["person_id"] for r in memory.recalls] == [str(reader.id), str(owner.id)]
     assert {r["query"] for r in memory.recalls} == {"do the task"}
     (recall,) = [s for s in await _spans(pool, turn.id) if s["kind"] == "memory_recall"]
-    assert recall["meta"] == {"k": 5, "scopes": {"own": 1, "shared": 1}, "hits": 2}
+    # One name per note recalled, per scope: the same note found in both
+    # partitions is two recalls, and the span says so.
+    assert recall["meta"] == {
+        "k": 5,
+        "scopes": {"own": 1, "shared": 1},
+        "hits": 2,
+        "recalled": ["Kitchen", "Kitchen"],
+    }
     volatile = gateway.payloads[0]["messages"][1]["content"]
     assert volatile.startswith(
         f"{chat.NOTES_HEADER}\n- Kitchen: the kettle is new"

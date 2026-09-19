@@ -51,6 +51,33 @@ cannot read — because every healthcheck is green either way (`ollama list`
 passes on the CPU) and a 27B model on the CPU only shows up as the next chat
 turn timing out, which is exactly what happened.
 
+## Machines
+
+Since S40 the gateway treats local inference as **engines**: a provider row with
+`adapter='ollama'` plus an `engines` row (lifecycle, the serving switch, cached
+state). Today there is one, the bundled container, and its provider name is
+**`hub`**.
+
+- **Ids name the machine.** `hub:qwen3:8b` is the bundled engine's `qwen3:8b`. A bare id (`qwen3:8b`, whose own colon is the tag) still means the default provider.
+  - Migration 009 renamed the builtin provider `ollama` → `hub` and rewrote `ollama:X` chain links. Core's 035 rewrote `chat.model`/`chat.vision_model` values that carried the `ollama:` prefix.
+  - **History keeps `ollama`.** Usage rows and probes written before S40 still say so, because that was true. `ollama` is now a reserved provider name, so nothing new can take it over.
+- **Reading an engine.** `GET /admin/engines[?live=1]` and `GET /admin/engines/{name}` replace `/admin/vram`, which is gone.
+  - Each engine states what it saw (`ready`, `unreachable`, `switched_off`, `unobserved`), with its reason, when it saw it, its models, and its compute.
+  - Failures are cached for 10 s and successes for 30 s.
+- **Measurement identity.** Every served reply, probe and usage row carries `served_on`, the compute it actually ran on, in the D10 grammar (`gpu:cuda:<uuid>`, `cpu:<model>|<n>c|<GiB>g`, joined by `+` for a split). `runtime` (`container`) is recorded separately.
+  - When it cannot be known, it is **omitted, never guessed**.
+  - Fit and speed read only numbers measured on the same compute. Legacy probes with no compute are never read by fit.
+- **The serving switch** is in Settings → Models → Machines, or you can ask her ("stop running chat models here" → `machine_configure`, which reads the value back).
+  - When it is off, chat routing passes over that machine and the next link in the role's chain answers, saying so. With no next link, the turn fails and says why.
+  - Calls that name their model with no role are still served there.
+  - **Memory's embeddings do not go through the switch.** The memory service calls the bundled ollama container directly (`http://ollama:11434`), so a switched-off `hub` still embeds. If that container stops answering, the urgent `peer_down:hub` check still fires.
+- **Rollback of S40 (drilled on copies of live data).** `pg_restore --clean` does **not** work over an S40 database, because `providers` cannot be dropped while `engines` references it. Instead:
+  1. Stop `gateway` and `core`.
+  2. Drop and recreate each database: `DROP DATABASE nova_gateway; CREATE DATABASE nova_gateway OWNER gateway;` and `DROP DATABASE nova_core; CREATE DATABASE nova_core OWNER core;` (the owners are the service roles from `postgres-init/01-databases.sql`).
+  3. `pg_restore -U postgres -d <db>` the pre-S40 dumps.
+  4. `docker tag nova-<svc>:pre-s40 nova-<svc>:latest`.
+  5. `up -d --no-deps --no-build --force-recreate gateway core web`.
+
 ## Tailnet access
 
 One durable HTTPS origin on your tailnet — `https://<node>.<tailnet>.ts.net`

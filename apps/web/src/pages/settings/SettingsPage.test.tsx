@@ -60,6 +60,7 @@ vi.mock('../../lib/api', async importOriginal => {
       api_key: null,
     })),
     pullModel: vi.fn(),
+    getMachines: vi.fn(async () => ({ machines: [] })),
   }
 })
 

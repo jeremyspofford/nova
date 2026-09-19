@@ -1,8 +1,10 @@
 """The model catalogue: every source mapped into ONE row shape.
 
-Assembles, with no HTTP of its own: installed local models (ollama
-/api/tags + /api/show), the curated picks not installed (the vetted
-layer), and every registered provider's listing. Each row is
+Assembles, with no HTTP of its own: installed models on every engine
+(each engine's own /api/tags + /api/show, ids `{engine}:{tag}`, one source
+per engine keyed by its name — S40), the curated picks no engine holds
+(`library:{slug}`, the vetted layer), and every registered provider's
+listing. Each row is
 `CatalogRow` — every fact `{value, basis, source}` with `basis ∈ declared |
 inferred | vetted | measured` and `source` a key into the row's
 `sources[]`, each stamped with when it answered. A fact a source did not
@@ -17,12 +19,13 @@ suite here).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from app import adapters, hf_hub, ollama_registry, providers, pulls
+from app import adapters, engines, hf_hub, ollama_registry, providers, pulls
 from app import curated as curated_mod
 from app import fit as fit_mod
 from app.adapters import (
@@ -31,7 +34,13 @@ from app.adapters import (
     ollama,
     openai_chat,
 )
-from app.catalog_row import BASES, ROW_KEYS, base_row, fact  # noqa: F401 — the shared shape
+from app.catalog_row import (  # noqa: F401 — the shared shape
+    BASES,
+    LIBRARY,
+    ROW_KEYS,
+    base_row,
+    fact,
+)
 
 logger = logging.getLogger("gateway")
 
@@ -83,10 +92,13 @@ def local_row(
     fit_ctx: dict,
     *,
     tags_fetched_at: str,
+    engine: str,
 ) -> dict:
-    """One installed model from ollama's own state (+ the vetted layer)."""
+    """One installed model from ONE engine's own state (+ the vetted layer).
+    Its id is `{engine}:{tag}` — what a chain link or chat.model names it by
+    (S40, D21)."""
     name = tags_row["id"]
-    row = _base_row(f"ollama:{name}", "ollama", name, name, "local")
+    row = _base_row(f"{engine}:{name}", engine, name, name, "local")
     row["installed"] = True
     row["sources"].append(
         {"key": SOURCE_TAGS, "url": "ollama /api/tags", "fetched_at": tags_fetched_at}
@@ -135,6 +147,9 @@ def local_row(
             "ok": True,
             "latency_ms": probe_row.get("latency_ms"),
             "vram_mb": probe_row.get("vram_mb"),
+            # Where it ran (D10): the card, or `cpu:…+gpu:…` for a partly
+            # offloaded run; None when the stamp was omitted.
+            "compute": probe_row.get("compute"),
             "created_at": probe_row["created_at"].isoformat()
             if hasattr(probe_row.get("created_at"), "isoformat")
             else probe_row.get("created_at"),
@@ -165,10 +180,11 @@ def local_row(
 
 
 def library_row(curated_entry: dict, fit_ctx: dict, probe_row: dict | None) -> dict:
-    """A curated pick that is not installed: the vetted layer is all there
-    is until it is pulled (or resolved live from the registry)."""
+    """A curated pick that no engine holds: the vetted layer is all there is
+    until it is pulled (or resolved live from the registry). It is on no
+    machine, so its id is `library:{slug}` (S40) — never an engine's."""
     slug = curated_entry["slug"]
-    row = _base_row(f"ollama:{slug}", "ollama", slug, curated_entry.get("label") or slug, "local")
+    row = _base_row(f"{LIBRARY}:{slug}", LIBRARY, slug, curated_entry.get("label") or slug, "local")
     row["installed"] = False
     _annotate(row, curated_entry)
     row["fit"] = _fit_for(curated_entry, probe_row, fit_ctx)
@@ -285,22 +301,78 @@ def cloud_row(provider_row: dict, model: dict, fetched_at: str, *, cached: bool 
 # ── assembly ──────────────────────────────────────────────────────────────
 
 
-async def _probes_by_model(pool, names: list[str]) -> dict[str, dict]:
-    """The newest OK probe of the BUNDLED ollama per name (kind='ollama' —
-    a second ollama host registered as a provider probes the same bare tag
-    and must not lend its numbers to the local row), with latency and time
-    for the row's `probe` block. Fit does NOT read this: it reads
-    admin._latest_probes (newest with a VRAM reading), the same query
+async def _probes_by_model(pool, names: list[str], provider: str) -> dict[str, dict]:
+    """The newest OK probe per name taken ON THIS ENGINE (`probes.provider`,
+    stamped since migration 009 — a second machine probes the same bare tag
+    and must not lend its numbers to this engine's row), with latency, time
+    and the compute it ran on for the row's `probe` block. A row from before
+    009 names no engine and is nobody's until re-probed. Fit does NOT read
+    this: it reads admin._latest_probes (keyed by compute), the same query
     /admin/suggest uses, so the two verdicts agree by construction."""
     if not names:
         return {}
     rows = await pool.fetch(
-        "SELECT DISTINCT ON (model) model, vram_mb, latency_ms, created_at FROM probes "
-        "WHERE model = ANY($1) AND ok = true AND kind = 'ollama' "
+        "SELECT DISTINCT ON (model) model, vram_mb, latency_ms, compute, created_at FROM probes "
+        "WHERE model = ANY($1) AND provider = $2 AND ok = true "
         "ORDER BY model, created_at DESC",
         names,
+        provider,
     )
     return {row["model"]: dict(row) for row in rows}
+
+
+def _read_at(value: object) -> datetime:
+    """When an /api/show answer was read: its own `fetched_at` — a cached
+    answer keeps the time it was ORIGINALLY read (app/cache.py's rail), so a
+    row never claims a fresher reading than happened."""
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    return datetime.now(UTC)
+
+
+async def _remember_models(
+    pool, engine: str, tags_models: list[dict], shown: dict[str, dict]
+) -> None:
+    """What THIS engine's /api/show said about each model it lists, kept in
+    `engine_models` (S40 ruling G1): the digest the answer is about, the
+    capabilities ollama declared (NULL when it declared none — never "none"),
+    the context length it stated, and when it was read. One row per (engine,
+    name), updated on every read. A show that failed or timed out said
+    nothing, so nothing is written for it: a row is only ever what was read."""
+    records = []
+    for tags_row in tags_models:
+        name = tags_row["id"]
+        answer = shown.get(name)
+        if answer is None or answer.get("note"):
+            continue
+        capabilities = [
+            key
+            for key, entry in (answer.get("capabilities") or {}).items()
+            if isinstance(entry, dict) and entry.get("value") is True
+        ]
+        context = ((answer.get("facts") or {}).get("context_length") or {}).get("value")
+        records.append(
+            (
+                engine,
+                name,
+                tags_row.get("digest"),
+                json.dumps(capabilities) if capabilities else None,
+                context if isinstance(context, int) and context > 0 else None,
+                _read_at(answer.get("fetched_at")),
+            )
+        )
+    if not records:
+        return
+    await pool.executemany(
+        "INSERT INTO engine_models (provider, name, digest, capabilities, context_length, "
+        "read_at) VALUES ($1, $2, $3, $4::jsonb, $5, $6) ON CONFLICT (provider, name) DO UPDATE "
+        "SET digest = EXCLUDED.digest, capabilities = EXCLUDED.capabilities, "
+        "context_length = EXCLUDED.context_length, read_at = EXCLUDED.read_at",
+        records,
+    )
 
 
 SHOW_DEADLINE_S = 15.0
@@ -314,6 +386,19 @@ def _show_timed_out(names: list[str]) -> dict[str, dict]:
     }
 
 
+# The fit context when no machine here runs models: every verdict `unknown`,
+# saying why (library rows still list — they are pullable once one exists).
+_NO_ENGINE = {
+    "engine": None,
+    "compute": None,
+    "fit_frame": None,
+    "free_gb": None,
+    "total_gb": None,
+    "reason": "no machine here runs models",
+    "sizes": {},
+}
+
+
 async def build(
     app,
     pool,
@@ -322,39 +407,47 @@ async def build(
     listing_for: Callable,
     latest_probes: Callable,
 ) -> dict:
-    """The whole catalogue. `fit_context(app, pool)`, `listing_for(app,
-    pool, row)` and `latest_probes(pool, names)` are admin.py's own helpers,
-    passed in so this module owns no HTTP and the numbers agree with
-    /admin/suggest by construction. The local section (tags + show) and the
-    provider listings run CONCURRENTLY, and the show fan-out is bounded by
-    SHOW_DEADLINE_S — a stalled ollama yields rows with /api/tags facts and
-    a stated note, never a page that times out at core."""
+    """The whole catalogue. `fit_context(app, pool, engine_row)`,
+    `listing_for(app, pool, row)` and `latest_probes(pool, names, *,
+    compute)` are admin.py's own helpers, passed in so this module owns no
+    HTTP and the numbers agree with /admin/suggest by construction. One
+    section per ENGINE (S40), each its own source keyed by the engine's name
+    (`kind: "engine"`), and the provider listings, all CONCURRENTLY; the
+    show fan-out is bounded by SHOW_DEADLINE_S — a stalled ollama yields
+    rows with /api/tags facts and a stated note, never a page that times out
+    at core. Library rows are the curated picks no engine lists; their fit
+    is the builtin's — the machine a bare pull lands on while it is the only
+    one (S44 adds a fit per engine)."""
     fetched_at = _now()
     sources: list[dict] = []
     rows: list[dict] = []
     curated = curated_mod.load_curated()
     by_slug = {entry["slug"]: entry for entry in curated}
-    fit_ctx = await fit_context(app, pool)
+    engine_rows = await engines.rows(pool)
+    contexts = await asyncio.gather(*(fit_context(app, pool, r) for r in engine_rows))
+    fit_by_engine = {r["name"]: ctx for r, ctx in zip(engine_rows, contexts, strict=True)}
 
-    async def local_section() -> tuple[list[dict], list[dict], set[str]]:
-        builtin = await providers.get_row(pool, "ollama")
-        base_url = providers.base_url_of(builtin)
+    async def engine_section(engine_row: dict) -> tuple[dict, list[dict], set[str] | None]:
+        engine = engine_row["name"]
+        fit_ctx = fit_by_engine[engine]
         try:
-            tags = await ollama.ADAPTER.list_models(app, builtin)
+            tags = await ollama.ADAPTER.list_models(app, engine_row)
         except ProviderRefused as exc:
-            failed_source = {"key": "ollama", "ok": False, "rows": 0, "note": exc.detail}
-            return [{**failed_source, "fetched_at": fetched_at}], [], set()
+            failed = {"key": engine, "kind": "engine", "ok": False, "rows": 0, "note": exc.detail}
+            return {**failed, "fetched_at": fetched_at}, [], None
         names = [m["id"] for m in tags.models]
         note = None
         try:
             shown = await asyncio.wait_for(
-                ollama.facts_for_installed(app, base_url, tags.models), SHOW_DEADLINE_S
+                ollama.facts_for_installed(app, providers.base_url_of(engine_row), tags.models),
+                SHOW_DEADLINE_S,
             )
         except TimeoutError:
             shown = _show_timed_out(names)
             note = f"/api/show did not answer within {SHOW_DEADLINE_S:g} s — /api/tags facts only"
-        probe_blocks = await _probes_by_model(pool, names)
-        fit_probes = await latest_probes(pool, names)
+        await _remember_models(pool, engine, tags.models, shown)
+        probe_blocks = await _probes_by_model(pool, names, engine)
+        fit_probes = await latest_probes(pool, names, compute=fit_ctx["compute"])
         local_rows = [
             local_row(
                 tags_row,
@@ -364,17 +457,18 @@ async def build(
                 fit_probes.get(tags_row["id"]),
                 fit_ctx,
                 tags_fetched_at=tags.fetched_at,
+                engine=engine,
             )
             for tags_row in tags.models
         ]
         failed = sum(1 for v in shown.values() if v.get("note"))
         if failed and note is None:
             note = f"/api/show failed for {failed} model(s)"
-        source = {"key": "ollama", "ok": True, "rows": len(tags.models)}
+        source = {"key": engine, "kind": "engine", "ok": True, "rows": len(tags.models)}
         source["fetched_at"] = tags.fetched_at
         if note:
             source["note"] = note
-        return [source], local_rows, set(names)
+        return source, local_rows, set(names)
 
     async def one(provider_row: dict) -> tuple[dict, list[dict]]:
         name = provider_row["name"]
@@ -394,23 +488,29 @@ async def build(
             [cloud_row(provider_row, m, listing.fetched_at) for m in listing.models],
         )
 
-    provider_rows = [r for r in await providers.list_rows(pool) if not r["builtin"]]
-    local, *provider_results = await asyncio.gather(
-        local_section(), *(one(r) for r in provider_rows)
+    # A machine that runs models is an engine section, never a cloud listing.
+    cloud_rows = [r for r in await providers.list_rows(pool) if not engines.is_engine(r)]
+    results = await asyncio.gather(
+        *(engine_section(r) for r in engine_rows), *(one(r) for r in cloud_rows)
     )
-    local_sources, local_rows, installed_tags = local
-    sources.extend(local_sources)
-    rows.extend(local_rows)
+    installed_anywhere: set[str] = set()
+    for source, local_rows, installed in results[: len(engine_rows)]:
+        sources.append(source)
+        rows.extend(local_rows)
+        installed_anywhere |= installed or set()
 
-    library = [entry for entry in curated if entry["slug"] not in installed_tags]
-    fit_probes = await latest_probes(pool, [entry["slug"] for entry in library])
+    library = [entry for entry in curated if entry["slug"] not in installed_anywhere]
+    library_ctx = fit_by_engine[engine_rows[0]["name"]] if engine_rows else _NO_ENGINE
+    fit_probes = await latest_probes(
+        pool, [entry["slug"] for entry in library], compute=library_ctx["compute"]
+    )
     for entry in library:
-        rows.append(library_row(entry, fit_ctx, fit_probes.get(entry["slug"])))
+        rows.append(library_row(entry, library_ctx, fit_probes.get(entry["slug"])))
     sources.append(
         {"key": SOURCE_CURATED, "ok": True, "rows": len(library), "url": "curated_models.json"}
     )
 
-    for source, provider_models in provider_results:
+    for source, provider_models in results[len(engine_rows) :]:
         sources.append(source)
         rows.extend(provider_models)
 
@@ -420,51 +520,60 @@ async def build(
 # ── Hugging Face and the registry, as rows ────────────────────────────────
 
 
-def hf_page_rows(page: hf_hub.HfPage, installed_names: set[str] | None) -> list[dict]:
+def hf_page_rows(page: hf_hub.HfPage, installed: dict[str, set[str] | None] | None) -> list[dict]:
     rows = [
         hf_hub.to_catalog_row(entry, page.fetched_at, cached=page.cached) for entry in page.rows
     ]
     for row in rows:
-        mark_hub_installed(row, installed_names)
+        mark_hub_installed(row, installed)
     return rows
 
 
-def hf_repo_row(repo: hf_hub.HfRepo, installed_names: set[str] | None) -> dict:
+def hf_repo_row(repo: hf_hub.HfRepo, installed: dict[str, set[str] | None] | None) -> dict:
     quants = hf_hub.quants_of(repo.siblings)
     # A detail body without `id` still maps under the ref that was asked for.
     row = hf_hub.to_catalog_row(
         {**repo.data, "id": repo.id}, repo.fetched_at, cached=repo.cached, quants=quants
     )
-    mark_hub_installed(row, installed_names)
+    mark_hub_installed(row, installed)
     return row
 
 
-def mark_hub_installed(row: dict, installed_names: set[str] | None) -> None:
-    """`installed` on a Hub row is THIS host's fact, never the Hub's: True
-    when ollama's own tags list the repo under any quant (`hf.co/org/repo:
-    Q4_K_M`), naming the installed tag(s); False when the tags were read
-    and the repo is not among them; None (unstated) when they could not be
-    read."""
-    if installed_names is None:
+def mark_hub_installed(row: dict, installed: dict[str, set[str] | None] | None) -> None:
+    """`installed` on a Hub row is a fact about THIS hub's machines, never
+    the Hub's: True when any engine's own tags list the repo under any quant
+    (`hf.co/org/repo:Q4_K_M`), naming each as `{engine}:{tag}` — the id to
+    use; False when every engine's tags were read and none lists it; None
+    (unstated) when one could not be read and none that could lists it."""
+    if not installed:
         return
     prefix = f"{row['model']}:"
-    hits = sorted(n for n in installed_names if n == row["model"] or n.startswith(prefix))
+    hits = sorted(
+        f"{engine}:{name}"
+        for engine, names in installed.items()
+        for name in names or ()
+        if name == row["model"] or name.startswith(prefix)
+    )
     if hits:
         row["installed"] = True
         row["note"] = "installed as " + ", ".join(hits)
-    else:
+    elif all(names is not None for names in installed.values()):
         row["installed"] = False
 
 
-async def installed_names(app, pool) -> set[str] | None:
-    """What the bundled ollama lists right now, or None when it could not be
-    asked — the caller then leaves `installed` unstated rather than False."""
-    try:
-        builtin = await providers.get_row(pool, "ollama")
-        listing = await ollama.ADAPTER.list_models(app, builtin)
-    except (ProviderRefused, providers.UnknownProvider):
-        return None
-    return {m["id"] for m in listing.models}
+async def installed_names(app, pool) -> dict[str, set[str] | None]:
+    """{engine: what it lists right now, or None when it could not be asked}
+    — one entry per machine that runs models, read live. A machine that
+    could not be asked leaves `installed` unstated rather than False."""
+    out: dict[str, set[str] | None] = {}
+    for engine_row in await engines.rows(pool):
+        try:
+            listing = await ollama.ADAPTER.list_models(app, engine_row)
+        except ProviderRefused:
+            out[engine_row["name"]] = None
+        else:
+            out[engine_row["name"]] = {m["id"] for m in listing.models}
+    return out
 
 
 async def resolve_ref(app, model: str) -> dict:
@@ -564,22 +673,60 @@ async def _upstream_weights(app, name: str) -> tuple[str | None, str, str | None
     return None, ollama_registry.SOURCE_KEY, "the registry manifest carries no model layer"
 
 
+async def engine_and_model(pool, raw: object) -> tuple[dict, str]:
+    """(engine row, bare model) for the model a pull, a removal or an update
+    check names (S40). `hub:qwen3:8b` names its engine; a bare `qwen3:8b`
+    means the one machine there is, and is refused by name when there are
+    several — which machine would be a guess. A library row's own id
+    (`library:qwen3:8b`, `library:hf.co/…` — a pick no machine holds yet)
+    names no machine: it is the model after the prefix, bound exactly as a
+    bare ref is (S40 fix wave C2). A cloud provider's prefix is refused: a
+    cloud model is used directly. The ref is validated AFTER the engine
+    prefix is split off (pulls.MODEL_RE allows one colon, the tag's own).
+    The machines are read live (engines.rows), never a list anyone keeps.
+    Raises ValueError with the reason (a 400)."""
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("model is required — e.g. hub:qwen3:8b")
+    raw = raw.strip()
+    head, sep, rest = raw.partition(":")
+    if sep and rest and head == LIBRARY:
+        raw = rest
+    machines = {row["name"]: row for row in await engines.rows(pool)}
+    names = {row["name"] for row in await providers.list_rows(pool)} | set(machines)
+    prefix, bare = providers.split_model_id(raw, names)
+    model = pulls.validate_model(bare)
+    if prefix is not None:
+        if prefix not in machines:
+            raise ValueError(
+                f"{prefix!r} is not a machine that runs models — a cloud model is used "
+                "directly; it cannot be pulled, removed or checked for updates"
+            )
+        return machines[prefix], model
+    if not machines:
+        raise ValueError("no machine here runs models — there is nothing to pull to or remove from")
+    if len(machines) > 1:
+        named = " or ".join(f"{name}:{raw}" for name in machines)
+        raise ValueError(f"{raw!r} does not say which machine — name it: {named}")
+    return next(iter(machines.values())), model
+
+
 async def check_drift(app, pool, model: str) -> dict:
-    """Has the source's weights blob changed since `model` was pulled?
-    Compares the installed Modelfile's blob digest with the source's
-    current one. NEVER pulls, never re-resolves the tag to another model:
-    `moved` is True/False only when both digests were read, else None with
-    the reason. The catalogue's `drift` block is exactly this shape."""
-    model = pulls.validate_model(model)
-    builtin = await providers.get_row(pool, "ollama")
-    listing = await ollama.ADAPTER.list_models(app, builtin)
+    """Has the source's weights blob changed since `model` was pulled onto
+    the named engine (`hub:x`; a bare id means the only one)? Compares the
+    installed Modelfile's blob digest — read from THAT engine — with the
+    source's current one. NEVER pulls, never re-resolves the tag to another
+    model: `moved` is True/False only when both digests were read, else None
+    with the reason. The catalogue's `drift` block is exactly this shape."""
+    row, model = await engine_and_model(pool, model)
+    listing = await ollama.ADAPTER.list_models(app, row)
     name = installed_name(listing.models, model)
     if name is None:
-        raise NotInstalled(f"{model!r} is not installed on the bundled ollama")
+        raise NotInstalled(f"{model!r} is not installed on {row['name']}")
     checked_at = _now()
-    show = await ollama.show(app, providers.base_url_of(builtin), name)
+    show = await ollama.show(app, providers.base_url_of(row), name)
     installed = installed_weights_digest(show)
     result = {
+        "engine": row["name"],
         "model": name,
         "checked_at": checked_at,
         "installed_digest": installed,

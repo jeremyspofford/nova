@@ -55,16 +55,13 @@ may state that a call cannot run; it may never decide that it may not.
 
 from __future__ import annotations
 
-import httpx
-
-from app import model_speed, peers, settings_store
+from app import machines, model_speed, settings_store
 from app.checks import CannotCheck, Check, Finding
 
-# The gateway's live card reading. Core has no route to the GPU of its own —
-# the gateway is the only thing that can run nvidia-smi — so free VRAM here
-# is the same fact the Models page shows.
-VRAM_PATH = "/admin/vram"
-VRAM_TIMEOUT = httpx.Timeout(connect=5.0, read=15.0, write=5.0, pool=5.0)
+# The card is the gateway's reading of each machine (GET /admin/engines/{name}
+# through app/machines.py, S40 — /admin/vram is gone). Core has no route to a
+# GPU of its own — the gateway is the only thing that can run nvidia-smi — so
+# free VRAM here is the same fact the Models page shows.
 
 DEGRADED_FACTOR_KEY = "inference.degraded_factor"
 
@@ -103,15 +100,18 @@ async def _card_facts(app) -> dict:
     """
     blank = {"free_gb": None, "others_gb": None, "util_pct": None, "reason": None, "facts": {}}
     try:
-        async with peers.client(app, peers.GATEWAY, VRAM_TIMEOUT) as client:
-            resp = await client.get(VRAM_PATH)
-            resp.raise_for_status()
-    except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
-        return {
-            **blank,
-            "reason": f"the gateway could not be asked about the card — {peers.reason(exc)}",
-        }
-    body = resp.json()
+        pairs = await machines.cards(app)
+    except machines.PlantUnavailable as exc:
+        return {**blank, "reason": f"the gateway could not be asked about the card — {exc}"}
+    # The card of THE machine (machines.the_card, chosen by readability):
+    # while one machine's card can be read, it is the card these rounds ran
+    # on. Two are never guessed between — which one served is a match of
+    # served_on to a machine's compute, not made here.
+    chosen = machines.the_card(pairs)
+    if isinstance(chosen, str):
+        return {**blank, "reason": chosen}
+    _view, detail = chosen
+    body = detail.get("vram") if isinstance(detail.get("vram"), dict) else {}
     free = body.get("free_after_switch_gb")
     if free is None:
         free = body.get("free_gb")
@@ -202,6 +202,13 @@ async def degraded(app, pool) -> list[Finding]:
     hard_stops = [s for s in stalled.values() if s.walled >= model_speed.MIN_STALLED_ROUNDS]
     comparable = [s for s in speeds.values() if s.ratio is not None]
     slow = [s for s in comparable if s.ratio >= factor]
+    # ONE finding per MODEL — the worst of the computes it is slow on (S40:
+    # a Speed is per (model, served_on, runtime)) — so the notice keeps one
+    # key per model and the compute it was measured on rides in the facts.
+    worst: dict[str, model_speed.Speed] = {}
+    for speed in slow:
+        if speed.model not in worst or speed.ratio > worst[speed.model].ratio:
+            worst[speed.model] = speed
 
     if not comparable and not hard_stops:
         raise CannotCheck(
@@ -209,10 +216,10 @@ async def degraded(app, pool) -> list[Finding]:
             "and none has stalled — nothing to measure (needs "
             f"{model_speed.MIN_ROUNDS_RECENT} rounds in the last "
             f"{model_speed.RECENT_HOURS} h and {model_speed.MIN_ROUNDS_BASELINE} in the last "
-            f"{model_speed.BASELINE_HOURS // 24} days, or "
+            f"{model_speed.BASELINE_HOURS // 24} days on one compute, or "
             f"{model_speed.MIN_STALLED_ROUNDS} rounds that produced nothing)"
         )
-    if not slow and not hard_stops:
+    if not worst and not hard_stops:
         return []
 
     card = await _card_facts(app)
@@ -220,9 +227,13 @@ async def degraded(app, pool) -> list[Finding]:
         _stalled_finding(stall, card) for stall in sorted(hard_stops, key=lambda s: -s.walled)
     ]
     free_gb, vram_reason = card["free_gb"], card["reason"]
-    for speed in sorted(slow, key=lambda s: -s.ratio):
+    for speed in sorted(worst.values(), key=lambda s: -s.ratio):
         facts: dict = {
             "model": speed.model,
+            # Where it ran (D10): stable per machine, so it changes the
+            # fingerprint only when the compute does — which IS new news.
+            "served_on": speed.served_on,
+            "runtime": speed.runtime,
             # The bucket, not the rate — see `_bucket`.
             "slowdown_bucket": _bucket(speed.ratio),
         }

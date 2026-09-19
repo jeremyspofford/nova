@@ -61,6 +61,19 @@ nobody has to remember to update one when the hardware changes.
 The median, not the mean: one 300 s timeout among twenty healthy rounds
 would drag a mean below any threshold, and the point is to notice a card
 that is genuinely contended, not a single bad round.
+
+## Keyed by where it ran (S40)
+A rate is a fact about a model ON a machine. It was keyed by the model the
+turn ASKED for, which held while one card served everything and is a lie the
+day one model runs on two machines. So a rate is filed under three things the
+gateway stamps on the round: the model that answered, without its engine
+prefix (the same weights on the same card are one measurement whatever the
+engine is called — what lets history survive the hub move); `served_on`, the
+compute id (D10); and the runtime. A round without `served_on` is not counted:
+the gateway omits it exactly when it cannot tell where the round ran, and a
+guessed compute would file a rate under a machine it never ran on. History
+from before S40 is therefore not read, and each (model, compute, runtime)
+builds its own baseline from its first MIN_ROUNDS_BASELINE rounds.
 """
 
 from __future__ import annotations
@@ -107,15 +120,23 @@ def tok_per_s(completion_tokens: int | None, generation_ms: int | None) -> float
     return round(completion_tokens / (generation_ms / 1000), 2)
 
 
+#: What a rate is filed under: (model without its engine prefix, served_on, runtime).
+Key = tuple[str, str, str | None]
+
+
 @dataclass(frozen=True)
 class Speed:
-    """One model's throughput picture. Every field is a fact or a None."""
+    """One model's throughput on one compute. Every field is a fact or a None."""
 
     model: str
     recent: float | None
     recent_rounds: int
     baseline: float | None
     baseline_rounds: int
+    # Where the rounds ran (S40, D10) — part of the identity, not decoration:
+    # the same model on another card is another Speed.
+    served_on: str | None = None
+    runtime: str | None = None
 
     @property
     def ratio(self) -> float | None:
@@ -130,6 +151,8 @@ class Speed:
     def as_dict(self) -> dict:
         return {
             "model": self.model,
+            "served_on": self.served_on,
+            "runtime": self.runtime,
             "recent_tok_per_s": self.recent,
             "recent_rounds": self.recent_rounds,
             "baseline_tok_per_s": self.baseline,
@@ -138,43 +161,56 @@ class Speed:
         }
 
 
-_RATES_SQL = """
-    SELECT (meta->>'model') AS model, (meta->>'tok_per_s')::float8 AS rate
+# The model that ANSWERED, without its engine: X-Nova-Served-By is always
+# `<provider>:<model>` (gateway providers.served_by), so its FIRST colon is the
+# provider's — `hub:qwen3.8:27b` -> `qwen3.8:27b`, whose own colon is kept.
+_BARE_SERVED = "substr(meta->>'served_by', strpos(meta->>'served_by', ':') + 1)"
+
+_RATES_SQL = f"""
+    SELECT {_BARE_SERVED} AS model,
+           meta->>'served_on' AS served_on,
+           meta->>'served_runtime' AS runtime,
+           (meta->>'tok_per_s')::float8 AS rate
       FROM turn_spans
      WHERE kind = 'llm_call'
        AND meta ? 'tok_per_s'
+       AND meta ? 'served_on'
+       AND strpos(meta->>'served_by', ':') > 0
        AND started_at >= now() - ($1 || ' hours')::interval
-       AND ($2::text IS NULL OR meta->>'model' = $2)
+       AND ($2::text IS NULL OR {_BARE_SERVED} = $2)
 """
 
 
-async def _rates(pool: asyncpg.Pool, hours: int, model: str | None) -> dict[str, list[float]]:
+async def _rates(pool: asyncpg.Pool, hours: int, model: str | None) -> dict[Key, list[float]]:
     rows = await pool.fetch(_RATES_SQL, str(hours), model)
-    out: dict[str, list[float]] = {}
+    out: dict[Key, list[float]] = {}
     for row in rows:
-        if row["model"] and row["rate"]:
-            out.setdefault(row["model"], []).append(row["rate"])
+        if row["model"] and row["served_on"] and row["rate"]:
+            key = (row["model"], row["served_on"], row["runtime"])
+            out.setdefault(key, []).append(row["rate"])
     return out
 
 
-async def speed_of(pool: asyncpg.Pool, model: str) -> Speed:
-    """One model's recent and baseline medians."""
-    return (await speeds(pool, model=model)).get(model) or Speed(model, None, 0, None, 0)
+async def speed_of(pool: asyncpg.Pool, model: str, served_on: str, runtime: str | None) -> Speed:
+    """One model's recent and baseline medians on one compute, in one runtime."""
+    found = (await speeds(pool, model=model)).get((model, served_on, runtime))
+    return found or Speed(model, None, 0, None, 0, served_on, runtime)
 
 
-async def speeds(pool: asyncpg.Pool, model: str | None = None) -> dict[str, Speed]:
-    """Every model with rounds in the baseline window, keyed by model.
+async def speeds(pool: asyncpg.Pool, model: str | None = None) -> dict[Key, Speed]:
+    """Every (model, compute, runtime) with rounds in the baseline window.
 
-    Two queries, not one per model: a beat check runs over whatever has
-    been serving lately and must not turn into a query per name.
+    Two queries, not one per key: a beat check runs over whatever has been
+    serving lately and must not turn into a query per name.
     """
     recent = await _rates(pool, RECENT_HOURS, model)
     baseline = await _rates(pool, BASELINE_HOURS, model)
-    out: dict[str, Speed] = {}
-    for name in set(recent) | set(baseline):
-        recent_rates = recent.get(name, [])
-        baseline_rates = baseline.get(name, [])
-        out[name] = Speed(
+    out: dict[Key, Speed] = {}
+    for key in set(recent) | set(baseline):
+        name, served_on, runtime = key
+        recent_rates = recent.get(key, [])
+        baseline_rates = baseline.get(key, [])
+        out[key] = Speed(
             model=name,
             recent=(
                 round(statistics.median(recent_rates), 2)
@@ -188,8 +224,56 @@ async def speeds(pool: asyncpg.Pool, model: str | None = None) -> dict[str, Spee
                 else None
             ),
             baseline_rounds=len(baseline_rates),
+            served_on=served_on,
+            runtime=runtime,
         )
     return out
+
+
+@dataclass(frozen=True)
+class Serving:
+    """Where a requested model's newest placed round ran."""
+
+    engine: str
+    model: str
+    served_on: str
+    runtime: str | None
+
+    @property
+    def key(self) -> Key:
+        return (self.model, self.served_on, self.runtime)
+
+
+_LATEST_SQL = f"""
+    SELECT split_part(meta->>'served_by', ':', 1) AS engine,
+           {_BARE_SERVED} AS model,
+           meta->>'served_on' AS served_on,
+           meta->>'served_runtime' AS runtime
+      FROM turn_spans
+     WHERE kind = 'llm_call'
+       AND meta->>'model' = $1
+       AND meta ? 'served_on'
+       AND strpos(meta->>'served_by', ':') > 0
+       AND started_at >= now() - ($2 || ' hours')::interval
+  ORDER BY started_at DESC
+     LIMIT 1
+"""
+
+
+async def latest_serving(pool: asyncpg.Pool, requested: str) -> Serving | None:
+    """Where the model a turn ASKS for (chat.model, as the span recorded it)
+    last ran within the baseline window, or None when no round of it was ever
+    placed. How a caller holding a SETTING finds the Speed to read, without
+    parsing an engine out of an id itself."""
+    row = await pool.fetchrow(_LATEST_SQL, requested, str(BASELINE_HOURS))
+    if row is None or not row["model"] or not row["served_on"]:
+        return None
+    return Serving(
+        engine=row["engine"],
+        model=row["model"],
+        served_on=row["served_on"],
+        runtime=row["runtime"],
+    )
 
 
 # How many rounds must have produced NOTHING before that is the machine

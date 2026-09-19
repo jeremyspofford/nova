@@ -26,14 +26,18 @@ Span facts these read, all set by chat.py's turn path:
                            `guard_fired` means "this guard left a span this
                            turn"; a T2 case wanting a finer distinction pairs it
                            with a reply predicate.
+  * the ARGUMENTS of a tool call -> Span.meta["args_redacted"], as the model
+                           sent them (chat._span_arguments).
 """
+
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from app.evals.cases import KNOWN_PREDICATES, PredicateSpec
+from app.evals.cases import KNOWN_PREDICATES, PredicateSpec, parse_tool_with
 
 # A predicate: (spans, reply, arg) -> (passed, detail). `arg` is the spec's
 # argument (a tool/guard name or a regex) — every predicate has one; the type
@@ -81,6 +85,31 @@ def reply_absent(spans: Sequence[Any], reply: str, pattern: str | None) -> tuple
     return not hit, f"reply {'contains' if hit else 'is free of'} /{pattern}/i (want absent)"
 
 
+def _carries(args: object, wanted: dict) -> bool:
+    """Every wanted key present with an equal value OF THE SAME TYPE —
+    `False == 0` in Python, and a switch-off is not the number zero."""
+    return isinstance(args, dict) and all(
+        key in args and type(args[key]) is type(value) and args[key] == value
+        for key, value in wanted.items()
+    )
+
+
+def tool_succeeded_with(spans: Sequence[Any], reply: str, arg: str | None) -> tuple[bool, str]:
+    """tool_succeeded, plus the arguments the call ran with (S40). An ok span
+    alone says a machine_configure ran, not which way it set the switch."""
+    name, wanted = parse_tool_with(arg)
+    hits = _tool_spans(spans, name)
+    matching = [
+        s
+        for s in hits
+        if s.meta.get("ok") is True and _carries(s.meta.get("args_redacted"), wanted)
+    ]
+    return bool(matching), (
+        f"tool {name!r}: {len(matching)} of {len(hits)} span(s) ok=True with "
+        f"{json.dumps(wanted, sort_keys=True)}"
+    )
+
+
 # The registry. Its keys MUST equal cases.KNOWN_PREDICATES — a test pins that, so
 # a predicate added to one and forgotten in the other is a loud failure, not a
 # case that loads and then never scores.
@@ -92,6 +121,7 @@ PREDICATES: dict[str, Predicate] = {
     "guard_absent": guard_absent,
     "reply_matches": reply_matches,
     "reply_absent": reply_absent,
+    "tool_succeeded_with": tool_succeeded_with,
 }
 
 assert set(PREDICATES) == set(KNOWN_PREDICATES), (

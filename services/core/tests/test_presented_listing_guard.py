@@ -303,6 +303,11 @@ def test_every_registry_tool_named_list_declares_the_listing_kind():
         # which is precisely why the guard reads the DECLARATION and not
         # the name.
         "notices",
+        # S40 (2026-09-19) the fourth: `machine_status` enumerates the machines
+        # that run models and the models each has installed, with sizes. A list
+        # she relays from it is a BACKED listing, and its name says nothing
+        # about listing either.
+        "machine_status",
     }
 
 

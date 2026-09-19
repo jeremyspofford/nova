@@ -470,9 +470,24 @@ def _spawn(coro) -> asyncio.Task:
 
 
 async def drain_background() -> None:
-    """Wait for everything fired and forgotten so far."""
+    """Wait for everything fired and forgotten so far.
+
+    Every round must YIELD to the loop. A task that has finished but whose
+    done-callback (the `discard` in `_spawn`) has not run yet is a normal state
+    for one loop iteration, and since CPython 3.12 `asyncio.gather` over
+    children that are all done completes eagerly and does not yield. Gathering
+    the whole set therefore spun for ever on one finished task: the loop never
+    ran again, so its discard never ran, so the set never emptied. That was the
+    core suite's ~12% wedge (item 0, 2026-09-18), and the same loop ran at
+    shutdown. So: gather only what is still running, and when nothing is, give
+    the loop one turn so the queued discards can land.
+    """
     while _BACKGROUND:
-        await asyncio.gather(*list(_BACKGROUND), return_exceptions=True)
+        running = [t for t in _BACKGROUND if not t.done()]
+        if running:
+            await asyncio.gather(*running, return_exceptions=True)
+        else:
+            await asyncio.sleep(0)
 
 
 async def settle_detached(spawned_before: set[asyncio.Task]) -> None:
@@ -850,6 +865,30 @@ def stable_system_prompt(
             "it lists are the files that exist — quote the report as the agent's words, say "
             "the agent did not finish when the result starts with Error:, and never say an "
             "agent did something the facts line does not show or claim its work as your own."
+        )
+    # S40: the machine sentence, keyed on the tools' own constants like the
+    # delegation one — a rename moves the sentence with it, and an agent whose
+    # subset lacks the tool is never told to use it.
+    status_tool = tools.machines.MACHINE_STATUS.name
+    configure_tool = tools.machines.MACHINE_CONFIGURE.name
+    if status_tool in tool_names:
+        # The TRUE rule (S40 fix wave B4): a bare id's first colon is its
+        # tag's own (<name>:<tag>), so "the part before the first colon is
+        # the machine" was false for every bare id. The example is a
+        # placeholder, never a real model name — a real one here reads as a
+        # fact, not an illustration (S40 text fix, turn b851aa91, 2026-09-19).
+        prompt += (
+            " Models run on machines: a model id qualified with a machine's name "
+            "(machine:model) names that machine; a bare id, whose own colon is its tag "
+            "(<name>:<tag>), means the default machine. Say where a model runs, or whether a "
+            f"machine is answering, only from {status_tool}"
+            + (
+                f", and switch a machine's models on or off only with {configure_tool}, "
+                "reporting the value it read back"
+                if configure_tool in tool_names
+                else ""
+            )
+            + "."
         )
     if agent_block:
         prompt = f"{prompt}\n\n{agent_block}"
@@ -2642,9 +2681,7 @@ async def _gateway_round(
                     json=completion_payload(model, messages, advertised),
                     headers=peers.attribution_headers(turn, purpose, role),
                 ) as response:
-                    served_by = response.headers.get("x-nova-served-by")
-                    if served_by:
-                        span.meta["served_by"] = served_by
+                    _note_served(span, response.headers)
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         span.meta["gateway_status"] = response.status_code
@@ -2883,6 +2920,28 @@ def _note_route(span, header: str | None) -> None:
         span.meta["route_reason"] = unquote(fields["reason"])
 
 
+def _note_served(span, headers) -> None:
+    """WHO served this round, and WHERE (S40, D10), off the gateway's headers.
+
+    X-Nova-Served-By is `provider:model`. X-Nova-Served-On is the compute id
+    the gateway stamped (`gpu:cuda:<uuid>`, `cpu:<slug>|<n>c|<GiB>g`, joined
+    with `+` on a partial offload) and X-Nova-Served-Runtime the runtime it ran
+    in. Each is recorded ONLY when the gateway said it: an omitted header means
+    the gateway could not tell (more than one accelerator, a cloud model), and
+    model_speed keys every rate by these — a guessed compute would file a round
+    under a machine it never ran on.
+    """
+    served_by = headers.get("x-nova-served-by")
+    if served_by:
+        span.meta["served_by"] = served_by
+    served_on = headers.get("x-nova-served-on")
+    if served_on:
+        span.meta["served_on"] = served_on
+    runtime = headers.get("x-nova-served-runtime")
+    if runtime:
+        span.meta["served_runtime"] = runtime
+
+
 def _purpose_of(turn: traces.Turn) -> str:
     """What the ledger records a turn's own rounds as: its kind."""
     kind = getattr(turn, "kind", None)
@@ -2958,9 +3017,7 @@ async def _collect_completion(
                     json=payload,
                     headers=peers.attribution_headers(turn, purpose, turn.role or "judge"),
                 ) as response:
-                    served_by = response.headers.get("x-nova-served-by")
-                    if served_by:
-                        span.meta["served_by"] = served_by
+                    _note_served(span, response.headers)
                     _note_route(span, response.headers.get("x-nova-route"))
                     if response.status_code != 200:
                         detail = (await response.aread()).decode(errors="replace")[:200]
@@ -4377,7 +4434,11 @@ async def _run_turn(
         # while the model was answering him.
         stack_claim = None
         try:
-            stack_claim = guards.stack_claim_check(text, turn.spans)
+            # The turn's own rounds are stamped with its kind, not with
+            # "chat". The guard reads them in the kinds it is armed in
+            # (guards.STACK_CLAIM_KINDS: chat and the eval that replays it)
+            # and says nothing in the others, where it is unmeasured.
+            stack_claim = guards.stack_claim_check(text, turn.spans, purpose=_purpose_of(turn))
         except Exception:
             logger.exception("serving-state guard raised; shipping the reply uncorrected")
             stack_claim = None

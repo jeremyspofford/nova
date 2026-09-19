@@ -25,14 +25,13 @@ from __future__ import annotations
 import httpx
 from fastapi import APIRouter, Depends, Request
 
-from app import db, identity, model_speed, peers, settings_store
+from app import db, identity, machines, model_speed, peers, settings_store
 from app.identity import Person
 
 router = APIRouter(prefix="/api/v1/system", tags=["system"])
 
-#: The gateway is the only thing that can run nvidia-smi or read this host's
-#: /proc, so both halves come from there.
-VRAM_PATH = "/admin/vram"
+#: The gateway is the only thing that reads this host's /proc; the card is the
+#: gateway's reading of each machine (app/machines.py, S40 — /admin/vram is gone).
 MACHINE_PATH = "/admin/machine"
 
 #: Short: a panel opening on a click must not hang on a busy peer. A slow
@@ -50,7 +49,7 @@ async def _from_gateway(app, path: str) -> tuple[dict | None, str | None]:
     return resp.json(), None
 
 
-def _card(body: dict) -> dict:
+def _card_words(body: dict) -> dict:
     """The card, in the panel's own words.
 
     `others_gb` is the actionable half and the reason this is not just
@@ -78,28 +77,45 @@ def _card(body: dict) -> dict:
     }
 
 
+async def _card(app) -> dict:
+    """The card of THE machine whose card can be read, named — or a reason.
+    One selection with the inference check (machines.the_card, by
+    readability); two readable cards are not guessed between."""
+    try:
+        pairs = await machines.cards(app)
+    except machines.PlantUnavailable as exc:
+        return {"reason": f"the gateway could not be asked — {exc}"}
+    chosen = machines.the_card(pairs)
+    if isinstance(chosen, str):
+        return {"reason": chosen}
+    view, detail = chosen
+    body = detail.get("vram") if isinstance(detail.get("vram"), dict) else {}
+    return {"machine": view["name"], **_card_words(body)}
+
+
 @router.get("/resources")
 async def resources(request: Request, person: Person = Depends(identity.require_person)) -> dict:
     """The card, the machine, and how fast the chat model is generating."""
     pool = await db.get_pool()
 
-    vram, vram_error = await _from_gateway(request.app, VRAM_PATH)
+    card = await _card(request.app)
     machine, machine_error = await _from_gateway(request.app, MACHINE_PATH)
 
     model = await settings_store.read_value(pool, "chat.model")
     speed = None
     if model:
-        speeds = await model_speed.speeds(pool, model=model)
-        found = speeds.get(model)
-        speed = found.as_dict() if found is not None else None
+        # Where its rounds last ran decides whose normal it is (S40, D10).
+        serving = await model_speed.latest_serving(pool, model)
+        if serving is not None:
+            speed = (await model_speed.speed_of(pool, *serving.key)).as_dict()
 
     return {
-        "card": _card(vram) if vram is not None else {"reason": vram_error},
+        "card": card,
         "machine": machine if machine is not None else {"reason": machine_error},
-        # None when this model has no measured history here yet — never a
+        # None when this model has no placed history here yet — never a
         # zero, which would read as a dead card. `model_speed` refuses a
-        # token count too small to be a measurement, so a quiet day simply
-        # has nothing to say.
+        # token count too small to be a measurement, and a round the gateway
+        # could not place is not counted at all.
         "throughput": speed,
         "model": model or None,
     }

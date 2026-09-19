@@ -401,8 +401,10 @@ def test_find_quant_matches_tag_then_filename_case_insensitively():
 def test_to_catalog_row_labels_declared_facts_and_inferred_guesses():
     row = hf_hub.to_catalog_row(CODER_ROW, "2026-09-06T10:00:00+00:00")
 
-    assert row["id"] == "ollama:hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
-    assert row["provider"] == "ollama"
+    # S40: a Hub repo is on no machine — named `library:` like a curated pick
+    # not installed; `installed` is derived per engine by the catalogue routes.
+    assert row["id"] == "library:hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+    assert row["provider"] == "library"
     assert row["model"] == "hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
     assert row["label"] == "Qwen3-Coder-30B-A3B-Instruct-GGUF"
     assert row["kind"] == "hub"

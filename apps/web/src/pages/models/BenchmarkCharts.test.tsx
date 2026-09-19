@@ -25,7 +25,7 @@ const MAX = row({ id: 'openrouter:qwen/qwen3.8-max', label: 'Qwen3.8 Max', suita
 const FLASH = row({ id: 'openrouter:google/gemini-3.8-flash', label: 'Gemini 3.8 Flash', suitability: { intelligence: listed(41), coding: listed(76), agentic: listed(41) } })
 // Coding only — no intelligence or agentic data, and an INFERRED coding tag that is not a score.
 const ASTRA = row({ id: 'openrouter:openai/gpt-6-astra-pro', label: 'GPT-6 Astra Pro', suitability: { coding: listed(82) } })
-const LOCAL = row({ id: 'ollama:qwen3:8b', label: 'Qwen3 8B', kind: 'local', installed: true, suitability: { 'coding:inferred': { value: true, basis: 'inferred', source: 'name' } } })
+const LOCAL = row({ id: 'hub:qwen3:8b', label: 'Qwen3 8B', kind: 'local', installed: true, suitability: { 'coding:inferred': { value: true, basis: 'inferred', source: 'name' } } })
 
 describe('BenchmarkCharts', () => {
   it('draws one chart per index with bar heights equal to the score, and names the models without data', () => {
@@ -39,7 +39,7 @@ describe('BenchmarkCharts', () => {
     expect(screen.getByTestId('benchmark-missing-agentic').textContent).toContain('GPT-6 Astra Pro has no agentic data')
     expect(screen.queryByTestId('benchmark-missing-coding')).toBeNull()
     // The local model has no index at all: not on any chart, not in a footnote.
-    expect(screen.queryByTestId('bench-coding-ollama:qwen3:8b')).toBeNull()
+    expect(screen.queryByTestId('bench-coding-hub:qwen3:8b')).toBeNull()
     expect(screen.queryByText(/Qwen3 8B/)).toBeNull()
   })
 

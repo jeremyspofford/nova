@@ -39,6 +39,15 @@ worth stating rather than papering over: the number is trustworthy, the
 blame is not. Which is exactly why the caller pairs it with ollama's own
 per-model `/api/ps` reading, the one number on this host that IS
 attributable.
+
+## Which card (S40)
+A number is only meaningful with the hardware it was taken on (D10,
+app/compute_id.py). The reading therefore carries the biggest card's own
+uuid and name, every card's uuid, and how many cards nvidia-smi listed — a
+card that printed no uuid is still counted, because a set with a nameless
+card in it cannot be named. `absent` says there is no nvidia-smi in this
+container at all (no GPU passed through): a fact, and a different one from
+"the card is there and could not be read".
 """
 
 from __future__ import annotations
@@ -57,18 +66,33 @@ NVIDIA_SMI_TIMEOUT_S = 10.0
 # 99% by a process outside every container this machine runs, so ollama was
 # timesharing the shader cores and turns took 100-400 s. A reading that says
 # only "6.9 GB free" describes that card as healthy.
-_QUERY = "memory.total,memory.used,memory.free,utilization.gpu"
+#
+# S40 appends uuid and name AFTER utilisation, never between: memory stays
+# fields 1-3 and utilisation 4 on every driver.
+_QUERY = "memory.total,memory.used,memory.free,utilization.gpu,uuid,name"
 
 
 class Vram:
-    """One card's live memory, in MiB, or an honest reason it is unknown.
+    """One card's live memory, in MiB, or an honest reason it is unknown —
+    plus which card it is (S40).
 
     A degraded reading is `total_mb is None` WITH a `reason` — never zeros,
     never a stale number kept warm from a previous call. Callers that must
     answer "unknown" have a sentence to answer it with.
     """
 
-    __slots__ = ("total_mb", "used_mb", "free_mb", "util_pct", "reason")
+    __slots__ = (
+        "total_mb",
+        "used_mb",
+        "free_mb",
+        "util_pct",
+        "reason",
+        "uuid",
+        "name",
+        "uuids",
+        "cards",
+        "absent",
+    )
 
     def __init__(
         self,
@@ -77,6 +101,12 @@ class Vram:
         free_mb: float | None = None,
         util_pct: float | None = None,
         reason: str | None = None,
+        *,
+        uuid: str | None = None,
+        name: str | None = None,
+        uuids: tuple[str, ...] | list[str] = (),
+        cards: int = 0,
+        absent: bool = False,
     ) -> None:
         self.total_mb = total_mb
         self.used_mb = used_mb
@@ -85,6 +115,14 @@ class Vram:
         # card is idle.
         self.util_pct = util_pct
         self.reason = reason
+        # The biggest card's own uuid and name (the card the numbers above
+        # are about); every card's uuid; how many cards were listed.
+        self.uuid = uuid
+        self.name = name
+        self.uuids = tuple(uuids)
+        self.cards = cards
+        # True only when nvidia-smi is not in this container at all.
+        self.absent = absent
 
     @property
     def known(self) -> bool:
@@ -97,6 +135,11 @@ class Vram:
             "free_mb": self.free_mb,
             "util_pct": self.util_pct,
             "reason": self.reason,
+            "uuid": self.uuid,
+            "name": self.name,
+            "uuids": list(self.uuids),
+            "cards": self.cards,
+            "absent": self.absent,
         }
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
@@ -115,12 +158,23 @@ def parse(stdout: str) -> Vram:
     the LAST field for that reason: a driver too old to report it, or one
     printing `[N/A]`, still yields a complete memory reading rather than
     losing the whole line.
+
+    Field 5 is the uuid and everything after it is the name (a name may
+    hold a comma). Every line of three or more fields is a card, counted
+    even when its memory is [N/A].
     """
-    best: tuple[float, float, float, float | None] | None = None
+    best: tuple[float, float, float, float | None, str | None, str | None] | None = None
+    cards = 0
+    uuids: list[str] = []
     for line in stdout.splitlines():
         parts = [p.strip() for p in line.split(",")]
         if len(parts) < 3:
             continue
+        cards += 1
+        uuid = parts[4] if len(parts) > 4 and parts[4].upper().startswith("GPU-") else None
+        if uuid is not None:
+            uuids.append(uuid)
+        name = ", ".join(parts[5:]) or None
         try:
             total, used, free = (float(p) for p in parts[:3])
         except ValueError:
@@ -134,11 +188,20 @@ def parse(stdout: str) -> Vram:
             except ValueError:
                 util = None
         if best is None or total > best[0]:
-            best = (total, used, free, util)
+            best = (total, used, free, util, uuid, name)
     if best is None:
-        return Vram(reason="nvidia-smi printed no usable memory line")
-    total, used, free, util = best
-    return Vram(total_mb=total, used_mb=used, free_mb=free, util_pct=util)
+        return Vram(reason="nvidia-smi printed no usable memory line", uuids=uuids, cards=cards)
+    total, used, free, util, uuid, name = best
+    return Vram(
+        total_mb=total,
+        used_mb=used,
+        free_mb=free,
+        util_pct=util,
+        uuid=uuid,
+        name=name,
+        uuids=uuids,
+        cards=cards,
+    )
 
 
 async def read_vram() -> Vram:
@@ -159,6 +222,10 @@ async def read_vram() -> Vram:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=NVIDIA_SMI_TIMEOUT_S)
+    except FileNotFoundError as exc:
+        # No nvidia-smi in this container: no GPU was passed through
+        # (deploy/docker-compose.gpu.yml not merged) — the engine runs on CPU.
+        return Vram(reason=f"nvidia-smi could not be run — {exc}", absent=True)
     except (OSError, TimeoutError) as exc:
         return Vram(reason=f"nvidia-smi could not be run — {exc}")
     if proc.returncode != 0:

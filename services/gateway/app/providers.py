@@ -26,6 +26,20 @@ LISTING_STATES = ("available", "unavailable", "unknown")
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 PRESETS_PATH = Path(__file__).resolve().parent / "providers_presets.json"
 
+#: D8: the bundled engine is always `hub`, the compose container reached at
+#: OLLAMA_URL. engines.BUILTIN is this same name — it lives here because
+#: engines.py imports this module, and ensure_builtin seeds it.
+BUILTIN = "hub"
+#: Library rows in the catalogue are `library:<slug>`; a provider by that name
+#: would turn them into calls (migration 009, providers_name_not_reserved).
+LIBRARY = "library"
+#: The bundled engine's name before S40. Every usage_events and probes row
+#: written before migration 009 carries it, and they keep it because it was
+#: true; a new provider under that name would take that history over, so a
+#: measurement would change meaning (ruling G3).
+LEGACY_BUILTIN = "ollama"
+RESERVED_NAMES = frozenset({BUILTIN, LIBRARY, LEGACY_BUILTIN})
+
 _COLUMNS = (
     "name, adapter, base_url, auth_shape, api_key, default_model, model_note, preset, "
     "builtin, is_default, verified_at, listing, listing_note, key_proven, verify_note, "
@@ -82,12 +96,16 @@ def to_public(row: dict) -> dict:
 def base_url_of(row: dict) -> str:
     """Where this provider's calls go.
 
-    The builtin ollama row always resolves to the live OLLAMA_URL, never a
-    stored column — the sidecar's address is a fact of this host's compose
-    file (S1's rule, kept). Every other row is what the owner typed, with a
-    trailing slash dropped so path joins are unambiguous.
+    The bundled engine (builtin, adapter=ollama) always resolves to the live
+    OLLAMA_URL, never a stored column — the sidecar's address is a fact of
+    this host's compose file (S1's rule, kept). Every other row, including
+    another machine's engine, is its stored address with a trailing slash
+    dropped so path joins are unambiguous. BOTH conditions, not the flag
+    alone: the ollama adapter re-dresses the builtin as an openai-chat row at
+    `{OLLAMA_URL}/v1` to chat (adapters/ollama.py), and that row must keep
+    its /v1.
     """
-    if row["adapter"] == "ollama":
+    if row.get("adapter") == "ollama" and row.get("builtin"):
         return os.environ.get("OLLAMA_URL", "").rstrip("/")
     return (row.get("base_url") or "").rstrip("/")
 
@@ -128,8 +146,9 @@ def validate_shape(payload: dict, *, existing: dict | None = None) -> dict:
     if adapter == "ollama" and not (existing or {}).get("builtin"):
         raise HTTPException(
             status_code=400,
-            detail="the ollama adapter is the builtin row only — remote OpenAI-shaped "
-            "servers (including another ollama's /v1) use adapter=openai-chat",
+            detail=f"adapter=ollama cannot be registered here: it is an engine, and the only "
+            f"engine here is the bundled one ({BUILTIN!r}) — another machine's ollama is "
+            "reached with adapter=openai-chat at its /v1 address",
         )
     auth_shape = merged.get("auth_shape")
     if auth_shape not in AUTH_SHAPES:
@@ -220,19 +239,24 @@ async def default_row(pool: asyncpg.Pool) -> dict:
 
 
 async def ensure_builtin(pool: asyncpg.Pool) -> None:
-    """The startup seed: the bundled ollama row exists, and SOMETHING is the
-    default. ON CONFLICT DO NOTHING, so this is a no-op every startup after
-    the first."""
+    """The startup seed: the bundled engine `hub` exists with its engines
+    row, and SOMETHING is the default. Every statement is a no-op every
+    startup after the first."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute(
                 "INSERT INTO providers (name, adapter, base_url, auth_shape, builtin, local, "
-                "is_default) VALUES ('ollama', 'ollama', '', 'none', true, true, "
+                "is_default) VALUES ($1, 'ollama', '', 'none', true, true, "
                 "NOT EXISTS (SELECT 1 FROM providers WHERE is_default)) "
-                "ON CONFLICT (name) DO NOTHING"
+                "ON CONFLICT (name) DO NOTHING",
+                BUILTIN,
             )
             await conn.execute(
-                "UPDATE providers SET is_default = true WHERE name = 'ollama' "
+                "INSERT INTO engines (provider) SELECT name FROM providers "
+                "WHERE adapter = 'ollama' ON CONFLICT (provider) DO NOTHING"
+            )
+            await conn.execute(
+                "UPDATE providers SET is_default = true WHERE builtin "
                 "AND NOT EXISTS (SELECT 1 FROM providers WHERE is_default)"
             )
 
@@ -356,7 +380,9 @@ async def record_usage_support(pool: asyncpg.Pool, name: str, supported: bool) -
 async def delete_row(pool: asyncpg.Pool, name: str) -> None:
     row = await get_row(pool, name)
     if row["builtin"]:
-        raise HTTPException(status_code=400, detail="the bundled ollama provider cannot be deleted")
+        raise HTTPException(
+            status_code=400, detail=f"{name!r} is the bundled engine and cannot be deleted"
+        )
     if row["is_default"]:
         raise HTTPException(
             status_code=409,

@@ -57,7 +57,7 @@ const FIXTURES = [
     ],
     threads: { m2: 2 },
   }],
-  [/\/models\/catalog/, { rows: [{ id: 'ollama:qwen3:8b', model: 'qwen3:8b', facts: { context_length: { value: 40960 } } }] }],
+  [/\/models\/catalog/, { rows: [{ id: 'hub:qwen3:8b', model: 'qwen3:8b', facts: { context_length: { value: 40960 } } }] }],
   [/\/system\/resources/, {
     card: { free_gb: 21.1, total_gb: 24, used_gb: 2.9, util_pct: 4, non_ollama_gb: 0, resident: [], reason: null },
     machine: { memory: { total_mb: 32768, available_mb: 27000, reason: null }, cpu: { cores: 20, load_1m: 2.3, reason: null }, disk: { free_gb: 904, total_gb: 1007, reason: null } },

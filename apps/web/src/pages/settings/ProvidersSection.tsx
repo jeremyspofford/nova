@@ -547,7 +547,7 @@ function ProviderRow({
   }, [])
 
   const use = async (modelId: string) => {
-    // ALWAYS qualified — including the bundled ollama (`ollama:qwen3:8b`). A
+    // ALWAYS qualified — including the bundled engine (`hub:qwen3:8b`). A
     // bare id routes to whichever provider is the default, and this very
     // section lets the owner move the default; a bare local id written here
     // would silently start going to the cloud the moment they did.
@@ -565,7 +565,8 @@ function ProviderRow({
   }
 
   // A bare chat.model (written before S10-pre) still means the local
-  // provider, so the ollama row recognises it as current.
+  // provider, so the bundled engine's row (adapter ollama) recognises it as
+  // current.
   const isCurrent = (modelId: string) =>
     chatModel === `${provider.name}:${modelId}` ||
     (provider.adapter === 'ollama' && chatModel === modelId)

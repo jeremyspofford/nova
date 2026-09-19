@@ -431,10 +431,10 @@ describe('chatReducer — live tool activity in the pending bubble', () => {
     let state = started()
     state = chatReducer(state, {
       type: 'event',
-      event: { type: 'route', route: { role: 'chat', link: 2, reason: 'fell back to link 2', servedBy: 'ollama:qwen3:8b' } },
+      event: { type: 'route', route: { role: 'chat', link: 2, reason: 'fell back to link 2', servedBy: 'hub:qwen3:8b' } },
     })
     expect(messages(state)[1].routeReason).toBe('fell back to link 2')
-    expect(messages(state)[1].servedBy).toBe('ollama:qwen3:8b')
+    expect(messages(state)[1].servedBy).toBe('hub:qwen3:8b')
   })
 
   it('an ok frame clears the marker — the call resolved cleanly', () => {
@@ -623,7 +623,7 @@ describe('chatReducer — who answered (S10-pre)', () => {
   it('a row starts with no badge and a served event outside a turn is ignored', () => {
     const state = chatReducer(emptyChat(), {
       type: 'event',
-      event: { type: 'served', servedBy: 'ollama:qwen3:8b' },
+      event: { type: 'served', servedBy: 'hub:qwen3:8b' },
     })
     expect(state.rows).toEqual([])
     expect(messages(started()).every(m => m.servedBy === null)).toBe(true)

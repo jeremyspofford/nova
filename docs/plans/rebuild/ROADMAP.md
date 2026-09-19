@@ -20,7 +20,7 @@ source for anything v4 has not rebuilt.
 ## Where things stand
 
 v4 merged to `main` on 2026-09-17 (`0996a31`). Shipped slices: S01–S05b, S09,
-S10/S10a/S10pre, S11–S19, S22, S24, S25, S28. Parked: S23. Unbuilt: S26, S27.
+S10/S10a/S10pre, S11–S19, S22, S24, S25, S28, **S40** (2026-09-19). Parked: S23. Unbuilt: S26, S27, S41–S49.
 
 ---
 
@@ -35,10 +35,20 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | 2 | **S24** threads | done |
 | 3 | **S25** the Inbox | done |
 | — | **S28** attachments | done (inserted) |
-| 4 | **S26 — the quality corpus** | **NEXT. Nothing built, nothing spec'd.** |
+| 0 | **The suite hang** (below) | **DONE 2026-09-18**: root-caused and fixed; full core suite 2,957/2,957 green twice |
+| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b next**: the walk showed her stating a machine's live state without checking it, so `state_claim` gains machine subjects, and possibly `where_served_claim`. **Then S41** (portable hub plus verified backup and restore). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
+| 4 | **S26 — the quality corpus** | Nothing built, nothing spec'd. After the hub lane. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
 
 ### 0. Before S26 — the suite hang
+
+**RESOLVED 2026-09-18.** `drain_background()` spun synchronously over one
+finished task: since CPython 3.12, `gather` over already-done children
+completes without yielding, so the queued done-callback that removes the task
+never ran. The fix yields; `pytest-timeout` now bounds every test; full suite
+2,957/2,957 twice. Measured write-up in
+`docs/incidents/2026-09-16-core-suite-wedge.md`. What follows is the original
+entry.
 
 **Not a slice, and ahead of all of them.** The full core suite wedges at ~12%,
 in the chat tests. It first appeared while S25 was being gated, so it belongs to
@@ -141,7 +151,7 @@ claimed it.
 | GPU contention: she can say it, nothing stops it | **STILL VALID, by design** | `services/core/app/checks/inference.py` states; routing around a contended card is S10's mode switch and a decision on his behalf (ruling 2026-09-03). Third occurrence 2026-09-15. |
 | S16 eval case needs a file fixture | **STILL VALID** | `cases.py:261-277` — no `files` field. |
 | `no-fabricated-agent-work` unstable | **STILL VALID** | case present; no stability work since. |
-| Full core suite hang | **STILL VALID** | see item 0 and the incident doc. |
+| Full core suite hang | **RESOLVED 2026-09-18** | `drain_background` spin over a finished task (CPython 3.12 eager `gather`); full suite 2,957/2,957 twice. See item 0 and the incident doc. |
 
 ### Deferred, needing the owner's own session
 
@@ -161,6 +171,8 @@ longer sufficient.
 - **Watching stops when the machine sleeps** (S11). WSL-on-Windows host; nine of
   twelve hours had no pass on the first night. The digest says so rather than
   implying cover. Where Nova runs is a bigger question than that slice.
+  **Answered by the hub lane** (S40–S49, [`hub-topology.md`](hub-topology.md)):
+  an always-on hub, with the GPU machine woken on demand.
 - **`review_commitments` is the only check that spends money** (S11). On a cloud
   chain, a metered line item every six hours. v3's watchdog burned 6.3M tokens
   in one night while its ledger read $0.
@@ -256,6 +268,8 @@ kept for the record).
 | S26 | quality corpus | **no document yet** |
 | S27 | feature flags | `slice-27-feature-flags.md` — **last** |
 | S28 | attachments | `slice-28-attachments.md` |
+| S40 | engines and measurement identity | `slice-40-engines.md`, `-carries`, `s40/` (task files + review rulings) |
+| S41–S49 | the rest of the hub lane: backup/restore, agent on every OS, Tailscale join, models role, the move, wake, thin clients, Headscale, LAN | [`hub-topology.md`](hub-topology.md) + `hub/` (maps, two design rounds, critiques) — **approved 2026-09-18** |
 
 **What S10a was cited for** (`slice-02e-carries.md:87`): live catalog +
 provenance. The owner's hand-pulled `muse-glimmer:latest` showed no metadata —

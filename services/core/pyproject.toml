@@ -29,6 +29,7 @@ dev = [
     "pytest",
     "pytest-asyncio",
     "pyyaml>=6.0.3",
+    "pytest-timeout>=2.4.0",
 ]
 
 [tool.uv]
@@ -45,3 +46,10 @@ select = ["E", "F", "I", "UP"]
 asyncio_mode = "auto"
 pythonpath = ["."]
 testpaths = ["tests"]
+# No test may hang the suite. Before item 0 (2026-09-18) one spinning
+# drain_background wedged the whole run at ~12% with no output naming the test,
+# and a wedged suite is a tripwire that cannot fire. Two minutes is ~50x the
+# slowest test; SIGALRM interrupts both a blocked await and a Python-level spin,
+# fails THAT test by name, and lets the rest of the suite run.
+timeout = 120
+timeout_method = "signal"

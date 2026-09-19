@@ -80,20 +80,27 @@ class _SilentPool:
 
 
 def _local(model: str, *, installed: bool = True) -> dict:
+    # S40: the bundled engine is `hub` (gateway 009), and a row on it is
+    # `kind: local` — the word the checks read, never the provider's name.
     return {
-        "id": f"ollama:{model}",
-        "provider": "ollama",
+        "id": f"hub:{model}",
+        "provider": "hub",
         "model": model,
         "kind": "local",
         "installed": installed,
     }
 
 
-def _catalog(*rows: dict, ollama_ok: bool = True, note: str | None = None) -> dict:
-    source: dict = {"key": "ollama", "ok": ollama_ok, "rows": len(rows)}
+def _catalog(*rows: dict, hub_ok: bool = True, note: str | None = None) -> dict:
+    # The catalogue keys each engine's source by the engine's name (T4).
+    source: dict = {"key": "hub", "ok": hub_ok, "rows": len(rows)}
     if note is not None:
         source["note"] = note
     return {"fetched_at": "2026-09-08T00:00:00+00:00", "sources": [source], "rows": list(rows)}
+
+
+def _engine_calls(gateway: FakeGateway) -> int:
+    return sum(1 for path, _ in gateway.seen if path == "/admin/engines")
 
 
 def _spend(**over) -> dict:
@@ -403,9 +410,14 @@ async def test_quiet_reads_a_real_run_all(only):
 
 @requires_db
 async def test_the_stack_is_quiet_when_every_peer_answers(pool, mount_peers):
-    mount_peers(gateway=FakeGateway(catalog_body=_catalog(_local("qwen3:8b"))), memory=FakeMemory())
+    mount_peers(
+        gateway=FakeGateway(
+            catalog_body=_catalog(_local("qwen3:8b")), engines=[fakes.engine_view()]
+        ),
+        memory=FakeMemory(),
+    )
     await settings_store.write_setting(
-        settings_store.SettingWrite(key="chat.model", value="ollama:qwen3:8b")
+        settings_store.SettingWrite(key="chat.model", value="hub:qwen3:8b")
     )
     for name in stack.NAMES:
         run = await checks.run_one(core_app, pool, name)
@@ -449,17 +461,97 @@ async def test_an_unconfigured_link_is_a_check_that_did_not_run(pool, mount_peer
 
 
 @requires_db
-async def test_ollama_is_read_from_the_gateways_own_catalogue(pool, mount_peers):
-    body = _catalog(ollama_ok=False, note="ollama refused: connection refused")
-    mount_peers(gateway=FakeGateway(catalog_body=body), memory=FakeMemory())
+async def test_an_engine_that_did_not_answer_is_read_from_the_gateways_engine_list(
+    pool, mount_peers
+):
+    view = fakes.engine_view(state="unreachable", reason="ConnectError: connection refused")
+    mount_peers(gateway=FakeGateway(engines=[view]), memory=FakeMemory())
     run = await checks.run_one(core_app, pool, "stack_ollama")
-    assert run.ran and run.findings[0].key == "peer_down:ollama"
+    assert run.ran and [f.key for f in run.findings] == ["peer_down:hub"]
     assert run.findings[0].facts == {
-        "peer": "ollama",
-        "reason": "ollama refused: connection refused",
-        "basis": "the gateway's own model catalogue source entry",
+        "peer": "hub",
+        "reason": "ConnectError: connection refused",
+        "basis": "the gateway's own engine reading",
     }
     assert run.findings[0].urgent is True
+
+
+# Moved (S40 fix wave A1): this used to pin EVERY switched-off engine as no
+# outage. The switch only stops chat routing — the bundled engine is still
+# the embedder (D8; memory embeds straight against it), so hub switched off
+# AND not answering is recall failing, and the old pin hid it (and cleared an
+# open peer_down:hub as an all-clear). The pair below replaces it.
+@requires_db
+async def test_a_machine_switched_off_on_purpose_that_still_answers_is_not_an_outage(
+    pool, mount_peers
+):
+    """The owner's switch (S40): a machine he told to stop running models is
+    not down, and an urgent push at 3am saying so would be the lie."""
+    view = fakes.engine_view(serving=False, state="switched_off", answered=True)
+    mount_peers(gateway=FakeGateway(engines=[view]), memory=FakeMemory())
+    run = await checks.run_one(core_app, pool, "stack_ollama")
+    assert run.ran and run.findings == ()
+
+
+@requires_db
+async def test_the_bundled_machine_switched_off_and_not_answering_is_still_down(pool, mount_peers):
+    """The switch is the owner's; whether the engine answered is the
+    gateway's reading, and the bundled one still embeds for memory while
+    switched off. So it is still peer_down, and the title says both."""
+    reason = (
+        "hub is switched off (serving=false): chat routing passes over it; "
+        "hub could not be asked what is installed — could not reach ollama — ConnectError"
+    )
+    view = fakes.engine_view(
+        serving=False, state="switched_off", answered=False, tags=None, reason=reason
+    )
+    mount_peers(gateway=FakeGateway(engines=[view]), memory=FakeMemory())
+    run = await checks.run_one(core_app, pool, "stack_ollama")
+    assert run.ran and [f.key for f in run.findings] == ["peer_down:hub"]
+    found = run.findings[0]
+    assert found.urgent is True
+    assert found.facts == {
+        "peer": "hub",
+        "reason": reason,
+        "basis": "the gateway's own engine reading",
+        "serving": False,
+    }
+    assert found.title.startswith("hub is switched off and not answering the gateway — ")
+
+
+@requires_db
+async def test_another_machine_switched_off_and_not_answering_stays_silent(pool, mount_peers):
+    """Only the bundled engine embeds. Any other machine the owner switched
+    off is his to have turned off at the wall too."""
+    view = fakes.engine_view(
+        "dell", builtin=False, serving=False, state="switched_off", answered=False, tags=None
+    )
+    mount_peers(gateway=FakeGateway(engines=[view]), memory=FakeMemory())
+    run = await checks.run_one(core_app, pool, "stack_ollama")
+    assert run.ran and run.findings == ()
+
+
+@requires_db
+async def test_every_engine_is_its_own_subject_and_none_is_named_here(pool, mount_peers):
+    views = [
+        fakes.engine_view(),
+        fakes.engine_view("box", state="unreachable", reason="ConnectTimeout"),
+        fakes.engine_view("dell", lifecycle="wake_on_lan", state="unobserved"),
+    ]
+    mount_peers(gateway=FakeGateway(engines=views), memory=FakeMemory())
+    run = await checks.run_one(core_app, pool, "stack_ollama")
+    assert [f.key for f in run.findings] == ["peer_down:box"]
+
+
+@requires_db
+async def test_a_gateway_that_names_no_engines_makes_them_unknown_not_fine(pool, mount_peers):
+    """The admin echo names no engines: nothing was learned, so the check did
+    not run — an empty list read as "every engine answered" is the false
+    all-clear this family exists to refuse."""
+    mount_peers(gateway=FakeGateway(), memory=FakeMemory())
+    run = await checks.run_one(core_app, pool, "stack_ollama")
+    assert not run.ran and run.findings == ()
+    assert "did not name its engines" in run.reason
 
 
 @requires_db
@@ -472,7 +564,12 @@ async def test_an_unreachable_gateway_makes_ollama_unknown_not_down(pool, mount_
 
 @requires_db
 async def test_a_chat_model_the_catalogue_does_not_list_is_a_finding(pool, mount_peers):
-    mount_peers(gateway=FakeGateway(catalog_body=_catalog(_local("qwen3:8b"))), memory=FakeMemory())
+    mount_peers(
+        gateway=FakeGateway(
+            catalog_body=_catalog(_local("qwen3:8b")), engines=[fakes.engine_view()]
+        ),
+        memory=FakeMemory(),
+    )
     await settings_store.write_setting(
         settings_store.SettingWrite(key="chat.model", value="qwen3:70b")
     )
@@ -483,7 +580,10 @@ async def test_a_chat_model_the_catalogue_does_not_list_is_a_finding(pool, mount
     # Listed but not installed (a curated pick) is the same subject, said
     # accurately: the row exists and the weights do not.
     mount_peers(
-        gateway=FakeGateway(catalog_body=_catalog(_local("qwen3:70b", installed=False))),
+        gateway=FakeGateway(
+            catalog_body=_catalog(_local("qwen3:70b", installed=False)),
+            engines=[fakes.engine_view()],
+        ),
         memory=FakeMemory(),
     )
     run = await checks.run_one(core_app, pool, "stack_chat_model")
@@ -513,18 +613,20 @@ async def test_an_unset_chat_model_is_a_finding_because_scheduled_turns_refuse(p
 
 
 @requires_db
-async def test_a_missing_model_is_not_claimed_when_ollama_never_answered(pool, mount_peers):
+async def test_a_missing_model_is_not_claimed_when_its_engine_never_answered(pool, mount_peers):
     """The catalogue with no local rows would make ANY local model look
     uninstalled. That is the silent fallback this slice forbids: the check
-    did not run, and says which peer's silence stopped it."""
-    body = _catalog(ollama_ok=False, note="ollama refused: connection refused")
-    mount_peers(gateway=FakeGateway(catalog_body=body), memory=FakeMemory())
+    did not run, and says which engine's silence stopped it."""
+    body = _catalog(hub_ok=False, note="ollama refused: connection refused")
+    view = fakes.engine_view(state="unreachable", reason="ConnectError: connection refused")
+    mount_peers(gateway=FakeGateway(catalog_body=body, engines=[view]), memory=FakeMemory())
     await settings_store.write_setting(
         settings_store.SettingWrite(key="chat.model", value="qwen3:8b")
     )
     run = await checks.run_one(core_app, pool, "stack_chat_model")
     assert not run.ran and run.findings == ()
-    assert "ollama did not answer" in run.reason and "qwen3:8b" in run.reason
+    assert "hub (ollama refused: connection refused) did not answer the gateway" in run.reason
+    assert "qwen3:8b" in run.reason
 
 
 def _catalog_calls(gateway: FakeGateway) -> int:
@@ -532,17 +634,17 @@ def _catalog_calls(gateway: FakeGateway) -> int:
 
 
 @requires_db
-async def test_the_catalogue_is_assembled_once_per_beat_and_not_across_beats(
+async def test_each_gateway_reading_is_made_once_per_beat_and_not_across_beats(
     pool, mount_peers, only
 ):
-    """stack_ollama and stack_chat_model read the same catalogue, and the
-    gateway builds it by fanning out to ollama and every provider. One beat
-    fetches it once; the NEXT beat fetches it again, because a cached probe is
-    a probe that was not made this beat."""
-    gateway = FakeGateway(catalog_body=_catalog(_local("qwen3:8b")))
+    """stack_chat_model reads the catalogue, stack_ollama the engine list (S40);
+    each is made once per beat and again the next beat, because a cached probe
+    is a probe that was not made this beat. A check asked for on its own is
+    its own whole run."""
+    gateway = FakeGateway(catalog_body=_catalog(_local("qwen3:8b")), engines=[fakes.engine_view()])
     mount_peers(gateway=gateway, memory=FakeMemory())
     await settings_store.write_setting(
-        settings_store.SettingWrite(key="chat.model", value="ollama:qwen3:8b")
+        settings_store.SettingWrite(key="chat.model", value="hub:qwen3:8b")
     )
     only(checks.REGISTRY["stack_chat_model"], checks.REGISTRY["stack_ollama"])
     runs = await checks.run_all(core_app, pool)
@@ -550,26 +652,23 @@ async def test_the_catalogue_is_assembled_once_per_beat_and_not_across_beats(
         ("stack_chat_model", True, ()),
         ("stack_ollama", True, ()),
     ]
-    assert _catalog_calls(gateway) == 1
-    # The next beat looks again.
+    assert (_catalog_calls(gateway), _engine_calls(gateway)) == (1, 1)
     await checks.run_all(core_app, pool)
-    assert _catalog_calls(gateway) == 2
-    # And a check asked for on its own is its own whole run.
+    assert (_catalog_calls(gateway), _engine_calls(gateway)) == (2, 2)
     await checks.run_one(core_app, pool, "stack_ollama")
     await checks.run_one(core_app, pool, "stack_ollama")
-    assert _catalog_calls(gateway) == 4
+    assert (_catalog_calls(gateway), _engine_calls(gateway)) == (2, 4)
 
 
 @requires_db
-async def test_a_shared_catalogue_still_lets_each_subject_tell_its_own_truth(
-    pool, mount_peers, only
-):
-    """The reason these stay two checks sharing a FETCH rather than folding
-    into one check with two findings: on the SAME body, ollama being down is
-    an urgent FINDING while whether the chat model is installed is a check
-    that COULD NOT RUN. One CheckRun could only have said one of them."""
+async def test_one_beat_lets_each_subject_tell_its_own_truth(pool, mount_peers, only):
+    """The reason these stay two checks rather than folding into one check
+    with two findings: on the SAME beat, an engine not answering is an urgent
+    FINDING while whether the chat model is installed is a check that COULD
+    NOT RUN — and the engine list is read once for both."""
     gateway = FakeGateway(
-        catalog_body=_catalog(ollama_ok=False, note="ollama refused: connection refused")
+        catalog_body=_catalog(hub_ok=False, note="ollama refused: connection refused"),
+        engines=[fakes.engine_view(state="unreachable", reason="ConnectError: refused")],
     )
     mount_peers(gateway=gateway, memory=FakeMemory())
     await settings_store.write_setting(
@@ -577,10 +676,58 @@ async def test_a_shared_catalogue_still_lets_each_subject_tell_its_own_truth(
     )
     only(checks.REGISTRY["stack_chat_model"], checks.REGISTRY["stack_ollama"])
     model_run, ollama_run = await checks.run_all(core_app, pool)
-    assert _catalog_calls(gateway) == 1
-    assert ollama_run.ran and ollama_run.findings[0].key == "peer_down:ollama"
+    assert (_catalog_calls(gateway), _engine_calls(gateway)) == (1, 1)
+    assert ollama_run.ran and ollama_run.findings[0].key == "peer_down:hub"
     assert ollama_run.findings[0].urgent is True
-    assert not model_run.ran and "ollama did not answer" in model_run.reason
+    assert not model_run.ran and "did not answer the gateway" in model_run.reason
+
+
+@requires_db
+async def test_a_bare_tag_matches_a_local_row_on_whichever_engine_lists_it(pool, mount_peers):
+    row = {**_local("qwen3:8b"), "id": "box:qwen3:8b", "provider": "box"}
+    mount_peers(
+        gateway=FakeGateway(catalog_body=_catalog(row), engines=[fakes.engine_view("box")]),
+        memory=FakeMemory(),
+    )
+    await settings_store.write_setting(
+        settings_store.SettingWrite(key="chat.model", value="qwen3:8b")
+    )
+    run = await checks.run_one(core_app, pool, "stack_chat_model")
+    assert run.ran and run.findings == ()
+
+
+@requires_db
+async def test_a_cloud_model_missing_while_its_own_listing_failed_is_not_claimed(pool, mount_peers):
+    body = _catalog(_local("qwen3:8b"))
+    body["sources"].append(
+        {"key": "openrouter", "ok": False, "rows": 0, "note": "the listing was refused (401)"}
+    )
+    mount_peers(
+        gateway=FakeGateway(catalog_body=body, engines=[fakes.engine_view()]),
+        memory=FakeMemory(),
+    )
+    await settings_store.write_setting(
+        settings_store.SettingWrite(key="chat.model", value="openrouter:openai/gpt-x")
+    )
+    run = await checks.run_one(core_app, pool, "stack_chat_model")
+    assert not run.ran
+    assert "openrouter (the listing was refused (401)) did not answer the gateway" in run.reason
+
+
+@requires_db
+async def test_a_switched_off_engine_still_lists_what_it_has(pool, mount_peers):
+    """A machine switched off on purpose still answers the gateway's listing,
+    so a model missing from it IS missing — the switch is not silence."""
+    view = fakes.engine_view(serving=False, state="switched_off")
+    mount_peers(
+        gateway=FakeGateway(catalog_body=_catalog(_local("qwen3:8b")), engines=[view]),
+        memory=FakeMemory(),
+    )
+    await settings_store.write_setting(
+        settings_store.SettingWrite(key="chat.model", value="qwen3:70b")
+    )
+    run = await checks.run_one(core_app, pool, "stack_chat_model")
+    assert run.ran and [f.key for f in run.findings] == ["chat_model_missing:qwen3:70b"]
 
 
 @requires_db

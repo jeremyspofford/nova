@@ -86,3 +86,29 @@ async def test_the_tool_asks_the_gateway_with_the_role_and_model(pool, mount_pee
         assert "the routing check was refused — role must be a built-in" in str(exc)
     else:
         raise AssertionError("a role the gateway refuses must be refused in its words")
+
+
+def test_a_machine_switched_off_is_said_in_words():
+    body = {
+        "role": "chat",
+        "chain": [
+            {
+                "link": 1,
+                "id": "hub:qwen3.8:27b",
+                "verdict": "switched_off",
+                "reason": "hub is switched off for models",
+            },
+            {"link": 2, "id": "openrouter:gpt-x", "verdict": "runnable", "reason": None},
+        ],
+        "would_serve": {"served_by": "openrouter:gpt-x", "reason": "fell back to link 2"},
+        "reason": "fell back to link 2",
+    }
+    text = route.describe(body)
+    assert (
+        "1. hub:qwen3.8:27b: skipped — its machine is switched off for models "
+        "(hub is switched off for models)"
+    ) in text
+    unreachable = {**body, "chain": [{**body["chain"][0], "verdict": "unreachable"}]}
+    said = route.describe(unreachable)
+    assert "skipped — its machine did not answer" in said
+    assert "ollama" not in said  # the builtin is `hub` now; no engine is named by its adapter

@@ -581,6 +581,11 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
         # derived off the llm_call span like every key above it, so a reload
         # shows what the live usage frame showed.
         "prompt_tokens",
+        # S28 (2026-09-16): the files that came with the row
+        # (conversations.py:401), an empty list when none did. S28 merged on
+        # targeted suites while the full one was wedged, so this pin only
+        # caught up at item 0 (2026-09-18).
+        "attachments",
     }
 
 

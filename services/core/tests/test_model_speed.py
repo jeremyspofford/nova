@@ -60,15 +60,39 @@ class TestSpeed:
         assert speed.ratio is None
 
 
-async def _span(pool, *, model: str, rate: float | None, hours_ago: float) -> None:
-    """One llm_call span, exactly as chat.py files it."""
+GPU = "gpu:cuda:GPU-8d3c5a2e-7f41-4b8e-9c55-000000000001"
+CPU = "cpu:intel-n150|4c|16g"
+CONTAINER = "container"
+
+
+async def _span(
+    pool,
+    *,
+    model: str,
+    rate: float | None,
+    hours_ago: float,
+    engine: str = "hub",
+    served_on: str | None = GPU,
+    runtime: str | None = CONTAINER,
+    requested: str | None = None,
+) -> None:
+    """One llm_call span, exactly as chat.py files it — since S40 with WHERE
+    it ran (chat._note_served): served_by `<engine>:<model>`, served_on,
+    served_runtime."""
     turn_id = uuid.uuid4()
     await pool.execute(
         "INSERT INTO turns (id, started_at, status, kind) VALUES ($1, $2, 'ok', 'chat')",
         turn_id,
         datetime.now(UTC) - timedelta(hours=hours_ago),
     )
-    meta = {"model": model}
+    meta: dict = {
+        "model": requested if requested is not None else model,
+        "served_by": f"{engine}:{model}",
+    }
+    if served_on is not None:
+        meta["served_on"] = served_on
+    if runtime is not None:
+        meta["served_runtime"] = runtime
     if rate is not None:
         meta["tok_per_s"] = rate
     await pool.execute(
@@ -90,7 +114,7 @@ class TestSpeeds:
         for _ in range(5):
             await _span(pool, model="qwen3.8:27b", rate=0.25, hours_ago=0.5)
 
-        speed = await model_speed.speed_of(pool, "qwen3.8:27b")
+        speed = await model_speed.speed_of(pool, "qwen3.8:27b", GPU, CONTAINER)
 
         assert speed.recent == 0.25
         assert speed.baseline == 67.5
@@ -105,7 +129,7 @@ class TestSpeeds:
         for _ in range(5):
             await _span(pool, model="slow:2b", rate=3.0, hours_ago=0.5)
 
-        speed = await model_speed.speed_of(pool, "slow:2b")
+        speed = await model_speed.speed_of(pool, "slow:2b", GPU, CONTAINER)
 
         assert speed.ratio == 1.0
 
@@ -119,7 +143,7 @@ class TestSpeeds:
             await _span(pool, model="qwen3:8b", rate=40.0, hours_ago=0.5)
         await _span(pool, model="qwen3:8b", rate=0.2, hours_ago=0.5)
 
-        speed = await model_speed.speed_of(pool, "qwen3:8b")
+        speed = await model_speed.speed_of(pool, "qwen3:8b", GPU, CONTAINER)
 
         assert speed.recent == 40.0
 
@@ -128,7 +152,7 @@ class TestSpeeds:
             await _span(pool, model="qwen3:8b", rate=40.0, hours_ago=48)
         await _span(pool, model="qwen3:8b", rate=0.2, hours_ago=0.5)
 
-        speed = await model_speed.speed_of(pool, "qwen3:8b")
+        speed = await model_speed.speed_of(pool, "qwen3:8b", GPU, CONTAINER)
 
         assert speed.recent is None
         assert speed.recent_rounds == 1
@@ -140,7 +164,7 @@ class TestSpeeds:
         for _ in range(4):
             await _span(pool, model="new:12b", rate=20.0, hours_ago=0.5)
 
-        speed = await model_speed.speed_of(pool, "new:12b")
+        speed = await model_speed.speed_of(pool, "new:12b", GPU, CONTAINER)
 
         assert speed.recent == 20.0
         assert speed.baseline is None
@@ -154,7 +178,7 @@ class TestSpeeds:
         for _ in range(10):
             await _span(pool, model="qwen3:8b", rate=None, hours_ago=0.5)
 
-        speed = await model_speed.speed_of(pool, "qwen3:8b")
+        speed = await model_speed.speed_of(pool, "qwen3:8b", GPU, CONTAINER)
 
         assert speed.recent is None
         assert speed.recent_rounds == 0
@@ -163,7 +187,7 @@ class TestSpeeds:
         for _ in range(20):
             await _span(pool, model="qwen3:8b", rate=40.0, hours_ago=24 * 90)
 
-        speed = await model_speed.speed_of(pool, "qwen3:8b")
+        speed = await model_speed.speed_of(pool, "qwen3:8b", GPU, CONTAINER)
 
         assert speed.baseline is None
         assert speed.baseline_rounds == 0
@@ -175,19 +199,81 @@ class TestSpeeds:
 
         every = await model_speed.speeds(pool)
 
-        assert every["qwen3.8:27b"].baseline == 67.5
-        assert every["qwen3:8b"].baseline == 120.0
+        assert every[("qwen3.8:27b", GPU, CONTAINER)].baseline == 67.5
+        assert every[("qwen3:8b", GPU, CONTAINER)].baseline == 120.0
 
     async def test_an_unknown_model_answers_with_nothing_rather_than_raising(self, pool):
-        speed = await model_speed.speed_of(pool, "never-run:1b")
+        speed = await model_speed.speed_of(pool, "never-run:1b", GPU, CONTAINER)
         assert speed.as_dict() == {
             "model": "never-run:1b",
+            "served_on": GPU,
+            "runtime": CONTAINER,
             "recent_tok_per_s": None,
             "recent_rounds": 0,
             "baseline_tok_per_s": None,
             "baseline_rounds": 0,
             "ratio": None,
         }
+
+
+class TestWhereItRan:
+    """S40, D10: a rate is a fact about a model ON a compute, in a runtime —
+    the N150's 3 tok/s must never be averaged into the 3090's 67."""
+
+    async def test_a_round_the_gateway_could_not_place_is_not_a_measurement(self, pool):
+        for _ in range(20):
+            await _span(pool, model="qwen3:8b", rate=40.0, hours_ago=48, served_on=None)
+        assert await model_speed.speeds(pool) == {}
+
+    async def test_the_same_model_on_two_computes_keeps_two_histories(self, pool):
+        for _ in range(20):
+            await _span(pool, model="qwen3:8b", rate=120.0, hours_ago=48)
+            await _span(pool, model="qwen3:8b", rate=3.0, hours_ago=48, served_on=CPU)
+        for _ in range(5):
+            await _span(pool, model="qwen3:8b", rate=3.0, hours_ago=0.5, served_on=CPU)
+        on_cpu = await model_speed.speed_of(pool, "qwen3:8b", CPU, CONTAINER)
+        on_gpu = await model_speed.speed_of(pool, "qwen3:8b", GPU, CONTAINER)
+        assert on_cpu.baseline == 3.0 and on_cpu.ratio == 1.0
+        assert on_gpu.baseline == 120.0 and on_gpu.recent is None
+
+    async def test_the_runtime_is_part_of_where_it_ran(self, pool):
+        for _ in range(10):
+            await _span(pool, model="qwen3:8b", rate=100.0, hours_ago=48, runtime="container")
+            await _span(pool, model="qwen3:8b", rate=80.0, hours_ago=48, runtime="native")
+        every = await model_speed.speeds(pool)
+        assert every[("qwen3:8b", GPU, "container")].baseline == 100.0
+        assert every[("qwen3:8b", GPU, "native")].baseline == 80.0
+
+    async def test_the_engine_name_is_not_part_of_it(self, pool):
+        """The same weights on the same card are one measurement whatever the
+        engine is called — what lets a baseline survive the hub move."""
+        for _ in range(5):
+            await _span(pool, model="qwen3.8:27b", rate=67.5, hours_ago=48, engine="hub")
+            await _span(pool, model="qwen3.8:27b", rate=67.5, hours_ago=48, engine="dell")
+        speed = await model_speed.speed_of(pool, "qwen3.8:27b", GPU, CONTAINER)
+        assert speed.baseline_rounds == 10 and speed.baseline == 67.5
+
+    async def test_the_models_own_colon_survives_the_engine_coming_off(self, pool):
+        await _span(pool, model="qwen3.8:27b", rate=67.5, hours_ago=0.5)
+        assert set(await model_speed.speeds(pool)) == {("qwen3.8:27b", GPU, CONTAINER)}
+
+    async def test_where_a_requested_model_last_ran_is_its_newest_placed_round(self, pool):
+        await _span(
+            pool, model="qwen3:8b", rate=40.0, hours_ago=2, served_on=CPU, requested="hub:qwen3:8b"
+        )
+        await _span(pool, model="qwen3:8b", rate=100.0, hours_ago=1, requested="hub:qwen3:8b")
+        serving = await model_speed.latest_serving(pool, "hub:qwen3:8b")
+        assert serving == model_speed.Serving(
+            engine="hub", model="qwen3:8b", served_on=GPU, runtime=CONTAINER
+        )
+        assert serving.key == ("qwen3:8b", GPU, CONTAINER)
+
+    async def test_a_model_never_placed_has_nowhere_it_last_ran(self, pool):
+        await _span(
+            pool, model="qwen3:8b", rate=40.0, hours_ago=1, served_on=None, requested="qwen3:8b"
+        )
+        assert await model_speed.latest_serving(pool, "qwen3:8b") is None
+        assert await model_speed.latest_serving(pool, "never-run:1b") is None
 
 
 class TestStalls:
@@ -223,7 +309,7 @@ class TestStalls:
         assert stalled["qwen3.8:27b"].walled == 3
         assert stalled["qwen3.8:27b"].rounds == 3
         # And the token-based reading has nothing at all to say about it.
-        assert (await model_speed.speed_of(pool, "qwen3.8:27b")).recent is None
+        assert (await model_speed.speed_of(pool, "qwen3.8:27b", GPU, CONTAINER)).recent is None
 
     async def test_a_round_that_wrote_something_before_timing_out_is_not_walled(self, pool):
         await self._walled(pool, "qwen3.8:27b", 3, chars=812)

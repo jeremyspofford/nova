@@ -24,11 +24,11 @@ const REPORT: SpendReport = {
   by_provider: [
     { provider: 'openrouter', local: false, usd: 3.0, calls: 4, unmetered: 2, refusals: 1, gpu_seconds: null, month_usd: 3.0, cap_usd: 10, remaining_usd: 7 },
     { provider: 'anthropic', local: false, usd: 0.5, calls: 1, unmetered: 0, refusals: 0, gpu_seconds: null, month_usd: 0.5, cap_usd: null, remaining_usd: null },
-    { provider: 'ollama', local: true, usd: 0, calls: 9, unmetered: 0, refusals: 0, gpu_seconds: 750, month_usd: null, cap_usd: null, remaining_usd: null },
+    { provider: 'hub', local: true, usd: 0, calls: 9, unmetered: 0, refusals: 0, gpu_seconds: 750, month_usd: null, cap_usd: null, remaining_usd: null },
   ],
   by_model: [
     { key: 'openrouter:openai/gpt-x', local: false, usd: 3.0, calls: 4, unmetered: 2, prompt_tokens: 12000, completion_tokens: 3000, gpu_seconds: 0 },
-    { key: 'ollama:qwen3:8b', local: true, usd: 0, calls: 9, unmetered: 0, prompt_tokens: 9000, completion_tokens: 4000, gpu_seconds: 750 },
+    { key: 'hub:qwen3:8b', local: true, usd: 0, calls: 9, unmetered: 0, prompt_tokens: 9000, completion_tokens: 4000, gpu_seconds: 750 },
   ],
   by_purpose: [
     { key: 'chat', local: false, usd: 3.0, calls: 10, unmetered: 2, prompt_tokens: 0, completion_tokens: 0, gpu_seconds: 0 },
@@ -48,7 +48,7 @@ const REPORT: SpendReport = {
       models: [
         { key: 'openrouter:openai/gpt-x', local: false, usd: 1.5, calls: 2, gpu_seconds: 0 },
         { key: 'anthropic:claude-opus-5', local: false, usd: 0.5, calls: 1, gpu_seconds: 0 },
-        { key: 'ollama:qwen3:8b', local: true, usd: 0, calls: 2, gpu_seconds: 0 },
+        { key: 'hub:qwen3:8b', local: true, usd: 0, calls: 2, gpu_seconds: 0 },
       ],
     },
     {
@@ -58,7 +58,7 @@ const REPORT: SpendReport = {
       gpu_seconds: 750,
       models: [
         { key: 'openrouter:openai/gpt-x', local: false, usd: 1.5, calls: 2, gpu_seconds: 0 },
-        { key: 'ollama:qwen3:8b', local: true, usd: 0, calls: 7, gpu_seconds: 750 },
+        { key: 'hub:qwen3:8b', local: true, usd: 0, calls: 7, gpu_seconds: 750 },
       ],
     },
   ],
@@ -114,19 +114,19 @@ describe('SpendPage', () => {
     const seg = screen.getByTestId('spend-day-2026-09-02-openrouter:openai/gpt-x')
     expect(seg.style.height).toBe('75%')
     expect(screen.getByTestId('spend-day-2026-09-02-anthropic:claude-opus-5').style.height).toBe('25%')
-    expect(screen.queryByTestId('spend-day-2026-09-02-ollama:qwen3:8b')).toBeNull()
+    expect(screen.queryByTestId('spend-day-2026-09-02-hub:qwen3:8b')).toBeNull()
     // The key: most used first, each with its colour; the local model says "no dollars".
     const key = screen.getByTestId('spend-key')
     const entries = Array.from(key.querySelectorAll('li[data-testid^="spend-key-"]')).map(li => li.getAttribute('data-testid'))
-    expect(entries).toEqual(['spend-key-openrouter:openai/gpt-x', 'spend-key-anthropic:claude-opus-5', 'spend-key-ollama:qwen3:8b'])
-    expect(screen.getByTestId('spend-key-ollama:qwen3:8b').textContent).toContain('local, no dollars')
+    expect(entries).toEqual(['spend-key-openrouter:openai/gpt-x', 'spend-key-anthropic:claude-opus-5', 'spend-key-hub:qwen3:8b'])
+    expect(screen.getByTestId('spend-key-hub:qwen3:8b').textContent).toContain('local, no dollars')
     const gptColour = seg.className
     expect(screen.getByTestId('spend-key-openrouter:openai/gpt-x').querySelector('span')?.className).toContain(gptColour.split(' ').pop() ?? '')
     // Calls: the local model appears, and the tallest day is the one with more calls.
     fireEvent.click(screen.getByRole('button', { name: 'Calls' }))
     expect(screen.getByTestId('spend-day-2026-09-05').style.height).toBe('100%')
-    expect(screen.getByTestId('spend-day-2026-09-05-ollama:qwen3:8b').style.height).toBe(`${(7 / 9) * 100}%`)
-    expect(screen.getByTestId('spend-key-ollama:qwen3:8b').textContent).toContain('9 calls')
+    expect(screen.getByTestId('spend-day-2026-09-05-hub:qwen3:8b').style.height).toBe(`${(7 / 9) * 100}%`)
+    expect(screen.getByTestId('spend-key-hub:qwen3:8b').textContent).toContain('9 calls')
   })
 
   it('a provider card shows month vs cap and saves a new cap through the API', async () => {
@@ -135,11 +135,25 @@ describe('SpendPage', () => {
     const card = screen.getByTestId('spend-provider-openrouter')
     expect(card.textContent).toContain('$3.00 of $10.00 this month')
     expect(card.textContent).toContain('2 unmetered')
-    expect(screen.getByTestId('spend-provider-ollama').textContent).toContain('12.5 min of GPU time over 9 calls — not money')
+    expect(screen.getByTestId('spend-provider-hub').textContent).toContain('12.5 min of GPU time over 9 calls — not money')
     fireEvent.change(within(card).getByLabelText('monthly cap openrouter'), { target: { value: '20' } })
     fireEvent.click(within(card).getByRole('button', { name: /save/i }))
     await waitFor(() => expect(api.putSpendCap).toHaveBeenCalledWith('openrouter', 20))
     await waitFor(() => expect(api.getSpend).toHaveBeenCalledTimes(2))
+  })
+
+  it('a month spanning the rename shows the old rows under their old name, both local', async () => {
+    // usage_events keep provider='ollama' for every call served before S40:
+    // it was true when written, and a measurement row never changes meaning.
+    const report = { ...REPORT, by_provider: [
+      ...REPORT.by_provider.filter(p => p.provider !== 'hub'),
+      { provider: 'ollama', local: true, usd: 0, calls: 5, unmetered: 0, refusals: 0, gpu_seconds: 300, month_usd: null, cap_usd: null, remaining_usd: null },
+      { provider: 'hub', local: true, usd: 0, calls: 4, unmetered: 0, refusals: 0, gpu_seconds: 450, month_usd: null, cap_usd: null, remaining_usd: null },
+    ] }
+    renderPage({ getSpend: vi.fn(async () => report) })
+    await waitFor(() => expect(screen.getByTestId('spend-provider-hub')).toBeTruthy())
+    expect(screen.getByTestId('spend-provider-ollama').textContent).toContain('5.0 min of GPU time over 5 calls — not money')
+    expect(screen.getByTestId('spend-provider-hub').textContent).toContain('7.5 min of GPU time over 4 calls — not money')
   })
 
   it('rollups by model, purpose and person read the server\'s words, local rows in minutes', async () => {

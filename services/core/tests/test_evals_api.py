@@ -39,6 +39,9 @@ pytestmark = requires_db
 MODEL = "qwen3:8b"
 RUN = "/api/v1/evals/run"
 ACTIVE = "/api/v1/evals/runs/active"
+# The corpus's live version, read the way the endpoint reads it, so these do
+# not break every time the corpus moves (they broke at S40's 13 -> 14).
+CURRENT_VERSION = cases_mod.load_suite("agent_quality")[0].suite_version
 
 
 def text(piece: str) -> dict:
@@ -632,8 +635,10 @@ async def test_runs_requires_auth(client):
 # ── repeated runs: the floor, not the last number (2026-09-14) ─────────────
 
 
-async def _finished_run(pool, model, outcomes, *, suite="agent_quality", version=13):
-    """A completed suite run with one eval_runs row per (case_id, passed)."""
+async def _finished_run(pool, model, outcomes, *, suite="agent_quality", version=None):
+    """A completed suite run with one eval_runs row per (case_id, passed), at
+    the corpus's live version unless a test says otherwise."""
+    version = CURRENT_VERSION if version is None else version
     run_id = await pool.fetchval(
         "INSERT INTO eval_suite_runs (suite, suite_version, model, case_count, status, "
         "ended_at) VALUES ($1, $2, $3, $4, 'done', now()) RETURNING id",
@@ -717,8 +722,8 @@ async def test_one_run_is_reported_as_one_run(owner_client, pool):
 async def test_runs_of_another_version_are_never_blended_in(owner_client, pool):
     """A score is only comparable inside one suite_version — the whole reason
     the column exists."""
-    await _finished_run(pool, "qwen3:8b", [("a", True)], version=13)
-    await _finished_run(pool, "qwen3:8b", [("a", False)], version=12)
+    await _finished_run(pool, "qwen3:8b", [("a", True)], version=CURRENT_VERSION)
+    await _finished_run(pool, "qwen3:8b", [("a", False)], version=CURRENT_VERSION - 1)
 
     body = (
         await owner_client.get(
@@ -726,7 +731,7 @@ async def test_runs_of_another_version_are_never_blended_in(owner_client, pool):
         )
     ).json()
     assert body["runs_read"] == 1
-    assert body["suite_version"] == 13
+    assert body["suite_version"] == CURRENT_VERSION
 
 
 # ── the model's load, paid before case one (S21) ───────────────────────────

@@ -1,14 +1,88 @@
-# The core suite wedges at ~12%, 2026-09-16 — hypotheses, not yet a root cause
+# The core suite wedges at ~12%, 2026-09-16 — ROOT-CAUSED and fixed 2026-09-18
 
-**Status: UNCONFIRMED.** Written 2026-09-17 against `main` at `0996a31` by
-reading the code only. The suite was **not run** — it is known to wedge, and
-this container has no postgres to run it against. Everything below is a
-mechanism argued from source with file and line. None of it is measured.
+**Status: RESOLVED 2026-09-18 (item 0).** The resolution, measured, is the
+next section. The rest of the document is the 2026-09-17 read-only analysis,
+kept as written: its Hypothesis A (a timed-out teardown skipping
+`close_pool`) and B (TRUNCATE blocked by a leaked connection) were NOT the
+cause, and its guess that the wedge was a blocked await was wrong in kind: it
+was a busy spin.
 
-That distinction is the point: a plausible story told confidently is how the
-journal poisoning cost an afternoon on 2026-09-16 (slice-28-attachments.md,
-"the first diagnosis was wrong"). This document proposes probes; it does not
-claim an answer.
+## Resolution (2026-09-18, measured)
+
+**The wedge was `drain_background()` spinning, synchronously, over one
+finished task.**
+
+```python
+while _BACKGROUND:
+    await asyncio.gather(*list(_BACKGROUND), return_exceptions=True)
+```
+
+- `_spawn` removes a task from `_BACKGROUND` with a done-callback
+  (`task.add_done_callback(_BACKGROUND.discard)`). A done-callback runs on the
+  loop's NEXT iteration, so "finished, still in the set" is a normal state for
+  one iteration.
+- Since CPython 3.12, `asyncio.gather` over children that are ALL already done
+  completes **eagerly**: it runs its done-callbacks synchronously and returns a
+  finished future. Awaiting a finished future does not yield to the loop.
+- Enter `drain_background` in that one-iteration window and the `while` loop
+  never yields again: the loop never runs, so the queued `discard` never runs,
+  so the set never empties. The conftest's `asyncio.wait_for(..., timeout=15)`
+  could not fire either: a timeout needs the loop too. That is why the suite
+  hung for ever with no output, and why it moved from test to test (a timing
+  window, not a test).
+
+**How it was found** (probes in the session scratchpad, never product code):
+
+1. `pytest-timeout --timeout-method=thread` named the test: `test_chat_mention.py::test_a_leading_mention_runs_the_whole_turn_as_the_agent`, inside its own `await chat.drain_background()`. The same file alone: 7 passed in 4.6 s. So the state came from earlier in the run.
+2. A plugin recording `chat._BACKGROUND` at every test's start found **nothing leaked between tests**. The hang was in-test. It moved to `test_chat.py`, then `test_chat_bare_intent.py`, then `test_chat_honesty.py`, then `test_chat_deferral.py`: never the same test twice, every time a `drain_background()` call.
+3. The main thread's stack at the timeout ended on `while _BACKGROUND:` itself, so this was a spin, not a blocked await.
+4. Wrapping `drain_background` to log each round showed one `drain_queue` task (spawned from `_run_turn`'s `finally`, chat.py:5103), `done=True`, no exception, not cancelled, on the running loop, for 3,000 rounds.
+5. Keyed by weak reference to the task object (not `id()`, which CPython reuses): neither of its done-callbacks had run. Both handles, `set.discard` and the probe's own, were sitting **uncancelled in the running loop's `_ready` queue**. The loop was never iterating.
+
+**The fix** (`app/chat.py`, `drain_background`): gather only tasks that are
+still running, and when only finished ones remain, `await asyncio.sleep(0)` so
+the loop runs once and the queued discards land. Pinned by
+`tests/test_chat_background.py`, which builds the exact state (a finished task
+still in the set) and counts gather rounds instead of relying on a timeout that
+cannot fire. Red before the fix: 101 rounds, 0.07 s. Green after.
+
+**Not only a test bug.** `main.py`'s lifespan calls `drain_background()` at
+shutdown, so a stop that landed in the same window would have spun until
+Docker's SIGKILL after `stop_grace` (330 s), losing whatever the drain was
+meant to let finish.
+
+**A guard so it cannot be silent again:** `pytest-timeout` is a dev dependency
+with `timeout = 120`, `timeout_method = "signal"` in `pyproject.toml`. SIGALRM
+interrupts a blocked await AND a Python-level spin, fails that test by name,
+and the rest of the suite still runs.
+
+**Two stale pins the wedge had hidden**, both from slices that merged on
+targeted suites while the full run could not finish:
+- `test_chat_agents.py::test_recall_asks_one_partition_or_two_under_one_span`
+  predates `recalled` on the recall span (f0693c35, 2026-09-16), which moved
+  `test_chat.py`'s pin and missed these two.
+- `test_timers_api.py::test_messages_carry_turn_kind_…` predates S28's
+  `attachments` key on every message row (conversations.py:401).
+
+**Full-suite runs after the fix** (the suite has 2,957 tests):
+
+| Run | Result | Time |
+|---|---|---|
+| 1 | 2,956 passed, 1 failed (the `attachments` pin) | 13:22 |
+| 2 | 2,956 passed, 1 failed (same pin; collected before its fix) | 15:27 |
+| 3 | **2,957 passed** | 13:11 |
+| 4 | **2,957 passed** | 13:19 |
+
+Runs 3 and 4 are the final code, back to back, against a scratch database on
+`nova-scratch-pg`. The suite has not been able to finish since S25.
+
+**Found in passing, not fixed here:** `queued.next_waiting_conversation`
+(queued.py:101-107) filters `claimed_at IS NULL` but not
+`cancelled_at IS NULL`, while `any_waiting` and `claim_next` filter both. A
+cancelled row in another conversation sends every drain on a wasted claim
+attempt. It is harmless (`claim_next` re-checks) but inconsistent. Carried.
+
+---
 
 ## What was observed (from slice-28-attachments.md)
 

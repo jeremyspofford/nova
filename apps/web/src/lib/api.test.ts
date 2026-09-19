@@ -15,6 +15,8 @@ import {
   listSkills,
   listTools,
   updateAgent,
+  getMachines,
+  setMachineServing,
   type PullLine,
 } from './api'
 
@@ -260,6 +262,43 @@ describe('agents (S12): the routes and the bodies, verbatim', () => {
 
   it('encodes characters that would otherwise break the query string', () => {
     expect(workspaceRawUrl('a b&c.md')).toBe('/api/v1/workspace/raw?path=a%20b%26c.md')
+  })
+})
+
+describe('machines (S40): the routes and the bodies, verbatim', () => {
+  function stubJson(body: unknown, status = 200) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: status < 400,
+        status,
+        text: async () => JSON.stringify(body),
+        json: async () => body,
+      }) as unknown as Response),
+    )
+  }
+  const call = () => vi.mocked(fetch).mock.calls[0] as unknown as [string, RequestInit | undefined]
+  const HUB = {
+    name: 'hub', lifecycle: 'always_on', serving: false, state: 'switched_off', reason: null, observed_at: null,
+    compute: null, runtime: 'container', models: [],
+  }
+
+  it('lists from the fixed path, and asks for a fresh look only when told to', async () => {
+    stubJson({ machines: [HUB] })
+    expect(await getMachines()).toEqual({ machines: [HUB] })
+    expect(call()[0]).toBe('/api/v1/machines')
+    stubJson({ machines: [HUB] })
+    await getMachines({ live: true })
+    expect(call()[0]).toBe('/api/v1/machines?live=true')
+  })
+
+  it('sets the switch with PATCH {serving} and returns the row core read back, not the request', async () => {
+    stubJson(HUB)
+    expect(await setMachineServing('hub box', false)).toEqual(HUB)
+    const [url, init] = call()
+    expect(url).toBe('/api/v1/machines/hub%20box')
+    expect(init?.method).toBe('PATCH')
+    expect(JSON.parse(init?.body as string)).toEqual({ serving: false })
   })
 })
 

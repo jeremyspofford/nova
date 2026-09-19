@@ -5,10 +5,15 @@ X-Nova-Served-By (`provider:model`) as read off the llm_call span — and a
 reloaded transcript gets the same fact from the same span through the
 assistant row's turn link. Neither is ever the model setting the turn ran
 under, and neither is anything the reply says about itself."""
+
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
+import httpx
+
+from app import chat
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway, FakeMemory
 
@@ -110,3 +115,58 @@ async def test_no_served_by_frame_when_the_gateway_never_stated_one(owner_client
     resp = await owner_client.post("/api/v1/chat/stream", json={"message": "hello"})
     sent = frames(resp.text)
     assert not any(isinstance(f, dict) and "served_by" in f for f in sent)
+
+
+async def test_the_round_records_where_it_ran_when_the_gateway_says(
+    owner_client, mount_peers, pool
+):
+    """S40, D10: the compute id and runtime the gateway stamped go on the
+    llm_call span — model_speed keys every rate by them."""
+    gateway = FakeGateway(
+        deltas=("Hi",),
+        served_by="hub:qwen3:8b",
+        served_on="gpu:cuda:GPU-8d3c5a2e-7f41-4b8e-9c55-000000000001",
+        served_runtime="container",
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    resp = await owner_client.post("/api/v1/chat/stream", json={"message": "hello"})
+    assert resp.status_code == 200
+    meta = await pool.fetchval(
+        "SELECT meta FROM turn_spans WHERE kind = 'llm_call' ORDER BY started_at LIMIT 1"
+    )
+    assert meta["served_on"] == "gpu:cuda:GPU-8d3c5a2e-7f41-4b8e-9c55-000000000001"
+    assert meta["served_runtime"] == "container"
+
+
+async def test_nothing_is_recorded_where_the_gateway_said_nothing(owner_client, mount_peers, pool):
+    """Omitted, never guessed: a missing header means the gateway could not
+    tell, and a guessed compute would file the rate under another machine."""
+    gateway = FakeGateway(deltas=("Hi",), served_by="openrouter:openai/gpt-x")
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await owner_client.post("/api/v1/chat/stream", json={"message": "hello"})
+    meta = await pool.fetchval(
+        "SELECT meta FROM turn_spans WHERE kind = 'llm_call' ORDER BY started_at LIMIT 1"
+    )
+    assert "served_on" not in meta and "served_runtime" not in meta
+
+
+def test_note_served_takes_only_what_the_headers_state():
+    span = SimpleNamespace(meta={})
+    chat._note_served(
+        span,
+        httpx.Headers(
+            {
+                "X-Nova-Served-By": "hub:qwen3:8b",
+                "X-Nova-Served-On": "cpu:intel-n150|4c|16g",
+                "X-Nova-Served-Runtime": "container",
+            }
+        ),
+    )
+    assert span.meta == {
+        "served_by": "hub:qwen3:8b",
+        "served_on": "cpu:intel-n150|4c|16g",
+        "served_runtime": "container",
+    }
+    empty = SimpleNamespace(meta={})
+    chat._note_served(empty, httpx.Headers({}))
+    assert empty.meta == {}

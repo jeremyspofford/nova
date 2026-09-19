@@ -18,6 +18,7 @@ import {
   type Routes,
 } from '../../lib/api'
 import { formatRelativeTime } from '../activity/activityFormat'
+import { LIBRARY } from './modelsFormat'
 
 /**
  * Routing by role (S10-2). Each role has an ordered chain of `provider:model`
@@ -68,7 +69,11 @@ const VERDICT_WORDS: Record<string, string> = {
   over_cap: 'over its cap',
   walled: 'refused recently',
   not_installed: 'not installed',
-  unreachable: 'ollama unreachable',
+  // S40: a link on a machine the owner switched off (`engines.serving`) is
+  // passed over by choice, not failure; and `unreachable` is any provider
+  // whose dial failed — a machine or a cloud — so the words name none.
+  switched_off: 'switched off',
+  unreachable: 'could not be reached',
   unknown: 'no such provider',
   refused: 'refused',
 }
@@ -278,7 +283,9 @@ function RoleEditor({
   const verdicts = explain && !('error' in explain) ? explain.chain : []
   const verdictFor = (id: string) => verdicts.find(v => v.id === id)
   const options = catalog
-    .filter(r => (r.kind === 'local' || r.kind === 'cloud') && !draft.includes(r.id) && r.id !== chatModel)
+    // A `library:` row is a model on no machine yet: the gateway cannot
+    // route to it, so it is never offered as a link (pull it on Models).
+    .filter(r => (r.kind === 'local' || r.kind === 'cloud') && r.provider !== LIBRARY && !draft.includes(r.id) && r.id !== chatModel)
     .map(r => ({ value: r.id, label: `${r.provider} · ${r.model}${r.installed === false ? ' (not installed)' : ''}` }))
 
   const remove = async () => {
@@ -444,9 +451,10 @@ function RoleEditor({
 function VerdictBadge({ verdict }: { verdict: { verdict: string; reason: string | null } | undefined }) {
   if (!verdict) return null
   const ok = verdict.verdict === 'runnable'
+  // switched_off is the owner's choice, not a failure: neutral, never red.
   return (
     <span title={verdict.reason ?? undefined} data-verdict={verdict.verdict}>
-      <Badge size="sm" color={ok ? 'success' : verdict.verdict === 'over_cap' ? 'warning' : 'danger'}>
+      <Badge size="sm" color={ok ? 'success' : verdict.verdict === 'over_cap' ? 'warning' : verdict.verdict === 'switched_off' ? 'neutral' : 'danger'}>
         {VERDICT_WORDS[verdict.verdict] ?? verdict.verdict}
       </Badge>
     </span>

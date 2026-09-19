@@ -1,11 +1,14 @@
 /**
- * Model ids are `provider:model` (S10-pre). The bundled ollama is the
- * provider named `ollama`, so a local model is written `ollama:qwen3:8b` —
- * NEVER bare: a bare id routes to whichever provider is currently the
- * default, which Settings → Providers lets the owner move. The local
- * catalogue still works in bare slugs, so these two are the seam.
+ * Model ids are `provider:model` (S10-pre), split on the FIRST colon. The
+ * bundled engine is the provider named `hub` (S40; gateway engines.BUILTIN,
+ * a reserved name), so a local model is written `hub:qwen3:8b` — NEVER bare:
+ * a bare id routes to whichever provider is the default, which Settings →
+ * Providers lets the owner move. `library:` rows are catalogue entries on no
+ * machine yet: they can be pulled, never routed to. The local catalogue
+ * still works in bare slugs, so the two functions below are the seam.
  */
-export const LOCAL_PROVIDER = 'ollama'
+export const LOCAL_PROVIDER = 'hub'
+export const LIBRARY = 'library'
 
 export function qualifyLocalModel(slug: string): string {
   return slug.startsWith(`${LOCAL_PROVIDER}:`) ? slug : `${LOCAL_PROVIDER}:${slug}`

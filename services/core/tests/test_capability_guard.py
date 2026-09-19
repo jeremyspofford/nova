@@ -73,6 +73,55 @@ MUST_FIRE = [
         "Scheduling tasks is not something I can do.",
         "create_timer",
     ),
+    # S40: her machine tools are registered, so disowning them is a false denial.
+    (
+        "cant_see_where_models_run",
+        "I can't see which machine your models run on.",
+        "machine_status",
+    ),
+    (
+        "unable_to_check_where_models_run",
+        "I'm unable to check where the models are running.",
+        "machine_status",
+    ),
+    (
+        "no_access_to_machine_status",
+        "I don't have access to the status of your machines.",
+        "machine_status",
+    ),
+    # Ruling C9: T7's denial, the sentence the checks case scores — the verb
+    # comes BEFORE the noun ("which machine runs my models").
+    (
+        "cant_check_which_machine_runs_my_models",
+        "I can't check which machine runs my models.",
+        "machine_status",
+    ),
+    (
+        "cant_switch_models_off_on_a_machine",
+        "I can't switch off chat models on a machine.",
+        "machine_configure",
+    ),
+    (
+        "not_able_to_stop_a_machine_serving",
+        "I'm not able to stop a machine from running models.",
+        "machine_configure",
+    ),
+    (
+        "changing_which_machine_trailing",
+        "Changing which machine runs the models is not something I can do.",
+        "machine_configure",
+    ),
+    # S40 fix wave A3: the GENERAL forms the tightened pattern keeps.
+    (
+        "cant_turn_off_models_on_any_machine",
+        "I can't turn off chat models on any machine.",
+        "machine_configure",
+    ),
+    (
+        "unable_to_stop_machines_serving",
+        "I'm unable to stop machines from serving models.",
+        "machine_configure",
+    ),
 ]
 
 
@@ -142,6 +191,44 @@ MUST_NOT_FIRE = [
     ("question_would_you_like", "Would you like me to try?"),
     # An honest plain reply carries no denial.
     ("plain_reply", "The capital of France is Paris."),
+    # S40: no wake tool yet (S46) — honest. A scope limit — honest. A past,
+    # specific failed switch — an honest report of one try.
+    ("honest_no_wake_tool", "I can't wake machines up."),
+    ("machine_scope_other_network", "I can't check where models run on another network."),
+    (
+        "machine_specific_past",
+        "I couldn't switch off chat models on hub — the gateway refused.",
+    ),
+    # S40 fix wave A3: machine_configure's own refusals and a failed switch,
+    # RELAYED in the present tense about ONE machine ("that machine", "this
+    # machine" — the words the tile and machine_status use for hub). The
+    # switch really did not happen; "Correction: I can do that" here would be
+    # the guard lying at the exact moment she is telling the truth.
+    (
+        "relayed_no_such_machine",
+        "I can't switch off chat models on that machine — the gateway has no machine named dell.",
+    ),
+    (
+        "relayed_refused_switch",
+        "I'm unable to stop this machine from running chat models: the gateway refused the change.",
+    ),
+    (
+        "relayed_unreachable_right_now",
+        "I can't switch off chat models on this machine right now — the gateway couldn't be "
+        "reached.",
+    ),
+    (
+        "relayed_not_confirmed",
+        "I can't turn off serving for your machine — hub's switch is not confirmed set.",
+    ),
+    (
+        "relayed_until_back",
+        "I can't switch off chat models on this machine until the gateway is back.",
+    ),
+    (
+        "relayed_the_machine_until",
+        "I can't stop the machine from running models until the gateway is reachable.",
+    ),
 ]
 
 
@@ -478,3 +565,14 @@ def test_the_delete_correction_is_clean_over_itself():
     correction = guards.capability_claim_check("I can't delete files.", ALL_TOOLS)
     assert correction is not None
     assert guards.capability_claim_check(correction.text, ALL_TOOLS) is None
+
+
+def test_a_machine_denial_is_false_only_while_machine_status_is_registered():
+    """Ruling C9 / T7's armed test: the denial the checks case invites fires
+    with the live toolset and is HONEST the moment machine_status is not held
+    — the verdict is derived from the toolset, never from a list."""
+    denial = "I can't check which machine runs my models."
+    fired = guards.capability_claim_check(denial, ALL_TOOLS)
+    assert fired is not None and tgt(fired) == ["machine_status"]
+    without = [name for name in ALL_TOOLS if name != "machine_status"]
+    assert guards.capability_claim_check(denial, without) is None

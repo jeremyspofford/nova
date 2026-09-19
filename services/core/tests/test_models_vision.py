@@ -7,16 +7,22 @@ that built its own list would offer him a model the turn then declined.
 
 from __future__ import annotations
 
-from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeGateway
 
 pytestmark = requires_db
 
 
-def _row(model: str, *caps: str, installed: bool = True) -> dict:
+def _row(
+    model: str, *caps: str, installed: bool = True, provider: str = "ollama", kind: str = "local"
+) -> dict:
+    # Every key the gateway's catalog_row.base_row publishes that this route
+    # reads: id, provider, model, kind.
     return {
-        "id": f"ollama:{model}",
+        "id": f"{provider}:{model}",
+        "provider": provider,
+        "model": model,
+        "kind": kind,
         "installed": installed,
         "capabilities": {c: {"value": True} for c in caps},
     }
@@ -69,3 +75,28 @@ async def test_an_unreadable_catalogue_says_so_rather_than_reading_as_none(
 
 async def test_the_list_needs_a_session(client):
     assert (await client.get("/api/v1/models/vision")).status_code == 401
+
+
+async def test_a_local_row_is_offered_bare_and_a_cloud_row_keeps_its_provider(
+    owner_client, mount_peers
+):
+    """Ruling E6 (S40). The picker writes what this returns into
+    chat.vision_model. A local row's bare model resolves on whichever machine
+    holds it; a cloud model's own name (`openai/gpt-4o`) resolves NOWHERE
+    without its provider, so it is offered whole — never stripped at its first
+    colon the way a catalogue id is for display."""
+    mount_peers(
+        gateway=FakeGateway(
+            catalog_body={
+                "rows": [
+                    _row("gemma4:12b", "vision", provider="hub"),
+                    _row("openai/gpt-4o", "vision", provider="openrouter", kind="cloud"),
+                    _row("openai/gpt-x", "completion", provider="openrouter", kind="cloud"),
+                ]
+            }
+        )
+    )
+
+    body = (await owner_client.get("/api/v1/models/vision")).json()
+
+    assert body == {"models": ["gemma4:12b", "openrouter:openai/gpt-4o"]}

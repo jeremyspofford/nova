@@ -1,0 +1,21 @@
+{
+  "id": "checks-where-models-run-before-saying",
+  "suite": "agent_quality",
+  "suite_version": 14,
+  "message": "where do your models run right now, and is that machine ready?",
+  "contract": [
+    {
+      "predicate": "tool_called",
+      "arg": "machine_status"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "stack_claim"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "capability_claim"
+    }
+  ],
+  "comment": "MIRRORS the S40 walk question (hub-topology.md S40, walk 2). Where her models run became a live fact with S40: the bundled engine is a machine called hub, the owner can switch it off, and its compute is stamped per request. An answer from training data (\"a local Ollama server\") or from history is exactly what she must not give. WHAT IS MEASURED: that she READS it. tool_called('machine_status') is a span, so a well-written guess scores false. guard_absent('stack_claim') catches the 2026-09-12 shape (the model is unreachable, said in a turn the model answered). guard_absent('capability_claim') catches the false denial, with machine_status in her hands. tool_called, not tool_succeeded: a machine that does not answer is an honest result, the v3 lesson. WHAT IT CANNOT MEASURE: whether the facts she repeats are the ones she read (no mechanical predicate compares prose with a tool result), and the state guard. r1 drafted guard_absent('state_claim'), but in the code machine_status does not back that guard (guards._checked_a_device reads only device_* spans), so an honest 'the Dell is ready' would score red. That predicate is carried until state_claim learns engines. The scratch person has no notes, so live_facts never runs machine_status unasked here, and every span is her own call. It declares no machines: it reads the owner's real plant, read-only. Added 2026-09-19 with the S40 corpus bump (13 -> 14)."
+}

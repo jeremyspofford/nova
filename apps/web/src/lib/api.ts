@@ -608,7 +608,8 @@ export interface RouteVerdict {
   provider?: string
   model?: string
   local?: boolean
-  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'unreachable' | 'unknown' | 'refused' | string
+  // switched_off (S40): the link's machine was switched off by the owner.
+  verdict: 'runnable' | 'over_cap' | 'walled' | 'not_installed' | 'switched_off' | 'unreachable' | 'unknown' | 'refused' | string
   reason: string | null
   walled_until?: string
 }
@@ -1171,6 +1172,44 @@ export async function revokeDevice(id: string): Promise<Device> {
     'POST',
   )
   return body.device
+}
+
+// ── machines (services/core/app/machines_api.py, S40) ───────────────────
+
+/**
+ * A machine that runs models for Nova (in S40, only the bundled engine,
+ * `hub`), as core relays the gateway's engine row. `state` is the gateway's
+ * word ('ready' | 'unreachable' | 'switched_off' | 'unobserved'); it is kept a
+ * string so a state added later is shown rather than hidden. `compute` is
+ * the measurement identity in the D10 grammar, and null when it could not
+ * be identified: never guessed. `runtime` is 'container' | 'native' | 'wsl'.
+ * `serving` is the owner's switch. `models` is null when the machine could
+ * not be asked what it holds — never an empty list, which is a machine that
+ * answered and holds nothing.
+ */
+export type Machine = {
+  name: string
+  lifecycle: string
+  serving: boolean
+  state: string
+  reason: string | null
+  observed_at: string | null
+  compute: string | null
+  runtime: string | null
+  models: { name: string; size_bytes: number | null }[] | null
+}
+
+/** The gateway's cached reading by default (a short TTL; failures cached
+ * too); `live` makes it look again before answering — what a Refresh
+ * button must mean. */
+export async function getMachines({ live = false }: { live?: boolean } = {}): Promise<{ machines: Machine[] }> {
+  return apiGet<{ machines: Machine[] }>(`/api/v1/machines${live ? '?live=true' : ''}`)
+}
+
+/** PATCH, and the answer is the row core READ BACK after the write. The
+ * tile shows that, never the value it asked for. */
+export async function setMachineServing(name: string, serving: boolean): Promise<Machine> {
+  return apiSend<Machine>(`/api/v1/machines/${encodeURIComponent(name)}`, 'PATCH', { serving })
 }
 
 // ── governance audit (services/core/app/governance_api.py) ──────────────
@@ -1956,8 +1995,9 @@ export const probeModel = (model: string) =>
 /** Has the source moved since this model was pulled? The installed weights
  * digest against the registry's / the Hub's current one. Never pulls. */
 export type DriftResult = NonNullable<CatalogRow['drift']> & { model: string; source: string | null; retry_after_s?: number }
-/** Remove an installed model from the bundled ollama; the gateway verifies
- * against /api/tags before it says removed. */
+/** Remove an installed model from the engine its id names (`hub:qwen3:8b`);
+ * the gateway verifies against that engine's own list before it says
+ * removed. */
 export const removeModel = (model: string) =>
   apiSend<{ removed: string; verified: boolean; installed_now: number }>(
     `/api/v1/models?model=${encodeURIComponent(model)}`,

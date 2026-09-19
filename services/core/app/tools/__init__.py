@@ -39,6 +39,7 @@ from app.tools import (
     agents,
     devices,
     inference,
+    machines,
     memory_tools,
     models,
     notices,
@@ -92,6 +93,9 @@ REGISTRY: dict[str, Tool] = {
         # contended card on 2026-09-12 and could not tell the owner what to
         # close; this is that gap, not a demo of it.
         *inference.TOOLS,
+        # S40: where models run, and the one switch on each machine
+        # (tools/machines.py) — read and set through app/machines.py.
+        *machines.TOOLS,
         *timers.TOOLS,
         *spend.TOOLS,
         *route.TOOLS,

@@ -23,11 +23,13 @@ from fastapi.responses import Response, StreamingResponse
 from app.adapters import base
 from app.adapters.base import (
     COMPLETIONS_TIMEOUT,
+    CONNECT_PHASE_ERRORS,
     MODELS_TIMEOUT,
     VERIFY_TIMEOUT,
     Listing,
     ListingUnavailable,
     ProviderRefused,
+    ProviderUnreachable,
     VerifyResult,
     http_client,
     positive_int,
@@ -474,10 +476,17 @@ class OpenAIChat:
             key_proven=False,
         )
 
-    async def completions(self, request: Request, row: dict, model: str, body: dict) -> Response:
-        return await self._completions(request.app, row, model, body)
+    async def completions(
+        self, request: Request, row: dict, model: str, body: dict, *, engine: bool = False
+    ) -> Response:
+        """`engine` is True when an ENGINE's chat rides this adapter (the ollama
+        adapter's /v1): a connect-phase failure is then ProviderUnreachable —
+        never a wall (D21) — instead of a refusal."""
+        return await self._completions(request.app, row, model, body, engine=engine)
 
-    async def _completions(self, app, row: dict, model: str, body: dict) -> Response:
+    async def _completions(
+        self, app, row: dict, model: str, body: dict, *, engine: bool = False
+    ) -> Response:
         url = base_url_of(row)
         if not url:
             raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
@@ -492,9 +501,10 @@ class OpenAIChat:
             )
         except httpx.HTTPError as exc:
             await client.aclose()
-            raise ProviderRefused(
-                502, f"could not reach {row['name']} at {url} — {reason(exc)}"
-            ) from exc
+            detail = f"could not reach {row['name']} at {url} — {reason(exc)}"
+            if engine and isinstance(exc, CONNECT_PHASE_ERRORS):
+                raise ProviderUnreachable(502, detail) from exc
+            raise ProviderRefused(502, detail) from exc
 
         if upstream.status_code != 200:
             content = await upstream.aread()
@@ -512,7 +522,7 @@ class OpenAIChat:
                 # send this one again without it — once, never a loop.
                 await _remember_usage_support(row, False)
                 return await self._completions(
-                    app, dict(row, usage_supported=False), model, strip_usage(body)
+                    app, dict(row, usage_supported=False), model, strip_usage(body), engine=engine
                 )
             return Response(content=content, status_code=upstream.status_code, headers=headers)
         if asked_for_usage and row.get("usage_supported") is None:

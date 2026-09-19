@@ -122,8 +122,8 @@ describe('ModelsSection', () => {
     await waitFor(() => expect(screen.getByText('Use this model')).toBeDefined())
     fireEvent.click(screen.getByText('Use this model'))
 
-    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'ollama:qwen3:14b'))
-    expect(onModelChanged).toHaveBeenCalledWith('ollama:qwen3:14b')
+    await waitFor(() => expect(api.putSetting).toHaveBeenCalledWith('chat.model', 'hub:qwen3:14b'))
+    expect(onModelChanged).toHaveBeenCalledWith('hub:qwen3:14b')
   })
 
   it('pulling a not-installed model streams progress and it becomes selectable on success', async () => {
@@ -367,7 +367,7 @@ describe('ModelsSection — which model reads an image (S28)', () => {
 
   it('offers the models that can actually see, and defaults to letting her choose', async () => {
     const api = seeing(['gemma4:12b', 'qwen3.8:27b'])
-    render(<ModelsSection chatModel="ollama:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
+    render(<ModelsSection chatModel="hub:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
 
     const picker = (await screen.findByLabelText('Model that reads images')) as HTMLSelectElement
     expect([...picker.options].map(o => o.value)).toEqual(['', 'gemma4:12b', 'qwen3.8:27b'])
@@ -378,7 +378,7 @@ describe('ModelsSection — which model reads an image (S28)', () => {
 
   it('writes his pick to chat.vision_model', async () => {
     const api = seeing(['gemma4:12b'])
-    render(<ModelsSection chatModel="ollama:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
+    render(<ModelsSection chatModel="hub:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
     const picker = await screen.findByLabelText('Model that reads images')
 
     fireEvent.change(picker, { target: { value: 'gemma4:12b' } })
@@ -392,7 +392,7 @@ describe('ModelsSection — which model reads an image (S28)', () => {
     // "State if we don't have one" — and it must not read as a picker with
     // no options, which looks broken rather than empty.
     const api = seeing([])
-    render(<ModelsSection chatModel="ollama:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
+    render(<ModelsSection chatModel="hub:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
 
     const said = await screen.findByTestId('no-vision-model')
     expect(said.textContent).toContain('No installed model can see images')
@@ -403,7 +403,7 @@ describe('ModelsSection — which model reads an image (S28)', () => {
     // The same distinction the turn had to learn on the live walk: one is a
     // fact about his machine, the other about a request that failed.
     const api = seeing([], 'the model catalogue could not be read')
-    render(<ModelsSection chatModel="ollama:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
+    render(<ModelsSection chatModel="hub:qwen3:8b" onModelChanged={vi.fn()} onRerunSetup={vi.fn()} api={api} />)
 
     const said = await screen.findByTestId('no-vision-model')
     expect(said.textContent).toContain('Could not tell')
