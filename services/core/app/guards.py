@@ -5711,6 +5711,17 @@ _LABEL_OK = re.compile(
     r"|in\s+use|answering(?:\s+now)?|serving(?:\s+now)?",
     re.I,
 )
+# Sentence shape 6 of the verdict: "R is serving|answering you|this|now". Its
+# match ends on the object, so what follows can still limit it to another role
+# (T2 review, round 1): "gemma4:12b is serving now AS THE VISION MODEL", "…
+# is serving this chat's IMAGES". _served_claims reads the rest of the clause
+# for this shape — the in-use limit right after it, the role and past words
+# anywhere after it — as shape 7 reads "(?!\s+(?:for|in|on))".
+_SERVED_ANSWERING = re.compile(
+    rf"{_SERVED_REF}\s+(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+(?:model\s+)?)?"
+    r"(?:answering|serving|replying\s+to|responding\s+to)\s+(?:you|this|now|right\s+now)\b",
+    re.I,
+)
 # The sentence shapes that name the model answering this reply.
 _SERVED_SENTENCES = tuple(
     re.compile(pattern, re.I)
@@ -5726,18 +5737,34 @@ _SERVED_SENTENCES = tuple(
         rf"{_SERVED_REF}",
         r"\byou(?:['’]re|\s+are)\s+(?:currently\s+|now\s+)?(?:talking|speaking|chatting)\s+"
         rf"(?:to|with)\s+{_SERVED_REF}",
-        rf"{_SERVED_REF}\s+(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+(?:model\s+)?)?"
-        r"(?:answering|serving|replying\s+to|responding\s+to)\s+(?:you|this|now|right\s+now)\b",
+    )
+) + (
+    _SERVED_ANSWERING,
+    re.compile(
         rf"{_SERVED_REF}\s+(?:is|['’]s)\s+(?:currently\s+)?(?:the\s+)?(?:current|active)\s+"
         r"(?:chat\s+)?model\b(?!\s+(?:for|in|on)\b)",
-    )
+        re.I,
+    ),
 )
 # "No model was needed" — about THIS answer, never about a pull, an embedding,
 # an image, or a step a timer ran.
+#
+# T2 review, round 1: the verdict's pattern let the bare, sentence-ending form
+# fire in the present too, and "no model IS needed" at the end of a sentence is
+# a general statement ("To set a timer, no model is needed.", "Reminders fire
+# by themselves — no model is involved.") — true, and corrected. The past
+# ("was") is about what just happened, so it may end the sentence; the present
+# must carry this reply's own tail ("here", "to answer this", "for this
+# answer"). Every §4 MUST_FIRE is "was" or "I didn't use a model here".
+_NO_MODEL_THIS_REPLY = (
+    r"here\b|to\s+answer\s+(?:this|that|it)\b"
+    r"|for\s+(?:this|that)\s+(?:answer|reply|response|calculation|question|sum|math)\b"
+)
 _NO_MODEL = re.compile(
-    r"\bno\s+(?:ai\s+|language\s+|llm\s+)?model\s+(?:was|is)\s+(?:needed|used|required|involved)"
-    r"(?=\s*(?:[.!;]|$)|\s+(?:here\b|to\s+answer\s+(?:this|that|it)\b"
-    r"|for\s+(?:this|that)\s+(?:answer|reply|response|calculation|question|sum|math)\b))"
+    r"\bno\s+(?:ai\s+|language\s+|llm\s+)?model\s+"
+    r"(?:was\s+(?:needed|used|required|involved)"
+    rf"(?=\s*(?:[.!;]|$)|\s+(?:{_NO_MODEL_THIS_REPLY}))"
+    rf"|is\s+(?:needed|used|required|involved)(?=\s+(?:{_NO_MODEL_THIS_REPLY})))"
     r"|\bi\s+(?:did\s+not|didn['’]t)\s+(?:need\s+to\s+)?use\s+(?:a|any)\s+model"
     r"(?=\s*(?:[.!;]|$)|\s+(?:here|for\s+(?:this|that)\s+"
     r"(?:answer|reply|response|calculation|question)))",
@@ -5775,6 +5802,27 @@ _IN_USE_UNSAID = re.compile(
 #     model and qwen3.8:27b is installed" the nearest ref across "and" is the
 #     installed one. The marker's candidates are the refs in its own conjunct.
 _IN_USE_CONJUNCT = re.compile(r",?\s+(?:and|while|whereas|plus)\s+", re.I)
+#   * T2 review, round 1: the marker is about the ref it is SAID of, never the
+#     nearest ref in the conjunct. The conjunct split knew only and/while/
+#     whereas/plus, and a comma, a dash, a colon, a parenthesis or a machine
+#     subject slipped past it: "hub:qwen3:8b is in use, gemma4:12b and
+#     qwen3.8:27b are installed", "qwen3:8b is in use — gemma4:12b is idle",
+#     "hub (serving you) has qwen3.8:27b installed" each corrected a true
+#     reply against the idle model. So the ref BEFORE the marker counts only
+#     across copula, parenthetical or badge material — a size or runtime in
+#     brackets, ✅, a dash, a table cell's bar, the marker's own "(" and one
+#     "is (the) (model)" — and the ref AFTER it only when the marker is a
+#     label or a subject ("Current model: X", "The model in use is X"). The
+#     ref said before the marker wins when both qualify ("qwen3:8b is the
+#     model in use: qwen3.8:27b is idle"): the marker is then a predicate.
+_IN_USE_BEFORE_GAP = re.compile(
+    r"(?:\s+|\([^()\n]{1,40}\)|\d[\d.,]*\s*[KMGT]i?B\b|[(|:=✅✔☑⭐←⬅—–-]|️)*"
+    r"(?:(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+)?(?:(?:chat\s+)?(?:model|one)\s+)?)?",
+    re.I,
+)
+_IN_USE_AFTER_GAP = re.compile(
+    r"(?:\s+(?:right\s+now|now|currently))?(?:\s*[:=]\s*|\s+(?:is|['’]s)\s+)", re.I
+)
 
 
 @dataclass(frozen=True)
@@ -5830,6 +5878,27 @@ def _conjunct(clause: str, start: int, end: int) -> tuple[int, int]:
     return lo, hi
 
 
+def _in_use_ref(clause: str, marker: re.Match[str], lo: int, hi: int) -> re.Match[str] | None:
+    """The model ref an in-use marker is SAID of, within its conjunct
+    clause[lo:hi], or None: the last ref before the marker when only copula,
+    parenthetical or badge material separates them; otherwise, when NO ref
+    comes before it in the conjunct, the first ref after it when the marker
+    labels or is the subject of it (see _IN_USE_BEFORE_GAP). A marker with a
+    ref before it is that ref's predicate, however many words sit between
+    ("hub:qwen3:8b is, right now, the model in use: qwen3.8:27b is idle"), so
+    a colon after it binds nothing. Never merely the nearest ref."""
+    refs = [r for r in _SERVED_REF_RE.finditer(clause) if r.start() >= lo and r.end() <= hi]
+    before = [r for r in refs if r.end() <= marker.start()]
+    if before:
+        if _IN_USE_BEFORE_GAP.fullmatch(clause, before[-1].end(), marker.start()):
+            return before[-1]
+        return None
+    after = [r for r in refs if r.start() >= marker.end()]
+    if after and _IN_USE_AFTER_GAP.fullmatch(clause, marker.end(), after[0].start()):
+        return after[0]
+    return None
+
+
 def _served_claims(clause: str, *, in_use: bool):
     """(shape, claimed ref or None, phrase) for every served-model claim this
     clause makes, each already cut by the hedge, intent and skip rules."""
@@ -5838,6 +5907,10 @@ def _served_claims(clause: str, *, in_use: bool):
             if _state_prefix_blocks(clause[: m.start()]):
                 continue
             if _SERVED_SKIP.search(clause[: m.end()]) or _SERVED_SETTING.search(clause[: m.end()]):
+                continue
+            if pattern is _SERVED_ANSWERING and (
+                _IN_USE_LIMITED.match(clause, m.end()) or _SERVED_SKIP.search(clause[m.end() :])
+            ):
                 continue
             yield "sentence", _strip_trailing_punct(m.group("ref")), m.group(0)
     if in_use:
@@ -5849,24 +5922,19 @@ def _served_claims(clause: str, *, in_use: bool):
             if _IN_USE_LIMITED.match(clause, m.end()):
                 continue
             lo, hi = _conjunct(clause, m.start(), m.end())
-            refs = [r for r in _SERVED_REF_RE.finditer(clause) if r.start() >= lo and r.end() <= hi]
-            if not refs:
+            said = _in_use_ref(clause, m, lo, hi)
+            if said is None:
                 continue
-            # The ref nearest the marker is the one it is about.
-            near = min(
-                refs,
-                key=lambda r, m=m: min(abs(r.start() - m.end()), abs(m.start() - r.end())),
-            )
             # What leads up to the pair, within its conjunct: the words before
             # the ref ("make X the current model") and between the two.
-            if near.end() <= m.start():
+            if said.end() <= m.start():
                 lead = clause[lo : m.start()]
             else:
-                lead = clause[m.end() : near.start()]
+                lead = clause[m.end() : said.start()]
             if _IN_USE_UNSAID.search(lead):
                 continue
-            start, end = min(near.start(), m.start()), max(near.end(), m.end())
-            yield "in_use", _strip_trailing_punct(near.group("ref")), clause[start:end]
+            start, end = min(said.start(), m.start()), max(said.end(), m.end())
+            yield "in_use", _strip_trailing_punct(said.group("ref")), clause[start:end]
     for m in _NO_MODEL.finditer(clause):
         if _state_prefix_blocks(clause[: m.start()]):
             continue

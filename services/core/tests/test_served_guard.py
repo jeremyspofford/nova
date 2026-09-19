@@ -222,6 +222,12 @@ ACCEPTED_MISSES = [
     # Found building S40b T2; kept as the verdict wrote it, pinned so a change
     # to either half is deliberate.
     ("reply_was_written_by", "This reply was written by qwen3.8:27b."),
+    # T2 review, round 1: a mid-clause label after another ref's predicate.
+    # A marker with a ref said before it in its conjunct is a predicate, so
+    # the ref after its colon is never bound ("hub:qwen3:8b, the current
+    # model: qwen3.8:27b sits idle" is true); the label form is caught on its
+    # own line, after "and", or as "the current model is X".
+    ("mid_clause_label", "gemma4:12b is idle, current model: qwen3.8:27b"),
 ]
 
 
@@ -299,6 +305,147 @@ STILL_FIRE_BEYOND_THE_CORPUS = [
 )
 def test_honest_sentences_beyond_the_corpus_are_not_corrected(label, reply):
     assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+# -- T2 review, round 1: honest sentences HEAD corrected ---------------------------
+#
+# Each was probed at 4c62f5c9 with hub:qwen3:8b serving, and each FIRED, adding
+# "this reply was written by hub:qwen3:8b … not by <an idle model>" to a true
+# reply and keeping the turn out of memory. They are the replies the DoD walk
+# question ("Where do your models run, and is that machine ready?") invites.
+
+# An in-use marker is about the ref it is SAID of: before it across copula,
+# parenthetical or badge material only ("X is the current model", "X (16.5 GB)
+# ✅ Current model in use"), after it only when the marker is a label or a
+# subject ("Current model: X", "The model in use is X"). The nearest ref in
+# another predicate ("…, gemma4:12b and qwen3.8:27b are installed") is not it.
+IN_USE_ANOTHER_PREDICATE = [
+    ("in_use_then_installed", "hub:qwen3:8b is in use, gemma4:12b and qwen3.8:27b are installed."),
+    ("current_then_sits_idle", "hub:qwen3:8b is the current model, qwen3.8:27b sits idle."),
+    ("current_dash_idle", "hub:qwen3:8b is the current model — qwen3.8:27b is idle."),
+    ("model_in_use_colon_idle", "qwen3:8b is the model in use: qwen3.8:27b is idle."),
+    ("in_use_bracketed_idle", "qwen3:8b is in use (qwen3.8:27b is installed but idle)."),
+    ("in_use_dash_idle", "qwen3:8b is in use — gemma4:12b is idle."),
+    ("machine_answering_you_has", "hub, the machine answering you, has gemma4:12b installed too."),
+    ("machine_serving_you_has", "hub (serving you) has qwen3.8:27b and qwen3:8b installed."),
+    (
+        "engine_serving_this_reply_is_hub",
+        "The engine serving this reply is hub (it also has gemma4:12b).",
+    ),
+    # Found fixing the above (they fired at HEAD too): a marker a ref is SAID
+    # of before it is a predicate, not a label, even where the words between
+    # are more than a copula — so the colon after it does not bind the next.
+    (
+        "said_of_first_then_colon",
+        "hub:qwen3:8b is, right now, the model in use: qwen3.8:27b is idle.",
+    ),
+    (
+        "handles_chat_as_current_then_colon",
+        "hub:qwen3:8b handles chat as the current model: qwen3.8:27b is idle.",
+    ),
+    ("appositive_then_colon", "hub:qwen3:8b, the current model: qwen3.8:27b sits idle."),
+]
+
+# Sentence shape 6 ("R is serving|answering you|this|now") limited by what
+# follows it: serving as another role, or serving something of this chat that
+# is another role's (its images).
+SERVING_ANOTHER_ROLE = [
+    ("serving_now_as_the_vision_model", "gemma4:12b is serving now as the vision model."),
+    (
+        "chat_then_serving_now_as_vision",
+        "qwen3:8b answers chat; gemma4:12b is serving now as the vision model.",
+    ),
+    ("serving_this_chats_images", "gemma4:12b is serving this chat's images."),
+]
+
+# "No model is needed" in the present is a general statement about timers and
+# reminders, not about this reply; only the past ("was") or an explicit
+# this-reply tail ("here", "for this answer") says it of this reply.
+NO_MODEL_IN_GENERAL = [
+    ("timers_run_on_their_own", "Timers run on their own; no model is needed."),
+    ("to_set_a_timer", "To set a timer, no model is needed."),
+    ("for_reminders", "For reminders, no model is needed."),
+    ("reminders_fire_by_themselves", "Reminders fire by themselves — no model is involved."),
+    ("timer_runs_without_me", "The timer runs without me; no model is required."),
+]
+
+REVIEW_ROUND_1_HONEST = IN_USE_ANOTHER_PREDICATE + SERVING_ANOTHER_ROLE + NO_MODEL_IN_GENERAL
+
+
+@pytest.mark.parametrize(
+    "label,reply", REVIEW_ROUND_1_HONEST, ids=[c[0] for c in REVIEW_ROUND_1_HONEST]
+)
+def test_review_round_1_honest_sentences_are_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+# The same rules, the claims they must keep: a false in-use claim before the
+# other predicate, a label or subject naming the ref after the marker, a table
+# row, the present with this reply's own tail, and shape 6 about this chat.
+REVIEW_ROUND_1_STILL_FIRE = [
+    ("in_use_first", "qwen3.8:27b is in use, gemma4:12b is installed.", "in_use", "qwen3.8:27b"),
+    (
+        "current_first_dash_idle",
+        "qwen3.8:27b is the current model — qwen3:8b is idle.",
+        "sentence",
+        "qwen3.8:27b",
+    ),
+    (
+        "idle_and_then_label",
+        "gemma4:12b is idle and current model: qwen3.8:27b",
+        "in_use",
+        "qwen3.8:27b",
+    ),
+    (
+        "idle_then_the_current_model_is",
+        "gemma4:12b is idle, the current model is qwen3.8:27b.",
+        "sentence",
+        "qwen3.8:27b",
+    ),
+    (
+        "label_on_its_own_line",
+        "gemma4:12b is idle.\nCurrent model: qwen3.8:27b",
+        "in_use",
+        "qwen3.8:27b",
+    ),
+    ("model_in_use_is", "The model in use is qwen3.8:27b.", "in_use", "qwen3.8:27b"),
+    (
+        "model_currently_answering_you_is",
+        "The model currently answering you is qwen3.8:27b.",
+        "in_use",
+        "qwen3.8:27b",
+    ),
+    ("model_in_use_colon", "- Model in use: `qwen3.8:27b`", "in_use", "qwen3.8:27b"),
+    ("table_row", "| `qwen3.8:27b` | 16.5 GB | ✅ in use |", "in_use", "qwen3.8:27b"),
+    ("badge_then_bracket", "- `qwen3.8:27b` ✅ (in use)", "in_use", "qwen3.8:27b"),
+    ("contracted_copula", "qwen3.8:27b's in use right now.", "in_use", "qwen3.8:27b"),
+    ("serving_this_chat", "qwen3.8:27b is serving this chat.", "sentence", "qwen3.8:27b"),
+    ("no_model_is_needed_here", "No model is needed here.", "no_model", None),
+    (
+        "no_model_is_needed_for_this_answer",
+        "No model is needed for this answer.",
+        "no_model",
+        None,
+    ),
+    (
+        "no_model_was_involved",
+        "Reminders fire by themselves — no model was involved.",
+        "no_model",
+        None,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,shape,claimed",
+    REVIEW_ROUND_1_STILL_FIRE,
+    ids=[c[0] for c in REVIEW_ROUND_1_STILL_FIRE],
+)
+def test_review_round_1_cuts_leave_the_claims_firing(label, reply, shape, claimed):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None, label
+    assert claim.shape == shape
+    assert claim.claimed == claimed
 
 
 @pytest.mark.parametrize(
