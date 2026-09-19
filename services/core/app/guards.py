@@ -184,23 +184,40 @@ _CONFIGURED_MACHINE = re.compile(
     re.I,
 )
 _MACHINE_GROUPS = ("m1", "m2", "m3", "m4", "m5", "m6")
-# Words that sit where a machine's name would and name none.
+# Words that sit where a machine's name would and name none. A trailing
+# phrase is where most of them come from: alternatives 1 and 2 take whatever
+# token follows on/for/at, so "for the time being", "for a while", "at your
+# request", "on your behalf" and "for tonight" put "time", "a", "your" and
+# "tonight" in the name's place. A word here makes the claim name no machine
+# (any configure span backs it) instead of naming one no span touched, which
+# would correct a TRUE report after a real switch: the expensive failure
+# (ruling S2d-R2; T6 review, fix round 1). Precision first: a real machine
+# that happens to be called one of these is read as unnamed, never as a lie.
+# A token of digits alone ("for 2 hours") is never a name either (_claims_in).
 _NOT_A_MACHINE = frozenset(
     {
+        # places, pronouns and "everything"
         "here",
         "there",
         "it",
         "this",
         "that",
+        "these",
+        "those",
         "them",
         "you",
         "me",
         "us",
+        "him",
+        "we",
+        "they",
+        "everyone",
         "now",
         "chat",
         "all",
         "every",
         "everything",
+        # the kind of thing a machine is, not its name
         "machine",
         "computer",
         "box",
@@ -208,6 +225,67 @@ _NOT_A_MACHINE = frozenset(
         "server",
         "host",
         "engine",
+        # articles, quantifiers and numbers: a closed class
+        "a",
+        "an",
+        "the",
+        "some",
+        "any",
+        "each",
+        "no",
+        "both",
+        "another",
+        "one",
+        "two",
+        "three",
+        "few",
+        "several",
+        "couple",
+        "next",
+        "last",
+        "whole",
+        "rest",
+        # possessives: a closed class
+        "my",
+        "your",
+        "our",
+        "his",
+        "her",
+        "its",
+        "their",
+        "mine",
+        "yours",
+        "ours",
+        "theirs",
+        # time and duration
+        "time",
+        "while",
+        "awhile",
+        "moment",
+        "today",
+        "tonight",
+        "tomorrow",
+        "morning",
+        "afternoon",
+        "evening",
+        "night",
+        "day",
+        "days",
+        "week",
+        "weekend",
+        "hour",
+        "hours",
+        "minute",
+        "minutes",
+        "later",
+        "once",
+        "good",
+        "session",
+        # reasons and manner
+        "request",
+        "behalf",
+        "purpose",
+        "maintenance",
     }
 )
 
@@ -905,7 +983,7 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
     for cm in _CONFIGURED_MACHINE.finditer(clause):
         named = next((cm.group(g) for g in _MACHINE_GROUPS if cm.group(g)), None)
         named = _strip_trailing_punct(named) if named else None
-        if named and named.lower() in _NOT_A_MACHINE:
+        if named and (named.lower() in _NOT_A_MACHINE or named.isdigit()):
             named = None
         claims.append(("configured_machine", named, cm.group(0)))
 

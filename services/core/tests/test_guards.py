@@ -1783,6 +1783,64 @@ def test_a_real_switch_off_backs_the_serving_cases_claim():
     assert guards.narration_check(T7_FABRICATIONS[0], [on_hub]) is not None
 
 
+# T6 review, fix round 1: alternatives 1 and 2 take whatever token follows
+# on/for/at as the machine's name, so a TRUE report after a real, verified
+# switch ("for the time being", "at your request") was corrected as a claim
+# about a machine called "time" or "your" — the expensive failure (S2d-R2).
+# A trailing phrase that names no machine claims with target None: any
+# configure span backs it, and with none the claim still fires. Each reply is
+# paired with the switch direction it reports, so the backing span is the one
+# a real turn would carry.
+TRAILING_PHRASE_HONEST = (
+    # the review's seven, checked against a real machine_configure span
+    ("I've switched off chat models for the time being.", False),
+    ("I turned off chat models for a while, so nothing local answers.", False),
+    ("I switched chat models off for tonight.", False),
+    ("I've turned off local models at your request.", False),
+    ("I've turned off chat models on your behalf.", False),
+    ("I switched chat models off for the rest of the day.", False),
+    ("I switched on local models for the evening.", True),
+    # the same shape: a number, a quantifier, a possessive, a time or reason noun
+    ("I switched off chat models for 2 hours.", False),
+    ("I turned off chat models for two hours.", False),
+    ("I switched chat models off for the next hour.", False),
+    ("I turned chat models off on my end.", False),
+    ("I switched chat models off for the weekend.", False),
+    ("I switched chat models off for the night.", False),
+    ("I switched chat models off for today.", False),
+    ("I switched chat models off at once.", False),
+    ("I switched chat models off for good.", False),
+    ("I switched chat models off for the moment.", False),
+    ("I switched off chat models for maintenance.", False),
+    ("I switched chat models off for some time.", False),
+)
+
+
+@pytest.mark.parametrize(("reply", "serving"), TRAILING_PHRASE_HONEST)
+def test_a_trailing_phrase_names_no_machine_so_a_real_switch_backs_it(reply, serving):
+    backed = [tool_span("machine_configure", machine="hub", serving=serving)]
+    assert guards.narration_check(reply, backed) is None, reply
+
+
+@pytest.mark.parametrize(("reply", "serving"), TRAILING_PHRASE_HONEST)
+def test_a_trailing_phrase_claim_with_no_switch_still_fires_naming_no_machine(reply, serving):
+    correction = guards.narration_check(reply, [other_span()])
+    assert correction is not None, reply
+    assert kinds(correction) == ["configured_machine"], reply
+    assert targets(correction) == [None], reply
+
+
+def test_a_machine_named_before_a_trailing_phrase_is_still_read():
+    reply = "I switched chat models off on hub for tonight."
+    flagged = guards.narration_check(reply, [other_span()])
+    assert flagged is not None and targets(flagged) == ["hub"]
+    on_hub = [tool_span("machine_configure", machine="hub", serving=False)]
+    assert guards.narration_check(reply, on_hub) is None
+    on_dell = [tool_span("machine_configure", machine="dell", serving=False)]
+    wrong = guards.narration_check(reply, on_dell)
+    assert wrong is not None and targets(wrong) == ["hub"]
+
+
 # -- a stated spend figure (S10) --------------------------------------------
 
 
