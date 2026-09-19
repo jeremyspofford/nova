@@ -215,7 +215,7 @@ export function sortRows(rows: CatalogRow[], key: SortKey, dir: 'asc' | 'desc'):
 }
 
 /** A pre-registry bare `chat.model` (no provider prefix) still means the
- * bundled ollama, so the local row for it reads as current. */
+ * bundled engine (`hub`), so the local row for it reads as current. */
 export function isCurrent(row: CatalogRow, chatModel: string): boolean {
   if (!chatModel) return false
   if (row.id === chatModel) return true

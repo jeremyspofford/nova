@@ -13,12 +13,15 @@ import {
 
 function row(overrides: Partial<CatalogRow> & { id: string }): CatalogRow {
   const [provider, ...rest] = overrides.id.split(':')
+  // S40: `hub` is the bundled engine and `library` a model on no machine
+  // yet; both are local. `ollama-show` names Ollama's API, not a provider.
+  const local = provider === 'hub' || provider === 'library'
   return {
     provider,
     model: rest.join(':'),
     label: overrides.id,
-    kind: provider === 'ollama' ? 'local' : 'cloud',
-    sources: [{ key: provider === 'ollama' ? 'ollama-show' : 'provider-listing', fetched_at: 't' }],
+    kind: local ? 'local' : 'cloud',
+    sources: [{ key: local ? 'ollama-show' : 'provider-listing', fetched_at: 't' }],
     facts: {},
     capabilities: {},
     suitability: {},
@@ -28,7 +31,7 @@ function row(overrides: Partial<CatalogRow> & { id: string }): CatalogRow {
 }
 
 const LOCAL = row({
-  id: 'ollama:qwen3:8b',
+  id: 'hub:qwen3:8b',
   installed: true,
   facts: {
     size_bytes: { value: 5_225_388_164, basis: 'declared', source: 'ollama-tags' },
@@ -63,7 +66,7 @@ const CLOUD = row({
 })
 
 const HUB = row({
-  id: 'ollama:hf.co/unsloth/Qwen3-Coder-30B-GGUF',
+  id: 'library:hf.co/unsloth/Qwen3-Coder-30B-GGUF',
   kind: 'hub',
   installed: false,
   sources: [{ key: 'hf-hub', fetched_at: 't' }],
@@ -72,12 +75,12 @@ const HUB = row({
   suitability: {},
 })
 
-const AVAILABLE = row({ id: 'ollama:qwen3:4b', installed: false, facts: {} })
+const AVAILABLE = row({ id: 'library:qwen3:4b', installed: false, facts: {} })
 
 describe('catalogFormat — tabs and text', () => {
   it('tabs split by kind and installed state', () => {
     const rows = [LOCAL, CLOUD, HUB, AVAILABLE]
-    expect(applyFacets(rows, { ...EMPTY_FACETS, tab: 'installed' }).rows.map(r => r.id)).toEqual(['ollama:qwen3:8b'])
+    expect(applyFacets(rows, { ...EMPTY_FACETS, tab: 'installed' }).rows.map(r => r.id)).toEqual(['hub:qwen3:8b'])
     expect(applyFacets(rows, { ...EMPTY_FACETS, tab: 'available' }).rows.map(r => r.id)).toEqual([HUB.id, AVAILABLE.id])
     expect(applyFacets(rows, { ...EMPTY_FACETS, tab: 'cloud' }).rows.map(r => r.id)).toEqual([CLOUD.id])
     expect(applyFacets(rows, EMPTY_FACETS).rows).toHaveLength(4)
@@ -136,7 +139,9 @@ describe('catalogFormat — sorting puts the absent last, both ways', () => {
     expect(sortRows(rows, 'size_bytes', 'asc').map(r => r.id)).toEqual([LOCAL.id, HUB.id, CLOUD.id])
     expect(sortRows(rows, 'size_bytes', 'desc').map(r => r.id)).toEqual([LOCAL.id, HUB.id, CLOUD.id])
     expect(sortRows(rows, 'params_b', 'desc').map(r => r.id)).toEqual([HUB.id, LOCAL.id, CLOUD.id])
-    expect(sortRows(rows, 'price_prompt', 'asc').map(r => r.id)).toEqual([CLOUD.id, HUB.id, LOCAL.id])
+    // The two unpriced rows tie and fall back to label order: `hub:qwen3:8b`
+    // before `library:hf.co/…` (S40 renamed both prefixes).
+    expect(sortRows(rows, 'price_prompt', 'asc').map(r => r.id)).toEqual([CLOUD.id, LOCAL.id, HUB.id])
   })
 
   it('by coding ignores inferred entries', () => {
@@ -147,11 +152,13 @@ describe('catalogFormat — sorting puts the absent last, both ways', () => {
 
 describe('catalogFormat — current and labels', () => {
   it('a qualified or a pre-registry bare chat.model marks the local row', () => {
-    expect(isCurrent(LOCAL, 'ollama:qwen3:8b')).toBe(true)
+    expect(isCurrent(LOCAL, 'hub:qwen3:8b')).toBe(true)
     expect(isCurrent(LOCAL, 'qwen3:8b')).toBe(true)
     expect(isCurrent(CLOUD, 'openrouter:openai/gpt-x')).toBe(true)
     expect(isCurrent(CLOUD, 'openai/gpt-x')).toBe(false)
     expect(isCurrent(LOCAL, '')).toBe(false)
+    // A bare chat.model means the bundled engine, never a model on no machine.
+    expect(isCurrent(AVAILABLE, 'qwen3:4b')).toBe(false)
   })
 
   it('tags are labelled by basis', () => {
@@ -174,16 +181,16 @@ describe('catalogFormat — current and labels', () => {
 
   it('an inferred number is not a stated one: the size facet leaves it out and counts it unless inferred is included', () => {
     const estimated = row({
-      id: 'ollama:hf.co/o/r',
+      id: 'library:hf.co/o/r',
       kind: 'hub',
       facts: { size_bytes: { value: 2_000_000_000, basis: 'inferred', source: 'hf-hub', note: '≈ Q4_K_M' } },
     })
-    const stated = row({ id: 'ollama:x:1b', installed: false, facts: { size_bytes: { value: 1_000_000_000, basis: 'declared', source: 'ollama-tags' } } })
+    const stated = row({ id: 'library:x:1b', installed: false, facts: { size_bytes: { value: 1_000_000_000, basis: 'declared', source: 'ollama-tags' } } })
     const off = applyFacets([estimated, stated], { ...EMPTY_FACETS, tab: 'available', maxSizeGb: 3 })
-    expect(off.rows.map(r => r.id)).toEqual(['ollama:x:1b'])
+    expect(off.rows.map(r => r.id)).toEqual(['library:x:1b'])
     expect(off.hidden.noSize).toBe(1)
     const on = applyFacets([estimated, stated], { ...EMPTY_FACETS, tab: 'available', maxSizeGb: 3, includeInferred: true })
-    expect(on.rows.map(r => r.id)).toEqual(['ollama:hf.co/o/r', 'ollama:x:1b'])
+    expect(on.rows.map(r => r.id)).toEqual(['library:hf.co/o/r', 'library:x:1b'])
     expect(on.hidden.noSize).toBe(0)
   })
 

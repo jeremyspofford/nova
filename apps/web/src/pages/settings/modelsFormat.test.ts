@@ -138,12 +138,12 @@ describe('isSmallerTier', () => {
 
 describe('local model ids are provider-qualified (S10-pre)', () => {
   it('qualifies a bare local slug once and leaves a qualified one alone', () => {
-    expect(qualifyLocalModel('qwen3:8b')).toBe('ollama:qwen3:8b')
-    expect(qualifyLocalModel('ollama:qwen3:8b')).toBe('ollama:qwen3:8b')
+    expect(qualifyLocalModel('qwen3:8b')).toBe('hub:qwen3:8b')
+    expect(qualifyLocalModel('hub:qwen3:8b')).toBe('hub:qwen3:8b')
   })
 
   it('bares only the local provider; another provider\'s id never matches a local row', () => {
-    expect(bareLocalModel('ollama:qwen3:8b')).toBe('qwen3:8b')
+    expect(bareLocalModel('hub:qwen3:8b')).toBe('qwen3:8b')
     expect(bareLocalModel('qwen3:8b')).toBe('qwen3:8b')
     expect(bareLocalModel('openrouter:qwen/qwen3-8b')).toBe('openrouter:qwen/qwen3-8b')
   })
@@ -151,9 +151,17 @@ describe('local model ids are provider-qualified (S10-pre)', () => {
   it('mergeModels marks the current model whether chat.model is bare or qualified', () => {
     const curated = [{ slug: 'qwen3:8b', name: 'Qwen', size_gb: 5, tier: 'mid' }] as never
     const bare = mergeModels('qwen3:8b', ['qwen3:8b'], curated)
-    const qualified = mergeModels('ollama:qwen3:8b', ['qwen3:8b'], curated)
+    const qualified = mergeModels('hub:qwen3:8b', ['qwen3:8b'], curated)
     expect(bare.find(m => m.slug === 'qwen3:8b')?.isCurrent).toBe(true)
     expect(qualified.find(m => m.slug === 'qwen3:8b')?.isCurrent).toBe(true)
+  })
+
+  it('an id written before S40 as ollama: is not the local engine any more', () => {
+    // Core's 035_hub_engine rewrote the stored chat.model; a leftover
+    // `ollama:` id names a provider that no longer exists, and must never be
+    // matched to a local row by accident.
+    expect(bareLocalModel('ollama:qwen3:8b')).toBe('ollama:qwen3:8b')
+    expect(qualifyLocalModel('ollama:qwen3:8b')).toBe('hub:ollama:qwen3:8b')
   })
 })
 

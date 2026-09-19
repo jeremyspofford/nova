@@ -58,7 +58,7 @@ export type WindowRow = {
 }
 
 export function windowFor(rows: WindowRow[], model: string): number | null {
-  // `chat.model` may be bare (`qwen3:8b`) or qualified (`ollama:qwen3:8b`),
+  // `chat.model` may be bare (`qwen3:8b`) or qualified (`hub:qwen3:8b`),
   // and the catalog's id is qualified — so the match is tried both ways
   // rather than assuming one shape. No match is a real answer: no ring.
   const row = rows.find(

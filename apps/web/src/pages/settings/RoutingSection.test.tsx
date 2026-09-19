@@ -14,7 +14,7 @@ function row(id: string, kind: 'local' | 'cloud', installed?: boolean): CatalogR
 // The gateway lists built-ins first (in its order), then stored roles by name.
 const ROUTES: Routes = {
   roles: [
-    { role: 'chat', chain: ['ollama:qwen3:8b'], reserved: false, builtin: true },
+    { role: 'chat', chain: ['hub:qwen3:8b'], reserved: false, builtin: true },
     { role: 'scheduled', chain: [], reserved: false, builtin: true },
     { role: 'judge', chain: [], reserved: false, builtin: true },
     { role: 'coding', chain: [], reserved: true, builtin: true },
@@ -28,7 +28,7 @@ const ROUTES_WITH_AGENTS: Routes = {
   roles: [
     ...ROUTES.roles,
     { role: 'agent_coder', chain: ['cerebras:llama'], reserved: false, builtin: false },
-    { role: 'agent_zed', chain: ['ollama:qwen3:8b'], reserved: false, builtin: false },
+    { role: 'agent_zed', chain: ['hub:qwen3:8b'], reserved: false, builtin: false },
   ],
 }
 const AGENTS: AgentSummary[] = [{ name: 'coder', purpose: 'writes and reviews code in a sandbox', role: 'agent_coder' }]
@@ -36,10 +36,10 @@ const EXPLAIN_CHAT: RouteExplain = {
   role: 'chat',
   chain: [
     { link: 1, id: 'openrouter:openai/gpt-x', verdict: 'walled', reason: 'openrouter refused (402): insufficient credits — walled for another 59 min' },
-    { link: 2, id: 'ollama:qwen3:8b', verdict: 'runnable', reason: null },
+    { link: 2, id: 'hub:qwen3:8b', verdict: 'runnable', reason: null },
   ],
-  would_serve: { role: 'chat', link: 2, reason: 'fell back to link 2 (ollama:qwen3:8b) — openrouter:openai/gpt-x: openrouter refused (402)', served_by: 'ollama:qwen3:8b', standby: false },
-  reason: 'fell back to link 2 (ollama:qwen3:8b) — openrouter:openai/gpt-x: openrouter refused (402)',
+  would_serve: { role: 'chat', link: 2, reason: 'fell back to link 2 (hub:qwen3:8b) — openrouter:openai/gpt-x: openrouter refused (402)', served_by: 'hub:qwen3:8b', standby: false },
+  reason: 'fell back to link 2 (hub:qwen3:8b) — openrouter:openai/gpt-x: openrouter refused (402)',
 }
 
 type ApiName = 'getRoutes' | 'putRoute' | 'explainRoute' | 'clearWall' | 'getCatalog' | 'deleteRoute' | 'listAgents'
@@ -53,7 +53,7 @@ function renderSection(over: Partial<Record<ApiName, ReturnType<typeof vi.fn>>> 
     getCatalog: vi.fn(async () => ({
       fetched_at: 't',
       sources: [],
-      rows: [row('ollama:qwen3:8b', 'local', true), row('ollama:qwen3:4b', 'local', false), row('openrouter:openai/gpt-x', 'cloud'), row('cerebras:llama', 'cloud')],
+      rows: [row('hub:qwen3:8b', 'local', true), row('library:qwen3:4b', 'local', false), row('openrouter:openai/gpt-x', 'cloud'), row('cerebras:llama', 'cloud')],
     })),
     deleteRoute: vi.fn(async () => undefined),
     listAgents: vi.fn(async () => AGENTS),
@@ -79,8 +79,8 @@ describe('RoutingSection', () => {
     expect(within(chat).getByTestId('route-chat-link-1').textContent).toContain('openrouter:openai/gpt-x')
     expect(within(chat).getByTestId('route-chat-link-1').textContent).toContain('your current pick')
     expect(within(chat).getByTestId('route-chat-link-1').querySelector('[data-verdict]')?.getAttribute('data-verdict')).toBe('walled')
-    expect(within(chat).getByTestId('route-chat-link-2').textContent).toContain('ollama:qwen3:8b')
-    expect(within(chat).getByTestId('route-chat-would-serve').textContent).toContain('ollama:qwen3:8b would answer — fell back to link 2')
+    expect(within(chat).getByTestId('route-chat-link-2').textContent).toContain('hub:qwen3:8b')
+    expect(within(chat).getByTestId('route-chat-would-serve').textContent).toContain('hub:qwen3:8b would answer — fell back to link 2')
     expect(api.explainRoute).toHaveBeenCalledWith('chat', 'openrouter:openai/gpt-x')
     expect(screen.getByTestId('route-scheduled').textContent).toContain('uses the chat chain')
     expect(screen.getByTestId('route-coding').textContent).toContain('no user yet')
@@ -169,11 +169,50 @@ describe('RoutingSection', () => {
     const api = renderSection()
     await waitFor(() => expect(screen.getByTestId('route-scheduled')).toBeTruthy())
     const scheduled = screen.getByTestId('route-scheduled')
-    fireEvent.change(within(scheduled).getByLabelText('add to scheduled'), { target: { value: 'ollama:qwen3:8b' } })
+    fireEvent.change(within(scheduled).getByLabelText('add to scheduled'), { target: { value: 'hub:qwen3:8b' } })
     fireEvent.click(within(scheduled).getByRole('button', { name: 'add scheduled' }))
-    expect(within(scheduled).getByTestId('route-scheduled-link-1').textContent).toContain('ollama:qwen3:8b')
+    expect(within(scheduled).getByTestId('route-scheduled-link-1').textContent).toContain('hub:qwen3:8b')
     fireEvent.click(within(scheduled).getByRole('button', { name: /save/i }))
-    await waitFor(() => expect(api.putRoute).toHaveBeenCalledWith('scheduled', ['ollama:qwen3:8b']))
+    await waitFor(() => expect(api.putRoute).toHaveBeenCalledWith('scheduled', ['hub:qwen3:8b']))
+  })
+
+  it('a model on no machine yet is never offered as a link', async () => {
+    renderSection()
+    await waitFor(() => expect(screen.getByTestId('route-scheduled')).toBeTruthy())
+    const picker = within(screen.getByTestId('route-scheduled')).getByLabelText('add to scheduled') as HTMLSelectElement
+    const offered = [...picker.options].map(o => o.value)
+    expect(offered).toContain('hub:qwen3:8b')
+    expect(offered).not.toContain('library:qwen3:4b')
+  })
+
+  it('words a switched-off machine and a link that could not be reached, naming no engine of its own', async () => {
+    // S40 (ruling G4): the gateway judges a link on a machine the owner
+    // switched off `switched_off`, and a link whose provider did not answer
+    // the dial `unreachable` — for any provider, cloud or engine, so the
+    // words name none. They used to say "ollama unreachable".
+    const explain: RouteExplain = {
+      role: 'chat',
+      chain: [
+        { link: 1, id: 'openrouter:openai/gpt-x', verdict: 'unreachable', reason: 'could not reach openrouter — ConnectError: connection refused' },
+        { link: 2, id: 'hub:qwen3:8b', verdict: 'switched_off', reason: 'hub is switched off' },
+      ],
+      would_serve: null,
+      reason: 'no link in the chat chain can run right now',
+    }
+    renderSection({ explainRoute: vi.fn(async (role: string) => (role === 'chat' ? explain : { role, chain: [], would_serve: null, reason: 'no chain' })) })
+    await waitFor(() => expect(screen.getByTestId('route-chat-link-2').querySelector('[data-verdict]')).toBeTruthy())
+    const chat = screen.getByTestId('route-chat')
+    const badge = (n: number) => within(chat).getByTestId(`route-chat-link-${n}`).querySelector('[data-verdict]')
+    expect(badge(1)?.getAttribute('data-verdict')).toBe('unreachable')
+    expect(badge(1)?.textContent).toBe('could not be reached')
+    expect(badge(1)?.getAttribute('title')).toBe('could not reach openrouter — ConnectError: connection refused')
+    expect(badge(2)?.getAttribute('data-verdict')).toBe('switched_off')
+    expect(badge(2)?.textContent).toBe('switched off')
+    expect(badge(2)?.getAttribute('title')).toBe('hub is switched off')
+    // The owner's choice, not a failure: never drawn in the failure colour.
+    expect(badge(2)?.innerHTML).not.toContain('danger')
+    expect(badge(1)?.innerHTML).toContain('danger')
+    expect(chat.textContent).not.toContain('ollama')
   })
 
   it('lists a walled provider with its reason and lets the owner clear it', async () => {

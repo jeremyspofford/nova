@@ -35,16 +35,16 @@ describe('windowFor', () => {
   it('matches a qualified catalog id against a bare model setting', () => {
     // chat.model may hold either shape, so both are tried rather than one
     // being assumed.
-    expect(windowFor([row('ollama:qwen3:8b', 40_960)], 'qwen3:8b')).toBe(40_960)
-    expect(windowFor([row('ollama:qwen3:8b', 40_960)], 'ollama:qwen3:8b')).toBe(40_960)
+    expect(windowFor([row('hub:qwen3:8b', 40_960)], 'qwen3:8b')).toBe(40_960)
+    expect(windowFor([row('hub:qwen3:8b', 40_960)], 'hub:qwen3:8b')).toBe(40_960)
   })
 
   it('answers null when the catalog states no window', () => {
-    expect(windowFor([row('ollama:qwen3:8b')], 'qwen3:8b')).toBeNull()
+    expect(windowFor([row('hub:qwen3:8b')], 'qwen3:8b')).toBeNull()
   })
 
   it('answers null for a model the catalog does not carry', () => {
-    expect(windowFor([row('ollama:other', 1000)], 'qwen3:8b')).toBeNull()
+    expect(windowFor([row('hub:other', 1000)], 'qwen3:8b')).toBeNull()
   })
 
   it('refuses a window that is not a positive number', () => {
@@ -67,7 +67,7 @@ describe('ContextGauge', () => {
       <ContextGauge
         promptTokens={10_240}
         model="qwen3:8b"
-        getCatalog={catalog([row('ollama:qwen3:8b', 40_960)])}
+        getCatalog={catalog([row('hub:qwen3:8b', 40_960)])}
       />,
     )
     // 10K, not 10.2K: one decimal below ten thousand, whole above — the
@@ -85,7 +85,7 @@ describe('ContextGauge', () => {
       <ContextGauge
         promptTokens={10_240}
         model="qwen3:8b"
-        getCatalog={catalog([row('ollama:qwen3:8b')])}
+        getCatalog={catalog([row('hub:qwen3:8b')])}
       />,
     )
     const gauge = await screen.findByTestId('context-gauge')
@@ -116,7 +116,7 @@ describe('ContextGauge', () => {
       <ContextGauge
         promptTokens={99_999}
         model="qwen3:8b"
-        getCatalog={catalog([row('ollama:qwen3:8b', 40_960)])}
+        getCatalog={catalog([row('hub:qwen3:8b', 40_960)])}
       />,
     )
     await waitFor(() => expect(screen.getByTestId('context-gauge').querySelector('svg')).toBeTruthy())
