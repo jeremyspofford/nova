@@ -5,6 +5,7 @@ exposes the same five things (see base.py): the headers it authenticates
 with, a live model listing, a verify-before-save check, and chat
 completions in the OpenAI shape core speaks — streamed or not.
 """
+
 from __future__ import annotations
 
 from app.adapters import anthropic_messages, ollama, openai_chat
@@ -13,6 +14,7 @@ from app.adapters.base import (
     Listing,
     ListingUnavailable,
     ProviderRefused,
+    ProviderUnreachable,
     http_client,
     reason,
 )
@@ -36,6 +38,7 @@ __all__ = [
     "Listing",
     "ListingUnavailable",
     "ProviderRefused",
+    "ProviderUnreachable",
     "for_row",
     "http_client",
     "reason",

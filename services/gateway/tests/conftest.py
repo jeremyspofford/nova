@@ -104,22 +104,43 @@ def mount_backend():
     app.state.peer_transports = {}
 
 
+@pytest.fixture
+def mount_transport():
+    """Mount a raw httpx transport at a base URL — for a peer that fails in a
+    way no ASGI app can (a connection that is never accepted). Shares
+    mount_backend's registry and its teardown."""
+
+    def _mount(url: str, transport) -> None:
+        transports = dict(getattr(app.state, "peer_transports", {}))
+        transports[url] = transport
+        app.state.peer_transports = transports
+
+    yield _mount
+    app.state.peer_transports = {}
+
+
 @pytest.fixture(autouse=True)
 def fresh_upstream_caches():
     """S10a's live-source caches (Hub pages and details, registry
     manifests), the Hub request budget, and every engine's cached reading
     (S40) are process-local — cleared around every test so a page one test
     fetched can never answer another's assertion, and no test starts with a
-    spent budget."""
+    spent budget. S40 adds ollama's /api/show answers too: they are
+    content-addressed by digest and the fakes derive a digest from the tag
+    name, so one test's faked capabilities would otherwise answer another's
+    (the routing standby reads them)."""
     from app import engines, hf_hub, ollama_registry
+    from app.adapters import ollama
 
-    hf_hub.clear()
-    ollama_registry.clear()
-    engines.clear_cache()
+    def _clear() -> None:
+        hf_hub.clear()
+        ollama_registry.clear()
+        engines.clear_cache()
+        ollama.SHOW_CACHE.clear()
+
+    _clear()
     yield
-    hf_hub.clear()
-    ollama_registry.clear()
-    engines.clear_cache()
+    _clear()
 
 
 @pytest.fixture(autouse=True)

@@ -14,12 +14,15 @@ call is made (rail 9 — refuse before the act):
   * a cloud provider must be under its monthly cap and the total cap
     (usage.over_cap — recorded spend only; a local provider is never
     capped in USD);
-  * a local model must be installed (ollama's /api/tags, cached 30 s).
+  * an ENGINE (a row on the ollama adapter) must be SERVING — its
+    owner's switch, engines.serving — and must list the model
+    (engines.observe: a listing cached 30 s, a failure 10 s).
 
 The first runnable link serves. When nothing in the chain can and the
-chain has no local link, a CROSS-TIER STANDBY is derived (the bundled
-ollama's default model if installed, else the best-fitting installed
-curated pick) and stated as such — never a cloud model the owner did not
+chain has no local link, a CROSS-TIER STANDBY is derived (a serving
+engine's default model if installed, else the best-fitting installed
+curated pick, else its first installed chat model — never an embedding
+model) and stated as such — never a cloud model the owner did not
 name (that would spend money nobody chose). Nothing runnable at all is a
 503 that lists every verdict. Every decision that is not link 1 carries
 its reason on the response (`X-Nova-Route`) and in the usage chunk, so
@@ -34,6 +37,7 @@ exactly as scheduled/judge do. Nothing here keeps a second list of roles.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -43,10 +47,9 @@ from datetime import UTC, datetime, timedelta
 import asyncpg
 
 from app import curated as curated_mod
+from app import engines, providers, usage
 from app import fit as fit_mod
-from app import providers, usage
 from app.adapters import ProviderRefused, ollama
-from app.cache import TTLCache
 
 logger = logging.getLogger("gateway")
 
@@ -68,8 +71,6 @@ OUTAGE_STEPS_S = (60, 5 * 60, 30 * 60)
 # The `model` value that means "every model on this provider". Not NULL: it is
 # half of the primary key, and a NULL there is a row you cannot address.
 WHOLE_PROVIDER = ""
-TAGS_TTL_S = 30
-TAGS_CACHE = TTLCache(ttl_s=TAGS_TTL_S, max_entries=4)
 
 
 class NothingRunnable(RuntimeError):
@@ -273,35 +274,48 @@ async def note_success(pool: asyncpg.Pool, provider: str, model: str) -> None:
 
 # ── the walk ───────────────────────────────────────────────────────────────
 
+# How long the standby waits on ollama's own /api/show answers before it
+# passes over an engine: a stalled engine costs its candidates, never the
+# turn (catalog.SHOW_DEADLINE_S's reasoning, sized for a turn in flight).
+STANDBY_SHOW_DEADLINE_S = 5.0
 
-async def installed_sizes(app, pool: asyncpg.Pool) -> dict[str, int | None] | None:
-    """{tag -> download size in bytes} for what the bundled ollama lists,
-    cached TAGS_TTL_S; None when it could not be asked.
 
-    The cache holds the MAPPING rather than a bare name set so the size —
-    an exact fact about the copy on this host — is available everywhere the
-    names are, without a second /api/tags read. S22's fit precedence prefers
-    it over a hand-written estimate, and `_fit_context` shares one map with
-    every surface so two pages cannot size the same model differently.
-    """
-    hit = TAGS_CACHE.get("tags")
-    if hit is not None:
-        return hit[0]
+def _provider_of(link: str, by_name: dict[str, dict]) -> tuple[str | None, str]:
+    """(provider name or None, model) for one chain link. A bare id is a
+    model on the DEFAULT provider — the same rule providers.resolve applies
+    to every request (a local tag like qwen3.8:27b has a colon of its own
+    and no provider prefix)."""
+    provider_name, model = providers.split_model_id(link, set(by_name))
+    if provider_name is None and model:
+        default = next((r for r in by_name.values() if r.get("is_default")), None)
+        if default is not None:
+            provider_name = default["name"]
+    return provider_name, model
+
+
+def switched_off(row: dict) -> str | None:
+    """Why this engine serves nothing right now, or None. `serving` is the
+    owner's switch (engines.serving; PUT /admin/engines/{name}) — installed
+    is not the same as used. A row that is not an engine has no switch. The
+    words are engines.switched_off_reason, the one sentence observe states
+    too (S40 ruling C10)."""
+    if engines.is_engine(row) and row.get("serving") is False:
+        return engines.switched_off_reason(row["name"])
+    return None
+
+
+async def installed_sizes(
+    app, pool: asyncpg.Pool, engine: str = engines.BUILTIN
+) -> dict[str, int | None] | None:
+    """{tag -> download size in bytes} for what `engine` lists (the bundled
+    engine unless one is named), or None when it could not be asked — read
+    through engines.observe, whose per-engine cache holds a ready listing
+    30 s and a failure 10 s. admin._fit_context sizes models from it until
+    S40 T4 moves it onto engines directly."""
     try:
-        builtin = await providers.get_row(pool, providers.BUILTIN)
-        listing = await ollama.ADAPTER.list_models(app, builtin)
-    except (ProviderRefused, providers.UnknownProvider):
+        return await engines.installed_sizes(app, pool, engine)
+    except engines.UnknownEngine:
         return None
-    sizes = {m["id"]: m.get("size_bytes") for m in listing.models}
-    TAGS_CACHE.put("tags", sizes)
-    return sizes
-
-
-async def installed_tags(app, pool: asyncpg.Pool) -> set[str] | None:
-    """What the bundled ollama lists, cached TAGS_TTL_S; None when it could
-    not be asked (a local link is then judged 'ollama unreachable')."""
-    sizes = await installed_sizes(app, pool)
-    return None if sizes is None else set(sizes)
 
 
 def _installed(names: set[str] | None, model: str) -> bool | None:
@@ -311,17 +325,20 @@ def _installed(names: set[str] | None, model: str) -> bool | None:
 
 
 async def judge_link(
-    app, pool, link: str, by_name: dict[str, dict], walled: dict, timezone: str, tags
+    app,
+    pool,
+    link: str,
+    by_name: dict[str, dict],
+    walled: dict,
+    timezone: str,
+    seen: dict[str, engines.EngineView],
 ) -> dict:
-    """One link's live verdict: runnable, or why not — in words."""
-    provider_name, model = providers.split_model_id(link, set(by_name))
-    if provider_name is None and model:
-        # A bare id is a model on the DEFAULT provider — the same rule
-        # providers.resolve applies to every request (a local tag like
-        # qwen3.8:27b has a colon of its own and no provider prefix).
-        default = next((r for r in by_name.values() if r.get("is_default")), None)
-        if default is not None:
-            provider_name = default["name"]
+    """One link's live verdict: runnable, or why not — in words.
+
+    `seen` is this walk's observation of each engine the chain names
+    (engines.observe), keyed by engine name. An engine its owner switched
+    off is judged first, and nothing is asked of it."""
+    provider_name, model = _provider_of(link, by_name)
     if provider_name is None or not model:
         return {
             "id": link,
@@ -330,6 +347,9 @@ async def judge_link(
         }
     row = by_name[provider_name]
     entry = {"id": link, "provider": provider_name, "model": model, "local": bool(row.get("local"))}
+    off = switched_off(row)
+    if off is not None:
+        return {**entry, "verdict": "switched_off", "reason": off}
     wall = wall_for(walled, provider_name, model)
     if wall is not None:
         left = int((wall["walled_until"] - datetime.now(UTC)).total_seconds() // 60) + 1
@@ -342,51 +362,110 @@ async def judge_link(
     capped = await usage.over_cap(pool, row, timezone)
     if capped:
         return {**entry, "verdict": "over_cap", "reason": capped}
-    if row.get("local"):
-        installed = _installed(tags, model)
+    if engines.is_engine(row):
+        view = seen.get(provider_name)
+        names = None if view is None or view.tags is None else set(view.tags)
+        installed = _installed(names, model)
         if installed is False:
-            return {**entry, "verdict": "not_installed", "reason": f"{model} is not installed"}
-        if installed is None:
             return {
                 **entry,
-                "verdict": "unreachable",
-                "reason": "ollama could not be asked what is installed",
+                "verdict": "not_installed",
+                "reason": f"{model} is not installed on {provider_name}",
             }
+        if installed is None:
+            # The engine's own words when it gave any (they already say it
+            # "could not be asked what is installed" and why) — never both
+            # (S40 ruling E5).
+            reason = (view.reason if view is not None else None) or (
+                f"{provider_name} could not be asked what is installed"
+            )
+            return {**entry, "verdict": "unreachable", "reason": reason}
     return {**entry, "verdict": "runnable", "reason": None}
 
 
+async def _chat_models(app, row: dict, names: set[str]) -> set[str]:
+    """The models among `names` that ollama's own /api/show declares fit for
+    a chat turn (ollama.suits_chat: completion without embedding). A model
+    whose show could not be read declares nothing and is left out — never
+    guessed into a chat.
+
+    The answers are content-addressed (ollama.SHOW_CACHE, keyed by the
+    /api/tags digest — which is why the listing is read here rather than
+    taken from the engine's cached name→size map), so once they are cached
+    this costs one /api/tags read."""
+    try:
+        listing = await ollama.ADAPTER.list_models(app, row)
+        rows = [m for m in listing.models if m["id"] in names]
+        shown = await asyncio.wait_for(
+            ollama.facts_for_installed(app, providers.base_url_of(row), rows),
+            STANDBY_SHOW_DEADLINE_S,
+        )
+    except (ProviderRefused, TimeoutError) as exc:
+        logger.warning("standby: %s could not say which models chat — %s", row["name"], exc)
+        return set()
+    return {
+        name for name, facts in shown.items() if ollama.suits_chat(facts.get("capabilities") or {})
+    }
+
+
 async def standby(
-    app, pool, fit_context, latest_probes, tags: set[str] | None
+    app,
+    pool,
+    fit_context,
+    latest_probes,
+    candidates: list[dict],
+    seen: dict[str, engines.EngineView],
 ) -> tuple[dict, str, str] | None:
     """(row, model, why) — the local model to fall to when a chain has no
-    runnable link and names no local model: the bundled ollama's default
-    if installed, else the best-fitting installed curated pick (curated
-    order, first that is not wont_fit), else the first installed tag."""
-    if not tags:
-        return None
-    builtin = await providers.get_row(pool, providers.BUILTIN)
-    default = builtin.get("default_model")
-    if default and _installed(tags, default):
-        return builtin, default, f"the bundled ollama's default model {default}"
+    runnable link and names no local model.
+
+    Only an engine that is SERVING (its owner's switch) and whose listing
+    could be read is considered, in engines.rows' order (the builtin
+    first), and only a model ollama declares fit for chat: the bundled
+    engine is also the embedder (D8), and the old last resort — the first
+    tag in sorted order — would hand a chat turn to whichever embedder
+    sorted first. On each engine: its default model if installed, else the
+    best-fitting installed curated pick (curated order, first that is not
+    wont_fit), else its first installed chat model."""
     curated = curated_mod.load_curated()
-    ctx = await fit_context(app, pool)
-    probes = await latest_probes(pool, [e["slug"] for e in curated])
-    for entry in curated:
-        slug = entry["slug"]
-        if not _installed(tags, slug):
+    ctx: dict | None = None
+    probes: dict = {}
+    for row in candidates:
+        if switched_off(row) is not None:
             continue
-        needed_gb, source = fit_mod.needed_gb_for(entry, probes.get(slug))
-        verdict = fit_mod.compute_fit(
-            needed_gb, ctx["free_gb"], ctx["total_gb"], source=source, reason=ctx["reason"]
-        )
-        if verdict.get("verdict") != "wont_fit":
-            return (
-                builtin,
-                slug,
-                f"the best-fitting installed curated pick {slug} ({verdict.get('verdict')})",
+        name = row["name"]
+        view = seen.get(name) or await engines.observe(app, pool, row, live=False)
+        if not view.tags:
+            continue
+        chat = await _chat_models(app, row, set(view.tags))
+        if not chat:
+            continue
+        default = row.get("default_model")
+        if default and _installed(chat, default):
+            return row, default, f"{name}'s default model {default}"
+        for entry in curated:
+            slug = entry["slug"]
+            if not _installed(chat, slug):
+                continue
+            if ctx is None:
+                # Asked only when a curated pick is installed: the card is read
+                # when a fit verdict is needed, never on the way past.
+                ctx = await fit_context(app, pool)
+                probes = await latest_probes(pool, [e["slug"] for e in curated])
+            needed_gb, source = fit_mod.needed_gb_for(entry, probes.get(slug))
+            verdict = fit_mod.compute_fit(
+                needed_gb, ctx["free_gb"], ctx["total_gb"], source=source, reason=ctx["reason"]
             )
-    first = sorted(tags)[0]
-    return builtin, first, f"the first installed local model {first}"
+            if verdict.get("verdict") != "wont_fit":
+                return (
+                    row,
+                    slug,
+                    f"the best-fitting installed curated pick {slug} on {name} "
+                    f"({verdict.get('verdict')})",
+                )
+        first = sorted(chat)[0]
+        return row, first, f"the first installed chat model on {name}, {first}"
+    return None
 
 
 async def resolve(
@@ -399,13 +478,21 @@ async def resolve(
     fit_context,
     latest_probes,
     skip: set[str] | None = None,
+    unreachable: dict[str, str] | None = None,
 ) -> Decision:
     """The link that serves this call, decided BEFORE any provider is
     called. `skip` names links already refused in this request (the
-    in-request fallback after a live refusal)."""
+    in-request fallback after a live refusal); `unreachable` maps links this
+    request could not reach at all to the words why. Both are keyed by the
+    served id (`provider:model`), so a bare link in the chain matches too,
+    and neither is asked again in the same request."""
     validate_role(role)
-    rows = await providers.list_rows(pool)
-    by_name = {r["name"]: r for r in rows}
+    by_name = {r["name"]: r for r in await providers.list_rows(pool)}
+    engine_names: list[str] = []
+    for row in await engines.rows(pool):
+        # The provider row plus its engines columns (serving, lifecycle, ...).
+        by_name[row["name"]] = {**by_name.get(row["name"], {}), **row}
+        engine_names.append(row["name"])
     all_chains = await chains(pool)
     chain = list(all_chains.get(role) or [])
     if not chain and role != "chat":
@@ -414,9 +501,27 @@ async def resolve(
         # The explicit pick is link 1; the chain holds the fallbacks.
         chain = [requested] + [c for c in chain if c != requested]
     if not chain:
-        # No pick and no chain: today's rule — the default provider's model.
+        # No pick and no chain: today's rule — the default provider's model,
+        # unless the default is an engine its owner switched off.
         default = await providers.default_row(pool)
         model = default.get("default_model") or ""
+        link_id = f"{default['name']}:{model}"
+        off = switched_off(by_name.get(default["name"], default))
+        if off is not None:
+            raise NothingRunnable(
+                role,
+                [
+                    {
+                        "id": link_id,
+                        "provider": default["name"],
+                        "model": model,
+                        "local": bool(default.get("local")),
+                        "verdict": "switched_off",
+                        "reason": off,
+                        "link": 1,
+                    }
+                ],
+            )
         return Decision(
             row=default,
             model=model,
@@ -425,20 +530,36 @@ async def resolve(
             role=role,
             verdicts=[
                 {
-                    "id": f"{default['name']}:{model}",
+                    "id": link_id,
                     "verdict": "runnable",
                     "reason": "no chain; the default provider's model",
                 }
             ],
         )
     walled = await walls(pool)
-    tags = await installed_tags(app, pool)
+    # Observe only the engines this chain names, once each, and never one
+    # its owner switched off.
+    seen: dict[str, engines.EngineView] = {}
+    for link in chain:
+        name, _model = _provider_of(link, by_name)
+        row = by_name.get(name) if name else None
+        if (
+            row is not None
+            and name not in seen
+            and engines.is_engine(row)
+            and switched_off(row) is None
+        ):
+            seen[name] = await engines.observe(app, pool, row, live=False)
     verdicts: list[dict] = []
     has_local = False
     for index, link in enumerate(chain, 1):
-        verdict = await judge_link(app, pool, link, by_name, walled, timezone, tags)
+        verdict = await judge_link(app, pool, link, by_name, walled, timezone, seen)
         verdict["link"] = index
-        if skip and link in skip:
+        served_as = f"{verdict['provider']}:{verdict['model']}" if verdict.get("provider") else link
+        if unreachable and served_as in unreachable:
+            verdict["verdict"] = "unreachable"
+            verdict["reason"] = unreachable[served_as]
+        elif skip and served_as in skip:
             verdict["verdict"] = "refused"
             verdict["reason"] = f"{link} refused this request"
         verdicts.append(verdict)
@@ -457,30 +578,36 @@ async def resolve(
                 verdicts=verdicts,
             )
     if not has_local:
-        fallback = await standby(app, pool, fit_context, latest_probes, tags)
+        candidates = [by_name[name] for name in engine_names]
+        fallback = await standby(app, pool, fit_context, latest_probes, candidates, seen)
         if fallback is not None:
             row, model, why = fallback
-            skipped = "; ".join(f"{v['id']}: {v['reason']}" for v in verdicts)
-            verdicts.append(
-                {
-                    "id": f"{row['name']}:{model}",
-                    "provider": row["name"],
-                    "model": model,
-                    "local": True,
-                    "verdict": "runnable",
-                    "reason": f"standby: {why}",
-                    "link": len(verdicts) + 1,
-                }
-            )
-            return Decision(
-                row=row,
-                model=model,
-                link=len(verdicts),
-                reason=f"fell back to local standby {row['name']}:{model} ({why}) — {skipped}",
-                role=role,
-                verdicts=verdicts,
-                standby=True,
-            )
+            standby_id = f"{row['name']}:{model}"
+            entry = {
+                "id": standby_id,
+                "provider": row["name"],
+                "model": model,
+                "local": True,
+                "link": len(verdicts) + 1,
+            }
+            if unreachable and standby_id in unreachable:
+                reason = f"standby: {unreachable[standby_id]}"
+                verdicts.append({**entry, "verdict": "unreachable", "reason": reason})
+            elif skip and standby_id in skip:
+                reason = f"standby: {standby_id} refused this request"
+                verdicts.append({**entry, "verdict": "refused", "reason": reason})
+            else:
+                skipped = "; ".join(f"{v['id']}: {v['reason']}" for v in verdicts)
+                verdicts.append({**entry, "verdict": "runnable", "reason": f"standby: {why}"})
+                return Decision(
+                    row=row,
+                    model=model,
+                    link=len(verdicts),
+                    reason=f"fell back to local standby {standby_id} ({why}) — {skipped}",
+                    role=role,
+                    verdicts=verdicts,
+                    standby=True,
+                )
     raise NothingRunnable(role, verdicts)
 
 
@@ -508,9 +635,13 @@ async def explain(
     }
 
 
-def clear_tags_cache() -> None:
-    TAGS_CACHE.clear()
-
-
-__all__ = ["BUILTIN_ROLES", "RESERVED_ROLES", "Decision", "NothingRunnable", "resolve", "explain"]
+__all__ = [
+    "BUILTIN_ROLES",
+    "RESERVED_ROLES",
+    "Decision",
+    "NothingRunnable",
+    "resolve",
+    "explain",
+    "switched_off",
+]
 _ = time  # noqa: F841 — kept for callers that time the walk

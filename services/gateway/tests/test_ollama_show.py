@@ -131,6 +131,23 @@ def test_license_is_the_first_non_empty_line_only():
     assert facts["license"] == {"value": "MIT License", **DECLARED}
 
 
+def test_suits_chat_is_a_declared_completion_without_embedding():
+    """The rule the routing standby uses, and the one catalog.local_row
+    applies to suitability.chat: ollama's manifest must SAY completion and
+    must not say embedding. A model that declares nothing is not a chat
+    model — never guessed into one."""
+    _f, chat = ollama.show_to_facts(QWEN3_8B_SHOW)
+    _f, embedder = ollama.show_to_facts({**QWEN3_8B_SHOW, "capabilities": ["embedding"]})
+    _f, both = ollama.show_to_facts({**QWEN3_8B_SHOW, "capabilities": ["completion", "embedding"]})
+    _f, silent = ollama.show_to_facts({**QWEN3_8B_SHOW, "capabilities": []})
+
+    assert ollama.suits_chat(chat) is True
+    assert ollama.suits_chat(embedder) is False
+    assert ollama.suits_chat(both) is False
+    assert ollama.suits_chat(silent) is False
+    assert ollama.suits_chat({}) is False
+
+
 # ── tags_to_models extras ────────────────────────────────────────────────
 
 

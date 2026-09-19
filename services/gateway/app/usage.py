@@ -344,6 +344,8 @@ class Event:
     error: str | None = None
     route_reason: str | None = None
     route_link: int | None = None
+    # D10 compute id (data_plane.served_stamp); None = not known, never guessed
+    served_on: str | None = None
 
 
 async def record(pool: asyncpg.Pool, event: Event) -> bool:
@@ -355,9 +357,10 @@ async def record(pool: asyncpg.Pool, event: Event) -> bool:
         await pool.execute(
             "INSERT INTO usage_events (provider, model, served_by, kind, purpose, role, turn_id, "
             "person_id, prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens, "
-            "duration_ms, local, cost_usd, cost_basis, status, error, route_reason, route_link) "
+            "duration_ms, local, cost_usd, cost_basis, status, error, route_reason, route_link, "
+            "served_on) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7::uuid, $8::uuid, $9, $10, $11, $12, $13, $14, "
-            "$15, $16, $17, $18, $19, $20)",
+            "$15, $16, $17, $18, $19, $20, $21)",
             event.provider,
             event.model,
             event.served_by,
@@ -378,6 +381,7 @@ async def record(pool: asyncpg.Pool, event: Event) -> bool:
             event.error,
             event.route_reason,
             event.route_link,
+            event.served_on,
         )
     except Exception:
         WRITE_FAILURES += 1
@@ -441,12 +445,15 @@ async def observe(
     started: float,
     stream: bool,
     route: dict | None = None,
+    served_on: str | None = None,
 ) -> Response:
     """Wrap an adapter's response so the call is metered and recorded when
     it ENDS. A streaming body is relayed byte for byte with one synthetic
     usage chunk inserted before the upstream `[DONE]`; a plain body has
     its `usage` read and enriched in place. A non-200 is recorded as a
-    refusal (kind `refusal`), tokens NULL."""
+    refusal (kind `refusal`), tokens NULL. `served_on` is where the call
+    ran (data_plane stamps it before the first byte); a refusal is given
+    None."""
     local = bool(row.get("local"))
     provider = row["name"]
     route_reason = route.get("reason") if route else None
@@ -464,6 +471,7 @@ async def observe(
             status=status,
             route_reason=route_reason,
             route_link=route_link,
+            served_on=served_on,
         )
 
     iterator: AsyncIterator[bytes] | None = getattr(response, "body_iterator", None)
@@ -1024,7 +1032,7 @@ async def events(
     rows = await pool.fetch(
         f"SELECT id, at, provider, model, served_by, kind, purpose, role, turn_id, person_id, "
         f"prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens, duration_ms, "
-        f"local, cost_usd, cost_basis, metered, status, error, route_reason, route_link "
+        f"local, cost_usd, cost_basis, metered, status, error, route_reason, route_link, served_on "
         f"FROM usage_events {where} ORDER BY id DESC LIMIT ${len(args)}",
         *args,
     )

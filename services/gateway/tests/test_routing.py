@@ -16,11 +16,13 @@ from __future__ import annotations
 import json
 from decimal import Decimal
 
+import httpx
 import pytest
 
-from app import backends, routing, usage
+from app import backends, engines, routing, usage
+from app.adapters import ollama as ollama_mod
 from tests.conftest import requires_db
-from tests.fakes import FakeOllama, FakeOpenAICompat
+from tests.fakes import FailingTransport, FakeOllama, FakeOpenAICompat
 
 pytestmark = requires_db
 
@@ -53,7 +55,8 @@ async def local(pool, monkeypatch, mount_backend):
     fake = FakeOllama(deltas=("Hel", "lo"), tags=("qwen3:8b", "qwen3:4b"))
     mount_backend("http://ollama.test", fake.app)
     await backends.save_config(pool, {"kind": "ollama", "model": "qwen3:8b"})
-    routing.clear_tags_cache()
+    # Routing owns no listing cache any more: each engine's is in app/engines.py.
+    engines.clear_cache()
     return fake
 
 
@@ -135,7 +138,8 @@ async def test_a_capped_provider_is_skipped_before_the_call_and_the_reason_is_st
     assert route["link"] == 2 and route["served_by"] == "hub:qwen3:4b"
     assert "openrouter over its monthly cap $1.00 (spent $1.50)" in route["reason"]
     assert len(cloud.seen) == before, "the capped provider was NEVER called"
-    assert local.seen[-1][1]["model"] == "qwen3:4b"
+    # Moved (S40 T3): the served-on stamp reads /api/ps after the completion.
+    assert [b for p, b in local.seen if p == "/v1/chat/completions"][-1]["model"] == "qwen3:4b"
 
     # explain says the same, without serving.
     ex = (await client.get("/admin/route/explain?role=chat&model=openrouter:remote-model")).json()
@@ -228,9 +232,19 @@ async def test_a_model_that_failed_does_not_wall_its_own_fallback(pool, local):
     assert outage is not None and outage["model"] == "qwen3.8:27b"
 
     walled = await routing.walls(pool)
-    by_name = {"hub": {"name": "hub", "local": True, "is_default": True}}
-    failed = await routing.judge_link(None, pool, "hub:qwen3.8:27b", by_name, walled, "UTC", ())
-    sibling = await routing.judge_link(None, pool, "hub:qwen3:8b", by_name, walled, "UTC", ())
+    # Moved (S40 T3): judge_link reads an engine's switch and adapter off the
+    # row, and takes each engine's observation as a map ({} = none observed).
+    by_name = {
+        "hub": {
+            "name": "hub",
+            "adapter": "ollama",
+            "local": True,
+            "is_default": True,
+            "serving": True,
+        }
+    }
+    failed = await routing.judge_link(None, pool, "hub:qwen3.8:27b", by_name, walled, "UTC", {})
+    sibling = await routing.judge_link(None, pool, "hub:qwen3:8b", by_name, walled, "UTC", {})
     assert failed["verdict"] == "walled", failed
     assert sibling["verdict"] != "walled", "the fallback was walled for its sibling's failure"
 
@@ -239,7 +253,7 @@ async def test_a_model_that_failed_does_not_wall_its_own_fallback(pool, local):
     await routing.record_refusal(pool, row, 402, "out of credit", model="qwen3:8b")
     walled = await routing.walls(pool)
     both = [
-        await routing.judge_link(None, pool, link, by_name, walled, "UTC", ())
+        await routing.judge_link(None, pool, link, by_name, walled, "UTC", {})
         for link in ("hub:qwen3.8:27b", "hub:qwen3:8b")
     ]
     assert [v["verdict"] for v in both] == ["walled", "walled"]
@@ -346,9 +360,10 @@ async def test_a_chain_with_no_runnable_and_no_local_link_falls_to_the_stated_st
     assert resp.status_code == 200
     route = _route_chunk(resp.content)
     assert route["standby"] is True and route["served_by"] == "hub:qwen3:8b"
+    # Moved (S40 T3): the standby names the engine it fell to — "the bundled
+    # ollama" stops being a unique name once machines are engines.
     assert (
-        "fell back to local standby hub:qwen3:8b (the bundled ollama's default model qwen3:8b)"
-        in route["reason"]
+        "fell back to local standby hub:qwen3:8b (hub's default model qwen3:8b)" in route["reason"]
     )
     assert "over its monthly cap $0.00" in route["reason"]
     assert len(cloud.seen) == before
@@ -356,7 +371,7 @@ async def test_a_chain_with_no_runnable_and_no_local_link_falls_to_the_stated_st
 
 async def test_nothing_runnable_is_a_503_that_lists_every_verdict(client, pool, local, monkeypatch):
     local.tags = ()
-    routing.clear_tags_cache()
+    engines.clear_cache()
     await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
     resp = await _chat(client, "chat")
     assert resp.status_code == 503
@@ -388,7 +403,8 @@ async def test_a_bare_local_pick_is_link_one_on_the_default_provider(client, poo
     assert resp.status_code == 200
     assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
     assert resp.headers["x-nova-route"] == "role=chat;link=1"
-    assert local.seen[-1][1]["model"] == "qwen3:8b"
+    # Moved (S40 T3): the served-on stamp reads /api/ps after the completion.
+    assert [b for p, b in local.seen if p == "/v1/chat/completions"][-1]["model"] == "qwen3:8b"
 
 
 async def test_a_derived_role_with_its_own_chain_resolves_to_it_and_without_one_walks_chat(
@@ -484,3 +500,222 @@ async def test_the_routes_page_lists_built_ins_first_and_a_derived_role_can_be_r
     assert never.status_code == 404
     page = (await client.get("/admin/routes")).json()["roles"]
     assert [r["role"] for r in page] == [*routing.BUILTIN_ROLES, "agent_alpha"]
+
+
+# ── S40: the walk reads engines ─────────────────────────────────────────────
+
+
+async def test_a_switched_off_engine_is_skipped_by_name_and_never_called(
+    client, pool, local, mount_backend
+):
+    """S40: `engines.serving` is the owner's "this machine runs chat models"
+    switch — installed is not the same as used. A link on a switched-off
+    engine is judged `switched_off` BEFORE anything is asked of it, the next
+    link answers, and the route says which link was passed over and why. It
+    is the owner's choice, not a failure: nothing is walled. Switched back
+    on, it is link 1 again."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["openrouter:remote-model"]})
+    stored = await engines.set_serving(pool, "hub", False)
+    assert stored["serving"] is False
+
+    resp = await _chat(client, "chat", model="hub:qwen3:8b")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "openrouter:remote-model"
+    route = _route_chunk(resp.content)
+    assert route["link"] == 2
+    assert "hub:qwen3:8b: hub is switched off" in route["reason"]
+    assert not [p for p, _ in local.seen if p.endswith("/chat/completions")]
+    assert await pool.fetch("SELECT provider FROM provider_walls") == []
+    ex = (await client.get("/admin/route/explain?role=chat&model=hub:qwen3:8b")).json()
+    assert [v["verdict"] for v in ex["chain"]] == ["switched_off", "runnable"]
+    assert ex["would_serve"]["served_by"] == "openrouter:remote-model"
+
+    await engines.set_serving(pool, "hub", True)
+    resp = await _chat(client, "chat", model="hub:qwen3:8b")
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
+    assert resp.headers["x-nova-route"] == "role=chat;link=1"
+
+
+async def test_a_switched_off_engine_with_nothing_behind_it_is_a_stated_503(client, pool, local):
+    """With no other link, the walk says so — never the switched-off engine,
+    whether the owner picked it or it is the default's model on a role
+    with no chain at all."""
+    await engines.set_serving(pool, "hub", False)
+
+    picked = await _chat(client, "chat", model="hub:qwen3:8b")
+    unpicked = await _chat(client, "scheduled")
+
+    for resp in (picked, unpicked):
+        assert resp.status_code == 503
+        assert "hub is switched off" in resp.json()["error"]
+    assert not [p for p, _ in local.seen if p.endswith("/chat/completions")]
+
+
+async def test_an_engine_that_cannot_list_is_asked_once_per_failure_window(
+    client, pool, local, mount_backend, mount_transport
+):
+    """The engine's listing is read through engines.observe, whose cache
+    remembers a FAILURE too (10 s; a ready listing 30 s). Before S40 a
+    failure was never cached (routing.py:293-294), so every routed turn
+    waited out the listing timeout again. The link still says why it was
+    passed over, naming the engine."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["openrouter:remote-model"]})
+    down = FailingTransport(httpx.ConnectError)
+    mount_transport("http://ollama.test", down)
+    engines.clear_cache()
+
+    first = await _chat(client, "chat", model="hub:qwen3:4b")
+    asked = len(down.requests)
+    second = await _chat(client, "chat", model="hub:qwen3:4b")
+
+    for resp in (first, second):
+        assert resp.headers["x-nova-served-by"] == "openrouter:remote-model"
+        route = _route_chunk(resp.content)
+        assert route["link"] == 2
+        assert "hub could not be asked what is installed" in route["reason"]
+    assert asked >= 1, "the first turn asked the engine"
+    assert len(down.requests) == asked, "the second turn read the cached failure"
+    assert await pool.fetch("SELECT provider FROM provider_walls") == []
+
+
+async def test_the_standby_is_only_ever_a_serving_engine(client, pool, local, mount_backend):
+    """The owner's switch holds on the standby path too: a chain with no
+    runnable link does not fall to an engine that was switched off."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/judge", json={"chain": ["openrouter:remote-model"]})
+    await usage.set_cap(pool, "openrouter", Decimal("0"))
+    await engines.set_serving(pool, "hub", False)
+
+    resp = await _chat(client, "judge")
+
+    assert resp.status_code == 503
+    assert "over its monthly cap $0.00" in resp.json()["error"]
+    assert not [p for p, _ in local.seen if p.endswith("/chat/completions")]
+
+
+async def test_the_standby_never_hands_a_chat_turn_to_an_embedding_model(
+    client, pool, mount_backend, monkeypatch
+):
+    """The bundled engine is also the embedder (D8), so an embedding model
+    sits in its listing — and the old last resort, the first tag in sorted
+    order (routing.py:388), handed a chat turn to whichever embedder sorted
+    first. ollama's own /api/show says which models chat (completion
+    without embedding); the standby reads that."""
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(tags=("all-minilm:latest", "zz-chat:1b"))
+    fake.show["all-minilm:latest"]["capabilities"] = ["embedding"]
+    mount_backend("http://ollama.test", fake.app)
+    await backends.save_config(pool, {"kind": "ollama"})  # no default model on the engine
+    ollama_mod.SHOW_CACHE.clear()
+    engines.clear_cache()
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/judge", json={"chain": ["openrouter:remote-model"]})
+    await usage.set_cap(pool, "openrouter", Decimal("0"))
+
+    resp = await _chat(client, "judge")
+
+    assert resp.status_code == 200
+    route = _route_chunk(resp.content)
+    assert route["standby"] is True and route["served_by"] == "hub:zz-chat:1b"
+    assert "the first installed chat model on hub, zz-chat:1b" in route["reason"]
+    sent = [body for path, body in fake.seen if path == "/v1/chat/completions"]
+    assert [body["model"] for body in sent] == ["zz-chat:1b"]
+
+
+async def test_an_engine_that_cannot_be_reached_is_never_walled_and_the_next_link_answers(
+    client, pool, local, mount_backend, mount_transport
+):
+    """D21: a connect failure to an engine is not a wall. A wall outlives the
+    outage — a local model's wall is never cleared by a success — while the
+    engine's own observation is re-read on the next walk. The ledger still
+    has the refusal row; the route says why the link was passed over; the
+    next turn asks the engine again, once, even through a bare id."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["openrouter:remote-model"]})
+    refused = FailingTransport(httpx.ConnectError)
+    mount_transport("http://ollama.test/v1", refused)  # chat never connects; /api/* answers
+
+    resp = await _chat(client, "chat", model="hub:qwen3:8b")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "openrouter:remote-model"
+    route = _route_chunk(resp.content)
+    assert route["link"] == 2
+    assert (
+        "hub:qwen3:8b: could not reach hub at http://ollama.test/v1 — ConnectError"
+        in route["reason"]
+    )
+    assert await pool.fetch("SELECT provider, model FROM provider_walls") == []
+    rows = await pool.fetch("SELECT kind, provider, status FROM usage_events ORDER BY id")
+    assert [(r["kind"], r["provider"], r["status"]) for r in rows] == [
+        ("refusal", "hub", 502),
+        ("completion", "openrouter", 200),
+    ]
+    assert refused.requests == [("POST", "/v1/chat/completions")]
+
+    resp = await _chat(client, "chat", model="qwen3:8b")
+    assert resp.headers["x-nova-served-by"] == "openrouter:remote-model"
+    assert refused.requests == [("POST", "/v1/chat/completions")] * 2
+    assert await pool.fetch("SELECT provider FROM provider_walls") == []
+
+
+async def test_an_unreachable_engine_is_forgotten_so_the_next_walk_asks_it_again(
+    client, pool, local, mount_backend, mount_transport
+):
+    """Ruling C11: after a connect failure the data plane forgets THAT
+    engine's cached observation (engines.forget), so the retry in the same
+    request reads its listing again instead of trusting one from before it
+    went — and only that engine's."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["openrouter:remote-model"]})
+    mount_transport("http://ollama.test/v1", FailingTransport(httpx.ConnectError))
+    engines.clear_cache()
+
+    def tags_reads() -> int:
+        return sum(1 for p, _ in local.seen if p == "/api/tags")
+
+    before = tags_reads()  # adding the cloud provider read the listing too
+    resp = await _chat(client, "chat", model="hub:qwen3:8b")
+
+    assert resp.headers["x-nova-served-by"] == "openrouter:remote-model"
+    assert tags_reads() - before == 2, "observed for the first walk, and again once forgotten"
+
+
+async def test_a_cloud_provider_that_cannot_be_reached_is_still_walled(
+    client, pool, local, mount_backend, mount_transport
+):
+    """Only an ENGINE's connect failure is exempt. A cloud provider's walls
+    its model for the outage ladder, as before S40."""
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    mount_transport("http://openrouter.test", FailingTransport(httpx.ConnectError))
+
+    resp = await _chat(client, "chat", model="openrouter:remote-model")
+
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
+    walls = await pool.fetch("SELECT provider, model, status FROM provider_walls")
+    assert [(w["provider"], w["model"], w["status"]) for w in walls] == [
+        ("openrouter", "remote-model", 502)
+    ]
+
+
+async def test_an_unreachable_standby_is_tried_once_and_the_503_says_why(
+    client, pool, local, mount_backend, mount_transport
+):
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/judge", json={"chain": ["openrouter:remote-model"]})
+    await usage.set_cap(pool, "openrouter", Decimal("0"))
+    refused = FailingTransport(httpx.ConnectError)
+    mount_transport("http://ollama.test/v1", refused)
+
+    resp = await _chat(client, "judge")
+
+    assert resp.status_code == 503
+    error = resp.json()["error"]
+    assert "over its monthly cap $0.00" in error
+    assert "hub:qwen3:8b: standby: could not reach hub" in error
+    assert refused.requests == [("POST", "/v1/chat/completions")]
+    assert await pool.fetch("SELECT provider FROM provider_walls") == []

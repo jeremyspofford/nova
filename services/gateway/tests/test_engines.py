@@ -427,6 +427,27 @@ async def test_resident_is_the_engines_own_ps_in_ollamas_own_keys(pool, hub):
 
 
 @requires_db
+async def test_a_resident_entry_whose_vram_is_not_a_byte_count_is_skipped_never_a_crash(pool, hub):
+    """S40 T3: the served-on stamp reads /api/ps after every local reply, so
+    an entry that states size_vram as something other than a byte count (a
+    string, a bool, a negative) must not take the reply down with a
+    TypeError — it is skipped like an entry that states none. Nothing is
+    filled in."""
+    hub.ps_models = [
+        {"name": "as-text", "size": 1_000, "size_vram": "6400000000"},
+        {"name": "as-bool", "size": 1_000, "size_vram": True},
+        {"name": "negative", "size": 1_000, "size_vram": -1},
+        {"name": "qwen3:8b", "size": 6_000_000_000, "size_vram": 0},
+    ]
+    row = await engines.get(pool, "hub")
+    resident, reason = await engines.resident(gateway_app, row)
+    assert reason is None
+    assert resident == [
+        {"model": "qwen3:8b", "vram_mb": 0.0, "size": 6_000_000_000, "size_vram": 0}
+    ]
+
+
+@requires_db
 async def test_resident_takes_the_callers_timeout(pool, hub, monkeypatch):
     """The stamp reads /api/ps after every local reply, on a 2 s budget."""
     seen = []

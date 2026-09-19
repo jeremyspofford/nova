@@ -253,6 +253,29 @@ async def test_the_check_constraint_refuses_dollars_on_a_local_row(pool):
         )
 
 
+async def test_the_ledger_row_says_where_the_call_ran_and_null_when_not_known(pool):
+    """S40 / D10: `served_on` is the compute a completion ran on, stamped
+    when it ran. Not known is NULL — never '' and never a guess — and a row
+    written before this column existed stays NULL: a measurement never
+    changes meaning after it is written."""
+    stamp = "gpu:cuda:GPU-8f0c1d2e-3a4b-5c6d-7e8f-90a1b2c3d4e5"
+    event = dict(
+        provider="hub",
+        model="qwen3:8b",
+        served_by="hub:qwen3:8b",
+        kind="completion",
+        attribution=usage.Attribution(purpose="chat"),
+        duration_ms=1200,
+        local=True,
+        status=200,
+    )
+    assert await usage.record(pool, usage.Event(**event, served_on=stamp)) is True
+    assert await usage.record(pool, usage.Event(**event)) is True
+
+    assert [r["served_on"] for r in await _rows(pool)] == [stamp, None]
+    assert [e["served_on"] for e in await usage.events(pool, limit=10)] == [None, stamp]
+
+
 async def test_a_failed_ledger_write_is_counted_and_said_in_the_stream(
     client, pool, local, monkeypatch
 ):

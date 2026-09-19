@@ -124,6 +124,12 @@ async def test_installed_rows_carry_ollamas_own_facts_and_the_vetted_layer(clien
 
 async def test_uncurated_installed_models_still_list_with_an_honest_fit(client, local):
     local.tags = ("muse-glimmer:latest",)
+    # Moved (S40 T3): /api/tags states no size for it — the "size unstated"
+    # case this test names. Before T3 the assertion held only while routing's
+    # process-wide tags cache still held ANOTHER test's listing (run alone at
+    # 11f47387 it failed); engines' cache is cleared per test, so the fake's
+    # stated download size would now reach the fit and size it.
+    local.tag_rows["muse-glimmer:latest"] = {"size": None}
     resp = await client.get("/admin/catalog")
     row = _rows_by_id(resp.json())["ollama:muse-glimmer:latest"]
     assert row["installed"] is True

@@ -391,7 +391,9 @@ async def test_chat_routes_by_prefix_and_badges_the_canonical_identity(
     )
     assert local.status_code == 200
     assert local.headers["x-nova-served-by"] == "hub:qwen3.8:27b"
-    assert ollama.seen[-1][1]["model"] == "qwen3.8:27b"
+    # Moved (S40 T3): the served-on stamp reads /api/ps AFTER the completion,
+    # so the last request the engine saw is no longer the completion.
+    assert [b for p, b in ollama.seen if p == "/v1/chat/completions"][-1]["model"] == "qwen3.8:27b"
 
 
 async def test_a_failing_provider_answers_with_its_own_status_never_another_providers_reply(

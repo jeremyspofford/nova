@@ -266,9 +266,12 @@ async def resident(
     size_vram}` in ollama's own keys: vram_mb for fit's free-after-switch,
     size/size_vram for the D10 stamp (compute_id.served_on), which decides
     offload from exactly those two numbers. An entry /api/ps states no
-    size_vram for is skipped; nothing is filled in. It is the only per-model
-    VRAM figure on a host that can be attributed to anything: the card's own
-    counter sees every process and, under WSL2, can name none of them.
+    size_vram for — or states it as anything but a byte count — is skipped;
+    nothing is filled in, and a garbled entry never costs the caller (the
+    served-on stamp reads this after every local reply). It is the only
+    per-model VRAM figure on a host that can be attributed to anything: the
+    card's own counter sees every process and, under WSL2, can name none of
+    them.
 
     Never an empty list for a read that failed: None WITH the reason."""
     if not providers.base_url_of(row):
@@ -292,7 +295,11 @@ async def resident(
         if not isinstance(entry, dict):
             continue
         size_vram = entry.get("size_vram")
-        if size_vram is not None:
+        if (
+            isinstance(size_vram, int | float)
+            and not isinstance(size_vram, bool)
+            and size_vram >= 0
+        ):
             out.append(
                 {
                     "model": entry.get("name") or entry.get("model"),
