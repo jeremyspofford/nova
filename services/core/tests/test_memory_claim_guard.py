@@ -107,6 +107,15 @@ MUST_NOT = [
     ("you_said", "You said the memory service is down.", ANSWERED),
     ("degraded", "The memory service is degraded: semantic search timed out.", ANSWERED),
     ("down_for_maintenance", "The memory store is down for maintenance tonight.", ANSWERED),
+    # T2 review, round 1: memory_backfill's ok says distillation RAN, not that
+    # memory answered — distil.backfill states a failed /export as a limit and
+    # collects failed saves, and still returns ran=True. In the one turn memory
+    # really is down (the recall failed), this reply is true.
+    (
+        "backfill_ran_while_the_recall_failed",
+        "The memory service is unreachable, so none of the facts were saved.",
+        [LLM, _recall(error="ConnectError"), _tool("memory_backfill", ok=True)],
+    ),
 ]
 
 ACCEPTED_MISSES = [
@@ -114,6 +123,11 @@ ACCEPTED_MISSES = [
     ("memory_is_unreachable", "Memory is unreachable."),
     # A contracted negation is not one of the listed states.
     ("isnt_responding", "The memory service isn't responding."),
+    # T2 review, round 1: "can't reach" is her claim only in the first person
+    # or with no subject. A third-party subject is usually a true statement of
+    # the architecture ("your phone can't reach the memory service"), so a
+    # service named as the one that cannot reach it is a miss by the same rule.
+    ("core_cant_reach", "Core can't reach the memory service."),
 ]
 
 
@@ -197,6 +211,82 @@ STILL_FIRE_BEYOND_THE_CORPUS = [
 )
 def test_honest_sentences_beyond_the_corpus_are_not_corrected(label, reply):
     assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None
+
+
+# -- T2 review, round 1: "can't reach" said of someone else, or limited ----------
+#
+# Probed at 4c62f5c9 with the recall answered: each FIRED. The can't-reach form
+# never read WHO cannot reach memory, and had no anchor on what follows it, so
+# the same true architecture statement Deviation 4 pins as honest in the
+# "unreachable from outside the tailnet" form was corrected in this one. The
+# claim is hers only in the first person or with no subject ("Can't reach the
+# memory service."), and it ends the way _MEMORY_DOWN's outage words end.
+
+UNREACHED_BY_SOMEONE_ELSE = [
+    ("you_from_outside", "You can't reach the memory service from outside the tailnet."),
+    (
+        "phone_directly",
+        "Your phone can't reach the memory service directly; it goes through core.",
+    ),
+    ("web_app_directly", "The web app cannot contact the memory service directly — core does."),
+    ("without_the_tailnet_you", "Without the tailnet, you can't reach the memory service."),
+    # First person, limited to a route, not an outage.
+    ("i_directly", "I can't reach the memory service directly — core calls it for me."),
+    ("we_from_your_phone", "We can't reach the memory service from your phone."),
+]
+
+# (label, reply, the phrase the guard span records: from "I"/"we", or from
+# the verb when there is no subject — never a list mark)
+UNREACHED_STILL_FIRE = [
+    ("no_subject", "Can't reach the memory service right now.", "Can't reach the memory service"),
+    (
+        "we_bracketed_reason",
+        "We cannot reach the memory service (ConnectError).",
+        "We cannot reach the memory service",
+    ),
+    (
+        "im_unable",
+        "I'm unable to reach the memory service.",
+        "I'm unable to reach the memory service",
+    ),
+    (
+        "i_still_so",
+        "I still can't reach the memory service, so the note stays here.",
+        "I still can't reach the memory service",
+    ),
+    (
+        "bullet_no_subject",
+        "- Unable to connect to the memory service.",
+        "Unable to connect to the memory service",
+    ),
+    (
+        "curly_apostrophe",
+        "I can’t reach the memory service right now.",
+        "I can’t reach the memory service",
+    ),
+    (
+        "after_an_opener",
+        "Sorry, I can't reach the memory service.",
+        "I can't reach the memory service",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", UNREACHED_BY_SOMEONE_ELSE, ids=[c[0] for c in UNREACHED_BY_SOMEONE_ELSE]
+)
+def test_cant_reach_said_of_someone_else_or_a_route_is_not_corrected(label, reply):
+    assert guards.memory_claim_check(reply, ANSWERED, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "label,reply,phrase", UNREACHED_STILL_FIRE, ids=[c[0] for c in UNREACHED_STILL_FIRE]
+)
+def test_cant_reach_in_her_own_voice_still_fires(label, reply, phrase):
+    claim = guards.memory_claim_check(reply, ANSWERED, purpose="chat")
+    assert claim is not None, label
+    assert claim.subject == "the memory service"
+    assert claim.phrase == phrase
 
 
 @pytest.mark.parametrize(
@@ -290,6 +380,91 @@ def test_the_memory_tool_prefix_is_the_registrys():
     defined = {tool.name for tool in memory_tools.TOOLS}
     assert defined and all(name.startswith(prefix) for name in defined)
     assert {name for name in tools.REGISTRY if name.startswith(prefix)} == defined
+
+
+def test_a_backfill_that_ran_is_not_memory_answering():
+    """T2 review, round 1. memory_backfill's ok means distillation RAN: a
+    failed /export is a stated limit and failed saves are collected, and it
+    still returns ran=True. So its ok is no evidence memory answered, and the
+    correction it produced ("this turn's memory_backfill call was answered by
+    it") was a false statement from the guard, in the very turn memory was
+    down. A failed backfill still silences the guard (a failure is evidence
+    the report may be true)."""
+    reply = "The memory service is unreachable, so none of the facts were saved."
+    alone = [LLM, _tool("memory_backfill", ok=True)]
+    assert guards.memory_claim_check(reply, alone, purpose="chat") is None
+    beside_an_answer = [LLM, RECALL, _tool("memory_backfill", ok=True)]
+    claim = guards.memory_claim_check(reply, beside_an_answer, purpose="chat")
+    assert claim is not None and claim.text == CORRECTION
+    saved = [LLM, _recall(error="ConnectError"), _tool("memory_save", ok=True)]
+    claim = guards.memory_claim_check(reply, saved, purpose="chat")
+    assert claim is not None and "this turn's memory_save call was answered by it" in claim.text
+
+
+def test_the_answering_memory_tools_are_every_memory_tool_but_the_backfill():
+    """Derived from the registry, not retyped: the tools whose ok counts as
+    memory answering, and the ones whose ok does not, together are exactly
+    memory_tools.TOOLS. A memory tool added or renamed turns this red, so
+    which side it belongs on is decided, never defaulted."""
+    answering = guards._MEMORY_ANSWER_TOOLS
+    ran_only = guards._MEMORY_RAN_NOT_ANSWERED
+    defined = {tool.name for tool in memory_tools.TOOLS}
+    assert answering and not answering & ran_only
+    assert answering | ran_only == defined
+    assert ran_only == {"memory_backfill"}
+
+
+# Valid arguments for every answering tool: a tool added to the answering set
+# without an entry here turns the pin below red.
+_ANSWER_ARGS = {
+    "memory_search": {"query": "coffee"},
+    "memory_save": {"title": "A", "content": "b"},
+}
+
+
+@pytest.fixture
+def memory_link(monkeypatch, tmp_path):
+    """A ToolContext whose memory link is unconfigured, or a local fake (the
+    test_tools_peers fixture's shape: no database, dispatch consults none)."""
+    import uuid
+
+    from app.identity import Person
+    from app.main import app
+    from tests import fakes
+
+    person = Person(id=uuid.uuid4(), name="jeremy", role="owner")
+
+    def _mount(memory=None):
+        if memory is not None:
+            monkeypatch.setenv("MEMORY_URL", fakes.MEMORY_URL)
+            monkeypatch.setenv("CORE_MEMORY_TOKEN", fakes.MEMORY_TOKEN)
+            app.state.peer_transports = {fakes.MEMORY_URL: fakes.StreamingASGITransport(memory.app)}
+        else:
+            monkeypatch.delenv("MEMORY_URL", raising=False)
+            monkeypatch.delenv("CORE_MEMORY_TOKEN", raising=False)
+            app.state.peer_transports = {}
+        return tools.ToolContext(app=app, person=person, workspace_root=tmp_path)
+
+    yield _mount
+    app.state.peer_transports = {}
+
+
+@pytest.mark.parametrize("name", sorted(_ANSWER_ARGS))
+async def test_an_answering_tool_is_ok_only_when_memory_answered(name, memory_link):
+    """What makes a tool's ok evidence: it cannot be ok unless memory answered
+    with a 200 (_call_memory raises on anything else). Unconfigured, refused
+    and answered are each dispatched through the real registry."""
+    from tests import fakes
+
+    assert name in guards._MEMORY_ANSWER_TOOLS
+    assert set(_ANSWER_ARGS) == guards._MEMORY_ANSWER_TOOLS
+    _, ok = await tools.dispatch(name, _ANSWER_ARGS[name], memory_link(None))
+    assert ok is False
+    refusing = fakes.FakeMemory(recall_status=500, save_status=500)
+    _, ok = await tools.dispatch(name, _ANSWER_ARGS[name], memory_link(refusing))
+    assert ok is False
+    _, ok = await tools.dispatch(name, _ANSWER_ARGS[name], memory_link(fakes.FakeMemory()))
+    assert ok is True
 
 
 def test_an_empty_or_blank_reply_never_fires():

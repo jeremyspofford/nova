@@ -137,7 +137,9 @@ async def test_a_memory_outage_claim_is_corrected_when_recall_answered(
     assert span["name"] == "memory_claim"
     assert span["meta"] == {
         "subject": "the memory service",
-        "phrase": "can't reach the memory service",
+        # T2 review, round 1: the can't-reach claim is hers only in the first
+        # person (or with no subject), so the phrase now carries its "I".
+        "phrase": "I can't reach the memory service",
         "retrievers_missing": None,
     }
     await chat.drain_background()

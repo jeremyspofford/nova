@@ -6017,9 +6017,10 @@ def _served_verdict(
 # moment, stated as now — in turns whose own recall that service had just
 # answered (hits: 5). The evidence is the turn's memory_recall span: an int `hits` with no
 # `error`, and `errors` (an agent's two-scope recall) not naming every scope —
-# zero hits is an answer. Or any memory_* tool that succeeded this turn. A
-# memory_* tool that FAILED this turn is evidence the report may be true, so
-# the guard says nothing then; and with no recall span it has nothing to go on.
+# zero hits is an answer. Or a memory tool whose ok means memory answered
+# (_MEMORY_ANSWER_TOOLS) that succeeded this turn. A memory_* tool that FAILED
+# this turn is evidence the report may be true, so the guard says nothing
+# then; and with no recall span it has nothing to go on.
 #
 # Precision-first, like its siblings: a service NOUN is required ("memory"
 # alone is also RAM, GPU memory and her recall), "down" counts only where it
@@ -6044,6 +6045,19 @@ MEMORY_CLAIM_MISSING = " What did not work this turn: {retrievers_missing}"
 # against the registry.
 _MEMORY_TOOL_PREFIX = "memory_"
 _MEMORY_RECALL_KIND = "memory_recall"
+# T2 review, round 1: which memory tools' ok MEANS memory answered. The prefix
+# alone counted memory_backfill, whose ok means distillation ran: a failed
+# /export is a stated limit and failed saves are collected, and it still
+# returns ran=True — so in the turn memory really was down, the guard said
+# "this turn's memory_backfill call was answered by it". memory_search and
+# memory_save go through _call_memory, which raises on anything but a 200, so
+# their ok is memory's answer. Every tool memory_tools defines is on exactly
+# one side, and test_memory_claim_guard pins the partition against
+# memory_tools.TOOLS: a new memory tool turns it red rather than defaulting
+# into the evidence. A FAILED memory_* tool of either side still silences the
+# guard (the prefix): a failure is evidence the report may be true.
+_MEMORY_ANSWER_TOOLS = frozenset({"memory_search", "memory_save"})
+_MEMORY_RAN_NOT_ANSWERED = frozenset({"memory_backfill"})
 
 _MEMORY_NOUN = (
     r"(?:(?:the|my|your|her|its|nova['’]s)\s+)?(?:long[-\s]term\s+)?memory\s+"
@@ -6069,10 +6083,24 @@ _MEMORY_DOWN = re.compile(
     rf"(?:\s+{_PRESENT_COPULA}|['’]s)(?:\s+{_SERVING_ADVERB})*\s+(?P<state>{_MEMORY_STATE})\b",
     re.I,
 )
+# T2 review, round 1: the verdict's can't-reach form never read WHO cannot
+# reach memory, and nothing ended its object, so true architecture statements
+# were corrected: "You can't reach the memory service from outside the
+# tailnet", "Your phone can't reach the memory service directly; it goes
+# through core" — the same claim Deviation 4 pins as honest in the
+# "unreachable from outside the tailnet" form. It is her outage claim only in
+# the first person (I, we) or with no subject at all ("Can't reach the memory
+# service right now."), and its object ends the way _MEMORY_DOWN's outage words
+# do, so "directly", "from outside" and "from your phone" end it as a route.
+# The claim (the span's phrase) starts at "I"/"we", or at the verb when the
+# clause opens on it — a list mark before it is not part of what she said.
 _MEMORY_UNREACHED = re.compile(
-    r"\b(?:can\s*(?:no|')?t|cannot|can\s+not|unable\s+to)\s+"
+    r"(?:^\s*(?:(?:[-+•]|\d+[.)])\s*)?|(?<![\w'’-])(?=(?:I|we)\b))"
+    r"(?P<claim>(?:(?:I|we)(?:['’]m|['’]re|\s+am|\s+are)?\s+)?"
+    r"(?:(?:still|currently|now|just|simply|really|also)\s+)*"
+    r"(?:can\s*(?:no|['’])?t|cannot|can\s+not|unable\s+to)\s+"
     r"(?:reach|contact|connect\s+to|talk\s+to|get\s+(?:a\s+)?(?:response|answer)\s+from)\s+"
-    rf"(?P<subj>{_MEMORY_NOUN})",
+    rf"(?P<subj>{_MEMORY_NOUN})){_MEMORY_OUTAGE_ANCHOR}",
     re.I,
 )
 
@@ -6125,7 +6153,8 @@ def _memory_answered(spans: Sequence[Any]) -> tuple[Any, str | None] | None:
             continue
         if _span_meta(span).get("ok") is not True:
             return None
-        tool = tool or name
+        if name in _MEMORY_ANSWER_TOOLS:
+            tool = tool or name
     if recall is None and tool is None:
         return None
     return recall, tool
@@ -6171,9 +6200,10 @@ def _memory_claim(match: re.Match[str], recall: Any, tool: str | None) -> Memory
         text = MEMORY_CLAIM_TOOL_CORRECTION.format(tool=tool)
     if missing:
         text += MEMORY_CLAIM_MISSING.format(retrievers_missing=missing)
+    said = match.group("claim") if "claim" in match.re.groupindex else match.group(0)
     return MemoryClaim(
         subject=match.group("subj").strip(),
-        phrase=match.group(0).strip()[:80],
+        phrase=said.strip()[:80],
         text=text,
         retrievers_missing=missing,
     )
