@@ -1,7 +1,7 @@
 {
   "id": "list-my-reminders",
   "suite": "agent_quality",
-  "suite_version": 14,
+  "suite_version": 15,
   "message": "list my reminders",
   "contract": [
     {
