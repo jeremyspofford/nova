@@ -24,7 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import guards
+from app import agents, chat, guards
 from tests.s40_walk import B02A5694, B851AA91, T60834CCF
 
 HUB_8B = "hub:qwen3:8b"
@@ -458,3 +458,101 @@ def test_the_corrections_trip_no_guard_of_their_own(text):
     """The correction is APPENDED to what persists, so a text that tripped a
     guard would be corrected forever — this one included."""
     _all_guards_silent(text)
+
+
+# -- the prompt truth fix (verdict §3.3) ----------------------------------------
+
+
+def test_the_prompt_states_what_is_asked_for_not_what_answers():
+    """ "The model answering is {model}" stated the SETTING as the model that
+    answers, which is false on every fallback — and repeating it would earn her
+    a served_claim correction. The prompt now says what is true: which model
+    the turn asks for, and that routing decides which one answers."""
+    prompt = chat.stable_system_prompt("qwen3.8:27b", ("get_time",))
+    assert "The model answering is" not in prompt
+    assert (
+        "This turn asks the gateway for qwen3.8:27b; its routing decides which model "
+        "actually answers." in prompt
+    )
+    default = chat.stable_system_prompt("", ("get_time",))
+    assert (
+        "This turn asks the gateway for its default model; its routing decides which model "
+        "actually answers." in default
+    )
+
+
+def test_repeating_the_prompts_sentence_is_not_a_served_claim():
+    said = (
+        "This turn asks the gateway for qwen3.8:27b; its routing decides which model "
+        "actually answers."
+    )
+    assert guards.served_claim_check(said, SERVED, purpose="chat") is None
+
+
+# -- the redirect's vetting (verdict §3.3, _regen_rejected_by) ------------------
+
+
+def _vet(corrected: str, spans, kind: str = "chat") -> str | None:
+    """chat._regen_rejected_by over a stand-in turn: it reads the turn's spans
+    and kind and nothing else of it."""
+    turn = SimpleNamespace(spans=spans, kind=kind)
+    return chat._regen_rejected_by(
+        corrected,
+        turn,
+        None,
+        [],
+        "which model is answering?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+
+
+@pytest.mark.parametrize(
+    "regen,rejected_by",
+    [
+        ("The model is unreachable right now.", "stack_claim"),
+        ("I'm running on qwen3.8:27b.", "served_claim"),
+        ("No model was needed.", "served_claim"),
+        ("I can't reach the memory service right now.", "memory_claim"),
+    ],
+)
+def test_a_regeneration_that_repeats_a_served_or_memory_lie_is_refused(regen, rejected_by):
+    """The redirect's output REPLACES the durable record and is ingested, so it
+    clears the same bar the reply did — the three S40b/S19 claims included,
+    armed by the turn's own kind exactly as over the reply."""
+    assert _vet(regen, [_llm(), RECALLED]) == rejected_by
+
+
+@pytest.mark.parametrize(
+    "regen",
+    [
+        "The model is unreachable right now.",
+        "I'm running on qwen3.8:27b.",
+        "I can't reach the memory service right now.",
+    ],
+)
+def test_the_vetting_is_armed_by_the_turns_kind(regen):
+    spans = [_llm(purpose="scheduled"), RECALLED]
+    assert _vet(regen, spans, kind="scheduled") is None
+
+
+def test_an_honest_regeneration_passes_the_new_checks():
+    assert (
+        _vet("I'm running on qwen3:8b, and the memory service answered.", [_llm(), RECALLED])
+        is None
+    )
+
+
+def test_the_vetting_runs_the_new_checks_in_the_turns_order():
+    """Cheapest-first, in the order the turn runs them: after the capability
+    check, before the state check."""
+    import inspect
+
+    source = inspect.getsource(chat._regen_rejected_by)
+    assert (
+        source.index('"capability_claim"')
+        < source.index('"stack_claim"')
+        < source.index('"served_claim"')
+        < source.index('"memory_claim"')
+        < source.index('"state_claim"')
+    )

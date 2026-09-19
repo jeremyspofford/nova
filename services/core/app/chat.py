@@ -838,9 +838,14 @@ def stable_system_prompt(
     literal here: a rename of the tool moves this sentence with it instead
     of silently dropping it from every prompt.
     """
+    # S40b (verdict §3.3): this said "The model answering is {model}", which
+    # names the SETTING as the model that answers — false on every fallback,
+    # and a sentence guards.served_claim_check would correct her for
+    # repeating. What is true is what the turn asks for, and who decides.
     prompt = (
         "You are Nova, a self-hosted assistant running on this household's own hardware. "
-        f"The model answering is {model or 'the gateway default'}. Be direct and concrete, "
+        f"This turn asks the gateway for {model or 'its default model'}; its routing decides "
+        "which model actually answers. Be direct and concrete, "
         "and say plainly when you do not know something.\n\n"
         f"You can call these tools: {', '.join(tool_names)}. "
         "Use one when it gets a real answer instead of a guess. "
@@ -3365,6 +3370,23 @@ def _regen_rejected_by(
             "capability_claim",
             lambda: guards.capability_claim_check(corrected, persona.tool_names),
         ),
+        # The serving-state, served-model and memory-outage claims (S19, S40b),
+        # each armed by the turn's kind exactly as over the reply: a
+        # regeneration saying the model is down, naming a model that served
+        # nothing this turn, or calling an answering memory unreachable would
+        # be persisted and ingested with no correction beside it.
+        (
+            "stack_claim",
+            lambda: guards.stack_claim_check(corrected, turn.spans, purpose=_purpose_of(turn)),
+        ),
+        (
+            "served_claim",
+            lambda: guards.served_claim_check(corrected, turn.spans, purpose=_purpose_of(turn)),
+        ),
+        (
+            "memory_claim",
+            lambda: guards.memory_claim_check(corrected, turn.spans, purpose=_purpose_of(turn)),
+        ),
         (
             "state_claim",
             # The turn's kind arms the machine branch exactly as it was armed
@@ -4466,6 +4488,50 @@ async def _run_turn(
                 span.meta["served"] = True
             emit(_frame({"correction": stack_claim.text}))
 
+        # The SERVED-MODEL and MEMORY-OUTAGE claim guards (S40b), same raw
+        # reply, same fail-OPEN contract, armed in the same kinds as the
+        # serving-state guard above. The S40 walk: "qwen3.8:27b … Current
+        # model in use" in turns hub:qwen3:8b served, "No model was needed for
+        # this calculation." in a turn a model wrote, and "the memory service
+        # is currently unreachable" in turns whose recall it had just
+        # answered. The evidence is this turn's own record — the gateway's
+        # served-by stamp on its rounds, and its memory_recall span — never
+        # the requested model, which is the setting and not the fact.
+        #
+        # APPEND-class, both: the reply may carry real content beside the
+        # false line (60834ccf's arithmetic was right), so the correction
+        # follows the prose rather than replacing it — and the turn is kept
+        # out of memory, which is how the "no model" line reached his notes.
+        served_claim = None
+        try:
+            served_claim = guards.served_claim_check(text, turn.spans, purpose=_purpose_of(turn))
+        except Exception:
+            logger.exception("served-claim guard raised; shipping the reply uncorrected")
+            served_claim = None
+        if served_claim is not None:
+            with turn.span("guard", "served_claim") as span:
+                span.meta.update(
+                    shape=served_claim.shape,
+                    claimed=served_claim.claimed,
+                    served=list(served_claim.served),
+                    phrase=served_claim.phrase,
+                )
+            emit(_frame({"correction": served_claim.text}))
+        memory_claim = None
+        try:
+            memory_claim = guards.memory_claim_check(text, turn.spans, purpose=_purpose_of(turn))
+        except Exception:
+            logger.exception("memory-claim guard raised; shipping the reply uncorrected")
+            memory_claim = None
+        if memory_claim is not None:
+            with turn.span("guard", "memory_claim") as span:
+                span.meta.update(
+                    subject=memory_claim.subject,
+                    phrase=memory_claim.phrase,
+                    retrievers_missing=memory_claim.retrievers_missing,
+                )
+            emit(_frame({"correction": memory_claim.text}))
+
         # The LIVE-STATE claim guard, on the same raw reply, same fail-OPEN
         # contract. Derived from the live device registry (`device_names`, read
         # above): it fires only when the reply asserts a paired device's CURRENT
@@ -4704,6 +4770,11 @@ async def _run_turn(
             # that it had not) and is what the next turn reads.
             persisted = listing_text or ""
         elif replace_corrections:
+            # The APPEND-class corrections join the replacement in the order
+            # the guards ran (S40b: served_claim and memory_claim after the
+            # serving-state guard). The b02a5694 replay is the case: the state
+            # guard drops the replayed block, and what persists is the three
+            # corrections with no line of it between them.
             persisted = "\n\n".join(
                 c.text
                 for c in (
@@ -4713,17 +4784,20 @@ async def _run_turn(
                     capability_correction,
                     state_claim,
                     stack_claim,
+                    served_claim,
+                    memory_claim,
                     listing_replacement,
                 )
                 if c is not None
             )
-        elif correction is not None or delegation_claim is not None:
+        elif appended_corrections := [
+            c for c in (correction, delegation_claim, served_claim, memory_claim) if c is not None
+        ]:
             # The APPEND class: narration and its third-person mirror, the
-            # delegation claim (S12) — the prose stays, each correction
-            # follows it, once, in the order the guards ran.
-            persisted = "\n\n".join(
-                [text, *(c.text for c in (correction, delegation_claim) if c is not None)]
-            )
+            # delegation claim (S12), and the served-model and memory-outage
+            # claims (S40b) — the prose stays, each correction follows it,
+            # once, in the order the guards ran.
+            persisted = "\n\n".join([text, *(c.text for c in appended_corrections)])
         else:
             persisted = text
         # `text` carries the backend note, so the two branches above keep it by
@@ -4768,6 +4842,8 @@ async def _run_turn(
             or capability_correction is not None
             or state_claim is not None
             or stack_claim is not None
+            or served_claim is not None
+            or memory_claim is not None
             or listing_claim is not None
         )
 
@@ -5064,6 +5140,14 @@ async def _run_turn(
             # per-person — a stale outage as a current fact, which is the very
             # thing this guard exists to stop.
             or stack_claim is not None
+            # And the served-model and memory-outage claims (S40b), the same
+            # poison again: 60834ccf's "No model was needed for this
+            # calculation." is in his notes because nothing kept that turn
+            # out, and a recalled "the memory service is unreachable" would
+            # hand a later turn a stale outage as a current fact. There is no
+            # redirect for either, so a fired one keeps the turn plumbing.
+            or served_claim is not None
+            or memory_claim is not None
             # A presented listing nothing produced is the same noise again —
             # and the worst of it, because a recalled listing is exactly what
             # produced this one: ingesting it is how the next parrot gets its

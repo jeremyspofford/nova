@@ -515,6 +515,15 @@ HUB_CORRECTION = (
     "I said about it is not a current reading."
 )
 HUB_SERVED_CLAUSE = f" hub answered this turn: this reply came from {HUB}."
+# What b02a5694's other two false lines draw in a turn hub:qwen3:8b served and
+# the fake memory answered (S40b T2): the served-model and memory-outage
+# corrections, APPEND-class, in the order their guards run.
+REPLAY_APPENDED = [
+    f"Correction: this reply was written by {HUB} — the gateway recorded that for this "
+    "turn — not by qwen3.8:27b.",
+    "Correction: the memory service answered this turn — this turn's recall was read from "
+    "it — so it is not unreachable now.",
+]
 
 
 @dataclass
@@ -572,10 +581,15 @@ async def test_a_replayed_machine_reading_fires_and_the_redirect_reads_the_machi
     assert tool["meta"]["facts"][0]["machine"] == "hub"
 
     assert await _stored(pool) == answer
-    assert _corrections(sent) == [chat.MACHINE_REDIRECT_NOTE]
+    # S40b T2: b02a5694 carries the walk's other two false lines as well — a
+    # current model hub:qwen3:8b did not serve, and a memory outage in a turn
+    # whose recall answered. Their APPEND-class corrections stream as their
+    # guards run, before the state guard's redirect; the redirect that stood
+    # replaced the prose they were about, so the record is its reply alone.
+    assert _corrections(sent) == [*REPLAY_APPENDED, chat.MACHINE_REDIRECT_NOTE]
     spans = await _guard_spans(pool)
-    assert [s["name"] for s in spans] == ["state_claim"]
-    meta = spans[0]["meta"]
+    assert [s["name"] for s in spans] == ["served_claim", "memory_claim", "state_claim"]
+    meta = spans[-1]["meta"]
     assert meta["subject_kind"] == "machine"
     assert meta["machine"] == "hub"
     assert meta["evidence"] == "unchecked"
@@ -696,10 +710,12 @@ async def test_a_regen_that_says_plainly_it_did_not_check_ships(owner_client, po
 
     assert gateway.calls == 2  # the replay, and the one redirect
     assert await _stored(pool) == SAID_NOT_CHECKED
-    assert _corrections(sent) == [chat.MACHINE_REDIRECT_NOTE]
+    # S40b T2: the replay's served-model and memory-outage corrections stream
+    # first (see the replayed-reading test above).
+    assert _corrections(sent) == [*REPLAY_APPENDED, chat.MACHINE_REDIRECT_NOTE]
     spans = await _guard_spans(pool)
-    assert [s["name"] for s in spans] == ["state_claim"]
-    meta = spans[0]["meta"]
+    assert [s["name"] for s in spans] == ["served_claim", "memory_claim", "state_claim"]
+    meta = spans[-1]["meta"]
     assert meta["subject_kind"] == "machine"
     assert meta["redirected"] is True
     assert "regen_rejected_by" not in meta
