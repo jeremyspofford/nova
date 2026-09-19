@@ -304,20 +304,6 @@ def switched_off(row: dict) -> str | None:
     return None
 
 
-async def installed_sizes(
-    app, pool: asyncpg.Pool, engine: str = engines.BUILTIN
-) -> dict[str, int | None] | None:
-    """{tag -> download size in bytes} for what `engine` lists (the bundled
-    engine unless one is named), or None when it could not be asked — read
-    through engines.observe, whose per-engine cache holds a ready listing
-    30 s and a failure 10 s. admin._fit_context sizes models from it until
-    S40 T4 moves it onto engines directly."""
-    try:
-        return await engines.installed_sizes(app, pool, engine)
-    except engines.UnknownEngine:
-        return None
-
-
 def _installed(names: set[str] | None, model: str) -> bool | None:
     if names is None:
         return None
@@ -426,11 +412,13 @@ async def standby(
     tag in sorted order — would hand a chat turn to whichever embedder
     sorted first. On each engine: its default model if installed, else the
     best-fitting installed curated pick (curated order, first that is not
-    wont_fit), else its first installed chat model."""
+    wont_fit), else its first installed chat model. A curated pick's fit is
+    THIS engine's (`fit_context(app, pool, row)`), read by the compute its
+    card has now (S40 ruling C13)."""
     curated = curated_mod.load_curated()
-    ctx: dict | None = None
-    probes: dict = {}
     for row in candidates:
+        ctx: dict | None = None
+        probes: dict = {}
         if switched_off(row) is not None:
             continue
         name = row["name"]
@@ -450,8 +438,10 @@ async def standby(
             if ctx is None:
                 # Asked only when a curated pick is installed: the card is read
                 # when a fit verdict is needed, never on the way past.
-                ctx = await fit_context(app, pool)
-                probes = await latest_probes(pool, [e["slug"] for e in curated])
+                ctx = await fit_context(app, pool, row)
+                probes = await latest_probes(
+                    pool, [e["slug"] for e in curated], compute=ctx["compute"]
+                )
             needed_gb, source = fit_mod.needed_gb_for(entry, probes.get(slug))
             verdict = fit_mod.compute_fit(
                 needed_gb, ctx["free_gb"], ctx["total_gb"], source=source, reason=ctx["reason"]

@@ -24,8 +24,10 @@ from app import (
     adapters,
     backends,
     catalog,
+    compute_id,
     db,
     devices_vram,
+    engines,
     hf_hub,
     machine,
     ollama_registry,
@@ -107,41 +109,30 @@ async def hardware() -> dict:
     return data
 
 
-async def _resident_models(app, base_url: str) -> tuple[list[dict] | None, str | None]:
-    """(every model ollama's /api/ps reports resident, reason-if-unreadable).
+async def _resident_models(app, row: dict) -> tuple[list[dict] | None, str | None]:
+    """(every model THIS ENGINE's /api/ps reports resident, reason-if-unreadable).
 
-    Each entry is `{"model": name, "vram_mb": float}` — a per-model TABLE,
-    not a pre-summed total, because two callers need the rows themselves:
-    `fit.free_gb_after_switch` adds back what a switch would evict, and
-    `_footprint_vram_mb` picks out the ONE model that just answered. It is
+    Each entry is `{"model", "vram_mb", "size", "size_vram"}` — a per-model
+    TABLE, not a pre-summed total, because two callers need the rows
+    themselves: `fit.free_gb_after_switch` adds back what a switch would
+    evict, and `_footprint` picks out the ONE model that just answered. It is
     also the only per-model VRAM figure on this host that can be attributed
     to anything: the card's own counter sees every process and, under WSL2,
     can name none of them.
+
+    S40: read from the ENGINE's own address, so sizing or probing `dell:x`
+    never reads the hub's /api/ps, and through the one /api/ps reader
+    (engines.resident, ruling C2), whose entries keep ollama's own `size` /
+    `size_vram` — the two numbers the D10 stamp decides offload from.
     """
-    client = backends.http_client(app, PS_TIMEOUT, base_url=base_url)
-    try:
-        async with client as c:
-            resp = await c.get("/api/ps")
-            resp.raise_for_status()
-    except httpx.HTTPError as exc:
-        return None, f"could not reach ollama's /api/ps — {backends.reason(exc)}"
-    resident = []
-    for entry in resp.json().get("models", []):
-        size_vram = entry.get("size_vram")
-        if size_vram is not None:
-            resident.append(
-                {
-                    "model": entry.get("name") or entry.get("model"),
-                    "vram_mb": size_vram / (1024 * 1024),
-                }
-            )
-    return resident, None
+    return await engines.resident(app, row)
 
 
 async def _free_and_total_vram_gb(
-    app, config: dict
-) -> tuple[float | None, float | None, str | None]:
-    """(free_gb, total_gb, reason-if-free-is-unknown) — read from the card.
+    app, row: dict
+) -> tuple[float | None, float | None, str | None, devices_vram.Vram]:
+    """(free_gb, total_gb, reason-if-free-is-unknown, the card reading) for
+    ONE engine — read from the card.
 
     Both numbers come from ONE live `nvidia-smi` call (app/devices_vram.py)
     at the moment of the question. Not hardware.json: that file is written
@@ -162,73 +153,33 @@ async def _free_and_total_vram_gb(
     Note the asymmetry, and that it is deliberate: `total_gb` survives every
     degrade below, because the card's capacity is known the moment
     nvidia-smi answers and does not depend on ollama at all.
+
+    S40: the question is about an ENGINE, not about whichever provider is
+    the default — a cloud default no longer hides the hub's card (before
+    S40 this answered "the active backend is remote … free VRAM isn't
+    observable" while the bundled engine sat holding 17 GB). The hub reads
+    exactly one card, its own: another machine's is on that machine, and
+    reading this one for it would describe the hub's GPU as that machine's
+    (engines.NOT_THIS_CARD) — a stated unknown until its agent reports it
+    (S44). (GET /admin/vram, which answered the same question for "the
+    active backend", was deleted in S40; its card lives on GET
+    /admin/engines/{name}.)
     """
+    if not row.get("builtin"):
+        vram = devices_vram.Vram(reason=engines.NOT_THIS_CARD.format(name=row["name"]))
+        return None, None, vram.reason, vram
     vram = await devices_vram.read_vram()
     if not vram.known:
-        return None, None, vram.reason or "the GPU could not be read"
+        return None, None, vram.reason or "the GPU could not be read", vram
     total_gb = vram.total_mb / 1024
-    if config["kind"] != "ollama":
-        return (
-            None,
-            total_gb,
-            (
-                f"the active backend is {config['kind']}, not local ollama — "
-                "free VRAM isn't observable"
-            ),
-        )
-    base_url = backends.resolve_base_url(config)
-    if not base_url:
-        return None, total_gb, "OLLAMA_URL is unset — cannot read what's resident"
-    resident, reason = await _resident_models(app, base_url)
+    resident, reason = await _resident_models(app, row)
     if resident is None:
-        return None, total_gb, reason
-    return fit_mod.free_gb_after_switch(vram.free_mb, resident), total_gb, None
+        return None, total_gb, reason, vram
+    return fit_mod.free_gb_after_switch(vram.free_mb, resident), total_gb, None, vram
 
 
-@router.get("/vram")
-async def vram_route(request: Request) -> dict:
-    """The card right now, plus what ollama is holding on it.
-
-    One route so everything that asks gets the SAME instant: core's
-    `inference_health` tool, the `inference_degraded` beat check, and
-    anything an operator curls. Both halves degrade independently and each
-    carries its own reason — the card can be readable while ollama is down,
-    and `free_after_switch_gb` is simply absent when it is, because a
-    number that needs the resident table cannot be invented without it.
-
-    Nothing here decides anything. It reports (owner ruling 2026-09-03).
-    """
-    vram = await devices_vram.read_vram()
-    out: dict = vram.as_dict()
-    out["total_gb"] = round(vram.total_mb / 1024, 1) if vram.total_mb is not None else None
-    out["free_gb"] = round(vram.free_mb / 1024, 1) if vram.free_mb is not None else None
-    out["used_gb"] = round(vram.used_mb / 1024, 1) if vram.used_mb is not None else None
-
-    pool = await db.get_pool()
-    config = await backends.read_config(pool)
-    base_url = backends.resolve_base_url(config) if config["kind"] == "ollama" else None
-    if not base_url:
-        out["resident"] = None
-        out["resident_reason"] = (
-            f"the active backend is {config['kind']}, not local ollama"
-            if config["kind"] != "ollama"
-            else "OLLAMA_URL is unset"
-        )
-        out["free_after_switch_gb"] = None
-        return out
-    resident, reason = await _resident_models(request.app, base_url)
-    out["resident"] = resident
-    out["resident_reason"] = reason
-    out["free_after_switch_gb"] = (
-        round(fit_mod.free_gb_after_switch(vram.free_mb, resident), 1)
-        if resident is not None and vram.free_mb is not None
-        else None
-    )
-    return out
-
-
-async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
-    """The newest OK probe row per slug, IN THE CURRENT FRAME.
+async def _latest_probes(pool, slugs: list[str], *, compute: str | None) -> dict[str, dict]:
+    """The newest OK probe row per slug, IN THE CURRENT FRAME, TAKEN ON `compute`.
 
     A failed probe (ok=false) never counts as a measurement, and an older
     successful one loses to a newer one for the same model.
@@ -243,37 +194,58 @@ async def _latest_probes(pool, slugs: list[str]) -> dict[str, dict]:
     frame falls back to its download size or the curated estimate until it
     is re-probed, which is the honest answer: nobody has measured it the way
     we now measure.
+
+    `compute = $2` is S40's (D10: fit is keyed by (compute, model)). A reading
+    belongs to the card that held it: one from another card, or from before
+    migration 009 with no compute at all, is not a measurement of THIS
+    engine's card and is never read — the model falls back to its download
+    size or the curated estimate until it is re-probed, exactly as 008 did.
+    A partly-offloaded probe is stamped `cpu:…+gpu:…` and so never matches a
+    card either: its size_vram understates what the model needs. `compute`
+    None (a card that cannot be named) reads nothing — omitted, never guessed.
     """
-    if not slugs:
+    if not slugs or compute is None:
         return {}
     rows = await pool.fetch(
         "SELECT DISTINCT ON (model) model, vram_mb, created_at FROM probes "
-        "WHERE model = ANY($1) AND ok = true AND vram_mb IS NOT NULL "
-        "AND kind = 'ollama' AND frame = 'model' "
+        "WHERE model = ANY($1) AND compute = $2 AND ok = true AND vram_mb IS NOT NULL "
+        "AND frame = 'model' "
         "ORDER BY model, created_at DESC",
         slugs,
+        compute,
     )
     return {row["model"]: dict(row) for row in rows}
 
 
-async def _fit_context(app, pool) -> dict:
-    """The numbers every fit verdict is computed against — read ONCE per
-    request and shared by /admin/suggest and the catalogue, so the two can
-    never disagree about the same card, or about how big a model is.
+async def _fit_context(app, pool, row: dict | None = None) -> dict:
+    """The numbers every fit verdict for ONE engine is computed against —
+    read once per request and shared by /admin/suggest, the catalogue and
+    the routing standby, so no two surfaces disagree about the same card or
+    about how big a model is.
 
-    `sizes` is the installed models' own download bytes from ollama's
-    /api/tags (cached TAGS_TTL_S). It sits here rather than being read
-    per-surface for exactly the reason the card does: two pages that size
-    the same model differently are two pages one of which is wrong.
+    `row` is the engine; None means the builtin (what /admin/suggest asks
+    about). `compute` is the D10 id a model fully resident on this engine is
+    stamped with — the key `_latest_probes` reads by — and `sizes` is this
+    engine's installed download bytes from its /api/tags. Both come from ONE
+    engines.observe (cached as observe caches, ruling C4), so the fit key is
+    the same fact GET /admin/engines states. `fit_frame` says which memory
+    the verdicts are about (engines.fit_frame): None for a machine whose
+    card this hub cannot read. S40 computes verdicts in the `vram` frame
+    only; a `ram` frame's verdicts stay `unknown` with the card's own reason
+    until a CPU engine exists to walk it (S44/S45).
     """
-    config = await backends.read_config(pool)
-    free_gb, total_gb, reason = await _free_and_total_vram_gb(app, config)
-    sizes = await routing.installed_sizes(app, pool)
+    if row is None:
+        row = await engines.get(pool, engines.BUILTIN)
+    view = await engines.observe(app, pool, row, live=False)
+    free_gb, total_gb, reason, vram = await _free_and_total_vram_gb(app, row)
     return {
+        "engine": row["name"],
+        "compute": view.compute,
+        "fit_frame": engines.fit_frame(row, vram.as_dict() if row.get("builtin") else None),
         "free_gb": free_gb,
         "total_gb": total_gb,
         "reason": reason,
-        "sizes": sizes or {},
+        "sizes": view.tags or {},
     }
 
 
@@ -289,7 +261,9 @@ async def suggest_route(request: Request) -> dict:
     data, _note = _read_hardware()
     result = suggest_mod.suggest(data, curated_mod.load_curated(), ctx["total_gb"])
 
-    probes_by_model = await _latest_probes(pool, [m["slug"] for m in result["models"]])
+    probes_by_model = await _latest_probes(
+        pool, [m["slug"] for m in result["models"]], compute=ctx["compute"]
+    )
 
     for model in result["models"]:
         needed_gb, source = fit_mod.needed_gb_for(
@@ -462,9 +436,13 @@ async def pull(request: Request) -> Response:
             _PULLS_IN_FLIGHT.pop(key, None)
 
 
-async def _footprint_vram_mb(app, base_url: str, model: str) -> int | None:
-    """The just-loaded model's own VRAM, in MiB: ollama's `/api/ps`
-    `size_vram` for the model that just answered.
+async def _footprint(app, row: dict, model: str) -> dict | None:
+    """The just-answered model's own /api/ps entry on THIS engine:
+    `{"vram_mb": int | None, "size", "size_vram"}` — one reading, so the
+    VRAM figure and the D10 stamp (compute_id.served_on, which decides
+    offload from exactly `size` and `size_vram`) describe the same instant.
+    `vram_mb` is ollama's `size_vram` for the model that just answered, in
+    MiB.
 
     THE FRAME (S22, see app/fit.py): `needed_gb` is what the MODEL costs —
     weights plus its KV cache at the serving context — never the machine's
@@ -485,17 +463,26 @@ async def _footprint_vram_mb(app, base_url: str, model: str) -> int | None:
     what /api/ps names, regardless of what was loaded before it. A model
     that is not in the table (evicted between the answer and this read, or
     an engine that reports no size_vram) is None — unknown, never zero.
+
+    S40: read from THIS engine's /api/ps (the one reader, engines.resident),
+    never the default provider's address — probing hub:x while a cloud
+    provider is the default is still a question about the hub, and probing
+    dell:x never reads the hub's table. A non-positive size_vram is not a
+    VRAM measurement (vram_mb None) but IS the fact the stamp reads: the
+    model is wholly in system memory.
     """
-    resident, _reason = await _resident_models(app, base_url)
-    if not resident:
-        return None
-    for entry in resident:
+    resident, _reason = await _resident_models(app, row)
+    for entry in resident or []:
         if entry.get("model") == model:
             vram_mb = entry.get("vram_mb")
             # A resident model always occupies SOME VRAM; a non-positive
             # figure means the engine's own accounting is unreliable right
             # now, which is not a measurement.
-            return int(vram_mb) if vram_mb and vram_mb > 0 else None
+            return {
+                "vram_mb": int(vram_mb) if vram_mb and vram_mb > 0 else None,
+                "size": entry.get("size"),
+                "size_vram": entry.get("size_vram"),
+            }
     return None
 
 
@@ -509,6 +496,16 @@ async def probe(request: Request) -> dict:
     pool = await db.get_pool()
     row, target_model = await providers.resolve(pool, model)
     kind = backends.kind_of(row)
+    on_engine = engines.is_engine(row)
+    # Where the call ran, on the row (D10). The engine's name always. The
+    # bundled engine is by definition the container on the compose network
+    # (D8/D9), so its runtime and path are known; another machine's arrive
+    # with its agent (S44) — absent until then, never guessed. A cloud call
+    # ran on no device of this host: all three stay None.
+    bundled = on_engine and bool(row.get("builtin"))
+    runtime = engines.BUILTIN_RUNTIME if bundled else None
+    path = "internal" if bundled else None
+    compute: str | None = None
 
     ok = True
     error: str | None = None
@@ -548,13 +545,22 @@ async def probe(request: Request) -> dict:
             # but not with a completion.
             ok = False
             error = content.decode(errors="replace")[:400]
-        elif kind == "ollama":
-            # Only meaningful for a local ollama model — a remote/cloud
-            # backend consumes no VRAM on this host at all. Read AFTER the
-            # request answers, so the model is certainly resident.
-            base_url = backends.resolve_base_url(await backends.read_config(pool))
-            if base_url:
-                vram_mb = await _footprint_vram_mb(request.app, base_url, target_model)
+        elif on_engine:
+            # Only meaningful for an engine — a remote/cloud backend consumes
+            # no VRAM on any machine here. Read AFTER the request answers, so
+            # the model is certainly resident, from THIS engine's /api/ps —
+            # never the default provider's address.
+            footprint = await _footprint(request.app, row, target_model)
+            if footprint is not None:
+                vram_mb = footprint["vram_mb"]
+                if bundled:
+                    # The hub's devices, read now (the one live reader,
+                    # engines.bundled_devices, ruling C1); another machine's
+                    # devices are its agent's to state (S44).
+                    accelerators, cpu = await engines.bundled_devices()
+                    compute = compute_id.served_on(
+                        footprint["size"], footprint["size_vram"], accelerators, cpu
+                    )
     except adapters.ProviderRefused as exc:
         ok = False
         error = exc.detail
@@ -574,17 +580,26 @@ async def probe(request: Request) -> dict:
         started=started,
         purpose="probe",
         error=error,
+        served_on=compute,
     )
+    # The row carries where it ran (D10): fit reads a reading only by the
+    # compute it was taken on (_latest_probes), and the row is read back
+    # (RETURNING), so the answer is what was stored, never what was meant.
     row_out = await pool.fetchrow(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
-        "VALUES ($1, $2, $3, $4, $5, $6) "
-        "RETURNING id, model, kind, ok, latency_ms, vram_mb, error, created_at",
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, provider, compute, "
+        "runtime, path) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
+        "RETURNING id, model, kind, ok, latency_ms, vram_mb, error, provider, compute, "
+        "runtime, path, created_at",
         target_model,
         kind,
         ok,
         latency_ms,
         vram_mb,
         error,
+        row["name"],
+        compute,
+        runtime,
+        path,
     )
     return dict(row_out)
 

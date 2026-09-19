@@ -354,7 +354,7 @@ async def build(
             shown = _show_timed_out(names)
             note = f"/api/show did not answer within {SHOW_DEADLINE_S:g} s — /api/tags facts only"
         probe_blocks = await _probes_by_model(pool, names)
-        fit_probes = await latest_probes(pool, names)
+        fit_probes = await latest_probes(pool, names, compute=fit_ctx["compute"])
         local_rows = [
             local_row(
                 tags_row,
@@ -403,7 +403,9 @@ async def build(
     rows.extend(local_rows)
 
     library = [entry for entry in curated if entry["slug"] not in installed_tags]
-    fit_probes = await latest_probes(pool, [entry["slug"] for entry in library])
+    fit_probes = await latest_probes(
+        pool, [entry["slug"] for entry in library], compute=fit_ctx["compute"]
+    )
     for entry in library:
         rows.append(library_row(entry, fit_ctx, fit_probes.get(entry["slug"])))
     sources.append(

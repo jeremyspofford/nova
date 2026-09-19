@@ -143,6 +143,25 @@ def fresh_upstream_caches():
     _clear()
 
 
+@pytest.fixture
+async def second_engine(pool, mount_backend):
+    """A second machine that runs models, `dell`, as ROWS ONLY. S40 builds no
+    way to link one (S44 does); these rows are how every per-engine site
+    proves it is not the builtin under another name. Its ollama is a fake at
+    http://dell.test listing the 27B."""
+    from tests.fakes import FakeOllama
+
+    fake = FakeOllama(tags=("qwen3.8:27b",))
+    mount_backend("http://dell.test", fake.app)
+    await pool.execute(
+        "INSERT INTO providers (name, adapter, base_url, auth_shape, api_key, builtin, local, "
+        "is_default) VALUES ('dell', 'ollama', 'http://dell.test', 'static-bearer', "
+        "'dell-token', false, true, false)"
+    )
+    await pool.execute("INSERT INTO engines (provider) VALUES ('dell') ON CONFLICT DO NOTHING")
+    return fake
+
+
 @pytest.fixture(autouse=True)
 def no_devices_under_the_desk(request, monkeypatch, tmp_path):
     """No test reads the hardware under the desk (S40, ruling E10): a test

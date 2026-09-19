@@ -572,8 +572,11 @@ async def record_probe(
     started: float,
     purpose: str,
     error: str | None = None,
+    served_on: str | None = None,
 ) -> None:
-    """A buffered probe (a key check, an admin probe) as a ledger row."""
+    """A buffered probe (a key check, an admin probe) as a ledger row.
+    `served_on` is where an admin probe ran (D10), None when unknown or a
+    cloud call."""
     captured = Captured()
     try:
         parsed = json.loads(body) if body else None
@@ -592,6 +595,7 @@ async def record_probe(
         status=status,
         captured=captured,
         error=error or captured.error,
+        served_on=served_on,
     )
     if event.kind == "probe":
         event.cost_usd, event.cost_basis = await price_call(pool, row, model, captured)

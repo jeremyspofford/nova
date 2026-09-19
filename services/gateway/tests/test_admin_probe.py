@@ -25,9 +25,10 @@ was loaded a moment earlier.
 
 from __future__ import annotations
 
-from app import admin, backends
+from app import admin, backends, compute_id, devices_vram, engines
 from tests.conftest import requires_db
 from tests.fakes import FakeOllama, FakeOpenAICompat
+from tests.test_admin_suggest_fit import CARD_UUID, COMPUTE, IDLE_FREE_MB, _card, _fit_for
 
 pytestmark = requires_db
 
@@ -147,11 +148,13 @@ async def test_probe_against_a_remote_backend_never_reads_this_hosts_gpu(
     probe must never even attempt a footprint read."""
     calls: list[int] = []
 
-    async def _spy(app, base_url, model):
+    # S40: one /api/ps read yields both the VRAM figure and the D10 stamp's
+    # size/size_vram, so the seam is `_footprint(app, engine_row, model)`.
+    async def _spy(app, row, model):
         calls.append(1)
-        return 1234
+        return {"vram_mb": 1234, "size": None, "size_vram": None}
 
-    monkeypatch.setattr(admin, "_footprint_vram_mb", _spy)
+    monkeypatch.setattr(admin, "_footprint", _spy)
     fake = FakeOpenAICompat()
     mount_backend("http://remote.test", fake.app)
     await backends.save_config(pool, {"kind": "remote", "url": "http://remote.test"})
@@ -216,3 +219,181 @@ async def test_probe_against_a_remote_backend_has_no_vram_reading(client, pool, 
     body = resp.json()
     assert body["ok"] is True
     assert body["vram_mb"] is None
+
+
+GIB = 1024**3
+# A CPU the D10 grammar accepts, for the stamps that need one.
+CPU = "cpu:amd-ryzen-9-5950x|32c|64g"
+
+
+def _bundled(monkeypatch, accelerators, cpu):
+    async def _devices():
+        return accelerators, cpu
+
+    monkeypatch.setattr(engines, "bundled_devices", _devices)
+
+
+async def _hub_probe(client, pool, monkeypatch, mount_backend, ps_models):
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(probe_model_name="qwen3:8b", ps_models=ps_models)
+    mount_backend("http://ollama.test", fake.app)
+    await backends.save_config(pool, {"kind": "ollama"})
+    resp = await client.post("/admin/probe", json={"model": "hub:qwen3:8b"})
+    assert resp.status_code == 200, resp.text
+    return resp.json(), fake
+
+
+async def test_a_probe_row_says_where_it_ran(client, pool, monkeypatch, mount_backend):
+    """The DoD's own row (D10): provider hub, compute the card's CUDA uuid,
+    runtime container, path internal. The 8B sits wholly on the card
+    (size_vram == size), so the stamp is that one device and nothing else —
+    and the probe's ledger row carries the same served_on."""
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
+    full = [{"name": "qwen3:8b", "size": 9_970_000_000, "size_vram": 9_970_000_000}]
+
+    body, _fake = await _hub_probe(client, pool, monkeypatch, mount_backend, full)
+
+    assert body["ok"] is True
+    expected = {
+        "provider": "hub",
+        "compute": f"gpu:cuda:{CARD_UUID}",
+        "runtime": "container",
+        "path": "internal",
+    }
+    assert {k: body[k] for k in expected} == expected
+    stored = await pool.fetchrow(
+        "SELECT provider, compute, runtime, path FROM probes WHERE id = $1", body["id"]
+    )
+    assert dict(stored) == expected
+    ledger = await pool.fetchval("SELECT served_on FROM usage_events WHERE purpose = 'probe'")
+    assert ledger == f"gpu:cuda:{CARD_UUID}"
+
+
+async def test_a_probe_taken_now_is_what_fit_reads(client, pool, monkeypatch, mount_backend):
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
+    full = [{"name": "qwen3:8b", "size": 9_970_000_000, "size_vram": 9_970_000_000}]
+    await _hub_probe(client, pool, monkeypatch, mount_backend, full)
+
+    fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3:8b")
+
+    assert fit["source"] == "verified" and fit["needed_gb"] == 9.3
+
+
+async def test_a_model_partly_in_system_memory_is_stamped_with_both_and_fit_skips_it(
+    client, pool, monkeypatch, mount_backend
+):
+    """size_vram < size: part of the model runs on the CPU. The stamp names
+    both devices, sorted (D10), and fit does not read it — its size_vram
+    understates what the model needs on this card."""
+    compute_id.parse(CPU)  # the fixture itself obeys the grammar
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
+    _bundled(monkeypatch, [COMPUTE], CPU)
+    partial = [{"name": "qwen3:8b", "size": 10 * GIB, "size_vram": 6 * GIB}]
+
+    body, _fake = await _hub_probe(client, pool, monkeypatch, mount_backend, partial)
+
+    assert body["compute"] == f"{CPU}+{COMPUTE}"
+    assert body["vram_mb"] == 6 * 1024
+    fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3:8b")
+    assert fit["source"] == "estimated"
+
+
+async def test_a_model_wholly_on_the_cpu_is_stamped_with_the_cpu(
+    client, pool, monkeypatch, mount_backend
+):
+    _bundled(monkeypatch, [COMPUTE], CPU)
+    cpu_only = [{"name": "qwen3:8b", "size": 5 * GIB, "size_vram": 0}]
+
+    body, _fake = await _hub_probe(client, pool, monkeypatch, mount_backend, cpu_only)
+
+    assert body["compute"] == CPU and body["vram_mb"] is None
+
+
+async def test_a_model_not_resident_leaves_compute_unstated(
+    client, pool, monkeypatch, mount_backend
+):
+    _bundled(monkeypatch, [COMPUTE], CPU)
+
+    body, _fake = await _hub_probe(client, pool, monkeypatch, mount_backend, [])
+
+    assert body["compute"] is None
+    assert (body["provider"], body["runtime"], body["path"]) == ("hub", "container", "internal")
+
+
+async def test_probing_the_hub_reads_its_own_ps_whatever_the_default(
+    client, pool, monkeypatch, mount_backend
+):
+    """Before S40 the footprint was read at the DEFAULT backend's address, so
+    with a cloud default a hub probe asked the cloud for /api/ps and stored no
+    reading. A probe of hub:x is a question about the hub."""
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    fake = FakeOllama(
+        probe_model_name="qwen3:8b",
+        ps_models=[{"name": "qwen3:8b", "size": 9_970_000_000, "size_vram": 9_970_000_000}],
+    )
+    mount_backend("http://ollama.test", fake.app)
+    await backends.save_config(pool, {"kind": "remote", "url": "http://remote.test"})
+
+    body = (await client.post("/admin/probe", json={"model": "hub:qwen3:8b"})).json()
+
+    assert body["vram_mb"] == int(9_970_000_000 / (1024 * 1024))
+    assert ("/api/ps", None) in fake.seen
+
+
+async def test_a_cloud_probe_names_its_provider_and_nothing_it_cannot_know(
+    client, pool, monkeypatch, mount_backend
+):
+    reads: list[int] = []
+
+    async def _spy():
+        reads.append(1)
+        return [], None
+
+    monkeypatch.setattr(engines, "bundled_devices", _spy)
+    mount_backend("http://remote.test", FakeOpenAICompat().app)
+    await backends.save_config(pool, {"kind": "remote", "url": "http://remote.test"})
+
+    body = (await client.post("/admin/probe", json={"model": "some-model"})).json()
+
+    assert (body["provider"], body["compute"], body["runtime"], body["path"]) == (
+        "remote",
+        None,
+        None,
+        None,
+    )
+    assert reads == [], "a cloud call ran on no device of this host"
+
+
+async def test_a_probe_on_another_machine_never_reads_this_hubs_card(
+    client, pool, monkeypatch, second_engine
+):
+    """dell's reading comes from dell's own /api/ps. Its compute and runtime
+    come from its agent (S44): absent here, never the hub's card."""
+    reads: list[int] = []
+
+    async def _read():
+        reads.append(1)
+        return devices_vram.Vram(
+            total_mb=24576.0,
+            used_mb=0.0,
+            free_mb=24576.0,
+            uuid=CARD_UUID,
+            uuids=(CARD_UUID,),
+            cards=1,
+        )
+
+    monkeypatch.setattr(devices_vram, "read_vram", _read)
+    second_engine.probe_model_name = "qwen3.8:27b"
+    second_engine.ps_models = [{"name": "qwen3.8:27b", "size": 17 * GIB, "size_vram": 17 * GIB}]
+
+    body = (await client.post("/admin/probe", json={"model": "dell:qwen3.8:27b"})).json()
+
+    assert body["ok"] is True and body["vram_mb"] == 17 * 1024
+    assert (body["provider"], body["compute"], body["runtime"], body["path"]) == (
+        "dell",
+        None,
+        None,
+        None,
+    )
+    assert reads == []

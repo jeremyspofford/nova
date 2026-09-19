@@ -16,7 +16,7 @@ from app import admin, catalog, hf_hub, ollama_registry
 from app import curated as curated_mod
 from tests.conftest import requires_db
 from tests.fakes import FakeHFHub, FakeOllama, FakeOllamaRegistry, FakeOpenAICompat
-from tests.test_admin_suggest_fit import IDLE_FREE_MB, _card
+from tests.test_admin_suggest_fit import COMPUTE, IDLE_FREE_MB, _card
 from tests.test_hf_hub import SIBLINGS
 from tests.test_ollama_registry import CONFIG, CONFIG_DIGEST, MANIFEST, TOTAL
 
@@ -154,15 +154,20 @@ async def test_fit_agrees_with_admin_suggest_for_the_same_slug(
 ):
     """Not vacuous: a real card, an older probe WITH a VRAM reading and a
     newer OK probe WITHOUT one. Fit must read the reading (suggest's
-    query) while the row's probe block reports the newest probe."""
+    query) while the row's probe block reports the newest probe. Both are
+    stamped with the engine and the card they ran on (S40: fit is keyed by
+    (compute, model), the probe block by the engine)."""
     _card(monkeypatch, 24576, IDLE_FREE_MB)
     await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, created_at) "
-        "VALUES ('qwen3:8b', 'ollama', true, 100, 9508, NULL, now() - interval '1 day')"
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, created_at, provider, "
+        "compute) VALUES ('qwen3:8b', 'ollama', true, 100, 9508, NULL, "
+        "now() - interval '1 day', 'hub', $1)",
+        COMPUTE,
     )
     await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, created_at) "
-        "VALUES ('qwen3:8b', 'ollama', true, 500, NULL, NULL, now())"
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, created_at, provider, "
+        "compute) VALUES ('qwen3:8b', 'ollama', true, 500, NULL, NULL, now(), 'hub', $1)",
+        COMPUTE,
     )
     suggest = (await client.get("/admin/suggest")).json()
     cat = _rows_by_id((await client.get("/admin/catalog")).json())
@@ -190,10 +195,14 @@ async def test_another_backends_probe_of_the_same_tag_is_not_this_rows(client, l
     assert row["fit"]["source"] != "verified"
 
 
-async def test_a_probe_surfaces_as_a_measured_fact(client, local, pool):
+async def test_a_probe_surfaces_as_a_measured_fact(client, local, pool, monkeypatch):
+    # S40: a reading is the card's it was taken on — the card is faked and
+    # the row stamped with it (fit is keyed by (compute, model)).
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
     await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
-        "VALUES ('qwen3:8b', 'ollama', true, 812, 9318, NULL)"
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, provider, compute) "
+        "VALUES ('qwen3:8b', 'ollama', true, 812, 9318, NULL, 'hub', $1)",
+        COMPUTE,
     )
     row = _rows_by_id((await client.get("/admin/catalog")).json())["ollama:qwen3:8b"]
     assert row["probe"]["latency_ms"] == 812 and row["probe"]["vram_mb"] == 9318

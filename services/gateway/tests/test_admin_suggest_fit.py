@@ -13,7 +13,7 @@ hardware under the desk is not measuring the code.
 
 from __future__ import annotations
 
-from app import backends, devices_vram
+from app import backends, compute_id, devices_vram
 from app import curated as curated_mod
 from tests.conftest import requires_db
 from tests.fakes import FakeOllama
@@ -24,15 +24,59 @@ pytestmark = requires_db
 # In the S22 frame it lives ONLY on the free side — the driver has already
 # subtracted it — so a 24GB card idles at ~21.4GB free.
 IDLE_FREE_MB = 21914.0
+# The card every test here fakes, by the id nvidia-smi gives it. S40 keys fit
+# by (compute, model) (D10): a probe row is read for a model only when it was
+# taken on THIS card, and the CUDA uuid is how the card is named.
+CARD_UUID = "GPU-8a1c2f3e-5b6d-4c7e-9f80-1a2b3c4d5e6f"
+COMPUTE = compute_id.gpu_cuda(CARD_UUID)
 
 
-def _card(monkeypatch, total_mb: float, free_mb: float) -> None:
-    """Fake the one live nvidia-smi read the whole fit path now shares."""
+def _card(monkeypatch, total_mb: float, free_mb: float, uuid: str | None = CARD_UUID) -> None:
+    """Fake the one live nvidia-smi read the whole fit path now shares: one
+    card, named by its uuid when it printed one (S40 ruling E2: `uuids` and
+    `cards` are what compute_id.bundled_accelerators names the card from)."""
 
     async def _read():
-        return devices_vram.Vram(total_mb=total_mb, used_mb=total_mb - free_mb, free_mb=free_mb)
+        return devices_vram.Vram(
+            total_mb=total_mb,
+            used_mb=total_mb - free_mb,
+            free_mb=free_mb,
+            uuid=uuid,
+            name="NVIDIA GeForce RTX 3090",
+            uuids=(uuid,) if uuid else (),
+            cards=1,
+        )
 
     monkeypatch.setattr(devices_vram, "read_vram", _read)
+
+
+async def _insert_probe(
+    pool,
+    model: str,
+    vram_mb: int | None,
+    *,
+    ok: bool = True,
+    error: str | None = None,
+    age_days: int = 0,
+    frame: str = "model",
+    provider: str | None = "hub",
+    compute: str | None = COMPUTE,
+) -> None:
+    """A probes row as POST /admin/probe writes it since S40: stamped with the
+    engine it ran on and the card that held it."""
+    await pool.execute(
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, frame, provider, "
+        "compute, created_at) VALUES ($1, 'ollama', $2, 100, $3, $4, $5, $6, $7, "
+        "now() - make_interval(days => $8))",
+        model,
+        ok,
+        vram_mb,
+        error,
+        frame,
+        provider,
+        compute,
+        age_days,
+    )
 
 
 def _no_card(monkeypatch, reason: str) -> None:
@@ -130,10 +174,7 @@ async def test_a_model_bigger_than_the_whole_card_still_wont_fit_even_after_evic
     mount_backend("http://ollama.test", fake.app)
     await backends.save_config(pool, {"kind": "ollama"})
     # A hypothetical 30GB model — bigger than the 24GB card has, period.
-    await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
-        "VALUES ('huge:70b', 'ollama', true, 100, 30720, NULL)"
-    )
+    await _insert_probe(pool, "huge:70b", 30720)
     curated = curated_mod.load_curated() + [
         {
             "slug": "huge:70b",
@@ -169,10 +210,7 @@ async def test_a_probe_row_is_preferred_over_the_curated_estimate(
     await backends.save_config(pool, {"kind": "ollama"})
     # A real probe of qwen3:8b measured 9508 MiB (the S2 measurement's own
     # figure) — this must win over the curated catalog's 10GB estimate.
-    await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
-        "VALUES ('qwen3:8b', 'ollama', true, 100, 9508, NULL)"
-    )
+    await _insert_probe(pool, "qwen3:8b", 9508)
 
     resp = await client.get("/admin/suggest")
 
@@ -190,20 +228,11 @@ async def test_a_failed_probe_row_never_overrides_the_estimate(
     mount_backend("http://ollama.test", fake.app)
     await backends.save_config(pool, {"kind": "ollama"})
     # A probe that failed (ok=false) is not a measurement — must not win.
-    await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
-        "VALUES ('qwen3:8b', 'ollama', false, 100, NULL, 'timed out')"
-    )
+    await _insert_probe(pool, "qwen3:8b", None, ok=False, error="timed out")
     # An OLDER successful probe exists too — the newest ok=true row must win
     # over a still-older one, and both must beat the failed one above.
-    await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, created_at) "
-        "VALUES ('qwen3:8b', 'ollama', true, 100, 8000, NULL, now() - interval '1 day')"
-    )
-    await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, created_at) "
-        "VALUES ('qwen3:8b', 'ollama', true, 100, 9508, NULL, now())"
-    )
+    await _insert_probe(pool, "qwen3:8b", 8000, age_days=1)
+    await _insert_probe(pool, "qwen3:8b", 9508)
 
     resp = await client.get("/admin/suggest")
 
@@ -231,19 +260,30 @@ async def test_the_card_being_unreadable_is_unknown_for_every_model(
         assert "nvidia-smi could not be run" in model["fit"]["reason"]
 
 
-async def test_non_ollama_backend_is_unknown_but_states_why(client, pool, monkeypatch, tmp_path):
+async def test_a_remote_default_does_not_hide_the_hub_card(
+    client, pool, monkeypatch, mount_backend
+):
+    """Replaces test_non_ollama_backend_is_unknown_but_states_why (S40, on purpose).
+
+    That test pinned "free VRAM isn't observable" whenever the DEFAULT provider
+    was not the bundled ollama — true only while one backend was the whole
+    world. The hub's card and its /api/ps belong to the machine, not to whichever
+    provider answers a bare id, and /admin/suggest sizes models for the hub."""
     _card(monkeypatch, 24576, IDLE_FREE_MB)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    mount_backend("http://ollama.test", FakeOllama(ps_models=[]).app)
     await backends.save_config(pool, {"kind": "remote", "url": "http://remote.test"})
 
-    resp = await client.get("/admin/suggest")
+    fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3.8:27b")
 
-    fit = _fit_for(resp.json(), "qwen3.8:27b")
-    assert fit["verdict"] == "unknown"
-    # The card's capacity IS known the moment nvidia-smi answers; only free
-    # VRAM needs ollama, so only free VRAM degrades.
-    assert fit["total_gb"] == 24.0
-    assert fit["free_gb"] is None
-    assert "remote" in fit["reason"]
+    assert fit == {
+        "verdict": "tight",
+        "needed_gb": 18.0,
+        "free_gb": 21.4,
+        "total_gb": 24.0,
+        "source": "estimated",
+        "reason": None,
+    }
 
 
 async def test_ollama_url_unset_is_unknown_but_states_why(client, pool, monkeypatch, tmp_path):
@@ -291,10 +331,7 @@ async def test_a_probe_from_the_old_whole_card_frame_is_not_read_as_a_measuremen
     fake = FakeOllama(ps_models=[])
     mount_backend("http://ollama.test", fake.app)
     await backends.save_config(pool, {"kind": "ollama"})
-    await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, frame) "
-        "VALUES ('qwen3.8:27b', 'ollama', true, 100, 22369, NULL, 'whole_card')"
-    )
+    await _insert_probe(pool, "qwen3.8:27b", 22369, frame="whole_card")
 
     fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3.8:27b")
 
@@ -315,11 +352,66 @@ async def test_a_new_probe_lands_in_the_current_frame_by_default(
     mount_backend("http://ollama.test", fake.app)
     await backends.save_config(pool, {"kind": "ollama"})
     await pool.execute(
-        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error) "
-        "VALUES ('qwen3.8:27b', 'ollama', true, 100, 17818, NULL)"
+        "INSERT INTO probes (model, kind, ok, latency_ms, vram_mb, error, provider, compute) "
+        "VALUES ('qwen3.8:27b', 'ollama', true, 100, 17818, NULL, 'hub', $1)",
+        COMPUTE,
     )
 
     fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3.8:27b")
 
     assert fit["source"] == "verified"
     assert fit["needed_gb"] == 17.4
+
+
+async def test_a_reading_with_no_compute_is_never_this_engines(
+    client, pool, monkeypatch, mount_backend
+):
+    """The legacy-probe isolation S40 promised. A row written before migration
+    009 names no compute: nothing says which card held it, or whether it was
+    this machine at all (the hub may since have moved). A 19,000 MB reading of
+    qwen3:8b is therefore never read as the hub's measurement — fit falls back
+    to the download's own size, `estimated`, until it is re-probed (the 008
+    precedent). The row stays: it was true when it was taken."""
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    mount_backend("http://ollama.test", FakeOllama(ps_models=[]).app)
+    await backends.save_config(pool, {"kind": "ollama"})
+    await _insert_probe(pool, "qwen3:8b", 19000, provider=None, compute=None)
+
+    fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3:8b")
+
+    assert fit["source"] == "estimated"
+    assert fit["needed_gb"] == 4.9, "the download's own size, not 18.6 GB nobody can place"
+
+
+async def test_a_reading_taken_on_another_card_is_never_this_engines(
+    client, pool, monkeypatch, mount_backend
+):
+    """Fit is keyed by (compute, model): a reading from a different card — the
+    3090 before a move, a node's card — is that card's fact, not this one's."""
+    _card(monkeypatch, 24576, IDLE_FREE_MB)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    mount_backend("http://ollama.test", FakeOllama(ps_models=[]).app)
+    await backends.save_config(pool, {"kind": "ollama"})
+    other = compute_id.gpu_cuda("GPU-00000000-1111-2222-3333-444444444444")
+    await _insert_probe(pool, "qwen3:8b", 9508, compute=other)
+
+    fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3:8b")
+
+    assert fit["source"] == "estimated" and fit["needed_gb"] == 4.9
+
+
+async def test_a_card_that_states_no_uuid_reads_no_probe(client, pool, monkeypatch, mount_backend):
+    """D10: a card's key is its CUDA uuid; the PCI fallback needs a bus id this
+    reading does not carry. A card that answered without one cannot be named,
+    so no reading can be proven to be its own — omitted, never guessed. Its
+    memory is still read: free_gb stays a fact."""
+    _card(monkeypatch, 24576, IDLE_FREE_MB, uuid=None)
+    monkeypatch.setenv("OLLAMA_URL", "http://ollama.test")
+    mount_backend("http://ollama.test", FakeOllama(ps_models=[]).app)
+    await backends.save_config(pool, {"kind": "ollama"})
+    await _insert_probe(pool, "qwen3:8b", 9508)
+
+    fit = _fit_for((await client.get("/admin/suggest")).json(), "qwen3:8b")
+
+    assert fit["source"] == "estimated" and fit["free_gb"] == 21.4
