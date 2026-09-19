@@ -2742,10 +2742,28 @@ _PRESENT_COPULA = (
 # Adverbs that may sit between the copula and the state word, "not" included: a
 # negated state ("the device is not connected") is just as much an unchecked
 # claim about now as the positive one, so it must NOT suppress.
-_STATE_ADVERB = (
-    r"(?:still|currently|now|again|apparently|probably|likely|definitely"
-    r"|no\s+longer|back|not|already|actually|indeed)"
+#
+# One tuple (S40b final fix wave, C13): the serving guard's set below is this
+# one minus the negations, built structurally rather than by string surgery on
+# the joined pattern.
+_STATE_ADVERBS = (
+    "still",
+    "currently",
+    "now",
+    "again",
+    "apparently",
+    "probably",
+    "likely",
+    "definitely",
+    r"no\s+longer",
+    "back",
+    "not",
+    "already",
+    "actually",
+    "indeed",
 )
+_NEGATING_ADVERBS = ("not", r"no\s+longer")
+_STATE_ADVERB = "(?:" + "|".join(_STATE_ADVERBS) + ")"
 # The states themselves — UNAMBIGUOUSLY about connectivity, and nothing else.
 # "connected" is the one word that needs a shape test rather than a ban: it is a
 # real connectivity state ("the device is connected.") and also an ordinary
@@ -3006,7 +3024,7 @@ _OWN_STATE_LINE = re.compile(
 # …", "- Runtime: Containerized", "- Serving: On"). A colon or "=" only: "- Dell
 # — the laptop" is a label with its description.
 _KEY_VALUE_LINE = re.compile(rf"{_LINE_LEAD}[^:=\n]{{1,40}}?\s*+[:=]\s*+\S")
-_NEGATING_ADVERB = re.compile(r"\b(?:not|no\s+longer)\b", re.I)
+_NEGATING_ADVERB = re.compile(r"\b(?:" + "|".join(_NEGATING_ADVERBS) + r")\b", re.I)
 # A reading's time: an ISO-ish stamp, a clock time with its zone, or "just now".
 _READING_TS = (
     r"(?:\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
@@ -6075,8 +6093,10 @@ _SERVING_STATE = (
 # not down" and "the gateway is no longer unreachable" say it CAN — and were
 # corrected as outage claims, replacing an honest reply. "not responding" and
 # "not working" are state words of their own and still fire. Derived from
-# _STATE_ADVERB, so an adverb added there reaches here too.
-_SERVING_ADVERB = _STATE_ADVERB.replace("|no\\s+longer", "").replace("|not", "")
+# _STATE_ADVERBS, so an adverb added there reaches here too (the final fix
+# wave's C13: built from the tuple, never by editing the joined pattern).
+_SERVING_ADVERBS = tuple(a for a in _STATE_ADVERBS if a not in _NEGATING_ADVERBS)
+_SERVING_ADVERB = "(?:" + "|".join(_SERVING_ADVERBS) + ")"
 _SERVING_ASSERTION = re.compile(
     rf"\b(?P<subj>(?:{_SERVING_DET}\s+)?{_SERVING_NOUN})"
     rf"(?:\s+{_PRESENT_COPULA}|['’]s)"
@@ -6198,9 +6218,6 @@ SERVED_CLAIM_CORRECTION = (
     "turn — not by {claimed}."
 )
 SERVED_NO_MODEL_CORRECTION = "Correction: a model wrote this reply — {served}."
-# When the round that wrote the reply carried no served-by header: a model
-# still wrote it (the round exists), and nothing more is known.
-SERVED_NO_MODEL_CORRECTION_BARE = "Correction: a model wrote this reply."
 
 # A model reference: an optional provider/engine prefix, then a letter-led
 # name with a tag (`qwen3.8:27b`, `hub:qwen3:8b`, `hf.co/org/repo:tag`). Never
@@ -6282,21 +6299,46 @@ _SERVED_SENTENCES = tuple(
 # ("was") is about what just happened, so it may end the sentence; the present
 # must carry this reply's own tail ("here", "to answer this", "for this
 # answer"). Every §4 MUST_FIRE is "was" or "I didn't use a model here".
+#
+# S40b final fix wave (A6): the past too. A bare "no model was needed." ends
+# honest sentences about a timer or a reminder ("Your 9:00 reminder went out
+# by itself. No model was involved."), and was corrected with "a model wrote
+# this reply". So the "was" form needs this reply's tail as the "is" form
+# does, and only the FIRST-PERSON form ("I didn't use a model.") may end its
+# sentence: she is its subject, and she wrote the reply. The walk's line,
+# "No model was needed for this calculation.", keeps its tail and fires.
 _NO_MODEL_THIS_REPLY = (
     r"here\b|to\s+answer\s+(?:this|that|it)\b"
     r"|for\s+(?:this|that)\s+(?:answer|reply|response|calculation|question|sum|math)\b"
 )
 _NO_MODEL = re.compile(
     r"\bno\s+(?:ai\s+|language\s+|llm\s+)?model\s+"
-    r"(?:was\s+(?:needed|used|required|involved)"
-    rf"(?=\s*(?:[.!;]|$)|\s+(?:{_NO_MODEL_THIS_REPLY}))"
-    rf"|is\s+(?:needed|used|required|involved)(?=\s+(?:{_NO_MODEL_THIS_REPLY})))"
+    rf"(?:was|is)\s+(?:needed|used|required|involved)(?=\s+(?:{_NO_MODEL_THIS_REPLY}))"
     r"|\bi\s+(?:did\s+not|didn['’]t)\s+(?:need\s+to\s+)?use\s+(?:a|any)\s+model"
     r"(?=\s*(?:[.!;]|$)|\s+(?:here|for\s+(?:this|that)\s+"
     r"(?:answer|reply|response|calculation|question)))",
     re.I,
 )
 _LATEST_TAG = ":latest"
+# S40b final fix wave (C4), the CLAIM side only: "ollama:" is how history
+# named the builtin engine, so "ollama:qwen3:8b" names the tag on whichever
+# machine serves it; and a quantization or precision suffix names the same
+# model's build ("qwen3:8b-q4_K_M", "-q8_0", "-fp16"). Neither is a different
+# model, and correcting "qwen3:8b-q4_K_M" to "hub:qwen3:8b" is pedantry that
+# teaches him her corrections are noise.
+_OLLAMA_PREFIX = re.compile(r"^ollama:(?=[A-Za-z])", re.I)
+_QUANT_SUFFIX = re.compile(
+    r"-(?:q\d(?:_[A-Za-z0-9]+)*|iq\d_[A-Za-z0-9_]+|fp16|bf16|f16|fp32|f32)$", re.I
+)
+
+
+def _claimed_as_served(claimed: str) -> str:
+    """The claimed ref as the served-by stamps would spell it: no ":latest"
+    tag, no "ollama:" alias for the builtin engine, no quantization suffix."""
+    compared = claimed[: -len(_LATEST_TAG)] if claimed.lower().endswith(_LATEST_TAG) else claimed
+    compared = _OLLAMA_PREFIX.sub("", compared)
+    return _QUANT_SUFFIX.sub("", compared)
+
 
 # -- T2 precision cuts, beyond the verdict's corpus -------------------------
 #
@@ -6671,17 +6713,17 @@ def _served_verdict(
     answered: bool,
 ) -> ServedClaim | None:
     if claimed is None:
-        if not answered:
+        # S40b final fix wave (C3): silent when the round that wrote the reply
+        # carries no served-by header — the verdict's §4 MUST_NOT ("any
+        # MUST_FIRE sentence with no served_by") over its evidence line, as
+        # the ledger ruled: the guard says only what it can quote.
+        if not answered or writer is None:
             return None
-        text = (
-            SERVED_NO_MODEL_CORRECTION.format(served=writer)
-            if writer
-            else SERVED_NO_MODEL_CORRECTION_BARE
-        )
+        text = SERVED_NO_MODEL_CORRECTION.format(served=writer)
         return ServedClaim(shape=shape, claimed=None, served=served, phrase=phrase[:80], text=text)
     if not served or writer is None:
         return None
-    compared = claimed[: -len(_LATEST_TAG)] if claimed.lower().endswith(_LATEST_TAG) else claimed
+    compared = _claimed_as_served(claimed)
     if any(_same_model(compared, model) for model in served):
         return None
     return ServedClaim(

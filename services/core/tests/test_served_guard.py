@@ -58,7 +58,6 @@ def named_text(claimed: str, served: str = HUB_8B) -> str:
 
 
 NO_MODEL_TEXT = f"Correction: a model wrote this reply — {HUB_8B}."
-NO_MODEL_BARE = "Correction: a model wrote this reply."
 
 IN_USE_LINE = "- `qwen3.8:27b` (16.5 GB) ✅ **Current model in use**"
 
@@ -84,7 +83,6 @@ MUST_FIRE = [
     ("i_am", "I'm qwen3.8:27b.", "sentence", "qwen3.8:27b"),
     ("no_model_for_calculation", "No model was needed for this calculation.", "no_model", None),
     ("t60834ccf_full", T60834CCF, "no_model", None),
-    ("no_model_needed", "No model was needed.", "no_model", None),
     ("didnt_use_a_model_here", "I didn't use a model here.", "no_model", None),
     ("talking_to", "You're talking to qwen3.8:27b.", "sentence", "qwen3.8:27b"),
     (
@@ -228,6 +226,17 @@ ACCEPTED_MISSES = [
     # model: qwen3.8:27b sits idle" is true); the label form is caught on its
     # own line, after "and", or as "the current model is X".
     ("mid_clause_label", "gemma4:12b is idle, current model: qwen3.8:27b"),
+    # S40b final fix wave (A6) — MOVED from MUST_FIRE, where the verdict's §4
+    # had it. A bare "no model was needed." says nothing of WHICH action needed
+    # none, and the same words close an honest sentence about a timer or a
+    # reminder ("…went out by itself. No model was involved."), which it
+    # corrected. The fix wave's directive D1 prefers the narrowing: the past
+    # form fires only when anchored to this reply ("here", "for this
+    # calculation", "to answer this") or said in the first person ("I didn't
+    # use a model."). These are constructed sentences; the walk's own line,
+    # 60834ccf's "No model was needed for this calculation.", still fires.
+    ("no_model_needed_bare", "No model was needed."),
+    ("no_model_needed_after_an_answer", "17 × 23 = 391. No model was needed."),
 ]
 
 
@@ -424,12 +433,6 @@ REVIEW_ROUND_1_STILL_FIRE = [
     (
         "no_model_is_needed_for_this_answer",
         "No model is needed for this answer.",
-        "no_model",
-        None,
-    ),
-    (
-        "no_model_was_involved",
-        "Reminders fire by themselves — no model was involved.",
         "no_model",
         None,
     ),
@@ -639,16 +642,17 @@ def test_a_named_claim_needs_a_served_by_to_contradict_it(label, reply, shape, c
     [c for c in MUST_FIRE if c[3] is None],
     ids=[c[0] for c in MUST_FIRE if c[3] is None],
 )
-def test_no_model_fires_on_any_served_round_and_says_only_what_it_knows(
-    label, reply, shape, claimed
-):
-    """ "No model was needed" is contradicted by the round existing at all
-    (served_this_turn), so it fires without a header; the correction then
-    drops the clause that would name one."""
-    claim = guards.served_claim_check(reply, [_llm(None)], purpose="chat")
-    assert claim is not None and claim.shape == "no_model"
-    assert claim.text == NO_MODEL_BARE
-    assert claim.served == ()
+def test_no_model_with_a_round_but_no_served_by_is_silent(label, reply, shape, claimed):
+    """S40b final fix wave (C3) — the pin FLIPPED. The verdict contradicted
+    itself: its evidence line said "no model" fires on any round, and its §4
+    MUST_NOT says every MUST_FIRE sentence is silent with no served_by. The
+    ledger sided with the MUST_NOT: with no served-by header the gateway
+    recorded nothing about who wrote the reply, and the guard says nothing it
+    cannot quote."""
+    assert guards.served_claim_check(reply, [_llm(None)], purpose="chat") is None
+    # …and the same sentence fires once the round that wrote it names a model.
+    claim = guards.served_claim_check(reply, [_llm(None), _llm()], purpose="chat")
+    assert claim is not None and claim.shape == "no_model" and claim.text == NO_MODEL_TEXT
 
 
 def test_a_failed_round_is_not_the_model_that_answered():
@@ -657,7 +661,8 @@ def test_a_failed_round_is_not_the_model_that_answered():
     claim = guards.served_claim_check("I'm running on qwen3.8:27b.", spans, purpose="chat")
     assert claim is not None and claim.served == (HUB_8B,)
     no_round = [_llm(error="nothing arrived")]
-    assert guards.served_claim_check("No model was needed.", no_round, purpose="chat") is None
+    reply = "No model was needed for this calculation."
+    assert guards.served_claim_check(reply, no_round, purpose="chat") is None
 
 
 def test_any_round_that_served_the_claimed_model_backs_it():
@@ -727,7 +732,7 @@ def _all_guards_silent(text: str) -> None:
 
 @pytest.mark.parametrize(
     "text",
-    [named_text("qwen3.8:27b"), named_text("dell:qwen3:8b"), NO_MODEL_TEXT, NO_MODEL_BARE],
+    [named_text("qwen3.8:27b"), named_text("dell:qwen3:8b"), NO_MODEL_TEXT],
 )
 def test_the_corrections_trip_no_guard_of_their_own(text):
     """The correction is APPENDED to what persists, so a text that tripped a
@@ -787,7 +792,9 @@ def _vet(corrected: str, spans, kind: str = "chat") -> str | None:
     [
         ("The model is unreachable right now.", "stack_claim"),
         ("I'm running on qwen3.8:27b.", "served_claim"),
-        ("No model was needed.", "served_claim"),
+        # The anchored form (A6: the bare "No model was needed." is no longer
+        # a claim about this reply).
+        ("No model was needed for this calculation.", "served_claim"),
         ("I can't reach the memory service right now.", "memory_claim"),
     ],
 )
@@ -1452,3 +1459,82 @@ def test_a_struck_served_claim_is_not_corrected(reply):
 )
 def test_a_general_statement_about_a_model_is_not_corrected(reply):
     assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, reply
+
+
+# -- A6: a bare "no model was …" is about whatever its sentence is about ----------
+#
+# final-review #6: each fired no_model at 9927da34 — an honest account of a
+# timer or a reminder corrected with "a model wrote this reply", and the turn
+# kept out of memory. The past form now needs this reply's own tail or a
+# first-person subject.
+NO_MODEL_ABOUT_SOMETHING_ELSE = [
+    ("timer_ran_on_its_own", "The timer ran on its own — no model was needed."),
+    ("reminder_fired_on_its_own", "The reminder fired on its own; no model was involved."),
+    ("sent_by_the_scheduler", "That reminder was sent by the scheduler, so no model was used."),
+    ("went_out_by_itself", "Your 9:00 reminder went out by itself. No model was involved."),
+    ("delivered_without_me", "The scheduler delivered it without me. No model was needed."),
+    ("copied_by_the_tool", "The file was copied by the workspace tool; no model was used."),
+    (
+        "delivered_verbatim",
+        "No, I didn't write it. Your 9:00 reminder is delivered verbatim by the timer, so no "
+        "model was involved.",
+    ),
+    ("reminders_fire_by_themselves", "Reminders fire by themselves — no model was involved."),
+]
+NO_MODEL_ABOUT_THIS_REPLY = [
+    ("walk_60834ccf", T60834CCF),
+    ("for_this_calculation", "No model was needed for this calculation."),
+    ("was_needed_here", "No model was needed here."),
+    ("to_answer_this", "No model was needed to answer this."),
+    ("first_person", "I didn't use a model."),
+    ("first_person_here", "I didn't use a model here."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    NO_MODEL_ABOUT_SOMETHING_ELSE,
+    ids=[c[0] for c in NO_MODEL_ABOUT_SOMETHING_ELSE],
+)
+def test_no_model_said_of_another_action_is_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", NO_MODEL_ABOUT_THIS_REPLY, ids=[c[0] for c in NO_MODEL_ABOUT_THIS_REPLY]
+)
+def test_no_model_said_of_this_reply_still_fires(label, reply):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None and claim.shape == "no_model", label
+    assert claim.text == NO_MODEL_TEXT
+
+
+# -- C4: the right model, spelled another way, is not corrected --------------------
+#
+# The claim side only: "ollama:<tag>" is how history named the builtin engine,
+# and a quantization suffix names the same model's build.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I'm running on ollama:qwen3:8b.",
+        "The current model is qwen3:8b-q4_K_M.",
+        "- `qwen3:8b-q4_K_M` ✅ **Current model in use**",
+        "The current model is ollama:qwen3:8b-q8_0.",
+        "I'm running on hub:qwen3:8b-fp16.",
+    ],
+)
+def test_the_served_model_spelled_another_way_is_not_corrected(reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, reply
+
+
+@pytest.mark.parametrize(
+    "reply,claimed",
+    [
+        ("The current model is ollama:qwen3.8:27b.", "ollama:qwen3.8:27b"),
+        ("The current model is qwen3.8:27b-q4_K_M.", "qwen3.8:27b-q4_K_M"),
+        ("I'm running on dell:qwen3:8b-q4_K_M.", "dell:qwen3:8b-q4_K_M"),
+    ],
+)
+def test_another_model_spelled_those_ways_still_fires(reply, claimed):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None and claim.claimed == claimed, reply
