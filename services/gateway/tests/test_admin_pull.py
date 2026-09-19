@@ -494,6 +494,31 @@ async def test_a_bare_ref_with_two_machines_is_refused_naming_both(
     assert upstreams.registry.seen == [], "refused before anything was sized"
 
 
+async def test_a_library_rows_own_id_pulls_its_model_onto_the_machine(client, pool, ollama):
+    """(S40 fix wave C2) A curated pick no machine holds is listed as
+    `library:<tag>` (and a Hub row as `library:hf.co/…`), and a client that
+    pulls a row sends the row's id. `library` names no machine: the id is the
+    model after it, bound for the one machine there is — exactly as a bare
+    ref is."""
+    resp = await client.post("/admin/pull", json={"model": "library:qwen3:8b"})
+
+    assert resp.status_code == 200, resp.text
+    assert _lines(resp.content)[0]["engine"] == "hub"
+    assert ollama.seen[-1] == ("/api/pull", {"model": "qwen3:8b"})
+
+
+async def test_a_library_id_with_two_machines_is_refused_naming_both(
+    client, ollama, second_engine, upstreams
+):
+    resp = await client.post("/admin/pull", json={"model": "library:qwen3:8b"})
+
+    assert resp.status_code == 400
+    error = resp.json()["error"]
+    assert "hub:qwen3:8b" in error and "dell:qwen3:8b" in error
+    assert "library:" not in error.split("name it:")[-1]
+    assert ollama.seen == [] and second_engine.seen == []
+
+
 async def test_a_qualified_pull_goes_to_that_machine(
     client, ollama, second_engine, monkeypatch, tmp_path
 ):

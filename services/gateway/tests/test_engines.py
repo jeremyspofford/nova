@@ -369,17 +369,6 @@ async def test_a_cpu_it_cannot_name_is_omitted_and_says_why(pool, hub):
 
 
 @requires_db
-async def test_installed_sizes_is_the_cached_listing_and_none_when_it_cannot_ask(pool, hub):
-    sizes = await engines.installed_sizes(gateway_app, pool, "hub")
-    assert set(sizes) == {"qwen3:8b", "nomic-embed-text:latest"}
-    assert await engines.installed_sizes(gateway_app, pool, "hub") == sizes
-    assert _tag_reads(hub) == 1
-    engines.clear_cache()
-    hub.tags_status = 500
-    assert await engines.installed_sizes(gateway_app, pool, "hub") is None
-
-
-@requires_db
 async def test_forget_drops_one_engines_reading_and_keeps_the_others(pool, hub, mount_backend):
     """(ruling C11) After a connect-phase failure the data plane forgets THAT
     engine, so its next observe asks again — the others keep their readings."""

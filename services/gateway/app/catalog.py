@@ -677,14 +677,20 @@ async def engine_and_model(pool, raw: object) -> tuple[dict, str]:
     """(engine row, bare model) for the model a pull, a removal or an update
     check names (S40). `hub:qwen3:8b` names its engine; a bare `qwen3:8b`
     means the one machine there is, and is refused by name when there are
-    several — which machine would be a guess. A cloud provider's prefix is
-    refused: a cloud model is used directly. The ref is validated AFTER the
-    engine prefix is split off (pulls.MODEL_RE allows one colon, the tag's
-    own). The machines are read live (engines.rows), never a list anyone
-    keeps. Raises ValueError with the reason (a 400)."""
+    several — which machine would be a guess. A library row's own id
+    (`library:qwen3:8b`, `library:hf.co/…` — a pick no machine holds yet)
+    names no machine: it is the model after the prefix, bound exactly as a
+    bare ref is (S40 fix wave C2). A cloud provider's prefix is refused: a
+    cloud model is used directly. The ref is validated AFTER the engine
+    prefix is split off (pulls.MODEL_RE allows one colon, the tag's own).
+    The machines are read live (engines.rows), never a list anyone keeps.
+    Raises ValueError with the reason (a 400)."""
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError("model is required — e.g. hub:qwen3:8b")
     raw = raw.strip()
+    head, sep, rest = raw.partition(":")
+    if sep and rest and head == LIBRARY:
+        raw = rest
     machines = {row["name"]: row for row in await engines.rows(pool)}
     names = {row["name"] for row in await providers.list_rows(pool)} | set(machines)
     prefix, bare = providers.split_model_id(raw, names)

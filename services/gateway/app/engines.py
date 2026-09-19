@@ -510,10 +510,3 @@ async def observe(app, pool: asyncpg.Pool, row: dict, *, live: bool) -> EngineVi
         reading = await _read(app, pool, row)
         _READINGS[row["name"]] = reading
     return _view(row, reading)
-
-
-async def installed_sizes(app, pool: asyncpg.Pool, name: str) -> dict[str, int | None] | None:
-    """{tag: download bytes} this engine lists (cached as observe caches);
-    None when it could not be asked."""
-    view = await observe(app, pool, await get(pool, name), live=False)
-    return view.tags
