@@ -3139,10 +3139,23 @@ def _every_correction() -> list[tuple[str, str]]:
             continue
         # `machine` (S40b): the state guard's machine correction names the
         # machine it did not check, so its template joins the tripwire here.
+        # `served`, `claimed` and `tool` (S40b T2): the served-model
+        # correction names the model that wrote the reply and the one claimed,
+        # and the memory correction the memory tool that answered.
         out.append(
             (
                 name,
-                value.format(agent="coder", repeats=4, unrun=1, total=3, found=2, machine="hub"),
+                value.format(
+                    agent="coder",
+                    repeats=4,
+                    unrun=1,
+                    total=3,
+                    found=2,
+                    machine="hub",
+                    served="hub:qwen3:8b",
+                    claimed="qwen3.8:27b",
+                    tool="memory_search",
+                ),
             )
         )
     return sorted(out)

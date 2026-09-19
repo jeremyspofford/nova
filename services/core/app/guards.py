@@ -5636,3 +5636,412 @@ def stack_claim_check(reply_text: str, spans: Sequence[Any], *, purpose: str) ->
                 phrase=match.group(0).strip(),
             )
     return None
+
+
+# ── S40b: the SERVED-model claim — "the current model is X" while Y answered ──
+#
+# The S40 live walk (2026-09-19). Asked where her models run, she marked
+# `qwen3.8:27b` "Current model in use" in two turns hub:qwen3:8b served
+# (b851aa91, b02a5694) — read out of old notes, and out of a prompt line that
+# stated the chat SETTING as "the model answering". And asked 17 × 23, she
+# answered and added "No model was needed for this calculation." (60834ccf) —
+# which went into his notes, because nothing stopped the turn being ingested.
+#
+# The evidence needs no probe and cannot be argued with: the gateway stamps
+# every round it serves with the model that served it (X-Nova-Served-By), and
+# chat records it on the round's span as `served_by`. A NAMED claim is
+# contradicted when some round of this turn was stamped and none of the stamps
+# is the model named (any purpose: a model that served ANY round of the turn is
+# not contradicted — lenient on purpose). "No model was needed" is contradicted
+# by the turn's own round existing at all (served_this_turn). The requested
+# `meta.model` is deliberately NOT evidence (verdict §2): it is the setting,
+# and on a fallback the setting is exactly the lie.
+#
+# Precision-first, measured over 649 real replies (s40b/design-verdict.md §4):
+# a model reference must be letter-led with a tag (so a GPU id, a port and a
+# clock time are not models), a line labelled with anything but chat or the
+# current model is some other role's line, a model "in use FOR/BY" something is
+# in use for something else, and the role words (vision, judge, embedder,
+# fallback…) mark a claim about another role. Past, hedged, reported, quoted and
+# questioned forms assert nothing about this reply. APPEND-class: the reply may
+# carry real content beside the false line, so the correction follows it; the
+# turn is not ingested. Armed only in STACK_CLAIM_KINDS, where it was measured.
+
+SERVED_CLAIM_CORRECTION = (
+    "Correction: this reply was written by {served} — the gateway recorded that for this "
+    "turn — not by {claimed}."
+)
+SERVED_NO_MODEL_CORRECTION = "Correction: a model wrote this reply — {served}."
+# When the round that wrote the reply carried no served-by header: a model
+# still wrote it (the round exists), and nothing more is known.
+SERVED_NO_MODEL_CORRECTION_BARE = "Correction: a model wrote this reply."
+
+# A model reference: an optional provider/engine prefix, then a letter-led
+# name with a tag (`qwen3.8:27b`, `hub:qwen3:8b`, `hf.co/org/repo:tag`). Never
+# a compute id (`cuda:GPU-…`), a URL, or a port (`ollama:11434`).
+_SERVED_REF = (
+    r"(?<![\w./:-])(?P<ref>(?!(?:gpu|cpu|cuda|rocm|metal|https?):)"
+    r"(?:[a-z0-9][a-z0-9_-]{0,31}:)?"
+    r"(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?"
+    r"|[A-Za-z][\w.-]*(?:/[\w.-]+)?:(?!\d+\b)[\w.-]+))"
+)
+_SERVED_REF_RE = re.compile(_SERVED_REF, re.I)
+# "Current model in use", "in use", "answering you" — the marker a line or a
+# clause carries beside the ref it is about. "in use by/for/as/…" is in use for
+# something else.
+_IN_USE = re.compile(
+    r"\b(?:current(?:ly)?\s+(?:chat\s+)?model(?:\s+in\s+use)?"
+    r"|(?:currently\s+)?in\s+use(?!\s+(?:by|for|as|in|on|with|when|if)\b)"
+    r"|(?:currently\s+|now\s+)?(?:answering|serving)\s+(?:you|this\s+(?:chat|conversation|reply|turn))"
+    r"|active\s+(?:chat\s+)?model)\b",
+    re.I,
+)
+# Another role, a standby, or the past: the claim is not about this reply.
+_SERVED_SKIP = re.compile(
+    r"\b(?:vision|judge|coding|coder|scheduled|embed\w*|ingest\w*|images?|photos?|pictures?"
+    r"|agents?|distil\w*|fallback|standby|backup|was|were|previously"
+    r"|not\s+(?:the\s+)?(?:current|in\s+use))\b",
+    re.I,
+)
+# A labelled line ("- coding: gemma4:31b (active model)"): its label must say
+# chat or the current model for an in-use marker on it to be about this reply.
+_LINE_LABEL = re.compile(r"^\s*(?:[-+•]|\d+[.)])?\s*(?P<label>[A-Za-z][A-Za-z ]{0,30}?)\s*:\s")
+_LABEL_OK = re.compile(
+    r"chat(?:\s+model)?|(?:current|active)\s+(?:chat\s+)?model|model(?:\s+in\s+use)?"
+    r"|in\s+use|answering(?:\s+now)?|serving(?:\s+now)?",
+    re.I,
+)
+# The sentence shapes that name the model answering this reply.
+_SERVED_SENTENCES = tuple(
+    re.compile(pattern, re.I)
+    for pattern in (
+        r"\b(?:the\s+)?model\s+(?:that(?:['’]s|\s+is)\s+)?"
+        r"(?:answering|serving|replying|responding)(?:\s+(?:you|this|here))?"
+        rf"(?:\s+(?:right\s+now|now|currently))?\s+is\s+{_SERVED_REF}",
+        rf"\bthe\s+current\s+(?:chat\s+)?model\s+is\s+{_SERVED_REF}",
+        r"\bi(?:['’]m|\s+am)\s+(?:currently\s+|now\s+)?"
+        rf"(?:(?:running\s+(?:on|as)|served\s+by|powered\s+by)\s+)?{_SERVED_REF}",
+        r"\b(?:this|my)\s+(?:reply|answer|response|message)\s+"
+        r"(?:came|comes|is\s+coming|was\s+(?:written|generated|served))\s+(?:from|by)\s+"
+        rf"{_SERVED_REF}",
+        r"\byou(?:['’]re|\s+are)\s+(?:currently\s+|now\s+)?(?:talking|speaking|chatting)\s+"
+        rf"(?:to|with)\s+{_SERVED_REF}",
+        rf"{_SERVED_REF}\s+(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+(?:model\s+)?)?"
+        r"(?:answering|serving|replying\s+to|responding\s+to)\s+(?:you|this|now|right\s+now)\b",
+        rf"{_SERVED_REF}\s+(?:is|['’]s)\s+(?:currently\s+)?(?:the\s+)?(?:current|active)\s+"
+        r"(?:chat\s+)?model\b(?!\s+(?:for|in|on)\b)",
+    )
+)
+# "No model was needed" — about THIS answer, never about a pull, an embedding,
+# an image, or a step a timer ran.
+_NO_MODEL = re.compile(
+    r"\bno\s+(?:ai\s+|language\s+|llm\s+)?model\s+(?:was|is)\s+(?:needed|used|required|involved)"
+    r"(?=\s*(?:[.!;]|$)|\s+(?:here\b|to\s+answer\s+(?:this|that|it)\b"
+    r"|for\s+(?:this|that)\s+(?:answer|reply|response|calculation|question|sum|math)\b))"
+    r"|\bi\s+(?:did\s+not|didn['’]t)\s+(?:need\s+to\s+)?use\s+(?:a|any)\s+model"
+    r"(?=\s*(?:[.!;]|$)|\s+(?:here|for\s+(?:this|that)\s+"
+    r"(?:answer|reply|response|calculation|question)))",
+    re.I,
+)
+_LATEST_TAG = ":latest"
+
+
+@dataclass(frozen=True)
+class ServedClaim:
+    """A claim about which model wrote this reply that the turn's own rounds
+    contradict.
+
+    `shape` is how it was said ("sentence", "in_use" or "no_model"), `claimed`
+    the model reference named (None for "no model"), `served` every model the
+    gateway recorded serving a round of this turn, `phrase` the matched text
+    for the guard span, and `text` the stated correction.
+    """
+
+    shape: str
+    claimed: str | None
+    served: tuple[str, ...]
+    phrase: str
+    text: str
+
+
+def _served_models(spans: Sequence[Any]) -> tuple[str, ...]:
+    """Every `served_by` on an error-free llm_call of this turn, any purpose,
+    in order and deduplicated: the models the gateway says answered a round."""
+    found: list[str] = []
+    for span in spans:
+        if getattr(span, "kind", None) != "llm_call":
+            continue
+        meta = _span_meta(span)
+        served_by = meta.get("served_by")
+        if meta.get("error") or not isinstance(served_by, str) or not served_by.strip():
+            continue
+        if served_by.strip() not in found:
+            found.append(served_by.strip())
+    return tuple(found)
+
+
+def _own_lines(reply_text: str) -> list[str]:
+    """The reply's lines as a claim scan reads them: fenced and `>` lines
+    blanked (someone else's text), emphasis and code marks stripped. The
+    machine branch's reading of a reply (_machine_lines), shared."""
+    return _machine_lines(reply_text)
+
+
+def _served_claims(clause: str, *, in_use: bool):
+    """(shape, claimed ref or None, phrase) for every served-model claim this
+    clause makes, each already cut by the hedge, intent and skip rules."""
+    for pattern in _SERVED_SENTENCES:
+        for m in pattern.finditer(clause):
+            if _state_prefix_blocks(clause[: m.start()]):
+                continue
+            if _SERVED_SKIP.search(clause[: m.end()]):
+                continue
+            yield "sentence", _strip_trailing_punct(m.group("ref")), m.group(0)
+    if in_use:
+        for m in _IN_USE.finditer(clause):
+            if _STATE_HEDGE.search(clause) or _STATE_INTENT.search(clause[: m.start()]):
+                continue
+            if _SERVED_SKIP.search(clause):
+                continue
+            refs = list(_SERVED_REF_RE.finditer(clause))
+            if not refs:
+                continue
+            # The ref nearest the marker is the one it is about.
+            near = min(
+                refs,
+                key=lambda r, m=m: min(abs(r.start() - m.end()), abs(m.start() - r.end())),
+            )
+            start, end = min(near.start(), m.start()), max(near.end(), m.end())
+            yield "in_use", _strip_trailing_punct(near.group("ref")), clause[start:end]
+    for m in _NO_MODEL.finditer(clause):
+        if _state_prefix_blocks(clause[: m.start()]):
+            continue
+        yield "no_model", None, m.group(0)
+
+
+def served_claim_check(
+    reply_text: str, spans: Sequence[Any], *, purpose: str | None
+) -> ServedClaim | None:
+    """Contradict a claim about which model wrote this reply that the turn's
+    own rounds refute (see the section header). None otherwise — pure,
+    precision-first, fail-open at the call site. `purpose` is the turn's kind
+    (chat._purpose_of); outside STACK_CLAIM_KINDS it says nothing.
+
+    A NAMED claim fires when the model named served no round of this turn,
+    some round was stamped, and the round that WROTE the reply (_reply_served_
+    by) was stamped too: the correction quotes that round, and when it carries
+    no stamp the claimed model may be the very one that wrote it. "No model"
+    fires on any round of the turn's own purpose that answered."""
+    if purpose not in STACK_CLAIM_KINDS:
+        return None
+    if not reply_text or not reply_text.strip():
+        return None
+    served = _served_models(spans)
+    answered = served_this_turn(spans, purpose)
+    if not served and not answered:
+        return None
+    writer = _reply_served_by(spans, purpose)
+    for line in _own_lines(reply_text):
+        if not line.strip():
+            continue
+        label = _LINE_LABEL.match(line)
+        in_use = label is None or _LABEL_OK.fullmatch(label.group("label").strip()) is not None
+        for clause, is_question in _clauses(line):
+            if is_question or _REPORTED.search(clause) or _PRIOR_TIME.search(clause):
+                continue
+            for shape, claimed, phrase in _served_claims(clause, in_use=in_use):
+                phrase = _strip_trailing_punct(phrase.strip())
+                claim = _served_verdict(shape, claimed, phrase, served, writer, answered)
+                if claim is not None:
+                    return claim
+    return None
+
+
+def _served_verdict(
+    shape: str,
+    claimed: str | None,
+    phrase: str,
+    served: tuple[str, ...],
+    writer: str | None,
+    answered: bool,
+) -> ServedClaim | None:
+    if claimed is None:
+        if not answered:
+            return None
+        text = (
+            SERVED_NO_MODEL_CORRECTION.format(served=writer)
+            if writer
+            else SERVED_NO_MODEL_CORRECTION_BARE
+        )
+        return ServedClaim(shape=shape, claimed=None, served=served, phrase=phrase[:80], text=text)
+    if not served or writer is None:
+        return None
+    compared = claimed[: -len(_LATEST_TAG)] if claimed.lower().endswith(_LATEST_TAG) else claimed
+    if any(_same_model(compared, model) for model in served):
+        return None
+    return ServedClaim(
+        shape=shape,
+        claimed=claimed,
+        served=served,
+        phrase=phrase[:80],
+        text=SERVED_CLAIM_CORRECTION.format(served=writer, claimed=claimed),
+    )
+
+
+# ── S40b: the MEMORY-outage claim — "memory is unreachable" while it answered ──
+#
+# The same walk: b851aa91 and b02a5694 reported "The memory service (`memory`)
+# is currently unreachable (`ConnectError`)" — an old stack-check notice,
+# replayed — in turns whose own recall that service had just answered (hits:
+# 5). The evidence is the turn's memory_recall span: an int `hits` with no
+# `error`, and `errors` (an agent's two-scope recall) not naming every scope —
+# zero hits is an answer. Or any memory_* tool that succeeded this turn. A
+# memory_* tool that FAILED this turn is evidence the report may be true, so
+# the guard says nothing then; and with no recall span it has nothing to go on.
+#
+# Precision-first, like its siblings: a service NOUN is required ("memory"
+# alone is also RAM, GPU memory and her recall), "down" counts only where it
+# ends the claim ("down for maintenance tonight" is a schedule), negations are
+# not outage claims, and past, hedged, reported, quoted and questioned forms
+# assert nothing about now. APPEND-class and not ingested, like served_claim;
+# armed only in STACK_CLAIM_KINDS.
+
+MEMORY_CLAIM_CORRECTION = (
+    "Correction: the memory service answered this turn — this turn's recall was read from "
+    "it — so it is not unreachable now."
+)
+# When no recall answered but a memory tool did: the correction names the call
+# that proves it, never a recall that did not happen.
+MEMORY_CLAIM_TOOL_CORRECTION = (
+    "Correction: the memory service answered this turn — this turn's {tool} call was "
+    "answered by it — so it is not unreachable now."
+)
+MEMORY_CLAIM_MISSING = " What did not work this turn: {retrievers_missing}"
+# Every memory tool is named memory_* (app/tools/memory_tools.py) — the prefix
+# IS the derivation, like _DEVICE_SPAN_PREFIX. test_memory_claim_guard pins it
+# against the registry.
+_MEMORY_TOOL_PREFIX = "memory_"
+_MEMORY_RECALL_KIND = "memory_recall"
+
+_MEMORY_NOUN = (
+    r"(?:(?:the|my|your|her|its|nova['’]s)\s+)?(?:long[-\s]term\s+)?memory\s+"
+    r"(?:service|server|container|backend|api|store|database)"
+)
+_MEMORY_STATE = (
+    r"(?:unreachable|not\s+reachable|offline|unavailable|not\s+responding|unresponsive"
+    r"|not\s+answering|disconnected"
+    r"|down(?=\s*(?:[.,;:!?)\]]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment)\b))"
+)
+_MEMORY_DOWN = re.compile(
+    rf"\b(?P<subj>{_MEMORY_NOUN})(?:\s*\([^()\n]{{1,40}}\))?"
+    rf"(?:\s+{_PRESENT_COPULA}|['’]s)(?:\s+{_SERVING_ADVERB})*\s+(?P<state>{_MEMORY_STATE})\b",
+    re.I,
+)
+_MEMORY_UNREACHED = re.compile(
+    r"\b(?:can\s*(?:no|')?t|cannot|can\s+not|unable\s+to)\s+"
+    r"(?:reach|contact|connect\s+to|talk\s+to|get\s+(?:a\s+)?(?:response|answer)\s+from)\s+"
+    rf"(?P<subj>{_MEMORY_NOUN})",
+    re.I,
+)
+
+
+@dataclass(frozen=True)
+class MemoryClaim:
+    """A present-tense claim that the memory service cannot answer, in a turn
+    it answered. `subject` is the noun the reply used, `phrase` the matched
+    text, `retrievers_missing` memory's own sentence about a search it could
+    not run in full this turn (the true half of an outage report), and `text`
+    the stated correction."""
+
+    subject: str
+    phrase: str
+    text: str
+    retrievers_missing: str | None = None
+
+
+def _recall_answered(span: Any) -> bool:
+    if getattr(span, "kind", None) != _MEMORY_RECALL_KIND:
+        return False
+    meta = _span_meta(span)
+    hits = meta.get("hits")
+    if not isinstance(hits, int) or isinstance(hits, bool) or meta.get("error"):
+        return False
+    errors = meta.get("errors")
+    if errors:
+        scopes = meta.get("scopes")
+        if not isinstance(errors, Mapping) or not isinstance(scopes, Mapping) or not scopes:
+            return False  # a failure this span cannot place: not an answer
+        if all(scope in errors for scope in scopes):
+            return False
+    return True
+
+
+def _memory_answered(spans: Sequence[Any]) -> tuple[Any, str | None] | None:
+    """(the recall span that answered or None, the memory tool that answered
+    or None) — None when memory did not answer this turn, or when a memory
+    tool failed this turn."""
+    recall = None
+    tool: str | None = None
+    for span in spans:
+        if recall is None and _recall_answered(span):
+            recall = span
+            continue
+        name = getattr(span, "name", None)
+        if getattr(span, "kind", None) != "tool" or not isinstance(name, str):
+            continue
+        if not name.startswith(_MEMORY_TOOL_PREFIX):
+            continue
+        if _span_meta(span).get("ok") is not True:
+            return None
+        tool = tool or name
+    if recall is None and tool is None:
+        return None
+    return recall, tool
+
+
+def memory_claim_check(
+    reply_text: str, spans: Sequence[Any], *, purpose: str | None
+) -> MemoryClaim | None:
+    """Contradict a present-tense claim that the memory service cannot answer,
+    made in a turn it answered (see the section header). None otherwise —
+    pure, precision-first, fail-open at the call site. `purpose` is the turn's
+    kind; outside STACK_CLAIM_KINDS it says nothing."""
+    if purpose not in STACK_CLAIM_KINDS:
+        return None
+    if not reply_text or not reply_text.strip():
+        return None
+    evidence = _memory_answered(spans)
+    if evidence is None:
+        return None
+    recall, tool = evidence
+    for line in _own_lines(reply_text):
+        if not line.strip():
+            continue
+        for clause, is_question in _clauses(line):
+            if is_question or _REPORTED.search(clause) or _PRIOR_TIME.search(clause):
+                continue
+            for pattern in (_MEMORY_DOWN, _MEMORY_UNREACHED):
+                for m in pattern.finditer(clause):
+                    if _state_prefix_blocks(clause[: m.start()]):
+                        continue
+                    if _SERVED_SKIP.search(clause[: m.end()]):
+                        continue
+                    return _memory_claim(m, recall, tool)
+    return None
+
+
+def _memory_claim(match: re.Match[str], recall: Any, tool: str | None) -> MemoryClaim:
+    missing = _span_meta(recall).get("retrievers_missing") if recall is not None else None
+    missing = missing.strip() if isinstance(missing, str) and missing.strip() else None
+    if recall is not None:
+        text = MEMORY_CLAIM_CORRECTION
+    else:
+        text = MEMORY_CLAIM_TOOL_CORRECTION.format(tool=tool)
+    if missing:
+        text += MEMORY_CLAIM_MISSING.format(retrievers_missing=missing)
+    return MemoryClaim(
+        subject=match.group("subj").strip(),
+        phrase=match.group(0).strip()[:80],
+        text=text,
+        retrievers_missing=missing,
+    )
