@@ -55,7 +55,7 @@ async def test_chat_completions_passthrough_verbatim_with_served_by_header(
     )
 
     assert resp.status_code == 200
-    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:8b"
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
     frames = _sse_payloads(resp.content)
     assert _deltas(frames) == ["Hel", "lo"]
     # S10: one usage chunk, the provider's counts, then [DONE] last.
@@ -80,7 +80,7 @@ async def test_an_explicit_model_overrides_the_configured_default(
     )
 
     assert resp.status_code == 200
-    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:4b"
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
     assert fake.seen[0][1]["model"] == "qwen3:4b"
 
 

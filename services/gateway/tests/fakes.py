@@ -212,6 +212,9 @@ class FakeOllama:
     show_in_flight: int = 0
     show_max_in_flight: int = 0
     version_status: int = 200
+    # /api/tags answers this status when it is not 200 (S40: an engine that
+    # cannot be asked what is installed).
+    tags_status: int = 200
     pull_status: int = 200
     pull_lines: tuple[str, ...] = ('{"status":"pulling"}', '{"status":"success"}')
     probe_status: int = 200
@@ -349,6 +352,8 @@ class FakeOllama:
 
     async def _tags(self, request):
         await self._record(request)
+        if self.tags_status != 200:
+            return JSONResponse({"error": "ollama is not ready"}, status_code=self.tags_status)
         return JSONResponse({"models": [self._tag_row(name) for name in self.tags]})
 
     async def _version(self, request):

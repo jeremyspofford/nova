@@ -88,8 +88,8 @@ async def test_the_explicit_pick_is_link_one_and_the_chain_is_the_fallbacks(
     client, pool, local, mount_backend
 ):
     cloud = await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
-    put = await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:4b"]})
-    assert put.status_code == 200 and put.json()["chain"] == ["ollama:qwen3:4b"]
+    put = await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
+    assert put.status_code == 200 and put.json()["chain"] == ["hub:qwen3:4b"]
 
     resp = await _chat(client, "chat", model="openrouter:remote-model")
     assert resp.status_code == 200
@@ -117,7 +117,7 @@ async def test_a_capped_provider_is_skipped_before_the_call_and_the_reason_is_st
     client, pool, local, mount_backend
 ):
     cloud = await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
-    await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:4b"]})
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
     await usage.set_cap(pool, "openrouter", Decimal("1"))
     await pool.execute(
         "INSERT INTO usage_events (provider, model, served_by, kind, purpose, duration_ms, local, "
@@ -130,9 +130,9 @@ async def test_a_capped_provider_is_skipped_before_the_call_and_the_reason_is_st
     resp = await _chat(client, "chat", model="openrouter:remote-model")
 
     assert resp.status_code == 200
-    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:4b"
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
     route = _route_chunk(resp.content)
-    assert route["link"] == 2 and route["served_by"] == "ollama:qwen3:4b"
+    assert route["link"] == 2 and route["served_by"] == "hub:qwen3:4b"
     assert "openrouter over its monthly cap $1.00 (spent $1.50)" in route["reason"]
     assert len(cloud.seen) == before, "the capped provider was NEVER called"
     assert local.seen[-1][1]["model"] == "qwen3:4b"
@@ -140,7 +140,7 @@ async def test_a_capped_provider_is_skipped_before_the_call_and_the_reason_is_st
     # explain says the same, without serving.
     ex = (await client.get("/admin/route/explain?role=chat&model=openrouter:remote-model")).json()
     assert [v["verdict"] for v in ex["chain"]] == ["over_cap", "runnable"]
-    assert ex["would_serve"]["served_by"] == "ollama:qwen3:4b"
+    assert ex["would_serve"]["served_by"] == "hub:qwen3:4b"
     assert len(local.seen) == 1 + sum(1 for p, _ in local.seen if p == "/api/tags") - 1 or True
 
 
@@ -174,13 +174,13 @@ async def test_a_live_refusal_walls_the_provider_and_the_same_request_falls_to_t
     client, pool, local, mount_backend
 ):
     cloud = await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
-    await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:4b"]})
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
     cloud.completions_status = 402
 
     resp = await _chat(client, "chat", model="openrouter:remote-model")
 
     assert resp.status_code == 200
-    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:4b"
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
     route = _route_chunk(resp.content)
     assert route["link"] == 2 and "openrouter:remote-model refused this request" in route["reason"]
     walls = (await client.get("/admin/routes")).json()["walls"]
@@ -189,7 +189,7 @@ async def test_a_live_refusal_walls_the_provider_and_the_same_request_falls_to_t
     rows = await pool.fetch("SELECT kind, provider, status FROM usage_events ORDER BY id")
     assert [(r["kind"], r["provider"], r["status"]) for r in rows] == [
         ("refusal", "openrouter", 402),
-        ("completion", "ollama", 200),
+        ("completion", "hub", 200),
     ]
 
     # Walled: the next call skips it WITHOUT calling, and says why.
@@ -223,14 +223,14 @@ async def test_a_model_that_failed_does_not_wall_its_own_fallback(pool, local):
     account, so they wall the provider; a 5xx is one model failing to serve,
     so it walls that model and leaves its siblings alone.
     """
-    row = {"name": "ollama"}
+    row = {"name": "hub"}
     outage = await routing.record_refusal(pool, row, 502, "ReadTimeout", model="qwen3.8:27b")
     assert outage is not None and outage["model"] == "qwen3.8:27b"
 
     walled = await routing.walls(pool)
-    by_name = {"ollama": {"name": "ollama", "local": True, "is_default": True}}
-    failed = await routing.judge_link(None, pool, "ollama:qwen3.8:27b", by_name, walled, "UTC", ())
-    sibling = await routing.judge_link(None, pool, "ollama:qwen3:8b", by_name, walled, "UTC", ())
+    by_name = {"hub": {"name": "hub", "local": True, "is_default": True}}
+    failed = await routing.judge_link(None, pool, "hub:qwen3.8:27b", by_name, walled, "UTC", ())
+    sibling = await routing.judge_link(None, pool, "hub:qwen3:8b", by_name, walled, "UTC", ())
     assert failed["verdict"] == "walled", failed
     assert sibling["verdict"] != "walled", "the fallback was walled for its sibling's failure"
 
@@ -240,7 +240,7 @@ async def test_a_model_that_failed_does_not_wall_its_own_fallback(pool, local):
     walled = await routing.walls(pool)
     both = [
         await routing.judge_link(None, pool, link, by_name, walled, "UTC", ())
-        for link in ("ollama:qwen3.8:27b", "ollama:qwen3:8b")
+        for link in ("hub:qwen3.8:27b", "hub:qwen3:8b")
     ]
     assert [v["verdict"] for v in both] == ["walled", "walled"]
 
@@ -250,7 +250,7 @@ async def test_an_outage_wall_is_short_and_an_account_refusal_is_not(pool, local
     that is how one slow start costs every question for the rest of the hour.
     An account refusal genuinely does last: nothing about 402 changes in a
     minute. Two ladders, chosen by what the status is about."""
-    row = {"name": "ollama"}
+    row = {"name": "hub"}
     outage = await routing.record_refusal(pool, row, 503, "loading", model="qwen3:8b")
     account = await routing.record_refusal(pool, row, 402, "out of credit")
     assert outage is not None and account is not None
@@ -269,7 +269,7 @@ async def test_the_two_ladders_escalate_independently(pool, local):
     model's first slow start look like a fourth strike. They are different
     facts about different things, counted apart.
     """
-    row = {"name": "ollama"}
+    row = {"name": "hub"}
 
     def seconds(wall) -> float:
         return (wall["walled_until"] - wall["recorded_at"]).total_seconds()
@@ -298,31 +298,31 @@ async def test_a_clean_completion_clears_this_model_and_not_its_siblings(pool, l
     """An outage wall says one model would not serve. A SIBLING answering is no
     evidence about it, so a success must not sweep every model's wall away and
     send the next turn straight back into the one that just failed."""
-    row = {"name": "ollama"}
+    row = {"name": "hub"}
     await routing.record_refusal(pool, row, 500, "boom", model="qwen3:8b")
     await routing.record_refusal(pool, row, 500, "boom", model="qwen3.8:27b")
 
-    await routing.note_success(pool, "ollama", "qwen3:8b")
+    await routing.note_success(pool, "hub", "qwen3:8b")
     live = await routing.walls(pool)
-    assert ("ollama", "qwen3:8b") not in live
-    assert ("ollama", "qwen3.8:27b") in live, (
+    assert ("hub", "qwen3:8b") not in live
+    assert ("hub", "qwen3.8:27b") in live, (
         "a sibling's success cleared a wall it knows nothing about"
     )
 
     # The owner clearing the provider DOES mean all of it.
-    assert await routing.clear_wall(pool, "ollama") is True
+    assert await routing.clear_wall(pool, "hub") is True
     assert await routing.walls(pool) == {}
-    assert await routing.clear_wall(pool, "ollama") is False
+    assert await routing.clear_wall(pool, "hub") is False
 
 
 async def test_an_empty_role_chain_uses_the_chat_chain_and_an_uninstalled_local_is_skipped(
     client, pool, local
 ):
-    await client.put("/admin/routes/chat", json={"chain": ["ollama:gemma4:12b", "ollama:qwen3:4b"]})
+    await client.put("/admin/routes/chat", json={"chain": ["hub:gemma4:12b", "hub:qwen3:4b"]})
     resp = await _chat(client, "scheduled")
     assert resp.status_code == 200
     route = _route_chunk(resp.content)
-    assert route["served_by"] == "ollama:qwen3:4b" and route["link"] == 2
+    assert route["served_by"] == "hub:qwen3:4b" and route["link"] == 2
     assert "gemma4:12b is not installed" in route["reason"]
     assert route["role"] == "scheduled"
     (row,) = await pool.fetch("SELECT role, route_link, route_reason FROM usage_events")
@@ -345,9 +345,9 @@ async def test_a_chain_with_no_runnable_and_no_local_link_falls_to_the_stated_st
 
     assert resp.status_code == 200
     route = _route_chunk(resp.content)
-    assert route["standby"] is True and route["served_by"] == "ollama:qwen3:8b"
+    assert route["standby"] is True and route["served_by"] == "hub:qwen3:8b"
     assert (
-        "fell back to local standby ollama:qwen3:8b (the bundled ollama's default model qwen3:8b)"
+        "fell back to local standby hub:qwen3:8b (the bundled ollama's default model qwen3:8b)"
         in route["reason"]
     )
     assert "over its monthly cap $0.00" in route["reason"]
@@ -357,7 +357,7 @@ async def test_a_chain_with_no_runnable_and_no_local_link_falls_to_the_stated_st
 async def test_nothing_runnable_is_a_503_that_lists_every_verdict(client, pool, local, monkeypatch):
     local.tags = ()
     routing.clear_tags_cache()
-    await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:4b"]})
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
     resp = await _chat(client, "chat")
     assert resp.status_code == 503
     assert "qwen3:4b is not installed" in resp.json()["error"]
@@ -383,10 +383,10 @@ async def test_a_bare_local_pick_is_link_one_on_the_default_provider(client, poo
     — the same rule every request follows: a model on the default provider.
     Live 2026-09-08 the walk once read it as 'names no registered provider'
     and fell to the chain's first fallback; this pins the fix."""
-    await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:4b"]})
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
     resp = await _chat(client, "chat", model="qwen3:8b")
     assert resp.status_code == 200
-    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:8b"
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
     assert resp.headers["x-nova-route"] == "role=chat;link=1"
     assert local.seen[-1][1]["model"] == "qwen3:8b"
 
@@ -398,37 +398,37 @@ async def test_a_derived_role_with_its_own_chain_resolves_to_it_and_without_one_
     ROLE_RE) can own a chain. With one, it serves from it; with an empty
     chain or no row at all it walks the chat chain — exactly as Nova's
     scheduled/judge fallbacks do."""
-    await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:8b"]})
-    put = await client.put("/admin/routes/agent_coder", json={"chain": ["ollama:qwen3:4b"]})
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b"]})
+    put = await client.put("/admin/routes/agent_coder", json={"chain": ["hub:qwen3:4b"]})
     assert put.status_code == 200 and put.json() == {
         "role": "agent_coder",
-        "chain": ["ollama:qwen3:4b"],
+        "chain": ["hub:qwen3:4b"],
     }
 
     resp = await _chat(client, "agent_coder")
     assert resp.status_code == 200
-    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:4b"
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:4b"
     assert resp.headers["x-nova-route"] == "role=agent_coder;link=1"
     assert _route_chunk(resp.content) == {
         "role": "agent_coder",
         "link": 1,
         "reason": None,
-        "served_by": "ollama:qwen3:4b",
+        "served_by": "hub:qwen3:4b",
         "standby": False,
     }
     (row,) = await pool.fetch("SELECT role, served_by FROM usage_events")
-    assert (row["role"], row["served_by"]) == ("agent_coder", "ollama:qwen3:4b")
+    assert (row["role"], row["served_by"]) == ("agent_coder", "hub:qwen3:4b")
 
     # explain names the same chain, without serving.
     ex = (await client.get("/admin/route/explain?role=agent_coder")).json()
-    assert ex["role"] == "agent_coder" and [v["id"] for v in ex["chain"]] == ["ollama:qwen3:4b"]
-    assert ex["would_serve"]["served_by"] == "ollama:qwen3:4b"
+    assert ex["role"] == "agent_coder" and [v["id"] for v in ex["chain"]] == ["hub:qwen3:4b"]
+    assert ex["would_serve"]["served_by"] == "hub:qwen3:4b"
 
     # An empty chain of its own: the chat chain serves, under the agent's role.
     await client.put("/admin/routes/agent_coder", json={"chain": []})
     resp = await _chat(client, "agent_coder")
     assert resp.status_code == 200
-    assert resp.headers["x-nova-served-by"] == "ollama:qwen3:8b"
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
     assert resp.headers["x-nova-route"] == "role=agent_coder;link=1"
 
     # No row at all (never set, or removed): the same walk.
@@ -436,10 +436,10 @@ async def test_a_derived_role_with_its_own_chain_resolves_to_it_and_without_one_
     for role in ("agent_coder", "agent_reviewer"):
         resp = await _chat(client, role)
         assert resp.status_code == 200
-        assert resp.headers["x-nova-served-by"] == "ollama:qwen3:8b"
+        assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
         assert resp.headers["x-nova-route"] == f"role={role};link=1"
     ex = (await client.get("/admin/route/explain?role=agent_reviewer")).json()
-    assert ex["role"] == "agent_reviewer" and ex["would_serve"]["served_by"] == "ollama:qwen3:8b"
+    assert ex["role"] == "agent_reviewer" and ex["would_serve"]["served_by"] == "hub:qwen3:8b"
     rows = await pool.fetch("SELECT role FROM usage_events ORDER BY id")
     assert [r["role"] for r in rows] == ["agent_coder"] * 3 + ["agent_reviewer"]
 
@@ -456,18 +456,18 @@ async def test_the_routes_page_lists_built_ins_first_and_a_derived_role_can_be_r
     assert [r["role"] for r in page if r["reserved"]] == sorted(routing.RESERVED_ROLES)
 
     for role in ("agent_zed", "agent_alpha"):
-        put = await client.put(f"/admin/routes/{role}", json={"chain": ["ollama:qwen3:4b"]})
+        put = await client.put(f"/admin/routes/{role}", json={"chain": ["hub:qwen3:4b"]})
         assert put.status_code == 200, put.text
     page = (await client.get("/admin/routes")).json()["roles"]
     assert [r["role"] for r in page] == [*routing.BUILTIN_ROLES, "agent_alpha", "agent_zed"]
     derived = [r for r in page if not r["builtin"]]
     assert derived == [
-        {"role": "agent_alpha", "chain": ["ollama:qwen3:4b"], "reserved": False, "builtin": False},
-        {"role": "agent_zed", "chain": ["ollama:qwen3:4b"], "reserved": False, "builtin": False},
+        {"role": "agent_alpha", "chain": ["hub:qwen3:4b"], "reserved": False, "builtin": False},
+        {"role": "agent_zed", "chain": ["hub:qwen3:4b"], "reserved": False, "builtin": False},
     ]
 
     # A built-in is never removed, row or not.
-    await client.put("/admin/routes/chat", json={"chain": ["ollama:qwen3:4b"]})
+    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:4b"]})
     for role in ("chat", "vision"):
         bad = await client.delete(f"/admin/routes/{role}")
         assert bad.status_code == 400

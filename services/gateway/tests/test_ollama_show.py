@@ -8,6 +8,7 @@ capability list is a manifest, not a denial); every fact says it is
 one failing show is a note on that name in ollama's words, never a raise
 that empties the whole listing.
 """
+
 from __future__ import annotations
 
 import copy
@@ -273,7 +274,9 @@ async def test_the_fakes_own_tags_rows_flow_through_to_the_digest_cache(mount_ba
     monkeypatch.setenv("OLLAMA_URL", OLLAMA_URL)
     fake = FakeOllama(tags=("qwen3:8b", "qwen3:4b"))
     mount_backend(OLLAMA_URL, fake.app)
-    listing = await ollama.ADAPTER.list_models(app, {"name": "ollama", "adapter": "ollama"})
+    listing = await ollama.ADAPTER.list_models(
+        app, {"name": "hub", "adapter": "ollama", "builtin": True}
+    )
     assert all(row["digest"].startswith("sha256:") for row in listing.models)
     assert listing.models[0]["context_length"] == 40960
 
@@ -284,7 +287,9 @@ async def test_the_fakes_own_tags_rows_flow_through_to_the_digest_cache(mount_ba
 
     # The re-pull, as ollama would report it: a new digest on /api/tags.
     fake.tag_rows["qwen3:8b"] = {"digest": "sha256:" + "f" * 64}
-    listing = await ollama.ADAPTER.list_models(app, {"name": "ollama", "adapter": "ollama"})
+    listing = await ollama.ADAPTER.list_models(
+        app, {"name": "hub", "adapter": "ollama", "builtin": True}
+    )
     after = await ollama.facts_for_installed(app, OLLAMA_URL, listing.models)
     assert _shows(fake)[2:] == ["qwen3:8b"]
     assert after["qwen3:8b"]["cached"] is False and after["qwen3:4b"]["cached"] is True

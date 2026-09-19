@@ -45,15 +45,17 @@ async def _migrate_to(tmp_path, upto: int) -> None:
 
 @pytest.fixture
 async def legacy(tmp_path):
-    """A database exactly as S39 left it (001-008). Handed back afterwards:
-    the next `pool` fixture rebuilds the suite's schema from empty."""
+    """A database exactly as S39 left it (001-008). Handed back REBUILT: a
+    test that stops the migration leaves the schema at 008, and resetting
+    `_schema_built` from here would not reach the `pool` fixture — pytest
+    loads conftest as `conftest`, and `tests.conftest` is a second copy."""
     await _migrate_to(tmp_path, 8)
     conn = await asyncpg.connect(TEST_DSN)
     try:
         yield conn
     finally:
         await conn.close()
-        conftest._schema_built = False
+        await conftest._build_schema()
 
 
 async def _seed(conn) -> None:

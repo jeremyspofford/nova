@@ -288,7 +288,7 @@ async def installed_sizes(app, pool: asyncpg.Pool) -> dict[str, int | None] | No
     if hit is not None:
         return hit[0]
     try:
-        builtin = await providers.get_row(pool, "ollama")
+        builtin = await providers.get_row(pool, providers.BUILTIN)
         listing = await ollama.ADAPTER.list_models(app, builtin)
     except (ProviderRefused, providers.UnknownProvider):
         return None
@@ -364,7 +364,7 @@ async def standby(
     order, first that is not wont_fit), else the first installed tag."""
     if not tags:
         return None
-    builtin = await providers.get_row(pool, "ollama")
+    builtin = await providers.get_row(pool, providers.BUILTIN)
     default = builtin.get("default_model")
     if default and _installed(tags, default):
         return builtin, default, f"the bundled ollama's default model {default}"

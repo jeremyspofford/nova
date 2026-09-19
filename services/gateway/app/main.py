@@ -1,4 +1,5 @@
 """FastAPI entrypoint for the gateway service."""
+
 from __future__ import annotations
 
 import asyncio
@@ -12,7 +13,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app import admin, backends, data_plane, db, usage
+from app import admin, backends, data_plane, db, engines_api, usage
 from app.auth import bearer_auth_middleware
 from app.logging_conf import configure_logging
 from app.migrations_runner import run_migrations
@@ -48,6 +49,7 @@ app = FastAPI(title=SERVICE_NAME, lifespan=lifespan)
 app.middleware("http")(bearer_auth_middleware)
 app.include_router(data_plane.router)
 app.include_router(admin.router)
+app.include_router(engines_api.router)
 
 
 @app.exception_handler(StarletteHTTPException)

@@ -26,13 +26,14 @@ from __future__ import annotations
 import ast
 import pathlib
 
-from app import admin, catalog, fit, routing, suggest
+from app import admin, catalog, engines, fit, routing, suggest
 
 APP_DIR = pathlib.Path(admin.__file__).parent
 
 # Every module that answers a question about the card WHILE SERVING. None of
 # them may name the file or the function that reads it.
-SERVING_MODULES = (fit, catalog, routing, suggest)
+# S40: engines states what the hub's card is while serving (EngineView.facts).
+SERVING_MODULES = (fit, catalog, engines, routing, suggest)
 
 
 def _reads_hardware(module) -> bool:

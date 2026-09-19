@@ -337,7 +337,7 @@ async def build(
     fit_ctx = await fit_context(app, pool)
 
     async def local_section() -> tuple[list[dict], list[dict], set[str]]:
-        builtin = await providers.get_row(pool, "ollama")
+        builtin = await providers.get_row(pool, providers.BUILTIN)
         base_url = providers.base_url_of(builtin)
         try:
             tags = await ollama.ADAPTER.list_models(app, builtin)
@@ -460,7 +460,7 @@ async def installed_names(app, pool) -> set[str] | None:
     """What the bundled ollama lists right now, or None when it could not be
     asked — the caller then leaves `installed` unstated rather than False."""
     try:
-        builtin = await providers.get_row(pool, "ollama")
+        builtin = await providers.get_row(pool, providers.BUILTIN)
         listing = await ollama.ADAPTER.list_models(app, builtin)
     except (ProviderRefused, providers.UnknownProvider):
         return None
@@ -571,7 +571,7 @@ async def check_drift(app, pool, model: str) -> dict:
     `moved` is True/False only when both digests were read, else None with
     the reason. The catalogue's `drift` block is exactly this shape."""
     model = pulls.validate_model(model)
-    builtin = await providers.get_row(pool, "ollama")
+    builtin = await providers.get_row(pool, providers.BUILTIN)
     listing = await ollama.ADAPTER.list_models(app, builtin)
     name = installed_name(listing.models, model)
     if name is None:

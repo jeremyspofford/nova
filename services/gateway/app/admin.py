@@ -662,7 +662,7 @@ async def _refuse_name_that_shadows_a_local_tag(app, pool, name: str) -> None:
     "model 7b on Mistral's cloud". Checked against what the bundled ollama
     LISTS right now — derived, never a maintained list — and a listing that
     cannot be read is a stated refusal, not a skipped check."""
-    builtin = await providers.get_row(pool, "ollama")
+    builtin = await providers.get_row(pool, providers.BUILTIN)
     try:
         listing = await adapters.for_row(builtin).list_models(app, builtin)
     except adapters.ProviderRefused as exc:
@@ -699,8 +699,13 @@ async def create_provider(request: Request) -> dict:
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="request body must be a JSON object")
     name = providers.validate_name(body.get("name"))
-    if name == "ollama":
-        raise HTTPException(status_code=409, detail="'ollama' is the builtin provider")
+    if name in providers.RESERVED_NAMES:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{name!r} is reserved — {providers.BUILTIN!r} is the bundled engine, "
+            f"{providers.LIBRARY!r} names the model library and {providers.LEGACY_BUILTIN!r} "
+            "is the name pre-S40 usage rows carry; pick another name",
+        )
     pool = await db.get_pool()
     try:
         await providers.get_row(pool, name)
@@ -1138,7 +1143,7 @@ async def remove_model(request: Request) -> dict:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     pool = await db.get_pool()
-    builtin = await providers.get_row(pool, "ollama")
+    builtin = await providers.get_row(pool, providers.BUILTIN)
     base_url = providers.base_url_of(builtin)
     try:
         before = await ollama.ADAPTER.list_models(request.app, builtin)

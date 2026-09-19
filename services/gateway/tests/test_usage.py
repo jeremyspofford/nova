@@ -204,7 +204,7 @@ async def test_a_local_completion_is_one_row_with_ollamas_counts_and_no_dollars(
         "local": True,
         "metered": True,
         "recorded": True,
-        "provider": "ollama",
+        "provider": "hub",
     }
     # ollama was ASKED for its counts.
     assert local.seen[0][1]["stream_options"] == {"include_usage": True}
@@ -492,16 +492,16 @@ async def test_the_report_rolls_up_by_provider_model_purpose_person_and_day(clie
     }
     assert report["totals"]["gpu_seconds"] >= 0
     (provider,) = report["by_provider"]
-    assert provider["provider"] == "ollama" and provider["local"] is True
+    assert provider["provider"] == "hub" and provider["local"] is True
     assert provider["month_usd"] is None and provider["gpu_seconds"] is not None
     assert {p["key"]: p["calls"] for p in report["by_purpose"]} == {"chat": 2, "scheduled": 1}
     assert report["by_person"][0]["key"] == ATTRIBUTION["X-Nova-Person"]
-    assert report["by_model"][0]["key"] == "ollama:qwen3:8b"
+    assert report["by_model"][0]["key"] == "hub:qwen3:8b"
     assert len(report["by_day"]) == 1 and report["by_day"][0]["calls"] == 3
     # The day's bar is stacked by model.
     assert report["by_day"][0]["models"] == [
         {
-            "key": "ollama:qwen3:8b",
+            "key": "hub:qwen3:8b",
             "local": True,
             "usd": 0.0,
             "calls": 3,
@@ -525,7 +525,7 @@ async def test_caps_are_per_provider_plus_a_total_and_never_on_a_local_provider(
         await client.put("/admin/spend/caps", json={"provider": "*", "monthly_usd": 25})
     ).status_code == 200
     assert (
-        await client.put("/admin/spend/caps", json={"provider": "ollama", "monthly_usd": 5})
+        await client.put("/admin/spend/caps", json={"provider": "hub", "monthly_usd": 5})
     ).status_code == 400
     assert (
         await client.put("/admin/spend/caps", json={"provider": "nope", "monthly_usd": 5})
@@ -536,7 +536,7 @@ async def test_caps_are_per_provider_plus_a_total_and_never_on_a_local_provider(
     caps = (await client.get("/admin/spend/caps")).json()["caps"]
     assert caps[0]["monthly_usd"] == 25.0 and caps[0]["remaining_usd"] == 25.0
     # Read live, before the act.
-    builtin = await providers.get_row(pool, "ollama")
+    builtin = await providers.get_row(pool, "hub")
     assert await usage.over_cap(pool, builtin, "UTC") is None
     cloud = {"name": "openrouter", "local": False}
     await usage.set_cap(pool, "openrouter", Decimal("1"))
