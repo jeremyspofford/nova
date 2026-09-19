@@ -15,9 +15,11 @@ card by assigning a reading, then forgets the cached observation.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from app import backends, devices_vram, engines
+from app import backends, data_plane, devices_vram, engines
 from tests.conftest import HUB_CPU, HUB_GPU, HUB_GPU_UUID, requires_db
 from tests.fakes import FakeOllama, FakeOpenAICompat
 
@@ -203,3 +205,34 @@ async def test_a_stored_device_list_is_never_read_as_this_hosts(client, pool, hu
     assert "x-nova-served-on" not in resp.headers
     (row,) = await pool.fetch("SELECT served_on FROM usage_events WHERE kind = 'completion'")
     assert row["served_on"] is None
+
+
+async def test_a_stamp_that_stalls_costs_the_stamp_never_the_reply(client, pool, hub, monkeypatch):
+    """(S40 ruling, fix wave B1) The stamp is read before the reply's first
+    byte, so it is bounded as a whole: an observation that hangs (a slow
+    nvidia-smi, a wedged engine) omits served_on AND served_runtime — never a
+    guess, never the last value seen — and the reply still goes out."""
+    stalled = asyncio.Event()
+
+    async def _never(*args, **kwargs):
+        stalled.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(engines, "observe", _never)
+    monkeypatch.setattr(data_plane, "STAMP_BUDGET_S", 0.05, raising=False)
+
+    # Bounded here too, so an unbounded stamp is a red test, not a hung suite.
+    resp = await asyncio.wait_for(client.post("/v1/chat/completions", json=CHAT), 5.0)
+
+    assert stalled.is_set(), "the stamp was asked for"
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
+    assert "x-nova-served-on" not in resp.headers
+    assert "x-nova-served-runtime" not in resp.headers
+    (row,) = await pool.fetch("SELECT served_on FROM usage_events WHERE kind = 'completion'")
+    assert row["served_on"] is None
+
+
+def test_the_stamps_whole_budget_is_two_seconds():
+    """The ruling's number: never more than ~2 s before the first byte."""
+    assert data_plane.STAMP_BUDGET_S == 2.0

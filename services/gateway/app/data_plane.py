@@ -42,6 +42,11 @@ ROUTE_HEADER = "X-Nova-Route"
 # ollama's /api/ps is local and answers in milliseconds; bounded so a wedged
 # engine costs the stamp (omitted), never the reply (S40 ruling C2: 2 s).
 STAMP_TIMEOUT = httpx.Timeout(2.0)
+# The WHOLE stamp — the engine's observation (a cold one reads nvidia-smi and
+# /api/tags) and its /api/ps — before the reply's first byte. Past this the
+# stamp is omitted, served_on and served_runtime both: never guessed, never
+# the last value seen (S40 T3 ruling, fix wave B1).
+STAMP_BUDGET_S = 2.0
 
 
 class EngineUnreachable(HTTPException):
@@ -211,10 +216,18 @@ async def serve_completion(
             status_code=exc.status, detail=exc.detail, headers={SERVED_BY_HEADER: served_by}
         ) from exc
     # A refusal ran nowhere: only a 200 is stamped.
+    served = Served()
     if response.status_code == 200:
-        served = await served_stamp(request.app, pool, row, model)
-    else:
-        served = Served()
+        try:
+            served = await asyncio.wait_for(
+                served_stamp(request.app, pool, row, model), STAMP_BUDGET_S
+            )
+        except TimeoutError:
+            logger.info(
+                "served-on: omitted for %s — the stamp took longer than %g s",
+                served_by,
+                STAMP_BUDGET_S,
+            )
     response = await usage.observe(
         pool,
         response,
