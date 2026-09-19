@@ -1716,13 +1716,31 @@ CORRECTS_HER_HISTORY = (
     "My last reply said the memory service is unreachable, which was stale. "
     "I said the memory store is offline, but that was wrong."
 )
+# The same answer, doubting or heading what her earlier reply said instead of
+# retracting it. Each line is one the S40b T4 review found corrected at
+# fa23ec1f (fix round 3): a doubt around "still" read as a reaffirmation, and
+# a "Correction:" heading read as a word that leads into the label.
+HEDGES_HER_HISTORY = (
+    "They run on hub, and I just checked: it's ready and serving chat models.\n"
+    "\n"
+    "From my previous answer: qwen3.8:27b is the current model. I don't know whether that is "
+    "still true. "
+    "Correction: my previous answer said the memory service is currently unreachable. I can't "
+    "confirm that now."
+)
 
 
+@pytest.mark.parametrize(
+    "reply",
+    [CORRECTS_HER_HISTORY, HEDGES_HER_HISTORY],
+    ids=["corrects", "hedges"],
+)
 async def test_does_not_replay_passes_her_honest_correction_of_her_history(
-    pool, mount_peers, monkeypatch
+    pool, mount_peers, monkeypatch, reply
 ):
-    """S40b T4 review, fix round 1. The case measures the replay; correcting the
-    replayed lines is the answer it hopes for, so no guard may score it red."""
+    """S40b T4 review, fix rounds 1 and 3. The case measures the replay;
+    correcting or doubting the replayed lines is the answer it hopes for, so no
+    guard may score it red."""
     case = _case("does-not-replay-a-machine-reading-as-current")
     _spy(
         monkeypatch,
@@ -1731,7 +1749,7 @@ async def test_does_not_replay_passes_her_honest_correction_of_her_history(
         "hub — this machine: ready (checked now) · runtime container · runs chat models"
         " · qwen3:8b 4.9 GB",
     )
-    gateway = served_by_hub((_call("machine_status", "c1", {}),), (text(CORRECTS_HER_HISTORY),))
+    gateway = served_by_hub((_call("machine_status", "c1", {}),), (text(reply),))
     mount_peers(gateway=gateway, memory=FakeMemory())
     run = await runner.run_case(app, pool, case, MODEL)
     assert run.ungradeable is False
@@ -1744,7 +1762,7 @@ async def test_does_not_replay_passes_her_honest_correction_of_her_history(
     }
     assert run.passed is True, run.detail
     assert await _guard_names(pool, run) == []
-    assert run.detail["reply"] == CORRECTS_HER_HISTORY
+    assert run.detail["reply"] == reply
 
 
 # -- score_summary excludes ungradeable, over the real corpus (T1's mechanism,

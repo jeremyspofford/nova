@@ -1132,3 +1132,131 @@ def test_a_regeneration_that_reasserts_her_earlier_served_claim_is_refused(regen
     regeneration that cites her last reply to restate the claim clears no
     lower bar than the reply did."""
     assert _vet(regen, [_llm(), RECALLED]) == "served_claim"
+
+
+# -- S40b T4 review, fix round 3: a doubt is not a reaffirmation, a heading is not a lead
+#
+# Each sentence below FIRED at fa23ec1f and was SILENT at c9538364 in a turn
+# served by hub:qwen3:8b whose recall answered (the reviewer's probes verbatim
+# first). A reaffirmation she doubts ("I don't know whether that is still
+# true") was read as hers, and a heading ("Correction:", "Update:") as a word
+# that leads INTO the label. See test_state_guard.py's fix round 3 for the
+# rule (guards._vouched, guards._NOT_A_LABEL_LEAD).
+SERVED_LABELLED_THEN_DOUBTED_OR_HEADED = [
+    (
+        "dont_know_whether_still_true",
+        "From my previous answer: qwen3.8:27b is the current model. I don't know whether that "
+        "is still true.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "correction_heading_and_a_guess",
+        "Correction: my last reply said qwen3.8:27b is the current model, and that was a guess.",
+        "qwen3.8:27b is the current model, and that was a guess.",
+    ),
+    # The same doubt and heading, spelled the other ways she writes them.
+    (
+        "not_sure_that_is_still_true",
+        "My last reply said qwen3.8:27b is the current model. I'm not sure that is still true.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "whether_still_the_case_i_cant_say",
+        "My last reply said qwen3.8:27b is the current model; whether that is still the case, "
+        "I can't say.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "cant_tell_you_whether_still_accurate",
+        "My previous answer: qwen3.8:27b is the current model. I can't tell you whether that is "
+        "still accurate.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "update_heading",
+        "Update: my previous answer said qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "correction_dash_heading",
+        "Correction — my last reply said qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "as_a_correction_heading",
+        "As a correction, my last reply said qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "changed_heading",
+        "Changed: my previous answer said qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+]
+
+# What must keep firing: a doubt that is no doubt, a doubt about something
+# else in another clause, and a lead that joins its label by a space.
+SERVED_STILL_REASSERTED = [
+    (
+        "no_doubt_still_true",
+        "My last reply said qwen3.8:27b is the current model. No doubt that is still true.",
+    ),
+    (
+        "not_sure_why_still_true",
+        "My last reply said qwen3.8:27b is the current model. I'm not sure why that is still true.",
+    ),
+    (
+        "a_doubt_about_something_else",
+        "My last reply said qwen3.8:27b is the current model; I'm not sure about the embedder, "
+        "but that is still true.",
+    ),
+    (
+        "fixing_my_last_replys_model_line",
+        "Fixing my last reply's model line: qwen3.8:27b is the current model.",
+    ),
+    (
+        "corrections_to_my_last_replys_model_line",
+        "Corrections to my last reply's model line: qwen3.8:27b is the current model.",
+    ),
+    ("update_from_my_last_reply", "Update from my last reply: qwen3.8:27b is the current model."),
+    (
+        "update_heading_then_still_the_case",
+        "Update: my previous answer said qwen3.8:27b is the current model, and that is still "
+        "the case.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    SERVED_LABELLED_THEN_DOUBTED_OR_HEADED,
+    ids=[c[0] for c in SERVED_LABELLED_THEN_DOUBTED_OR_HEADED],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_doubted_or_headed_served_history_label_is_not_corrected(purpose, label, reply, bare):
+    spans = [_llm(purpose=purpose), RECALLED]
+    assert guards.served_claim_check(reply, spans, purpose=purpose) is None, label
+    claim = guards.served_claim_check(bare, spans, purpose=purpose)
+    assert claim is not None and claim.claimed == "qwen3.8:27b", label
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_STILL_REASSERTED, ids=[c[0] for c in SERVED_STILL_REASSERTED]
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_vouched_reaffirmation_or_a_joined_lead_still_fires_on_the_served_claim(
+    purpose, label, reply
+):
+    claim = guards.served_claim_check(reply, [_llm(purpose=purpose), RECALLED], purpose=purpose)
+    assert claim is not None, label
+    assert claim.claimed == "qwen3.8:27b"
+    assert claim.text == named_text("qwen3.8:27b")
+
+
+@pytest.mark.parametrize("regen", [c[1] for c in SERVED_LABELLED_THEN_DOUBTED_OR_HEADED[:2]])
+def test_a_regeneration_that_doubts_or_heads_her_served_history_passes(regen):
+    assert _vet(regen, [_llm(), RECALLED]) is None

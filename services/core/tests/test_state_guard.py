@@ -1871,3 +1871,270 @@ def test_a_regeneration_that_replays_as_current_while_citing_history_is_refused(
         agent_names=[],
     )
     assert rejected == "state_claim"
+
+
+# ================================================================================
+# S40b T4 review, fix round 3: a doubt is not a reaffirmation, a heading is not
+# a lead
+# ================================================================================
+#
+# Fix round 2 made a claim after a history label fire again when she
+# reaffirms it ("…, and that is still true") or when a word that restates or
+# corrects leads INTO the label ("Correction to my last reply:"). Two of those
+# limits read too much. Each MUST_NOT below FIRED at fa23ec1f and was SILENT
+# at c9538364 with only hub's served round (the reviewer's probes verbatim
+# first); in chat each was a REPLACE-class correction of the honest answer,
+# and a regeneration that wrote it was refused.
+#   * A DOUBT read as a reaffirmation: "I can't tell you whether that is still
+#     accurate", "(not sure it still holds)". A reaffirmation or a "still
+#     holds" is hers only when nothing in its clause ahead of it doubts it (a
+#     doubted belief, "don't know", "can't tell/say/confirm", "unclear", a
+#     "whether"/"if" right before it) and its sentence is not a question
+#     (guards._vouched).
+#   * A HEADING read as a lead: "Correction:", "Update —", "As a correction,".
+#     A lead joins its label by a space ("correction to", "updated from", "as
+#     my last reply said"); a colon, dash or comma after it ends a heading, and
+#     the label under a heading is a label.
+STATE_LABELLED_THEN_DOUBTED = [
+    (
+        "cant_tell_you_whether_still_accurate",
+        f"Here is hub's status from my previous answer:\n{NAME_RUN}\nI can't tell you whether "
+        "that is still accurate.",
+        NAME_RUN,
+    ),
+    (
+        "not_sure_it_still_holds_in_the_label",
+        "From my previous answer (not sure it still holds): hub is offline.",
+        "hub is offline.",
+    ),
+    # The same doubt, spelled the other ways she writes it.
+    (
+        "not_sure_that_is_still_true",
+        "My previous answer said: hub is offline. I'm not sure that is still true.",
+        "hub is offline.",
+    ),
+    (
+        "dont_know_if_still_true",
+        "From my previous answer: hub is switched off. I don't know if that is still true.",
+        "hub is switched off.",
+    ),
+    (
+        "whether_still_the_case_i_cant_say",
+        "From my previous answer: hub is offline. Whether that is still the case, I can't say.",
+        "hub is offline.",
+    ),
+    (
+        "block_then_dont_know_whether",
+        f"From my previous answer:\n{NAME_RUN}\nI don't know whether that is still true.",
+        NAME_RUN,
+    ),
+    (
+        "block_then_not_sure_it_still_holds",
+        f"From my previous answer:\n{NAME_RUN}\nI'm not sure it still holds.",
+        NAME_RUN,
+    ),
+    (
+        "cant_say_whether_it_still_holds",
+        "From my previous answer: hub is offline, and I can't say whether it still holds.",
+        "hub is offline.",
+    ),
+    (
+        "cant_confirm_still_the_case",
+        "From my previous answer: hub is offline. I can't confirm that is still the case.",
+        "hub is offline.",
+    ),
+    (
+        "doubt_still_true",
+        "From my previous answer: hub is offline. I doubt that is still true.",
+        "hub is offline.",
+    ),
+    (
+        "dont_think_still_true",
+        "From my previous answer: hub is offline. I don't think that is still true.",
+        "hub is offline.",
+    ),
+    (
+        "unclear_whether_still_holds",
+        "From my previous answer: hub is offline. It's unclear whether that still holds.",
+        "hub is offline.",
+    ),
+    (
+        "block_then_cant_tell_whether_still_current",
+        f"Here is hub's status from my previous answer:\n{NAME_RUN}\nI can't tell whether that "
+        "is still current.",
+        NAME_RUN,
+    ),
+    # A reaffirmation she asks about is not one.
+    (
+        "still_true_or_is_it",
+        "From my previous answer: hub is offline. That is still true, or is it?",
+        "hub is offline.",
+    ),
+]
+
+STATE_LABELLED_UNDER_A_HEADING = [
+    (
+        "correction_heading_then_from_history",
+        "Correction: my previous answer said: hub is offline. That was from history, not a "
+        "fresh check.",
+        "hub is offline.",
+    ),
+    # The same heading, spelled the other ways she writes it.
+    (
+        "update_heading",
+        "Update: my previous answer said: hub is offline. That was from history.",
+        "hub is offline.",
+    ),
+    (
+        "update_dash_heading_over_an_attribution",
+        f"Update — from my previous answer:\n{NAME_RUN}\nI have not re-read it.",
+        NAME_RUN,
+    ),
+    (
+        "correction_heading_over_showed",
+        f"Correction: my previous answer showed:\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    (
+        "correction_dash_heading",
+        "Correction — my previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "correction_comma_heading",
+        "Correction, my previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "bold_correction_heading",
+        "**Correction:** my previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    ("updated_heading", "Updated: my last reply said: hub is offline.", "hub is offline."),
+    ("fix_heading", "Fix: my last reply said: hub is offline.", "hub is offline."),
+    (
+        "as_a_correction_heading",
+        "As a correction: my previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    # A word that says the state changed is a heading the same way.
+    (
+        "changed_heading",
+        "Changed: my previous answer said: hub is offline. I have not re-read it.",
+        "hub is offline.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    STATE_LABELLED_THEN_DOUBTED + STATE_LABELLED_UNDER_A_HEADING,
+    ids=[c[0] for c in STATE_LABELLED_THEN_DOUBTED + STATE_LABELLED_UNDER_A_HEADING],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_doubted_or_headed_history_label_is_not_corrected(purpose, label, reply, bare):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    assert guards.state_claim_check(reply, spans, NAMES, purpose=purpose) is None, label
+    claim = guards.state_claim_check(bare, spans, NAMES, purpose=purpose)
+    assert claim is not None and claim.device == "hub", label
+
+
+# What must keep firing: a doubt that is no doubt ("not sure WHY" presupposes
+# it, "no doubt" asserts it), a doubt about something else in another clause,
+# an "if" that does not lead the reaffirmation, and a lead that joins its label
+# by a space — a verb, a participle, a plural noun and a preposition.
+STATE_STILL_REASSERTED = [
+    (
+        "not_sure_why_still_true",
+        "From my previous answer: hub is offline. I'm not sure why that is still true.",
+    ),
+    (
+        "dont_know_why_still_true",
+        "From my previous answer: hub is offline. I don't know why that is still true.",
+    ),
+    (
+        "a_doubt_about_something_else",
+        "From my previous answer: hub is offline. I'm not sure about the Dell, but that is "
+        "still true.",
+    ),
+    (
+        "no_doubt_still_true",
+        "From my previous answer: hub is offline. No doubt that is still true.",
+    ),
+    ("sure_still_true", "From my previous answer: hub is offline. I'm sure that is still true."),
+    (
+        "an_if_that_does_not_lead_it",
+        "From my previous answer: hub is offline. If you're asking, that is still true.",
+    ),
+    ("correcting_my_last_replys_reading", "Correcting my last reply's reading: hub is offline."),
+    ("fixing_my_last_replys_reading", "Fixing my last reply's reading: hub is offline."),
+    (
+        "corrections_to_my_last_replys_reading",
+        "Corrections to my last reply's reading: hub is offline.",
+    ),
+    ("updates_to_my_last_replys_reading", "Updates to my last reply's reading: hub is offline."),
+    (
+        "amendment_to_my_last_replys_reading",
+        "Amendment to my last reply's reading: hub is offline.",
+    ),
+    (
+        "current_status_updated_from_my_last_reply",
+        f"Here is hub's current status (updated from my last reply):\n{NAME_RUN}",
+    ),
+    ("updated_from_my_last_reply_after", "hub is offline, updated from my last reply."),
+    (
+        "current_status_bold_unchanged_from_my_last_reply",
+        f"Here is hub's current status (**unchanged** from my last reply):\n{NAME_RUN}",
+    ),
+    # A noun that runs into an attribution needs no preposition of its own.
+    ("update_from_my_last_reply", "Update from my last reply: hub is offline."),
+    ("changed_from_my_last_reply", "Changed from my last reply: hub is offline."),
+    # A word that says the state is the SAME leads through a heading's colon.
+    ("unchanged_heading", "Unchanged: my previous answer said: hub is offline."),
+    # Under a heading, a label still ends at a reaffirmation or a retraction.
+    (
+        "correction_heading_then_still_true",
+        "Correction: my previous answer said: hub is offline, and that is still true.",
+    ),
+    (
+        "correction_heading_retracted_then_a_new_claim",
+        "Correction: my previous answer said: hub was ready, which was wrong, and hub is offline.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", STATE_STILL_REASSERTED, ids=[c[0] for c in STATE_STILL_REASSERTED]
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_vouched_reaffirmation_or_a_joined_lead_still_fires(purpose, label, reply):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    claim = guards.state_claim_check(reply, spans, NAMES, purpose=purpose)
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+
+
+@pytest.mark.parametrize(
+    "regen",
+    [
+        STATE_LABELLED_THEN_DOUBTED[0][1],
+        STATE_LABELLED_UNDER_A_HEADING[0][1],
+    ],
+)
+def test_a_regeneration_that_doubts_or_heads_her_history_is_not_refused(regen):
+    """The reviewer's regeneration probes: the honest answer, vetted as a
+    regeneration, was refused as state_claim and the correction became the
+    record."""
+    from app import agents
+
+    turn = SimpleNamespace(spans=[HUB_SERVED], kind="chat")
+    rejected = chat._regen_rejected_by(
+        regen,
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected is None

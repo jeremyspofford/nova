@@ -742,3 +742,188 @@ def test_a_memory_claim_labelled_as_her_history_is_not_corrected(purpose, label,
     spans = [LLM, _recall(hits=5)]
     assert guards.memory_claim_check(reply, spans, purpose=purpose) is None, label
     assert guards.memory_claim_check(bare, spans, purpose=purpose) is not None, label
+
+
+# -- S40b T4 review, fix round 3: a doubt is not a reaffirmation, a heading is not a lead
+#
+# Each sentence below FIRED at fa23ec1f and was SILENT at c9538364 with the
+# recall answered (the reviewer's probes verbatim first). See
+# test_state_guard.py's fix round 3 for the rule (guards._vouched,
+# guards._NOT_A_LABEL_LEAD).
+MEMORY_LABELLED_THEN_DOUBTED_OR_HEADED = [
+    (
+        "not_sure_that_is_still_true",
+        "From my last reply: the memory service is unreachable. I'm not sure that is still true.",
+        "The memory service is unreachable.",
+    ),
+    (
+        "correction_heading_cant_confirm",
+        "Correction: my previous answer said the memory service is currently unreachable. I "
+        "can't confirm that now.",
+        "The memory service is currently unreachable.",
+    ),
+    (
+        "correction_heading_that_was_stale",
+        "Correction: my previous answer said the memory service is currently unreachable "
+        "(ConnectError). That was stale: memory answered this turn.",
+        "The memory service is currently unreachable (ConnectError).",
+    ),
+    (
+        "update_heading_from_history",
+        "Update: my previous answer said the memory service is currently unreachable. That "
+        "line was from history.",
+        "The memory service is currently unreachable.",
+    ),
+    # The same doubt, spelled the other ways she writes it.
+    (
+        "dont_know_if_still_true",
+        "From my last reply: the memory service is unreachable. I don't know if that is still "
+        "true.",
+        "The memory service is unreachable.",
+    ),
+    (
+        "whether_still_the_case_i_cant_say",
+        "My last reply said the memory service is unreachable. Whether that is still the case, "
+        "I can't say.",
+        "The memory service is unreachable.",
+    ),
+    (
+        "cant_tell_you_whether_still_accurate",
+        "My last reply said the memory service is unreachable; I can't tell you whether that is "
+        "still accurate.",
+        "The memory service is unreachable.",
+    ),
+    # The same heading, spelled the other ways she writes it.
+    (
+        "correction_dash_heading",
+        "Correction — my previous answer said the memory service is unreachable; memory "
+        "answered this turn.",
+        "The memory service is unreachable; memory answered this turn.",
+    ),
+    (
+        "correction_hyphen_heading",
+        "Correction - my previous answer said the memory service is unreachable; memory "
+        "answered this turn.",
+        "The memory service is unreachable; memory answered this turn.",
+    ),
+    (
+        "correction_comma_heading",
+        "Correction, my previous answer said the memory service is unreachable; memory "
+        "answered this turn.",
+        "The memory service is unreachable; memory answered this turn.",
+    ),
+    (
+        "bold_correction_heading",
+        "**Correction:** my previous answer said the memory service is unreachable; memory "
+        "answered this turn.",
+        "The memory service is unreachable; memory answered this turn.",
+    ),
+    (
+        "updated_heading",
+        "Updated: my last reply said the memory service is unreachable; this turn's recall "
+        "answered.",
+        "The memory service is unreachable; this turn's recall answered.",
+    ),
+    (
+        "as_a_correction_colon_heading",
+        "As a correction: my previous answer said the memory service is unreachable; memory "
+        "answered this turn.",
+        "The memory service is unreachable; memory answered this turn.",
+    ),
+    (
+        "as_a_correction_comma_heading",
+        "As a correction, my previous answer said the memory service is unreachable; memory "
+        "answered this turn.",
+        "The memory service is unreachable; memory answered this turn.",
+    ),
+    (
+        "as_an_update_heading",
+        "As an update: my last reply said the memory service is unreachable; this turn's "
+        "recall answered.",
+        "The memory service is unreachable; this turn's recall answered.",
+    ),
+    (
+        "fix_heading",
+        "Fix: my last reply said the memory service is unreachable; this turn's recall answered.",
+        "The memory service is unreachable; this turn's recall answered.",
+    ),
+    (
+        "correction_heading_over_an_attribution",
+        "Correction: from my previous answer, the memory service is unreachable; this turn's "
+        "recall answered.",
+        "The memory service is unreachable; this turn's recall answered.",
+    ),
+]
+
+# What must keep firing: a doubt that is no doubt, and a lead that joins its
+# label by a space.
+MEMORY_STILL_REASSERTED = [
+    (
+        "no_doubt_still_true",
+        "My last reply said the memory service is unreachable. No doubt that is still true.",
+    ),
+    (
+        "sure_still_true",
+        "My last reply said the memory service is unreachable. I'm sure that is still true.",
+    ),
+    (
+        "not_sure_why_still_the_case",
+        "My last reply said the memory service is unreachable. I'm not sure why that is still "
+        "the case.",
+    ),
+    (
+        "correcting_my_last_replys_memory_line",
+        "Correcting my last reply's memory line: the memory service is unreachable.",
+    ),
+    (
+        "update_from_my_last_reply",
+        "Update from my last reply: the memory service is unreachable.",
+    ),
+    (
+        "correction_heading_then_it_still_is",
+        "Correction: my previous answer said the memory service is unreachable, and it still is.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    MEMORY_LABELLED_THEN_DOUBTED_OR_HEADED,
+    ids=[c[0] for c in MEMORY_LABELLED_THEN_DOUBTED_OR_HEADED],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_doubted_or_headed_memory_history_label_is_not_corrected(purpose, label, reply, bare):
+    spans = [LLM, _recall(hits=5)]
+    assert guards.memory_claim_check(reply, spans, purpose=purpose) is None, label
+    assert guards.memory_claim_check(bare, spans, purpose=purpose) is not None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", MEMORY_STILL_REASSERTED, ids=[c[0] for c in MEMORY_STILL_REASSERTED]
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_vouched_reaffirmation_or_a_joined_lead_still_fires_on_the_memory_claim(
+    purpose, label, reply
+):
+    claim = guards.memory_claim_check(reply, [LLM, _recall(hits=5)], purpose=purpose)
+    assert claim is not None, label
+    assert claim.text == CORRECTION
+
+
+@pytest.mark.parametrize("regen", [c[1] for c in MEMORY_LABELLED_THEN_DOUBTED_OR_HEADED[:2]])
+def test_a_regeneration_that_doubts_or_heads_her_memory_history_passes(regen):
+    """The reviewer's regeneration probe: _regen_rejected_by refused the
+    honest "Correction:" answer as memory_claim."""
+    from app import agents, chat
+
+    turn = SimpleNamespace(spans=[LLM, _recall(hits=5)], kind="chat")
+    rejected = chat._regen_rejected_by(
+        regen,
+        turn,
+        None,
+        [],
+        "Is your memory service working?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected is None

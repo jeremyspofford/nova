@@ -3002,10 +3002,13 @@ _HER_EARLIER_REPLY = (
 # or compared, or that restates or corrects it: "unchanged from", "different
 # from", "updated from", "as/like/unlike/since … in/from", "As my last reply
 # said", "Correction to / Update on my last reply's reading".
-# A label reaches only up to a retraction or a "still holds" (_REPORT_CLOSED),
-# and a claim reaffirmed after it is hers again (_REAFFIRMED). Shared by the
+# A label reaches only up to a retraction or a "still holds" (_report_closed),
+# and a claim reaffirmed after it is hers again (_reaffirmed). Shared by the
 # machine branch below and the served and memory guards' claim cut:
 # _labelled_as_history, _history_framed.
+# Fix round 3: a "still holds" or a reaffirmation she DOUBTS is neither ("I'm
+# not sure that is still true", "(not sure it still holds)"; _vouched), and a
+# HEADING is not a lead ("Correction: my previous answer said X" labels X).
 _HISTORY_SOURCE = (
     r"(?:(?:(?:my|the|our|this)\s+)?(?:(?:chat|conversation)\s+)?history\b"
     rf"|{_HER_EARLIER_REPLY})"
@@ -3031,11 +3034,25 @@ _HISTORY_HEAD = re.compile(
     rf"{_HER_EARLIER_REPLY}|{_HER_EARLIER_REPLY}\s*:)",
     re.I,
 )
+# A word that says the state changed, or corrects or updates it, leads a
+# label only when it runs INTO it, through a space or a preposition:
+# "Correction to my last reply's reading:", "Update on my last reply's
+# status:", "Correcting my last reply's reading:", "(updated from my last
+# reply)", "Nothing changed from my last reply:". Stood alone and closed by a
+# colon, dash or comma it is a HEADING, and the label under it is a label:
+# "Correction: my previous answer said X. …", "Update — from my previous
+# answer:", "As a correction, my last reply said X" (T4 review, fix round 3;
+# round 2's "\W*$" let the heading lead). A word that says the state is the
+# same, or compares it, keeps any join: "(**unchanged** from my last reply)",
+# "Unchanged: my previous answer said X" (X is stated as current).
+_CORRECTION_NOUN = r"(?:corrections?|updates?|fix(?:es)?|amendments?)"
 _NOT_A_LABEL_LEAD = re.compile(
-    r"(?:\b(?:unchanged|changed?|changes|different(?:ly)?|differs?|updated?|updates|varies"
-    r"|vary|new)|\b(?:as|like|unlike|since)(?:\s+[\w'’]+){0,2}"
-    r"|\b(?:correction|correcting|updating|fix|fixing|amendment)(?:\s+(?:to|on|of|for))?"
-    r"|\bupdates?\s+(?:to|on|of|for))\W*$",
+    r"(?:\bunchanged"
+    rf"|\b(?:as|like|unlike|since)(?!\s+(?:an?\s+)?{_CORRECTION_NOUN}\b)(?:\s+[\w'’]+){{0,2}}"
+    r")\W*$"
+    r"|\b(?:changed?|changes|different(?:ly)?|differs?|varies|vary|new|updated|correcting"
+    rf"|updating|fixing|amending|{_CORRECTION_NOUN})"
+    r"(?:\s+(?:to|on|of|for|from))?[\s*(\[]*$",
     re.I,
 )
 # What she says of an earlier claim right after it: "I told you X, which was
@@ -3052,17 +3069,20 @@ _RETRACTED = re.compile(
 # A label reaches a claim only if nothing between them says what it labels
 # was WRONG ("My last reply named hub:qwen3:8b, which is wrong — X": X is said
 # anew; "In my last reply I was wrong: X") or still holds ("What I said in my
-# last reply still holds: X"). Never a staleness word — "(it isn't current)",
-# "which is outdated": that the labelled reading is old is the label's point,
-# so _RETRACTED's "stale"/"not current" class does not close it.
+# last reply still holds: X"; _STILL_HOLDS, when she vouches for it). Never a
+# staleness word — "(it isn't current)", "which is outdated": that the
+# labelled reading is old is the label's point, so _RETRACTED's "stale"/"not
+# current" class does not close it.
 _REPORT_CLOSED = re.compile(
     r"\b(?:that|which|this|it)\s*(?:was|is|['’]s)"
     r"(?:\s+(?:(?:simply|just|plainly|also)\s+)?(?:wrong|false|incorrect|mistaken|untrue"
     r"|a\s+mistake|an\s+error)\b"
     r"|(?:\s+not|n['’]t)(?:\s+(?:true|right|correct|accurate))?(?=\s*(?:[.!;,:)—–-]|$)))"
-    r"|\bI\s+was\s+(?:wrong|mistaken)\b|\bI\s+got\s+(?:it|that|this)\s+wrong\b"
-    r"|\bstill\s+(?:holds|stands|applies|true|valid|current|the\s+case)\b",
+    r"|\bI\s+was\s+(?:wrong|mistaken)\b|\bI\s+got\s+(?:it|that|this)\s+wrong\b",
     re.I,
+)
+_STILL_HOLDS = re.compile(
+    r"\bstill\s+(?:holds|stands|applies|true|valid|current|the\s+case)\b", re.I
 )
 # …and a claim she reaffirms after it is hers again: "…, and that is still
 # true", "That is still the case.", "which remains true", "it still holds".
@@ -3074,6 +3094,27 @@ _REAFFIRMED = re.compile(
     r"|still\s+(?:is|holds|stands|applies)(?:\s+(?:true|the\s+case))?"
     r"|(?:remains|holds|stands)\s+(?:true|correct|accurate|valid|the\s+case))"
     r"(?=\s*(?:[.!;,:)—–-]|$))",
+    re.I,
+)
+# "Not sure WHY X" / "don't know how X" presuppose X, so they do not doubt it.
+# (Shared with the served and memory guards' _EPISTEMIC_FRAME.)
+_WH_WORD = r"(?!\s+(?:why|how|when|where|what|which|who)\b)"
+# T4 review, fix round 3: a reaffirmation or a "still holds" she DOUBTS says
+# the opposite — "I'm not sure that is still true", "I can't tell you whether
+# that is still accurate", "Whether that is still the case, I can't say",
+# "(not sure it still holds)". Round 2 read each as her vouching for the claim,
+# so the canonical honest answer, her old line labelled and then doubted, was
+# corrected. What doubts it, ahead of it in its clause (_vouched): a doubted
+# belief (_EPISTEMIC_FRAME), not knowing or not being able to tell, say or
+# confirm, "unclear", and a "whether"/"if" right before it ("If you're asking,
+# that is still true" is not led by its "if").
+_DOUBTED = re.compile(
+    r"(?:\bnot|n['’]t|\bcannot|\bunable\s+to)\s+(?:(?:be(?:en)?\s+)?able\s+to\s+)?"
+    r"(?:know|tell|say|confirm(?:ed)?|verif(?:y|ied)|check(?:ed)?|guarantee|promise|vouch"
+    rf"|be\s+(?:sure|certain))\b{_WH_WORD}"
+    r"|\b(?:unclear|unknown|no\s+idea|hard\s+to\s+(?:say|tell|know))\b"
+    r"|(?:\bnot|n['’]t)\s+clear\b"
+    r"|\b(?:whether|if)(?:\s+or\s+not)?\s*$",
     re.I,
 )
 _HEADING = re.compile(r"^\s*#{1,6}\s")
@@ -3374,10 +3415,43 @@ def _history_label_ends(text: str) -> list[int]:
     return ends
 
 
+def _vouched(text: str, found: re.Match[str]) -> bool:
+    """Does she vouch for what `found` says of a claim ("that is still true",
+    "still holds"), where it stands in `text`? Not when its sentence is asked,
+    nor when anything in its clause ahead of it doubts it (_DOUBTED,
+    _EPISTEMIC_FRAME): "I'm not sure that is still true" (T4 review, fix
+    round 3). A doubt in another clause is about something else: "I'm not
+    sure about the Dell, but that is still true" vouches."""
+    start = 0
+    for sentence in _sentences(text):
+        if start + len(sentence) > found.start():
+            break
+        start += len(sentence)
+    else:
+        return True  # unreachable: _sentences covers all of `text`
+    if sentence.rstrip().endswith("?"):
+        return False
+    ahead = _CLAUSE_SPLIT.split(text[start : found.start()])[-1]
+    return _DOUBTED.search(ahead) is None and _EPISTEMIC_FRAME.search(ahead) is None
+
+
+def _report_closed(text: str, pos: int) -> bool:
+    """Does anything in `text` from `pos` retract what a label labels, or say
+    it still holds — and vouch for that?"""
+    if _REPORT_CLOSED.search(text, pos) is not None:
+        return True
+    return any(_vouched(text, m) for m in _STILL_HOLDS.finditer(text, pos))
+
+
+def _reaffirmed(text: str) -> bool:
+    """Does `text` reaffirm a claim as true now, and vouch for it?"""
+    return any(_vouched(text, m) for m in _REAFFIRMED.finditer(text))
+
+
 def _labelled_as_history(text: str) -> bool:
     """Does `text` carry a history label that nothing after it retracts or
     says still holds?"""
-    return any(_REPORT_CLOSED.search(text, end) is None for end in _history_label_ends(text))
+    return any(not _report_closed(text, end) for end in _history_label_ends(text))
 
 
 def _history_framed(before: str, tail: str = "", after: str = "") -> bool:
@@ -3388,13 +3462,12 @@ def _history_framed(before: str, tail: str = "", after: str = "") -> bool:
     in what follows (`after`) reaffirms it as true now ("…, and that is still
     true"). The served and memory guards pass no tail: their cut reads only
     what leads up to the claim, as in fix round 1."""
-    if _REAFFIRMED.search(after) is not None:
+    if _reaffirmed(after):
         return False
     if _labelled_as_history(before):
         return True
     return any(
-        _NOT_A_LABEL_LEAD.search(tail, 0, m.start()) is None
-        and _REPORT_CLOSED.search(tail, m.end()) is None
+        _NOT_A_LABEL_LEAD.search(tail, 0, m.start()) is None and not _report_closed(tail, m.end())
         for m in _FROM_HISTORY.finditer(tail)
     )
 
@@ -3411,7 +3484,7 @@ def _not_a_current_reading(texts: Sequence[str]) -> bool:
     ):
         return True
     return any(_labelled_as_history(text) for text in texts) and not any(
-        _REAFFIRMED.search(text) for text in texts
+        _reaffirmed(text) for text in texts
     )
 
 
@@ -6050,8 +6123,8 @@ _IN_USE_DENIED = re.compile(
 # the prefix of each claim's match within its clause: the shared _STATE_HEDGE
 # was measured over the machine and device corpus, and is not re-measured.
 #   * A doubted or denied belief. "Not sure WHY X" presupposes X, and "no
-#     doubt X" asserts it, so both still fire.
-_WH_WORD = r"(?!\s+(?:why|how|when|where|what|which|who)\b)"
+#     doubt X" asserts it, so both still fire (_WH_WORD, with the history
+#     label's regexes above).
 _EPISTEMIC_FRAME = re.compile(
     r"\b(?:do|does|did)\s*n['’]?o?t\s+(?:think|believe)\b"
     rf"|\bnot\s+(?:sure|certain)\b{_WH_WORD}"
