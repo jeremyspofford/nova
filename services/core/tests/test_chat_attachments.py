@@ -27,8 +27,11 @@ def _catalog(*rows: dict) -> dict:
 
 
 def _row(model: str, *caps: str) -> dict:
+    # The gateway's row shape: a local row says so (`kind`), and a bare
+    # setting is matched against local rows only (S40 fix wave C3).
     return {
         "id": f"ollama:{model}",
+        "kind": "local",
         "installed": True,
         "capabilities": {c: {"value": True} for c in caps},
     }
