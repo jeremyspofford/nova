@@ -443,7 +443,25 @@ async def test_two_readable_cards_are_not_guessed_between(mount_peers):
         memory=FakeMemory(),
     )
     card = await inference._card_facts(core_app)
-    assert card["free_gb"] is None and "2 machines report a card" in card["reason"]
+    # Wording moved with the one helper (S40 fix wave C3, machines.the_card).
+    assert card["free_gb"] is None and "2 machines report a card that can be read" in card["reason"]
+
+
+async def test_the_hubs_card_is_read_beside_a_machine_whose_card_is_not(mount_peers):
+    """(S40 fix wave C3) Another machine's card is never read from the hub;
+    counting it as "a card" cost the finding the hub's own card."""
+    mount_peers(
+        gateway=FakeGateway(
+            engines=[fakes.engine_view(), fakes.engine_view("dell", builtin=False)],
+            engine_details={
+                "hub": {"vram": VRAM, "fit_frame": "vram"},
+                "dell": {"vram": {"total_mb": None, "reason": "not this hub's card"}},
+            },
+        ),
+        memory=FakeMemory(),
+    )
+    card = await inference._card_facts(core_app)
+    assert card["free_gb"] == 17.2 and card["facts"]["free_vram_gb"] == 17.2
 
 
 async def test_a_gateway_that_names_no_machines_costs_the_card_with_its_reason(mount_peers):

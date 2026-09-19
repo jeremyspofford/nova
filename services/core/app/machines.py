@@ -173,6 +173,45 @@ async def cards(app) -> list[tuple[dict, dict | None]]:
     return out
 
 
+NO_CARD = "the gateway lists no machine whose card could be read"
+
+
+def _vram_of(detail: dict) -> dict:
+    vram = detail.get("vram")
+    return vram if isinstance(vram, dict) else {}
+
+
+def the_card(pairs: list[tuple[dict, dict | None]]) -> tuple[dict, dict] | str:
+    """THE machine's card among `cards()`'s pairs — (view, detail) — or, as a
+    string, the reason there is none. The one selection every card reader
+    uses (the inference check, the resources panel).
+
+    Chosen by READABILITY (`vram.total_mb` is not None), never by how many
+    machines answered: the hub reads exactly one card, its own, and states
+    every other machine's unreadable (gateway NOT_THIS_CARD), so hub plus an
+    always-on node is still one card. Two readable cards are never guessed
+    between. With none readable, a single machine that gave a reading is
+    returned anyway, so its own reason (`vram.reason`) is what the reader
+    states; several say each one's reason."""
+    read = [(view, detail) for view, detail in pairs if detail is not None]
+    readable = [pair for pair in read if _vram_of(pair[1]).get("total_mb") is not None]
+    if len(readable) == 1:
+        return readable[0]
+    if readable:
+        return (
+            f"{len(readable)} machines report a card that can be read, and which one is "
+            "meant is not matched here"
+        )
+    if len(read) == 1:
+        return read[0]
+    if not read:
+        return NO_CARD
+    return "no machine's card could be read — " + "; ".join(
+        f"{view['name']}: {_vram_of(detail).get('reason') or 'no reason stated'}"
+        for view, detail in read
+    )
+
+
 # A declared eval machine starts as a live, always-on one that answered now —
 # never the bundled engine, which is the owner's real hub.
 _FIXTURE_DEFAULTS: dict = {

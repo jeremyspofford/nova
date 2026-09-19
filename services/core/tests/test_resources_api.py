@@ -116,9 +116,29 @@ async def test_two_readable_cards_are_not_guessed_between(owner_client, mount_pe
         )
     )
     body = (await owner_client.get("/api/v1/system/resources")).json()
+    # Wording moved with the one helper (S40 fix wave C3, machines.the_card).
     assert body["card"] == {
-        "reason": "2 machines report a card; the panel shows one only when there is one"
+        "reason": "2 machines report a card that can be read, and which one is meant is not "
+        "matched here"
     }
+
+
+async def test_the_panel_shows_the_hubs_card_beside_a_machine_whose_card_is_not_read(
+    owner_client, mount_peers
+):
+    """(S40 fix wave C3) The panel chose by count, so hub plus any always-on
+    machine (whose card the hub never reads) showed no card at all."""
+    mount_peers(
+        gateway=FakeGateway(
+            engines=[fakes.engine_view(), fakes.engine_view("dell", builtin=False)],
+            engine_details={
+                "hub": {"vram": CARD, "fit_frame": "vram"},
+                "dell": {"vram": {"total_mb": None, "reason": "not this hub's card"}},
+            },
+        )
+    )
+    body = (await owner_client.get("/api/v1/system/resources")).json()
+    assert body["card"]["machine"] == "hub" and body["card"]["free_gb"] == 21.4
 
 
 async def test_a_model_never_placed_on_a_compute_has_no_throughput_not_a_zero(

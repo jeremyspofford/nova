@@ -103,19 +103,15 @@ async def _card_facts(app) -> dict:
         pairs = await machines.cards(app)
     except machines.PlantUnavailable as exc:
         return {**blank, "reason": f"the gateway could not be asked about the card — {exc}"}
-    # The card of THE machine: while one machine's card can be read, it is the
-    # card these rounds ran on. Two are never guessed between — which one
-    # served is a match of served_on to a machine's compute, not made here.
-    read = [detail for _view, detail in pairs if detail is not None]
-    if len(read) != 1:
-        reason = (
-            "the gateway lists no machine whose card could be read"
-            if not read
-            else f"{len(read)} machines report a card, and which one ran these rounds "
-            "is not matched here"
-        )
-        return {**blank, "reason": reason}
-    body = read[0].get("vram") if isinstance(read[0].get("vram"), dict) else {}
+    # The card of THE machine (machines.the_card, chosen by readability):
+    # while one machine's card can be read, it is the card these rounds ran
+    # on. Two are never guessed between — which one served is a match of
+    # served_on to a machine's compute, not made here.
+    chosen = machines.the_card(pairs)
+    if isinstance(chosen, str):
+        return {**blank, "reason": chosen}
+    _view, detail = chosen
+    body = detail.get("vram") if isinstance(detail.get("vram"), dict) else {}
     free = body.get("free_after_switch_gb")
     if free is None:
         free = body.get("free_gb")

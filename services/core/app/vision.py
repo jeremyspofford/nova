@@ -167,7 +167,13 @@ def choose(
             certain=False,
         )
     able = capable(rows, capability)
-    bares = {bare(m) for m in able}
+    # A bare setting (`qwen3.8:27b`) runs on a machine, so its tail is matched
+    # against LOCAL rows only (S40 fix wave C3): a cloud row whose id ends in
+    # the same words is another model somewhere else, and matching it said
+    # "can already see" about a local model that cannot. A cloud row is
+    # matched by its whole id.
+    local = {row.get("id") for row in rows if isinstance(row, dict) and row.get("kind") == "local"}
+    bares = {bare(m) for m in able if m in local}
     # A setting names a catalogue row exactly (`hub:qwen3.8:27b`) or by its
     # model alone (`qwen3.8:27b`). Never split: its first colon may be the
     # tag's own.
@@ -188,7 +194,7 @@ def choose(
     picked = able[0]
     if preferred:
         for model in able:
-            if model == preferred or bare(model) == preferred:
+            if model == preferred or (model in local and bare(model) == preferred):
                 picked = model
                 break
     said = _said(wanted, rows)

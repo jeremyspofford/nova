@@ -79,19 +79,16 @@ def _card_words(body: dict) -> dict:
 
 async def _card(app) -> dict:
     """The card of THE machine whose card can be read, named — or a reason.
-    Two readable cards are not guessed between (the panel shows one)."""
+    One selection with the inference check (machines.the_card, by
+    readability); two readable cards are not guessed between."""
     try:
         pairs = await machines.cards(app)
     except machines.PlantUnavailable as exc:
         return {"reason": f"the gateway could not be asked — {exc}"}
-    read = [(view, detail) for view, detail in pairs if detail is not None]
-    if len(read) != 1:
-        return {
-            "reason": "the gateway lists no machine whose card could be read"
-            if not read
-            else f"{len(read)} machines report a card; the panel shows one only when there is one"
-        }
-    view, detail = read[0]
+    chosen = machines.the_card(pairs)
+    if isinstance(chosen, str):
+        return {"reason": chosen}
+    view, detail = chosen
     body = detail.get("vram") if isinstance(detail.get("vram"), dict) else {}
     return {"machine": view["name"], **_card_words(body)}
 

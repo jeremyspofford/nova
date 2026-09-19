@@ -12,9 +12,10 @@ from app import vision
 
 
 def row(model: str, *caps: str, installed: bool = True) -> dict:
-    """A catalogue row in the shape the gateway publishes."""
+    """A catalogue row in the shape the gateway publishes (a local one)."""
     return {
         "id": f"ollama:{model}",
+        "kind": "local",
         "installed": installed,
         "capabilities": {c: {"value": True, "basis": "declared"} for c in caps},
     }
@@ -195,9 +196,24 @@ def test_the_prefix_is_whatever_the_catalogue_says_never_a_name_kept_here():
     bare or qualified. The catalogue id splits at its FIRST colon; a setting
     is never split — `qwen3.8:27b`'s colon is its own."""
     rows = [
-        {"id": "hub:qwen3.8:27b", "installed": True, "capabilities": {"vision": {"value": True}}},
-        {"id": "dell:gemma4:12b", "installed": True, "capabilities": {"vision": {"value": True}}},
-        {"id": "hub:qwen3:8b", "installed": True, "capabilities": {"tools": {"value": True}}},
+        {
+            "id": "hub:qwen3.8:27b",
+            "kind": "local",
+            "installed": True,
+            "capabilities": {"vision": {"value": True}},
+        },
+        {
+            "id": "dell:gemma4:12b",
+            "kind": "local",
+            "installed": True,
+            "capabilities": {"vision": {"value": True}},
+        },
+        {
+            "id": "hub:qwen3:8b",
+            "kind": "local",
+            "installed": True,
+            "capabilities": {"tools": {"value": True}},
+        },
     ]
     assert vision.bare("hub:qwen3.8:27b") == "qwen3.8:27b"
     assert vision.choose(rows, wanted="hub:qwen3.8:27b").note is None
@@ -205,3 +221,39 @@ def test_the_prefix_is_whatever_the_catalogue_says_never_a_name_kept_here():
     swapped = vision.choose(rows, wanted="hub:qwen3:8b", preferred="gemma4:12b")
     assert swapped.model == "dell:gemma4:12b"
     assert "running on gemma4:12b rather than qwen3:8b" in swapped.note
+
+
+def test_a_bare_setting_is_matched_against_local_rows_only():
+    """(S40 fix wave C3) A bare setting (`qwen3.8:27b`) runs on a machine; a
+    cloud row whose id happens to end in the same words is another model
+    somewhere else. Matching its tail said "can already see" about the local
+    model that cannot — and picked the cloud row as HIS preference."""
+    cloud = {
+        "id": "openrouter:qwen3.8:27b",
+        "kind": "cloud",
+        "installed": True,
+        "capabilities": {"vision": {"value": True}},
+    }
+    rows = [
+        {
+            "id": "hub:gemma4:12b",
+            "kind": "local",
+            "installed": True,
+            "capabilities": {"vision": {"value": True}},
+        },
+        cloud,
+        {
+            "id": "hub:qwen3.8:27b",
+            "kind": "local",
+            "installed": True,
+            "capabilities": {"tools": {"value": True}},
+        },
+        {"id": "hub:qwen3:8b", "kind": "local", "installed": True, "capabilities": {}},
+    ]
+    choice = vision.choose(rows, wanted="qwen3.8:27b")
+    assert choice.note is not None and choice.model == "hub:gemma4:12b"
+    preferred = vision.choose(rows, wanted="qwen3:8b", preferred="qwen3.8:27b")
+    assert preferred.model == "hub:gemma4:12b"
+    # The cloud row is still a row: named WHOLE, it is matched as itself.
+    assert vision.choose(rows, wanted="openrouter:qwen3.8:27b").note is None
+    assert vision.choose(rows, wanted="qwen3:8b", preferred=cloud["id"]).model == cloud["id"]

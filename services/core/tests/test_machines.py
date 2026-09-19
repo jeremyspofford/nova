@@ -344,3 +344,68 @@ def test_every_state_core_writes_or_reads_is_one_the_gateway_can_state():
     # Not vacuous: the readers do branch on the gateway's words.
     assert {"ready", "unreachable", "switched_off", "unobserved"} <= read
     assert read <= states, read - states
+
+
+# -- THE card: one selection, by readability (S40 fix wave C3) --------------
+
+NOT_THIS_CARD = {
+    "total_mb": None,
+    "reason": "dell's card cannot be read from this hub — only the hub's own card is read here",
+}
+
+
+def _pair(name: str, vram: dict) -> tuple[dict, dict]:
+    view = fakes.engine_view(name)
+    return view, {**view, "vram": vram, "fit_frame": None}
+
+
+def test_the_card_is_chosen_by_readability_never_by_how_many_machines_answered():
+    """The hub reads exactly one card, its own; every other machine's is
+    stated unreadable (gateway NOT_THIS_CARD). Counting readings made hub plus
+    any always-on node "2 machines report a card", and the panel and the
+    inference check lost the hub's card for good."""
+    hub, dell = _pair("hub", CARD), _pair("dell", NOT_THIS_CARD)
+    assert machines.the_card([hub, dell]) == hub
+    assert machines.the_card([dell, hub]) == hub
+
+
+def test_one_machine_whose_card_failed_is_carried_with_its_own_reason():
+    failed = _pair("hub", {"total_mb": None, "reason": "nvidia-smi could not be run"})
+    assert machines.the_card([failed]) == failed
+    asleep = (fakes.engine_view("dell", lifecycle="wake_on_lan", state="unobserved"), None)
+    assert machines.the_card([failed, asleep]) == failed
+
+
+def test_two_readable_cards_are_never_guessed_between():
+    reason = machines.the_card([_pair("hub", CARD), _pair("box", CARD)])
+    assert reason == (
+        "2 machines report a card that can be read, and which one is meant is not matched here"
+    )
+
+
+def test_no_readable_card_among_several_says_each_ones_reason():
+    reason = machines.the_card(
+        [
+            _pair("hub", {"total_mb": None, "reason": "nvidia-smi failed"}),
+            _pair("dell", NOT_THIS_CARD),
+        ]
+    )
+    assert reason == (
+        "no machine's card could be read — hub: nvidia-smi failed; dell: " + NOT_THIS_CARD["reason"]
+    )
+
+
+def test_nothing_listed_or_everything_asleep_is_no_card_with_that_reason():
+    asleep = (fakes.engine_view("dell", lifecycle="wake_on_lan", state="unobserved"), None)
+    for pairs in ([], [asleep]):
+        assert machines.the_card(pairs) == "the gateway lists no machine whose card could be read"
+
+
+def test_both_card_readers_choose_through_the_one_helper():
+    from app import resources_api
+    from app.checks import inference
+
+    for reader in (inference._card_facts, resources_api._card):
+        source = inspect.getsource(reader)
+        assert "machines.the_card(" in source
+        assert "len(read)" not in source
