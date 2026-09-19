@@ -3305,6 +3305,36 @@ def test_an_honest_or_hedged_form_is_left_alone(reply):
     assert guards.stack_claim_check(reply, SERVED, purpose="chat") is None
 
 
+# S40b (verdict §3.1 B): the serving pattern reused the device guard's adverbs,
+# which carry "not" and "no longer" — right for a device ("the device is not
+# connected" is an unchecked claim about now), wrong here, where every state
+# word means "cannot answer". So "not down" read as "down" and an honest
+# report that the model IS answering was replaced by a correction saying so.
+# "not responding" and "not working" are state words of their own and still
+# fire (the MUST_FIRE set above is unchanged).
+STACK_NEGATIONS = (
+    "The model is not down.",
+    "The gateway is no longer unreachable.",
+    "The model is not unreachable — it answered.",
+)
+
+
+@pytest.mark.parametrize("reply", STACK_NEGATIONS)
+def test_a_negated_outage_is_not_an_outage_claim(reply):
+    assert guards.stack_claim_check(reply, SERVED, purpose="chat") is None
+
+
+def test_the_serving_adverbs_are_the_state_adverbs_without_the_negations():
+    """Derived, so the two cannot drift: every adverb the device guard allows
+    except the two that negate."""
+    assert "not" not in guards._SERVING_ADVERB and "no\\s+longer" not in guards._SERVING_ADVERB
+    for adverb in ("still", "currently", "now", "again", "apparently", "back", "actually"):
+        assert re.fullmatch(guards._SERVING_ADVERB, adverb), adverb
+    for negation in ("not", "no longer"):
+        assert re.fullmatch(guards._STATE_ADVERB, negation)
+        assert not re.fullmatch(guards._SERVING_ADVERB, negation)
+
+
 def test_a_turn_the_model_did_not_serve_is_not_second_guessed():
     """No successful round means no evidence, and a guard with no evidence has
     nothing to say. (In practice such a turn has no reply to judge — the

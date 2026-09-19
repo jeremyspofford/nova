@@ -5542,10 +5542,19 @@ _SERVING_STATE = (
     r"(?:unreachable|not\s+reachable|down|offline|unavailable|walled|blocked"
     r"|not\s+responding|unresponsive|not\s+working|failing|timing\s+out|refusing)"
 )
+# The adverbs that may sit between the copula and a serving state: the device
+# guard's, WITHOUT "not" and "no longer" (S40b, verdict §3.1 B). There, a
+# negated state is still an unchecked claim about now ("the device is not
+# connected"); here every state word means "cannot answer", so "the model is
+# not down" and "the gateway is no longer unreachable" say it CAN — and were
+# corrected as outage claims, replacing an honest reply. "not responding" and
+# "not working" are state words of their own and still fire. Derived from
+# _STATE_ADVERB, so an adverb added there reaches here too.
+_SERVING_ADVERB = _STATE_ADVERB.replace("|no\\s+longer", "").replace("|not", "")
 _SERVING_ASSERTION = re.compile(
     rf"\b(?P<subj>(?:{_SERVING_DET}\s+)?{_SERVING_NOUN})"
     rf"(?:\s+{_PRESENT_COPULA}|['’]s)"
-    rf"(?:\s+{_STATE_ADVERB})*"
+    rf"(?:\s+{_SERVING_ADVERB})*"
     rf"\s+(?P<state>{_SERVING_STATE})\b",
     re.I,
 )
