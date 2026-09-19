@@ -1567,6 +1567,11 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
     # machine_status / machine_configure are registered, and a denial of either
     # is the S12 failure again. GENERAL nouns only (machines, models) — never a
     # machine's name — so an honest report about one machine is left alone.
+    # For machine_configure that means the determiner too (S40 fix wave A3):
+    # only "a"/"any" machine or bare plural "machines". "this machine" is what
+    # the tile and machine_status call hub, and "I can't switch off chat
+    # models on this machine — the gateway couldn't be reached" is her honest
+    # relay of a switch that did not happen, never a denial of the ability.
     (
         re.compile(
             r"(?:see|seeing|check|checking|tell|telling|know|knowing|say|saying|find\s+out)\s+"
@@ -1587,8 +1592,8 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         re.compile(
             r"(?:switch|switching|turn|turning)\s+(?:off|on)\s+"
             r"(?:(?:the|local|chat|ai)\s+){0,2}(?:models?|model\s+serving|serving|inference)\s+"
-            r"(?:on|for)\s+(?:a|any|the|your|my|this|that)\s+machines?\b"
-            r"|(?:stop|stopping|start|starting)\s+(?:(?:a|any|the|your|this)\s+)?machines?\s+"
+            r"(?:on|for)\s+(?:(?:a|any)\s+machines?|machines)\b"
+            r"|(?:stop|stopping|start|starting)\s+(?:(?:a|any)\s+machines?|machines)\s+"
             r"from\s+(?:running|serving)\s+(?:(?:chat|local|ai)\s+)?models?\b"
             r"|(?:change|changing|control|controlling|configure|configuring|choose|choosing)\s+"
             r"(?:which|what)\s+machines?\s+(?:runs?|serves?)\s+"

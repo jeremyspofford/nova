@@ -111,6 +111,17 @@ MUST_FIRE = [
         "Changing which machine runs the models is not something I can do.",
         "machine_configure",
     ),
+    # S40 fix wave A3: the GENERAL forms the tightened pattern keeps.
+    (
+        "cant_turn_off_models_on_any_machine",
+        "I can't turn off chat models on any machine.",
+        "machine_configure",
+    ),
+    (
+        "unable_to_stop_machines_serving",
+        "I'm unable to stop machines from serving models.",
+        "machine_configure",
+    ),
 ]
 
 
@@ -187,6 +198,36 @@ MUST_NOT_FIRE = [
     (
         "machine_specific_past",
         "I couldn't switch off chat models on hub — the gateway refused.",
+    ),
+    # S40 fix wave A3: machine_configure's own refusals and a failed switch,
+    # RELAYED in the present tense about ONE machine ("that machine", "this
+    # machine" — the words the tile and machine_status use for hub). The
+    # switch really did not happen; "Correction: I can do that" here would be
+    # the guard lying at the exact moment she is telling the truth.
+    (
+        "relayed_no_such_machine",
+        "I can't switch off chat models on that machine — the gateway has no machine named dell.",
+    ),
+    (
+        "relayed_refused_switch",
+        "I'm unable to stop this machine from running chat models: the gateway refused the change.",
+    ),
+    (
+        "relayed_unreachable_right_now",
+        "I can't switch off chat models on this machine right now — the gateway couldn't be "
+        "reached.",
+    ),
+    (
+        "relayed_not_confirmed",
+        "I can't turn off serving for your machine — hub's switch is not confirmed set.",
+    ),
+    (
+        "relayed_until_back",
+        "I can't switch off chat models on this machine until the gateway is back.",
+    ),
+    (
+        "relayed_the_machine_until",
+        "I can't stop the machine from running models until the gateway is reachable.",
     ),
 ]
 
