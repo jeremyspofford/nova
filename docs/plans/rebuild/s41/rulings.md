@@ -182,3 +182,50 @@ than degrading.
 text and stays **reconciled against the render** — raw says what exists, the
 render says what it resolves to. Anything the parser genuinely cannot decide is
 a stated refusal, never a skip.
+
+
+## My rulings, 2026-09-21 (from T2's report)
+
+### A. `safe_extract` refuses an ESCAPING symlink, not every symlink
+
+The verdict contradicts itself: §9.2 and §12.3 say "a symlink" flatly, while
+§5.2 and §5.5's own example listing show links inside the tar
+(`l 0777 … ./people/current`). **T2's reading stands.** Absolute paths, `..`,
+device nodes and fifos are refused unconditionally; a link is refused only when
+its target leaves the extraction root.
+
+**Why:** a blanket refusal makes a real memory volume unbackupable, and the
+memory store is markdown files on disk where a `current` pointer is an ordinary
+shape. A backup that refuses the data it exists to carry is not a safety
+property, it is a broken product. The security property that matters — nothing
+lands outside the root — is preserved exactly.
+
+**Cost if wrong:** a contained link could still point somewhere surprising
+*inside* the restored tree. That is visible in the listing, which travels in
+the bundle, and it cannot reach the host.
+
+### B. `§5.3` wins over `§9.2 step 7`: the field is `migrations_member`
+
+§9.2 step 7 reads `manifest.databases[].migrations`; §5.3 defines
+`migrations_member`, a TSV path, and defines no `migrations`. T2 implemented
+§5.3. **§5.3 is the schema and it wins.** T4 builds against
+`migrations_member`. Cost if wrong: one field rename in one reader.
+
+### C. Recorded, not changed
+
+- The failure sentence carries **no trailing full stop** — v3's exact bytes,
+  which is the point, since a v3-written payload must still open.
+- `meta.passphrase_fingerprint` is derived under **`kat.enc`'s** salt (§7.4
+  does not say which file's).
+- `pack` performs §9.1 steps 16, 18 and 19, because §4 names no verb for the
+  outer tar or the chown.
+
+### D. My own process error, recorded because it cost authorship
+
+T2's edits to `deploy/.env.example` and `.gitignore` were swept into **my**
+commit `7605484b`: I ran `git add` on those paths while its edits sat
+uncommitted in the same worktree. The content is correct and present; the
+authorship is wrong. This is the known hazard of two workers sharing one git
+index, and the rule I gave the implementers — stage only your own paths —
+applies to me at least as strongly, because I am the one who commits while
+others are mid-edit.
