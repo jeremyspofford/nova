@@ -274,3 +274,128 @@ def test_segment_policy_names_no_path():
             f"{segment!r} is a path, not a segment. An exact path row is what missed "
             "`.superpowers/sdd/.gitignore` in port-v3 (verdict §6.4)."
         )
+
+
+# ── NF-2: both spellings of a bind, not just the one the file happens to use ─
+#
+# F1 closed "a disposition deleted from the real file". It did not close "a
+# bind ADDED to the real file in short syntax": compose resolves
+# `- ../newstate:/newstate` to exactly the same mount as the long form, with
+# no x-nova-backup row, and the next real backup refuses R2 — while both
+# suites stayed green. The compose file's own header says only the long form
+# can carry the rows; that was a convention nothing enforced.
+
+SHORT_BIND = """\
+name: nova
+services:
+  memory:
+    image: nova-memory
+    volumes:
+      - v4_memdata:/data/memory
+      - ../newstate:/newstate
+      - /etc/localtime:/etc/localtime:ro
+      - ~/somewhere:/home-relative
+      - ${SOME_DIR}/x:/interpolated
+volumes:
+  v4_memdata:
+    x-nova-backup: include
+    x-nova-backup-reason: the notes
+"""
+
+
+def short_bind_rows():
+    return _rows(compose_read("raw_dispositions", SHORT_BIND))
+
+
+def test_raw_dispositions_reports_a_short_syntax_bind_as_undeclared():
+    rows = short_bind_rows()
+    assert ("bind", "memory", "/newstate") in rows
+    assert rows[("bind", "memory", "/newstate")] == ("", False)
+
+
+def test_raw_dispositions_reports_every_spelling_of_a_host_path():
+    """compose's own rule: a short-syntax source is a bind when it starts with
+    `.`, `/`, `~` or `$`, and a named volume otherwise."""
+    rows = short_bind_rows()
+    for target in ("/newstate", "/etc/localtime", "/home-relative", "/interpolated"):
+        assert ("bind", "memory", target) in rows, target
+
+
+def test_raw_dispositions_does_not_call_a_named_volume_a_bind():
+    """The other direction, and the reason this cannot just match every short
+    mount: `- v4_memdata:/data/memory` is a named volume, it carries its
+    disposition under `volumes:`, and reporting it as an undeclared bind would
+    refuse every backup."""
+    rows = short_bind_rows()
+    assert ("bind", "memory", "/data/memory") not in rows
+    assert ("volume", "", "v4_memdata") in rows
+
+
+def test_a_short_syntax_bind_added_to_the_real_file_would_be_caught():
+    """The end the operator meets: whichever spelling is used, the
+    'every bind is declared' test is what fires."""
+    rows = short_bind_rows()
+    undeclared = sorted(
+        name for (kind, _, name), (d, _) in rows.items() if kind == "bind" and not d
+    )
+    assert undeclared == ["/etc/localtime", "/home-relative", "/interpolated", "/newstate"]
+
+
+# ── NF-3: the fix the product prints must be a fix the product accepts ──────
+
+
+def test_pasting_the_anon_fix_the_product_prints_produces_a_file_it_can_read():
+    """Not "the text looks right" — the text is taken from the refusal, an
+    operator's two substitutions are applied to it, it is spliced into a real
+    copy of deploy/docker-compose.yml, and the shipped reader is run over the
+    result. Before this, that produced a correct compose file that reddened
+    three tests, which is exactly what teaches people to route around a
+    tripwire.
+    """
+    from test_coverage import base_facts
+
+    from novabundle import coverage
+
+    facts = base_facts()
+    del facts["dispositions"]["anon"]["searxng"]
+    _, refusals = coverage(facts, "routine")
+    fix = next(r for r in refusals if "anonymous volume" in r.subject).fix
+
+    # What an operator does with it: take the YAML under the "fix:" line,
+    # de-indent it, and fill in the two placeholders.
+    block = [line for line in fix.splitlines() if line.strip()][1:]
+    margin = min(len(line) - len(line.lstrip()) for line in block)
+    pasted = "\n".join("    " + line[margin:] for line in block)
+    pasted = pasted.replace("<one of the eight>", "exclude-ephemeral")
+    pasted = pasted.replace('"<why>"', '"a search result cache"')
+
+    # Start from the file as it is WHEN the refusal fires: the anon block is
+    # the thing that is missing. Leaving the real one in place would let its
+    # declared rows mask the pasted ones.
+    stripped, dropping = [], False
+    for line in COMPOSE_FILE.read_text().splitlines(keepends=True):
+        if line.startswith("    x-nova-backup-anon:"):
+            dropping = True
+            continue
+        if dropping:
+            if line.strip() and len(line) - len(line.lstrip()) <= 4:
+                dropping = False
+            else:
+                continue
+        stripped.append(line)
+    without_anon = "".join(stripped)
+    assert "x-nova-backup-anon" not in without_anon
+    assert ("anon", "searxng", "/var/cache/searxng") not in _rows(
+        compose_read("raw_dispositions", without_anon)
+    )
+
+    patched = without_anon.replace("  searxng:\n", "  searxng:\n" + pasted + "\n", 1)
+    rows = _rows(compose_read("raw_dispositions", patched))
+
+    assert rows[("anon", "searxng", "/var/cache/searxng")] == ("exclude-ephemeral", True)
+    # ...and every rule test_policy applies to the real file holds for it.
+    for (kind, owner, name), (disposition, has_reason) in rows.items():
+        assert disposition, f"{kind} {owner} {name} came back undeclared after the paste"
+        assert disposition in DISPOSITIONS, f"{kind} {owner} {name}: {disposition!r}"
+        if disposition.startswith("exclude-"):
+            assert has_reason, f"{kind} {owner} {name} is {disposition} with no reason"

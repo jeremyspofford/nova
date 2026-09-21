@@ -109,7 +109,7 @@ raw_dispositions() {
     }
     function flush_mount() {
       if (mtype == "bind") printf "bind\t%s\t%s\t%s\t%s\n", svc, mtgt, mdisp, (mreason ? "yes" : "no")
-      mtype = ""; mtgt = ""; mdisp = ""; mreason = 0
+      mtype = ""; mtgt = ""; msrc = ""; mdisp = ""; mreason = 0
     }
     function flush_anon() {
       if (atgt != "") printf "anon\t%s\t%s\t%s\t%s\n", svc, atgt, adisp, (areason ? "yes" : "no")
@@ -132,8 +132,22 @@ raw_dispositions() {
     }
     invols && /^      - / {
       flush_mount()
-      item = $0; sub(/^      - /, "", item)
-      if (item ~ /^type:/) mtype = cr_value(item, "type")
+      item = cr_trim($0); sub(/^- /, "", item)
+      if (item ~ /^type:/) { mtype = cr_value(item, "type"); next }
+      # SHORT SYNTAX. `<source>:<target>[:mode]`. Compose reads the source as
+      # a host path — a bind — when it starts with `.`, `/`, `~` or `$`, and
+      # as a named volume otherwise; a named volume carries its disposition
+      # under `volumes:` instead, so calling one a bind would refuse every
+      # backup. Reported with an EMPTY disposition, because the short form
+      # cannot carry one: that is the whole point of reporting it.
+      item = cr_unquote(item)
+      p = index(item, ":")
+      if (p == 0) next
+      msrc = substr(item, 1, p - 1)
+      mtgt = substr(item, p + 1)
+      sub(/:.*$/, "", mtgt)
+      c = substr(msrc, 1, 1)
+      if (c == "." || c == "/" || c == "~" || c == "$") mtype = "bind"
       next
     }
     invols && /^        type:/ { mtype = cr_value($0, "type"); next }
