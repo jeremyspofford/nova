@@ -497,3 +497,2163 @@ def _find(tree: ast.AST, qualname: str) -> ast.AST:
     found = _walk(tree, parts)
     assert found is not None, f"could not locate {qualname} in the module"
     return found
+
+
+# ============================================================================
+# S40b: MACHINES (design-verdict §3.1 A, corpus §4 "state_claim — machine")
+# ============================================================================
+#
+# The S40 live walk, turn b02a5694: asked "Where do your models run, and is
+# that machine ready?" a second time, she replayed the previous turn's
+# machine_status reading from history — `Last Reported: 2026-09-19T05:15:39`,
+# twenty minutes old — as the current status, without checking anything. The
+# guard learns machine subjects, DERIVED from this turn's own spans (the head of
+# a served round's `served_by`, machine_status facts and args), and corrects a
+# negative state or a reading time about a machine this turn did not read.
+#
+# Armed only in the turn kinds its precision was measured in (STACK_CLAIM_KINDS:
+# chat and eval); every existing call — `purpose` omitted — is unchanged.
+#
+# The corpus sentences below are the verdict's, verbatim. Additions beyond it
+# are in their own lists, labelled.
+
+from types import SimpleNamespace  # noqa: E402
+
+from app.tools import machines as machine_tools  # noqa: E402
+from tests.s40_walk import B02A5694, B851AA91  # noqa: E402
+
+
+def _span(kind: str, name: str, **meta):
+    return SimpleNamespace(kind=kind, name=name, meta=dict(meta))
+
+
+def _llm(served_by: str, *, local: bool | None = True, purpose: str = "chat", **meta):
+    """A served round as chat._gateway_round records it: `served_by` from the
+    gateway's header, `local` from its usage chunk."""
+    fields = {"purpose": purpose, "served_by": served_by, **meta}
+    if local is not None:
+        fields["local"] = local
+    return _span("llm_call", served_by, **fields)
+
+
+def _status(*, machine: str | None = None, facts: list | None = None, ok: bool = True, **meta):
+    args = {} if machine is None else {"machine": machine}
+    fields = {"ok": ok, "args_redacted": args, **meta}
+    if facts is not None:
+        fields["facts"] = facts
+    return _span("tool", "machine_status", **fields)
+
+
+def _fact(machine: str, *, checked_now: bool = True) -> dict:
+    return {
+        "machine": machine,
+        "answering": True,
+        "checked_now": checked_now,
+        "at": "2026-09-19T05:15:39.282993+00:00",
+    }
+
+
+HUB_SERVED = _llm("hub:qwen3:8b")
+HUB_READ = _status(facts=[_fact("hub")])
+CFG = _span(
+    "tool",
+    "machine_configure",
+    ok=True,
+    args_redacted={"machine": "hub", "serving": False},
+)
+DELL_READ = _status(machine="dell", facts=[_fact("dell")])
+
+NAME_BLOCK = (
+    "### Machine Status\n- **Name**: `hub`\n- **Last Reported**: `2026-09-19T05:15:39+00:00`"
+)
+
+MACHINE_CORRECTION_HUB = (
+    "Correction: I did not check hub this turn — I have no record of doing so, so what "
+    "I said about it is not a current reading."
+)
+HUB_SERVED_CLAUSE = " hub answered this turn: this reply came from hub:qwen3:8b."
+
+# (label, reply, spans, purpose, the machine it names)
+MACHINE_MUST_FIRE = [
+    ("b02a5694_full", B02A5694, [HUB_SERVED], "chat", "hub"),
+    ("switched_off", "hub is switched off.", [HUB_SERVED], "chat", "hub"),
+    ("code_not_answering", "`hub` is not answering right now.", [HUB_SERVED], "chat", "hub"),
+    ("bold_code_offline", "**`hub`** is offline.", [HUB_SERVED], "chat", "hub"),
+    (
+        "which_is_currently_switched_off",
+        "The models run on hub, which is currently switched off.",
+        [HUB_SERVED],
+        "chat",
+        "hub",
+    ),
+    ("name_last_reported_block", NAME_BLOCK, [HUB_SERVED], "chat", "hub"),
+    (
+        "last_checked_kv",
+        "The models run on hub.\n- **Last Checked**: 05:15 UTC",
+        [HUB_SERVED],
+        "chat",
+        "hub",
+    ),
+    (
+        "last_checked_just_now",
+        "hub runs models.\n- Last checked: just now",
+        [HUB_SERVED],
+        "chat",
+        "hub",
+    ),
+    ("no_longer_answering", "hub is no longer answering.", [HUB_SERVED], "chat", "hub"),
+    ("not_ready_right_now", "hub is not ready right now.", [HUB_SERVED], "chat", "hub"),
+    (
+        "read_of_another_machine_copula",
+        "hub is switched off for models.",
+        [HUB_SERVED, DELL_READ],
+        "chat",
+        "hub",
+    ),
+    (
+        "read_of_another_machine_block",
+        NAME_BLOCK,
+        [HUB_SERVED, DELL_READ],
+        "chat",
+        "hub",
+    ),
+    (
+        "eval_box_in_an_eval",
+        "Your models run on eval_box, which is switched off for chat models.",
+        [_llm("eval_box:qwen3:8b", purpose="eval")],
+        "eval",
+        "eval_box",
+    ),
+]
+
+# (label, reply, spans) — every one in a chat turn.
+MACHINE_MUST_NOT = [
+    ("b851aa91_full", B851AA91, [HUB_SERVED, HUB_READ]),
+    (
+        "called_ready_and_active",
+        "The models run on a machine called **hub**, which is currently ready and active.",
+        [HUB_SERVED],
+    ),
+    (
+        "serving_on_block",
+        "### Machine Status\n- **Name**: `hub`\n- **Serving**: ✅ **On** (always on)",
+        [HUB_SERVED],
+    ),
+    ("usb_hub", "Your USB hub is offline.", [HUB_SERVED]),
+    ("smart_home_hub", "The smart-home hub is offline.", [HUB_SERVED]),
+    ("possessive_hub", "Jeremy's hub is offline.", [HUB_SERVED]),
+    ("past_when_i_checked", "When I checked at 05:15, hub was answering.", [HUB_SERVED]),
+    ("past_earlier_today", "Earlier today hub was switched off for chat models.", [HUB_SERVED]),
+    ("intent_check_whether", "Let me check whether hub is ready.", [HUB_SERVED]),
+    (
+        "conditional_if",
+        "If hub is switched off, chat falls back to the next link.",
+        [HUB_SERVED],
+    ),
+    ("question", "Is hub ready?", [HUB_SERVED]),
+    ("reported_speech", "You said hub is offline.", [HUB_SERVED]),
+    ("not_ready_for_you", "hub is not ready for you to add a model.", [HUB_SERVED]),
+    ("configured_this_turn", "hub is switched off for models.", [HUB_SERVED, CFG]),
+    (
+        "read_not_checked_now",
+        "hub is not answering (not checked now).",
+        [HUB_SERVED, _status(facts=[_fact("hub", checked_now=False)])],
+    ),
+    ("unasked_read_no_facts", NAME_BLOCK, [HUB_SERVED, _status(unasked=True)]),
+    (
+        "last_updated_is_not_a_reading",
+        "hub runs models.\n- **Last updated**: 2026-08-29 10:00 UTC",
+        [HUB_SERVED],
+    ),
+    (
+        "heading_ends_the_run",
+        "hub runs models.\n### Devices\n- **Last seen**: 2026-09-18 16:48 UTC",
+        [HUB_SERVED],
+    ),
+    (
+        "paired_device_line_unbinds",
+        "hub runs models.\n- DELL-XPS-8950\n- **Last seen**: 2026-09-18 16:48 UTC",
+        [HUB_SERVED],
+    ),
+    (
+        "colon_line_unbinds",
+        "Models run on hub.\nYour Dell:\n- Status: offline\n- Last seen: 2026-09-18 16:48 UTC",
+        [HUB_SERVED],
+    ),
+    ("fenced_block", f"```\n{NAME_BLOCK}\n```", [HUB_SERVED]),
+    ("fenced_copula", "```\nhub is offline.\n```", [HUB_SERVED]),
+    (
+        "quoted_block",
+        "\n".join(f"> {line}" for line in NAME_BLOCK.splitlines()),
+        [HUB_SERVED],
+    ),
+    ("quoted_copula", "> hub is offline.", [HUB_SERVED]),
+    ("the_machine_existing_pin", "The machine is unreachable.", [HUB_SERVED]),
+    ("negated_offline", "hub is not offline.", [HUB_SERVED]),
+    ("negated_switched_off", "hub is not switched off.", [HUB_SERVED]),
+    (
+        "lead_in_checked_earlier",
+        f"Here is what hub reported when I checked earlier:\n\n{NAME_BLOCK}",
+        [HUB_SERVED],
+    ),
+    ("not_checked_since", f"{NAME_BLOCK} (I have not checked since)", [HUB_SERVED]),
+    (
+        "could_not_be_asked",
+        f"{NAME_BLOCK} (the gateway could not be asked now)",
+        [HUB_SERVED],
+    ),
+    (
+        "cloud_served_only",
+        "hub is offline.",
+        [_llm("openrouter:anthropic/claude-sonnet-4.6", local=False)],
+    ),
+    ("github", "The GitHub is offline.", [HUB_SERVED]),
+    ("hostname", "hub.example.com is unreachable.", [HUB_SERVED]),
+    ("positive_ready", "hub is ready.", [HUB_SERVED]),
+    ("positive_answering", "hub is answering.", [HUB_SERVED]),
+    ("positive_online_and_serving", "hub is online and serving.", [HUB_SERVED]),
+]
+
+# The misses this precision buys (verdict §4), pinned so each is a choice.
+MACHINE_ACCEPTED_MISSES = [
+    ("case_exact", "Hub is offline.", [HUB_SERVED]),
+    ("determiner_the", "The hub is offline.", [HUB_SERVED]),
+    (
+        "no_negative_key_value_branch",
+        "### Machine Status\n- **Name**: `hub`\n- **Serving**: ❌ **Off**",
+        [HUB_SERVED],
+    ),
+    ("past_tense_last_checked", "hub was last checked at 05:15 UTC.", [HUB_SERVED]),
+    # S44 lists machine names from the gateway; until then a machine that
+    # neither served nor was read this turn is not a subject.
+    ("unnamed_machine_s44", "hub is ready.", [_llm("dell:qwen3:8b")]),
+    (
+        "read_plus_replayed_older_stamp",
+        NAME_BLOCK.replace("2026-09-19T05:15:39", "2026-09-18T22:01:07"),
+        [HUB_SERVED, HUB_READ],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans,purpose,machine",
+    MACHINE_MUST_FIRE,
+    ids=[c[0] for c in MACHINE_MUST_FIRE],
+)
+def test_machine_must_fire(label, reply, spans, purpose, machine):
+    claim = guards.state_claim_check(reply, spans, NAMES, purpose=purpose)
+    assert claim is not None, f"{label!r} should have fired but did not"
+    assert claim.subject_kind == "machine"
+    assert claim.device == machine
+    assert claim.phrase
+    assert claim.text.startswith(guards.STATE_CLAIM_MACHINE_CORRECTION.format(machine=machine)), (
+        claim.text
+    )
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans",
+    MACHINE_MUST_NOT,
+    ids=[c[0] for c in MACHINE_MUST_NOT],
+)
+def test_machine_must_not_fire(label, reply, spans):
+    assert guards.state_claim_check(reply, spans, NAMES, purpose="chat") is None, (
+        f"{label!r} was wrongly corrected — a false positive makes the guard the liar"
+    )
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans",
+    MACHINE_ACCEPTED_MISSES,
+    ids=[c[0] for c in MACHINE_ACCEPTED_MISSES],
+)
+def test_machine_accepted_misses_stay_missed(label, reply, spans):
+    assert guards.state_claim_check(reply, spans, NAMES, purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans,purpose,machine",
+    MACHINE_MUST_FIRE,
+    ids=[c[0] for c in MACHINE_MUST_FIRE],
+)
+def test_machine_must_fire_is_silent_with_no_spans(label, reply, spans, purpose, machine):
+    """DERIVED, not hardcoded: with nothing served and nothing read this turn,
+    there is no machine to be wrong about."""
+    assert guards.state_claim_check(reply, [], NAMES, purpose=purpose) is None
+
+
+@pytest.mark.parametrize("unarmed", ["scheduled", "agent", "beat", None])
+@pytest.mark.parametrize(
+    "label,reply,spans,purpose,machine",
+    MACHINE_MUST_FIRE,
+    ids=[c[0] for c in MACHINE_MUST_FIRE],
+)
+def test_machine_must_fire_is_silent_where_the_guard_is_not_armed(
+    label, reply, spans, purpose, machine, unarmed
+):
+    """Armed only where its precision was measured (STACK_CLAIM_KINDS). A
+    scheduled or agent turn is not read live and the correction REPLACES, so a
+    false one there IS the persisted row; `None` is every pre-S40b caller."""
+    if unarmed is None:
+        assert guards.state_claim_check(reply, spans, NAMES) is None
+    assert guards.state_claim_check(reply, spans, NAMES, purpose=unarmed) is None
+
+
+# -- the walk turn, pinned exactly ---------------------------------------------
+
+
+def test_the_walk_replay_is_corrected_on_its_reading_line():
+    """b02a5694: the `Last Reported` line binds to hub through the `Name: hub`
+    line above it, and nothing read hub this turn. A reading time is not a
+    negative state, so the served clause is not appended: the correction says
+    only what is mechanically true."""
+    claim = guards.state_claim_check(B02A5694, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.phrase == "- Last Reported: 2026-09-19T05:15:39+00:00"
+    assert claim.text == MACHINE_CORRECTION_HUB
+    assert claim.served_by is None
+    assert claim.evidence == "unchecked"
+
+
+def test_a_negative_claim_about_a_machine_that_served_says_so():
+    claim = guards.state_claim_check("hub is switched off.", [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.text == MACHINE_CORRECTION_HUB + HUB_SERVED_CLAUSE
+    assert claim.served_by == "hub:qwen3:8b"
+    assert claim.evidence == "served"
+    assert claim.phrase == "hub is switched off"
+
+
+def test_the_honest_walk_turn_is_silent_because_it_read_hub():
+    """b851aa91: the same block, the same timestamp — and her own machine_status
+    call behind it. Silence here is the read, and removing the read fires."""
+    assert guards.state_claim_check(B851AA91, [HUB_SERVED, HUB_READ], NAMES, purpose="chat") is None
+    assert guards.state_claim_check(B851AA91, [HUB_SERVED], NAMES, purpose="chat") is not None
+
+
+# -- beyond the verdict corpus: the other shapes its regexes name ---------------
+
+MACHINE_MUST_FIRE_EXTRA = [
+    # The `last_reading` prose form (verdict §3.1 A).
+    ("prose_last_reported_at", "hub last reported at 05:15 UTC.", [HUB_SERVED]),
+    ("prose_last_seen_iso", "hub is last seen 2026-09-19 05:15 UTC.", [HUB_SERVED]),
+    # finditer, not search: a positive claim about one machine does not hide a
+    # negative one about another in the same clause.
+    ("second_subject_in_clause", "dell is ready and hub is offline.", [HUB_SERVED, DELL_READ]),
+    # A parenthetical between the name and the copula.
+    ("parenthetical", "hub (the bundled engine) is unreachable.", [HUB_SERVED]),
+    ("contraction", "hub's not answering right now.", [HUB_SERVED]),
+]
+
+MACHINE_MUST_NOT_EXTRA = [
+    (
+        "prose_not_checked_since",
+        "hub last reported at 05:15 UTC, and I have not checked since.",
+        [HUB_SERVED],
+    ),
+    ("prose_prior_time", "Earlier, hub last reported at 05:15 UTC.", [HUB_SERVED]),
+    ("model_id_is_not_a_subject", "hub:qwen3:8b is offline.", [HUB_SERVED]),
+    ("prose_read_this_turn", "hub last reported at 05:15 UTC.", [HUB_SERVED, HUB_READ]),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans", MACHINE_MUST_FIRE_EXTRA, ids=[c[0] for c in MACHINE_MUST_FIRE_EXTRA]
+)
+def test_machine_must_fire_extra(label, reply, spans):
+    claim = guards.state_claim_check(reply, spans, NAMES, purpose="chat")
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+
+
+@pytest.mark.parametrize(
+    "label,reply,spans", MACHINE_MUST_NOT_EXTRA, ids=[c[0] for c in MACHINE_MUST_NOT_EXTRA]
+)
+def test_machine_must_not_fire_extra(label, reply, spans):
+    assert guards.state_claim_check(reply, spans, NAMES, purpose="chat") is None, label
+
+
+# -- the two branches are independent -------------------------------------------
+
+
+def test_a_device_check_does_not_back_a_machine_claim():
+    """`_checked_a_device` short-circuits the DEVICE branch only: a device_list
+    this turn says nothing about hub."""
+    spans = [HUB_SERVED, Span("device_list")]
+    claim = guards.state_claim_check("hub is switched off.", spans, NAMES, purpose="chat")
+    assert claim is not None and claim.subject_kind == "machine"
+
+
+def test_a_machine_read_does_not_back_a_device_claim():
+    claim = guards.state_claim_check(OWNER_CASE, [HUB_SERVED, HUB_READ], NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.subject_kind == "device"
+    assert claim.text == guards.STATE_CLAIM_CORRECTION
+
+
+def test_machine_claims_fire_with_nothing_paired():
+    """The early exit needs NEITHER device names NOR machine names now."""
+    claim = guards.state_claim_check("hub is switched off.", [HUB_SERVED], [], purpose="chat")
+    assert claim is not None and claim.device == "hub"
+
+
+def test_the_device_branch_is_unchanged_by_purpose():
+    for purpose in (None, "chat", "eval", "scheduled", "agent"):
+        claim = guards.state_claim_check(OWNER_CASE, [], NAMES, purpose=purpose)
+        assert claim is not None and claim.subject_kind == "device"
+        assert claim.text == guards.STATE_CLAIM_CORRECTION
+
+
+# -- machine_names: derived from the turn's own spans ---------------------------
+
+
+def test_machine_names_are_derived_from_served_rounds_reads_and_configures():
+    spans = [
+        _llm("hub:qwen3:8b"),  # local
+        _llm("dell:qwen3:8b", local=None, served_on="gpu:cuda:GPU-<uuid>"),
+        _llm("spark:gemma4:12b", local=None, served_runtime="container"),
+        _status(facts=[_fact("eval_box")]),
+        _status(machine="named_arg"),
+        _span("tool", "machine_configure", ok=True, args_redacted={"machine": "cfg_box"}),
+    ]
+    assert guards.machine_names(spans) == (
+        "cfg_box",
+        "dell",
+        "eval_box",
+        "hub",
+        "named_arg",
+        "spark",
+    )
+
+
+def test_machine_names_ignore_failed_spans_and_non_local_rounds():
+    spans = [
+        _llm("hub:qwen3:8b", error="the gateway reported: boom"),  # failed round
+        _llm("openrouter:anthropic/claude-sonnet-4.6", local=False),  # a cloud round
+        _llm("cloudy:model:tag", local=None),  # nothing says it ran on an engine
+        _llm("x:qwen3:8b"),  # a one-character name
+        _status(machine="ghost", ok=False, facts=[_fact("ghost")]),
+        _span("tool", "machine_configure", ok=False, args_redacted={"machine": "ghost2"}),
+        _span("tool", "fetch_url", ok=True, args_redacted={"machine": "not_a_machine_tool"}),
+    ]
+    assert guards.machine_names(spans) == ()
+
+
+def test_every_derived_machine_is_read_or_served_so_no_positive_claim_fires():
+    """The PROPERTY the verdict pins (§3.1 A): a name only ever comes from a
+    read of it or a round it served, so a positive claim about a derived
+    machine is always backed — in S40b the machine branch fires only on a
+    negative state or an unread reading time. S44 (gateway-listed names) is
+    the change that makes this go red, deliberately."""
+    span_sets = [
+        [HUB_SERVED],
+        [HUB_READ],
+        [CFG],
+        [DELL_READ],
+        [HUB_SERVED, DELL_READ],
+        [_llm("dell:qwen3:8b", local=None, served_on="gpu:x")],
+        [_status(machine="spark"), _llm("hub:qwen3:8b")],
+    ]
+    for spans in span_sets:
+        names = guards.machine_names(spans)
+        assert names, spans
+        for name in names:
+            # Served: a round the gateway says ran on it — the very record
+            # machine_names derives the name from.
+            served = name in {guards._engine_served_head(span) for span in spans}
+            assert guards._machine_read(spans, name) or served, name
+            for positive in (f"{name} is ready.", f"{name} is online.", f"{name} is answering."):
+                assert guards.state_claim_check(positive, spans, [], purpose="chat") is None
+
+
+# -- the constants and the texts --------------------------------------------------
+
+
+def test_the_machine_tool_names_are_the_registry_names():
+    """Derived, never retyped: a rename in the registry turns this red.
+
+    Pin moved in the S40b final fix wave (C2): the read set was a hand-kept
+    {machine_status}; it is now every tool that DECLARES its result states
+    the machines' state (Tool.reads_machines) — see the fix-wave section."""
+    assert machine_tools.MACHINE_STATUS.name in guards._machine_read_tools()
+    assert guards._CONFIGURE_TOOLS == frozenset({machine_tools.MACHINE_CONFIGURE.name})
+    from app import tools
+
+    assert machine_tools.MACHINE_STATUS.name in tools.REGISTRY
+    assert machine_tools.MACHINE_CONFIGURE.name in tools.REGISTRY
+
+
+def test_the_machine_texts_trip_no_guard_of_their_own():
+    """The correction PERSISTS and the note streams, so a text that tripped a
+    guard would be corrected forever; the nudge is what the model is told."""
+    texts = [
+        MACHINE_CORRECTION_HUB,
+        MACHINE_CORRECTION_HUB + HUB_SERVED_CLAUSE,
+        chat.MACHINE_REDIRECT_NOTE,
+        chat.state_redirect_nudge(device="hub", ran_a_tool=False, kind="machine"),
+    ]
+    for text in texts:
+        for purpose in ("chat", "eval"):
+            assert guards.state_claim_check(text, [HUB_SERVED], NAMES, purpose=purpose) is None
+            assert guards.stack_claim_check(text, [HUB_SERVED], purpose=purpose) is None
+        assert guards.narration_check(text, []) is None
+        assert guards.consent_claim_check(text) is None
+        assert guards.capability_claim_check(text, ["machine_status", "device_list"]) is None
+        assert guards.deferral_check(text, [], ["fetch_url", "web_search"]) is None
+        assert guards.presented_listing_check(text, [], ["workspace_list_files"]) is None
+        assert guards.bare_intent_check(text, []) is None
+        assert guards.observation_check(text, [], []) is None
+        assert guards.delivery_claim_check(text, []) is None
+
+
+def test_the_machine_nudge_names_the_registry_tool_and_refuses_a_false_premise():
+    nudge = chat.state_redirect_nudge(device="hub", ran_a_tool=False, kind="machine")
+    assert nudge == (
+        f"You have not checked hub this turn. Check it now with "
+        f"{machine_tools.MACHINE_STATUS.name} before describing it, or say plainly "
+        "that you did not check."
+    )
+    with pytest.raises(ValueError):
+        chat.state_redirect_nudge(device="hub", ran_a_tool=True, kind="machine")
+    # The device nudge is what it was.
+    assert "device tool" in chat.state_redirect_nudge(device=DEVICE, ran_a_tool=False)
+
+
+# ============================================================================
+# S40b T1 review, fix round 1: four ways an honest reply was corrected
+# ============================================================================
+#
+# Each list below is a class of honest sentence the verbatim patterns REPLACED
+# (a false positive makes the guard the liar), found by the T1 review. The
+# verdict corpus above stays exactly as it is: every fix here only removes
+# fires, and the sentences that must still fire are pinned beside them.
+
+# -- 1. "this reply came from …" names the round that WROTE the reply ------------
+#
+# The served clause is a statement of fact about this reply, so it may only
+# quote the turn's last error-free round of its own purpose — the one that
+# wrote the text — and only when that round ran on the machine the claim is
+# about. Any other served round (an earlier one, a judge's, another machine's)
+# does not make the clause true; the correction then says only "unchecked".
+
+DELL_SERVED = _llm("dell:qwen3:8b")
+
+
+def test_the_served_clause_is_omitted_when_another_machine_wrote_the_reply():
+    """hub served an earlier round; dell served the round that wrote the reply.
+    "this reply came from hub:qwen3:8b" would be false."""
+    spans = [HUB_SERVED, DELL_SERVED]
+    claim = guards.state_claim_check("hub is switched off.", spans, NAMES, purpose="chat")
+    assert claim is not None and claim.device == "hub"
+    assert claim.text == MACHINE_CORRECTION_HUB
+    assert claim.served_by is None
+    assert claim.evidence == "unchecked"
+
+
+def test_the_served_clause_is_omitted_when_the_machine_served_only_another_purpose():
+    """The reply was written in the cloud; hub served only a judge's round. A
+    judge round is the backend's second opinion, never the reply."""
+    spans = [
+        _llm("openrouter:anthropic/claude-sonnet-4.6", local=False),
+        _llm("hub:qwen3:8b", purpose="judge"),
+    ]
+    claim = guards.state_claim_check("hub is switched off.", spans, NAMES, purpose="chat")
+    assert claim is not None and claim.device == "hub"
+    assert claim.text == MACHINE_CORRECTION_HUB
+    assert claim.served_by is None
+    assert claim.evidence == "unchecked"
+
+
+def test_the_served_clause_quotes_the_round_that_wrote_the_reply():
+    """Two rounds on hub: the clause quotes the LAST, the one whose text this is."""
+    spans = [HUB_SERVED, _llm("hub:gemma4:12b")]
+    claim = guards.state_claim_check("hub is switched off.", spans, NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.served_by == "hub:gemma4:12b"
+    assert claim.text == (
+        MACHINE_CORRECTION_HUB + " hub answered this turn: this reply came from hub:gemma4:12b."
+    )
+
+
+def test_a_later_round_of_another_purpose_does_not_displace_the_writer():
+    """A judge round after the reply is not the round that wrote it; a failed
+    own round wrote nothing."""
+    spans = [
+        HUB_SERVED,
+        _llm("dell:qwen3:8b", purpose="judge"),
+        _llm("dell:qwen3:8b", error="the gateway reported: boom"),
+    ]
+    claim = guards.state_claim_check("hub is switched off.", spans, NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.served_by == "hub:qwen3:8b"
+    assert claim.text == MACHINE_CORRECTION_HUB + HUB_SERVED_CLAUSE
+
+
+# -- 2. she says plainly that she did not check ---------------------------------
+#
+# The machine nudge offers exactly this ("…or say plainly that you did not
+# check"), so a correction here also refused the regeneration that followed
+# the nudge. A reading's not-current cut reads its WHOLE run down to the
+# reading line, the heading that opens the run and the lead-in above it; the
+# copula form reads the cut over its whole sentence; and a double-quoted span
+# is someone else's words, never her claim.
+
+# The Name/Last Reported pair without a heading, so an intro can sit in its run.
+NAME_RUN = "- **Name**: `hub`\n- **Last Reported**: `2026-09-19T05:15:39+00:00`"
+
+SAID_NOT_CHECKED = [
+    (
+        "intro_in_the_same_run",
+        f"I did not check hub this turn. The last reading I have:\n{NAME_RUN}",
+    ),
+    (
+        "intro_line_without_a_colon",
+        f"Not checked this turn; this is from history.\n{NAME_RUN}",
+    ),
+    ("disclaimer_in_the_heading", f"### Machine Status (not checked this turn)\n{NAME_RUN}"),
+    (
+        "disclaimer_in_the_heading_above_a_blank",
+        f"### Machine Status (not checked this turn)\n\n{NAME_RUN}",
+    ),
+    (
+        "quoted_last_line",
+        'I did not check hub this turn; the last line I have is "hub is switched off."',
+    ),
+    (
+        "curly_quoted_with_disclaimer",
+        "My last reading of hub said “hub is switched off.” I have not checked it this turn.",
+    ),
+    ("not_checked_after_but", "hub is switched off, but I have not checked it this turn."),
+    (
+        "not_current_after_semicolon",
+        "hub is offline; that is not a current reading, since I did not check it.",
+    ),
+]
+
+QUOTED_NOT_HERS = [
+    ("curly_quoted_note", "Your note reads “hub is offline, so use the cloud.”"),
+    ("straight_quoted_note", 'The note you saved reads "hub is switched off for models."'),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SAID_NOT_CHECKED + QUOTED_NOT_HERS,
+    ids=[c[0] for c in SAID_NOT_CHECKED] + [c[0] for c in QUOTED_NOT_HERS],
+)
+def test_saying_plainly_she_did_not_check_is_not_corrected(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+def test_the_nudges_own_alternative_passes_its_own_vetting():
+    """The sentence the machine nudge asks for, written the way she writes a
+    status block, passes the state check the regeneration is vetted by."""
+    regen = f"I did not check hub this turn. The last reading I have is from history:\n{NAME_RUN}"
+    assert guards.state_claim_check(regen, [HUB_SERVED], NAMES, purpose="chat") is None
+    # …and the same block without the sentence is still the replay.
+    assert guards.state_claim_check(NAME_RUN, [HUB_SERVED], NAMES, purpose="chat") is not None
+
+
+# Quote marks as formatting of her OWN key/value reading are not a quotation:
+# a reading line that begins with a quote never matches, so only the clause
+# scan blanks quoted spans.
+QUOTED_VALUES_STILL_FIRE = [
+    ("quoted_values", '- Name: "hub"\n- Last Reported: "2026-09-19T05:15:39+00:00"'),
+]
+
+# The sentence-scope not-current cut costs this miss: "could not be reached"
+# reads as a disclaimer. Pinned so it is a choice (reviewed with the fix).
+SAID_NOT_CHECKED_ACCEPTED_MISSES = [
+    ("could_not_be_reached", "hub is offline, so the model could not be reached."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", QUOTED_VALUES_STILL_FIRE, ids=[c[0] for c in QUOTED_VALUES_STILL_FIRE]
+)
+def test_quoted_key_value_readings_still_fire(label, reply):
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None and claim.device == "hub", label
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SAID_NOT_CHECKED_ACCEPTED_MISSES,
+    ids=[c[0] for c in SAID_NOT_CHECKED_ACCEPTED_MISSES],
+)
+def test_the_not_current_cut_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+# -- 3. a state limited to a place, a schedule or a count is not an outage -------
+#
+# Every machine state word now carries an anchor, including the negative ones
+# and the positive link words that "not"/"no longer" turn negative. So
+# "offline" counts only where the sentence ends it or says "right now",
+# "again" or "for chat models". It never counts in "unreachable from your
+# phone" or "offline twice a week". Since fix round 2 the outage words take
+# _OUTAGE_ANCHOR, which is the verdict's anchor plus clause connectors and
+# present-time phrases (see the round 2 section below).
+
+LIMITED_STATES = [
+    (
+        "place_unreachable_from",
+        "hub is unreachable from your phone, since it is only on the tailnet.",
+    ),
+    ("place_not_reachable_from", "hub is not reachable from outside the tailnet."),
+    (
+        "place_disconnected_from",
+        "hub is disconnected from the internet, but it still serves models locally.",
+    ),
+    ("schedule_switched_off_overnight", "hub is switched off overnight to save power."),
+    ("count_offline_twice_a_week", "hub is offline twice a week for updates."),
+    ("schedule_not_online_on_weekends", "hub is not online on weekends."),
+    ("offline_capable", "hub is offline-capable."),
+]
+
+ANCHORED_STILL_FIRE = [
+    ("offline_right_now", "hub is offline right now."),
+    ("unreachable_again", "hub is unreachable again."),
+    ("switched_off_comma", "hub is switched off, so routing skips it."),
+    ("not_online_right_now", "hub is not online right now."),
+]
+
+
+@pytest.mark.parametrize("label,reply", LIMITED_STATES, ids=[c[0] for c in LIMITED_STATES])
+def test_a_limited_state_is_not_read_as_a_present_outage(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", ANCHORED_STILL_FIRE, ids=[c[0] for c in ANCHORED_STILL_FIRE]
+)
+def test_an_anchored_present_outage_still_fires(label, reply):
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None and claim.device == "hub", label
+    assert claim.text == MACHINE_CORRECTION_HUB + HUB_SERVED_CLAUSE
+
+
+# -- 4. a device's own status line is not hub's ------------------------------------
+#
+# The upward walk stops, unbound, at a line that states a connectivity state
+# and names no machine: that line is some other thing's status (here a device
+# the reply does not call by its paired name), and the reading under it is
+# that thing's. Each turn ran device_list, so the device branch is backed and
+# only a wrong binding could fire.
+
+DEVICE_CHECKED = [HUB_SERVED, Span("device_list")]
+
+DEVICE_STATUS_LINES = [
+    ("dell_offline", "Models run on hub.\n- Dell: offline\n- Last seen: 2026-09-18 16:48 UTC"),
+    ("dell_is_online", "hub runs models.\nThe Dell is online.\n- Last checked: just now"),
+    (
+        "laptop_powered_on",
+        "The models run on hub.\n- Laptop: powered on\n- Last reported: 05:15 UTC",
+    ),
+    (
+        "desktop_connected",
+        "hub serves the models.\n- Your desktop is connected\n- Last contact: 2026-09-18 16:48 UTC",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", DEVICE_STATUS_LINES, ids=[c[0] for c in DEVICE_STATUS_LINES]
+)
+def test_a_reading_under_a_device_status_line_does_not_bind_to_the_machine(label, reply):
+    assert guards.state_claim_check(reply, DEVICE_CHECKED, NAMES, purpose="chat") is None, label
+
+
+def test_a_status_line_that_names_the_machine_still_binds():
+    """The stop is for a line that names NO machine: "hub: online" is hub's."""
+    claim = guards.state_claim_check(
+        "- hub: online\n- Last checked: just now", DEVICE_CHECKED, NAMES, purpose="chat"
+    )
+    assert claim is not None and claim.device == "hub"
+    assert claim.phrase == "- Last checked: just now"
+
+
+# ================================================================================
+# T1 review, fix round 2
+# ================================================================================
+#
+# Two fixes from round 1 went further than their findings did, and each one
+# silenced a present claim that it should have kept.
+
+# -- 1. hub's OWN status line does not unbind its reading --------------------------
+#
+# Round 1 ended the upward walk at any line that states a connectivity and names
+# no machine, so that the reading under "- Dell: offline" is not read as hub's.
+# Within b02a5694's own block, a "- Status: Offline" line between `Name: hub` and
+# `Last Reported` also names no machine. It states the block's OWN attribute,
+# and the replay under it went silent. That includes machine_status's own
+# wording, "switched off for models" (tools/machines.py).
+#
+# Now a line whose key is a generic attribute (status, state, connection,
+# reachable, power, …) and whose value begins with a state lets the walk go on.
+# So does a keyless line that is only a state. Past such a line, the walk
+# crosses only the block's key/value lines up to the line that heads the block.
+# A label or sentence that names no machine ("- Dell") leaves the reading
+# unbound.
+
+HUB_BLOCK_HEAD = (
+    "The models run on a machine called **`hub`**, and its current status is:  \n"
+    "\n"
+    "### 🏗️ **Machine Status**  \n"
+    "- **Name**: `hub`  \n"
+)
+HUB_BLOCK_READING = "- **Last Reported**: `2026-09-19T05:15:39+00:00`  "
+WALK_PHRASE = "- Last Reported: 2026-09-19T05:15:39+00:00"
+
+OWN_STATUS_LINES = [
+    ("status_switched_off_for_models", "- **Status**: Switched off for models"),
+    ("status_green_online", "- **Status**: 🟢 Online"),
+    ("status_offline", "- **Status**: Offline"),
+    ("connection_connected", "- **Connection**: Connected"),
+    ("reachable_yes", "- **Reachable**: Yes"),
+    ("power_powered_on", "- **Power**: Powered on"),
+    ("status_answering", "- **Status**: Answering"),
+    ("state_not_reachable", "- **State**: not reachable"),
+    ("connection_status_em_dash", "- **Connection status** — Disconnected"),
+    ("bare_state_line", "- 🟢 Online"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,status_line", OWN_STATUS_LINES, ids=[c[0] for c in OWN_STATUS_LINES]
+)
+def test_hubs_own_status_line_keeps_the_replay_bound(label, status_line):
+    reply = f"{HUB_BLOCK_HEAD}{status_line}  \n{HUB_BLOCK_READING}"
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+    assert claim.phrase == WALK_PHRASE
+    assert claim.text == MACHINE_CORRECTION_HUB
+
+
+def test_the_walk_replay_with_a_status_line_is_still_corrected():
+    """b02a5694 verbatim, with a Status line under `Name: hub`: the walk goes up
+    past the Status, Serving, Compute and Runtime lines to `Name: hub`."""
+    name_line = "- **Name**: `hub`  \n"
+    reply = B02A5694.replace(name_line, name_line + "- **Status**: Switched off for models  \n")
+    assert reply != B02A5694
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None
+    assert claim.phrase == WALK_PHRASE
+
+
+# A status line that is some other thing's still ends the walk unbound. Each of
+# these fired at b3d4f73b and was silent at 8cc0d4ae. Each turn ran device_list,
+# so only a wrong binding could fire.
+OTHER_SUBJECTS_STATUS = [
+    (
+        "label_heads_the_status_line",
+        "Models run on hub.\n- Dell\n- Status: offline\n- Last seen: 2026-09-18 16:48 UTC",
+    ),
+    (
+        "status_value_names_another_subject",
+        "Models run on hub.\n- Status: the Dell is offline\n- Last seen: 2026-09-18 16:48 UTC",
+    ),
+    (
+        "state_word_heads_a_list",
+        "Models run on hub.\n- Offline devices: Dell\n- Last seen: 2026-09-18 16:48 UTC",
+    ),
+    (
+        "subject_em_dash_state",
+        "Models run on hub.\n- Dell — offline\n- Last seen: 2026-09-18 16:48 UTC",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", OTHER_SUBJECTS_STATUS, ids=[c[0] for c in OTHER_SUBJECTS_STATUS]
+)
+def test_another_subjects_status_line_still_unbinds_the_reading(label, reply):
+    assert guards.state_claim_check(reply, DEVICE_CHECKED, NAMES, purpose="chat") is None, label
+
+
+# This is the cost of the heads-the-block rule. Past a status line, the walk
+# crosses only key/value lines. A keyless line such as "- Always on" reads the
+# same as the "- Dell" label, so hub's reading under it goes unbound. It was
+# silent at 8cc0d4ae too.
+OWN_STATUS_ACCEPTED_MISSES = [
+    (
+        "keyless_attribute_above_the_status",
+        f"{HUB_BLOCK_HEAD}- Always on\n- **Status**: Offline\n{HUB_BLOCK_READING}",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", OWN_STATUS_ACCEPTED_MISSES, ids=[c[0] for c in OWN_STATUS_ACCEPTED_MISSES]
+)
+def test_the_own_status_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+# -- 2. a clause connector or a present-time phrase ends an outage claim ----------
+#
+# Round 1 anchored every state word so that a place, a schedule or a count after
+# it limits the claim. The verdict's anchor, however, lists only punctuation,
+# "right now"/"now"/"again"/"at the moment", "and" and "for chat models". So a
+# present outage followed by "so", "because", "which", "since", "for now", "at
+# present" or "today" went silent. None of those words limits the state; each
+# one ends the claim.
+#
+# The outage words (the negative ones, and the link words that "not" or
+# "no longer" turns into an outage) now also end at a clause connector or a
+# present-time phrase. "answering", "ready" and "serving" keep exactly the
+# verdict's anchor, and the corpus measured them with it.
+
+PRESENT_OUTAGES = [
+    ("so_no_comma", "hub is offline so I can't run local models right now."),
+    ("for_now", "hub is switched off for now, so I used the cloud."),
+    ("at_present", "hub is unreachable at present."),
+    ("since_a_time", "hub is offline since 05:15 UTC."),
+    ("because", "hub is offline because its GPU is busy."),
+    ("which", "hub is unreachable which is why chat is slow."),
+    ("today", "hub is offline today."),
+    ("currently_after", "hub is disconnected currently."),
+    ("negated_link_so", "hub is not online so I used the cloud."),
+    ("negated_link_because", "hub is not reachable because the tailnet is down."),
+]
+
+
+@pytest.mark.parametrize("label,reply", PRESENT_OUTAGES, ids=[c[0] for c in PRESENT_OUTAGES])
+def test_a_present_outage_ended_by_a_connector_or_a_time_fires(label, reply):
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None and claim.device == "hub", label
+    assert claim.text == MACHINE_CORRECTION_HUB + HUB_SERVED_CLAUSE
+
+
+# The new anchor words stop where the words after them limit the state again.
+CONNECTOR_LIMITED = [
+    # "so" as a degree word is a frequency, not a connector.
+    ("so_often", "hub is offline so often that I stopped relying on it."),
+    ("so_rarely", "hub is switched off so rarely that nobody notices."),
+    # "today" counts only where it ends the claim, not in a schedule for later.
+    ("today_at_a_time", "hub is switched off today at 18:00 for updates."),
+    ("today_from_a_time", "hub is offline today from 18:00 to 20:00."),
+    # "as" is left out: "as a chat machine" is a role, and "as of <time>" is a
+    # stamp.
+    ("as_a_role", "hub is switched off as a chat machine on weekends."),
+    # "ready" keeps the verdict's anchor: "not ready" is readiness for something.
+    ("ready_keeps_its_anchor", "hub is not ready since you have not added a model."),
+]
+
+
+@pytest.mark.parametrize("label,reply", CONNECTOR_LIMITED, ids=[c[0] for c in CONNECTOR_LIMITED])
+def test_a_connector_word_that_limits_the_state_does_not_fire(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+def test_the_verdicts_anchor_is_kept_verbatim_inside_the_outage_anchor():
+    """The verdict's _MACHINE_ANCHOR is unchanged, and the outage anchor only
+    adds to it."""
+    assert guards._MACHINE_ANCHOR == (
+        r"(?=\s*(?:[.,;:!?)\]}—–]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment|and\b"
+        r"|for\s+(?:chat\s+)?(?:models|chat|requests)\b))"
+    )
+    assert guards._OUTAGE_ANCHOR.startswith(guards._MACHINE_ANCHOR[:-1] + "|")
+
+
+# ================================================================================
+# S40b T4 review, fix round 1: a reading she labels as her history
+# ================================================================================
+#
+# The v15 case seeds b851aa91's reading as her own history, and the answer the
+# machine nudge asks for says plainly that she did not check. Each block below
+# FIRED at f81d0a1b with only hub's served round (the reviewer's probes,
+# verbatim): a REPLACE-class correction of a reply that already said the
+# reading was history. The not-current cut read the run above the reading line,
+# its heading and its lead-in, but never a history label, and never a
+# disclaimer written after the block. It now reads:
+#   * a history label: "from history", "from my previous answer", "My previous
+#     answer:", "In the previous turn:";
+#   * the rest of the run below the reading line, and the first non-blank line
+#     after the run (unless that line is a heading or a lead-in ending in ":",
+#     which belong to what follows).
+
+HISTORY_LABELLED = [
+    (
+        "same_line_from_my_previous_answer",
+        f"{NAME_RUN} (from my previous answer)",
+    ),
+    ("same_line_from_history", f"{NAME_RUN} (from history)"),
+    (
+        "heading_from_my_previous_answer",
+        f"### Machine Status (from my previous answer)\n{NAME_RUN}",
+    ),
+    ("lead_in_from_history", f"The last reading I have is from history:\n{NAME_RUN}"),
+    ("lead_in_my_previous_answer", f"My previous answer:\n{NAME_RUN}"),
+    ("lead_in_from_my_previous_answer", f"From my previous answer:\n{NAME_RUN}"),
+    ("lead_in_in_the_previous_turn", f"In the previous turn:\n{NAME_RUN}"),
+    (
+        "lead_in_then_trailing_disclaimer",
+        f"From my previous answer:\n{NAME_RUN}\nI have not checked it this turn.",
+    ),
+]
+
+# A disclaimer written after the block, with no label above it.
+TRAILING_DISCLAIMERS = [
+    ("disclaimer_in_the_run", f"{NAME_RUN}\nI have not checked it this turn."),
+    ("disclaimer_after_a_blank", f"{NAME_RUN}\n\nI have not checked it this turn."),
+    ("disclaimer_after_the_heading_block", f"{NAME_BLOCK}\n\nThat reading may have changed."),
+    (
+        "disclaimer_on_a_line_below_the_reading",
+        f"{NAME_BLOCK}\n- **Serving**: On (not checked this turn)",
+    ),
+]
+
+# The same copula a history label frames, in her own sentence.
+HISTORY_LABELLED_COPULA = [
+    ("copula_after_a_history_lead_in", "From my previous answer: hub is switched off."),
+    ("copula_after_from_history", "From history: hub is offline."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    HISTORY_LABELLED + TRAILING_DISCLAIMERS + HISTORY_LABELLED_COPULA,
+    ids=[c[0] for c in HISTORY_LABELLED + TRAILING_DISCLAIMERS + HISTORY_LABELLED_COPULA],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_reading_labelled_as_history_is_not_corrected(purpose, label, reply):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    assert guards.state_claim_check(reply, spans, NAMES, purpose=purpose) is None, label
+
+
+# What must keep firing. The bare block (the replay, b02a5694's own shape) and
+# b02a5694 itself are pinned above; these are the new context's limits: a
+# heading or a lead-in after the run opens the NEXT section, so its words are
+# not about hub's reading; a clause that says hub is offline after a history
+# clause is its own claim; and a response FROM hub is not her earlier reply.
+HISTORY_CONTEXT_STILL_FIRES = [
+    (
+        "next_heading_is_another_section",
+        f"{NAME_BLOCK}\n\n### Devices (not checked this turn)\n- Dell: offline",
+    ),
+    (
+        "next_lead_in_is_another_block",
+        f"{NAME_BLOCK}\n\nThe Dell, which I have not checked this turn:\n- Status: offline",
+    ),
+    (
+        "copula_after_a_history_clause",
+        "My previous answer said hub was ready; hub is offline.",
+    ),
+    ("a_response_from_hub", f"The last response from hub:\n{NAME_RUN}"),
+    ("block_then_an_unrelated_line", f"{NAME_BLOCK}\n\nWant me to pull another model?"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    HISTORY_CONTEXT_STILL_FIRES,
+    ids=[c[0] for c in HISTORY_CONTEXT_STILL_FIRES],
+)
+def test_a_reading_the_new_context_does_not_frame_still_fires(label, reply):
+    claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+
+
+def test_the_bare_replay_still_fires_beside_the_labelled_ones():
+    """The pins the not-current cut must never reach: the bare block and the
+    walk's replay, word for word."""
+    for reply in (NAME_BLOCK, NAME_RUN, B02A5694):
+        claim = guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat")
+        assert claim is not None and claim.device == "hub"
+
+
+# The cost of reading the line after the run, pinned so it is a choice: a
+# sentence there that says something else is not current reads as the
+# reading's disclaimer.
+TRAILING_LINE_ACCEPTED_MISSES = [
+    ("another_subjects_disclaimer", f"{NAME_BLOCK}\n\nThe Dell was not checked this turn."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    TRAILING_LINE_ACCEPTED_MISSES,
+    ids=[c[0] for c in TRAILING_LINE_ACCEPTED_MISSES],
+)
+def test_the_trailing_line_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+def test_a_regeneration_that_labels_the_reading_as_history_is_not_refused():
+    """The nudge's alternative passed only because it opened with "I did not
+    check". Without that opener, the history label alone was refused when the
+    regeneration was vetted, and the persisted row became the correction."""
+    from app import agents
+
+    regen = f"The last reading I have is from history:\n{NAME_RUN}"
+    turn = SimpleNamespace(spans=[HUB_SERVED], kind="chat")
+    rejected = chat._regen_rejected_by(
+        regen,
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected is None
+    # …and the bare block is still refused by the state check.
+    rejected = chat._regen_rejected_by(
+        NAME_RUN,
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected == "state_claim"
+
+
+# ================================================================================
+# S40b T4 review, fix round 2: a mention of her earlier reply is not a label
+# ================================================================================
+#
+# Fix round 1's history cut read only whether a phrase naming her earlier reply
+# was PRESENT — on the reading's lead-in, heading, run and trailing line, and
+# anywhere in a copula's clause. So a replay that says it is CURRENT while
+# citing her history went silent: the replay-as-current the v15 case and this
+# branch exist for. Each block below FIRED at f81d0a1b and was SILENT at
+# c9538364 with only hub's served round (the reviewer's probes, verbatim
+# first). "Unchanged from my last reply" asserts the current state without a
+# read; it does not label the reading as history. In chat each was a missed
+# REPLACE-class correction of a replay.
+#
+# The cut now reads a LABEL (guards._history_framed / _labelled_as_history):
+#   * her earlier reply reported: "my previous answer said/showed X";
+#   * an attribution: "from history", "(from my previous answer)", "the
+#     reading I gave in my last reply";
+#   * a heading at the start of its line or clause: "My previous answer:",
+#     "In the previous turn:", "According to my last reply,";
+# never after "as"/"like"/"unlike"/"same as" or "unchanged"/"different"/
+# "updated", never past a retraction, and never when what follows reaffirms
+# the claim ("…, and that is still true").
+STATE_REPLAYED_AS_CURRENT = [
+    (
+        "current_status_unchanged_from_my_last_reply",
+        f"Here is hub's current status (unchanged from my last reply):\n{NAME_RUN}",
+    ),
+    (
+        "current_status_same_as_in_my_previous_answer",
+        f"Hub's current status, same as in my previous answer:\n{NAME_RUN}",
+    ),
+    (
+        "unlike_my_previous_answer_current_status",
+        f"Unlike my previous answer, here is hub's current status:\n{NAME_RUN}",
+    ),
+    ("correction_to_my_last_reply", "Correction to my last reply: hub is offline."),
+    ("as_in_my_last_reply", "As in my last reply, hub is offline."),
+    ("same_as_in_my_last_reply_after", "hub is offline, same as in my last reply."),
+    ("since_the_last_turn", "Since the last turn, hub has been offline."),
+    # The same limits, spelled the other ways.
+    ("as_i_said_in_my_last_reply", "As I said in my last reply, hub is offline."),
+    ("previous_answer_still_holds", "My previous answer still holds — hub is offline."),
+    ("per_my_last_reply", "Per my last reply, hub is offline."),
+    # "said hub" is never read (the verdict's lead-word rule); "said: hub" is.
+    (
+        "previous_answer_said_and_still_true",
+        "My previous answer said: hub is offline, and that is still true.",
+    ),
+    (
+        "previous_answer_showed_and_still_true",
+        f"My previous answer showed:\n{NAME_RUN}\nThat is still true.",
+    ),
+    (
+        "from_my_previous_answer_and_still_true",
+        "From my previous answer: hub is switched off, and that is still true.",
+    ),
+    ("unchanged_from_my_last_reply_after", "hub is offline, unchanged from my last reply."),
+    ("in_my_last_reply_i_was_wrong", "In my last reply I was wrong: hub is offline."),
+    (
+        "a_retracted_report_then_the_current_status",
+        f"My previous answer said hub was ready, which was wrong. Here is hub's current "
+        f"status:\n{NAME_RUN}",
+    ),
+    (
+        "the_reading_from_my_last_reply_is_still_current",
+        f"The reading from my last reply is still current:\n{NAME_RUN}",
+    ),
+    ("nothing_changed_from_my_last_reply", "Nothing changed from my last reply: hub is offline."),
+    ("like_my_previous_answer_said", "Like my previous answer said: hub is offline."),
+    ("which_i_reported_in_my_last_reply", "hub is offline, which I reported in my last reply."),
+    # …and the same sources, corrected, updated or repeated: a claim anew.
+    (
+        "correction_to_my_last_replys_reading",
+        "Correction to my last reply's reading: hub is offline.",
+    ),
+    ("update_on_my_last_replys_status", f"Update on my last reply's status:\n{NAME_RUN}"),
+    ("repeating_my_last_reply", "Repeating my last reply: hub is offline."),
+    (
+        "summary_of_my_previous_answer_still_current",
+        f"Summary of my previous answer, still current:\n{NAME_RUN}",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    STATE_REPLAYED_AS_CURRENT,
+    ids=[c[0] for c in STATE_REPLAYED_AS_CURRENT],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_replay_that_only_cites_her_earlier_reply_still_fires(purpose, label, reply):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    claim = guards.state_claim_check(reply, spans, NAMES, purpose=purpose)
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+
+
+# Her earlier reply, labelled as such. Each carries the same claim without its
+# label, which fires, so the pin cannot pass on a claim the guard never read.
+STATE_LABELLED_AS_HISTORY = [
+    (
+        "plain_report_of_her_previous_answer",
+        "My previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "according_to_my_last_reply",
+        "According to my last reply, hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "attribution_after_the_claim",
+        "hub is switched off, from my previous answer.",
+        "hub is switched off.",
+    ),
+    (
+        "attribution_after_a_prose_reading",
+        "hub last reported at 05:15 UTC (from my previous answer).",
+        "hub last reported at 05:15 UTC.",
+    ),
+    (
+        "the_reading_i_gave_in_my_last_reply",
+        f"This is the reading I gave in my last reply:\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    (
+        "copied_from_my_previous_answer_after_the_block",
+        f"{NAME_RUN}\n\nThat block is copied from my previous answer.",
+        NAME_RUN,
+    ),
+    (
+        "my_previous_answer_showed",
+        f"My previous answer showed:\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    (
+        "what_i_reported_in_my_previous_answer",
+        f"Here is what I reported in my previous answer:\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    ("as_of_my_last_reply", "As of my last reply, hub is offline.", "hub is offline."),
+    ("as_of_my_last_reply_lead_in", f"As of my last reply:\n{NAME_RUN}", NAME_RUN),
+    # A label with a staleness disclaimer after it: old, as the label says —
+    # not a retraction that closes it (only "wrong"-class words do).
+    (
+        "label_then_it_isnt_current",
+        f"From my previous answer (it isn't current):\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    (
+        "label_then_it_isnt_current_copula",
+        "From my previous answer (it isn't current): hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "attribution_which_is_outdated",
+        f"{NAME_RUN} (from my previous answer, which is outdated)",
+        NAME_RUN,
+    ),
+    ("from_history_which_is_outdated", f"From history, which is outdated:\n{NAME_RUN}", NAME_RUN),
+    # The other ways she names her earlier reply as the source: a recap or
+    # copy OF it, its possessive, a source lead at the start.
+    ("recap_of_my_last_reply", f"Recap of my last reply:\n{NAME_RUN}", NAME_RUN),
+    (
+        "summary_of_my_previous_answer",
+        "Summary of my previous answer: hub is offline.",
+        "hub is offline.",
+    ),
+    ("my_last_replys_status_block", f"My last reply's status block:\n{NAME_RUN}", NAME_RUN),
+    (
+        "based_on_my_previous_response",
+        "Based on my previous response, hub is offline.",
+        "hub is offline.",
+    ),
+    ("going_by_my_last_reply", "Going by my last reply, hub is offline.", "hub is offline."),
+    ("quoting_my_last_reply", f"Quoting my last reply:\n{NAME_RUN}", NAME_RUN),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    STATE_LABELLED_AS_HISTORY,
+    ids=[c[0] for c in STATE_LABELLED_AS_HISTORY],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_claim_labelled_as_her_history_is_not_corrected(purpose, label, reply, bare):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    assert guards.state_claim_check(reply, spans, NAMES, purpose=purpose) is None, label
+    claim = guards.state_claim_check(bare, spans, NAMES, purpose=purpose)
+    assert claim is not None and claim.device == "hub", label
+
+
+# The cost of letting only a "wrong"-class retraction close a label (a
+# staleness word says the labelled reading is old, which is the label's
+# point), pinned so it is a choice: a report called outdated, then the same
+# reading presented as current in the next sentence, reads as labelled.
+STALE_THEN_CURRENT_ACCEPTED_MISSES = [
+    (
+        "outdated_then_current_status",
+        f"My previous answer said hub was ready, which is outdated. Here is hub's current "
+        f"status:\n{NAME_RUN}",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    STALE_THEN_CURRENT_ACCEPTED_MISSES,
+    ids=[c[0] for c in STALE_THEN_CURRENT_ACCEPTED_MISSES],
+)
+def test_the_stale_then_current_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+    # …and the same report called wrong fires (STATE_REPLAYED_AS_CURRENT).
+    wrong = reply.replace("which is outdated", "which was wrong")
+    assert guards.state_claim_check(wrong, [HUB_SERVED], NAMES, purpose="chat") is not None
+
+
+# The cost of reading a heading label over its whole clause, pinned so it is
+# a choice: a second claim joined by "and" (not "but", which splits the
+# clause) reads as part of what her last reply said.
+HISTORY_HEAD_ACCEPTED_MISSES = [
+    ("and_joined_second_claim", "In my last reply hub was ready, and hub is offline now."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    HISTORY_HEAD_ACCEPTED_MISSES,
+    ids=[c[0] for c in HISTORY_HEAD_ACCEPTED_MISSES],
+)
+def test_the_history_head_accepted_misses_stay_missed(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+    # …and the same sentence split by "but" fires.
+    split = reply.replace(", and ", ", but ")
+    assert guards.state_claim_check(split, [HUB_SERVED], NAMES, purpose="chat") is not None
+
+
+@pytest.mark.parametrize(
+    "regen",
+    [
+        "Correction to my last reply: hub is offline.",
+        f"Here is hub's current status (unchanged from my last reply):\n{NAME_RUN}",
+    ],
+)
+def test_a_regeneration_that_replays_as_current_while_citing_history_is_refused(regen):
+    """The regeneration the nudge asks for is vetted by the same state check:
+    citing her last reply to restate the reading as current is refused by
+    name, as the bare block is."""
+    from app import agents
+
+    turn = SimpleNamespace(spans=[HUB_SERVED], kind="chat")
+    rejected = chat._regen_rejected_by(
+        regen,
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected == "state_claim"
+
+
+# ================================================================================
+# S40b T4 review, fix round 3: a doubt is not a reaffirmation, a heading is not
+# a lead
+# ================================================================================
+#
+# Fix round 2 made a claim after a history label fire again when she
+# reaffirms it ("…, and that is still true") or when a word that restates or
+# corrects leads INTO the label ("Correction to my last reply:"). Two of those
+# limits read too much. Each MUST_NOT below FIRED at fa23ec1f and was SILENT
+# at c9538364 with only hub's served round (the reviewer's probes verbatim
+# first); in chat each was a REPLACE-class correction of the honest answer,
+# and a regeneration that wrote it was refused.
+#   * A DOUBT read as a reaffirmation: "I can't tell you whether that is still
+#     accurate", "(not sure it still holds)". A reaffirmation or a "still
+#     holds" is hers only when nothing in its clause ahead of it doubts it (a
+#     doubted belief, "don't know", "can't tell/say/confirm", "unclear", a
+#     "whether"/"if" right before it) and its sentence is not a question
+#     (guards._vouched).
+#   * A HEADING read as a lead: "Correction:", "Update —", "As a correction,".
+#     A lead joins its label by a space ("correction to", "updated from", "as
+#     my last reply said"); a colon, dash or comma after it ends a heading, and
+#     the label under a heading is a label.
+STATE_LABELLED_THEN_DOUBTED = [
+    (
+        "cant_tell_you_whether_still_accurate",
+        f"Here is hub's status from my previous answer:\n{NAME_RUN}\nI can't tell you whether "
+        "that is still accurate.",
+        NAME_RUN,
+    ),
+    (
+        "not_sure_it_still_holds_in_the_label",
+        "From my previous answer (not sure it still holds): hub is offline.",
+        "hub is offline.",
+    ),
+    # The same doubt, spelled the other ways she writes it.
+    (
+        "not_sure_that_is_still_true",
+        "My previous answer said: hub is offline. I'm not sure that is still true.",
+        "hub is offline.",
+    ),
+    (
+        "dont_know_if_still_true",
+        "From my previous answer: hub is switched off. I don't know if that is still true.",
+        "hub is switched off.",
+    ),
+    (
+        "whether_still_the_case_i_cant_say",
+        "From my previous answer: hub is offline. Whether that is still the case, I can't say.",
+        "hub is offline.",
+    ),
+    (
+        "block_then_dont_know_whether",
+        f"From my previous answer:\n{NAME_RUN}\nI don't know whether that is still true.",
+        NAME_RUN,
+    ),
+    (
+        "block_then_not_sure_it_still_holds",
+        f"From my previous answer:\n{NAME_RUN}\nI'm not sure it still holds.",
+        NAME_RUN,
+    ),
+    (
+        "cant_say_whether_it_still_holds",
+        "From my previous answer: hub is offline, and I can't say whether it still holds.",
+        "hub is offline.",
+    ),
+    (
+        "cant_confirm_still_the_case",
+        "From my previous answer: hub is offline. I can't confirm that is still the case.",
+        "hub is offline.",
+    ),
+    (
+        "doubt_still_true",
+        "From my previous answer: hub is offline. I doubt that is still true.",
+        "hub is offline.",
+    ),
+    (
+        "dont_think_still_true",
+        "From my previous answer: hub is offline. I don't think that is still true.",
+        "hub is offline.",
+    ),
+    (
+        "unclear_whether_still_holds",
+        "From my previous answer: hub is offline. It's unclear whether that still holds.",
+        "hub is offline.",
+    ),
+    (
+        "block_then_cant_tell_whether_still_current",
+        f"Here is hub's status from my previous answer:\n{NAME_RUN}\nI can't tell whether that "
+        "is still current.",
+        NAME_RUN,
+    ),
+    # A reaffirmation she asks about is not one.
+    (
+        "still_true_or_is_it",
+        "From my previous answer: hub is offline. That is still true, or is it?",
+        "hub is offline.",
+    ),
+]
+
+STATE_LABELLED_UNDER_A_HEADING = [
+    (
+        "correction_heading_then_from_history",
+        "Correction: my previous answer said: hub is offline. That was from history, not a "
+        "fresh check.",
+        "hub is offline.",
+    ),
+    # The same heading, spelled the other ways she writes it.
+    (
+        "update_heading",
+        "Update: my previous answer said: hub is offline. That was from history.",
+        "hub is offline.",
+    ),
+    (
+        "update_dash_heading_over_an_attribution",
+        f"Update — from my previous answer:\n{NAME_RUN}\nI have not re-read it.",
+        NAME_RUN,
+    ),
+    (
+        "correction_heading_over_showed",
+        f"Correction: my previous answer showed:\n{NAME_RUN}",
+        NAME_RUN,
+    ),
+    (
+        "correction_dash_heading",
+        "Correction — my previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "correction_comma_heading",
+        "Correction, my previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    (
+        "bold_correction_heading",
+        "**Correction:** my previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    ("updated_heading", "Updated: my last reply said: hub is offline.", "hub is offline."),
+    ("fix_heading", "Fix: my last reply said: hub is offline.", "hub is offline."),
+    (
+        "as_a_correction_heading",
+        "As a correction: my previous answer said: hub is offline.",
+        "hub is offline.",
+    ),
+    # A word that says the state changed is a heading the same way.
+    (
+        "changed_heading",
+        "Changed: my previous answer said: hub is offline. I have not re-read it.",
+        "hub is offline.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    STATE_LABELLED_THEN_DOUBTED + STATE_LABELLED_UNDER_A_HEADING,
+    ids=[c[0] for c in STATE_LABELLED_THEN_DOUBTED + STATE_LABELLED_UNDER_A_HEADING],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_doubted_or_headed_history_label_is_not_corrected(purpose, label, reply, bare):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    assert guards.state_claim_check(reply, spans, NAMES, purpose=purpose) is None, label
+    claim = guards.state_claim_check(bare, spans, NAMES, purpose=purpose)
+    assert claim is not None and claim.device == "hub", label
+
+
+# What must keep firing: a doubt that is no doubt ("not sure WHY" presupposes
+# it, "no doubt" asserts it), a doubt about something else in another clause,
+# an "if" that does not lead the reaffirmation, and a lead that joins its label
+# by a space — a verb, a participle, a plural noun and a preposition.
+STATE_STILL_REASSERTED = [
+    (
+        "not_sure_why_still_true",
+        "From my previous answer: hub is offline. I'm not sure why that is still true.",
+    ),
+    (
+        "dont_know_why_still_true",
+        "From my previous answer: hub is offline. I don't know why that is still true.",
+    ),
+    (
+        "a_doubt_about_something_else",
+        "From my previous answer: hub is offline. I'm not sure about the Dell, but that is "
+        "still true.",
+    ),
+    (
+        "no_doubt_still_true",
+        "From my previous answer: hub is offline. No doubt that is still true.",
+    ),
+    ("sure_still_true", "From my previous answer: hub is offline. I'm sure that is still true."),
+    (
+        "an_if_that_does_not_lead_it",
+        "From my previous answer: hub is offline. If you're asking, that is still true.",
+    ),
+    ("correcting_my_last_replys_reading", "Correcting my last reply's reading: hub is offline."),
+    ("fixing_my_last_replys_reading", "Fixing my last reply's reading: hub is offline."),
+    (
+        "corrections_to_my_last_replys_reading",
+        "Corrections to my last reply's reading: hub is offline.",
+    ),
+    ("updates_to_my_last_replys_reading", "Updates to my last reply's reading: hub is offline."),
+    (
+        "amendment_to_my_last_replys_reading",
+        "Amendment to my last reply's reading: hub is offline.",
+    ),
+    (
+        "current_status_updated_from_my_last_reply",
+        f"Here is hub's current status (updated from my last reply):\n{NAME_RUN}",
+    ),
+    ("updated_from_my_last_reply_after", "hub is offline, updated from my last reply."),
+    (
+        "current_status_bold_unchanged_from_my_last_reply",
+        f"Here is hub's current status (**unchanged** from my last reply):\n{NAME_RUN}",
+    ),
+    # A noun that runs into an attribution needs no preposition of its own.
+    ("update_from_my_last_reply", "Update from my last reply: hub is offline."),
+    ("changed_from_my_last_reply", "Changed from my last reply: hub is offline."),
+    # A word that says the state is the SAME leads through a heading's colon.
+    ("unchanged_heading", "Unchanged: my previous answer said: hub is offline."),
+    # Under a heading, a label still ends at a reaffirmation or a retraction.
+    (
+        "correction_heading_then_still_true",
+        "Correction: my previous answer said: hub is offline, and that is still true.",
+    ),
+    (
+        "correction_heading_retracted_then_a_new_claim",
+        "Correction: my previous answer said: hub was ready, which was wrong, and hub is offline.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", STATE_STILL_REASSERTED, ids=[c[0] for c in STATE_STILL_REASSERTED]
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_vouched_reaffirmation_or_a_joined_lead_still_fires(purpose, label, reply):
+    spans = [_llm("hub:qwen3:8b", purpose=purpose)]
+    claim = guards.state_claim_check(reply, spans, NAMES, purpose=purpose)
+    assert claim is not None, label
+    assert (claim.subject_kind, claim.device) == ("machine", "hub")
+
+
+@pytest.mark.parametrize(
+    "regen",
+    [
+        STATE_LABELLED_THEN_DOUBTED[0][1],
+        STATE_LABELLED_UNDER_A_HEADING[0][1],
+    ],
+)
+def test_a_regeneration_that_doubts_or_heads_her_history_is_not_refused(regen):
+    """The reviewer's regeneration probes: the honest answer, vetted as a
+    regeneration, was refused as state_claim and the correction became the
+    record."""
+    from app import agents
+
+    turn = SimpleNamespace(spans=[HUB_SERVED], kind="chat")
+    rejected = chat._regen_rejected_by(
+        regen,
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected is None
+
+
+# ================================================================================
+# S40b final fix wave (fix-wave-brief.md; reproductions in final-review.md)
+# ================================================================================
+#
+# Precision is the product (directive D1): each fix below REMOVES a fire on an
+# honest sentence by a cut, an anchor or a skipped shape, and the three real
+# walk turns' FALSE sentences (tests/s40_walk.py) keep firing — pinned again at
+# the end of this section.
+
+WALK_TS = "2026-09-19T05:15:39+00:00"
+HUB_BLOCK = f"- Name: hub\n- Serving: On (always on)\n- Last Reported: {WALK_TS}"
+
+
+def _fires_on_hub(reply: str, spans=None) -> bool:
+    claim = guards.state_claim_check(reply, spans or [HUB_SERVED], NAMES, purpose="chat")
+    return claim is not None and claim.device == "hub"
+
+
+# -- A2: the not-current cut knows more than "check" -------------------------------
+#
+# The machine nudge tells her to "say plainly that you did not check"; these
+# are the other plain ways of saying so, and the common staleness labels. Each
+# was REPLACE-corrected at 9927da34 (final-review #2, the verifier's probes),
+# and a regeneration saying it was refused by name.
+SAID_NOT_CURRENT_OTHERWISE = [
+    (
+        "have_not_run_the_read_tool",
+        f"I have not run machine_status this turn. The last reading I have:\n{HUB_BLOCK}",
+    ),
+    (
+        "have_not_verified",
+        f"I haven't verified hub this turn. The last reading I have:\n{HUB_BLOCK}",
+    ),
+    (
+        "have_not_looked_at",
+        f"I haven't looked at hub this turn. The last reading I have:\n{HUB_BLOCK}",
+    ),
+    ("unverified", f"Unverified this turn. The last reading I have:\n{HUB_BLOCK}"),
+    (
+        "last_known_status",
+        f"hub (last known status):\n- Serving: On\n- Last Reported: {WALK_TS}",
+    ),
+    ("most_recent_reading", f"hub's most recent reading:\n- Last Reported: {WALK_TS}"),
+    ("min_ago", f"{HUB_BLOCK} (20 min ago)"),
+    ("have_not_re_read_after", f"{HUB_BLOCK}\n\nI haven't re-read hub this turn."),
+    (
+        "may_no_longer_hold_after_the_block",
+        f"{HUB_BLOCK}\n\nThis reading was taken at 05:15 UTC; it may no longer hold.",
+    ),
+    ("may_no_longer_hold_prose", "hub last reported at 05:15 UTC; it may no longer hold."),
+    (
+        "when_i_last_looked",
+        f"The models run on hub. When I last looked, at 05:15 UTC:\n- Serving: On\n"
+        f"- Last Reported: {WALK_TS}",
+    ),
+    ("have_not_verified_it_but", "I haven't verified it this turn, but hub is switched off."),
+    ("old_reading", f"{HUB_BLOCK} (old reading)"),
+    ("not_confirmed", "hub is switched off — not confirmed this turn."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", SAID_NOT_CURRENT_OTHERWISE, ids=[c[0] for c in SAID_NOT_CURRENT_OTHERWISE]
+)
+def test_saying_it_is_not_current_in_other_words_is_not_corrected(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+# The widening stops at what says the READING is not current. A bare "read" or
+# "run" is about anything ("I haven't read your notes", "I haven't run the
+# backup"), so those sentences still assert the outage.
+NOT_CURRENT_STILL_FIRES = [
+    ("have_not_read_your_notes", "hub is offline; I haven't read your notes yet."),
+    ("have_not_run_the_backup", "hub is offline, and I haven't run the backup."),
+    ("run_another_tool", "I have not run web_search this turn, but hub is switched off."),
+    ("bare_block", HUB_BLOCK),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", NOT_CURRENT_STILL_FIRES, ids=[c[0] for c in NOT_CURRENT_STILL_FIRES]
+)
+def test_an_unrelated_not_read_or_not_run_does_not_cut_the_claim(label, reply):
+    assert _fires_on_hub(reply), label
+
+
+def test_the_not_current_tool_names_are_the_machine_read_tools():
+    """The "I have not run machine_status" form names a tool that reads a machine —
+    DERIVED from the read set, so a read tool added there is recognised
+    here without a second list."""
+    for name in guards._machine_read_tools():
+        reply = f"I have not run {name} this turn. The last reading I have:\n{HUB_BLOCK}"
+        assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, name
+
+
+def test_a_regeneration_that_says_it_did_not_verify_passes_its_vetting():
+    """The nudge's alternative in other words: refused as state_claim at
+    9927da34, so the correction became the record."""
+    from app import agents
+
+    turn = SimpleNamespace(spans=[HUB_SERVED], kind="chat")
+    rejected = chat._regen_rejected_by(
+        f"I haven't verified hub this turn. The last reading I have:\n{HUB_BLOCK}",
+        turn,
+        None,
+        NAMES,
+        "Where do your models run, and is that machine ready?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected is None
+
+
+# -- A3: the history stamp's own wording is not-current ----------------------------
+#
+# T3's stamp tells her a replayed row is "a record of that moment, not of now"
+# and "from readings taken then"; T1's cut did not know those words, so the
+# reply that labelled the reading exactly the way it was labelled to her was
+# REPLACE-corrected (final-review #3). The vocabulary is DERIVED from the stamp
+# constants (guards.HISTORY_STAMP_*), which chat builds its stamps from.
+STAMP_WORDED = [
+    (
+        "record_of_that_moment_lead_in",
+        f"This is a record of that moment, not of now:\n\n### Machine Status\n{HUB_BLOCK}",
+    ),
+    (
+        "written_from_readings_taken_then_lead_in",
+        "Written at 05:15 UTC from readings taken then — a record of that moment, not of "
+        f"now:\n\n### Machine Status\n{HUB_BLOCK}",
+    ),
+    (
+        "record_of_a_time_after",
+        f"### Machine Status\n{HUB_BLOCK}\n\n(A record of 05:15 UTC, not of now.)",
+    ),
+    (
+        "taken_then_not_now_after",
+        f"### Machine Status\n{HUB_BLOCK}\n\nThese readings were taken then, not now.",
+    ),
+]
+
+
+@pytest.mark.parametrize("label,reply", STAMP_WORDED, ids=[c[0] for c in STAMP_WORDED])
+def test_the_stamps_own_wording_labels_a_reading_not_current(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+def _live_stamp() -> str:
+    return chat._LIVE_READING_MARKER.format(when="2026-09-19 05:15 UTC")
+
+
+def test_every_history_stamp_is_worded_from_the_shared_constants():
+    """The stamps chat hands her and the cut that honours them read one
+    constant: a change to the stamp's wording reaches the guard by itself."""
+    stamps = [
+        *chat._PAST_TURN_MARKERS.values(),
+        chat._RECORD_KIND_MARKER,
+        chat._LIVE_READING_MARKER,
+    ]
+    for stamp in stamps:
+        assert guards.HISTORY_STAMP_RECORD in stamp, stamp
+        assert guards._NOT_CURRENT.search(stamp.format(when="05:15", kind="beat")), stamp
+    assert guards.HISTORY_STAMP_READINGS in chat._LIVE_READING_MARKER
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    [
+        ("stamp_after_an_intro", "Here is what I had.\n{stamp}\n\n### Machine Status\n{block}"),
+        ("stamp_above_the_heading", "Here is what I had.\n\n{stamp}\n### Machine Status\n{block}"),
+        ("stamp_after_the_block", "### Machine Status\n{block}\n\n{stamp}"),
+    ],
+)
+def test_a_copied_stamp_that_is_not_leading_labels_the_reading(label, reply):
+    reply = reply.format(stamp=_live_stamp(), block=HUB_BLOCK)
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "{stamp}\n### Machine Status\n{block}",
+        "{stamp}\n\n### Machine Status\n{block}",
+        "{stamp}\n{block}",
+        "{stamp} hub is switched off.",
+    ],
+)
+def test_a_copied_leading_stamp_labels_nothing(reply):
+    """C7 strips a LEADING stamp-shaped bracket at the persist boundary, so
+    what persists is the bare replay: the guard reads the reply the same way
+    (final-review #3's caveat) — it never honours a label the record will not
+    carry."""
+    reply = reply.format(stamp=_live_stamp(), block=HUB_BLOCK)
+    assert _fires_on_hub(reply), reply
+    assert guards.without_leading_stamp(reply) == reply[len(_live_stamp()) :].lstrip()
+
+
+# -- C2: every tool whose result states the machines' state is a read -------------
+#
+# inference_health reads the same engine list machine_status does and states
+# each machine's card and state; route_explain states each link's machine
+# verdict ("skipped — its machine did not answer"). Before, only the hand-kept
+# name machine_status counted, so after either read an honest "hub is
+# switched off" was REPLACE-corrected as unchecked. The set is DERIVED from
+# the registry's declaration (Tool.reads_machines), never a list in guards.
+
+
+def test_the_machine_read_set_is_derived_from_the_registry():
+    from app import tools
+
+    assert guards._machine_read_tools() == frozenset(tools.machine_read_tool_names())
+    # A named pin, so the derivation cannot drift silently either way.
+    assert guards._machine_read_tools() == frozenset(
+        {"machine_status", "inference_health", "route_explain"}
+    )
+
+
+@pytest.mark.parametrize("tool", ["inference_health", "route_explain"])
+def test_a_read_through_any_machine_read_tool_backs_the_claim(tool):
+    read = _span("tool", tool, ok=True, args_redacted={})
+    for reply in ("hub is switched off.", HUB_BLOCK):
+        assert guards.state_claim_check(reply, [HUB_SERVED, read], NAMES, purpose="chat") is None
+        # …and a FAILED one reads nothing.
+        failed = _span("tool", tool, ok=False, args_redacted={}, error="Error: …")
+        assert _fires_on_hub(reply, [HUB_SERVED, failed]), (tool, reply)
+
+
+def test_a_tool_that_does_not_state_machine_state_is_not_a_read():
+    for tool in ("web_search", "memory_search", "model_pull"):
+        span = _span("tool", tool, ok=True, args_redacted={})
+        assert _fires_on_hub("hub is switched off.", [HUB_SERVED, span]), tool
+
+
+# -- A4: a line attributed to his notes is not her claim ---------------------------
+#
+# Recall hands her his notes, and verdict §9 records they carry exactly these
+# false lines; the honest way to cite (and retract) one was REPLACE-corrected
+# (final-review #4). A reaffirmation after it makes the claim hers again.
+STATE_ATTRIBUTED_TO_HIS_NOTES = [
+    ("your_note_says_colon", "Your note says: hub is offline."),
+    ("per_your_notes", "Per your notes, hub is offline."),
+    ("according_to_my_notes", "According to my notes, hub is switched off."),
+    (
+        "note_says_then_retracted",
+        "Your note says: hub is offline. That's out of date — hub served this reply.",
+    ),
+    (
+        "per_your_journal_no_longer_true",
+        "Per your journal, hub is offline — that's no longer true.",
+    ),
+    ("notes_say_above_a_block", f"Your notes say:\n{HUB_BLOCK}"),
+]
+STATE_ATTRIBUTED_STILL_FIRES = [
+    ("notes_say_and_still_true", "Your notes say: hub is offline, and that is still true."),
+    ("a_note_about_something_else", "Your notes say the Dell sleeps at night; hub is offline."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", STATE_ATTRIBUTED_TO_HIS_NOTES, ids=[c[0] for c in STATE_ATTRIBUTED_TO_HIS_NOTES]
+)
+def test_a_machine_line_attributed_to_his_notes_is_not_corrected(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", STATE_ATTRIBUTED_STILL_FIRES, ids=[c[0] for c in STATE_ATTRIBUTED_STILL_FIRES]
+)
+def test_a_reaffirmed_or_separate_machine_claim_beside_a_note_still_fires(label, reply):
+    assert _fires_on_hub(reply), label
+
+
+# -- A12 (aside): a retraction AFTER the claim closes it ---------------------------
+def test_a_machine_claim_retracted_after_it_is_not_corrected():
+    for reply in (
+        "hub is switched off — this was wrong.",
+        "hub is switched off (which was wrong).",
+        "hub is switched off (incorrect).",
+    ):
+        assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, reply
+    # …and a retraction of something else in another sentence does not reach it.
+    assert _fires_on_hub("hub is switched off. The Dell reading was wrong.")
+
+
+# -- B1 (T4 breaker OPEN-1): a doubt may name what it doubts -----------------------
+STATE_DOUBT_WITH_A_SUBJECT = [
+    ("if_it_still_holds", f"From my previous answer (if it still holds):\n{NAME_RUN}"),
+    (
+        "whether_that_still_holds",
+        f"From my previous answer (whether that still holds I can't say):\n{NAME_RUN}",
+    ),
+    ("sentence_if_it_still_holds", "From my previous answer (if it still holds), hub is offline."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", STATE_DOUBT_WITH_A_SUBJECT, ids=[c[0] for c in STATE_DOUBT_WITH_A_SUBJECT]
+)
+def test_a_doubt_that_names_its_subject_keeps_the_history_label(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+# -- B2 (T4 breaker OPEN-2): "No change:" reaffirms, it does not label -------------
+NEGATED_SAMENESS_HEADS = [
+    "No change:",
+    "No changes:",
+    "Nothing has changed —",
+    "Nothing new —",
+    "No update:",
+    "No updates:",
+]
+# The machine branch's own shapes: a state after a lead-in comma, and a
+# reading block. ("my previous answer said hub is …" never binds — "said" is
+# not a lead word — and "hub is switched off (…)" is not an anchored state.)
+STATE_UNDER_A_SAMENESS_HEAD = [
+    "{head} from my previous answer, hub is switched off.",
+    "{head} as of my last reply, hub is switched off.",
+    "{head}\nFrom my previous answer:\n" + NAME_RUN,
+    "{head} from my previous answer:\n" + NAME_RUN,
+]
+
+
+@pytest.mark.parametrize("head", NEGATED_SAMENESS_HEADS)
+@pytest.mark.parametrize("body", STATE_UNDER_A_SAMENESS_HEAD)
+def test_a_negated_sameness_head_reaffirms_the_reading(head, body):
+    assert _fires_on_hub(body.format(head=head)), (head, body)
+
+
+# -- C11: a struck span is visibly retracted ---------------------------------------
+STATE_STRUCK = [
+    ("struck_sentence", "~~hub is switched off.~~ It answered this turn."),
+    ("struck_reading", f"- Name: hub\n- ~~Last Reported: {WALK_TS}~~"),
+    ("struck_block_lines", "~~- Name: hub~~\n~~- Last Reported: " + WALK_TS + "~~"),
+]
+
+
+@pytest.mark.parametrize("label,reply", STATE_STRUCK, ids=[c[0] for c in STATE_STRUCK])
+def test_a_struck_machine_claim_is_not_corrected(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+    # …and the same text unstruck fires.
+    assert _fires_on_hub(reply.replace("~~", "")), label
+
+
+# -- A5: a scope fronted before the name, or after the anchor, limits the state ----
+#
+# T1 fixed only the trailing "from X" form; the same limit written first, or
+# after an anchoring comma or "right now", was REPLACE-corrected
+# (final-review #5). "hub" is the builtin engine name on every install.
+FRONTED_OR_TRAILING_SCOPE = [
+    ("off_the_tailnet", "Off the tailnet, hub is unreachable."),
+    ("outside_your_home_network", "Outside your home network, hub is unreachable."),
+    ("from_your_phone", "From your phone, hub is unreachable right now — you're off the tailnet."),
+    ("for_your_phone", "For your phone, hub is unreachable now."),
+    ("to_the_outside_world", "To the outside world, hub is offline."),
+    ("from_the_internet", "From the internet, hub is not reachable."),
+    ("from_outside_the_tailnet", "From outside the tailnet, hub is unreachable."),
+    ("publicly", "Publicly, hub is unreachable."),
+    # S40b fix-wave follow-up, beside the narrowing below: a vantage that is
+    # HIS ("your side", "that side") names a reach, where "From my side," does
+    # not; and a reach after the anchor limits the state as a fronted one does.
+    ("from_your_side", "From your side, hub is unreachable."),
+    ("comma_for_your_phone", "hub is offline, for your phone."),
+    ("as_far_as_your_phone", "hub is offline, as far as your phone is concerned."),
+    ("from_the_public_internet", "hub is disconnected, from the public internet's point of view."),
+    (
+        "right_now_from_your_phone",
+        "hub is unreachable right now from your phone, because you're off the tailnet.",
+    ),
+    ("for_chat_models_on_weekends", "hub is switched off for chat models on weekends."),
+    ("by_schedule_overnight", "hub is offline, by schedule, overnight."),
+]
+# A present-tense claim led or followed by a phrase that limits nothing.
+UNSCOPED_STILL_FIRES = [
+    ("for_now", "For now, hub is offline."),
+    ("to_be_clear", "To be clear, hub is offline."),
+    ("for_the_moment", "For the moment, hub is offline."),
+    ("currently_comma", "Currently, hub is offline."),
+    ("from_what_i_can_tell", "From what I can tell, hub is offline."),
+    ("so_i_cant", "hub is offline, so I can't run local models."),
+    ("comma_for_now", "hub is offline, for now."),
+    ("comma_to_be_clear", "hub is offline, to be clear."),
+    ("right_now", "hub is offline right now."),
+    ("at_the_moment_comma", "hub is offline, at the moment."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", FRONTED_OR_TRAILING_SCOPE, ids=[c[0] for c in FRONTED_OR_TRAILING_SCOPE]
+)
+def test_a_scoped_machine_state_is_not_a_present_outage(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", UNSCOPED_STILL_FIRES, ids=[c[0] for c in UNSCOPED_STILL_FIRES]
+)
+def test_an_unscoped_machine_outage_still_fires(label, reply):
+    assert _fires_on_hub(reply), label
+
+
+# -- A5, narrowed: a scope has to NAME A REACH (fix-wave follow-up) ----------------
+#
+# A5's first cut read ANY "<place-preposition> <determiner> <=40 chars>," as a
+# scope, with a short exclusion list (moment|time|record|rest|…) as its only
+# limit — so every OTHER fronted discourse marker silenced the claim. Each lead
+# below fired at 9927da34 (before A5) and went silent with A5 in; the same
+# fourteen are pinned on the memory branch in test_memory_claim_guard.py, 28
+# missed lies in all. A scope now has to name a reach — a place, a network, a
+# device, a vantage — which is the narrowing direction (D1): the honest scopes
+# above stay silent and these come back.
+FRONTED_MARKERS = [
+    ("to_your_question", "To your question,"),
+    ("on_that_note", "On that note,"),
+    ("for_your_information", "For your information,"),
+    ("from_the_look_of_it", "From the look of it,"),
+    ("on_the_whole", "On the whole,"),
+    ("for_this_reason", "For this reason,"),
+    ("to_some_extent", "To some extent,"),
+    ("to_my_knowledge", "To my knowledge,"),
+    ("on_your_behalf", "On your behalf,"),
+    ("for_that_matter", "For that matter,"),
+    ("to_this_day", "To this day,"),
+    ("from_my_side", "From my side,"),
+    ("for_a_start", "For a start,"),
+    ("on_a_related_note", "On a related note,"),
+]
+
+
+@pytest.mark.parametrize("label,lead", FRONTED_MARKERS, ids=[c[0] for c in FRONTED_MARKERS])
+def test_a_fronted_discourse_marker_does_not_limit_the_outage(label, lead):
+    assert _fires_on_hub(f"{lead} hub is offline."), label
+
+
+# The same overshoot written AFTER the anchor: `_TRAILING_LIMIT` read "for/to
+# <determiner> …", "from …" and "per <determiner>" as limits on the same terms.
+# All three fired at 9927da34 and were silent after A5.
+TRAILING_MARKERS = [
+    ("for_your_information", "hub is offline, for your information."),
+    ("for_that_matter", "hub is offline, for that matter."),
+    ("to_my_knowledge", "hub is offline, to my knowledge."),
+    ("from_the_look_of_it", "hub is offline, from the look of it."),
+    ("from_my_reading", "hub is offline, from my reading."),
+    ("per_your_question", "hub is offline, per your question."),
+]
+
+
+@pytest.mark.parametrize("label,reply", TRAILING_MARKERS, ids=[c[0] for c in TRAILING_MARKERS])
+def test_a_trailing_discourse_marker_does_not_limit_the_outage(label, reply):
+    assert _fires_on_hub(reply), label
+
+
+# -- A10: the object of a preposition is not the copula's subject ------------------
+#
+# "X on hub is not answering" is about X. A preposition lead binds a machine
+# only in the relative form the corpus pins ("run on hub, which is currently
+# switched off").
+PREPOSITION_OBJECT = [
+    ("27b_on_hub_offline", "hub itself is fine, but the 27B on hub is offline at the moment."),
+    (
+        "model_on_hub_not_answering",
+        "qwen3.8:27b on hub is not answering right now, so chat fell back to qwen3:8b.",
+    ),
+    (
+        "27b_on_hub_unreachable",
+        "The 27B on hub is unreachable at the moment, so the gateway fell back to qwen3:8b.",
+    ),
+    ("gemma_on_hub_switched_off", "gemma4:31b on hub is switched off."),
+    ("chat_via_hub", "Chat via hub is unreachable right now, so I'm on the fallback."),
+    ("plex_on_hub", "Your Plex server on hub is offline."),
+    ("model_at_hub", "The 27B model at hub is not answering."),
+    ("traffic_from_hub", "Traffic from hub is not reachable."),
+    ("model_on_hub_cloud", "The model on hub is offline, so I used the cloud."),
+]
+ROUTE_READ = _span("tool", "route_explain", ok=True, args_redacted={"role": "chat"})
+
+
+@pytest.mark.parametrize("label,reply", PREPOSITION_OBJECT, ids=[c[0] for c in PREPOSITION_OBJECT])
+@pytest.mark.parametrize(
+    "spans", [[HUB_SERVED], [ROUTE_READ, HUB_SERVED], []], ids=["served", "route", "none"]
+)
+def test_a_machine_that_is_a_prepositions_object_is_not_the_subject(label, reply, spans):
+    assert guards.state_claim_check(reply, spans, NAMES, purpose="chat") is None, label
+
+
+def test_the_relative_form_after_a_preposition_still_fires():
+    assert _fires_on_hub("The models run on hub, which is currently switched off.")
+    assert _fires_on_hub("Your models run on hub (the GPU box), which is switched off.")
+
+
+# -- C1: a clause-initial "while" is a hedge; an -ly lead only opens a clause ------
+LEAD_WORD_MISUSED = [
+    ("while_clause_initial", "While hub is switched off, routing skips every link on it."),
+    ("family_hub", "The family hub is offline."),
+    ("my_family_hub", "My family hub is offline."),
+    ("family_hub_reading", f"The family hub:\n- Last Reported: {WALK_TS}"),
+]
+LEAD_WORD_STILL_FIRES = [
+    ("currently_opens", "Currently hub is offline."),
+    ("apparently_opens", "Apparently hub is switched off."),
+    ("while_mid_clause", "Chat is slow while hub is offline."),
+    ("and_lead", "The Dell is fine and hub is offline."),
+]
+
+
+@pytest.mark.parametrize("label,reply", LEAD_WORD_MISUSED, ids=[c[0] for c in LEAD_WORD_MISUSED])
+def test_a_misused_lead_word_does_not_bind_the_machine(label, reply):
+    assert guards.state_claim_check(reply, [HUB_SERVED], NAMES, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", LEAD_WORD_STILL_FIRES, ids=[c[0] for c in LEAD_WORD_STILL_FIRES]
+)
+def test_a_lead_word_that_opens_the_claim_still_binds(label, reply):
+    assert _fires_on_hub(reply), label

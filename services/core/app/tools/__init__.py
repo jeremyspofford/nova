@@ -72,6 +72,8 @@ __all__ = [
     "advertised_tools",
     "context_for",
     "dispatch",
+    "live_reading_tool_names",
+    "machine_read_tool_names",
     "tool_names",
     "tool_names_by_result_kind",
 ]
@@ -129,11 +131,38 @@ def tool_names_reporting_spend() -> list[str]:
     return sorted(name for name, tool in REGISTRY.items() if tool.reports_spend)
 
 
+def machine_read_tool_names() -> list[str]:
+    """The registered tools whose successful result states the machines'
+    state as the gateway reports it now (`Tool.reads_machines`), sorted.
+
+    S40b final fix wave (C2): the state guard's read of a machine. Derived
+    from the declarations every call, so a tool that states machine state
+    backs a machine claim by declaring it, and the guard keeps no names."""
+    return sorted(name for name, tool in REGISTRY.items() if tool.reads_machines)
+
+
 def tool_names_by_result_kind(kind: str) -> list[str]:
     """The registered tools declaring `Tool.result_kind == kind`, sorted.
     Derived from the live registry every call, so a tool added (or
     monkeypatched in) with the declaration is counted by that fact alone."""
     return sorted(name for name, tool in REGISTRY.items() if tool.result_kind == kind)
+
+
+def live_reading_tool_names() -> list[str]:
+    """The registered tools whose successful result is a READING of the world
+    at that moment, sorted: `ephemeral` (the result goes stale) AND
+    `reads_only` (running it changed nothing). machine_status, a device's
+    files, the GPU, a web page — each true when read and not after.
+
+    S40b: a turn that read one of these writes a reply that is a record of
+    that moment, and the next turn's history says so (chat._past_turn_marker)
+    instead of handing her "hub is ready" as a sentence about now. Derived
+    from the declarations every call, so a live-reading tool registered
+    tomorrow stamps its turns by that fact alone. `device_notify` is
+    ephemeral but not reads_only — it changes something, and what it returns
+    is a receipt — so it is not a reading. A fact about the output, never a
+    permission: nothing reads this to refuse a call."""
+    return sorted(name for name, tool in REGISTRY.items() if tool.ephemeral and tool.reads_only)
 
 
 def context_for(

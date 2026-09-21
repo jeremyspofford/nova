@@ -227,19 +227,37 @@ def consent_redirect_nudge(*, ran_a_tool: bool) -> str:
 # pending-state phrase, and no assertion about the device's state — so running
 # any guard over it, this turn's included, comes back clean.
 STATE_REDIRECT_NOTE = "Checking the device now instead of describing it unchecked."
+# The same note when the unchecked subject is a MACHINE (S40b): the S40 walk's
+# replayed machine_status reading. Same properties, pinned in test_state_guard.
+MACHINE_REDIRECT_NOTE = "Checking the machine now instead of describing it unchecked."
+# The same redirect when it dispatched NO call (S40b final fix wave, C14): a
+# regeneration that stood by saying plainly it did not check ran nothing, and
+# "Checking the machine now" beside it is the backend claiming a check that
+# never happened. Derived from the redirect's own dispatch count, the way the
+# nudge is derived from ran_a_tool.
+STATE_REDIRECT_NOTE_NO_CALL = "Answering again, without the unchecked claim."
 
 
-def state_redirect_nudge(*, device: str, ran_a_tool: bool) -> str:
+def state_redirect_nudge(*, device: str, ran_a_tool: bool, kind: str = "device") -> str:
     """The state-claim redirect's nudge, DERIVED from the fact the caller
     measured. It asserts one thing about the turn — nothing has run — so it is
     built from that boolean rather than written out as a constant that could
     drift away from the truth. If a tool DID run, the sentence would be a lie,
     and a lie told to the model is how you get a second dispatch; so this
     REFUSES rather than emitting it. The caller's fail-open turns that refusal
-    into the ordinary correction, never an error frame."""
+    into the ordinary correction, never an error frame.
+
+    `kind` is the claim's subject_kind (S40b). For a machine the nudge names
+    the tool that reads one — the registry's own name, never retyped here."""
     if ran_a_tool:
         raise ValueError(
             f"the state redirect nudge asserts nothing has run this turn; ran_a_tool={ran_a_tool}"
+        )
+    if kind == "machine":
+        return (
+            f"You have not checked {device} this turn. Check it now with "
+            f"{tools.machines.MACHINE_STATUS.name} before describing it, or say plainly "
+            "that you did not check."
         )
     return (
         f"You have not checked {device}'s state this turn. Check it now with a "
@@ -679,27 +697,75 @@ def attributed_history(rows: Sequence, runner: str | None) -> list[dict[str, str
 # the guesswork this codebase keeps removing. The guard on the other side
 # (guards.stack_claim_check) is what refuses when she asserts it anyway: this
 # half only makes sure she was told the truth first.
+# The record phrase is guards.HISTORY_STAMP_RECORD (S40b final fix wave, A3):
+# the state guard's not-current cut reads the same constant, so the words that
+# label a row for her are the words that label a reading as not current.
 _PAST_TURN_MARKERS = {
-    "error": "[that turn failed at {when}; a record of that moment, not of now]",
-    "stopped": "[you stopped that turn at {when}; a record of that moment, not of now]",
+    "error": f"[that turn failed at {{when}}; {guards.HISTORY_STAMP_RECORD}]",
+    "stopped": f"[you stopped that turn at {{when}}; {guards.HISTORY_STAMP_RECORD}]",
 }
+
+# S40b (verdict §3.3, provision c — the truth half). The S40 walk found the
+# other rows history handed her in the present tense: turn b851aa91 read hub
+# with machine_status and said it was ready, and the next time the owner asked,
+# turn b02a5694 replayed that reply — "Last Reported: 05:15:39" and all — as
+# the machine's current state, without checking. Nothing had told her the row
+# was a reading taken earlier. So a row is stamped, too, when the turn behind it
+# was a timer's or a beat's firing (written while nobody was talking to her,
+# about whatever was true then), or READ something live: one of its tool spans
+# is a live reading (tools.live_reading_tool_names) that answered. Both are
+# derived by `_open_turn`'s query from the turn's kind and its spans, never
+# from the row's words. The state guard is what refuses when she replays a
+# reading anyway; this half only makes sure she was told the truth first.
+#
+# The kinds are the scheduler's own (scheduler.MODEL_TURN_KINDS: a timer's
+# firing and a beat — the two it hands to a model), read at the call rather
+# than retyped here (S40b final fix wave, C9). Imported inside the function
+# because the scheduler imports THIS module at module level. A reminder is not
+# among them: it is the owner's own text, delivered by code, with no model and
+# no reading.
+_RECORD_KIND_MARKER = f"[a {{kind}} message from {{when}}; {guards.HISTORY_STAMP_RECORD}]"
+_LIVE_READING_MARKER = (
+    f"[written at {{when}} {guards.HISTORY_STAMP_READINGS}; {guards.HISTORY_STAMP_RECORD}]"
+)
+
+
+def _record_kinds() -> frozenset[str]:
+    """The turn kinds whose reply is a RECORD of the moment it fired — the
+    scheduler's own set (C9), never a second list here."""
+    from app import scheduler
+
+    return frozenset(scheduler.MODEL_TURN_KINDS)
 
 
 def _past_turn_marker(row) -> str | None:
-    """The stamp an assistant row from a failed or stopped turn carries into
-    the next turn's history, or None for every ordinary row.
+    """The stamp an assistant row carries into the next turn's history, or
+    None for every ordinary row.
 
-    Tolerant of a row that carries neither column, because two callers build
-    these dicts by hand in tests and a missing key is not a failed turn.
+    One stamp at most, in this order: a failed or stopped turn (S19) says so
+    whatever else it did; then a scheduled or beat firing says it was one;
+    then a turn that read something live (`read_live`, S40b) says its reply
+    was written from readings taken then.
+
+    Tolerant of a row that carries none of these columns, because callers
+    build these dicts by hand in tests and a missing key is not a failed turn,
+    a firing or a reading. `read_live` counts only when it is exactly True —
+    the query's EXISTS — so a hand-built row that said nothing about the
+    turn's spans is never read as one that read the world.
     """
     if row.get("role") != "assistant":
         return None
     template = _PAST_TURN_MARKERS.get(row.get("status") or "")
+    kind = row.get("turn_kind")
+    if template is None and kind in _record_kinds():
+        template = _RECORD_KIND_MARKER
+    if template is None and row.get("read_live") is True:
+        template = _LIVE_READING_MARKER
     if template is None:
         return None
     written = row.get("created_at")
     when = written.strftime("%Y-%m-%d %H:%M UTC") if written is not None else "an earlier turn"
-    return template.format(when=when)
+    return template.format(when=when, kind=kind)
 
 
 # ── The thread seed (S24) ────────────────────────────────────────────────
@@ -738,17 +804,32 @@ async def thread_seed(conn, conversation_id: uuid.UUID) -> list[dict]:
     they all come, because a digest IS one message about several findings —
     a room opened from it is a room about the digest.
     """
+    #
+    # S40b final fix wave (C8): the parent row is stamped the way history
+    # stamps any other — the turn behind it was a firing, or it read something
+    # live — so a room opened off a machine reading does not hand her that
+    # reading in the present tense. Same columns, same _past_turn_marker.
     parent = await conn.fetchrow(
-        "SELECT p.role, p.content FROM conversations c "
+        "SELECT p.role, p.content, p.created_at, t.status, t.kind AS turn_kind, "
+        "EXISTS (SELECT 1 FROM turn_spans s WHERE s.turn_id = p.turn_id "
+        "AND s.kind = 'tool' AND s.name = ANY($2::text[]) "
+        "AND s.meta->>'ok' = 'true') AS read_live "
+        "FROM conversations c "
         "JOIN messages p ON p.id = c.parent_message_id "
+        "LEFT JOIN turns t ON t.id = p.turn_id "
         "WHERE c.id = $1",
         conversation_id,
+        tools.live_reading_tool_names(),
     )
     if parent is None:
         return []
+    content = parent["content"]
+    marker = _past_turn_marker(parent)
+    if marker:
+        content = f"{marker} {content}"
     seed: list[dict] = [
         {"role": "system", "content": THREAD_OPENING},
-        {"role": parent["role"], "content": parent["content"]},
+        {"role": parent["role"], "content": content},
     ]
     rows = await conn.fetch(
         "SELECT check_name, title, facts FROM notices "
@@ -826,9 +907,14 @@ def stable_system_prompt(
     literal here: a rename of the tool moves this sentence with it instead
     of silently dropping it from every prompt.
     """
+    # S40b (verdict §3.3): this said "The model answering is {model}", which
+    # names the SETTING as the model that answers — false on every fallback,
+    # and a sentence guards.served_claim_check would correct her for
+    # repeating. What is true is what the turn asks for, and who decides.
     prompt = (
         "You are Nova, a self-hosted assistant running on this household's own hardware. "
-        f"The model answering is {model or 'the gateway default'}. Be direct and concrete, "
+        f"This turn asks the gateway for {model or 'its default model'}; its routing decides "
+        "which model actually answers. Be direct and concrete, "
         "and say plainly when you do not know something.\n\n"
         f"You can call these tools: {', '.join(tool_names)}. "
         "Use one when it gets a real answer instead of a guess. "
@@ -2231,8 +2317,14 @@ async def _persist_assistant(
 ) -> None:
     """The assistant row, linked to the turn that produced it (S10-pre): the
     link is what lets a transcript be badged from the trace rather than
-    from anything the reply says about itself."""
-    text = without_markup(text)
+    from anything the reply says about itself.
+
+    S40b final fix wave (C7): a history stamp she COPIED to the start of her
+    reply is dropped here, mechanically — it is the backend's label on an
+    older row, carrying that row's time, and the next turn stamps this row
+    itself if it earns one. Every guard reads a reply the same way
+    (guards.without_leading_stamp), so none honoured the label either."""
+    text = guards.without_leading_stamp(without_markup(text))
     await pool.execute(
         "INSERT INTO messages (conversation_id, role, content, turn_id) "
         "VALUES ($1, 'assistant', $2, $3)",
@@ -3290,6 +3382,69 @@ async def _deferral_redirect(
 # of the regeneration, or the single-budget rule to drift out of agreement.
 
 
+def _state_claim_stands(
+    text: str, turn: traces.Turn, device_names: Sequence[str], subject: str
+) -> bool:
+    """Is the state claim in `text` STILL unbacked, read over the turn's spans
+    as they are now (S40b final fix wave, A9)?
+
+    A redirect that dispatched machine_status has READ the machine: its
+    correction, "I did not check {m} this turn — I have no record of doing
+    so", is then contradicted by the turn's own record. Re-asked here, over
+    the same subject, so what persists is true of the final state. Fail-open:
+    a guard that raises leaves the correction as it was."""
+    try:
+        claim = guards.state_claim_check(text, turn.spans, device_names, purpose=_purpose_of(turn))
+    except Exception:
+        logger.exception("state-claim re-check raised; keeping the correction")
+        return True
+    return claim is not None and claim.device == subject
+
+
+def _append_class_claims(text: str, turn: traces.Turn) -> list[tuple[str, object]]:
+    """The APPEND-class claims — served-model and memory-outage (S40b) — over
+    `text` and THIS turn's live spans, each fail-open on its own.
+
+    They are APPEND-class in both places they are read: over the model's own
+    reply the correction follows the prose, and over a redirect's regeneration
+    the same (S40b final fix wave, A9). Before, a regeneration rejected by one
+    of them threw the whole reply away — the machine reading its own call had
+    just taken with it — and the REPLACE correction that persisted instead
+    ("I did not check hub this turn") was then false."""
+    found: list[tuple[str, object]] = []
+    for name, check in (
+        ("served_claim", guards.served_claim_check),
+        ("memory_claim", guards.memory_claim_check),
+    ):
+        try:
+            claim = check(text, turn.spans, purpose=_purpose_of(turn))
+        except Exception:
+            logger.exception("%s guard raised; shipping the reply uncorrected", name)
+            claim = None
+        if claim is not None:
+            found.append((name, claim))
+    return found
+
+
+def _file_claim_span(turn: traces.Turn, name: str, claim) -> None:
+    """The guard span each APPEND-class claim files, in one place: the turn
+    body and a redirect's regeneration record the same facts."""
+    with turn.span("guard", name) as span:
+        if name == "served_claim":
+            span.meta.update(
+                shape=claim.shape,
+                claimed=claim.claimed,
+                served=list(claim.served),
+                phrase=claim.phrase,
+            )
+        else:
+            span.meta.update(
+                subject=claim.subject,
+                phrase=claim.phrase,
+                retrievers_missing=claim.retrievers_missing,
+            )
+
+
 def _regen_rejected_by(
     corrected: str,
     turn: traces.Turn,
@@ -3353,9 +3508,24 @@ def _regen_rejected_by(
             "capability_claim",
             lambda: guards.capability_claim_check(corrected, persona.tool_names),
         ),
+        # The serving-state claim (S19), armed by the turn's kind exactly as
+        # over the reply: a regeneration saying the model is down would be
+        # persisted and ingested with no correction beside it. The served-model
+        # and memory-outage claims are NOT here: they are APPEND-class, and a
+        # regeneration they fire on is corrected beside its prose rather than
+        # thrown away (_append_class_claims; S40b final fix wave, A9).
+        (
+            "stack_claim",
+            lambda: guards.stack_claim_check(corrected, turn.spans, purpose=_purpose_of(turn)),
+        ),
         (
             "state_claim",
-            lambda: guards.state_claim_check(corrected, turn.spans, device_names),
+            # The turn's kind arms the machine branch exactly as it was armed
+            # over the reply this regeneration replaces (S40b): a regen that
+            # repeats an unchecked machine claim is refused by name.
+            lambda: guards.state_claim_check(
+                corrected, turn.spans, device_names, purpose=_purpose_of(turn)
+            ),
         ),
         (
             "presented_listing",
@@ -3393,6 +3563,10 @@ class _ClaimRedirect:
     # model's prose, so a turn whose last word was an unrunnable tool call says
     # so instead of showing XML or nothing.
     markup_note: str | None = None
+    # The APPEND-class guards whose correction was appended to a regeneration
+    # that STOOD (S40b final fix wave, A9). Their corrections are already in
+    # `text`; the caller reads the names to keep the turn out of memory.
+    appended: tuple[str, ...] = ()
 
 
 async def _claim_redirect(
@@ -3405,6 +3579,8 @@ async def _claim_redirect(
     span_meta: dict,
     nudge_for: Callable[[bool], str],
     redirect_note: str,
+    redirect_note_no_call: str | None = None,
+    still_unbacked: Callable[[], bool] | None = None,
     out_of_rounds: bool,
     messages: Sequence[dict],
     advertised: Sequence[dict],
@@ -3424,7 +3600,15 @@ async def _claim_redirect(
     the caller measured them; `nudge_for` DERIVES the system nudge from
     ran_a_tool (measured here, from the spans) so the sentence it sends the
     model is true by construction rather than by a comment promising it is; and
-    `redirect_note` is the live frame shipped ahead of a successful regeneration.
+    `redirect_note` is the live frame shipped ahead of a successful regeneration,
+    and `redirect_note_no_call` the one to send instead when the regeneration
+    dispatched NOTHING (S40b final fix wave, C14: "Checking the machine now"
+    beside a regeneration that said plainly it did not check is the backend
+    claiming a check that never ran). `still_unbacked` (A9) re-asks the
+    ORIGINATING guard over the turn's final spans when the correction is about
+    to persist: if this redirect's own call backed the claim after all, the
+    correction saying nothing was checked would itself be false, and what
+    persists names what ran instead.
 
     Outcomes, all recorded on the turn's single guard span:
 
@@ -3501,6 +3685,19 @@ async def _claim_redirect(
                 correction_text, False, read_ephemeral, markup_note=_markup_note()
             )
 
+        dispatched = False
+
+        def _correction() -> str:
+            """What persists when the regeneration does not stand. Ordinarily
+            the guard's own correction — but a redirect that RAN something may
+            have backed the very claim it was correcting (A9), and then that
+            correction is a false statement about the turn: name what ran."""
+            if dispatched and still_unbacked is not None and not still_unbacked():
+                ran = ", ".join(guards.successful_tool_names(turn.spans)) or "a tool"
+                span.meta["correction_replaced_by"] = "ran_but_unreported"
+                return _bare_intent_ran_but_unreported_note(ran)
+            return correction_text
+
         try:
             attempt: list[dict] = [
                 *messages,
@@ -3537,6 +3734,7 @@ async def _claim_redirect(
                         "tool_calls": [call.as_openai() for call in calls],
                     }
                 )
+                dispatched = True
                 read_ephemeral = await _dispatch_calls(
                     turn, tool_ctx, calls, attempt, emit, subset=subset
                 )
@@ -3559,10 +3757,9 @@ async def _claim_redirect(
                 claim_kind,
                 peers.reason(exc),
             )
-            emit(_frame({"correction": correction_text}))
-            return _ClaimRedirect(
-                correction_text, False, read_ephemeral, markup_note=_markup_note()
-            )
+            text = _correction()
+            emit(_frame({"correction": text}))
+            return _ClaimRedirect(text, False, read_ephemeral, markup_note=_markup_note())
 
         if markup_refused:
             # The redirect wrote a tool call as text in a round that had no
@@ -3596,15 +3793,31 @@ async def _claim_redirect(
                     claim_kind,
                     rejected_by,
                 )
-            emit(_frame({"correction": correction_text}))
-            return _ClaimRedirect(
-                correction_text, False, read_ephemeral, markup_note=_markup_note()
-            )
+            text = _correction()
+            emit(_frame({"correction": text}))
+            return _ClaimRedirect(text, False, read_ephemeral, markup_note=_markup_note())
 
+        # It stands. An APPEND-class claim in it is corrected beside it, exactly
+        # as over an original reply (A9): the reading this redirect took is not
+        # thrown away over a side line, and the record carries both.
+        appended = _append_class_claims(corrected, turn)
         span.meta["redirected"] = True
-        emit(_frame({"correction": redirect_note}))
+        if appended:
+            span.meta["regen_appended"] = [name for name, _ in appended]
+        note = redirect_note if dispatched else (redirect_note_no_call or redirect_note)
+        emit(_frame({"correction": note}))
         emit(_frame({"t": corrected}))
-        return _ClaimRedirect(corrected, True, read_ephemeral, markup_note=_markup_note())
+        for name, claim in appended:
+            _file_claim_span(turn, name, claim)
+            emit(_frame({"correction": claim.text}))
+        text = "\n\n".join([corrected, *(claim.text for _, claim in appended)])
+        return _ClaimRedirect(
+            text,
+            True,
+            read_ephemeral,
+            markup_note=_markup_note(),
+            appended=tuple(name for name, _ in appended),
+        )
 
 
 async def _run_turn(
@@ -4368,6 +4581,11 @@ async def _run_turn(
         # failed redirect can never be followed by a second one below.
         consent_redirected = False
         consent_text: str | None = None
+        # The APPEND-class guards a standing regeneration was corrected by
+        # (S40b final fix wave, A9): their corrections are in the persisted
+        # text, so the turn is plumbing for the same reason an original
+        # reply's are. Collected from every redirect that stood.
+        redirect_appended: tuple[str, ...] = ()
         if consent_correction is not None:
             outcome = await _claim_redirect(
                 app,
@@ -4395,6 +4613,7 @@ async def _run_turn(
             )
             consent_text = outcome.text
             consent_redirected = outcome.redirected
+            redirect_appended += outcome.appended
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
             backend_note = backend_note or outcome.markup_note
         # The turn's single redirect budget: ONE regeneration per turn, first
@@ -4449,6 +4668,33 @@ async def _run_turn(
                 span.meta["served"] = True
             emit(_frame({"correction": stack_claim.text}))
 
+        # The SERVED-MODEL and MEMORY-OUTAGE claim guards (S40b), same raw
+        # reply, same fail-OPEN contract, armed in the same kinds as the
+        # serving-state guard above. The S40 walk: "qwen3.8:27b … Current
+        # model in use" in turns hub:qwen3:8b served, "No model was needed for
+        # this calculation." in a turn a model wrote, and "the memory service
+        # is currently unreachable" in turns whose recall it had just
+        # answered. The evidence is this turn's own record — the gateway's
+        # served-by stamp on its rounds, and its memory_recall span — never
+        # the requested model, which is the setting and not the fact.
+        #
+        # APPEND-class, both: the reply may carry real content beside the
+        # false line (60834ccf's arithmetic was right), so the correction
+        # follows the prose rather than replacing it — and the turn is kept
+        # out of memory, which is how the "no model" line reached his notes.
+        #
+        # Skipped when the consent redirect already STOOD (S40b final fix wave,
+        # C12): the durable text is then the regeneration, which carries its
+        # own APPEND-class corrections (_claim_redirect), so judging the
+        # discarded prose would file a span about text nobody reads — the rule
+        # the state and listing claims already follow.
+        claims = [] if consent_redirected else _append_class_claims(text, turn)
+        served_claim = next((c for name, c in claims if name == "served_claim"), None)
+        memory_claim = next((c for name, c in claims if name == "memory_claim"), None)
+        for name, claim in claims:
+            _file_claim_span(turn, name, claim)
+            emit(_frame({"correction": claim.text}))
+
         # The LIVE-STATE claim guard, on the same raw reply, same fail-OPEN
         # contract. Derived from the live device registry (`device_names`, read
         # above): it fires only when the reply asserts a paired device's CURRENT
@@ -4460,22 +4706,39 @@ async def _run_turn(
         # the durable text is then the regeneration, which `_regen_rejected_by`
         # already vetted with this very check against the now-live spans, so
         # judging the discarded prose would file a span about text nobody reads.
+        #
+        # S40b: the turn's kind arms its MACHINE branch too (chat and eval, the
+        # kinds it was measured in) — the S40 walk, where a replayed
+        # machine_status reading was stated as hub's current status. Machines
+        # are derived from this turn's own spans, never passed in.
         state_claim = None
         state_redirected = False
         state_text: str | None = None
         if not consent_redirected:
             try:
-                state_claim = guards.state_claim_check(text, turn.spans, device_names)
+                state_claim = guards.state_claim_check(
+                    text, turn.spans, device_names, purpose=_purpose_of(turn)
+                )
             except Exception:
                 logger.exception("state-claim guard raised; shipping the reply uncorrected")
                 state_claim = None
         if state_claim is not None:
+            state_is_machine = state_claim.subject_kind == "machine"
             claim_meta = {
                 "detected": True,
-                "device": state_claim.device,
+                "subject_kind": state_claim.subject_kind,
                 "phrase": state_claim.phrase,
                 "paired_devices": len(device_names),
             }
+            if state_is_machine:
+                claim_meta.update(
+                    machine=state_claim.device,
+                    machines=len(guards.machine_names(turn.spans)),
+                    evidence=state_claim.evidence,
+                    served_by=state_claim.served_by,
+                )
+            else:
+                claim_meta["device"] = state_claim.device
             if redirect_spent:
                 # The consent guard took the turn's one redirect and its own
                 # regeneration did not stand. Both claims are still contradicted
@@ -4497,9 +4760,21 @@ async def _run_turn(
                     correction_text=state_claim.text,
                     span_meta=claim_meta,
                     nudge_for=lambda ran: state_redirect_nudge(
-                        device=state_claim.device, ran_a_tool=ran
+                        device=state_claim.device,
+                        ran_a_tool=ran,
+                        kind=state_claim.subject_kind,
                     ),
-                    redirect_note=STATE_REDIRECT_NOTE,
+                    redirect_note=(
+                        MACHINE_REDIRECT_NOTE if state_is_machine else STATE_REDIRECT_NOTE
+                    ),
+                    # A regeneration that stood WITHOUT calling anything did
+                    # not check (C14), and a correction saying nothing was
+                    # checked is false once this redirect's own call backed the
+                    # claim (A9) — both derived from what the redirect did.
+                    redirect_note_no_call=STATE_REDIRECT_NOTE_NO_CALL,
+                    still_unbacked=lambda: _state_claim_stands(
+                        text, turn, device_names, state_claim.device
+                    ),
                     out_of_rounds=out_of_rounds,
                     messages=messages,
                     advertised=advertised,
@@ -4513,6 +4788,14 @@ async def _run_turn(
                 )
                 state_text = outcome.text
                 state_redirected = outcome.redirected
+                redirect_appended += outcome.appended
+                if not state_redirected and state_text != state_claim.text:
+                    # The redirect replaced the correction with one that is
+                    # true of the turn's final state (S40b final fix wave, A9:
+                    # its own call read the machine, so "I did not check" is
+                    # not what persists). The composition below carries the
+                    # claim's text, so the claim carries the new one.
+                    state_claim = dataclasses.replace(state_claim, text=state_text)
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
                 backend_note = backend_note or outcome.markup_note
                 redirect_spent = True
@@ -4614,6 +4897,7 @@ async def _run_turn(
                 )
                 listing_text = outcome.text
                 listing_redirected = outcome.redirected
+                redirect_appended += outcome.appended
                 read_ephemeral = read_ephemeral or outcome.read_ephemeral
                 backend_note = backend_note or outcome.markup_note
                 redirect_spent = True
@@ -4666,6 +4950,11 @@ async def _run_turn(
             # that it had not) and is what the next turn reads.
             persisted = listing_text or ""
         elif replace_corrections:
+            # The APPEND-class corrections join the replacement in the order
+            # the guards ran (S40b: served_claim and memory_claim after the
+            # serving-state guard). The b02a5694 replay is the case: the state
+            # guard drops the replayed block, and what persists is the three
+            # corrections with no line of it between them.
             persisted = "\n\n".join(
                 c.text
                 for c in (
@@ -4675,17 +4964,20 @@ async def _run_turn(
                     capability_correction,
                     state_claim,
                     stack_claim,
+                    served_claim,
+                    memory_claim,
                     listing_replacement,
                 )
                 if c is not None
             )
-        elif correction is not None or delegation_claim is not None:
+        elif appended_corrections := [
+            c for c in (correction, delegation_claim, served_claim, memory_claim) if c is not None
+        ]:
             # The APPEND class: narration and its third-person mirror, the
-            # delegation claim (S12) — the prose stays, each correction
-            # follows it, once, in the order the guards ran.
-            persisted = "\n\n".join(
-                [text, *(c.text for c in (correction, delegation_claim) if c is not None)]
-            )
+            # delegation claim (S12), and the served-model and memory-outage
+            # claims (S40b) — the prose stays, each correction follows it,
+            # once, in the order the guards ran.
+            persisted = "\n\n".join([text, *(c.text for c in appended_corrections)])
         else:
             persisted = text
         # `text` carries the backend note, so the two branches above keep it by
@@ -4732,6 +5024,20 @@ async def _run_turn(
             or stack_claim is not None
             or listing_claim is not None
         )
+        # S40b final fix wave (A11). The served-model and memory-outage claims
+        # are APPEND-class side lines: the prose stays, and any fabrication in
+        # it stays with it. Counting them above silenced the completion, offer
+        # and bare-intent handling of the SAME reply — "your blink reminder is
+        # now running. No model was needed." kept its fabricated reminder and
+        # got only "a model wrote this reply", with no timer, no honest note
+        # and not even a deferral span. Those three redirects regenerate with
+        # tools through _claim_redirect, whose regeneration is vetted (and,
+        # since A9, corrected) by these very guards, so the stated reason for
+        # the skip — that a regeneration could bring back what a hard guard
+        # removed — does not hold for them. It does hold for the text-only
+        # commitment redirect and the soft responsiveness one, which re-run
+        # neither guard: those two still yield.
+        append_only_guard_fired = served_claim is not None or memory_claim is not None
 
         # The ALWAYS-ON deferral guard, and the FIRST claim on the turn's single
         # redirect budget. Run on the composed reply + this turn's spans + the
@@ -4767,6 +5073,7 @@ async def _run_turn(
             deferral is not None
             and deferral.kind == "commitment"
             and not mechanical_guard_fired
+            and not append_only_guard_fired
             and not redirect_spent
             # Same rule as _claim_redirect: a turn at its round cap gets no
             # extra gateway round with a "do it now" nudge. Found in review —
@@ -4854,6 +5161,7 @@ async def _run_turn(
                 subset=subset,
             )
             offer_redirected = outcome.redirected
+            redirect_appended += outcome.appended
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
             if offer_redirected:
                 persisted = outcome.text
@@ -4916,6 +5224,7 @@ async def _run_turn(
                 subset=subset,
             )
             bare_intent_redirected = outcome.redirected
+            redirect_appended += outcome.appended
             read_ephemeral = read_ephemeral or outcome.read_ephemeral
 
             if not bare_intent_redirected and guards.ran_a_tool(turn.spans):
@@ -4975,6 +5284,7 @@ async def _run_turn(
         if (
             responsiveness_on
             and not mechanical_guard_fired
+            and not append_only_guard_fired
             and not deferral_fired
             and not redirect_spent
         ):
@@ -5005,6 +5315,14 @@ async def _run_turn(
         # succeeded is the exception: the durable reply is then the regenerated
         # one, which did the work instead of narrating a pending state, so it is
         # ordinary knowledge again.
+        # Which redirect, if any, REPLACED the model's prose in the record.
+        prose_replaced = (
+            consent_redirected
+            or state_redirected
+            or listing_redirected
+            or offer_redirected
+            or bare_intent_redirected
+        )
         plumbing_turn = (
             (consent_correction is not None and not consent_redirected)
             or capability_correction is not None
@@ -5026,6 +5344,17 @@ async def _run_turn(
             # per-person — a stale outage as a current fact, which is the very
             # thing this guard exists to stop.
             or stack_claim is not None
+            # And the served-model and memory-outage claims (S40b), the same
+            # poison again: 60834ccf's "No model was needed for this
+            # calculation." is in his notes because nothing kept that turn
+            # out, and a recalled "the memory service is unreachable" would
+            # hand a later turn a stale outage as a current fact. There is no
+            # redirect for either, so a fired one keeps the turn plumbing.
+            # …and only while the prose they were about is what persists
+            # (C12): a redirect that stood replaced it, and its own
+            # regeneration's corrections are what count then.
+            or ((served_claim is not None or memory_claim is not None) and not prose_replaced)
+            or bool(redirect_appended)
             # A presented listing nothing produced is the same noise again —
             # and the worst of it, because a recalled listing is exactly what
             # produced this one: ingesting it is how the next parrot gets its
@@ -5283,10 +5612,21 @@ async def _open_turn(
     # Read INSIDE the lock (S15): a window read before the gate could miss the
     # previous turn's reply, because that reply is persisted only moments before
     # the turn lets go of the conversation.
+    #
+    # S40b: `turn_kind` and `read_live` are what _past_turn_marker stamps a row
+    # from — the turn behind it was a firing, or one of its tool spans is a
+    # live reading that answered. Asked or unasked alike: an unasked check's
+    # result was handed to her before she wrote that reply. The reading set is
+    # read from the registry here, per turn, never frozen at import.
     history = history_window(
         attributed_history(
             await conn.fetch(
-                "SELECT m.role, m.content, m.created_at, t.status, a.name AS agent FROM messages m "
+                "SELECT m.role, m.content, m.created_at, t.status, t.kind AS turn_kind, "
+                "a.name AS agent, "
+                "EXISTS (SELECT 1 FROM turn_spans s WHERE s.turn_id = m.turn_id "
+                "AND s.kind = 'tool' AND s.name = ANY($4::text[]) "
+                "AND s.meta->>'ok' = 'true') AS read_live "
+                "FROM messages m "
                 "LEFT JOIN turns t ON t.id = m.turn_id "
                 "LEFT JOIN agents a ON a.id = t.agent_id "
                 "WHERE m.conversation_id = $1 AND m.id <> $2 "
@@ -5294,6 +5634,7 @@ async def _open_turn(
                 conversation_id,
                 message_id,
                 HISTORY_MAX_MESSAGES,
+                tools.live_reading_tool_names(),
             ),
             None if agent is None else agent.name,
         )

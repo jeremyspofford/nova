@@ -98,6 +98,23 @@ def _person_id(ctx: ToolContext) -> str:
     return str(person.id)
 
 
+# The fact the door records on the turn's facts channel (ToolContext.
+# facts_sink) for every request it SENDS: {MEMORY_CALL_FACT: path, "reached":
+# bool} — reached is False when the request never arrived (unconfigured,
+# unreachable, timed out), True when memory answered, refusals included. A
+# call refused BEFORE the door — by the schema, for want of an identity, or by
+# a live-source check — records nothing, so the memory-outage guard can tell
+# "her call went to memory and failed" from "her call never went" (S40b final
+# fix wave, C15) without reading a word of the refusal.
+MEMORY_CALL_FACT = "memory_call"
+
+
+def _record_call(ctx: ToolContext, path: str, *, reached: bool) -> None:
+    sink = getattr(ctx, "facts_sink", None)
+    if sink is not None:
+        sink.append({MEMORY_CALL_FACT: path, "reached": reached})
+
+
 async def _call_memory(ctx: ToolContext, path: str, payload: dict) -> object:
     # THE SINGLE DOOR into the memory service from this process. A payload
     # carrying a `live_source` is checked against the live registry before it
@@ -109,6 +126,7 @@ async def _call_memory(ctx: ToolContext, path: str, payload: dict) -> object:
     try:
         async with peers.client(ctx.app, peers.MEMORY, MEMORY_TIMEOUT) as client:
             response = await client.post(path, json=payload)
+            _record_call(ctx, path, reached=True)
             if response.status_code != 200:
                 detail = response.text[:200]
                 raise ToolFailure(
@@ -117,7 +135,12 @@ async def _call_memory(ctx: ToolContext, path: str, payload: dict) -> object:
             return response.json()
     except ToolFailure:
         raise
-    except (httpx.HTTPError, peers.PeerUnconfigured, ValueError) as exc:
+    except (httpx.HTTPError, peers.PeerUnconfigured) as exc:
+        _record_call(ctx, path, reached=False)
+        raise ToolFailure(f"could not reach memory — {peers.reason(exc)}") from exc
+    except ValueError as exc:
+        # An answer that was not JSON: memory was reached (the request was
+        # recorded above) and said something unreadable.
         raise ToolFailure(f"could not reach memory — {peers.reason(exc)}") from exc
 
 

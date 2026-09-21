@@ -1,0 +1,1578 @@
+"""S40b's served-model guard, tested in isolation: pure (text, spans, purpose)
+-> verdict.
+
+The S40 live walk (2026-09-19) caught two replies naming a model as the one in
+use that did not serve the turn: turns b851aa91 and b02a5694 marked
+`qwen3.8:27b` "Current model in use" in a turn hub:qwen3:8b answered, and
+60834ccf said "No model was needed for this calculation." in a turn a model
+wrote. The fact both are checked against needs no probe and cannot be argued
+with: the gateway stamps every round it serves with `served_by`, and chat
+records it on the round's span.
+
+Precision is the product. The corpus below is the verdict's §4 "served_claim"
+set, verbatim (s40b/design-verdict.md): every MUST_NOT is a sentence an honest
+reply writes — a settings line, a role that is not chat, a model in use for
+something else, a GPU id, a port, a hedge, a past report — and a correction on
+one of them would make the guard the liar. The correction is APPEND-class
+(the prose stays, the correction follows it), so a miss costs a lie standing
+uncorrected once and a false fire costs a true reply contradicted.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from app import agents, chat, guards
+from tests.s40_walk import B02A5694, B851AA91, T60834CCF
+
+HUB_8B = "hub:qwen3:8b"
+HUB_27B = "hub:qwen3.8:27b"
+
+
+def _span(kind: str, name: str | None, **meta):
+    return SimpleNamespace(kind=kind, name=name, meta=dict(meta))
+
+
+def _llm(served_by: str | None = HUB_8B, *, purpose: str = "chat", **meta):
+    """A round as chat._gateway_round records it: `served_by` off the gateway's
+    X-Nova-Served-By header, when it sent one."""
+    fields = {"purpose": purpose, **meta}
+    if served_by is not None:
+        fields["served_by"] = served_by
+    return _span("llm_call", served_by, **fields)
+
+
+SERVED = [_llm()]
+# The turn's recall, answered: what the memory guard reads as memory having
+# answered this turn.
+RECALLED = _span("memory_recall", None, k=5, hits=2)
+
+
+def named_text(claimed: str, served: str = HUB_8B) -> str:
+    return (
+        f"Correction: this reply was written by {served} — the gateway recorded that for "
+        f"this turn — not by {claimed}."
+    )
+
+
+NO_MODEL_TEXT = f"Correction: a model wrote this reply — {HUB_8B}."
+
+IN_USE_LINE = "- `qwen3.8:27b` (16.5 GB) ✅ **Current model in use**"
+
+# (label, reply, shape, the ref the claim names — None for "no model")
+MUST_FIRE = [
+    ("current_model_in_use_line", IN_USE_LINE, "in_use", "qwen3.8:27b"),
+    ("b851aa91_full", B851AA91, "in_use", "qwen3.8:27b"),
+    ("b02a5694_full", B02A5694, "in_use", "qwen3.8:27b"),
+    (
+        "model_answering_right_now",
+        "The model answering right now is qwen3.8:27b.",
+        "sentence",
+        "qwen3.8:27b",
+    ),
+    (
+        "model_answering_then_fallback",
+        "The model answering right now is qwen3.8:27b, and when that route is down I can "
+        "fall back…",
+        "sentence",
+        "qwen3.8:27b",
+    ),
+    ("running_on", "I'm running on qwen3.8:27b.", "sentence", "qwen3.8:27b"),
+    ("i_am", "I'm qwen3.8:27b.", "sentence", "qwen3.8:27b"),
+    ("no_model_for_calculation", "No model was needed for this calculation.", "no_model", None),
+    ("t60834ccf_full", T60834CCF, "no_model", None),
+    ("didnt_use_a_model_here", "I didn't use a model here.", "no_model", None),
+    ("talking_to", "You're talking to qwen3.8:27b.", "sentence", "qwen3.8:27b"),
+    (
+        "answering_you_right_now",
+        "qwen3.8:27b is answering you right now.",
+        "sentence",
+        "qwen3.8:27b",
+    ),
+    ("current_model_label", "Current model: `dell:qwen3:8b`", "in_use", "dell:qwen3:8b"),
+    ("reply_came_from", "This reply came from qwen3.8:27b.", "sentence", "qwen3.8:27b"),
+    (
+        "reply_came_from_engine",
+        "This reply came from hub:qwen3.8:27b.",
+        "sentence",
+        "hub:qwen3.8:27b",
+    ),
+    ("is_the_current_model", "qwen3.8:27b is the current model.", "sentence", "qwen3.8:27b"),
+    ("the_current_model_is", "The current model is qwen3.8:27b.", "sentence", "qwen3.8:27b"),
+    (
+        "model_answering_you_is",
+        "The model answering you is qwen3.8:27b.",
+        "sentence",
+        "qwen3.8:27b",
+    ),
+    (
+        "chat_label_current_model",
+        "- chat: hub:qwen3.8:27b (current model)",
+        "in_use",
+        "hub:qwen3.8:27b",
+    ),
+]
+
+# (label, reply) — every one in a chat turn served by hub:qwen3:8b.
+MUST_NOT = [
+    ("came_from_8b_on_hub", "This reply came from qwen3:8b on hub."),
+    ("vision_model", "The vision model is qwen3.8:27b."),
+    ("installed_listing_line", "- `qwen3.8:27b` (16.5 GB)"),
+    ("installed_on_hub", "qwen3.8:27b is installed on hub."),
+    (
+        "notes_say_then",
+        "My notes from 2026-09-15 say the model answering then was qwen3.8:27b.",
+    ),
+    ("offer_to_switch", "I can switch qwen3.8:27b in as the chat model if you want."),
+    (
+        "question_with_example",
+        "Would you like to check if a specific model (e.g., `qwen3.8:27b`) is fully loaded…?",
+    ),
+    ("compute_gpu_in_use", "- **Compute**: Uses GPU `cuda:GPU-<uuid>` (in use)"),
+    # A real eval reply (51ca965a, the checks case, an honest one).
+    ("gpu_in_use_51ca965a", "- GPU: cuda:GPU-<uuid> (in use)."),
+    ("embedder_in_use_for_recall", "The embedder, nomic-embed-text:latest, is in use for recall."),
+    ("in_use_by_the_coder", "gemma4:31b is in use by the coder agent."),
+    ("current_chat_model_true", "qwen3:8b is the current chat model."),
+    ("current_model_in_use_true", "- `hub:qwen3:8b` ✅ **Current model in use**"),
+    ("if_it_were_current", "If qwen3.8:27b were the current model, replies would be slower."),
+    ("if_it_were_in_use", "If qwen3.8:27b were in use, replies would be slower."),
+    ("you_said_27b", "You said the 27B was the chat model."),
+    ("was_in_use_earlier", "qwen3.8:27b was in use earlier today."),
+    (
+        "setting_names_but_reply_came_from",
+        "The chat setting names qwen3.8:27b, but this reply came from hub:qwen3:8b.",
+    ),
+    ("ollama_port_in_use", "Ollama is listening on ollama:11434 (in use)."),
+    ("no_model_pulled", "No model was pulled."),
+    ("no_model_used_for_embeddings", "No model was used for the embeddings."),
+    (
+        "no_model_called_for_the_image",
+        "No model was called for the image, since you didn't attach one.",
+    ),
+    ("no_models_needed_to_be_pulled", "No models were needed to be pulled."),
+    (
+        "no_model_needed_for_that_step",
+        "No model was needed for that step — the timer ran on its own.",
+    ),
+    ("didnt_use_a_model_for_the_timer", "I didn't use a model for the timer."),
+    (
+        "failure_statement_1dcaaedd",
+        "I didn't get a response from hub:qwen3:8b in round 2: the gateway refused the "
+        "request (503): hub is switched off (serving=false).",
+    ),
+    ("the_old_prompt_line_true", "The model answering is hub:qwen3:8b."),
+    (
+        "embedder_in_use_for_embeddings",
+        "- `nomic-embed-text:latest` (0.3 GB) — in use for embeddings",
+    ),
+    ("arithmetic", "17 multiplied by 23 is **391**."),
+    (
+        "installed_and_hub_answering",
+        "`qwen3.8:27b` is installed on hub, and hub is answering.",
+    ),
+    (
+        "hub_answering_installed",
+        "hub: answering; installed: gemma4:12b (7.0 GB), qwen3.8:27b (16.5 GB).",
+    ),
+    (
+        "routing_with_fallback",
+        "Routing: chat → hub:qwen3:8b (current model in use); fallback "
+        "openrouter:anthropic/claude-sonnet-4.6 (in use only if hub is down)",
+    ),
+    ("in_use_for_vision", "The model in use for vision is qwen3.8:27b."),
+    ("current_vision_model", "qwen3.8:27b is the current vision model."),
+    ("current_model_for_images", "qwen3.8:27b is the current model for images."),
+    ("ingest_label", "- ingest: glm-5.2:cloud (current model)"),
+    ("coding_label", "- coding: gemma4:31b (active model)"),
+    ("scheduled_label", "- scheduled: openrouter:x/y (current model)"),
+    ("when_the_27b_is_in_use", "When the 27B is in use, hub:qwen3.8:27b answers slower."),
+    (
+        "chain_answering_now",
+        "The chat role's chain: 1. hub:qwen3:8b (answering now) 2. openrouter:…",
+    ),
+    ("pulling_now", "I'm pulling qwen3:4b now."),
+    ("going_to_switch", "I'm going to switch to qwen3.8:27b."),
+    ("in_use_when_hub_is_off", "openrouter:… is in use when hub is switched off."),
+    (
+        "in_use_when_hub_is_off_named",
+        "openrouter:anthropic/claude-sonnet-4.6 is in use when hub is switched off.",
+    ),
+    ("standby_in_use", "The standby model in use is openrouter:x/y."),
+    ("i_am_8b", "I am qwen3:8b."),
+    ("fenced_in_use", f"```\n{IN_USE_LINE}\n```"),
+    ("quoted_in_use", f"> {IN_USE_LINE}"),
+]
+
+ACCEPTED_MISSES = [
+    # No model reference the guard can compare: a size, a display name.
+    ("running_on_the_27b", "I'm running on the 27B."),
+    ("display_name", "The current model is Qwen3.8-27B."),
+    # No sentence shape: a fragment.
+    ("currently_using", "Currently using qwen3.8:27b."),
+    # A SETTINGS claim, not a claim about this reply.
+    ("chat_model_setting", "The chat model is qwen3.8:27b."),
+    # The verdict's own pattern carries "was written/generated/served by", and
+    # its skip set carries "was" (the past-tense cut, "X was in use earlier"),
+    # applied up to the match end — so this shape is cut by construction.
+    # Found building S40b T2; kept as the verdict wrote it, pinned so a change
+    # to either half is deliberate.
+    ("reply_was_written_by", "This reply was written by qwen3.8:27b."),
+    # T2 review, round 1: a mid-clause label after another ref's predicate.
+    # A marker with a ref said before it in its conjunct is a predicate, so
+    # the ref after its colon is never bound ("hub:qwen3:8b, the current
+    # model: qwen3.8:27b sits idle" is true); the label form is caught on its
+    # own line, after "and", or as "the current model is X".
+    ("mid_clause_label", "gemma4:12b is idle, current model: qwen3.8:27b"),
+    # S40b final fix wave (A6) — MOVED from MUST_FIRE, where the verdict's §4
+    # had it. A bare "no model was needed." says nothing of WHICH action needed
+    # none, and the same words close an honest sentence about a timer or a
+    # reminder ("…went out by itself. No model was involved."), which it
+    # corrected. The fix wave's directive D1 prefers the narrowing: the past
+    # form fires only when anchored to this reply ("here", "for this
+    # calculation", "to answer this") or said in the first person ("I didn't
+    # use a model."). These are constructed sentences; the walk's own line,
+    # 60834ccf's "No model was needed for this calculation.", still fires.
+    ("no_model_needed_bare", "No model was needed."),
+    ("no_model_needed_after_an_answer", "17 × 23 = 391. No model was needed."),
+    # Same shape, same reason (S40b fix-wave follow-up): the bare past form
+    # with "used" is as unanchored as the one with "needed", and the same
+    # words close an honest sentence about something else ("the digest went
+    # out on its own. No model was used."). Pinned so the pair stays a pair.
+    ("no_model_used_bare", "No model was used."),
+]
+
+
+@pytest.mark.parametrize("label,reply,shape,claimed", MUST_FIRE, ids=[c[0] for c in MUST_FIRE])
+def test_served_must_fire(label, reply, shape, claimed):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None, label
+    assert claim.shape == shape
+    assert claim.claimed == claimed
+    assert claim.served == (HUB_8B,)
+    assert claim.phrase
+    assert claim.text == (NO_MODEL_TEXT if claimed is None else named_text(claimed))
+
+
+@pytest.mark.parametrize("label,reply", MUST_NOT, ids=[c[0] for c in MUST_NOT])
+def test_served_must_not_fire(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+# -- T2 precision beyond the verdict's corpus ------------------------------------
+#
+# Honest sentences the verbatim in-use shape CORRECTED, found probing past the
+# corpus while building T2 (the T1 review's lesson: the verdict's corpus is a
+# floor, not the whole of what an honest reply says). Each fix only removes
+# fires; the §4 MUST_FIRE set above is unchanged, and the sentences that must
+# still fire are pinned beside them.
+
+HONEST_BEYOND_THE_CORPUS = [
+    # A negation, the past or a change of state between the ref and its marker.
+    ("isnt_in_use", "qwen3.8:27b isn't in use right now."),
+    ("not_currently_in_use", "qwen3.8:27b is not currently in use."),
+    ("listing_not_currently_in_use", "- `qwen3.8:27b` (16.5 GB) — not currently in use"),
+    ("no_longer_current", "qwen3.8:27b is no longer the current model."),
+    ("used_to_be_current", "qwen3.8:27b used to be the current model."),
+    ("current_is_not", "The current model is not qwen3.8:27b."),
+    ("make_it_current", "Ask me to make qwen3.8:27b the current model and I will."),
+    ("to_make_it_current", "To make qwen3.8:27b the current model, change the chat setting."),
+    (
+        "switching_to_be_current",
+        "Switching qwen3.8:27b to be the current model needs a setting change.",
+    ),
+    # A setting is not this reply.
+    (
+        "setting_names_it_as_current",
+        "Your chat setting names qwen3.8:27b as the current model, but hub:qwen3:8b answered.",
+    ),
+    ("settings_current_model", "The chat setting's current model is qwen3.8:27b."),
+    # A marker limited to another place or role.
+    ("current_model_on_dell", "qwen3.8:27b is the current model on dell."),
+    ("active_model_in_the_catalog", "The active model in the catalog is qwen3.8:27b."),
+    ("in_use_elsewhere", "qwen3.8:27b is in use elsewhere."),
+    # The nearest ref across a coordinator is another conjunct's.
+    (
+        "coordinated_installed",
+        "hub:qwen3:8b is the current model and qwen3.8:27b is installed.",
+    ),
+]
+
+STILL_FIRE_BEYOND_THE_CORPUS = [
+    ("currently_in_use", "qwen3.8:27b is currently in use."),
+    (
+        "coordinated_current",
+        "hub:qwen3:8b is installed and qwen3.8:27b is the current model in use.",
+    ),
+    ("coordinated_in_use", "hub:qwen3:8b is installed, and qwen3.8:27b is in use."),
+    ("in_use_right_now_line", "- `qwen3.8:27b` ✅ in use right now"),
+    ("active_model_label", "Active model: qwen3.8:27b"),
+    ("bare_current_model", "qwen3.8:27b (current model)"),
+    ("current_chat_model_label", "Current chat model: hub:qwen3.8:27b"),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", HONEST_BEYOND_THE_CORPUS, ids=[c[0] for c in HONEST_BEYOND_THE_CORPUS]
+)
+def test_honest_sentences_beyond_the_corpus_are_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+# -- T2 review, round 1: honest sentences HEAD corrected ---------------------------
+#
+# Each was probed at 4c62f5c9 with hub:qwen3:8b serving, and each FIRED, adding
+# "this reply was written by hub:qwen3:8b … not by <an idle model>" to a true
+# reply and keeping the turn out of memory. They are the replies the DoD walk
+# question ("Where do your models run, and is that machine ready?") invites.
+
+# An in-use marker is about the ref it is SAID of: before it across copula,
+# parenthetical or badge material only ("X is the current model", "X (16.5 GB)
+# ✅ Current model in use"), after it only when the marker is a label or a
+# subject ("Current model: X", "The model in use is X"). The nearest ref in
+# another predicate ("…, gemma4:12b and qwen3.8:27b are installed") is not it.
+IN_USE_ANOTHER_PREDICATE = [
+    ("in_use_then_installed", "hub:qwen3:8b is in use, gemma4:12b and qwen3.8:27b are installed."),
+    ("current_then_sits_idle", "hub:qwen3:8b is the current model, qwen3.8:27b sits idle."),
+    ("current_dash_idle", "hub:qwen3:8b is the current model — qwen3.8:27b is idle."),
+    ("model_in_use_colon_idle", "qwen3:8b is the model in use: qwen3.8:27b is idle."),
+    ("in_use_bracketed_idle", "qwen3:8b is in use (qwen3.8:27b is installed but idle)."),
+    ("in_use_dash_idle", "qwen3:8b is in use — gemma4:12b is idle."),
+    ("machine_answering_you_has", "hub, the machine answering you, has gemma4:12b installed too."),
+    ("machine_serving_you_has", "hub (serving you) has qwen3.8:27b and qwen3:8b installed."),
+    (
+        "engine_serving_this_reply_is_hub",
+        "The engine serving this reply is hub (it also has gemma4:12b).",
+    ),
+    # Found fixing the above (they fired at HEAD too): a marker a ref is SAID
+    # of before it is a predicate, not a label, even where the words between
+    # are more than a copula — so the colon after it does not bind the next.
+    (
+        "said_of_first_then_colon",
+        "hub:qwen3:8b is, right now, the model in use: qwen3.8:27b is idle.",
+    ),
+    (
+        "handles_chat_as_current_then_colon",
+        "hub:qwen3:8b handles chat as the current model: qwen3.8:27b is idle.",
+    ),
+    ("appositive_then_colon", "hub:qwen3:8b, the current model: qwen3.8:27b sits idle."),
+]
+
+# Sentence shape 6 ("R is serving|answering you|this|now") limited by what
+# follows it: serving as another role, or serving something of this chat that
+# is another role's (its images).
+SERVING_ANOTHER_ROLE = [
+    ("serving_now_as_the_vision_model", "gemma4:12b is serving now as the vision model."),
+    (
+        "chat_then_serving_now_as_vision",
+        "qwen3:8b answers chat; gemma4:12b is serving now as the vision model.",
+    ),
+    ("serving_this_chats_images", "gemma4:12b is serving this chat's images."),
+]
+
+# "No model is needed" in the present is a general statement about timers and
+# reminders, not about this reply; only the past ("was") or an explicit
+# this-reply tail ("here", "for this answer") says it of this reply.
+NO_MODEL_IN_GENERAL = [
+    ("timers_run_on_their_own", "Timers run on their own; no model is needed."),
+    ("to_set_a_timer", "To set a timer, no model is needed."),
+    ("for_reminders", "For reminders, no model is needed."),
+    ("reminders_fire_by_themselves", "Reminders fire by themselves — no model is involved."),
+    ("timer_runs_without_me", "The timer runs without me; no model is required."),
+]
+
+REVIEW_ROUND_1_HONEST = IN_USE_ANOTHER_PREDICATE + SERVING_ANOTHER_ROLE + NO_MODEL_IN_GENERAL
+
+
+@pytest.mark.parametrize(
+    "label,reply", REVIEW_ROUND_1_HONEST, ids=[c[0] for c in REVIEW_ROUND_1_HONEST]
+)
+def test_review_round_1_honest_sentences_are_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+# The same rules, the claims they must keep: a false in-use claim before the
+# other predicate, a label or subject naming the ref after the marker, a table
+# row, the present with this reply's own tail, and shape 6 about this chat.
+REVIEW_ROUND_1_STILL_FIRE = [
+    ("in_use_first", "qwen3.8:27b is in use, gemma4:12b is installed.", "in_use", "qwen3.8:27b"),
+    (
+        "current_first_dash_idle",
+        "qwen3.8:27b is the current model — qwen3:8b is idle.",
+        "sentence",
+        "qwen3.8:27b",
+    ),
+    (
+        "idle_and_then_label",
+        "gemma4:12b is idle and current model: qwen3.8:27b",
+        "in_use",
+        "qwen3.8:27b",
+    ),
+    (
+        "idle_then_the_current_model_is",
+        "gemma4:12b is idle, the current model is qwen3.8:27b.",
+        "sentence",
+        "qwen3.8:27b",
+    ),
+    (
+        "label_on_its_own_line",
+        "gemma4:12b is idle.\nCurrent model: qwen3.8:27b",
+        "in_use",
+        "qwen3.8:27b",
+    ),
+    ("model_in_use_is", "The model in use is qwen3.8:27b.", "in_use", "qwen3.8:27b"),
+    (
+        "model_currently_answering_you_is",
+        "The model currently answering you is qwen3.8:27b.",
+        "in_use",
+        "qwen3.8:27b",
+    ),
+    ("model_in_use_colon", "- Model in use: `qwen3.8:27b`", "in_use", "qwen3.8:27b"),
+    ("table_row", "| `qwen3.8:27b` | 16.5 GB | ✅ in use |", "in_use", "qwen3.8:27b"),
+    ("badge_then_bracket", "- `qwen3.8:27b` ✅ (in use)", "in_use", "qwen3.8:27b"),
+    ("contracted_copula", "qwen3.8:27b's in use right now.", "in_use", "qwen3.8:27b"),
+    ("serving_this_chat", "qwen3.8:27b is serving this chat.", "sentence", "qwen3.8:27b"),
+    ("no_model_is_needed_here", "No model is needed here.", "no_model", None),
+    (
+        "no_model_is_needed_for_this_answer",
+        "No model is needed for this answer.",
+        "no_model",
+        None,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,shape,claimed",
+    REVIEW_ROUND_1_STILL_FIRE,
+    ids=[c[0] for c in REVIEW_ROUND_1_STILL_FIRE],
+)
+def test_review_round_1_cuts_leave_the_claims_firing(label, reply, shape, claimed):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None, label
+    assert claim.shape == shape
+    assert claim.claimed == claimed
+
+
+# -- T2 review, round 2: a trailing LABEL names the model after it ------------------
+#
+# Round 1 made the ref BEFORE an in-use marker win whenever only badge material
+# (a size, a parenthetical, a dash, a table bar) separated them. On a model
+# list with sizes that bound a trailing label — "— in use: Y", "| current
+# model: Y" — backward to the idle model listed before it, and corrected a true
+# status line against that model. Each of the first eight (the reviewer's,
+# verbatim) was quiet at 4c62f5c9 and FIRED at e102b80b with hub:qwen3:8b
+# serving; the next six are the same shape, probed while fixing, and all six
+# fired at e102b80b. A label names the ref after its colon; the ref before
+# wins only across a copula ("X is the model in use: Y is idle"); and when
+# anything but a size, a badge or closing punctuation follows the label's ref
+# ("in use: Y is idle", "in use: Y on hub", "in use: Y (idle)") and it names
+# another model than the badge's, nothing is claimed.
+TRAILING_LABEL_NAMES_THE_MODEL = [
+    (
+        "listing_then_in_use_label",
+        "- hub (ready): `qwen3.8:27b` (16.5 GB), `gemma4:12b` (7.0 GB) — in use: `qwen3:8b`",
+    ),
+    ("sized_item_then_current_label", "- `gemma4:12b` (7.0 GB) — current model: `qwen3:8b`"),
+    (
+        "table_bar_then_current_label",
+        "**hub** is ready. `qwen3.8:27b` (16.5 GB) | current model: `hub:qwen3:8b`",
+    ),
+    (
+        "two_sized_then_current_label",
+        "`qwen3.8:27b` (16.5 GB) and `gemma4:12b` (7.0 GB) — current model: `qwen3:8b`",
+    ),
+    ("arrow_then_bold_label", "hub → `qwen3.8:27b` (16.5 GB) — **current model:** `qwen3:8b`"),
+    ("bar_then_sized_label", "- qwen3.8:27b (16.5 GB)  |  in use: qwen3:8b (5.2 GB)"),
+    ("idle_then_current_label", "qwen3.8:27b (idle) — current model: hub:qwen3:8b"),
+    ("idle_then_answering_label", "qwen3.8:27b (idle) — answering you: qwen3:8b"),
+    # Probed while fixing, same shape.
+    ("table_cell_label", "| qwen3.8:27b | 16.5 GB | current model: qwen3:8b |"),
+    (
+        "equals_label",
+        "- hub (ready): `qwen3.8:27b` (16.5 GB), `gemma4:12b` (7.0 GB) — current model = "
+        "`qwen3:8b`",
+    ),
+    (
+        "currently_answering_label_sized",
+        "- `gemma4:12b` (7.0 GB) — currently answering you: `hub:qwen3:8b` (5.2 GB).",
+    ),
+    ("in_use_right_now_label", "- `gemma4:12b` (7.0 GB) — in use right now: `qwen3:8b`"),
+    # The label's ref starts a predicate of its own and names another model
+    # than the badge's: which one the marker is said of is unknown, so nothing.
+    ("label_ref_answering_you", "qwen3.8:27b (16.5 GB) — in use: qwen3:8b is answering you"),
+    ("label_ref_on_hub", "gemma4:12b (idle) — in use: qwen3:8b on hub"),
+    # Quiet at e102b80b (all three fired at 4c62f5c9): the badge's ref is the one
+    # in use and the colon opens the next clause — kept quiet. The label's
+    # value is read to the clause's end, not the conjunct's: "and" does not
+    # close it.
+    ("badge_then_colon_clause", "hub:qwen3:8b ✅ in use: qwen3.8:27b is idle"),
+    ("badge_then_colon_and_clause", "hub:qwen3:8b ✅ in use: qwen3.8:27b and gemma4:12b sit idle."),
+    # A worded bracket after the label's ref says something of it ("(idle)"),
+    # so it does not close the label either; only a size does.
+    ("badge_then_label_ref_idle", "hub:qwen3:8b ✅ in use: qwen3.8:27b (idle)"),
+]
+
+# Found fixing the above (it fired at 4c62f5c9 and e102b80b alike): a label
+# whose VALUE says no says the model before it is not in use.
+IN_USE_LABEL_SAYS_NO = [
+    ("in_use_no", "- `qwen3.8:27b` (16.5 GB) — in use: no"),
+    ("current_model_cross", "- `qwen3.8:27b` (16.5 GB) — current model: ❌"),
+    ("table_in_use_none", "| qwen3.8:27b | 16.5 GB | in use: none |"),
+]
+
+REVIEW_ROUND_2_HONEST = TRAILING_LABEL_NAMES_THE_MODEL + IN_USE_LABEL_SAYS_NO
+
+
+@pytest.mark.parametrize(
+    "label,reply", REVIEW_ROUND_2_HONEST, ids=[c[0] for c in REVIEW_ROUND_2_HONEST]
+)
+def test_review_round_2_honest_sentences_are_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+# The claims the same lines make when they are false: the label naming a model
+# that did not serve (e102b80b named the badge's model in the correction, or
+# said nothing), the copula form keeping the ref before (4c62f5c9 said nothing
+# on both), a label that says yes, and a label naming the badge's own model.
+REVIEW_ROUND_2_STILL_FIRE = [
+    (
+        "listing_then_in_use_label",
+        "- hub (ready): `qwen3:8b` (5.2 GB), `gemma4:12b` (7.0 GB) — in use: `qwen3.8:27b`",
+        "qwen3.8:27b",
+    ),
+    (
+        "sized_item_then_current_label",
+        "- `hub:qwen3:8b` (5.2 GB) — current model: `qwen3.8:27b`",
+        "qwen3.8:27b",
+    ),
+    ("idle_then_answering_label", "qwen3:8b (idle) — answering you: qwen3.8:27b", "qwen3.8:27b"),
+    (
+        "bar_then_sized_label",
+        "- qwen3:8b (5.2 GB)  |  in use: qwen3.8:27b (16.5 GB)",
+        "qwen3.8:27b",
+    ),
+    ("table_cell_label", "| gemma4:12b | 7.0 GB | current model: qwen3.8:27b |", "qwen3.8:27b"),
+    (
+        "copula_keeps_the_ref_before",
+        "qwen3.8:27b is the model in use: qwen3:8b is idle.",
+        "qwen3.8:27b",
+    ),
+    ("copula_in_use_colon", "qwen3.8:27b is in use: hub:qwen3:8b is idle.", "qwen3.8:27b"),
+    ("in_use_yes", "- `qwen3.8:27b` (16.5 GB) — in use: yes", "qwen3.8:27b"),
+    ("label_names_the_badges_model", "qwen3.8:27b (16.5 GB) — in use: qwen3.8:27b", "qwen3.8:27b"),
+    (
+        "label_ref_with_predicate_same_model",
+        "- `qwen3.8:27b` ✅ in use: qwen3.8:27b on hub",
+        "qwen3.8:27b",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,claimed",
+    REVIEW_ROUND_2_STILL_FIRE,
+    ids=[c[0] for c in REVIEW_ROUND_2_STILL_FIRE],
+)
+def test_review_round_2_trailing_labels_still_fire_on_the_model_they_name(label, reply, claimed):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None, label
+    assert claim.shape == "in_use"
+    assert claim.claimed == claimed
+    assert claim.text == named_text(claimed)
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    STILL_FIRE_BEYOND_THE_CORPUS,
+    ids=[c[0] for c in STILL_FIRE_BEYOND_THE_CORPUS],
+)
+def test_the_precision_cuts_leave_a_plain_in_use_claim_firing(label, reply):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None and claim.shape == "in_use"
+    assert claim.claimed in ("qwen3.8:27b", "hub:qwen3.8:27b")
+
+
+def test_the_model_that_served_is_named_without_a_correction():
+    """Truth is per turn: in a turn the 27B served, naming it is honest (the
+    eval run on hub:qwen3.8:27b)."""
+    reply = "qwen3.8:27b is answering you."
+    assert guards.served_claim_check(reply, [_llm(HUB_27B)], purpose="chat") is None
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is not None
+
+
+@pytest.mark.parametrize("label,reply", ACCEPTED_MISSES, ids=[c[0] for c in ACCEPTED_MISSES])
+def test_served_accepted_misses_stay_missed(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+@pytest.mark.parametrize("label,reply,shape,claimed", MUST_FIRE, ids=[c[0] for c in MUST_FIRE])
+def test_served_must_fire_is_silent_with_no_rounds(label, reply, shape, claimed):
+    """No round at all: nothing was served, so there is nothing to contradict."""
+    assert guards.served_claim_check(reply, [], purpose="chat") is None
+
+
+@pytest.mark.parametrize("unarmed", ["scheduled", "agent", "beat", None])
+@pytest.mark.parametrize("label,reply,shape,claimed", MUST_FIRE, ids=[c[0] for c in MUST_FIRE])
+def test_served_must_fire_is_silent_where_the_guard_is_not_armed(
+    unarmed, label, reply, shape, claimed
+):
+    """Armed only in STACK_CLAIM_KINDS, the kinds its precision was measured
+    in — the round's own purpose is the turn's kind, so each is given its own."""
+    spans = [_llm(purpose=unarmed or "chat")]
+    assert guards.served_claim_check(reply, spans, purpose=unarmed) is None
+
+
+@pytest.mark.parametrize("label,reply,shape,claimed", MUST_FIRE, ids=[c[0] for c in MUST_FIRE])
+def test_served_must_fire_in_the_eval_that_replays_chat(label, reply, shape, claimed):
+    claim = guards.served_claim_check(reply, [_llm(purpose="eval")], purpose="eval")
+    assert claim is not None and claim.shape == shape
+
+
+@pytest.mark.parametrize(
+    "label,reply,shape,claimed",
+    [c for c in MUST_FIRE if c[3] is not None],
+    ids=[c[0] for c in MUST_FIRE if c[3] is not None],
+)
+def test_a_named_claim_needs_a_served_by_to_contradict_it(label, reply, shape, claimed):
+    """A round the gateway sent no served-by header for says nothing about
+    which model wrote it, so a named claim has nothing to be compared with."""
+    assert guards.served_claim_check(reply, [_llm(None)], purpose="chat") is None
+
+
+@pytest.mark.parametrize(
+    "label,reply,shape,claimed",
+    [c for c in MUST_FIRE if c[3] is None],
+    ids=[c[0] for c in MUST_FIRE if c[3] is None],
+)
+def test_no_model_with_a_round_but_no_served_by_is_silent(label, reply, shape, claimed):
+    """S40b final fix wave (C3) — the pin FLIPPED. The verdict contradicted
+    itself: its evidence line said "no model" fires on any round, and its §4
+    MUST_NOT says every MUST_FIRE sentence is silent with no served_by. The
+    ledger sided with the MUST_NOT: with no served-by header the gateway
+    recorded nothing about who wrote the reply, and the guard says nothing it
+    cannot quote."""
+    assert guards.served_claim_check(reply, [_llm(None)], purpose="chat") is None
+    # …and the same sentence fires once the round that wrote it names a model.
+    claim = guards.served_claim_check(reply, [_llm(None), _llm()], purpose="chat")
+    assert claim is not None and claim.shape == "no_model" and claim.text == NO_MODEL_TEXT
+
+
+def test_a_failed_round_is_not_the_model_that_answered():
+    """An errored round's served_by is not evidence: it did not write this."""
+    spans = [_llm(), _llm(HUB_27B, error="nothing arrived from the gateway for 300 s")]
+    claim = guards.served_claim_check("I'm running on qwen3.8:27b.", spans, purpose="chat")
+    assert claim is not None and claim.served == (HUB_8B,)
+    no_round = [_llm(error="nothing arrived")]
+    reply = "No model was needed for this calculation."
+    assert guards.served_claim_check(reply, no_round, purpose="chat") is None
+
+
+def test_any_round_that_served_the_claimed_model_backs_it():
+    """Evidence is every served_by of the turn, any purpose — lenient on
+    purpose: a model that served ANY round of this turn is not contradicted."""
+    spans = [_llm(), _llm(HUB_27B, purpose="judge")]
+    assert guards.served_claim_check("I'm running on qwen3.8:27b.", spans, purpose="chat") is None
+
+
+def test_the_correction_quotes_the_round_that_wrote_the_reply():
+    """ "This reply was written by …" is a statement about THIS reply, so it
+    quotes the turn's last error-free round of its own purpose (the T1 review's
+    rule for the machine clause), never a judge's or an earlier round's."""
+    spans = [_llm("openrouter:x/y"), _llm(), _llm("openrouter:z/w", purpose="judge")]
+    claim = guards.served_claim_check("I'm running on qwen3.8:27b.", spans, purpose="chat")
+    assert claim is not None
+    assert claim.text == named_text("qwen3.8:27b")
+    assert claim.served == ("openrouter:x/y", HUB_8B, "openrouter:z/w")
+
+
+def test_a_named_claim_is_silent_when_the_writing_round_names_no_model():
+    """The deviation T2 records: when the round that WROTE the reply carries no
+    served_by, the claimed model may be the one that wrote it — a correction
+    naming another round's model would be false. Silent."""
+    spans = [_llm(), _llm(None)]
+    assert guards.served_claim_check("I'm running on qwen3.8:27b.", spans, purpose="chat") is None
+
+
+def test_a_latest_tag_is_compared_without_it():
+    spans = [_llm("hub:gemma4:12b")]
+    assert guards.served_claim_check("I'm running on gemma4:latest.", spans, purpose="chat") is None
+    claim = guards.served_claim_check("I'm running on qwen3:latest.", spans, purpose="chat")
+    assert claim is not None and claim.claimed == "qwen3:latest"
+
+
+def test_the_first_contradicted_claim_is_the_one_reported():
+    """Every claim is checked: a true one before a false one does not hide it."""
+    reply = "I am qwen3:8b. The current model is qwen3.8:27b."
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None and claim.claimed == "qwen3.8:27b"
+
+
+def test_an_empty_or_blank_reply_never_fires():
+    for reply in ("", "   ", "\n\n"):
+        assert guards.served_claim_check(reply, SERVED, purpose="chat") is None
+
+
+# -- the texts ----------------------------------------------------------------
+
+
+def _all_guards_silent(text: str) -> None:
+    for purpose in ("chat", "eval"):
+        spans = [_llm(purpose=purpose), RECALLED]
+        assert guards.served_claim_check(text, spans, purpose=purpose) is None
+        assert guards.memory_claim_check(text, spans, purpose=purpose) is None
+        assert guards.stack_claim_check(text, spans, purpose=purpose) is None
+        assert guards.state_claim_check(text, spans, ["DELL-XPS-8950"], purpose=purpose) is None
+    assert guards.narration_check(text, []) is None
+    assert guards.consent_claim_check(text) is None
+    assert guards.capability_claim_check(text, ["machine_status", "device_list"]) is None
+    assert guards.deferral_check(text, [], ["fetch_url", "web_search"]) is None
+    assert guards.presented_listing_check(text, [], ["workspace_list_files"]) is None
+    assert guards.bare_intent_check(text, []) is None
+    assert guards.observation_check(text, [], []) is None
+    assert guards.delivery_claim_check(text, []) is None
+
+
+@pytest.mark.parametrize(
+    "text",
+    [named_text("qwen3.8:27b"), named_text("dell:qwen3:8b"), NO_MODEL_TEXT],
+)
+def test_the_corrections_trip_no_guard_of_their_own(text):
+    """The correction is APPENDED to what persists, so a text that tripped a
+    guard would be corrected forever — this one included."""
+    _all_guards_silent(text)
+
+
+# -- the prompt truth fix (verdict §3.3) ----------------------------------------
+
+
+def test_the_prompt_states_what_is_asked_for_not_what_answers():
+    """ "The model answering is {model}" stated the SETTING as the model that
+    answers, which is false on every fallback — and repeating it would earn her
+    a served_claim correction. The prompt now says what is true: which model
+    the turn asks for, and that routing decides which one answers."""
+    prompt = chat.stable_system_prompt("qwen3.8:27b", ("get_time",))
+    assert "The model answering is" not in prompt
+    assert (
+        "This turn asks the gateway for qwen3.8:27b; its routing decides which model "
+        "actually answers." in prompt
+    )
+    default = chat.stable_system_prompt("", ("get_time",))
+    assert (
+        "This turn asks the gateway for its default model; its routing decides which model "
+        "actually answers." in default
+    )
+
+
+def test_repeating_the_prompts_sentence_is_not_a_served_claim():
+    said = (
+        "This turn asks the gateway for qwen3.8:27b; its routing decides which model "
+        "actually answers."
+    )
+    assert guards.served_claim_check(said, SERVED, purpose="chat") is None
+
+
+# -- the redirect's vetting (verdict §3.3, _regen_rejected_by) ------------------
+
+
+def _vet(corrected: str, spans, kind: str = "chat") -> str | None:
+    """chat._regen_rejected_by over a stand-in turn: it reads the turn's spans
+    and kind and nothing else of it."""
+    turn = SimpleNamespace(spans=spans, kind=kind)
+    return chat._regen_rejected_by(
+        corrected,
+        turn,
+        None,
+        [],
+        "which model is answering?",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+
+
+def test_a_regeneration_that_repeats_a_serving_state_lie_is_refused():
+    """The redirect's output REPLACES the durable record and is ingested, so a
+    REPLACE-class claim in it is refused by name, armed by the turn's own kind
+    exactly as over the reply."""
+    assert _vet("The model is unreachable right now.", [_llm(), RECALLED]) == "stack_claim"
+
+
+@pytest.mark.parametrize(
+    "regen,appended",
+    [
+        ("I'm running on qwen3.8:27b.", ["served_claim"]),
+        # The anchored form (A6: the bare "No model was needed." is no longer
+        # a claim about this reply).
+        ("No model was needed for this calculation.", ["served_claim"]),
+        ("I can't reach the memory service right now.", ["memory_claim"]),
+    ],
+)
+def test_a_regeneration_that_repeats_a_served_or_memory_lie_is_corrected_beside_it(regen, appended):
+    """Pin moved in the S40b final fix wave (A9): these two are APPEND-class
+    over a regeneration as they are over a reply. Refusing the whole
+    regeneration threw away whatever the redirect's own call had just read,
+    and the REPLACE correction that persisted instead was then false. The
+    regeneration stands and the side line is corrected beside it."""
+    spans = [_llm(), RECALLED]
+    assert _vet(regen, spans) is None
+    turn = SimpleNamespace(spans=spans, kind="chat")
+    assert [name for name, _ in chat._append_class_claims(regen, turn)] == appended
+
+
+@pytest.mark.parametrize(
+    "regen",
+    [
+        "The model is unreachable right now.",
+        "I'm running on qwen3.8:27b.",
+        "I can't reach the memory service right now.",
+    ],
+)
+def test_the_vetting_is_armed_by_the_turns_kind(regen):
+    spans = [_llm(purpose="scheduled"), RECALLED]
+    assert _vet(regen, spans, kind="scheduled") is None
+
+
+def test_an_honest_regeneration_passes_the_new_checks():
+    assert (
+        _vet("I'm running on qwen3:8b, and the memory service answered.", [_llm(), RECALLED])
+        is None
+    )
+
+
+def test_the_vetting_names_the_first_guard_that_refuses():
+    """Pin replaced in the S40b final fix wave (C6): reading the function's
+    SOURCE for the order of its string literals pinned the text, not the
+    behaviour. This runs regenerations that trip two guards each and names
+    which one the vetting reports — the order the turn runs them in."""
+    spans = [_llm(), RECALLED]
+    # capability before stack: a denial of a tool she holds, beside an outage.
+    both = "I am unable to browse the web. The model is unreachable right now."
+    assert _vet(both, spans) == "capability_claim"
+    # stack before state: an outage claim beside an unchecked machine reading
+    # (the machine is derived from a round the gateway says ran on an engine).
+    engine = [_llm(local=True), RECALLED]
+    assert _vet("hub is switched off.", engine) == "state_claim"
+    assert _vet("The model is unreachable right now. hub is switched off.", engine) == (
+        "stack_claim"
+    )
+
+
+def test_the_append_class_guards_are_not_rejectors():
+    """A9: served_claim and memory_claim never refuse a regeneration; they
+    correct it beside its prose (_append_class_claims)."""
+    spans = [_llm(), RECALLED]
+    for regen in ("I'm running on qwen3.8:27b.", "I can't reach the memory service right now."):
+        assert _vet(regen, spans) is None
+    turn = SimpleNamespace(spans=spans, kind="chat")
+    assert [name for name, _ in chat._append_class_claims("I'm qwen3.8:27b.", turn)] == [
+        "served_claim"
+    ]
+    # …and in a kind they are not armed in, nothing fires either way.
+    scheduled = SimpleNamespace(spans=[_llm(purpose="scheduled"), RECALLED], kind="scheduled")
+    assert chat._append_class_claims("I'm qwen3.8:27b.", scheduled) == []
+
+
+# -- S40b T4 review, fix round 1: what she says ABOUT the claim, before it ---------
+#
+# The v15 case seeds the walk's false "Current model in use" line as her own
+# history, and the answer it hopes for corrects it. Each sentence below FIRED at
+# f81d0a1b in a chat turn served by hub:qwen3:8b (the reviewer's probes,
+# verbatim), appending "this reply was written by hub:qwen3:8b … not by
+# qwen3.8:27b" to a reply that already said so, and keeping it out of memory.
+# The cut reads the prefix of each claim's match in its clause; it is the
+# served and memory guards' own, so the shared _STATE_HEDGE is not re-measured.
+
+# A doubted or denied belief before the claim (finding 1).
+SERVED_DOUBTED = [
+    (
+        "dont_think_then_served",
+        "I don't think qwen3.8:27b is the current model; hub:qwen3:8b answered.",
+    ),
+    ("dont_believe", "I don't believe qwen3.8:27b is the current model."),
+    ("not_sure", "I'm not sure qwen3.8:27b is the current model."),
+    ("false_that", "It's false that qwen3.8:27b is the current model."),
+    # The same frames, spelled the other ways she writes them.
+    ("do_not_think", "I do not think qwen3.8:27b is the current model."),
+    ("isnt_true_that", "It isn't true that qwen3.8:27b is the current model."),
+    ("doubt", "I doubt qwen3.8:27b is the current model."),
+]
+
+# Her retraction of her own earlier reply (finding 2).
+SERVED_RETRACTED = [
+    (
+        "previous_answer_said_that_was_wrong",
+        "My previous answer said qwen3.8:27b is the current model; that was wrong.",
+    ),
+    ("i_said_but_that_was_wrong", "I said qwen3.8:27b is the current model, but that was wrong."),
+    # The same retraction, as she would write it over the seeded line.
+    ("i_wrongly_said", "I wrongly said qwen3.8:27b is the current model."),
+    ("i_said_then_retracted", "I said qwen3.8:27b is the current model. That was wrong."),
+    (
+        "last_reply_marked_the_in_use_line",
+        "My last reply marked `qwen3.8:27b` (16.5 GB) ✅ Current model in use; that was stale.",
+    ),
+    # 60834ccf's line, retracted.
+    (
+        "last_reply_said_no_model",
+        "My last reply said no model was needed for this calculation; that was wrong.",
+    ),
+]
+
+# What must keep firing: the plain claim, a reassertion of an earlier reply
+# ("As I said", "Like I said", a bare "I said"), a stated belief, a doubt
+# that is no doubt, and "not sure WHY", which presupposes the claim.
+SERVED_STILL_ASSERTED = [
+    ("plain_claim", "qwen3.8:27b is the current model."),
+    ("as_i_said", "As I said, qwen3.8:27b is the current model."),
+    ("like_i_said", "Like I said, qwen3.8:27b is the current model."),
+    ("bare_i_said", "I said qwen3.8:27b is the current model."),
+    ("as_i_told_you", "As I told you, qwen3.8:27b is the current model."),
+    ("i_think", "I think qwen3.8:27b is the current model."),
+    ("no_doubt", "No doubt qwen3.8:27b is the current model."),
+    ("not_sure_why", "I'm not sure why qwen3.8:27b is the current model."),
+    (
+        "i_said_and_it_still_is",
+        "I said qwen3.8:27b is the current model, and that is still true.",
+    ),
+    (
+        "retraction_then_a_new_claim",
+        "My last reply named hub:qwen3:8b, which is wrong; qwen3.8:27b is the current model.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SERVED_DOUBTED + SERVED_RETRACTED,
+    ids=[c[0] for c in SERVED_DOUBTED + SERVED_RETRACTED],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_doubted_or_retracted_served_claim_is_not_corrected(purpose, label, reply):
+    spans = [_llm(purpose=purpose), RECALLED]
+    assert guards.served_claim_check(reply, spans, purpose=purpose) is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_STILL_ASSERTED, ids=[c[0] for c in SERVED_STILL_ASSERTED]
+)
+def test_a_reasserted_or_believed_served_claim_still_fires(label, reply):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None, label
+    assert claim.claimed == "qwen3.8:27b"
+    assert claim.text == named_text("qwen3.8:27b")
+
+
+# The cost of reading the frame anywhere in the claim's clause (as the shared
+# hedge cut does), pinned so it is a choice: a frame about something else,
+# before a colon, reads as the claim's.
+FRAME_ACCEPTED_MISSES = [
+    ("frame_before_a_colon", "I don't think it matters: qwen3.8:27b is the current model."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", FRAME_ACCEPTED_MISSES, ids=[c[0] for c in FRAME_ACCEPTED_MISSES]
+)
+def test_the_frame_accepted_misses_stay_missed(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+# -- S40b T4 review, fix round 2: a mention of her earlier reply is not a label ------
+#
+# Fix round 1 cut a served claim on ANY mention of her earlier reply before it
+# in its clause. Each sentence below FIRED at f81d0a1b and was SILENT at
+# c9538364 in a chat turn served by hub:qwen3:8b (the reviewer's probes,
+# verbatim first): a reassertion that cites the earlier reply ("As I said in my
+# last reply"), a correction or update that states the claim anew, a report
+# she reaffirms, and a new claim after a retraction. In chat the false line was
+# persisted and ingested with no correction, and a regeneration that said it
+# passed the vetting. The history cut now reads a LABEL (guards._history_framed):
+#   * her earlier reply reported: "my last reply said/named/marked X";
+#   * an attribution: "from my previous answer", "in my last reply";
+#   * a heading at the clause's start: "My previous answer:", "According to
+#     my last reply,";
+# never after "as"/"like"/"unlike"/"same as" or "unchanged"/"updated", never
+# past a retraction between it and the claim, and never when what follows
+# reaffirms the claim ("…, and that is still true").
+SERVED_REASSERTED_OVER_HISTORY = [
+    (
+        "as_i_said_in_my_last_reply",
+        "As I said in my last reply, qwen3.8:27b is the current model.",
+    ),
+    (
+        "correction_to_my_last_reply",
+        "Correction to my last reply: qwen3.8:27b is the current model.",
+    ),
+    (
+        "last_reply_said_and_still_true",
+        "My last reply said qwen3.8:27b is the current model, and that is still true.",
+    ),
+    (
+        "named_then_wrong_then_a_new_claim",
+        "My last reply named hub:qwen3:8b, which is wrong — qwen3.8:27b is the current model.",
+    ),
+    # The memory probes' forms, over the served claim.
+    (
+        "as_mentioned_in_my_previous_response",
+        "As mentioned in my previous response, qwen3.8:27b is the current model.",
+    ),
+    ("as_in_my_last_reply", "As in my last reply, qwen3.8:27b is the current model."),
+    ("update_on_my_last_answer", "Update on my last answer: qwen3.8:27b is the current model."),
+    (
+        "previous_answer_still_holds",
+        "My previous answer still holds — qwen3.8:27b is the current model.",
+    ),
+    # The same limits, spelled the other ways.
+    ("as_my_last_reply_said", "As my last reply said, qwen3.8:27b is the current model."),
+    ("per_my_last_reply", "Per my last reply, qwen3.8:27b is the current model."),
+    (
+        "reaffirmed_in_the_next_sentence",
+        "My last reply said qwen3.8:27b is the current model. That is still true.",
+    ),
+    (
+        "unchanged_from_my_last_reply",
+        "Unchanged from my last reply: qwen3.8:27b is the current model.",
+    ),
+    # "I was wrong" is the verdict's _SERVED_SKIP ("was"); "got it wrong" is not.
+    (
+        "in_my_last_reply_i_got_it_wrong",
+        "In my last reply I got it wrong: qwen3.8:27b is the current model.",
+    ),
+    (
+        "what_i_said_in_it_still_holds",
+        "What I said in my last reply still holds: qwen3.8:27b is the current model.",
+    ),
+    (
+        "correction_to_my_last_replys_model_line",
+        "Correction to my last reply's model line: qwen3.8:27b is the current model.",
+    ),
+]
+
+# Her earlier reply, labelled as such: what she said then, not a claim about
+# this turn. Already cut at c9538364; kept cut by the label rule. Each carries
+# the same claim without its label, which fires — so the pin cannot pass on a
+# claim the guard never read. "My last reply said X." is reported speech, cut
+# like _REPORTED's "The previous reply said X."; a bare "I said X." stays a
+# reassertion (SERVED_STILL_ASSERTED).
+SERVED_LABELLED_AS_HISTORY = [
+    (
+        "plain_report_of_her_last_reply",
+        "My last reply said qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "listed_then_who_answered",
+        "My last reply listed `qwen3.8:27b` ✅ Current model in use; hub:qwen3:8b answered "
+        "this one.",
+        "`qwen3.8:27b` ✅ Current model in use; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "from_my_previous_answer_heading",
+        "From my previous answer: qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "my_previous_answer_label",
+        "My previous answer: qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "according_to_my_last_reply",
+        "According to my last reply, qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "in_my_last_reply_i_wrote_that",
+        "In my last reply I wrote that qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "I wrote that qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "retracted_then_a_still_about_something_else",
+        "My last reply said qwen3.8:27b is the current model; that was stale. It is still the "
+        "case that hub:qwen3:8b answered.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "label_then_it_isnt_current",
+        "From my previous answer (it isn't current): qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "recap_of_my_last_reply",
+        "Recap of my last reply: qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "my_previous_answers_model_line",
+        "My previous answer's model line: qwen3.8:27b is the current model.",
+        "qwen3.8:27b is the current model.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SERVED_REASSERTED_OVER_HISTORY,
+    ids=[c[0] for c in SERVED_REASSERTED_OVER_HISTORY],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_served_claim_that_only_cites_her_earlier_reply_still_fires(purpose, label, reply):
+    spans = [_llm(purpose=purpose), RECALLED]
+    claim = guards.served_claim_check(reply, spans, purpose=purpose)
+    assert claim is not None, label
+    assert claim.claimed == "qwen3.8:27b"
+    assert claim.text == named_text("qwen3.8:27b")
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    SERVED_LABELLED_AS_HISTORY,
+    ids=[c[0] for c in SERVED_LABELLED_AS_HISTORY],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_served_claim_labelled_as_her_history_is_not_corrected(purpose, label, reply, bare):
+    spans = [_llm(purpose=purpose), RECALLED]
+    assert guards.served_claim_check(reply, spans, purpose=purpose) is None, label
+    claim = guards.served_claim_check(bare, spans, purpose=purpose)
+    assert claim is not None and claim.claimed == "qwen3.8:27b", label
+
+
+# The verdict's _REPORTED cut reads the whole clause, so "The last reply said
+# X" is someone's reported speech whatever follows it — a cut this fix does not
+# re-measure. Pinned so it is a choice.
+SERVED_REPORTED_ACCEPTED_MISSES = [
+    (
+        "the_last_reply_said_and_still_true",
+        "The last reply said qwen3.8:27b is the current model, and that is still true.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SERVED_REPORTED_ACCEPTED_MISSES,
+    ids=[c[0] for c in SERVED_REPORTED_ACCEPTED_MISSES],
+)
+def test_the_reported_speech_accepted_misses_stay_missed(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "regen",
+    [
+        "As I said in my last reply, qwen3.8:27b is the current model.",
+        "Correction to my last reply: qwen3.8:27b is the current model.",
+        "My last reply said qwen3.8:27b is the current model, and that is still true.",
+    ],
+)
+def test_a_regeneration_that_reasserts_her_earlier_served_claim_is_corrected(regen):
+    """The redirect's output replaces the durable record and is ingested; a
+    regeneration that cites her last reply to restate the claim clears no
+    lower bar than the reply did — and clears it the same way (A9): the
+    correction is appended, not the whole reply refused."""
+    spans = [_llm(), RECALLED]
+    assert _vet(regen, spans) is None
+    turn = SimpleNamespace(spans=spans, kind="chat")
+    assert [name for name, _ in chat._append_class_claims(regen, turn)] == ["served_claim"]
+
+
+# -- S40b T4 review, fix round 3: a doubt is not a reaffirmation, a heading is not a lead
+#
+# Each sentence below FIRED at fa23ec1f and was SILENT at c9538364 in a turn
+# served by hub:qwen3:8b whose recall answered (the reviewer's probes verbatim
+# first). A reaffirmation she doubts ("I don't know whether that is still
+# true") was read as hers, and a heading ("Correction:", "Update:") as a word
+# that leads INTO the label. See test_state_guard.py's fix round 3 for the
+# rule (guards._vouched, guards._NOT_A_LABEL_LEAD).
+SERVED_LABELLED_THEN_DOUBTED_OR_HEADED = [
+    (
+        "dont_know_whether_still_true",
+        "From my previous answer: qwen3.8:27b is the current model. I don't know whether that "
+        "is still true.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "correction_heading_and_a_guess",
+        "Correction: my last reply said qwen3.8:27b is the current model, and that was a guess.",
+        "qwen3.8:27b is the current model, and that was a guess.",
+    ),
+    # The same doubt and heading, spelled the other ways she writes them.
+    (
+        "not_sure_that_is_still_true",
+        "My last reply said qwen3.8:27b is the current model. I'm not sure that is still true.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "whether_still_the_case_i_cant_say",
+        "My last reply said qwen3.8:27b is the current model; whether that is still the case, "
+        "I can't say.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "cant_tell_you_whether_still_accurate",
+        "My previous answer: qwen3.8:27b is the current model. I can't tell you whether that is "
+        "still accurate.",
+        "qwen3.8:27b is the current model.",
+    ),
+    (
+        "update_heading",
+        "Update: my previous answer said qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "correction_dash_heading",
+        "Correction — my last reply said qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "as_a_correction_heading",
+        "As a correction, my last reply said qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+    (
+        "changed_heading",
+        "Changed: my previous answer said qwen3.8:27b is the current model; hub:qwen3:8b "
+        "answered this one.",
+        "qwen3.8:27b is the current model; hub:qwen3:8b answered this one.",
+    ),
+]
+
+# What must keep firing: a doubt that is no doubt, a doubt about something
+# else in another clause, and a lead that joins its label by a space.
+SERVED_STILL_REASSERTED = [
+    (
+        "no_doubt_still_true",
+        "My last reply said qwen3.8:27b is the current model. No doubt that is still true.",
+    ),
+    (
+        "not_sure_why_still_true",
+        "My last reply said qwen3.8:27b is the current model. I'm not sure why that is still true.",
+    ),
+    (
+        "a_doubt_about_something_else",
+        "My last reply said qwen3.8:27b is the current model; I'm not sure about the embedder, "
+        "but that is still true.",
+    ),
+    (
+        "fixing_my_last_replys_model_line",
+        "Fixing my last reply's model line: qwen3.8:27b is the current model.",
+    ),
+    (
+        "corrections_to_my_last_replys_model_line",
+        "Corrections to my last reply's model line: qwen3.8:27b is the current model.",
+    ),
+    ("update_from_my_last_reply", "Update from my last reply: qwen3.8:27b is the current model."),
+    (
+        "update_heading_then_still_the_case",
+        "Update: my previous answer said qwen3.8:27b is the current model, and that is still "
+        "the case.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply,bare",
+    SERVED_LABELLED_THEN_DOUBTED_OR_HEADED,
+    ids=[c[0] for c in SERVED_LABELLED_THEN_DOUBTED_OR_HEADED],
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_doubted_or_headed_served_history_label_is_not_corrected(purpose, label, reply, bare):
+    spans = [_llm(purpose=purpose), RECALLED]
+    assert guards.served_claim_check(reply, spans, purpose=purpose) is None, label
+    claim = guards.served_claim_check(bare, spans, purpose=purpose)
+    assert claim is not None and claim.claimed == "qwen3.8:27b", label
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_STILL_REASSERTED, ids=[c[0] for c in SERVED_STILL_REASSERTED]
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_vouched_reaffirmation_or_a_joined_lead_still_fires_on_the_served_claim(
+    purpose, label, reply
+):
+    claim = guards.served_claim_check(reply, [_llm(purpose=purpose), RECALLED], purpose=purpose)
+    assert claim is not None, label
+    assert claim.claimed == "qwen3.8:27b"
+    assert claim.text == named_text("qwen3.8:27b")
+
+
+@pytest.mark.parametrize("regen", [c[1] for c in SERVED_LABELLED_THEN_DOUBTED_OR_HEADED[:2]])
+def test_a_regeneration_that_doubts_or_heads_her_served_history_passes(regen):
+    assert _vet(regen, [_llm(), RECALLED]) is None
+
+
+# ================================================================================
+# S40b final fix wave (fix-wave-brief.md; reproductions in final-review.md)
+# ================================================================================
+#
+# Directive D1: each fix REMOVES a fire on an honest sentence. The walk's own
+# FALSE lines (b851aa91, b02a5694, 60834ccf) keep firing — MUST_FIRE above.
+
+
+def _served_fires(reply: str, spans=None) -> bool:
+    return guards.served_claim_check(reply, spans or SERVED, purpose="chat") is not None
+
+
+# -- A4: a line attributed to his notes is not her claim ---------------------------
+SERVED_ATTRIBUTED_TO_HIS_NOTES = [
+    (
+        "your_notes_say_out_of_date",
+        "Your notes say the current model is qwen3.8:27b, but that's out of date — "
+        "hub:qwen3:8b answered this turn.",
+    ),
+    (
+        "an_older_note_says",
+        "An older note says qwen3.8:27b is the current model; this reply actually came from "
+        "hub:qwen3:8b.",
+    ),
+    (
+        "from_your_notes_heading",
+        "From your notes: qwen3.8:27b is the current model. That's stale: hub:qwen3:8b answered.",
+    ),
+    (
+        "according_to_your_notes",
+        "According to your notes, the current model is qwen3.8:27b — but hub:qwen3:8b wrote "
+        "this reply.",
+    ),
+    (
+        "a_note_of_yours_reads_no_model",
+        "A note of yours reads: no model was needed for this calculation. That's false; a "
+        "model wrote every reply.",
+    ),
+]
+SERVED_ATTRIBUTED_STILL_FIRES = [
+    (
+        "notes_say_and_still_true",
+        "The notes say qwen3.8:27b is the current model — and that is still true.",
+    ),
+    ("notes_then_her_own_claim", "Your notes mention gemma. qwen3.8:27b is the current model."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    SERVED_ATTRIBUTED_TO_HIS_NOTES,
+    ids=[c[0] for c in SERVED_ATTRIBUTED_TO_HIS_NOTES],
+)
+def test_a_served_line_attributed_to_his_notes_is_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_ATTRIBUTED_STILL_FIRES, ids=[c[0] for c in SERVED_ATTRIBUTED_STILL_FIRES]
+)
+def test_a_reaffirmed_or_separate_served_claim_beside_a_note_still_fires(label, reply):
+    assert _served_fires(reply), label
+
+
+# -- A8: a denial frame is not her assertion ---------------------------------------
+SERVED_DENIED = [
+    ("its_not_that", "It's not that qwen3.8:27b is the current model — hub:qwen3:8b wrote this."),
+    ("nothing_says", "Nothing says qwen3.8:27b is the current model."),
+    ("it_isnt_the_case_that", "It isn't the case that qwen3.8:27b is the current model."),
+    ("it_is_not_the_case_that", "It is not the case that qwen3.8:27b is the current model."),
+    ("no_sign_that", "There is no sign that qwen3.8:27b is the current model."),
+]
+SERVED_NOT_DENIED = [
+    ("it_is_the_case_that", "It is the case that qwen3.8:27b is the current model."),
+    ("its_that", "It's that qwen3.8:27b is the current model."),
+]
+
+
+@pytest.mark.parametrize("label,reply", SERVED_DENIED, ids=[c[0] for c in SERVED_DENIED])
+def test_a_denied_served_claim_is_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize("label,reply", SERVED_NOT_DENIED, ids=[c[0] for c in SERVED_NOT_DENIED])
+def test_an_affirmed_frame_still_fires_on_the_served_claim(label, reply):
+    assert _served_fires(reply), label
+
+
+# -- A12: an attribution or a retraction AFTER the claim closes it -----------------
+SERVED_CLOSED_AFTER = [
+    ("in_use_from_my_previous_answer", f"{IN_USE_LINE} (from my previous answer)"),
+    ("in_use_incorrect", f"{IN_USE_LINE} (incorrect — it's qwen3:8b)"),
+    ("sentence_from_my_last_answer", "qwen3.8:27b is the current model (from my last answer)."),
+    ("in_use_outdated", f"{IN_USE_LINE} (outdated)"),
+    ("in_use_stale_from_my_last_answer", f"{IN_USE_LINE} (stale — from my last answer)"),
+    ("which_is_wrong_bracketed", f"{IN_USE_LINE} (which is wrong)"),
+    ("which_was_wrong", "qwen3.8:27b is the current model, which was wrong."),
+    ("dash_this_is_wrong", f"{IN_USE_LINE} — this is wrong; hub:qwen3:8b answered."),
+]
+SERVED_NOT_CLOSED_AFTER = [
+    (
+        "unchanged_from_my_last_answer",
+        "qwen3.8:27b is the current model (unchanged from my last answer).",
+    ),
+    ("bare_in_use_line", IN_USE_LINE),
+    ("wrong_about_something_else", "qwen3.8:27b is the current model. The Dell reading was wrong."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_CLOSED_AFTER, ids=[c[0] for c in SERVED_CLOSED_AFTER]
+)
+@pytest.mark.parametrize("purpose", ["chat", "eval"])
+def test_a_served_claim_closed_after_it_is_not_corrected(purpose, label, reply):
+    assert guards.served_claim_check(reply, [_llm(purpose=purpose)], purpose=purpose) is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", SERVED_NOT_CLOSED_AFTER, ids=[c[0] for c in SERVED_NOT_CLOSED_AFTER]
+)
+def test_a_served_claim_not_closed_after_it_still_fires(label, reply):
+    assert _served_fires(reply), label
+
+
+# -- B1 / B2 (T4 breaker OPEN-1, OPEN-2) --------------------------------------------
+# The served and memory guards read a label in the claim's own line (their
+# scan is per line), so the doubt sits there too.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "From my previous answer (if it still holds): qwen3.8:27b is the current model.",
+        "From my previous answer (whether that still holds I can't say): qwen3.8:27b is the "
+        "current model.",
+        f"From my previous answer (if it still holds): {IN_USE_LINE[2:]}",
+    ],
+)
+def test_a_doubt_that_names_its_subject_keeps_the_served_history_label(reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, reply
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        "No change:",
+        "No changes:",
+        "Nothing has changed —",
+        "Nothing new —",
+        "No update:",
+        "No updates:",
+    ],
+)
+@pytest.mark.parametrize(
+    "body",
+    [
+        "{head} my previous answer said qwen3.8:27b is the current model.",
+        "{head} from my previous answer, qwen3.8:27b is the current model.",
+        "{head} qwen3.8:27b is the current model (from my previous answer).",
+    ],
+)
+def test_a_negated_sameness_head_reaffirms_the_served_claim(head, body):
+    assert _served_fires(body.format(head=head)), (head, body)
+
+
+# -- C11: a struck span is visibly retracted ---------------------------------------
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "- ~~`qwen3.8:27b` (16.5 GB) ✅ **Current model in use**~~ — it's `qwen3:8b`.",
+        "~~qwen3.8:27b is the current model.~~ hub:qwen3:8b answered this turn.",
+        "~~No model was needed for this calculation.~~ A model wrote this reply.",
+    ],
+)
+def test_a_struck_served_claim_is_not_corrected(reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, reply
+    assert _served_fires(reply.replace("~~", "")), reply
+
+
+# -- C16: a general statement is a hedge -------------------------------------------
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Whenever qwen3.8:27b is the current model, replies are slower.",
+        "Any time qwen3.8:27b is in use, replies are slower.",
+        "Every time qwen3.8:27b is the current model, the card fills up.",
+        "Each time qwen3.8:27b is answering you, the card runs hot.",
+        "In the event qwen3.8:27b is the current model, replies slow down.",
+    ],
+)
+def test_a_general_statement_about_a_model_is_not_corrected(reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, reply
+
+
+# -- A6: a bare "no model was …" is about whatever its sentence is about ----------
+#
+# final-review #6: each fired no_model at 9927da34 — an honest account of a
+# timer or a reminder corrected with "a model wrote this reply", and the turn
+# kept out of memory. The past form now needs this reply's own tail or a
+# first-person subject.
+NO_MODEL_ABOUT_SOMETHING_ELSE = [
+    ("timer_ran_on_its_own", "The timer ran on its own — no model was needed."),
+    ("reminder_fired_on_its_own", "The reminder fired on its own; no model was involved."),
+    ("sent_by_the_scheduler", "That reminder was sent by the scheduler, so no model was used."),
+    ("went_out_by_itself", "Your 9:00 reminder went out by itself. No model was involved."),
+    ("delivered_without_me", "The scheduler delivered it without me. No model was needed."),
+    ("copied_by_the_tool", "The file was copied by the workspace tool; no model was used."),
+    (
+        "delivered_verbatim",
+        "No, I didn't write it. Your 9:00 reminder is delivered verbatim by the timer, so no "
+        "model was involved.",
+    ),
+    ("reminders_fire_by_themselves", "Reminders fire by themselves — no model was involved."),
+]
+NO_MODEL_ABOUT_THIS_REPLY = [
+    ("walk_60834ccf", T60834CCF),
+    ("for_this_calculation", "No model was needed for this calculation."),
+    ("was_needed_here", "No model was needed here."),
+    ("to_answer_this", "No model was needed to answer this."),
+    ("first_person", "I didn't use a model."),
+    ("first_person_here", "I didn't use a model here."),
+]
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    NO_MODEL_ABOUT_SOMETHING_ELSE,
+    ids=[c[0] for c in NO_MODEL_ABOUT_SOMETHING_ELSE],
+)
+def test_no_model_said_of_another_action_is_not_corrected(label, reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, label
+
+
+@pytest.mark.parametrize(
+    "label,reply", NO_MODEL_ABOUT_THIS_REPLY, ids=[c[0] for c in NO_MODEL_ABOUT_THIS_REPLY]
+)
+def test_no_model_said_of_this_reply_still_fires(label, reply):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None and claim.shape == "no_model", label
+    assert claim.text == NO_MODEL_TEXT
+
+
+# -- C4: the right model, spelled another way, is not corrected --------------------
+#
+# The claim side only: "ollama:<tag>" is how history named the builtin engine,
+# and a quantization suffix names the same model's build.
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "I'm running on ollama:qwen3:8b.",
+        "The current model is qwen3:8b-q4_K_M.",
+        "- `qwen3:8b-q4_K_M` ✅ **Current model in use**",
+        "The current model is ollama:qwen3:8b-q8_0.",
+        "I'm running on hub:qwen3:8b-fp16.",
+    ],
+)
+def test_the_served_model_spelled_another_way_is_not_corrected(reply):
+    assert guards.served_claim_check(reply, SERVED, purpose="chat") is None, reply
+
+
+@pytest.mark.parametrize(
+    "reply,claimed",
+    [
+        ("The current model is ollama:qwen3.8:27b.", "ollama:qwen3.8:27b"),
+        ("The current model is qwen3.8:27b-q4_K_M.", "qwen3.8:27b-q4_K_M"),
+        ("I'm running on dell:qwen3:8b-q4_K_M.", "dell:qwen3:8b-q4_K_M"),
+    ],
+)
+def test_another_model_spelled_those_ways_still_fires(reply, claimed):
+    claim = guards.served_claim_check(reply, SERVED, purpose="chat")
+    assert claim is not None and claim.claimed == claimed, reply

@@ -13,14 +13,21 @@ still claims unchecked is refused and keeps the correction, an unredirected turn
 stays out of memory, and the single redirect budget is shared with the consent
 guard (one redirect, both corrections when it fails).
 """
+
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 
-from app import chat, guards, tools
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+
+from app import chat, guards, machines, tools
 from app.tools.base import Tool, ToolContext
+from tests import fakes
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
+from tests.s40_walk import B02A5694, B851AA91
 
 pytestmark = requires_db
 
@@ -93,8 +100,7 @@ async def _pair(pool, name: str = DEVICE) -> None:
     """A paired machine, straight into the registry — the guard's names come
     from devices.list_devices, so this is the only fact it needs."""
     await pool.execute(
-        "INSERT INTO devices (name, platform, hostname, pubkey) "
-        "VALUES ($1, 'linux', 'dell', $2)",
+        "INSERT INTO devices (name, platform, hostname, pubkey) VALUES ($1, 'linux', 'dell', $2)",
         name,
         "a" * 64,
     )
@@ -171,6 +177,7 @@ async def test_the_owner_case_fires_and_the_redirect_checks_the_device(
     assert [s["name"] for s in spans] == ["state_claim"]
     assert spans[0]["meta"]["redirected"] is True
     assert spans[0]["meta"]["device"] == "the device"
+    assert spans[0]["meta"]["subject_kind"] == "device"
     assert spans[0]["meta"]["paired_devices"] == 1
     assert await pool.fetchval("SELECT status FROM turns") == "ok"
 
@@ -243,9 +250,7 @@ async def test_the_same_sentence_is_clean_when_a_device_tool_really_ran(
     No guard fires, no redirect runs (a third gateway call would be a loud 500),
     and the reply stands untouched."""
     await _pair(pool)
-    gateway = ScriptedGateway(
-        rounds=((tool_call("d1", "device_list", {}),), (text(OWNER_CASE),))
-    )
+    gateway = ScriptedGateway(rounds=((tool_call("d1", "device_list", {}),), (text(OWNER_CASE),)))
     mount_peers(gateway=gateway, memory=FakeMemory())
 
     sent = await _say(owner_client)
@@ -256,9 +261,7 @@ async def test_the_same_sentence_is_clean_when_a_device_tool_really_ran(
     assert await _stored(pool) == OWNER_CASE
 
 
-async def test_nothing_paired_means_the_guard_never_fires(
-    owner_client, pool, mount_peers
-):
+async def test_nothing_paired_means_the_guard_never_fires(owner_client, pool, mount_peers):
     """DERIVED, not hardcoded: with no device in the registry there is no machine
     to be wrong about, so the identical sentence stands and the turn is ordinary
     knowledge."""
@@ -276,9 +279,7 @@ async def test_nothing_paired_means_the_guard_never_fires(
     assert len(memory.ingests) == 1
 
 
-async def test_a_revoked_device_does_not_arm_the_guard(
-    owner_client, pool, mount_peers
-):
+async def test_a_revoked_device_does_not_arm_the_guard(owner_client, pool, mount_peers):
     """A revoked machine is not paired. Its name must not keep arming a check
     forever — the registry read excludes it, so the guard is silent again."""
     await _pair(pool)
@@ -296,9 +297,7 @@ async def test_a_revoked_device_does_not_arm_the_guard(
 # -- precision, through the real route -------------------------------------
 
 
-async def test_hedged_and_past_phrasings_are_never_redirected(
-    owner_client, pool, mount_peers
-):
+async def test_hedged_and_past_phrasings_are_never_redirected(owner_client, pool, mount_peers):
     """Precision first: a past report, a conditional and an intent-to-check all
     ship untouched. One gateway call each — a redirect would be a loud 500."""
     honest = [
@@ -334,9 +333,7 @@ async def test_both_claims_get_one_redirect_and_both_corrections_on_failure(
     both corrections in the durable record, and the turn stays out of memory."""
     await _pair(pool)
     both = "That's awaiting your approval. The device is still offline anyway."
-    gateway = ScriptedGateway(
-        rounds=((text(both),), (text("It is still pending your approval."),))
-    )
+    gateway = ScriptedGateway(rounds=((text(both),), (text("It is still pending your approval."),)))
     memory = FakeMemory()
     mount_peers(gateway=gateway, memory=memory)
 
@@ -350,9 +347,7 @@ async def test_both_claims_get_one_redirect_and_both_corrections_on_failure(
     assert spans[1]["meta"]["not_redirected_because"] == "redirect_spent"
 
     stored = await _stored(pool)
-    assert stored == (
-        f"{guards.CONSENT_CLAIM_CORRECTION}\n\n{guards.STATE_CLAIM_CORRECTION}"
-    )
+    assert stored == (f"{guards.CONSENT_CLAIM_CORRECTION}\n\n{guards.STATE_CLAIM_CORRECTION}")
     assert _corrections(sent) == [
         guards.CONSENT_CLAIM_CORRECTION,
         guards.STATE_CLAIM_CORRECTION,
@@ -498,3 +493,340 @@ async def test_a_tool_call_in_the_redirects_closing_round_is_refused(
     assert refused[0]["meta"]["error"] == chat.REDIRECT_CLOSED_REFUSAL
     spans = await _guard_spans(pool)
     assert spans[0]["meta"]["refused_calls"] == 1
+
+
+# ============================================================================
+# S40b: MACHINES, through the real route (design-verdict §3.1 A, §3.3)
+# ============================================================================
+#
+# The S40 walk, turn b02a5694: the same question asked twice, and the second
+# answer replayed the first turn's machine_status reading from history as the
+# current status, with no check behind it. The machine names come from the
+# turn's own spans: a round the gateway says ran on an engine (`served_by` head,
+# `local` from its usage chunk) names the machine it ran on.
+
+HUB = "hub:qwen3:8b"
+# The gateway's usage chunk for a round an engine served (chat._USAGE_FIELDS).
+LOCAL = {"choices": [], "usage": {"local": True}}
+MACHINE_QUESTION = "Where do your models run, and is that machine ready?"
+HUB_OFF = "hub is switched off."
+HUB_CORRECTION = (
+    "Correction: I did not check hub this turn — I have no record of doing so, so what "
+    "I said about it is not a current reading."
+)
+HUB_SERVED_CLAUSE = f" hub answered this turn: this reply came from {HUB}."
+# What b02a5694's other two false lines draw in a turn hub:qwen3:8b served and
+# the fake memory answered (S40b T2): the served-model and memory-outage
+# corrections, APPEND-class, in the order their guards run.
+REPLAY_APPENDED = [
+    f"Correction: this reply was written by {HUB} — the gateway recorded that for this "
+    "turn — not by qwen3.8:27b.",
+    "Correction: the memory service answered this turn — this turn's recall was read from "
+    "it — so it is not unreachable now.",
+]
+
+
+@dataclass
+class EngineGateway(ScriptedGateway):
+    """The scripted completions endpoint plus the gateway's engine list, so a
+    redirect's machine_status call runs the REAL tool against a real reading."""
+
+    engines: list = field(default_factory=lambda: [fakes.engine_view()])
+
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        self.app.router.routes.append(Route(machines.ENGINES_PATH, self._engines, methods=["GET"]))
+
+    async def _engines(self, request):
+        return JSONResponse({"engines": self.engines})
+
+
+async def _tool_spans(pool) -> list:
+    return await pool.fetch(
+        "SELECT name, meta FROM turn_spans WHERE kind = 'tool' ORDER BY started_at"
+    )
+
+
+async def test_a_replayed_machine_reading_fires_and_the_redirect_reads_the_machine(
+    owner_client, pool, mount_peers
+):
+    """b02a5694 exactly, served by hub. Nothing read hub this turn, so its
+    `Last Reported` line is a reading nobody took: the guard fires, and the one
+    redirect is told — in a sentence built from the registry's tool name — to
+    read the machine. It calls the real machine_status, whose read backs the
+    regenerated reply, and that reply REPLACES the replay in the record."""
+    answer = "hub is answering: serving is on, and qwen3:8b is installed."
+    gateway = EngineGateway(
+        rounds=(
+            (text(B02A5694), LOCAL),
+            (tool_call("r1", "machine_status", {}), LOCAL),
+            (text(answer), LOCAL),
+        ),
+        served_by=HUB,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    assert gateway.calls == 3  # the replay, one redirect, its closing round
+    nudge = gateway.payloads[1]["messages"][-1]
+    assert nudge == {
+        "role": "system",
+        "content": chat.state_redirect_nudge(device="hub", ran_a_tool=False, kind="machine"),
+    }
+    assert "machine_status" in nudge["content"]
+
+    (tool,) = await _tool_spans(pool)
+    assert tool["name"] == "machine_status" and tool["meta"]["ok"] is True
+    assert tool["meta"]["facts"][0]["machine"] == "hub"
+
+    assert await _stored(pool) == answer
+    # S40b T2: b02a5694 carries the walk's other two false lines as well — a
+    # current model hub:qwen3:8b did not serve, and a memory outage in a turn
+    # whose recall answered. Their APPEND-class corrections stream as their
+    # guards run, before the state guard's redirect; the redirect that stood
+    # replaced the prose they were about, so the record is its reply alone.
+    assert _corrections(sent) == [*REPLAY_APPENDED, chat.MACHINE_REDIRECT_NOTE]
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["served_claim", "memory_claim", "state_claim"]
+    meta = spans[-1]["meta"]
+    assert meta["subject_kind"] == "machine"
+    assert meta["machine"] == "hub"
+    assert meta["evidence"] == "unchecked"
+    assert meta["served_by"] is None
+    assert meta["machines"] == 1
+    assert meta["phrase"] == "- Last Reported: 2026-09-19T05:15:39+00:00"
+    assert meta["redirected"] is True
+
+
+async def test_a_regen_that_still_says_the_machine_is_off_is_refused_by_state_claim(
+    owner_client, pool, mount_peers
+):
+    """The regeneration is vetted by the full set WITH the turn's kind, so the
+    machine branch is armed there too: a regen repeating the unchecked claim is
+    refused by name, and the correction — with what the served round proves —
+    persists alone. The turn stays out of memory."""
+    gateway = ScriptedGateway(
+        rounds=((text(HUB_OFF), LOCAL), (text("hub is still switched off, sorry."), LOCAL)),
+        served_by=HUB,
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    assert gateway.calls == 2
+    assert await _stored(pool) == HUB_CORRECTION + HUB_SERVED_CLAUSE
+    assert _corrections(sent) == [HUB_CORRECTION + HUB_SERVED_CLAUSE]
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["state_claim"]
+    meta = spans[0]["meta"]
+    assert meta["redirected"] is False
+    assert meta["regen_rejected_by"] == "state_claim"
+    assert meta["evidence"] == "served"
+    assert meta["served_by"] == HUB
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+async def test_a_machine_claim_after_a_tool_ran_is_corrected_without_a_redirect(
+    owner_client, pool, mount_peers
+):
+    """The walk's own path: something already ran this turn (there, the unasked
+    catalogue check), so a redirect would dispatch a second time. The
+    correction ships instead, carrying the served round that contradicts it."""
+    gateway = ScriptedGateway(
+        rounds=((tool_call("t1", "get_time", {}), LOCAL), (text(HUB_OFF), LOCAL)),
+        served_by=HUB,
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    assert gateway.calls == 2  # no redirect round
+    assert await _stored(pool) == HUB_CORRECTION + HUB_SERVED_CLAUSE
+    assert _corrections(sent) == [HUB_CORRECTION + HUB_SERVED_CLAUSE]
+    spans = await _guard_spans(pool)
+    assert spans[0]["meta"]["not_redirected_because"] == "tools_already_ran"
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+async def test_a_machine_status_call_backs_the_same_reading(owner_client, pool, mount_peers):
+    """The toggle: her own machine_status this turn reads hub, so the identical
+    reading line is a report of a real read. No guard, no redirect, untouched."""
+    honest = "hub is answering.\n- **Last Reported**: `2026-09-18T10:00:00+00:00`"
+    gateway = EngineGateway(
+        rounds=((tool_call("m1", "machine_status", {}), LOCAL), (text(honest), LOCAL)),
+        served_by=HUB,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    assert gateway.calls == 2
+    assert [s["name"] for s in await _guard_spans(pool)] == []
+    assert _corrections(sent) == []
+    assert await _stored(pool) == honest
+
+
+async def test_no_engine_served_round_means_no_machine_to_be_wrong_about(
+    owner_client, pool, mount_peers
+):
+    """DERIVED, not hardcoded: a round with no sign it ran on an engine (no
+    `local`, no served-on stamp) names no machine, so the same sentence ships."""
+    gateway = ScriptedGateway(rounds=((text(HUB_OFF),),), served_by=HUB)
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    assert gateway.calls == 1
+    assert [s["name"] for s in await _guard_spans(pool)] == []
+    assert _corrections(sent) == []
+    assert await _stored(pool) == HUB_OFF
+
+
+# S40b T1 review, fix round 1: the machine nudge offers "…or say plainly that
+# you did not check". A regeneration that does exactly that — the disclaimer in
+# the same run as the replayed block — must pass the vetting it is held to, or
+# the guard refuses the honest answer its own nudge asked for.
+SAID_NOT_CHECKED = (
+    "I did not check hub this turn. The last reading I have is from history:\n"
+    "- **Name**: `hub`\n"
+    "- **Last Reported**: `2026-09-19T05:15:39+00:00`"
+)
+
+
+async def test_a_regen_that_says_plainly_it_did_not_check_ships(owner_client, pool, mount_peers):
+    gateway = ScriptedGateway(
+        rounds=((text(B02A5694), LOCAL), (text(SAID_NOT_CHECKED), LOCAL)),
+        served_by=HUB,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    assert gateway.calls == 2  # the replay, and the one redirect
+    assert await _stored(pool) == SAID_NOT_CHECKED
+    # S40b T2: the replay's served-model and memory-outage corrections stream
+    # first (see the replayed-reading test above).
+    #
+    # Pin moved in the S40b final fix wave (C14): this regeneration dispatched
+    # NOTHING — it said plainly that it did not check — so the note that
+    # follows it may not say "Checking the machine now". The note is derived
+    # from what the redirect did, the way the nudge is derived from
+    # ran_a_tool.
+    assert _corrections(sent) == [*REPLAY_APPENDED, chat.STATE_REDIRECT_NOTE_NO_CALL]
+    assert chat.STATE_REDIRECT_NOTE_NO_CALL != chat.MACHINE_REDIRECT_NOTE
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["served_claim", "memory_claim", "state_claim"]
+    meta = spans[-1]["meta"]
+    assert meta["subject_kind"] == "machine"
+    assert meta["redirected"] is True
+    assert "regen_rejected_by" not in meta
+
+
+# ── S40b final fix wave (A9, C14) ────────────────────────────────────────────
+#
+# The verifier's reproduction (final-review #9): the redirect READ hub with its
+# own machine_status call and relayed the reading — b851aa91, the walk's real
+# relay — and served_claim rejected that regeneration for the "Current model in
+# use" line it also carries. The whole reply, reading and all, was thrown away,
+# and what persisted was "I did not check hub this turn — I have no record of
+# doing so", with an ok machine_status span beside it in the same turn.
+
+
+async def test_a_redirect_that_read_the_machine_keeps_its_reading(owner_client, pool, mount_peers):
+    """b851aa91 verbatim as the regeneration: its APPEND-class lines are
+    corrected beside it (A9), and the reading its own call took stands."""
+    gateway = EngineGateway(
+        rounds=(
+            (text(B02A5694), LOCAL),
+            (tool_call("r1", "machine_status", {}), LOCAL),
+            (text(B851AA91), LOCAL),
+        ),
+        served_by=HUB,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    (tool,) = await _tool_spans(pool)
+    assert tool["name"] == "machine_status" and tool["meta"]["ok"] is True
+    stored = await _stored(pool)
+    assert stored.startswith(B851AA91)
+    assert stored == "\n\n".join([B851AA91, *REPLAY_APPENDED])
+    assert HUB_CORRECTION not in stored
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == [
+        "served_claim",
+        "memory_claim",
+        "state_claim",
+        "served_claim",
+        "memory_claim",
+    ]
+    state = spans[2]["meta"]
+    assert state["redirected"] is True
+    assert state["regen_appended"] == ["served_claim", "memory_claim"]
+    assert "regen_rejected_by" not in state
+    # The note says a check happened, because one did (C14).
+    assert _corrections(sent) == [
+        *REPLAY_APPENDED,
+        chat.MACHINE_REDIRECT_NOTE,
+        *REPLAY_APPENDED,
+    ]
+
+
+async def test_a_rejected_regen_after_a_real_read_does_not_claim_nothing_was_checked(
+    owner_client, pool, mount_peers
+):
+    """A9's other half: the regeneration reads hub, then a REPLACE-class guard
+    refuses what it wrote. The correction that persists may not say "I did not
+    check hub this turn" — the turn's own record shows the read — so it names
+    what ran instead."""
+    fabricated = "That's still awaiting your approval — I can't run it until you OK it."
+    gateway = EngineGateway(
+        rounds=(
+            (text(B02A5694), LOCAL),
+            (tool_call("r1", "machine_status", {}), LOCAL),
+            (text(fabricated), LOCAL),
+        ),
+        served_by=HUB,
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    sent = await _say(owner_client, MACHINE_QUESTION)
+
+    (tool,) = await _tool_spans(pool)
+    assert tool["name"] == "machine_status" and tool["meta"]["ok"] is True
+    note = chat._bare_intent_ran_but_unreported_note("machine_status")
+    stored = await _stored(pool)
+    assert note in stored
+    assert HUB_CORRECTION not in stored
+    assert _corrections(sent)[-1] == note
+    state = [s for s in await _guard_spans(pool) if s["name"] == "state_claim"][0]["meta"]
+    assert state["redirected"] is False
+    assert state["regen_rejected_by"] == "consent_claim"
+    assert state["correction_replaced_by"] == "ran_but_unreported"
+
+
+async def test_a_rejected_regen_that_read_nothing_still_says_it_did_not_check(
+    owner_client, pool, mount_peers
+):
+    """The control: no call, so the claim is still unbacked and the
+    correction stands exactly as before."""
+    fabricated = "That's still awaiting your approval — I can't run it until you OK it."
+    gateway = ScriptedGateway(
+        rounds=((text(B02A5694), LOCAL), (text(fabricated), LOCAL)), served_by=HUB
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+
+    await _say(owner_client, MACHINE_QUESTION)
+
+    stored = await _stored(pool)
+    assert HUB_CORRECTION in stored
+    state = [s for s in await _guard_spans(pool) if s["name"] == "state_claim"][0]["meta"]
+    assert state["regen_rejected_by"] == "consent_claim"
+    assert "correction_replaced_by" not in state

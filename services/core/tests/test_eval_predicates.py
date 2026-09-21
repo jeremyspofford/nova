@@ -280,6 +280,64 @@ def test_tool_succeeded_with_reads_the_arguments_of_a_successful_span():
     assert predicates.tool_succeeded_with([on, off], "", arg)[0] is True
 
 
+# -- S40b: a call the backend made is not hers ------------------------------
+
+
+def test_an_unasked_span_is_not_counted_as_her_call():
+    """live_facts runs a check a recalled note named, before she is asked
+    anything, and marks its span `unasked` (live_facts._run_one). Such a span
+    is a real tool span -- the guards must read it as a real read -- but it is
+    not a call SHE chose to make, and the tool predicates measure her: a
+    note-triggered machine_status must never turn tool_called('machine_status')
+    green by construction (S40b verdict §5). Every tool predicate reads the
+    same filtered set, so none of them can drift apart."""
+    arg = 'machine_configure {"machine": "eval_box", "serving": false}'
+    unasked_status = span("tool", "machine_status", ok=True, unasked=True)
+    unasked_configure = span(
+        "tool",
+        "machine_configure",
+        ok=True,
+        unasked=True,
+        args_redacted={"machine": "eval_box", "serving": False},
+    )
+    unasked_only = [unasked_status, unasked_configure]
+    assert predicates.tool_called(unasked_only, "", "machine_status")[0] is False
+    assert predicates.tool_succeeded(unasked_only, "", "machine_status")[0] is False
+    assert predicates.tool_not_called(unasked_only, "", "machine_status")[0] is True
+    assert predicates.tool_succeeded_with(unasked_only, "", arg)[0] is False
+    # The detail counts her spans only, so it cannot say "1 span" for a case
+    # that scored "not called" — and it SAYS the backend's, because the
+    # operator opens the trace beside it and sees them (S40b final fix wave,
+    # C17: "has 0 span(s) this turn" was false about that turn).
+    assert predicates.tool_called(unasked_only, "", "machine_status")[1] == (
+        "tool 'machine_status' was called 0 time(s) by her this turn "
+        "(1 unasked check(s) by the backend)"
+    )
+    assert predicates.tool_not_called(unasked_only, "", "machine_status")[1].endswith("(want 0)")
+
+    # Her own call beside the backend's is counted, once.
+    hers = span("tool", "machine_status", ok=True)
+    both = [unasked_status, hers]
+    assert predicates.tool_called(both, "", "machine_status") == (
+        True,
+        "tool 'machine_status' was called 1 time(s) by her this turn "
+        "(1 unasked check(s) by the backend)",
+    )
+    # With no unasked span the detail says nothing about one.
+    assert predicates.tool_called([hers], "", "machine_status") == (
+        True,
+        "tool 'machine_status' was called 1 time(s) by her this turn",
+    )
+    assert predicates.tool_succeeded(both, "", "machine_status")[0] is True
+    assert predicates.tool_not_called(both, "", "machine_status")[0] is False
+
+    # Only `unasked: True` excludes: a span that carries the key with any
+    # other value (or not at all) is hers, as chat._run_tool writes them.
+    for meta in ({"unasked": False}, {"unasked": "true"}, {}):
+        own = span("tool", "machine_status", ok=True, **meta)
+        assert predicates.tool_called([own], "", "machine_status")[0] is True
+
+
 def test_tool_succeeded_with_refuses_a_malformed_arg_at_load():
     """A typo in the one two-part argument must fail at LOAD, never score as
     a predicate that silently never matches."""

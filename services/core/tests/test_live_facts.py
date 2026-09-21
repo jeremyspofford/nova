@@ -12,8 +12,9 @@ import pathlib
 
 import pytest
 
-from app import chat, live_facts, tools
+from app import chat, guards, live_facts, tools
 from app.tools import ToolContext
+from app.tools.base import ToolFailure
 
 
 def _ctx() -> ToolContext:
@@ -334,3 +335,120 @@ async def test_a_slow_check_does_not_cost_a_fast_one_its_answer(monkeypatch):
     by_tool = {c.call.tool: c for c in checked}
     assert not by_tool["slow_check"].ok
     assert by_tool["get_time"].ok, "the fast check answered and must be reported as answered"
+
+
+# -- S40b: every check keeps the facts it determined ---------------------------
+#
+# A check runs under gather beside the others, so a shared sink cannot say which
+# call determined which fact — and before S40b nothing copied a fact onto the
+# check's span at all. That left a hole the state guard falls into: an unasked
+# device check that REFUSES because the device is offline determined its
+# connectivity, but the span carried no fact, so an honest "the Dell is offline"
+# was corrected as unchecked (design-verdict §1 point 6, §3.2).
+
+
+def _fact_tool(name: str, device: str, *, connected: bool, fail: bool = False, hang: bool = False):
+    """A reads-only check that records two facts, yielding between them so a
+    concurrent check interleaves its own, then answers, refuses or hangs."""
+
+    async def _run(args, ctx):
+        for step in range(2):
+            ctx.facts_sink.append({"device": device, "connected": connected, "step": step})
+            await asyncio.sleep(0)
+        if hang:
+            await asyncio.sleep(30)
+        if fail:
+            raise ToolFailure(f"device {device!r} is not connected — its tile is stale")
+        return f"{device} answered"
+
+    return tools.Tool(
+        name=name,
+        description="records a fact",
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        executor=_run,
+        reads_only=True,
+    )
+
+
+def _arm(monkeypatch, *checks: tools.Tool) -> None:
+    for check in checks:
+        monkeypatch.setitem(tools.REGISTRY, check.name, check)
+    monkeypatch.setattr(live_facts, "AUTO_RUN", live_facts.AUTO_RUN | {c.name for c in checks})
+
+
+def _sink_ctx() -> ToolContext:
+    return ToolContext(app=None, person=None, workspace_root=pathlib.Path("."), facts_sink=[])
+
+
+def _facts_of(turn: _Turn, name: str) -> list:
+    (span,) = [s for s in turn.spans if s.name == name]
+    return span.meta.get("facts")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_checks_each_keep_their_own_facts(monkeypatch):
+    _arm(
+        monkeypatch,
+        _fact_tool("device_check_a", "a", connected=True),
+        _fact_tool("device_check_b", "b", connected=False),
+    )
+    turn, ctx = _Turn(), _sink_ctx()
+    checked = await live_facts.run([_call("device_check_a"), _call("device_check_b")], turn, ctx)
+    assert all(c.ok for c in checked)
+    assert _facts_of(turn, "device_check_a") == [
+        {"device": "a", "connected": True, "step": 0},
+        {"device": "a", "connected": True, "step": 1},
+    ]
+    assert _facts_of(turn, "device_check_b") == [
+        {"device": "b", "connected": False, "step": 0},
+        {"device": "b", "connected": False, "step": 1},
+    ]
+    # And the turn's own sink still hears every one of them.
+    assert sorted((f["device"], f["step"]) for f in ctx.facts_sink) == [
+        ("a", 0),
+        ("a", 1),
+        ("b", 0),
+        ("b", 1),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_refused_check_keeps_the_fact_it_determined(monkeypatch):
+    """The device hole, closed: an offline device refuses the check, the refusal
+    DETERMINED connectivity, and an honest report of it is backed."""
+    _arm(monkeypatch, _fact_tool("device_check_dell", "DELL-XPS-8950", connected=False, fail=True))
+    turn, ctx = _Turn(), _sink_ctx()
+    (check,) = await live_facts.run([_call("device_check_dell")], turn, ctx)
+    assert not check.ok
+    (span,) = turn.spans
+    assert span.meta["ok"] is False
+    assert span.meta["facts"][0] == {"device": "DELL-XPS-8950", "connected": False, "step": 0}
+    assert len(ctx.facts_sink) == 2
+    honest = "DELL-XPS-8950 is offline — its tile is stale."
+    assert guards.state_claim_check(honest, turn.spans, ["DELL-XPS-8950"]) is None
+
+
+@pytest.mark.asyncio
+async def test_a_check_that_times_out_keeps_the_facts_it_had(monkeypatch):
+    _arm(monkeypatch, _fact_tool("device_check_slow", "slow", connected=True, hang=True))
+    monkeypatch.setattr(live_facts, "CHECK_TIMEOUT", 0.05)
+    turn, ctx = _Turn(), _sink_ctx()
+    (check,) = await live_facts.run([_call("device_check_slow")], turn, ctx)
+    assert not check.ok
+    (span,) = turn.spans
+    assert "did not answer" in span.meta["error"]
+    assert [f["step"] for f in span.meta["facts"]] == [0, 1]
+    assert len(ctx.facts_sink) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_check_that_determined_nothing_carries_no_facts():
+    turn, ctx = _Turn(), _sink_ctx()
+    await live_facts.run([_call("get_time")], turn, ctx)
+    (span,) = turn.spans
+    assert "facts" not in span.meta
+    assert ctx.facts_sink == []
+    # And a context with no sink at all still runs the check.
+    turn = _Turn()
+    (check,) = await live_facts.run([_call("get_time")], turn, _ctx())
+    assert check.ok and "facts" not in turn.spans[0].meta

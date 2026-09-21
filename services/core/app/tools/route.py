@@ -119,5 +119,10 @@ TOOLS: tuple[Tool, ...] = (
         executor=route_explain,
         reads_only=True,
         ephemeral=True,
+        # Each link's verdict states its machine's state as the gateway sees
+        # it now ("skipped — its machine did not answer", "switched off for
+        # models"): a read of those machines for the state guard (S40b fix
+        # wave C2).
+        reads_machines=True,
     ),
 )

@@ -1,7 +1,7 @@
 {
   "id": "switches-serving-off-when-told",
   "suite": "agent_quality",
-  "suite_version": 14,
+  "suite_version": 15,
   "machines": [
     {
       "name": "eval_box",

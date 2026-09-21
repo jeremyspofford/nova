@@ -499,3 +499,74 @@ async def test_the_digest_still_lands_in_the_hallway_with_a_room_open(owner_clie
     await _message(pool, room["id"], "talking in here", role="user")
 
     assert (await conversations.active_conversation(pool, owner))["id"] == hallway
+
+
+# ── S40b final fix wave (C8): the parent row is stamped like any other ───────
+#
+# History stamps a row whose turn fired on a timer or a beat, or read
+# something live, so she is not handed a reading in the present tense
+# (chat._past_turn_marker). The room's seed is a row of exactly that kind —
+# often a digest a check wrote — and it arrived unstamped.
+
+
+async def _message_from_a_turn(
+    pool, conversation_id, person_id, *, kind: str, spans=()
+) -> uuid.UUID:
+    from app import traces
+
+    turn = await traces.open_turn(
+        pool, kind=kind, conversation_id=conversation_id, person_id=person_id
+    )
+    for name in spans:
+        with turn.span("tool", name) as span:
+            span.meta.update(ok=True, args_redacted={}, result_head="a reading")
+    await traces.close_turn(pool, turn, "ok")
+    return await pool.fetchval(
+        "INSERT INTO messages (conversation_id, role, content, turn_id) "
+        "VALUES ($1, 'assistant', $2, $3) RETURNING id",
+        conversation_id,
+        "hub is ready and serving.",
+        turn.id,
+    )
+
+
+async def test_a_room_off_a_beats_message_is_told_it_is_a_record(owner_client, pool):
+    owner = _Person(await _owner(pool))
+    hallway = await _hallway(pool, owner.id)
+    message_id = await _message_from_a_turn(pool, hallway, owner.id, kind="beat")
+    room, _ = await conversations.open_thread(pool, owner, message_id)
+
+    seed = await chat.thread_seed(pool, room["id"])
+
+    assert seed[1]["role"] == "assistant"
+    assert seed[1]["content"].startswith("[a beat message from ")
+    assert seed[1]["content"].endswith(
+        "a record of that moment, not of now] hub is ready and serving."
+    )
+
+
+async def test_a_room_off_a_reading_is_told_when_it_was_read(owner_client, pool):
+    from app.tools.machines import MACHINE_STATUS
+
+    owner = _Person(await _owner(pool))
+    hallway = await _hallway(pool, owner.id)
+    message_id = await _message_from_a_turn(
+        pool, hallway, owner.id, kind="chat", spans=(MACHINE_STATUS.name,)
+    )
+    room, _ = await conversations.open_thread(pool, owner, message_id)
+
+    seed = await chat.thread_seed(pool, room["id"])
+
+    assert seed[1]["content"].startswith("[written at ")
+    assert "from readings taken then" in seed[1]["content"]
+
+
+async def test_an_ordinary_parent_message_is_seeded_unstamped(owner_client, pool):
+    owner = _Person(await _owner(pool))
+    hallway = await _hallway(pool, owner.id)
+    message_id = await _message_from_a_turn(pool, hallway, owner.id, kind="chat")
+    room, _ = await conversations.open_thread(pool, owner, message_id)
+
+    seed = await chat.thread_seed(pool, room["id"])
+
+    assert seed[1] == {"role": "assistant", "content": "hub is ready and serving."}

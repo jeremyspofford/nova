@@ -3137,7 +3137,27 @@ def _every_correction() -> list[tuple[str, str]]:
         value = getattr(guards, name)
         if not isinstance(value, str):
             continue
-        out.append((name, value.format(agent="coder", repeats=4, unrun=1, total=3, found=2)))
+        # `machine` (S40b): the state guard's machine correction names the
+        # machine it did not check, so its template joins the tripwire here.
+        # `served`, `claimed` and `tool` (S40b T2): the served-model
+        # correction names the model that wrote the reply and the one claimed,
+        # and the memory correction the memory tool that answered.
+        out.append(
+            (
+                name,
+                value.format(
+                    agent="coder",
+                    repeats=4,
+                    unrun=1,
+                    total=3,
+                    found=2,
+                    machine="hub",
+                    served="hub:qwen3:8b",
+                    claimed="qwen3.8:27b",
+                    tool="memory_search",
+                ),
+            )
+        )
     return sorted(out)
 
 
@@ -3296,6 +3316,62 @@ def test_a_present_tense_serving_claim_is_contradicted_when_the_model_just_answe
 )
 def test_an_honest_or_hedged_form_is_left_alone(reply):
     assert guards.stack_claim_check(reply, SERVED, purpose="chat") is None
+
+
+# S40b (verdict §3.1 B): the serving pattern reused the device guard's adverbs,
+# which carry "not" and "no longer" — right for a device ("the device is not
+# connected" is an unchecked claim about now), wrong here, where every state
+# word means "cannot answer". So "not down" read as "down" and an honest
+# report that the model IS answering was replaced by a correction saying so.
+# "not responding" and "not working" are state words of their own and still
+# fire (the MUST_FIRE set above is unchanged).
+STACK_NEGATIONS = (
+    "The model is not down.",
+    "The gateway is no longer unreachable.",
+    "The model is not unreachable — it answered.",
+)
+
+
+@pytest.mark.parametrize("reply", STACK_NEGATIONS)
+def test_a_negated_outage_is_not_an_outage_claim(reply):
+    assert guards.stack_claim_check(reply, SERVED, purpose="chat") is None
+
+
+def test_the_serving_adverbs_are_the_state_adverbs_without_the_negations():
+    """Derived, so the two cannot drift: every adverb the device guard allows
+    except the two that negate.
+
+    Pin moved in the S40b final fix wave (C13): the serving set was made by
+    string surgery on _STATE_ADVERB and pinned by a substring test, so an
+    adverb such as "notably" added there would have become "ably" here and
+    the pin would have gone red for the wrong reason. Both are built from one
+    tuple now, and the sets are pinned by name."""
+    negating = {"not", "no\\s+longer"}
+    serving = {
+        "still",
+        "currently",
+        "now",
+        "again",
+        "apparently",
+        "probably",
+        "likely",
+        "definitely",
+        "back",
+        "already",
+        "actually",
+        "indeed",
+    }
+    assert set(guards._STATE_ADVERBS) == serving | negating
+    assert set(guards._NEGATING_ADVERBS) == negating
+    assert set(guards._SERVING_ADVERBS) == serving
+    for adverb in ("still", "currently", "now", "again", "apparently", "back", "actually"):
+        assert re.fullmatch(guards._SERVING_ADVERB, adverb), adverb
+    for negation in ("not", "no longer"):
+        assert re.fullmatch(guards._STATE_ADVERB, negation)
+        assert not re.fullmatch(guards._SERVING_ADVERB, negation)
+    # The whole-word shape holds: a word merely starting with an adverb is not one.
+    for word in ("notably", "nowhere", "stillness"):
+        assert not re.fullmatch(guards._STATE_ADVERB, word), word
 
 
 def test_a_turn_the_model_did_not_serve_is_not_second_guessed():

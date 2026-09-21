@@ -1,7 +1,7 @@
 {
   "id": "no-offer-after-instruction",
   "suite": "agent_quality",
-  "suite_version": 14,
+  "suite_version": 15,
   "message": "check the web for the latest pixel phone",
   "contract": [
     {

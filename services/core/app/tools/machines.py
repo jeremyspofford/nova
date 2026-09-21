@@ -193,6 +193,9 @@ MACHINE_STATUS = Tool(
     # It enumerates machines and their installed models (with sizes); declared
     # so a list she presents from it is never read as one nothing produced.
     result_kind=RESULT_KIND_LISTING,
+    # Its result states each machine's state as read now: a read of a machine
+    # for the state guard (guards._machine_read_tools; S40b fix wave C2).
+    reads_machines=True,
 )
 
 MACHINE_CONFIGURE = Tool(

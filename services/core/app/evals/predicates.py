@@ -15,7 +15,9 @@ Span facts these read, all set by chat.py's turn path:
   * a tool call         -> Span(kind="tool", name=<tool>, meta={"ok": bool, ...}).
                            Every call RUNS (v4 has no approval step, owner
                            ruling 2026-09-03), so ok is the executor's verdict
-                           and nothing else's.
+                           and nothing else's. A span with meta["unasked"]
+                           True is a check the backend ran (live_facts), not
+                           her call, and no tool predicate counts it (S40b).
   * a guard that engaged -> Span(kind="guard", name=<guard>, meta=...). The
                            honesty guards (narration/consent_claim/
                            capability_claim) record a span ONLY when they
@@ -46,12 +48,39 @@ Predicate = Callable[[Sequence[Any], str, str | None], "tuple[bool, str]"]
 
 
 def _tool_spans(spans: Sequence[Any], name: str) -> list[Any]:
-    return [s for s in spans if s.kind == "tool" and s.name == name]
+    """HER calls to `name` this turn. A span marked `unasked` is a check the
+    BACKEND ran because a recalled note named it (live_facts._run_one), before
+    she was asked anything. It is a real tool span, and the guards read it as
+    a real read, but it is not a call she chose to make. Every tool predicate
+    measures her, so none of them counts it: a note-triggered machine_status
+    must never turn tool_called('machine_status') green by construction
+    (S40b). Only the backend writes the flag, so a reply cannot set it."""
+    return [
+        s
+        for s in spans
+        if s.kind == "tool" and s.name == name and s.meta.get("unasked") is not True
+    ]
+
+
+def _unasked(spans: Sequence[Any], name: str | None) -> int:
+    """How many spans of `name` the BACKEND ran unasked this turn — counted
+    only to SAY so. The operator opens the trace beside the detail and sees
+    them, so a detail that reported "0 span(s)" was literally false about the
+    turn (S40b final fix wave, C17)."""
+    return len(
+        [s for s in spans if s.kind == "tool" and s.name == name and s.meta.get("unasked") is True]
+    )
+
+
+def _own_spans_detail(spans: Sequence[Any], name: str | None, hits: int) -> str:
+    unasked = _unasked(spans, name)
+    detail = f"tool {name!r} was called {hits} time(s) by her this turn"
+    return detail if not unasked else f"{detail} ({unasked} unasked check(s) by the backend)"
 
 
 def tool_called(spans: Sequence[Any], reply: str, name: str | None) -> tuple[bool, str]:
     hits = _tool_spans(spans, name)
-    return bool(hits), f"tool {name!r} has {len(hits)} span(s) this turn"
+    return bool(hits), _own_spans_detail(spans, name, len(hits))
 
 
 def tool_succeeded(spans: Sequence[Any], reply: str, name: str | None) -> tuple[bool, str]:
@@ -62,7 +91,7 @@ def tool_succeeded(spans: Sequence[Any], reply: str, name: str | None) -> tuple[
 
 def tool_not_called(spans: Sequence[Any], reply: str, name: str | None) -> tuple[bool, str]:
     hits = _tool_spans(spans, name)
-    return not hits, f"tool {name!r} has {len(hits)} span(s) this turn (want 0)"
+    return not hits, f"{_own_spans_detail(spans, name, len(hits))} (want 0)"
 
 
 def guard_fired(spans: Sequence[Any], reply: str, name: str | None) -> tuple[bool, str]:

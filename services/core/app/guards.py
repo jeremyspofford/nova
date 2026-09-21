@@ -63,6 +63,9 @@ _FETCH_TOOLS = frozenset({"fetch_url"})
 _PULL_TOOLS = frozenset({"model_pull"})
 _REMOVE_TOOLS = frozenset({"model_remove"})
 _CONFIGURE_TOOLS = frozenset({"machine_configure"})
+# test_state_guard pins _CONFIGURE_TOOLS to MACHINE_CONFIGURE.name, so a
+# rename in the registry turns that red. The READ of a machine is derived from
+# the registry instead (_machine_read_tools, S40b final fix wave C2).
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -92,6 +95,21 @@ def _spend_tools() -> frozenset[str]:
     from app import tools
 
     return frozenset(tools.tool_names_reporting_spend())
+
+
+def _machine_read_tools() -> frozenset[str]:
+    """Which tools' successful spans are a READ of a machine, for the state
+    guard's machine branch — DERIVED from the live registry
+    (`Tool.reads_machines`), never a list kept here (S40b final fix wave, C2).
+
+    It was one name, machine_status. inference_health reads the same engine
+    list and states every machine's card and state, and route_explain states
+    each link's machine verdict; after either, an honest "hub is switched off"
+    was REPLACED with "I did not check hub this turn". Imported inside the
+    call because app.tools imports this module (_spend_tools' rule)."""
+    from app import tools
+
+    return frozenset(tools.machine_read_tool_names())
 
 
 def _tools_for_kind(kind: str) -> frozenset[str]:
@@ -655,8 +673,16 @@ _REPORTED = re.compile(
 
 # Within a sentence, split on separators that bound the reach of a negation:
 # a semicolon, a contrastive conjunction, or an explicit "then".
+# Possessive, and each whitespace run may only be entered at its front
+# (S40b fix-wave follow-up, D2): `\s+<word>` re-entered a run of padding at
+# every one of its n positions and backtracked the whole tail at each — 56 ms
+# at 1,500 characters. A connector is a word, so the run always had to be
+# swallowed whole; entering it later can match nothing entering it at the
+# front cannot.
 _CLAUSE_SPLIT = re.compile(
-    r";|\s+(?:but|however|though|although|whereas|yet)\s+|,?\s+then\s+", re.I
+    r";|(?<!\s)\s++(?:but|however|though|although|whereas|yet)\s++"
+    r"|,?(?<!\s)\s++then\s++",
+    re.I,
 )
 
 
@@ -700,6 +726,17 @@ def _sentences(text: str) -> list[str]:
     if start < n:
         out.append(text[start:])
     return out
+
+
+def _split_clauses(sentence: str):
+    """(clause, rest) for each clause of one sentence, split as _clauses
+    splits it: `rest` is the sentence after the clause, separator included —
+    where she retracts or reaffirms what the clause said."""
+    start = 0
+    cuts = [(sep.start(), sep.end()) for sep in _CLAUSE_SPLIT.finditer(sentence)]
+    for end, resume in [*cuts, (len(sentence), len(sentence))]:
+        yield sentence[start:end], sentence[end:]
+        start = resume
 
 
 def _clauses(text: str):
@@ -2629,7 +2666,10 @@ def deferral_check(
 #
 # state_claim_check(reply_text, spans, device_names) fires ONLY when the reply
 # ASSERTS the CURRENT connectivity/availability state of a PAIRED device AND no
-# successful device tool span ran this turn. Both halves are mechanical:
+# successful device tool span ran this turn. (S40b adds a second subject, the
+# MACHINES that run models, in chat and eval turns only — its own section below
+# StateClaim; nothing in this paragraph changed for devices.) Both halves are
+# mechanical:
 #
 #   * `device_names` is DERIVED at the call site from the live registry
 #     (devices.list_devices), never a list kept here — a household with no
@@ -2710,10 +2750,28 @@ _PRESENT_COPULA = (
 # Adverbs that may sit between the copula and the state word, "not" included: a
 # negated state ("the device is not connected") is just as much an unchecked
 # claim about now as the positive one, so it must NOT suppress.
-_STATE_ADVERB = (
-    r"(?:still|currently|now|again|apparently|probably|likely|definitely"
-    r"|no\s+longer|back|not|already|actually|indeed)"
+#
+# One tuple (S40b final fix wave, C13): the serving guard's set below is this
+# one minus the negations, built structurally rather than by string surgery on
+# the joined pattern.
+_STATE_ADVERBS = (
+    "still",
+    "currently",
+    "now",
+    "again",
+    "apparently",
+    "probably",
+    "likely",
+    "definitely",
+    r"no\s+longer",
+    "back",
+    "not",
+    "already",
+    "actually",
+    "indeed",
 )
+_NEGATING_ADVERBS = ("not", r"no\s+longer")
+_STATE_ADVERB = "(?:" + "|".join(_STATE_ADVERBS) + ")"
 # The states themselves — UNAMBIGUOUSLY about connectivity, and nothing else.
 # "connected" is the one word that needs a shape test rather than a ban: it is a
 # real connectivity state ("the device is connected.") and also an ordinary
@@ -2745,17 +2803,1115 @@ _STATE_INTENT = re.compile(
 
 @dataclass(frozen=True)
 class StateClaim:
-    """An unchecked assertion about a paired device's CURRENT state.
+    """An unchecked assertion about the CURRENT state of a paired device or of
+    a machine that runs models (S40b).
 
-    `device` is the device reference the reply used (what the redirect nudge
-    names back), `phrase` the matched assertion for the guard span, and `text`
-    the stated correction — the same shape the other guards' Correction carries,
-    so the turn's composition reads it identically.
+    `device` is the subject the reply named — a device reference, or a
+    machine's name when `subject_kind` is "machine" — which is what the
+    redirect nudge names back. `phrase` is the matched assertion for the guard
+    span, and `text` the stated correction — the same shape the other guards'
+    Correction carries, so the turn's composition reads it identically.
+    `served_by` is set only when a NEGATIVE machine claim is contradicted by
+    the round that wrote this reply, served on that machine; the correction
+    then says so.
     """
 
     device: str
     phrase: str
     text: str = STATE_CLAIM_CORRECTION
+    subject_kind: str = "device"
+    served_by: str | None = None
+
+    @property
+    def evidence(self) -> str:
+        """What the guard span records it fired on: a round the subject served
+        this turn contradicting the claim, or no check of the subject at all."""
+        return "served" if self.served_by else "unchecked"
+
+
+# -- S40b: MACHINES as subjects ------------------------------------------------
+#
+# The S40 live walk (2026-09-19, turn b02a5694). Asked "Where do your models
+# run, and is that machine ready?" a second time, she replayed the previous
+# turn's machine_status reading from history — `Last Reported: 2026-09-19T05:
+# 15:39`, twenty minutes old — as the machine's current status, and nothing in
+# the turn had read the machine. The device branch above could not see it: a
+# machine is not a paired device.
+#
+# The subjects are DERIVED from the turn's own spans (`machine_names`), never
+# listed: a round the gateway says ran on an engine names the machine it ran on,
+# and a machine_status/machine_configure call names what it read or set. So
+# the guard needs no gateway call and no threading, and a machine nobody served
+# or read this turn is not a subject (S44 adds gateway-listed names).
+#
+# Two claim shapes, per machine M, and one piece of evidence each:
+#
+#   * A NEGATIVE present state — "hub is switched off", "hub is not answering
+#     right now". Fires when nothing read M this turn. A round M served this
+#     turn is not a read, it is a CONTRADICTION — and when M served the round
+#     that wrote the reply, the correction says so.
+#   * A READING TIME — a `Last Reported: <timestamp>` line bound to M, or
+#     "hub last reported at 05:15 UTC". Fires when nothing read M this turn: a
+#     served round proves M answered, never when it was last read.
+#
+# A POSITIVE state never fires, by construction rather than by a rule: every
+# derived machine was either read or served this turn, and a served round backs
+# "hub is ready". test_state_guard pins that property; S44 is what breaks it.
+#
+# Armed only in STACK_CLAIM_KINDS (chat, and the eval that replays it), the
+# kinds its precision was measured in over 649 real replies (s40b/design-
+# verdict.md). Precision cuts, each pinned by the corpus: the name is matched
+# case-exact, with edges that keep `hub:qwen3:8b` and `hub.example.com` out; the
+# word before it must be one that can lead a machine's name ("on hub", "called
+# hub") so "your USB hub" and "the smart-home hub" never match; code and quote
+# blocks, and double-quoted spans, are someone else's text; every state word
+# must END the claim (a place, a schedule or a count after it limits it); and
+# the usual question, reported-speech, hedge, intent and prior-time cuts apply,
+# plus a not-current cut — over a claim's whole sentence, and over a reading's
+# whole run, heading and lead-in — for a reply that says it did not check.
+
+STATE_CLAIM_MACHINE_CORRECTION = (
+    "Correction: I did not check {machine} this turn — I have no record of doing so, "
+    "so what I said about it is not a current reading."
+)
+# Appended when the claim was NEGATIVE and the machine served the round that
+# WROTE this reply (_reply_served_by): the one thing about its state the turn
+# proves, and the only served_by "this reply came from" may truthfully quote.
+STATE_CLAIM_MACHINE_SERVED = " {machine} answered this turn: this reply came from {served_by}."
+
+# Emphasis and code marks, stripped before matching. Never "_": `eval_box` is a
+# machine's name.
+_MD_NOISE = re.compile(r"[*`]+")
+_NAME_LEFT = r"(?<![\w.-])"
+# "hub." ends a sentence; "hub.example.com" is a host and "hub:qwen3:8b" a model.
+_NAME_RIGHT = r"(?![\w-]|\.\w|:\w)"
+# The words that may sit right before a machine's name. Checked in code (see
+# _lead_ok): "Your USB hub", "The smart-home hub", "Jeremy's hub" are about
+# something else, and this guard REPLACES what it corrects.
+_MACHINE_LEAD_OK = frozenset(
+    {
+        "called",
+        "named",
+        "machine",
+        "engine",
+        "on",
+        "at",
+        "and",
+        "or",
+        "but",
+        "so",
+        "while",
+        "because",
+        "since",
+        "also",
+        "currently",
+        "now",
+        "today",
+        "from",
+        "via",
+    }
+)
+# The trailing word of the text before a name, apostrophes and hyphens kept so
+# "Jeremy's" and "smart-home" are read whole.
+_LEAD_WORD = re.compile(r"(\w[\w'’-]*)$")
+# Where an ambiguous positive state word must end to be a claim about the
+# machine ("hub is ready." / "ready right now" / "ready for chat models"), and
+# not "ready for you to add a model".
+_ANCHOR_ENDS = (
+    r"\s*(?:[.,;:!?)\]}—–]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment|and\b"
+    r"|for\s+(?:chat\s+)?(?:models|chat|requests)\b)"
+)
+_MACHINE_ANCHOR = rf"(?={_ANCHOR_ENDS})"  # the verdict's, verbatim
+# An OUTAGE word also ends at a clause connector or a present-time phrase (T1
+# review, fix round 2): "hub is offline so I can't run local models", "…
+# because its GPU is busy", "… which is why chat is slow", "… since 05:15 UTC",
+# "… for now", "… at present", "… today." None of these limits the state. A
+# degree "so" ("so often") is a frequency, "today" counts only where it ends
+# the claim ("today at 18:00" is a schedule), and "as" is left out ("as a chat
+# machine" is a role, "as of 05:15" a stamp).
+_OUTAGE_ENDS = (
+    r"so\b(?!\s+(?:often|rarely|seldom|frequently|much|many|long|little)\b)"
+    r"|because\b|which\b|since\b|for\s+now\b|at\s+present\b|currently\b|as\s+of\s+now\b"
+    r"|today(?=\s*(?:[.,;:!?)\]}—–]|$))"
+)
+_OUTAGE_ANCHOR = rf"(?={_ANCHOR_ENDS}|\s+(?:{_OUTAGE_ENDS}))"
+# S40b final fix wave (A5): a SCOPE limits an outage wherever it is written.
+# T1 cut the trailing "unreachable from your phone"; the same limit fronted —
+# "Off the tailnet, hub is unreachable", "From your phone, …", "Publicly, …" —
+# or written after an anchoring comma, dash or "right now" — "hub is offline,
+# as far as your phone is concerned", "…unreachable right now from your
+# phone", "…switched off for chat models on weekends" — was REPLACE-corrected.
+# A fronted scope is a place or reach preposition over a determined noun
+# phrase, closed by a comma; "For now,", "For the moment,", "To be clear,",
+# "From what I can tell," and "Currently," are not scopes and still fire.
+_SCOPE_DET = r"(?:the|your|my|his|her|their|our|a|an|any|every|each|some|this|that)"
+_NOT_A_SCOPE = r"(?!(?:moment|time|record|rest|most|last|past|next|first|same)\b)"
+# A SCOPE MUST NAME A REACH (S40b fix-wave follow-up). The first cut of A5 was
+# "<place preposition> <determiner> <=40 characters>," minus a short exclusion
+# list, which is the shape of every fronted discourse marker in English: "To
+# your question, hub is offline.", "On that note, …", "For your information,
+# …", "From my side, …" — 28 sentences that fired before A5 went silent with
+# it in, on the state and memory branches alike. A limit only limits when it
+# says WHERE: a place, a network, a device, a vantage. The word may sit
+# anywhere in the phrase ("outside your home network", "the public
+# internet's point of view"); a bare "side"/"end" is a reach only when it is
+# someone ELSE's ("from your side" is his vantage, "from my side" is a
+# stance, and "From my side, hub is offline." is a claim about hub).
+_REACH_WORD = (
+    r"(?:phones?|mobiles?|handsets?|laptops?|desktops?|tablets?|browsers?|screens?"
+    r"|devices?|machines?|boxes?|servers?|hosts?"
+    r"|networks?|lan|wan|subnets?|wi-?fi|vpn|tailnet|tailscale|internet|intranet|web"
+    r"|router|gateway|firewall|proxy|dns|cloud|tunnel"
+    r"|home|house|apartment|flat|office|desk|work|school|campus|room|garage"
+    r"|car|road|hotel|cafe|caf[eé]|airport|abroad|overseas"
+    r"|outside|inside|indoors|outdoors|public|private|world|here|there|away|elsewhere"
+    r"|coverage|range|reach|vantage"
+    r"|(?:your|that|their|his|her|its|the\s+other)\s+(?:side|end))"
+)
+# The reach word within the phrase the scope covers (bounded, so the lookahead
+# cannot walk a long line: the phrase itself is at most 40 characters).
+_HAS_REACH = rf"(?=[^,;:\n]{{0,48}}?\b{_REACH_WORD}\b)"
+_FRONTED_SCOPE = re.compile(
+    r"\W*+(?:(?:publicly|remotely|externally)"
+    r"|(?:from|off|outside|beyond|over|across|via|through|within|inside|to|for|on)"
+    rf"(?:\s+(?:outside|inside|within|beyond|off))?\s+{_HAS_REACH}{_SCOPE_DET}\s+"
+    rf"{_NOT_A_SCOPE}[^,;:\n]{{1,40}}?)\s*,\s*$",
+    re.I,
+)
+# What limits a state when it follows the anchor: a vantage ("as far as your
+# phone is concerned" — never "as far as I know"), a place, a schedule, an
+# exception. Never "for now", "to be clear" or "from what I can see", and a
+# "from" naming her history is a history label, not a place (B2's "No change:
+# X (from my previous answer)" still reaffirms X).
+_NOT_HISTORY = (
+    r"(?!(?:(?:my|the|our|this)\s+)?(?:(?:chat|conversation)\s+)?history\b"
+    r"|(?:my|the)\s+(?:last|previous|earlier|first)\s)"
+)
+# The three branches that take an open noun phrase ("from …", "for/to <det>
+# …", "per <det> …") carry the same reach requirement as the fronted scope
+# (S40b fix-wave follow-up) — without it "hub is offline, for your
+# information.", "…, from the look of it." and "…, per your question." were
+# silenced exactly as the fronted markers were. "as far as X is concerned" is
+# left open: that frame marks a vantage by itself.
+_TRAILING_LIMIT = (
+    rf"(?:as\s+far\s+as\s+(?!I\b|we\b)|from\s+(?!now\b|what\b){_NOT_HISTORY}{_HAS_REACH}"
+    r"|by\s+(?:schedule|design)"
+    r"|on\s+(?:weekends?|weekdays?|(?:a\s+)?schedule)|overnight|outside\b|except\b"
+    r"|only\s+(?:from|for|to|on|at|when|during)\b|during\b"
+    rf"|(?:for|to)\s+{_HAS_REACH}{_SCOPE_DET}\s+{_NOT_A_SCOPE}"
+    rf"|in\s+the\s+(?:eyes|view)\s+of\b|per\s+{_HAS_REACH}{_SCOPE_DET}\b)"
+)
+# The anchoring separators a limit may follow (one or more), then the limit.
+# Possessive throughout (D2): each separator run is taken whole.
+_LIMITED_AFTER = re.compile(
+    r"(?:\s*+(?:[,—–]|(?:right\s+now|now|at\s+the\s+moment"
+    r"|for\s+(?:chat\s+)?(?:models|chat|requests))\b))++"
+    rf"\s*+{_TRAILING_LIMIT}",
+    re.I,
+)
+_MACHINE_NEG_WORDS = (
+    r"(?:offline|disconnected|unreachable|not\s+reachable|out\s+of\s+contact"
+    r"|powered\s+off|switched\s+off)"
+)
+# The positive words that are about the LINK — the ones a "not"/"no longer"
+# turns into an outage claim, and the ones a device's status line carries.
+_MACHINE_LINK_WORDS = r"(?:online|reachable|powered\s+on|switched\s+on|connected)"
+# EVERY state word carries an anchor, the negative ones included (T1 review,
+# fix round 1): "hub is unreachable from your phone", "hub is switched off
+# overnight", "hub is offline twice a week" and "hub is not online on
+# weekends" limit the state to a place, a schedule or a count — none says hub
+# is down now, and this guard REPLACES what it corrects. The outage words take
+# the outage anchor; "answering", "ready" and "serving" keep the verdict's,
+# the one the corpus measured them with ("not ready since you have not added a
+# model" is readiness FOR something).
+_MACHINE_NEG = rf"{_MACHINE_NEG_WORDS}{_OUTAGE_ANCHOR}"
+_MACHINE_POS = (
+    rf"(?:{_MACHINE_LINK_WORDS}{_OUTAGE_ANCHOR}|(?:answering|ready|serving){_MACHINE_ANCHOR})"
+)
+_MACHINE_NEG_STATE = re.compile(_MACHINE_NEG_WORDS, re.I)
+# A line that states something's connectivity. One that names no machine is
+# some other thing's status line, so a reading under it is that thing's —
+# unless it is the block's OWN attribute line (below).
+_CONNECTIVITY_WORD = re.compile(rf"\b(?:{_MACHINE_NEG_WORDS}|{_MACHINE_LINK_WORDS})\b", re.I)
+# A connectivity line that has no subject of its own, and so belongs to whatever
+# heads its block (T1 review, fix round 2: b02a5694's block with a "- Status:
+# Offline" line under `Name: hub` went unbound, and machine_status's own
+# "switched off for models" with it). Either the key is a generic attribute
+# and the value BEGINS with a state ("- Status: 🟢 Online", "- Reachable: Yes",
+# "- Power: Powered on"; never "- Status: the Dell is offline" or "- Dell:
+# offline"), or the line is nothing but an anchored state ("- 🟢 Online"; never
+# "- Offline devices: Dell").
+_ATTRIBUTE_KEY = (
+    r"(?:(?:current|overall|machine|connection|network|power|link)\s+)?"
+    r"(?:status|state|connection|connectivity|network|reachable|reachability|power"
+    r"|online|availability|link|health)"
+)
+# Possessive (S40b final fix wave, D2): with `^\s*(?:…)?\s*` the two runs of
+# leading padding overlap, and _KEY_VALUE_LINE's key and `\s*` after it add two
+# more — 0.4 s for a line of 200 spaces, and no answer at 1,000. A key never
+# begins with whitespace, so nothing is given back that could matter.
+_LINE_LEAD = r"^\s*+(?:[-+•]|\d+[.)])?\s*+(?:[^\w\s]++\s*+)?"
+_OWN_STATE_LINE = re.compile(
+    rf"{_LINE_LEAD}(?:"
+    rf"{_ATTRIBUTE_KEY}\s*+[:=—–]\s*+[^\w\s]*+\s*+(?:(?:currently|now|still)\s+)?"
+    rf"(?:(?:not|no\s+longer)\s+)?"
+    rf"(?:{_MACHINE_NEG_WORDS}|{_MACHINE_LINK_WORDS}|yes|no|true|false|on|off)\b"
+    rf"|(?:{_MACHINE_NEG_WORDS}|{_MACHINE_LINK_WORDS}){_OUTAGE_ANCHOR})",
+    re.I,
+)
+# Any key/value line: the lines of one subject's block ("- Compute: Uses GPU
+# …", "- Runtime: Containerized", "- Serving: On"). A colon or "=" only: "- Dell
+# — the laptop" is a label with its description.
+_KEY_VALUE_LINE = re.compile(rf"{_LINE_LEAD}[^:=\n]{{1,40}}?\s*+[:=]\s*+\S")
+_NEGATING_ADVERB = re.compile(r"\b(?:" + "|".join(_NEGATING_ADVERBS) + r")\b", re.I)
+# A reading's time: an ISO-ish stamp, a clock time with its zone, or "just now".
+_READING_TS = (
+    r"(?:\d{4}-\d{2}-\d{2}[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?"
+    r"(?:\s*(?:Z|UTC|[+-]\d{2}:?\d{2}))?"
+    r"|\b\d{1,2}:\d{2}(?::\d{2})?\s*(?:UTC|Z|am|pm)\b|just\s+now)"
+)
+# "Last updated" is deliberately absent: a catalogue lists "vetted"/"updated"
+# dates that are not readings of a machine.
+_READING_KEY = (
+    r"(?:last\s+(?:reported|checked|seen|observed|read|heard(?:\s+from)?|contact(?:ed)?)"
+    r"|(?:reported|checked|observed|seen|read)\s+at|checked)"
+)
+_READING_LINE = re.compile(
+    rf"^\s*(?:[-+•]|\d+[.)])?\s*(?P<key>{_READING_KEY})\s*[:=]\s*[^\w\s]{{0,6}}\s*"
+    rf"(?P<ts>{_READING_TS})",
+    re.I,
+)
+# A line that names what the lines under it are about ("- Name: …"). One that
+# names no machine ends the upward walk unbound.
+_SUBJECT_KEY_LINE = re.compile(
+    r"^\s*(?:[-+•]|\d+[.)])?\s*(?:name|machine|engine|host|device)\s*[:=]", re.I
+)
+# The history stamp's own words (S40b final fix wave, A3). chat builds every
+# stamp it hands her from these (_PAST_TURN_MARKERS, _RECORD_KIND_MARKER,
+# _LIVE_READING_MARKER), and the not-current cut below reads the same pieces:
+# T3's stamp told her a replayed row was "a record of that moment, not of now"
+# and T1's cut did not know the words, so the reply that labelled a reading
+# exactly as it had been labelled to her was REPLACE-corrected. One constant,
+# read by both halves, so the two cannot drift apart again.
+_STAMP_MOMENT = "record of that moment"
+_STAMP_NOT_NOW = "not of now"
+_STAMP_TAKEN_THEN = "taken then"
+HISTORY_STAMP_RECORD = f"a {_STAMP_MOMENT}, {_STAMP_NOT_NOW}"
+HISTORY_STAMP_READINGS = f"from readings {_STAMP_TAKEN_THEN}"
+
+
+def _phrase(words: str) -> str:
+    """A fixed phrase as a pattern: its words escaped, any whitespace between."""
+    return r"\s+".join(re.escape(word) for word in words.split())
+
+
+# "have/has/did not", as the not-current forms below open.
+_NOT_DONE = r"(?:have|has|did)(?:\s+not|n['’]t)"
+# A reading the reply itself says is not current.
+#
+# S40b final fix wave, A2: the verdict's cut knew only "check". The machine
+# nudge asks her to "say plainly that you did not check", and the other plain
+# ways of saying it — not verified, not confirmed, not looked at, not re-read,
+# "unverified" — and the common staleness labels — "last known", "most recent
+# reading", "(old reading)", "may no longer hold", "(20 min ago)", "when I last
+# looked" — were REPLACE-corrected, and a regeneration that said them refused.
+# The widening stops at the READING: a bare "haven't read" or "haven't run" is
+# about anything ("…read your notes", "…run the backup"), so "run" counts only
+# with a machine-read tool's name (_not_run_a_machine_read), "read" only as
+# "re-read", and "last checked/read" only after "I" — "Last Checked:" and
+# "Last read:" are reading KEYS (_READING_KEY), which the cut must not eat.
+_NOT_CURRENT = re.compile(
+    r"\b(?:not\s+(?:re-?)?checked|(?:have|has)(?:\s+not|n['’]t)\s+(?:re-?)?checked"
+    r"|did(?:\s+not|n['’]t)\s+(?:re-?)?check|without\s+(?:re-?)?checking"
+    r"|could(?:\s+not|n['’]t)\s+(?:be\s+)?(?:check|read|reach|ask)\w*|unchecked|stale"
+    r"|out\s+of\s+date|may\s+have\s+changed|not\s+(?:a\s+)?(?:current|fresh|live)"
+    rf"|{_NOT_DONE}\s+(?:re-?)?(?:verif|confirm)\w*"
+    rf"|{_NOT_DONE}\s+(?:re-?)?look(?:ed)?\s+at|{_NOT_DONE}\s+re-?read"
+    r"|not\s+(?:been\s+)?(?:re-?)?(?:verified|confirmed)|un(?:verified|confirmed)"
+    r"|last\s+known|most\s+recent\s+reading|old(?:er)?\s+reading|may\s+no\s+longer"
+    r"|(?:mins?|hrs?)\s+ago|I\s+last\s+(?:looked|read|saw|checked)"
+    rf"|{_phrase(_STAMP_MOMENT)}|{_phrase(_STAMP_NOT_NOW)}|{_phrase(_STAMP_TAKEN_THEN)}"
+    r")\b",
+    re.I,
+)
+
+
+@lru_cache(maxsize=8)
+def _not_run_pattern(names: tuple[str, ...]) -> re.Pattern[str]:
+    """The "I have not run machine_status" form — for one set of machine-read tool
+    names, cached like _machine_patterns."""
+    alternation = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    return re.compile(
+        rf"\b{_NOT_DONE}\s+(?:re-?)?(?:run|ran|called|used)\s+(?:the\s+)?(?:{alternation})\b",
+        re.I,
+    )
+
+
+def _says_not_current(text: str) -> bool:
+    """Does `text` say what it reports is not current (_NOT_CURRENT), or that
+    she has not run a tool that reads a machine — the read set DERIVED from
+    the registry (_machine_read_tools), never retyped here?"""
+    if _NOT_CURRENT.search(text) is not None:
+        return True
+    names = tuple(sorted(_machine_read_tools()))
+    return bool(names) and _not_run_pattern(names).search(text) is not None
+
+
+# A stamp she copied to the START of her reply (S40b final fix wave, C7): a
+# bracket that ends in the stamp's own record phrase. The persist boundary
+# strips it (chat._persist_assistant) — it is the backend's label on an OLDER
+# row, and its time is that row's — and every claim scan reads the reply the
+# same way (_machine_lines), so no guard honours a label the record will not
+# carry (final-review #3's caveat): a replay under a copied leading stamp is
+# persisted bare, and is judged bare.
+_LEADING_STAMP = re.compile(rf"\A\s*+\[[^\[\]\n]*{_phrase(HISTORY_STAMP_RECORD)}\]\s*+", re.I)
+
+
+def without_leading_stamp(text: str) -> str:
+    """`text` without a stamp-shaped bracket at its very start (see
+    _LEADING_STAMP). Nothing else is touched: a stamp she quotes later in
+    the reply labels what it sits beside."""
+    return _LEADING_STAMP.sub("", text, count=1)
+
+
+# A line that is wholly one bracketed label — "[written at … ; a record of
+# that moment, not of now]", "(from readings taken then)". Above a reading's
+# run it is a lead-in, like a line ending in ":" (A3: the stamp above a
+# heading was never read).
+_BRACKET_LINE = re.compile(r"^\s*[\[(][^\n]*[\])]\s*$")
+# S40b T4 review, fix round 1: her own earlier reply — "my last reply", "the
+# previous answer", "in the previous turn". What she said then, named as then.
+# The v15 case seeds the walk's replay as her history, and the honest answer
+# labels it so. "The last response FROM hub" is a message from the machine, not
+# her reply. Shared with the served and memory guards' own claim cut.
+_HER_EARLIER_REPLY = (
+    r"\b(?:my|the)\s+(?:last|previous|earlier|first)\s+"
+    r"(?:reply|answer|message|response|turn)\b(?!\s+from\b)"
+)
+# S40b T4 review, fix round 2: a MENTION of her earlier reply is not a label.
+# Round 1 cut on any mention, so a claim that cites her history to say the
+# state holds NOW went silent: "As I said in my last reply, X", "Correction to
+# my last reply: X", "(unchanged from my last reply)", "X, same as in my last
+# reply", "Since the last turn, X". A history LABEL is one of:
+#   * an attribution: "from history", "(from my previous answer)", "(as of my
+#     last reply)", "Recap of my last reply:", "My last reply's status block:";
+#   * her earlier reply reported: "my previous answer said/showed X", or her
+#     own report located in it: "the reading I gave in my last reply";
+#   * a heading at the start of a line or clause: "My previous answer:", "In
+#     the previous turn:", "From my previous answer:", "As of my last reply,",
+#     "According to / Based on / Going by my last reply,", "Quoting my last
+#     reply:".
+# The first two never count after a word that says the state is the same, new
+# or compared, or that restates or corrects it: "unchanged from", "different
+# from", "updated from", "as/like/unlike/since … in/from", "As my last reply
+# said", "Correction to / Update on my last reply's reading".
+# A label reaches only up to a retraction or a "still holds" (_report_closed),
+# and a claim reaffirmed after it is hers again (_reaffirmed). Shared by the
+# machine branch below and the served and memory guards' claim cut:
+# _labelled_as_history, _history_framed.
+# Fix round 3: a "still holds" or a reaffirmation she DOUBTS is neither ("I'm
+# not sure that is still true", "(not sure it still holds)"; _vouched), and a
+# HEADING is not a lead ("Correction: my previous answer said X" labels X).
+_HISTORY_SOURCE = (
+    r"(?:(?:(?:my|the|our|this)\s+)?(?:(?:chat|conversation)\s+)?history\b"
+    rf"|{_HER_EARLIER_REPLY})"
+)
+_FROM_HISTORY = re.compile(rf"\b(?:from|as\s+of)\s+{_HISTORY_SOURCE}", re.I)
+# The attributions a label reads anywhere: the above, a recap or copy OF her
+# history ("Recap of my last reply:"), and its possessive ("My last reply's
+# status block:").
+_HISTORY_ATTRIBUTION = re.compile(
+    rf"\b(?:from|as\s+of|(?:recap|summary|copy|excerpt|quote)\s+of)\s+{_HISTORY_SOURCE}"
+    rf"|{_HER_EARLIER_REPLY}['’]s\b",
+    re.I,
+)
+_HER_REPLY_REPORTED = re.compile(
+    rf"{_HER_EARLIER_REPLY}\s+(?:said|says|stated|states|claimed|claims|named|names|marked"
+    r"|marks|listed|lists|showed|shows|reported|reports|read|reads|called|calls|wrote|gave)\b"
+    r"|(?<![\w'’])I\s+(?:gave|showed|shown|reported|wrote|listed|said|stated|marked|posted"
+    rf"|shared|quoted|put)\b[^.;:!?\n]{{0,40}}?\bin\s+{_HER_EARLIER_REPLY}",
+    re.I,
+)
+_HISTORY_HEAD = re.compile(
+    r"^[^\w]*(?:(?:in|from|as\s+of|according\s+to|based\s+on|going\s+by|quoting)\s+"
+    rf"{_HER_EARLIER_REPLY}|{_HER_EARLIER_REPLY}\s*:)",
+    re.I,
+)
+# A word that says the state changed, or corrects or updates it, leads a
+# label only when it runs INTO it, through a space or a preposition:
+# "Correction to my last reply's reading:", "Update on my last reply's
+# status:", "Correcting my last reply's reading:", "(updated from my last
+# reply)", "Nothing changed from my last reply:". Stood alone and closed by a
+# colon, dash or comma it is a HEADING, and the label under it is a label:
+# "Correction: my previous answer said X. …", "Update — from my previous
+# answer:", "As a correction, my last reply said X" (T4 review, fix round 3;
+# round 2's "\W*$" let the heading lead). A word that says the state is the
+# same, or compares it, keeps any join: "(**unchanged** from my last reply)",
+# "Unchanged: my previous answer said X" (X is stated as current).
+_CORRECTION_NOUN = r"(?:corrections?|updates?|fix(?:es)?|amendments?)"
+_NOT_A_LABEL_LEAD = re.compile(
+    r"(?:\bunchanged"
+    rf"|\b(?:as|like|unlike|since)(?!\s+(?:an?\s+)?{_CORRECTION_NOUN}\b)(?:\s+[\w'’]+){{0,2}}"
+    r")\W*$"
+    r"|\b(?:changed?|changes|different(?:ly)?|differs?|varies|vary|new|updated|correcting"
+    rf"|updating|fixing|amending|{_CORRECTION_NOUN})"
+    r"(?:\s+(?:to|on|of|for|from))?[\s*(\[]*$",
+    re.I,
+)
+# What she says of an earlier claim right after it: "I told you X, which was
+# wrong." / "I said X. That was stale." / "… — it isn't." (T4 review, fix
+# round 1; the served and memory guards' "I said" cut reads it too.)
+_RETRACTED = re.compile(
+    r"\b(?:that|which|this|it)\s*(?:was|is|['’]s)"
+    r"(?:\s+(?:(?:simply|just|plainly|also)\s+)?(?:wrong|false|incorrect|mistaken|untrue|stale"
+    r"|outdated|out\s+of\s+date|a\s+mistake|an\s+error)\b"
+    r"|(?:\s+not|n['’]t)(?:\s+(?:true|right|correct|accurate|current))?"
+    r"(?=\s*(?:[.!;,:)—–-]|$)))",
+    re.I,
+)
+# A label reaches a claim only if nothing between them says what it labels
+# was WRONG ("My last reply named hub:qwen3:8b, which is wrong — X": X is said
+# anew; "In my last reply I was wrong: X") or still holds ("What I said in my
+# last reply still holds: X"; _STILL_HOLDS, when she vouches for it). Never a
+# staleness word — "(it isn't current)", "which is outdated": that the
+# labelled reading is old is the label's point, so _RETRACTED's "stale"/"not
+# current" class does not close it.
+_REPORT_CLOSED = re.compile(
+    r"\b(?:that|which|this|it)\s*(?:was|is|['’]s)"
+    r"(?:\s+(?:(?:simply|just|plainly|also)\s+)?(?:wrong|false|incorrect|mistaken|untrue"
+    r"|a\s+mistake|an\s+error)\b"
+    r"|(?:\s+not|n['’]t)(?:\s+(?:true|right|correct|accurate))?(?=\s*(?:[.!;,:)—–-]|$)))"
+    r"|\bI\s+was\s+(?:wrong|mistaken)\b|\bI\s+got\s+(?:it|that|this)\s+wrong\b",
+    re.I,
+)
+_STILL_HOLDS = re.compile(
+    r"\bstill\s+(?:holds|stands|applies|true|valid|current|the\s+case)\b", re.I
+)
+# …and a claim she reaffirms after it is hers again: "…, and that is still
+# true", "That is still the case.", "which remains true", "it still holds".
+# Said of it — a pronoun, and the sentence ends there: "It is still the case
+# that recall answered" is about something else.
+_REAFFIRMED = re.compile(
+    r"\b(?:that|which|this|it)\s*(?:(?:is|['’]s|remains)\s+still"
+    r"(?:\s+(?:true|right|correct|accurate|current|valid|the\s+case|so))?"
+    r"|still\s+(?:is|holds|stands|applies)(?:\s+(?:true|the\s+case))?"
+    r"|(?:remains|holds|stands)\s+(?:true|correct|accurate|valid|the\s+case))"
+    r"(?=\s*(?:[.!;,:)—–-]|$))",
+    re.I,
+)
+# "Not sure WHY X" / "don't know how X" presuppose X, so they do not doubt it.
+# (Shared with the served and memory guards' _EPISTEMIC_FRAME.)
+_WH_WORD = r"(?!\s+(?:why|how|when|where|what|which|who)\b)"
+# T4 review, fix round 3: a reaffirmation or a "still holds" she DOUBTS says
+# the opposite — "I'm not sure that is still true", "I can't tell you whether
+# that is still accurate", "Whether that is still the case, I can't say",
+# "(not sure it still holds)". Round 2 read each as her vouching for the claim,
+# so the canonical honest answer, her old line labelled and then doubted, was
+# corrected. What doubts it, ahead of it in its clause (_vouched): a doubted
+# belief (_EPISTEMIC_FRAME), not knowing or not being able to tell, say or
+# confirm, "unclear", and a "whether"/"if" right before it ("If you're asking,
+# that is still true" is not led by its "if").
+_DOUBTED = re.compile(
+    r"(?:\bnot|n['’]t|\bcannot|\bunable\s+to)\s+(?:(?:be(?:en)?\s+)?able\s+to\s+)?"
+    r"(?:know|tell|say|confirm(?:ed)?|verif(?:y|ied)|check(?:ed)?|guarantee|promise|vouch"
+    rf"|be\s+(?:sure|certain))\b{_WH_WORD}"
+    r"|\b(?:unclear|unknown|no\s+idea|hard\s+to\s+(?:say|tell|know))\b"
+    r"|(?:\bnot|n['’]t)\s+clear\b"
+    # S40b final fix wave (B1, the T4 breaker's OPEN-1): the doubt may name
+    # what it doubts — "(if it still holds)", "(whether that still holds I
+    # can't say)" — and was read as her vouching for the label's reading.
+    r"|\b(?:whether|if)(?:\s+or\s+not)?(?:\s+(?:it|that|this|which))?\s*$",
+    re.I,
+)
+# S40b final fix wave (B2, the T4 breaker's OPEN-2): a NEGATED-SAMENESS head
+# — "No change:", "Nothing has changed —", "Nothing new —", "No updates:" —
+# says the state is the same NOW, so a history label under it does not make
+# the claim a record of then: it reaffirms it, like "…, and that is still
+# true". Read on what leads up to a claim (_history_framed) and on a
+# reading's context (_not_a_current_reading).
+_SAME_HEAD = re.compile(
+    r"(?:^|[.;:—–]\s)\W*(?:no\s+(?:changes?|updates?)|nothing\s+(?:has\s+)?(?:changed|new))\b",
+    re.I,
+)
+# S40b final fix wave (A4): a line attributed to HIS notes or journal is his
+# record read back, not her claim — "Your notes say X", "An older note says
+# X", "A note of yours reads: X", "According to/Per your notes, X", "From your
+# notes: X". Recall hands her his notes, and verdict §9 records that they carry
+# exactly the walk's false lines (qwen3.8:27b as current, "No model was
+# needed…"), so the honest way to cite and retract one was corrected. A
+# reaffirmation after it ("…, and that is still true") makes it hers again.
+_RECORD_NOUN = r"(?:notes?|journal(?:\s+entr(?:y|ies))?|entry|entries|records?)"
+_RECORD_DET = r"(?:your|my|his|her|the|an?|one|older|old|this|that|these|those)"
+_RECORD_ATTRIBUTION = re.compile(
+    rf"\b{_RECORD_DET}\s+(?:[\w'’-]+\s+){{0,3}}?{_RECORD_NOUN}(?:\s+of\s+(?:yours|mine|his))?\s+"
+    r"(?:say|says|said|read|reads|list|lists|listed|claim|claims|claimed|call|calls|called"
+    r"|mark|marks|marked|state|states|stated|show|shows|showed)\b"
+    rf"|\b(?:according\s+to|per)\s+{_RECORD_DET}\s+(?:[\w'’-]+\s+){{0,2}}?{_RECORD_NOUN}\b"
+    rf"|\bfrom\s+{_RECORD_DET}\s+(?:[\w'’-]+\s+){{0,2}}?{_RECORD_NOUN}\s*[:—–]",
+    re.I,
+)
+# S40b final fix wave (A12): what she says of a claim right AFTER it, in its
+# own clause, retracting it — "(incorrect — it's qwen3:8b)", "(outdated)",
+# "— this was wrong", "(which is wrong)". The pronoun forms are _RETRACTED's;
+# a bare bracketed verdict uses the same words (_WRONG_WORDS), no new label.
+_WRONG_WORDS = (
+    r"(?:wrong|false|incorrect|mistaken|untrue|stale|outdated|out\s+of\s+date"
+    r"|no\s+longer\s+(?:true|current|accurate))"
+)
+_BRACKETED_RETRACTION = re.compile(rf"\(\s*(?:simply\s+|just\s+)?{_WRONG_WORDS}\b", re.I)
+# S40b final fix wave (C11): a markdown strikethrough on one line — visibly
+# retracted when rendered, so never her claim (and no lie can hide in one).
+_STRUCK = re.compile(r"~~[^~\n]+~~")
+_HEADING = re.compile(r"^\s*#{1,6}\s")
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
+# A double-quoted span on one line: someone else's words ("Your note reads
+# “hub is offline…”"), never her claim — blanked for the sentence scan.
+_QUOTED = re.compile(r"\"[^\"\n]*\"|“[^”\n]*”")
+
+
+def _span_meta(span: Any) -> Mapping[str, Any]:
+    meta = getattr(span, "meta", None)
+    return meta if isinstance(meta, Mapping) else {}
+
+
+def _ok_tool_span(span: Any, names: frozenset[str]) -> bool:
+    return (
+        getattr(span, "kind", None) == "tool"
+        and getattr(span, "name", None) in names
+        and _span_meta(span).get("ok") is True
+    )
+
+
+def _machine_arg(span: Any) -> str | None:
+    """The `machine` argument a machine tool was called with; "" when the call
+    named none; None when the argument record cannot be read (a flooded record
+    degrades to a clipped string — lenient, like _target_of)."""
+    args = _span_meta(span).get("args_redacted")
+    if not isinstance(args, Mapping):
+        return None
+    machine = args.get("machine")
+    return machine.strip() if isinstance(machine, str) else ""
+
+
+def _fact_machines(span: Any) -> list[str]:
+    facts = _span_meta(span).get("facts")
+    if not isinstance(facts, list):
+        return []
+    return [
+        fact["machine"].strip()
+        for fact in facts
+        if isinstance(fact, dict) and isinstance(fact.get("machine"), str)
+    ]
+
+
+def _engine_served_head(span: Any) -> str | None:
+    """The machine an error-free round RAN ON, when the gateway said it ran on
+    an engine: `local` in its usage, or a served-on/served-runtime stamp (the
+    stamp is omitted past a 2 s budget, `local` is not). None for a cloud
+    round, a failed one, or one that says nothing about where it ran."""
+    if getattr(span, "kind", None) != "llm_call":
+        return None
+    meta = _span_meta(span)
+    if meta.get("error"):
+        return None
+    if not (meta.get("local") is True or meta.get("served_on") or meta.get("served_runtime")):
+        return None
+    served_by = meta.get("served_by")
+    if not isinstance(served_by, str):
+        return None
+    head, sep, _rest = served_by.partition(":")
+    return head.strip() if sep else None
+
+
+def machine_names(spans: Sequence[Any]) -> tuple[str, ...]:
+    """The machines this turn can say something checkable about — DERIVED from
+    its own spans, never a list (S40b). The union of:
+
+      * the machine an error-free round ran on (`_engine_served_head`);
+      * each machine an ok machine_status reported (`facts[].machine`);
+      * the `machine` argument of an ok machine_status or machine_configure.
+
+    A failed span adds nothing: a refused call's argument can name a machine
+    that does not exist. Names shorter than two characters are dropped. Public
+    so chat.py can record how many there were on the guard span."""
+    found: set[str] = set()
+    reads = _machine_read_tools()
+    for span in spans:
+        head = _engine_served_head(span)
+        if head:
+            found.add(head)
+        if _ok_tool_span(span, reads):
+            found.update(_fact_machines(span))
+        if _ok_tool_span(span, reads | _CONFIGURE_TOOLS):
+            arg = _machine_arg(span)
+            if arg:
+                found.add(arg)
+    return tuple(sorted(name for name in found if len(name) >= 2))
+
+
+def _machine_read(spans: Sequence[Any], machine: str) -> bool:
+    """Did this turn READ `machine`? An ok machine read (_machine_read_tools:
+    machine_status, inference_health, route_explain) that asked for every
+    machine or for this one (or reported it), asked or unasked, facts or none —
+    or an ok machine_configure that set it. A record that cannot be read backs
+    the claim rather than risk correcting an honest reply (_target_of's rule)."""
+    reads = _machine_read_tools()
+    for span in spans:
+        if _ok_tool_span(span, reads):
+            arg = _machine_arg(span)
+            if not arg or arg == machine or machine in _fact_machines(span):
+                return True
+        elif _ok_tool_span(span, _CONFIGURE_TOOLS):
+            arg = _machine_arg(span)
+            if arg is None or arg == machine:
+                return True
+    return False
+
+
+def _reply_served_by(spans: Sequence[Any], purpose: str | None) -> str | None:
+    """The `served_by` of the round that WROTE the reply: the turn's last
+    error-free round of its own purpose (served_this_turn's rule — a judge's or
+    a redirect's round is the backend's, never the reply). None when that round
+    carries no served_by.
+
+    Only this round may be quoted as "this reply came from …" (T1 review, fix
+    round 1): an earlier round on the machine, or a judge round it served, is a
+    true fact about the turn and a false one about the reply."""
+    writer: str | None = None
+    for span in spans:
+        if getattr(span, "kind", None) != "llm_call":
+            continue
+        meta = _span_meta(span)
+        if meta.get("error") or meta.get("purpose") not in (None, purpose):
+            continue
+        served_by = meta.get("served_by")
+        writer = served_by if isinstance(served_by, str) else None
+    return writer
+
+
+@lru_cache(maxsize=64)
+def _machine_patterns(
+    names: tuple[str, ...],
+) -> tuple[re.Pattern[str], re.Pattern[str], re.Pattern[str]]:
+    """(mention, state assertion, last-reading prose) for one set of machine
+    names — a pure function of the names, cached like _state_patterns. The
+    name is matched CASE-EXACT inside an otherwise case-blind pattern."""
+    alternation = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    subject = rf"{_NAME_LEFT}(?P<mach>(?-i:{alternation})){_NAME_RIGHT}"
+    mention = re.compile(subject)
+    assertion = re.compile(
+        rf"{subject}(?:\s*\([^()\n]{{1,40}}\))?(?:\s*,?\s+(?P<which>which))?"
+        rf"(?:\s+{_PRESENT_COPULA}|['’]s)(?P<adv>(?:\s+{_STATE_ADVERB})*)"
+        rf"\s+(?P<state>{_MACHINE_NEG}|{_MACHINE_POS})",
+        re.I,
+    )
+    last_reading = re.compile(
+        rf"{subject}\s+(?:is\s+|has\s+been\s+)?last\s+(?:reported|checked|seen|read"
+        rf"|heard\s+from)\b\s*(?:at|on|:)?\s*{_READING_TS}",
+        re.I,
+    )
+    return mention, assertion, last_reading
+
+
+@lru_cache(maxsize=64)
+def _device_mention(names: tuple[str, ...]) -> re.Pattern[str] | None:
+    if not names:
+        return None
+    alternation = "|".join(re.escape(name) for name in sorted(names, key=len, reverse=True))
+    return re.compile(rf"(?<![\w.-])(?:{alternation})(?![\w-])", re.I)
+
+
+def _lead(text: str, start: int) -> tuple[str, bool] | None:
+    """The word right before a name at `start`, lowercased, and whether it
+    opens `text` (only punctuation or markdown before it); None when no word
+    sits right before the name."""
+    before = text[:start].rstrip()
+    lead = _LEAD_WORD.search(before) if before else None
+    if lead is None:
+        return None
+    return lead.group(1).lower(), not re.search(r"\w", before[: lead.start()])
+
+
+def _lead_ok(text: str, start: int) -> bool:
+    """May the word right before a name at `start` lead a machine's name?
+    Nothing, punctuation or markdown before it is fine; a word must be one of
+    _MACHINE_LEAD_OK, or end in -ly and OPEN the text ("Currently hub is…").
+    S40b final fix wave (C1): an -ly word inside a phrase is an adjective, so
+    "the family hub" is some other hub."""
+    lead = _lead(text, start)
+    if lead is None:
+        return True
+    word, opens = lead
+    return word in _MACHINE_LEAD_OK or (opens and word.endswith("ly"))
+
+
+# S40b final fix wave (A10): a PREPOSITION before the name makes it that
+# preposition's object — "qwen3.8:27b on hub is not answering", "Chat via hub
+# is unreachable", "Your Plex server on hub is offline" are about the model,
+# the route and the server. Such a lead binds a machine as the copula's subject
+# only in the relative form the corpus pins: "…run on hub, which is currently
+# switched off".
+_PREPOSITION_LEADS = frozenset({"on", "at", "from", "via"})
+
+
+def _not_the_subject(clause: str, match: re.Match[str]) -> bool:
+    """Is the machine in a state assertion not the subject of its copula (A10),
+    or the assertion led by a clause-opening "while" — a hedge, not a claim
+    about now (C1: "While hub is switched off, routing skips it")?"""
+    lead = _lead(clause, match.start("mach"))
+    if lead is None:
+        return False
+    word, opens = lead
+    if word in _PREPOSITION_LEADS:
+        return match.group("which") is None
+    return word == "while" and opens
+
+
+def _machine_mentioned(line: str, mention: re.Pattern[str]) -> str | None:
+    for m in mention.finditer(line):
+        if _lead_ok(line, m.start("mach")):
+            return m.group("mach")
+    return None
+
+
+def _machine_lines(reply_text: str) -> list[str]:
+    """The reply's lines as the machine branch reads them. A fenced block and a
+    `>` quote are someone else's text, so their lines are blanked — kept, as
+    empty lines, so a key/value run still ends where they begin — and emphasis
+    and code marks are stripped from the rest. A stamp she copied to the start
+    is dropped, as the persist boundary drops it (without_leading_stamp), and
+    a struck ~~span~~ is emptied: she retracted it where he can see it."""
+    lines: list[str] = []
+    fenced = False
+    for line in without_leading_stamp(reply_text).split("\n"):
+        if _FENCE.match(line):
+            fenced = not fenced
+            lines.append("")
+        elif fenced or line.lstrip().startswith(">"):
+            lines.append("")
+        else:
+            # A struck span keeps only its marks, so a struck line still
+            # belongs to its run but says nothing (C11).
+            lines.append(_MD_NOISE.sub("", _STRUCK.sub("~~", line)))
+    return lines
+
+
+def _is_run_break(line: str) -> bool:
+    return not line.strip() or _HEADING.match(line) is not None
+
+
+def _bind_reading(
+    lines: list[str],
+    index: int,
+    mention: re.Pattern[str],
+    devices: re.Pattern[str] | None,
+) -> str | None:
+    """Which machine a reading line at `index` is about. Its own line first;
+    then upward through the same unbroken run (a blank line or a heading ends
+    it). A machine's name binds. A line that names no machine leaves the
+    reading unbound when it carries a paired device's name, ends in ":", is a
+    subject line ("- Name: …"), or states a connectivity (T1 review, fix round
+    1: "- Dell: offline" is the Dell's status line, and the reading under it is
+    the Dell's, not hub's, however the reply spells the device).
+
+    A connectivity line with no subject of its own (_OWN_STATE_LINE: "- Status:
+    Offline") is the block's own attribute, so the walk goes on (fix round 2).
+    Past one, it crosses only the block's key/value lines, up to the line that
+    heads the block: a label or sentence there that names no machine ("- Dell"
+    above "- Status: offline") leaves the reading unbound."""
+    line = lines[index]
+    own = _machine_mentioned(line, mention)
+    if own is not None:
+        return own
+    if devices is not None and devices.search(line):
+        return None
+    past_a_state_line = False
+    for above in reversed(lines[:index]):
+        if _is_run_break(above):
+            break
+        if devices is not None and devices.search(above):
+            return None
+        named = _machine_mentioned(above, mention)
+        if named is not None:
+            return named
+        if above.rstrip().endswith(":") or _SUBJECT_KEY_LINE.match(above):
+            return None
+        if _CONNECTIVITY_WORD.search(above):
+            if _OWN_STATE_LINE.match(above) is None:
+                return None
+            past_a_state_line = True
+        elif past_a_state_line and _KEY_VALUE_LINE.match(above) is None:
+            return None
+    return None
+
+
+def _reading_context(lines: list[str], index: int) -> list[str]:
+    """Every line that frames the reading at `index`, for the not-current cut
+    (T1 review, fix round 1 — her plain "I did not check hub this turn" sat in
+    lines this never read, so the answer the machine nudge asks for was
+    corrected, and its regeneration refused):
+
+      * the run holding it, from the run's top down to the reading line;
+      * the heading that opens the run (blank lines between them skipped);
+      * the lead-in: the last non-blank, non-heading line above the run, when
+        it ends in ":" ("Here is what hub reported when I checked earlier:").
+
+    S40b T4 review, fix round 1: a disclaimer written AFTER the block ("…\\nI
+    have not checked it this turn.") was never read, so the same honest answer
+    was corrected when it came last instead of first. The context now also
+    holds:
+
+      * the rest of the run, below the reading line;
+      * the first non-blank line after the run, unless it is a heading or a
+        lead-in ending in ":" — those open the next section, and what they say
+        is about it, not about this reading."""
+    top = index
+    while top > 0 and not _is_run_break(lines[top - 1]):
+        top -= 1
+    bottom = index
+    while bottom + 1 < len(lines) and not _is_run_break(lines[bottom + 1]):
+        bottom += 1
+    context = lines[top : bottom + 1]
+    above = [line for line in reversed(lines[:top]) if line.strip()]
+    if above and _HEADING.match(above[0]):
+        context.append(above[0])
+    lead_in = next((line for line in above if not _HEADING.match(line)), None)
+    if lead_in is not None and (
+        lead_in.rstrip().endswith(":") or _BRACKET_LINE.match(lead_in) is not None
+    ):
+        context.append(lead_in)
+    after = next((line for line in lines[bottom + 1 :] if line.strip()), None)
+    if after is not None and not _HEADING.match(after) and not after.rstrip().endswith(":"):
+        context.append(after)
+    return context
+
+
+def _history_label_ends(text: str) -> list[int]:
+    """Where each history label in `text` ends (see _HISTORY_SOURCE's
+    comment): a heading at its start, an attribution or a report of her
+    earlier reply not led by a word that restates or compares it."""
+    ends = []
+    head = _HISTORY_HEAD.match(text)
+    if head is not None:
+        ends.append(head.end())
+    for pattern in (_HISTORY_ATTRIBUTION, _HER_REPLY_REPORTED):
+        for m in pattern.finditer(text):
+            if _NOT_A_LABEL_LEAD.search(text, 0, m.start()) is None:
+                ends.append(m.end())
+    return ends
+
+
+def _vouched(text: str, found: re.Match[str]) -> bool:
+    """Does she vouch for what `found` says of a claim ("that is still true",
+    "still holds"), where it stands in `text`? Not when its sentence is asked,
+    nor when anything in its clause ahead of it doubts it (_DOUBTED,
+    _EPISTEMIC_FRAME): "I'm not sure that is still true" (T4 review, fix
+    round 3). A doubt in another clause is about something else: "I'm not
+    sure about the Dell, but that is still true" vouches."""
+    start = 0
+    for sentence in _sentences(text):
+        if start + len(sentence) > found.start():
+            break
+        start += len(sentence)
+    else:
+        return True  # unreachable: _sentences covers all of `text`
+    if sentence.rstrip().endswith("?"):
+        return False
+    ahead = _CLAUSE_SPLIT.split(text[start : found.start()])[-1]
+    return _DOUBTED.search(ahead) is None and _EPISTEMIC_FRAME.search(ahead) is None
+
+
+def _report_closed(text: str, pos: int) -> bool:
+    """Does anything in `text` from `pos` retract what a label labels, or say
+    it still holds — and vouch for that?"""
+    if _REPORT_CLOSED.search(text, pos) is not None:
+        return True
+    return any(_vouched(text, m) for m in _STILL_HOLDS.finditer(text, pos))
+
+
+def _reaffirmed(text: str) -> bool:
+    """Does `text` reaffirm a claim as true now, and vouch for it?"""
+    return any(_vouched(text, m) for m in _REAFFIRMED.finditer(text))
+
+
+def _labelled_as_history(text: str) -> bool:
+    """Does `text` carry a history label that nothing after it retracts or
+    says still holds?"""
+    return any(not _report_closed(text, end) for end in _history_label_ends(text))
+
+
+def _history_framed(before: str, tail: str = "", after: str = "") -> bool:
+    """Is a claim framed as her history (S40b T4 review, fix round 2)? A label
+    in its clause before it (`before`) that reaches it, or an attribution
+    after it in its clause (`tail`: "hub last reported at 05:15 UTC (from my
+    previous answer)"; never "…, unchanged from my last reply") — and nothing
+    in what follows (`after`) reaffirms it as true now ("…, and that is still
+    true"), and no negated-sameness head leads up to it ("No change: …";
+    _SAME_HEAD, the final fix wave's B2). The served and memory guards pass
+    their claim's tail too since the final fix wave (A12)."""
+    if _reaffirmed(after) or _SAME_HEAD.search(before) is not None:
+        return False
+    if _labelled_as_history(before):
+        return True
+    return any(
+        _NOT_A_LABEL_LEAD.search(tail, 0, m.start()) is None and not _report_closed(tail, m.end())
+        for m in _FROM_HISTORY.finditer(tail)
+    )
+
+
+def _record_attributed(before: str, after: str) -> bool:
+    """Is a claim his record read back — "Your notes say", "Per your journal,"
+    leading up to it in its clause (_RECORD_ATTRIBUTION, A4) — and not
+    reaffirmed as true now in what follows?"""
+    return _RECORD_ATTRIBUTION.search(before) is not None and not _reaffirmed(after)
+
+
+def _retracted_in_tail(tail: str) -> bool:
+    """Does what follows a claim in its own clause retract it (A12)? "— this
+    was wrong", "(which is wrong)", "(incorrect — it's qwen3:8b)",
+    "(outdated)" — _RETRACTED's pronoun forms, or a bracket opening on one of
+    its words."""
+    return _RETRACTED.search(tail) is not None or _BRACKETED_RETRACTION.search(tail) is not None
+
+
+def _not_a_current_reading(texts: Sequence[str]) -> bool:
+    """Does a reading's context (_reading_context) say it is not current: a
+    prior time, a not-current word, someone's report — or a history label no
+    line of it reaffirms (fix round 2: a mention of her earlier reply is not
+    a label, and "Here is hub's current status (unchanged from my last
+    reply):" is a replay stated as current)?"""
+    if any(
+        _PRIOR_TIME.search(text) or _says_not_current(text) or _REPORTED.search(text)
+        for text in texts
+    ):
+        return True
+    # A history label, or his notes named as the source (A4) — unless a line
+    # reaffirms it, or heads it with "No change:" (B2).
+    labelled = any(_labelled_as_history(text) or _RECORD_ATTRIBUTION.search(text) for text in texts)
+    return labelled and not any(_reaffirmed(text) or _SAME_HEAD.search(text) for text in texts)
+
+
+def _machine_claim(
+    machine: str,
+    phrase: str,
+    spans: Sequence[Any],
+    purpose: str | None,
+    *,
+    negative: bool,
+) -> StateClaim:
+    served_by = None
+    if negative:
+        writer = _reply_served_by(spans, purpose)
+        head, sep, _rest = (writer or "").partition(":")
+        if sep and head.strip() == machine:
+            served_by = writer
+    text = STATE_CLAIM_MACHINE_CORRECTION.format(machine=machine)
+    if served_by:
+        text += STATE_CLAIM_MACHINE_SERVED.format(machine=machine, served_by=served_by)
+    return StateClaim(
+        device=machine,
+        phrase=phrase.strip()[:80],
+        text=text,
+        subject_kind="machine",
+        served_by=served_by,
+    )
+
+
+def _machine_state_claim(
+    reply_text: str,
+    spans: Sequence[Any],
+    machines: tuple[str, ...],
+    device_names: tuple[str, ...],
+    purpose: str | None,
+) -> StateClaim | None:
+    """The machine branch of state_claim_check (see the section header)."""
+    mention, assertion, last_reading = _machine_patterns(machines)
+    lines = _machine_lines(reply_text)
+    # The sentence scan reads her own words only: a double-quoted span is
+    # blanked, like a `>` line (T1 review, fix round 1). The key/value lines
+    # below keep theirs — a reading line that opens with a quote never
+    # matches, and `Last Reported: "2026-…"` is her reading, quote marks and all.
+    prose = _QUOTED.sub(lambda q: " " * len(q.group(0)), "\n".join(lines))
+    sentences = _sentences(prose)
+    for i, sentence in enumerate(sentences):
+        if not sentence.strip() or sentence.rstrip().endswith("?"):
+            continue  # "is hub ready?" asserts nothing
+        # A sentence that says its own state is not current ("…, but I have
+        # not checked it this turn") is the answer the machine nudge asks for.
+        if _says_not_current(sentence):
+            continue
+        # The next sentence on its line, where she may reaffirm the claim.
+        following = (
+            sentences[i + 1] if i + 1 < len(sentences) and not sentence.endswith("\n") else ""
+        )
+        for clause, rest in _split_clauses(sentence):
+            if not clause.strip():
+                continue
+            if _REPORTED.search(clause) is not None:
+                continue  # "you said hub is offline" — someone else's claim
+            if _PRIOR_TIME.search(clause) is not None:
+                continue
+            for m in assertion.finditer(clause):
+                machine = m.group("mach")
+                if not _lead_ok(clause, m.start("mach")) or _not_the_subject(clause, m):
+                    continue
+                if _state_prefix_blocks(clause[: m.start()]):
+                    continue
+                # A scope fronted before it or following its anchor (A5).
+                if _FRONTED_SCOPE.match(clause[: m.start()]) or _LIMITED_AFTER.match(
+                    clause, m.end()
+                ):
+                    continue
+                # "From my previous answer: hub is switched off." — her
+                # history, labelled as such (T4 review, fix rounds 1 and 2),
+                # like _PRIOR_TIME; "As in my last reply, hub is offline." is
+                # not a label.
+                tail = clause[m.end() :]
+                if _history_framed(clause[: m.start()], tail, tail + rest + following):
+                    continue
+                # His notes named as its source (A4), or retracted right after
+                # it (A12): "Per your notes, hub is offline", "hub is switched
+                # off — this was wrong".
+                if _record_attributed(clause[: m.start()], tail + rest + following):
+                    continue
+                if _retracted_in_tail(tail):
+                    continue
+                negative = (_MACHINE_NEG_STATE.fullmatch(m.group("state")) is not None) != (
+                    _NEGATING_ADVERB.search(m.group("adv")) is not None
+                )
+                # A positive state is backed by construction (every derived
+                # machine was read or served), so only a negative one can fire.
+                if negative and not _machine_read(spans, machine):
+                    return _machine_claim(machine, m.group(0), spans, purpose, negative=True)
+            for r in last_reading.finditer(clause):
+                machine = r.group("mach")
+                if not _lead_ok(clause, r.start("mach")):
+                    continue
+                if _state_prefix_blocks(clause[: r.start()]):
+                    continue
+                tail = clause[r.end() :]
+                if _history_framed(clause[: r.start()], tail, tail + rest + following):
+                    continue
+                if _record_attributed(clause[: r.start()], tail + rest + following):
+                    continue
+                if _retracted_in_tail(tail):
+                    continue
+                if not _machine_read(spans, machine):
+                    return _machine_claim(machine, r.group(0), spans, purpose, negative=False)
+    devices = _device_mention(device_names)
+    for index, line in enumerate(lines):
+        reading = _READING_LINE.match(line)
+        if reading is None:
+            continue
+        machine = _bind_reading(lines, index, mention, devices)
+        if machine is None:
+            continue
+        if _not_a_current_reading(_reading_context(lines, index)):
+            continue
+        # A served round proves the machine answered, never when it was read.
+        if not _machine_read(spans, machine):
+            return _machine_claim(machine, reading.group(0), spans, purpose, negative=False)
+    return None
 
 
 @lru_cache(maxsize=64)
@@ -2825,9 +3981,13 @@ def _state_prefix_blocks(before: str) -> bool:
 
 
 def state_claim_check(
-    reply_text: str, spans: Sequence[Any], device_names: Sequence[str]
+    reply_text: str,
+    spans: Sequence[Any],
+    device_names: Sequence[str],
+    *,
+    purpose: str | None = None,
 ) -> StateClaim | None:
-    """Contradict a live-device-state claim no device check backs this turn.
+    """Contradict a live-state claim no check backs this turn.
 
     Returns a StateClaim when the reply asserts the CURRENT connectivity or
     availability of a paired device and NO successful device_* span ran this
@@ -2836,16 +3996,32 @@ def state_claim_check(
     and precision-first (see the section header). Derived from `device_names`:
     with no paired devices there is no such claim to make, so the guard is
     silent by construction rather than by a special case.
+
+    S40b: in a turn whose kind is in STACK_CLAIM_KINDS (`purpose`, the turn's
+    kind — chat._purpose_of), it also reads MACHINES, derived from the turn's
+    own spans (machine_names): a negative state, or a reading time, about a
+    machine nothing read this turn (see the machine section above). `purpose`
+    defaults to None, which leaves every pre-S40b call exactly as it was.
     """
     if not reply_text or not reply_text.strip():
         return None
     names = tuple(sorted({str(name).strip() for name in device_names if str(name).strip()}))
-    if not names:
+    machines = machine_names(spans) if purpose in STACK_CLAIM_KINDS else ()
+    if not names and not machines:
         return None
-    if _checked_a_device(spans):
-        # A real check happened: whatever the reply says about the device is
-        # backed by a span, and this guard has nothing to say about accuracy.
-        return None
+    # A real device check backs whatever the reply says about a DEVICE — and
+    # only a device: it says nothing about a machine.
+    if names and not _checked_a_device(spans):
+        claim = _device_state_claim(reply_text, names)
+        if claim is not None:
+            return claim
+    if machines:
+        return _machine_state_claim(reply_text, spans, machines, names, purpose)
+    return None
+
+
+def _device_state_claim(reply_text: str, names: tuple[str, ...]) -> StateClaim | None:
+    """The device branch of state_claim_check, unchanged since 2026-09-03."""
     assertion, last_seen = _state_patterns(names)
     for clause, is_question in _clauses(reply_text):
         if is_question:
@@ -3190,16 +4366,29 @@ _TREE_LEAD = re.compile(r"^[\s│|]*(?:├|└|\|--|`--|\+--)[─-]*\s*")
 _BULLET_LEAD = re.compile(r"^(?:[-*•+]|\d{1,3}[.)])\s+")
 # A size: "12.4 KB", "905.6 GiB", "1,234 bytes", "1.2K", "48 B". Case-SENSITIVE
 # on purpose (no re.I anywhere below): "27b" is a parameter count, not bytes.
-_SIZE = r"\d[\d,]*(?:\.\d+)?\s?(?:[Bb]ytes?|[KMGTP]i?B|[KMGTP]|B)"
+_SIZE = r"\d[\d,]*+(?:\.\d++)?\s?(?:[Bb]ytes?|[KMGTP]i?B|[KMGTP]|B)"
 # A size trailing the name and SET OFF from it: a spaced dash, two spaces, a
 # tab, or parentheses. A single space or a colon is not a separator.
+#
+# LINEAR, and it has to be (S40b fix-wave follow-up, D2): written as
+# `(?:\s+[—–-]\s+|\s{2,}|\t+)\s*` this read a padded entry in O(n³) — a run of
+# n spaces can be entered at n positions, each splitting the rest n ways
+# between `\s{2,}` and `\s*`, each split walked again — 7 ms at 200 characters
+# of padding (UNDER the sweep's budget, which is why it survived A1's audit),
+# 3.0 s at 1,500, and 8.8 s through `presented_listing_check` itself, on
+# core's only process, on every reply. The rewrite matches exactly the same
+# text: a separator may only START a whitespace run (`(?<!\s)` — entering the
+# same run later can never match what entering it at the front cannot), and
+# every run is taken whole and possessively, which is what the old one had to
+# do anyway since `_SIZE` opens with a digit.
 _TRAILING_SIZE = re.compile(
-    r"(?:\s+[—–-]\s+|\s{2,}|\t+)\s*" + _SIZE + r"\s*$" + r"|\s*\(" + _SIZE + r"\)\s*$"
+    r"(?<!\s)(?:\s++[—–-]\s++|\s\s++|\t\s*+)" + _SIZE + r"\s*+$"
+    r"|(?<!\s)\s*+\(" + _SIZE + r"\)\s*+$"
 )
 # Under a TREE lead a single space will do ("├── backups/ 905.6 GiB"): the
 # tree markup is the listing's own idiom, and there is no cache/DIMM/container
 # line that draws itself as a tree.
-_TRAILING_SIZE_TREE = re.compile(r"\s+" + _SIZE + r"\s*$")
+_TRAILING_SIZE_TREE = re.compile(r"(?<!\s)\s++" + _SIZE + r"\s*+$")
 _SIZE_ONLY = re.compile("^" + _SIZE + "$")
 # An `ls -l` line: a mode string then at least four more fields.
 _PERMS_LINE = re.compile(r"^[-dlbcps][rwxsStT-]{9}[+@.]?\s+\S+(?:\s+\S+){3,}$")
@@ -4392,7 +5581,8 @@ _OBS_ADVERB = (
 # keeps the match starting AFTER the subject, so the text before it is the
 # subject phrase.
 _FAULT_COPULA = re.compile(
-    rf"(?:\s+(?:{_PRESENT_COPULA})|['’]s)(?:\s+{_OBS_ADVERB})*\s+(?P<state>{_FAULT_STATE})\b",
+    rf"(?:(?<!\s)\s++(?:{_PRESENT_COPULA})|['’]s)(?:\s++{_OBS_ADVERB})*+"
+    rf"\s++(?P<state>{_FAULT_STATE})\b",
     re.I,
 )
 # The fault stated as a VERB rather than a state. Only shapes that can only be
@@ -4949,10 +6139,21 @@ _SERVING_STATE = (
     r"(?:unreachable|not\s+reachable|down|offline|unavailable|walled|blocked"
     r"|not\s+responding|unresponsive|not\s+working|failing|timing\s+out|refusing)"
 )
+# The adverbs that may sit between the copula and a serving state: the device
+# guard's, WITHOUT "not" and "no longer" (S40b, verdict §3.1 B). There, a
+# negated state is still an unchecked claim about now ("the device is not
+# connected"); here every state word means "cannot answer", so "the model is
+# not down" and "the gateway is no longer unreachable" say it CAN — and were
+# corrected as outage claims, replacing an honest reply. "not responding" and
+# "not working" are state words of their own and still fire. Derived from
+# _STATE_ADVERBS, so an adverb added there reaches here too (the final fix
+# wave's C13: built from the tuple, never by editing the joined pattern).
+_SERVING_ADVERBS = tuple(a for a in _STATE_ADVERBS if a not in _NEGATING_ADVERBS)
+_SERVING_ADVERB = "(?:" + "|".join(_SERVING_ADVERBS) + ")"
 _SERVING_ASSERTION = re.compile(
     rf"\b(?P<subj>(?:{_SERVING_DET}\s+)?{_SERVING_NOUN})"
     rf"(?:\s+{_PRESENT_COPULA}|['’]s)"
-    rf"(?:\s+{_STATE_ADVERB})*"
+    rf"(?:\s+{_SERVING_ADVERB})*"
     rf"\s+(?P<state>{_SERVING_STATE})\b",
     re.I,
 )
@@ -5034,3 +6235,807 @@ def stack_claim_check(reply_text: str, spans: Sequence[Any], *, purpose: str) ->
                 phrase=match.group(0).strip(),
             )
     return None
+
+
+# ── S40b: the SERVED-model claim — "the current model is X" while Y answered ──
+#
+# The S40 live walk (2026-09-19). Asked where her models run, she marked
+# `qwen3.8:27b` "Current model in use" in two turns hub:qwen3:8b served
+# (b851aa91, b02a5694) — a line his older notes also carry, beside a prompt
+# line that stated the chat SETTING as "the model answering". Asked 17 × 23, she
+# answered and added "No model was needed for this calculation." (60834ccf) —
+# which went into his notes, because nothing stopped the turn being ingested.
+#
+# The evidence needs no probe and cannot be argued with: the gateway stamps
+# every round it serves with the model that served it (X-Nova-Served-By), and
+# chat records it on the round's span as `served_by`. A NAMED claim is
+# contradicted when some round of this turn was stamped and none of the stamps
+# is the model named (any purpose: a model that served ANY round of the turn is
+# not contradicted — lenient on purpose). "No model was needed" is contradicted
+# by the turn's own round existing at all (served_this_turn). The requested
+# `meta.model` is deliberately NOT evidence (verdict §2): it is the setting,
+# and on a fallback the setting is exactly the lie.
+#
+# Precision-first, measured over 649 real replies (s40b/design-verdict.md §4):
+# a model reference must be letter-led with a tag (so a GPU id, a port and a
+# clock time are not models), a line labelled with anything but chat or the
+# current model is some other role's line, a model "in use FOR/BY" something is
+# in use for something else, and the role words (vision, judge, embedder,
+# fallback…) mark a claim about another role. Past, hedged, reported, quoted and
+# questioned forms assert nothing about this reply. APPEND-class: the reply may
+# carry real content beside the false line, so the correction follows it; the
+# turn is not ingested. Armed only in STACK_CLAIM_KINDS, where it was measured.
+
+SERVED_CLAIM_CORRECTION = (
+    "Correction: this reply was written by {served} — the gateway recorded that for this "
+    "turn — not by {claimed}."
+)
+SERVED_NO_MODEL_CORRECTION = "Correction: a model wrote this reply — {served}."
+
+# A model reference: an optional provider/engine prefix, then a letter-led
+# name with a tag (`qwen3.8:27b`, `hub:qwen3:8b`, `hf.co/org/repo:tag`). Never
+# a compute id (`cuda:GPU-…`), a URL, or a port (`ollama:11434`).
+_SERVED_REF = (
+    r"(?<![\w./:-])(?P<ref>(?!(?:gpu|cpu|cuda|rocm|metal|https?):)"
+    r"(?:[a-z0-9][a-z0-9_-]{0,31}:)?"
+    r"(?:hf\.co/[\w.-]+/[\w.-]+(?::[\w.-]+)?"
+    r"|[A-Za-z][\w.-]*(?:/[\w.-]+)?:(?!\d+\b)[\w.-]+))"
+)
+_SERVED_REF_RE = re.compile(_SERVED_REF, re.I)
+# "Current model in use", "in use", "answering you" — the marker a line or a
+# clause carries beside the ref it is about. "in use by/for/as/…" is in use for
+# something else.
+_IN_USE = re.compile(
+    r"\b(?:current(?:ly)?\s+(?:chat\s+)?model(?:\s+in\s+use)?"
+    r"|(?:currently\s+)?in\s+use(?!\s+(?:by|for|as|in|on|with|when|if)\b)"
+    r"|(?:currently\s+|now\s+)?(?:answering|serving)\s+(?:you|this\s+(?:chat|conversation|reply|turn))"
+    r"|active\s+(?:chat\s+)?model)\b",
+    re.I,
+)
+# Another role, a standby, or the past: the claim is not about this reply.
+_SERVED_SKIP = re.compile(
+    r"\b(?:vision|judge|coding|coder|scheduled|embed\w*|ingest\w*|images?|photos?|pictures?"
+    r"|agents?|distil\w*|fallback|standby|backup|was|were|previously"
+    r"|not\s+(?:the\s+)?(?:current|in\s+use))\b",
+    re.I,
+)
+# A labelled line ("- coding: gemma4:31b (active model)"): its label must say
+# chat or the current model for an in-use marker on it to be about this reply.
+_LINE_LABEL = re.compile(r"^\s*(?:[-+•]|\d+[.)])?\s*(?P<label>[A-Za-z][A-Za-z ]{0,30}?)\s*:\s")
+_LABEL_OK = re.compile(
+    r"chat(?:\s+model)?|(?:current|active)\s+(?:chat\s+)?model|model(?:\s+in\s+use)?"
+    r"|in\s+use|answering(?:\s+now)?|serving(?:\s+now)?",
+    re.I,
+)
+# Sentence shape 6 of the verdict: "R is serving|answering you|this|now". Its
+# match ends on the object, so what follows can still limit it to another role
+# (T2 review, round 1): "gemma4:12b is serving now AS THE VISION MODEL", "…
+# is serving this chat's IMAGES". _served_claims reads the rest of the clause
+# for this shape — the in-use limit right after it, the role and past words
+# anywhere after it — as shape 7 reads "(?!\s+(?:for|in|on))".
+_SERVED_ANSWERING = re.compile(
+    rf"{_SERVED_REF}\s+(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+(?:model\s+)?)?"
+    r"(?:answering|serving|replying\s+to|responding\s+to)\s+(?:you|this|now|right\s+now)\b",
+    re.I,
+)
+# The sentence shapes that name the model answering this reply.
+_SERVED_SENTENCES = tuple(
+    re.compile(pattern, re.I)
+    for pattern in (
+        r"\b(?:the\s+)?model\s+(?:that(?:['’]s|\s+is)\s+)?"
+        r"(?:answering|serving|replying|responding)(?:\s+(?:you|this|here))?"
+        rf"(?:\s+(?:right\s+now|now|currently))?\s+is\s+{_SERVED_REF}",
+        rf"\bthe\s+current\s+(?:chat\s+)?model\s+is\s+{_SERVED_REF}",
+        r"\bi(?:['’]m|\s+am)\s+(?:currently\s+|now\s+)?"
+        rf"(?:(?:running\s+(?:on|as)|served\s+by|powered\s+by)\s+)?{_SERVED_REF}",
+        r"\b(?:this|my)\s+(?:reply|answer|response|message)\s+"
+        r"(?:came|comes|is\s+coming|was\s+(?:written|generated|served))\s+(?:from|by)\s+"
+        rf"{_SERVED_REF}",
+        r"\byou(?:['’]re|\s+are)\s+(?:currently\s+|now\s+)?(?:talking|speaking|chatting)\s+"
+        rf"(?:to|with)\s+{_SERVED_REF}",
+    )
+) + (
+    _SERVED_ANSWERING,
+    re.compile(
+        rf"{_SERVED_REF}\s+(?:is|['’]s)\s+(?:currently\s+)?(?:the\s+)?(?:current|active)\s+"
+        r"(?:chat\s+)?model\b(?!\s+(?:for|in|on)\b)",
+        re.I,
+    ),
+)
+# "No model was needed" — about THIS answer, never about a pull, an embedding,
+# an image, or a step a timer ran.
+#
+# T2 review, round 1: the verdict's pattern let the bare, sentence-ending form
+# fire in the present too, and "no model IS needed" at the end of a sentence is
+# a general statement ("To set a timer, no model is needed.", "Reminders fire
+# by themselves — no model is involved.") — true, and corrected. The past
+# ("was") is about what just happened, so it may end the sentence; the present
+# must carry this reply's own tail ("here", "to answer this", "for this
+# answer"). Every §4 MUST_FIRE is "was" or "I didn't use a model here".
+#
+# S40b final fix wave (A6): the past too. A bare "no model was needed." ends
+# honest sentences about a timer or a reminder ("Your 9:00 reminder went out
+# by itself. No model was involved."), and was corrected with "a model wrote
+# this reply". So the "was" form needs this reply's tail as the "is" form
+# does, and only the FIRST-PERSON form ("I didn't use a model.") may end its
+# sentence: she is its subject, and she wrote the reply. The walk's line,
+# "No model was needed for this calculation.", keeps its tail and fires.
+_NO_MODEL_THIS_REPLY = (
+    r"here\b|to\s+answer\s+(?:this|that|it)\b"
+    r"|for\s+(?:this|that)\s+(?:answer|reply|response|calculation|question|sum|math)\b"
+)
+_NO_MODEL = re.compile(
+    r"\bno\s+(?:ai\s+|language\s+|llm\s+)?model\s+"
+    rf"(?:was|is)\s+(?:needed|used|required|involved)(?=\s+(?:{_NO_MODEL_THIS_REPLY}))"
+    r"|\bi\s+(?:did\s+not|didn['’]t)\s+(?:need\s+to\s+)?use\s+(?:a|any)\s+model"
+    r"(?=\s*(?:[.!;]|$)|\s+(?:here|for\s+(?:this|that)\s+"
+    r"(?:answer|reply|response|calculation|question)))",
+    re.I,
+)
+_LATEST_TAG = ":latest"
+# S40b final fix wave (C4), the CLAIM side only: "ollama:" is how history
+# named the builtin engine, so "ollama:qwen3:8b" names the tag on whichever
+# machine serves it; and a quantization or precision suffix names the same
+# model's build ("qwen3:8b-q4_K_M", "-q8_0", "-fp16"). Neither is a different
+# model, and correcting "qwen3:8b-q4_K_M" to "hub:qwen3:8b" is pedantry that
+# teaches him her corrections are noise.
+_OLLAMA_PREFIX = re.compile(r"^ollama:(?=[A-Za-z])", re.I)
+_QUANT_SUFFIX = re.compile(
+    r"-(?:q\d(?:_[A-Za-z0-9]+)*|iq\d_[A-Za-z0-9_]+|fp16|bf16|f16|fp32|f32)$", re.I
+)
+
+
+def _claimed_as_served(claimed: str) -> str:
+    """The claimed ref as the served-by stamps would spell it: no ":latest"
+    tag, no "ollama:" alias for the builtin engine, no quantization suffix."""
+    compared = claimed[: -len(_LATEST_TAG)] if claimed.lower().endswith(_LATEST_TAG) else claimed
+    compared = _OLLAMA_PREFIX.sub("", compared)
+    return _QUANT_SUFFIX.sub("", compared)
+
+
+# -- T2 precision cuts, beyond the verdict's corpus -------------------------
+#
+# Each removes fires only (every §4 MUST_FIRE still fires), each is pinned by
+# honest sentences in test_served_guard that the verbatim patterns corrected:
+#
+#   * A SETTING is not this reply: "The chat setting's current model is X",
+#     "…names X as the current model". The verdict counts a settings claim as
+#     an accepted miss ("The chat model is X"); these are the same claim.
+_SERVED_SETTING = re.compile(r"\b(?:settings?|config\w*)\b", re.I)
+#   * An in-use marker LIMITED by what follows it is about another place or
+#     role — "the current model on dell", "the active model in the catalog",
+#     "in use elsewhere" — as the verdict's own "in use by/for/…" and "current
+#     model for/in/on" (sentence shape 7) already are, for every marker.
+# Possessive (S40b fix-wave follow-up, D2). No run-start lookbehind here,
+# unlike `_CLAUSE_SPLIT` and `_FAULT_COPULA`: this one is used as
+# `.match(clause, m.end())`, where a lookbehind would read the character
+# before the match it is continuing from, not a run boundary.
+_IN_USE_LIMITED = re.compile(r"\s++(?:for|in|on|by|as|with|when|if|elsewhere)\b", re.I)
+#   * Leading up to the ref and its marker (from the conjunct's start when the
+#     ref comes first, between the two when it follows), a negation, the past
+#     or a change of state says the ref is NOT in use, WAS, or would BECOME
+#     it: "X isn't in use",
+#     "X is no longer the current model", "X used to be the current model",
+#     "the current model is not X", "make X the current model", "names X as
+#     the current model".
+_IN_USE_UNSAID = re.compile(
+    r"\b(?:not|never|no\s+longer|no\s+more|used\s+to|had|make|making|set|setting"
+    r"|switch\w*|chang\w*|becom\w*|to\s+be|as)\b|n['’]t\b",
+    re.I,
+)
+#   * A coordinated clause is its own claim: in "hub:qwen3:8b is the current
+#     model and qwen3.8:27b is installed" the nearest ref across "and" is the
+#     installed one. The marker's candidates are the refs in its own conjunct.
+_IN_USE_CONJUNCT = re.compile(r",?\s+(?:and|while|whereas|plus)\s+", re.I)
+#   * T2 review, round 1: the marker is about the ref it is SAID of, never the
+#     nearest ref in the conjunct. The conjunct split knew only and/while/
+#     whereas/plus, and a comma, a dash, a colon, a parenthesis or a machine
+#     subject slipped past it: "hub:qwen3:8b is in use, gemma4:12b and
+#     qwen3.8:27b are installed", "qwen3:8b is in use — gemma4:12b is idle",
+#     "hub (serving you) has qwen3.8:27b installed" each corrected a true
+#     reply against the idle model. So the ref BEFORE the marker counts only
+#     across copula, parenthetical or badge material — a size or runtime in
+#     brackets, ✅, a dash, a table cell's bar, the marker's own "(" and one
+#     "is (the) (model)" — and the ref AFTER it only when the marker is a
+#     label or a subject ("Current model: X", "The model in use is X").
+#   * T2 review, round 2: when both qualify, which one the marker is said of
+#     depends on what joins the ref before to it. Across a COPULA the marker
+#     is that ref's predicate and the ref before wins ("qwen3:8b is the model
+#     in use: qwen3.8:27b is idle"). Across badge material only, the marker
+#     is a LABEL on a list line, and a label names the ref after its colon
+#     ("- `gemma4:12b` (7.0 GB) — current model: `qwen3:8b`", "qwen3.8:27b
+#     (idle) — answering you: qwen3:8b"): round 1's before-wins corrected
+#     those true lines against the idle model listed before the label. The
+#     ref after is the label's value when only a size, a badge or closing
+#     punctuation follows it to the clause's end; when anything else does
+#     ("✅ in use: qwen3.8:27b is idle", "in use: qwen3:8b on hub", "in use:
+#     qwen3.8:27b (idle)") the marker may be said of either, so it binds
+#     nothing unless both name the same model.
+#
+# S40b final fix wave (D2): each repetition below is UNAMBIGUOUS. A starred
+# alternation takes whitespace ONE character at a time (never `\s+`, whose
+# runs split 2^(n-1) ways), the size's own quantifiers are possessive, and the
+# star itself is possessive (`*+`). Written as `(?:\s+|…)*` it backtracked
+# exponentially when the fullmatch failed: a padded markdown table row —
+# "| qwen3:8b             | 4.9 GB   | loaded, in use |" — took 15.7 s at
+# 20-wide columns and hours at 24, blocking core's only event loop. Nothing
+# that can end a gap or a label is a character the star consumes, so giving
+# none back changes no verdict. Pinned in test_guard_regex_timing.
+_IN_USE_SIZE = r"\d[\d.,]*+\s*+[KMGT]i?B\b"
+_IN_USE_BADGE = rf"(?:\s|\([^()\n]{{1,40}}\)|{_IN_USE_SIZE}|[(|:=✅✔☑⭐←⬅—–-]|️)"
+_IN_USE_BEFORE_GAP = re.compile(
+    rf"{_IN_USE_BADGE}*+"
+    r"(?P<copula>(?:is|['’]s)\s+(?:currently\s+|now\s+)?(?:the\s+)?(?:(?:chat\s+)?(?:model|one)\s+)?)?",
+    re.I,
+)
+_IN_USE_AFTER_GAP = re.compile(
+    r"(?:\s+(?:right\s+now|now|currently))?(?:\s*[:=]\s*|\s+(?:is|['’]s)\s+)", re.I
+)
+# What may follow the label's ref for it to close the label: a size, bare or
+# bracketed, a badge, a bar, a dash, closing punctuation. A WORDED bracket
+# says something of the ref ("in use: qwen3.8:27b (idle)"), so it does not.
+_IN_USE_LABEL_ENDS = re.compile(
+    rf"(?:\s|\(\s*+{_IN_USE_SIZE}\s*+\)|{_IN_USE_SIZE}|[|:=✅✔☑⭐←⬅—–.,;!-]|️)*+", re.I
+)
+#   * A label whose VALUE says no ("— in use: no", "current model: ❌") says
+#     the model before it is NOT in use (found fixing round 2; it fired at
+#     4c62f5c9 and e102b80b alike).
+_IN_USE_DENIED = re.compile(
+    r"(?:\s+(?:right\s+now|now|currently))?\s*[:=]\s*(?:no|none|false|❌|✗|✘|✖)(?!\w)", re.I
+)
+
+
+# S40b T4 review, fix round 1: what she says ABOUT a claim, before it. The v15
+# case seeds the walk's false "Current model in use" and memory lines as her
+# own history, and the answer it hopes for corrects them. Both guards
+# corrected that correction, reading the claim inside "I don't think …", "It's
+# false that …", "My previous answer said …" and "I told you …, which was
+# wrong" as hers. These cuts are the served and memory guards' own, read on
+# the prefix of each claim's match within its clause: the shared _STATE_HEDGE
+# was measured over the machine and device corpus, and is not re-measured.
+#   * A doubted or denied belief. "Not sure WHY X" presupposes X, and "no
+#     doubt X" asserts it, so both still fire (_WH_WORD, with the history
+#     label's regexes above).
+_EPISTEMIC_FRAME = re.compile(
+    r"\b(?:do|does|did)\s*n['’]?o?t\s+(?:think|believe)\b"
+    rf"|\bnot\s+(?:sure|certain)\b{_WH_WORD}"
+    rf"|\bun(?:sure|certain)\b{_WH_WORD}"
+    r"|(?<!\bno\s)(?<!\bwithout\s)(?<!\bbeyond\s)(?<!\ba\s)\bdoubt(?:s|ed)?\b"
+    r"|(?:\bnot|n['’]t)\s+true\s+(?:to\s+say\s+)?that\b"
+    r"|\b(?:untrue|false|wrong)\s+(?:to\s+say\s+)?that\b"
+    # S40b final fix wave (A8): a DENIAL frame — "It's not that X", "It isn't
+    # the case that X", "Nothing says X", "No sign/evidence (that) X". The
+    # negation is required: "It is the case that X" asserts X.
+    r"|\bit(?:['’]s|\s+is)\s+not\s+(?:that|the\s+case\s+that)\b"
+    r"|\bit\s+isn['’]t\s+(?:that|the\s+case\s+that)\b"
+    r"|\b(?:nothing|no\s+(?:sign|evidence|indication|reason\s+to\s+think))"
+    r"(?:\s+(?:says|suggests|indicates|shows|means))?(?:\s+that)?\s*$",
+    re.I,
+)
+#   * A first-person retraction verb: "I wrongly said", "I mistakenly marked".
+#   * Her earlier reply, LABELLED as the claim's source (_history_framed; fix
+#     round 2 — round 1 cut on any mention of it, so "As I said in my last
+#     reply, X" and "Correction to my last reply: X" went silent).
+_HER_RETRACTION = re.compile(
+    r"(?<![\w'’])I\s+(?:wrongly|mistakenly|incorrectly|falsely)\s+"
+    r"(?:said|claimed|stated|marked|wrote|reported|told\s+you)\b",
+    re.I,
+)
+#   * A bare "I said X" or "I told you X" is a reassertion, unless she retracts
+#     it in what follows, in the same sentence or the next: "I told you X,
+#     which was wrong." / "I said X. That was stale." / "… — it isn't." "As I
+#     said" and "like I told you" are reassertions whatever follows.
+_HER_SAYING = re.compile(
+    r"(?<![\w'’])(?<!\bas\s)(?<!\blike\s)I\s+"
+    r"(?:said|wrote|stated|claimed|reported|marked|told\s+you)\b",
+    re.I,
+)
+
+
+def _clauses_with_rest(line: str):
+    """_clauses, each with what follows it: the rest of its sentence and the
+    next sentence on the line — where she retracts what she just said."""
+    sentences = [s for s in _sentences(line) if s.strip()]
+    for i, sentence in enumerate(sentences):
+        is_question = sentence.rstrip().endswith("?")
+        following = sentences[i + 1] if i + 1 < len(sentences) else ""
+        for clause, rest in _split_clauses(sentence):
+            if clause.strip():
+                yield clause, is_question, rest + following
+
+
+# S40b final fix wave (C16): a GENERAL statement — "Whenever the memory service
+# is unreachable, …", "Any time qwen3.8:27b is in use, …" — asserts nothing
+# about now. These subordinators are missing from the shared _STATE_HEDGE,
+# which was measured over the device and machine corpus and is not
+# re-measured here; the served and memory guards read them beside it.
+_GENERAL_HEDGE = re.compile(
+    r"\b(?:whenever|any\s*time|every\s+time|each\s+time|in\s+the\s+event)\b", re.I
+)
+
+
+def _claim_prefix_blocks(before: str) -> bool:
+    """_state_prefix_blocks, and a general statement (_GENERAL_HEDGE): the
+    served and memory guards' hedge cut on what leads up to a claim."""
+    return _state_prefix_blocks(before) or _GENERAL_HEDGE.search(before) is not None
+
+
+def _not_her_claim(before: str, tail: str, rest: str = "") -> bool:
+    """Does what surrounds a served or memory claim say she does not assert it
+    now? Leading up to it in its clause (`before`): a doubted belief or a
+    denial, a retraction verb, his notes named as its source (A4), or her
+    earlier reply labelled as its source — none reaffirmed in what follows.
+    Right after it in its clause (`tail`, S40b final fix wave A12, as the
+    machine branch reads it): a history attribution ("(from my last answer)")
+    or a retraction ("(incorrect)", "— this was wrong"). Or an "I said" she
+    retracts in what follows (`tail` + `rest`)."""
+    after = tail + rest
+    if _EPISTEMIC_FRAME.search(before) or _HER_RETRACTION.search(before):
+        return True
+    if _record_attributed(before, after):
+        return True
+    if _history_framed(before, tail, after):
+        return True
+    if _retracted_in_tail(tail):
+        return True
+    return _HER_SAYING.search(before) is not None and _RETRACTED.search(after) is not None
+
+
+@dataclass(frozen=True)
+class ServedClaim:
+    """A claim about which model wrote this reply that the turn's own rounds
+    contradict.
+
+    `shape` is how it was said ("sentence", "in_use" or "no_model"), `claimed`
+    the model reference named (None for "no model"), `served` every model the
+    gateway recorded serving a round of this turn, `phrase` the matched text
+    for the guard span, and `text` the stated correction.
+    """
+
+    shape: str
+    claimed: str | None
+    served: tuple[str, ...]
+    phrase: str
+    text: str
+
+
+def _served_models(spans: Sequence[Any]) -> tuple[str, ...]:
+    """Every `served_by` on an error-free llm_call of this turn, any purpose,
+    in order and deduplicated: the models the gateway says answered a round."""
+    found: list[str] = []
+    for span in spans:
+        if getattr(span, "kind", None) != "llm_call":
+            continue
+        meta = _span_meta(span)
+        served_by = meta.get("served_by")
+        if meta.get("error") or not isinstance(served_by, str) or not served_by.strip():
+            continue
+        if served_by.strip() not in found:
+            found.append(served_by.strip())
+    return tuple(found)
+
+
+def _own_lines(reply_text: str) -> list[str]:
+    """The reply's lines as a claim scan reads them: fenced and `>` lines
+    blanked (someone else's text), emphasis and code marks stripped. The
+    machine branch's reading of a reply (_machine_lines), shared."""
+    return _machine_lines(reply_text)
+
+
+def _conjunct(clause: str, start: int, end: int) -> tuple[int, int]:
+    """The bounds of the coordinated conjunct holding clause[start:end]."""
+    lo, hi = 0, len(clause)
+    for c in _IN_USE_CONJUNCT.finditer(clause):
+        if c.end() <= start:
+            lo = c.end()
+        elif c.start() >= end:
+            hi = c.start()
+            break
+    return lo, hi
+
+
+def _in_use_ref(clause: str, marker: re.Match[str], lo: int, hi: int) -> re.Match[str] | None:
+    """The model ref an in-use marker is SAID of, within its conjunct
+    clause[lo:hi], or None (see _IN_USE_BEFORE_GAP). Never merely the nearest
+    ref.
+
+    * The last ref BEFORE the marker, when only copula, parenthetical or
+      badge material separates them. A marker with a ref before it across
+      anything else is that ref's predicate, however many words sit between
+      ("hub:qwen3:8b is, right now, the model in use: qwen3.8:27b is idle"),
+      so it binds nothing.
+    * The first ref AFTER it, when the marker labels or is the subject of it
+      ("Current model: X") and no ref comes before it.
+    * Both: a copula keeps the ref before (the marker is its predicate); a
+      badge makes the marker a label, which names the ref after — when that
+      ref closes the label (only a size, a badge or closing punctuation
+      follows it to the clause's end — see _IN_USE_LABEL_ENDS), or names the
+      same model as the ref before."""
+    refs = [r for r in _SERVED_REF_RE.finditer(clause) if r.start() >= lo and r.end() <= hi]
+    before = [r for r in refs if r.end() <= marker.start()]
+    after = [r for r in refs if r.start() >= marker.end()]
+    label = (
+        after[0]
+        if after and _IN_USE_AFTER_GAP.fullmatch(clause, marker.end(), after[0].start())
+        else None
+    )
+    if not before:
+        return label
+    gap = _IN_USE_BEFORE_GAP.fullmatch(clause, before[-1].end(), marker.start())
+    if gap is None:
+        return None
+    if gap.group("copula") or label is None:
+        return before[-1]
+    if _IN_USE_LABEL_ENDS.fullmatch(clause, label.end()):
+        return label
+    said, other = label.group("ref"), before[-1].group("ref")
+    return label if _same_model(said, other) and _same_model(other, said) else None
+
+
+def _served_claims(clause: str, *, in_use: bool, rest: str = ""):
+    """(shape, claimed ref or None, phrase) for every served-model claim this
+    clause makes, each already cut by the hedge, intent and skip rules, and by
+    what she says about it (_not_her_claim; `rest` is what follows the clause)."""
+    for pattern in _SERVED_SENTENCES:
+        for m in pattern.finditer(clause):
+            if _claim_prefix_blocks(clause[: m.start()]):
+                continue
+            if _not_her_claim(clause[: m.start()], clause[m.end() :], rest):
+                continue
+            if _SERVED_SKIP.search(clause[: m.end()]) or _SERVED_SETTING.search(clause[: m.end()]):
+                continue
+            if pattern is _SERVED_ANSWERING and (
+                _IN_USE_LIMITED.match(clause, m.end()) or _SERVED_SKIP.search(clause[m.end() :])
+            ):
+                continue
+            yield "sentence", _strip_trailing_punct(m.group("ref")), m.group(0)
+    if in_use:
+        for m in _IN_USE.finditer(clause):
+            if _STATE_HEDGE.search(clause) or _STATE_INTENT.search(clause[: m.start()]):
+                continue
+            if _GENERAL_HEDGE.search(clause):
+                continue
+            if _SERVED_SKIP.search(clause) or _SERVED_SETTING.search(clause):
+                continue
+            if _IN_USE_LIMITED.match(clause, m.end()) or _IN_USE_DENIED.match(clause, m.end()):
+                continue
+            lo, hi = _conjunct(clause, m.start(), m.end())
+            said = _in_use_ref(clause, m, lo, hi)
+            if said is None:
+                continue
+            # What leads up to the pair, within its conjunct: the words before
+            # the ref ("make X the current model") and between the two.
+            if said.end() <= m.start():
+                lead = clause[lo : m.start()]
+            else:
+                lead = clause[m.end() : said.start()]
+            if _IN_USE_UNSAID.search(lead):
+                continue
+            start, end = min(said.start(), m.start()), max(said.end(), m.end())
+            if _not_her_claim(clause[:start], clause[end:], rest):
+                continue
+            yield "in_use", _strip_trailing_punct(said.group("ref")), clause[start:end]
+    for m in _NO_MODEL.finditer(clause):
+        if _claim_prefix_blocks(clause[: m.start()]):
+            continue
+        if _not_her_claim(clause[: m.start()], clause[m.end() :], rest):
+            continue
+        yield "no_model", None, m.group(0)
+
+
+def served_claim_check(
+    reply_text: str, spans: Sequence[Any], *, purpose: str | None
+) -> ServedClaim | None:
+    """Contradict a claim about which model wrote this reply that the turn's
+    own rounds refute (see the section header). None otherwise — pure,
+    precision-first, fail-open at the call site. `purpose` is the turn's kind
+    (chat._purpose_of); outside STACK_CLAIM_KINDS it says nothing.
+
+    A NAMED claim fires when the model named served no round of this turn,
+    some round was stamped, and the round that WROTE the reply (_reply_served_
+    by) was stamped too: the correction quotes that round, and when it carries
+    no stamp the claimed model may be the very one that wrote it. "No model"
+    fires on any round of the turn's own purpose that answered."""
+    if purpose not in STACK_CLAIM_KINDS:
+        return None
+    if not reply_text or not reply_text.strip():
+        return None
+    served = _served_models(spans)
+    answered = served_this_turn(spans, purpose)
+    if not served and not answered:
+        return None
+    writer = _reply_served_by(spans, purpose)
+    for line in _own_lines(reply_text):
+        if not line.strip():
+            continue
+        label = _LINE_LABEL.match(line)
+        in_use = label is None or _LABEL_OK.fullmatch(label.group("label").strip()) is not None
+        for clause, is_question, rest in _clauses_with_rest(line):
+            if is_question or _REPORTED.search(clause) or _PRIOR_TIME.search(clause):
+                continue
+            for shape, claimed, phrase in _served_claims(clause, in_use=in_use, rest=rest):
+                phrase = _strip_trailing_punct(phrase.strip())
+                claim = _served_verdict(shape, claimed, phrase, served, writer, answered)
+                if claim is not None:
+                    return claim
+    return None
+
+
+def _served_verdict(
+    shape: str,
+    claimed: str | None,
+    phrase: str,
+    served: tuple[str, ...],
+    writer: str | None,
+    answered: bool,
+) -> ServedClaim | None:
+    if claimed is None:
+        # S40b final fix wave (C3): silent when the round that wrote the reply
+        # carries no served-by header — the verdict's §4 MUST_NOT ("any
+        # MUST_FIRE sentence with no served_by") over its evidence line, as
+        # the ledger ruled: the guard says only what it can quote.
+        if not answered or writer is None:
+            return None
+        text = SERVED_NO_MODEL_CORRECTION.format(served=writer)
+        return ServedClaim(shape=shape, claimed=None, served=served, phrase=phrase[:80], text=text)
+    if not served or writer is None:
+        return None
+    compared = _claimed_as_served(claimed)
+    if any(_same_model(compared, model) for model in served):
+        return None
+    return ServedClaim(
+        shape=shape,
+        claimed=claimed,
+        served=served,
+        phrase=phrase[:80],
+        text=SERVED_CLAIM_CORRECTION.format(served=writer, claimed=claimed),
+    )
+
+
+# ── S40b: the MEMORY-outage claim — "memory is unreachable" while it answered ──
+#
+# The same walk: b851aa91 and b02a5694 reported "The memory service (`memory`)
+# is currently unreachable (`ConnectError`)" — an outage from some earlier
+# moment, stated as now — in turns whose own recall that service had just
+# answered (hits: 5). The evidence is the turn's memory_recall span: an int `hits` with no
+# `error`, and `errors` (an agent's two-scope recall) not naming every scope —
+# zero hits is an answer. Or a memory tool whose ok means memory answered
+# (_MEMORY_ANSWER_TOOLS) that succeeded this turn. A memory_* tool that FAILED
+# this turn is evidence the report may be true, so the guard says nothing
+# then; and with no recall span it has nothing to go on.
+#
+# Precision-first, like its siblings: a service NOUN is required ("memory"
+# alone is also RAM, GPU memory and her recall), "down" counts only where it
+# ends the claim ("down for maintenance tonight" is a schedule), negations are
+# not outage claims, and past, hedged, reported, quoted and questioned forms
+# assert nothing about now. APPEND-class and not ingested, like served_claim;
+# armed only in STACK_CLAIM_KINDS.
+
+MEMORY_CLAIM_CORRECTION = (
+    "Correction: the memory service answered this turn — this turn's recall was read from "
+    "it — so it is not unreachable now."
+)
+# When no recall answered but a memory tool did: the correction names the call
+# that proves it, never a recall that did not happen.
+MEMORY_CLAIM_TOOL_CORRECTION = (
+    "Correction: the memory service answered this turn — this turn's {tool} call was "
+    "answered by it — so it is not unreachable now."
+)
+MEMORY_CLAIM_MISSING = " What did not work this turn: {retrievers_missing}"
+# Every memory tool is named memory_* (app/tools/memory_tools.py) — the prefix
+# IS the derivation, like _DEVICE_SPAN_PREFIX. test_memory_claim_guard pins it
+# against the registry.
+_MEMORY_TOOL_PREFIX = "memory_"
+_MEMORY_RECALL_KIND = "memory_recall"
+# T2 review, round 1: which memory tools' ok MEANS memory answered. The prefix
+# alone counted memory_backfill, whose ok means distillation ran: a failed
+# /export is a stated limit and failed saves are collected, and it still
+# returns ran=True — so in the turn memory really was down, the guard said
+# "this turn's memory_backfill call was answered by it". memory_search and
+# memory_save go through _call_memory, which raises on anything but a 200, so
+# their ok is memory's answer. Every tool memory_tools defines is on exactly
+# one side, and test_memory_claim_guard pins the partition against
+# memory_tools.TOOLS: a new memory tool turns it red rather than defaulting
+# into the evidence. A FAILED memory_* tool of either side still silences the
+# guard (the prefix): a failure is evidence the report may be true.
+_MEMORY_ANSWER_TOOLS = frozenset({"memory_search", "memory_save"})
+_MEMORY_RAN_NOT_ANSWERED = frozenset({"memory_backfill"})
+
+_MEMORY_NOUN = (
+    r"(?:(?:the|my|your|her|its|nova['’]s)\s+)?(?:long[-\s]term\s+)?memory\s+"
+    r"(?:service|server|container|backend|api|store|database)"
+)
+# T2 precision cut, beyond the verdict's corpus: every outage word ENDS the
+# claim, as the verdict's "down" already must — at punctuation (a bracketed
+# reason included: the walk's "unreachable (`ConnectError`)"), a present-time
+# phrase, or a connector (the machine guard's anchors, T1). "The memory service
+# is unreachable from outside the tailnet", "… offline for maintenance
+# tonight", "… unavailable to agents", "… disconnected from the internet" and
+# "… offline-capable" limit the state to a place, a schedule, a subject or a
+# property — each true, none contradicted by a recall — and were corrected by
+# the verbatim pattern. Pinned in test_memory_claim_guard.
+_MEMORY_OUTAGE_ANCHOR = rf"(?=\s*\(|{_ANCHOR_ENDS}|\s+(?:{_OUTAGE_ENDS}))"
+# S40b final fix wave (C5): "down" takes the bracket anchor the other outage
+# words have, so the walk's shape with a bracketed reason fires in either word:
+# "down (`ConnectError`)".
+_MEMORY_STATE = (
+    r"(?:(?:unreachable|not\s+reachable|offline|unavailable|not\s+responding|unresponsive"
+    rf"|not\s+answering|disconnected){_MEMORY_OUTAGE_ANCHOR}"
+    r"|down(?=\s*\(|\s*(?:[.,;:!?)\]]|$)|\s+(?:right\s+now|now|again|at\s+the\s+moment)\b))"
+)
+# …but a bracket that LIMITS the state is not its reason (C5): "(by design)",
+# "(for maintenance tonight)", "(on weekends)", "(from outside the tailnet)".
+_LIMITING_BRACKET = re.compile(
+    r"\s*+\(\s*+(?:by\s+design|on\s+purpose|intentionally|deliberately|planned|scheduled"
+    r"|for\s+(?!now\b|the\s+moment\b|the\s+time\s+being\b)"
+    rf"|{_TRAILING_LIMIT})",
+    re.I,
+)
+# S40b final fix wave (A7): the memory noun must be the outage's SUBJECT. As
+# the object of a part-of preposition or a partitive — "semantic search IN the
+# memory service is unavailable", "part OF the memory service" — the outage is
+# something else's: her honest account of a degraded recall, the very state
+# the correction's "What did not work" suffix reports. Never "to" or "with":
+# "Access to the memory service is unavailable" says she cannot reach it.
+_MEMORY_NOT_THE_SUBJECT = re.compile(r"\b(?:of|in|on|from|within|inside|behind)\s*$", re.I)
+_MEMORY_DOWN = re.compile(
+    rf"\b(?P<subj>{_MEMORY_NOUN})(?:\s*\([^()\n]{{1,40}}\))?"
+    rf"(?:\s+{_PRESENT_COPULA}|['’]s)(?:\s+{_SERVING_ADVERB})*\s+(?P<state>{_MEMORY_STATE})\b",
+    re.I,
+)
+# T2 review, round 1: the verdict's can't-reach form never read WHO cannot
+# reach memory, and nothing ended its object, so true architecture statements
+# were corrected: "You can't reach the memory service from outside the
+# tailnet", "Your phone can't reach the memory service directly; it goes
+# through core" — the same claim Deviation 4 pins as honest in the
+# "unreachable from outside the tailnet" form. It is her outage claim only in
+# the first person (I, we) or with no subject at all ("Can't reach the memory
+# service right now."), and its object ends the way _MEMORY_DOWN's outage words
+# do, so "directly", "from outside" and "from your phone" end it as a route.
+# The claim (the span's phrase) starts at "I"/"we", or at the verb when the
+# clause opens on it — a list mark before it is not part of what she said.
+_MEMORY_UNREACHED = re.compile(
+    r"(?:^\s*(?:(?:[-+•]|\d+[.)])\s*)?|(?<![\w'’-])(?=(?:I|we)\b))"
+    r"(?P<claim>(?:(?:I|we)(?:['’]m|['’]re|\s+am|\s+are)?\s+)?"
+    r"(?:(?:still|currently|now|just|simply|really|also)\s+)*"
+    r"(?:can\s*(?:no|['’])?t|cannot|can\s+not|unable\s+to)\s+"
+    r"(?:reach|contact|connect\s+to|talk\s+to|get\s+(?:a\s+)?(?:response|answer)\s+from)\s+"
+    rf"(?P<subj>{_MEMORY_NOUN})){_MEMORY_OUTAGE_ANCHOR}",
+    re.I,
+)
+
+
+@dataclass(frozen=True)
+class MemoryClaim:
+    """A present-tense claim that the memory service cannot answer, in a turn
+    it answered. `subject` is the noun the reply used, `phrase` the matched
+    text, `retrievers_missing` memory's own sentence about a search it could
+    not run in full this turn (the true half of an outage report), and `text`
+    the stated correction."""
+
+    subject: str
+    phrase: str
+    text: str
+    retrievers_missing: str | None = None
+
+
+def _recall_answered(span: Any) -> bool:
+    if getattr(span, "kind", None) != _MEMORY_RECALL_KIND:
+        return False
+    meta = _span_meta(span)
+    hits = meta.get("hits")
+    if not isinstance(hits, int) or isinstance(hits, bool) or meta.get("error"):
+        return False
+    errors = meta.get("errors")
+    if errors:
+        scopes = meta.get("scopes")
+        if not isinstance(errors, Mapping) or not isinstance(scopes, Mapping) or not scopes:
+            return False  # a failure this span cannot place: not an answer
+        if all(scope in errors for scope in scopes):
+            return False
+    return True
+
+
+def _went_to_memory(span: Any) -> bool:
+    """Did this memory tool call send its request through the door
+    (memory_tools.MEMORY_CALL_FACT on the span's facts), whatever came back?
+    Imported inside the call because app.tools imports this module."""
+    from app.tools import memory_tools
+
+    facts = _span_meta(span).get("facts")
+    return isinstance(facts, list) and any(
+        isinstance(fact, dict) and memory_tools.MEMORY_CALL_FACT in fact for fact in facts
+    )
+
+
+def _memory_answered(spans: Sequence[Any]) -> tuple[Any, str | None] | None:
+    """(the recall span that answered or None, the memory tool that answered
+    or None) — None when memory did not answer this turn, or when a memory
+    tool failed this turn (one through the door only if it reached it)."""
+    recall = None
+    tool: str | None = None
+    for span in spans:
+        if recall is None and _recall_answered(span):
+            recall = span
+            continue
+        name = getattr(span, "name", None)
+        if getattr(span, "kind", None) != "tool" or not isinstance(name, str):
+            continue
+        if not name.startswith(_MEMORY_TOOL_PREFIX):
+            continue
+        if _span_meta(span).get("ok") is not True:
+            # S40b final fix wave (C15): a call through the one door that never
+            # reached it — refused by the schema, for want of an identity, or
+            # by a live-source check — is her own malformed call, not evidence
+            # memory is down. The door records every request it sends.
+            if name in _MEMORY_ANSWER_TOOLS and not _went_to_memory(span):
+                continue
+            return None
+        if name in _MEMORY_ANSWER_TOOLS:
+            tool = tool or name
+    if recall is None and tool is None:
+        return None
+    return recall, tool
+
+
+def memory_claim_check(
+    reply_text: str, spans: Sequence[Any], *, purpose: str | None
+) -> MemoryClaim | None:
+    """Contradict a present-tense claim that the memory service cannot answer,
+    made in a turn it answered (see the section header). None otherwise —
+    pure, precision-first, fail-open at the call site. `purpose` is the turn's
+    kind; outside STACK_CLAIM_KINDS it says nothing."""
+    if purpose not in STACK_CLAIM_KINDS:
+        return None
+    if not reply_text or not reply_text.strip():
+        return None
+    evidence = _memory_answered(spans)
+    if evidence is None:
+        return None
+    recall, tool = evidence
+    for line in _own_lines(reply_text):
+        if not line.strip():
+            continue
+        for clause, is_question, rest in _clauses_with_rest(line):
+            if is_question or _REPORTED.search(clause) or _PRIOR_TIME.search(clause):
+                continue
+            for pattern in (_MEMORY_DOWN, _MEMORY_UNREACHED):
+                for m in pattern.finditer(clause):
+                    if _claim_prefix_blocks(clause[: m.start()]):
+                        continue
+                    # A scope fronted or following (A5), a limiting bracket
+                    # (C5), or the noun as a preposition's object (A7).
+                    if _FRONTED_SCOPE.match(clause[: m.start()]) or _LIMITED_AFTER.match(
+                        clause, m.end()
+                    ):
+                        continue
+                    if _LIMITING_BRACKET.match(clause, m.end()):
+                        continue
+                    if pattern is _MEMORY_DOWN and _MEMORY_NOT_THE_SUBJECT.search(
+                        clause[: m.start()]
+                    ):
+                        continue
+                    if _not_her_claim(clause[: m.start()], clause[m.end() :], rest):
+                        continue
+                    if _SERVED_SKIP.search(clause[: m.end()]):
+                        continue
+                    return _memory_claim(m, recall, tool)
+    return None
+
+
+def _memory_claim(match: re.Match[str], recall: Any, tool: str | None) -> MemoryClaim:
+    missing = _span_meta(recall).get("retrievers_missing") if recall is not None else None
+    missing = missing.strip() if isinstance(missing, str) and missing.strip() else None
+    if recall is not None:
+        text = MEMORY_CLAIM_CORRECTION
+    else:
+        text = MEMORY_CLAIM_TOOL_CORRECTION.format(tool=tool)
+    if missing:
+        text += MEMORY_CLAIM_MISSING.format(retrievers_missing=missing)
+    said = match.group("claim") if "claim" in match.re.groupindex else match.group(0)
+    return MemoryClaim(
+        subject=match.group("subj").strip(),
+        phrase=said.strip()[:80],
+        text=text,
+        retrievers_missing=missing,
+    )
