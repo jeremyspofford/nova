@@ -420,6 +420,15 @@ change is out of scope.
 
 ## 5. The bundle format
 
+> **Amended 2026-09-21:** §5.5's example listing below predates the symlink
+> line and shows no `L` row. The listing now carries a fifth kind,
+> `L ./path -> target`, one per symlink, in the same sorted file — because a
+> **retargeted** symlink was invisible to `pack`, `verify` and the standalone
+> reader alike, so a backup could not notice its own data being repointed. An
+> `l` entry with no matching `L` line is a **refusal** on both sides: the
+> producing container counts its own entries, and `verify` checks again.
+
+
 ### 5.1 The outer archive — plain uncompressed `tar`, mode 0600, owned by the operator
 
 Name: `nova-backup-<host>-<YYYYMMDDTHHMMSSZ>[-N].tar`. The stamp is UTC and
