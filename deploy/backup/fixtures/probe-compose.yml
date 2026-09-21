@@ -1,0 +1,38 @@
+# The probe file behind design-verdict.md §3, checked in so the two renders
+# beside it can be regenerated on any host (fixtures/refresh.sh).
+#
+# It carries an `x-` key at each of the four positions a disposition can
+# occupy plus one at the document root, and a volume NO service mounts:
+#   - x-nova-top-level      the document root        (the JSON render KEEPS it)
+#   - vol_one               under `volumes:`         (the JSON render strips it)
+#   - alpha                 a service                (stripped)
+#   - the long-syntax bind  a mount                  (stripped)
+#   - vol_three             declared, mounted by nothing (PRUNED from both)
+name: novaxprobe
+x-nova-top-level: kept-or-not
+services:
+  alpha:
+    image: alpine:3.20
+    command: ["true"]
+    x-nova-backup-anon:
+      /var/cache/thing:
+        disposition: exclude-ephemeral
+        reason: a cache; it regenerates on use.
+    volumes:
+      - vol_one:/one
+      - type: bind
+        source: ./bindsrc
+        target: /b
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: from git
+volumes:
+  vol_one:
+    x-nova-backup: include
+    x-nova-backup-reason: "the notes: they matter"
+  vol_three:
+    x-nova-backup: include
+    x-nova-backup-reason: >-
+      declared here and mounted by no service, which is the one case a render
+      cannot show; folded so the fixture also proves a multi-line reason
+      renders onto a single line.
