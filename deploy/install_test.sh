@@ -275,10 +275,16 @@ case "$FRESH_PERMS" in
   600) report 0 "fresh .env: written chmod 600" ;;
   *) report 1 "fresh .env: written chmod 600" "got mode '$FRESH_PERMS'" ;;
 esac
-case "$FRESH_BODY" in
-  *INSTANCE_SECRET*) report 1 "fresh .env: no INSTANCE_SECRET generated" "$FRESH_BODY" ;;
-  *) report 0 "fresh .env: no INSTANCE_SECRET generated" ;;
-esac
+# Anchored to a real assignment line, not a substring of the whole file:
+# since S41, .env.example carries a COMMENTED-OUT `# INSTANCE_SECRET=` so the
+# key has a `# nova-backup:` disposition (it is written into a real .env by
+# something other than that file, and an undeclared key refuses every backup).
+# A plain substring test reads that declaration as a generated secret.
+if printf '%s\n' "$FRESH_BODY" | grep -q '^INSTANCE_SECRET='; then
+  report 1 "fresh .env: no INSTANCE_SECRET generated" "$FRESH_BODY"
+else
+  report 0 "fresh .env: no INSTANCE_SECRET generated"
+fi
 case "$FRESH_BODY" in
   *"CORE_MEMORY_TOKEN="?*) report 0 "fresh .env: real secrets still generated" ;;
   *) report 1 "fresh .env: real secrets still generated" "$FRESH_BODY" ;;
