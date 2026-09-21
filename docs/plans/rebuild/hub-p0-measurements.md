@@ -55,13 +55,15 @@ pci_id=0000:01:00.0 type=discrete total="24.0 GiB" available="22.8 GiB"
 | Docker networks | `bridge` 172.17/16; `docker_default` **172.18/16**; `jobhunter_default` 172.19/16; `nova_nova-internal` 172.20/16; `project_nova-internal` 172.21/16 |
 | Failed user units | `openclaw-gateway.service`, `xdg-desktop-portal-gtk.service` (unrelated to Nova) |
 
-**Finding (blocks S41/S45 until handled):** the mini PC holds a stopped Nova from the earlier platform line, **under the compose project name `nova`**:
+**Finding (RESOLVED 2026-09-21 — archived and removed on the owner's instruction; see `s41/map-minipc-measured.md`, "After the cleanup"):** the mini PC held a stopped Nova from the earlier platform line, **under the compose project name `nova`**:
 - containers `nova-postgres-1`, `nova-orchestrator-1`, `nova-llm-gateway-1`, `nova-chat-api-1`, `nova-chat-bridge-1`, `nova-dashboard-1`, `nova-memory-service-1`, `nova-redis-1` and `nova-recovery-1`;
 - volumes `nova_postgres-data` (67.66 MB) and `nova_redis-data` (37.06 kB).
 
 v4's project is also `nova`. So `docker compose up` would adopt `nova-postgres-1` as its own `postgres` service container and recreate it, and it would report the rest as orphans. That is the same-project-name trap already hit on the Dell on 2026-09-07.
 
 **Owner ruling 2026-09-21:** that stack is to be **deleted, containers and volumes**, by an installer that names what it found first (`hub-topology.md` decision 16, `s41/rulings.md`).
+
+**Carried out the same day**, widened by the owner to "all old nova stacks, nova-ai-platform included": projects `nova`, `docker` and `project` were archived to `/home/jeremy/nova-old-stacks-archive` (21 MB, checksums verified by the operator) and then removed — 13 containers, 6 volumes, 3 networks, 7 images — with `minecraft` left running and `jobhunter` untouched. **172.18/16 is therefore free on that machine now**, and the only subnets left are 172.17 and 172.19.
 
 ### Correction, measured 2026-09-21: a `nova_` name does NOT mean the `nova` project
 

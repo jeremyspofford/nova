@@ -1,4 +1,11 @@
-# The mini PC, measured 2026-09-21 (read-only)
+# The mini PC, measured 2026-09-21
+
+> **Superseded in part the same day:** on the owner's instruction ("You can clean up
+> everything from all old nova stacks. nova-ai-platform included.") the three old
+> projects were archived and then removed. What that changed is in the last section,
+> ["After the cleanup"](#after-the-cleanup). Everything above it is the reading taken
+> **before** the cleanup, and it is kept because it is what S41's install refusal and
+> its fixtures are built from.
 
 Taken over Tailscale SSH from the Dell, read-only: no container was started,
 stopped or removed, no volume touched, nothing written to that machine. This
@@ -114,3 +121,52 @@ or beyond. Host is on Wi-Fi `wlo1`, 192.168.0.245/24, default via 192.168.0.1.
   yet, so there is nothing to compare until the install.
 - Whether logind's `Inhibit sleep` is honoured from a linger unit (P0-9, gates
   S44).
+
+
+## After the cleanup (2026-09-21, same day)
+
+The owner instructed: "You can clean up everything from all old nova stacks.
+nova-ai-platform included." Done, in this order, each step verifying itself:
+
+1. **Archived first.** Every volume of projects `nova`, `docker` and `project`
+   was tarred from a throwaway container and **re-read and sha256-verified by
+   the operator**, not by root, before anything was deleted:
+   `/home/jeremy/nova-old-stacks-archive/` — 21 MB, six `.tgz` files plus
+   `SHA256SUMS`, all `sha256sum -c` OK.
+2. **The removal refused to start** unless every volume of every target project
+   had a verified archive. It selected by the `com.docker.compose.project`
+   label, never by name.
+3. Removed: 13 containers, 6 volumes, 3 networks, 7 images.
+4. **Verified after:** 0 leftovers for each of the three projects; `minecraft`
+   still **running** (2 containers); `jobhunter` untouched (6 containers, 3
+   volumes). The only volumes left on the machine are jobhunter's three.
+5. The phantom tree at `/home/jeremy/workspace/nova` — four empty root-owned
+   stub directories (`.env/`, `backups/`, `docker-compose.yml/`, `workspace/`)
+   created by failed bind mounts on 2026-05-20, containing nothing — was removed
+   with `rmdir`, which refuses a non-empty directory, rather than `rm -rf`. The
+   path v4 will install to is now clear.
+
+### What this changes for S41
+
+- **The blocker is gone.** There is no foreign `nova` compose project on the
+  mini PC any more, so nothing stands between S41's install and that machine.
+- **172.18/16 is now free there.** The allocated subnets are down to 172.17
+  (docker0) and 172.19 (jobhunter). v4 pins 172.18, so the collision that
+  `decide_subnet` was written for no longer exists **on this machine**.
+  `decide_subnet` is still required — it is a general mechanism, and 172.19 is
+  still taken — but it is no longer load-bearing for this install.
+- **The install refusal is still built, and still matters.** It is what makes
+  the next machine safe, and its label-not-name rule is now proven by a real
+  near-miss rather than argued.
+- **The fixtures come from the reading above**, not from the live machine:
+  after the cleanup there is nothing left to point them at. That is why the
+  pre-cleanup reading is kept verbatim.
+- **A new, measured design constraint:** a container writing the archive
+  produces a **root-owned, mode-0600** file, and the host-side verification —
+  running as the operator — then cannot read it back. That bit during this very
+  cleanup. So a bundle written from a container must be `chown`ed to the
+  invoking uid (or every verification step must also run in a container).
+  Requirement #26 says an archive path that cannot hold mode 0600 is refused;
+  this is the other half of it, and S41 must not assume the writer and the
+  verifier are the same user.
+- Disk on the mini PC after: **353 GB free of 460 GB**.
