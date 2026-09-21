@@ -131,8 +131,40 @@ bk_j() { _cr_j "$1"; }
 
 # The project label every `docker` selection below is filtered by. Read from
 # the render — never typed, never assembled.
+#
+# stderr is CARRIED, not discarded. `bk_compose_config 2>/dev/null | …` is the
+# exact pattern this file's own header condemns at install.sh:394-396: every
+# caller below refuses when the project name is empty, and without the reason
+# compose gave, the refusal says "no project name" when the truth was "your
+# .env names a compose file that is not there".
+#
+# Cached for the run, because three callers each need it and each call is a
+# full `docker compose config`. render_facts clears the cache, so a fresh run
+# re-reads it.
 bk_project() {
-  bk_compose_config 2>/dev/null | cfg_project_name
+  local err rc=0 text
+  if [ -n "${BK_PROJECT_CACHE:-}" ]; then
+    printf '%s\n' "$BK_PROJECT_CACHE"
+    return 0
+  fi
+  err="$(mktemp "${TMPDIR:-/tmp}/nova-project.XXXXXX")" || return 1
+  text="$(bk_compose_config 2> "$err")" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    bk_fail "docker compose --profile '*' config exited $rc while reading the project name.
+       stderr: $(tr '\n' ' ' < "$err")"
+    rm -f "$err"
+    return 1
+  fi
+  BK_PROJECT_CACHE="$(printf '%s' "$text" | cfg_project_name)"
+  if [ -z "$BK_PROJECT_CACHE" ]; then
+    bk_fail "the compose render carries no top-level \`name:\` line, so this stack has no
+       project label for anything below to select by.
+       stderr: $(tr '\n' ' ' < "$err")"
+    rm -f "$err"
+    return 1
+  fi
+  rm -f "$err"
+  printf '%s\n' "$BK_PROJECT_CACHE"
 }
 
 # The image the reachability probe runs. Read off the RUNNING postgres
@@ -140,7 +172,7 @@ bk_project() {
 # pulled its own image would be measuring a different machine's postgres.
 bk_probe_image() {
   local project id image
-  project="$(bk_project)"
+  project="$(bk_project)" || return 1
   id="$(bk_docker ps -a \
     --filter "label=com.docker.compose.project=$project" \
     --filter "label=com.docker.compose.service=postgres" \
@@ -276,12 +308,7 @@ render_containers() {
   local stage="$1"
   local out="$stage/facts/containers.json" err="$stage/facts/.containers.err"
   local project id first rc=0 ids
-  project="$(bk_project)"
-  if [ -z "$project" ]; then
-    bk_fail "could not read the project name out of the compose render, so there is
-       no label to select this stack's containers by."
-    return 1
-  fi
+  project="$(bk_project)" || return 1
   ids="$(bk_docker ps -a --filter "label=com.docker.compose.project=$project" \
     --format '{{.ID}}' 2> "$err")" || rc=$?
   if [ "$rc" -ne 0 ]; then
@@ -620,7 +647,7 @@ render_databases() {
   local stage="$1"
   local out="$stage/facts/databases.json" err="$stage/facts/.databases.err"
   local project id rows rc=0 line first
-  project="$(bk_project)"
+  project="$(bk_project)" || return 1
   id="$(bk_docker ps --filter "label=com.docker.compose.project=$project" \
     --filter "label=com.docker.compose.service=postgres" \
     --format '{{.ID}}' 2> "$err" | head -1)"
@@ -860,6 +887,7 @@ bk_ignored_paths() {
 render_facts() {
   local stage="$1" mode="${2:-routine}"
   mkdir -p "$stage/facts" || return 1
+  BK_PROJECT_CACHE=""
   render_raw "$stage" || return 1
   render_dispositions "$stage" || return 1
   render_config "$stage" || return 1

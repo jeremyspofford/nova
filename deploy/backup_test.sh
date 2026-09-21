@@ -267,6 +267,8 @@ PY
 stub_docker() {
   case "$1" in
     compose)
+      [ -n "$STUB_COMPOSE_STDERR" ] && printf '%s\n' "$STUB_COMPOSE_STDERR" >&2
+      [ -n "$STUB_COMPOSE_EMPTY" ] && return 0
       case " $* " in
         *" --format json "*) sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.json" ;;
         *)
@@ -343,6 +345,8 @@ expect_cov() {
 CONTAINERS_FIXTURE="containers-v4.json"
 STUB_COMPOSE_RC=0
 STUB_COMPOSE_SED=""
+STUB_COMPOSE_EMPTY=""
+STUB_COMPOSE_STDERR=""
 STUB_DATABASES="nova_core|core
 nova_gateway|gateway
 nova_memory|memory"
@@ -394,13 +398,41 @@ grep -q 'v4_vectors' "$FIXTURES/compose-v5.3.0.yaml" && \
   report 1 "the_render_used_above_never_mentioned_the_new_volume" "the fixture carries it" || \
   report 0 "the_render_used_above_never_mentioned_the_new_volume"
 
-# A renderer that fails takes the run with it and carries its stderr.
+# A renderer that fails takes the run with it and carries its stderr — the
+# whole point of not writing `2>/dev/null` anywhere on this path.
 STUB_COMPOSE_RC=1
+STUB_COMPOSE_STDERR="could not find /nowhere/docker-compose.yml"
 FACTFAIL="$(run_coverage routine)"
 expect_cov "refuses_when_a_fact_renderer_fails" "$FACTFAIL" 9 "Error:"
 expect_cov "refuses_when_a_fact_renderer_fails_and_names_the_command" "$FACTFAIL" 9 \
   "docker compose --profile '*' config"
+expect_cov "refuses_when_a_fact_renderer_fails_and_prints_its_stderr" "$FACTFAIL" 9 \
+  "could not find /nowhere/docker-compose.yml"
 STUB_COMPOSE_RC=0
+STUB_COMPOSE_STDERR=""
+
+# Nothing is selected by name, so everything downstream is selected by the
+# project LABEL — and a render with no `name:` leaves nothing to select by.
+# The refusal has to say that, not fail three functions later with an empty
+# filter that silently matches every container on the host.
+STUB_COMPOSE_SED='/^name: /d'
+STUB_COMPOSE_STDERR="compose said why"
+NONAME="$(run_coverage routine)"
+expect_cov "refuses_a_render_with_no_project_name" "$NONAME" 9 "no top-level"
+expect_cov "and_carries_the_reason_compose_gave" "$NONAME" 9 "compose said why"
+STUB_COMPOSE_SED=""
+STUB_COMPOSE_STDERR=""
+
+# A renderer that exits 0 and produces NOTHING is a reading that failed.
+# Before this, deleting bk_verify_fact's whole empty branch cost nothing in
+# either suite.
+STUB_COMPOSE_EMPTY=1
+EMPTYFACT="$(run_coverage routine)"
+expect_cov "an_empty_but_successful_fact_is_a_failure" "$EMPTYFACT" 9 "produced nothing"
+expect_cov "and_says_an_empty_fact_is_not_nothing_to_carry" "$EMPTYFACT" 9 \
+  "An empty fact is a reading that failed"
+STUB_COMPOSE_EMPTY=""
+
 
 # R7: an empty database list is a reading that failed, not a stack with
 # nothing in it.
