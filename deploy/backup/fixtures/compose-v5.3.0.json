@@ -119,7 +119,8 @@
           "type": "bind",
           "source": "/repo/data",
           "target": "/data",
-          "read_only": true
+          "read_only": true,
+          "bind": {}
         },
         {
           "type": "volume",
@@ -251,7 +252,8 @@
           "type": "bind",
           "source": "/repo/deploy/postgres-init",
           "target": "/docker-entrypoint-initdb.d",
-          "read_only": true
+          "read_only": true,
+          "bind": {}
         }
       ]
     },
@@ -294,7 +296,8 @@
           "type": "bind",
           "source": "/repo/searxng",
           "target": "/etc/searxng",
-          "read_only": true
+          "read_only": true,
+          "bind": {}
         }
       ]
     },
@@ -346,7 +349,8 @@
           "type": "bind",
           "source": "/repo/deploy/tailscale",
           "target": "/config",
-          "read_only": true
+          "read_only": true,
+          "bind": {}
         }
       ]
     },

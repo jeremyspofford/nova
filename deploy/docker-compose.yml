@@ -17,6 +17,10 @@ services:
         source: ./postgres-init
         target: /docker-entrypoint-initdb.d
         read_only: true
+        # Implied by short syntax, NOT by long: stated so the resolved
+        # config is byte-identical to the short form this replaced.
+        bind:
+          create_host_path: true
         x-nova-backup: exclude-code
         x-nova-backup-reason: >-
           01-databases.sql, in git. A fresh v4_pgdata re-runs it from the
@@ -95,6 +99,10 @@ services:
         source: ../data
         target: /data
         read_only: true
+        # Implied by short syntax, NOT by long: stated so the resolved
+        # config is byte-identical to the short form this replaced.
+        bind:
+          create_host_path: true
         x-nova-backup: exclude-derived
         x-nova-backup-reason: >-
           hardware.json, rewritten by detect_hardware on every install
@@ -223,6 +231,10 @@ services:
         source: ../searxng
         target: /etc/searxng
         read_only: true
+        # Implied by short syntax, NOT by long: stated so the resolved
+        # config is byte-identical to the short form this replaced.
+        bind:
+          create_host_path: true
         x-nova-backup: exclude-code
         x-nova-backup-reason: >-
           settings.yml, in git. This bind is also what covers the image's own
@@ -335,6 +347,10 @@ services:
         source: ./tailscale
         target: /config
         read_only: true
+        # Implied by short syntax, NOT by long: stated so the resolved
+        # config is byte-identical to the short form this replaced.
+        bind:
+          create_host_path: true
         x-nova-backup: exclude-code
         x-nova-backup-reason: >-
           start.sh and serve_check.sh, in git. The node's identity is on

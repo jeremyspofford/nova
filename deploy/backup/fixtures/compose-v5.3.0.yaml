@@ -76,6 +76,7 @@ services:
         source: /repo/data
         target: /data
         read_only: true
+        bind: {}
         x-nova-backup: exclude-derived
         x-nova-backup-reason: hardware.json, rewritten by detect_hardware on every install (deploy/install.sh:808-863). The restored host's GPUs are not the source host's, so carrying this would describe the wrong machine.
       - type: volume
@@ -167,6 +168,7 @@ services:
         source: /repo/deploy/postgres-init
         target: /docker-entrypoint-initdb.d
         read_only: true
+        bind: {}
         x-nova-backup: exclude-code
         x-nova-backup-reason: 01-databases.sql, in git. A fresh v4_pgdata re-runs it from the checkout at restore time with the carried POSTGRES_PASSWORD, so carrying a copy would only offer a second, staler one.
   searxng:
@@ -199,6 +201,7 @@ services:
         source: /repo/searxng
         target: /etc/searxng
         read_only: true
+        bind: {}
         x-nova-backup: exclude-code
         x-nova-backup-reason: settings.yml, in git. This bind is also what covers the image's own /etc/searxng volume declaration at run time.
     x-nova-backup-anon:
@@ -246,6 +249,7 @@ services:
         source: /repo/deploy/tailscale
         target: /config
         read_only: true
+        bind: {}
         x-nova-backup: exclude-code
         x-nova-backup-reason: start.sh and serve_check.sh, in git. The node's identity is on v4_tailscale, not here.
   web:
