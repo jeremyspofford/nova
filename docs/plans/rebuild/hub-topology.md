@@ -71,6 +71,18 @@ without WSL, or a combination. Nova should set up the networking between machine
 15. **Order.** Roadmap item 0 (the core suite wedge) first, then this lane (S40–S49). That puts
     this lane ahead of S26 and doing-things; doing-things rebases onto the new novad later.
 
+### Owner decisions (2026-09-21, for S41)
+
+16. **The mini PC's old platform-line `nova` stack is deleted, containers and volumes.** `install.sh`
+    refuses while it is there, names every container and volume it found, and only then offers a
+    removal bounded to exactly what it named. Deletion is irreversible, so the offer states what it
+    destroys and defaults to doing nothing.
+17. **S41 ships the encrypted bundle of ARCS arc 8**, not the plain tar its own bullets below still
+    describe: encrypted bundle, passphrase **resolver seam** (not the secrets store), the restore
+    script inside every bundle, and coverage **derived from the compose file** that REFUSES on an
+    unclassified volume. `BACKUP_EXCLUDE_DATA`, the hand-kept list, is not built. Arc 8 wins wherever
+    it contradicts the S41 section; the reasoning is in `s41/rulings.md`.
+
 ### Measured facts (2026-09-18)
 
 - **Hub: AZW MINI S.**
