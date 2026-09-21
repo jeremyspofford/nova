@@ -94,6 +94,30 @@ that is declared `carry` but absent from the live `.env` does **not** travel.
 
 ## Prerequisites — run these days earlier, and re-run the starred ones on the day
 
+> ### Checked 2026-09-21 by the controller, read-only, both machines
+>
+> | | Reading | Verdict |
+> |---|---|---|
+> | **P10** disk | Dell 904 GB free of 1007; mini PC 341 GB free of 460 | pass, both ends |
+> | **P11** postgres major/minor | **both 16.15** (`16.15-1.pgdg13+2`) | pass — and it **retires §15 risk 1**: the per-table digest comparison is between identical servers, so a minor-version text-rendering difference cannot fail the drill. Re-check on the day, because `postgres:16` floats. |
+> | **P14** destination `TS_AUTHKEY` | blank | pass |
+> | **P15** destination tailnet state volume | none exists | pass |
+> | **P16** `TAILNET_HOSTNAME` on destination | **unset** | **action at cutover**, not a blocker |
+> | **P17** `.env` keys nothing declares | none | pass — `INSTANCE_SECRET` and the three subnet keys were declared during S41 |
+> | **P18** collateral on destination | `minecraft` **running** (must stay), `jobhunter` exited, and the dry-run `nova` stack | pass, with the dry-run stack to tear down at step 14 |
+> | **P12** unattended ssh to destination | works (`BatchMode`, Tailscale SSH `action: accept`) | pass |
+>
+> Still **BLOCKING** at this timestamp: **P0** (S41 finished and merged — two
+> lanes were still editing `deploy/backup.sh` and `deploy/backup/**` when this
+> was checked) and **P13** (the Dell must not sleep during the move; the owner
+> has since decided it sleeps and is woken by WoL *after* the move, which does
+> not change the requirement during it).
+>
+> **P2 and P3 are being built** — `cmd_undo_move` and the failed-`--move`
+> parking — because the owner chose to have them before moving rather than
+> relying on the by-hand recovery.
+
+
 Each has a command, what it verifies, and what to do when it fails. A
 prerequisite that cannot be *checked* is a prerequisite that has failed.
 
