@@ -29,43 +29,51 @@ def raw_volume_keys():
     return compose_read("raw_volume_keys", COMPOSE_FILE.read_text()).split()
 
 
-def raw_service_keys():
-    return compose_read("raw_service_keys", COMPOSE_FILE.read_text()).split()
+def _rows(text):
+    """{(kind, owner, name): (disposition, has_reason)} — the shape both the
+    raw file and the render are reduced to, so they can be compared."""
+    out = {}
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        kind, owner, name, disposition, reason = line.split("\t")
+        out[(kind, owner, name)] = (disposition, reason == "yes")
+    return out
 
 
-def rendered_volume_dispositions():
-    """{key: (disposition, reason)} from the YAML render."""
+def raw_rows():
+    """Every disposition deploy/docker-compose.yml ITSELF declares.
+
+    This is the only reader in the suite that looks at the file a human edits;
+    everything else reads the checked-in render, which is a capture. Deleting
+    a row from the real file and leaving the capture alone has to be loud.
+    """
+    return _rows(compose_read("raw_dispositions", COMPOSE_FILE.read_text()))
+
+
+def rendered_rows():
+    """The same set, as the checked-in render shows it."""
     text = RENDER.read_text()
     out = {}
     for key in compose_read("cfg_volume_keys", text).split():
         line = compose_read(f'cfg_volume_disposition "{key}"', text).rstrip("\n")
-        if line:
-            disposition, _, reason = line.partition("\t")
-            out[key] = (disposition, reason)
-    return out
-
-
-def rendered_bind_dispositions():
-    text = RENDER.read_text()
-    out = {}
+        disposition, _, reason = line.partition("\t")
+        out[("volume", "", key)] = (disposition, bool(reason.strip()))
     for svc in compose_read("cfg_service_keys", text).split():
         for line in compose_read(f'cfg_mounts "{svc}"', text).splitlines():
             parts = line.split("\t")
             if len(parts) < 6 or parts[0] != "bind":
                 continue
-            out[(svc, parts[2])] = (parts[1], parts[4], parts[5])
-    return out
-
-
-def rendered_anon_dispositions():
-    text = RENDER.read_text()
-    out = {}
-    for svc in compose_read("cfg_service_keys", text).split():
+            out[("bind", svc, parts[2])] = (parts[4], bool(parts[5].strip()))
         for line in compose_read(f'cfg_anon "{svc}"', text).splitlines():
             target, _, rest = line.partition("\t")
             disposition, _, reason = rest.partition("\t")
-            out[(svc, target)] = (disposition, reason)
+            out[("anon", svc, target)] = (disposition, bool(reason.strip()))
     return out
+
+
+def raw_service_keys():
+    return compose_read("raw_service_keys", COMPOSE_FILE.read_text()).split()
 
 
 def env_declarations():
@@ -95,10 +103,35 @@ def env_declarations():
 # ── the compose file ────────────────────────────────────────────────────────
 
 
+def test_the_render_declares_exactly_what_the_file_declares():
+    """The tripwire the rest of the suite hangs off.
+
+    Every other disposition assertion reads the checked-in render. That render
+    is a capture, so on its own it says nothing about the file the operator
+    edits: deleting searxng's x-nova-backup-anon block, or v4_memdata's two
+    rows, or the ../searxng bind's two rows, left this whole suite green while
+    the next real backup refused R2. Compared in both directions, the same
+    edit is red before it is committed — and so is a fixture nobody refreshed.
+    """
+    raw, rendered = raw_rows(), rendered_rows()
+    only_in_file = {k: raw[k] for k in raw if k not in rendered}
+    only_in_render = {k: rendered[k] for k in rendered if k not in raw}
+    differing = {k: (raw[k], rendered[k]) for k in raw if k in rendered and raw[k] != rendered[k]}
+    assert not (only_in_file or only_in_render or differing), (
+        f"{COMPOSE_FILE} and {RENDER.name} disagree.\n"
+        f"  only in the file:   {only_in_file}\n"
+        f"  only in the render: {only_in_render}\n"
+        f"  different:          {differing}\n"
+        "Run deploy/backup/fixtures/refresh.sh, in the same commit as the edit."
+    )
+
+
 def test_every_volume_the_file_declares_has_a_disposition():
-    declared = set(raw_volume_keys())
-    have = set(rendered_volume_dispositions())
-    missing = sorted(declared - have)
+    missing = sorted(
+        name
+        for (kind, _, name), (disposition, _) in raw_rows().items()
+        if kind == "volume" and not disposition
+    )
     assert not missing, (
         f"{missing} are declared under `volumes:` in {COMPOSE_FILE.name} with no "
         "x-nova-backup row. Adding one here is what stops the operator meeting "
@@ -108,46 +141,49 @@ def test_every_volume_the_file_declares_has_a_disposition():
 
 def test_every_disposition_names_a_volume_the_file_declares():
     declared = set(raw_volume_keys())
-    extra = sorted(set(rendered_volume_dispositions()) - declared)
+    extra = sorted(
+        name for (kind, _, name) in raw_rows() if kind == "volume" and name not in declared
+    )
     assert not extra, f"{extra} carry an x-nova-backup row and are declared nowhere."
 
 
-def test_every_volume_disposition_is_one_of_the_eight():
-    for key, (disposition, _) in rendered_volume_dispositions().items():
-        assert disposition in DISPOSITIONS, f"{key}: {disposition!r}"
+def test_every_disposition_in_the_file_is_one_of_the_eight():
+    for (kind, owner, name), (disposition, _) in raw_rows().items():
+        assert disposition in DISPOSITIONS, f"{kind} {owner} {name}: {disposition!r}"
 
 
-def test_every_volume_exclude_carries_a_reason():
-    for key, (disposition, reason) in rendered_volume_dispositions().items():
+def test_every_exclude_in_the_file_carries_a_reason():
+    for (kind, owner, name), (disposition, has_reason) in raw_rows().items():
         if disposition.startswith("exclude-"):
-            assert reason.strip(), f"{key} is {disposition} with no reason"
+            assert has_reason, f"{kind} {owner} {name} is {disposition} with no reason"
 
 
-def test_every_bind_in_the_render_carries_a_disposition_and_a_reason():
-    binds = rendered_bind_dispositions()
-    assert binds, "the render shows no bind at all, which is not this compose file"
-    for (svc, target), (source, disposition, reason) in binds.items():
-        assert disposition in DISPOSITIONS, f"{svc} at {target} ({source}): {disposition!r}"
-        if disposition.startswith("exclude-"):
-            assert reason.strip(), f"{svc} at {target} is {disposition} with no reason"
+def test_the_file_declares_every_bind_it_mounts():
+    binds = {k: v for k, v in raw_rows().items() if k[0] == "bind"}
+    assert binds, f"{COMPOSE_FILE.name} declares no bind at all, which is not this file"
+    undeclared = sorted(f"{owner} at {name}" for (_, owner, name), (d, _) in binds.items() if not d)
+    assert not undeclared, (
+        f"{undeclared} are long-syntax binds with no x-nova-backup row. A bind with no "
+        "disposition refuses every backup."
+    )
 
 
-def test_every_anon_row_is_legal_and_reasoned():
-    anon = rendered_anon_dispositions()
+def test_the_file_declares_every_anon_row_it_opens():
+    anon = {k: v for k, v in raw_rows().items() if k[0] == "anon"}
     assert anon, (
         "no service carries an x-nova-backup-anon row. searxng's image declares "
         "/etc/searxng and /var/cache/searxng, and the second is live on this "
         "machine as an anonymous volume — without a row, every backup refuses."
     )
-    for (svc, target), (disposition, reason) in anon.items():
-        assert disposition in DISPOSITIONS, f"{svc} at {target}: {disposition!r}"
-        assert reason.strip(), f"{svc} at {target} has no reason"
+    for (_, owner, name), (disposition, has_reason) in anon.items():
+        assert disposition, f"{owner} at {name} opens an anon row and declares nothing"
+        assert has_reason, f"{owner} at {name} has no reason"
 
 
 def test_searxng_declares_the_anonymous_volume_that_is_live_on_this_machine():
     """port-v3 C2. It exists ONLY in `docker inspect` output: compose never
     names an image-declared volume, so it has no entry under `volumes:`."""
-    assert ("searxng", "/var/cache/searxng") in rendered_anon_dispositions()
+    assert ("anon", "searxng", "/var/cache/searxng") in raw_rows()
 
 
 def test_the_dispositions_cover_every_v4_volume_by_name():
@@ -165,8 +201,9 @@ def test_the_dispositions_cover_every_v4_volume_by_name():
 
 def test_exactly_one_volume_is_dump_pg_and_it_is_the_database_one():
     by_disposition = {}
-    for key, (disposition, _) in rendered_volume_dispositions().items():
-        by_disposition.setdefault(disposition, []).append(key)
+    for (kind, _, name), (disposition, _) in raw_rows().items():
+        if kind == "volume":
+            by_disposition.setdefault(disposition, []).append(name)
     assert by_disposition.get("dump-pg") == ["v4_pgdata"]
     assert by_disposition.get("move-only") == ["v4_tailscale"]
     assert sorted(by_disposition.get("include", [])) == ["v4_memdata", "v4_workspace"]

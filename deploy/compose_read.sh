@@ -86,6 +86,68 @@ _cr_raw_keys() {
 raw_volume_keys() { _cr_raw_keys volumes; }
 raw_service_keys() { _cr_raw_keys services; }
 
+# Every disposition the RAW text declares, one per line:
+#
+#   volume<TAB><TAB><key><TAB><disposition><TAB>yes|no
+#   bind<TAB><service><TAB><target><TAB><disposition><TAB>yes|no
+#   anon<TAB><service><TAB><target><TAB><disposition><TAB>yes|no
+#
+# (the last field is whether a reason row is present, not its text: a folded
+# `>-` scalar's text lives on the lines below it and only the render joins it)
+#
+# THIS IS THE ONE READER THAT LOOKS AT THE FILE A HUMAN EDITS. Everything else
+# reads the render, and a render is a capture: delete a row from
+# deploy/docker-compose.yml and a suite that only reads captures stays green
+# while the next real backup refuses. deploy/backup/tests/test_policy.py
+# compares this against the render in BOTH directions, which is also what
+# notices a fixture nobody refreshed.
+raw_dispositions() {
+  awk "$_CR_AWK_LIB"'
+    function flush_vol() {
+      if (vkey != "") printf "volume\t\t%s\t%s\t%s\n", vkey, vdisp, (vreason ? "yes" : "no")
+      vkey = ""; vdisp = ""; vreason = 0
+    }
+    function flush_mount() {
+      if (mtype == "bind") printf "bind\t%s\t%s\t%s\t%s\n", svc, mtgt, mdisp, (mreason ? "yes" : "no")
+      mtype = ""; mtgt = ""; mdisp = ""; mreason = 0
+    }
+    function flush_anon() {
+      if (atgt != "") printf "anon\t%s\t%s\t%s\t%s\n", svc, atgt, adisp, (areason ? "yes" : "no")
+      atgt = ""; adisp = ""; areason = 0
+    }
+    function flush_all() { flush_vol(); flush_mount(); flush_anon() }
+
+    /^[ \t]*#/ { next }
+    /^[A-Za-z_][A-Za-z0-9_-]*:/ { flush_all(); sect = cr_key($0); invols = 0; inanon = 0; next }
+
+    sect == "volumes" && /^  [A-Za-z0-9._-]+:/ { flush_vol(); vkey = cr_key($0); next }
+    sect == "volumes" && /^    x-nova-backup:/ { vdisp = cr_value($0, "x-nova-backup"); next }
+    sect == "volumes" && /^    x-nova-backup-reason:/ { vreason = 1; next }
+
+    sect != "services" { next }
+    /^  [A-Za-z0-9._-]+:/ { flush_mount(); flush_anon(); svc = cr_key($0); invols = 0; inanon = 0; next }
+    /^    [A-Za-z0-9._-]+:/ {
+      flush_mount(); flush_anon()
+      invols = ($0 ~ /^    volumes:/); inanon = ($0 ~ /^    x-nova-backup-anon:/); next
+    }
+    invols && /^      - / {
+      flush_mount()
+      item = $0; sub(/^      - /, "", item)
+      if (item ~ /^type:/) mtype = cr_value(item, "type")
+      next
+    }
+    invols && /^        type:/ { mtype = cr_value($0, "type"); next }
+    invols && /^        target:/ { mtgt = cr_value($0, "target"); next }
+    invols && /^        x-nova-backup:/ { mdisp = cr_value($0, "x-nova-backup"); next }
+    invols && /^        x-nova-backup-reason:/ { mreason = 1; next }
+    inanon && /^      [^ ]/ { flush_anon(); atgt = cr_key($0); next }
+    inanon && /^        disposition:/ { adisp = cr_value($0, "disposition"); next }
+    inanon && /^        reason:/ { areason = 1; next }
+
+    END { flush_all() }
+  '
+}
+
 # The project name as the checkout's own text declares it — the value coverage
 # compares the render's `name:` against, so a render of some other project
 # cannot be mistaken for this one.
@@ -188,7 +250,7 @@ cfg_bind_disposition() {
 cfg_anon() {
   awk "$_CR_AWK_LIB"'
     function flush() {
-      if (tgt != "" && d != "") printf "%s\t%s\t%s\n", tgt, d, r
+      if (tgt != "") printf "%s\t%s\t%s\n", tgt, d, r
       tgt = ""; d = ""; r = ""
     }
     /^[A-Za-z_][A-Za-z0-9_-]*:/ { flush(); sect = cr_key($0); insvc = 0; inanon = 0; next }
@@ -268,6 +330,7 @@ EOF
     first_row=1
     while IFS='	' read -r tgt d r; do
       [ -n "$tgt" ] || continue
+      [ -n "$d" ] || continue
       if [ "$first_row" -eq 1 ]; then
         [ "$first_svc" -eq 1 ] || printf ','
         printf '\n    "%s": {' "$(_cr_j "$svc")"

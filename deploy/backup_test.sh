@@ -154,6 +154,47 @@ expect_has "dispositions_json_carries_binds_keyed_by_service_and_target" "$DISP"
   '"/b": {"disposition": "exclude-code", "reason": "from git"'
 expect_has "dispositions_json_carries_anon_keyed_by_service_and_target" "$DISP" \
   '"/var/cache/thing": {"disposition": "exclude-ephemeral", "reason": "a cache; it regenerates on use."}'
+# ── the raw file, not a capture of it ───────────────────────────────────────
+#
+# Every assertion above reads a RENDER. A render is a capture, so on its own it
+# says nothing about the file a human edits: deleting a disposition from
+# deploy/docker-compose.yml and leaving the capture alone left this whole suite
+# green while the next real backup refused. raw_dispositions reads the file
+# itself, and this compares the two SETS — which is also what notices a fixture
+# nobody refreshed.
+render_rows() {
+  local text svc key line
+  text="$(cat)"
+  for key in $(printf '%s' "$text" | cfg_volume_keys); do
+    line="$(printf '%s' "$text" | cfg_volume_disposition "$key")"
+    printf 'volume		%s	%s	%s
+' "$key" "${line%%	*}" \
+      "$([ -n "${line#*	}" ] && [ -n "$line" ] && printf yes || printf no)"
+  done
+  for svc in $(printf '%s' "$text" | cfg_service_keys); do
+    printf '%s' "$text" | cfg_mounts "$svc" |
+      awk -F'	' -v s="$svc" '$1 == "bind" { printf "bind\t%s\t%s\t%s\t%s\n", s, $3, $5, ($6 == "" ? "no" : "yes") }'
+    printf '%s' "$text" | cfg_anon "$svc" |
+      awk -F'	' -v s="$svc" '{ printf "anon\t%s\t%s\t%s\t%s\n", s, $1, $2, ($3 == "" ? "no" : "yes") }'
+  done
+}
+
+expect_str "the_real_compose_file_and_the_checked_in_render_declare_the_same_rows" \
+  "$(raw_dispositions < "$SCRIPT_DIR/docker-compose.yml" | sort)" \
+  "$(render_rows < "$FIXTURES/compose-v5.3.0.yaml" | sort)"
+
+RAW_DISP="$(raw_dispositions < "$SCRIPT_DIR/docker-compose.yml")"
+expect_has "raw_dispositions_reads_a_volumes_row_from_the_file" "$RAW_DISP" \
+  "$(printf 'volume		v4_memdata	include	yes')"
+expect_has "raw_dispositions_reads_a_long_syntax_binds_row_from_the_file" "$RAW_DISP" \
+  "$(printf 'bind	searxng	/etc/searxng	exclude-code	yes')"
+expect_has "raw_dispositions_reads_an_anon_row_from_the_file" "$RAW_DISP" \
+  "$(printf 'anon	searxng	/var/cache/searxng	exclude-ephemeral	yes')"
+# A short-syntax volume mount cannot carry a disposition and must not be
+# reported as a bind that is missing one.
+expect_lacks "raw_dispositions_ignores_a_short_syntax_mount" "$RAW_DISP" \
+  "$(printf 'bind	postgres	/var/lib/postgresql/data')"
+
 expect_has "dispositions_json_is_parseable" \
   "$(printf '%s' "$DISP" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted(d))')" \
   "['anon', 'binds', 'volumes']"
@@ -228,7 +269,13 @@ stub_docker() {
     compose)
       case " $* " in
         *" --format json "*) sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.json" ;;
-        *) sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.yaml" ;;
+        *)
+          if [ -n "$STUB_COMPOSE_SED" ]; then
+            sed -e "s|/repo|$WORLD/repo|g" -e "$STUB_COMPOSE_SED" "$FIXTURES/compose-v5.3.0.yaml"
+          else
+            sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.yaml"
+          fi
+          ;;
       esac
       return "$STUB_COMPOSE_RC"
       ;;
@@ -295,6 +342,7 @@ expect_cov() {
 
 CONTAINERS_FIXTURE="containers-v4.json"
 STUB_COMPOSE_RC=0
+STUB_COMPOSE_SED=""
 STUB_DATABASES="nova_core|core
 nova_gateway|gateway
 nova_memory|memory"
@@ -393,6 +441,48 @@ FOREIGN="$(run_coverage routine)"
 expect_cov "refuses_a_live_mount_compose_does_not_name" "$FOREIGN" 3 "R4_UNDECLARED_LIVE_MOUNT"
 expect_cov "and_names_the_compose_file_that_container_came_from" "$FOREIGN" 3 "config_files"
 CONTAINERS_FIXTURE="containers-v4.json"
+build_world
+
+# ── reachability is per include-class SOURCE, not per volume ───────────────
+#
+# carried_entries() returns any entry whose disposition is `include`, whatever
+# kind it is. Before this, only named volumes and git-scanned host paths were
+# probed, so declaring a BIND or an anonymous volume as state to carry put it
+# in the bundle with nothing having proved this host can read it.
+
+# bk_anon_mounts is the only thing that can name an anonymous volume: it has
+# no compose key, and the 64-hex name lives only in `docker inspect` output.
+ANON="$(cd "$WORLD/repo" && bk_docker() { stub_docker "$@"; }; bk_git() { stub_git "$@"; }; \
+  BK_COMPOSE_FILES="$WORLD/repo/deploy/docker-compose.yml" \
+  BK_ENV_FILE="$WORLD/repo/deploy/.env" BK_ENV_EXAMPLE="$WORLD/repo/deploy/.env.example" \
+  render_containers "$WORLD/stage" >/dev/null 2>&1; bk_anon_mounts "$WORLD/stage")"
+expect_has "bk_anon_mounts_finds_the_image_declared_volume" "$ANON" "searxng"
+expect_has "bk_anon_mounts_reports_its_destination" "$ANON" "/var/cache/searxng"
+case "$ANON" in
+  *[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+    report 0 "bk_anon_mounts_reports_the_64_hex_name_a_probe_can_address" ;;
+  *) report 1 "bk_anon_mounts_reports_the_64_hex_name_a_probe_can_address" "$ANON" ;;
+esac
+
+# Declare the gateway's ../data bind as state to carry. Before the fix the run
+# passed with the bind in the carried set and nothing in reachable.files.
+STUB_COMPOSE_SED='s/x-nova-backup: exclude-derived/x-nova-backup: include/'
+BINDINC="$(run_coverage routine)"
+expect_cov "an_include_class_bind_is_carried_only_after_a_probe" "$BINDINC" 0 '"kind": "bind"'
+if grep -q "$WORLD/repo/data\": {\"exists\": true, \"ok\": true" "$WORLD/stage/facts/reachable.json"; then
+  report 0 "render_reachable_probes_an_include_class_bind_source"
+else
+  report 1 "render_reachable_probes_an_include_class_bind_source" \
+    "$(tr -d '\n' < "$WORLD/stage/facts/reachable.json")"
+fi
+
+# ...and when the source is not there, the run refuses rather than tarring a
+# path nothing proved readable.
+rm -rf "$WORLD/repo/data"
+GONE="$(run_coverage routine)"
+expect_cov "refuses_an_include_class_bind_this_host_cannot_read" "$GONE" 3 "R6_UNREACHABLE"
+expect_cov "and_names_the_bind_and_its_service" "$GONE" 3 "service \`gateway\`"
+STUB_COMPOSE_SED=""
 build_world
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
