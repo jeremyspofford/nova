@@ -504,7 +504,7 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                                 f"fix: in {where}, under `services: {svc}:` add\n"
                                 "             x-nova-backup-anon:\n"
                                 f"               {dest}: {{disposition: <one of the eight>, "
-                                'reason: "<why>"}}',
+                                'reason: "<why>"}',
                             )
                         )
                         continue
@@ -693,13 +693,37 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                     "leaves it behind."
                 )
 
-    # 10/11. Reachability and existence, for everything carried as bytes.
-    vol_probe = reachable.get("volumes") or {}
+    # 10/11. Reachability and existence, for EVERY include-class source — the
+    # literal words of §6.3 step 10, and not "every include-class volume".
+    # carried_entries() returns an entry of any kind whose disposition is
+    # `include`, so a rule that probes one or two kinds leaves the others
+    # carried with nothing having proved them readable. That is the silent
+    # skip this module exists to prevent, one level up from the one it
+    # already catches.
+    probes = {
+        "volumes": reachable.get("volumes") or {},
+        "files": reachable.get("files") or {},
+    }
     for entry in entries:
-        if entry.kind != "volume" or entry.disposition not in INCLUDE_CLASS:
+        if entry.disposition not in INCLUDE_CLASS:
             continue
-        probe = vol_probe.get(entry.name)
-        label = f"volume {entry.name}  ({entry.full_name})"
+        rule = _probe_rule(entry)
+        if rule is None:
+            # Not "skip": a kind that can be carried and cannot be probed is a
+            # gap in THIS file, and it refuses rather than passing quietly.
+            refusals.append(
+                Refusal(
+                    R6,
+                    f"{entry.kind} {entry.name}",
+                    f"classified as state to carry, and nothing here knows how to probe a "
+                    f"{entry.kind}. A tier nobody measured is not a tier proven readable.",
+                    "fix: give this kind a row in _probe_rule() and a probe in "
+                    "deploy/backup.sh's render_reachable.",
+                )
+            )
+            continue
+        which, key, label, missing_code = rule
+        probe = probes[which].get(key)
         if probe is None:
             refusals.append(
                 Refusal(
@@ -714,11 +738,11 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
         if not probe.get("exists"):
             refusals.append(
                 Refusal(
-                    R5,
+                    missing_code,
                     label,
-                    "is to be carried and no volume of that name exists on this host: "
-                    f"{probe.get('detail', '')}. Either the service that owns it has never "
-                    "run, or the volume was removed.",
+                    "is to be carried and it is not on this host: "
+                    f"{probe.get('detail', '')}. Either what owns it has never run, or it "
+                    "was removed.",
                     "",
                 )
             )
@@ -735,26 +759,39 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                 )
             )
 
-    file_probe = reachable.get("files") or {}
-    for entry in entries:
-        if entry.kind != "path" or entry.disposition not in INCLUDE_CLASS:
-            continue
-        probe = file_probe.get(entry.name)
-        if probe is None or not probe.get("ok"):
-            detail = (probe or {}).get("detail", "nothing probed it")
-            refusals.append(
-                Refusal(
-                    R6,
-                    f"host path {entry.name}",
-                    "classified as state to carry, but the backup cannot read it: "
-                    f"{detail}. A bundle that silently omits a tier is worse than no bundle.",
-                    "",
-                )
-            )
-
     entries.sort(key=lambda e: (e.kind, e.name))
     refusals.sort(key=lambda r: (REFUSAL_CODES.index(r.code), r.subject))
     return Coverage(entries, refusals)
+
+
+def _probe_rule(entry: Entry) -> tuple[str, str, str, str] | None:
+    """(which half of reachable.json, the key in it, the label, the absent code).
+
+    reachable.json is keyed by what a probe can actually address: a named
+    volume by its compose KEY, an anonymous one by the 64-hex name docker gave
+    it (it has no compose key — that is what makes it anonymous), and a host
+    path or a bind by the path itself. `None` means this kind is not a source
+    of bytes, which the caller turns into a refusal rather than a skip.
+    """
+    if entry.kind == "volume":
+        return ("volumes", entry.name, f"volume {entry.name}  ({entry.full_name})", R5)
+    if entry.kind == "anon":
+        return (
+            "volumes",
+            entry.full_name or "",
+            f"anonymous volume  service `{entry.service}` at {entry.name}",
+            R5,
+        )
+    if entry.kind == "path":
+        return ("files", entry.name, f"host path {entry.name}", R6)
+    if entry.kind == "bind":
+        return (
+            "files",
+            entry.name,
+            f"bind {entry.name}  (service `{entry.service}` at {entry.target})",
+            R6,
+        )
+    return None
 
 
 def _classify_declared(row: dict[str, Any]) -> str:

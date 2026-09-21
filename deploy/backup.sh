@@ -668,10 +668,83 @@ EOF
 # volume's own content and not the image's. The EXIT STATUS is read, never the
 # emptiness of stdout: a probe that failed and a volume that is empty are
 # different facts.
+# One volume, two readings, emitted as one JSON member: "<key>": {...}.
+# `docker volume inspect` FIRST, because `docker run -v <name>:/probe` CREATES
+# a missing volume and the probe alone can then never tell R5 from R6.
+bk_probe_volume() {
+  local key="$1" full="$2" image="$3" err="$4" rc=0
+  bk_docker volume inspect "$full" >/dev/null 2>> "$err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '\n    "%s": {"exists": false, "ok": false, "detail": "%s"}' \
+      "$(bk_j "$key")" "$(bk_j "docker volume inspect $full exited $rc")"
+    return 0
+  fi
+  rc=0
+  bk_docker run --rm -v "$full:/probe:ro" --entrypoint find "$image" \
+    /probe -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>> "$err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '\n    "%s": {"exists": true, "ok": false, "detail": "%s"}' \
+      "$(bk_j "$key")" \
+      "$(bk_j "\`docker run --rm -v $full:/probe:ro $image find /probe …\` exited $rc")"
+  else
+    printf '\n    "%s": {"exists": true, "ok": true, "detail": ""}' "$(bk_j "$key")"
+  fi
+}
+
+# One host path, as the INVOKING USER sees it — not as a container would. The
+# bundle is read back by the operator, so the operator's own readability is
+# the fact that matters.
+bk_probe_path() {
+  local key="$1" path="$2"
+  if [ -r "$path" ]; then
+    printf '\n    "%s": {"exists": true, "ok": true, "detail": ""}' "$(bk_j "$key")"
+  elif [ -e "$path" ]; then
+    printf '\n    "%s": {"exists": true, "ok": false, "detail": "not readable by this user"}' \
+      "$(bk_j "$key")"
+  else
+    printf '\n    "%s": {"exists": false, "ok": false, "detail": "no such path"}' "$(bk_j "$key")"
+  fi
+}
+
+# "<service>\t<destination>\t<64-hex name>" for every ANONYMOUS volume mount
+# in containers.json. An image-declared volume has no compose key — that is
+# what makes it anonymous — so the only thing a probe can address it by is the
+# name docker gave it, and the only place that name exists is this fact.
+#
+# containers.json puts one container per line by construction (render_containers
+# above), and docker's own `{{json .Mounts}}` emits each mount object with its
+# keys in alphabetical order and no spaces, so `},{` separates them.
+bk_anon_mounts() {
+  local stage="$1"
+  [ -f "$stage/facts/containers.json" ] || return 0
+  awk '
+    # Tolerant of the space after a colon: docker emits `{{json .Mounts}}`
+    # compact, and anything that re-serialises the fact may not.
+    function field(chunk, key,   p, v) {
+      p = match(chunk, "\"" key "\"[ ]*:[ ]*\"")
+      if (p == 0) return ""
+      v = substr(chunk, p + RLENGTH)
+      sub(/".*$/, "", v)
+      return v
+    }
+    /"mounts"/ {
+      svc = field($0, "service")
+      n = split($0, chunk, /\}[ ]*,[ ]*\{/)
+      for (i = 1; i <= n; i++) {
+        if (field(chunk[i], "Type") != "volume") continue
+        name = field(chunk[i], "Name")
+        if (length(name) != 64 || name !~ /^[0-9a-f]+$/) continue
+        print svc "\t" field(chunk[i], "Destination") "\t" name
+      }
+    }
+  ' "$stage/facts/containers.json"
+}
+
 render_reachable() {
   local stage="$1"
   local mode="${2:-routine}" out="$stage/facts/reachable.json"
   local err="$stage/facts/.reachable.err" image key disp full first rc line root
+  local svc src _tgt _ro _reason anon_svc anon_dest anon_name
 
   if [ ! -f "$stage/facts/config.yaml" ] || [ ! -f "$stage/facts/git.json" ]; then
     bk_fail "reachable.json is rendered from the dispositions and the git scan, and
@@ -700,25 +773,26 @@ render_reachable() {
       full="$(cfg_volume_name "$key" < "$stage/facts/config.yaml")"
       [ "$first" -eq 1 ] || printf ','
       first=0
-      rc=0
-      bk_docker volume inspect "$full" >/dev/null 2>> "$err" || rc=$?
-      if [ "$rc" -ne 0 ]; then
-        printf '\n    "%s": {"exists": false, "ok": false, "detail": "%s"}' \
-          "$(bk_j "$key")" \
-          "$(bk_j "docker volume inspect $full exited $rc")"
-        continue
-      fi
-      rc=0
-      bk_docker run --rm -v "$full:/probe:ro" --entrypoint find "$image" \
-        /probe -mindepth 1 -maxdepth 1 -print -quit >/dev/null 2>> "$err" || rc=$?
-      if [ "$rc" -ne 0 ]; then
-        printf '\n    "%s": {"exists": true, "ok": false, "detail": "%s"}' \
-          "$(bk_j "$key")" \
-          "$(bk_j "\`docker run --rm -v $full:/probe:ro $image find /probe …\` exited $rc")"
-      else
-        printf '\n    "%s": {"exists": true, "ok": true, "detail": ""}' "$(bk_j "$key")"
-      fi
+      bk_probe_volume "$key" "$full" "$image" "$err"
     done
+    # Anonymous volumes an image declares, keyed by the 64-hex name docker
+    # gave them. Without this an anon row declared `include` is carried with
+    # nothing having proved it readable — coverage refuses R6 on the absence,
+    # which is safe, but it would refuse for ever.
+    while IFS='	' read -r anon_svc anon_dest anon_name; do
+      [ -n "$anon_name" ] || continue
+      disp="$(cfg_anon_disposition "$anon_svc" "$anon_dest" < "$stage/facts/config.yaml" | cut -f1)"
+      case "$disp" in
+        include) ;;
+        move-only) [ "$mode" = "move" ] || continue ;;
+        *) continue ;;
+      esac
+      [ "$first" -eq 1 ] || printf ','
+      first=0
+      bk_probe_volume "$anon_name" "$anon_name" "$image" "$err"
+    done <<EOF
+$(bk_anon_mounts "$stage")
+EOF
     [ "$first" -eq 1 ] || printf '\n  '
     printf '},\n  "files": {'
     # Every host path the git scan called `ignored` — the include-class half
@@ -730,22 +804,34 @@ render_reachable() {
       [ -n "$line" ] || continue
       [ "$first" -eq 1 ] || printf ','
       first=0
-      if [ -r "$root/$line" ]; then
-        printf '\n    "%s": {"exists": true, "ok": true, "detail": ""}' "$(bk_j "$line")"
-      elif [ -e "$root/$line" ]; then
-        printf '\n    "%s": {"exists": true, "ok": false, "detail": "not readable by this user"}' \
-          "$(bk_j "$line")"
-      else
-        printf '\n    "%s": {"exists": false, "ok": false, "detail": "no such path"}' \
-          "$(bk_j "$line")"
-      fi
+      bk_probe_path "$line" "$root/$line"
     done <<EOF
 $(bk_ignored_paths "$stage")
 EOF
+    # Every BIND the compose file declares as state to carry, keyed by its
+    # resolved absolute source — the same key coverage looks it up by. A bind
+    # is a host path like any other; what made it invisible before was that
+    # this loop only knew about the git scan's paths.
+    for svc in $(cfg_service_keys < "$stage/facts/config.yaml"); do
+      # cfg_mounts emits: type, source, target, read_only, disposition, reason
+      while IFS='	' read -r line src _tgt _ro disp _reason; do
+        [ "$line" = "bind" ] || continue
+        case "$disp" in
+          include) ;;
+          move-only) [ "$mode" = "move" ] || continue ;;
+          *) continue ;;
+        esac
+        [ "$first" -eq 1 ] || printf ','
+        first=0
+        bk_probe_path "$src" "$src"
+      done <<EOF
+$(cfg_mounts "$svc" < "$stage/facts/config.yaml")
+EOF
+    done
     [ "$first" -eq 1 ] || printf '\n  '
     printf '}\n}\n'
   } > "$out"
-  bk_verify_fact "$out" "docker volume inspect + a find probe per carried volume" "$err"
+  bk_verify_fact "$out" "docker volume inspect + a find probe per carried source" "$err"
 }
 
 # The paths git.json called "ignored", read back out of the rendered fact so

@@ -123,10 +123,16 @@ for c in fact.get("containers", []):
     files = {p for p in (c.get("config_files") or "").split(",") if p}
     (ours if files & OURS else foreign).append(c)
 
+# Written in the SHAPE render_containers produces — one compact container
+# object per line — because the shell readers over this fact (bk_anon_mounts)
+# split docker's own `{{json .Mounts}}` on `},{` within one line. A fixture
+# re-indented into a prettier shape is a fixture the shipped reader cannot
+# read, which is a fixture that stamps what the product does not do.
 for name, rows in (("containers-v4.json", ours), ("containers-foreign-v4.json", foreign)):
+    body = ",\n    ".join(json.dumps(c, separators=(",", ": ")) for c in rows)
     with open(f"{out_dir}/{name}", "w", encoding="utf-8") as fh:
-        json.dump({"project": fact.get("project"), "containers": rows}, fh, indent=2)
-        fh.write("\n")
+        fh.write('{\n  "project": %s,\n  "containers": [\n    %s\n  ]\n}\n'
+                 % (json.dumps(fact.get("project")), body))
     print(f"wrote {name}: {len(rows)} container(s)")
 PY
 

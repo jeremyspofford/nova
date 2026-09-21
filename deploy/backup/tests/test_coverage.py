@@ -734,3 +734,130 @@ def test_a_live_bind_at_a_destination_the_service_does_not_declare_still_refuses
     _, refusals = coverage(f, "routine")
     r = next(x for x in refusals if x.code == "R4_UNDECLARED_LIVE_MOUNT")
     assert "/somewhere-else" in r.detail
+
+
+# ── R6 for EVERY include-class source, not only for volumes ─────────────────
+#
+# carried_entries() returns any entry whose disposition is `include`, whatever
+# its kind. A reachability rule that only knew about volumes and host paths
+# let a bind or an anonymous volume be carried with nothing having proved it
+# readable — which is the silent skip one level up from the one this module
+# already catches. Each case below fails before that fix.
+
+
+def test_R6_an_include_class_bind_with_no_probe():
+    f = base_facts()
+    f["dispositions"]["binds"]["postgres"]["/docker-entrypoint-initdb.d"] = {
+        "disposition": "include",
+        "reason": "suppose someone decides this is state",
+    }
+    entries, refusals = coverage(f, "routine")
+    r = next(x for x in refusals if x.code == "R6_UNREACHABLE")
+    assert "/repo/deploy/postgres-init" in r.subject
+    assert "postgres" in r.subject
+    assert entry_for(entries, "bind", "/repo/deploy/postgres-init").disposition == "include"
+
+
+def test_R6_an_include_class_bind_the_backup_cannot_read():
+    f = base_facts()
+    f["dispositions"]["binds"]["postgres"]["/docker-entrypoint-initdb.d"] = {
+        "disposition": "include",
+        "reason": "state",
+    }
+    f["reachable"]["files"]["/repo/deploy/postgres-init"] = {
+        "exists": True,
+        "ok": False,
+        "detail": "not readable by this user",
+    }
+    _, refusals = coverage(f, "routine")
+    r = next(x for x in refusals if x.code == "R6_UNREACHABLE")
+    assert "not readable by this user" in r.detail
+
+
+def test_an_include_class_bind_with_a_passing_probe_is_carried():
+    f = base_facts()
+    f["dispositions"]["binds"]["postgres"]["/docker-entrypoint-initdb.d"] = {
+        "disposition": "include",
+        "reason": "state",
+    }
+    f["reachable"]["files"]["/repo/deploy/postgres-init"] = {
+        "exists": True,
+        "ok": True,
+        "detail": "",
+    }
+    result = coverage(f, "routine")
+    assert codes(result.refusals) == []
+    assert any(e.kind == "bind" for e in carried_entries(result))
+
+
+def test_R6_an_include_class_anonymous_volume_with_no_probe():
+    f = base_facts()
+    f["dispositions"]["anon"]["searxng"]["/var/cache/searxng"] = {
+        "disposition": "include",
+        "reason": "suppose the cache became state",
+    }
+    _, refusals = coverage(f, "routine")
+    r = next(x for x in refusals if x.code == "R6_UNREACHABLE")
+    assert "searxng" in r.subject and "/var/cache/searxng" in r.subject
+
+
+def test_an_include_class_anonymous_volume_is_probed_by_its_64_hex_name():
+    """It has no compose key — that is what makes it anonymous — so the only
+    thing a probe can address it by is the name docker gave it."""
+    f = base_facts()
+    f["dispositions"]["anon"]["searxng"]["/var/cache/searxng"] = {
+        "disposition": "include",
+        "reason": "state",
+    }
+    f["reachable"]["volumes"]["a" * 64] = {"exists": True, "ok": True, "detail": ""}
+    result = coverage(f, "routine")
+    assert codes(result.refusals) == []
+    assert any(e.kind == "anon" for e in carried_entries(result))
+
+
+def test_a_missing_include_class_volume_is_R5_and_a_missing_path_is_R6():
+    """A volume that is not on this host is R5_VOLUME_MISSING; a host path
+    that is not there is R6 — there is no R5 for a file."""
+    f = base_facts()
+    f["reachable"]["volumes"]["v4_memdata"]["exists"] = False
+    f["git"]["paths"]["deploy/gone.txt"] = "ignored"
+    f["reachable"]["files"]["deploy/gone.txt"] = {
+        "exists": False,
+        "ok": False,
+        "detail": "no such path",
+    }
+    _, refusals = coverage(f, "routine")
+    by_code = {r.code: r for r in refusals}
+    assert "v4_memdata" in by_code["R5_VOLUME_MISSING"].subject
+    assert "deploy/gone.txt" in by_code["R6_UNREACHABLE"].subject
+
+
+def test_every_carried_entry_had_a_probe_that_passed():
+    """The invariant, stated once: nothing reaches the carried set that was
+    not measured readable. Not a restatement of the cases above — it holds
+    over whatever the baseline happens to carry, so a new carried kind added
+    later is covered by it."""
+    result = coverage(base_facts(), "routine")
+    reachable = base_facts()["reachable"]
+    for entry in carried_entries(result):
+        if entry.disposition != "include":
+            continue
+        rule = None
+        for which in ("volumes", "files"):
+            for key in (entry.name, entry.full_name):
+                if key and key in reachable[which]:
+                    rule = reachable[which][key]
+        assert rule and rule["ok"], f"{entry.kind} {entry.name} was carried unprobed"
+
+
+def test_the_anon_fix_text_is_valid_to_paste():
+    """F6: the fix line is copied into a YAML file by hand, so its braces
+    have to balance. The second fragment of that string is not an f-string,
+    and `}}` survived into the printed text."""
+    f = base_facts()
+    del f["dispositions"]["anon"]["searxng"]
+    _, refusals = coverage(f, "routine")
+    fix = next(x for x in refusals if "anonymous volume" in x.subject).fix
+    assert fix.count("{") == fix.count("}"), fix
+    assert '/var/cache/searxng: {disposition: <one of the eight>, reason: "<why>"}' in fix
+    assert "}}" not in fix

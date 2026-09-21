@@ -17,7 +17,7 @@ import json
 import pytest
 from conftest import FIXTURES, compose_read
 
-from novabundle import SEGMENT_POLICY, coverage
+from novabundle import SEGMENT_POLICY, CoverageRefused, carried_entries, coverage
 
 RENDER = FIXTURES / "compose-v5.3.0.yaml"
 
@@ -215,3 +215,23 @@ def test_no_fixture_carries_a_home_directory_or_a_tailnet_name():
         text = (FIXTURES / name).read_text()
         assert "/home/" not in text, f"{name} carries a home directory"
         assert ".ts.net" not in text, f"{name} carries a tailnet name"
+
+
+def test_reclassifying_a_real_bind_as_state_demands_a_probe():
+    """The reviewer's reproduction, over the real captures: declare the
+    gateway's ../data bind `include` and the backup must not proceed until
+    something has measured that this host can read it. Before the fix this
+    returned refusals: [] with the bind in the carried set and nothing in
+    reachable.files touching it."""
+    facts = real_facts()
+    facts["dispositions"]["binds"]["gateway"]["/data"] = {
+        "disposition": "include",
+        "reason": "suppose a later slice decides this is state",
+        "source": "/repo/data",
+        "read_only": True,
+    }
+    entries, refusals = coverage(facts, "routine")
+    r = next(x for x in refusals if x.code == "R6_UNREACHABLE")
+    assert "/repo/data" in r.subject
+    with pytest.raises(CoverageRefused):
+        carried_entries((entries, refusals))
