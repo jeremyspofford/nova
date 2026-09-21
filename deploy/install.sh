@@ -1830,7 +1830,26 @@ main() {
   case "$cmd" in
     install) cmd_install ;;
     update) cmd_update ;;
-    *) die "unknown subcommand: $cmd (expected: install, update)" ;;
+    backup|restore|drill)
+      # S41's verbs live in deploy/backup.sh, which states in its own header
+      # that it is sourced from here and run as `./install backup`. That
+      # sentence was true of the intent and false of the code until now:
+      # `./install backup` answered "unknown subcommand", while the slice's
+      # definition of done is written entirely in those terms.
+      #
+      # Sourced only when one of them is asked for, so `./install` does not
+      # pay for it and a fault in backup.sh cannot stop someone installing.
+      shift
+      . "$DEPLOY_DIR/backup.sh"
+      "cmd_$cmd" "$@"
+      ;;
+    undo-move)
+      # Named by the sidecar's refusal and by the README, but not built
+      # (deploy/backup.sh says so at its top). State the CANNOT and point at
+      # the by-hand steps rather than dispatching into nothing.
+      die "undo-move is not built yet. The by-hand equivalent is in deploy/README.md, under 'Moving Nova'."
+      ;;
+    *) die "unknown subcommand: $cmd (expected: install, update, backup, restore, drill)" ;;
   esac
 }
 
