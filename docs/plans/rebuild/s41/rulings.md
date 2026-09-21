@@ -266,3 +266,33 @@ nothing inside it may select the code that opens it, or where that code writes.
   a listing naming an `l` entry with no `L` line is a **refusal**, not a skip.
 - **Carried-script digests moved again**: `nova_restore.py` `bead35a6…`,
   `restore.sh` `894fead8…`. T6 publishes these.
+
+
+## Ruling, 2026-09-21: a failed `--move` parks or restarts, and says which
+
+T3's review found that a `--move` failing anywhere between §9.1 steps 7 and 21
+leaves `core`, `gateway`, `memory` **and `tailscale`** stopped, writes no
+marker, and prints one sentence about `pg_dump`. The host is then neither
+running nor parked, and **off the tailnet** — which is how the owner reaches
+Nova at all.
+
+§9.1 step 7's wording permits this, so it is a **hole in the verdict**, not a
+violation of it. Closed here:
+
+- Every exit path of `--move` ends in one of exactly two states, and **says
+  which one**: the writers are running again, or the host is parked with the
+  marker written.
+- "Parked" is a state the operator can see and undo, so it is written down
+  before it is reported, and read back after.
+- Losing the tailnet is never a silent consequence of a failed backup. If the
+  sidecar was stopped, the failure path restarts it or states plainly that it
+  could not.
+
+**Why this is not a nicety:** the machine being moved is the one the owner
+reaches over the tailnet. A failure that quietly leaves it unreachable turns a
+recoverable backup error into "Nova is gone", at the exact moment he is doing
+something risky with his data.
+
+**Cost if wrong:** a restart that races the move's own teardown. Bounded by
+the EXIT trap owning the decision in one place, which is already the shape T3
+built for the non-move path.
