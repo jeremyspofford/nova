@@ -1,0 +1,13 @@
+{
+  "probe_image": "sha256:f1c3376c26f2609ab9f29f71f824103fe2fcd8ee0346485cb6122a4f93df6f94",
+  "volumes": {
+    "v4_memdata": {"exists": true, "ok": true, "detail": ""},
+    "v4_workspace": {"exists": true, "ok": true, "detail": ""}
+  },
+  "files": {
+    "deploy/backup/.pytest_cache": {"exists": true, "ok": true, "detail": ""},
+    "deploy/backup/.ruff_cache": {"exists": true, "ok": true, "detail": ""},
+    "deploy/backup/__pycache__": {"exists": true, "ok": true, "detail": ""},
+    "deploy/backup/tests/__pycache__": {"exists": true, "ok": true, "detail": ""}
+  }
+}

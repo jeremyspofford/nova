@@ -10,7 +10,18 @@ services:
       POSTGRES_DB: postgres
     volumes:
       - v4_pgdata:/var/lib/postgresql/data
-      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+      # Long syntax, not `./postgres-init:/docker-entrypoint-initdb.d:ro`,
+      # because only the long form can carry the x-nova-backup rows below —
+      # and a bind with no disposition refuses every backup (deploy/backup.sh).
+      - type: bind
+        source: ./postgres-init
+        target: /docker-entrypoint-initdb.d
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: >-
+          01-databases.sql, in git. A fresh v4_pgdata re-runs it from the
+          checkout at restore time with the carried POSTGRES_PASSWORD, so
+          carrying a copy would only offer a second, staler one.
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -80,7 +91,15 @@ services:
     volumes:
       # Ruling R2: install.sh writes <repo>/data/hardware.json on the host;
       # this compose file lives in deploy/, so the repo root is one level up.
-      - ../data:/data:ro
+      - type: bind
+        source: ../data
+        target: /data
+        read_only: true
+        x-nova-backup: exclude-derived
+        x-nova-backup-reason: >-
+          hardware.json, rewritten by detect_hardware on every install
+          (deploy/install.sh:808-863). The restored host's GPUs are not the
+          source host's, so carrying this would describe the wrong machine.
       - v4_models:/models
     depends_on:
       postgres:
@@ -160,6 +179,24 @@ services:
       retries: 10
 
   searxng:
+    # The volumes searxng's IMAGE declares (`VOLUME /etc/searxng`,
+    # `VOLUME /var/cache/searxng`). Compose never NAMES an image-declared
+    # volume, so there is no entry under `volumes:` below to hang a
+    # disposition on — this block is the only place one can live, keyed by
+    # mount target. /var/cache/searxng is live on this machine right now as an
+    # anonymous 64-hex volume; without this row every backup refuses
+    # (design-verdict.md §6.5). The image is deliberately unpinned, so the next
+    # upstream image that adds a VOLUME line reproduces that refusal — which is
+    # the behaviour we want. deploy/README.md carries the refresh procedure.
+    x-nova-backup-anon:
+      /etc/searxng:
+        disposition: exclude-code
+        reason: >-
+          the generated runtime config. The settings come from ../searxng in
+          git, which the bind below mounts over this target.
+      /var/cache/searxng:
+        disposition: exclude-ephemeral
+        reason: a search result cache; it regenerates on use.
     # Nova's bundled web search. A stock metasearch engine — no key, no build,
     # just the upstream image plus our settings.yml. It comes up with the base
     # stack (no profile) so "what's the latest on X" always has a real search
@@ -182,7 +219,14 @@ services:
       # `restart: unless-stopped` retried it forever without ever repairing it
       # (v3 lost web search for 43h that way). Read-only: the service never
       # writes its own config.
-      - ../searxng:/etc/searxng:ro
+      - type: bind
+        source: ../searxng
+        target: /etc/searxng
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: >-
+          settings.yml, in git. This bind is also what covers the image's own
+          /etc/searxng volume declaration at run time.
     ports:
       # Loopback only, like every other host bind here. Publishing is not
       # required — core reaches it in-network at http://searxng:8080 — but it
@@ -287,7 +331,14 @@ services:
       # The DIRECTORY, read-only — never a single-file bind (a single-file
       # mount resolves to a host inode at create time and dies with exit 127
       # when Docker Desktop recycles its WSL mount; searxng above says why).
-      - ./tailscale:/config:ro
+      - type: bind
+        source: ./tailscale
+        target: /config
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: >-
+          start.sh and serve_check.sh, in git. The node's identity is on
+          v4_tailscale, not here.
     # `sh` explicitly, so the wrapper does not depend on an executable bit
     # surviving the bind mount.
     command: ["sh", "/config/start.sh"]
@@ -333,12 +384,41 @@ networks:
           ip_range: 172.18.0.0/17
           gateway: 172.18.0.1
 
+# Every entry here carries its own x-nova-backup disposition and a reason.
+# The disposition lives BESIDE the thing it describes, in the same document
+# the declared set is read from, so it cannot go stale against that document —
+# and a volume added without one does not get quietly skipped, it REFUSES the
+# whole backup by name (deploy/backup/novabundle.py, R2_UNCLASSIFIED). The
+# eight legal values are include, dump-pg, move-only, exclude-code,
+# exclude-redownload, exclude-derived, exclude-ephemeral, exclude-declined;
+# every exclude-* MUST carry a non-empty reason. See design-verdict.md §6.
 volumes:
   v4_pgdata:
+    x-nova-backup: dump-pg
+    x-nova-backup-reason: >-
+      a live PGDATA file copy is torn. Captured as pg_dump -Fc per database;
+      a fresh volume initialises from deploy/postgres-init/01-databases.sql
+      with the carried password.
   v4_models:
+    x-nova-backup: exclude-redownload
+    x-nova-backup-reason: >-
+      gateway's /models. Its only reader in the whole service is os.statvfs
+      for a free-space check (services/gateway/app/admin.py:59,332).
   v4_memdata:
+    x-nova-backup: include
+    x-nova-backup-reason: >-
+      the notes (services/memory/app/store.py:1-18) — the state with no other
+      copy anywhere. .embeddings/*.jsonl rides along; it is a cache and
+      carrying it only saves a rebuild.
   v4_workspace:
+    x-nova-backup: include
+    x-nova-backup-reason: >-
+      Nova's own scratch space; a file she wrote lives only here.
   v4_ollama:
+    x-nova-backup: exclude-redownload
+    x-nova-backup-reason: >-
+      local model weights, tens of GB, re-pulled. Stated cost: a restore on a
+      disconnected machine has no local inference until the pulls finish.
   # The tailnet node's identity (tailscaled.state, certs, MagicDNS name).
   # Compose names it <project>_v4_tailscale. Deliberately NOT `tailscale_state`:
   # a volume of THAT name already exists under this project name
@@ -349,3 +429,7 @@ volumes:
   # MIGRATED into this volume at T3 with the old container stopped
   # (deploy/README.md), never shared live.
   v4_tailscale:
+    x-nova-backup: move-only
+    x-nova-backup-reason: >-
+      the tailnet node identity. Two live nodes sharing one identity flap, so
+      it travels only on a move — which also leaves MOVED_TO behind.

@@ -158,5 +158,242 @@ expect_has "dispositions_json_is_parseable" \
   "$(printf '%s' "$DISP" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted(d))')" \
   "['anon', 'binds', 'volumes']"
 
+printf '\n── coverage: the renderers, and what novabundle.py does with them ──────\n'
+
+# The seam this block exists for: the FACTS the shipped renderers write are
+# the facts coverage reads. The python suite drives coverage() with fact dicts
+# it builds itself; only this block proves the shell writes those shapes.
+#
+# No docker, no network, no live stack. `bk_docker` is a shell function, so a
+# stub replaces it without a binary anywhere on PATH; `bk_git` delegates to
+# the REAL git inside a throwaway repository built in a temp dir, because the
+# trailing-slash behaviour is the thing being pinned and a stubbed git would
+# pin the stub.
+
+if ! command -v python3 >/dev/null 2>&1; then
+  report 1 "coverage block" "no python3 on PATH — novabundle.py cannot be run, so this
+     block would pass vacuously. It fails instead."
+  printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
+  exit 1
+fi
+
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/backup.sh"
+
+WORLD="$(mktemp -d "${TMPDIR:-/tmp}/nova-backup-test.XXXXXX")"
+trap 'rm -rf "$WORLD"' EXIT
+
+# A throwaway checkout that looks like this one to the git scan: the same
+# deploy/ layout, the same two .gitignore lines that matter, and REAL git.
+build_world() {
+  rm -rf "$WORLD/repo"
+  mkdir -p "$WORLD/repo/deploy/postgres-init" "$WORLD/repo/deploy/tailscale" \
+    "$WORLD/repo/searxng" "$WORLD/repo/data"
+  printf 'data/\n.env\n' > "$WORLD/repo/.gitignore"
+  cp "$SCRIPT_DIR/docker-compose.yml" "$WORLD/repo/deploy/docker-compose.yml"
+  cp "$SCRIPT_DIR/.env.example" "$WORLD/repo/deploy/.env.example"
+  printf 'x\n' > "$WORLD/repo/deploy/postgres-init/01-databases.sql"
+  printf 'x\n' > "$WORLD/repo/deploy/tailscale/start.sh"
+  printf 'x\n' > "$WORLD/repo/searxng/settings.yml"
+  printf 'hardware\n' > "$WORLD/repo/data/hardware.json"
+  # The one file nothing can regenerate. KEY NAMES are all the renderer reads;
+  # the values here are throwaway and never leave this temp dir.
+  for k in POSTGRES_PASSWORD CORE_TOKEN CORE_GATEWAY_TOKEN CORE_MEMORY_TOKEN \
+    SEARXNG_SECRET COMPOSE_FILE INSTANCE_SECRET; do
+    printf '%s=throwaway\n' "$k"
+  done > "$WORLD/repo/deploy/.env"
+  ( cd "$WORLD/repo" && git init -q . && git add -A . && \
+    git -c user.email=t@t -c user.name=t commit -qm fixtures ) >/dev/null 2>&1
+  # The captured containers fixture, one file per id, so the docker stub can
+  # answer `inspect` without a JSON parser in the shell.
+  mkdir -p "$WORLD/containers"
+  python3 - "$FIXTURES/$CONTAINERS_FIXTURE" "$WORLD" "$WORLD/repo" <<'PY'
+import json, sys
+src, world, root = sys.argv[1], sys.argv[2], sys.argv[3]
+fact = json.load(open(src, encoding="utf-8"))
+ids = []
+for c in fact["containers"]:
+    c = json.loads(json.dumps(c).replace("/repo", root))
+    ids.append(c["id"])
+    with open(f"{world}/containers/{c['id']}.json", "w", encoding="utf-8") as fh:
+        json.dump(c, fh)
+open(f"{world}/ids.txt", "w", encoding="utf-8").write("\n".join(ids) + "\n")
+PY
+}
+
+# Every docker call the renderers make, answered from the checked-in captures
+# with /repo rewritten to this world's root.
+stub_docker() {
+  case "$1" in
+    compose)
+      case " $* " in
+        *" --format json "*) sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.json" ;;
+        *) sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.yaml" ;;
+      esac
+      return "$STUB_COMPOSE_RC"
+      ;;
+    ps) cat "$WORLD/ids.txt"; return 0 ;;
+    inspect)
+      case " $* " in
+        *'{{.Image}}'*) printf 'sha256:0000000000000000000000000000000000000000000000000000000000000000\n' ;;
+        *) cat "$WORLD/containers/$2.json" ;;
+      esac
+      return 0
+      ;;
+    volume) return 0 ;;
+    run) return 0 ;;
+    exec) printf '%s\n' "$STUB_DATABASES"; return 0 ;;
+  esac
+  return 0
+}
+
+GIT_LOG=""
+stub_git() {
+  printf '%s\n' "$*" >> "$GIT_LOG"
+  git "$@"
+}
+
+# Render every fact in this world and run coverage over it. Prints
+# "<exit>|<stderr as one line>".
+run_coverage() {
+  (
+    cd "$WORLD/repo" || exit 9
+    bk_docker() { stub_docker "$@"; }
+    bk_git() { stub_git "$@"; }
+    BK_COMPOSE_FILES="$WORLD/repo/deploy/docker-compose.yml"
+    BK_ENV_FILE="$WORLD/repo/deploy/.env"
+    BK_ENV_EXAMPLE="$WORLD/repo/deploy/.env.example"
+    export BK_COMPOSE_FILES BK_ENV_FILE BK_ENV_EXAMPLE
+    rm -rf "$WORLD/stage"
+    mkdir -p "$WORLD/stage/facts"
+    err="$(render_facts "$WORLD/stage" "${1:-routine}" 2>&1)" || {
+      printf '%s|%s' 9 "$(printf '%s' "$err" | tr '\n' ' ')"
+      exit 0
+    }
+    out="$(python3 "$SCRIPT_DIR/backup/novabundle.py" coverage \
+      --facts "$WORLD/stage/facts" --mode "${1:-routine}" 2>&1)"
+    printf '%s|%s' "$?" "$(printf '%s' "$out" | tr '\n' ' ')"
+  )
+}
+
+expect_cov() {
+  local name="$1" out="$2" want_code="$3" want_text="${4:-}"
+  local code="${out%%|*}" text="${out#*|}"
+  if [ "$code" != "$want_code" ]; then
+    report 1 "$name" "exit $code, wanted $want_code — $text"
+    return
+  fi
+  if [ -n "$want_text" ]; then
+    case "$text" in
+      *"$want_text"*) report 0 "$name" ;;
+      *) report 1 "$name" "output did not mention '$want_text' — $text" ;;
+    esac
+  else
+    report 0 "$name"
+  fi
+}
+
+CONTAINERS_FIXTURE="containers-v4.json"
+STUB_COMPOSE_RC=0
+STUB_DATABASES="nova_core|core
+nova_gateway|gateway
+nova_memory|memory"
+GIT_LOG="$WORLD/git.log"
+build_world
+
+# The headline: the real renderers, the real readers, the real compose file,
+# and coverage says yes.
+CLEAN="$(run_coverage routine)"
+expect_cov "the_rendered_facts_of_this_compose_file_cover_themselves" "$CLEAN" 0 '"may_backup": true'
+expect_cov "the_plan_names_the_volume_it_will_carry" "$CLEAN" 0 '"name": "v4_memdata"'
+expect_cov "the_plan_names_the_anonymous_volume_only_docker_can_see" "$CLEAN" 0 '"kind": "anon"'
+
+# port-v3 §4.5's bug, which would make every v4 backup refuse on day one.
+# Asserted on the RECORDED ARGV, not on the outcome: an outcome can be right
+# for the wrong reason.
+if grep -q 'check-ignore -q data/' "$GIT_LOG"; then
+  report 0 "git_check_ignore_is_probed_with_a_trailing_slash"
+else
+  report 1 "git_check_ignore_is_probed_with_a_trailing_slash" \
+    "no `git check-ignore -q data/` in the recorded argv: $(tr '\n' ' ' < "$GIT_LOG")"
+fi
+if grep -q 'check-ignore -q data$' "$GIT_LOG"; then
+  report 1 "the_bare_form_is_never_used_for_a_directory" "probed `data` without the slash"
+else
+  report 0 "the_bare_form_is_never_used_for_a_directory"
+fi
+
+# DoD 6: proven by adding a volume to the file, not by argument.
+cp "$SCRIPT_DIR/docker-compose.yml" "$WORLD/repo/deploy/docker-compose.yml"
+printf '  v4_vectors:\n' >> "$WORLD/repo/deploy/docker-compose.yml"
+UNDECLARED="$(run_coverage routine)"
+expect_cov "refuses_an_undeclared_volume" "$UNDECLARED" 3 "R2_UNCLASSIFIED"
+expect_cov "refuses_an_undeclared_volume_by_name" "$UNDECLARED" 3 "volume v4_vectors"
+expect_cov "and_says_it_is_mounted_by_no_service" "$UNDECLARED" 3 "mounted by no service"
+expect_cov "and_names_the_file_to_edit" "$UNDECLARED" 3 "docker-compose.yml"
+# A PRUNED volume's fix is not "add a disposition" — it cannot have one that
+# any render would show. The fix it prints is the one that is actually open.
+expect_cov "and_the_fix_it_offers_is_the_one_that_works" "$UNDECLARED" 3 \
+  "mount it from the service that owns it, or delete the declaration"
+expect_cov "and_says_no_bundle_was_written" "$UNDECLARED" 3 "No bundle was written."
+expect_cov "and_says_nothing_was_stopped" "$UNDECLARED" 3 "Nothing was stopped, dumped or written."
+build_world
+
+# The declared set is the raw text's: the render the stub returns is the
+# UNCHANGED capture, so the only way v4_vectors can be seen at all is that
+# raw.json read the file.
+grep -q 'v4_vectors' "$FIXTURES/compose-v5.3.0.yaml" && \
+  report 1 "the_render_used_above_never_mentioned_the_new_volume" "the fixture carries it" || \
+  report 0 "the_render_used_above_never_mentioned_the_new_volume"
+
+# A renderer that fails takes the run with it and carries its stderr.
+STUB_COMPOSE_RC=1
+FACTFAIL="$(run_coverage routine)"
+expect_cov "refuses_when_a_fact_renderer_fails" "$FACTFAIL" 9 "Error:"
+expect_cov "refuses_when_a_fact_renderer_fails_and_names_the_command" "$FACTFAIL" 9 \
+  "docker compose --profile '*' config"
+STUB_COMPOSE_RC=0
+
+# R7: an empty database list is a reading that failed, not a stack with
+# nothing in it.
+STUB_DATABASES=""
+NODB="$(run_coverage routine)"
+expect_cov "refuses_when_the_database_list_is_empty" "$NODB" 3 "R7_NO_DATABASES"
+STUB_DATABASES="nova_core|core"
+
+# .env: an undeclared key refuses; only `carry` travels.
+printf 'SOME_NEW_KEY=x\n' >> "$WORLD/repo/deploy/.env"
+NEWKEY="$(run_coverage routine)"
+expect_cov "env_refuses_an_undeclared_key" "$NEWKEY" 3 ".env key SOME_NEW_KEY"
+expect_cov "env_refusal_names_the_file_to_declare_it_in" "$NEWKEY" 3 ".env.example"
+build_world
+
+CARRIED="$(run_coverage routine)"
+expect_cov "env_carries_the_generated_secrets" "$CARRIED" 0 '"POSTGRES_PASSWORD"'
+case "${CARRIED#*|}" in
+  *'"name": "COMPOSE_FILE", "disposition": "carry"'* | *'"name": "INSTANCE_SECRET", "disposition": "carry"'*)
+    report 1 "env_carries_only_the_carry_disposition" "a host/drop key was marked carry" ;;
+  *) report 0 "env_carries_only_the_carry_disposition" ;;
+esac
+
+# The mode overlay, end to end.
+MOVE="$(run_coverage move)"
+expect_cov "carries_v4_tailscale_only_in_move_mode" "$MOVE" 0 'this run is `--move`'
+case "${CLEAN#*|}" in
+  *'--move'*) report 1 "a_routine_run_leaves_the_node_identity_behind" "routine carried it" ;;
+  *) report 0 "a_routine_run_leaves_the_node_identity_behind" ;;
+esac
+
+# The same machine's other truth: v3's stopped containers still carry the
+# `nova` project label, so a backup HERE has state under its own label that
+# this compose file cannot account for. Real capture, not an invented fixture.
+CONTAINERS_FIXTURE="containers-foreign-v4.json"
+build_world
+FOREIGN="$(run_coverage routine)"
+expect_cov "refuses_a_live_mount_compose_does_not_name" "$FOREIGN" 3 "R4_UNDECLARED_LIVE_MOUNT"
+expect_cov "and_names_the_compose_file_that_container_came_from" "$FOREIGN" 3 "config_files"
+CONTAINERS_FIXTURE="containers-v4.json"
+build_world
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
