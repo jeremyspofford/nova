@@ -1,0 +1,894 @@
+#!/usr/bin/env python3
+"""Open a Nova backup bundle on a machine that has NOTHING but this file,
+python3, the bundle and the passphrase.
+
+    python3 nova_restore.py <bundle> --out ./nova-restored
+    python3 nova_restore.py <bundle> --verify-only
+    python3 nova_restore.py <bundle> --kat            # just prove the passphrase
+
+Why this file exists (the bootstrap trap): the bundle CONTAINS deploy/.env,
+and the stack cannot start without it — so on a fresh machine, opening a
+backup cannot go through Nova. This script is committed to the repo AND
+written byte-identically into every bundle, so it travels with the thing it
+opens, and one published digest covers every bundle for a given commit.
+
+It is deliberately standalone: it imports nothing from this repo and needs no
+third-party package. AES-256-GCM comes from `cryptography` when that happens
+to be installed, and otherwise from the system OpenSSL's libcrypto through
+ctypes. scrypt is `hashlib`'s, which is why the KDF cost is what it is.
+
+It never runs docker, never touches an existing installation and never writes
+outside --out. The destructive steps stay a human decision, printed.
+
+The NOVAENC1 reading half below mirrors deploy/backup/novabundle.py and is
+pinned to it by tests/test_restore_reader.py, which round-trips the writer's
+output through this file in a subprocess under BOTH backends.
+"""
+
+import argparse
+import getpass
+import glob
+import hashlib
+import io
+import json
+import os
+import posixpath
+import shutil
+import struct
+import sys
+import tarfile
+import tempfile
+import time
+
+MAGIC = b"NOVAENC1"
+TAG_LEN = 16
+MAX_N, MAX_R, MAX_P = 1 << 18, 16, 4
+KDF_MEM_CAP = 128 * 1024 * 1024
+SCRYPT_MAXMEM = 256 * 1024 * 1024
+MAX_CHUNK = 64 * 1024 * 1024
+MAX_HEADER = 4096
+
+OUTER_README = "README.txt"
+OUTER_READER = "nova_restore.py"
+OUTER_SCRIPT = "restore.sh"
+OUTER_KAT_SHA = "kat.sha256"
+OUTER_KAT = "kat.enc"
+OUTER_META = "meta.json"
+OUTER_PAYLOAD = "payload.enc"
+INNER_MANIFEST = "MANIFEST.json"
+
+# The ONE field of cleartext meta.json this reader consults, and the one
+# named exception to "nothing that survives a failed decrypt is decided by
+# meta.json": a restore must choose WHICH passphrase to try before it can
+# decrypt anything, and this is the only pre-decryption source of a bundle's
+# fingerprint. A wrong choice fails the known-answer test and refuses.
+META_FIELD_READ = "passphrase_fingerprint"
+
+# Identical, character for character, to novabundle.py's BAD_DECRYPT, and
+# pinned by tests/test_novaenc.py. GCM genuinely cannot tell a wrong
+# passphrase from a corrupt file, and pretending otherwise is what produces
+# "the passphrase must be right, so the file must be broken" at 3am.
+BAD_DECRYPT = (
+    "decryption failed — wrong passphrase, or the file is corrupt, truncated "
+    "or tampered with (GCM cannot tell these apart)"
+)
+
+# One known AES-256-GCM answer, so a backend is ACCEPTED only after it has
+# produced the right plaintext once — before any bundle is touched. A library
+# that loads and resolves its symbols has proven neither.
+_SELFTEST_KEY = bytes.fromhex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+_SELFTEST_NONCE = bytes.fromhex("000102030405060708090a0b")
+_SELFTEST_AAD = b"nova-backend-self-test"
+_SELFTEST_PLAIN = b"nova AES-256-GCM backend self-test"
+_SELFTEST_CT = bytes.fromhex(
+    "296da07ae5a48748a073a2bd9cae3b20a3b4e6579b1e3118181480e97b4474d7"
+    "7264508b831360fd0f197270f9fcc77b76c6"
+)
+
+
+class CryptoError(Exception):
+    """Wrong passphrase, or the file is corrupt/tampered/truncated, or a
+    header this reader will not obey."""
+
+
+class RestoreError(Exception):
+    """The bundle is not what it says it is."""
+
+
+class NoBackend(RestoreError):
+    """This MACHINE cannot decrypt, which is a different fact from "this
+    bundle or this passphrase is wrong" — and restore.sh needs to tell them
+    apart to know whether to try the next backend or to stop. It does that on
+    the exit code, not by matching a sentence."""
+
+
+# ── AES-256-GCM, two ways ───────────────────────────────────────────────────
+
+
+def gcm_backend():
+    """(decrypt(key, nonce, ct_with_tag, aad) -> plaintext, a name).
+
+    `cryptography` first because it is the one that needs no discovery. Set
+    NOVA_FORCE_CTYPES_GCM=1 to skip it — that is how the backup's own round
+    trip proves the path a bare machine will take, rather than the path the
+    machine that built the bundle happens to have.
+    """
+    if os.environ.get("NOVA_FORCE_CTYPES_GCM") != "1":
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        except ImportError:
+            pass
+        else:
+
+            def _decrypt(key, nonce, ct, aad):
+                try:
+                    return AESGCM(key).decrypt(nonce, ct, aad)
+                except Exception:
+                    raise CryptoError(BAD_DECRYPT) from None
+
+            _self_test(_decrypt, "cryptography")
+            return _decrypt, "cryptography"
+    return _openssl_gcm()
+
+
+def _self_test(decrypt, name):
+    try:
+        got = decrypt(_SELFTEST_KEY, _SELFTEST_NONCE, _SELFTEST_CT, _SELFTEST_AAD)
+    except Exception as exc:
+        raise RestoreError(f"the {name} backend failed its own known answer: {exc}") from exc
+    if got != _SELFTEST_PLAIN:
+        raise RestoreError(f"the {name} backend decrypted a known vector to the wrong bytes")
+
+
+def _libcrypto_candidates():
+    """Where a real OpenSSL might be, discovered rather than listed.
+
+    On macOS `ctypes.util.find_library` is NEVER called: Apple ships a stub
+    libcrypto that aborts the whole process when it is used, so the naive
+    "find any libcrypto" is not merely wrong there but crash-unsafe. The
+    answer is to look only where real OpenSSL installs put themselves, and to
+    GLOB rather than hardcode two paths — `openssl@3` will not be the last
+    name Homebrew uses, and a Cellar path is version-stamped.
+    """
+    override = os.environ.get("NOVA_LIBCRYPTO")
+    found = [override] if override else []
+    if sys.platform == "darwin":
+        prefixes = [os.environ.get("HOMEBREW_PREFIX") or "", "/opt/homebrew", "/usr/local"]
+        for prefix in prefixes:
+            if not prefix:
+                continue
+            found += sorted(glob.glob(prefix + "/opt/openssl@*/lib/libcrypto.dylib"), reverse=True)
+            found += sorted(
+                glob.glob(prefix + "/Cellar/openssl@*/*/lib/libcrypto.dylib"), reverse=True
+            )
+        found += sorted(glob.glob("/opt/local/lib/libcrypto.*.dylib"), reverse=True)
+        found.append("/opt/local/lib/libcrypto.dylib")
+    else:
+        import ctypes.util
+
+        discovered = ctypes.util.find_library("crypto")
+        if discovered:
+            found.append(discovered)
+        found += ["libcrypto.so.3", "libcrypto.so.1.1", "libcrypto.so"]
+    seen, ordered = set(), []
+    for candidate in found:
+        if candidate and candidate not in seen:
+            seen.add(candidate)
+            ordered.append(candidate)
+    return ordered
+
+
+_INSTALL_ADVICE = (
+    "no usable AES-256-GCM on this machine.\n"
+    "  Install one of:\n"
+    "    python3 -m pip install cryptography          (any OS)\n"
+    "    apt-get install -y openssl libssl3           (Debian/Ubuntu)\n"
+    "    dnf install -y openssl-libs                  (Fedora/RHEL)\n"
+    "    brew install openssl@3                       (macOS)\n"
+    "  or point this script at a real libcrypto:  NOVA_LIBCRYPTO=/path/to/libcrypto.so\n"
+    "  or open the bundle through docker instead — restore.sh does that for you."
+)
+
+
+def _openssl_gcm():
+    import ctypes
+
+    c = ctypes
+    lib = None
+    tried = []
+    for candidate in _libcrypto_candidates():
+        tried.append(candidate)
+        try:
+            probe = c.CDLL(candidate)
+            probe.EVP_CIPHER_CTX_new  # noqa: B018 — symbol probe
+            lib = probe
+            break
+        except (OSError, AttributeError):
+            continue
+    if lib is None:
+        raise NoBackend(_INSTALL_ADVICE + "\n  (tried: " + ", ".join(tried or ["nothing"]) + ")")
+
+    lib.EVP_CIPHER_CTX_new.restype = c.c_void_p
+    lib.EVP_CIPHER_CTX_free.argtypes = [c.c_void_p]
+    lib.EVP_aes_256_gcm.restype = c.c_void_p
+    lib.EVP_DecryptInit_ex.restype = c.c_int
+    lib.EVP_DecryptInit_ex.argtypes = [c.c_void_p, c.c_void_p, c.c_void_p, c.c_char_p, c.c_char_p]
+    lib.EVP_CIPHER_CTX_ctrl.restype = c.c_int
+    lib.EVP_CIPHER_CTX_ctrl.argtypes = [c.c_void_p, c.c_int, c.c_int, c.c_void_p]
+    lib.EVP_DecryptUpdate.restype = c.c_int
+    lib.EVP_DecryptUpdate.argtypes = [
+        c.c_void_p,
+        c.c_char_p,
+        c.POINTER(c.c_int),
+        c.c_char_p,
+        c.c_int,
+    ]
+    lib.EVP_DecryptFinal_ex.restype = c.c_int
+    lib.EVP_DecryptFinal_ex.argtypes = [c.c_void_p, c.c_char_p, c.POINTER(c.c_int)]
+    EVP_CTRL_AEAD_SET_IVLEN, EVP_CTRL_AEAD_SET_TAG = 0x9, 0x11
+
+    def _decrypt(key, nonce, ct_with_tag, aad):
+        if len(ct_with_tag) < TAG_LEN:
+            raise CryptoError(BAD_DECRYPT)
+        ct, tag = ct_with_tag[:-TAG_LEN], ct_with_tag[-TAG_LEN:]
+        ctx = lib.EVP_CIPHER_CTX_new()
+        if not ctx:
+            raise RestoreError("OpenSSL: could not allocate a cipher context")
+        try:
+            outl = c.c_int(0)
+            ok = (
+                lib.EVP_DecryptInit_ex(ctx, lib.EVP_aes_256_gcm(), None, None, None) == 1
+                and lib.EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, len(nonce), None) == 1
+                and lib.EVP_DecryptInit_ex(ctx, None, None, key, nonce) == 1
+            )
+            if not ok:
+                raise RestoreError("OpenSSL: cipher initialisation failed")
+            if aad and lib.EVP_DecryptUpdate(ctx, None, c.byref(outl), aad, len(aad)) != 1:
+                raise RestoreError("OpenSSL: could not absorb the AAD")
+            out = c.create_string_buffer(max(len(ct), 1))
+            outl = c.c_int(0)
+            if ct and lib.EVP_DecryptUpdate(ctx, out, c.byref(outl), ct, len(ct)) != 1:
+                raise RestoreError("OpenSSL: decrypt update failed")
+            plain = out.raw[: outl.value]
+            if lib.EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, TAG_LEN, c.c_char_p(tag)) != 1:
+                raise RestoreError("OpenSSL: could not set the GCM tag")
+            fin = c.c_int(0)
+            tail = c.create_string_buffer(TAG_LEN)
+            # EVP_DecryptFinal_ex's RETURN VALUE is the tag check. A zero
+            # return is a refusal, never a warning.
+            if lib.EVP_DecryptFinal_ex(ctx, tail, c.byref(fin)) != 1:
+                raise CryptoError(BAD_DECRYPT)
+            return plain + tail.raw[: fin.value]
+        finally:
+            lib.EVP_CIPHER_CTX_free(ctx)
+
+    name = f"system OpenSSL via ctypes ({tried[-1]})"
+    _self_test(_decrypt, name)
+    return _decrypt, name
+
+
+# ── the NOVAENC1 container (reader half; mirrors novabundle.py) ─────────────
+
+
+def parse_header(fh):
+    if fh.read(len(MAGIC)) != MAGIC:
+        raise CryptoError("not a NOVAENC1 file")
+    raw = fh.read(4)
+    if len(raw) != 4:
+        raise CryptoError("truncated before the header")
+    hlen = struct.unpack(">I", raw)[0]
+    if hlen > MAX_HEADER:
+        raise CryptoError("implausible header size — corrupt or tampered")
+    hbytes = fh.read(hlen)
+    if len(hbytes) != hlen:
+        raise CryptoError("truncated inside the header")
+    try:
+        header = json.loads(hbytes.decode("utf-8"))
+    except ValueError as exc:
+        raise CryptoError(f"header is not JSON: {exc}") from exc
+    if not isinstance(header, dict):
+        raise CryptoError("header is not a JSON object — corrupt or tampered")
+    if (
+        header.get("v") != 1
+        or header.get("cipher") != "aes-256-gcm"
+        or header.get("kdf") != "scrypt"
+    ):
+        raise CryptoError(f"unsupported format: {header}")
+    n, r, p = header.get("n", 0), header.get("r", 0), header.get("p", 0)
+    # Checked BEFORE any allocation: a decryptor must allocate 128*r*n bytes
+    # before the first authentication check can run, so without this a
+    # tampered header naming an absurd cost makes an honest reader allocate
+    # gigabytes — or blow maxmem and turn "tampered" into a bare ValueError.
+    if not (
+        isinstance(n, int)
+        and isinstance(r, int)
+        and isinstance(p, int)
+        and not isinstance(n, bool)
+        and not isinstance(r, bool)
+        and not isinstance(p, bool)
+        and 0 < n <= MAX_N
+        and 0 < r <= MAX_R
+        and 0 < p <= MAX_P
+        and (n & (n - 1)) == 0
+        and 128 * r * n <= KDF_MEM_CAP
+    ):
+        raise CryptoError(
+            f"scrypt cost n={n} r={r} p={p} is outside what this reader will pay for "
+            "— the header may be tampered with"
+        )
+    chunk = header.get("chunk")
+    if not (isinstance(chunk, int) and not isinstance(chunk, bool) and 0 < chunk <= MAX_CHUNK):
+        raise CryptoError("implausible chunk size — corrupt or tampered")
+    for field, length in (("salt", 16), ("nonce_prefix", 4)):
+        value = header.get(field)
+        try:
+            if len(bytes.fromhex(value)) != length:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise CryptoError(
+                f"header {field} is not {length} bytes of hex — corrupt or tampered"
+            ) from None
+    header["_bytes"] = hbytes
+    return header
+
+
+def _derive(passphrase, header):
+    return hashlib.scrypt(
+        passphrase.encode("utf-8"),
+        salt=bytes.fromhex(header["salt"]),
+        n=header["n"],
+        r=header["r"],
+        p=header["p"],
+        maxmem=SCRYPT_MAXMEM,
+        dklen=32,
+    )
+
+
+def key_fingerprint(passphrase, header):
+    """§7.4: sha256(scrypt(passphrase, THIS file's salt))[:12]. Never
+    sha256(passphrase)[:12] — that form costs an attacker one unsalted hash
+    per guess and annuls the KDF this bundle is protected by."""
+    return hashlib.sha256(_derive(passphrase, header)).hexdigest()[:12]
+
+
+def _read_frame(fh, chunk):
+    raw = fh.read(4)
+    if not raw:
+        return None
+    if len(raw) != 4:
+        raise CryptoError("truncated mid-frame")
+    clen = struct.unpack(">I", raw)[0]
+    if not (TAG_LEN <= clen <= chunk + TAG_LEN):
+        raise CryptoError(f"implausible frame of {clen} bytes — corrupt")
+    ct = fh.read(clen)
+    if len(ct) != clen:
+        raise CryptoError("truncated inside a frame")
+    return ct
+
+
+def decrypt_stream(fin, fout, passphrase, decrypt):
+    header = parse_header(fin)
+    hbytes = header.pop("_bytes")
+    try:
+        key = _derive(passphrase, header)
+        prefix = bytes.fromhex(header["nonce_prefix"])
+    except CryptoError:
+        raise
+    except Exception as exc:
+        raise CryptoError(f"unusable header: {type(exc).__name__}: {exc}") from exc
+    index = 0
+    frame = _read_frame(fin, header["chunk"])
+    if frame is None:
+        raise CryptoError("no ciphertext at all — the file is truncated")
+    while frame is not None:
+        # Finality at read time is LOOKAHEAD: the next frame header is read
+        # before this frame is decrypted, so a truncated file fails
+        # authentication instead of yielding a shorter archive.
+        nxt = _read_frame(fin, header["chunk"])
+        final = nxt is None
+        aad = MAGIC + hbytes + struct.pack(">Q", index) + (b"\x01" if final else b"\x00")
+        fout.write(decrypt(key, prefix + struct.pack(">Q", index), frame, aad))
+        frame, index = nxt, index + 1
+    return header
+
+
+def decrypt_bytes(blob, passphrase, decrypt):
+    out = io.BytesIO()
+    decrypt_stream(io.BytesIO(blob), out, passphrase, decrypt)
+    return out.getvalue()
+
+
+# ── extraction, refusing by name ────────────────────────────────────────────
+
+_REFUSED_TYPES = {
+    tarfile.CHRTYPE: "a character device",
+    tarfile.BLKTYPE: "a block device",
+    tarfile.FIFOTYPE: "a fifo",
+}
+
+
+def _escapes(name):
+    if name.startswith("/") or (len(name) > 1 and name[1] == ":"):
+        return "an absolute path"
+    if ".." in name.replace("\\", "/").split("/"):
+        return "a `..` component"
+    return ""
+
+
+def check_member(member):
+    bad = _escapes(member.name)
+    if bad:
+        return f"{member.name}: {bad}"
+    if member.type in _REFUSED_TYPES:
+        return f"{member.name}: {_REFUSED_TYPES[member.type]}"
+    if member.issym() or member.islnk():
+        if member.islnk():
+            bad = _escapes(member.linkname)
+            if bad:
+                return f"{member.name}: a hard link to {bad}"
+        if member.linkname.startswith("/"):
+            return f"{member.name}: a link with an absolute target"
+        resolved = posixpath.normpath(
+            posixpath.join(posixpath.dirname(member.name), member.linkname)
+        )
+        if resolved == ".." or resolved.startswith("../"):
+            return f"{member.name}: a link with a target outside the archive"
+    return ""
+
+
+def safe_extract(tar, dest, members=None):
+    chosen = list(tar.getmembers() if members is None else members)
+    for member in chosen:
+        bad = check_member(member)
+        if bad:
+            raise RestoreError(f"bundle member refused — {bad}")
+    if not os.path.isdir(dest):
+        os.makedirs(dest)
+    try:
+        tar.extractall(dest, members=chosen, filter="data")
+    except TypeError:  # python < 3.12 has no `filter` keyword
+        tar.extractall(dest, members=chosen)
+    return chosen
+
+
+# ── verification against the manifest ───────────────────────────────────────
+
+
+def sha256_file(path):
+    h, total = hashlib.sha256(), 0
+    with open(path, "rb") as fh:
+        while True:
+            block = fh.read(1 << 20)
+            if not block:
+                break
+            h.update(block)
+            total += len(block)
+    return h.hexdigest(), total
+
+
+def _verify_tree(root, listing):
+    problems = []
+    want = {}
+    for line in listing.splitlines():
+        if not line:
+            continue
+        if line[:1] in ("d", "f", "l") and line[1:2] == " ":
+            continue
+        digest, _, path = line.partition("  ")
+        if path:
+            want[path] = digest
+    for rel, digest in sorted(want.items()):
+        full = os.path.join(root, rel.lstrip("./"))
+        if not os.path.isfile(full):
+            problems.append(f"{rel}: named in the listing, absent from the archive")
+            continue
+        got, _ = sha256_file(full)
+        if got != digest:
+            problems.append(f"{rel}: content does not match its recorded checksum")
+    return problems
+
+
+def verify_extracted(root, manifest):
+    """Re-derive every member's sha256 FROM THE EXTRACTED BYTES.
+
+    A backup restored without verification is a hope with extra steps.
+    """
+    problems = []
+    by_prefix = dict((v["prefix"], v) for v in manifest.get("volumes", []))
+    for row in manifest.get("members", []):
+        path = row["path"]
+        target = os.path.join(root, path.rstrip("/"))
+        if row["kind"] == "tree":
+            volume = by_prefix.get(path)
+            if volume is None:
+                problems.append(f"{path}: a tree member with no volumes[] row")
+                continue
+            listing_path = os.path.join(root, volume["listing_member"])
+            if not os.path.isdir(target) or not os.path.isfile(listing_path):
+                problems.append(f"{path}: named in the manifest, absent from the archive")
+                continue
+            digest, _ = sha256_file(listing_path)
+            if digest != row["sha256"]:
+                problems.append(f"{path}: its listing does not match the recorded hash")
+            with open(listing_path) as fh:
+                problems += [f"{path}{p}" for p in _verify_tree(target, fh.read())]
+            continue
+        if not os.path.isfile(target):
+            problems.append(f"{path}: named in the manifest, absent from the archive")
+            continue
+        digest, size = sha256_file(target)
+        if digest != row["sha256"]:
+            problems.append(f"{path}: content does not match its recorded checksum")
+        if size != row["bytes"]:
+            recorded_bytes = row["bytes"]
+            problems.append(f"{path}: {size} bytes, the manifest recorded {recorded_bytes}")
+    return problems
+
+
+# ── the bundle ──────────────────────────────────────────────────────────────
+
+
+def _meta_fingerprint(meta):
+    """The ONLY field of meta.json this reader consults. See META_FIELD_READ."""
+    value = meta.get(META_FIELD_READ)
+    return value if isinstance(value, str) else None
+
+
+def open_outer_tar(bundle):
+    """The outer tar, whose every read states a refusal instead of raising a
+    tarfile error. `tarfile.open` succeeds on a file truncated after the
+    first member header and only fails when the member list is walked, so
+    wrapping the open alone would still put a bare ReadError in front of an
+    operator who is holding his only copy of his Nova."""
+    return _OuterTar(bundle)
+
+
+class _OuterTar:
+    def __init__(self, bundle):
+        self.bundle = bundle
+        try:
+            self.tar = tarfile.open(bundle, "r:")
+        except tarfile.TarError as exc:
+            raise self._refusal(exc) from exc
+        except OSError as exc:
+            raise RestoreError(f"{bundle}: {exc}") from exc
+
+    def _refusal(self, exc):
+        return RestoreError(
+            f"{os.path.basename(self.bundle)} is not a readable tar: "
+            f"{type(exc).__name__}: {exc}. It is truncated or damaged — check the copy "
+            "that produced it."
+        )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.tar.close()
+        return False
+
+    def __getattr__(self, name):
+        attribute = getattr(self.tar, name)
+        if not callable(attribute):
+            return attribute
+
+        def guarded(*args, **kwargs):
+            try:
+                return attribute(*args, **kwargs)
+            except tarfile.TarError as exc:
+                raise self._refusal(exc) from exc
+            except (EOFError, OSError) as exc:
+                raise self._refusal(exc) from exc
+
+        return guarded
+
+
+def open_outer(bundle):
+    with open_outer_tar(bundle) as tar:
+        names = tar.getnames()
+        if OUTER_PAYLOAD not in names:
+            raise RestoreError(
+                f"{os.path.basename(bundle)} has no {OUTER_PAYLOAD} — this is not a Nova "
+                f"bundle this script understands (members: {names[:8]})"
+            )
+        blobs = {}
+        for name in (OUTER_KAT, OUTER_KAT_SHA, OUTER_META, OUTER_READER, OUTER_SCRIPT):
+            if name in names:
+                handle = tar.extractfile(name)
+                blobs[name] = b"" if handle is None else handle.read()
+    return blobs
+
+
+def _require_kat(blobs):
+    if OUTER_KAT not in blobs or OUTER_KAT_SHA not in blobs:
+        raise RestoreError(
+            f"this bundle carries no {OUTER_KAT}/{OUTER_KAT_SHA}, so a passphrase cannot "
+            f"be proven before the payload is read"
+        )
+
+
+def kat_fingerprint(blobs, passphrase):
+    """What this passphrase derives under THIS bundle's KAT salt (§7.4)."""
+    _require_kat(blobs)
+    header = parse_header(io.BytesIO(blobs[OUTER_KAT]))
+    header.pop("_bytes")
+    return key_fingerprint(passphrase, header)
+
+
+def kat_gate(blobs, passphrase, decrypt):
+    """Prove the decryptor AND the passphrase against 64 known bytes with
+    their own fresh salt — BEFORE a payload byte is read."""
+    _require_kat(blobs)
+    plain = decrypt_bytes(blobs[OUTER_KAT], passphrase, decrypt)
+    if hashlib.sha256(plain).hexdigest() != blobs[OUTER_KAT_SHA].decode().strip():
+        raise CryptoError(BAD_DECRYPT)
+
+
+def _refusal_with_fingerprint(blobs, mine):
+    recorded = None
+    if OUTER_META in blobs:
+        try:
+            recorded = _meta_fingerprint(json.loads(blobs[OUTER_META].decode("utf-8")))
+        except ValueError:
+            recorded = None
+    if recorded and mine and recorded != mine:
+        return (
+            f"{BAD_DECRYPT}\n  This bundle records passphrase fingerprint {recorded}; the "
+            f"one you supplied derives {mine} under this bundle's salt, so it is a DIFFERENT "
+            f"passphrase, not a damaged file."
+        )
+    if recorded:
+        return f"{BAD_DECRYPT}\n  This bundle records passphrase fingerprint {recorded}."
+    return BAD_DECRYPT
+
+
+# ── the passphrase ──────────────────────────────────────────────────────────
+
+
+def passphrase_candidates(args):
+    """Each candidate is tried STRIPPED, then VERBATIM: a paper transcription
+    usually gains whitespace, and a stored value may legitimately carry it."""
+    if args.passphrase_file:
+        with open(args.passphrase_file) as fh:
+            raw = fh.read()
+    elif os.environ.get("NOVA_BACKUP_PASSPHRASE"):
+        raw = os.environ["NOVA_BACKUP_PASSPHRASE"]
+    elif not sys.stdin.isatty():
+        raw = sys.stdin.readline()
+        if not raw:
+            raise RestoreError(
+                "no passphrase: set NOVA_BACKUP_PASSPHRASE, pass --passphrase-file, "
+                "pipe it on stdin, or run interactively"
+            )
+        if raw.endswith("\n"):
+            raw = raw[:-1]
+    else:
+        raw = getpass.getpass("Backup passphrase: ")
+    out = []
+    for candidate in (raw.strip(), raw):
+        if candidate and candidate not in out:
+            out.append(candidate)
+    if not out:
+        raise RestoreError("an empty passphrase is not a passphrase")
+    return out
+
+
+# ── main ────────────────────────────────────────────────────────────────────
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Open a Nova backup bundle without a running Nova.")
+    ap.add_argument("bundle", help="nova-backup-<host>-<stamp>.tar")
+    ap.add_argument(
+        "--out", default=None, help="output directory (default: ./nova-restored-<stamp>)"
+    )
+    ap.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="decrypt and check every member against the manifest, then write nothing",
+    )
+    ap.add_argument(
+        "--kat",
+        action="store_true",
+        help="prove this machine's decryptor and this passphrase, and stop",
+    )
+    ap.add_argument("--passphrase-file", default=None)
+    args = ap.parse_args()
+
+    # Everything this writes — .env, the signing key, the dumps — is exactly
+    # what the bundle was encrypted to protect, so nothing it creates is ever
+    # group- or world-readable. First statement, before anything is opened.
+    os.umask(0o077)
+
+    if not os.path.isfile(args.bundle):
+        sys.stderr.write(f"ERROR: no such file: {args.bundle}\n")
+        return 2
+
+    decrypt, backend = gcm_backend()
+    sys.stderr.write(f"backend: {backend}\n")
+    blobs = open_outer(args.bundle)
+
+    mine = None
+    passphrase = None
+    for candidate in passphrase_candidates(args):
+        mine = kat_fingerprint(blobs, candidate)
+        try:
+            kat_gate(blobs, candidate, decrypt)
+        except CryptoError:
+            continue
+        passphrase = candidate
+        break
+    if passphrase is None:
+        sys.stderr.write(f"ERROR: {_refusal_with_fingerprint(blobs, mine)}\n")
+        return 1
+    print(f"known-answer test passed: this passphrase opens this bundle ({mine})")
+
+    if args.kat:
+        return 0
+
+    if args.verify_only:
+        work = tempfile.mkdtemp(prefix="nova-verify-")
+        try:
+            return _verify_only(args.bundle, passphrase, decrypt, work)
+        finally:
+            shutil.rmtree(work, ignore_errors=False)
+
+    out = args.out or "nova-restored-{}".format(time.strftime("%Y%m%d%H%M%S"))
+    if os.path.isdir(out) and os.listdir(out):
+        sys.stderr.write(
+            f"ERROR: {out} exists and is not empty — refusing to mix a restore into it\n"
+        )
+        return 2
+    if not os.path.isdir(out):
+        os.makedirs(out)
+    try:
+        return _restore(args.bundle, passphrase, decrypt, out)
+    except BaseException:
+        # A failed restore must not leave half-decrypted credentials on disk
+        # under a name that looks finished. `out` was empty or absent at
+        # entry, so everything in it is ours.
+        try:
+            shutil.rmtree(out)
+        except OSError:
+            sys.stderr.write(
+                f"WARNING: could not clean up {out} — it may hold decrypted credentials; "
+                "remove it by hand\n"
+            )
+        raise
+
+
+def _open_payload(bundle, passphrase, decrypt, work):
+    with open_outer_tar(bundle) as tar:
+        safe_extract(tar, work, members=[tar.getmember(OUTER_PAYLOAD)])
+    payload = os.path.join(work, OUTER_PAYLOAD)
+    inner = os.path.join(work, "inner.tgz")
+    with open(payload, "rb") as fin, open(inner, "wb") as fout:
+        decrypt_stream(fin, fout, passphrase, decrypt)
+    os.unlink(payload)
+    root = os.path.join(work, "inner")
+    os.makedirs(root)
+    try:
+        with tarfile.open(inner, "r:gz") as tar:
+            first = tar.next()
+            if first is None or first.name != INNER_MANIFEST:
+                raise RestoreError(
+                    "the inner archive's first member is {}, and a Nova bundle forces {}".format(
+                        "nothing" if first is None else repr(first.name), INNER_MANIFEST
+                    )
+                )
+            handle = tar.extractfile(first)
+            manifest = json.loads(handle.read().decode("utf-8"))
+            tar.members = []
+            safe_extract(tar, root)
+    except (RestoreError, CryptoError):
+        raise
+    except Exception as exc:
+        # A truncated gzip raises EOFError, which is neither TarError nor
+        # OSError; a narrower catch turns "corrupt" into an uncaught crash.
+        raise RestoreError(
+            f"the inner archive could not be read: {type(exc).__name__}: {exc}"
+        ) from exc
+    os.unlink(inner)
+    return root, manifest
+
+
+def _verify_only(bundle, passphrase, decrypt, work):
+    root, manifest = _open_payload(bundle, passphrase, decrypt, work)
+    problems = verify_extracted(root, manifest)
+    if problems:
+        sys.stderr.write("VERIFICATION FAILED — this bundle cannot be trusted:\n")
+        for problem in problems:
+            sys.stderr.write(f"  {problem}\n")
+        return 1
+    members = len(manifest.get("members", []))
+    volumes = len(manifest.get("volumes", []))
+    databases = len(manifest.get("databases", []))
+    print(
+        f"verified: {members} members, {volumes} volumes, {databases} databases, all "
+        f"matching the manifest sealed inside"
+    )
+    return 0
+
+
+def _restore(bundle, passphrase, decrypt, out):
+    work = os.path.join(out, ".work")
+    os.makedirs(work)
+    root, manifest = _open_payload(bundle, passphrase, decrypt, work)
+    problems = verify_extracted(root, manifest)
+    if problems:
+        sys.stderr.write("VERIFICATION FAILED — this restore cannot be trusted:\n")
+        for problem in problems:
+            sys.stderr.write(f"  {problem}\n")
+        # No next steps at all: a failed verify must never read as a partial
+        # success.
+        return 1
+    members = len(manifest.get("members", []))
+    print(f"verified: {members} members match their checksums")
+
+    placed = []
+    for row in manifest.get("members", []):
+        src = os.path.join(root, row["path"].rstrip("/"))
+        if row["kind"] == "tree":
+            dst = os.path.join(out, "volumes", row["restore_to"].split(":", 1)[1])
+        elif row["kind"] in ("db", "counts", "migrations"):
+            dst = os.path.join(out, "db", os.path.basename(row["path"]))
+        elif row["kind"] == "listing":
+            dst = os.path.join(out, "listings", os.path.basename(row["path"]))
+        elif row["kind"] == "env":
+            # The carried KEY SET, not a file to drop over deploy/.env —
+            # `./install restore` builds a plan from it and prints the key
+            # names it replaces. Kept out of project/ so it can never collide
+            # with a carried deploy/.env file member.
+            dst = os.path.join(out, "env", os.path.basename(row["path"]))
+        else:
+            dst = os.path.join(out, "project", row["restore_to"])
+        if not os.path.isdir(os.path.dirname(dst)):
+            os.makedirs(os.path.dirname(dst))
+        os.rename(src, dst)
+        placed.append(os.path.relpath(dst, out))
+    carried = os.path.join(root, INNER_MANIFEST)
+    if os.path.isfile(carried):
+        os.rename(carried, os.path.join(out, INNER_MANIFEST))
+    shutil.rmtree(work)
+
+    print(f"\nOpened into {out}/:")
+    for path in sorted(placed):
+        print(f"  {path}")
+    if manifest.get("excluded"):
+        print("\nThis bundle does NOT contain (recorded when it was written):")
+        for row in manifest["excluded"]:
+            print("  {} {} — {}".format(row["kind"], row["name"], row["reason"]))
+    print(
+        """
+Next, on this machine, in order:
+
+  1. git clone https://github.com/jeremyspofford/nova ~/workspace/nova
+     and check out {}, the commit this bundle was written from.
+  2. ./install restore {}
+     — that is the verified path: it creates the volumes with the labels
+       compose needs, restores each database THROUGH the postgres container
+       (so client and server versions can never disagree), diffs every volume
+       listing, and compares every table's count and digest against the
+       numbers sealed in this bundle.
+
+What you have here is the decrypted CONTENT. `./install restore` is what
+turns it back into a running Nova, and it is the only path that verifies what
+it did.""".format(
+            manifest.get("source", {}).get("repo_sha") or "the recorded commit",
+            os.path.abspath(bundle),
+        )
+    )
+    return 0
+
+
+EXIT_NO_BACKEND = 4
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except NoBackend as exc:
+        sys.stderr.write(f"ERROR: {exc}\n")
+        sys.exit(EXIT_NO_BACKEND)
+    except (RestoreError, CryptoError) as exc:
+        sys.stderr.write(f"ERROR: {exc}\n")
+        sys.exit(1)
