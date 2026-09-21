@@ -31,7 +31,7 @@ RENDER = FIXTURES / "compose-v5.3.0.yaml"
 ENV_EXAMPLE = COMPOSE_FILE.parent / ".env.example"
 
 
-def raw_volume_keys():
+def declared_volumes():
     return raw_compose_fact([(str(COMPOSE_FILE), COMPOSE_FILE.read_text())])["volumes"]
 
 
@@ -95,10 +95,6 @@ def rendered_rows():
             disposition, _, reason = rest.partition("\t")
             out[("anon", svc, target)] = (disposition, bool(reason.strip()))
     return out
-
-
-def raw_service_keys():
-    return raw_compose_fact([(str(COMPOSE_FILE), COMPOSE_FILE.read_text())])["services"]
 
 
 def env_declarations():
@@ -165,7 +161,7 @@ def test_every_volume_the_file_declares_has_a_disposition():
 
 
 def test_every_disposition_names_a_volume_the_file_declares():
-    declared = set(raw_volume_keys())
+    declared = set(declared_volumes())
     extra = sorted(
         name for (kind, _, name) in raw_rows() if kind == "volume" and name not in declared
     )
@@ -214,7 +210,7 @@ def test_searxng_declares_the_anonymous_volume_that_is_live_on_this_machine():
 def test_the_dispositions_cover_every_v4_volume_by_name():
     """Not a restatement of the two-direction test: this pins the SET, so a
     volume quietly dropped from the compose file is as loud as one added."""
-    assert sorted(raw_volume_keys()) == [
+    assert sorted(declared_volumes()) == [
         "v4_memdata",
         "v4_models",
         "v4_ollama",
@@ -332,13 +328,13 @@ def short_bind_rows():
     return parse(SHORT_BIND)
 
 
-def test_raw_dispositions_reports_a_short_syntax_bind_as_undeclared():
+def test_the_parser_reports_a_short_syntax_bind_as_undeclared():
     rows = short_bind_rows()
     assert ("bind", "memory", "/newstate") in rows
     assert rows[("bind", "memory", "/newstate")] == ("", False)
 
 
-def test_raw_dispositions_reports_every_spelling_of_a_host_path():
+def test_the_parser_reports_every_spelling_of_a_host_path():
     """compose's own rule: a short-syntax source is a bind when it starts with
     `.`, `/`, `~` or `$`, and a named volume otherwise."""
     rows = short_bind_rows()
@@ -346,7 +342,7 @@ def test_raw_dispositions_reports_every_spelling_of_a_host_path():
         assert ("bind", "memory", target) in rows, target
 
 
-def test_raw_dispositions_does_not_call_a_named_volume_a_bind():
+def test_the_parser_does_not_call_a_named_volume_a_bind():
     """The other direction, and the reason this cannot just match every short
     mount: `- v4_memdata:/data/memory` is a named volume, it carries its
     disposition under `volumes:`, and reporting it as an undeclared bind would
@@ -579,7 +575,7 @@ def test_the_real_compose_file_uses_no_form_the_reader_cannot_read():
     bad = [f"{owner}: {name}" for (kind, owner, name) in raw_rows_all() if kind == "unreadable"]
     assert not bad, (
         f"{bad} — deploy/docker-compose.yml writes a mount list in a form "
-        "raw_dispositions cannot read, so every item in it is invisible to this suite."
+        "the raw parser cannot read, so every item in it is invisible to this suite."
     )
 
 

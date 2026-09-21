@@ -857,10 +857,16 @@ def test_the_anon_fix_text_is_valid_to_paste():
     It first printed `reason: "<why>"}}` — one brace too many, because the
     second fragment of that string is not an f-string. Balancing it made the
     text usable and exposed the real problem (NF-3): the balanced form was an
-    inline flow mapping, which compose renders correctly and this repo's own
-    raw reader cannot parse, so an operator who pasted exactly what the
+    inline flow mapping, which compose renders correctly and the raw reader of
+    the day could not parse, so an operator who pasted exactly what the
     product told them to paste wrote a CORRECT compose file that reddened
-    three tests. Block style is the form both ends agree on.
+    three tests.
+
+    The reader can read a flow mapping now (s41/rulings.md 2026-09-21), so
+    that is no longer the reason. Block style stays because it is the form
+    deploy/docker-compose.yml itself is written in and the one
+    test_policy.py's paste test splices back in — a fix that does not look
+    like the file it is pasted into is a fix people rewrite by hand.
     """
     f = base_facts()
     del f["dispositions"]["anon"]["searxng"]
@@ -868,7 +874,7 @@ def test_the_anon_fix_text_is_valid_to_paste():
     fix = next(x for x in refusals if "anonymous volume" in x.subject).fix
     assert fix.count("{") == fix.count("}"), fix
     assert "}}" not in fix
-    assert "{" not in fix, "an inline flow mapping is not what raw_dispositions reads"
+    assert "{" not in fix, "the fix is block style, like the file it is pasted into"
     lines = [line for line in fix.splitlines() if line.strip()]
     assert lines[1].strip() == "x-nova-backup-anon:"
     assert lines[2].strip() == "/var/cache/searxng:"

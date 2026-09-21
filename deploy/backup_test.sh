@@ -457,7 +457,7 @@ build_world
 
 # The declared set is the raw text's: the render the stub returns is the
 # UNCHANGED capture, so the only way v4_vectors can be seen at all is that
-# raw.json read the file.
+# the compose text render_raw staged was read.
 grep -q 'v4_vectors' "$FIXTURES/compose-v5.3.0.yaml" && \
   report 1 "the_render_used_above_never_mentioned_the_new_volume" "the fixture carries it" || \
   report 0 "the_render_used_above_never_mentioned_the_new_volume"
