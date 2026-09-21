@@ -1040,7 +1040,16 @@ run_install() {
     detect_gpus_json() { printf '[]'; }
     detect_disk_free_gb() { printf '100'; }
     port_holder() { printf ''; }
-    unset NOVA_TAILNET NOVA_SKIP_INFERENCE
+    # decide_subnet runs for real on this path (that is the point — deleting
+    # its call from cmd_install turns the NOVA_SUBNET assertions below red).
+    # Its four outside-world seams are answered here so the answer is the same
+    # on every machine: no docker networks, one docker0 route.
+    check_foreign_project() { :; }
+    docker_network_ids() { :; }
+    have_cmd() { [ "$1" = ip ]; }
+    ip_route_text() { printf '%s\n' '172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1'; }
+    compose_project_name() { printf '%s' nova; }
+    unset NOVA_TAILNET NOVA_SKIP_INFERENCE NOVA_SUBNET
     out="$(cmd_install 2>&1)"; code=$?
     printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" "$(printf '%s' "$out" | tr '\n' ' ')"
   )
@@ -1053,6 +1062,9 @@ expect_tn "install, gpu + CUDA: COMPOSE_FILE written with both absolute files" "
   "COMPOSE_FILE=$SCRIPT_DIR/docker-compose.yml:$SCRIPT_DIR/docker-compose.gpu.yml;"
 expect_tn "install, gpu + CUDA: secrets still generated" "$INST_OK" 0 2 "CORE_TOKEN="
 expect_tn "install, gpu + CUDA: COMPOSE_PROFILES lists inference" "$INST_OK" 0 2 "COMPOSE_PROFILES=inference;"
+# decide_subnet is REACHED from cmd_install, and writes all five keys.
+expect_tn "install: the subnet decision reaches .env" "$INST_OK" 0 2 "NOVA_SUBNET=172.18.0.0/16;"
+expect_tn "install: and the derived web address with it" "$INST_OK" 0 2 "NOVA_WEB_ADDR=172.18.128.10;"
 
 INST_CPU="$(run_install 1 "$DECOY_LINE\n$CPU_LINE\n")"
 expect_tn "install, gpu + cpu: refuses after a green table" "$INST_CPU" 1 3 "came up WITHOUT the GPU"
@@ -1301,6 +1313,210 @@ expect_str "refuse_if_moved: refuses before ANY docker call" "$(tn_field "$MV" 2
 MV_NONE="$(run_moved "")"
 expect_tn "refuse_if_moved: no marker ⇒ the install runs" "$MV_NONE" 0 3 "Nova is up"
 expect_tn_lacks "refuse_if_moved: no marker ⇒ says nothing about a move" "$MV_NONE" 3 "parked by"
+
+# ── the subnet: decided from what is in use, never from a table ─────────────
+# deploy/subnet.sh + decide_subnet (design-verdict.md §10.2). 172.18/16 is a
+# hardcoded literal in docker-compose.yml today and NOVA_SUBNET appears
+# nowhere, so a second Nova on a machine that already uses 172.18 collides.
+# Everything here runs the real decision; stubbed are the four seams that
+# touch the outside world — `docker network ls`/`inspect`, whether `ip` and
+# `netstat` exist, and what each prints.
+#
+# Fixture shape: SB_NETWORKS is one network per line,
+#   <name>;<com.docker.compose.project.config_files>;<space-separated subnets>
+#   $1 SB_NETWORKS   $2 SB_IP_ROUTES (printf %b)   $3 initial .env body
+#   $4 NOVA_SUBNET in the environment ("" = unset)
+#   $5 "1" = `ip` exists     $6 "1" = `netstat` exists, with $7 its output
+#   $8 "0" = docker cannot be asked
+# Prints "<exit>|<.env with ;>|<stderr>".
+run_subnet() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    printf '%b' "${3:-}" > "$ENV_FILE"
+    SB_NETWORKS="$1"; SB_IP="$2"; SB_HAVE_IP="${5:-1}"
+    SB_HAVE_NETSTAT="${6:-0}"; SB_BSD="${7:-}"; SB_DOCKER_OK="${8:-1}"
+    docker_network_ids() {
+      [ "$SB_DOCKER_OK" = 1 ] || return 1
+      printf '%b\n' "$SB_NETWORKS" | awk 'NF { c++; print c }'
+    }
+    docker_network_row() {
+      printf '%b\n' "$SB_NETWORKS" | awk -v n="$1" 'NF { c++; if (c == n) print }' | tr ';' '\t'
+    }
+    have_cmd() {
+      case "$1" in
+        ip) [ "$SB_HAVE_IP" = 1 ] ;;
+        netstat) [ "$SB_HAVE_NETSTAT" = 1 ] ;;
+        *) command -v "$1" >/dev/null 2>&1 ;;
+      esac
+    }
+    ip_route_text() { printf '%b' "$SB_IP"; }
+    netstat_route_text() { printf '%b' "$SB_BSD"; }
+    compose_project_name() { printf '%s' "nova"; }
+    if [ -n "${4:-}" ]; then export NOVA_SUBNET="$4"; else unset NOVA_SUBNET; fi
+    err="$(decide_subnet 2>&1)"; code=$?
+    printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+# One function, sourced for real, driven with arguments.
+run_sb() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    "$@"
+  )
+}
+
+SB_OURS="$SCRIPT_DIR/docker-compose.yml"
+# The Dell's own shape: docker0 plus the project network.
+SB_IP_FREE='172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1\ndefault via 192.168.0.1 dev eth0 proto dhcp\n192.168.0.0/24 dev eth0 proto kernel scope link src 192.168.0.9\n'
+
+# Branch 1: the project network exists AND its config-files label is this
+# checkout's — the only case in which its addressing may be adopted.
+SB_ADOPT="$(run_subnet "nova_default;$SB_OURS;172.25.0.0/16" "$SB_IP_FREE")"
+expect_tn "subnet: adopts this checkout's own project network" "$SB_ADOPT" 0 2 "NOVA_SUBNET=172.25.0.0/16;"
+expect_tn "subnet: says it adopted rather than picked" "$SB_ADOPT" 0 3 "adopted"
+expect_tn "subnet: adopt writes NOVA_SUBNET_RANGE" "$SB_ADOPT" 0 2 "NOVA_SUBNET_RANGE=172.25.0.0/17;"
+expect_tn "subnet: adopt writes NOVA_SUBNET_GATEWAY" "$SB_ADOPT" 0 2 "NOVA_SUBNET_GATEWAY=172.25.0.1;"
+expect_tn "subnet: adopt writes NOVA_WEB_ADDR" "$SB_ADOPT" 0 2 "NOVA_WEB_ADDR=172.25.128.10;"
+expect_tn "subnet: adopt writes NOVA_TAILSCALE_ADDR" "$SB_ADOPT" 0 2 "NOVA_TAILSCALE_ADDR=172.25.128.20;"
+
+# python-tool M5. §10.1 removes foreign containers and volumes but NOT
+# networks, so a dead project's `nova_default` outlives the cleanup. Adopting
+# it by NAME would take addressing someone else chose — and the compose
+# comment at docker-compose.yml:374-386 says the fixed address IS web's trust
+# boundary. It must be treated as in use, not as ours.
+SB_FOREIGN="$(run_subnet "nova_default;/somewhere/else/docker-compose.yml;172.18.0.0/16" "$SB_IP_FREE")"
+expect_tn "subnet: a nova_default labelled for another checkout is NOT adopted" "$SB_FOREIGN" 0 2 "NOVA_SUBNET=172.19.0.0/16;"
+expect_tn_lacks "subnet: the foreign network is not called adopted" "$SB_FOREIGN" 3 "adopted"
+expect_tn "subnet: the foreign network counts as in use instead" "$SB_FOREIGN" 0 3 "is taken by 172.18.0.0/16 network nova_default"
+
+# Adopting a network that is not a /16 cannot produce the two .128 addresses,
+# and writing addresses outside the network is how `up` fails later.
+SB_SLASH24="$(run_subnet "nova_default;$SB_OURS;172.25.0.0/24" "$SB_IP_FREE")"
+expect_tn "subnet: refuses to derive the .128 addresses from a non-/16" "$SB_SLASH24" 1 3 "not a /16"
+expect_tn "subnet: names the network it could not derive from" "$SB_SLASH24" 1 3 "172.25.0.0/24"
+
+# Branch 3: pick, avoiding every network and every route.
+SB_PICK="$(run_subnet "a;;172.18.0.0/16\nb;;172.19.0.0/16" "$SB_IP_FREE")"
+expect_tn "subnet: picks the first candidate nothing else holds" "$SB_PICK" 0 2 "NOVA_SUBNET=172.20.0.0/16;"
+expect_tn "subnet: logs each candidate it rejected, and why" "$SB_PICK" 0 3 "172.18.0.0/16 is taken by 172.18.0.0/16 network a"
+
+# Branch 2: a pinned NOVA_SUBNET is never silently moved.
+SB_PIN_OK="$(run_subnet "a;;172.18.0.0/16" "$SB_IP_FREE" "" "10.77.0.0/16")"
+expect_tn "subnet: a free pinned NOVA_SUBNET is honoured" "$SB_PIN_OK" 0 2 "NOVA_SUBNET=10.77.0.0/16;"
+expect_tn "subnet: a pinned subnet derives its own addresses" "$SB_PIN_OK" 0 2 "NOVA_WEB_ADDR=10.77.128.10;"
+SB_PIN_BAD="$(run_subnet "othernet;;172.20.0.0/16" "$SB_IP_FREE" "" "172.20.0.0/16")"
+expect_tn "subnet: a colliding pinned NOVA_SUBNET dies" "$SB_PIN_BAD" 1 3 "collides"
+expect_tn "subnet: the collision names the network" "$SB_PIN_BAD" 1 3 "network othernet"
+expect_tn_lacks "subnet: a colliding pin writes nothing" "$SB_PIN_BAD" 2 "NOVA_SUBNET="
+SB_PIN_ROUTE="$(run_subnet "" "10.88.0.0/16 dev eth0 proto kernel scope link src 10.88.0.2\n" "" "10.88.0.0/16")"
+expect_tn "subnet: a pin colliding with a host ROUTE dies too" "$SB_PIN_ROUTE" 1 3 "collides"
+expect_tn "subnet: the collision names the route" "$SB_PIN_ROUTE" 1 3 "route 10.88.0.0/16"
+
+# port-v3 m3, the BSD leg. netstat prints `172.16/12` with no length; an
+# octet-count expansion calls it a /16 and reports 172.18 free, which it is
+# not. The whole 172.16–172.31 band is covered, so the pick must fall through
+# to the 10.200 band.
+SB_BSD_FIX='Routing tables\n\nInternet:\nDestination        Gateway            Flags        Netif Expire\ndefault            192.168.0.1        UGScg          en0\n10.0.0/24          link#3             UCS            en0\n127.0.0.1          127.0.0.1          UH             lo0\n172.16             link#4             UCS            en0\n'
+SB_BSD_RUN="$(run_subnet "" "" "" "" 0 1 "$SB_BSD_FIX")"
+expect_tn "subnet: reads routes from netstat when ip is absent" "$SB_BSD_RUN" 0 3 "netstat -rn -f inet"
+expect_tn "subnet: a BSD short form expands to the containing RFC1918 block" "$SB_BSD_RUN" 0 3 "172.16.0.0/12"
+expect_tn "subnet: the whole 172 band is therefore taken" "$SB_BSD_RUN" 0 2 "NOVA_SUBNET=10.200.0.0/16;"
+expect_tn_lacks "subnet: never expands 172.16 to a /16" "$SB_BSD_RUN" 3 "172.16.0.0/16"
+
+# Neither tool: refuse to pick blind rather than pick.
+SB_NOTOOLS="$(run_subnet "" "" "" "" 0 0 "")"
+expect_tn "subnet: refuses to pick when neither ip nor netstat exists" "$SB_NOTOOLS" 1 3 "neither"
+expect_tn "subnet: names both commands it looked for" "$SB_NOTOOLS" 1 3 "netstat"
+expect_tn_lacks "subnet: writes nothing when it could not read the routes" "$SB_NOTOOLS" 2 "NOVA_SUBNET="
+
+# A docker call that fails is a refusal, not an empty set.
+SB_NODOCKER="$(run_subnet "a;;172.18.0.0/16" "$SB_IP_FREE" "" "" 1 0 "" 0)"
+expect_tn "subnet: docker that cannot be asked is a refusal" "$SB_NODOCKER" 1 3 "docker"
+expect_tn_lacks "subnet: a docker failure writes nothing" "$SB_NODOCKER" 2 "NOVA_SUBNET="
+
+# A destination that cannot become a CIDR is PRINTED, never silently dropped.
+SB_JUNK="$(run_subnet "" "224.0.0 dev eth0\n172.17.0.0/16 dev docker0\n" "")"
+expect_tn "subnet: an unparseable route destination is named out loud" "$SB_JUNK" 0 3 "224.0.0"
+expect_tn "subnet: and the run still completes" "$SB_JUNK" 0 2 "NOVA_SUBNET=172.18.0.0/16;"
+
+# A write that does not read back is a failure, not a shrug. The one seam
+# stubbed here makes .env come back missing the key that was just written to
+# it — the shape of a silently-failed write.
+SB_LIAR="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    : > "$ENV_FILE"
+    docker_network_ids() { :; }
+    have_cmd() { [ "$1" = ip ]; }
+    ip_route_text() { printf '%b' '172.17.0.0/16 dev docker0\n'; }
+    compose_project_name() { printf '%s' nova; }
+    get_env_value() {
+      [ "$1" = NOVA_WEB_ADDR ] && return 0
+      grep -m1 "^${1}=" "$ENV_FILE" 2>/dev/null | cut -d'=' -f2- || true
+    }
+    unset NOVA_SUBNET
+    err="$(decide_subnet 2>&1)"; code=$?
+    printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE")" "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+)"
+expect_tn "subnet: a key that does not read back is a failure" "$SB_LIAR" 1 3 "NOVA_WEB_ADDR"
+expect_tn "subnet: the failure says what came back instead" "$SB_LIAR" 1 3 "read back"
+
+# The pure arithmetic, on its own.
+expect_str "subnet_overlaps: identical blocks overlap" \
+  "$(run_sb eval 'subnet_overlaps 172.18.0.0/16 172.18.0.0/16; printf %s $?')" "0"
+expect_str "subnet_overlaps: a /24 inside a /16 overlaps" \
+  "$(run_sb eval 'subnet_overlaps 172.18.0.0/16 172.18.5.0/24; printf %s $?')" "0"
+expect_str "subnet_overlaps: the containing /12 overlaps a /16 inside it" \
+  "$(run_sb eval 'subnet_overlaps 172.18.0.0/16 172.16.0.0/12; printf %s $?')" "0"
+expect_str "subnet_overlaps: neighbours do not overlap" \
+  "$(run_sb eval 'subnet_overlaps 172.18.0.0/16 172.19.0.0/16; printf %s $?')" "1"
+expect_str "subnet_overlaps: 10/8 does not reach 172.18" \
+  "$(run_sb eval 'subnet_overlaps 172.18.0.0/16 10.0.0.0/8; printf %s $?')" "1"
+expect_str "subnet_overlaps: garbage is its own answer, not 'no'" \
+  "$(run_sb eval 'subnet_overlaps 172.18.0.0/16 not-a-cidr; printf %s $?')" "2"
+expect_str "expand_route_dest: an explicit length is honoured, octets padded" \
+  "$(run_sb expand_route_dest 10.0.0/24)" "10.0.0.0/24"
+expect_str "expand_route_dest: a four-octet host route is a /32" \
+  "$(run_sb expand_route_dest 127.0.0.1)" "127.0.0.1/32"
+expect_str "expand_route_dest: 172.16 is the /12, not the classful guess" \
+  "$(run_sb expand_route_dest 172.16)" "172.16.0.0/12"
+expect_str "expand_route_dest: 192.168 is the /16" \
+  "$(run_sb expand_route_dest 192.168)" "192.168.0.0/16"
+expect_str "expand_route_dest: 10.0.0 is the whole /8" \
+  "$(run_sb expand_route_dest 10.0.0)" "10.0.0.0/8"
+expect_str "expand_route_dest: a short form outside RFC1918 is refused" \
+  "$(run_sb eval 'expand_route_dest 224.0.0 >/dev/null; printf %s $?')" "1"
+
+# #23: the two fixed addresses must sit OUTSIDE the dynamic range, or the
+# allocator can hand web's address to something else and nginx's trust
+# boundary stops meaning anything.
+SB_ADDRS="$(run_sb derive_subnet_addrs 172.22.0.0/16)"
+expect_str "derive_subnet_addrs: the dynamic range is the lower /17" \
+  "$(printf '%s\n' "$SB_ADDRS" | grep '^NOVA_SUBNET_RANGE=' | cut -d= -f2)" "172.22.0.0/17"
+expect_str "derive_subnet_addrs: web sits outside the dynamic range" \
+  "$(run_sb eval 'subnet_overlaps 172.22.128.10/32 172.22.0.0/17; printf %s $?')" "1"
+expect_str "derive_subnet_addrs: the sidecar sits outside the dynamic range" \
+  "$(run_sb eval 'subnet_overlaps 172.22.128.20/32 172.22.0.0/17; printf %s $?')" "1"
+expect_str "derive_subnet_addrs: web sits INSIDE the subnet itself" \
+  "$(run_sb eval 'subnet_overlaps 172.22.128.10/32 172.22.0.0/16; printf %s $?')" "0"
+expect_str "derive_subnet_addrs: a non-/16 derives nothing" \
+  "$(run_sb eval 'derive_subnet_addrs 172.22.0.0/24 >/dev/null; printf %s $?')" "1"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

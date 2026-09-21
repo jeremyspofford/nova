@@ -63,6 +63,13 @@ MOVED_MARKER="$DEPLOY_DIR/.moved"
 log() { printf '%s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
+# The subnet decision and its CIDR arithmetic. A separate file because it is
+# the one part of the installer that has to work under BSD userland — macOS
+# has no `ip` — and because deploy/backup.sh needs the same functions when it
+# restores onto a machine whose networks are somebody else's.
+# shellcheck source=subnet.sh
+. "$SCRIPT_DIR/subnet.sh"
+
 # ---- preflight ----------------------------------------------------------
 
 check_docker() {
@@ -220,6 +227,32 @@ bundled_ollama_running() {
   done
   IFS="$OLDIFS"
   BUNDLED_OLLAMA_REASON="the container on the ollama slot was created from [$labels], not from $want"
+  return 1
+}
+
+# Was a container, volume or network created from THIS checkout's compose
+# file? $1 is a com.docker.compose.project.config_files label: compose writes
+# every -f it was given, comma-separated, and a match on any one of them is a
+# match. Compared by canonical path, so a label naming a path that does not
+# exist on this filesystem (the v3 stack has containers labelled
+# /compose/docker-compose.yml) compares as itself rather than blowing up.
+#
+# bundled_ollama_running above walks the same list by hand and is left alone
+# on purpose: its BUNDLED_OLLAMA_REASON strings are what its own cases assert,
+# and folding them into a boolean would lose them.
+config_files_are_ours() {
+  local labels="$1" want entry OLDIFS="$IFS"
+  [ -n "$labels" ] || return 1
+  want="$(canonical_path "$COMPOSE_FILE")"
+  IFS=','
+  for entry in $labels; do
+    IFS="$OLDIFS"
+    if [ "$(canonical_path "$entry")" = "$want" ]; then
+      return 0
+    fi
+    IFS=','
+  done
+  IFS="$OLDIFS"
   return 1
 }
 
@@ -1125,6 +1158,10 @@ cmd_install() {
   generate_secrets
   # After generate_secrets: it reads and writes .env. Still before anything is
   # pulled, built or started.
+  # After generate_secrets, which is what guarantees .env exists to be
+  # written into, and before record_compose_files, which is the first thing
+  # that makes this run's compose invocation durable.
+  decide_subnet
   decide_tailnet
   # Every -f and --profile is decided now. Write both to .env before anything
   # is pulled, built or started, so a later hand-run compose command inherits
