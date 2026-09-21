@@ -20,6 +20,11 @@ Running it, on a machine whose Nova is up::
 Without `NOVA_E2E_LIVE` every case SKIPS and says so: it stops the live
 stack's writers for the length of a backup and it creates and destroys docker
 objects, so it never runs by accident.
+
+`pytest.mark.live` is not registered in any pytest config in this repo yet, so
+pytest warns about the mark. The SKIP is driven by the environment variable
+and works regardless; registering the mark is one line, wherever the repo's
+pytest config eventually lands.
 """
 
 from __future__ import annotations
@@ -53,33 +58,18 @@ requires_live = pytest.mark.skipif(
 
 
 def run_verb(*argv: str, timeout: int = 3600) -> subprocess.CompletedProcess[str]:
-    """One of `deploy/backup.sh`'s verbs, driven the way `./install` drives it.
+    """One of `deploy/backup.sh`'s verbs, through the documented entry point.
 
-    `deploy/install.sh` is sourced first because the restore path calls
-    `decide_subnet`, `get_env_value` and `set_env_value`, which live there,
-    and because sourcing it is what turns on `set -euo pipefail` — the shell
-    settings the verb really runs under, and the ones its `set +e` wrapper
-    exists for.
-
-    It is SOURCED and not invoked as `./install backup`, because
-    `install.sh`'s `main` still dispatches only `install` and `update`: the
-    `. backup.sh` source and the new `case` arms are owed by another task
-    (T3's report, "Owed"). The day they land, this driver keeps working and
-    the command in `deploy/README.md` becomes the same one.
+    `./install backup|restore|drill` is the command the slice's definition of
+    done, `deploy/README.md` and the move runbook are all written in terms of,
+    so it is the command this measures. `install.sh` sources `backup.sh` only
+    when one of those verbs is asked for, and exits with the verb's own code.
     """
-    script = (
-        "set -euo pipefail\n"
-        'cd "$1"\n'
-        "shift\n"
-        ". deploy/install.sh\n"
-        ". deploy/passphrase.sh\n"
-        ". deploy/backup.sh\n"
-        '"$@"\n'
-    )
     return subprocess.run(
-        ["bash", "-c", script, "bash", str(REPO), *argv],
+        [str(REPO / "install"), *argv],
         capture_output=True,
         text=True,
+        cwd=REPO,
         timeout=timeout,
     )
 
@@ -123,7 +113,7 @@ def bundle(archive_dir):
         f"a drill object is already here before anything ran: {before}. "
         "Clear it (./install drill sweeps) before measuring this."
     )
-    done = run_verb("cmd_backup", "--out", str(archive_dir))
+    done = run_verb("backup", "--out", str(archive_dir))
     assert done.returncode == 0, f"backup failed ({done.returncode}):\n{done.stderr}"
     tars = sorted(archive_dir.glob("nova-backup-*.tar"))
     assert len(tars) == 1, f"expected one bundle in {archive_dir}, found {tars}"
@@ -146,7 +136,7 @@ def test_the_operator_can_read_the_bundle_he_just_wrote(bundle):
 def test_backup_then_drill_round_trips(bundle):
     """§9.3: every count, every digest, every volume listing and the signing
     key, compared against the numbers sealed in the bundle."""
-    done = run_verb("cmd_restore", str(bundle), "--drill")
+    done = run_verb("restore", str(bundle), "--drill")
     assert done.returncode == 0, f"the drill failed:\n{done.stdout}\n{done.stderr}"
 
     # The three facts the word `drill` is only printed with (§9.2 step 16).
@@ -178,7 +168,7 @@ def test_the_drill_verb_answers_the_question(archive_dir, bundle):
     """§9.4: `./install drill` sweeps, picks the newest bundle by the stamp in
     its own name, runs the drill and cross-checks every older bundle's
     passphrase fingerprint. THE EXIT CODE IS THE VERDICT."""
-    done = run_verb("cmd_drill", "--out", str(archive_dir))
+    done = run_verb("drill", "--out", str(archive_dir))
     assert done.returncode == 0, f"the drill verb failed:\n{done.stdout}\n{done.stderr}"
     assert f"drill PASSED: {bundle.name}" in done.stdout
     assert survivors() == {"container": [], "volume": [], "network": []}
@@ -200,20 +190,12 @@ def test_coverage_refuses_an_undeclared_volume_against_a_live_daemon(tmp_path):
     copy.write_text(text, encoding="utf-8")
 
     out = tmp_path / "archive"
-    env = dict(os.environ, BK_COMPOSE_FILES=str(copy))
-    script = (
-        "set -euo pipefail\n"
-        'cd "$1"\n'
-        ". deploy/install.sh\n"
-        ". deploy/passphrase.sh\n"
-        ". deploy/backup.sh\n"
-        'cmd_backup --out "$2"\n'
-    )
     done = subprocess.run(
-        ["bash", "-c", script, "bash", str(REPO), str(out)],
+        [str(REPO / "install"), "backup", "--out", str(out)],
         capture_output=True,
         text=True,
-        env=env,
+        cwd=REPO,
+        env=dict(os.environ, BK_COMPOSE_FILES=str(copy)),
         timeout=900,
     )
     assert done.returncode != 0, f"an unclassified volume did not refuse:\n{done.stdout}"

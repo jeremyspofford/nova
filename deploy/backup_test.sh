@@ -1198,6 +1198,21 @@ expect_str "the_postgres_image_tag_is_read_from_the_render" \
 expect_str "every_rendered_profile_is_recorded" \
   "$(bk_cfg_profiles < "$WORLD/stage/facts/config.yaml" | tr '\n' ' ')" "inference tailnet "
 
+# ── every verb's dependencies are the FILE's, not the caller's ─────────────
+#
+# deploy/install.sh dispatches `backup`, `restore` and `drill` by sourcing
+# deploy/backup.sh and nothing else, so a verb that calls `resolve_passphrase`
+# and leaves the source to its caller dies with `command not found` before it
+# reads a byte — which is what `./install backup` did on 705620ee. This runs
+# in a shell that has sourced backup.sh ALONE.
+BKT_DEPS="$(bash -c '. "$1/backup.sh"
+  for f in resolve_passphrase create_passphrase nova_passphrase_source \
+    cfg_volume_keys cfg_volume_name cfg_volume_disposition; do
+    command -v "$f" >/dev/null 2>&1 || printf "%s " "$f"
+  done' bash "$SCRIPT_DIR" 2>&1)"
+expect_str "sourcing_backup_sh_alone_defines_everything_its_verbs_call" \
+  "${BKT_DEPS% }" ""
+
 printf '\n── restore and drill: the parts that need no world ──────────────────\n'
 
 # ── DRILL_RE, on the string that reaches the command (python-tool M7) ──────

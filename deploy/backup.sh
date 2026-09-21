@@ -26,6 +26,15 @@ BK_REPO_ROOT="$(cd "$BK_DIR/.." && pwd)"
 
 # shellcheck source=/dev/null
 . "$BK_DIR/compose_read.sh"
+# And the passphrase resolver seam, because every verb below calls
+# `resolve_passphrase`. Sourced HERE and not left to the caller: as of
+# `705620ee` deploy/install.sh dispatches `backup`, `restore` and `drill` by
+# sourcing THIS file and nothing else, so `./install backup` died with
+# `resolve_passphrase: command not found` before it read a byte. A file that
+# calls a function declares where the function comes from; sourcing it twice
+# costs a function redefinition and nothing else.
+# shellcheck source=/dev/null
+. "$BK_DIR/passphrase.sh"
 
 # ── the seams the suite stubs ───────────────────────────────────────────────
 #
