@@ -296,3 +296,29 @@ something risky with his data.
 **Cost if wrong:** a restart that races the move's own teardown. Bounded by
 the EXIT trap owning the decision in one place, which is already the shape T3
 built for the non-move path.
+
+
+## Owner decisions, 2026-09-21 (late) — the move's three open questions
+
+1. **Expose the Dell's ollama on the tailnet, accepting the risk**, until S42
+   lands the pinned-TLS bearer link. Any tailnet peer can then reach it
+   unauthenticated, and the realistic worst case is `DELETE /api/delete`
+   costing a re-download of ~82 GB of weights, which are deliberately not in
+   the bundle (`x-nova-backup: exclude-redownload`). No owner data is at risk.
+2. **The Dell sleeps, and Nova wakes it with Wake-on-LAN.** His words: *"The
+   dell should sleep but be woken via 'wake on lan'. Chat should be patient and
+   wait for it to start if we set it to the WoL device. Yes, I know the mini pc
+   doesn't have a gpu, that was the point. That is always on. Dell or other
+   devices can be on-demand/WoL when needed."*
+
+   This confirms decisions 2 and 3 rather than changing them, and it sets the
+   priority: **S46 is what delivers the end state he actually wants.** The move
+   itself is unaffected — the Dell is awake throughout — but between the move
+   and S46 the GPU is available only while the Dell happens to be awake, and
+   that is a stated gap, not a surprise. "Chat should be patient and wait" is
+   §9's wait rule: the turn waits with progress, and past the deadline the next
+   chain link answers and says which.
+3. **Build `cmd_undo_move` and the failed-`--move` parking before moving.**
+   Every step of the cutover sits downstream of a `--move` that can currently
+   stop the Dell and walk away, so the by-hand recovery is not good enough for
+   the one night it would be needed.
