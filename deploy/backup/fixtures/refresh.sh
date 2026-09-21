@@ -60,11 +60,18 @@ if [ -n "$LIVE_COMPOSE" ]; then
   printf 'live stack was created from %s\n' "$LIVE_ROOT"
 fi
 
+# This checkout and the checkout the live stack was created from both become
+# /repo. Whatever is LEFT under the operator's home belongs to some third
+# project that happens to share this project's NAME — v3's stopped containers
+# here — and it becomes /elsewhere: the repo is public, the shape of the path
+# is the part that matters, and the username is not.
+#
+# Order is load-bearing: both roots are under $HOME, so $HOME goes last.
 normalise() {
   if [ -n "$LIVE_ROOT" ] && [ "$LIVE_ROOT" != "$REPO_ROOT" ]; then
-    sed -e "s|$LIVE_ROOT|/repo|g" -e "s|$REPO_ROOT|/repo|g"
+    sed -e "s|$LIVE_ROOT|/repo|g" -e "s|$REPO_ROOT|/repo|g" -e "s|$HOME|/elsewhere|g"
   else
-    sed -e "s|$REPO_ROOT|/repo|g"
+    sed -e "s|$REPO_ROOT|/repo|g" -e "s|$HOME|/elsewhere|g"
   fi
 }
 

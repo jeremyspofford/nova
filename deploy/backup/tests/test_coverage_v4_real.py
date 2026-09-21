@@ -13,6 +13,7 @@ deploy/backup/fixtures/refresh.sh in the same commit as the edit.
 """
 
 import json
+import re
 
 import pytest
 from conftest import FIXTURES, compose_read
@@ -202,19 +203,29 @@ def test_the_fixtures_were_captured_from_one_checkout():
 
 
 def test_no_fixture_carries_a_home_directory_or_a_tailnet_name():
-    """This repo is public."""
-    for name in (
-        "compose-v5.3.0.yaml",
-        "compose-v5.3.0.json",
-        "containers-v4.json",
-        "raw-v4.json",
-        "git-v4.json",
-        "reachable-v4.json",
-        "ignored-paths.txt",
-    ):
-        text = (FIXTURES / name).read_text()
-        assert "/home/" not in text, f"{name} carries a home directory"
-        assert ".ts.net" not in text, f"{name} carries a tailnet name"
+    """This repo is public — and the list of fixtures is DERIVED.
+
+    A hand-kept list of names is a check you have to remember to extend: the
+    one it was missing (containers-foreign-v4.json) was the one that failed
+    it, and refresh.sh is designed to write compose-v5.5.1.* on the other
+    host, which no list written today could name.
+    """
+    checked = 0
+    for path in sorted(FIXTURES.iterdir()):
+        if path.is_dir() or path.name == "refresh.sh":
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        assert not re.search(r"/(home|Users)/[A-Za-z0-9._-]+/", text), (
+            f"{path.name} carries someone's home directory. refresh.sh rewrites this "
+            "checkout and the live stack's checkout to /repo and anything else under "
+            "$HOME to /elsewhere; re-run it."
+        )
+        assert ".ts.net" not in text, f"{path.name} carries a tailnet name"
+        assert not re.search(r"\b100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.", text), (
+            f"{path.name} carries a tailnet (100.64/10) address"
+        )
+        checked += 1
+    assert checked >= 10, f"only {checked} fixtures were checked; the directory looks wrong"
 
 
 def test_reclassifying_a_real_bind_as_state_demands_a_probe():
