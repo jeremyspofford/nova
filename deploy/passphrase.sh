@@ -36,6 +36,10 @@ NP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # does not exist, is a red suite rather than a silent divergence.
 NOVA_PASSPHRASE_SOURCES="file env prompt cmd"
 
+# A literal newline, for the multi-line check in nova_pass_file.
+NP_NL='
+'
+
 # Overridable so the suite never reads the operator's own .env or writes his
 # own passphrase file.
 np_env_file() { printf '%s\n' "${NP_ENV_FILE:-$NP_DIR/.env}"; }
@@ -116,12 +120,15 @@ nova_pass_file() {
   # multi-line store would be silently truncated to its first line and seal
   # every bundle with something the operator does not think he has.
   # `$( )` strips trailing newlines, so a `case` against $(printf '\n') would
-  # match a pattern of `*""*` — everything. Count the newlines instead.
-  if [ "$(printf '%s' "$value" | wc -l | tr -d ' ')" != "0" ]; then
-    np_fail "$path holds more than one line. The passphrase is one line; a file like
+  # match a pattern of `*""*` — everything. The newline is a literal inside
+  # single quotes instead, which needs no external binary at all.
+  case "$value" in
+    *"$NP_NL"*)
+      np_fail "$path holds more than one line. The passphrase is one line; a file like
   this would be silently cut at the first newline."
-    return 1
-  fi
+      return 1
+      ;;
+  esac
   printf '%s' "$value"
   return 0
 }

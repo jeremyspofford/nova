@@ -490,7 +490,13 @@ def members_refusal(members):
             return bad
         name = posixpath.normpath(member.name)
         for ancestor in _ancestors(name):
-            if ancestor in symlinks:
+            # Case-folded as well as exact: on a case-insensitive filesystem
+            # — APFS by default, and NTFS — `DIR/x` and `dir/x` are the same
+            # path, so an exact-match set lets the second hop of a chain in
+            # under a different spelling. Folding costs nothing on a
+            # case-sensitive filesystem except refusing an archive that
+            # carries two entries differing only in case, which fails closed.
+            if ancestor in symlinks or ancestor.lower() in symlinks:
                 return (
                     f"{member.name}: its path goes through `{ancestor}`, which this same "
                     "archive declares a symlink — a chain like that escapes the target "
@@ -498,6 +504,7 @@ def members_refusal(members):
                 )
         if member.issym():
             symlinks.add(name)
+            symlinks.add(name.lower())
     return ""
 
 
@@ -538,6 +545,11 @@ def _mode_octal(mode):
     return "0" if bits == 0 else f"0{bits:o}"
 
 
+def tar_member_record(member):
+    """(metadata, link target) from the ARCHIVE'S records."""
+    return tar_member_metadata(member), member.linkname if member.issym() else ""
+
+
 def tar_member_metadata(member):
     """`<kind> <mode> <uid> <gid>` in the listing's own spelling, from the
     ARCHIVE'S records — never from the filesystem it was extracted onto.
@@ -570,8 +582,16 @@ def _verify_tree(root, listing, archived):
     problems = []
     want_meta = {}
     want_hash = {}
+    want_link = {}
     for line in listing.splitlines():
         if not line:
+            continue
+        if line.startswith("L "):
+            path, sep, target = line[2:].rpartition(" -> ")
+            if not sep:
+                problems.append(f"{line!r}: unreadable listing line")
+                continue
+            want_link[path] = target
             continue
         if line[:1] in ("d", "f", "l") and line[1:2] == " ":
             parts = line.split(" ", 4)
@@ -599,17 +619,28 @@ def _verify_tree(root, listing, archived):
                 elif want_hash[rel] != got:
                     problems.append(f"{rel}: content does not match its recorded checksum")
     for rel in sorted(want_meta):
-        got = archived.get(rel)
-        if got is None:
+        record = archived.get(rel)
+        if record is None:
             problems.append(f"{rel}: named in the listing, absent from the archive")
-        elif got != want_meta[rel]:
+            continue
+        if record[0] != want_meta[rel]:
             problems.append(
-                f"{rel}: type/mode/uid/gid is `{got}`, the listing recorded `{want_meta[rel]}`"
+                f"{rel}: type/mode/uid/gid is `{record[0]}`, the listing recorded "
+                f"`{want_meta[rel]}`"
             )
+        if want_meta[rel].startswith("l "):
+            if rel not in want_link:
+                problems.append(f"{rel}: is a symlink and the listing records no target for it")
+            elif want_link[rel] != record[1]:
+                problems.append(
+                    f"{rel}: points at `{record[1]}`, the listing recorded `{want_link[rel]}`"
+                )
     for rel in sorted(set(archived) - set(want_meta)):
         problems.append(f"{rel}: in the archive, absent from the listing")
     for rel in sorted(set(want_hash) - seen):
         problems.append(f"{rel}: named in the listing, absent from the archive")
+    for rel in sorted(set(want_link) - set(want_meta)):
+        problems.append(f"{rel}: the listing records a target for an entry it does not name")
     return sorted(set(problems))
 
 
@@ -1004,7 +1035,7 @@ def _open_payload(bundle, passphrase, decrypt, work):
             manifest = json.loads(handle.read().decode("utf-8"))
             tar.members = []
             members = safe_extract(tar, root)
-            archived = {m.name: tar_member_metadata(m) for m in members}
+            archived = {m.name: tar_member_record(m) for m in members}
     except (RestoreError, CryptoError):
         raise
     except Exception as exc:
@@ -1017,8 +1048,42 @@ def _open_payload(bundle, passphrase, decrypt, work):
     return root, manifest, archived
 
 
+def check_manifest_paths(manifest):
+    """Every path-shaped value the manifest carries, or a refusal.
+
+    Run by BOTH verifiers, before either prints a word. `--verify-only` used
+    to say yes to a bundle `novabundle verify` said no to, because it never
+    looked at `restore_to` — two verifiers disagreeing about the same file is
+    worse than either of them being wrong, since the operator will believe
+    whichever one agrees with him.
+    """
+    for row in manifest.get("members", []):
+        _relative(row.get("path"), "a member path")
+        _restore_to(row.get("restore_to"))
+    for row in manifest.get("volumes", []):
+        _relative(row.get("prefix"), "a volume prefix")
+        _relative(row.get("listing_member"), "a listing member")
+        _restore_to(row.get("restore_to"))
+    for row in manifest.get("files", []):
+        _relative(row.get("member"), "a file member")
+        _restore_to(row.get("restore_to"))
+    for row in manifest.get("databases", []):
+        for field in ("dump_member", "counts_member", "migrations_member"):
+            _relative(row.get(field), f"a database {field}")
+
+
+def _restore_to(value):
+    """The three legal forms of §5.3, and nothing else."""
+    if isinstance(value, str) and value.startswith("volume:"):
+        return _volume_name(value)
+    if isinstance(value, str) and value.startswith("db:"):
+        return value
+    return _relative(value)
+
+
 def _verify_only(bundle, passphrase, decrypt, work):
     root, manifest, archived = _open_payload(bundle, passphrase, decrypt, work)
+    check_manifest_paths(manifest)
     problems = verify_extracted(root, manifest, archived)
     if problems:
         sys.stderr.write("VERIFICATION FAILED — this bundle cannot be trusted:\n")
@@ -1039,6 +1104,10 @@ def _restore(bundle, passphrase, decrypt, out):
     work = os.path.join(out, ".work")
     os.makedirs(work)
     root, manifest, archived = _open_payload(bundle, passphrase, decrypt, work)
+    # BEFORE the word "verified" is printed, not after: the placement checks
+    # used to run later, so an escaping bundle got `verified: 7 members match
+    # their checksums` on stdout and only then refused.
+    check_manifest_paths(manifest)
     problems = verify_extracted(root, manifest, archived)
     if problems:
         sys.stderr.write("VERIFICATION FAILED — this restore cannot be trusted:\n")
@@ -1067,6 +1136,19 @@ def _restore(bundle, passphrase, decrypt, out):
             dst = os.path.join(out, "env", os.path.basename(row["path"]))
         else:
             dst = os.path.join(out, "project", _relative(row["restore_to"]))
+        if row["kind"] != "tree" and os.path.islink(src):
+            # Placement moves a member to a path of a DIFFERENT depth, and a
+            # relative symlink target is resolved from where the link sits —
+            # so a link that was contained inside the archive can point
+            # outside once it has been placed. A tree moves whole, at the
+            # same depth, so its internal links keep meaning what they meant;
+            # a single member does not, and a bundle this tool writes never
+            # has one (plan() records regular files).
+            raise RestoreError(
+                f"this bundle's manifest places {row['path']!r}, which is a symlink. A link "
+                "moved to a different depth stops meaning what the archive checked. Nothing "
+                "is placed from a manifest this reader does not trust."
+            )
         _must_stay_inside(out, dst)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         os.rename(src, dst)

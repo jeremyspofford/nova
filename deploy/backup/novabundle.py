@@ -1990,6 +1990,13 @@ def tree_listing(root: str) -> str:
             else:
                 raise BundleError(f"{rel}: a listing cannot describe a {stat.S_IFMT(st.st_mode):o}")
             meta.append(f"{kind} {_mode_octal(st.st_mode)} {st.st_uid} {st.st_gid} {rel}")
+            if kind == "l":
+                # WHERE a link points is data. §5.5's four columns record that
+                # a link exists and nothing about its target, so repointing
+                # `./people/current` from one person's notes to another's
+                # passed pack, verify and the reader. A backup that cannot
+                # notice its own data being repointed is not verifying it.
+                meta.append(f"L {rel} -> {os.readlink(full)}")
             if kind == "f":
                 digest, _ = sha256_file(full)
                 hashes.append(f"{digest}  {rel}")
@@ -1999,20 +2006,40 @@ def tree_listing(root: str) -> str:
     return "".join(line + "\n" for line in lines)
 
 
-def parse_listing(listing: str) -> tuple[dict[str, str], dict[str, str], list[str]]:
-    """(`<kind> <mode> <uid> <gid>` per ./path, sha256 per ./path, bad lines).
+def parse_listing(
+    listing: str,
+) -> tuple[dict[str, str], dict[str, str], dict[str, str], list[str]]:
+    """(metadata per ./path, sha256 per ./path, link target per ./path, bad lines).
 
     Parses rather than regenerates, on purpose: the listing that ships is
     written by `find` + `sha256sum` inside a container (§9.1 step 12) and this
     side must not have to reproduce that byte for byte to be able to check it.
+
+    Three line kinds, and the third is new:
+
+        d 0755 0 0 ./people                       type, mode, uid, gid
+        L ./people/current -> example             a symlink's TARGET
+        <sha256>  ./people/example/a-note.md      a regular file's content
+
+    `L` is a separate line rather than a sixth column so the four-column lines
+    are untouched: `%y %#m %U %G %p` still produces them, and the container
+    adds one more pass. The target is last and split off the RIGHT, so a path
+    containing ` -> ` still parses.
     """
     meta: dict[str, str] = {}
     hashes: dict[str, str] = {}
+    links: dict[str, str] = {}
     problems: list[str] = []
     for line in listing.splitlines():
         if not line:
             continue
-        if line[:1] in ("d", "f", "l") and line[1:2] == " ":
+        if line.startswith("L "):
+            path, sep, target = line[2:].rpartition(" -> ")
+            if not sep:
+                problems.append(f"{line!r}: unreadable listing line")
+                continue
+            links[path] = target
+        elif line[:1] in ("d", "f", "l") and line[1:2] == " ":
             parts = line.split(" ", 4)
             if len(parts) != 5:
                 problems.append(f"{line!r}: unreadable listing line")
@@ -2024,7 +2051,13 @@ def parse_listing(listing: str) -> tuple[dict[str, str], dict[str, str], list[st
                 problems.append(f"{line!r}: unreadable listing line")
                 continue
             hashes[path] = digest
-    return meta, hashes, problems
+    return meta, hashes, links, problems
+
+
+def tar_member_record(member: tarfile.TarInfo) -> tuple[str, str]:
+    """(`<kind> <mode> <uid> <gid>`, the link target) from the ARCHIVE'S own
+    records rather than from the filesystem it was extracted onto."""
+    return tar_member_metadata(member), member.linkname if member.issym() else ""
 
 
 def tar_member_metadata(member: tarfile.TarInfo) -> str:
@@ -2041,20 +2074,20 @@ def tar_member_metadata(member: tarfile.TarInfo) -> str:
     return f"{kind} {_mode_octal(member.mode)} {member.uid} {member.gid}"
 
 
-def archived_tree_metadata(members, prefix: str) -> dict[str, str]:
-    """The recorded metadata of every member under `prefix`, keyed ./path."""
+def archived_tree_metadata(members, prefix: str) -> dict[str, tuple[str, str]]:
+    """The recorded (metadata, link target) of every member under `prefix`."""
     stripped = prefix.rstrip("/") + "/"
-    out: dict[str, str] = {}
+    out: dict[str, tuple[str, str]] = {}
     for member in members:
         name = member.name
         if not name.startswith(stripped):
             continue
-        out["./" + name[len(stripped) :]] = tar_member_metadata(member)
+        out["./" + name[len(stripped) :]] = tar_member_record(member)
     return out
 
 
 def verify_tree_against_listing(
-    root: str, listing: str, archived: dict[str, str] | None = None
+    root: str, listing: str, archived: dict[str, tuple[str, str]] | None = None
 ) -> list[str]:
     """Every difference between a carried tree and its recorded listing.
 
@@ -2076,8 +2109,8 @@ def verify_tree_against_listing(
     `archived=None` falls back to `lstat`, for a tree that did not come out of
     a tar at all (the drill re-derives one inside a container).
     """
-    want_meta, want_hash, problems = parse_listing(listing)
-    got_meta: dict[str, str] = dict(archived) if archived is not None else {}
+    want_meta, want_hash, want_link, problems = parse_listing(listing)
+    got: dict[str, tuple[str, str]] = dict(archived) if archived is not None else {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
         for name in sorted(dirnames + filenames):
@@ -2094,7 +2127,10 @@ def verify_tree_against_listing(
                     if stat.S_ISREG(st.st_mode)
                     else "?"
                 )
-                got_meta[rel] = f"{kind} {_mode_octal(st.st_mode)} {st.st_uid} {st.st_gid}"
+                got[rel] = (
+                    f"{kind} {_mode_octal(st.st_mode)} {st.st_uid} {st.st_gid}",
+                    os.readlink(full) if kind == "l" else "",
+                )
             if os.path.isfile(full) and not os.path.islink(full):
                 digest, _ = sha256_file(full)
                 if rel not in want_hash:
@@ -2102,15 +2138,29 @@ def verify_tree_against_listing(
                 elif want_hash[rel] != digest:
                     problems.append(f"{rel}: content does not match its recorded checksum")
     for rel, want in sorted(want_meta.items()):
-        got = got_meta.get(rel)
-        if got is None:
+        record = got.get(rel)
+        if record is None:
             problems.append(f"{rel}: named in the listing, absent from the archive")
-        elif got != want:
-            problems.append(f"{rel}: type/mode/uid/gid is `{got}`, the listing recorded `{want}`")
-    for rel in sorted(set(got_meta) - set(want_meta)):
+            continue
+        if record[0] != want:
+            problems.append(
+                f"{rel}: type/mode/uid/gid is `{record[0]}`, the listing recorded `{want}`"
+            )
+        if want.startswith("l "):
+            if rel not in want_link:
+                # Not a skip: a listing that names a link and records no
+                # target cannot answer the question this check exists for.
+                problems.append(f"{rel}: is a symlink and the listing records no target for it")
+            elif want_link[rel] != record[1]:
+                problems.append(
+                    f"{rel}: points at `{record[1]}`, the listing recorded `{want_link[rel]}`"
+                )
+    for rel in sorted(set(got) - set(want_meta)):
         problems.append(f"{rel}: in the archive, absent from the listing")
-    for rel in sorted(set(want_hash) - set(got_meta)):
+    for rel in sorted(set(want_hash) - set(got)):
         problems.append(f"{rel}: named in the listing, absent from the archive")
+    for rel in sorted(set(want_link) - set(want_meta)):
+        problems.append(f"{rel}: the listing records a target for an entry it does not name")
     return sorted(set(problems))
 
 
@@ -2199,7 +2249,13 @@ def members_refusal(members) -> str:
             return bad
         name = posixpath.normpath(member.name)
         for ancestor in _ancestors(name):
-            if ancestor in symlinks:
+            # Case-folded as well as exact: on a case-insensitive filesystem
+            # — APFS by default, and NTFS — `DIR/x` and `dir/x` are the same
+            # path, so an exact-match set lets the next hop of a chain in
+            # under a different spelling. Folding costs nothing on a
+            # case-sensitive filesystem except refusing an archive carrying
+            # two entries that differ only in case, which fails closed.
+            if ancestor in symlinks or ancestor.lower() in symlinks:
                 return (
                     f"{member.name}: its path goes through `{ancestor}`, which this same "
                     "archive declares a symlink — a chain like that escapes the target "
@@ -2207,6 +2263,7 @@ def members_refusal(members) -> str:
                 )
         if member.issym():
             symlinks.add(name)
+            symlinks.add(name.lower())
     return ""
 
 
@@ -2855,7 +2912,7 @@ def read_outer_member(bundle: str, name: str) -> bytes:
 
 
 def verify_inner(
-    root: str, manifest: dict[str, Any], archived: dict[str, str] | None = None
+    root: str, manifest: dict[str, Any], archived: dict[str, tuple[str, str]] | None = None
 ) -> list[str]:
     """Every member's sha256 RE-DERIVED from the extracted bytes.
 
@@ -2924,7 +2981,9 @@ def verify_inner(
     return sorted(set(problems))
 
 
-def archived_tree_metadata_from(archived: dict[str, str], prefix: str) -> dict[str, str]:
+def archived_tree_metadata_from(
+    archived: dict[str, tuple[str, str]], prefix: str
+) -> dict[str, tuple[str, str]]:
     """The `archived` map narrowed to one tree prefix, keyed ./path."""
     stripped = prefix.rstrip("/") + "/"
     return {
@@ -2934,7 +2993,7 @@ def archived_tree_metadata_from(archived: dict[str, str], prefix: str) -> dict[s
     }
 
 
-def open_inner(path: str, dest: str) -> tuple[dict[str, Any], dict[str, str]]:
+def open_inner(path: str, dest: str) -> tuple[dict[str, Any], dict[str, tuple[str, str]]]:
     """Extract the inner archive into `dest`; return (manifest, archived).
 
     `archived` is `<kind> <mode> <uid> <gid>` per member name, taken from the
@@ -2960,7 +3019,7 @@ def open_inner(path: str, dest: str) -> tuple[dict[str, Any], dict[str, str]]:
             manifest = load_manifest_text(extracted.read().decode("utf-8"))
             tar.members = []
             members = safe_extract(tar, dest)
-            archived = {m.name: tar_member_metadata(m) for m in members}
+            archived = {m.name: tar_member_record(m) for m in members}
     except (BundleError, ManifestError, CryptoError):
         raise
     except Exception as exc:  # noqa: BLE001 — EOFError, TarError, OSError, zlib

