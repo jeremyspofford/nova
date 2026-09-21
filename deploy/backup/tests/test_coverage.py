@@ -206,11 +206,12 @@ def test_R0_a_renderer_that_could_not_be_asked_carries_its_stderr():
 
 
 def test_R0_not_a_git_work_tree_is_its_own_sentence():
+    """A different failure from git being unavailable, and said differently."""
     f = base_facts()
-    f["git"] = {"work_tree": False, "root": "/repo", "paths": {}}
+    f["git"] = {"work_tree": False, "root": "/repo", "paths": {"deploy/x": "tracked"}}
     _, refusals = coverage(f, "routine")
-    r = next(x for x in refusals if x.code == "R0_FACT_UNREADABLE")
-    assert "not a git work tree" in r.detail
+    r0 = [x for x in refusals if x.code == "R0_FACT_UNREADABLE"]
+    assert any("not a git work tree" in x.detail for x in r0)
 
 
 def test_R0_a_render_of_another_project_is_refused():
@@ -861,3 +862,140 @@ def test_the_anon_fix_text_is_valid_to_paste():
     assert fix.count("{") == fix.count("}"), fix
     assert '/var/cache/searxng: {disposition: <one of the eight>, reason: "<why>"}' in fix
     assert "}}" not in fix
+
+
+# ── F3: the bind match is right, and a disagreement is recorded ─────────────
+
+
+def test_a_matched_bind_records_the_source_docker_reported_when_it_differs():
+    """The (service, destination) match is what stops Docker Desktop's
+    rewritten Source refusing every backup. On the pass path it recorded
+    nothing, so a bind whose host directory had moved underneath — the live
+    case on this machine, where the stack runs from a different checkout of
+    this same repo — passed leaving no trace in the bundle's own facts."""
+    f = base_facts()
+    f["containers"]["containers"].append(
+        {
+            "id": "fff",
+            "name": "nova-postgres-1",
+            "service": "postgres",
+            "state": "running",
+            "config_files": "/elsewhere/deploy/docker-compose.yml",
+            "mounts": [
+                {
+                    "Type": "bind",
+                    "Source": "/elsewhere/deploy/postgres-init",
+                    "Destination": "/docker-entrypoint-initdb.d",
+                    "RW": False,
+                }
+            ],
+        }
+    )
+    entries, refusals = coverage(f, "routine")
+    assert codes(refusals) == []
+    bind = entry_for(entries, "bind", "/repo/deploy/postgres-init")
+    live = bind.detail["live_mounts"]
+    assert live[0]["reported_source"] == "/elsewhere/deploy/postgres-init"
+    assert live[0]["source_matches_render"] is False
+    assert live[0]["container"] == "nova-postgres-1"
+    assert "live_mounts" in bind.as_dict()["detail"]
+
+
+def test_a_bind_whose_source_agrees_records_no_disagreement():
+    f = base_facts()
+    f["containers"]["containers"].append(
+        {
+            "id": "ggg",
+            "name": "nova-postgres-1",
+            "service": "postgres",
+            "state": "running",
+            "config_files": "/repo/deploy/docker-compose.yml",
+            "mounts": [
+                {
+                    "Type": "bind",
+                    "Source": "/repo/deploy/postgres-init",
+                    "Destination": "/docker-entrypoint-initdb.d",
+                    "RW": False,
+                }
+            ],
+        }
+    )
+    entries, refusals = coverage(f, "routine")
+    assert codes(refusals) == []
+    assert "live_mounts" not in entry_for(entries, "bind", "/repo/deploy/postgres-init").detail
+
+
+def test_a_declared_bind_source_does_not_excuse_another_services_mount():
+    """The source half of the match was a flat set across every service, so a
+    container of ANY service mounting ANY declared source at ANY destination
+    passed. It is keyed by service now."""
+    f = base_facts()
+    f["containers"]["containers"].append(
+        {
+            "id": "hhh",
+            "name": "nova-memory-1",
+            "service": "memory",
+            "state": "running",
+            "config_files": "/repo/deploy/docker-compose.yml",
+            "mounts": [
+                {
+                    "Type": "bind",
+                    "Source": "/repo/deploy/postgres-init",
+                    "Destination": "/somewhere/memory/never/declared",
+                    "RW": True,
+                }
+            ],
+        }
+    )
+    _, refusals = coverage(f, "routine")
+    r = next(x for x in refusals if x.code == "R4_UNDECLARED_LIVE_MOUNT")
+    assert "/repo/deploy/postgres-init" in r.subject
+    assert "memory" in r.detail
+
+
+# ── F4: a fact that came back EMPTY is a reading that failed ────────────────
+#
+# `[ -s "$file" ]` in the shell catches an empty file and none of these: every
+# one is well-formed JSON whose renderer produced nothing useful, and before
+# this each of them made coverage refuse LESS while saying nothing.
+
+
+@pytest.mark.parametrize(
+    "fact,key",
+    [
+        ("raw", "services"),
+        ("raw", "volumes"),
+        ("config", "services"),
+        ("config", "volumes"),
+        ("containers", "containers"),
+        ("env", "keys"),
+        ("git", "paths"),
+    ],
+)
+def test_R0_a_structurally_empty_fact_refuses(fact, key):
+    f = base_facts()
+    f[fact][key] = type(f[fact][key])()
+    _, refusals = coverage(f, "routine")
+    assert any(r.code == "R0_FACT_UNREADABLE" and f"{fact}.{key}" in r.subject for r in refusals), [
+        r.subject for r in refusals
+    ]
+
+
+def test_an_empty_container_list_would_otherwise_remove_a_whole_refusal():
+    """§6.1: containers.json is the ONLY source that can see an image-declared
+    volume. With an empty list the anonymous-volume refusal cannot fire at
+    all, so the emptiness itself has to."""
+    f = base_facts()
+    del f["dispositions"]["anon"]["searxng"]
+    f["containers"]["containers"] = []
+    _, refusals = coverage(f, "routine")
+    assert not [r for r in refusals if "anonymous volume" in r.subject]
+    assert any("containers.containers" in r.subject for r in refusals)
+
+
+def test_R0_the_containers_fact_must_be_about_the_same_project_as_the_render():
+    f = base_facts()
+    f["containers"]["project"] = "nova-v3"
+    _, refusals = coverage(f, "routine")
+    r = next(x for x in refusals if x.code == "R0_FACT_UNREADABLE" and "project" in x.subject)
+    assert "nova-v3" in r.detail and "not this stack's" in r.detail

@@ -157,6 +157,29 @@ FACT_NAMES = (
     "databases",
 )
 
+# A fact whose renderer failed can come back well-formed and EMPTY, and an
+# empty structure refuses nothing at all: no container means step 5 never
+# runs, and §6.1 says containers.json is the ONLY source that can see an
+# image-declared volume; no raw service means the R1 profile-gap check passes
+# vacuously. `[ -s ]` in the shell catches an empty FILE and none of these.
+#
+# "An empty-but-successful fact is a failure, not nothing to carry" — §6.1.
+NON_EMPTY_FACTS = (
+    ("raw", "services", "the compose text names no service"),
+    ("raw", "volumes", "the compose text declares no volume"),
+    ("config", "services", "the render has no service in it"),
+    ("config", "volumes", "the render has no volume in it"),
+    (
+        "containers",
+        "containers",
+        "docker reported no container under this project's label. That is the only "
+        "source that can see a volume an image declares, so an empty list removes a "
+        "whole refusal rather than reporting a stack with nothing in it",
+    ),
+    ("env", "keys", "the .env carries no key at all"),
+    ("git", "paths", "the scan found no host file under any scan root"),
+)
+
 ANON_VOLUME_NAME = re.compile(r"^[0-9a-f]{64}$")
 UNEXPANDED = re.compile(r"\$\{|\$[A-Za-z_]")
 
@@ -300,6 +323,20 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
     env = facts["env"]
     databases = facts["databases"]
 
+    # 0b. A fact that came back structurally empty is a reading that failed.
+    for fact_name, key, why in NON_EMPTY_FACTS:
+        if not (facts[fact_name].get(key) or []):
+            refusals.append(
+                Refusal(
+                    R0,
+                    f"fact {fact_name}.{key}",
+                    f"{fact_name}.json parsed and `{key}` is empty: {why}. An "
+                    "empty-but-successful fact is a failure, not nothing to carry.",
+                    "fix: re-run ./install backup and read the renderer's own error, and "
+                    "check that the stack this backup is about is the stack that is running.",
+                )
+            )
+
     # 1. The render must be a render of THIS checkout's compose text.
     raw_project = raw.get("project", "")
     cfg_project = config.get("name", "")
@@ -310,6 +347,22 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                 "project name",
                 f"the render calls this project `{cfg_project}` and the checkout's own "
                 f"compose text calls it `{raw_project}`. One of them is not this stack.",
+                "",
+            )
+        )
+
+    # ...and the containers fact must be about the same project as the render.
+    # Both are rendered from the same run and both are on disk, so a
+    # disagreement means one of them is a reading of something else.
+    containers_project = containers.get("project")
+    if containers_project is not None and containers_project != cfg_project:
+        refusals.append(
+            Refusal(
+                R0,
+                "project name",
+                f"containers.json was filtered on the label `{containers_project}` and the "
+                f"render calls this project `{cfg_project}`. The live mounts in that fact "
+                "are not this stack's.",
                 "",
             )
         )
@@ -385,7 +438,10 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
 
     # 4. Mounts, as the render resolves them.
     bind_sources: set[str] = set()
-    declared_bind_targets: set[tuple[str, str]] = set()
+    # Keyed by SERVICE, not flat: a flat set lets any container mounting any
+    # declared source at any destination pass, whatever service it belongs to.
+    declared_bind_targets: dict[tuple[str, str], Entry] = {}
+    declared_bind_sources: set[tuple[str, str]] = set()
     for svc in sorted(cfg_services):
         for mount in cfg_services[svc].get("volumes") or []:
             mtype = mount.get("type")
@@ -420,7 +476,6 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
             if mtype != "bind":
                 continue
 
-            declared_bind_targets.add((svc, target))
             entry = Entry(
                 kind="bind",
                 name=source,
@@ -444,6 +499,8 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                 )
                 continue
             bind_sources.add(source)
+            declared_bind_targets[(svc, target)] = entry
+            declared_bind_sources.add((svc, source))
             row = ((disp.get("binds") or {}).get(svc) or {}).get(target) or {}
             bad = _classify_declared(row)
             if bad:
@@ -555,7 +612,28 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                 # destination this compose file never declares. The Source
                 # docker reported is kept on the entry so the two are
                 # comparable by eye when they disagree.
-                if src in bind_sources or (svc, dest) in declared_bind_targets:
+                declared = declared_bind_targets.get((svc, dest))
+                if declared is not None or (svc, src) in declared_bind_sources:
+                    # Matched. If docker's Source is not the path the render
+                    # resolved, say so on the entry rather than merely
+                    # tolerating it: the bundle's facts then carry both paths,
+                    # and an operator reading the plan can see that the host
+                    # directory under a declared mount is not where this
+                    # checkout thinks it is. Two live causes on this machine —
+                    # Docker Desktop rewriting the source it reports, and a
+                    # stack created from a different checkout of this same
+                    # repo (verdict §10.1's `sibling`) — and coverage cannot
+                    # tell them apart, so it states the fact instead of
+                    # guessing which one it is looking at.
+                    if declared is not None and src and src != declared.name:
+                        declared.detail.setdefault("live_mounts", []).append(
+                            {
+                                "container": cname,
+                                "reported_source": src,
+                                "matched_by": "service+destination",
+                                "source_matches_render": False,
+                            }
+                        )
                     continue
                 entries.append(
                     Entry(
