@@ -59,3 +59,14 @@ tests/e2e/.auth/
 # The isolated e2e stack: generated throwaway secrets for the nova-e2e
 # project (tests/e2e/isolated.sh). Never deploy/.env, never committed.
 tests/e2e/.isolated/
+
+# S41: the backup passphrase and the bundles it seals. A bundle carries every
+# secret this machine has, and the passphrase is the only thing that opens
+# one — neither is ever a tracked file.
+deploy/.backup-passphrase
+deploy/.backup-passphrase.lock/
+deploy/backups/
+
+# S41 move markers: local state of THIS machine, never committed.
+deploy/.moved
+deploy/tailscale/MOVED_TO

@@ -1169,7 +1169,11 @@ expect_tn_lacks "profiles: bundled off ⇒ no --profile inference passed" "$PE_S
 # Never listed: nothing to take out, nothing to say about a container.
 PE_SKIP_NONE="$(run_profile_env 0 "" 'COMPOSE_PROFILES=\n')"
 expect_tn "profiles: bundled off, never listed ⇒ stays empty" "$PE_SKIP_NONE" 0 4 "already lists nothing"
-expect_tn_lacks "profiles: bundled off, never listed ⇒ inference absent" "$PE_SKIP_NONE" 3 "inference"
+# Field 3 is the whole .env text, which carries COMPOSE_FILE=<abs path>. A
+# checkout whose PATH contains "inference" (this one does) made a correct
+# implementation fail here. Assert on the value of COMPOSE_PROFILES, which
+# is what the case is about, not on every byte of the file.
+expect_tn "profiles: bundled off, never listed ⇒ inference absent" "$PE_SKIP_NONE" 0 3 "COMPOSE_PROFILES=;"
 expect_tn_lacks "profiles: bundled off, never listed ⇒ no stop advice" "$PE_SKIP_NONE" 4 "stop ollama"
 
 # Profiles this script does not manage are left where they are.

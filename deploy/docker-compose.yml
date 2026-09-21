@@ -396,9 +396,15 @@ networks:
   default:
     ipam:
       config:
-        - subnet: 172.18.0.0/16
-          ip_range: 172.18.0.0/17
-          gateway: 172.18.0.1
+        # decide_subnet (deploy/subnet.sh) writes these into .env when 172.18
+        # is already taken on the host — measured on the mini PC, where four
+        # other bridges held 172.17 through 172.21. Hardcoding the subnet here
+        # while decide_subnet wrote an address into .env would put the web
+        # address on a network compose still pinned elsewhere, and `up` fails.
+        # The defaults keep an existing install byte-identical.
+        - subnet: ${NOVA_SUBNET:-172.18.0.0/16}
+          ip_range: ${NOVA_SUBNET_RANGE:-172.18.0.0/17}
+          gateway: ${NOVA_SUBNET_GATEWAY:-172.18.0.1}
 
 # Every entry here carries its own x-nova-backup disposition and a reason.
 # The disposition lives BESIDE the thing it describes, in the same document
