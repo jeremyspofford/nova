@@ -92,3 +92,33 @@ What that binds:
   platform-line project in the present tense. A map that contradicts the
   verdict is a trap for an implementer who reads the map first, which the task
   briefs will tell them to do.
+
+
+## Owner decision, 2026-09-21 (late): the macOS CI work ships
+
+Asked as verdict §16's one owner question — widen `rebuild-ci.yml`'s trigger
+so anything in this slice runs at all. Answer: **"You can also implement that
+macOS ci work."**
+
+So **requirement #27 is MET, not deferred**, and T6 builds it:
+
+- the trigger widens from `rebuild/**` to include `slice/**` and `main`;
+- a **`macos-15`** job runs `install_test.sh` and `backup_test.sh` under
+  `/bin/bash` (bash 3.2 there, which is the whole point — it is the only place
+  the BSD-userland path is ever executed);
+- the workflow is **re-enabled** on GitHub. It is currently
+  `disabled_manually`, so a widened trigger alone would fire nothing; the
+  jobs would be theatre. Both halves or neither.
+- the `bash -n` step stays as well: it is cheap and it catches a syntax error
+  before a runner is spent.
+
+This reverses the standing 2026-09-07 "CI and hooks OFF for now" decision **for
+this workflow only**. `core.hooksPath=/dev/null` is untouched. Cost if wrong:
+red builds start mattering again, which is what he switched off; turning it
+back off is `gh workflow disable rebuild-ci`, and the slice record then says
+macOS is untested rather than implying coverage.
+
+It also settles verdict §15 risk 4: `nova_restore.py`'s two hardcoded Homebrew
+libcrypto paths have never been executed on a Mac, and the `macos-15` job
+running `test_restore_reader.py` with `NOVA_FORCE_CTYPES_GCM=1` is the only
+thing that ever will. The repo is public, so those runners cost nothing.
