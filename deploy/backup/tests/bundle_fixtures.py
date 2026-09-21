@@ -224,6 +224,7 @@ def forge_bundle(
     fallback_image="python:3.12-slim",
     needs_images=("postgres:16", "python:3.12-slim"),
     mutate_stage=None,
+    owner=None,
 ):
     """A bundle whose MANIFEST never went through `load_manifest`.
 
@@ -240,7 +241,26 @@ def forge_bundle(
     (stage / "MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     inner = stage / "inner.tgz"
-    nb.build_inner_archive(str(stage), manifest, str(inner))
+    if owner is None:
+        nb.build_inner_archive(str(stage), manifest, str(inner))
+    else:
+        # A volume that was root-owned on the source hub — `v4_tailscale` is,
+        # and `v4_memdata` is uid 1000. This suite runs unprivileged, so a
+        # staged tree can only ever record the user running it; the numeric
+        # owner has to be written into the headers to have a bundle whose
+        # entries the reader CANNOT chown back.
+        real = nb._tar_filter
+
+        def as_owner(info):
+            info = real(info)
+            info.uid, info.gid = owner
+            return info
+
+        nb._tar_filter = as_owner
+        try:
+            nb.build_inner_archive(str(stage), manifest, str(inner))
+        finally:
+            nb._tar_filter = real
     payload = stage / "payload.enc"
     nb.encrypt_file(str(inner), str(payload), passphrase, manifest["encryption"]["chunk"])
     kat_blob = nb.encrypt_bytes(nb.KAT_PLAINTEXT, passphrase)

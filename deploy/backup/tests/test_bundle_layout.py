@@ -118,8 +118,10 @@ def test_the_inner_members_follow_the_manifests_order(bundle):
 
 
 def test_the_inner_archive_carries_numeric_ownership_only(bundle):
-    """§5.2: restore extracts with --numeric-owner, so a uname that does not
-    exist on the target can never silently become uid 0."""
+    """§5.2: the restore puts back the NUMBERS (nova_restore's
+    apply_recorded_metadata), so a uname that does not exist on the target —
+    or does, and belongs to someone else — can never decide who owns a
+    restored file."""
     path, _, _ = bundle
     with tarfile.open(path, "r:") as tar:
         payload = tar.extractfile("payload.enc").read()

@@ -2822,9 +2822,12 @@ OUTER_CLEARTEXT = OUTER_ORDER[:4] + (OUTER_META,)
 
 
 def _tar_filter(info: tarfile.TarInfo) -> tarfile.TarInfo:
-    """Numeric owner only. §5.2: python's tarfile records numeric uid/gid/mode
-    directly, so restore extracts with --numeric-owner and a name that does
-    not exist on the target can never silently become uid 0."""
+    """Numeric owner only. §5.2: python's tarfile records numeric uid/gid and
+    mode directly, and `nova_restore.apply_recorded_metadata` puts those
+    numbers back (the owner half only when it is root, and it states the gap
+    when it is not). Clearing uname/gname is what stops a NAME that does not
+    exist on the target — or does, and belongs to someone else — from
+    deciding who owns a restored file."""
     info.uname = ""
     info.gname = ""
     return info

@@ -35,6 +35,7 @@ import os
 import posixpath
 import re
 import shutil
+import stat
 import struct
 import sys
 import tarfile
@@ -508,9 +509,105 @@ def members_refusal(members):
     return ""
 
 
+HIGH_BITS = 0o7000  # setuid, setgid, sticky
+
+
+def running_as_root():
+    """Whether this process can set an owner AT ALL.
+
+    `os.chown` is a no-op for everyone else, so this is the one fact every
+    sentence about ownership below is derived from — the statement and the
+    behaviour cannot disagree because they read the same function.
+    """
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+def high_bit_refusal(members):
+    """Why this set will not be extracted because of its MODES, or "".
+
+    Restoring a recorded mode is restoring data. Restoring a setuid, setgid
+    or sticky bit out of a file somebody handed you is letting the bundle
+    choose a privileged behaviour on the machine that opens it — and this
+    reader runs, by design, on a machine with nothing, sometimes as root.
+    `backup.sh` refuses the same three bits when it fills a volume from the
+    sealed listing; two layers that disagree about what they will place is
+    worse than either rule on its own.
+    """
+    for member in members:
+        if member.mode and member.mode & HIGH_BITS:
+            return (
+                f"{member.name}: mode {_mode_octal(member.mode)} carries setuid, setgid or "
+                "sticky. Nothing is placed from a bundle this reader does not trust."
+            )
+    return ""
+
+
+def apply_recorded_metadata(dest, members):
+    """Put back what CPython's `data` extraction filter drops.
+
+    WHICH LAYER OWNS WHAT, because a restore that gets this wrong is a hub
+    whose services cannot read their own data:
+
+      * MODE is this reader's, always. The filter masks every mode to
+        `& 0o755` and re-adds the owner bits, and drops a directory's mode
+        entirely — measured on this file's own fixture volume: a 0664 note
+        landed 0644, a 0666 note landed 0644, a 0755 directory landed 0700.
+      * OWNER is root's. `os.chown` is a no-op for anyone else, so this sets
+        uid/gid when the process IS root, and `owner_gap` names what it
+        could not set when it is not. `./install restore` applies the sealed
+        listing's owner columns itself when it fills each volume; this
+        reader states the gap rather than pretending to have closed it.
+
+    The source is the ARCHIVE'S OWN HEADERS — the same records
+    `verify_extracted` compares the sealed listing against — so extraction
+    is faithful to the archive, and the listing is what says the archive is
+    right. Nothing here reads a value the manifest could have chosen.
+    """
+    root_now = running_as_root()
+    # Deepest first: a directory the archive records as 0500 would otherwise
+    # stop this loop from reaching what is inside it.
+    for member in sorted(members, key=lambda m: m.name, reverse=True):
+        target = os.path.join(dest, member.name.rstrip("/"))
+        if not os.path.lexists(target):
+            continue
+        if member.issym():
+            # chmod through a symlink re-modes its TARGET, and Linux has no
+            # lchmod; a symlink's own mode is not data anything reads. Its
+            # OWNER is, and lchown does exist.
+            if root_now:
+                os.lchown(target, member.uid, member.gid)
+            continue
+        if member.mode is not None:
+            os.chmod(target, member.mode & 0o777)
+        if root_now:
+            os.chown(target, member.uid, member.gid)
+
+
+def owner_gap(members):
+    """The members whose recorded owner this process did NOT set.
+
+    Empty when it is root (it set every one) and when the archive records
+    the user it is already running as (there is nothing to set).
+    """
+    if running_as_root():
+        return []
+    euid = os.geteuid() if hasattr(os, "geteuid") else -1
+    egid = os.getegid() if hasattr(os, "getegid") else -1
+    return [m.name for m in members if m.uid != euid or m.gid != egid]
+
+
 def safe_extract(tar, dest, members=None):
+    """Extract `members` under `dest` and then restore the modes the
+    extraction dropped.
+
+    The extraction is CPython's hardened `data` filter where there is one,
+    plus this file's own member and member-SET refusals, because restore.sh
+    accepts python 3.9. What that filter does not do is preserve what was
+    backed up — see apply_recorded_metadata for which layer owns which
+    column.
+    """
     chosen = list(tar.getmembers() if members is None else members)
-    bad = members_refusal(chosen)
+    bad = members_refusal(chosen) or high_bit_refusal(chosen)
     if bad:
         raise RestoreError(f"bundle member refused — {bad}")
     if not os.path.isdir(dest):
@@ -518,10 +615,33 @@ def safe_extract(tar, dest, members=None):
     try:
         tar.extractall(dest, members=chosen, filter="data")
     except TypeError:  # python < 3.12 has no `filter` keyword
-        for member in chosen:
-            member.mode &= 0o777  # nothing else clears setuid/setgid here
         tar.extractall(dest, members=chosen)
+    apply_recorded_metadata(dest, chosen)
     return chosen
+
+
+def rmtree(path):
+    """`shutil.rmtree` over a tree this reader may have made unwritable.
+
+    Extraction now lands the archive's recorded modes, and a 0500 directory
+    inside a volume is an ordinary thing — so the cleanup that removes the
+    work directory has to be able to get back into what it wrote. Failures
+    still raise: a cleanup that swallows its reason is how a half-decrypted
+    .env gets left behind looking like nothing happened.
+    """
+    try:
+        os.chmod(path, os.lstat(path).st_mode | 0o700)
+    except OSError:
+        pass
+    for dirpath, dirnames, _files in os.walk(path):
+        for name in dirnames:
+            full = os.path.join(dirpath, name)
+            if not os.path.islink(full):
+                try:
+                    os.chmod(full, os.lstat(full).st_mode | 0o700)
+                except OSError:
+                    pass  # rmtree will raise with the real reason
+    shutil.rmtree(path)
 
 
 # ── verification against the manifest ───────────────────────────────────────
@@ -552,13 +672,13 @@ def tar_member_record(member):
 
 def tar_member_metadata(member):
     """`<kind> <mode> <uid> <gid>` in the listing's own spelling, from the
-    ARCHIVE'S records — never from the filesystem it was extracted onto.
+    ARCHIVE'S records.
 
-    Extraction cannot reproduce either half: CPython's `data` filter masks
-    mode to `& 0o755` and drops uid/gid, and chown during extraction is a
-    no-op unless this process is root. The tar headers carry what `find
-    -printf "%y %#m %U %G %p"` saw on the live volume, so they are what the
-    listing is compared against.
+    Half of the verification. The tar headers carry what `find -printf "%y
+    %#m %U %G %p"` saw on the live volume, so comparing them to the sealed
+    listing says the ARCHIVE is what was backed up. `disk_metadata` is the
+    other half — what actually landed — and a check that only ever read this
+    one passed over a tree whose every mode was wrong.
     """
     if member.issym():
         kind = "l"
@@ -569,6 +689,35 @@ def tar_member_metadata(member):
     else:
         kind = "?"
     return f"{kind} {_mode_octal(member.mode)} {member.uid} {member.gid}"
+
+
+def disk_metadata(path):
+    """`<kind> <mode> <uid> <gid>` for what is ON DISK, in the listing's own
+    spelling. The other half of tar_member_metadata."""
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode):
+        kind = "l"
+    elif stat.S_ISDIR(st.st_mode):
+        kind = "d"
+    elif stat.S_ISREG(st.st_mode):
+        kind = "f"
+    else:
+        kind = "?"
+    return f"{kind} {_mode_octal(st.st_mode)} {st.st_uid} {st.st_gid}"
+
+
+def _checkable_columns(record):
+    """The columns of a metadata line this process is in a position to check.
+
+    Type and mode always — extraction sets both, and this reader puts back
+    what the filter dropped. uid and gid ONLY when it is root: unprivileged,
+    `os.chown` did nothing, so comparing them would compare the extracting
+    user against himself and print "verified" over a tree nobody restored
+    the ownership of. What was not compared is stated instead, by
+    _ownership_line.
+    """
+    parts = record.split(" ")
+    return parts if running_as_root() else parts[:2]
 
 
 def _verify_tree(root, listing, archived):
@@ -612,6 +761,22 @@ def _verify_tree(root, listing, archived):
             full = os.path.join(dirpath, name)
             rel = "./" + os.path.relpath(full, root).replace(os.sep, "/")
             seen.add(rel)
+            # WHAT LANDED, against what was recorded. `archived` below says
+            # the ARCHIVE is right; this says the tree on disk is the tree
+            # the archive describes. Without it, an extraction that re-moded
+            # every entry verified clean (measured: 4 wrong directories and
+            # a read-only file, and `verified: 7 members` on stdout).
+            if rel in want_meta:
+                got = disk_metadata(full)
+                if _checkable_columns(got) != _checkable_columns(want_meta[rel]):
+                    problems.append(
+                        f"{rel}: on disk it is `{got}`, the listing recorded `{want_meta[rel]}`"
+                    )
+                elif os.path.islink(full) and os.readlink(full) != want_link.get(rel, ""):
+                    problems.append(
+                        f"{rel}: on disk it points at `{os.readlink(full)}`, the listing "
+                        f"recorded `{want_link.get(rel, '')}`"
+                    )
             if os.path.isfile(full) and not os.path.islink(full):
                 got, _ = sha256_file(full)
                 if rel not in want_hash:
@@ -986,7 +1151,7 @@ def main():
         try:
             return _verify_only(args.bundle, passphrase, decrypt, work)
         finally:
-            shutil.rmtree(work, ignore_errors=False)
+            rmtree(work)
 
     out = args.out or "nova-restored-{}".format(time.strftime("%Y%m%d%H%M%S"))
     if os.path.isdir(out) and os.listdir(out):
@@ -1003,7 +1168,7 @@ def main():
         # under a name that looks finished. `out` was empty or absent at
         # entry, so everything in it is ours.
         try:
-            shutil.rmtree(out)
+            rmtree(out)
         except OSError:
             sys.stderr.write(
                 f"WARNING: could not clean up {out} — it may hold decrypted credentials; "
@@ -1024,7 +1189,15 @@ def _open_payload(bundle, passphrase, decrypt, work):
     os.makedirs(root)
     try:
         with tarfile.open(inner, "r:gz") as tar:
-            first = tar.next()
+            # ONE scan, from offset 0, and the manifest read out of the list
+            # it produced. `tar.next()` followed by `tar.members = []` and a
+            # re-scan resumes from the CURRENT offset, so MANIFEST.json was
+            # not among the members safe_extract wrote: --out landed every
+            # member except the one that says what they are, and the
+            # placement guard that would have said so could never fire
+            # (measured by T4 against a real bundle).
+            everything = tar.getmembers()
+            first = everything[0] if everything else None
             if first is None or first.name != INNER_MANIFEST:
                 raise RestoreError(
                     "the inner archive's first member is {}, and a Nova bundle forces {}".format(
@@ -1033,9 +1206,9 @@ def _open_payload(bundle, passphrase, decrypt, work):
                 )
             handle = tar.extractfile(first)
             manifest = json.loads(handle.read().decode("utf-8"))
-            tar.members = []
-            members = safe_extract(tar, root)
+            members = safe_extract(tar, root, members=everything)
             archived = {m.name: tar_member_record(m) for m in members}
+            unowned = owner_gap(members)
     except (RestoreError, CryptoError):
         raise
     except Exception as exc:
@@ -1045,7 +1218,56 @@ def _open_payload(bundle, passphrase, decrypt, work):
             f"the inner archive could not be read: {type(exc).__name__}: {exc}"
         ) from exc
     os.unlink(inner)
-    return root, manifest, archived
+    return root, manifest, archived, unowned
+
+
+def _ownership_line(unowned):
+    """What this run did about uid/gid, in one paragraph, always printed.
+
+    Never "verified" over a tree whose ownership nobody restored: if this
+    reader could not chown, that is a CANNOT it states, with what does set
+    them. It is not a failure — the content is right, and `./install
+    restore` applies the sealed listing's owner columns when it fills each
+    volume — but an operator who is handed this tree and told nothing would
+    hand his services files they cannot read.
+    """
+    if running_as_root():
+        return (
+            "ownership: restored from the archive's recorded numeric uid/gid, and compared "
+            "against the sealed listing (this reader is running as root)."
+        )
+    me = f"{os.geteuid()}:{os.getegid()}"
+    if not unowned:
+        return (
+            f"ownership: every entry in this bundle recorded {me}, which is who this reader "
+            "is running as, so what landed is what was backed up."
+        )
+    return (
+        f"ownership: NOT restored, and NOT compared. This reader is running as uid "
+        f"{os.geteuid()} and cannot chown, so everything here is owned by {me} — "
+        f"{len(unowned)} of the entries in this bundle recorded a different owner (for "
+        f"example `{unowned[0]}`). Their type, mode and content ARE what was backed up "
+        "and were checked. `./install restore` sets each entry's owner from the sealed "
+        "listing when it fills the volume; by hand, re-run this reader as root."
+    )
+
+
+COMMIT_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
+
+def _recorded_commit(manifest):
+    """The commit this bundle was written from, or the words that stand in.
+
+    It goes into a line the operator is told to act on — `check out X` —
+    and, like every other value here, it comes out of the file being opened.
+    Every path-shaped value in this manifest is shape-checked before it is
+    used; a value that ends up in a command an operator pastes is the same
+    class, and s41/rulings.md settled it for the images.
+    """
+    value = manifest.get("source", {}).get("repo_sha")
+    if isinstance(value, str) and COMMIT_RE.match(value):
+        return value
+    return "the recorded commit"
 
 
 def check_manifest_paths(manifest):
@@ -1082,7 +1304,7 @@ def _restore_to(value):
 
 
 def _verify_only(bundle, passphrase, decrypt, work):
-    root, manifest, archived = _open_payload(bundle, passphrase, decrypt, work)
+    root, manifest, archived, unowned = _open_payload(bundle, passphrase, decrypt, work)
     check_manifest_paths(manifest)
     problems = verify_extracted(root, manifest, archived)
     if problems:
@@ -1097,13 +1319,14 @@ def _verify_only(bundle, passphrase, decrypt, work):
         f"verified: {members} members, {volumes} volumes, {databases} databases, all "
         f"matching the manifest sealed inside"
     )
+    print(_ownership_line(unowned))
     return 0
 
 
 def _restore(bundle, passphrase, decrypt, out):
     work = os.path.join(out, ".work")
     os.makedirs(work)
-    root, manifest, archived = _open_payload(bundle, passphrase, decrypt, work)
+    root, manifest, archived, unowned = _open_payload(bundle, passphrase, decrypt, work)
     # BEFORE the word "verified" is printed, not after: the placement checks
     # used to run later, so an escaping bundle got `verified: 7 members match
     # their checksums` on stdout and only then refused.
@@ -1118,6 +1341,7 @@ def _restore(bundle, passphrase, decrypt, out):
         return 1
     members = len(manifest.get("members", []))
     print(f"verified: {members} members match their checksums")
+    print(_ownership_line(unowned))
 
     placed = []
     for row in manifest.get("members", []):
@@ -1153,10 +1377,21 @@ def _restore(bundle, passphrase, decrypt, out):
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         os.rename(src, dst)
         placed.append(os.path.relpath(dst, out))
+    # The manifest LAST and unconditionally: every decision `./install
+    # restore` makes reads this file, and the closing text below sends the
+    # operator at that verb. A guard here that skipped it when it was
+    # missing is how it went missing from every restore for a whole slice —
+    # if it is not there, this run did not do what it is about to print.
     carried = os.path.join(root, INNER_MANIFEST)
-    if os.path.isfile(carried):
-        os.rename(carried, os.path.join(out, INNER_MANIFEST))
-    shutil.rmtree(work)
+    if not os.path.isfile(carried):
+        raise RestoreError(
+            f"{INNER_MANIFEST} was verified inside this bundle and is not in what was "
+            "extracted — refusing to leave an opened bundle without the file that says "
+            "what is in it."
+        )
+    os.rename(carried, os.path.join(out, INNER_MANIFEST))
+    placed.append(INNER_MANIFEST)
+    rmtree(work)
 
     print(f"\nOpened into {out}/:")
     for path in sorted(placed):
@@ -1166,12 +1401,12 @@ def _restore(bundle, passphrase, decrypt, out):
         for row in manifest["excluded"]:
             print("  {} {} — {}".format(row["kind"], row["name"], row["reason"]))
     print(
-        """
+        f"""
 Next, on this machine, in order:
 
   1. git clone https://github.com/jeremyspofford/nova ~/workspace/nova
-     and check out {}, the commit this bundle was written from.
-  2. ./install restore {}
+     and check out {_recorded_commit(manifest)}, the commit this bundle was written from.
+  2. ./install restore {os.path.abspath(bundle)}
      — that is the verified path: it creates the volumes with the labels
        compose needs, restores each database THROUGH the postgres container
        (so client and server versions can never disagree), diffs every volume
@@ -1180,10 +1415,7 @@ Next, on this machine, in order:
 
 What you have here is the decrypted CONTENT. `./install restore` is what
 turns it back into a running Nova, and it is the only path that verifies what
-it did.""".format(
-            manifest.get("source", {}).get("repo_sha") or "the recorded commit",
-            os.path.abspath(bundle),
-        )
+it did."""
     )
     return 0
 

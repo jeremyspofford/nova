@@ -17,8 +17,13 @@
 #
 #   1. host python3 with `import cryptography`
 #   2. host python3 with a usable libcrypto through ctypes
-#   3. docker run <meta.crypto_image>          (the image this hub already has)
-#   4. docker run <meta.fallback_image>        (python:3.12-slim, pulled)
+#   3. docker run $NOVA_CRYPTO_IMAGE           (default nova-core, if present)
+#   4. docker run $NOVA_FALLBACK_IMAGE         (default python:3.12-slim, pulled)
+#
+# Neither image name comes out of the bundle: see "the images, which the
+# BUNDLE does not get to choose" below. This comment said <meta.crypto_image>
+# for a while after the code had stopped reading it, which is the same defect
+# in prose — a claim about a control that is not the control.
 #
 # If no candidate passes it prints exactly what to install and the docker
 # pull lines, and exits non-zero. It NEVER falls back to "try anyway".
