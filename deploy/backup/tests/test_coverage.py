@@ -852,16 +852,32 @@ def test_every_carried_entry_had_a_probe_that_passed():
 
 
 def test_the_anon_fix_text_is_valid_to_paste():
-    """F6: the fix line is copied into a YAML file by hand, so its braces
-    have to balance. The second fragment of that string is not an f-string,
-    and `}}` survived into the printed text."""
+    """The fix is copied into a YAML file by hand.
+
+    It first printed `reason: "<why>"}}` — one brace too many, because the
+    second fragment of that string is not an f-string. Balancing it made the
+    text usable and exposed the real problem (NF-3): the balanced form was an
+    inline flow mapping, which compose renders correctly and this repo's own
+    raw reader cannot parse, so an operator who pasted exactly what the
+    product told them to paste wrote a CORRECT compose file that reddened
+    three tests. Block style is the form both ends agree on.
+    """
     f = base_facts()
     del f["dispositions"]["anon"]["searxng"]
     _, refusals = coverage(f, "routine")
     fix = next(x for x in refusals if "anonymous volume" in x.subject).fix
     assert fix.count("{") == fix.count("}"), fix
-    assert '/var/cache/searxng: {disposition: <one of the eight>, reason: "<why>"}' in fix
     assert "}}" not in fix
+    assert "{" not in fix, "an inline flow mapping is not what raw_dispositions reads"
+    lines = [line for line in fix.splitlines() if line.strip()]
+    assert lines[1].strip() == "x-nova-backup-anon:"
+    assert lines[2].strip() == "/var/cache/searxng:"
+    assert lines[3].strip() == "disposition: <one of the eight>"
+    assert lines[4].strip() == 'reason: "<why>"'
+    # Relative indentation is what a paste has to carry: two spaces per level,
+    # the same shape deploy/docker-compose.yml already uses.
+    indents = [len(line) - len(line.lstrip()) for line in lines[1:5]]
+    assert [i - indents[0] for i in indents] == [0, 2, 4, 4], indents
 
 
 # ── F3: the bind match is right, and a disagreement is recorded ─────────────
@@ -999,3 +1015,33 @@ def test_R0_the_containers_fact_must_be_about_the_same_project_as_the_render():
     _, refusals = coverage(f, "routine")
     r = next(x for x in refusals if x.code == "R0_FACT_UNREADABLE" and "project" in x.subject)
     assert "nova-v3" in r.detail and "not this stack's" in r.detail
+
+
+def test_a_bind_matched_by_source_alone_records_the_destination_it_was_mounted_at():
+    """NF-4, the other arm of F3. The bytes are accounted for — that source is
+    a declared bind with a disposition — but this service mounts it somewhere
+    the compose file never says, and the pass path said nothing about it."""
+    f = base_facts()
+    f["containers"]["containers"].append(
+        {
+            "id": "iii",
+            "name": "nova-postgres-1",
+            "service": "postgres",
+            "state": "running",
+            "config_files": "/repo/deploy/docker-compose.yml",
+            "mounts": [
+                {
+                    "Type": "bind",
+                    "Source": "/repo/deploy/postgres-init",
+                    "Destination": "/a/destination/the/compose/file/never/declares",
+                    "RW": False,
+                }
+            ],
+        }
+    )
+    entries, refusals = coverage(f, "routine")
+    assert codes(refusals) == []
+    live = entry_for(entries, "bind", "/repo/deploy/postgres-init").detail["live_mounts"]
+    assert live[0]["matched_by"] == "service+source"
+    assert live[0]["reported_destination"] == "/a/destination/the/compose/file/never/declares"
+    assert live[0]["destination_matches_render"] is False

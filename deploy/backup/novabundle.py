@@ -441,7 +441,7 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
     # Keyed by SERVICE, not flat: a flat set lets any container mounting any
     # declared source at any destination pass, whatever service it belongs to.
     declared_bind_targets: dict[tuple[str, str], Entry] = {}
-    declared_bind_sources: set[tuple[str, str]] = set()
+    declared_bind_sources: dict[tuple[str, str], Entry] = {}
     for svc in sorted(cfg_services):
         for mount in cfg_services[svc].get("volumes") or []:
             mtype = mount.get("type")
@@ -500,7 +500,7 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                 continue
             bind_sources.add(source)
             declared_bind_targets[(svc, target)] = entry
-            declared_bind_sources.add((svc, source))
+            declared_bind_sources[(svc, source)] = entry
             row = ((disp.get("binds") or {}).get(svc) or {}).get(target) or {}
             bad = _classify_declared(row)
             if bad:
@@ -560,8 +560,9 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                                 "has no entry under `volumes:` to carry a disposition. " + bad,
                                 f"fix: in {where}, under `services: {svc}:` add\n"
                                 "             x-nova-backup-anon:\n"
-                                f"               {dest}: {{disposition: <one of the eight>, "
-                                'reason: "<why>"}',
+                                f"               {dest}:\n"
+                                "                 disposition: <one of the eight>\n"
+                                '                 reason: "<why>"',
                             )
                         )
                         continue
@@ -613,7 +614,8 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                 # docker reported is kept on the entry so the two are
                 # comparable by eye when they disagree.
                 declared = declared_bind_targets.get((svc, dest))
-                if declared is not None or (svc, src) in declared_bind_sources:
+                by_source = declared_bind_sources.get((svc, src))
+                if declared is not None or by_source is not None:
                     # Matched. If docker's Source is not the path the render
                     # resolved, say so on the entry rather than merely
                     # tolerating it: the bundle's facts then carry both paths,
@@ -630,8 +632,25 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                             {
                                 "container": cname,
                                 "reported_source": src,
+                                "reported_destination": dest,
                                 "matched_by": "service+destination",
                                 "source_matches_render": False,
+                            }
+                        )
+                    elif declared is None and by_source is not None:
+                        # Matched on the source alone: the bytes are accounted
+                        # for, because that source is a declared bind carrying
+                        # a disposition — but this service mounts it somewhere
+                        # the compose file never says. Same principle as the
+                        # arm above: state the fact where you cannot refuse on
+                        # it, rather than passing in silence.
+                        by_source.detail.setdefault("live_mounts", []).append(
+                            {
+                                "container": cname,
+                                "reported_source": src,
+                                "reported_destination": dest,
+                                "matched_by": "service+source",
+                                "destination_matches_render": False,
                             }
                         )
                     continue

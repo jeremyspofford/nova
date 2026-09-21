@@ -37,6 +37,23 @@ trap 'rm -rf "$STAGE"' EXIT
 
 die() { printf 'refresh: %s\n' "$1" >&2; exit 1; }
 
+# The redaction below rewrites every occurrence of $HOME to /elsewhere. That
+# is right when $HOME is an operator's home and WRONG when it is a system
+# directory: under `sudo`, $HOME is /root, and /root/.ollama is the ollama
+# volume's mount TARGET inside the container — rewriting it corrupts the
+# capture in a way both suites stay green on. A capture tool that can silently
+# corrupt its own output refuses instead.
+case "${HOME:-}" in
+  /home/?*|/Users/?*) ;;
+  *)
+    die "HOME is '${HOME:-}', which is not an operator's home directory.
+    The path redaction rewrites every occurrence of \$HOME, and against a system
+    home (/root under sudo) that rewrites container paths like /root/.ollama and
+    corrupts the capture without anything going red. Run this as the operator who
+    owns the stack, not as root."
+    ;;
+esac
+
 # shellcheck source=/dev/null
 . "$DEPLOY_DIR/backup.sh"
 

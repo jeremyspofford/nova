@@ -208,10 +208,11 @@ def test_no_fixture_carries_a_home_directory_or_a_tailnet_name():
     A hand-kept list of names is a check you have to remember to extend: the
     one it was missing (containers-foreign-v4.json) was the one that failed
     it, and refresh.sh is designed to write compose-v5.5.1.* on the other
-    host, which no list written today could name.
+    host, which no list written today could name. `rglob`, not `iterdir`,
+    because "top level only" is a hand-kept boundary too.
     """
     checked = 0
-    for path in sorted(FIXTURES.iterdir()):
+    for path in sorted(FIXTURES.rglob("*")):
         if path.is_dir() or path.name == "refresh.sh":
             continue
         text = path.read_text(encoding="utf-8", errors="replace")
