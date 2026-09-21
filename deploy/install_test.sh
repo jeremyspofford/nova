@@ -1197,5 +1197,110 @@ else
   report 1 "tripwire: .env.example states the two COMPOSE_FILE facts (-f replaces; absolute paths)" "missing"
 fi
 
+# ── set_env_value: a .env that does not exist yet ───────────────────────────
+# The defect (design-verdict.md §9.2 step 2; port-v3 M2 / python-tool M3):
+# set_env_value reads the file it is about to rewrite — `done < "$ENV_FILE"` —
+# so on a bare target it dies with "No such file or directory" instead of
+# writing the key. Every caller that writes a key before generate_secrets has
+# run hits it: restore on an empty machine, and decide_subnet.
+#   $1 key   $2 initial .env body ("" = the file does not exist)
+# Prints "<exit>|<.env with ;>|<stderr>".
+run_set_env() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    if [ -n "${2:-}" ]; then printf '%b' "$2" > "$ENV_FILE"; fi
+    # errexit restored for the call itself: install.sh runs with `set -e`, so
+    # the failed redirect below IS fatal in the real installer even though the
+    # harness turns errexit off for its own bookkeeping.
+    err="$( ( set -e; set_env_value "$1" value-written ) 2>&1 )"; code=$?
+    printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$ENV_FILE" 2>/dev/null)" \
+      "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+SEV_NEW="$(run_set_env NOVA_SUBNET)"
+expect_tn "set_env_value: a missing .env is created, not a crash" "$SEV_NEW" 0 2 "NOVA_SUBNET=value-written;"
+expect_tn_lacks "set_env_value: says nothing about a missing file" "$SEV_NEW" 3 "No such file"
+expect_str "set_env_value: the new file holds exactly one line" \
+  "$(tn_field "$SEV_NEW" 2 | tr ';' '\n' | grep -c .)" "1"
+# The existing behaviour is unchanged: replace in place, append when absent.
+SEV_REPLACE="$(run_set_env NOVA_SUBNET 'A=1\nNOVA_SUBNET=old\nB=2\n')"
+expect_tn "set_env_value: an existing key is still replaced in place" "$SEV_REPLACE" 0 2 \
+  "A=1;NOVA_SUBNET=value-written;B=2;"
+SEV_APPEND="$(run_set_env NOVA_SUBNET 'A=1\n')"
+expect_tn "set_env_value: a new key is still appended" "$SEV_APPEND" 0 2 "A=1;NOVA_SUBNET=value-written;"
+
+# ── refuse_if_moved: a parked host refuses FIRST ────────────────────────────
+# `./install backup --move` parks this machine: it writes deploy/.moved and
+# deploy/tailscale/MOVED_TO (design-verdict.md §9.5). Bringing the stack up
+# here again puts a SECOND tailscaled on the same node identity and the two
+# flap. cmd_install must refuse before it reads, pulls or starts anything —
+# the assertion below counts the docker calls, so a refusal that runs after
+# preflight fails even though its text is right.
+#   $1 marker body ("" = no marker)
+# Prints "<exit>|<docker call count>|<combined output>".
+run_moved() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    # shellcheck disable=SC2034
+    DATA_DIR="$tmp"
+    # shellcheck disable=SC2034
+    HARDWARE_JSON="$tmp/hardware.json"
+    # shellcheck disable=SC2034
+    ENV_FILE="$tmp/.env"
+    # shellcheck disable=SC2034
+    ENV_EXAMPLE="$SCRIPT_DIR/.env.example"
+    # shellcheck disable=SC2034
+    INFERENCE_COMPUTE_TIMEOUT=0
+    # shellcheck disable=SC2034
+    MOVED_MARKER="$tmp/.moved"
+    : > "$tmp/docker-calls"
+    if [ -n "${1:-}" ]; then printf '%b' "$1" > "$MOVED_MARKER"; fi
+    docker() {
+      printf '%s\n' "$*" >> "$tmp/docker-calls"
+      case "$*" in
+        info) printf 'Runtimes: runc\n' ;;
+        "compose version") ;;
+        *" up -d --build") ;;
+        *" ps -q "*) printf 'cid\n' ;;
+        "inspect "*) printf 'healthy\n' ;;
+        *" logs --no-log-prefix ollama") printf 'inference compute id=0 library=cpu\n' ;;
+        *) ;;
+      esac
+    }
+    check_foreign_project() { :; }
+    decide_subnet() { :; }
+    detect_gpus_json() { printf '[]'; }
+    detect_disk_free_gb() { printf '100'; }
+    port_holder() { printf ''; }
+    unset NOVA_TAILNET NOVA_SKIP_INFERENCE
+    out="$(cmd_install 2>&1)"; code=$?
+    printf '%s|%s|%s' "$code" "$(grep -c . "$tmp/docker-calls" 2>/dev/null)" \
+      "$(printf '%s' "$out" | tr '\n' ' ')"
+  )
+}
+MOVED_BODY='moved_at=20260921T143012Z\nbundle=nova-backup-srchost-20260921T143012Z.tar\nbundle_sha256=0123456789abcdef\nsource_host=srchost\n'
+MV="$(run_moved "$MOVED_BODY")"
+expect_tn "refuse_if_moved: a parked host refuses" "$MV" 1 3 "parked by"
+expect_tn "refuse_if_moved: prints the marker verbatim" "$MV" 1 3 \
+  "bundle=nova-backup-srchost-20260921T143012Z.tar"
+expect_tn "refuse_if_moved: names the file that says so" "$MV" 1 3 ".moved"
+expect_tn "refuse_if_moved: states the flap it is preventing" "$MV" 1 3 "node identity"
+expect_tn "refuse_if_moved: names undo-move as the way back" "$MV" 1 3 "./install undo-move"
+expect_str "refuse_if_moved: refuses before ANY docker call" "$(tn_field "$MV" 2)" "0"
+# No marker: the ordinary machine is untouched by this check.
+MV_NONE="$(run_moved "")"
+expect_tn "refuse_if_moved: no marker ⇒ the install runs" "$MV_NONE" 0 3 "Nova is up"
+expect_tn_lacks "refuse_if_moved: no marker ⇒ says nothing about a move" "$MV_NONE" 3 "parked by"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

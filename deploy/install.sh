@@ -54,6 +54,12 @@ COMPOSE_ARGS=(-f "$COMPOSE_FILE")
 # switch: only the explicit "off" un-writes.
 PROFILES_SWITCHED_OFF=""
 
+# Written by `./install backup --move` when this host hands Nova over, and
+# removed by `./install undo-move`. Its sibling, deploy/tailscale/MOVED_TO,
+# lives inside the read-only /config bind the sidecar already has, so the
+# refusal exists at both layers (design-verdict.md §9.5).
+MOVED_MARKER="$DEPLOY_DIR/.moved"
+
 log() { printf '%s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
@@ -317,6 +323,33 @@ decide_inference() {
   log "            then pick 'Remote endpoint' in the wizard, pointing at"
   log "            http://host.docker.internal:$OLLAMA_PORT (or this host's LAN address)."
   exit 1
+}
+
+# `backup --move` parks this machine: Nova's tailnet node identity left in the
+# bundle, and both markers were written here. Starting the stack again would
+# put a SECOND tailscaled on that one identity, and two nodes sharing a node
+# key flap — which is not a thing a health check notices.
+#
+# So this runs FIRST in cmd_install, before anything is read, pulled or
+# started. It is a CANNOT, not a MAY NOT: it does not decide that this host
+# may not run Nova, it reports the fact that the identity is somewhere else
+# and names the one command that clears it. `undo-move` then takes the
+# owner's typed word and proceeds either way (design-verdict.md §9.5).
+refuse_if_moved() {
+  [ -f "$MOVED_MARKER" ] || return 0
+  log "REFUSED: this machine was parked by \`./install backup --move\`."
+  log ""
+  log "  $MOVED_MARKER says:"
+  # Printed verbatim, not parsed: whatever the marker holds, the operator
+  # sees. A marker this script cannot read is still a marker.
+  sed 's/^/    /' < "$MOVED_MARKER" >&2 || true
+  log ""
+  log "Nova runs on the host named above. Starting it here as well would put a"
+  log "second tailscaled on the same tailnet node identity, and the two flap."
+  log ""
+  log "If this machine is the one that should run Nova again:"
+  log "    ./install undo-move     # prints the marker, then asks you to type: undo"
+  die "moved host: $MOVED_MARKER is present"
 }
 
 preflight() {
@@ -879,6 +912,15 @@ get_env_value() {
 
 set_env_value() {
   local key="$1" value="$2" line tmp replaced
+  # The file is READ below to be rewritten, so it has to exist first. On a
+  # bare target it does not: `./install restore` writes keys into an empty
+  # machine and decide_subnet writes five of them before generate_secrets has
+  # copied .env.example anywhere. Without this line the redirect fails, and
+  # under install.sh's `set -e` that failure is fatal — the install dies with
+  # "No such file or directory" instead of writing the key (design-verdict.md
+  # §9.2 step 2; port-v3 M2, python-tool M3). The mktemp+mv below then gives
+  # the new file mktemp's own 0600, so nothing is ever created world-readable.
+  [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
   tmp="$(mktemp "${ENV_FILE}.XXXXXX")"
   replaced=0
   while IFS= read -r line || [ -n "$line" ]; do
@@ -1076,6 +1118,8 @@ print_status() {
 # ---- subcommands ------------------------------------------------------
 
 cmd_install() {
+  # First, before anything is read, pulled or started.
+  refuse_if_moved
   preflight
   detect_hardware
   generate_secrets
