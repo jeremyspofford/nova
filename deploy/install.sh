@@ -462,7 +462,11 @@ project_labelled_volumes() {
 all_volume_names() { docker volume ls -q 2>/dev/null; }
 volume_exists() { docker volume inspect "$1" >/dev/null 2>&1; }
 volume_label() {
-  docker volume inspect --format "{{index .Labels \"$2\"}}" "$1" 2>/dev/null
+  # The {{if .Labels}} guard matters: a volume made by hand (`docker volume
+  # create`, or `docker run -v <name>:/x`) has a NIL label map, and a bare
+  # `index` on one renders the literal string "<no value>", which would then
+  # be printed to the operator as this volume's project.
+  docker volume inspect --format "{{if .Labels}}{{index .Labels \"$2\"}}{{end}}" "$1" 2>/dev/null
 }
 docker_volume_rm() { docker volume rm "$1" >/dev/null 2>&1; }
 docker_container_rm() { docker rm "$1" >/dev/null 2>&1; }
@@ -543,6 +547,8 @@ NOVA_OURS_PROJECT=""
 NOVA_OURS_VOLK=""
 NOVA_OURS_VOLN=""
 NOVA_OURS_SVC=""
+# The render this set was read from, kept so nothing below renders twice.
+NOVA_OURS_RENDER=""
 read_ours_set() {
   local errf render rc msg raw_volk raw_svc ren_volk ren_svc k n
   errf="$(mktemp "${TMPDIR:-/tmp}/nova-render.XXXXXX")"
@@ -552,6 +558,7 @@ read_ours_set() {
   [ "$rc" -eq 0 ] || die "docker compose --profile '*' config failed: ${msg:-no output}"
   [ -n "$render" ] || die "docker compose --profile '*' config produced no output${msg:+ (stderr: $msg)}"
 
+  NOVA_OURS_RENDER="$render"
   NOVA_OURS_PROJECT="$(printf '%s\n' "$render" | config_project_name)"
   [ -n "$NOVA_OURS_PROJECT" ] || die "compose reported no project name. Refusing to ask docker for everything labelled with an EMPTY project — that filter matches every container and volume on this machine."
 
@@ -864,15 +871,12 @@ check_foreign_project() {
 }
 
 # The image state_file_on_volume looks through — the tailscale sidecar's own,
-# read from the render rather than typed. Empty when the render names none,
-# in which case no volume is annotated and none is claimed to be clean.
+# read from the render read_ours_set already took, never typed and never
+# rendered a second time. Empty when the render names none, in which case no
+# volume is annotated and none is claimed to be clean either.
 compose_tailscale_image() {
-  local errf render rc
-  errf="$(mktemp "${TMPDIR:-/tmp}/nova-render.XXXXXX")"
-  render="$(compose_config_text_all_profiles "$errf")" && rc=0 || rc=$?
-  rm -f "$errf"
-  [ "$rc" -eq 0 ] || return 0
-  printf '%s\n' "$render" | config_service_image tailscale
+  [ -n "$NOVA_OURS_RENDER" ] || return 0
+  printf '%s\n' "$NOVA_OURS_RENDER" | config_service_image tailscale
 }
 
 # The bounded deletion. It reads ONLY the two capture files written at naming
