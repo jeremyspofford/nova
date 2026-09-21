@@ -552,40 +552,42 @@ def test_a_missing_stage_is_a_missing_fact(tmp_path):
 # ── the interpreter this parser needs (s41/rulings.md 2026-09-21) ───────────
 
 
+# `"pyyaml>=6.0.3"` — the NAME is what is declared; the specifier, an extra
+# and an environment marker are not this test's business.
+_BOUND = re.compile(r"[<>=!~\[;]")
+
+
 def test_pyyaml_is_in_the_core_images_runtime_closure():
     """novabundle.py runs inside the already-built core image, so `import
-    yaml` there is load-bearing. The ruling cited services/core/pyproject.toml
-    line 31 — which is in the DEV group, and the image is built with
-    `uv sync --frozen --no-dev`. What actually puts PyYAML in the image is
-    `uvicorn[standard]`, whose `standard` extra depends on it.
+    yaml` there is load-bearing.
 
-    That is a real dependency and it is locked, but it is not a stated one, so
-    this is the line of code that goes red the day it stops being true —
-    rather than the pack step failing on a machine at backup time.
+    This used to guard the weaker path. PyYAML was in the image only
+    TRANSITIVELY, through `uvicorn[standard]`'s extra, while the line that
+    looked like a declaration sat in the dev group and the image is built
+    with `uv sync --frozen --no-dev` — so this checked that somebody else's
+    optional extra still happened to carry it. `f17bc06f` declared it
+    directly, which is the fact to pin: the DECLARATION, in the table the
+    image installs, and the lock agreeing with it. Both halves, because a
+    declaration `uv.lock` does not carry is not installed either.
     """
     core = pathlib.Path(__file__).resolve().parents[3] / "services" / "core"
+    declared = runtime_dependencies(core / "pyproject.toml")
+    assert any(_BOUND.split(name)[0].strip() == "pyyaml" for name in declared), (
+        "services/core's [project] dependencies no longer declares pyyaml, and "
+        "novabundle.py imports yaml inside that image. (A dev-group entry does not "
+        f"count: the image is built with `uv sync --frozen --no-dev`.) Declared: {declared}"
+    )
     lock = (core / "uv.lock").read_text()
-    runtime = re.search(
-        r'^name = "uvicorn"$.*?^\[package\.optional-dependencies\]$\n^standard = \[$(.*?)^\]$',
+    locked = re.search(
+        r'^name = "nova-core"$\n.*?^dependencies = \[$(.*?)^\]$',
         lock,
         re.S | re.M,
     )
-    assert runtime, "services/core/uv.lock no longer locks uvicorn's `standard` extra"
-    assert '{ name = "pyyaml" }' in runtime.group(1), (
-        "uvicorn[standard] no longer pulls PyYAML into the core image's runtime "
-        "closure, and novabundle.py imports yaml. Declare pyyaml in "
-        "services/core/pyproject.toml's `dependencies` and re-lock."
-    )
-    # The RUNTIME table, not the file. The image is built with
-    # `uv sync --frozen --no-dev`, so a `uvicorn[standard]` that has moved
-    # into `[dependency-groups] dev`, or been commented out, puts nothing in
-    # the image — and a whole-file substring check passes for both. Measured
-    # 2026-09-21: commenting the line out of `[project] dependencies` left
-    # the old assertion green.
-    assert "uvicorn[standard]" in runtime_dependencies(core / "pyproject.toml"), (
-        "services/core's [project] dependencies no longer asks for uvicorn's `standard` "
-        "extra, so nothing puts PyYAML in the image novabundle.py runs in. (A dev-group "
-        "entry does not count: the image is built with `uv sync --frozen --no-dev`.)"
+    assert locked, "services/core/uv.lock no longer holds nova-core's own dependencies"
+    assert '{ name = "pyyaml" }' in locked.group(1), (
+        "services/core/uv.lock does not lock pyyaml as one of nova-core's own "
+        "dependencies, so `uv sync --frozen` installs whatever the lock says and not "
+        "what pyproject.toml asks for. Re-lock."
     )
 
 
