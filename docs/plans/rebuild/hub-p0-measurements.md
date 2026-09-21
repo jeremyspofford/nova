@@ -56,16 +56,35 @@ pci_id=0000:01:00.0 type=discrete total="24.0 GiB" available="22.8 GiB"
 | Failed user units | `openclaw-gateway.service`, `xdg-desktop-portal-gtk.service` (unrelated to Nova) |
 
 **Finding (blocks S41/S45 until handled):** the mini PC holds a stopped Nova from the earlier platform line, **under the compose project name `nova`**:
-- containers `nova-postgres-1`, `nova-orchestrator-1`, `nova-llm-gateway-1`, `nova-chat-api-1`, `nova-chat-bridge-1`, `nova-dashboard-1`, `nova-memory-service-1`, `nova-redis-1` (exited 13 days ago) and `nova-recovery-1`, `nova-redis` (exited months ago);
-- volumes `nova_pgdata`, `nova_postgres-data`, `nova_redis-data` and `nova_redis_data`.
+- containers `nova-postgres-1`, `nova-orchestrator-1`, `nova-llm-gateway-1`, `nova-chat-api-1`, `nova-chat-bridge-1`, `nova-dashboard-1`, `nova-memory-service-1`, `nova-redis-1` and `nova-recovery-1`;
+- volumes `nova_postgres-data` (67.66 MB) and `nova_redis-data` (37.06 kB).
 
 v4's project is also `nova`. So `docker compose up` would adopt `nova-postgres-1` as its own `postgres` service container and recreate it, and it would report the rest as orphans. That is the same-project-name trap already hit on the Dell on 2026-09-07.
 
-The volume names differ from v4's `nova_v4_*`, so no data would be deleted. But the install cannot be allowed to discover this at runtime:
-- S41's `decide_subnet` already refuses a colliding subnet;
-- `install.sh` must also refuse, naming the containers, when a `nova` compose project exists that is not this install.
+**Owner ruling 2026-09-21:** that stack is to be **deleted, containers and volumes**, by an installer that names what it found first (`hub-topology.md` decision 16, `s41/rulings.md`).
 
-What happens to that old stack and its data is **the owner's decision**. It was not touched.
+### Correction, measured 2026-09-21: a `nova_` name does NOT mean the `nova` project
+
+The line above previously listed `nova_pgdata` and `nova_redis_data` as that stack's volumes. **They are not.** Read back from `docker volume inspect`:
+
+| Volume | `com.docker.compose.project` | Size |
+|---|---|---|
+| `nova_postgres-data` | **nova** | 67.66 MB |
+| `nova_redis-data` | **nova** | 37.06 kB |
+| `nova_pgdata` | **docker** | 75.77 MB |
+| `nova_redis_data` | **docker** | 264 B |
+
+Project `docker` is `/home/jeremy/repos/nova-ai-platform/infra/docker/docker-compose.yml`, and it also owns containers **named** `nova-redis` and `nova-postgres`. A deletion that selected by the name prefix `nova` — the obvious implementation — would destroy 75.8 MB belonging to a different project of his. **Selection must be by the `com.docker.compose.project` label, never by name.** `s41/map-minipc-measured.md` carries the full reading, and it is a pinned test in S41.
+
+**And the old project's compose file is a directory.** `/home/jeremy/workspace/nova/docker-compose.yml` on the mini PC is a root-owned empty **directory** (the single-file bind-mount failure mode), so `docker compose -f … down -v` cannot remove that stack. Removal must be `docker rm` plus `docker volume rm`, selected by label. There is no v4 checkout on that machine and `/home/jeremy/workspace/nova` there is not a git repository.
+
+### Host facts for S41's encrypted bundle (measured 2026-09-21)
+
+bash **5.2.21**, OpenSSL **3.0.13**, GNU tar **1.35**, GNU coreutils **9.4** (`sha256sum`, `md5sum`), `shasum` 6.04, python3 **3.12.3**, gpg **2.4.4**, zstd **1.5.5**; **`age` is not installed**. Docker **29.8.0**, compose **v5.5.1**. Disk: 351 GB free of 460 GB.
+
+Docker subnets in use on that host: **172.17, 172.18, 172.19, 172.20, 172.21** — all `linkdown` but allocated, so `decide_subnet` must land at 172.22/16 or beyond. Wi-Fi `wlo1`, 192.168.0.245/24, default via 192.168.0.1.
+
+Other stacks on the machine that S41 must never touch: `minecraft` (**running**), `jobhunter`, `docker` (nova-ai-platform), `project`.
 
 **Still to measure for P0-9:** whether logind's `Inhibit sleep` is refused and `idle` accepted from a linger unit, and whether COSMIC's auto-suspend honours it (before S44).
 
