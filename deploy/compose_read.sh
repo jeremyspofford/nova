@@ -62,6 +62,38 @@ function cr_value(line, key,   v, p) {
 function cr_key(line,   k) {
   k = cr_trim(line); sub(/:.*$/, "", k); return cr_unquote(k)
 }
+# Which side of a mount a SOURCE is, by the rule compose itself applies to text
+# that is already interpolated: a bind when it starts with `.`, `/` or `~`, or
+# contains `/` anywhere; a named volume otherwise (a volume NAME cannot hold a
+# slash). Measured against compose v5.3.0, every row.
+#
+# "interp" is the honest third answer. Compose applies the rule AFTER
+# interpolation, so `${VOLNAME}:/t` is a named volume when the variable holds
+# a name and a bind when it holds a path — measured both ways. The raw text
+# cannot know, and guessing either way is a lie: guessing "bind" reddens a
+# correct file, guessing "volume" hides an undeclared one.
+function cr_mount_kind(src,   c, literal) {
+  c = substr(src, 1, 1)
+  if (c == "." || c == "/" || c == "~") return "bind"
+  literal = src
+  gsub(/\$\{[^}]*\}/, "", literal)
+  gsub(/\$[A-Za-z_][A-Za-z0-9_]*/, "", literal)
+  if (index(literal, "/") > 0) return "bind"
+  if (index(src, "$") > 0) return "interp"
+  return "volume"
+}
+
+# One key out of a flow mapping `{k: v, k: v}`. Bounded at the next comma or
+# brace, which is why the REASON is read as present/absent rather than by
+# value: a reason is prose and may hold a comma.
+function cr_flow(item, key,   p, v) {
+  p = match(item, "(^\\{|[,{][ \t]*)" key "[ \t]*:")
+  if (p == 0) return ""
+  v = substr(item, p + RLENGTH)
+  sub(/[,}].*$/, "", v)
+  return cr_unquote(v)
+}
+
 function cr_json(s) {
   gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, "\\t", s); gsub(/\r/, "\\r", s)
   return s
@@ -107,8 +139,29 @@ raw_dispositions() {
       if (vkey != "") printf "volume\t\t%s\t%s\t%s\n", vkey, vdisp, (vreason ? "yes" : "no")
       vkey = ""; vdisp = ""; vreason = 0
     }
+    # A flow mapping item, `{type: bind, source: …, target: …}`, which YAML
+    # lets span lines. Brace depth decides where it ends; a brace inside a
+    # quoted reason would fool that, and the row then comes out malformed,
+    # which reddens rather than hides.
+    function cr_depth(chunk,   i, c, d) {
+      for (i = 1; i <= length(chunk); i++) {
+        c = substr(chunk, i, 1)
+        if (c == "{") d++
+        else if (c == "}") d--
+      }
+      return d
+    }
+    function parse_flow(item) {
+      mtype = cr_flow(item, "type")
+      msrc = cr_flow(item, "source")
+      mtgt = cr_flow(item, "target")
+      mdisp = cr_flow(item, "x-nova-backup")
+      mreason = (item ~ /x-nova-backup-reason[ \t]*:/) ? 1 : 0
+      if (mtype == "") mtype = cr_mount_kind(msrc)
+    }
     function flush_mount() {
-      if (mtype == "bind") printf "bind\t%s\t%s\t%s\t%s\n", svc, mtgt, mdisp, (mreason ? "yes" : "no")
+      if (mtype == "bind" || mtype == "interp")
+        printf "%s\t%s\t%s\t%s\t%s\n", mtype, svc, mtgt, mdisp, (mreason ? "yes" : "no")
       mtype = ""; mtgt = ""; msrc = ""; mdisp = ""; mreason = 0
     }
     function flush_anon() {
@@ -125,31 +178,54 @@ raw_dispositions() {
     sect == "volumes" && /^    x-nova-backup-reason:/ { vreason = 1; next }
 
     sect != "services" { next }
-    /^  [A-Za-z0-9._-]+:/ { flush_mount(); flush_anon(); svc = cr_key($0); invols = 0; inanon = 0; next }
+    /^  [A-Za-z0-9._-]+:/ {
+      flush_mount(); flush_anon()
+      svc = cr_key($0); invols = 0; inanon = 0; inflow = 0; flowbuf = ""; next
+    }
     /^    [A-Za-z0-9._-]+:/ {
       flush_mount(); flush_anon()
-      invols = ($0 ~ /^    volumes:/); inanon = ($0 ~ /^    x-nova-backup-anon:/); next
+      inflow = 0; flowbuf = ""
+      invols = ($0 ~ /^    volumes:/); inanon = ($0 ~ /^    x-nova-backup-anon:/)
+      if (invols && cr_value($0, "volumes") != "") {
+        printf "unreadable\t%s\t%s\t\tno\n", svc, cr_trim($0)
+        invols = 0
+      }
+      next
+    }
+    invols && inflow {
+      flowbuf = flowbuf " " cr_trim($0)
+      if (cr_depth(flowbuf) <= 0) { parse_flow(flowbuf); inflow = 0; flowbuf = "" }
+      next
     }
     invols && /^      - / {
       flush_mount()
-      item = cr_trim($0); sub(/^- /, "", item)
+      item = cr_trim($0); sub(/^-[ \t]*/, "", item)
+      # FLOW MAPPING, `- {type: bind, source: …, target: …}`. One line, and it
+      # may carry the two x-nova-backup rows like any other long-syntax mount.
+      if (substr(item, 1, 1) == "{") {
+        if (cr_depth(item) > 0) { inflow = 1; flowbuf = item; next }
+        parse_flow(item)
+        next
+      }
+      # BLOCK MAPPING opened on the dash itself; the rest arrives below.
       if (item ~ /^type:/) { mtype = cr_value(item, "type"); next }
-      # SHORT SYNTAX. `<source>:<target>[:mode]`. Compose reads the source as
-      # a host path — a bind — when it starts with `.`, `/`, `~` or `$`, and
-      # as a named volume otherwise; a named volume carries its disposition
-      # under `volumes:` instead, so calling one a bind would refuse every
-      # backup. Reported with an EMPTY disposition, because the short form
-      # cannot carry one: that is the whole point of reporting it.
+      # SCALAR (short syntax), `<source>:<target>[:mode]`. No colon at all is
+      # an inline ANONYMOUS volume (`- /var/lib/x`), measured — not a bind,
+      # and the only place its name exists is containers.json, where an
+      # undeclared one is refused R2.
       item = cr_unquote(item)
       p = index(item, ":")
       if (p == 0) next
       msrc = substr(item, 1, p - 1)
       mtgt = substr(item, p + 1)
       sub(/:.*$/, "", mtgt)
-      c = substr(msrc, 1, 1)
-      if (c == "." || c == "/" || c == "~" || c == "$") mtype = "bind"
+      mtype = cr_mount_kind(msrc)
       next
     }
+    # A list form this reader does not parse — a FLOW SEQUENCE, on the
+    # `volumes:` line or beneath it. Every item in it would otherwise be
+    # invisible, so it says so instead: a stated cannot, not a silent skip.
+    invols && /^      [^ -]/ { printf "unreadable\t%s\t%s\t\tno\n", svc, cr_trim($0); next }
     invols && /^        type:/ { mtype = cr_value($0, "type"); next }
     invols && /^        target:/ { mtgt = cr_value($0, "target"); next }
     invols && /^        x-nova-backup:/ { mdisp = cr_value($0, "x-nova-backup"); next }

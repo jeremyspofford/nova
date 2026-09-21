@@ -41,14 +41,25 @@ def _rows(text):
     return out
 
 
+def raw_rows_all():
+    """Every row raw_dispositions emits for the real file, `interp` and
+    `unreadable` included."""
+    return _rows(compose_read("raw_dispositions", COMPOSE_FILE.read_text()))
+
+
 def raw_rows():
     """Every disposition deploy/docker-compose.yml ITSELF declares.
 
     This is the only reader in the suite that looks at the file a human edits;
     everything else reads the checked-in render, which is a capture. Deleting
     a row from the real file and leaving the capture alone has to be loud.
+
+    `interp` and `unreadable` rows are left out of the SET comparison: the
+    first is a mount whose kind only the render can settle, and the second is
+    a stated cannot. Each has its own test below, so leaving them out here
+    drops nothing on the floor.
     """
-    return _rows(compose_read("raw_dispositions", COMPOSE_FILE.read_text()))
+    return {k: v for k, v in raw_rows_all().items() if k[0] in ("volume", "bind", "anon")}
 
 
 def rendered_rows():
@@ -394,8 +405,251 @@ def test_pasting_the_anon_fix_the_product_prints_produces_a_file_it_can_read():
 
     assert rows[("anon", "searxng", "/var/cache/searxng")] == ("exclude-ephemeral", True)
     # ...and every rule test_policy applies to the real file holds for it.
+    # Over the same kinds raw_rows() compares: an `interp` row carries no
+    # disposition by construction and an `unreadable` row is a stated cannot,
+    # so asserting "declared" over those would fail on a correct file.
+    rows = {k: v for k, v in rows.items() if k[0] in ("volume", "bind", "anon")}
     for (kind, owner, name), (disposition, has_reason) in rows.items():
         assert disposition, f"{kind} {owner} {name} came back undeclared after the paste"
         assert disposition in DISPOSITIONS, f"{kind} {owner} {name}: {disposition!r}"
         if disposition.startswith("exclude-"):
             assert has_reason, f"{kind} {owner} {name} is {disposition} with no reason"
+
+
+# ── The mount grammar, enumerated against real compose rather than guessed ──
+#
+# Measured with `docker compose config` (v5.3.0) over a throwaway file
+# carrying every spelling, because "both spellings" turned out to be three and
+# guessing a fourth is how this goes round again. What compose accepts under a
+# service's `volumes:`:
+#
+#   the LIST may be a block sequence (`- …` lines) or a FLOW sequence
+#   (`volumes: [ … ]`), and each ITEM may be
+#     1. a scalar          `- name:/t`, `- ./src:/t`, `- /abs:/t:ro`, `- /abs`
+#     2. a block mapping   `- type: bind` + `source:`/`target:` beneath
+#     3. a flow mapping    `- {type: bind, source: ./src, target: /t}`
+#
+# and an item's SOURCE is a bind, after interpolation, when it starts with
+# `.`, `/` or `~`, or contains `/` anywhere; otherwise it is a named volume.
+# Measured, each one:
+#     named_one:/t            -> volume        ./src:/t        -> bind
+#     /etc/hostname:/t        -> bind          ~/x:/t          -> bind
+#     .hidden:/t              -> bind          named:/t:ro     -> volume
+#     ${VOLNAME}:/t           -> VOLUME        ${DIR}/sub:/t   -> bind
+#     /var/lib/x  (no colon)  -> ANONYMOUS volume, not a bind
+#
+# Two of those are undecidable from the raw text and are handled as such:
+# a wholly-interpolated source (`${VOLNAME}:/t` can be either, measured both
+# ways) is reported `interp` and reconciled against the render; a flow
+# SEQUENCE is reported `unreadable`, a stated cannot rather than a silent skip.
+
+GRAMMAR = """\
+name: nova
+services:
+  a:
+    image: alpine
+    volumes:
+      - named_one:/short-named
+      - ./src:/short-rel
+      - /etc/hostname:/short-abs
+      - .hidden:/short-dot
+      - named_two:/short-mode:ro
+      - /var/lib/anon-inline
+      - ${VOLNAME}:/interp-whole
+      - ${DIRNAME}/sub:/interp-prefix
+      - {type: bind, source: ../flowsrc, target: /flow-map}
+      - {type: volume, source: named_three, target: /flow-vol}
+      - {type: bind, source: ../flowdecl, target: /flow-declared,
+         x-nova-backup: exclude-code, x-nova-backup-reason: "in git"}
+      - type: bind
+        source: ../blocksrc
+        target: /block-map
+volumes:
+  named_one:
+  named_two:
+  named_three:
+"""
+
+
+def grammar_rows():
+    return _rows(compose_read("raw_dispositions", GRAMMAR))
+
+
+def test_the_reader_reports_every_bind_spelling_compose_accepts():
+    rows = grammar_rows()
+    binds = {name for (kind, _, name) in rows if kind == "bind"}
+    assert binds == {
+        "/short-rel",
+        "/short-abs",
+        "/short-dot",
+        "/interp-prefix",
+        "/flow-map",
+        "/flow-declared",
+        "/block-map",
+    }
+
+
+def test_a_flow_mapping_item_carries_its_disposition_like_any_other():
+    """New 2: `- {type: bind, …}` is a third spelling, and it produced no row
+    at all — a bind added that way to the real file left both suites green."""
+    rows = grammar_rows()
+    assert rows[("bind", "a", "/flow-map")] == ("", False)
+    assert rows[("bind", "a", "/flow-declared")] == ("exclude-code", True)
+
+
+def test_a_wholly_interpolated_source_is_reported_undecidable_not_guessed():
+    """New 3: compose applies the bind rule AFTER interpolation, so
+    `${VOLNAME}:/t` is a named volume when VOLNAME is a name and a bind when
+    it is a path — measured both ways. Calling it a bind is a false RED on a
+    correct file, which is what teaches people to route around a tripwire."""
+    rows = grammar_rows()
+    assert ("bind", "a", "/interp-whole") not in rows
+    assert rows[("interp", "a", "/interp-whole")] == ("", False)
+    # ...while an interpolation with a literal `/` in it IS decidable.
+    assert ("bind", "a", "/interp-prefix") in rows
+
+
+def test_a_named_volume_is_never_reported_as_a_bind():
+    rows = grammar_rows()
+    for target in ("/short-named", "/short-mode", "/flow-vol"):
+        assert ("bind", "a", target) not in rows, target
+        assert ("interp", "a", target) not in rows, target
+
+
+def test_an_inline_anonymous_volume_is_not_a_bind():
+    """`- /var/lib/x` with no colon is an ANONYMOUS VOLUME, measured. It is
+    seen live through containers.json and refused R2 there, which is the only
+    place its name exists."""
+    rows = grammar_rows()
+    assert not [k for k in rows if k[2] == "/var/lib/anon-inline"]
+
+
+FLOW_SEQUENCE = """\
+name: nova
+services:
+  a:
+    image: alpine
+    volumes: [ "named_one:/one", {type: bind, source: ../two, target: /two} ]
+volumes:
+  named_one:
+"""
+
+FLOW_SEQUENCE_NEXT_LINE = """\
+name: nova
+services:
+  a:
+    image: alpine
+    volumes:
+      [ "named_one:/one" ]
+volumes:
+  named_one:
+"""
+
+
+def test_a_list_form_this_reader_cannot_read_is_a_stated_cannot():
+    """A flow SEQUENCE is legal compose and this reader does not parse it.
+    Saying so out loud is the difference between a cannot and a silent skip:
+    every item in it would otherwise be invisible, which is the New 2 defect
+    with a bigger blast radius."""
+    for text in (FLOW_SEQUENCE, FLOW_SEQUENCE_NEXT_LINE):
+        rows = _rows(compose_read("raw_dispositions", text))
+        assert [k for k in rows if k[0] == "unreadable"], text
+
+
+def test_the_real_compose_file_uses_no_form_the_reader_cannot_read():
+    bad = [f"{owner}: {name}" for (kind, owner, name) in raw_rows_all() if kind == "unreadable"]
+    assert not bad, (
+        f"{bad} — deploy/docker-compose.yml writes a mount list in a form "
+        "raw_dispositions cannot read, so every item in it is invisible to this suite."
+    )
+
+
+def test_every_undecidable_mount_in_the_real_file_is_settled_by_the_render():
+    """Reconciled, not forbidden.
+
+    An interpolated mount source is legal compose and may be either kind, so
+    a test that simply refused one would be a red on a correct file — the
+    thing New 3 was about, in a new place. Instead the render settles it: the
+    raw text is the authority on what EXISTS, the render on what it RESOLVES
+    TO. Today the real file has none, so this passes over an empty set; the
+    case above exercises all three branches on a synthetic pair.
+    """
+    interp = [k for k in raw_rows_all() if k[0] == "interp"]
+    render_mounts = {}
+    text = RENDER.read_text()
+    for svc in compose_read("cfg_service_keys", text).split():
+        for line in compose_read(f'cfg_mounts "{svc}"', text).splitlines():
+            parts = line.split("\t")
+            if len(parts) >= 3:
+                render_mounts[(svc, parts[2])] = parts[0]
+
+    unresolved, undeclared = [], []
+    for kind, svc, target in interp:
+        resolved = render_mounts.get((svc, target))
+        if resolved is None:
+            unresolved.append(f"{svc} at {target}")
+        elif resolved == "bind" and not raw_rows_all()[(kind, svc, target)][0]:
+            undeclared.append(f"{svc} at {target}")
+    assert not unresolved, (
+        f"{unresolved} are mounts the file declares and the render does not show. "
+        "Run deploy/backup/fixtures/refresh.sh, in the same commit as the edit."
+    )
+    assert not undeclared, (
+        f"{undeclared} resolve to BINDS and carry no x-nova-backup row. Write them "
+        "in long syntax, which is the only form that can carry one."
+    )
+
+
+def test_an_undecidable_source_is_reconciled_against_the_render():
+    """The rule, stated once: the raw text is the authority on what EXISTS,
+    the render is the authority on what it RESOLVES TO.
+
+    Run over a synthetic pair rather than the real file, which has no
+    interpolated mount today, so the reconciliation is exercised rather than
+    merely available. Three outcomes, and each is the honest one:
+      render says volume  -> nothing to declare, the raw row is satisfied
+      render says bind    -> it needs a disposition like any other bind
+      render says nothing -> the fixture is stale, and that is the alarm
+    """
+    raw = _rows(compose_read("raw_dispositions", GRAMMAR))
+    interp = {k for k in raw if k[0] == "interp"}
+    assert interp == {("interp", "a", "/interp-whole")}
+
+    def reconcile(render_mounts):
+        unresolved, undeclared = [], []
+        for _, svc, target in interp:
+            kind = render_mounts.get((svc, target))
+            if kind is None:
+                unresolved.append((svc, target))
+            elif kind == "bind" and not raw[("interp", svc, target)][0]:
+                undeclared.append((svc, target))
+        return unresolved, undeclared
+
+    assert reconcile({("a", "/interp-whole"): "volume"}) == ([], [])
+    assert reconcile({("a", "/interp-whole"): "bind"}) == ([], [("a", "/interp-whole")])
+    assert reconcile({}) == ([("a", "/interp-whole")], [])
+
+
+MULTILINE_FLOW = """\
+name: nova
+services:
+  a:
+    image: alpine
+    volumes:
+      - {type: bind,
+         source: ../spread,
+         target: /spread,
+         x-nova-backup: exclude-code,
+         x-nova-backup-reason: "in git"}
+      - {type: bind, source: ../plain, target: /plain}
+"""
+
+
+def test_a_flow_mapping_may_span_lines():
+    """YAML lets a flow mapping wrap, and the first version of this reader
+    read only the opening line — so a bind written that way was invisible and
+    the item after it was read with the wrapped item's leftovers. Brace depth
+    decides where it ends."""
+    rows = _rows(compose_read("raw_dispositions", MULTILINE_FLOW))
+    assert rows[("bind", "a", "/spread")] == ("exclude-code", True)
+    assert rows[("bind", "a", "/plain")] == ("", False)
