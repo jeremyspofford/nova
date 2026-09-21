@@ -1,0 +1,71 @@
+# S41 rulings — what the owner decided, and what I ruled
+
+## Owner decisions, 2026-09-21
+
+Both were asked as questions because neither was mine to settle: one disposes
+of his data, the other picks which of two contradictory specs the slice obeys.
+
+### 1. The mini PC's old `nova` stack: **delete it, containers and volumes**
+
+The mini PC holds a stopped Nova from the **platform line** under the same
+compose project name v4 uses (`nova`): containers `nova-postgres-1`,
+`nova-orchestrator-1` and others, volumes `nova_pgdata`, `nova_postgres-data`,
+`nova_redis-data`, `nova_redis_data`. v4's project is also `nova`, so a plain
+`docker compose up` there would **adopt and recreate** those containers.
+
+Offered: rename the old project and keep its data; delete it outright; or
+refuse and leave it to him. **He chose deletion.**
+
+What that binds in S41:
+- `install.sh` **refuses** when a foreign `nova` project is on the target and
+  **names every container and volume it found** before offering anything.
+- The removal it then offers deletes **only** what it named, and the names come
+  from `docker` output, never from a list in the script.
+- It must be impossible for that path to touch a v4 volume. That is a test, not
+  a promise: a fixture with both old and v4 volumes present, asserting the v4
+  ones survive.
+- Deletion is irreversible, so the offer states what will be destroyed, and the
+  default is to do nothing.
+
+### 2. S41 ships the **encrypted bundle**, not the plain tar
+
+The approved plan's S41 bullets describe a plain tar-and-manifest pipeline;
+ARCS arc 8, resting on his 2026-08-02 ruling, requires a complete **encrypted**
+bundle with a passphrase **resolver seam** and the restore script **inside every
+bundle**, with coverage **derived from the compose file** that refuses on an
+unclassified volume. Both readings are checked in, and commit `8920faaf` flagged
+the gap without closing it.
+
+Offered: encrypted now; plain first and encryption later; or encrypted plus the
+whole secrets store. **He chose encrypted in S41.**
+
+What that binds:
+- Arc 8 wins wherever it contradicts the S41 bullets. The plain-tar sketch in
+  `hub-topology.md:298-318` and `hub/r2-integration.md:393-411` is **superseded**
+  on encryption and on coverage.
+- `BACKUP_EXCLUDE_DATA`, the hand-kept list, is **not built**. Coverage is
+  derived from the compose file and **refuses** on an unclassified volume.
+- Proposal A (the secrets store) stays out of S41; only the passphrase
+  **resolver seam** lands, so a secrets manager can supply it later.
+
+## My rulings
+
+- **Mine v3, do not redesign.** v3's `backend/app/backup_*.py` (8 modules) and
+  `scripts/nova_restore.py` already implement the encrypted bundle, the
+  passphrase resolver, coverage classification, the standalone in-bundle restore
+  script and a non-destructive verify drill — about 3,800 lines. S41 ports what
+  fits v4's compose stack and states what it drops. Cost if wrong: v3's shapes
+  carry assumptions v4 does not share, and a port hides them; the designs must
+  therefore read v3 critically, not copy it.
+- **`network_credentials` is carried, not excluded.** The bundle is encrypted,
+  which is the condition D15's exclusion existed to work around. Coverage is
+  schema-driven, so the table is carried the day S43a creates it. The
+  now-wrong "backups exclude `network_credentials`" text at
+  `hub-topology.md:135,411` and `hub/r2-integration.md:61,550` is corrected
+  when S41 lands. Cost if wrong: a restored hub silently loses its tailnet
+  credential and the `network_credential_missing` check has to ask for it again
+  — which is exactly what S43b already specifies as the fallback.
+- **S41 remains operator tooling: no new tool, no guard, no eval case.** The
+  chat walk belongs to S45. Cost if wrong: the drill verb is her capability by
+  arc 8, so if it turns out the drill must be hers in S41, that is one tool and
+  one eval added on top, not a redesign.
