@@ -122,3 +122,48 @@ It also settles verdict §15 risk 4: `nova_restore.py`'s two hardcoded Homebrew
 libcrypto paths have never been executed on a Mac, and the `macos-15` job
 running `test_restore_reader.py` with `NOVA_FORCE_CTYPES_GCM=1` is the only
 thing that ever will. The repo is public, so those runners cost nothing.
+
+
+## My ruling, 2026-09-21: the raw compose text is parsed by a YAML parser, not by awk
+
+**What changes:** `compose_read.sh`'s `raw_*` functions hand-parse YAML in
+POSIX awk to produce `facts/raw.json`. That parsing moves into
+`novabundle.py`, which already runs in the pack container and where
+**PyYAML 6.0.3 is already a dependency** (`services/core/pyproject.toml:31`,
+confirmed present in the running core image). The shell stages the raw text of
+every file in `COMPOSE_FILE`; the container parses it.
+
+**What does NOT change, and must not be misread as changing:** the
+**two-sources** principle of verdict §6.1 stands exactly as written. The
+declared set still comes from the **raw text**, because compose prunes a
+declared-but-unmounted volume from every render; dispositions still come from
+the **YAML render**, because the JSON render strips nested `x-` keys. This
+ruling changes the *parser*, not the *source*. The comment at
+`compose_read.sh:24-27` warns against a later "just parse the JSON, it needs
+no awk" simplification — that warning is still right, and this is not that.
+
+**Why.** Four fix rounds produced six defects in the awk reader, each one a
+real bind that a real `docker compose config` resolves and the reader did not
+see: short syntax (NF-2), single-line flow mapping (New 2), line-spanning flow
+mapping (found while fixing New 2), an unbalanced brace in a quoted reason or a
+comment swallowing every following item (round-3 regression), list items at 4-
+or 8-space indentation, a flow sequence at 8 spaces, and `- ${MOUNTSPEC}`
+carrying a whole `src:tgt`. Each fix revealed the next in a different place.
+That is the pattern that says the architecture is wrong, not the line.
+
+A mechanism whose entire purpose is **to refuse rather than silently skip**
+cannot rest on a parser that silently skips whatever its author did not
+anticipate. PyYAML handles the whole grammar — every spelling, every
+indentation, quoting, comments, anchors and aliases — and the classes above
+stop being a list to maintain.
+
+**Cost if wrong:** the container gains a job the shell used to do. It is the
+same container, with no docker socket, already handling every other byte, and
+the parse is of a file the operator wrote — not of anything secret. If PyYAML
+ever leaves the core image, the pack step fails loudly at the import rather
+than degrading.
+
+**Still required, unchanged:** interpolation (`${VOL}`) is undecidable from raw
+text and stays **reconciled against the render** — raw says what exists, the
+render says what it resolves to. Anything the parser genuinely cannot decide is
+a stated refusal, never a skip.
