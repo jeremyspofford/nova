@@ -110,6 +110,65 @@ Two undeclared keys in the live stack's `.env`
 the first `./install backup` on the Dell refuses. That is the risk doing its
 job before a line was written.
 
+## R8 — the mount grammar compose actually accepts (2026-09-21, after the ruling)
+
+Taken before the raw parser moved off awk (`s41/rulings.md`, last section), so
+the new parser is written against readings rather than against a guess about
+YAML. Every row is `docker compose --project-directory <tmp> -f <probe> config
+--format json` on **compose v5.3.0**, over throwaway files in `/tmp/novachk.*`
+— no container, no stack. "awk said" is the shipped POSIX-awk reader
+(`compose_read.sh` at `02d2e1bc`) run over the same text.
+
+| # | written under a service's `volumes:` | compose resolves | awk said |
+|---|---|---|---|
+| 1 | `- ../x:/A` | bind | bind /A |
+| 2 | `- type: bind` + `source:`/`target:` | bind | bind /B |
+| 3 | `- {type: bind, source: ../x, target: /C}` | bind | bind /C |
+| 4 | the same flow mapping wrapped over 3 lines | bind | bind /D |
+| 5 | `volumes: [ "named:/E1", {type: bind, …} ]` | volume + bind | `unreadable` (whole line) |
+| 6 | a flow sequence on the next line, 8 spaces | volume + bind | **nothing** |
+| 7 | list items at **4** spaces | bind | **nothing** |
+| 8 | list items at **8** spaces | bind | **nothing** |
+| 9 | `- ${MOUNTSPEC}` (`../whole:/H`) | bind | **nothing** |
+| 10 | flow mapping with `{` inside a quoted reason, then 2 more items | 3 binds | **nothing** (all three) |
+| 11 | flow mapping with `{` in a trailing comment, then 1 more | 2 binds | **nothing** (both) |
+| 12 | `volumes: *m` (anchor holding the list) | 2 binds | `unreadable` |
+| 13 | `<<: *base` (merge key bringing the list) | bind | **nothing** |
+| 14 | `- named:/L1`, `- named:/L2:ro` | volume, volume+ro | nothing (correct) |
+| 15 | `- {type: volume, source: named, target: /M}` | volume | nothing (correct) |
+| 16 | `- /var/lib/anon` (no colon) | **anonymous volume** | nothing (correct) |
+| 17 | `- ../x:$TGT` | bind at `/tt` | `bind a $TGT` (a target no render has) |
+| 18 | `- sub/dir:/S` | **named volume** `sub/dir` (undefined ⇒ error) | bind /S |
+| 19 | `volumes: []` | no mounts, valid | `unreadable` (a red on a correct file) |
+| 20 | `volumes:` (null) | **rejected**: `must be a array` | `unreadable` |
+| 21 | `- source: ../x` + `target:` (no `type:`) | **rejected**: `must be a string` | nothing |
+| 22 | `- {source: ../x, target: /V}` (no `type:`) | **rejected**: `must be a string` | nothing |
+| 23 | `- ${VOLNAME}:/P`, `VOLNAME=named` | **volume** | `interp` (correct) |
+| 24 | `- ${VOLNAME}:/P`, `VOLNAME=/tmp/x` | **bind** | `interp` (correct) |
+| 25 | `- ${D}/sub:/U` | bind | bind /U |
+| 26 | `- ~/x:/R`, `- ~:/t` | bind | bind |
+| 27 | `- .hidden:/T` | bind | bind |
+| 28 | `- ./a:/t:ro:extra` | **rejected**: too many colons | — |
+| 29 | `- ":/t"` | **rejected**: empty section between colons | — |
+| 30 | a duplicate `volumes:` key in one service | **rejected**: yaml construct errors | — |
+
+Two rules fall out, and both are the opposite of what the awk reader assumed:
+
+- **A volume NAME may not contain `/`** — `volumes: {"sub/dir": {}}` is
+  rejected outright (`additional properties 'sub/dir' not allowed`), which is
+  why row 18 is an *undefined volume* and not a bind. So "contains a `/`"
+  still safely implies "not a named volume"; it is the leading character
+  (`.`, `/`, `~`, after interpolation) that decides bind vs volume.
+- **`name:` merges last-wins.** `-f first -f second` renders `name: second`
+  and the reverse order renders `name: first`; a file that declares no name
+  does not clear one. The awk reader took the FIRST `name:` line in the
+  concatenated text, so a GPU overlay that named the project would have made
+  every backup refuse R0.
+
+Every one of the nine spellings in rows 1-11 was then spliced into the REAL
+`deploy/docker-compose.yml` (in place of the memory service's one mount line)
+and rendered: compose accepted all nine and resolved the added bind each time.
+
 ## Still not measured
 
 - **§15 risk 4** — `nova_restore.py`'s hardcoded Homebrew libcrypto paths on a
