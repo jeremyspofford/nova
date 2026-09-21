@@ -247,3 +247,270 @@ control plane flaps). In this order:
 - Stop the sidecar and the tailnet URL goes dark; `127.0.0.1:3000` is
   unaffected. The other direction holds too: nothing but this sidecar (and
   an explicit tunnel or funnel) exposes the stack beyond loopback.
+
+## Backup
+
+`./install backup` writes **one encrypted file** that carries everything a
+Nova is: every database, every carried volume, the parts of `deploy/.env` that
+belong to this Nova rather than to this machine, and the checkout's git
+identity. The bundle is a `NOVAENC1` tar — scrypt plus AES-256-GCM per 4 MiB
+frame — and it **carries its own reader**, so a machine with nothing but
+`python3` or nothing but `docker` can open it.
+
+> **Status, 2026-09-21.** The verbs below live in `deploy/backup.sh` and are
+> reached through `./install`. Until S41's final wiring commit lands,
+> `deploy/install.sh`'s subcommand table still answers only `install` and
+> `update`; if `./install backup` says *"unknown subcommand"*, that wiring is
+> what is missing. Delete this note when it does not.
+
+```sh
+./install backup                                  # the routine one
+./install backup --out /media/usb/nova-backups    # somewhere else, this once
+./install backup --transport removable            # records how it is leaving
+./install backup --move                           # see "Moving Nova", below
+```
+
+`--transport` records how the bundle is leaving (`local`, `tailnet`,
+`removable`) into the manifest, and makes the final rename intra-filesystem by
+construction — on a removable target a cross-filesystem rename is the normal
+case, and it would fail *after* the expensive part.
+
+**Where it lands.** `NOVA_BACKUP_DIR` in `deploy/.env`, or `deploy/backups/`
+when that is empty (gitignored). The file is
+`nova-backup-<host>-<YYYYMMDDTHHMMSSZ>.tar`, mode `0600`, owned by you — not
+by root, even though a container wrote most of it.
+
+**The passphrase** is resolved through a named source, never read from one
+hard-coded place. `NOVA_PASSPHRASE_SOURCE` in `deploy/.env` is one of:
+
+| source | where it reads | notes |
+|---|---|---|
+| `file` (default) | `NOVA_PASSPHRASE_FILE`, default `deploy/.backup-passphrase` | mode `0600`; the **only** source that may create one, and only when the file does not exist at all |
+| `env` | `$NOVA_BACKUP_PASSPHRASE` | |
+| `prompt` | the terminal | with no terminal this is a stated *cannot*, never a quiet fallback |
+| `cmd` | stdout of `NOVA_PASSPHRASE_CMD` | e.g. `op read op://nova/backup/passphrase` — a secrets manager needs no new code |
+
+A store that **exists and cannot be read** is never treated as absent. That
+distinction is the whole reason the seam exists: a logged-out secrets manager
+must refuse the backup, not generate a second passphrase over the one that
+still seals every bundle you already have.
+
+**The passphrase is the only thing that opens a bundle, and Nova's copy of it
+lives on the machine the bundle exists to survive. Write it down somewhere
+else.** The run prints a 12-hex *fingerprint*, which says WHICH passphrase
+without carrying it.
+
+**What the run verifies, in order.** Each of these is a step that fails and
+says why rather than continuing:
+
+1. A lock, so two backups cannot interleave.
+2. Coverage, derived from the **raw compose text** — every volume and bind
+   must carry a disposition (`x-nova-backup:` beside it in
+   `docker-compose.yml`) and every `deploy/.env` key a `# nova-backup:` line.
+   An **unclassified volume refuses the backup**. There is no hand-kept
+   exclusion list to fall out of step.
+3. The writers are stopped and *proved* stopped — `.State.Running` false
+   **and** `.State.FinishedAt` at or after the moment the stop was issued, so
+   a container that was already dead is not mistaken for one this run
+   quiesced. Which services those are is **derived from the compose render**,
+   not a list in the script, so a service added to the stack is quiesced
+   because it is there and not because somebody remembered it.
+4. A per-table census — row counts and digests — recorded before the dump.
+5. `pg_dump -Fc` per database, inside the postgres container.
+6. A **self-test restore** of that dump into a throwaway database, compared
+   against the census.
+7. The volumes, tarred container-to-container; every symlink recorded as its
+   own listing line, so a *retargeted* link is visible rather than invisible.
+8. The bundle is packed, and then **the reader that ships inside it is run
+   against the finished bundle** with `cryptography` forced unimportable — so
+   the path a bare machine takes is the path that was proven, here, before
+   you needed it.
+9. Everything a container wrote is `chown`ed to you and **re-read as you**
+   before it counts.
+10. The writers are restarted and each one's healthcheck is read back — or,
+    with `--move`, the host is parked (below). Every exit path ends in one of
+    those two states and **says which**.
+
+The report at the end names the bundle, its size, its sha256, its mode and
+owner, the passphrase fingerprint, the reader's digest, and **everything the
+bundle does not carry with the reason for each**. Check the digest yourself,
+as yourself:
+
+```sh
+sha256sum  /media/usb/nova-backups/nova-backup-dell-workstation-20260921T143012Z.tar   # GNU
+shasum -a 256 /media/usb/nova-backups/nova-backup-dell-workstation-20260921T143012Z.tar # macOS
+```
+
+## Restore, and the drill
+
+```sh
+./install restore nova-backup-dell-workstation-20260921T143012Z.tar
+./install restore nova-backup-dell-workstation-20260921T143012Z.tar --drill
+./install drill                     # the newest bundle in NOVA_BACKUP_DIR
+```
+
+A **wrong passphrase is refused before a single payload byte is read.** The
+bundle carries a known-answer test — 64 known bytes under their own fresh salt
+— and nothing proceeds until a decryptor reproduces it. The refusal says so,
+so "it failed" is never ambiguous between *wrong passphrase* and *corrupt
+file*.
+
+`restore` verifies its own work rather than reporting that it ran: it compares
+every table's count and digest against the census sealed into the bundle,
+diffs every volume against the listing sealed beside it, and compares the
+**core signing key fingerprint** — the key every paired device pins. Only when
+all three have run does it print the word `restored`, and it then prints what
+this bundle does *not* carry, each with the reason recorded when it was
+written. It leaves `deploy/.restored` behind and postgres stopped; `./install`
+is the next command.
+
+If a restore is interrupted it leaves `deploy/.restore-in-progress`, which
+records **exactly what it created**. A later run refuses on that marker and
+prints the list. Nothing discovers anything: that list is the bound.
+
+`--drill` is the same walk, non-destructively. It restores into throwaway
+objects named `nova-drill-<8 hex>…`, compares the same three things, and
+sweeps every object it made. **No `nova-drill-*` container, volume or network
+may survive a drill**; the sweep is anchored to that exact name shape, never
+to a prefix. Run it on a schedule if you like — a backup nobody has opened is
+a belief, not a backup.
+
+### Opening a bundle on a machine that has no Nova
+
+The reader travels inside the file, byte-identical to `deploy/backup/restore.sh`
+in this repo:
+
+```sh
+tar -xOf nova-backup-dell-workstation-20260921T143012Z.tar restore.sh \
+  | sh -s -- nova-backup-dell-workstation-20260921T143012Z.tar ./out
+```
+
+It is POSIX `sh`, and it probes four decryptor backends **in order**, accepting
+one only after the known-answer test passes: host `python3` with
+`cryptography`; host `python3` with a usable libcrypto through `ctypes`; the
+core image, if this machine has it; `python:3.12-slim`, pulled. If none passes
+it prints exactly what to install and exits non-zero — it never falls back to
+"try anyway". Add `--verify-only` to check a bundle without writing anything.
+
+The decryptor images are **constants in that script**, overridable only by
+`NOVA_CRYPTO_IMAGE` / `NOVA_FALLBACK_IMAGE` that you type. Nothing inside a
+bundle selects the code that opens it: a bundle is a file that can come from
+anywhere.
+
+## Moving Nova to another machine
+
+The move is a backup that also **parks the source**, so two Novas never serve
+the same data or fight over the same tailnet identity.
+
+On the machine Nova is leaving:
+
+```sh
+./install backup --move --out /media/usb/nova-backups
+```
+
+`--move` differs from a routine backup in four ways: the tailnet node's state
+is carried (it is `move-only`, excluded from every other backup), the sidecar
+joins the quiesced set, the whole stack is left stopped, and two markers are
+written — `deploy/.moved` and `deploy/tailscale/MOVED_TO`. The run proves the
+stack is stopped by reading `.State.Running` back for every service, and
+writes each marker and **reads it back** before it says the host is parked.
+
+Then carry the file, and check it arrived whole — the digest the run printed,
+computed again on the far side, by you:
+
+```sh
+sha256sum nova-backup-dell-workstation-20260921T143012Z.tar
+```
+
+On the machine Nova is moving to:
+
+```sh
+./install restore nova-backup-dell-workstation-20260921T143012Z.tar --drill   # rehearse
+./install restore nova-backup-dell-workstation-20260921T143012Z.tar           # then do it
+./install                                                                     # bring it up
+```
+
+Rehearse with `--drill` first if the target is new to you: it proves the
+bundle opens and that every count, digest and the signing-key fingerprint
+match, and leaves nothing behind.
+
+**Then point the devices at the new hub.** Core's signing key travelled inside
+the bundle, so each machine's pinned key is still correct and only the URL
+changed:
+
+```sh
+novad repoint --server https://nova.example-tailnet.ts.net --check   # prove it, write nothing
+novad repoint --server https://nova.example-tailnet.ts.net           # then write it
+systemctl --user restart novad
+novad status
+```
+
+`repoint` completes the whole device handshake before it writes: it refuses a
+server whose `core_pubkey` is not the pinned one, and it refuses a server that
+holds the right key but has forgotten this device. Whoever owns a DNS name can
+serve a Nova-shaped socket; they cannot produce core's ed25519 key.
+
+**What the parked machine does now.** Two refusals, at the two layers that
+would otherwise cause the damage:
+
+- `./install` refuses first, before any docker call, prints the marker
+  verbatim and names the way back.
+- The **tailnet sidecar refuses to start at all** while
+  `deploy/tailscale/MOVED_TO` is present — so a reboot, a restart policy or a
+  stray `docker compose up -d` cannot put a second tailscaled on the node key
+  and flap the address you reach Nova at. (`deploy/tailscale/` is already
+  bind-mounted into that container read-only at `/config`, which is why the
+  marker lives there and needs no compose change. Bound honestly: a
+  `docker run` of that image that does **not** mount `/config` bypasses it.)
+
+**Undoing a park** — because the move failed, or because this machine is the
+one that should serve after all — is `./install undo-move`. It prints the
+marker, says either what it found on the tailnet or that it cannot check from
+here (the sidecar is stopped, so there is no tailscaled to ask), warns that
+bringing this node up while the other is online will flap the node key, and
+removes both markers only after you type `undo`. It starts nothing itself.
+Doing it by hand is removing `deploy/.moved` and `deploy/tailscale/MOVED_TO`;
+the verb exists so you are told what you are undoing first.
+
+## Regenerating the backup fixtures
+
+`deploy/backup/tests/test_coverage_v4_real.py` asserts that the dispositions in
+`deploy/docker-compose.yml` cover the **real** stack, against fixtures captured
+from a running one. Regenerate them with:
+
+```sh
+deploy/backup/fixtures/refresh.sh
+```
+
+It is read-only against the stack — `docker compose config`, `docker ps`,
+`docker inspect`, one `psql -c SELECT`, and one throwaway `docker run --rm` per
+carried volume with the volume mounted `:ro`. It starts nothing and stops
+nothing, and writes nothing outside `deploy/backup/fixtures/`. Every absolute
+path — this checkout's, and the checkout the live stack was actually created
+from, which are often not the same directory — is normalised to `/repo`, and
+the suite has its own checks that this happened, because a container capture
+from one tree beside a compose render from another makes every bind look
+undeclared.
+
+**Stage the working tree first.**
+
+```sh
+git add -- deploy/docker-compose.yml deploy/.env.example   # whatever you changed
+deploy/backup/fixtures/refresh.sh
+```
+
+`refresh.sh` asks git what is tracked and `git ls-files` reads the **index**,
+so a fixture captured with new files unstaged records them as `unknown` and the
+suite goes red on files that are about to be committed.
+
+Run it:
+
+- in the **same commit** as any change to `deploy/docker-compose.yml`'s
+  volumes, binds or `x-nova-backup` rows — otherwise the suite pins a stale
+  render;
+- when the (deliberately unpinned) searxng image starts declaring another
+  `VOLUME`. That refusal is expected, and refreshing the container fixture is
+  how the new volume gets classified;
+- when docker or compose changes under the stack. The fixtures are named after
+  the compose version, so two hosts produce two sets rather than overwriting
+  each other.
