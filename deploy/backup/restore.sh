@@ -131,6 +131,12 @@ NEEDS_IMAGES=$(meta_list needs_images)
 if [ -n "$PASSFILE" ]; then
   [ -f "$PASSFILE" ] || die "no such passphrase file: $PASSFILE" 2
   PASS=$(cat "$PASSFILE")
+  # nova_restore.py reads the FIRST LINE of stdin, so a multi-line file would
+  # be silently cut rather than refused.
+  if [ "$(printf '%s' "$PASS" | wc -l | tr -d ' ')" != "0" ]; then
+    die "$PASSFILE holds more than one line. The passphrase is one line; a file like
+  this would be silently cut at the first newline." 2
+  fi
 elif [ -n "${NOVA_BACKUP_PASSPHRASE:-}" ]; then
   PASS="$NOVA_BACKUP_PASSPHRASE"
 elif [ -t 0 ]; then

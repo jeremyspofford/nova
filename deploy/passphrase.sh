@@ -112,6 +112,16 @@ nova_pass_file() {
   empty store is not an absent one."
     return 1
   fi
+  # The passphrase reaches novabundle.py as the FIRST LINE of stdin, so a
+  # multi-line store would be silently truncated to its first line and seal
+  # every bundle with something the operator does not think he has.
+  # `$( )` strips trailing newlines, so a `case` against $(printf '\n') would
+  # match a pattern of `*""*` — everything. Count the newlines instead.
+  if [ "$(printf '%s' "$value" | wc -l | tr -d ' ')" != "0" ]; then
+    np_fail "$path holds more than one line. The passphrase is one line; a file like
+  this would be silently cut at the first newline."
+    return 1
+  fi
   printf '%s' "$value"
   return 0
 }
@@ -215,6 +225,15 @@ resolve_passphrase() {
 # every filesystem) and the loser re-reads inside the lock and becomes a
 # reader, never a second writer.
 #
+# Drop the lock. Deliberately NOT a trap: `trap -p` inside a command
+# substitution reports the PARENT's handlers, so saving and restoring them
+# here re-installs the caller's EXIT trap inside a subshell that would never
+# have run it — measured, it deleted the caller's own temp tree. The dead
+# lock a Ctrl-C leaves is handled where the lock is taken, by reclaiming it.
+np_unlock() {
+  rm -rf "$1" 2>/dev/null
+}
+
 # The generator is passed in as a command, because this file holds no crypto:
 # `novabundle.py genpass` runs in the pack container, where the 160 bits come
 # from secrets.token_bytes and not from `openssl rand` through a command
@@ -232,36 +251,56 @@ create_passphrase() {
     return 1
   fi
   if ! mkdir "$lock" 2>/dev/null; then
-    np_fail "another run is creating the passphrase (lock held at $lock)"
-    return 1
+    # A Ctrl-C between the mkdir and the rmdir would otherwise brick the
+    # passphrase store for every later run, with no verb that clears it —
+    # a stated dead end. So a lock whose recorded process is gone is
+    # reclaimed ONCE, out loud. This decides nothing on the owner's behalf:
+    # the thing the lock guards is a get-or-create that re-reads inside the
+    # lock, so a second creator becomes a reader either way.
+    held="$(cat "$lock/pid" 2>/dev/null || printf '')"
+    if [ -n "$held" ] && kill -0 "$held" 2>/dev/null; then
+      np_fail "another run is creating the passphrase (pid $held holds $lock since
+  $(cat "$lock/since" 2>/dev/null || printf 'an unrecorded time'))"
+      return 1
+    fi
+    printf 'clearing a stale passphrase lock at %s (pid %s is not running)\n' \
+      "$lock" "${held:-unrecorded}" >&2
+    rm -rf "$lock"
+    if ! mkdir "$lock" 2>/dev/null; then
+      np_fail "could not take the passphrase lock at $lock even after clearing a stale one.
+  Remove it by hand and re-run:  rm -rf '$lock'"
+      return 1
+    fi
   fi
+  printf '%s\n' "$$" > "$lock/pid" 2>/dev/null
+  date -u '+%Y-%m-%dT%H:%M:%SZ' > "$lock/since" 2>/dev/null
   # Inside the lock: re-read first. The loser of the outer race becomes a
   # READER here rather than a second writer.
   if value="$(nova_pass_file 2>/dev/null)"; then
-    rmdir "$lock"
+    np_unlock "$lock"
     printf '%s' "$value"
     return 0
   fi
   value="$("$@" 2>/dev/null)" || value=""
   if [ -z "$value" ]; then
-    rmdir "$lock"
+    np_unlock "$lock"
     np_fail "'$generator' produced no passphrase, so none was written"
     return 1
   fi
   (
     umask 077
     printf '%s' "$value" > "$path"
-  ) || { rmdir "$lock"; np_fail "could not write $path"; return 1; }
+  ) || { np_unlock "$lock"; np_fail "could not write $path"; return 1; }
   chmod 600 "$path" 2>/dev/null
   mode="$(np_mode_of "$path")"
   if [ "$mode" != "600" ]; then
     rm -f "$path"
-    rmdir "$lock"
+    np_unlock "$lock"
     np_fail "$path came back mode ${mode:-unreadable}, not 600. This filesystem cannot
   protect the passphrase, so the file was deleted and no bundle is written."
     return 1
   fi
-  rmdir "$lock"
+  np_unlock "$lock"
   printf 'A new backup passphrase was generated and written to %s\n' "$path" >&2
   printf 'THIS IS THE ONLY COPY. Nothing else can open the bundles it seals.\n' >&2
   printf 'Write it down somewhere that is not this machine:\n\n    %s\n\n' "$value" >&2

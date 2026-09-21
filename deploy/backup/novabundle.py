@@ -1999,17 +1999,16 @@ def tree_listing(root: str) -> str:
     return "".join(line + "\n" for line in lines)
 
 
-def verify_tree_against_listing(root: str, listing: str) -> list[str]:
-    """Every difference between an extracted tree and its recorded listing.
+def parse_listing(listing: str) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    """(`<kind> <mode> <uid> <gid>` per ./path, sha256 per ./path, bad lines).
 
     Parses rather than regenerates, on purpose: the listing that ships is
-    written by `find` + `sha256sum` inside a container and this side must not
-    have to reproduce that byte for byte to be able to check it. Returns the
-    differing entries by name, never "the tree differs".
+    written by `find` + `sha256sum` inside a container (§9.1 step 12) and this
+    side must not have to reproduce that byte for byte to be able to check it.
     """
+    meta: dict[str, str] = {}
+    hashes: dict[str, str] = {}
     problems: list[str] = []
-    want_meta: dict[str, str] = {}
-    want_hash: dict[str, str] = {}
     for line in listing.splitlines():
         if not line:
             continue
@@ -2018,31 +2017,85 @@ def verify_tree_against_listing(root: str, listing: str) -> list[str]:
             if len(parts) != 5:
                 problems.append(f"{line!r}: unreadable listing line")
                 continue
-            want_meta[parts[4]] = " ".join(parts[:4])
+            meta[parts[4]] = " ".join(parts[:4])
         else:
             digest, _, path = line.partition("  ")
             if not path:
                 problems.append(f"{line!r}: unreadable listing line")
                 continue
-            want_hash[path] = digest
-    got_meta: dict[str, str] = {}
+            hashes[path] = digest
+    return meta, hashes, problems
+
+
+def tar_member_metadata(member: tarfile.TarInfo) -> str:
+    """`<kind> <mode> <uid> <gid>` in §5.5's spelling, from the ARCHIVE'S own
+    records rather than from the filesystem it was extracted onto."""
+    if member.issym():
+        kind = "l"
+    elif member.isdir():
+        kind = "d"
+    elif member.isreg() or member.islnk():
+        kind = "f"
+    else:
+        kind = "?"
+    return f"{kind} {_mode_octal(member.mode)} {member.uid} {member.gid}"
+
+
+def archived_tree_metadata(members, prefix: str) -> dict[str, str]:
+    """The recorded metadata of every member under `prefix`, keyed ./path."""
+    stripped = prefix.rstrip("/") + "/"
+    out: dict[str, str] = {}
+    for member in members:
+        name = member.name
+        if not name.startswith(stripped):
+            continue
+        out["./" + name[len(stripped) :]] = tar_member_metadata(member)
+    return out
+
+
+def verify_tree_against_listing(
+    root: str, listing: str, archived: dict[str, str] | None = None
+) -> list[str]:
+    """Every difference between a carried tree and its recorded listing.
+
+    **Type, mode, uid and gid are compared against what the TAR RECORDS, not
+    against what extraction produced**, and `archived` is that record. This is
+    not a nicety. CPython's `data` extraction filter masks mode to `& 0o755`
+    and drops uid/gid entirely, and `os.chown` during extraction is a no-op
+    unless the extracting process is root — so an extracted tree can NEVER
+    carry what `find -printf "%y %#m %U %G %p"` recorded on the live volume.
+    Measured on 3.12.13: `f 0664 1000 1000` comes back `f 0644 <extractor>
+    <extractor>`. Comparing the filesystem refused three entries of an
+    ordinary markdown volume, and a `--move` bundle — uid 1000 for
+    v4_memdata, root for v4_tailscale — could not be verified by ANY single
+    extracting uid.
+
+    Content is still re-derived from the extracted bytes, because that is the
+    half extraction reproduces faithfully and the half that matters most.
+
+    `archived=None` falls back to `lstat`, for a tree that did not come out of
+    a tar at all (the drill re-derives one inside a container).
+    """
+    want_meta, want_hash, problems = parse_listing(listing)
+    got_meta: dict[str, str] = dict(archived) if archived is not None else {}
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
         for name in sorted(dirnames + filenames):
             full = os.path.join(dirpath, name)
             rel = "./" + os.path.relpath(full, root).replace(os.sep, "/")
-            st = os.lstat(full)
-            kind = (
-                "l"
-                if stat.S_ISLNK(st.st_mode)
-                else "d"
-                if stat.S_ISDIR(st.st_mode)
-                else "f"
-                if stat.S_ISREG(st.st_mode)
-                else "?"
-            )
-            got_meta[rel] = f"{kind} {_mode_octal(st.st_mode)} {st.st_uid} {st.st_gid}"
-            if kind == "f":
+            if archived is None:
+                st = os.lstat(full)
+                kind = (
+                    "l"
+                    if stat.S_ISLNK(st.st_mode)
+                    else "d"
+                    if stat.S_ISDIR(st.st_mode)
+                    else "f"
+                    if stat.S_ISREG(st.st_mode)
+                    else "?"
+                )
+                got_meta[rel] = f"{kind} {_mode_octal(st.st_mode)} {st.st_uid} {st.st_gid}"
+            if os.path.isfile(full) and not os.path.islink(full):
                 digest, _ = sha256_file(full)
                 if rel not in want_hash:
                     problems.append(f"{rel}: in the archive, absent from the listing")
@@ -2117,22 +2170,68 @@ def check_member(member) -> str:
     return ""
 
 
+def _ancestors(name: str) -> list[str]:
+    parts = posixpath.normpath(name).split("/")
+    return ["/".join(parts[:i]) for i in range(1, len(parts))]
+
+
+def members_refusal(members) -> str:
+    """Why this SET of members will not be extracted, or "".
+
+    `check_member` judges each member alone, and that is not enough: a
+    two-hop chain passes it and escapes anyway. `dir/x -> ".."` normalises to
+    `"."` (contained); `dir/x/up -> ".."` normalises to `"dir"` (contained);
+    `dir/x/up/PWNED` holds no `..` at all — but by the time it is written,
+    `dir/x` is already a symlink to the root, so `dir/x/up` points at the
+    root's PARENT. Measured: all four members return "" from check_member,
+    and with the filter removed the file lands outside the destination.
+
+    So the containment rule is enforced over the sequence: no member's path
+    may pass THROUGH a member this archive has already declared a symlink.
+    No legitimate archive does that — neither `tar -cf` nor python's
+    `tarfile.add` follows a symlink, so a real tree never names a path
+    through one.
+    """
+    symlinks: set[str] = set()
+    for member in members:
+        bad = check_member(member)
+        if bad:
+            return bad
+        name = posixpath.normpath(member.name)
+        for ancestor in _ancestors(name):
+            if ancestor in symlinks:
+                return (
+                    f"{member.name}: its path goes through `{ancestor}`, which this same "
+                    "archive declares a symlink — a chain like that escapes the target "
+                    "one hop at a time"
+                )
+        if member.issym():
+            symlinks.add(name)
+    return ""
+
+
 def safe_extract(tar: tarfile.TarFile, dest: str, members=None) -> list:
     """Extract, or refuse by name.
 
     No member escapes the target: no absolute path, no `..`, no link that
-    resolves outside, no device node and no fifo. Proven with an adversarial
-    tar built in tests/test_bundle_verify.py, not by argument.
+    resolves outside, no chain of links that gets there in two hops, no
+    device node and no fifo. Proven with an adversarial tar built in
+    tests/test_bundle_verify.py, not by argument — and proven with the
+    extraction filter FORCED OFF, because `restore.sh` accepts python3 >= 3.9
+    and the refusal has to be ours rather than the interpreter's.
     """
     chosen = list(tar.getmembers() if members is None else members)
-    for member in chosen:
-        bad = check_member(member)
-        if bad:
-            raise BundleError(f"bundle member refused — {bad}")
+    bad = members_refusal(chosen)
+    if bad:
+        raise BundleError(f"bundle member refused — {bad}")
     os.makedirs(dest, exist_ok=True)
     try:
         tar.extractall(dest, members=chosen, filter="data")
     except TypeError:  # python < 3.12 has no `filter` keyword
+        # Nothing above us clears them on this path, and this code extracts
+        # as root inside the pack container.
+        for member in chosen:
+            member.mode &= 0o777
         tar.extractall(dest, members=chosen)
     return chosen
 
@@ -2169,7 +2268,56 @@ HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
 HEX12_RE = re.compile(r"^[0-9a-f]{12}$")
 SELFTEST_RE = re.compile(r"^nova_selftest_[0-9a-f]{8}$")
-RESTORE_TO_RE = re.compile(r"^(db:.+|volume:.+|[^/][^\0]*)$")
+# Docker's own volume-name charset, and a conservative database-name one.
+VOLUME_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
+DB_NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_$-]{0,62}$")
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def path_refusal(value: Any, what: str) -> str:
+    """Why this manifest path will not be joined onto anything, or "".
+
+    EVERY path in a manifest is treated as hostile. It arrives inside
+    `payload.enc`, which means whoever wrote it had the passphrase — and a
+    bundle someone hands you along with its passphrase is exactly the case
+    §7.6 and §9.2 contemplate. `safe_extract` already decided that a bundle's
+    own bytes do not get to name a path on this machine; these are the paths
+    that were not going through `safe_extract`.
+    """
+    if not isinstance(value, str) or not value:
+        return f"{what} is not a path"
+    if "\x00" in value or "\\" in value:
+        return f"{what} {value!r} holds a NUL or a backslash"
+    if value.startswith("/") or value.startswith("~"):
+        return f"{what} {value!r} is absolute"
+    if len(value) > 1 and value[1] == ":":
+        return f"{what} {value!r} names a drive"
+    parts = value.rstrip("/").split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return f"{what} {value!r} has an empty, `.` or `..` segment"
+    return ""
+
+
+def restore_to_refusal(value: Any) -> str:
+    """`db:<name>` | `volume:<full name>` | a relative path, and nothing else.
+
+    An unknown form refuses (§5.3). So, now, does a known form carrying a
+    traversal: `volume:../../x` was accepted by the old shape check, and
+    nova_restore.py joined it straight onto --out.
+    """
+    if not isinstance(value, str) or not value:
+        return "restore_to is not a string"
+    if value.startswith("db:"):
+        name = value[3:]
+        if not DB_NAME_RE.match(name):
+            return f"restore_to {value!r} does not name a database"
+        return ""
+    if value.startswith("volume:"):
+        name = value[7:]
+        if not VOLUME_NAME_RE.match(name):
+            return f"restore_to {value!r} does not name a docker volume"
+        return ""
+    return path_refusal(value, "restore_to")
 
 
 class ManifestError(Exception):
@@ -2362,7 +2510,7 @@ MANIFEST_SPEC: dict[str, Any] = {
                 "kind": ("one_of", MEMBER_KINDS),
                 "bytes": int,
                 "sha256": _HEX64,
-                "restore_to": ("re", RESTORE_TO_RE, "db:<name> | volume:<name> | a relative path"),
+                "restore_to": ("nonempty_str",),
             },
         ),
     ),
@@ -2451,7 +2599,39 @@ def load_manifest(data: Any) -> dict[str, Any]:
         if row["path"] in seen:
             raise ManifestError(f"manifest.members names {row['path']} twice")
         seen.add(row["path"])
+    bad = _path_refusals(data)
+    if bad:
+        raise ManifestError("; ".join(bad))
     return data
+
+
+def _path_refusals(data: dict[str, Any]) -> list[str]:
+    """Every path-shaped value in the manifest, checked as hostile input."""
+    bad: list[str] = []
+    for i, row in enumerate(data["members"]):
+        bad.append(path_refusal(row["path"], f"members[{i}].path"))
+        bad.append(restore_to_refusal(row["restore_to"]))
+    for i, row in enumerate(data["volumes"]):
+        bad.append(path_refusal(row["prefix"], f"volumes[{i}].prefix"))
+        bad.append(path_refusal(row["listing_member"], f"volumes[{i}].listing_member"))
+        bad.append(restore_to_refusal(row["restore_to"]))
+        if not VOLUME_NAME_RE.match(row["full_name"]):
+            bad.append(f"volumes[{i}].full_name {row['full_name']!r} is not a volume name")
+        if not VOLUME_NAME_RE.match(row["key"]):
+            bad.append(f"volumes[{i}].key {row['key']!r} is not a compose key")
+    for i, row in enumerate(data["files"]):
+        bad.append(path_refusal(row["member"], f"files[{i}].member"))
+        bad.append(path_refusal(row["origin"], f"files[{i}].origin"))
+        bad.append(restore_to_refusal(row["restore_to"]))
+    for i, row in enumerate(data["databases"]):
+        for field_name in ("dump_member", "counts_member", "migrations_member"):
+            bad.append(path_refusal(row[field_name], f"databases[{i}].{field_name}"))
+        if not DB_NAME_RE.match(row["name"]):
+            bad.append(f"databases[{i}].name {row['name']!r} is not a database name")
+    for key in data["env_keys"]:
+        if not isinstance(key, str) or not ENV_KEY_RE.match(key):
+            bad.append(f"env_keys carries {key!r}, which is not a variable name")
+    return [problem for problem in bad if problem]
 
 
 def load_manifest_text(text: str) -> dict[str, Any]:
@@ -2674,12 +2854,18 @@ def read_outer_member(bundle: str, name: str) -> bytes:
 # ── verification (§9.1 steps 17 and 20, §9.2 step 5) ────────────────────────
 
 
-def verify_inner(root: str, manifest: dict[str, Any]) -> list[str]:
+def verify_inner(
+    root: str, manifest: dict[str, Any], archived: dict[str, str] | None = None
+) -> list[str]:
     """Every member's sha256 RE-DERIVED from the extracted bytes.
 
     Deliberately not trusting the numbers the manifest recorded moments ago:
     the sha256-equality of a file the writer just wrote proves the writer can
     hash, and nothing else.
+
+    `archived` is the tar's own `<kind> <mode> <uid> <gid>` per member, which
+    is what a tree's listing is compared against — extraction cannot
+    reproduce either half. `open_inner` returns it.
     """
     problems: list[str] = []
     accounted: set[str] = {INNER_MANIFEST}
@@ -2711,9 +2897,10 @@ def verify_inner(root: str, manifest: dict[str, Any]) -> list[str]:
                 problems.append(f"{path}: its listing does not match volumes[].listing_sha256")
             with open(listing_path, encoding="utf-8") as fh:
                 listing = fh.read()
+            under = archived_tree_metadata_from(archived, path) if archived is not None else None
             problems.extend(
                 f"{path}{p.lstrip('./')}" if p.startswith("./") else f"{path}: {p}"
-                for p in verify_tree_against_listing(target, listing)
+                for p in verify_tree_against_listing(target, listing, under)
             )
             for dirpath, _dirs, files in os.walk(target):
                 for name in files:
@@ -2737,8 +2924,21 @@ def verify_inner(root: str, manifest: dict[str, Any]) -> list[str]:
     return sorted(set(problems))
 
 
-def open_inner(path: str, dest: str) -> dict[str, Any]:
-    """Extract the inner archive into `dest` and return its manifest.
+def archived_tree_metadata_from(archived: dict[str, str], prefix: str) -> dict[str, str]:
+    """The `archived` map narrowed to one tree prefix, keyed ./path."""
+    stripped = prefix.rstrip("/") + "/"
+    return {
+        "./" + name[len(stripped) :]: value
+        for name, value in archived.items()
+        if name.startswith(stripped)
+    }
+
+
+def open_inner(path: str, dest: str) -> tuple[dict[str, Any], dict[str, str]]:
+    """Extract the inner archive into `dest`; return (manifest, archived).
+
+    `archived` is `<kind> <mode> <uid> <gid>` per member name, taken from the
+    TAR HEADERS before extraction touches them.
 
     The exception handler is broad on purpose: a truncated gzip raises
     EOFError, which is neither TarError nor OSError, and a narrower catch
@@ -2759,14 +2959,15 @@ def open_inner(path: str, dest: str) -> dict[str, Any]:
                 raise BundleError(f"{INNER_MANIFEST} is not a regular file")
             manifest = load_manifest_text(extracted.read().decode("utf-8"))
             tar.members = []
-            safe_extract(tar, dest)
+            members = safe_extract(tar, dest)
+            archived = {m.name: tar_member_metadata(m) for m in members}
     except (BundleError, ManifestError, CryptoError):
         raise
     except Exception as exc:  # noqa: BLE001 — EOFError, TarError, OSError, zlib
         raise BundleError(
             f"the inner archive could not be read: {type(exc).__name__}: {exc}"
         ) from exc
-    return manifest
+    return manifest, archived
 
 
 def _payload_into(src: str, passphrase: str, work: str) -> str:
@@ -2844,7 +3045,12 @@ class _OuterTar:
 def verify_bundle(
     bundle: str, passphrase: str, work: str, *, reader_dir: str | None = None
 ) -> dict:
-    """Open a finished bundle and check everything in it against itself."""
+    """Open a finished bundle and check everything in it against itself.
+
+    The KAT runs BEFORE a single payload byte is written anywhere. That is
+    what the known-answer test is for: on a many-GB bundle read off a
+    removable drive, a wrong passphrase must cost nothing but one scrypt.
+    """
     with open_outer_tar(bundle) as tar:
         names = [m.name for m in tar.getmembers()]
         if names != list(OUTER_ORDER):
@@ -2855,16 +3061,16 @@ def verify_bundle(
                 continue
             handle = tar.extractfile(name)
             blobs[name] = b"" if handle is None else handle.read()
+        kat_gate(blobs[OUTER_KAT], blobs[OUTER_KAT_SHA].decode("utf-8"), passphrase)
         payload = os.path.join(work, OUTER_PAYLOAD)
         safe_extract(tar, work, members=[tar.getmember(OUTER_PAYLOAD)])
-    kat_gate(blobs[OUTER_KAT], blobs[OUTER_KAT_SHA].decode("utf-8"), passphrase)
     meta = json.loads(blobs[OUTER_META].decode("utf-8"))
     payload_sha256, payload_bytes = sha256_file(payload)
     inner = _payload_into(payload, passphrase, work)
     root = os.path.join(work, "inner")
     os.makedirs(root, mode=0o700, exist_ok=True)
-    manifest = open_inner(inner, root)
-    problems = verify_inner(root, manifest)
+    manifest, archived = open_inner(inner, root)
+    problems = verify_inner(root, manifest, archived)
     problems.extend(meta_disagreements(meta, manifest))
     if meta.get("payload_sha256") != payload_sha256:
         problems.append("meta.payload_sha256 does not match the payload this bundle carries")
@@ -3434,8 +3640,8 @@ def cmd_verify(args: argparse.Namespace) -> int:
             inner = _payload_into(args.payload, passphrase, work)
             root = os.path.join(work, "inner")
             os.makedirs(root, mode=0o700, exist_ok=True)
-            manifest = open_inner(inner, root)
-            problems = verify_inner(root, manifest)
+            manifest, archived = open_inner(inner, root)
+            problems = verify_inner(root, manifest, archived)
         if problems:
             sys.stderr.write("Error: this bundle does not verify:\n")
             for problem in problems:

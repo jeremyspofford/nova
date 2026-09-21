@@ -33,6 +33,7 @@ import io
 import json
 import os
 import posixpath
+import re
 import shutil
 import struct
 import sys
@@ -132,12 +133,36 @@ def gcm_backend():
 
 
 def _self_test(decrypt, name):
+    """A backend is accepted only after it has produced the right plaintext
+    once AND refused a vector whose GCM tag is wrong.
+
+    Both halves matter. The first rules out a broken or mismatched wheel; the
+    second rules out a "backend" that decrypts without checking the tag at
+    all — a CTR-mode stand-in passes the first and would then pass the KAT
+    too, and every truncation and tampering guarantee in this file rests on
+    that check.
+
+    A failure here is a fault of this MACHINE, not of the bundle, so it
+    raises NoBackend and exits 4: restore.sh reads that and moves to the next
+    candidate. Reported as a bundle fault it stopped the probe dead on a
+    machine where three other backends worked, and told the operator his
+    passphrase or his only copy was wrong when neither was.
+    """
     try:
         got = decrypt(_SELFTEST_KEY, _SELFTEST_NONCE, _SELFTEST_CT, _SELFTEST_AAD)
     except Exception as exc:
-        raise RestoreError(f"the {name} backend failed its own known answer: {exc}") from exc
+        raise NoBackend(f"the {name} backend failed its own known answer: {exc}") from exc
     if got != _SELFTEST_PLAIN:
-        raise RestoreError(f"the {name} backend decrypted a known vector to the wrong bytes")
+        raise NoBackend(f"the {name} backend decrypted a known vector to the wrong bytes")
+    tampered = _SELFTEST_CT[:-1] + bytes([_SELFTEST_CT[-1] ^ 0x01])
+    try:
+        decrypt(_SELFTEST_KEY, _SELFTEST_NONCE, tampered, _SELFTEST_AAD)
+    except Exception:
+        return
+    raise NoBackend(
+        f"the {name} backend accepted a known vector whose GCM tag is wrong, so it is not "
+        "checking authenticity at all"
+    )
 
 
 def _libcrypto_candidates():
@@ -151,7 +176,13 @@ def _libcrypto_candidates():
     name Homebrew uses, and a Cellar path is version-stamped.
     """
     override = os.environ.get("NOVA_LIBCRYPTO")
-    found = [override] if override else []
+    if override:
+        # EXCLUSIVE, not first. The operator pointed at a library; quietly
+        # loading a different one and reporting success would be the kind of
+        # fallback that reads as success. If this one does not work, the
+        # refusal names it.
+        return [override]
+    found = []
     if sys.platform == "darwin":
         prefixes = [os.environ.get("HOMEBREW_PREFIX") or "", "/opt/homebrew", "/usr/local"]
         for prefix in prefixes:
@@ -436,17 +467,52 @@ def check_member(member):
     return ""
 
 
-def safe_extract(tar, dest, members=None):
-    chosen = list(tar.getmembers() if members is None else members)
-    for member in chosen:
+def _ancestors(name):
+    parts = posixpath.normpath(name).split("/")
+    return ["/".join(parts[:i]) for i in range(1, len(parts))]
+
+
+def members_refusal(members):
+    """Why this SET of members will not be extracted, or "".
+
+    check_member judges each member alone, and a two-hop chain passes it:
+    `dir/x -> ".."` normalises to `"."`, `dir/x/up -> ".."` normalises to
+    `"dir"`, and `dir/x/up/PWNED` holds no `..` at all — but by the time it
+    is written, `dir/x` is a symlink to the root and `dir/x/up` points at the
+    root's PARENT. On python 3.12 the extraction filter stops that; this
+    script runs on whatever python3 a fresh machine has and restore.sh
+    accepts 3.9, so the refusal has to be ours.
+    """
+    symlinks = set()
+    for member in members:
         bad = check_member(member)
         if bad:
-            raise RestoreError(f"bundle member refused — {bad}")
+            return bad
+        name = posixpath.normpath(member.name)
+        for ancestor in _ancestors(name):
+            if ancestor in symlinks:
+                return (
+                    f"{member.name}: its path goes through `{ancestor}`, which this same "
+                    "archive declares a symlink — a chain like that escapes the target "
+                    "one hop at a time"
+                )
+        if member.issym():
+            symlinks.add(name)
+    return ""
+
+
+def safe_extract(tar, dest, members=None):
+    chosen = list(tar.getmembers() if members is None else members)
+    bad = members_refusal(chosen)
+    if bad:
+        raise RestoreError(f"bundle member refused — {bad}")
     if not os.path.isdir(dest):
         os.makedirs(dest)
     try:
         tar.extractall(dest, members=chosen, filter="data")
     except TypeError:  # python < 3.12 has no `filter` keyword
+        for member in chosen:
+            member.mode &= 0o777  # nothing else clears setuid/setgid here
         tar.extractall(dest, members=chosen)
     return chosen
 
@@ -466,44 +532,179 @@ def sha256_file(path):
     return h.hexdigest(), total
 
 
-def _verify_tree(root, listing):
+def _mode_octal(mode):
+    """GNU find's `%#m`: octal with a leading 0, and a bare `0` for zero."""
+    bits = mode & 0o7777
+    return "0" if bits == 0 else f"0{bits:o}"
+
+
+def tar_member_metadata(member):
+    """`<kind> <mode> <uid> <gid>` in the listing's own spelling, from the
+    ARCHIVE'S records — never from the filesystem it was extracted onto.
+
+    Extraction cannot reproduce either half: CPython's `data` filter masks
+    mode to `& 0o755` and drops uid/gid, and chown during extraction is a
+    no-op unless this process is root. The tar headers carry what `find
+    -printf "%y %#m %U %G %p"` saw on the live volume, so they are what the
+    listing is compared against.
+    """
+    if member.issym():
+        kind = "l"
+    elif member.isdir():
+        kind = "d"
+    elif member.isreg() or member.islnk():
+        kind = "f"
+    else:
+        kind = "?"
+    return f"{kind} {_mode_octal(member.mode)} {member.uid} {member.gid}"
+
+
+def _verify_tree(root, listing, archived):
+    """Every difference between a carried tree and its recorded listing.
+
+    The metadata lines exist precisely so a missing symlink, a lost empty
+    directory or a changed mode is visible — a `find . -type f` listing
+    cannot see any of them. This used to skip every one of those lines and
+    still print "all matching the manifest sealed inside".
+    """
     problems = []
-    want = {}
+    want_meta = {}
+    want_hash = {}
     for line in listing.splitlines():
         if not line:
             continue
         if line[:1] in ("d", "f", "l") and line[1:2] == " ":
+            parts = line.split(" ", 4)
+            if len(parts) != 5:
+                problems.append(f"{line!r}: unreadable listing line")
+                continue
+            want_meta[parts[4]] = " ".join(parts[:4])
             continue
         digest, _, path = line.partition("  ")
-        if path:
-            want[path] = digest
-    for rel, digest in sorted(want.items()):
-        full = os.path.join(root, rel.lstrip("./"))
-        if not os.path.isfile(full):
-            problems.append(f"{rel}: named in the listing, absent from the archive")
+        if not path:
+            problems.append(f"{line!r}: unreadable listing line")
             continue
-        got, _ = sha256_file(full)
-        if got != digest:
-            problems.append(f"{rel}: content does not match its recorded checksum")
-    return problems
+        want_hash[path] = digest
+    seen = set()
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(dirnames + filenames):
+            full = os.path.join(dirpath, name)
+            rel = "./" + os.path.relpath(full, root).replace(os.sep, "/")
+            seen.add(rel)
+            if os.path.isfile(full) and not os.path.islink(full):
+                got, _ = sha256_file(full)
+                if rel not in want_hash:
+                    problems.append(f"{rel}: in the archive, absent from the listing")
+                elif want_hash[rel] != got:
+                    problems.append(f"{rel}: content does not match its recorded checksum")
+    for rel in sorted(want_meta):
+        got = archived.get(rel)
+        if got is None:
+            problems.append(f"{rel}: named in the listing, absent from the archive")
+        elif got != want_meta[rel]:
+            problems.append(
+                f"{rel}: type/mode/uid/gid is `{got}`, the listing recorded `{want_meta[rel]}`"
+            )
+    for rel in sorted(set(archived) - set(want_meta)):
+        problems.append(f"{rel}: in the archive, absent from the listing")
+    for rel in sorted(set(want_hash) - seen):
+        problems.append(f"{rel}: named in the listing, absent from the archive")
+    return sorted(set(problems))
 
 
-def verify_extracted(root, manifest):
+VOLUME_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$")
+
+
+def _volume_name(restore_to):
+    """The docker volume name in a `volume:<name>` hint, or a refusal.
+
+    `restore_to` comes out of the manifest, which is inside payload.enc — so
+    whoever wrote it had the passphrase. That is exactly the case this script
+    exists for: a bundle someone hands you, with its passphrase, on a machine
+    that has nothing. `volume:../../../ESCAPED/x` used to be joined straight
+    onto --out.
+    """
+    name = restore_to.split(":", 1)[1] if restore_to.startswith("volume:") else ""
+    if not VOLUME_NAME_RE.match(name):
+        raise RestoreError(
+            f"this bundle's manifest says restore_to {restore_to!r}, which does not name a "
+            "docker volume. Nothing is placed from a manifest this reader does not trust."
+        )
+    return name
+
+
+def _relative(value, what="restore_to"):
+    """A relative path this reader will act on, or a refusal.
+
+    Absolute, `~`, a drive letter, a backslash, an empty segment, `.` and
+    `..` are all refused. Used for every path the manifest names — the ones
+    it WRITES to, and the ones it READS from: a `members[].path` of
+    `../../../etc/hostname` with that file's real sha256 would otherwise
+    "verify", and the word verified would be printed over a file that was
+    never in the bundle.
+    """
+    bad = (
+        not isinstance(value, str)
+        or not value
+        or value.startswith(("/", "~"))
+        or "\\" in value
+        or "\x00" in value
+        or (len(value) > 1 and value[1] == ":")
+        or any(part in ("", ".", "..") for part in value.rstrip("/").split("/"))
+    )
+    if bad:
+        raise RestoreError(
+            f"this bundle's manifest says {what} {value!r}, which is not a path this reader "
+            "will act on. Nothing is read or placed from a manifest this reader does not trust."
+        )
+    return value
+
+
+def _must_stay_inside(out, dst):
+    """The belt to the two braces above: the RESOLVED destination is under
+    --out, or nothing is written. This file's own docstring promises it never
+    writes outside --out, and placement is the one path safe_extract does not
+    cover."""
+    root = os.path.realpath(out)
+    target = os.path.realpath(dst)
+    if target != root and not target.startswith(root + os.sep):
+        raise RestoreError(
+            f"this bundle would place {os.path.basename(dst)} outside {out} — refusing. "
+            "Nothing is placed from a manifest this reader does not trust."
+        )
+
+
+def _under(archived, prefix):
+    stripped = prefix.rstrip("/") + "/"
+    return {
+        "./" + name[len(stripped) :]: value
+        for name, value in archived.items()
+        if name.startswith(stripped)
+    }
+
+
+def verify_extracted(root, manifest, archived):
     """Re-derive every member's sha256 FROM THE EXTRACTED BYTES.
 
     A backup restored without verification is a hope with extra steps.
+    `archived` is the tar's own metadata per member, which is what a tree's
+    listing is checked against.
     """
     problems = []
+    accounted = {INNER_MANIFEST}
     by_prefix = dict((v["prefix"], v) for v in manifest.get("volumes", []))
     for row in manifest.get("members", []):
-        path = row["path"]
+        path = _relative(row.get("path"), "a member path")
         target = os.path.join(root, path.rstrip("/"))
         if row["kind"] == "tree":
             volume = by_prefix.get(path)
             if volume is None:
                 problems.append(f"{path}: a tree member with no volumes[] row")
                 continue
-            listing_path = os.path.join(root, volume["listing_member"])
+            listing_path = os.path.join(
+                root, _relative(volume.get("listing_member"), "a listing member")
+            )
             if not os.path.isdir(target) or not os.path.isfile(listing_path):
                 problems.append(f"{path}: named in the manifest, absent from the archive")
                 continue
@@ -511,18 +712,31 @@ def verify_extracted(root, manifest):
             if digest != row["sha256"]:
                 problems.append(f"{path}: its listing does not match the recorded hash")
             with open(listing_path) as fh:
-                problems += [f"{path}{p}" for p in _verify_tree(target, fh.read())]
+                problems += [
+                    f"{path}{p.lstrip('./')}" if p.startswith("./") else f"{path}: {p}"
+                    for p in _verify_tree(target, fh.read(), _under(archived, path))
+                ]
+            for dirpath, _dirs, files in os.walk(target):
+                for name in files:
+                    full = os.path.join(dirpath, name)
+                    accounted.add(os.path.relpath(full, root).replace(os.sep, "/"))
             continue
         if not os.path.isfile(target):
             problems.append(f"{path}: named in the manifest, absent from the archive")
             continue
+        accounted.add(path)
         digest, size = sha256_file(target)
         if digest != row["sha256"]:
             problems.append(f"{path}: content does not match its recorded checksum")
         if size != row["bytes"]:
             recorded_bytes = row["bytes"]
             problems.append(f"{path}: {size} bytes, the manifest recorded {recorded_bytes}")
-    return problems
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            rel = os.path.relpath(os.path.join(dirpath, name), root).replace(os.sep, "/")
+            if rel not in accounted:
+                problems.append(f"{rel}: in the archive and named by no member of the manifest")
+    return sorted(set(problems))
 
 
 # ── the bundle ──────────────────────────────────────────────────────────────
@@ -632,13 +846,23 @@ def _refusal_with_fingerprint(blobs, mine):
         except ValueError:
             recorded = None
     if recorded and mine and recorded != mine:
+        # NOT "so it is a different passphrase". Both numbers come from
+        # cleartext this reader cannot authenticate — meta.json, and the salt
+        # in kat.enc's header — so an edited salt makes the CORRECT
+        # passphrase derive a different value here. Claiming which of the two
+        # it is would be the 3am failure the sentence above exists to
+        # prevent, inverted.
         return (
-            f"{BAD_DECRYPT}\n  This bundle records passphrase fingerprint {recorded}; the "
-            f"one you supplied derives {mine} under this bundle's salt, so it is a DIFFERENT "
-            f"passphrase, not a damaged file."
+            f"{BAD_DECRYPT}\n  meta.json records passphrase fingerprint {recorded}; the one "
+            f"you supplied derives {mine} under the salt in kat.enc. Both of those are "
+            f"cleartext this bundle does not authenticate, so they differing means EITHER a "
+            f"different passphrase OR an edited file — it cannot say which."
         )
     if recorded:
-        return f"{BAD_DECRYPT}\n  This bundle records passphrase fingerprint {recorded}."
+        return (
+            f"{BAD_DECRYPT}\n  meta.json records passphrase fingerprint {recorded} "
+            f"(cleartext, unauthenticated — advisory only)."
+        )
     return BAD_DECRYPT
 
 
@@ -779,7 +1003,8 @@ def _open_payload(bundle, passphrase, decrypt, work):
             handle = tar.extractfile(first)
             manifest = json.loads(handle.read().decode("utf-8"))
             tar.members = []
-            safe_extract(tar, root)
+            members = safe_extract(tar, root)
+            archived = {m.name: tar_member_metadata(m) for m in members}
     except (RestoreError, CryptoError):
         raise
     except Exception as exc:
@@ -789,12 +1014,12 @@ def _open_payload(bundle, passphrase, decrypt, work):
             f"the inner archive could not be read: {type(exc).__name__}: {exc}"
         ) from exc
     os.unlink(inner)
-    return root, manifest
+    return root, manifest, archived
 
 
 def _verify_only(bundle, passphrase, decrypt, work):
-    root, manifest = _open_payload(bundle, passphrase, decrypt, work)
-    problems = verify_extracted(root, manifest)
+    root, manifest, archived = _open_payload(bundle, passphrase, decrypt, work)
+    problems = verify_extracted(root, manifest, archived)
     if problems:
         sys.stderr.write("VERIFICATION FAILED — this bundle cannot be trusted:\n")
         for problem in problems:
@@ -813,8 +1038,8 @@ def _verify_only(bundle, passphrase, decrypt, work):
 def _restore(bundle, passphrase, decrypt, out):
     work = os.path.join(out, ".work")
     os.makedirs(work)
-    root, manifest = _open_payload(bundle, passphrase, decrypt, work)
-    problems = verify_extracted(root, manifest)
+    root, manifest, archived = _open_payload(bundle, passphrase, decrypt, work)
+    problems = verify_extracted(root, manifest, archived)
     if problems:
         sys.stderr.write("VERIFICATION FAILED — this restore cannot be trusted:\n")
         for problem in problems:
@@ -829,7 +1054,7 @@ def _restore(bundle, passphrase, decrypt, out):
     for row in manifest.get("members", []):
         src = os.path.join(root, row["path"].rstrip("/"))
         if row["kind"] == "tree":
-            dst = os.path.join(out, "volumes", row["restore_to"].split(":", 1)[1])
+            dst = os.path.join(out, "volumes", _volume_name(row["restore_to"]))
         elif row["kind"] in ("db", "counts", "migrations"):
             dst = os.path.join(out, "db", os.path.basename(row["path"]))
         elif row["kind"] == "listing":
@@ -841,9 +1066,9 @@ def _restore(bundle, passphrase, decrypt, out):
             # with a carried deploy/.env file member.
             dst = os.path.join(out, "env", os.path.basename(row["path"]))
         else:
-            dst = os.path.join(out, "project", row["restore_to"])
-        if not os.path.isdir(os.path.dirname(dst)):
-            os.makedirs(os.path.dirname(dst))
+            dst = os.path.join(out, "project", _relative(row["restore_to"]))
+        _must_stay_inside(out, dst)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
         os.rename(src, dst)
         placed.append(os.path.relpath(dst, out))
     carried = os.path.join(root, INNER_MANIFEST)
