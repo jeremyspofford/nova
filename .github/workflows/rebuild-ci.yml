@@ -1,10 +1,19 @@
 name: rebuild-ci
 
+# The v4 lane branched from `rebuild/**` into `slice/**` and then merged to
+# `main` (2026-09-17), so a trigger on `rebuild/**` alone ran NOTHING for any
+# slice — the jobs below were written and never fired. Widened on the owner's
+# decision of 2026-09-21 (docs/plans/rebuild/s41/rulings.md), which reverses
+# the standing 2026-09-07 "CI off" decision FOR THIS WORKFLOW ONLY.
+#
+# The workflow is also `disabled_manually` on GitHub. A widened trigger alone
+# fires nothing, so enabling it (`gh workflow enable rebuild-ci`) is the other
+# half; turning it back off is `gh workflow disable rebuild-ci`.
 on:
   push:
-    branches: ["rebuild/**"]
+    branches: ["rebuild/**", "slice/**", "main"]
   pull_request:
-    branches: ["rebuild/**"]
+    branches: ["rebuild/**", "slice/**", "main"]
 
 jobs:
   services:
@@ -52,8 +61,93 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash -n deploy/install.sh && bash -n deploy/install_test.sh && bash -n deploy/tailnet_topology_test.sh
+      - run: bash -n deploy/backup.sh deploy/backup_test.sh deploy/passphrase.sh deploy/subnet.sh deploy/compose_read.sh
       - run: shellcheck -S warning deploy/install.sh deploy/install_test.sh deploy/tailnet_topology_test.sh install
+      - run: shellcheck -S warning deploy/backup.sh deploy/backup_test.sh deploy/passphrase.sh deploy/subnet.sh deploy/compose_read.sh
+      # restore.sh travels INSIDE every bundle and runs under /bin/sh on a bare
+      # machine, so it is linted as POSIX sh, not as bash.
+      - run: shellcheck -S warning -s sh deploy/backup/restore.sh deploy/tailscale/start.sh deploy/tailscale/serve_check.sh
       - run: ./deploy/install_test.sh
+      - run: ./deploy/backup_test.sh
+      # A REAL bash 3.2 parser, on Linux, needing no macOS runner. S41's
+      # portability rule (map-portability.md §6) is otherwise enforced by code
+      # review alone, and one bash-4-ism already slipped into the tree
+      # (deploy/tailnet_topology_test.sh:248). This catches the syntax half on
+      # every push; the macos-15 job below is what actually RUNS these under
+      # 3.2 with a BSD userland.
+      - name: parse every portable script with a real bash 3.2
+        run: |
+          docker run --rm -v "$PWD:/w" bash:3.2 bash -n \
+            /w/deploy/install.sh /w/deploy/backup.sh /w/deploy/subnet.sh \
+            /w/deploy/passphrase.sh /w/deploy/compose_read.sh /w/deploy/backup_test.sh
+
+  # The bundle's python half: the format, the manifest, coverage, and the
+  # reader that travels inside every bundle. No docker, no live stack.
+  #
+  # `uv run --project deploy/backup` and not an ambient python3: the suite
+  # imports yaml, and measured on 2026-09-21 an ambient interpreter without it
+  # is 13 collection errors and ZERO tests run. The import check below is a
+  # step of its own so that failure is one loud line at the top of the log
+  # rather than a wall of collection errors — and so it can never become a
+  # skip that reads as coverage.
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+      - name: the suite's interpreter must be able to import yaml
+        run: uv run --project deploy/backup python -c "import sys, yaml; print('PyYAML', yaml.__version__, 'on', sys.version)"
+      - run: uv run --project deploy/backup ruff check deploy/backup
+      # The path argument is load-bearing: without it pytest takes its rootdir
+      # from the checkout root and collects v3's backend/tests/, which exits 77
+      # during collection (measured 2026-09-21: 14 errors, 0 tests).
+      - run: uv run --project deploy/backup pytest -m "not live" deploy/backup/tests
+
+  # macOS is the OTHER half of S41's portability claim, and the only place it
+  # is ever executed. GitHub's macos-15 image ships bash 3.2 at /bin/bash with
+  # a BSD userland — no GNU date, no GNU stat, no `readlink -f`, `sed -i`
+  # taking an argument. Requirement #27; owner decision 2026-09-21.
+  #
+  # Two things that look like details and are not:
+  #
+  #  1. The interpreter is named EXPLICITLY (`/bin/bash ./deploy/...`).
+  #     `defaults.run.shell` sets what interprets the step BODY; the script
+  #     itself would then be run through its own `#!/usr/bin/env bash`, which
+  #     resolves against PATH — where Homebrew's bash 5 sits ahead of
+  #     /bin/bash on these images. The job would silently test bash 5.
+  #  2. The first step FAILS unless the interpreter really is 3.2. A leg that
+  #     cannot prove which bash it ran is a leg reporting success it did not
+  #     check.
+  #
+  # No docker on this job: both shell suites stub it, and whether docker is
+  # usable on a hosted macOS runner is unverified (map-portability.md §6).
+  backup-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: prove /bin/bash is 3.2 before believing anything else
+        run: /bin/bash -c 'echo "$BASH_VERSION"; [ "${BASH_VERSINFO[0]}" -eq 3 ]'
+      - run: /bin/bash -n deploy/install.sh deploy/install_test.sh deploy/backup.sh deploy/backup_test.sh deploy/passphrase.sh deploy/subnet.sh deploy/compose_read.sh
+      - run: /bin/bash ./deploy/install_test.sh
+      - run: /bin/bash ./deploy/backup_test.sh
+      - uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+      - name: the suite's interpreter must be able to import yaml
+        run: uv run --project deploy/backup python -c "import sys, yaml; print('PyYAML', yaml.__version__, 'on', sys.version)"
+      - run: uv run --project deploy/backup pytest -m "not live" deploy/backup/tests
+      # The ONLY measurement anywhere of the ctypes-libcrypto decrypt path
+      # against a real Homebrew OpenSSL — the path a bare machine takes when
+      # `cryptography` is not installed, and the one design-verdict §7.3 marks
+      # [unverified]. The file parametrizes both backends itself; the env var
+      # is the belt to that braces, and it also forces the cases that would
+      # otherwise pick whichever backend this runner happens to have.
+      - name: the in-bundle reader on system OpenSSL (macOS)
+        env:
+          NOVA_FORCE_CTYPES_GCM: "1"
+        run: uv run --project deploy/backup pytest deploy/backup/tests/test_restore_reader.py
 
   web:
     runs-on: ubuntu-latest
