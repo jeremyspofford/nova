@@ -385,9 +385,622 @@ refuse_if_moved() {
   die "moved host: $MOVED_MARKER is present"
 }
 
+# ---- the foreign `nova` compose project (#29, owner ruling 1) --------------
+#
+# v4's compose project is named `nova`, and so were the platform-line stack
+# and the v3 stack before it. `docker compose up` in a project whose name
+# already has containers ADOPTS and recreates them. Owner ruling 1
+# (docs/plans/rebuild/s41/rulings.md): name every container and volume found,
+# then offer to delete exactly that, defaulting to doing nothing.
+#
+# THREE CONSTRAINTS, ALL MEASURED, ALL BINDING (map-minipc-measured.md):
+#
+#  1. SELECT BY LABEL, NEVER BY NAME, and print the label beside every object.
+#     On the mini PC `nova_pgdata` (75.77 MB) and `nova_redis_data` carried
+#     `com.docker.compose.project=docker` — a DIFFERENT project of his — while
+#     the old Nova owned `nova_postgres-data` and `nova_redis-data`. Two of
+#     his containers were likewise NAMED `nova-postgres`/`nova-redis` under
+#     project `docker`. The obvious `nova_` prefix rule destroys 75.8 MB of
+#     someone else's data. That near-miss is the reason every candidate here
+#     comes out of a `--filter label=…` and carries its own label back.
+#
+#  2. ASK DOCKER, NOT COMPOSE. That project's compose file on that machine is
+#     a root-owned empty DIRECTORY (the single-file bind-mount failure mode),
+#     so `docker compose -p nova down -v` cannot read its config at all.
+#     Nothing here shells out to compose for the foreign side.
+#
+#  3. AN EMPTY PROJECT NAME MUST BE IMPOSSIBLE TO PASS. `--filter
+#     label=com.docker.compose.project=` with an empty value matches EVERY
+#     container on the host. The two seams that take the project name refuse
+#     an empty one themselves, so the property does not depend on a caller
+#     having checked.
+#
+# All three old projects on that machine were archived and removed on
+# 2026-09-21, so this refusal and its deletion loop can no longer be walked
+# against a real foreign project on any machine we have. Every case is
+# fixture-backed (deploy/install_test.sh), built from the recorded
+# pre-cleanup reading; #29's refusal branch has never run on hardware and the
+# slice record says so rather than implying coverage.
+
+# THE SEAM. compose's own render with EVERY profile on. Unlike
+# compose_config_text above, stderr is CAPTURED into the file $1 rather than
+# discarded: a render that fails must be reported in compose's own words, not
+# as "no volumes found" (port-v3 m5).
+compose_config_text_all_profiles() {
+  docker compose "${COMPOSE_ARGS[@]}" --profile '*' config 2>"$1"
+}
+
+# THE SEAMS. Everything below asks docker, never compose, and every one that
+# takes the project name refuses an empty one.
+project_containers() {
+  [ -n "$1" ] || { log "docker: refusing to list containers for an EMPTY compose project — that filter matches every container on this host"; return 2; }
+  # --no-trunc so .ID is the full 64-hex id `docker inspect -f {{.Id}}` also
+  # returns; the deletion loop compares the two and a truncated capture would
+  # never match, so every container would be skipped.
+  docker ps -a --no-trunc \
+    --filter "label=com.docker.compose.project=$1" \
+    --format '{{.ID}}	{{.Names}}	{{.Label "com.docker.compose.service"}}	{{.State}}' 2>/dev/null
+}
+container_config_files() {
+  docker inspect --format \
+    '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$1" 2>/dev/null
+}
+container_exists() { docker inspect --type container "$1" >/dev/null 2>&1; }
+container_id_of() { docker inspect --format '{{.Id}}' "$1" 2>/dev/null; }
+container_mounted_volumes() {
+  docker inspect --format \
+    '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}}
+{{end}}{{end}}' "$1" 2>/dev/null
+}
+containers_using_volume() {
+  docker ps -a -q --no-trunc --filter "volume=$1" 2>/dev/null
+}
+project_labelled_volumes() {
+  [ -n "$1" ] || { log "docker: refusing to list volumes for an EMPTY compose project — that filter matches every volume on this host"; return 2; }
+  docker volume ls -q --filter "label=com.docker.compose.project=$1" 2>/dev/null
+}
+all_volume_names() { docker volume ls -q 2>/dev/null; }
+volume_exists() { docker volume inspect "$1" >/dev/null 2>&1; }
+volume_label() {
+  docker volume inspect --format "{{index .Labels \"$2\"}}" "$1" 2>/dev/null
+}
+docker_volume_rm() { docker volume rm "$1" >/dev/null 2>&1; }
+docker_container_rm() { docker rm "$1" >/dev/null 2>&1; }
+
+# The operator's typed answer. A seam so the prompt can be driven without a
+# terminal; `read` returning non-zero (EOF) is an answer too, and it is "no".
+prompt_delete_answer() {
+  local answer
+  read -r answer || answer=""
+  printf '%s' "$answer"
+}
+
+# Is every whitespace-separated word of $1 present in $2?
+list_has() {
+  local item
+  for item in $1; do
+    if [ "$item" = "$2" ]; then return 0; fi
+  done
+  return 1
+}
+keys_subset() {
+  local k
+  for k in $1; do
+    if ! list_has "$2" "$k"; then return 1; fi
+  done
+  return 0
+}
+# Does the tab-separated capture file $1 have $2 in its first column?
+capture_has() {
+  awk -F'\t' -v v="$2" '$1 == v { f = 1 } END { exit !f }' "$1"
+}
+
+# The KEYS of a top-level block mapping (stdin), e.g. `volumes:` or
+# `services:`. Anchored at column 0 for the section and two spaces for the
+# keys, so a service's own nested `volumes:` (four spaces in) can never be
+# read as the document's.
+#
+# This is deliberately NOT the YAML reader s41/rulings.md moved into PyYAML.
+# That ruling is about the MOUNT grammar — short syntax, flow mappings,
+# line-spanning flow mappings, ${MOUNTSPEC} — where six real binds were
+# silently skipped in four fix rounds. A top-level block mapping's own keys
+# are the one shape that does not vary, they are identical in the raw file
+# and in compose's render, and this reader is the same idiom as
+# config_volume_name above. It reads no mount and no disposition.
+config_block_keys() {
+  awk -v sec="$1" '
+    $0 == sec ":" { f = 1; next }
+    /^[^ \t]/ { f = 0 }
+    f && /^  [A-Za-z0-9._-]+:/ {
+      line = $0
+      sub(/^  /, "", line)
+      sub(/:.*$/, "", line)
+      print line
+    }
+  '
+}
+
+# The same, over the TEXT of every file this run passes with -f. The declared
+# set can only come from the raw text: compose PRUNES a declared volume no
+# rendered service mounts, out of `config`, `config --format json` and
+# `config --volumes` alike (design-verdict.md §3, measured twice on v5.3.0).
+compose_files_block_keys() {
+  local section="$1" i=0 n="${#COMPOSE_ARGS[@]}" f
+  while [ "$i" -lt "$n" ]; do
+    if [ "${COMPOSE_ARGS[$i]}" = "-f" ]; then
+      i=$((i + 1))
+      f="${COMPOSE_ARGS[$i]}"
+      [ -r "$f" ] || die "compose file $f cannot be read, so this stack's own declared set cannot be derived — refusing to classify anything as foreign"
+      config_block_keys "$section" < "$f"
+    fi
+    i=$((i + 1))
+  done
+}
+
+# The ours-set: what this checkout declares, from BOTH sources unioned.
+# Set as globals because every consumer needs all four.
+NOVA_OURS_PROJECT=""
+NOVA_OURS_VOLK=""
+NOVA_OURS_VOLN=""
+NOVA_OURS_SVC=""
+read_ours_set() {
+  local errf render rc msg raw_volk raw_svc ren_volk ren_svc k n
+  errf="$(mktemp "${TMPDIR:-/tmp}/nova-render.XXXXXX")"
+  render="$(compose_config_text_all_profiles "$errf")" && rc=0 || rc=$?
+  msg="$(tr '\n' ' ' < "$errf" 2>/dev/null || true)"
+  rm -f "$errf"
+  [ "$rc" -eq 0 ] || die "docker compose --profile '*' config failed: ${msg:-no output}"
+  [ -n "$render" ] || die "docker compose --profile '*' config produced no output${msg:+ (stderr: $msg)}"
+
+  NOVA_OURS_PROJECT="$(printf '%s\n' "$render" | config_project_name)"
+  [ -n "$NOVA_OURS_PROJECT" ] || die "compose reported no project name. Refusing to ask docker for everything labelled with an EMPTY project — that filter matches every container and volume on this machine."
+
+  raw_volk="$(compose_files_block_keys volumes)"
+  raw_svc="$(compose_files_block_keys services)"
+  ren_volk="$(printf '%s\n' "$render" | config_block_keys volumes)"
+  ren_svc="$(printf '%s\n' "$render" | config_block_keys services)"
+  NOVA_OURS_VOLK="$(printf '%s\n%s\n' "$raw_volk" "$ren_volk" | awk 'NF && !seen[$0]++')"
+  NOVA_OURS_SVC="$(printf '%s\n%s\n' "$raw_svc" "$ren_svc" | awk 'NF && !seen[$0]++')"
+  [ -n "$NOVA_OURS_VOLK" ] || die "no volumes are declared by this checkout's compose file(s). Refusing to classify anything as foreign against an empty ours-set."
+
+  NOVA_OURS_VOLN=""
+  for k in $NOVA_OURS_VOLK; do
+    n="$(printf '%s\n' "$render" | config_volume_name "$k")"
+    if [ -z "$n" ]; then
+      # Declared but mounted by no rendered service, so compose pruned it and
+      # the render cannot name it. It is still ours, and the one thing that
+      # must never happen here is a v4 volume in the deletion set — so it is
+      # protected by the name compose would give it, said out loud because
+      # this is the one name that was assembled rather than read.
+      n="${NOVA_OURS_PROJECT}_${k}"
+      log "compose: volume \`$k\` is declared and mounted by no service, so the render does not name it; protecting $n by the name compose would give it"
+    fi
+    NOVA_OURS_VOLN="${NOVA_OURS_VOLN}${NOVA_OURS_VOLN:+ }$n"
+  done
+}
+
+# Recomputed next to the destructive command, never taken from the capture.
+project_own_volumes() {
+  read_ours_set
+  printf '%s' "$NOVA_OURS_VOLN"
+}
+
+# ours | sibling | foreign, for a container's config_files label.
+#
+# `sibling` is port-v3's class and it is measured-real: the live v4 stack was
+# created from a DIFFERENT checkout's compose file than this worktree's. A
+# classifier that tests only "config files equal mine" calls the entire
+# running stack foreign and offers to delete it on the first run from any
+# worktree — the single most dangerous bug this feature can have.
+classify_container() {
+  local labels="$1" entry pname vkeys OLDIFS="$IFS"
+  if config_files_are_ours "$labels"; then
+    printf 'ours'
+    return 0
+  fi
+  if [ -z "$labels" ]; then
+    printf 'foreign'
+    return 0
+  fi
+  IFS=','
+  for entry in $labels; do
+    IFS="$OLDIFS"
+    if [ -f "$entry" ] && [ -r "$entry" ]; then
+      pname="$(config_project_name < "$entry")"
+      if [ "$pname" = "$NOVA_OURS_PROJECT" ]; then
+        vkeys="$(config_block_keys volumes < "$entry")"
+        if keys_subset "$vkeys" "$NOVA_OURS_VOLK"; then
+          printf 'sibling'
+          return 0
+        fi
+      fi
+    fi
+    IFS=','
+  done
+  IFS="$OLDIFS"
+  printf 'foreign'
+}
+
+# Classify every container carrying this project's label, and write the
+# capture. $2 is the capture directory; two files come out of it:
+#   foreign_containers.tsv   id  name  service  state  config_files
+#   ours_container_ids.txt   the ids that are ours or a sibling's
+# 2 — docker could not be asked. Never an empty set.
+foreign_containers() {
+  local project="$1" dir="$2" rows row id name svc state cfgs cls
+  rows="$(project_containers "$project")" || return 2
+  : > "$dir/foreign_containers.tsv"
+  : > "$dir/ours_container_ids.txt"
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    id="$(printf '%s' "$row" | cut -f1)"
+    name="$(printf '%s' "$row" | cut -f2)"
+    svc="$(printf '%s' "$row" | cut -f3)"
+    state="$(printf '%s' "$row" | cut -f4)"
+    cfgs="$(container_config_files "$id")" || return 2
+    cls="$(classify_container "$cfgs")"
+    if [ "$cls" = "foreign" ]; then
+      printf '%s\t%s\t%s\t%s\t%s\n' "$id" "$name" "$svc" "$state" "$cfgs" \
+        >> "$dir/foreign_containers.tsv"
+    else
+      printf '%s\n' "$id" >> "$dir/ours_container_ids.txt"
+    fi
+  done <<EOF
+$rows
+EOF
+}
+
+# Every volume this project's label selects, from TWO independent derivations
+# unioned — the label filter AND the mounts of the foreign containers
+# (python-tool M8: `docker compose down` without -v leaves volumes whose
+# containers are gone, and ruling 1 says name every volume). Writes:
+#   foreign_volumes.tsv   name  project label  volume key label
+#   decoy_volumes.tsv     name  project label   — NAMED <project>_* but owned
+#                                                 by someone else; the measured
+#                                                 near-miss, printed so the
+#                                                 operator sees it was spared
+#   own_volumes.txt       this stack's own that exist
+#   all_volumes.txt       the whole live listing, for the post-check
+# 2 — docker could not be asked.
+foreign_volumes() {
+  local project="$1" dir="$2" labelled mounted id v vproj vkey ours_ids all
+  labelled="$(project_labelled_volumes "$project")" || return 2
+  all="$(all_volume_names)" || return 2
+  printf '%s\n' "$all" | awk 'NF' > "$dir/all_volumes.txt"
+  mounted=""
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    v="$(container_mounted_volumes "$id")" || return 2
+    mounted="$mounted $v"
+  done < "$dir/foreign_containers.tsv.ids"
+  # The mounts of OUR OWN and our sibling's containers are ours by
+  # derivation, which is what keeps an anonymous volume of the running stack
+  # (searxng declares two) out of the set: it carries this project's label
+  # and is in no `volumes:` block anywhere.
+  ours_ids=""
+  while IFS= read -r id; do
+    [ -n "$id" ] || continue
+    v="$(container_mounted_volumes "$id")" || return 2
+    ours_ids="$ours_ids $v"
+  done < "$dir/ours_container_ids.txt"
+
+  : > "$dir/foreign_volumes.tsv"
+  : > "$dir/own_volumes.txt"
+  for v in $(printf '%s\n%s\n' "$labelled" "$mounted" | tr ' ' '\n' | awk 'NF && !seen[$0]++'); do
+    vkey="$(volume_label "$v" com.docker.compose.volume)" || return 2
+    if list_has "$NOVA_OURS_VOLN" "$v" || list_has "$NOVA_OURS_VOLK" "$vkey" \
+       || list_has "$ours_ids" "$v"; then
+      printf '%s\n' "$v" >> "$dir/own_volumes.txt"
+      continue
+    fi
+    vproj="$(volume_label "$v" com.docker.compose.project)" || return 2
+    printf '%s\t%s\t%s\n' "$v" "$vproj" "$vkey" >> "$dir/foreign_volumes.tsv"
+  done
+
+  # The decoys: what a name-prefix rule would have taken. Derived, not listed.
+  : > "$dir/decoy_volumes.tsv"
+  while IFS= read -r v; do
+    [ -n "$v" ] || continue
+    case "$v" in
+      "${project}_"*) ;;
+      *) continue ;;
+    esac
+    if capture_has "$dir/foreign_volumes.tsv" "$v"; then continue; fi
+    vproj="$(volume_label "$v" com.docker.compose.project)" || return 2
+    [ "$vproj" != "$project" ] || continue
+    printf '%s\t%s\n' "$v" "${vproj:-none}" >> "$dir/decoy_volumes.tsv"
+  done < "$dir/all_volumes.txt"
+}
+
+# The refusal, the capture, and the offer. The capture directory is PRINTED
+# and deliberately left behind on every path that does not complete a
+# deletion: after a refusal, every fact this classifier saw is a file on disk.
+check_foreign_project() {
+  local project dir nc nv collide svc line id name state cfgs v vproj vkey rc image
+
+  read_ours_set
+  project="$NOVA_OURS_PROJECT"
+
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/nova-foreign.XXXXXX")"
+  printf '%s\n' "$project" > "$dir/project.txt"
+  foreign_containers "$project" "$dir" || die "docker could not be asked which containers carry com.docker.compose.project=$project. Refusing to guess."
+  awk -F'\t' 'NF { print $1 }' "$dir/foreign_containers.tsv" > "$dir/foreign_containers.tsv.ids"
+  foreign_volumes "$project" "$dir" || die "docker could not be asked which volumes carry com.docker.compose.project=$project. Refusing to guess."
+
+  nc="$(awk 'NF' "$dir/foreign_containers.tsv" | wc -l | tr -d ' ')"
+  nv="$(awk 'NF' "$dir/foreign_volumes.tsv" | wc -l | tr -d ' ')"
+  if [ "$nc" -eq 0 ] && [ "$nv" -eq 0 ]; then
+    log "compose project \`$project\`: nothing on this machine belongs to another project of that name"
+    rm -rf "$dir"
+    return 0
+  fi
+
+  # Which of the foreign containers `docker compose up` here would actually
+  # ADOPT: the ones whose service name this compose file also declares. This
+  # is the hazard, computed rather than assumed, and it is what the non-TTY
+  # exit code keys off.
+  collide=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    svc="$(printf '%s' "$line" | cut -f3)"
+    [ -n "$svc" ] || continue
+    if list_has "$NOVA_OURS_SVC" "$svc" && ! list_has "$collide" "$svc"; then
+      collide="${collide}${collide:+ }$svc"
+    fi
+  done < "$dir/foreign_containers.tsv"
+
+  log "REFUSED: a compose project named \`$project\` is on this machine and it is not this one."
+  log "\`docker compose up\` here would ADOPT and recreate its containers."
+  log ""
+  log "  project:       $project   (from $COMPOSE_FILE)"
+  log "  this checkout: $COMPOSE_FILE"
+  log ""
+  log "  Foreign containers ($nc)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    id="$(printf '%s' "$line" | cut -f1)"
+    name="$(printf '%s' "$line" | cut -f2)"
+    svc="$(printf '%s' "$line" | cut -f3)"
+    state="$(printf '%s' "$line" | cut -f4)"
+    cfgs="$(printf '%s' "$line" | cut -f5)"
+    log "    $id  $name  service=${svc:-none}  ${state:-unknown}"
+    log "                  label com.docker.compose.project=$project"
+    if [ -n "$cfgs" ]; then
+      log "                  created from $cfgs"
+    else
+      log "                  carries no compose config-files label"
+    fi
+  done < "$dir/foreign_containers.tsv"
+  log ""
+  log "  Foreign volumes ($nv)"
+  image="$(compose_tailscale_image)"
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    v="$(printf '%s' "$line" | cut -f1)"
+    vproj="$(printf '%s' "$line" | cut -f2)"
+    vkey="$(printf '%s' "$line" | cut -f3)"
+    log "    $v   label project=${vproj:-none}   key=${vkey:-none}"
+    if [ -n "$image" ]; then
+      state_file_on_volume "$v" "$image" && rc=0 || rc=$?
+      case "$rc" in
+        0)
+          log "        >> HOLDS A TAILSCALE NODE IDENTITY (tailscaled.state). Deleting it means"
+          log "           this node must be re-authenticated under a new key."
+          log "           deploy/README.md has the migration."
+          ;;
+        1) ;;
+        *) log "        (could not be read to see whether it holds a tailscaled.state)" ;;
+      esac
+    fi
+  done < "$dir/foreign_volumes.tsv"
+  if [ -s "$dir/decoy_volumes.tsv" ]; then
+    log ""
+    log "  Left alone — NAMED ${project}_* but labelled for another project ($(awk 'NF' "$dir/decoy_volumes.tsv" | wc -l | tr -d ' '))"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      log "    $(printf '%s' "$line" | cut -f1)   label project=$(printf '%s' "$line" | cut -f2)"
+    done < "$dir/decoy_volumes.tsv"
+  fi
+  if [ -s "$dir/own_volumes.txt" ]; then
+    log ""
+    log "  Left alone — this stack's own ($(awk 'NF' "$dir/own_volumes.txt" | wc -l | tr -d ' '))"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      log "    $line"
+    done < "$dir/own_volumes.txt"
+  fi
+  log ""
+  log "  (sizes: \`docker system df -v\` lists them; this refusal does not guess)"
+  if [ -n "$collide" ]; then
+    log ""
+    log "  \`docker compose up\` here would adopt the foreign containers whose service"
+    log "  name this file also declares: $collide"
+  fi
+  log ""
+  log "  The full capture this run made is in $dir"
+  log ""
+
+  if have_tty; then
+    log "Deleting the $nc container(s) and $nv volume(s) above is IRREVERSIBLE and destroys"
+    log "whatever data they hold. Nothing else is touched."
+    log "Type exactly:  delete     to remove them"
+    log "anything else, including Enter, leaves everything as it is."
+    printf '> ' >&2
+    local answer
+    answer="$(prompt_delete_answer)"
+    if [ "$answer" = "delete" ]; then
+      delete_foreign_project "$dir"
+      log "continuing with the install."
+      return 0
+    fi
+    log "nothing was deleted."
+  else
+    log "No terminal, so nothing is offered and nothing is deleted."
+    log "To remove exactly what is named above, and nothing else, run:"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      log "    docker volume rm $(printf '%s' "$line" | cut -f1)"
+    done < "$dir/foreign_volumes.tsv"
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      log "    docker rm $(printf '%s' "$line" | cut -f1)   # $(printf '%s' "$line" | cut -f2)"
+    done < "$dir/foreign_containers.tsv"
+    log "…or re-run \`./install\` from a terminal, where it offers exactly that."
+  fi
+
+  # The CANNOT is the ADOPTION, and nothing else. A foreign container whose
+  # service name this file also declares would be recreated by `up`, so the
+  # install cannot proceed past it. One that shares no service name is a
+  # printed warning: ./install is documented idempotent and an agent or a CI
+  # step runs it with no terminal, so an unconditional exit 1 here breaks
+  # every non-interactive run (port-v3 M9c). There is no --yes and no
+  # NOVA_ASSUME_DELETE: an unattended run must never destroy data.
+  if [ -n "$collide" ]; then
+    die "a foreign \`$project\` project holds container(s) for service(s) this compose file also declares: $collide"
+  fi
+  log "WARNING: none of the foreign containers share a service name with this file,"
+  log "         so \`docker compose up\` cannot adopt any of them. Continuing."
+  return 0
+}
+
+# The image state_file_on_volume looks through — the tailscale sidecar's own,
+# read from the render rather than typed. Empty when the render names none,
+# in which case no volume is annotated and none is claimed to be clean.
+compose_tailscale_image() {
+  local errf render rc
+  errf="$(mktemp "${TMPDIR:-/tmp}/nova-render.XXXXXX")"
+  render="$(compose_config_text_all_profiles "$errf")" && rc=0 || rc=$?
+  rm -f "$errf"
+  [ "$rc" -eq 0 ] || return 0
+  printf '%s\n' "$render" | config_service_image tailscale
+}
+
+# The bounded deletion. It reads ONLY the two capture files written at naming
+# time, so it cannot discover a new target, and every destructive command has
+# a check re-derived immediately before it and a re-inspect immediately after.
+delete_foreign_project() {
+  local dir="$1"
+  local cfile="$dir/foreign_containers.tsv" vfile="$dir/foreign_volumes.tsv"
+  local project ours_now line vol vproj id name holders h bad now cur failed=0
+  local attempted_v="" attempted_c="" survived="" vanished=""
+
+  project="$(cat "$dir/project.txt")"
+  [ -n "$project" ] || die "the capture in $dir names no project; nothing was deleted"
+
+  # port-v3 M9(a): `docker volume rm` fails on a volume a container still
+  # holds, so a containers-first order destroys every foreign container
+  # irreversibly, then fails on the volumes, leaving an operator who
+  # consented to a SET with a partial and no rollback. So: before ANYTHING is
+  # removed, refuse the whole operation if a captured volume is held by a
+  # container that was not in the list he was shown.
+  bad=""
+  while IFS= read -r line; do
+    vol="$(printf '%s' "$line" | cut -f1)"
+    [ -n "$vol" ] || continue
+    holders="$(containers_using_volume "$vol")" || die "docker could not be asked which containers hold $vol; nothing was deleted"
+    for h in $holders; do
+      if ! capture_has "$cfile" "$h"; then
+        bad="${bad}${bad:+;}volume $vol is held by container $h, which was not in the list above"
+      fi
+    done
+  done < "$vfile"
+  if [ -n "$bad" ]; then
+    log "REFUSED: nothing was deleted."
+    printf '%s\n' "$bad" | tr ';' '\n' | sed 's/^/  /' >&2
+    die "the set that was named is no longer the set that is here"
+  fi
+
+  # Recomputed HERE, from compose, next to the destructive command.
+  ours_now="$(project_own_volumes)" || die "this stack's own volume set could not be recomputed; nothing was deleted"
+
+  # Volumes first: they are the irrecoverable half.
+  while IFS= read -r line; do
+    vol="$(printf '%s' "$line" | cut -f1)"
+    [ -n "$vol" ] || continue
+    vproj="$(printf '%s' "$line" | cut -f2)"
+    now="$(volume_label "$vol" com.docker.compose.project)" || {
+      log "skipping volume $vol: its labels could not be re-read"
+      continue
+    }
+    if [ "$now" != "$vproj" ]; then
+      log "skipping volume $vol: its project label now reads '${now:-none}', not the '$vproj' it was named under"
+      continue
+    fi
+    if list_has "$ours_now" "$vol"; then
+      log "skipping volume $vol: compose now says it is this stack's own"
+      continue
+    fi
+    attempted_v="${attempted_v}${attempted_v:+ }$vol"
+    if ! docker_volume_rm "$vol"; then
+      log "docker volume rm $vol FAILED"
+      failed=1
+      continue
+    fi
+    if volume_exists "$vol"; then
+      die "docker volume rm $vol reported success and $vol is still here"
+    fi
+    log "removed volume $vol"
+  done < "$vfile"
+
+  # Containers second. The id is re-read BY NAME, which is the only lookup
+  # whose answer can differ from the capture: a container recreated in
+  # between carries the same name and a new id.
+  while IFS= read -r line; do
+    id="$(printf '%s' "$line" | cut -f1)"
+    [ -n "$id" ] || continue
+    name="$(printf '%s' "$line" | cut -f2)"
+    cur="$(container_id_of "$name")" || {
+      log "skipping container $name: it could not be re-inspected"
+      continue
+    }
+    if [ "$cur" != "$id" ]; then
+      log "skipping container $name: the container on that name is now $cur, not the $id that was named"
+      continue
+    fi
+    attempted_c="${attempted_c}${attempted_c:+ }$id"
+    if ! docker_container_rm "$id"; then
+      log "docker rm $id FAILED"
+      failed=1
+      continue
+    fi
+    if container_exists "$id"; then
+      die "docker rm $id reported success and $name is still here"
+    fi
+    log "removed container $name ($id)"
+  done < "$cfile"
+
+  # The post-check, both halves. Nothing above printed "removed" without its
+  # own re-inspect; this is the whole-operation version.
+  for vol in $attempted_v; do
+    if volume_exists "$vol"; then survived="${survived} volume:$vol"; fi
+  done
+  for id in $attempted_c; do
+    if container_exists "$id"; then survived="${survived} container:$id"; fi
+  done
+  # port-v3 C1's second half: computed from the LIVE listing captured at
+  # naming time, never from ours_volk — "every key in ours_volk still exists"
+  # is vacuous exactly when the ours-set is wrong, which is the one case it
+  # needed to catch.
+  while IFS= read -r vol; do
+    [ -n "$vol" ] || continue
+    if capture_has "$vfile" "$vol"; then continue; fi
+    if ! volume_exists "$vol"; then vanished="${vanished} $vol"; fi
+  done < "$dir/all_volumes.txt"
+
+  if [ -n "$survived" ]; then
+    die "removal reported success but these are still here:$survived"
+  fi
+  if [ -n "$vanished" ]; then
+    die "these volumes are gone and this run never named them, so it cannot say what removed them:$vanished — the capture is in $dir"
+  fi
+  [ "$failed" -eq 0 ] || die "one or more removals failed (see above); the capture is in $dir"
+  rm -rf "$dir"
+}
+
 preflight() {
   check_docker
   check_compose
+  check_foreign_project
   check_openssl
   check_disk
   check_ports

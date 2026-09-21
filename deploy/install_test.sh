@@ -1518,5 +1518,314 @@ expect_str "derive_subnet_addrs: web sits INSIDE the subnet itself" \
 expect_str "derive_subnet_addrs: a non-/16 derives nothing" \
   "$(run_sb eval 'derive_subnet_addrs 172.22.0.0/24 >/dev/null; printf %s $?')" "1"
 
+# ── the foreign `nova` compose project, and the one irreversible path ───────
+# design-verdict.md §10.1, owner ruling 1: name everything found, then offer
+# to delete exactly that, defaulting to nothing.
+#
+# The fixtures below are the mini PC's PRE-CLEANUP reading
+# (docs/plans/rebuild/s41/map-minipc-measured.md:20-30,45-56) with its home
+# paths replaced by neutral ones. They are the only place those objects still
+# exist: all three old projects were archived and removed on 2026-09-21, so
+# this refusal and its deletion loop can no longer be walked against a real
+# foreign project on any machine we have (§10.1, §13 T7). Nothing here is
+# hand-invented, and nothing here touches docker.
+#
+# The measured near-miss this exists to stop: `nova_pgdata` and
+# `nova_redis_data` were NAMED with the `nova_` prefix while their
+# com.docker.compose.project label said `docker` — a different project of his.
+# A name-prefix selection destroys 75.8 MB of it.
+#
+# World, mutable across a run so the post-checks are real:
+#   FX_CONTAINERS  id;name;service;state;config_files   (labelled project=nova)
+#   FX_VOLUMES     name;project label;compose volume key label
+#   FX_HOLDERS     volume;container id
+#   $1 render text ($2 "" = use the REAL deploy/docker-compose.yml as the raw
+#      text; otherwise this text is written as the compose file)
+#   $3 tty (1/0)   $4 what the operator types   $5 shell run just before the
+#      answer, so a case can change the world BETWEEN naming and deletion
+#   $6 volumes that hold a tailscaled.state, space-separated
+# Prints "<exit>|<removal log with ;>|<stderr>".
+run_foreign() {
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    FX_RENDER="$1"; FX_TTY="${3:-1}"; FX_ANSWER="${4:-}"
+    FX_ON_ANSWER="${5:-}"; FX_STATE_VOLS="${6:-}"
+    if [ -n "${2:-}" ]; then
+      printf '%b' "$2" > "$tmp/docker-compose.yml"
+      COMPOSE_FILE="$tmp/docker-compose.yml"
+    fi
+    COMPOSE_ARGS=(-f "$COMPOSE_FILE")
+    printf '%b\n' "$FX_CONTAINERS" | awk 'NF' > "$tmp/world-containers"
+    printf '%b\n' "$FX_VOLUMES" | awk 'NF' > "$tmp/world-volumes"
+    printf '%b\n' "${FX_HOLDERS:-}" | awk 'NF' > "$tmp/world-holders"
+    : > "$tmp/removed"
+    compose_config_text_all_profiles() { printf '%b' "$FX_RENDER"; }
+    project_containers() {
+      # The hazard T1 found elsewhere: an EMPTY value here matches every
+      # container on the host. The seam refuses it rather than trusting a
+      # caller to have checked.
+      [ -n "$1" ] || { printf 'EMPTY PROJECT FILTER\n' >&2; return 2; }
+      awk -F';' '{ printf "%s\t%s\t%s\t%s\n", $1, $2, $3, $4 }' "$tmp/world-containers"
+    }
+    container_config_files() { awk -F';' -v i="$1" '$1 == i { print $5 }' "$tmp/world-containers"; }
+    container_exists() { awk -F';' -v i="$1" '$1 == i { f = 1 } END { exit !f }' "$tmp/world-containers"; }
+    container_id_of() { awk -F';' -v n="$1" '$2 == n { print $1; f = 1 } END { exit !f }' "$tmp/world-containers"; }
+    container_mounted_volumes() { awk -F';' -v i="$1" '$2 == i { print $1 }' "$tmp/world-holders"; }
+    containers_using_volume() { awk -F';' -v v="$1" '$1 == v { print $2 }' "$tmp/world-holders"; }
+    project_labelled_volumes() {
+      [ -n "$1" ] || { printf 'EMPTY PROJECT FILTER\n' >&2; return 2; }
+      awk -F';' -v p="$1" '$2 == p { print $1 }' "$tmp/world-volumes"
+    }
+    all_volume_names() { awk -F';' '{ print $1 }' "$tmp/world-volumes"; }
+    volume_exists() { awk -F';' -v v="$1" '$1 == v { f = 1 } END { exit !f }' "$tmp/world-volumes"; }
+    volume_label() {
+      awk -F';' -v v="$1" -v l="$2" \
+        '$1 == v { print (l == "com.docker.compose.project" ? $2 : $3) }' "$tmp/world-volumes"
+    }
+    state_file_on_volume() {
+      case " $FX_STATE_VOLS " in *" $1 "*) return 0 ;; esac
+      return 1
+    }
+    docker_volume_rm() {
+      printf 'volume rm %s\n' "$1" >> "$tmp/removed"
+      awk -F';' -v v="$1" '$1 != v' "$tmp/world-volumes" > "$tmp/w" && mv "$tmp/w" "$tmp/world-volumes"
+    }
+    docker_container_rm() {
+      printf 'container rm %s\n' "$1" >> "$tmp/removed"
+      awk -F';' -v i="$1" '$1 != i' "$tmp/world-containers" > "$tmp/w" && mv "$tmp/w" "$tmp/world-containers"
+    }
+    have_tty() { [ "$FX_TTY" = 1 ]; }
+    prompt_delete_answer() { eval "$FX_ON_ANSWER"; printf '%s' "$FX_ANSWER"; }
+    err="$(check_foreign_project 2>&1)"; code=$?
+    printf '%s|%s|%s' "$code" "$(tr '\n' ';' < "$tmp/removed")" \
+      "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+}
+
+# The render `--profile tailnet` gives: FOUR volumes. v4_ollama and
+# v4_tailscale are behind the inference profile and are simply absent, which
+# is port-v3 C1 / shell-first C1 / python-tool C2 — under a render-only
+# ours-set both classify FOREIGN and land in the delete block, and one of
+# them is the tailnet node identity. The raw compose TEXT is what closes it,
+# and the raw text used below is the REAL deploy/docker-compose.yml, so the
+# ours-set is never hand-written.
+FX_RENDER_TAILNET='name: nova\nservices:\n  postgres:\n    image: postgres:16\n  web:\n    image: nova-web\n  searxng:\n    image: searxng/searxng\n  tailscale:\n    image: tailscale/tailscale:v1.102.3\nvolumes:\n  v4_memdata:\n    name: nova_v4_memdata\n  v4_models:\n    name: nova_v4_models\n  v4_pgdata:\n    name: nova_v4_pgdata\n  v4_workspace:\n    name: nova_v4_workspace\n'
+
+OLD_CFG='/opt/old-nova/docker-compose.yml'
+# The nine exited containers of the old platform-line project, abbreviated to
+# the three whose service names matter; full 64-hex ids, because the deletion
+# loop compares against `docker inspect -f {{.Id}}`, which never truncates.
+FX_OLD_CONTAINERS="0000000000000000000000000000000000000000000000000000000000003f21;nova-postgres-1;postgres;exited;$OLD_CFG\n0000000000000000000000000000000000000000000000000000000000004b8c;nova-orchestrator-1;orchestrator;exited;$OLD_CFG\n0000000000000000000000000000000000000000000000000000000000005d9e;nova-redis-1;redis;exited;$OLD_CFG"
+# The measured volume set: two of the old project, two NAMED nova_* but
+# labelled for project `docker`, all six of v4's, and one of jobhunter's.
+FX_OLD_VOLUMES='nova_postgres-data;nova;postgres-data\nnova_redis-data;nova;redis-data\nnova_pgdata;docker;nova_pgdata\nnova_redis_data;docker;nova_redis_data\nnova_v4_pgdata;nova;v4_pgdata\nnova_v4_models;nova;v4_models\nnova_v4_memdata;nova;v4_memdata\nnova_v4_workspace;nova;v4_workspace\nnova_v4_ollama;nova;v4_ollama\nnova_v4_tailscale;nova;v4_tailscale\njobhunter_postgres_data;jobhunter;postgres_data'
+
+FX_CONTAINERS="$FX_OLD_CONTAINERS"
+FX_VOLUMES="$FX_OLD_VOLUMES"
+FX_HOLDERS='nova_postgres-data;0000000000000000000000000000000000000000000000000000000000003f21\nnova_redis-data;0000000000000000000000000000000000000000000000000000000000005d9e'
+
+FG="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete)"
+expect_tn "foreign: refuses and says what would be adopted" "$FG" 0 3 "REFUSED"
+expect_tn "foreign: names every foreign container it found" "$FG" 0 3 "nova-postgres-1"
+expect_tn "foreign: names the orchestrator too" "$FG" 0 3 "nova-orchestrator-1"
+expect_tn "foreign: prints the label that selected each container" "$FG" 0 3 "com.docker.compose.project=nova"
+expect_tn "foreign: names the config file the container came from" "$FG" 0 3 "$OLD_CFG"
+expect_tn "foreign: names every foreign volume it found" "$FG" 0 3 "nova_postgres-data"
+expect_tn "foreign: names the second foreign volume" "$FG" 0 3 "nova_redis-data"
+expect_tn "foreign: names the service name that would be adopted" "$FG" 0 3 "also declares: postgres"
+
+# THE test owner ruling 1 demands. A `nova_`-named volume owned by another
+# project, and six real v4 volumes, are all in the same world as the two the
+# label really selects.
+expect_str "foreign: the removal set is EXACTLY the two label-selected volumes and the three containers" \
+  "$(tn_field "$FG" 2)" \
+  "volume rm nova_postgres-data;volume rm nova_redis-data;container rm 0000000000000000000000000000000000000000000000000000000000003f21;container rm 0000000000000000000000000000000000000000000000000000000000004b8c;container rm 0000000000000000000000000000000000000000000000000000000000005d9e;"
+expect_tn_lacks "foreign: no v4 volume can ever be caught (by name, over every removal)" "$FG" 2 "nova_v4_"
+expect_tn_lacks "foreign: the decoy nova_pgdata is never removed" "$FG" 2 "nova_pgdata"
+expect_tn_lacks "foreign: the decoy nova_redis_data is never removed" "$FG" 2 "nova_redis_data"
+expect_tn_lacks "foreign: another project's volume is never removed" "$FG" 2 "jobhunter"
+expect_tn "foreign: the decoy is NAMED as left alone, with its own label" "$FG" 0 3 "nova_pgdata"
+expect_tn "foreign: and the label that left it alone is printed" "$FG" 0 3 "project=docker"
+expect_tn "foreign: this stack's own volumes are named as left alone" "$FG" 0 3 "nova_v4_pgdata"
+# The two the tailnet render prunes are protected by the raw text alone.
+expect_tn "foreign: the inference-profile volume is ours, not foreign" "$FG" 0 3 "nova_v4_ollama"
+expect_tn "foreign: the node identity volume is ours, not foreign" "$FG" 0 3 "nova_v4_tailscale"
+expect_tn "foreign: volumes are removed BEFORE containers" "$FG" 0 2 "volume rm nova_redis-data;container rm"
+expect_tn "foreign: the install continues once the refusal's cause is gone" "$FG" 0 3 "continuing with the install"
+
+# Default is to do nothing, and only the exact word proceeds.
+for FG_WORD in "" y Y yes DELETE "delete " " delete" no; do
+  FG_TRY="$(run_foreign "$FX_RENDER_TAILNET" "" 1 "$FG_WORD")"
+  expect_str "foreign: '$FG_WORD' is not the word delete, so nothing is removed" "$(tn_field "$FG_TRY" 2)" ""
+done
+FG_DECLINE="$(run_foreign "$FX_RENDER_TAILNET" "" 1 no)"
+expect_tn "foreign: declining says nothing was deleted" "$FG_DECLINE" 1 3 "nothing was deleted"
+expect_tn "foreign: declining with a colliding service name still refuses the install" "$FG_DECLINE" 1 3 "postgres"
+
+# port-v3 M9(c): ./install is documented idempotent and an agent or CI runs it
+# with no terminal. A non-TTY run never prompts, and exits 1 ONLY when a
+# foreign container's service name collides with one this file declares.
+FG_NOTTY="$(run_foreign "$FX_RENDER_TAILNET" "" 0)"
+expect_tn "foreign: no terminal ⇒ offers nothing" "$FG_NOTTY" 1 3 "No terminal"
+expect_str "foreign: no terminal ⇒ removes nothing" "$(tn_field "$FG_NOTTY" 2)" ""
+expect_tn "foreign: no terminal ⇒ prints the exact volume removal line" "$FG_NOTTY" 1 3 \
+  "docker volume rm nova_postgres-data"
+expect_tn "foreign: no terminal ⇒ prints the exact container removal line" "$FG_NOTTY" 1 3 \
+  "docker rm 0000000000000000000000000000000000000000000000000000000000003f21"
+expect_tn "foreign: no terminal ⇒ exits 1 on a service-name collision" "$FG_NOTTY" 1 3 "would adopt"
+
+# No collision: a warning, and the install goes on. An unattended run must
+# never destroy data, and it must not brick every non-interactive ./install.
+FX_CONTAINERS="0000000000000000000000000000000000000000000000000000000000004b8c;nova-orchestrator-1;orchestrator;exited;$OLD_CFG"
+FG_NOCOLLIDE="$(run_foreign "$FX_RENDER_TAILNET" "" 0)"
+expect_tn "foreign: no terminal, no colliding service ⇒ the install continues" "$FG_NOCOLLIDE" 0 3 "orchestrator"
+expect_str "foreign: no terminal, no colliding service ⇒ still removes nothing" "$(tn_field "$FG_NOCOLLIDE" 2)" ""
+
+# python-tool M8: `docker compose down` without -v leaves volumes with no
+# containers at all. Deriving the volume set from surviving containers alone
+# misses them, and ruling 1 says name every volume.
+FX_CONTAINERS=""
+FX_HOLDERS=""
+FG_ORPHAN="$(run_foreign "$FX_RENDER_TAILNET" "" 0)"
+expect_tn "foreign: an orphaned volume with no container is still named" "$FG_ORPHAN" 0 3 "nova_postgres-data"
+expect_tn "foreign: and its own project label with it" "$FG_ORPHAN" 0 3 "project=nova"
+
+# shell-first M1: the one volume in the system that cannot be regenerated.
+FX_VOLUMES="$FX_OLD_VOLUMES\nnova_tailscale_state;nova;tailscale_state"
+FG_STATE="$(run_foreign "$FX_RENDER_TAILNET" "" 0 "" "" "nova_tailscale_state")"
+expect_tn "foreign: a volume holding tailscaled.state is annotated" "$FG_STATE" 0 3 "TAILSCALE NODE IDENTITY"
+expect_tn "foreign: the annotation says what deleting it costs" "$FG_STATE" 0 3 "re-authenticated"
+FX_VOLUMES="$FX_OLD_VOLUMES"
+
+# port-v3's `sibling` class, and it is measured-real: the live v4 stack was
+# created from a DIFFERENT checkout's compose file than this worktree's. A
+# classifier that tests only "config files equal mine" calls the whole running
+# stack foreign and offers to delete it on the first run from any worktree.
+FG_SIB_DIR="$(mktemp -d)"
+printf '%b' 'name: nova\nservices:\n  postgres:\n    image: postgres:16\nvolumes:\n  v4_pgdata:\n  v4_memdata:\n' \
+  > "$FG_SIB_DIR/docker-compose.yml"
+FX_CONTAINERS="0000000000000000000000000000000000000000000000000000000000006a1b;nova-postgres-1;postgres;running;$FG_SIB_DIR/docker-compose.yml"
+FX_HOLDERS=""
+FG_SIBLING="$(run_foreign "$FX_RENDER_TAILNET" "" 0)"
+expect_tn_lacks "foreign: a second checkout of this same stack is NOT foreign" "$FG_SIBLING" 3 "nova-postgres-1"
+rm -rf "$FG_SIB_DIR"
+
+# A container with no compose config-files label at all is foreign: nothing
+# says it is ours, and "unlabelled" is not "mine".
+FX_CONTAINERS="0000000000000000000000000000000000000000000000000000000000007c2d;nova-mystery-1;mystery;exited;"
+FG_NOLABEL="$(run_foreign "$FX_RENDER_TAILNET" "" 0)"
+expect_tn "foreign: a container with no config-files label is foreign" "$FG_NOLABEL" 0 3 "nova-mystery-1"
+expect_tn "foreign: and the refusal says the label is missing" "$FG_NOLABEL" 0 3 "no compose config-files label"
+
+# port-v3 M9(a). `docker volume rm` fails on a mounted volume, so a
+# containers-first order destroys every foreign container irreversibly, then
+# fails on the volumes, leaving an operator who consented to a SET with a
+# partial and no rollback. Nothing is removed at all in that case.
+FX_CONTAINERS="$FX_OLD_CONTAINERS"
+FX_HOLDERS="nova_postgres-data;000000000000000000000000000000000000000000000000000000000000beef"
+FG_HELD="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete)"
+expect_tn "foreign: a captured volume held by an uncaptured container refuses" "$FG_HELD" 1 3 "beef"
+expect_str "foreign: and nothing at all is removed" "$(tn_field "$FG_HELD" 2)" ""
+FX_HOLDERS=""
+
+# The capture is the whole world the removal loop can see: an object that
+# appears after the operator has been shown the list cannot be removed.
+FG_INJECT="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete \
+  'printf "%s\n" "nova_late-data;nova;late-data" >> "$tmp/world-volumes"')"
+expect_tn_lacks "foreign: an object that appeared after the capture is not removed" "$FG_INJECT" 2 "nova_late-data"
+
+# Re-derived next to the destructive command, not trusted from the capture.
+FG_RELABEL="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete \
+  'sed "s/^nova_redis-data;nova;/nova_redis-data;someoneelse;/" "$tmp/world-volumes" > "$tmp/w2"; mv "$tmp/w2" "$tmp/world-volumes"')"
+expect_tn_lacks "foreign: a volume whose project label changed is not removed" "$FG_RELABEL" 2 "volume rm nova_redis-data"
+expect_tn "foreign: and the skip says what the label now reads" "$FG_RELABEL" 0 3 "someoneelse"
+FG_RECREATE="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete \
+  'sed "s/^[0-9a-f]*;nova-redis-1;/00000000000000000000000000000000000000000000000000000000cafecafe;nova-redis-1;/" "$tmp/world-containers" > "$tmp/w2"; mv "$tmp/w2" "$tmp/world-containers"')"
+expect_tn_lacks "foreign: a container recreated since the capture is not removed" "$FG_RECREATE" 2 \
+  "container rm 0000000000000000000000000000000000000000000000000000000000005d9e"
+expect_tn "foreign: and the skip says which id is there now" "$FG_RECREATE" 0 3 "cafecafe"
+
+# port-v3 C1's second half: the post-check must be computed from the LIVE
+# listing captured at naming time, not from ours_volk — "every key in
+# ours_volk still exists" is vacuous exactly when the ours-set is wrong,
+# which is the only case it needed to catch.
+FG_VANISH="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete \
+  'grep -v "^nova_v4_memdata;" "$tmp/world-volumes" > "$tmp/w2"; mv "$tmp/w2" "$tmp/world-volumes"')"
+expect_tn "foreign: a volume that vanished and was never named is a loud failure" "$FG_VANISH" 1 3 "nova_v4_memdata"
+expect_tn "foreign: and it says the run did not name it" "$FG_VANISH" 1 3 "this run never named them"
+
+# The empty-project hazard, at the seam rather than at the caller: an empty
+# value in --filter label=com.docker.compose.project= matches EVERY container
+# on the host.
+FG_NOPROJ="$(run_foreign 'services:\n  postgres:\n    image: postgres:16\nvolumes:\n  v4_pgdata:\n    name: nova_v4_pgdata\n' \
+  'services:\n  postgres:\n    image: postgres:16\nvolumes:\n  v4_pgdata:\n')"
+expect_tn "foreign: no project name ⇒ refuses rather than filtering on empty" "$FG_NOPROJ" 1 3 "no project name"
+expect_str "foreign: no project name ⇒ removes nothing" "$(tn_field "$FG_NOPROJ" 2)" ""
+expect_str "foreign: the seam itself refuses an empty project filter" \
+  "$(run_sb eval 'project_containers "" >/dev/null 2>&1; printf %s $?')" "2"
+expect_str "foreign: and so does the volume seam" \
+  "$(run_sb eval 'project_labelled_volumes "" >/dev/null 2>&1; printf %s $?')" "2"
+
+# A render that fails is a refusal carrying compose's own words, not "no
+# volumes found" (port-v3 m5: compose_config_text discards stderr).
+FG_RENDERFAIL="$(
+  (
+    # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/install.sh"
+    set +e
+    compose_config_text_all_profiles() { printf 'no configuration file provided\n' > "$1"; return 1; }
+    err="$(check_foreign_project 2>&1)"; code=$?
+    printf '%s||%s' "$code" "$(printf '%s' "$err" | tr '\n' ' ')"
+  )
+)"
+expect_tn "foreign: a failed render is a refusal" "$FG_RENDERFAIL" 1 3 "config failed"
+
+# Nothing foreign on this machine: one line, no block, no offer.
+FX_CONTAINERS=""
+FX_VOLUMES='nova_v4_pgdata;nova;v4_pgdata\nnova_v4_memdata;nova;v4_memdata\njobhunter_postgres_data;jobhunter;postgres_data'
+FG_CLEAN="$(run_foreign "$FX_RENDER_TAILNET" "" 0)"
+expect_tn "foreign: nothing foreign ⇒ one line and no offer" "$FG_CLEAN" 0 3 "nothing on this machine belongs to another project"
+expect_tn_lacks "foreign: nothing foreign ⇒ no refusal block" "$FG_CLEAN" 3 "REFUSED"
+expect_str "foreign: nothing foreign ⇒ nothing removed" "$(tn_field "$FG_CLEAN" 2)" ""
+
+# ── tripwire: the five keys decide_subnet writes have to MEAN something ─────
+# It writes NOVA_SUBNET, NOVA_SUBNET_RANGE, NOVA_SUBNET_GATEWAY, NOVA_WEB_ADDR
+# and NOVA_TAILSCALE_ADDR. Two of those are already read by
+# docker-compose.yml; the other three are not, and until the `networks:
+# default: ipam:` block reads them (design-verdict.md §10.2 — defaults are
+# today's literals, so the live network does not move), a host where 172.18 is
+# already taken gets a NOVA_WEB_ADDR on a network compose still pins at
+# 172.18 and `up` fails with an address outside its own network.
+#
+# The same five have to carry a `# nova-backup:` disposition in .env.example,
+# because an .env key with no declaration REFUSES every backup by name
+# (design-verdict.md §6.2, shell-first m6) — and after this lands, every real
+# .env has all five.
+#
+# This case is the line of code that refuses; it is not advice in a report.
+SUB_MISSING=""
+for SUB_KEY in NOVA_SUBNET NOVA_SUBNET_RANGE NOVA_SUBNET_GATEWAY; do
+  grep -q "\${${SUB_KEY}:-" "$SCRIPT_DIR/docker-compose.yml" \
+    || SUB_MISSING="$SUB_MISSING docker-compose.yml:\${$SUB_KEY:-…}"
+done
+for SUB_KEY in NOVA_SUBNET NOVA_SUBNET_RANGE NOVA_SUBNET_GATEWAY NOVA_WEB_ADDR NOVA_TAILSCALE_ADDR; do
+  awk -v k="$SUB_KEY" '
+    $0 ~ "^# nova-backup:" { d = 1; next }
+    $0 ~ ("^" k "=") { if (d) ok = 1 }
+    { if ($0 !~ "^# nova-backup:") d = 0 }
+    END { exit !ok }
+  ' "$SCRIPT_DIR/.env.example" || SUB_MISSING="$SUB_MISSING .env.example:$SUB_KEY"
+done
+if [ -z "$SUB_MISSING" ]; then
+  report 0 "tripwire: every key decide_subnet writes is read by compose and declared in .env.example"
+else
+  report 1 "tripwire: every key decide_subnet writes is read by compose and declared in .env.example" \
+    "missing:$SUB_MISSING"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
