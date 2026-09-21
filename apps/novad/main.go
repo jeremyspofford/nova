@@ -3,7 +3,7 @@
 // one-use signed command envelopes it verifies on-device. The LLM never talks
 // to novad; only core does.
 //
-// Subcommands: enroll | run | status | version.
+// Subcommands: enroll | repoint | run | status | version.
 package main
 
 import (
@@ -40,6 +40,8 @@ func main() {
 	switch os.Args[1] {
 	case "enroll":
 		cmdEnroll(os.Args[2:])
+	case "repoint":
+		cmdRepoint(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
 	case "status":
@@ -57,6 +59,7 @@ func usage() {
 
 usage:
   novad enroll --server <url> --code <code> [--name <name>] [--force]
+  novad repoint --server <url> [--check]
   novad run
   novad status
   novad version

@@ -56,6 +56,34 @@ Custody, under `~/.config/novad/` (honors `XDG_CONFIG_HOME`):
 The audit chain lives at `~/.local/state/novad/audit.jsonl`
 (honors `XDG_STATE_HOME`).
 
+## Repoint (the hub moved)
+
+When Nova's hub moves to another machine — restored from a backup bundle, so
+core's signing key came with it — the only thing that changed for this device
+is the URL:
+
+```sh
+novad repoint --server https://nova.new-host.example --check   # prove it
+novad repoint --server https://nova.new-host.example           # then write it
+systemctl --user restart novad                                 # pick it up
+```
+
+`repoint` opens the device socket at the new URL and completes the **whole**
+handshake before it writes anything: it refuses a server whose `core_pubkey`
+is not the key pinned at enrollment, and it refuses a server that holds the
+right core key but has forgotten this device. Either way the config is left
+byte-for-byte as it was. `--check` prints the verdict and **writes nothing
+even when the proof succeeds** — that is how you decide between `repoint` and
+a fresh `enroll`.
+
+What it does not do: it never re-keys, never re-enrolls, and never restarts
+the daemon. It prints the restart command; `novad status` is what says whether
+the new server answers.
+
+Whoever owns a DNS name can serve a Nova-shaped websocket. They cannot produce
+core's ed25519 public key, which is why the pinned key — not the URL — is the
+identity this command checks.
+
 ## Run
 
 Two ways. For the pairing walk and for `apps.launch` / `system.notify`, run it
