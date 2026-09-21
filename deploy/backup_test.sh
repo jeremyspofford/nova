@@ -179,9 +179,47 @@ render_rows() {
   done
 }
 
+# `interp` and `unreadable` rows are left out of the SET comparison — the
+# first is a mount whose kind only the render can settle, the second is a
+# stated cannot — and asserted to be absent immediately below, so leaving
+# them out of the equality drops nothing.
 expect_str "the_real_compose_file_and_the_checked_in_render_declare_the_same_rows" \
-  "$(raw_dispositions < "$SCRIPT_DIR/docker-compose.yml" | sort)" \
+  "$(raw_dispositions < "$SCRIPT_DIR/docker-compose.yml" |
+     awk -F'	' '$1 == "volume" || $1 == "bind" || $1 == "anon"' | sort)" \
   "$(render_rows < "$FIXTURES/compose-v5.3.0.yaml" | sort)"
+
+expect_str "the_real_compose_file_uses_no_mount_form_this_reader_cannot_read" \
+  "$(raw_dispositions < "$SCRIPT_DIR/docker-compose.yml" | awk -F'	' '$1 == "unreadable"')" ""
+
+# The grammar, against the shipped reader: three item spellings and the two
+# undecidable-by-construction answers. Measured against real compose first
+# (the table is in test_policy.py); this is the reader agreeing with it.
+GRAMMAR_ROWS="$(raw_dispositions <<'YAML'
+name: nova
+services:
+  a:
+    image: alpine
+    volumes:
+      - named_one:/short-named
+      - ./src:/short-rel
+      - ${VOLNAME}:/interp-whole
+      - {type: bind, source: ../flowsrc, target: /flow-map}
+      - type: bind
+        source: ../blocksrc
+        target: /block-map
+  b:
+    image: alpine
+    volumes: [ "named_one:/one" ]
+YAML
+)"
+expect_has "a_flow_mapping_mount_is_read_like_any_other" "$GRAMMAR_ROWS" \
+  "$(printf 'bind	a	/flow-map')"
+expect_has "a_block_mapping_mount_is_read" "$GRAMMAR_ROWS" "$(printf 'bind	a	/block-map')"
+expect_has "a_short_syntax_bind_is_read" "$GRAMMAR_ROWS" "$(printf 'bind	a	/short-rel')"
+expect_has "an_undecidable_source_is_said_to_be_undecidable" "$GRAMMAR_ROWS" \
+  "$(printf 'interp	a	/interp-whole')"
+expect_lacks "a_named_volume_is_never_called_a_bind" "$GRAMMAR_ROWS" "/short-named"
+expect_has "a_flow_sequence_is_a_stated_cannot" "$GRAMMAR_ROWS" "$(printf 'unreadable	b')"
 
 RAW_DISP="$(raw_dispositions < "$SCRIPT_DIR/docker-compose.yml")"
 expect_has "raw_dispositions_reads_a_volumes_row_from_the_file" "$RAW_DISP" \
@@ -437,6 +475,35 @@ expect_has "bk_set_project_without_a_render_carries_composes_stderr" "$PROJFAIL"
   "could not find /nowhere/docker-compose.yml"
 expect_has "bk_set_project_without_a_render_names_the_command" "$PROJFAIL" \
   "docker compose --profile '*' config"
+
+# The THIRD arm, which the round-2 split created and left unpinned: no render
+# on disk, compose exits 0, and what it returns carries no `name:`. Without
+# the refusal here, bk_project prints an empty string and RETURNS 0, so
+# `project="$(bk_project)" || return 1` does not fire and render_containers
+# runs `docker ps -a --filter label=com.docker.compose.project=` — an empty
+# filter that matches every container on the host. On this machine that is
+# v4's eight, seven stopped v3 ones and anything else running. Selecting by
+# label instead of by name is the whole point; an empty label selects
+# everything.
+PROJEMPTY="$(
+  bk_docker() { stub_docker "$@"; }
+  STUB_COMPOSE_RC=0
+  STUB_COMPOSE_SED='/^name: /d'
+  # shellcheck disable=SC2034  # read by bk_set_project/bk_project
+  BK_PROJECT=""
+  bk_set_project 2>&1 | tr '\n' ' '
+)"
+expect_has "bk_set_project_refuses_a_render_that_carries_no_name" "$PROJEMPTY" "no top-level"
+PROJEMPTY_RC="$(
+  bk_docker() { stub_docker "$@"; }
+  STUB_COMPOSE_RC=0
+  STUB_COMPOSE_SED='/^name: /d'
+  # shellcheck disable=SC2034  # read by bk_set_project/bk_project
+  BK_PROJECT=""
+  bk_project >/dev/null 2>&1
+  printf '%s' "$?"
+)"
+expect_str "and_bk_project_returns_non_zero_so_the_caller_refuses" "$PROJEMPTY_RC" "1"
 
 # A renderer that exits 0 and produces NOTHING is a reading that failed.
 # Before this, deleting bk_verify_fact's whole empty branch cost nothing in
