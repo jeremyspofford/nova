@@ -742,5 +742,213 @@ for bad_home in /root "" /; do
   fi
 done
 
+printf '\n── the passphrase resolver seam ─────────────────────────────────────\n'
+
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/passphrase.sh"
+
+# Every case runs against its own throwaway deploy dir, so none of them can
+# read the operator's deploy/.env or write over his own passphrase file.
+PW_WORLD="$(mktemp -d "${TMPDIR:-/tmp}/nova-passphrase.XXXXXX")"
+trap 'rm -rf "$PW_WORLD"' EXIT
+
+# Sets NP_DIR and NP_ENV_FILE in THIS shell, and `dir` with them. Never
+# `pw_world x`: $( ) is a subshell, so the two globals the resolver
+# reads would be set in a shell that has already exited — the same trap
+# backup.sh's bk_set_project/bk_project split exists for.
+pw_world() {
+  NP_DIR="$PW_WORLD/$1"
+  NP_ENV_FILE="$NP_DIR/.env"
+  dir="$NP_DIR"
+  mkdir -p "$NP_DIR"
+  : > "$NP_ENV_FILE"
+}
+
+# The synthetic value every case below uses. Not a passphrase anything real is
+# sealed with — this file is public.
+PW_VALUE="aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh"
+
+# ── absent permits a create; unavailable never does ─────────────────────────
+#
+# v3's hardest-won lesson (backend/app/backup_passphrase.py:55-73): a store
+# that EXISTS and cannot be read must never read as "absent", or the next
+# backup generates a replacement over the passphrase that still seals every
+# existing bundle, and backups keep reporting green with nothing restorable
+# behind them.
+pw_world absent
+resolve_passphrase >/dev/null 2>&1
+code=$?
+expect_str "absent_permits_create_exit_3" "$code" "3"
+
+pw_world unreadable
+printf '%s' "$PW_VALUE" > "$dir/.backup-passphrase"
+chmod 000 "$dir/.backup-passphrase"
+out="$(resolve_passphrase 2>&1)"
+code=$?
+if [ "$code" -eq 3 ]; then
+  report 1 "unavailable_does_not_permit_a_create" \
+    "an unreadable store read as ABSENT, which generates a replacement passphrase"
+elif [ "$code" -eq 0 ]; then
+  report 1 "unavailable_does_not_permit_a_create" "it returned a value: $out"
+else
+  report 0 "unavailable_does_not_permit_a_create"
+fi
+chmod 600 "$dir/.backup-passphrase"
+
+# ── a pre-existing file is never overwritten ────────────────────────────────
+pw_world existing
+printf '%s' "$PW_VALUE" > "$dir/.backup-passphrase"
+chmod 600 "$dir/.backup-passphrase"
+out="$(create_passphrase printf '%s' 'a-brand-new-one')"
+expect_str "create_re_reads_rather_than_writing_a_second_passphrase" "$out" "$PW_VALUE"
+expect_str "the_file_on_disk_is_untouched" "$(cat "$dir/.backup-passphrase")" "$PW_VALUE"
+
+# ── a mode that is not 0600 refuses, and names the mode it read ─────────────
+pw_world wideopen
+printf '%s' "$PW_VALUE" > "$dir/.backup-passphrase"
+chmod 644 "$dir/.backup-passphrase"
+out="$(resolve_passphrase 2>&1)"
+code=$?
+expect_str "refuses_a_passphrase_file_not_0600" "$code" "1"
+expect_has "refuses_a_passphrase_file_not_0600_and_names_the_mode" "$out" "mode 644"
+
+# ── an unknown source refuses BY NAME and lists the ones it has ─────────────
+pw_world unknownsource ; printf 'NOVA_PASSPHRASE_SOURCE=vault\n' >> "$dir/.env"
+out="$(resolve_passphrase 2>&1)"
+code=$?
+expect_str "dispatch_refuses_an_unknown_source" "$code" "1"
+expect_has "dispatch_refuses_an_unknown_source_naming_it" "$out" "'vault'"
+for known in file env prompt cmd; do
+  expect_has "dispatch_names_the_source_it_has_${known}" "$out" "$known"
+done
+
+# ── cmd: a non-zero exit is UNAVAILABLE, never absent ───────────────────────
+pw_world cmdfails
+printf 'NOVA_PASSPHRASE_SOURCE=cmd\n' >> "$dir/.env"
+printf 'NOVA_PASSPHRASE_CMD=exit 7\n' >> "$dir/.env"
+out="$(resolve_passphrase 2>&1)"
+code=$?
+if [ "$code" -eq 3 ]; then
+  report 1 "cmd_nonzero_is_unavailable_not_absent" \
+    "a logged-out secrets manager read as absent, which generates a second passphrase"
+else
+  report 0 "cmd_nonzero_is_unavailable_not_absent"
+fi
+expect_has "cmd_nonzero_says_why" "$out" "UNAVAILABLE, not absent"
+
+pw_world cmdworks
+printf 'NOVA_PASSPHRASE_SOURCE=cmd\n' >> "$dir/.env"
+printf "NOVA_PASSPHRASE_CMD=printf '%%s' '$PW_VALUE'\n" >> "$dir/.env"
+expect_str "cmd_resolves_from_stdout" "$(resolve_passphrase)" "$PW_VALUE"
+
+pw_world cmdempty
+printf 'NOVA_PASSPHRASE_SOURCE=cmd\n' >> "$dir/.env"
+printf 'NOVA_PASSPHRASE_CMD=true\n' >> "$dir/.env"
+resolve_passphrase >/dev/null 2>&1
+code=$?
+expect_str "cmd_printing_nothing_is_a_refusal_not_an_empty_passphrase" "$code" "1"
+
+# ── env ─────────────────────────────────────────────────────────────────────
+pw_world envsource ; printf 'NOVA_PASSPHRASE_SOURCE=env\n' >> "$dir/.env"
+NOVA_BACKUP_PASSPHRASE="" resolve_passphrase >/dev/null 2>&1
+expect_str "env_unset_is_absent" "$?" "3"
+expect_str "env_resolves" "$(NOVA_BACKUP_PASSPHRASE="$PW_VALUE" resolve_passphrase)" "$PW_VALUE"
+
+# ── prompt without a tty is a STATED cannot, not a fallback ────────────────
+pw_world promptsource ; printf 'NOVA_PASSPHRASE_SOURCE=prompt\n' >> "$dir/.env"
+out="$(resolve_passphrase < /dev/null 2>&1)"
+code=$?
+expect_str "prompt_without_a_tty_is_not_absent" "$code" "1"
+expect_has "prompt_without_a_tty_is_a_stated_cannot" "$out" "cannot prompt without a terminal"
+
+# ── only `file` creates ─────────────────────────────────────────────────────
+pw_world envcreate ; printf 'NOVA_PASSPHRASE_SOURCE=env\n' >> "$dir/.env"
+out="$(create_passphrase printf '%s' 'should-never-be-written' 2>&1)"
+code=$?
+expect_str "only_the_file_source_creates" "$code" "1"
+if [ -f "$dir/.backup-passphrase" ]; then
+  report 1 "only_the_file_source_creates_nothing_on_disk" "it wrote a file anyway"
+else
+  report 0 "only_the_file_source_creates_nothing_on_disk"
+fi
+
+# ── a create writes 0600 and READS THE MODE BACK ───────────────────────────
+pw_world create
+out="$(create_passphrase printf '%s' "$PW_VALUE" 2>/dev/null)"
+expect_str "create_returns_what_it_wrote" "$out" "$PW_VALUE"
+expect_str "create_writes_0600" "$(np_mode_of "$dir/.backup-passphrase")" "600"
+expect_str "create_is_readable_by_the_resolver" "$(resolve_passphrase)" "$PW_VALUE"
+
+# ── two concurrent creates produce ONE passphrase ───────────────────────────
+#
+# Without the lock both runs generate, both write, and one of them then seals
+# a bundle with a passphrase the other's write has already replaced: a bundle
+# whose key exists nowhere.
+pw_world concurrent
+(
+  create_passphrase sh -c 'sleep 0.2; printf %s first' > "$dir/one" 2>/dev/null
+) &
+sleep 0.05
+create_passphrase sh -c 'printf %s second' > "$dir/two" 2>/dev/null
+wait
+stored="$(cat "$dir/.backup-passphrase" 2>/dev/null)"
+one="$(cat "$dir/one" 2>/dev/null)"
+two="$(cat "$dir/two" 2>/dev/null)"
+if [ -z "$stored" ]; then
+  report 1 "concurrent_create_produces_one_passphrase" "nothing was stored"
+elif [ -n "$one" ] && [ -n "$two" ] && [ "$one" != "$two" ]; then
+  report 1 "concurrent_create_produces_one_passphrase" \
+    "two creators returned different values ('$one' and '$two')"
+else
+  report 0 "concurrent_create_produces_one_passphrase"
+fi
+
+# ── the documented set is the dispatched set ───────────────────────────────
+#
+# Adding a source without offering it — or offering one that does not exist —
+# is a red suite, not a silent divergence.
+CASE_ARMS="$(sed -n '/^resolve_passphrase()/,/^}/p' "$SCRIPT_DIR/passphrase.sh" \
+  | sed -n 's/^    \([a-z|]*\)) *nova_pass_.*$/\1/p' | tr '|' '\n' | sort | tr '\n' ' ')"
+FUNCS="$(sed -n 's/^nova_pass_\([a-z]*\)().*$/\1/p' "$SCRIPT_DIR/passphrase.sh" | sort | tr '\n' ' ')"
+DOCUMENTED="$(sed -n 's/^# *NOVA_PASSPHRASE_SOURCE — one of: \(.*\)$/\1/p' "$SCRIPT_DIR/.env.example" \
+  | tr ' ' '\n' | sort | tr '\n' ' ')"
+DECLARED="$(printf '%s' "$NOVA_PASSPHRASE_SOURCES" | tr ' ' '\n' | sort | tr '\n' ' ')"
+expect_str "resolvers_are_exactly_the_documented_set_arms" "$CASE_ARMS" "$DECLARED"
+expect_str "resolvers_are_exactly_the_documented_set_functions" "$FUNCS" "$DECLARED"
+expect_str "resolvers_are_exactly_the_documented_set_env_example" "$DOCUMENTED" "$DECLARED"
+
+# ── the passphrase never reaches argv, and no -e carries it ────────────────
+#
+# §7.5: it reaches exactly one place, the first line of the pack container's
+# stdin. `docker inspect` shows -e for a container's whole lifetime and `ps`
+# shows argv to every user on the box — which is also why the design refuses
+# `openssl enc`, whose key IS an argument.
+pw_world argv
+printf '%s' "$PW_VALUE" > "$dir/.backup-passphrase"
+chmod 600 "$dir/.backup-passphrase"
+ARGV_LOG="$dir/argv.log"
+: > "$ARGV_LOG"
+fake_runner() {
+  printf '%s\n' "$*" >> "$ARGV_LOG"
+  # what novabundle.py fingerprint prints
+  printf '0123456789ab\n'
+}
+ZERO_SALT="00000000000000000000000000000000"
+out="$(resolve_passphrase | passphrase_fingerprint "$ZERO_SALT" \
+  fake_runner docker run --rm -i --network none nova-core python3 novabundle.py)"
+expect_str "the_fingerprint_seam_returns_12_hex" "$out" "0123456789ab"
+expect_lacks "passphrase_never_reaches_argv" "$(cat "$ARGV_LOG")" "$PW_VALUE"
+expect_lacks "passphrase_never_reaches_a_dash_e" "$(cat "$ARGV_LOG")" " -e "
+expect_has "the_fingerprint_seam_passes_the_salt_not_the_passphrase" \
+  "$(cat "$ARGV_LOG")" "fingerprint --salt 00000000000000000000000000000000"
+
+# ── the fingerprint seam refuses a salt that is not 16 bytes ───────────────
+out="$(printf '%s' "$PW_VALUE" | passphrase_fingerprint "00" fake_runner 2>&1)"
+code=$?
+expect_str "the_fingerprint_seam_refuses_a_short_salt" "$code" "1"
+expect_has "the_fingerprint_seam_names_what_a_salt_is" "$out" "16 bytes of hex"
+
+unset NP_DIR NP_ENV_FILE
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

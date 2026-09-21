@@ -576,7 +576,131 @@ def test_pyyaml_is_in_the_core_images_runtime_closure():
         "closure, and novabundle.py imports yaml. Declare pyyaml in "
         "services/core/pyproject.toml's `dependencies` and re-lock."
     )
-    assert '"uvicorn[standard]"' in (core / "pyproject.toml").read_text(), (
-        "services/core no longer asks for uvicorn's `standard` extra, so nothing "
-        "puts PyYAML in the image novabundle.py runs in."
+    # The RUNTIME table, not the file. The image is built with
+    # `uv sync --frozen --no-dev`, so a `uvicorn[standard]` that has moved
+    # into `[dependency-groups] dev`, or been commented out, puts nothing in
+    # the image — and a whole-file substring check passes for both. Measured
+    # 2026-09-21: commenting the line out of `[project] dependencies` left
+    # the old assertion green.
+    assert "uvicorn[standard]" in runtime_dependencies(core / "pyproject.toml"), (
+        "services/core's [project] dependencies no longer asks for uvicorn's `standard` "
+        "extra, so nothing puts PyYAML in the image novabundle.py runs in. (A dev-group "
+        "entry does not count: the image is built with `uv sync --frozen --no-dev`.)"
     )
+
+
+def runtime_dependencies(pyproject):
+    """The `[project] dependencies` array, by name, ignoring comments.
+
+    Hand-parsed rather than `tomllib`-parsed so this reads the same on any
+    interpreter the suites run under, and so a commented-out line is visibly
+    excluded rather than invisibly so.
+    """
+    names = []
+    section = None
+    in_deps = False
+    for line in pyproject.read_text().splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]") and "=" not in stripped:
+            section, in_deps = stripped, False
+            continue
+        if section == "[project]" and re.match(r"^dependencies\s*=\s*\[", stripped):
+            in_deps = True
+            continue
+        if in_deps:
+            if stripped.startswith("]"):
+                in_deps = False
+                continue
+            if stripped.startswith("#"):
+                continue
+            found = re.match(r'^"([^"]+)"', stripped)
+            if found:
+                names.append(found.group(1))
+    return names
+
+
+# ── a document this parser is not handed (task-1-rereview4.md section F) ────
+#
+# Compose's top-level `include:` merges another file's WHOLE document, its
+# `volumes:` block included. That file is not in COMPOSE_FILE, so backup.sh
+# never stages it and this parser never sees it; and a volume no rendered
+# service mounts is pruned from every render, so the render side cannot see it
+# either. Measured on compose v5.3.0 and on the shipped parser: a volume
+# declared there, carrying `x-nova-backup: include`, produced NO refusal and
+# NO row. That is the silent skip this module exists to prevent, so it is a
+# stated cannot.
+
+INCLUDING = """name: nova
+include:
+  - inc.yml
+services:
+  a:
+    image: alpine
+    volumes:
+      - v4_pgdata:/d
+volumes:
+  v4_pgdata:
+    x-nova-backup: dump-pg
+    x-nova-backup-reason: db
+"""
+
+
+def test_a_top_level_include_is_a_stated_refusal_not_a_skip():
+    with pytest.raises(Exception) as caught:
+        raw_compose_fact([("main.yml", INCLUDING)])
+    assert "include" in str(caught.value)
+    assert "inc.yml" in str(caught.value)
+    assert "COMPOSE_FILE" in str(caught.value)
+
+
+def test_the_include_refusal_reaches_coverage_as_a_fact_error(tmp_path):
+    """Not an exception the run dies on: R0, beside every other refusal, so
+    one run names them all."""
+    stage = tmp_path / "facts" / "compose"
+    stage.mkdir(parents=True)
+    (stage / "0.yml").write_text(INCLUDING)
+    (stage / "files.json").write_text(
+        json.dumps({"files": [{"path": "/repo/deploy/docker-compose.yml", "staged": "0.yml"}]})
+    )
+    facts = load_facts(str(tmp_path / "facts"))
+    assert "include" in facts["raw"]["error"]
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "include:\n  - inc.yml\n",
+        "include:\n  - path: inc.yml\n",
+        "include:\n  - path:\n      - inc.yml\n      - over.yml\n",
+        "include: inc.yml\n",
+    ],
+)
+def test_every_include_spelling_is_refused(spelling):
+    with pytest.raises(Exception) as caught:
+        raw_compose_rows("name: nova\n" + spelling + HEAD.split("\n", 1)[1], "main.yml")
+    assert "inc.yml" in str(caught.value)
+
+
+def test_a_service_extending_a_file_this_reader_is_not_handed_is_refused():
+    """`extends: file:` cannot bring a top-level volume, but it can bring a
+    BIND this text does not show — same shape, same answer."""
+    text = "name: nova\nservices:\n  a:\n    extends:\n      file: other.yml\n      service: b\n"
+    with pytest.raises(Exception) as caught:
+        raw_compose_rows(text, "main.yml")
+    assert "other.yml" in str(caught.value)
+
+
+def test_extends_within_this_file_is_not_refused():
+    text = (
+        "name: nova\n"
+        "services:\n"
+        "  base:\n    image: alpine\n    volumes:\n      - ../x:/N\n"
+        "  a:\n    extends:\n      service: base\n"
+    )
+    assert binds(text) == {"/N"}
+
+
+def test_the_v4_compose_file_uses_neither_key():
+    doc = COMPOSE_FILE.read_text()
+    assert "\ninclude:" not in doc
+    assert "extends:" not in doc
