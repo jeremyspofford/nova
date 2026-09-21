@@ -61,7 +61,7 @@ without WSL, or a combination. Nova should set up the networking between machine
 10. **Transports.** Tailscale first, with Nova joining machines herself. Self-hosted
     **Headscale** and **plain LAN** follow, each with a seam built now. Plain LAN relaxes the
     "tailnet-only exposure" rail, but only for machine-to-machine links. The web UI is never on the LAN.
-11. **No Mac to test on.** Mac support is built and CI-tested, and stated as **unwalked**.
+11. **No Mac to test on — CLOSED, do not reopen.** Mac support is built and CI-tested, and stated as **unwalked**. A Mac exists on the owner's tailnet; it is his **work device**, so Nova is never installed on it (owner, 2026-09-21). Seeing that machine in a tailnet listing is not a reason to ask again.
 12. **Binaries ship unsigned for now.** Each card states the one-time "Run anyway"/"Open" step.
     Machines with Smart App Control on are stated "cannot". Signing stays a seam in CI.
 13. **Tailscale OAuth credential allowed now.** Login links ship first; the credential follows.
