@@ -129,9 +129,24 @@ thing that ever will. The repo is public, so those runners cost nothing.
 **What changes:** `compose_read.sh`'s `raw_*` functions hand-parse YAML in
 POSIX awk to produce `facts/raw.json`. That parsing moves into
 `novabundle.py`, which already runs in the pack container and where
-**PyYAML 6.0.3 is already a dependency** (`services/core/pyproject.toml:31`,
-confirmed present in the running core image). The shell stages the raw text of
-every file in `COMPOSE_FILE`; the container parses it.
+**PyYAML 6.0.3 is present in the runtime image**. The shell stages the raw text
+of every file in `COMPOSE_FILE`; the container parses it.
+
+> **Correction, 2026-09-21 — my citation was wrong, and the implementer caught
+> it.** I wrote that PyYAML is a dependency at `services/core/pyproject.toml:31`.
+> That line is under **`[dependency-groups]`** — the dev group — and the image
+> builds with `uv sync --frozen --no-dev`. PyYAML reaches the runtime image
+> only **transitively, through `uvicorn[standard]`**. Verified by hand: the
+> running core image has PyYAML 6.0.3 and uvicorn 0.52.4 installed, and line 31
+> is in the dev table. The conclusion survives — the parser does have PyYAML —
+> but it rests on a transitive extra rather than on a declared dependency,
+> which is weaker than I claimed. `test_pyyaml_is_in_the_core_images_runtime_closure`
+> now refuses the day that stops being true.
+>
+> **Carried:** declare `pyyaml` in core's **runtime** dependencies, so the pack
+> step depends on something stated rather than inherited. It needs a lock
+> refresh and a core image rebuild, so it belongs with T6 rather than in a
+> coverage commit.
 
 **What does NOT change, and must not be misread as changing:** the
 **two-sources** principle of verdict §6.1 stands exactly as written. The
