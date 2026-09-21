@@ -416,12 +416,27 @@ STUB_COMPOSE_STDERR=""
 # The refusal has to say that, not fail three functions later with an empty
 # filter that silently matches every container on the host.
 STUB_COMPOSE_SED='/^name: /d'
-STUB_COMPOSE_STDERR="compose said why"
 NONAME="$(run_coverage routine)"
 expect_cov "refuses_a_render_with_no_project_name" "$NONAME" 9 "no top-level"
-expect_cov "and_carries_the_reason_compose_gave" "$NONAME" 9 "compose said why"
+expect_cov "and_names_the_render_it_read_that_from" "$NONAME" 9 "config.yaml"
 STUB_COMPOSE_SED=""
-STUB_COMPOSE_STDERR=""
+
+# The other half of the same function: with no render on disk it runs compose
+# itself, and a failure there must carry compose's own words. Driven directly,
+# because render_facts primes the name out of the render it just wrote and
+# this path is the one refresh.sh and a standalone renderer take.
+PROJFAIL="$(
+  bk_docker() { stub_docker "$@"; }
+  STUB_COMPOSE_RC=1
+  STUB_COMPOSE_STDERR="could not find /nowhere/docker-compose.yml"
+  # shellcheck disable=SC2034  # read by bk_set_project/bk_project
+  BK_PROJECT=""
+  bk_set_project 2>&1 | tr '\n' ' '
+)"
+expect_has "bk_set_project_without_a_render_carries_composes_stderr" "$PROJFAIL" \
+  "could not find /nowhere/docker-compose.yml"
+expect_has "bk_set_project_without_a_render_names_the_command" "$PROJFAIL" \
+  "docker compose --profile '*' config"
 
 # A renderer that exits 0 and produces NOTHING is a reading that failed.
 # Before this, deleting bk_verify_fact's whole empty branch cost nothing in
@@ -516,6 +531,58 @@ expect_cov "refuses_an_include_class_bind_this_host_cannot_read" "$GONE" 3 "R6_U
 expect_cov "and_names_the_bind_and_its_service" "$GONE" 3 "service \`gateway\`"
 STUB_COMPOSE_SED=""
 build_world
+
+# The same, for the other kind only `docker inspect` can see. Declaring
+# searxng's image-declared volume `include` must make render_reachable probe
+# it BY ITS 64-HEX NAME — it has no compose key to be probed by. The loop that
+# does this shipped last round with nothing asserting over it: removing it
+# entirely left both suites green.
+STUB_COMPOSE_SED='s/disposition: exclude-ephemeral/disposition: include/'
+ANONINC="$(run_coverage routine)"
+expect_cov "an_include_class_anon_volume_is_carried_only_after_a_probe" "$ANONINC" 0 '"kind": "anon"'
+ANON_NAME="$(bk_anon_mounts "$WORLD/stage" | awk -F'	' 'NR==1 {print $3}')"
+if [ -n "$ANON_NAME" ] && grep -q "\"$ANON_NAME\": {\"exists\": true, \"ok\": true" \
+  "$WORLD/stage/facts/reachable.json"; then
+  report 0 "render_reachable_probes_an_include_class_anon_volume_by_its_64_hex_name"
+else
+  report 1 "render_reachable_probes_an_include_class_anon_volume_by_its_64_hex_name" \
+    "name='$ANON_NAME' reachable=$(tr -d '\n' < "$WORLD/stage/facts/reachable.json")"
+fi
+STUB_COMPOSE_SED=""
+build_world
+
+# ── the capture tool refuses rather than corrupting its own output ─────────
+#
+# refresh.sh redacts by rewriting every occurrence of $HOME. Under `sudo` that
+# is /root, and /root/.ollama is the ollama volume's mount TARGET inside the
+# container: rewriting it corrupts compose-*.yaml, compose-*.json and
+# containers-v4.json while both suites stay green on the result. It runs
+# before any docker call, so this case needs no daemon.
+#
+# Run against a COPY in the temp world, never the one in the repo: a test of
+# "this tool refuses before it writes" must not be able to write over the
+# fixtures if the guard it is testing has regressed. (It can: running the
+# unguarded version by hand while proving this rewrote six captured fixtures
+# and left four files named after another compose version behind.) The guard
+# sits before the script sources or reads anything, so the copy refuses in
+# place.
+REFRESH="$WORLD/refresh.sh"
+cp "$SCRIPT_DIR/backup/fixtures/refresh.sh" "$REFRESH"
+for bad_home in /root "" /; do
+  out="$(HOME="$bad_home" "$REFRESH" 2>&1)"
+  code=$?
+  if [ "$code" -eq 0 ]; then
+    report 1 "refresh_refuses_a_system_home_rather_than_redacting_into_it" \
+      "HOME='$bad_home' exited 0"
+  else
+    case "$out" in
+      *"not an operator's home directory"*)
+        report 0 "refresh_refuses_a_system_home_rather_than_redacting_into_it" ;;
+      *) report 1 "refresh_refuses_a_system_home_rather_than_redacting_into_it" \
+           "HOME='$bad_home': $(printf '%s' "$out" | tr '\n' ' ')" ;;
+    esac
+  fi
+done
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

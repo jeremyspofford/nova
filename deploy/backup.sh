@@ -132,19 +132,36 @@ bk_j() { _cr_j "$1"; }
 # The project label every `docker` selection below is filtered by. Read from
 # the render — never typed, never assembled.
 #
+# TWO functions, and the split is the whole point. `bk_set_project` assigns
+# BK_PROJECT in the CALLER'S shell; `bk_project` prints it. Every caller here
+# is `project="$(bk_project)"`, and `$( … )` is a subshell — so a cache the
+# function sets for itself is discarded the moment it returns, every time.
+# That was shipped last round and reported as having removed two renders. It
+# removed none: MEASURED at 5 `docker compose … config` invocations per
+# render_facts run with the cache and 5 without.
+#
+# render_facts primes it once, in its own shell, and the substitutions below
+# then INHERIT the value. Called standalone (refresh.sh, a single renderer in
+# a test) nothing primes it and each call reads the render once, which is
+# correct and merely uncached.
+#
 # stderr is CARRIED, not discarded. `bk_compose_config 2>/dev/null | …` is the
 # exact pattern this file's own header condemns at install.sh:394-396: every
 # caller below refuses when the project name is empty, and without the reason
 # compose gave, the refusal says "no project name" when the truth was "your
 # .env names a compose file that is not there".
-#
-# Cached for the run, because three callers each need it and each call is a
-# full `docker compose config`. render_facts clears the cache, so a fresh run
-# re-reads it.
-bk_project() {
-  local err rc=0 text
-  if [ -n "${BK_PROJECT_CACHE:-}" ]; then
-    printf '%s\n' "$BK_PROJECT_CACHE"
+bk_set_project() {
+  local stage="${1:-}" err rc=0 text
+  # When the YAML render is already on disk, read it: the project name is in
+  # that text and running compose again to re-learn it is a whole render for
+  # a line we have.
+  if [ -n "$stage" ] && [ -s "$stage/facts/config.yaml" ]; then
+    BK_PROJECT="$(cfg_project_name < "$stage/facts/config.yaml")"
+    if [ -z "$BK_PROJECT" ]; then
+      bk_fail "$stage/facts/config.yaml carries no top-level \`name:\` line, so this stack
+       has no project label for anything below to select by."
+      return 1
+    fi
     return 0
   fi
   err="$(mktemp "${TMPDIR:-/tmp}/nova-project.XXXXXX")" || return 1
@@ -155,8 +172,8 @@ bk_project() {
     rm -f "$err"
     return 1
   fi
-  BK_PROJECT_CACHE="$(printf '%s' "$text" | cfg_project_name)"
-  if [ -z "$BK_PROJECT_CACHE" ]; then
+  BK_PROJECT="$(printf '%s' "$text" | cfg_project_name)"
+  if [ -z "$BK_PROJECT" ]; then
     bk_fail "the compose render carries no top-level \`name:\` line, so this stack has no
        project label for anything below to select by.
        stderr: $(tr '\n' ' ' < "$err")"
@@ -164,7 +181,11 @@ bk_project() {
     return 1
   fi
   rm -f "$err"
-  printf '%s\n' "$BK_PROJECT_CACHE"
+}
+
+bk_project() {
+  [ -n "${BK_PROJECT:-}" ] || bk_set_project || return 1
+  printf '%s\n' "$BK_PROJECT"
 }
 
 # The image the reachability probe runs. Read off the RUNNING postgres
@@ -887,9 +908,15 @@ bk_ignored_paths() {
 render_facts() {
   local stage="$1" mode="${2:-routine}"
   mkdir -p "$stage/facts" || return 1
-  BK_PROJECT_CACHE=""
+  BK_PROJECT=""
   render_raw "$stage" || return 1
   render_dispositions "$stage" || return 1
+  # Primed HERE, in THIS shell and out of the render that just landed on
+  # disk, so the `$(bk_project)` substitutions in the renderers below inherit
+  # it instead of each running a whole `docker compose config` of their own.
+  # After render_dispositions, so an unreadable render is still reported by
+  # the renderer whose command it was.
+  bk_set_project "$stage" || return 1
   render_config "$stage" || return 1
   render_containers "$stage" || return 1
   render_git "$stage" || return 1
