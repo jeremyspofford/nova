@@ -411,7 +411,20 @@ def test_a_folded_reason_comes_back_as_its_whole_text():
 # ── on the REAL file, not only on a probe ───────────────────────────────────
 
 REAL_TEXT = COMPOSE_FILE.read_text()
-ANCHOR = "      - v4_memdata:/data/memory\n"
+
+# The splice point: the memory service's one mount line, found rather than
+# typed. A literal line here is a test that goes red the day someone edits
+# that line for an unrelated reason — a red on a correct file, which is the
+# thing this whole mechanism must not do, even in its own tests.
+_ANCHOR_RE = re.compile(r"^(?P<indent> +)- (?P<item>\S+:/data/memory)\n", re.M)
+_ANCHOR_MATCH = _ANCHOR_RE.search(REAL_TEXT)
+assert _ANCHOR_MATCH, (
+    f"{COMPOSE_FILE} no longer mounts anything at /data/memory. These tests "
+    "splice each mount spelling in beside that line; re-point _ANCHOR_RE at "
+    "whichever mount line they should splice beside now."
+)
+ANCHOR = _ANCHOR_MATCH.group(0)
+ITEM = _ANCHOR_MATCH.group("item")
 
 # Every spelling, spliced into the real deploy/docker-compose.yml in place of
 # the memory service's one mount line. Each REPLACEMENT was run through real
@@ -433,15 +446,9 @@ REAL_CASES = {
         + "      - {type: bind,\n         source: ../newstate,\n         target: /newstate}\n",
         "/newstate",
     ),
-    "flow_sequence": (
-        '      [ "v4_memdata:/data/memory", "../newstate:/newstate" ]\n',
-        "/newstate",
-    ),
-    "four_spaces": ("    - v4_memdata:/data/memory\n    - ../newstate:/newstate\n", "/newstate"),
-    "eight_spaces": (
-        "        - v4_memdata:/data/memory\n        - ../newstate:/newstate\n",
-        "/newstate",
-    ),
+    "flow_sequence": (f'      [ "{ITEM}", "../newstate:/newstate" ]\n', "/newstate"),
+    "four_spaces": (f"    - {ITEM}\n    - ../newstate:/newstate\n", "/newstate"),
+    "eight_spaces": (f"        - {ITEM}\n        - ../newstate:/newstate\n", "/newstate"),
     "braced_reason": (
         ANCHOR + "      - {type: bind, source: ../newstate, target: /newstate,\n"
         '         x-nova-backup: exclude-code, x-nova-backup-reason: "a { brace"}\n'
@@ -463,11 +470,10 @@ def test_every_spelling_added_to_the_real_file_is_seen(name):
     disposition — which is what makes the next `./install backup` refuse R2
     instead of carrying an unclassified mount."""
     replacement, target = REAL_CASES[name]
-    assert ANCHOR in REAL_TEXT
     rows = rows_of(REAL_TEXT.replace(ANCHOR, replacement, 1), str(COMPOSE_FILE))
     assert ("bind", "memory", target) in rows, f"{name}: the added bind is invisible"
     assert rows[("bind", "memory", target)] == ("", False)
-    # ...and the mount that was already there is still a named volume.
+    # ...and the mount that was already there is still not read as a bind.
     assert ("volume", "", "v4_memdata") in rows
     assert ("bind", "memory", "/data/memory") not in rows
 

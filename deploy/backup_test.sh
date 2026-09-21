@@ -207,6 +207,71 @@ nova_py() {
   esac
 }
 
+# ── the raw file, not a capture of it ───────────────────────────────────────
+#
+# Every disposition assertion above reads a RENDER, and a render is a capture:
+# deleting a row from deploy/docker-compose.yml and leaving the capture alone
+# left this whole suite green while the next real backup refused R2. This
+# compares the two SETS, which is also what notices a fixture nobody refreshed
+# — there is no independent hash or mtime check anywhere.
+#
+# The raw half is the SHIPPED parser, driven the way deploy/backup/tests/
+# conftest.py drives the shell readers: through the real module, never a
+# second copy of it. It is no longer awk (s41/rulings.md 2026-09-21), but it
+# is still compared HERE as well as in test_policy.py, because one suite
+# holding the only fixture-freshness tripwire is one place to forget.
+raw_rows() {
+  nova_py - "$SCRIPT_DIR/backup" "$1" <<'RAWROWS'
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from novabundle import raw_compose_rows
+
+with open(sys.argv[2], encoding="utf-8") as fh:
+    for row in raw_compose_rows(fh.read(), sys.argv[2]):
+        print(
+            "\t".join(
+                [
+                    row["kind"],
+                    row["service"],
+                    row["name"],
+                    row["disposition"],
+                    "yes" if row["reason"] else "no",
+                ]
+            )
+        )
+RAWROWS
+}
+
+# The same rows, as the checked-in render shows them.
+render_rows() {
+  local text svc key line
+  text="$(cat)"
+  for key in $(printf '%s' "$text" | cfg_volume_keys); do
+    line="$(printf '%s' "$text" | cfg_volume_disposition "$key")"
+    printf 'volume\t\t%s\t%s\t%s\n' "$key" "${line%%	*}" \
+      "$([ -n "${line#*	}" ] && [ -n "$line" ] && printf yes || printf no)"
+  done
+  for svc in $(printf '%s' "$text" | cfg_service_keys); do
+    printf '%s' "$text" | cfg_mounts "$svc" |
+      awk -F'\t' -v s="$svc" '$1 == "bind" { printf "bind\t%s\t%s\t%s\t%s\n", s, $3, $5, ($6 == "" ? "no" : "yes") }'
+    printf '%s' "$text" | cfg_anon "$svc" |
+      awk -F'\t' -v s="$svc" '{ printf "anon\t%s\t%s\t%s\t%s\n", s, $1, $2, ($3 == "" ? "no" : "yes") }'
+  done
+}
+
+# `interp` and `unreadable` rows are left out of the SET comparison — the
+# first is a mount whose kind only the render can settle, the second is a
+# stated cannot — and asserted to be absent immediately below, so leaving them
+# out of the equality drops nothing.
+expect_str "the_real_compose_file_and_the_checked_in_render_declare_the_same_rows" \
+  "$(raw_rows "$SCRIPT_DIR/docker-compose.yml" |
+     awk -F'\t' '$1 == "volume" || $1 == "bind" || $1 == "anon"' | sort)" \
+  "$(render_rows < "$FIXTURES/compose-v5.3.0.yaml" | sort)"
+
+expect_str "the_real_compose_file_uses_no_form_the_parser_cannot_read" \
+  "$(raw_rows "$SCRIPT_DIR/docker-compose.yml" | awk -F'	' '$1 == "unreadable"')" ""
+
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/backup.sh"
 
