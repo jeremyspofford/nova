@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Readers over compose's own output, and over the raw compose text.
+# Readers over compose's own YAML render.
 # Sourced by deploy/backup.sh and driven against checked-in fixtures by
 # deploy/backup_test.sh. Nothing here shells out to docker: every function
 # takes text on stdin, so the whole file is testable with no daemon.
@@ -8,28 +8,38 @@
 # awk only — same constraint as deploy/install.sh:7.
 #
 # TWO SOURCES, and neither is a style preference (design-verdict.md §3, §6.1;
-# s41/measurements.md R2, measured on compose v5.3.0 and v5.5.1):
+# s41/measurements.md R2, measured on compose v5.3.0 and v5.5.1). This file is
+# now only ONE of them:
 #
-#   raw_*  read the RAW TEXT of every file in COMPOSE_FILE, because compose
-#          PRUNES a volume no rendered service mounts — out of `config`, out
-#          of `config --format json` and out of `config --volumes` alike. A
-#          declared volume nothing mounts is the exact case coverage exists to
-#          catch, and it is the one case no render can show.
+#   the RAW TEXT of every file in COMPOSE_FILE is the DECLARED SET, because
+#   compose PRUNES a volume no rendered service mounts — out of `config`, out
+#   of `config --format json` and out of `config --volumes` alike. A declared
+#   volume nothing mounts is the exact case coverage exists to catch, and it
+#   is the one case no render can show. That reading is NOT here any more:
+#   `render_raw` (deploy/backup.sh) stages the bytes and novabundle.py parses
+#   them with PyYAML, in the container it already runs in. s41/rulings.md,
+#   2026-09-21 — four fix rounds found six real binds the hand-written YAML
+#   reader that used to live here did not see, each in a different place, and
+#   a mechanism whose purpose is to refuse rather than skip cannot rest on a
+#   parser that silently skips whatever its author did not anticipate.
 #
-#   cfg_*  read the YAML render, because `config --format json` keeps only a
-#          TOP-LEVEL `x-` key and strips every NESTED one — a volume's, a
-#          service's, a long-syntax mount's — and every disposition lives
-#          nested. A JSON-fed reader sees no dispositions at all and reports
-#          every volume undeclared.
+#   cfg_*, below, read the YAML RENDER, because `config --format json` keeps
+#   only a TOP-LEVEL `x-` key and strips every NESTED one — a volume's, a
+#   service's, a long-syntax mount's — and every disposition lives nested. A
+#   JSON-fed reader sees no dispositions at all and reports every volume
+#   undeclared.
 #
-# Both directions are pinned by deploy/backup_test.sh against the two renders
-# of deploy/backup/fixtures/probe-compose.yml, so a later "just parse the
-# JSON, it needs no awk" simplification cannot land quietly, and the day a
-# newer compose starts keeping nested keys is a day the suite says so.
+# Both directions are still pinned by deploy/backup_test.sh against the two
+# renders of deploy/backup/fixtures/probe-compose.yml, so a later "just parse
+# the JSON, it needs no YAML reader" simplification cannot land quietly, and
+# the day a newer compose starts keeping nested keys is a day the suite says
+# so. Moving the raw parse to PyYAML was NOT that simplification: the declared
+# set still comes from the raw text and the dispositions still come from the
+# render. The sources did not move; the parser did.
 
 # ── shared awk helpers ──────────────────────────────────────────────────────
 # Prepended to every awk program below rather than repeated: one definition of
-# what a YAML scalar and a JSON string are.
+# what a rendered YAML scalar and a JSON string are.
 #
 # The renderer (gopkg.in/yaml.v3) emits a plain scalar when it can, wraps in
 # SINGLE quotes when the value needs it (doubling any embedded quote), and
@@ -62,191 +72,11 @@ function cr_value(line, key,   v, p) {
 function cr_key(line,   k) {
   k = cr_trim(line); sub(/:.*$/, "", k); return cr_unquote(k)
 }
-# Which side of a mount a SOURCE is, by the rule compose itself applies to text
-# that is already interpolated: a bind when it starts with `.`, `/` or `~`, or
-# contains `/` anywhere; a named volume otherwise (a volume NAME cannot hold a
-# slash). Measured against compose v5.3.0, every row.
-#
-# "interp" is the honest third answer. Compose applies the rule AFTER
-# interpolation, so `${VOLNAME}:/t` is a named volume when the variable holds
-# a name and a bind when it holds a path — measured both ways. The raw text
-# cannot know, and guessing either way is a lie: guessing "bind" reddens a
-# correct file, guessing "volume" hides an undeclared one.
-function cr_mount_kind(src,   c, literal) {
-  c = substr(src, 1, 1)
-  if (c == "." || c == "/" || c == "~") return "bind"
-  literal = src
-  gsub(/\$\{[^}]*\}/, "", literal)
-  gsub(/\$[A-Za-z_][A-Za-z0-9_]*/, "", literal)
-  if (index(literal, "/") > 0) return "bind"
-  if (index(src, "$") > 0) return "interp"
-  return "volume"
-}
-
-# One key out of a flow mapping `{k: v, k: v}`. Bounded at the next comma or
-# brace, which is why the REASON is read as present/absent rather than by
-# value: a reason is prose and may hold a comma.
-function cr_flow(item, key,   p, v) {
-  p = match(item, "(^\\{|[,{][ \t]*)" key "[ \t]*:")
-  if (p == 0) return ""
-  v = substr(item, p + RLENGTH)
-  sub(/[,}].*$/, "", v)
-  return cr_unquote(v)
-}
-
 function cr_json(s) {
   gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); gsub(/\t/, "\\t", s); gsub(/\r/, "\\r", s)
   return s
 }
 '
-
-# ── the raw compose text (stdin = every file in COMPOSE_FILE, concatenated) ──
-
-# A top-level section tracker, shared by the three raw readers: a key at
-# column 0 opens a section; only keys at exactly two spaces inside it count.
-# A service's own `volumes:` sits at four spaces and its entries at six, so
-# `- v4_pgdata:/var/lib/postgresql/data` is never read as a declaration.
-_cr_raw_keys() {
-  awk "$_CR_AWK_LIB"'
-    /^[ \t]*#/ { next }
-    /^[A-Za-z_][A-Za-z0-9_-]*:/ { sect = cr_key($0); next }
-    sect != want { next }
-    /^  [A-Za-z0-9._-]+:/ { print cr_key($0) }
-  ' want="$1"
-}
-
-raw_volume_keys() { _cr_raw_keys volumes; }
-raw_service_keys() { _cr_raw_keys services; }
-
-# Every disposition the RAW text declares, one per line:
-#
-#   volume<TAB><TAB><key><TAB><disposition><TAB>yes|no
-#   bind<TAB><service><TAB><target><TAB><disposition><TAB>yes|no
-#   anon<TAB><service><TAB><target><TAB><disposition><TAB>yes|no
-#
-# (the last field is whether a reason row is present, not its text: a folded
-# `>-` scalar's text lives on the lines below it and only the render joins it)
-#
-# THIS IS THE ONE READER THAT LOOKS AT THE FILE A HUMAN EDITS. Everything else
-# reads the render, and a render is a capture: delete a row from
-# deploy/docker-compose.yml and a suite that only reads captures stays green
-# while the next real backup refuses. deploy/backup/tests/test_policy.py
-# compares this against the render in BOTH directions, which is also what
-# notices a fixture nobody refreshed.
-raw_dispositions() {
-  awk "$_CR_AWK_LIB"'
-    function flush_vol() {
-      if (vkey != "") printf "volume\t\t%s\t%s\t%s\n", vkey, vdisp, (vreason ? "yes" : "no")
-      vkey = ""; vdisp = ""; vreason = 0
-    }
-    # A flow mapping item, `{type: bind, source: …, target: …}`, which YAML
-    # lets span lines. Brace depth decides where it ends; a brace inside a
-    # quoted reason would fool that, and the row then comes out malformed,
-    # which reddens rather than hides.
-    function cr_depth(chunk,   i, c, d) {
-      for (i = 1; i <= length(chunk); i++) {
-        c = substr(chunk, i, 1)
-        if (c == "{") d++
-        else if (c == "}") d--
-      }
-      return d
-    }
-    function parse_flow(item) {
-      mtype = cr_flow(item, "type")
-      msrc = cr_flow(item, "source")
-      mtgt = cr_flow(item, "target")
-      mdisp = cr_flow(item, "x-nova-backup")
-      mreason = (item ~ /x-nova-backup-reason[ \t]*:/) ? 1 : 0
-      if (mtype == "") mtype = cr_mount_kind(msrc)
-    }
-    function flush_mount() {
-      if (mtype == "bind" || mtype == "interp")
-        printf "%s\t%s\t%s\t%s\t%s\n", mtype, svc, mtgt, mdisp, (mreason ? "yes" : "no")
-      mtype = ""; mtgt = ""; msrc = ""; mdisp = ""; mreason = 0
-    }
-    function flush_anon() {
-      if (atgt != "") printf "anon\t%s\t%s\t%s\t%s\n", svc, atgt, adisp, (areason ? "yes" : "no")
-      atgt = ""; adisp = ""; areason = 0
-    }
-    function flush_all() { flush_vol(); flush_mount(); flush_anon() }
-
-    /^[ \t]*#/ { next }
-    /^[A-Za-z_][A-Za-z0-9_-]*:/ { flush_all(); sect = cr_key($0); invols = 0; inanon = 0; next }
-
-    sect == "volumes" && /^  [A-Za-z0-9._-]+:/ { flush_vol(); vkey = cr_key($0); next }
-    sect == "volumes" && /^    x-nova-backup:/ { vdisp = cr_value($0, "x-nova-backup"); next }
-    sect == "volumes" && /^    x-nova-backup-reason:/ { vreason = 1; next }
-
-    sect != "services" { next }
-    /^  [A-Za-z0-9._-]+:/ {
-      flush_mount(); flush_anon()
-      svc = cr_key($0); invols = 0; inanon = 0; inflow = 0; flowbuf = ""; next
-    }
-    /^    [A-Za-z0-9._-]+:/ {
-      flush_mount(); flush_anon()
-      inflow = 0; flowbuf = ""
-      invols = ($0 ~ /^    volumes:/); inanon = ($0 ~ /^    x-nova-backup-anon:/)
-      if (invols && cr_value($0, "volumes") != "") {
-        printf "unreadable\t%s\t%s\t\tno\n", svc, cr_trim($0)
-        invols = 0
-      }
-      next
-    }
-    invols && inflow {
-      flowbuf = flowbuf " " cr_trim($0)
-      if (cr_depth(flowbuf) <= 0) { parse_flow(flowbuf); inflow = 0; flowbuf = "" }
-      next
-    }
-    invols && /^      - / {
-      flush_mount()
-      item = cr_trim($0); sub(/^-[ \t]*/, "", item)
-      # FLOW MAPPING, `- {type: bind, source: …, target: …}`. One line, and it
-      # may carry the two x-nova-backup rows like any other long-syntax mount.
-      if (substr(item, 1, 1) == "{") {
-        if (cr_depth(item) > 0) { inflow = 1; flowbuf = item; next }
-        parse_flow(item)
-        next
-      }
-      # BLOCK MAPPING opened on the dash itself; the rest arrives below.
-      if (item ~ /^type:/) { mtype = cr_value(item, "type"); next }
-      # SCALAR (short syntax), `<source>:<target>[:mode]`. No colon at all is
-      # an inline ANONYMOUS volume (`- /var/lib/x`), measured — not a bind,
-      # and the only place its name exists is containers.json, where an
-      # undeclared one is refused R2.
-      item = cr_unquote(item)
-      p = index(item, ":")
-      if (p == 0) next
-      msrc = substr(item, 1, p - 1)
-      mtgt = substr(item, p + 1)
-      sub(/:.*$/, "", mtgt)
-      mtype = cr_mount_kind(msrc)
-      next
-    }
-    # A list form this reader does not parse — a FLOW SEQUENCE, on the
-    # `volumes:` line or beneath it. Every item in it would otherwise be
-    # invisible, so it says so instead: a stated cannot, not a silent skip.
-    invols && /^      [^ -]/ { printf "unreadable\t%s\t%s\t\tno\n", svc, cr_trim($0); next }
-    invols && /^        type:/ { mtype = cr_value($0, "type"); next }
-    invols && /^        target:/ { mtgt = cr_value($0, "target"); next }
-    invols && /^        x-nova-backup:/ { mdisp = cr_value($0, "x-nova-backup"); next }
-    invols && /^        x-nova-backup-reason:/ { mreason = 1; next }
-    inanon && /^      [^ ]/ { flush_anon(); atgt = cr_key($0); next }
-    inanon && /^        disposition:/ { adisp = cr_value($0, "disposition"); next }
-    inanon && /^        reason:/ { areason = 1; next }
-
-    END { flush_all() }
-  '
-}
-
-# The project name as the checkout's own text declares it — the value coverage
-# compares the render's `name:` against, so a render of some other project
-# cannot be mistaken for this one.
-raw_project_name() {
-  awk "$_CR_AWK_LIB"'
-    /^[ \t]*#/ { next }
-    !done && /^name:/ { print cr_value($0, "name"); done = 1 }
-  '
-}
 
 # ── the YAML render (stdin = docker compose ... --profile '*' config) ────────
 

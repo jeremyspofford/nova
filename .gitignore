@@ -35,6 +35,14 @@ data/runtime/
 # Kept on disk, out of git, until something consumes it.
 backend/uv.lock
 
+# Same rule for the backup worker's: nothing BUILDS from it (novabundle.py
+# runs inside the already-built core image, which locks its own deps in
+# services/core/uv.lock). It exists only because running the suite with
+# `uv run --project deploy/backup pytest` writes one. Left untracked it would
+# be a file git calls neither tracked nor ignored, which the backup's own
+# host-path scan refuses R2_UNCLASSIFIED — so it is ignored, deliberately.
+deploy/backup/uv.lock
+
 # Coverage output. An artifact of running the suite, not a statement about it —
 # and it changes on every run, so tracking it makes every test run a diff.
 backend/.coverage

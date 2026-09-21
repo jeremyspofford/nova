@@ -27,7 +27,7 @@ import pathlib
 import re
 
 import pytest
-from conftest import COMPOSE_FILE
+from conftest import COMPOSE_FILE, FIXTURES
 
 from novabundle import (
     load_facts,
@@ -85,7 +85,9 @@ def test_a_single_line_flow_mapping_is_a_bind():
 
 def test_a_flow_mapping_may_span_lines():
     """measured: the same item wrapped over three lines -> type bind."""
-    text = HEAD + "    volumes:\n      - {type: bind,\n         source: ../x,\n         target: /D}\n"
+    text = (
+        HEAD + "    volumes:\n      - {type: bind,\n         source: ../x,\n         target: /D}\n"
+    )
     assert binds(text) == {"/D"}
 
 
@@ -304,27 +306,12 @@ def test_text_that_is_not_one_compose_document_is_a_stated_refusal(text, why):
 
 # ── the declared set, over every file in COMPOSE_FILE ───────────────────────
 
-BASE = """\
-name: novaxprobe
-services:
-  alpha:
-    image: alpine
-    volumes:
-      - vol_one:/one
-volumes:
-  vol_one:
-  vol_three:
-"""
-
-OVERLAY = """\
-services:
-  beta:
-    image: alpine
-    volumes:
-      - vol_two:/two
-volumes:
-  vol_two:
-"""
+# The same probe pair deploy/backup_test.sh renders through real compose: a
+# volume `vol_three` that no service mounts (PRUNED from both renders), and a
+# second file carrying a service and a volume that exist only there — the
+# shape the GPU overlay makes real.
+BASE = (FIXTURES / "probe-compose.yml").read_text()
+OVERLAY = (FIXTURES / "probe-compose.overlay.yml").read_text()
 
 
 def test_the_declared_set_is_the_union_of_every_file():
@@ -347,7 +334,23 @@ def test_a_services_own_mount_list_is_not_a_declaration():
     `volumes` alone reports `/one` as a declared volume."""
     fact = raw_compose_fact([("base.yml", BASE)])
     assert fact["volumes"] == ["vol_one", "vol_three"]
-    assert "image" not in fact["services"]
+    assert fact["services"] == ["alpha"]
+
+
+def test_the_probe_pairs_dispositions_are_read_from_every_position():
+    """The probe carries an `x-` key at each of the four positions one can
+    occupy. All four are read from the raw text here; deploy/backup_test.sh
+    pins what each RENDER does with them."""
+    rows = {}
+    for row in raw_compose_fact([("base.yml", BASE), ("overlay.yml", OVERLAY)])["rows"]:
+        rows[(row["kind"], row["service"], row["name"])] = (row["disposition"], bool(row["reason"]))
+    assert rows[("volume", "", "vol_one")] == ("include", True)
+    assert rows[("volume", "", "vol_three")] == ("include", True)
+    assert rows[("volume", "", "vol_two")] == ("exclude-ephemeral", True)
+    assert rows[("bind", "alpha", "/b")] == ("exclude-code", True)
+    assert rows[("anon", "alpha", "/var/cache/thing")] == ("exclude-ephemeral", True)
+    assert ("bind", "alpha", "/one") not in rows
+    assert not [k for k in rows if k[0] == "unreadable"]
 
 
 def test_the_project_name_is_the_one_compose_would_use():
@@ -426,7 +429,8 @@ REAL_CASES = {
         "/newstate",
     ),
     "flow_spanning": (
-        ANCHOR + "      - {type: bind,\n         source: ../newstate,\n         target: /newstate}\n",
+        ANCHOR
+        + "      - {type: bind,\n         source: ../newstate,\n         target: /newstate}\n",
         "/newstate",
     ),
     "flow_sequence": (

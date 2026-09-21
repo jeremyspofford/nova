@@ -225,65 +225,76 @@ bk_probe_image() {
 # from the census, which §9.1 runs five steps AFTER coverage. Without them
 # coverage would silently drop two of its eight refusal codes.
 
-# raw.json — THE DECLARED SET, from the raw text of every compose file.
-# Never from a render: compose prunes a volume no rendered service mounts out
-# of `config`, `config --format json` and `config --volumes` alike (measured
-# on v5.3.0 and v5.5.1), and a declared volume nothing mounts is the exact
-# case coverage exists to catch.
+# facts/compose/ — THE RAW TEXT of every file in COMPOSE_FILE, staged byte
+# for byte, plus a manifest naming where each came from.
+#
+# Nothing here parses YAML. novabundle.py does, with PyYAML, in the container
+# it already runs in (s41/rulings.md 2026-09-21): four fix rounds found six
+# real binds the hand-written awk reader did not see, each in a different
+# place, and a mechanism whose whole purpose is to refuse rather than skip
+# cannot rest on a parser that silently skips what its author did not think
+# of. What does NOT change is the SOURCE: the declared set still comes from
+# this raw text, never from a render, because compose prunes a volume no
+# rendered service mounts out of `config`, `config --format json` and
+# `config --volumes` alike (measured on v5.3.0 and v5.5.1) — and a declared
+# volume nothing mounts is the exact case coverage exists to catch.
 render_raw() {
   local stage="$1"
-  local out="$stage/facts/raw.json" text="" f first files
+  local dir="$stage/facts/compose" files f staged idx first
+
   files="$(bk_compose_files)"
   if [ -z "$files" ]; then
     bk_fail "COMPOSE_FILE names no compose file, so there is no declared set to read."
     return 1
   fi
+
+  rm -rf "$dir" || return 1
+  if ! mkdir -p "$dir"; then
+    bk_fail "could not create $dir to stage the compose text in."
+    return 1
+  fi
+
+  # Copied first, manifest second: a file this host cannot read stops the run
+  # before anything downstream has a half-written manifest to believe.
+  idx=0
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     if [ ! -r "$f" ]; then
       bk_fail "COMPOSE_FILE names $f and this host cannot read it."
       return 1
     fi
-    text="$text
-$(cat "$f")"
+    staged="$(printf '%03d.yml' "$idx")"
+    if ! cat "$f" > "$dir/$staged"; then
+      bk_fail "could not stage $f into $dir/$staged."
+      return 1
+    fi
+    if [ ! -s "$dir/$staged" ]; then
+      bk_fail "$f is empty. An empty compose file is a reading that failed, not a
+       stack with nothing in it."
+      return 1
+    fi
+    idx=$((idx + 1))
   done <<EOF
 $files
 EOF
 
+  idx=0
+  first=1
   {
-    printf '{\n  "project": "%s",\n  "compose_files": [' "$(bk_j "$(printf '%s' "$text" | raw_project_name)")"
-    first=1
+    printf '{\n  "compose_files": ['
     while IFS= read -r f; do
       [ -n "$f" ] || continue
       [ "$first" -eq 1 ] || printf ','
       first=0
-      printf '\n    "%s"' "$(bk_j "$f")"
+      printf '\n    {"source": "%s", "staged": "%03d.yml"}' "$(bk_j "$f")" "$idx"
+      idx=$((idx + 1))
     done <<EOF
 $files
 EOF
-    printf '\n  ],\n  "services": ['
-    first=1
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      [ "$first" -eq 1 ] || printf ','
-      first=0
-      printf '\n    "%s"' "$(bk_j "$f")"
-    done <<EOF
-$(printf '%s' "$text" | raw_service_keys | sort -u)
-EOF
-    printf '\n  ],\n  "volumes": ['
-    first=1
-    while IFS= read -r f; do
-      [ -n "$f" ] || continue
-      [ "$first" -eq 1 ] || printf ','
-      first=0
-      printf '\n    "%s"' "$(bk_j "$f")"
-    done <<EOF
-$(printf '%s' "$text" | raw_volume_keys | sort -u)
-EOF
     printf '\n  ]\n}\n'
-  } > "$out"
-  bk_verify_fact "$out" "reading the raw text of COMPOSE_FILE" /dev/null
+  } > "$dir/files.json"
+
+  bk_verify_fact "$dir/files.json" "staging the raw text of COMPOSE_FILE" /dev/null
 }
 
 # config.yaml + dispositions.json — THE DISPOSITIONS, and only from here.

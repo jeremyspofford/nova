@@ -3,8 +3,14 @@
 #
 # No runtime dependencies are declared here on purpose. novabundle.py runs
 # inside the ALREADY-BUILT core image, which carries `cryptography`
-# (services/core/pyproject.toml:11); adding a second dependency statement
-# would be a second thing to keep in step with that image.
+# (services/core/pyproject.toml:11) and PyYAML (through `uvicorn[standard]`);
+# adding a second dependency statement would be a second thing to keep in step
+# with that image.
+#
+# `pyyaml` is in the DEV group below for one reason: the suites run this file
+# outside that image, so the interpreter they use needs what the image has.
+# tests/test_raw_compose.py is what checks the image still carries it — this
+# line cannot, because it is about a different interpreter.
 [project]
 name = "nova-backup"
 version = "0.0.1"
@@ -15,6 +21,7 @@ dependencies = []
 dev = [
     "ruff==0.15.21",
     "pytest",
+    "pyyaml>=6.0.3",
 ]
 
 [tool.uv]

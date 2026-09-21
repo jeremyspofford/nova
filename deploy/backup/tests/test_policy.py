@@ -19,32 +19,46 @@ import re
 import pytest
 from conftest import COMPOSE_FILE, FIXTURES, compose_read
 
-from novabundle import DISPOSITIONS, ENV_DISPOSITIONS, SEGMENT_POLICY
+from novabundle import (
+    DISPOSITIONS,
+    ENV_DISPOSITIONS,
+    SEGMENT_POLICY,
+    raw_compose_fact,
+    raw_compose_rows,
+)
 
 RENDER = FIXTURES / "compose-v5.3.0.yaml"
 ENV_EXAMPLE = COMPOSE_FILE.parent / ".env.example"
 
 
 def raw_volume_keys():
-    return compose_read("raw_volume_keys", COMPOSE_FILE.read_text()).split()
+    return raw_compose_fact([(str(COMPOSE_FILE), COMPOSE_FILE.read_text())])["volumes"]
 
 
-def _rows(text):
+def _rows(rows):
     """{(kind, owner, name): (disposition, has_reason)} — the shape both the
-    raw file and the render are reduced to, so they can be compared."""
-    out = {}
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        kind, owner, name, disposition, reason = line.split("\t")
-        out[(kind, owner, name)] = (disposition, reason == "yes")
-    return out
+    raw file and the render are reduced to, so they can be compared.
+
+    The raw side is novabundle.py's parser (s41/rulings.md 2026-09-21: the
+    parse moved off awk and into the container, where PyYAML already is); the
+    rendered side is still the awk reader over the YAML render, because that
+    is still where a disposition can be read from. Two sources, one parser
+    each — what moved was the parser.
+    """
+    return {
+        (row["kind"], row["service"], row["name"]): (row["disposition"], bool(row["reason"]))
+        for row in rows
+    }
+
+
+def parse(text, where="probe.yml"):
+    return _rows(raw_compose_rows(text, where))
 
 
 def raw_rows_all():
-    """Every row raw_dispositions emits for the real file, `interp` and
+    """Every row the raw parser emits for the real file, `interp` and
     `unreadable` included."""
-    return _rows(compose_read("raw_dispositions", COMPOSE_FILE.read_text()))
+    return parse(COMPOSE_FILE.read_text(), str(COMPOSE_FILE))
 
 
 def raw_rows():
@@ -84,7 +98,7 @@ def rendered_rows():
 
 
 def raw_service_keys():
-    return compose_read("raw_service_keys", COMPOSE_FILE.read_text()).split()
+    return raw_compose_fact([(str(COMPOSE_FILE), COMPOSE_FILE.read_text())])["services"]
 
 
 def env_declarations():
@@ -315,7 +329,7 @@ volumes:
 
 
 def short_bind_rows():
-    return _rows(compose_read("raw_dispositions", SHORT_BIND))
+    return parse(SHORT_BIND)
 
 
 def test_raw_dispositions_reports_a_short_syntax_bind_as_undeclared():
@@ -396,12 +410,10 @@ def test_pasting_the_anon_fix_the_product_prints_produces_a_file_it_can_read():
         stripped.append(line)
     without_anon = "".join(stripped)
     assert "x-nova-backup-anon" not in without_anon
-    assert ("anon", "searxng", "/var/cache/searxng") not in _rows(
-        compose_read("raw_dispositions", without_anon)
-    )
+    assert ("anon", "searxng", "/var/cache/searxng") not in parse(without_anon)
 
     patched = without_anon.replace("  searxng:\n", "  searxng:\n" + pasted + "\n", 1)
-    rows = _rows(compose_read("raw_dispositions", patched))
+    rows = parse(patched)
 
     assert rows[("anon", "searxng", "/var/cache/searxng")] == ("exclude-ephemeral", True)
     # ...and every rule test_policy applies to the real file holds for it.
@@ -472,7 +484,7 @@ volumes:
 
 
 def grammar_rows():
-    return _rows(compose_read("raw_dispositions", GRAMMAR))
+    return parse(GRAMMAR)
 
 
 def test_the_reader_reports_every_bind_spelling_compose_accepts():
@@ -546,14 +558,21 @@ volumes:
 """
 
 
-def test_a_list_form_this_reader_cannot_read_is_a_stated_cannot():
-    """A flow SEQUENCE is legal compose and this reader does not parse it.
-    Saying so out loud is the difference between a cannot and a silent skip:
-    every item in it would otherwise be invisible, which is the New 2 defect
-    with a bigger blast radius."""
-    for text in (FLOW_SEQUENCE, FLOW_SEQUENCE_NEXT_LINE):
-        rows = _rows(compose_read("raw_dispositions", text))
-        assert [k for k in rows if k[0] == "unreadable"], text
+def test_a_flow_sequence_is_read_rather_than_stated_as_a_cannot():
+    """A flow SEQUENCE is legal compose. The awk reader could not parse one:
+    it said so out loud for the inline spelling and saw NOTHING at all for the
+    same list written on the following line — the stated cannot in the one
+    spelling its rule could not reach. A YAML parser reads both, so what is
+    compared now is the items themselves.
+    """
+    rows = parse(FLOW_SEQUENCE)
+    assert ("bind", "a", "/two") in rows
+    assert ("bind", "a", "/one") not in rows, "`named_one:/one` is a named volume"
+    assert not [k for k in rows if k[0] == "unreadable"]
+
+    rows = parse(FLOW_SEQUENCE_NEXT_LINE)
+    assert ("volume", "", "named_one") in rows
+    assert not [k for k in rows if k[0] == "unreadable"]
 
 
 def test_the_real_compose_file_uses_no_form_the_reader_cannot_read():
@@ -611,7 +630,7 @@ def test_an_undecidable_source_is_reconciled_against_the_render():
       render says bind    -> it needs a disposition like any other bind
       render says nothing -> the fixture is stale, and that is the alarm
     """
-    raw = _rows(compose_read("raw_dispositions", GRAMMAR))
+    raw = parse(GRAMMAR)
     interp = {k for k in raw if k[0] == "interp"}
     assert interp == {("interp", "a", "/interp-whole")}
 
@@ -650,6 +669,6 @@ def test_a_flow_mapping_may_span_lines():
     read only the opening line — so a bind written that way was invisible and
     the item after it was read with the wrapped item's leftovers. Brace depth
     decides where it ends."""
-    rows = _rows(compose_read("raw_dispositions", MULTILINE_FLOW))
+    rows = parse(MULTILINE_FLOW)
     assert rows[("bind", "a", "/spread")] == ("exclude-code", True)
     assert rows[("bind", "a", "/plain")] == ("", False)

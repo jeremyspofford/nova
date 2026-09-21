@@ -107,6 +107,10 @@ printf 'wrote probe-%s.{yaml,json}\n' "$COMPOSE_VERSION"
 
 # ── the real stack ──────────────────────────────────────────────────────────
 mkdir -p "$STAGE/facts"
+# Stages the compose TEXT; it writes no fixture, because there is no fixture
+# of the raw text to write: the suites read deploy/docker-compose.yml itself,
+# which is the one input that is never a capture. It runs anyway, because the
+# renderers below inherit the project name it stages.
 render_raw "$STAGE" || die "render_raw failed"
 render_dispositions "$STAGE" || die "render_dispositions failed"
 render_config "$STAGE" || die "render_config failed"
@@ -117,7 +121,6 @@ render_reachable "$STAGE" routine || die "render_reachable failed"
 
 normalise < "$STAGE/facts/config.yaml" > "$FIX_DIR/compose-$COMPOSE_VERSION.yaml"
 normalise < "$STAGE/facts/config.json" > "$FIX_DIR/compose-$COMPOSE_VERSION.json"
-normalise < "$STAGE/facts/raw.json" > "$FIX_DIR/raw-v4.json"
 normalise < "$STAGE/facts/git.json" > "$FIX_DIR/git-v4.json"
 normalise < "$STAGE/facts/databases.json" > "$FIX_DIR/databases-v4.json"
 normalise < "$STAGE/facts/reachable.json" > "$FIX_DIR/reachable-v4.json"
@@ -165,6 +168,6 @@ PY
 ( cd "$REPO_ROOT" && git status --porcelain --ignored=matching ) |
   awk '/^!! /{ print substr($0, 4) }' | normalise > "$FIX_DIR/ignored-paths.txt"
 
-printf 'wrote compose-%s.{yaml,json}, raw-v4.json, git-v4.json, databases-v4.json, reachable-v4.json, ignored-paths.txt\n' \
+printf 'wrote compose-%s.{yaml,json}, git-v4.json, databases-v4.json, reachable-v4.json, ignored-paths.txt\n' \
   "$COMPOSE_VERSION"
 printf '\nNow run the suites: deploy/backup_test.sh and (cd deploy/backup && pytest)\n'

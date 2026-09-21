@@ -16,9 +16,15 @@ import json
 import re
 
 import pytest
-from conftest import FIXTURES, compose_read
+from conftest import COMPOSE_FILE, FIXTURES, compose_read
 
-from novabundle import SEGMENT_POLICY, CoverageRefused, carried_entries, coverage
+from novabundle import (
+    SEGMENT_POLICY,
+    CoverageRefused,
+    carried_entries,
+    coverage,
+    raw_compose_fact,
+)
 
 RENDER = FIXTURES / "compose-v5.3.0.yaml"
 
@@ -66,7 +72,11 @@ def env_fact():
 
 def real_facts(containers="containers-v4.json"):
     return {
-        "raw": load("raw-v4.json"),
+        # Not a capture: the declared set is read from the compose file a
+        # human edits, by the parser that ships. A fixture here would go
+        # stale the moment the file changed, which is the one thing this
+        # fact exists to notice (s41/rulings.md 2026-09-21).
+        "raw": raw_compose_fact([(str(COMPOSE_FILE), COMPOSE_FILE.read_text())]),
         "config": load("compose-v5.3.0.json"),
         "dispositions": json.loads(compose_read("dispositions_json", RENDER.read_text())),
         "containers": load(containers),

@@ -114,31 +114,22 @@ expect_has "yaml_render_keeps_every_nested_x_key" "$(cat "$PROBE_YAML")" 'x-nova
 expect_has "yaml_render_keeps_every_nested_x_key" "$(cat "$PROBE_YAML")" 'x-nova-backup-anon:'
 expect_has "yaml_render_keeps_every_nested_x_key" "$(cat "$PROBE_YAML")" 'x-nova-backup: exclude-code'
 
-# shell-first C2: `vol_three` is declared and mounted by no service. Compose
-# prunes it out of BOTH renders, so the declared set can only come from the
-# raw text. The two halves are asserted together, because either one alone
-# permits the wrong implementation.
-RAW_VOLS="$(cat "$PROBE_SRC" "$PROBE_OVERLAY" | raw_volume_keys)"
-expect_has "raw_volume_keys_sees_a_volume_the_render_prunes" "$RAW_VOLS" "vol_three"
+# shell-first C2: `vol_three` is declared and mounted by no service, and
+# compose prunes it out of BOTH renders — which is the whole reason the
+# declared set is read from the raw TEXT and never from a render.
+#
+# Only this half is a shell case now. Since 2026-09-21 (s41/rulings.md) the
+# raw text is parsed by novabundle.py with PyYAML rather than by awk here, so
+# the other half — that the reader sees `vol_three` in this same probe pair —
+# is deploy/backup/tests/test_raw_compose.py's
+# `test_a_volume_no_service_mounts_is_still_declared`, over these same two
+# fixture files. Both halves still exist; one of them moved to where the
+# parser went.
+expect_has "the_probe_pair_really_declares_the_volume_nothing_mounts" \
+  "$(cat "$PROBE_SRC")" "vol_three:"
 expect_lacks "the_render_really_did_prune_it" "$(cat "$PROBE_YAML")" "vol_three"
 expect_lacks "the_render_really_did_prune_it" "$(cat "$PROBE_JSON")" "vol_three"
 
-# Every file in COMPOSE_FILE, not just the first: the GPU overlay makes this
-# two files on any host with an NVIDIA runtime.
-RAW_SVCS="$(cat "$PROBE_SRC" "$PROBE_OVERLAY" | raw_service_keys)"
-expect_has "raw_service_keys_reads_every_file_in_COMPOSE_FILE" "$RAW_SVCS" "alpha"
-expect_has "raw_service_keys_reads_every_file_in_COMPOSE_FILE" "$RAW_SVCS" "beta"
-expect_str "raw_volume_keys_reads_every_file_in_COMPOSE_FILE" \
-  "$(printf '%s' "$RAW_VOLS" | tr '\n' ' ')" "vol_one vol_three vol_two"
-
-# A service's own `volumes:` block sits at four spaces and its entries at six;
-# neither is a top-level declaration. A reader that keys on the word alone
-# reports `- vol_one:/one` as a declared volume.
-expect_lacks "raw_volume_keys_ignores_a_services_own_volumes_block" "$RAW_VOLS" "/one"
-expect_lacks "raw_service_keys_ignores_indented_keys" "$RAW_SVCS" "image"
-
-expect_str "reads_the_project_name_from_the_raw_text" \
-  "$(cat "$PROBE_SRC" "$PROBE_OVERLAY" | raw_project_name)" "novaxprobe"
 expect_str "reads_the_project_name_from_the_render" \
   "$(cfg_project_name < "$PROBE_YAML")" "novaxprobe"
 
@@ -156,82 +147,20 @@ expect_has "dispositions_json_carries_anon_keyed_by_service_and_target" "$DISP" 
   '"/var/cache/thing": {"disposition": "exclude-ephemeral", "reason": "a cache; it regenerates on use."}'
 # ── the raw file, not a capture of it ───────────────────────────────────────
 #
-# Every assertion above reads a RENDER. A render is a capture, so on its own it
-# says nothing about the file a human edits: deleting a disposition from
-# deploy/docker-compose.yml and leaving the capture alone left this whole suite
-# green while the next real backup refused. raw_dispositions reads the file
-# itself, and this compares the two SETS — which is also what notices a fixture
-# nobody refreshed.
-render_rows() {
-  local text svc key line
-  text="$(cat)"
-  for key in $(printf '%s' "$text" | cfg_volume_keys); do
-    line="$(printf '%s' "$text" | cfg_volume_disposition "$key")"
-    printf 'volume		%s	%s	%s
-' "$key" "${line%%	*}" \
-      "$([ -n "${line#*	}" ] && [ -n "$line" ] && printf yes || printf no)"
-  done
-  for svc in $(printf '%s' "$text" | cfg_service_keys); do
-    printf '%s' "$text" | cfg_mounts "$svc" |
-      awk -F'	' -v s="$svc" '$1 == "bind" { printf "bind\t%s\t%s\t%s\t%s\n", s, $3, $5, ($6 == "" ? "no" : "yes") }'
-    printf '%s' "$text" | cfg_anon "$svc" |
-      awk -F'	' -v s="$svc" '{ printf "anon\t%s\t%s\t%s\t%s\n", s, $1, $2, ($3 == "" ? "no" : "yes") }'
-  done
-}
-
-# `interp` and `unreadable` rows are left out of the SET comparison — the
-# first is a mount whose kind only the render can settle, the second is a
-# stated cannot — and asserted to be absent immediately below, so leaving
-# them out of the equality drops nothing.
-expect_str "the_real_compose_file_and_the_checked_in_render_declare_the_same_rows" \
-  "$(raw_dispositions < "$SCRIPT_DIR/docker-compose.yml" |
-     awk -F'	' '$1 == "volume" || $1 == "bind" || $1 == "anon"' | sort)" \
-  "$(render_rows < "$FIXTURES/compose-v5.3.0.yaml" | sort)"
-
-expect_str "the_real_compose_file_uses_no_mount_form_this_reader_cannot_read" \
-  "$(raw_dispositions < "$SCRIPT_DIR/docker-compose.yml" | awk -F'	' '$1 == "unreadable"')" ""
-
-# The grammar, against the shipped reader: three item spellings and the two
-# undecidable-by-construction answers. Measured against real compose first
-# (the table is in test_policy.py); this is the reader agreeing with it.
-GRAMMAR_ROWS="$(raw_dispositions <<'YAML'
-name: nova
-services:
-  a:
-    image: alpine
-    volumes:
-      - named_one:/short-named
-      - ./src:/short-rel
-      - ${VOLNAME}:/interp-whole
-      - {type: bind, source: ../flowsrc, target: /flow-map}
-      - type: bind
-        source: ../blocksrc
-        target: /block-map
-  b:
-    image: alpine
-    volumes: [ "named_one:/one" ]
-YAML
-)"
-expect_has "a_flow_mapping_mount_is_read_like_any_other" "$GRAMMAR_ROWS" \
-  "$(printf 'bind	a	/flow-map')"
-expect_has "a_block_mapping_mount_is_read" "$GRAMMAR_ROWS" "$(printf 'bind	a	/block-map')"
-expect_has "a_short_syntax_bind_is_read" "$GRAMMAR_ROWS" "$(printf 'bind	a	/short-rel')"
-expect_has "an_undecidable_source_is_said_to_be_undecidable" "$GRAMMAR_ROWS" \
-  "$(printf 'interp	a	/interp-whole')"
-expect_lacks "a_named_volume_is_never_called_a_bind" "$GRAMMAR_ROWS" "/short-named"
-expect_has "a_flow_sequence_is_a_stated_cannot" "$GRAMMAR_ROWS" "$(printf 'unreadable	b')"
-
-RAW_DISP="$(raw_dispositions < "$SCRIPT_DIR/docker-compose.yml")"
-expect_has "raw_dispositions_reads_a_volumes_row_from_the_file" "$RAW_DISP" \
-  "$(printf 'volume		v4_memdata	include	yes')"
-expect_has "raw_dispositions_reads_a_long_syntax_binds_row_from_the_file" "$RAW_DISP" \
-  "$(printf 'bind	searxng	/etc/searxng	exclude-code	yes')"
-expect_has "raw_dispositions_reads_an_anon_row_from_the_file" "$RAW_DISP" \
-  "$(printf 'anon	searxng	/var/cache/searxng	exclude-ephemeral	yes')"
-# A short-syntax volume mount cannot carry a disposition and must not be
-# reported as a bind that is missing one.
-expect_lacks "raw_dispositions_ignores_a_short_syntax_mount" "$RAW_DISP" \
-  "$(printf 'bind	postgres	/var/lib/postgresql/data')"
+# Every assertion above reads a RENDER, and a render is a capture: deleting a
+# disposition from deploy/docker-compose.yml and leaving the capture alone left
+# this whole suite green while the next real backup refused. The reading that
+# looks at the file a human edits, and the two-direction set comparison that
+# is also what notices a fixture nobody refreshed, are now in
+# deploy/backup/tests/test_policy.py — `test_the_render_declares_exactly_what_
+# the_file_declares`, whose raw half is novabundle.py's parser and whose
+# rendered half is still the cfg_* readers above.
+#
+# They are there and not here because the raw parse moved into the pack
+# container on 2026-09-21 (s41/rulings.md): four fix rounds found six real
+# binds the awk reader did not see, each in a different place. Nothing in the
+# shell parses compose YAML any more; `render_raw` stages its bytes, and the
+# cases for THAT are in the coverage block below.
 
 expect_has "dispositions_json_is_parseable" \
   "$(printf '%s' "$DISP" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(sorted(d))')" \
@@ -249,12 +178,34 @@ printf '\n── coverage: the renderers, and what novabundle.py does with them 
 # trailing-slash behaviour is the thing being pinned and a stubbed git would
 # pin the stub.
 
-if ! command -v python3 >/dev/null 2>&1; then
-  report 1 "coverage block" "no python3 on PATH — novabundle.py cannot be run, so this
-     block would pass vacuously. It fails instead."
+# novabundle.py parses the staged compose text with PyYAML (s41/rulings.md,
+# 2026-09-21: the raw parse moved off awk and into the container, where the
+# core image carries PyYAML through uvicorn[standard]). Out here it needs an
+# interpreter that has it. Tried in order, and if NEITHER can import yaml this
+# block FAILS — a coverage block that quietly does not run is a green suite
+# that proved nothing.
+NOVA_PY=""
+if command -v python3 >/dev/null 2>&1 && python3 -c 'import yaml' >/dev/null 2>&1; then
+  NOVA_PY="python3"
+elif command -v uv >/dev/null 2>&1 &&
+  uv run --project "$SCRIPT_DIR/backup" python -c 'import yaml' >/dev/null 2>&1; then
+  NOVA_PY="uv"
+fi
+if [ -z "$NOVA_PY" ]; then
+  report 1 "coverage block" "no interpreter here can import yaml — novabundle.py cannot
+     be run, so this block would pass vacuously. It fails instead. Install PyYAML for
+     python3, or uv (\`uv run --project deploy/backup pytest\` is what CI uses)."
   printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
   exit 1
 fi
+
+# The one place this suite runs novabundle.py.
+nova_py() {
+  case "$NOVA_PY" in
+    uv) uv run --project "$SCRIPT_DIR/backup" python "$@" ;;
+    *) python3 "$@" ;;
+  esac
+}
 
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/backup.sh"
@@ -357,7 +308,7 @@ run_coverage() {
       printf '%s|%s' 9 "$(printf '%s' "$err" | tr '\n' ' ')"
       exit 0
     }
-    out="$(python3 "$SCRIPT_DIR/backup/novabundle.py" coverage \
+    out="$(nova_py "$SCRIPT_DIR/backup/novabundle.py" coverage \
       --facts "$WORLD/stage/facts" --mode "${1:-routine}" 2>&1)"
     printf '%s|%s' "$?" "$(printf '%s' "$out" | tr '\n' ' ')"
   )
@@ -390,6 +341,81 @@ nova_gateway|gateway
 nova_memory|memory"
 GIT_LOG="$WORLD/git.log"
 build_world
+
+# ── the raw text is STAGED here, and parsed in the container ────────────────
+#
+# s41/rulings.md 2026-09-21: the declared set still comes from the RAW TEXT —
+# compose prunes a volume no rendered service mounts out of every render — but
+# the parse is PyYAML's, in novabundle.py, where the pack container already is.
+# What the shell owns is the bytes: every file in COMPOSE_FILE, copied whole,
+# with a manifest saying where each came from. These are the cases for that,
+# and for each refusal it states instead of carrying on.
+#
+# The probe pair is two files on purpose: the GPU overlay makes COMPOSE_FILE
+# two files on any host with an NVIDIA runtime, and a stager that reads only
+# the first one loses a whole file's declarations.
+RAWDIR="$WORLD/rawstage"
+(
+  BK_COMPOSE_FILES="$PROBE_SRC:$PROBE_OVERLAY"
+  export BK_COMPOSE_FILES
+  mkdir -p "$RAWDIR/facts"
+  render_raw "$RAWDIR"
+) >/dev/null 2>&1
+
+expect_str "render_raw_stages_every_file_in_COMPOSE_FILE" \
+  "$(ls "$RAWDIR/facts/compose" 2>/dev/null | tr '\n' ' ')" "000.yml 001.yml files.json "
+
+if cmp -s "$PROBE_SRC" "$RAWDIR/facts/compose/000.yml" &&
+  cmp -s "$PROBE_OVERLAY" "$RAWDIR/facts/compose/001.yml"; then
+  report 0 "the_staged_copy_is_the_file_byte_for_byte"
+else
+  report 1 "the_staged_copy_is_the_file_byte_for_byte" \
+    "a staged copy differs from the file it was copied from"
+fi
+
+RAW_MANIFEST="$(cat "$RAWDIR/facts/compose/files.json" 2>/dev/null)"
+expect_has "the_manifest_says_where_the_first_file_came_from" "$RAW_MANIFEST" \
+  "{\"source\": \"$PROBE_SRC\", \"staged\": \"000.yml\"}"
+expect_has "the_manifest_says_where_the_second_file_came_from" "$RAW_MANIFEST" \
+  "{\"source\": \"$PROBE_OVERLAY\", \"staged\": \"001.yml\"}"
+
+# A second run must not leave a previous one's file behind for the parser to
+# read: the stage is emptied, not written over.
+printf 'name: stale\n' > "$RAWDIR/facts/compose/009.yml"
+(
+  BK_COMPOSE_FILES="$PROBE_SRC"
+  export BK_COMPOSE_FILES
+  render_raw "$RAWDIR"
+) >/dev/null 2>&1
+expect_str "re_staging_removes_what_the_last_run_staged" \
+  "$(ls "$RAWDIR/facts/compose" 2>/dev/null | tr '\n' ' ')" "000.yml files.json "
+
+# Each refusal, stated. "<exit>|<its own words>", so expect_cov reads it.
+stage_raw() {
+  (
+    BK_COMPOSE_FILES="$1"
+    export BK_COMPOSE_FILES
+    rm -rf "$WORLD/rawtry"
+    mkdir -p "$WORLD/rawtry/facts"
+    out="$(render_raw "$WORLD/rawtry" 2>&1)" && { printf '0|%s' "$out"; exit 0; }
+    printf '1|%s' "$(printf '%s' "$out" | tr '\n' ' ')"
+  )
+}
+
+expect_cov "refuses_a_compose_file_this_host_cannot_read" \
+  "$(stage_raw "$WORLD/not-a-file.yml")" 1 "cannot read it"
+: > "$WORLD/empty-compose.yml"
+expect_cov "refuses_an_empty_compose_file" \
+  "$(stage_raw "$WORLD/empty-compose.yml")" 1 "An empty compose file is a reading that failed"
+NOFILES="$(
+  bk_compose_files() { :; }
+  rm -rf "$WORLD/rawtry"
+  mkdir -p "$WORLD/rawtry/facts"
+  out="$(render_raw "$WORLD/rawtry" 2>&1)" && printf '0|%s' "$out" || \
+    printf '1|%s' "$(printf '%s' "$out" | tr '\n' ' ')"
+)"
+expect_cov "refuses_when_COMPOSE_FILE_names_nothing" "$NOFILES" 1 \
+  "no compose file, so there is no declared set to read"
 
 # The headline: the real renderers, the real readers, the real compose file,
 # and coverage says yes.

@@ -35,6 +35,15 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
+# The raw compose text is parsed HERE, by the same kind of parser compose
+# itself uses on it, rather than by hand in awk on the host (s41/rulings.md,
+# 2026-09-21). PyYAML is in this image's runtime closure through
+# `uvicorn[standard]`; tests/test_raw_compose.py is the line of code that goes
+# red the day that stops being true. An import failure here is a loud stop, on
+# purpose: the alternative is a parser that degrades to reading nothing, which
+# is the silent skip this whole module exists to prevent.
+import yaml
+
 # ── the closed set of dispositions (§6.2) ───────────────────────────────────
 #
 # Order matters only for the refusal text, which lists them all so the
@@ -156,6 +165,14 @@ FACT_NAMES = (
     "env",
     "databases",
 )
+
+# What each fact IS on disk, so a refusal names something the operator can go
+# and look at. `raw` is the odd one out: the shell stages the compose TEXT and
+# this module parses it, so there is no raw.json (s41/rulings.md 2026-09-21).
+FACT_FILES = dict.fromkeys(FACT_NAMES)
+for _name in FACT_NAMES:
+    FACT_FILES[_name] = f"{_name}.json"
+FACT_FILES["raw"] = "the compose text staged in facts/compose/"
 
 # A fact whose renderer failed can come back well-formed and EMPTY, and an
 # empty structure refuses nothing at all: no container means step 5 never
@@ -296,7 +313,8 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
             Refusal(
                 R0,
                 f"fact {name}",
-                f"{name}.json was not rendered, so this run cannot say what the stack holds.",
+                f"{FACT_FILES[name]} was not rendered, so this run cannot say what "
+                "the stack holds.",
                 "fix: re-run ./install backup and read the renderer's own error above.",
             )
         )
@@ -307,7 +325,8 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                 Refusal(
                     R0,
                     f"fact {name}",
-                    f"{name}.json records that its renderer could not be asked: {fact['error']}",
+                    f"{FACT_FILES[name]} records that its renderer could not be asked: "
+                    f"{fact['error']}",
                     "",
                 )
             )
@@ -330,7 +349,7 @@ def coverage(facts: dict[str, Any], mode: str) -> Coverage:
                 Refusal(
                     R0,
                     f"fact {fact_name}.{key}",
-                    f"{fact_name}.json parsed and `{key}` is empty: {why}. An "
+                    f"{FACT_FILES[fact_name]} parsed and `{key}` is empty: {why}. An "
                     "empty-but-successful fact is a failure, not nothing to carry.",
                     "fix: re-run ./install backup and read the renderer's own error, and "
                     "check that the stack this backup is about is the stack that is running.",
@@ -970,7 +989,521 @@ def _wrap(text: str, width: int) -> list[str]:
     return lines
 
 
+# ── the raw compose text (§6.1) ──────────────────────────────────────────────
+#
+# THE DECLARED SET, and the one reading that looks at the file a human edits.
+# It cannot come from a render: compose PRUNES a volume no rendered service
+# mounts out of `config`, out of `config --format json` and out of
+# `config --volumes` alike (measured on v5.3.0 and v5.5.1, s41/measurements.md
+# R2), and a declared volume nothing mounts is the exact case coverage exists
+# to catch. The DISPOSITIONS still come from the YAML render, because the JSON
+# render strips every nested `x-` key — two sources, neither a style
+# preference, and this file changes the parser rather than either source.
+#
+# Until 2026-09-21 this parse was hand-written in POSIX awk in
+# deploy/compose_read.sh. Four fix rounds found six defects in it, each a real
+# bind that real compose resolves and the reader did not see, each in a
+# different place — the pattern that says the architecture is wrong rather
+# than the line (s41/rulings.md). deploy/backup.sh now STAGES the bytes of
+# every file in COMPOSE_FILE and this side parses them.
+#
+# What the parser may not do is skip. Anything it cannot decide comes back as
+# an `unreadable` row naming what it could not read — a stated cannot — and
+# anything that is not one compose document at all raises, which coverage
+# turns into R0 rather than into an empty declared set.
+
+RAW_STAGE_DIR = "compose"
+RAW_STAGE_MANIFEST = "files.json"
+
+DISPOSITION_KEY = "x-nova-backup"
+REASON_KEY = "x-nova-backup-reason"
+ANON_KEY = "x-nova-backup-anon"
+
+# Every mount `type` compose accepts. `bind` is the only one that can carry a
+# disposition of its own: a named volume's lives under `volumes:` and an
+# image-declared one's under the service's x-nova-backup-anon block (§6.2).
+MOUNT_TYPES = ("bind", "volume", "tmpfs", "npipe", "cluster", "image")
+
+_INTERPOLATION = re.compile(r"\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
+
+
+class ComposeTextError(ValueError):
+    """The staged text is not one compose document, and says which file."""
+
+
+def _row(kind, service, name, disposition="", reason="", where=""):
+    return {
+        "kind": kind,
+        "service": service,
+        "name": name,
+        "disposition": disposition,
+        "reason": reason,
+        "where": where,
+    }
+
+
+def _text(value: Any) -> str:
+    """A scalar as the reader uses it. A non-string (a number, a list, None)
+    is not a disposition or a reason, and silently str()ing one would invent
+    a declaration nobody wrote."""
+    return value if isinstance(value, str) else ""
+
+
+def mount_kind(source: str) -> str:
+    """Which side of a mount a SOURCE is, by the rule compose applies AFTER
+    interpolation. Measured against compose v5.3.0, every row of
+    s41/measurements.md R8:
+
+      starts with `.`, `/` or `~`        -> bind
+      holds a literal `/` anywhere else  -> bind, because a volume NAME may
+                                            not contain `/` at all (compose
+                                            rejects `volumes: {"sub/dir": {}}`)
+      otherwise, and holds a `$`         -> INTERP: undecidable here
+      otherwise                          -> a named volume
+
+    `interp` is the honest third answer and it is why this reader does not
+    simply refuse an interpolated source. `${VOLNAME}:/t` is a named volume
+    when the variable holds a name and a bind when it holds a path — measured
+    both ways. Guessing `bind` reddens a correct file, which is what teaches
+    people to route around a tripwire; guessing `volume` hides an undeclared
+    one. The render settles it: raw text says what EXISTS, the render says
+    what it RESOLVES TO.
+    """
+    if not source:
+        return "unreadable"
+    if source[0] in "./~":
+        return "bind"
+    if "/" in _INTERPOLATION.sub("", source):
+        return "bind"
+    if "$" in source:
+        return "interp"
+    return "volume"
+
+
+def split_mount_spec(spec: str) -> list[str]:
+    """`<source>:<target>[:<mode>]`, split on the colons that separate them.
+
+    Not `spec.split(":")`: `${VAR:-/default}` carries a colon of its own and
+    compose expands it before splitting anything. Measured — compose resolves
+    `- ${NOPE:-../fallback}:/t` to a bind at /t — and a naive split reads the
+    source as `${NOPE` and the target as `-../fallback}`.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    depth = 0
+    index = 0
+    while index < len(spec):
+        char = spec[index]
+        if char == "$" and spec[index + 1 : index + 2] == "{":
+            depth += 1
+            current.append("${")
+            index += 2
+            continue
+        if char == "}" and depth:
+            depth -= 1
+        elif char == ":" and depth == 0:
+            parts.append("".join(current))
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    parts.append("".join(current))
+    return parts
+
+
+def _string_mount(item: str, service: str, where: str) -> list[dict]:
+    """A short-syntax item, `<source>:<target>[:<mode>]`."""
+    parts = split_mount_spec(item)
+    if len(parts) == 1:
+        if "$" in item:
+            # `- ${MOUNTSPEC}` carrying a whole `src:tgt`. Measured: compose
+            # resolves it to a real bind. Nothing here can know even the
+            # TARGET, which is the key every row is compared by, so this is
+            # said rather than guessed or swallowed.
+            return [
+                _row(
+                    "unreadable",
+                    service,
+                    f"`- {item}` (the whole mount spec is a variable)",
+                    where=where,
+                )
+            ]
+        # No colon and no variable: an inline ANONYMOUS volume, measured —
+        # not a bind. The only place its name exists is containers.json,
+        # where an undeclared one is refused R4.
+        return []
+    if len(parts) > 3:
+        return [
+            _row(
+                "unreadable",
+                service,
+                f"`- {item}` (too many colons; compose rejects it)",
+                where=where,
+            )
+        ]
+    source, target = parts[0], parts[1]
+    if not source or not target:
+        return [
+            _row("unreadable", service, f"`- {item}` (empty section between colons)", where=where)
+        ]
+    if "$" in target:
+        # The target is what a row is KEYED by, so an interpolated one cannot
+        # be compared against anything. Measured: compose resolves it fine.
+        return [
+            _row("unreadable", service, f"`- {item}` (the target is interpolated)", where=where)
+        ]
+    kind = mount_kind(source)
+    if kind in ("bind", "interp"):
+        return [_row(kind, service, target, where=where)]
+    return []
+
+
+def _mapping_mount(item: dict, service: str, where: str) -> list[dict]:
+    """A long-syntax item. Block mapping and flow mapping are the same thing
+    to a YAML parser, which is why three of the six awk defects were one bug
+    here."""
+    target = item.get("target")
+    disposition = _text(item.get(DISPOSITION_KEY))
+    reason = _text(item.get(REASON_KEY))
+    mtype = item.get("type")
+    if not isinstance(target, str) or not target:
+        return [_row("unreadable", service, "a long-syntax mount with no `target:`", where=where)]
+    if "$" in target:
+        return [
+            _row(
+                "unreadable",
+                service,
+                f"a long-syntax mount whose target `{target}` is interpolated",
+                where=where,
+            )
+        ]
+    if not isinstance(mtype, str) or not mtype:
+        # Measured: compose REJECTS a long-syntax mount with no `type:`
+        # (`services.a.volumes.0 must be a string`), so there is no resolved
+        # mount to agree with and no kind to infer.
+        return [
+            _row(
+                "unreadable",
+                service,
+                f"a long-syntax mount at {target} with no `type:`",
+                where=where,
+            )
+        ]
+    if mtype == "bind":
+        return [_row("bind", service, target, disposition, reason, where)]
+    if mtype in MOUNT_TYPES:
+        if disposition or reason:
+            # A disposition written on a non-bind mount is read by nothing:
+            # dispositions.json carries only binds, and a named volume's row
+            # lives under `volumes:`. Saying so beats ignoring it.
+            return [
+                _row(
+                    "unreadable",
+                    service,
+                    f"`{DISPOSITION_KEY}` on a `{mtype}` mount at {target} is read by nothing",
+                    where=where,
+                )
+            ]
+        return []
+    return [
+        _row("unreadable", service, f"a mount at {target} of unknown type `{mtype}`", where=where)
+    ]
+
+
+def _walk_keys(node: Any, path: tuple = ()):
+    """Every mapping key in the document, with the path it sits at."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            yield path, key
+            yield from _walk_keys(value, path + (key,))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _walk_keys(value, path + (index,))
+
+
+def _reads_this_disposition(path: tuple) -> bool:
+    """The three places §6.2 says a disposition lives, and no others."""
+    if len(path) == 3 and path[0] == "volumes" and path[2] in (DISPOSITION_KEY, REASON_KEY):
+        return True
+    if len(path) == 3 and path[0] == "services" and path[2] == ANON_KEY:
+        return True
+    return (
+        len(path) == 5
+        and path[0] == "services"
+        and path[2] == "volumes"
+        and isinstance(path[3], int)
+        and path[4] in (DISPOSITION_KEY, REASON_KEY)
+    )
+
+
+def _misplaced_dispositions(doc: dict, where: str) -> list[dict]:
+    """An `x-nova-backup*` row written where nothing reads it.
+
+    Not a hypothetical: the rows are hand-written prose in a YAML file, the
+    three legal homes are at three different depths, and neither this reader
+    nor the render would ever mention a misplaced one. A declaration nobody
+    reads looks exactly like a declaration that works.
+    """
+    rows = []
+    for path, key in _walk_keys(doc):
+        if not isinstance(key, str) or not key.startswith(DISPOSITION_KEY):
+            continue
+        full = path + (key,)
+        if _reads_this_disposition(full):
+            continue
+        service = path[1] if len(path) > 1 and path[0] == "services" else ""
+        where_written = ".".join(str(part) for part in full)
+        rows.append(
+            _row(
+                "unreadable",
+                service,
+                f"`{where_written}` is a disposition nothing reads",
+                where=where,
+            )
+        )
+    return rows
+
+
+def compose_document_rows(doc: dict, where: str) -> list[dict]:
+    """Every disposition-bearing thing one compose document declares:
+
+    volume     <key>                      its x-nova-backup row, if any
+    bind       <service> <target>         the long form's own row, if any
+    interp     <service> <target>         a source only the render can settle
+    anon       <service> <target>         an x-nova-backup-anon row
+    unreadable <service> <what>           a STATED cannot, never a skip
+    """
+    rows: list[dict] = []
+
+    volumes = doc.get("volumes")
+    if volumes is not None:
+        if not isinstance(volumes, dict):
+            rows.append(
+                _row("unreadable", "", "the top-level `volumes:` is not a mapping", where=where)
+            )
+        else:
+            for key, value in volumes.items():
+                if not isinstance(key, str):
+                    rows.append(
+                        _row(
+                            "unreadable",
+                            "",
+                            f"a volume key that is not a name: {key!r}",
+                            where=where,
+                        )
+                    )
+                    continue
+                if value is None:
+                    rows.append(_row("volume", "", key, where=where))
+                elif isinstance(value, dict):
+                    rows.append(
+                        _row(
+                            "volume",
+                            "",
+                            key,
+                            _text(value.get(DISPOSITION_KEY)),
+                            _text(value.get(REASON_KEY)),
+                            where,
+                        )
+                    )
+                else:
+                    rows.append(
+                        _row(
+                            "unreadable",
+                            "",
+                            f"volume `{key}` is declared as a {type(value).__name__}",
+                            where=where,
+                        )
+                    )
+
+    services = doc.get("services")
+    if services is not None:
+        if not isinstance(services, dict):
+            rows.append(
+                _row("unreadable", "", "the top-level `services:` is not a mapping", where=where)
+            )
+            services = {}
+        for name, body in sorted(services.items(), key=lambda kv: str(kv[0])):
+            service = str(name)
+            if body is None:
+                continue
+            if not isinstance(body, dict):
+                rows.append(
+                    _row(
+                        "unreadable",
+                        service,
+                        f"the service is a {type(body).__name__}, not a mapping",
+                        where=where,
+                    )
+                )
+                continue
+
+            anon = body.get(ANON_KEY)
+            if anon is not None:
+                if not isinstance(anon, dict):
+                    rows.append(
+                        _row("unreadable", service, f"`{ANON_KEY}:` is not a mapping", where=where)
+                    )
+                else:
+                    for target, entry in anon.items():
+                        if isinstance(entry, dict):
+                            rows.append(
+                                _row(
+                                    "anon",
+                                    service,
+                                    str(target),
+                                    _text(entry.get("disposition")),
+                                    _text(entry.get("reason")),
+                                    where,
+                                )
+                            )
+                        else:
+                            rows.append(
+                                _row(
+                                    "unreadable",
+                                    service,
+                                    f"`{ANON_KEY}: {target}` is not a mapping",
+                                    where=where,
+                                )
+                            )
+
+            if "volumes" in body:
+                mounts = body.get("volumes")
+                if not isinstance(mounts, list):
+                    # Measured: compose rejects both `volumes:` (null) and a
+                    # mapping (`services.a.volumes must be a array`). An empty
+                    # LIST is legal and means no mounts, so it is not a row.
+                    rows.append(
+                        _row(
+                            "unreadable", service, "`volumes:` is not a list of mounts", where=where
+                        )
+                    )
+                else:
+                    for item in mounts:
+                        if isinstance(item, str):
+                            rows.extend(_string_mount(item, service, where))
+                        elif isinstance(item, dict):
+                            rows.extend(_mapping_mount(item, service, where))
+                        else:
+                            rows.append(
+                                _row(
+                                    "unreadable",
+                                    service,
+                                    f"a mount item that is a {type(item).__name__}",
+                                    where=where,
+                                )
+                            )
+
+    rows.extend(_misplaced_dispositions(doc, where))
+    return rows
+
+
+def load_compose_document(text: str, where: str) -> dict:
+    """One compose document, or a refusal that names the file and says why."""
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        raise ComposeTextError(f"{where}: {' '.join(str(exc).split())}") from None
+    if doc is None:
+        raise ComposeTextError(
+            f"{where}: parses to nothing. An empty compose file is a reading that "
+            "failed, not a stack with nothing in it."
+        )
+    if not isinstance(doc, dict):
+        raise ComposeTextError(
+            f"{where}: parses to a {type(doc).__name__}, not a compose document."
+        )
+    return doc
+
+
+def raw_compose_rows(text: str, where: str) -> list[dict]:
+    return compose_document_rows(load_compose_document(text, where), where)
+
+
+def raw_compose_fact(files: list[tuple[str, str]]) -> dict[str, Any]:
+    """The `raw` fact of §6.1, from the text of every file in COMPOSE_FILE.
+
+    `files` is [(source path, text)] in COMPOSE_FILE order, which is the order
+    a bare `docker compose` on this host merges them in.
+    """
+    project = ""
+    services: set[str] = set()
+    volumes: set[str] = set()
+    rows: list[dict] = []
+    for where, text in files:
+        doc = load_compose_document(text, where)
+        # Measured on compose v5.3.0, both orders: the LAST file that declares
+        # a `name:` wins, and a file that declares none does not clear it.
+        name = doc.get("name")
+        if isinstance(name, str) and name.strip():
+            project = name.strip()
+        for section, into in (("services", services), ("volumes", volumes)):
+            block = doc.get(section)
+            if isinstance(block, dict):
+                into.update(str(key) for key in block)
+        rows.extend(compose_document_rows(doc, where))
+    return {
+        "project": project,
+        "compose_files": [where for where, _ in files],
+        "services": sorted(services),
+        "volumes": sorted(volumes),
+        "rows": rows,
+    }
+
+
+def read_compose_stage(facts_dir: str) -> list[tuple[str, str]]:
+    """The text backup.sh staged, in COMPOSE_FILE order.
+
+    The shell copies bytes and writes the manifest; it parses nothing.
+    """
+    stage = os.path.join(facts_dir, RAW_STAGE_DIR)
+    with open(os.path.join(stage, RAW_STAGE_MANIFEST), encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    entries = manifest.get("compose_files") if isinstance(manifest, dict) else None
+    if not isinstance(entries, list) or not entries:
+        raise ComposeTextError(
+            f"{stage}/{RAW_STAGE_MANIFEST} names no compose file, so there is no "
+            "declared set to read."
+        )
+    files = []
+    for entry in entries:
+        source = entry.get("source") if isinstance(entry, dict) else None
+        staged = entry.get("staged") if isinstance(entry, dict) else None
+        if not isinstance(source, str) or not isinstance(staged, str) or not staged:
+            raise ComposeTextError(
+                f"{stage}/{RAW_STAGE_MANIFEST} carries an entry that names no file: {entry!r}"
+            )
+        if os.path.basename(staged) != staged or staged.startswith("."):
+            raise ComposeTextError(
+                f"{stage}/{RAW_STAGE_MANIFEST} names a staged file outside the stage: {staged!r}"
+            )
+        with open(os.path.join(stage, staged), encoding="utf-8") as fh:
+            files.append((source, fh.read()))
+    return files
+
+
 # ── facts on disk ───────────────────────────────────────────────────────────
+
+
+def raw_fact_on_disk(facts_dir: str) -> dict[str, Any] | None:
+    """The `raw` fact, DERIVED here from the text backup.sh staged.
+
+    Every other fact is a JSON file the shell wrote. This one is the compose
+    text itself, parsed on this side (s41/rulings.md 2026-09-21), so the shell
+    stages bytes and hand-parses no YAML. `None` means nothing was staged at
+    all, which coverage reports as R0 like any other missing fact.
+    """
+    try:
+        files = read_compose_stage(facts_dir)
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        return {"error": f"{exc}"}
+    try:
+        return raw_compose_fact(files)
+    except ComposeTextError as exc:
+        return {"error": f"{exc}"}
 
 
 def load_facts(facts_dir: str) -> dict[str, Any]:
@@ -982,6 +1515,11 @@ def load_facts(facts_dir: str) -> dict[str, Any]:
     """
     facts: dict[str, Any] = {}
     for name in FACT_NAMES:
+        if name == "raw":
+            raw = raw_fact_on_disk(facts_dir)
+            if raw is not None:
+                facts[name] = raw
+            continue
         path = os.path.join(facts_dir, f"{name}.json")
         try:
             with open(path, encoding="utf-8") as fh:
