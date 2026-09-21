@@ -349,9 +349,12 @@ Consequences, all binding:
   have seen none. The JSON render stays — it is the right source for resolved
   mount structure and full volume names — but the **dispositions come out of
   the YAML** and the shell writes them into `facts/dispositions.json`.
-- The pack container therefore needs no YAML parser, which matters: the core
-  image carries `cryptography` (`services/core/pyproject.toml:11`) and nothing
-  guarantees PyYAML.
+- The pack container therefore needs no YAML parser for the DISPOSITIONS; the
+  shell hands it `facts/dispositions.json`. (Written when nothing was thought
+  to guarantee PyYAML in the core image. `rulings.md` 2026-09-21 measured that
+  `uvicorn[standard]` puts it there, and moved the RAW parse into the
+  container on the strength of it. The dispositions reading stays here: this
+  bullet's conclusion survives, its premise did not.)
 
 The same probe confirmed the second half of shell-first C2, and the re-measure
 confirmed it again [M]: `vol_three` — declared under `volumes:`, carrying its
@@ -377,7 +380,7 @@ render.** Both were taken on compose v5.3.0, twice.
 | `deploy/backup.sh` | `cmd_backup`, `cmd_restore`, `cmd_drill`, `cmd_undo_move`; the fact renderers (§6.1); `sha256_of`, `mode_probe`, `archive_name`, `pack_image`, `pg_image`, `writer_services`; the EXIT traps. Orchestration and refusal only — no data, no keys. Sourced by `install.sh`, entry-guarded like `deploy/install.sh:1139-1141` so the suite can source it. |
 | `deploy/passphrase.sh` | The resolver seam (§8). |
 | `deploy/subnet.sh` | `decide_subnet`, `docker_subnets_in_use`, `host_routes_in_use`, `subnet_overlaps`, `ip_to_int`, `pick_project_subnet`, `derive_subnet_addrs` (§10.2). Sourced by `install.sh` **and** `backup.sh`. |
-| `deploy/compose_read.sh` | The awk readers over the **YAML** render and over the raw compose text: `raw_volume_keys`, `raw_service_keys`, `cfg_volume_name`, `cfg_volume_disposition`, `cfg_bind_disposition`, `cfg_anon_disposition`, `cfg_service_keys`. Sourced by both. Separate file because §12.1 drives it against checked-in fixtures from two compose versions. |
+| `deploy/compose_read.sh` | The awk readers over the **YAML render**: `cfg_volume_name`, `cfg_volume_disposition`, `cfg_bind_disposition`, `cfg_anon_disposition`, `cfg_service_keys`, `cfg_volume_keys`, `cfg_mounts`, `cfg_anon`, `dispositions_json`. Sourced by both. Separate file because §12.1 drives it against checked-in fixtures from two compose versions. **The raw-text readers are no longer here** — `rulings.md` 2026-09-21 moved that parse to `novabundle.py` and PyYAML; `backup.sh` stages the bytes. The two SOURCES of §6.1 are unchanged. |
 | `deploy/backup/novabundle.py` | The container-side worker. Subcommands `plan`, `pack`, `verify`, `kat`, `fingerprint`, `genpass`, `listing`. Holds `NOVAENC1`, the tar builder, the member hasher, the manifest writer/validator. Consumes `facts/*.json`; **never shells out**. |
 | `deploy/backup/nova_restore.py` | The standalone reader (#3). Stdlib + `ctypes` libcrypto, with `cryptography` preferred when importable. No imports from this repo. **Byte-identical to the copy inside every bundle.** |
 | `deploy/backup/restore.sh` | POSIX `sh`. The four-backend probe, KAT-gated (§7.3). Travels in every bundle. |
@@ -692,9 +695,9 @@ discards stderr with `2>/dev/null`, and the new all-profiles renderer must not
 
 | File | Command | Why this source |
 |---|---|---|
-| `raw.json` | `raw_volume_keys` / `raw_service_keys` over the **text of every file in `COMPOSE_FILE`** | The declared set. Compose **prunes** a volume no rendered service mounts — out of the JSON render, the YAML render and `config --volumes` alike, re-measured by hand on compose v5.3.0 on 2026-09-21 (§3) [M] — so a render can never be the authority on what was declared. |
+| the `raw` fact | `render_raw` **stages the text of every file in `COMPOSE_FILE`** into `facts/compose/`; `novabundle.py` parses it with PyYAML and derives the fact (`rulings.md` 2026-09-21 — there is no `raw.json`) | The declared set. Compose **prunes** a volume no rendered service mounts — out of the JSON render, the YAML render and `config --volumes` alike, re-measured by hand on compose v5.3.0 on 2026-09-21 (§3) [M] — so a render can never be the authority on what was declared. |
 | `config.yaml` | `docker compose "${COMPOSE_ARGS[@]}" --profile '*' config` | The **dispositions**, and only here: `--format json` keeps only a **top-level** `x-` key and strips every **nested** one — per volume, per service, per mount — and every disposition §6.2 declares is nested (compose v5.3.0, re-measured by hand 2026-09-21, §3) [M]. |
-| `dispositions.json` | `compose_read.sh` over `config.yaml` | What the container reads, so it needs no YAML parser. |
+| `dispositions.json` | `compose_read.sh` over `config.yaml` | What the container reads for the dispositions, already reduced to JSON. |
 | `config.json` | the same command with `--format json` | Resolved full volume names, resolved absolute bind sources, mount `read_only`, service environment, `depends_on`, the project name. Warnings go to stderr; only stdout is parsed. |
 | `containers.json` | `docker ps -a --filter label=com.docker.compose.project=$P --format json`, then `docker inspect` for `.Mounts` per id | Anonymous and image-declared volumes compose never names. **This is the source with no fixture in port-v3, and it is the only one that can see `searxng`'s anonymous volume** [M]. Exited containers included. |
 | `git.json` | per host path under a scan root: `git check-ignore -q <rel>/` then `<rel>`; else `git ls-files --error-unmatch`; else unknown | §6.4. **The trailing slash is not optional** [M]: `git check-ignore -v data` exits 1 while `git check-ignore -v data/` matches `.gitignore:13`, and `../data` is a real bind (`deploy/docker-compose.yml:83`). A verbatim port of v3's `git_status_fn` makes every v4 backup refuse on day one. |
@@ -750,12 +753,12 @@ coverage(facts, mode) -> (entries, refusals)          # mode = routine | move
 
  1. PROJECT := config.json["name"]. Refuse unless it equals the project name of
     the checkout's own compose text, re-read.                        -> R0
- 2. Gap check.  raw_service_keys ⊆ config.json.services
-                raw_volume_keys  ⊆ config.json.volumes               -> R1
+ 2. Gap check.  raw.services ⊆ config.json.services
+                raw.volumes  ⊆ config.json.volumes                   -> R1
     This is what catches a compose build that treats `*` as an ordinary
     profile name, and it is what makes `--profile '*'` a convenience rather
     than the safety mechanism.
- 3. Declared volumes := raw_volume_keys.  For each:
+ 3. Declared volumes := raw.volumes.  For each:
       full name    := config.json.volumes[k].name   (READ, never assembled)
       disposition  := dispositions.json.volumes[k]
       missing, or not one of the eight, or exclude-* with no reason  -> R2
@@ -1874,10 +1877,10 @@ used, and they are binding:
 
 ```
 project     := compose_config_text | config_project_name           (install.sh:399-401)
-ours_volk   := raw_volume_keys(every file in COMPOSE_FILE)         # cannot be pruned
+ours_volk   := the raw fact's `volumes` (every file in COMPOSE_FILE)  # cannot be pruned
              ∪ (compose_config_text_all_profiles | cfg_service_keys-volumes)
 ours_voln   := cfg_volume_name(k) for each k in ours_volk          (install.sh:405-413)
-ours_svc    := raw_service_keys ∪ rendered services
+ours_svc    := the raw fact's `services` ∪ rendered services
 ```
 
 All three designs derived this from a *rendered* config and all three were
@@ -2200,9 +2203,11 @@ survives the JSON render, and a volume's, a service's and a long-syntax
 mount's do not — so a future "just use JSON, it parses" simplification cannot
 land, and so a future compose that starts keeping nested keys is noticed
 rather than silently relied on) ·
-`raw_volume_keys_sees_a_volume_the_render_prunes` ·
-`raw_service_keys_reads_every_file_in_COMPOSE_FILE` (python-tool minor 8: the
-GPU overlay makes it two files).
+`the_render_really_did_prune_it` (the shell half) with
+`test_a_volume_no_service_mounts_is_still_declared` and
+`test_the_declared_set_is_the_union_of_every_file` in
+`deploy/backup/tests/test_raw_compose.py` (the parser half, over the same two
+probe fixtures; python-tool minor 8: the GPU overlay makes it two files).
 
 **Coverage**: `refuses_an_undeclared_volume` ·
 `refuses_an_unknown_disposition_and_names_all_eight` ·

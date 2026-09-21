@@ -192,8 +192,12 @@ cfg_anon_disposition() {
 }
 
 # ── dispositions.json ───────────────────────────────────────────────────────
-# What crosses into the pack container, so it needs no YAML parser (the core
-# image carries `cryptography`; nothing guarantees PyYAML). Shape:
+# What crosses into the pack container, already reduced to JSON. It stays a
+# shell reading of the YAML render because s41/rulings.md moved the RAW parse
+# and only that; the line first written here — "nothing guarantees PyYAML" —
+# is no longer true (uvicorn[standard] puts it in the core image, and
+# deploy/backup/tests/test_raw_compose.py is what notices if it leaves), but
+# the cfg_* readers are not the thing four fix rounds found defects in. Shape:
 #
 #   {"volumes": {"<key>":     {"disposition":…, "reason":…}},
 #    "binds":   {"<service>": {"<target>": {"disposition":…, "reason":…,

@@ -136,8 +136,8 @@ expect_str "reads_the_project_name_from_the_render" \
 expect_str "cfg_service_keys_lists_every_service_in_the_render" \
   "$(cfg_service_keys < "$PROBE_YAML" | tr '\n' ' ')" "alpha beta "
 
-# dispositions.json is what crosses into the container, so the container needs
-# no YAML parser. Shape is the contract; T3 renders it, novabundle.py reads it.
+# dispositions.json is what crosses into the container, already reduced to
+# JSON. Shape is the contract; T3 renders it, novabundle.py reads it.
 DISP="$(dispositions_json < "$PROBE_YAML")"
 expect_has "dispositions_json_carries_volumes_keyed_by_compose_key" "$DISP" \
   '"vol_one": {"disposition": "include", "reason": "the notes: they matter"}'

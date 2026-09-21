@@ -301,7 +301,7 @@ EOF
 # `config --format json` keeps only a TOP-LEVEL `x-` key and strips every
 # nested one (a volume's, a service's, a long-syntax mount's), and every
 # disposition is nested. dispositions.json is what crosses into the container,
-# so the container needs no YAML parser.
+# already reduced to JSON.
 render_dispositions() {
   local stage="$1"
   local yaml="$stage/facts/config.yaml" out="$stage/facts/dispositions.json"
