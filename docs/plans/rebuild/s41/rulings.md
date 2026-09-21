@@ -69,3 +69,26 @@ What that binds:
   chat walk belongs to S45. Cost if wrong: the drill verb is her capability by
   arc 8, so if it turns out the drill must be hers in S41, that is one tool and
   one eval added on top, not a redesign.
+
+
+## My rulings, added 2026-09-21 after the cleanup
+
+- **The foreign-project refusal and its deletion are proven against a
+  deliberately-built synthetic foreign project, never against his data.**
+  After the cleanup there is no real foreign `nova` project left anywhere, so
+  the one irreversible path in S41 would otherwise ship fixture-proven and
+  never executed — "a reply is a claim" applies to a script as much as to her.
+  T7's walk therefore **creates** a throwaway compose project named `nova`
+  (one `busybox` container, one volume, correct `com.docker.compose.project`
+  labels) on the target machine, next to a decoy volume whose NAME starts with
+  `nova_` but whose label says another project, and next to a real v4 volume.
+  The walk then runs the refusal, runs the bounded deletion, and verifies that
+  the synthetic project is gone while the decoy and the v4 volume survive.
+  Cost if wrong: the walk itself runs a destructive path on a live machine —
+  which is why every object it may touch is one the walk created, and why the
+  decoy exists.
+- **The stale binding inputs are corrected, not just superseded inline.**
+  `map-requirements.md` still described the 172.18 collision and the stopped
+  platform-line project in the present tense. A map that contradicts the
+  verdict is a trap for an implementer who reads the map first, which the task
+  briefs will tell them to do.

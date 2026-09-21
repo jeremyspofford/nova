@@ -92,12 +92,20 @@ Four conflicts, all resolved by ruling 2 in favour of arc 8:
 - Mini PC: N150, 4 cores, 16 GB (15.4 GiB total, **12.5 GiB free** beside
   minecraft), 351 GB free disk, Pop!_OS 24.04, Docker 29.8, compose v5.5.1,
   linger on, AC sleep `nothing`. [`hub-topology.md:76-82`, `hub-p0-measurements.md:49-54`]
-- **172.18/16 is already taken on the mini PC** — the subnet v4 pins — as are
-  172.17, 172.19, 172.20, 172.21. r1 lands on 172.22.0.0/16.
-  [`hub-p0-measurements.md:55`, `hub/r1-hubmove-design.md:10,156`]
-- The stopped platform-line `nova` project on the mini PC (containers and
-  volumes named in `hub-p0-measurements.md:58-68`). Volume names differ from
-  v4's, so nothing of v4's is at risk from the deletion ruling.
+- ~~**172.18/16 is already taken on the mini PC**~~ — **superseded 2026-09-21.**
+  After the cleanup only **172.17** (docker0) and **172.19** (jobhunter) are
+  allocated there, so v4's pinned 172.18 is free and the r1 prediction of
+  172.22 is stale. `decide_subnet` is still required as a general mechanism,
+  and 172.19 still has to be avoided, but the collision is not a live blocker
+  for this install. [`s41/map-minipc-measured.md`, "After the cleanup"]
+- ~~The stopped platform-line `nova` project on the mini PC~~ — **gone,
+  2026-09-21.** Archived and removed on the owner's instruction, together with
+  the `docker` (nova-ai-platform) and `project` stacks. There is no foreign
+  `nova` project on that machine any more, so requirement 29's refusal cannot
+  be walked against a real one; it is proven by fixtures plus a **synthetic**
+  foreign project the walk builds itself (`rulings.md`). The pre-cleanup
+  reading in `s41/map-minipc-measured.md` is kept verbatim because the
+  fixtures are built from it.
 - pg client/server matching is solved **by construction** (dump with the
   container's own `pg_dump`); the MANIFEST records `pg_server_version` and
   `pg_dump_major`; restore refuses a lower major.

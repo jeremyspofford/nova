@@ -22,8 +22,9 @@ python-tool 23). **69 are folded into this verdict**, each named in §2 with
 where it lands; five design elements the critiques attacked are rejected
 outright, with reasons; three findings are not carried and §2 says which and
 why. One finding is my own and it changes an implementation choice in
-two of the three designs: **`docker compose config --format json` strips every
-`x-` extension field; the YAML render keeps them** [M].
+two of the three designs: **`docker compose config --format json` keeps a
+top-level `x-` key and strips every nested one — a volume's, a service's, a
+long-syntax mount's; the YAML render keeps them all** [M].
 
 ---
 
@@ -180,7 +181,7 @@ cannot do is roll back a bad upgrade in place.
 | shell-first m11 | `drill`'s sweep and `backup`'s self-test share the `nova_verify_*` namespace | §9.1 step 10 |
 | python-tool C1 | coverage's third derivation signal (git) is missing, so `PATH_POLICY` cannot be total and backup refuses for ever | §6.4 |
 | python-tool C2 | a v4 volume can enter the deletion set, and the required test would pass anyway because its fixture is hand-written | §10.1, §12.2 |
-| python-tool C3 | the bundle is written root-owned and the operator cannot read it back — **a measured incident**, `map-minipc-measured.md:164-171` | §9.1 step 19 |
+| python-tool C3 | the bundle is written root-owned and the operator cannot read it back — **a measured incident**, `map-minipc-measured.md:164-171` | §9's second convention (the writer is not the verifier) and §9.1 step 19 |
 | python-tool M1 | the empty-target probe reads every failure as "empty" | §9.2 step 6 |
 | python-tool M4 | the `.env` plan deadlocks against `decide_subnet`, and #32's host-specific key filter is referenced and never designed | §9.2 step 8 — the bundle carries a key SET, not a file |
 | python-tool M5 | `decide_subnet` adopts a network by name, not by label | §10.2 |
@@ -286,28 +287,56 @@ cannot do is roll back a bad upgrade in place.
 
 ## 3. My own finding, which none of the three designs accounts for
 
-**`docker compose config --format json` strips every `x-` extension field. The
-plain YAML render keeps all of them.** Measured here on compose v5.3.0 with a
-probe file carrying a top-level volume `x-` key, a long-syntax bind `x-` key
-and a service-level `x-` key:
+**`docker compose config --format json` keeps a TOP-LEVEL `x-` key and strips
+every NESTED one — a volume's, a service's, a long-syntax mount's. The plain
+YAML render keeps them all.** Measured here on compose **v5.3.0** with a
+synthetic probe file carrying one `x-` key at each of those four positions, and
+**re-measured by hand on 2026-09-21, same compose version** [M]. The sharper
+claim matters: the one position the JSON render preserves is the one position
+no disposition in this design occupies, because every disposition §6.2 declares
+is nested under a volume, a service or a mount.
+
+The probe file declares `x-nova-top-level:` at the document root, `vol_one`
+with `x-nova-backup:` + `x-nova-backup-reason:`, `vol_three` with the same two
+keys and **no service mounting it**, service `alpha` with
+`x-nova-backup-anon:`, and a long-syntax bind carrying the two keys.
 
 ```
-$ docker compose --project-directory $D -f $D/docker-compose.yml --profile '*' config --format json \
-    | python3 -c "import json,sys; c=json.load(sys.stdin); print(sorted(c['services']['alpha'])); print(c.get('volumes'))"
-['command', 'entrypoint', 'image', 'networks', 'volumes']
-{'vol_one': {'name': 'novaxprobe_vol_one'}, 'vol_three': {'name': 'novaxprobe_vol_three'}}
+$ docker compose --project-directory $D -f $D/docker-compose.yml config --format json
+{ "name": "novaxprobe",
+  "services": { "alpha": { "command": ["true"], "entrypoint": null,
+                           "image": "alpine:3.20",
+                           "volumes": [ {"type":"volume","source":"vol_one",
+                                         "target":"/one","volume":{}},
+                                        {"type":"bind","source":"/abs/bindsrc",
+                                         "target":"/b"} ] } },
+  "volumes":  { "vol_one": { "name": "novaxprobe_vol_one" } },
+  "x-nova-top-level": "kept-or-not" }
+                    ^ the only x- that survives: no volume, no service and no
+                      mount keeps one, and vol_three is not in here at all
 
-$ docker compose ... --profile '*' config          # YAML
+$ docker compose --project-directory $D -f $D/docker-compose.yml config     # YAML
+services:
+  alpha:
+    volumes:
+      - type: bind
+        source: /abs/bindsrc
+        target: /b
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: from git
+    x-nova-backup-anon:
+      /var/cache/thing:
+        disposition: exclude-ephemeral
+        reason: a cache
 volumes:
   vol_one:
     name: novaxprobe_vol_one
     x-nova-backup: include
     x-nova-backup-reason: the notes
-  ...
-    x-nova-backup-anon:
-      /var/cache/thing:
-        disposition: exclude-ephemeral
-        reason: a cache
+x-nova-top-level: kept-or-not
+
+$ docker compose --project-directory $D -f $D/docker-compose.yml config --volumes
+vol_one
 ```
 
 Consequences, all binding:
@@ -324,10 +353,18 @@ Consequences, all binding:
   image carries `cryptography` (`services/core/pyproject.toml:11`) and nothing
   guarantees PyYAML.
 
-The same probe confirmed the second half of shell-first C2: a volume declared
-under `volumes:` with a `name:` and an `x-` key, mounted by no rendered
-service, is **absent from both renders and from `config --volumes`**. That is
-why §6.1's declared set is read from the raw file text.
+The same probe confirmed the second half of shell-first C2, and the re-measure
+confirmed it again [M]: `vol_three` — declared under `volumes:`, carrying its
+own `x-` keys, mounted by no rendered service — is **pruned from the JSON
+render, from the YAML render and from `config --volumes` alike**. It is not
+merely undecorated; it is absent, so nothing downstream can know to ask about
+it. That is why §6.1's declared set is read from the raw file text and can
+never be read from a render.
+
+**The two measurements are the two halves of §6, and neither is a style
+preference: pruning is why the declared set must come from raw compose text;
+nested-`x-` stripping is why the dispositions cannot come from the JSON
+render.** Both were taken on compose v5.3.0, twice.
 
 ---
 
@@ -655,13 +692,24 @@ discards stderr with `2>/dev/null`, and the new all-profiles renderer must not
 
 | File | Command | Why this source |
 |---|---|---|
-| `raw.json` | `raw_volume_keys` / `raw_service_keys` over the **text of every file in `COMPOSE_FILE`** | The declared set. Compose prunes a volume no rendered service mounts — measured [M] — so a render can never be the authority on what was declared. |
-| `config.yaml` | `docker compose "${COMPOSE_ARGS[@]}" --profile '*' config` | The **dispositions**, and only here: `--format json` strips every `x-` key [M]. |
+| `raw.json` | `raw_volume_keys` / `raw_service_keys` over the **text of every file in `COMPOSE_FILE`** | The declared set. Compose **prunes** a volume no rendered service mounts — out of the JSON render, the YAML render and `config --volumes` alike, re-measured by hand on compose v5.3.0 on 2026-09-21 (§3) [M] — so a render can never be the authority on what was declared. |
+| `config.yaml` | `docker compose "${COMPOSE_ARGS[@]}" --profile '*' config` | The **dispositions**, and only here: `--format json` keeps only a **top-level** `x-` key and strips every **nested** one — per volume, per service, per mount — and every disposition §6.2 declares is nested (compose v5.3.0, re-measured by hand 2026-09-21, §3) [M]. |
 | `dispositions.json` | `compose_read.sh` over `config.yaml` | What the container reads, so it needs no YAML parser. |
 | `config.json` | the same command with `--format json` | Resolved full volume names, resolved absolute bind sources, mount `read_only`, service environment, `depends_on`, the project name. Warnings go to stderr; only stdout is parsed. |
 | `containers.json` | `docker ps -a --filter label=com.docker.compose.project=$P --format json`, then `docker inspect` for `.Mounts` per id | Anonymous and image-declared volumes compose never names. **This is the source with no fixture in port-v3, and it is the only one that can see `searxng`'s anonymous volume** [M]. Exited containers included. |
 | `git.json` | per host path under a scan root: `git check-ignore -q <rel>/` then `<rel>`; else `git ls-files --error-unmatch`; else unknown | §6.4. **The trailing slash is not optional** [M]: `git check-ignore -v data` exits 1 while `git check-ignore -v data/` matches `.gitignore:13`, and `../data` is a real bind (`deploy/docker-compose.yml:83`). A verbatim port of v3's `git_status_fn` makes every v4 backup refuse on day one. |
 | `reachable.json` | per include-class volume: `docker run --rm -v <name>:/probe:ro $PG_IMAGE find /probe -mindepth 1 -maxdepth 1 -print -quit`; per include-class file: `[ -r "$path" ]` | R6. Mounted at `/probe`, a path no image populates (shell-first m3). Exit status is read, not stdout emptiness (python-tool M1). |
+
+**Why two compose sources and not one.** Each measured behaviour rules out one
+single-source shortcut. Pruning rules out deriving the **declared set** from
+any render: a volume that no service mounts is the exact case coverage exists
+to catch, and it is the one case a render cannot show. Nested-`x-` stripping
+rules out deriving the **dispositions** from the JSON render, which is
+otherwise the convenient source because it parses without awk. A one-source
+implementation is not simpler; it is wrong in one of the two directions, and
+silently — the JSON-only version sees every volume as undeclared, the
+render-only version never sees the pruned volume at all. §12.1 pins both
+directions.
 
 Scan roots are **derived**: `{dirname(COMPOSE_FILE)} ∪ {every resolved bind
 source}` — not `dirname(bind)`, which resolves to the repo root and drags in
@@ -1154,6 +1202,22 @@ it does when that verification fails. A step that cannot make its own
 verification FAILS and names the verification it could not make.** No `|| true`,
 no `ignore_errors`, no fallback that reads as success.
 
+Second convention, from a measured incident rather than a principle: **the
+writer is not the verifier, so an artefact a container writes must end up
+readable by the invoking user, and the step that writes it proves that by
+reading it back as the operator.** During the mini PC cleanup on 2026-09-21 the
+archive step wrote its tar as root inside a container, and the host-side
+`tar -tzf` / `sha256sum` check — running as the invoking user — failed with
+`Permission denied` **naming the host path**, which reads as a host bug and is
+not one; the fix was a `chown <uid>:<gid>` inside the container, after which
+the operator's own `sha256sum -c` passed
+(`map-minipc-measured.md:164-171`). In S41 exactly one artefact crosses that
+boundary — the published bundle — so the rule is enforced in one place, §9.1
+step 19, and pinned in one place, §12.1's
+`the_operator_can_read_the_file_the_container_wrote`. Requirement #26 (an
+archive path that cannot hold mode 0600 is refused) is the other half of the
+same fact: a 0600 that belongs to root protects the bundle from its owner.
+
 Exit codes, uniform: `0` verified · `1` a verification failed · `2` the
 environment could not be asked · `3` refused before anything was touched · `4`
 **partial** — the artefact is good but the machine was not left as found. `4`
@@ -1391,10 +1455,14 @@ exists so "the backup is fine, the stack is not" can never be printed as `0`
     `NOVA_HOST_UID`/`NOVA_HOST_GID`; the container `os.chown`s the `.part`,
     then **re-stats and fails if the chown did not take**. Verifies by having
     the host shell run `sha256_of "$part"` **as the operator** and requiring
-    it to succeed. This is python-tool C3 and it is a measured incident, not a
-    hypothesis: *"a container writing the archive produces a root-owned,
-    mode-0600 file, and the host-side verification — running as the operator —
-    then cannot read it back. That bit during this very cleanup"*
+    it to succeed. **Ownership, not mode, is what is relaxed here**: the
+    cleanup's other half-fix, `umask 022`, is deliberately not carried, because
+    the bundle holds every secret this machine has and must stay 0600 — a
+    world-readable backup trades one failure for a worse one. This is
+    python-tool C3 and it is a measured incident, not a hypothesis: *"a
+    container writing the archive produces a root-owned, mode-0600 file, and
+    the host-side verification — running as the operator — then cannot read it
+    back. That bit during this very cleanup"*
     (`map-minipc-measured.md:164-171`). Without it the operator cannot
     `sha256sum`, `scp`, open or delete his own backup without `sudo`, and the
     DoD walk stops at the copy.
@@ -1782,12 +1850,25 @@ used, and they are binding:
   is a root-owned empty **directory** — the single-file bind-mount failure
   mode — so `docker compose -p nova down -v` cannot read its config
   (`:58-67`).
-- **The blocker is gone on that machine** (`:149-160`): the three old projects
-  were archived and removed on 2026-09-21. The refusal is still built, and
-  still matters, because it is what makes the *next* machine safe — and its
-  label-not-name rule is now proven by a real near-miss rather than argued.
-  The fixtures come from the pre-cleanup reading, because there is nothing
-  left to point them at.
+- **The blocker is gone on that machine** (`:126-163`): on the owner's
+  instruction of 2026-09-21 — *"You can clean up everything from all old nova
+  stacks. nova-ai-platform included."* — all three old projects (`nova`,
+  `docker` = nova-ai-platform, `project`) were archived to
+  `/home/jeremy/nova-old-stacks-archive` (21 MB, six `.tgz` plus `SHA256SUMS`,
+  every checksum re-verified **by the operator**, not by root) and then
+  removed: 13 containers, 6 volumes, 3 networks, 7 images. `minecraft` is still
+  running, `jobhunter` is untouched, and the phantom `~/workspace/nova` stub
+  tree went with `rmdir`. The refusal is still built and still **required** —
+  it is what makes the *next* machine safe, and its label-not-name rule is now
+  proven by a real near-miss rather than argued. **But it can no longer be
+  walked.** No machine we have carries a foreign `nova` project any more, so
+  every case in §12.2 is fixture-backed, built from the pre-cleanup reading
+  above — which is why that reading is kept verbatim — and §13 T7 records the
+  honest state of #29: the refusal branch has never been exercised on hardware
+  and, after 2026-09-21, nothing on the Dell or the mini PC can exercise it.
+  `map-requirements.md:97-99` ("The stopped platform-line `nova` project on the
+  mini PC") is stale as a present-tense fact and survives only as the source of
+  the fixtures.
 
 **1. The ours-set, which is what the safety rests on.**
 
@@ -1865,6 +1946,13 @@ every volume carries its **own** `com.docker.compose.project` read back from
 `state_file_on_volume` (`deploy/install.sh:439-444`) already looks for
 `tailscaled.state` through a throwaway container, so it is run over each
 candidate.
+
+The block below is the **recorded pre-cleanup reading** of the mini PC
+(`map-minipc-measured.md:20-30,45-56`) rendered in the shape the installer
+prints. It is not a capture, and after 2026-09-21 it is not reproducible —
+those objects no longer exist. It fixes the columns and the wording; §12.2's
+fixture carries the same rows, and that fixture is now the only place they
+exist.
 
 ```
 REFUSED: a compose project named `nova` is on this machine and it is not this one.
@@ -2033,11 +2121,19 @@ and before `record_compose_files` (`:956`), and **first** in `cmd_restore`.
 The compose edit is three `${VAR:-literal}` substitutions whose defaults are
 today's literals, so the Dell's live network does not move when this lands.
 
-Note, from `map-minipc-measured.md:153-157`: after the cleanup, 172.18/16 is
-**free** on the mini PC — only 172.17 (docker0) and 172.19 (jobhunter) remain.
-`decide_subnet` is still required as a general mechanism, but it is no longer
-load-bearing for that install, and the `172.22` prediction in two of the three
-designs is stale.
+Note, from `map-minipc-measured.md:153-157`: after the 2026-09-21 cleanup,
+172.18/16 is **free** on the mini PC — only 172.17 (docker0) and 172.19
+(jobhunter) remain allocated, and v4 pins 172.18. **The collision this
+mechanism was written for does not exist on the machine we are moving to.**
+`decide_subnet` is still required — it is a general mechanism and 172.19 is
+still taken — but on this install it is expected to fall through branch 3 on
+its first candidate and change nothing, and no step may be written as though
+the collision were a live blocker. Two binding inputs are stale in that
+direction and are superseded here: `map-requirements.md:95-96` ("172.18/16 is
+already taken on the mini PC … r1 lands on 172.22.0.0/16") and the
+`hub-p0-measurements.md:55` reading behind it. What survives is the mechanism
+and branch 2: nothing may *assume* 172.18, and a pinned `NOVA_SUBNET` that
+collides still dies naming what it collided with.
 
 ---
 
@@ -2098,8 +2194,12 @@ existing `report`/subshell harness shape (`deploy/install_test.sh:19-27`).
 compose versions): `reads_volume_disposition_from_the_yaml_render` ·
 `reads_bind_disposition_from_a_long_syntax_mount` ·
 `reads_anon_disposition_from_a_service_extension` ·
-**`json_render_has_no_x_keys_so_the_reader_must_use_yaml`** (my §3 finding,
-pinned so a future "just use JSON, it parses" simplification cannot land) ·
+**`json_render_strips_nested_x_keys_so_the_reader_must_use_yaml`** (my §3
+finding, asserting **both** halves against the fixtures — a top-level `x-` key
+survives the JSON render, and a volume's, a service's and a long-syntax
+mount's do not — so a future "just use JSON, it parses" simplification cannot
+land, and so a future compose that starts keeping nested keys is noticed
+rather than silently relied on) ·
 `raw_volume_keys_sees_a_volume_the_render_prunes` ·
 `raw_service_keys_reads_every_file_in_COMPOSE_FILE` (python-tool minor 8: the
 GPU overlay makes it two files).
@@ -2199,6 +2299,16 @@ asserted on the recorded argv) · `drill_never_touches_a_nova_underscore_object`
 `refuse_if_moved_refuses_install_first`.
 
 ### 12.2 `deploy/install_test.sh` — additions, no docker
+
+Every case here is **fixture-backed, and after 2026-09-21 that is the only
+thing it can be**: the mini PC's three old projects were archived and removed
+that day (`map-minipc-measured.md:126-147`), so no machine we have can
+exercise `check_foreign_project`'s refusal or its deletion loop against a real
+foreign project. The fixtures are built from the recorded pre-cleanup reading
+(`map-minipc-measured.md:20-30,45-56`) and never hand-invented — which is
+python-tool C2's whole point about the test ruling 1 demands. The slice record
+says so in those words: #29's refusal and deletion paths are proven by
+fixtures and have never been walked on hardware (§13 T7, §15 risk 11).
 
 `ours_volk_includes_a_volume_only_the_inference_profile_declares` (port-v3 C1,
 shell-first C1, python-tool C2 — **driven from a real captured
@@ -2370,11 +2480,15 @@ history. The walk is §13 T7, run by hand, recorded in `deploy/README.md`.
   shell suites stub it, and whether docker is usable on a hosted macOS runner
   is unverified (`map-portability.md` §6).
 - **#27 is recorded as DEFERRED, NOT MET.** `.github/workflows/rebuild-ci.yml:3-7`
-  triggers on `rebuild/**` only, so nothing in this slice runs in CI at all,
-  and the owner's 2026-09-07 decision was CI off. The jobs are written and
-  committed; enabling them is a one-line trigger change and it is his call
-  (§16). Both shell-first M10 and python-tool M10 are right that recording a
-  never-executed job as satisfying #27 is reporting success nobody checked.
+  triggers on `rebuild/**` only, so nothing in this slice runs in CI at all —
+  and the workflow is additionally `disabled_manually` on GitHub, so even a
+  widened trigger would not fire it until it is re-enabled. The owner's
+  standing decision of 2026-09-07 is that CI is off, so **the current answer
+  to §16 is that #27 stays deferred and the `bash:3.2 bash -n` container step
+  is what ships.** The jobs are written and committed; enabling them is a
+  one-line trigger change plus a click, and it is his call (§16). Both
+  shell-first M10 and python-tool M10 are right that recording a never-executed
+  job as satisfying #27 is reporting success nobody checked.
 
 ---
 
@@ -2391,7 +2505,7 @@ parallel; T3 needs T1 and T2; T4 needs T3; T7 needs everything.
 | **T4** | **`restore`, `restore --drill`, `drill`.** §9.2–§9.4, including the in-progress marker and the orphan sweep. | `backup_test.sh`'s restore and drill blocks; `tests/e2e/test_backup_roundtrip.py` (live, single host). | T3 |
 | **T5** | **The installer.** `check_foreign_project` + bounded deletion, `decide_subnet` + `subnet.sh` + the three compose substitutions, `refuse_if_moved`, `set_env_value`'s missing-file fix. | `install_test.sh`'s new cases. No docker. | — |
 | **T6** | **The edges.** novad `repoint`, `deploy/tailscale/start.sh`'s `MOVED_TO` guard, `deploy/README.md`'s three new sections + the fixture-refresh procedure, the four `network_credentials` text corrections, the CI jobs. | `repoint_test.go`, `start_test.sh`, `bash -n`/`shellcheck`. No docker. | — |
-| **T7** | **The walk (#28).** Back up on the Dell; `sha256_of` the bundle **as the operator**; copy it to the mini PC; `./install restore --drill` there; compare counts, sums and the signing-key fingerprint; confirm no `nova-drill-*` object survives. Then `./install` on the mini PC and confirm the foreign-project path is silent (the old stacks are gone — `map-minipc-measured.md:149-152`). | By hand, recorded in `deploy/README.md`. Not in CI. | T1–T6 |
+| **T7** | **The walk (#28).** Back up on the Dell; `sha256_of` the bundle **as the operator**; copy it to the mini PC; `./install restore --drill` there; compare counts, sums and the signing-key fingerprint; confirm no `nova-drill-*` object survives. Then `./install` on the mini PC and confirm the foreign-project path is **silent** — the old stacks were archived and removed on 2026-09-21 (`map-minipc-measured.md:126-147`), so the only branch this walk can exercise is the no-foreign-project one. **The refusal and the deletion loop stay fixture-only (§12.2); record them as never walked on hardware, not as walked and passed.** | By hand, recorded in `deploy/README.md`. Not in CI. | T1–T6 |
 
 ---
 
@@ -2468,7 +2582,7 @@ parallel; T3 needs T1 and T2; T4 needs T3; T7 needs everything.
 | # | Risk | Cheapest measurement | State |
 |---|---|---|---|
 | 1 | **The per-table digest is not stable across postgres minors.** The whole DoD rests on counts and digests being equal (#28), and `t::text` renders types through session GUCs. §9.1 step 9 pins six of them, but a *minor* that changes a type's text output makes every drill fail with no real difference. The Dell and the mini PC both float on `postgres:16` (`deploy/docker-compose.yml:5` is a major-only pin) and their minors have never been compared (open question 6). | On the Dell: run the pinned-session digest for `nova_core.public.turn_spans` against the running container, then again inside a freshly pulled `postgres:16` throwaway with the same dump restored, and compare one string. Two commands. | **Not run. Take this before writing a line of T3.** If they differ, fall back to a column-wise digest and record the frame in the manifest's `session` block. |
-| 2 | **Compose YAML shape drift between hosts breaks every awk reader**, and coverage would then refuse everything — or, worse, see nothing. The Dell runs compose **v5.3.0** [M]; the mini PC runs v5.5.1 (`map-minipc-measured.md:98`). | `docker compose --project-directory deploy -f deploy/docker-compose.yml --profile '*' config` on each host; diff; check both in as `deploy/backup/fixtures/`. One command per host. | Half measured: v5.3.0 confirmed here for `x-` preservation on volumes, long-syntax binds **and** service extensions, and for the JSON/YAML divergence [M]. v5.5.1 not measured. R1 is the runtime catch. |
+| 2 | **Compose YAML shape drift between hosts breaks every awk reader**, and coverage would then refuse everything — or, worse, see nothing. The Dell runs compose **v5.3.0** [M]; the mini PC runs v5.5.1 (`map-minipc-measured.md:98`). | `docker compose --project-directory deploy -f deploy/docker-compose.yml --profile '*' config` on each host; diff; check both in as `deploy/backup/fixtures/`. One command per host. | Half measured, now twice: v5.3.0 confirmed here and **re-measured by hand on 2026-09-21** for `x-` preservation on volumes, long-syntax binds **and** service extensions, for the exact JSON/YAML divergence (top-level kept, every nested one stripped) and for the pruning of a declared-but-unmounted volume out of both renders and `config --volumes` (§3) [M]. v5.5.1 not measured. R1 is the runtime catch. |
 | 3 | **Bundle size and wall time are unknown.** `v4_memdata` and `v4_workspace` are unmeasured, and the design reads the data three times (hash, pack, verify). At 50 GB that is a different conversation from at 500 MB. | `docker run --rm -v nova_v4_memdata:/a:ro -v nova_v4_workspace:/b:ro postgres:16 du -sb /a /b` on the Dell. One command. | Not run. Step 3's free-space check refuses rather than half-writing, so the failure is loud either way; if it is large, the hash and pack passes merge and the verify pass becomes the thing that costs. |
 | 4 | **`nova_restore.py`'s two hardcoded Homebrew libcrypto paths are stale on a current macOS**, so the ctypes fallback is fiction on the one platform it was written for. | Run `test_restore_reader.py` with `NOVA_FORCE_CTYPES_GCM=1` on the `macos-15` job. Free once the job fires. | Not run; no macOS machine here. Mitigated by the `cryptography` preference and the stated `pip3 install cryptography` refusal. |
 | 5 | **`python:3.12-slim` may have no reachable libcrypto**, so §7.3's backend 4 — the answer to "a machine that has only docker" — is fiction, and with it the DoD walk's independence from a completed install. | `docker run --rm python:3.12-slim python3 -c "import ctypes.util; print(ctypes.util.find_library('crypto'))"`. One line. | Not run. If it prints `None`, the fallback becomes an explicit `pip install cryptography` in the refusal and restore needs network — which the KAT gate surfaces at selection time rather than half-way through a decrypt. |
@@ -2477,6 +2591,7 @@ parallel; T3 needs T1 and T2; T4 needs T3; T7 needs everything.
 | 8 | **The plaintext dumps live on a throwaway docker volume during a backup**, readable by anything on the host that can run docker, for the duration of the run. | None needed — a stated bound. The alternative (a host tempdir) is strictly worse, and encrypting the dump before it leaves postgres would need a second key path. | Accepted. |
 | 9 | **`decide_subnet` has never run on the mini PC**, and the `172.22` prediction two designs make is already stale: after the cleanup only 172.17 and 172.19 remain allocated there (`map-minipc-measured.md:153-157`). | `docker network inspect $(docker network ls -q) \| grep -o '172\.[0-9]*\.' \| sort -u` on the mini PC, re-run **on the day of the move**, not trusting any recorded table. | Not run. |
 | 10 | **Two of the three `.gitignore`-derived classifications could rot**, making a routine backup refuse whenever someone edits `.gitignore`. | `test_coverage_v4_real.py` in CI on every push, with its fixture captured from the real command. | **Designed in.** The alarm is a red suite at commit time, not a failed backup at 3am, and the trade is stated at §6.4. |
+| 11 | **The foreign-project refusal has never run against a real foreign project, and after 2026-09-21 no machine we have can make it.** The three old projects on the mini PC were archived and removed that day (`map-minipc-measured.md:126-147`), so §10.1 — the one path in this slice that deletes the owner's data irreversibly — is proven only by §12.2's fixtures. Fixtures are written by the same hand as the code they check, which is python-tool C2's objection, answered here only insofar as the fixtures come from a recorded reading rather than from imagination. | Build a **synthetic** foreign project on purpose: one exited `alpine` container and one empty volume, both labelled `com.docker.compose.project=nova`, from a scratch compose file outside this checkout; run `./install` and decline at the prompt; then run it again and type `delete`; then confirm every `nova_v4_*` volume still exists. Ten minutes, and the only objects at risk are the two it created. | **Not run, and it is now the only way to run it.** Worth doing once before T5 is called done; until then #29 is fixture-proven, not walked. |
 
 ---
 
@@ -2492,11 +2607,17 @@ in CI as things stand**, and the 2026-09-07 decision recorded in memory was
 "CI and hooks OFF for now". The jobs are written and committed either way;
 widening the trigger is a one-line change.
 
-Until he answers, S41's slice record says **#27 is deferred, not met**, and
-the substitute that does run wherever the workflow is enabled is the
-`bash:3.2 bash -n` container step in the `installer` job (§12.5). Two of the
-three critiques independently flagged recording a never-executed job as
-satisfying #27 as reporting success nobody checked, and they are right.
+**The current answer, unless he changes it, is no.** His standing decision of
+2026-09-07 is that CI is off, and it is off in two independent ways: the
+trigger is `rebuild/**` only (`.github/workflows/rebuild-ci.yml:3-7`) **and**
+`rebuild-ci` is `disabled_manually` on GitHub, so widening the trigger alone
+would still fire nothing. So S41 ships with **#27 deferred, not met**, and the
+substitute that runs wherever the workflow is enabled is the `bash:3.2 bash -n`
+container step in the `installer` job (§12.5). The `macos-15` jobs are written
+and committed anyway, so answering the question later costs a one-line trigger
+change and a click rather than a design. Two of the three critiques
+independently flagged recording a never-executed job as satisfying #27 as
+reporting success nobody checked, and they are right.
 
 Everything else that looked like an owner question is already settled:
 the passphrase's home is the resolver seam plus his password manager
