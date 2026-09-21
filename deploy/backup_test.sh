@@ -275,6 +275,12 @@ expect_str "the_real_compose_file_uses_no_form_the_parser_cannot_read" \
 
 # shellcheck source=/dev/null
 . "$SCRIPT_DIR/backup.sh"
+# deploy/subnet.sh, for real: §9.3 step 3 has the drill pick its own /16 with
+# pick_project_subnet, and a stub of that would be a test of the stub. It
+# defines functions only and runs nothing; `log`, `die` and `docker` are the
+# caller's, and the restore block below supplies all three.
+# shellcheck source=/dev/null
+. "$SCRIPT_DIR/subnet.sh"
 
 WORLD="$(mktemp -d "${TMPDIR:-/tmp}/nova-backup-test.XXXXXX")"
 trap 'rm -rf "$WORLD"' EXIT
@@ -298,6 +304,7 @@ build_world() {
     SEARXNG_SECRET COMPOSE_FILE INSTANCE_SECRET; do
     printf '%s=throwaway\n' "$k"
   done > "$WORLD/repo/deploy/.env"
+  cp "$WORLD/repo/deploy/.env" "$WORLD/env.pristine"
   ( cd "$WORLD/repo" && git init -q . && git add -A . && \
     git -c user.email=t@t -c user.name=t commit -qm fixtures ) >/dev/null 2>&1
   # The captured containers fixture, one file per id, so the docker stub can
@@ -768,6 +775,8 @@ pw_world() {
 # The synthetic value every case below uses. Not a passphrase anything real is
 # sealed with — this file is public.
 PW_VALUE="aaaa-bbbb-cccc-dddd-eeee-ffff-gggg-hhhh"
+BKT_PW_ORIGINAL="$PW_VALUE"
+BKT_NO_PW=0
 
 # ── absent permits a create; unavailable never does ─────────────────────────
 #
@@ -979,6 +988,24 @@ STUB_DF_RC=0
 STUB_VOLUME_RM_RC=0
 STUB_UNREADABLE_PART=0
 STUB_DROP_LINK_TARGETS=0
+STUB_PROBE_RC=0
+STUB_NETWORK_RM_RC=0
+STUB_DETACH_RC=0
+STUB_PULL_RC=0
+STUB_PULL_LANDS=1
+STUB_RESTORE_DIFF=0
+STUB_RESTORE_VER_RC=0
+STUB_DROP_VOLUME_LABELS=0
+STUB_RESTORED_KEY_DIFFERS=0
+STUB_TAMPER_LISTING=""
+STUB_EMPTY_UNTIL_RESTORED=0
+STUB_MISSING_DB=""
+STUB_MISSING_ROLE=""
+STUB_ORPHAN_VERIFY_DBS=""
+STUB_VERIFY_DB_CONNS=0
+STUB_VERIFY_DB_OLD=1
+BKT_BARE_TARGET=0
+BKT_FORCE_CT_NET=""
 
 # ── pure helpers, before anything that needs a world ───────────────────────
 
@@ -1171,6 +1198,272 @@ expect_str "the_postgres_image_tag_is_read_from_the_render" \
 expect_str "every_rendered_profile_is_recorded" \
   "$(bk_cfg_profiles < "$WORLD/stage/facts/config.yaml" | tr '\n' ' ')" "inference tailnet "
 
+printf '\n── restore and drill: the parts that need no world ──────────────────\n'
+
+# ── DRILL_RE, on the string that reaches the command (python-tool M7) ──────
+#
+# The shape the design first wrote — ^nova-drill-[0-9a-f]{8}$ — matches NONE
+# of the names it was said to guard, so the stated three-touchpoint control
+# either failed on every create or was being applied to a different string
+# from the one `docker volume rm` receives. Every legal name a drill builds is
+# driven here, and so is every shape that must not pass.
+for good in nova-drill-a1b2c3d4-pg nova-drill-a1b2c3d4-net \
+  nova-drill-a1b2c3d4_v4_memdata nova-drill-00000000_pgdata \
+  nova-drill-ffffffff_content nova-drill-deadbeef_a; do
+  if bk_drill_assert_name "$good" "remove" >/dev/null 2>&1; then
+    report 0 "drill_re_matches_every_object_name_it_guards"
+  else
+    report 1 "drill_re_matches_every_object_name_it_guards" \
+      "'$good' is a name a drill CREATES and the assertion refused it"
+  fi
+done
+
+# Everything a drill must never touch, including the exact real objects this
+# machine holds (shell-first: `nova_` belongs to another project on the
+# owner's own machine, and selecting by prefix would have destroyed 75.8 MB
+# of it).
+for bad in nova_v4_memdata nova_v4_pgdata nova_pgdata nova_default \
+  nova-backup-stage-20260921T143002Z-1 nova-drill- nova-drill-a1b2c3d \
+  nova-drill-a1b2c3d45_x nova-drill-A1B2C3D4_x nova-drill-a1b2c3d4 \
+  nova-drill-a1b2c3d4-pgx nova-drill-a1b2c3d4x nova-drill-a1b2c3d4_ \
+  'nova-drill-a1b2c3d4_x; rm -rf /' 'nova-drill-a1b2c3d4_../../etc' \
+  xnova-drill-a1b2c3d4-pg ''; do
+  if bk_drill_assert_name "$bad" "remove" >/dev/null 2>&1; then
+    report 1 "drill_never_touches_a_nova_underscore_object" \
+      "'$bad' was accepted as a drill object name"
+  else
+    report 0 "drill_never_touches_a_nova_underscore_object"
+  fi
+done
+
+# The drill's scratch databases keep their OWN prefix (shell-first m11): the
+# sweep walks nova_verify_*, and a backup's nova_selftest_* must never be a
+# thing it can drop.
+bk_assert_verify_name nova_verify_a1b2c3d4 "drop" >/dev/null 2>&1 &&
+  report 0 "drill_databases_use_nova_verify_and_the_selftest_prefix_is_not_theirs" ||
+  report 1 "drill_databases_use_nova_verify_and_the_selftest_prefix_is_not_theirs" \
+    "a legal drill database name was refused"
+for bad in nova_selftest_a1b2c3d4 nova_verify_A1B2C3D4 nova_verify_a1b2c3d \
+  nova_core '' 'nova_verify_a1b2c3d4; DROP'; do
+  if bk_assert_verify_name "$bad" "drop" >/dev/null 2>&1; then
+    report 1 "drill_databases_use_nova_verify_and_the_selftest_prefix_is_not_theirs" \
+      "'$bad' was accepted as a drill database name"
+  else
+    report 0 "drill_databases_use_nova_verify_and_the_selftest_prefix_is_not_theirs"
+  fi
+done
+
+# ── the stamp, and the age it implies (§9.4 step 3) ───────────────────────
+#
+# macOS has no `date -d` and there is no portable epoch-from-string form
+# (map-portability.md:63), so the civil arithmetic is done by hand — which
+# means it is worth measuring against values computed somewhere else.
+expect_str "the_stamp_is_parsed_by_civil_arithmetic_not_by_date_d" \
+  "$(bk_stamp_epoch 19700101T000000Z)" "0"
+# The four expected values are python datetime's, not this implementation's
+# — an independent computation, which is the only thing that makes them
+# worth asserting. Two of them were WRONG when they were first typed by
+# hand, and the arithmetic under test was right.
+expect_str "the_stamp_is_parsed_by_civil_arithmetic_not_by_date_d" \
+  "$(bk_stamp_epoch 20260921T143002Z)" "1790001002"
+expect_str "the_stamp_is_parsed_by_civil_arithmetic_not_by_date_d" \
+  "$(bk_stamp_epoch 20000229T000000Z)" "951782400"
+expect_str "the_stamp_is_parsed_by_civil_arithmetic_not_by_date_d" \
+  "$(bk_stamp_epoch 20240101T000000Z)" "1704067200"
+# A leading zero is DECIMAL, not octal: 08 and 09 are where $(( )) bites.
+expect_str "a_leading_zero_in_the_stamp_is_decimal_not_octal" \
+  "$(bk_stamp_epoch 20260809T080908Z)" "1786262948"
+
+for bad in 20260921 20260921T143002 2026-09-21T14:30:02Z 20261321T143002Z \
+  20260921T253002Z 20260900T143002Z '' notastamp; do
+  if bk_stamp_epoch "$bad" >/dev/null 2>&1; then
+    report 1 "drill_fails_on_an_unparseable_stamp" "'$bad' was parsed as a stamp"
+  else
+    report 0 "drill_fails_on_an_unparseable_stamp"
+  fi
+done
+
+expect_str "the_stamp_comes_out_of_the_name_never_the_mtime" \
+  "$(bk_bundle_stamp 'nova-backup-a-host-20260921T143002Z.tar')" "20260921T143002Z"
+expect_str "the_stamp_comes_out_of_the_name_never_the_mtime" \
+  "$(bk_bundle_stamp 'nova-backup-a-host-20260921T143002Z-2.tar')" "20260921T143002Z"
+bk_bundle_stamp 'a-file-somebody-dropped-here.tar' >/dev/null 2>&1 &&
+  report 1 "drill_fails_on_an_unparseable_stamp" "a name with no stamp parsed" ||
+  report 0 "drill_fails_on_an_unparseable_stamp"
+
+# ── the shape checks a hostile manifest meets first ───────────────────────
+for good in nova_core nova_gateway core memory _x; do
+  bk_is_sql_name "$good" && report 0 "a_manifest_name_that_reaches_sql_is_shape_checked" ||
+    report 1 "a_manifest_name_that_reaches_sql_is_shape_checked" "'$good' was refused"
+done
+for bad in '' '1abc' 'nova core' 'nova;DROP' 'nova-core' '"x"' "o'brien" \
+  '$(whoami)' '../etc'; do
+  if bk_is_sql_name "$bad"; then
+    report 1 "a_manifest_name_that_reaches_sql_is_shape_checked" "'$bad' was accepted"
+  else
+    report 0 "a_manifest_name_that_reaches_sql_is_shape_checked"
+  fi
+done
+for bad in '' '../x' 'a/b' 'a b' '-x' '.hidden' 'a;b'; do
+  if bk_is_volume_key "$bad"; then
+    report 1 "a_manifest_volume_key_that_reaches_a_path_is_shape_checked" "'$bad' was accepted"
+  else
+    report 0 "a_manifest_volume_key_that_reaches_a_path_is_shape_checked"
+  fi
+done
+bk_is_volume_key v4_memdata &&
+  report 0 "a_manifest_volume_key_that_reaches_a_path_is_shape_checked" ||
+  report 1 "a_manifest_volume_key_that_reaches_a_path_is_shape_checked" "v4_memdata was refused"
+
+# ── the two constants this reader holds, pinned to the WRITER's own ───────
+#
+# §5.3's rule is that a manifest this code does not fully understand is not a
+# manifest it may restore from, and the strict loader that enforces it lives
+# in a module the fallback image cannot import (novabundle needs
+# `cryptography`; `python:3.12-slim` does not carry it). So backup.sh holds
+# its own key set — and a set someone maintains by hand is exactly what this
+# repo calls a control you have to delete the day the feature lands. These
+# two cases are what keep it derived in practice: add a key to MANIFEST_SPEC
+# or a member to OUTER_ORDER and they go red here first.
+expect_str "the_reader_knows_every_key_the_writer_writes" \
+  "$(printf '%s' "$BK_MANIFEST_KEYS" | tr ' ' '\n' | LC_ALL=C sort | tr '\n' ' ')" \
+  "$(nova_py - "$SCRIPT_DIR/backup" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from novabundle import MANIFEST_SPEC
+print(" ".join(sorted(MANIFEST_SPEC)), end=" ")
+PY
+)"
+expect_str "the_reader_knows_the_outer_member_order_the_writer_forces" \
+  "$BK_OUTER_ORDER" \
+  "$(nova_py - "$SCRIPT_DIR/backup" <<'PY'
+import sys
+sys.path.insert(0, sys.argv[1])
+from novabundle import OUTER_ORDER
+print(" ".join(OUTER_ORDER), end="")
+PY
+)"
+
+# ── reading MANIFEST.json, whose indentation is its grammar ───────────────
+#
+# Driven against a manifest the REAL writer wrote, not a hand-typed one: the
+# readers below are the only thing standing between §5.3 and this shell, and
+# a fixture someone typed would agree with whatever they assumed.
+BKT_MANIFEST_FIXTURE="$BK_WORLD/manifest-probe.json"
+nova_py - "$SCRIPT_DIR/backup" "$BKT_MANIFEST_FIXTURE" <<'PY'
+import json
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from novabundle import dump_manifest
+
+# Every shape the readers have to survive: a nested object inside a list row
+# (databases[].selftest), an empty list, a null, and a value carrying the
+# characters that break a line-based reader.
+manifest = {
+    "format": "nova-backup/2",
+    "bundle_version": 2,
+    "created_at": "20260921T143002Z",
+    "mode": "routine",
+    "transport": "local",
+    "migration_match": "content",
+    "source": {"host": "a-host", "os": "Linux", "repo_sha": None, "repo_dirty": None,
+               "project": "nova", "compose_files": [], "profiles": [],
+               "docker_version": "29.6.1", "compose_version": "v5.3.0",
+               "pack_image_id": "sha256:aa"},
+    "postgres": {"server_version": "16.15", "server_version_num": 160015,
+                 "pg_dump_version": "16.15", "pg_dump_major": 16,
+                 "container_image": "postgres:16", "container_image_id": "sha256:bb"},
+    "session": {"DateStyle": "ISO, MDY", "IntervalStyle": "postgres", "TimeZone": "UTC",
+                "bytea_output": "hex", "extra_float_digits": "0", "lc_numeric": "C"},
+    "databases": [
+        {"name": "nova_core", "owner": "core", "dump_member": "db/nova_core.dump",
+         "dump_bytes": 1, "dump_sha256": "cc",
+         "counts_member": "db/nova_core.counts.tsv",
+         "migrations_member": "db/nova_core.migrations.tsv",
+         "tables": 3, "rows": 51,
+         "selftest": {"scratch_db": "nova_selftest_a1b2c3d4", "tables_compared": 3,
+                      "equal": True}},
+        {"name": "nova_memory", "owner": "memory", "dump_member": "db/nova_memory.dump",
+         "dump_bytes": 1, "dump_sha256": "dd",
+         "counts_member": "db/nova_memory.counts.tsv",
+         "migrations_member": "db/nova_memory.migrations.tsv",
+         "tables": 2, "rows": 7,
+         "selftest": {"scratch_db": "nova_selftest_b1b2c3d4", "tables_compared": 2,
+                      "equal": True}},
+    ],
+    "volumes": [
+        {"key": "v4_memdata", "full_name": "nova_v4_memdata", "disposition": "include",
+         "prefix": "volumes/v4_memdata/", "listing_member": "listings/v4_memdata.sha256",
+         "listing_sha256": "ee", "entries": 6, "files": 3, "bytes": 12,
+         "restore_to": "volume:nova_v4_memdata"},
+    ],
+    "binds": [],
+    "files": [{"member": "files/deploy/.env", "origin": "deploy/.env",
+               "restore_to": "deploy/.env", "mode": 384, "bytes": 1, "sha256": "ff"}],
+    "env_keys": ["POSTGRES_PASSWORD", "SEARXNG_SECRET"],
+    "members": [],
+    "member_count": 0,
+    "excluded": [{"kind": "volume", "name": "v4_ollama",
+                  "disposition": "exclude-redownload",
+                  "reason": 'weights: tens of GB, "re-pulled", not carried'}],
+    "coverage": {"sources": [], "services": [], "entries": 0, "refusals": []},
+    "identity": {"core_signing_key_sha256": None, "tailnet_dns_name": None,
+                 "tailnet_state_carried": False, "device_count": 0, "people_count": 1},
+    "encryption": {"container": "NOVAENC1", "cipher": "aes-256-gcm", "kdf": "scrypt",
+                   "n": 32768, "r": 8, "p": 1, "dklen": 32, "chunk": 4194304,
+                   "fingerprint_kind": "scrypt-key", "passphrase_sha256_12": "aa",
+                   "passphrase_source": "file"},
+    "reader_sha256": "9b71",
+}
+with open(sys.argv[2], "w", encoding="utf-8") as fh:
+    fh.write(dump_manifest(manifest))
+PY
+
+expect_str "a_top_level_scalar_is_read_at_its_own_indentation" \
+  "$(bk_m_top created_at < "$BKT_MANIFEST_FIXTURE")" "20260921T143002Z"
+expect_str "a_top_level_scalar_is_read_at_its_own_indentation" \
+  "$(bk_m_top bundle_version < "$BKT_MANIFEST_FIXTURE")" "2"
+bk_m_top not_a_key < "$BKT_MANIFEST_FIXTURE" >/dev/null 2>&1 &&
+  report 1 "a_missing_key_is_a_non_zero_exit_not_an_empty_value" "a missing key read as a value" ||
+  report 0 "a_missing_key_is_a_non_zero_exit_not_an_empty_value"
+expect_str "a_nested_object_key_is_read_at_four_spaces" \
+  "$(bk_m_sub postgres pg_dump_major < "$BKT_MANIFEST_FIXTURE")" "16"
+expect_str "a_nested_object_key_is_read_at_four_spaces" \
+  "$(bk_m_sub source project < "$BKT_MANIFEST_FIXTURE")" "nova"
+# null is a VALUE, and it reads as the empty string with a zero exit — which
+# is what makes `null == null` equality at the signing-key comparison.
+bk_m_sub identity core_signing_key_sha256 < "$BKT_MANIFEST_FIXTURE" >/dev/null 2>&1 &&
+  report 0 "a_null_is_a_value_and_not_a_missing_key" ||
+  report 1 "a_null_is_a_value_and_not_a_missing_key" "a null read as a missing key"
+expect_str "a_null_is_a_value_and_not_a_missing_key" \
+  "$(bk_m_sub identity core_signing_key_sha256 < "$BKT_MANIFEST_FIXTURE")" ""
+expect_str "the_session_keys_are_read_as_a_set" \
+  "$(bk_m_sub_keys session < "$BKT_MANIFEST_FIXTURE" | tr '\n' ' ')" \
+  "DateStyle IntervalStyle TimeZone bytea_output extra_float_digits lc_numeric "
+
+# THE one that matters: a nested object inside a list row must not be read as
+# a new row. bk_coverage_rows was written after exactly this mistake dropped
+# 19 of 22 entries, and databases[].selftest is the same shape.
+expect_str "a_nested_object_in_a_list_row_is_not_read_as_a_new_row" \
+  "$(bk_m_rows databases "name,owner,tables" < "$BKT_MANIFEST_FIXTURE" | wc -l | tr -d ' ')" "2"
+expect_str "a_list_row_reads_every_field_in_the_order_it_was_asked_for" \
+  "$(bk_m_rows databases "name,owner,tables" < "$BKT_MANIFEST_FIXTURE" | head -1 | tr '\037' '|')" \
+  "nova_core|core|3"
+expect_str "a_list_row_reads_every_field_in_the_order_it_was_asked_for" \
+  "$(bk_m_rows volumes "key,full_name,prefix" < "$BKT_MANIFEST_FIXTURE" | tr '\037' '|')" \
+  "v4_memdata|nova_v4_memdata|volumes/v4_memdata/"
+expect_str "a_quoted_reason_survives_the_row_reader" \
+  "$(bk_m_rows excluded "name,reason" < "$BKT_MANIFEST_FIXTURE" | tr '\037' '|')" \
+  'v4_ollama|weights: tens of GB, "re-pulled", not carried'
+expect_str "an_empty_list_reads_as_no_rows" \
+  "$(bk_m_rows binds "source,target" < "$BKT_MANIFEST_FIXTURE" | wc -l | tr -d ' ')" "0"
+expect_str "a_list_of_strings_reads_one_per_line" \
+  "$(bk_m_strings env_keys < "$BKT_MANIFEST_FIXTURE" | tr '\n' ' ')" \
+  "POSTGRES_PASSWORD SEARXNG_SECRET "
+expect_str "an_empty_list_of_strings_reads_as_nothing" \
+  "$(bk_m_strings members < "$BKT_MANIFEST_FIXTURE" | wc -l | tr -d ' ')" "0"
+
 # ── the whole verb, end to end, with no docker ─────────────────────────────
 
 # The container scripts cmd_backup ships use GNU `find -printf` and
@@ -1220,8 +1513,66 @@ bkt_docker() {
     exec) bkt_exec "$@" ;;
     volume) bkt_volume "$@" ;;
     run) bkt_run "$@" ;;
+    network) bkt_network "$@" ;;
+    image) [ -f "$BK_WORLD/images/$(bkt_imgkey "$3")" ] ;;
+    pull)
+      [ "$STUB_PULL_RC" -eq 0 ] || return "$STUB_PULL_RC"
+      mkdir -p "$BK_WORLD/images"
+      if [ "$STUB_PULL_LANDS" = "1" ]; then
+        : > "$BK_WORLD/images/$(bkt_imgkey "$2")"
+      fi
+      ;;
+    rm)
+      shift
+      for a in "$@"; do
+        case "$a" in -*) ;; *) rm -f "$BK_WORLD/ct/$a" "$BK_WORLD/ctnet/$a" ;; esac
+      done
+      ;;
+    logs) printf 'a captured log line\n' ;;
     *) return 0 ;;
   esac
+}
+
+# Networks: created with an explicit subnet, inspected, removed — and every
+# one of those three is a place DRILL_RE has to hold.
+# An image tag as a filename: `python:3.12-slim` and `postgres:16` carry
+# characters a path cannot.
+bkt_imgkey() { printf '%s' "$1" | tr '/:' '__'; }
+
+bkt_network() {
+  local a name="" prev=""
+  case "$2" in
+    create)
+      shift 2
+      for a in "$@"; do
+          case "$a" in -*) ;; *) [ "$prev" = "--subnet" ] || name="$a" ;; esac
+        prev="$a"
+      done
+      mkdir -p "$BK_WORLD/net"
+      printf '%s' "$prev" > "$BK_WORLD/net/$name"
+      ;;
+    inspect)
+      shift 2
+      for a in "$@"; do
+        case "$a" in -*) ;; *) name="$a" ;; esac
+      done
+      [ -f "$BK_WORLD/net/$name" ] || return 1
+      # network_rows() reads "<name>\t<config_files label>\t<subnet>…"
+      printf '%s\t\t%s\n' "$name" "$(cat "$BK_WORLD/net/$name")"
+      ;;
+    rm)
+      shift 2
+      for a in "$@"; do
+        case "$a" in -*) ;; *) rm -f "$BK_WORLD/net/$a" ;; esac
+      done
+      [ "$STUB_NETWORK_RM_RC" -eq 0 ] || return "$STUB_NETWORK_RM_RC"
+      ;;
+    ls)
+      [ -d "$BK_WORLD/net" ] || return 0
+      find "$BK_WORLD/net" -maxdepth 1 -type f -exec basename {} \; 2>/dev/null
+      ;;
+  esac
+  return 0
 }
 
 bkt_compose() {
@@ -1295,7 +1646,15 @@ bkt_ps() {
     esac
   done
   if [ -z "$svc" ]; then
-    cat "$WORLD/ids.txt"
+    # §9.2 step 6 asks "is any container of this project here", exited ones
+    # included. On a bare restore target the honest answer is "only what this
+    # run started", which is BKT_RUNNING; everywhere else it is the captured
+    # fixture. One knob, because a world that answers both is not a world.
+    if [ "${BKT_BARE_TARGET:-0}" = "1" ]; then
+      printf '%s\n' "$BKT_RUNNING" | sed '/^$/d'
+    else
+      cat "$WORLD/ids.txt"
+    fi
     return 0
   fi
   [ "$svc" = "$BKT_NO_CONTAINER" ] && return 0
@@ -1315,6 +1674,20 @@ bkt_inspect() {
     [ "$a" = "--format" ] && want=1
   done
   svc="$(cat "$BK_WORLD/id2svc/$id" 2>/dev/null)"
+  # A container this run started with `docker run -d --name` is known by its
+  # NAME, not by a fixture id.
+  if [ -f "$BK_WORLD/ct/$id" ]; then
+    case "$fmt" in
+      *'.NetworkSettings.Networks'*)
+        printf '%s \n' "$(cat "$BK_WORLD/ctnet/$id" 2>/dev/null)"
+        ;;
+      *) printf '{}\n' ;;
+    esac
+    return 0
+  fi
+  case "$id" in
+    nova-drill-*) return 1 ;;
+  esac
   case "$fmt" in
     # render_containers' own template first: it names .State.Status and
     # .Config.Labels, so a rule ordered after those would swallow it.
@@ -1335,16 +1708,62 @@ bkt_inspect() {
 }
 
 bkt_volume() {
+  local a name="" labels="" want=0
   case "$2" in
-    create) mkdir -p "$BKT_VOLS/$3"; printf '%s\n' "$3" ;;
+    create)
+      # `docker volume create --label k=v --label k=v <name>`: the NAME is
+      # the one argument that is neither a flag nor a flag's value, so the
+      # stub has to parse rather than take $3.
+      shift 2
+      for a in "$@"; do
+        if [ "$want" -eq 1 ]; then labels="$labels $a"; want=0; continue; fi
+        case "$a" in
+          --label) want=1 ;;
+          -*) ;;
+          *) name="$a" ;;
+        esac
+      done
+      [ -n "$name" ] || return 1
+      mkdir -p "$BKT_VOLS/$name" "$BKT_VOLS/.labels"
+      # A create that SUCCEEDS and a label that does not stick. Without this
+      # the read-back is 0 == 0 by construction and measures nothing — the
+      # mutation sweep said so, by surviving.
+      if [ "${STUB_DROP_VOLUME_LABELS:-0}" = "1" ]; then
+        : > "$BKT_VOLS/.labels/$name"
+      else
+        printf '%s\n' "${labels# }" > "$BKT_VOLS/.labels/$name"
+      fi
+      printf '%s\n' "$name"
+      ;;
     rm)
       [ "$STUB_VOLUME_RM_RC" -eq 0 ] || return "$STUB_VOLUME_RM_RC"
       shift 2
       for a in "$@"; do
-        case "$a" in -*) ;; *) rm -rf "${BKT_VOLS:?}/$a" ;; esac
+        case "$a" in -*) ;; *) rm -rf "${BKT_VOLS:?}/$a" "$BKT_VOLS/.labels/$a" ;; esac
       done
       ;;
-    inspect) [ -d "$BKT_VOLS/$3" ] || return 1 ;;
+    inspect)
+      shift 2
+      for a in "$@"; do
+        if [ "$want" -eq 1 ]; then want=0; continue; fi
+        case "$a" in
+          --format) want=1 ;;
+          -*) ;;
+          *) name="$a" ;;
+        esac
+      done
+      [ -d "$BKT_VOLS/$name" ] || return 1
+      # The two compose labels, in the order the verb asks for them.
+      if [ -f "$BKT_VOLS/.labels/$name" ]; then
+        sed 's/com.docker.compose.project=//; s/com.docker.compose.volume=//' \
+          "$BKT_VOLS/.labels/$name"
+      fi
+      ;;
+    ls)
+      [ -d "$BKT_VOLS" ] || return 0
+      find "$BKT_VOLS" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; 2>/dev/null |
+        grep -v '^\.labels$'
+      ;;
   esac
   return 0
 }
@@ -1399,12 +1818,30 @@ bkt_psql() {
           if [ "$STUB_SELFTEST_DIFF" = "1" ] && [ "$db" != "${db#nova_selftest_}" ] &&
             [ "$t" = "public.people" ]; then
             printf '%s\t7\t999\n' "$t"
+          elif [ "$STUB_RESTORE_DIFF" = "1" ] && [ -f "$BK_WORLD/scratch/$db" ] &&
+            [ "$t" = "public.people" ]; then
+            printf '%s\t7\t999\n' "$t"
           else
             printf '%s\t%s\t%s\n' "$t" "${#t}" "$((${#t} * 7))"
           fi
         done
       ;;
     *"FROM schema_migrations"*) printf '%s\n' "$STUB_MIGRATION_ROWS" ;;
+    *"FROM pg_database WHERE datname LIKE"*) printf '%s\n' "$STUB_ORPHAN_VERIFY_DBS" ;;
+    *"pg_stat_file"*) printf '%s\n' "$STUB_VERIFY_DB_OLD" ;;
+    *"FROM pg_stat_activity WHERE datname"*) printf '%s\n' "$STUB_VERIFY_DB_CONNS" ;;
+    *"SELECT 1 FROM pg_database WHERE datname"*)
+      case "$sql" in
+        *"'$STUB_MISSING_DB'"*) [ -n "$STUB_MISSING_DB" ] && return 0 ;;
+      esac
+      printf '1\n'
+      ;;
+    *"SELECT 1 FROM pg_roles WHERE rolname"*)
+      case "$sql" in
+        *"'$STUB_MISSING_ROLE'"*) [ -n "$STUB_MISSING_ROLE" ] && return 0 ;;
+      esac
+      printf '1\n'
+      ;;
     *"SELECT current_database()"*) printf '%s\n' "${STUB_CURRENT_DB:-$db}" ;;
     "CREATE DATABASE"*)
       printf '%s\n' "$sql" >> "$BK_WORLD/dbops.log"
@@ -1414,11 +1851,17 @@ bkt_psql() {
       printf '%s\n' "$sql" >> "$BK_WORLD/dbops.log"
       ;;
     *"to_regclass('public.core_signing_key')"* | *"to_regclass('public.devices')"* | *"to_regclass('public.people')"*)
-      if [ "$db" = "nova_core" ]; then printf 't\n'; else printf 'f\n'; fi
+      t="$(cat "$BK_WORLD/scratch/$db" 2>/dev/null)"
+      [ -n "$t" ] || t="$db"
+      if [ "$t" = "nova_core" ]; then printf 't\n'; else printf 'f\n'; fi
       ;;
     *"count(*) FROM core_signing_key"*) printf '%s\n' "$STUB_SIGNING_ROWS" ;;
     *"encode(sha256("*)
-      printf '77d1000000000000000000000000000000000000000000000000000000000000\n'
+      if [ "$STUB_RESTORED_KEY_DIFFERS" = "1" ] && [ -f "$BK_WORLD/scratch/$db" ]; then
+        printf '0000000000000000000000000000000000000000000000000000000000000000\n'
+      else
+        printf '77d1000000000000000000000000000000000000000000000000000000000000\n'
+      fi
       ;;
     *"count(*) FROM devices"*) printf '3\n' ;;
     *"count(*) FROM people"*) printf '1\n' ;;
@@ -1430,12 +1873,18 @@ bkt_psql() {
 # which bkt_run records when pg_restore names both.
 bkt_tables_of() {
   local db="$1" src
-  case "$db" in
-    nova_selftest_*)
-      src="$(cat "$BK_WORLD/scratch/$db" 2>/dev/null)"
-      [ -n "$src" ] && db="$src"
-      ;;
-  esac
+  # Any database something has pg_restored INTO measures the tables of the
+  # database it came from — which is how both the backup's self-test and the
+  # restore's re-measurement are driven by what actually ran.
+  src="$(cat "$BK_WORLD/scratch/$db" 2>/dev/null)"
+  if [ -n "$src" ]; then
+    db="$src"
+  elif [ "${STUB_EMPTY_UNTIL_RESTORED:-0}" = "1" ]; then
+    # A bare restore target: postgres-init has created the database and
+    # nothing has put a table in it yet. §9.2 step 11 requires exactly this
+    # to be a normal answer and not a failed reading.
+    return 0
+  fi
   case "$db" in
     nova_core) printf 'devices people schema_migrations\n' ;;
     nova_gateway) printf 'schema_migrations spend\n' ;;
@@ -1446,7 +1895,7 @@ bkt_tables_of() {
 
 # `docker run` — re-run here, with the mounts rewritten.
 bkt_run() {
-  local img="" ep="" a spec src rest dst
+  local img="" ep="" a spec src rest dst detach=0 cname="" cnet=""
   shift
   BKT_MAP="/tmp	$BK_WORLD/ctmp"
   mkdir -p "$BK_WORLD/ctmp"
@@ -1454,7 +1903,10 @@ bkt_run() {
     a="$1"
     case "$a" in
       --rm | -i | -t | -it | --init) shift; continue ;;
-      --network | --user | -e | -w | --name) shift 2; continue ;;
+      -d | --detach) detach=1; shift; continue ;;
+      --name) cname="$2"; shift 2; continue ;;
+      --network) cnet="$2"; shift 2; continue ;;
+      --user | -e | -w) shift 2; continue ;;
       --entrypoint) ep="$2"; shift 2; continue ;;
       -v)
         spec="$2"
@@ -1472,6 +1924,17 @@ $dst	$src"
     esac
   done
   [ -n "$img" ] || return 125
+  # `docker run -d --name X`: nothing is executed here. The container becomes
+  # a name this world knows, attached to the network it was given — which is
+  # what `docker inspect`'s network assertion then reads back.
+  if [ "$detach" -eq 1 ]; then
+    [ "$STUB_DETACH_RC" -eq 0 ] || return "$STUB_DETACH_RC"
+    mkdir -p "$BK_WORLD/ct" "$BK_WORLD/ctnet"
+    : > "$BK_WORLD/ct/$cname"
+    printf '%s' "${BKT_FORCE_CT_NET:-$cnet}" > "$BK_WORLD/ctnet/$cname"
+    printf '%s\n' "$cname"
+    return 0
+  fi
   case "$ep" in
     find | chmod | cmp) bkt_bin "$ep" "$@"; return $? ;;
     pg_dump) PATH="$BK_WORLD/bin:$PATH" pg_dump "$@"; return $? ;;
@@ -1485,6 +1948,17 @@ $dst	$src"
 bkt_bin() {
   local cmd="$1" a args=()
   shift
+  # python-tool M1, reproduced where it happened: the probe's own `find`
+  # fails, writes to stderr and produces NOTHING on stdout. A verb that reads
+  # emptiness instead of the exit status calls that "empty, proceed".
+  if [ "$cmd" = "find" ] && [ "${STUB_PROBE_RC:-0}" != "0" ]; then
+    case " $* " in
+      *" /probe "*)
+        printf 'find: /probe: Permission denied\n' >&2
+        return "$STUB_PROBE_RC"
+        ;;
+    esac
+  fi
   for a in "$@"; do args+=("$(bkt_rewrite "$a")"); done
   "$cmd" "${args[@]}"
 }
@@ -1510,6 +1984,13 @@ bkt_sh() {
 bkt_pg_restore() {
   local a scratch="" dump=""
   local want=""
+  case " $* " in
+    *" --version "*)
+      [ "${STUB_RESTORE_VER_RC:-0}" = "0" ] || return "$STUB_RESTORE_VER_RC"
+      printf 'pg_restore (PostgreSQL) %s\n' "${STUB_RESTORE_VER:-16.15}"
+      return 0
+      ;;
+  esac
   for a in "$@"; do
     case "$want" in
       d) scratch="$a"; want="" ;;
@@ -1517,7 +1998,7 @@ bkt_pg_restore() {
     esac
     case "$a" in
       -d) want=d ;;
-      /stage/inner/db/*.dump) dump="$(basename "$a" .dump)" ;;
+      /stage/inner/db/*.dump | /stage/open/db/*.dump) dump="$(basename "$a" .dump)" ;;
     esac
   done
   [ -n "$scratch" ] && [ -n "$dump" ] && printf '%s\n' "$dump" > "$BK_WORLD/scratch/$scratch"
@@ -1536,6 +2017,33 @@ bkt_cmd() {
   # operator cannot read it back. `pack` here runs AS the operator, so the
   # only way to put the verb in that state is to take the mode away the
   # moment the file exists.
+  # The listing a restore diffs against lives INSIDE the bundle, so the only
+  # way to measure "the tree that landed does not match what was sealed" is
+  # to change one of the two after the bundle was opened. Changing the
+  # LISTING is the same measurement as changing the tree and needs no root:
+  # `uid` moves a column this harness cannot otherwise vary, because a test
+  # that cannot chown can still prove the column is COMPARED.
+  if [ "$rc" -eq 0 ] && [ -n "$STUB_TAMPER_LISTING" ]; then
+    case " ${args[*]} " in
+      *" --out "*)
+        for a in "${args[@]}"; do
+          case "$a" in
+            */open)
+              out="$a/listings/v4_memdata.sha256"
+              [ -f "$out" ] || continue
+              case "$STUB_TAMPER_LISTING" in
+                uid) sed 's|^f \(0[0-7]*\) [0-9]* |f \1 4242 |' "$out" > "$out.t" ;;
+                hash) sed 's|^\([0-9a-f]\{64\}\)  ./notes/one.md$|0000000000000000000000000000000000000000000000000000000000000000  ./notes/one.md|' "$out" > "$out.t" ;;
+                extra) { cat "$out"; printf 'f 0644 0 0 ./ghost\n'; } > "$out.t" ;;
+                *) cp "$out" "$out.t" ;;
+              esac
+              mv "$out.t" "$out"
+              ;;
+          esac
+        done
+        ;;
+    esac
+  fi
   if [ "$rc" -eq 0 ] && [ "$STUB_UNREADABLE_PART" = "1" ]; then
     case " ${args[*]} " in
       *" pack "*)
@@ -1615,8 +2123,27 @@ bkt_reset() {
   printf 'not a real node key\n' > "$BKT_VOLS/nova_v4_tailscale/tailscaled.state"
   printf 'a note\n' > "$BKT_VOLS/nova_v4_memdata/notes/one.md"
   ln -sf one.md "$BKT_VOLS/nova_v4_memdata/notes/current"
+  # MIXED MODES, and an empty directory, on purpose. A tree built with one
+  # umask round-trips through any copy that keeps nothing — the listing's
+  # four columns are types, MODES, uid and gid, and a fixture whose every
+  # entry is 0644 cannot tell a copy that preserves them from one that does
+  # not. (Ownership cannot be varied without root here, so the uid column is
+  # measured the other way round: by moving it in the carried listing and
+  # requiring the restore to refuse. See STUB_TAMPER_LISTING.)
+  mkdir -p "$BKT_VOLS/nova_v4_memdata/.embeddings" \
+    "$BKT_VOLS/nova_v4_memdata/people/empty"
+  printf 'private\n' > "$BKT_VOLS/nova_v4_memdata/people/secret.md"
+  printf 'read only\n' > "$BKT_VOLS/nova_v4_memdata/.embeddings/cache.jsonl"
+  chmod 600 "$BKT_VOLS/nova_v4_memdata/people/secret.md"
+  chmod 444 "$BKT_VOLS/nova_v4_memdata/.embeddings/cache.jsonl"
+  chmod 700 "$BKT_VOLS/nova_v4_memdata/people"
+  chmod 755 "$BKT_VOLS/nova_v4_memdata/people/empty"
   printf '%s' "$PW_VALUE" > "$BK_WORLD/pw/.backup-passphrase"
   chmod 600 "$BK_WORLD/pw/.backup-passphrase"
+  # A restore case empties this world into a bare TARGET; the next case gets
+  # the world back, or it is measuring a different world from the one it
+  # thinks it is.
+  [ -f "$WORLD/env.pristine" ] && cp "$WORLD/env.pristine" "$WORLD/repo/deploy/.env"
   : > "$BK_WORLD/pw/.env"
   BKT_RUNNING="$(printf 'core\ngateway\nmemory\npostgres\nsearxng\ntailscale\nweb\nollama\n')"
   STUB_STOP_RC=0
@@ -1648,6 +2175,31 @@ bkt_reset() {
   STUB_VOLUME_RM_RC=0
   STUB_UNREADABLE_PART=0
   STUB_DROP_LINK_TARGETS=0
+  # ── the knobs restore and drill add ──────────────────────────────────────
+  STUB_PROBE_RC=0
+  STUB_NETWORK_RM_RC=0
+  STUB_DETACH_RC=0
+  STUB_PULL_RC=0
+  STUB_PULL_LANDS=1
+  STUB_RESTORE_VER="16.15"
+  STUB_RESTORE_VER_RC=0
+  STUB_DROP_VOLUME_LABELS=0
+  STUB_RESTORE_DIFF=0
+  STUB_RESTORED_KEY_DIFFERS=0
+  STUB_TAMPER_LISTING=""
+  STUB_EMPTY_UNTIL_RESTORED=0
+  STUB_MISSING_DB=""
+  STUB_MISSING_ROLE=""
+  STUB_ORPHAN_VERIFY_DBS=""
+  STUB_VERIFY_DB_CONNS=0
+  STUB_VERIFY_DB_OLD=1
+  BKT_BARE_TARGET=0
+  BKT_FORCE_CT_NET=""
+  rm -rf "$BK_WORLD/ct" "$BK_WORLD/ctnet" "$BK_WORLD/net" "$BK_WORLD/images"
+  mkdir -p "$BK_WORLD/ct" "$BK_WORLD/ctnet" "$BK_WORLD/net" "$BK_WORLD/images"
+  # Both images this host already has, so the happy path pulls nothing.
+  : > "$BK_WORLD/images/postgres_16"
+  : > "$BK_WORLD/images/nova-core"
 }
 
 # One run of the verb, in its own subshell — which is where its EXIT trap
@@ -2288,6 +2840,997 @@ else
   expect_str "an_unreadable_passphrase_store_refuses_rather_than_creating_one" "$BKT_RC" "1"
   expect_str "and_no_bundle_is_written_under_a_new_passphrase" \
     "$(find "$BK_WORLD/out" -name 'nova-backup-*' | wc -l | tr -d ' ')" "0"
+
+  # ── the restore verb, against a bundle this suite has just written ───────
+  #
+  # Same rule as the backup block, same level of seam: the bundle under test
+  # is a real NOVAENC1 file this suite produced, opened by the real
+  # nova_restore.py, and every container script really runs. Nothing here
+  # answers `{"verified": true}`.
+  #
+  # `get_env_value` and `set_env_value` are install.sh's OWN bodies, lifted
+  # out of the file at run time rather than re-typed here. §9.2 step 2 and
+  # step 8 are specifically about how those two behave on a bare target, and
+  # a second copy of them in a test would be a fixture agreeing with whatever
+  # the author of the copy assumed. If either ever moves or is renamed, the
+  # eval below produces nothing and every restore case dies on "command not
+  # found" — which is the right kind of loud.
+  BKT_INSTALL_FNS="$(sed -n '/^get_env_value()/,/^}/p;/^set_env_value()/,/^}/p' "$SCRIPT_DIR/install.sh")"
+  case "$BKT_INSTALL_FNS" in
+    *"get_env_value()"*"set_env_value()"*)
+      report 0 "the_env_helpers_under_test_are_install_sh_s_own"
+      ;;
+    *)
+      report 1 "the_env_helpers_under_test_are_install_sh_s_own" \
+        "get_env_value/set_env_value could not be lifted out of install.sh"
+      ;;
+  esac
+
+  BKT_KEEP="$BK_WORLD/keep"
+  mkdir -p "$BKT_KEEP"
+
+  # Empty this world into a RESTORE TARGET: no volumes, no .env, no container
+  # of this project, and every database created-but-empty the way
+  # postgres-init leaves a fresh v4_pgdata.
+  bkt_bare_target() {
+    rm -rf "${BKT_VOLS:?}"
+    mkdir -p "$BKT_VOLS"
+    rm -f "$WORLD/repo/deploy/.env"
+    rm -f "$BK_WORLD/marker/.restore-in-progress" "$BK_WORLD/marker/.restored"
+    rm -rf "$BK_WORLD/scratch"
+    mkdir -p "$BK_WORLD/scratch"
+    BKT_RUNNING=""
+    BKT_BARE_TARGET=1
+    STUB_EMPTY_UNTIL_RESTORED=1
+  }
+
+  bkt_restore() {
+    (
+      [ "${BKT_SET_E:-0}" = "1" ] && set -e
+      cd "$WORLD/repo" || exit 9
+      bk_docker() { bkt_docker "$@"; }
+      docker() { bkt_docker "$@"; }
+      bk_git() { git "$@"; }
+      BK_COMPOSE_FILES="$WORLD/repo/deploy/docker-compose.yml"
+      BK_ENV_FILE="$WORLD/repo/deploy/.env"
+      BK_ENV_EXAMPLE="$WORLD/repo/deploy/.env.example"
+      ENV_FILE="$WORLD/repo/deploy/.env"
+      # shellcheck disable=SC2034
+      BK_REPO_ROOT="$WORLD/repo"
+      # shellcheck disable=SC2034
+      BK_MOVED_MARKER="$BK_WORLD/marker/.moved"
+      # shellcheck disable=SC2034
+      BK_MOVED_TO_MARKER="$BK_WORLD/marker/MOVED_TO"
+      # shellcheck disable=SC2034
+      BK_RESTORE_MARKER="$BK_WORLD/marker/.restore-in-progress"
+      # shellcheck disable=SC2034
+      BK_RESTORED_MARKER="$BK_WORLD/marker/.restored"
+      NP_DIR="$BK_WORLD/pw"
+      NP_ENV_FILE="$BK_WORLD/pw/.env"
+      export BK_COMPOSE_FILES BK_ENV_FILE BK_ENV_EXAMPLE ENV_FILE
+      export STUB_PGRESTORE_RC
+      eval "$BKT_INSTALL_FNS"
+      # subnet.sh's own seams, so the drill's subnet choice is the REAL
+      # pick_project_subnet reading a route table this case controls. 172.18
+      # is deliberately taken by a route: a drill that ignores what is in use
+      # would land on it.
+      have_cmd() { case "$1" in ip) return 0 ;; *) command -v "$1" >/dev/null 2>&1 ;; esac; }
+      ip_route_text() {
+        printf 'default via 192.168.1.1 dev eth0\n'
+        printf '172.18.0.0/16 dev br-something proto kernel scope link\n'
+      }
+      log() { printf '%s\n' "$*" >&2; }
+      die() { log "ERROR: $*"; exit 1; }
+      # §9.2 step 3 is install.sh's decide_subnet, which is T5's and is driven
+      # by install_test.sh. What the RESTORE owes is that it runs BEFORE
+      # anything creates a docker object, and that .env is already there when
+      # it does — so this records both facts into the same ordered log every
+      # docker call lands in, and writes the five keys the way the real one
+      # does.
+      decide_subnet() {
+        if [ -f "$ENV_FILE" ]; then
+          printf 'decide_subnet env-exists\n' >> "$BKT_LOG"
+        else
+          printf 'decide_subnet env-missing\n' >> "$BKT_LOG"
+        fi
+        set_env_value NOVA_SUBNET 172.20.0.0/16
+        set_env_value NOVA_SUBNET_RANGE 172.20.0.0/17
+        set_env_value NOVA_SUBNET_GATEWAY 172.20.0.1
+        set_env_value NOVA_WEB_ADDR 172.20.128.10
+        set_env_value NOVA_TAILSCALE_ADDR 172.20.128.20
+      }
+      date() {
+        local now
+        case "$*" in
+          "+%s")
+            now=$(( $(cat "$BK_WORLD/clock" 2>/dev/null || printf 1000000) + 1000 ))
+            printf '%s' "$now" > "$BK_WORLD/clock"
+            printf '%s\n' "$now"
+            ;;
+          *) command date "$@" ;;
+        esac
+      }
+      if [ "${BKT_NO_PW:-0}" != "1" ]; then
+        printf '%s\n' "$PW_VALUE" > "$BK_WORLD/pw/.backup-passphrase"
+        chmod 600 "$BK_WORLD/pw/.backup-passphrase"
+      fi
+      "$@"
+    ) > "$BK_WORLD/stdout" 2> "$BK_WORLD/stderr"
+    BKT_RC=$?
+    BKT_OUT="$(cat "$BK_WORLD/stdout")"
+    BKT_ERR="$(cat "$BK_WORLD/stderr")"
+  }
+
+  # One bundle, written from the full world, kept where bkt_reset cannot
+  # delete it. Every restore case below opens THIS file.
+  bkt_reset
+  bkt_backup
+  if [ "$BKT_RC" -ne 0 ]; then
+    report 1 "a_bundle_exists_to_restore_from" "the backup that feeds the restore block failed: $BKT_ERR"
+  else
+    report 0 "a_bundle_exists_to_restore_from"
+  fi
+  RBUNDLE="$BKT_KEEP/$(basename "$(bkt_bundle)")"
+  cp "$(bkt_bundle)" "$RBUNDLE"
+
+  # ── the happy path, and everything it proves ─────────────────────────────
+  bkt_reset
+  bkt_bare_target
+  bkt_restore cmd_restore "$RBUNDLE"
+  expect_str "the_verb_restores_a_bundle_onto_an_empty_target" "$BKT_RC" "0"
+  if [ "$BKT_RC" -ne 0 ]; then
+    printf '     stdout: %s\n     stderr: %s\n' "$BKT_OUT" "$BKT_ERR"
+  fi
+
+  # §9.2 step 16: the word `restored` is printed only with the three facts
+  # behind it.
+  expect_has "the_word_restored_carries_the_three_facts_behind_it" "$BKT_OUT" \
+    "restored: 7 tables compared across 3 databases, 2 volume listings diffed,"
+  expect_has "the_word_restored_carries_the_three_facts_behind_it" "$BKT_OUT" \
+    "signing key fingerprint equal."
+  expect_has "the_report_names_exactly_one_next_command" "$BKT_OUT" "next:
+  ./install"
+
+  # port-v3 M2 / python-tool M3: .env is created from the example BEFORE
+  # decide_subnet, which rewrites that file and dies on a missing one under
+  # install.sh's `set -e`.
+  expect_has "creates_env_from_the_example_before_decide_subnet" \
+    "$(cat "$BKT_LOG")" "decide_subnet env-exists"
+  expect_lacks "creates_env_from_the_example_before_decide_subnet" \
+    "$(cat "$BKT_LOG")" "decide_subnet env-missing"
+  expect_str "the_env_it_created_is_owner_only" \
+    "$(bk_mode_of "$WORLD/repo/deploy/.env")" "600"
+
+  # §9.2 step 3, as an ORDER and not a presence check: every docker call and
+  # decide_subnet land in one ordered log, and the line numbers are compared.
+  BKT_SUBNET_LINE="$(grep -n 'decide_subnet' "$BKT_LOG" | head -1 | cut -d: -f1)"
+  BKT_VOLCREATE_LINE="$(grep -n 'volume create' "$BKT_LOG" | head -1 | cut -d: -f1)"
+  if [ -n "$BKT_SUBNET_LINE" ] && [ -n "$BKT_VOLCREATE_LINE" ] &&
+    [ "$BKT_SUBNET_LINE" -lt "$BKT_VOLCREATE_LINE" ]; then
+    report 0 "runs_decide_subnet_before_the_first_volume_create"
+  else
+    report 1 "runs_decide_subnet_before_the_first_volume_create" \
+      "decide_subnet at line ${BKT_SUBNET_LINE:-none}, first volume create at line ${BKT_VOLCREATE_LINE:-none}"
+  fi
+
+  # §9.2 step 9: the two compose labels are READ BACK. An unlabelled volume
+  # is one `docker compose up` will not adopt, so the restore would come up
+  # on a fresh empty one.
+  expect_str "a_restored_volume_carries_the_labels_compose_needs_to_adopt_it" \
+    "$(cat "$BKT_VOLS/.labels/nova_v4_memdata" 2>/dev/null)" \
+    "com.docker.compose.project=nova com.docker.compose.volume=v4_memdata"
+  expect_has "every_volume_listing_is_re_derived_and_diffed" "$BKT_OUT" \
+    "volume v4_memdata -> nova_v4_memdata:"
+  expect_has "every_volume_listing_is_re_derived_and_diffed" "$BKT_OUT" "listing identical"
+  # port-v3 M5: the EMPTY volume is restored and diffed too. v4_workspace on
+  # a hub where she has written nothing yet is the volume a listing check
+  # would otherwise pass vacuously on.
+  expect_has "an_empty_carried_volume_is_restored_and_diffed_too" "$BKT_OUT" \
+    "volume v4_workspace -> nova_v4_workspace: 0 entries"
+  # The tree really landed: the notes, the symlink, and the modes.
+  expect_str "the_notes_really_land_in_the_volume" \
+    "$(cat "$BKT_VOLS/nova_v4_memdata/notes/one.md" 2>/dev/null)" "a note"
+  expect_str "a_symlink_inside_the_tree_survives_as_a_symlink" \
+    "$(readlink "$BKT_VOLS/nova_v4_memdata/notes/current" 2>/dev/null)" "one.md"
+  expect_str "the_modes_inside_the_tree_survive" \
+    "$(bk_mode_of "$BKT_VOLS/nova_v4_memdata/people/secret.md")" "600"
+  expect_str "the_modes_inside_the_tree_survive" \
+    "$(bk_mode_of "$BKT_VOLS/nova_v4_memdata/people")" "700"
+  expect_str "an_empty_directory_survives" \
+    "$(find "$BKT_VOLS/nova_v4_memdata/people/empty" -maxdepth 0 -type d | wc -l | tr -d ' ')" "1"
+
+  # §9.2 step 8: the carried KEY SET, written and re-read. python-tool M4 is
+  # the one that deadlocks the whole slice — NOVA_SUBNET is written by step 3
+  # and must not be in the bundle at all, or step 8 finds it present and
+  # different and refuses the restore this slice exists for.
+  expect_str "the_carried_keys_land_in_env" \
+    "$(grep -c '^POSTGRES_PASSWORD=throwaway$' "$WORLD/repo/deploy/.env")" "1"
+  expect_str "env_host_local_keys_are_never_carried" \
+    "$(grep -c '^NOVA_SUBNET=172.20.0.0/16$' "$WORLD/repo/deploy/.env")" "1"
+  expect_lacks "env_host_local_keys_are_never_carried" \
+    "$(cat "$WORLD/repo/deploy/.env")" "COMPOSE_FILE=throwaway"
+  expect_lacks "env_host_local_keys_are_never_carried" \
+    "$(cat "$WORLD/repo/deploy/.env")" "INSTANCE_SECRET=throwaway"
+
+  # §9.2 step 15: the in-progress marker is GONE and .restored is there.
+  expect_str "a_finished_restore_removes_its_in_progress_marker" \
+    "$(find "$BK_WORLD/marker" -name '.restore-in-progress' | wc -l | tr -d ' ')" "0"
+  expect_has "a_finished_restore_records_what_it_restored" \
+    "$(cat "$BK_WORLD/marker/.restored" 2>/dev/null)" "bundle_sha256=$(sha256_of "$RBUNDLE")"
+  expect_str "the_restored_marker_is_owner_only" \
+    "$(bk_mode_of "$BK_WORLD/marker/.restored")" "600"
+
+  # §9.2 step 7: the version comparison is STATED, which is the whole reason
+  # R1's risk was deferred to restore time.
+  expect_has "the_version_gate_says_what_it_found_on_both_sides" "$BKT_OUT" \
+    "the bundle was written by server 16.15 (160015) / pg_dump major 16"
+  expect_has "the_version_gate_says_what_it_found_on_both_sides" "$BKT_OUT" \
+    "host has postgres:16 with pg_restore 16.15 (major 16)"
+  expect_has "the_migration_gate_names_what_it_matched" "$BKT_OUT" \
+    "migrations nova_core: 1 applied, every one found by content"
+
+  # §7.5, on this side too: the passphrase reaches the first line of one
+  # container's stdin and nothing else.
+  expect_lacks "passphrase_never_reaches_argv_on_the_restore_side" \
+    "$(cat "$BKT_LOG")" "$PW_VALUE"
+  # `-e NAME=VALUE`, which is what docker takes: a bare `-e` inside a logged
+  # `sed -e ...` script is not one, and matching it was this case measuring
+  # its own harness.
+  expect_str "the_only_env_var_any_restore_container_gets_is_a_path" \
+    "$(grep -o -- '-e [A-Za-z_][A-Za-z0-9_]*=[^ ]*' "$BKT_LOG" | sort -u | tr '\n' ' ')" \
+    "-e PGPASSFILE=/stage/.pgpass "
+  expect_lacks "no_value_of_the_carried_env_is_ever_printed" "$BKT_OUT" "throwaway"
+  expect_str "no_plaintext_dump_is_left_on_the_host" \
+    "$(find "$BK_WORLD" "${TMPDIR:-/tmp}" -maxdepth 2 -name 'nova_core.dump' 2>/dev/null | wc -l | tr -d ' ')" "0"
+  expect_str "the_decrypted_content_volume_is_removed_when_the_run_finishes" \
+    "$(find "$BKT_VOLS" -maxdepth 1 -name 'nova-restore-content-*' | wc -l | tr -d ' ')" "0"
+
+  # ── under install.sh's own shell settings ────────────────────────────────
+  bkt_reset
+  bkt_bare_target
+  BKT_SET_E=1
+  bkt_restore cmd_restore "$RBUNDLE"
+  BKT_SET_E=0
+  expect_str "the_verb_runs_under_install_sh_s_own_set_euo_pipefail" "$BKT_RC" "0"
+  if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
+
+  bkt_reset
+  bkt_bare_target
+  mkdir -p "$BKT_VOLS/nova_v4_pgdata"
+  printf '16\n' > "$BKT_VOLS/nova_v4_pgdata/PG_VERSION"
+  BKT_SET_E=1
+  bkt_restore cmd_restore "$RBUNDLE"
+  BKT_SET_E=0
+  expect_str "a_refusal_under_set_e_is_still_a_sentence" "$BKT_RC" "1"
+  expect_has "a_refusal_under_set_e_is_still_a_sentence" "$BKT_ERR" "exists and is not empty"
+  (
+    set -e
+    bk_docker() { bkt_docker "$@"; }
+    cmd_restore --nonsense >/dev/null 2>&1 || true
+    case "$-" in
+      *e*) exit 0 ;;
+      *) exit 7 ;;
+    esac
+  )
+  expect_str "the_verb_restores_set_e_on_the_way_out" "$?" "0"
+
+  # ── §9.2 step 6, the single most important line in the verb ──────────────
+  #
+  # port-v3 M1 + shell-first M3: v4_pgdata is `dump-pg`, so it has NO
+  # manifest.volumes row — a loop over the manifest never inspects the single
+  # most important non-empty target on the machine, and the restore then
+  # verifies every count and digest and still produces a hub that cannot
+  # authenticate against its own database.
+  bkt_reset
+  bkt_bare_target
+  mkdir -p "$BKT_VOLS/nova_v4_pgdata"
+  printf '16\n' > "$BKT_VOLS/nova_v4_pgdata/PG_VERSION"
+  bkt_restore cmd_restore "$RBUNDLE"
+  expect_str "refuses_a_non_empty_v4_pgdata" "$BKT_RC" "1"
+  expect_has "refuses_a_non_empty_v4_pgdata" "$BKT_ERR" \
+    "volume nova_v4_pgdata (v4_pgdata, dump-pg) exists and is not empty"
+  expect_has "the_refusal_says_a_bad_restore_cannot_be_rolled_back" "$BKT_ERR" \
+    "A bad restore CANNOT be rolled back in place"
+  expect_str "and_creates_no_volume_at_all" \
+    "$(grep -c 'volume create' "$BKT_LOG")" "0"
+  expect_str "and_writes_no_in_progress_marker" \
+    "$(find "$BK_WORLD/marker" -name '.restore-in-progress' | wc -l | tr -d ' ')" "0"
+
+  # python-tool M1, measured: a probe that reads STDOUT instead of the EXIT
+  # STATUS calls every failure mode "empty, proceed".
+  bkt_reset
+  bkt_bare_target
+  mkdir -p "$BKT_VOLS/nova_v4_pgdata"
+  STUB_PROBE_RC=1
+  bkt_restore cmd_restore "$RBUNDLE"
+  STUB_PROBE_RC=0
+  expect_str "the_emptiness_probe_reads_exit_status_not_stdout" "$BKT_RC" "1"
+  expect_has "the_emptiness_probe_reads_exit_status_not_stdout" "$BKT_ERR" \
+    "could not be read"
+  expect_has "could_not_determine_is_a_refusal_not_a_pass" "$BKT_ERR" \
+    "is a refusal here, not a pass"
+
+  # shell-first m3: /probe is a path no image populates, so the probe cannot
+  # populate the volume it is checking.
+  expect_has "the_emptiness_probe_mounts_a_path_no_image_populates" \
+    "$(cat "$BKT_LOG")" "-v nova_v4_pgdata:/probe:ro"
+  expect_has "the_emptiness_probe_mounts_a_path_no_image_populates" \
+    "$(cat "$BKT_LOG")" "/probe -mindepth 1 -maxdepth 1 -print -quit"
+
+  bkt_reset
+  bkt_bare_target
+  BKT_RUNNING="core"
+  bkt_restore cmd_restore "$RBUNDLE"
+  expect_str "refuses_an_existing_project_container" "$BKT_RC" "1"
+  expect_has "refuses_an_existing_project_container" "$BKT_ERR" \
+    "container(s) of the project \`nova\` are here, exited ones included"
+
+  # ── the three the mutation sweep said nothing was measuring ─────────────
+  #
+  # Each of these exists because a deliberate mutation of the shipped code
+  # left the whole suite green. None was suspected; the sweep is what said so.
+
+  # §9.2 step 9: the labels are READ BACK off `docker volume inspect`. An
+  # unlabelled volume is one `docker compose up` will not adopt, so the
+  # restore would fill a volume and the stack would then come up on a fresh
+  # empty one. A create that succeeds and a label that does not stick is the
+  # only shape that measures the read-back.
+  bkt_reset
+  bkt_bare_target
+  STUB_DROP_VOLUME_LABELS=1
+  bkt_restore cmd_restore "$RBUNDLE"
+  STUB_DROP_VOLUME_LABELS=0
+  expect_str "a_volume_whose_labels_did_not_stick_is_a_refusal" "$BKT_RC" "1"
+  expect_has "a_volume_whose_labels_did_not_stick_is_a_refusal" "$BKT_ERR" \
+    "reports its compose"
+  expect_has "the_refusal_says_what_an_unlabelled_volume_costs" "$BKT_ERR" \
+    "\`docker compose up\` will not adopt"
+  expect_lacks "a_volume_whose_labels_did_not_stick_is_a_refusal" "$BKT_OUT" "restored:"
+
+  # §9.2 step 11: the volumes can be empty and a DATABASE not be. On a target
+  # whose v4_pgdata was removed but whose server still carries the three
+  # databases with rows in them, step 6 passes and step 11 is the only thing
+  # between the operator and a pg_restore interleaved into live data. Exit 3,
+  # its own code, because "the target is not empty" is not the same answer as
+  # "this bundle is wrong".
+  bkt_reset
+  bkt_bare_target
+  STUB_EMPTY_UNTIL_RESTORED=0
+  bkt_restore cmd_restore "$RBUNDLE"
+  STUB_EMPTY_UNTIL_RESTORED=1
+  expect_str "a_target_database_that_already_holds_tables_is_exit_3" "$BKT_RC" "3"
+  expect_has "a_target_database_that_already_holds_tables_is_exit_3" "$BKT_ERR" \
+    "already holds 3 table(s)"
+  expect_has "and_says_again_that_a_bad_restore_cannot_be_undone" "$BKT_ERR" \
+    "a bad restore cannot be rolled back in place"
+  expect_str "and_nothing_was_restored_into_it" \
+    "$(grep -c 'pg_restore' "$BK_WORLD/dbops.log")" "0"
+
+  # T3's reading 8, measured on THIS verb rather than inherited: under a live
+  # `-e` the shell exits at the first `x="$(cmd)"` whose command failed —
+  # BEFORE the `[ -z "$x" ]` that would have named it. A refusal that comes
+  # after a failed READING is the only shape that can tell the wrapper is
+  # doing anything; a refusal reached through `if` and `case` cannot, which
+  # is why the case that used to sit here measured nothing.
+  bkt_reset
+  bkt_bare_target
+  STUB_RESTORE_VER_RC=1
+  BKT_SET_E=1
+  bkt_restore cmd_restore "$RBUNDLE"
+  BKT_SET_E=0
+  STUB_RESTORE_VER_RC=0
+  expect_str "a_failed_reading_under_set_e_still_prints_its_reason" "$BKT_RC" "1"
+  expect_has "a_failed_reading_under_set_e_still_prints_its_reason" "$BKT_ERR" \
+    "host's major version is unreadable"
+  expect_has "the_refusal_says_what_it_could_not_read" "$BKT_ERR" \
+    "answered 'nothing'"
+
+  # ── §9.2 step 7: the version gate, both directions ───────────────────────
+  bkt_reset
+  bkt_bare_target
+  STUB_RESTORE_VER="15.7"
+  bkt_restore cmd_restore "$RBUNDLE"
+  STUB_RESTORE_VER="16.15"
+  expect_str "refuses_an_older_pg_restore" "$BKT_RC" "1"
+  expect_has "refuses_an_older_pg_restore" "$BKT_ERR" \
+    "written by pg_dump major 16 and this host's"
+  expect_has "refuses_an_older_pg_restore_and_names_both_numbers" "$BKT_ERR" \
+    "pg_restore 15.7 (major 15)"
+
+  bkt_reset
+  bkt_bare_target
+  STUB_RESTORE_VER="17.2"
+  bkt_restore cmd_restore "$RBUNDLE"
+  STUB_RESTORE_VER="16.15"
+  expect_str "accepts_a_newer_pg_restore" "$BKT_RC" "0"
+  if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
+
+  # ── §9.2 step 7: the migration gate matches by CONTENT ───────────────────
+  #
+  # shell-first M12: a filename-only gate false-refuses a RENUMBERED
+  # migration — a correct bundle refused, with the operator's only copy of
+  # his Nova and nowhere to go. There is no override flag; the fix is asking
+  # the question correctly.
+  bkt_reset
+  bkt_bare_target
+  mv "$WORLD/repo/services/core/migrations/001_init.sql" \
+    "$WORLD/repo/services/core/migrations/007_init.sql"
+  bkt_restore cmd_restore "$RBUNDLE"
+  mv "$WORLD/repo/services/core/migrations/007_init.sql" \
+    "$WORLD/repo/services/core/migrations/001_init.sql"
+  expect_str "migration_gate_matches_a_renumbered_migration_by_content" "$BKT_RC" "0"
+  if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
+
+  bkt_reset
+  bkt_bare_target
+  printf -- '-- core, but different\n' > "$WORLD/repo/services/core/migrations/001_init.sql"
+  bkt_restore cmd_restore "$RBUNDLE"
+  printf -- '-- core\n' > "$WORLD/repo/services/core/migrations/001_init.sql"
+  expect_str "migration_gate_refuses_a_changed_migration" "$BKT_RC" "1"
+  expect_has "migration_gate_refuses_a_changed_migration_and_names_the_file" \
+    "$BKT_ERR" "nova_core was migrated by '001_init.sql'"
+  expect_has "migration_gate_refuses_a_changed_migration_and_names_the_source_sha" \
+    "$BKT_ERR" "check
+       out $(git -C "$WORLD/repo" rev-parse HEAD | cut -c1-7) and restore"
+  expect_has "the_migration_refusal_says_the_match_is_by_content" "$BKT_ERR" \
+    "The match is by CONTENT"
+
+  # ── §9.2 step 8: a replacement prints NAMES, never values ────────────────
+  bkt_reset
+  bkt_bare_target
+  printf 'POSTGRES_PASSWORD=a-different-one\n' > "$WORLD/repo/deploy/.env"
+  chmod 600 "$WORLD/repo/deploy/.env"
+  bkt_restore cmd_restore "$RBUNDLE"
+  expect_str "env_replacement_is_not_a_refusal" "$BKT_RC" "0"
+  if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
+  expect_has "env_replacement_prints_key_names" "$BKT_OUT" "replaced: POSTGRES_PASSWORD"
+  expect_lacks "env_replacement_never_prints_values" "$BKT_OUT" "a-different-one"
+  expect_lacks "env_replacement_never_prints_values" "$BKT_OUT" "throwaway"
+  expect_str "the_replacement_really_replaced" \
+    "$(grep -c '^POSTGRES_PASSWORD=throwaway$' "$WORLD/repo/deploy/.env")" "1"
+
+  # ── §9.2 step 10: the marker, and the re-run that quotes it ──────────────
+  #
+  # shell-first M4, the one genuinely new gap: without the marker a restore
+  # that fails at step 12 leaves labelled half-populated volumes, and the
+  # re-run refuses ON STATE IT CREATED ITSELF with no verb that clears it —
+  # so the operator's only route is hand-run `docker volume rm` on his only
+  # copy of the data, unguided, at the worst possible moment.
+  bkt_reset
+  bkt_bare_target
+  STUB_PGRESTORE_RC=1
+  bkt_restore cmd_restore "$RBUNDLE"
+  STUB_PGRESTORE_RC=0
+  expect_str "a_failed_restore_refuses" "$BKT_RC" "1"
+  expect_has "a_failed_pg_restore_says_the_transaction_rolled_back" "$BKT_ERR" \
+    "--single-transaction, so the whole transaction rolled back"
+  expect_has "a_failed_restore_writes_the_in_progress_marker" \
+    "$(cat "$BK_WORLD/marker/.restore-in-progress" 2>/dev/null)" \
+    "volumes=nova_v4_memdata nova_v4_workspace"
+  expect_str "the_in_progress_marker_is_owner_only" \
+    "$(bk_mode_of "$BK_WORLD/marker/.restore-in-progress")" "600"
+  # ...and the re-run, on a target the first run half filled.
+  BKT_RUNNING=""
+  bkt_restore cmd_restore "$RBUNDLE"
+  expect_str "the_rerun_refuses_on_the_state_the_first_run_created" "$BKT_RC" "1"
+  expect_has "the_rerun_quotes_the_marker" "$BKT_ERR" \
+    "A previous restore did not finish. It recorded exactly what it created"
+  expect_has "the_rerun_quotes_the_marker" "$BKT_ERR" "volumes=nova_v4_memdata"
+  expect_has "nothing_is_discovered_the_marker_is_the_bound" "$BKT_ERR" \
+    "that list is the bound"
+
+  # ── §9.2 steps 13 and 14: what must never print `restored` ───────────────
+  bkt_reset
+  bkt_bare_target
+  STUB_RESTORE_DIFF=1
+  bkt_restore cmd_restore "$RBUNDLE"
+  STUB_RESTORE_DIFF=0
+  expect_str "never_prints_restored_when_a_count_differs" "$BKT_RC" "1"
+  expect_lacks "never_prints_restored_when_a_count_differs" "$BKT_OUT" "restored:"
+  expect_has "a_count_difference_names_the_table_and_both_sides" "$BKT_ERR" \
+    "public.people: bundle"
+  expect_has "a_count_difference_says_it_is_the_data_not_the_frame" "$BKT_ERR" \
+    "the same six pinned GUCs, so this is the data, not the frame"
+
+  bkt_reset
+  bkt_bare_target
+  STUB_RESTORED_KEY_DIFFERS=1
+  bkt_restore cmd_restore "$RBUNDLE"
+  STUB_RESTORED_KEY_DIFFERS=0
+  expect_str "never_prints_restored_when_the_key_fingerprint_differs" "$BKT_RC" "1"
+  expect_lacks "never_prints_restored_when_the_key_fingerprint_differs" "$BKT_OUT" "restored:"
+  expect_has "a_lost_signing_key_is_loud_and_says_what_it_costs" "$BKT_ERR" \
+    "THE SIGNING KEY DID NOT SURVIVE"
+  expect_has "a_lost_signing_key_is_loud_and_says_what_it_costs" "$BKT_ERR" \
+    "un-paired every device it had"
+
+  # §9.2 step 9: the listing is what a restore diffs against, and it covers
+  # TYPES, MODES, UID and GID — not just the file bytes. The uid column
+  # cannot be varied here without root, so it is measured from the other
+  # side: move it in the carried listing and require the restore to refuse.
+  # `extra` refuses one step earlier and more precisely — the listing names an
+  # entry that did not land, which is caught while the recorded metadata is
+  # being applied. Both are refusals of the same fact; each is asserted where
+  # it happens rather than blurred into one substring that would pass on
+  # either.
+  for tamper in uid extra hash; do
+    bkt_reset
+    bkt_bare_target
+    STUB_TAMPER_LISTING="$tamper"
+    bkt_restore cmd_restore "$RBUNDLE"
+    STUB_TAMPER_LISTING=""
+    expect_str "never_prints_restored_when_a_listing_differs" "$BKT_RC" "1"
+    expect_lacks "never_prints_restored_when_a_listing_differs" "$BKT_OUT" "restored:"
+    expect_str "a_listing_difference_stops_before_the_database" \
+      "$(grep -c 'pg_restore' "$BK_WORLD/dbops.log")" "0"
+    case "$tamper" in
+      extra)
+        expect_has "a_listing_entry_that_did_not_land_refuses_by_name" "$BKT_ERR" \
+          "the listing names ./ghost and it did not land"
+        ;;
+      *)
+        expect_has "never_prints_restored_when_a_listing_differs" "$BKT_ERR" \
+          "does not match the listing sealed in"
+        ;;
+    esac
+  done
+  expect_has "a_listing_difference_names_the_entries_that_differ" "$BKT_ERR" \
+    "changed ./notes/one.md"
+  expect_has "a_listing_difference_leaves_the_volume_for_inspection" "$BKT_ERR" \
+    "left in place for inspection and this run stops before"
+
+  # §9.2 step 5: a hash mismatch prints NO next steps at all, so a failed
+  # verify can never read as a partial success.
+  bkt_reset
+  bkt_bare_target
+  cp "$RBUNDLE" "$BK_WORLD/corrupt.tar"
+  # One byte of the payload, flipped. The outer tar still lists correctly and
+  # the KAT still passes — this is the case the AEAD is for.
+  python3 - "$BK_WORLD/corrupt.tar" <<'PY'
+import sys
+import tarfile
+
+with tarfile.open(sys.argv[1], "r:") as tar:
+    member = tar.getmember("payload.enc")
+at = member.offset_data + member.size // 2
+with open(sys.argv[1], "r+b") as fh:
+    fh.seek(at)
+    b = fh.read(1)
+    fh.seek(at)
+    fh.write(bytes([b[0] ^ 0xFF]))
+PY
+  bkt_restore cmd_restore "$BK_WORLD/corrupt.tar"
+  expect_str "a_corrupt_payload_refuses" "$BKT_RC" "1"
+  expect_has "a_corrupt_payload_refuses" "$BKT_ERR" \
+    "opened and what came out of it is not a bundle this tool can"
+  # The AEAD is what notices, and the refusal says what it cannot tell apart
+  # rather than guessing which of the three it was.
+  expect_has "a_corrupt_payload_refuses_with_a_sentence_not_a_traceback" "$BKT_ERR" \
+    "GCM cannot tell these apart"
+  expect_lacks "a_corrupt_payload_refuses_with_a_sentence_not_a_traceback" "$BKT_ERR" \
+    "Traceback (most recent call last)"
+  expect_lacks "prints_no_next_steps_on_a_hash_mismatch" "$BKT_OUT" "./install"
+  expect_lacks "prints_no_next_steps_on_a_hash_mismatch" "$BKT_OUT" "restored:"
+
+  # §9.2 step 4: the wrong passphrase is refused BEFORE a payload byte is
+  # read, and the refusal names the fingerprint meta.json recorded so a
+  # rotation is stated when it is known and never guessed.
+  bkt_reset
+  bkt_bare_target
+  printf 'not-the-right-passphrase\n' > "$BK_WORLD/pw/wrong"
+  chmod 600 "$BK_WORLD/pw/wrong"
+  bkt_restore cmd_restore "$RBUNDLE" --passphrase-file "$BK_WORLD/pw/wrong"
+  expect_str "a_wrong_passphrase_refuses_before_a_payload_byte_is_read" "$BKT_RC" "1"
+  expect_has "a_wrong_passphrase_refuses_before_a_payload_byte_is_read" "$BKT_ERR" \
+    "Nothing was read past the
+       known-answer test"
+  expect_has "the_wrong_passphrase_refusal_names_the_recorded_fingerprint" "$BKT_ERR" \
+    "meta.json records passphrase fingerprint"
+  expect_str "and_creates_no_volume" "$(grep -c 'volume create' "$BKT_LOG")" "0"
+
+  # A passphrase file other users can read is not read at all.
+  bkt_reset
+  bkt_bare_target
+  printf 'not-the-right-passphrase\n' > "$BK_WORLD/pw/wrong"
+  chmod 644 "$BK_WORLD/pw/wrong"
+  bkt_restore cmd_restore "$RBUNDLE" --passphrase-file "$BK_WORLD/pw/wrong"
+  expect_str "a_passphrase_file_other_users_can_read_refuses" "$BKT_RC" "1"
+  expect_has "a_passphrase_file_other_users_can_read_refuses" "$BKT_ERR" "mode 644, not 600"
+
+  # A restore NEVER generates a passphrase: the bundle is already sealed.
+  bkt_reset
+  bkt_bare_target
+  rm -f "$BK_WORLD/pw/.backup-passphrase"
+  BKT_NO_PW=1
+  bkt_restore cmd_restore "$RBUNDLE"
+  BKT_NO_PW=0
+  expect_str "a_restore_never_generates_a_passphrase" "$BKT_RC" "1"
+  expect_has "a_restore_never_generates_a_passphrase" "$BKT_ERR" \
+    "a restore never generates one"
+  expect_str "and_no_passphrase_file_appears" \
+    "$(find "$BK_WORLD/pw" -name '.backup-passphrase' | wc -l | tr -d ' ')" "0"
+
+  # ── a moved host refuses first ───────────────────────────────────────────
+  bkt_reset
+  bkt_bare_target
+  printf 'moved_at=20260921T143002Z\nbundle=nova-backup-x.tar\n' > "$BK_WORLD/marker/.moved"
+  bkt_restore cmd_restore "$RBUNDLE"
+  rm -f "$BK_WORLD/marker/.moved"
+  expect_str "a_moved_host_refuses_a_restore_too" "$BKT_RC" "1"
+  expect_has "a_moved_host_refuses_a_restore_too" "$BKT_ERR" "undo-move"
+
+  # ── a bundle that is not one ─────────────────────────────────────────────
+  bkt_reset
+  bkt_bare_target
+  tar -cf "$BK_WORLD/not-a-bundle.tar" -C "$WORLD/repo" .gitignore
+  bkt_restore cmd_restore "$BK_WORLD/not-a-bundle.tar"
+  expect_str "a_tar_that_is_not_a_bundle_refuses_by_shape" "$BKT_RC" "1"
+  expect_has "a_tar_that_is_not_a_bundle_refuses_by_shape" "$BKT_ERR" \
+    "is not a Nova bundle: its members are"
+  bkt_restore cmd_restore "$BK_WORLD/no-such-file.tar"
+  expect_str "a_bundle_that_is_not_there_is_bad_arguments" "$BKT_RC" "2"
+
+  # ── the cleartext half of the bundle is UNAUTHENTICATED ──────────────────
+  #
+  # meta.json rides OUTSIDE payload.enc, so anybody who can touch the file can
+  # rewrite it. §5.4's rule is that nothing surviving a failed decrypt is
+  # decided by it, and every value it duplicates is re-read from the
+  # authenticated manifest and compared. These four cases edit exactly one
+  # cleartext member of a real bundle and require the restore to refuse —
+  # which is the only way to show that the comparison is real and not a
+  # sentence in a design document.
+  bkt_retar() {
+    python3 - "$1" "$2" "$3" "$4" <<'RETAR'
+import sys
+import tarfile
+
+src, dst, member, replacement = sys.argv[1:5]
+with open(replacement, "rb") as fh:
+    body = fh.read()
+with tarfile.open(src, "r:") as old:
+    infos = old.getmembers()
+    with tarfile.open(dst, "w:") as new:
+        for info in infos:
+            if info.name == member:
+                info.size = len(body)
+                new.addfile(info, __import__("io").BytesIO(body))
+            else:
+                new.addfile(info, old.extractfile(info))
+RETAR
+  }
+
+  for field in created_at outer_version bundle_version; do
+    bkt_reset
+    bkt_bare_target
+    tar -xOf "$RBUNDLE" meta.json > "$BK_WORLD/meta.json"
+    case "$field" in
+      created_at) sed 's/"created_at": "[^"]*"/"created_at": "19990101T000000Z"/' \
+        "$BK_WORLD/meta.json" > "$BK_WORLD/meta.new" ;;
+      outer_version) sed 's/"outer_version": 1/"outer_version": 99/' \
+        "$BK_WORLD/meta.json" > "$BK_WORLD/meta.new" ;;
+      bundle_version) sed 's/"bundle_version": 2/"bundle_version": 1/' \
+        "$BK_WORLD/meta.json" > "$BK_WORLD/meta.new" ;;
+    esac
+    bkt_retar "$RBUNDLE" "$BK_WORLD/tampered.tar" meta.json "$BK_WORLD/meta.new"
+    bkt_restore cmd_restore "$BK_WORLD/tampered.tar"
+    expect_str "a_tampered_cleartext_meta_is_a_refusal" "$BKT_RC" "1"
+    expect_lacks "a_tampered_cleartext_meta_is_a_refusal" "$BKT_OUT" "restored:"
+    case "$field" in
+      created_at)
+        expect_has "a_meta_field_the_manifest_contradicts_is_named_on_both_sides" \
+          "$BKT_ERR" "disagrees with itself: its cleartext meta.json says"
+        expect_has "a_meta_field_the_manifest_contradicts_is_named_on_both_sides" \
+          "$BKT_ERR" "19990101T000000Z"
+        ;;
+      outer_version)
+        expect_has "an_outer_version_this_tool_does_not_know_refuses" "$BKT_ERR" \
+          "records outer_version '99', and this tool knows 1"
+        ;;
+      bundle_version)
+        expect_has "a_v3_shaped_bundle_is_refused_BY_NAME" "$BKT_ERR" \
+          "is a bundle_version 1 bundle"
+        ;;
+    esac
+    expect_str "a_tampered_bundle_creates_no_volume" \
+      "$(grep -c 'volume create' "$BKT_LOG")" "0"
+  done
+
+  # And the reader that ships inside it: manifest.reader_sha256 is sealed, the
+  # file is not. One published digest covers every bundle for a commit (§7.6),
+  # and this is what makes that true of the file rather than of the record.
+  bkt_reset
+  bkt_bare_target
+  printf '#!/usr/bin/env python3\nprint("not the reader")\n' > "$BK_WORLD/other-reader.py"
+  bkt_retar "$RBUNDLE" "$BK_WORLD/tampered.tar" nova_restore.py "$BK_WORLD/other-reader.py"
+  bkt_restore cmd_restore "$BK_WORLD/tampered.tar"
+  expect_str "a_swapped_in_bundle_reader_is_a_refusal" "$BKT_RC" "1"
+  expect_has "a_swapped_in_bundle_reader_is_a_refusal" "$BKT_ERR" \
+    "inside tampered.tar hashes to"
+  expect_lacks "a_swapped_in_bundle_reader_is_never_the_one_that_runs" \
+    "$(cat "$BKT_LOG")" "other-reader.py"
+
+  # ── the in-progress marker is WRITTEN, not attempted ─────────────────────
+  #
+  # A path that accepts a write and stores nothing is the class this catches;
+  # a symlink to /dev/null is exactly that. Without the read-back the restore
+  # would go on to create six labelled volumes with nothing recording that it
+  # had.
+  bkt_reset
+  bkt_bare_target
+  ln -sf /dev/null "$BK_WORLD/marker/.restore-in-progress"
+  bkt_restore cmd_restore "$RBUNDLE"
+  rm -f "$BK_WORLD/marker/.restore-in-progress"
+  expect_str "a_marker_that_does_not_keep_what_was_written_refuses" "$BKT_RC" "1"
+  expect_has "a_marker_that_does_not_keep_what_was_written_refuses" "$BKT_ERR" \
+    "did not read back as it was written"
+  # The LABELLED creates, which are the project's own volumes; the throwaway
+  # content volume is created before this and carries no compose label.
+  expect_str "and_no_volume_is_created_without_a_record_of_it" \
+    "$(grep -c 'volume create --label' "$BKT_LOG")" "0"
+
+  # ── §9.3: the drill ──────────────────────────────────────────────────────
+  bkt_reset
+  bkt_bare_target
+  bkt_restore cmd_restore "$RBUNDLE" --drill
+  expect_str "the_drill_exits_0_on_a_bundle_that_restores" "$BKT_RC" "0"
+  if [ "$BKT_RC" -ne 0 ]; then
+    printf '     stdout: %s\n     stderr: %s\n' "$BKT_OUT" "$BKT_ERR"
+  fi
+  # port-v3 M5: the drill runs step 9 too. Its §8.3 omitted it, so the drill
+  # proved the three dumps restore and proved NOTHING about v4_memdata (the
+  # notes, which exist nowhere else) or v4_workspace.
+  expect_has "drill_restores_and_diffs_every_volume_listing" "$BKT_OUT" \
+    "volume v4_memdata -> nova-drill-"
+  expect_has "drill_restores_and_diffs_every_volume_listing" "$BKT_OUT" \
+    "volume v4_workspace -> nova-drill-"
+  expect_has "drill_restores_and_diffs_every_volume_listing" "$BKT_OUT" "listing identical"
+  expect_has "the_drill_compares_every_table_and_the_key" "$BKT_OUT" \
+    "7 tables compared across 3 databases, 2 volume listings diffed"
+  expect_has "the_drill_restores_into_its_own_nova_verify_databases" \
+    "$(cat "$BK_WORLD/dbops.log")" "CREATE DATABASE \"nova_verify_"
+  # shell-first m11: the drill's databases are NOT the backup's self-test
+  # prefix, so a drill can never drop a running backup's scratch database.
+  expect_lacks "drill_uses_nova_verify_and_never_the_backups_selftest_prefix" \
+    "$(grep 'CREATE DATABASE' "$BK_WORLD/dbops.log")" "nova_selftest_"
+
+  # §9.3 step 3: an EXPLICIT subnet, chosen against what is actually in use.
+  # 172.18 is taken by a route in this world (shell-first m9 — a drill
+  # network with no IPAM takes whatever block docker hands it, which can be
+  # the very block a subsequent real restore was about to pick).
+  expect_has "drill_gives_its_network_an_explicit_subnet" \
+    "$(cat "$BKT_LOG")" "network create --subnet 172.19.0.0/16 nova-drill-"
+  expect_has "the_drill_server_is_attached_to_exactly_that_network" "$BKT_OUT" \
+    "isolated from every live network"
+
+  # §9.3: nothing live is touched. NOT a substring hunt — the recorded argv
+  # of every destructive docker call is read back, and no `nova_` object may
+  # appear in one.
+  expect_str "drill_never_touches_a_nova_underscore_object" \
+    "$(grep -E 'volume (create|rm)' "$BKT_LOG" | grep -c 'nova_')" "0"
+  expect_str "drill_creates_no_live_volume" \
+    "$(find "$BKT_VOLS" -maxdepth 1 -name 'nova_v4_*' | wc -l | tr -d ' ')" "0"
+  expect_str "drill_never_writes_env" \
+    "$(find "$WORLD/repo/deploy" -maxdepth 1 -name '.env' | wc -l | tr -d ' ')" "0"
+  expect_lacks "drill_never_runs_decide_subnet" "$(cat "$BKT_LOG")" "decide_subnet"
+  expect_str "drill_never_brings_the_project_stack_up" \
+    "$(grep -c 'compose .* up ' "$BKT_LOG")" "0"
+
+  # §9.3 step 5: the teardown removes every object it created and VERIFIES
+  # each removal.
+  expect_str "no_nova_drill_object_survives_a_passing_drill" \
+    "$(find "$BKT_VOLS" "$BK_WORLD/net" "$BK_WORLD/ct" -maxdepth 1 -name 'nova-drill-*' 2>/dev/null | wc -l | tr -d ' ')" "0"
+  expect_has "the_teardown_says_what_it_removed" "$BKT_OUT" "drill: removed the network nova-drill-"
+
+  # ...including after a failure partway through, which is the case that
+  # matters: a drill that dies at step 12 must still take its wreckage.
+  bkt_reset
+  bkt_bare_target
+  STUB_PGRESTORE_RC=1
+  bkt_restore cmd_restore "$RBUNDLE" --drill
+  STUB_PGRESTORE_RC=0
+  expect_str "a_drill_that_fails_partway_through_still_fails" "$BKT_RC" "1"
+  expect_str "no_nova_drill_object_survives_a_FAILED_drill" \
+    "$(find "$BKT_VOLS" "$BK_WORLD/net" "$BK_WORLD/ct" -maxdepth 1 -name 'nova-drill-*' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+  # §9.3 step 5: a removal that cannot be VERIFIED makes the drill FAIL,
+  # naming the leftover — never a silent rm -f, never ignore_errors.
+  bkt_reset
+  bkt_bare_target
+  STUB_VOLUME_RM_RC=1
+  bkt_restore cmd_restore "$RBUNDLE" --drill
+  STUB_VOLUME_RM_RC=0
+  expect_str "drill_fails_when_a_removal_cannot_be_verified" "$BKT_RC" "1"
+  expect_has "drill_fails_when_a_removal_cannot_be_verified" "$BKT_ERR" \
+    "is still there after \`docker volume rm -f\`"
+  expect_has "a_teardown_that_cannot_be_verified_is_a_FAILED_drill" "$BKT_ERR" \
+    "A drill whose teardown cannot be verified is a FAILED drill"
+
+  # §9.3 step 3: the throwaway server is attached to EXACTLY the network the
+  # drill created. A drill that can reach the live project network is not a
+  # drill, and `docker inspect` is asked rather than assumed.
+  bkt_reset
+  bkt_bare_target
+  BKT_FORCE_CT_NET="nova_default"
+  bkt_restore cmd_restore "$RBUNDLE" --drill
+  BKT_FORCE_CT_NET=""
+  expect_str "a_drill_server_on_another_network_fails" "$BKT_RC" "1"
+  expect_has "a_drill_server_on_another_network_fails" "$BKT_ERR" \
+    "A drill that can reach the live project network is not a"
+  expect_str "and_leaves_no_drill_object_behind_either" \
+    "$(find "$BKT_VOLS" "$BK_WORLD/net" "$BK_WORLD/ct" -maxdepth 1 -name 'nova-drill-*' 2>/dev/null | wc -l | tr -d ' ')" "0"
+
+  # shell-first C3: a drill needs DOCKER, not a completed install. This
+  # compose file carries no `image:` for core, so `nova-core` does not exist
+  # until ./install has built it — which is exactly the mini PC, and exactly
+  # what makes the move rehearsal executable there.
+  bkt_reset
+  bkt_bare_target
+  BKT_NO_CONTAINER=core
+  bkt_restore cmd_restore "$RBUNDLE" --drill
+  BKT_NO_CONTAINER=""
+  expect_str "drill_needs_no_installed_pack_image" "$BKT_RC" "0"
+  if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
+  expect_has "drill_falls_back_to_the_constant_image_and_pulls_it" \
+    "$(cat "$BKT_LOG")" "pull python:3.12-slim"
+  # s41/rulings.md, 2026-09-21: the decryptor image is a CONSTANT, never a
+  # value read out of the file being opened. meta.json in this very bundle
+  # names `crypto_image`, and no docker call may carry it.
+  expect_str "the_decryptor_image_is_never_read_out_of_the_bundle" \
+    "$(tar -xOf "$RBUNDLE" meta.json | bk_json_field fallback_image)" "python:3.12-slim"
+  expect_lacks "the_decryptor_image_is_never_read_out_of_the_bundle" \
+    "$(cat "$BKT_LOG")" "attacker"
+
+  # A pull that exits 0 and leaves nothing behind is not a pull.
+  bkt_reset
+  bkt_bare_target
+  BKT_NO_CONTAINER=core
+  STUB_PULL_LANDS=0
+  bkt_restore cmd_restore "$RBUNDLE" --drill
+  STUB_PULL_LANDS=1
+  BKT_NO_CONTAINER=""
+  expect_str "a_pull_that_leaves_no_image_behind_refuses" "$BKT_RC" "1"
+  expect_has "a_pull_that_leaves_no_image_behind_refuses" "$BKT_ERR" \
+    "exited 0 and \`docker image inspect"
+
+  # ── §9.4: the drill verb ─────────────────────────────────────────────────
+  bkt_reset
+  bkt_bare_target
+  rm -rf "$BK_WORLD/archive"
+  mkdir -p "$BK_WORLD/archive"
+  bkt_restore cmd_drill --out "$BK_WORLD/archive"
+  expect_str "drill_with_no_bundles_fails" "$BKT_RC" "1"
+  expect_has "drill_with_no_bundles_fails" "$BKT_ERR" \
+    "with nothing to recover from the answer
+       is NO"
+  expect_has "zero_bundles_is_a_failed_drill_not_a_vacuous_pass" "$BKT_ERR" \
+    "That is a FAILED drill, not a drill with nothing to do"
+
+  bkt_reset
+  bkt_bare_target
+  cp "$RBUNDLE" "$BK_WORLD/archive/"
+  bkt_restore cmd_drill --out "$BK_WORLD/archive"
+  expect_str "the_drill_verb_passes_on_a_good_bundle" "$BKT_RC" "0"
+  if [ "$BKT_RC" -ne 0 ]; then
+    printf '     stdout: %s\n     stderr: %s\n' "$BKT_OUT" "$BKT_ERR"
+  fi
+  expect_has "the_drill_verb_names_the_bundle_it_chose_and_its_age" "$BKT_OUT" \
+    "the newest is $(basename "$RBUNDLE")"
+  expect_has "the_drill_verb_names_the_bundle_it_chose_and_its_age" "$BKT_OUT" "day(s) old"
+  expect_has "the_exit_code_is_the_verdict_and_so_is_the_last_line" "$BKT_OUT" \
+    "drill PASSED: $(basename "$RBUNDLE")"
+  expect_has "the_sweep_reports_what_it_left_alone" "$BKT_OUT" "sweep:"
+
+  bkt_reset
+  bkt_bare_target
+  cp "$RBUNDLE" "$BK_WORLD/archive/a-bundle-with-no-stamp.tar"
+  bkt_restore cmd_drill --out "$BK_WORLD/archive"
+  rm -f "$BK_WORLD/archive/a-bundle-with-no-stamp.tar"
+  expect_str "drill_fails_on_an_unparseable_stamp" "$BKT_RC" "1"
+  expect_has "drill_fails_on_an_unparseable_stamp" "$BKT_ERR" \
+    "a-bundle-with-no-stamp.tar carries no YYYYMMDDTHHMMSSZ stamp"
+  expect_has "the_drill_never_orders_by_mtime" "$BKT_ERR" "never picks by mtime"
+
+  # ── §9.4 step 5: the cross-check a drill alone cannot surface ────────────
+  #
+  # An OLDER bundle sealed with the PREVIOUS passphrase still verifies as a
+  # bundle and cannot be opened with what is configured here. Nothing but
+  # this comparison says so, and the operator should know before he needs it.
+  PW_VALUE="a-second-passphrase-entirely"
+  bkt_reset
+  bkt_backup
+  if [ "$BKT_RC" -ne 0 ]; then printf '     stderr: %s\n' "$BKT_ERR"; fi
+  PW_VALUE="$BKT_PW_ORIGINAL"
+  ROTATED="$(bkt_bundle)"
+  if [ -n "$ROTATED" ]; then
+    report 0 "a_second_bundle_exists_under_another_passphrase"
+    # The rotated one must sort NEWER, so the drill restores it and the
+    # ORIGINAL becomes the older bundle whose fingerprint no longer matches.
+    cp "$ROTATED" "$BK_WORLD/archive/nova-backup-a-host-20990101T000000Z.tar"
+  else
+    report 1 "a_second_bundle_exists_under_another_passphrase" "no second bundle was written"
+  fi
+  bkt_reset
+  bkt_bare_target
+  printf '%s\n' "a-second-passphrase-entirely" > "$BK_WORLD/pw/.backup-passphrase"
+  chmod 600 "$BK_WORLD/pw/.backup-passphrase"
+  PW_VALUE="a-second-passphrase-entirely"
+  bkt_restore cmd_drill --out "$BK_WORLD/archive"
+  PW_VALUE="$BKT_PW_ORIGINAL"
+  expect_str "drill_names_bundles_sealed_with_an_older_passphrase" "$BKT_RC" "1"
+  expect_has "drill_names_bundles_sealed_with_an_older_passphrase" "$BKT_ERR" \
+    "$(basename "$RBUNDLE") (records"
+  expect_has "the_stale_passphrase_report_says_what_to_do" "$BKT_ERR" \
+    "They need the PREVIOUS passphrase"
+  rm -f "$BK_WORLD/archive/nova-backup-a-host-20990101T000000Z.tar"
+
+  # ── §9.4 step 1: the sweep ───────────────────────────────────────────────
+  #
+  # port-v3 m4: an unconditional sweep deletes a CONCURRENT drill's volumes
+  # out from under it — not reachable with one operator today, reachable the
+  # day a scheduled handler lands.
+  bkt_reset
+  bkt_bare_target
+  mkdir -p "$BKT_VOLS/nova-drill-deadbeef_v4_memdata" \
+    "$BKT_VOLS/nova-drill-feedface_v4_memdata" \
+    "$BKT_VOLS/nova_v4_memdata" "$BKT_VOLS/nova-backup-stage-keepme"
+  : > "$BK_WORLD/net/nova-drill-deadbeef-net"
+  : > "$BK_WORLD/ct/nova-drill-feedface-pg"
+  BKT_RUNNING="nova-drill-feedface-pg"
+  bkt_restore cmd_drill --out "$BK_WORLD/archive"
+  expect_str "drill_sweep_removes_an_orphaned_run" \
+    "$(find "$BKT_VOLS" -maxdepth 1 -name 'nova-drill-deadbeef_*' | wc -l | tr -d ' ')" "0"
+  expect_str "drill_sweep_removes_an_orphaned_network" \
+    "$(find "$BK_WORLD/net" -maxdepth 1 -name 'nova-drill-deadbeef-net' | wc -l | tr -d ' ')" "0"
+  expect_str "drill_sweep_skips_a_live_run" \
+    "$(find "$BKT_VOLS" -maxdepth 1 -name 'nova-drill-feedface_*' | wc -l | tr -d ' ')" "1"
+  expect_str "drill_sweep_never_touches_a_nova_underscore_object" \
+    "$(find "$BKT_VOLS" -maxdepth 1 -name 'nova_v4_memdata' | wc -l | tr -d ' ')" "1"
+  expect_str "drill_sweep_never_touches_a_backups_staging_volume" \
+    "$(find "$BKT_VOLS" -maxdepth 1 -name 'nova-backup-stage-keepme' | wc -l | tr -d ' ')" "1"
+  BKT_RUNNING=""
+  rm -rf "$BKT_VOLS/nova-drill-feedface_v4_memdata" "$BK_WORLD/ct/nova-drill-feedface-pg"
+
+  # An orphaned nova_verify_* database on the LIVE server, with no open
+  # connection and older than an hour.
+  bkt_reset
+  bkt_bare_target
+  BKT_RUNNING="postgres"
+  BKT_BARE_TARGET=0
+  STUB_ORPHAN_VERIFY_DBS="nova_verify_a1b2c3d4"
+  bkt_restore cmd_drill --out "$BK_WORLD/archive"
+  STUB_ORPHAN_VERIFY_DBS=""
+  expect_has "drill_sweep_drops_an_orphaned_verify_database" \
+    "$(cat "$BK_WORLD/dbops.log")" 'DROP DATABASE IF EXISTS "nova_verify_a1b2c3d4"'
+
+  bkt_reset
+  bkt_bare_target
+  BKT_RUNNING="postgres"
+  BKT_BARE_TARGET=0
+  STUB_ORPHAN_VERIFY_DBS="nova_verify_a1b2c3d4"
+  STUB_VERIFY_DB_CONNS=1
+  bkt_restore cmd_drill --out "$BK_WORLD/archive"
+  STUB_VERIFY_DB_CONNS=0
+  STUB_ORPHAN_VERIFY_DBS=""
+  expect_str "drill_sweep_leaves_a_verify_database_something_is_connected_to" \
+    "$(grep -c 'DROP DATABASE IF EXISTS \"nova_verify_a1b2c3d4\"' "$BK_WORLD/dbops.log")" "0"
+
+  bkt_reset
+  bkt_bare_target
+  BKT_RUNNING="postgres"
+  BKT_BARE_TARGET=0
+  STUB_ORPHAN_VERIFY_DBS="nova_verify_a1b2c3d4"
+  STUB_VERIFY_DB_OLD=0
+  bkt_restore cmd_drill --out "$BK_WORLD/archive"
+  STUB_VERIFY_DB_OLD=1
+  STUB_ORPHAN_VERIFY_DBS=""
+  expect_str "drill_sweep_leaves_a_verify_database_younger_than_an_hour" \
+    "$(grep -c 'DROP DATABASE IF EXISTS \"nova_verify_a1b2c3d4\"' "$BK_WORLD/dbops.log")" "0"
+
+  # The container filter is ANCHORED, because `docker ps --filter name=` is an
+  # unanchored substring match. The recorded argv is read back.
+  expect_has "the_sweeps_container_filter_is_anchored" "$(cat "$BKT_LOG")" \
+    "ps --filter name=^nova-drill-"
+
 fi
 
 [ "$SKIP" -eq 0 ] || printf '\n%d block(s) SKIPPED — see the SKIP lines above\n' "$SKIP"
