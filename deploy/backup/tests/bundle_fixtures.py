@@ -151,6 +151,18 @@ def make_stage(root: pathlib.Path) -> pathlib.Path:
     if not link.exists():
         link.symlink_to("example")
 
+    # THE SHAPES REAL DATA HAS, and the reason this fixture is not built with
+    # one umask and left alone. A markdown memory volume carries
+    # group-writable notes and group-writable directories; CPython's `data`
+    # extraction filter masks every mode to `& 0o755` and drops uid/gid, so a
+    # verification that compared the EXTRACTED tree refused three entries of
+    # an ordinary volume (measured: pack exit 0, verify exit 1). Without
+    # these three the suite cannot see that, which is
+    # [[fixture-stamps-what-the-product-does-not]] exactly.
+    write(volume / "people" / "example" / "group.md", "group-writable\n", 0o664)
+    write(volume / "shared" / "wide.md", "world-writable\n", 0o666)
+    os.chmod(volume / "shared", 0o775)
+
     listing = nb.tree_listing(str(volume))
     write(inner / "listings" / "v4_memdata.sha256", listing)
 
@@ -200,3 +212,52 @@ def make_bundle(root: pathlib.Path, *, passphrase=PASSPHRASE, out_name="nova-bac
     final = root / out_name
     os.replace(out, final)
     return final, manifest, stage
+
+
+def forge_bundle(root: pathlib.Path, mutate, *, passphrase=PASSPHRASE, name="forged.tar"):
+    """A bundle whose MANIFEST never went through `load_manifest`.
+
+    `pack` refuses a manifest this tool would not accept, which is the point
+    — but the carried reader opens files it did not write, on a machine that
+    has nothing, so it must refuse the same things independently. This builds
+    what an attacker (or a future writer) could hand it.
+    """
+    stage = make_stage(root)
+    manifest = plan(stage, passphrase=passphrase)
+    mutate(manifest)
+    (stage / "MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+    inner = stage / "inner.tgz"
+    nb.build_inner_archive(str(stage), manifest, str(inner))
+    payload = stage / "payload.enc"
+    nb.encrypt_file(str(inner), str(payload), passphrase, manifest["encryption"]["chunk"])
+    kat_blob = nb.encrypt_bytes(nb.KAT_PLAINTEXT, passphrase)
+    kat_salt = bytes.fromhex(nb.parse_header(io.BytesIO(kat_blob))["salt"])
+    digest, size = nb.sha256_file(str(payload))
+    meta = nb.build_meta(
+        manifest,
+        payload_bytes=size,
+        payload_sha256=digest,
+        fingerprint=nb.key_fingerprint(passphrase, kat_salt),
+        crypto_image="nova-core",
+        fallback_image="python:3.12-slim",
+        needs_images=["postgres:16", "python:3.12-slim"],
+        chunk=manifest["encryption"]["chunk"],
+    )
+    work = stage / "outer"
+    work.mkdir(exist_ok=True)
+    staged = {}
+    for member, blob in (
+        ("README.txt", b"forged\n"),
+        ("kat.sha256", (nb.sha256_bytes(nb.KAT_PLAINTEXT) + "\n").encode()),
+        ("kat.enc", kat_blob),
+        ("meta.json", (json.dumps(meta, indent=2) + "\n").encode()),
+    ):
+        (work / member).write_bytes(blob)
+        staged[member] = str(work / member)
+    staged["nova_restore.py"] = str(BACKUP_DIR / "nova_restore.py")
+    staged["restore.sh"] = str(BACKUP_DIR / "restore.sh")
+    staged["payload.enc"] = str(payload)
+    out = root / name
+    nb.build_outer_bundle(str(out), [(n, staged[n]) for n in nb.OUTER_ORDER], 0)
+    return out, manifest, stage

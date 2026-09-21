@@ -126,7 +126,7 @@ def test_the_probe_accepts_the_first_candidate_that_passes(bundle, tmp_path):
     assert len(kats) == 1, f"the probe kept going after a candidate passed: {kats}"
 
 
-def test_a_backend_that_cannot_decrypt_is_skipped_not_fatal(bundle, tmp_path):
+def test_a_backend_that_reports_no_decryptor_is_skipped_not_fatal(bundle, tmp_path):
     log = tmp_path / "python.log"
     dlog = tmp_path / "docker.log"
     path = bin_dir(tmp_path, python3=PYTHON_NO_BACKEND_ON_FIRST, docker=DOCKER_RECORDER)
@@ -250,3 +250,81 @@ def test_the_work_directory_is_removed_on_every_path(bundle, tmp_path):
 
 def test_restore_sh_parses_under_plain_sh():
     assert subprocess.run(["sh", "-n", str(RESTORE_SH)]).returncode == 0
+
+
+# ── a BROKEN backend, which is the case the name above did not cover ────────
+#
+# The stub above exits 4, which is the one code a self-test failure never
+# used to produce. The real case is a `cryptography` that imports and cannot
+# decrypt — a mismatched wheel, a half-finished upgrade. Measured before the
+# fix: restore.sh printed "this is the passphrase or the bundle, not this
+# machine", exited 1, and never tried the system libcrypto or either docker
+# backend, all three of which worked on that machine.
+
+LYING_PKG = """
+class AESGCM:
+    def __init__(self, key):
+        pass
+
+    def decrypt(self, nonce, data, aad):
+        return b"garbage that is not the plaintext"
+"""
+
+
+def lying_cryptography(root):
+    pkg = root / "fakepkg"
+    leaf = pkg / "cryptography" / "hazmat" / "primitives" / "ciphers"
+    leaf.mkdir(parents=True)
+    for part in (
+        pkg / "cryptography",
+        pkg / "cryptography" / "hazmat",
+        pkg / "cryptography" / "hazmat" / "primitives",
+        leaf,
+    ):
+        (part / "__init__.py").write_text("")
+    (leaf / "aead.py").write_text(LYING_PKG)
+    return pkg
+
+
+def test_a_lying_cryptography_makes_the_probe_move_on_not_stop(bundle, tmp_path):
+    log = tmp_path / "python.log"
+    path = bin_dir(tmp_path, python3=REAL_PYTHON)
+    done = run_sh(
+        bundle,
+        path,
+        "--verify-only",
+        extra_env={
+            "NOVA_TEST_LOG": str(log),
+            "PYTHONPATH": str(lying_cryptography(tmp_path)),
+        },
+    )
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert "no decryptor in that backend; trying the next" in done.stderr
+    assert "ctypes" in done.stderr
+    assert "passphrase or the bundle" not in done.stderr, (
+        "a machine fault was reported as a bundle fault, and the probe stopped"
+    )
+    assert "verified" in done.stdout
+
+
+def test_a_lying_cryptography_with_nothing_else_still_refuses(bundle, tmp_path):
+    """And the other half: when it really is the only candidate, the run
+    refuses rather than proceeding on a backend that failed its own test."""
+    log = tmp_path / "python.log"
+    path = bin_dir(tmp_path, python3=REAL_PYTHON)
+    done = run_sh(
+        bundle,
+        path,
+        "--verify-only",
+        extra_env={
+            "NOVA_TEST_LOG": str(log),
+            "PYTHONPATH": str(lying_cryptography(tmp_path)),
+            # EXCLUSIVE: naming a library that does not load must not fall
+            # through to whatever else is on the box.
+            "NOVA_LIBCRYPTO": "/nonexistent/libcrypto.so",
+        },
+    )
+    assert done.returncode == 1
+    assert "no way to decrypt this bundle on this machine" in done.stderr
+    assert "verified" not in done.stdout
+    assert "/nonexistent/libcrypto.so" in done.stderr, "the refusal names what it was told to use"

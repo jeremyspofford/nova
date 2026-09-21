@@ -263,7 +263,7 @@ def test_meta_disagreeing_with_the_manifest_is_a_refusal(tmp_path):
     assert result["problems"]
 
 
-def test_verify_refuses_a_wrong_passphrase_before_it_reads_the_payload(tmp_path):
+def test_verify_refuses_a_wrong_passphrase(tmp_path):
     bundle, _, _ = make_bundle(tmp_path)
     assert run(["verify", "--bundle", str(bundle)], "wrong-wrong-wrong-wrong") == 1
 
@@ -298,8 +298,8 @@ def test_verify_names_a_member_the_manifest_does_not(tmp_path):
             info = tf.TarInfo("db/rogue.dump")
             info.size = len(rogue)
             tar.addfile(info, io.BytesIO(rogue))
-    opened = nb.open_inner(str(inner), str(root))
-    problems = nb.verify_inner(str(root), opened)
+    opened, archived = nb.open_inner(str(inner), str(root))
+    problems = nb.verify_inner(str(root), opened, archived)
     assert any("db/rogue.dump" in p and "named by no member" in p for p in problems), problems
 
 
@@ -313,3 +313,192 @@ def test_pack_never_overwrites_an_existing_bundle(tmp_path):
     out.write_text("someone else's\n")
     assert run(["pack", "--stage", str(stage), "--out", str(out)]) == 1
     assert out.read_text() == "someone else's\n"
+
+
+# ── what a volume listing exists to catch ───────────────────────────────────
+#
+# §5.5: the type/mode/uid/gid lines are there because "a `find . -type f`
+# listing alone cannot detect a missing symlink, a lost empty directory or a
+# changed mode, all of which are inside the tar". Each of the four is mutated
+# in the STAGE after `plan` wrote the listing, so the tar and the listing
+# genuinely disagree — the shape a corrupted stage produces.
+
+
+def _bundle_with(tmp_path, mutate, name="mutated.tar.part"):
+    stage = make_stage(tmp_path)
+    plan(stage)
+    mutate(stage / "inner" / "volumes" / "v4_memdata")
+    out = tmp_path / name
+    assert run(["pack", "--stage", str(stage), "--out", str(out)]) == 0
+    return out
+
+
+def _problems(bundle, tmp_path):
+    work = tmp_path / "w"
+    work.mkdir(exist_ok=True)
+    return nb.verify_bundle(str(bundle), PASSPHRASE, str(work))["problems"]
+
+
+def test_a_changed_mode_in_a_volume_is_caught(tmp_path):
+    bundle = _bundle_with(
+        tmp_path, lambda v: os.chmod(v / "people" / "example" / "a-note.md", 0o600)
+    )
+    assert any("type/mode/uid/gid" in p for p in _problems(bundle, tmp_path))
+
+
+def test_a_missing_symlink_in_a_volume_is_caught(tmp_path):
+    bundle = _bundle_with(tmp_path, lambda v: (v / "people" / "current").unlink())
+    assert any(
+        "people/current" in p and "absent from the archive" in p
+        for p in _problems(bundle, tmp_path)
+    )
+
+
+def test_a_lost_empty_directory_in_a_volume_is_caught(tmp_path):
+    bundle = _bundle_with(tmp_path, lambda v: (v / "empty-dir").rmdir())
+    assert any("empty-dir" in p for p in _problems(bundle, tmp_path))
+
+
+def test_an_unlisted_extra_file_in_a_volume_is_caught(tmp_path):
+    bundle = _bundle_with(tmp_path, lambda v: (v / "smuggled.md").write_text("x\n"))
+    assert any(
+        "smuggled.md" in p and "absent from the listing" in p for p in _problems(bundle, tmp_path)
+    )
+
+
+def test_a_volume_whose_owner_is_not_the_extracting_user_still_verifies(tmp_path):
+    """The `--move` case, and the one that cannot be produced without root:
+    `v4_memdata` is uid 1000 and `v4_tailscale` is root, so no single
+    extracting uid can satisfy a comparison against the FILESYSTEM. Comparing
+    the TAR's own records is what makes both verifiable at once.
+
+    Built by hand because this suite does not run as root: the tar members
+    carry uid/gid 0 and the listing says so.
+    """
+    import gzip
+    import tarfile as tf
+
+    stage = make_stage(tmp_path)
+    manifest = plan(stage)
+    volume = stage / "inner" / "volumes" / "v4_memdata"
+    listing_lines = []
+    for line in nb.tree_listing(str(volume)).splitlines():
+        if line[:1] in ("d", "f", "l") and line[1:2] == " ":
+            parts = line.split(" ", 4)
+            listing_lines.append(f"{parts[0]} {parts[1]} 0 0 {parts[4]}")
+        else:
+            listing_lines.append(line)
+    listing = "".join(line + "\n" for line in listing_lines)
+    (stage / "inner" / "listings" / "v4_memdata.sha256").write_text(listing)
+    manifest = plan(stage)  # re-plan so the listing hash matches
+
+    inner = tmp_path / "inner.tgz"
+    with open(inner, "wb") as raw, gzip.GzipFile(fileobj=raw, mode="wb", mtime=0) as gz:
+        with tf.open(fileobj=gz, mode="w") as tar:
+
+            def as_root(info):
+                info.uid = info.gid = 0
+                info.uname = info.gname = ""
+                return info
+
+            tar.add(str(stage / "MANIFEST.json"), arcname="MANIFEST.json", filter=as_root)
+            for row in manifest["members"]:
+                path = row["path"]
+                tar.add(
+                    str(stage / "inner" / path.rstrip("/")),
+                    arcname=path.rstrip("/"),
+                    filter=as_root,
+                )
+    root = tmp_path / "root-owned"
+    root.mkdir()
+    opened, archived = nb.open_inner(str(inner), str(root))
+    assert nb.verify_inner(str(root), opened, archived) == []
+
+
+# ── the chained-symlink escape, and the interpreter that does not help ──────
+
+
+def _chain(tar):
+    info = tarfile.TarInfo("dir")
+    info.type = tarfile.DIRTYPE
+    info.mode = 0o755
+    tar.addfile(info)
+    link = tarfile.TarInfo("dir/x")
+    link.type = tarfile.SYMTYPE
+    link.linkname = ".."
+    tar.addfile(link)
+    up = tarfile.TarInfo("dir/x/up")
+    up.type = tarfile.SYMTYPE
+    up.linkname = ".."
+    tar.addfile(up)
+    tar.addfile(*_regular("dir/x/up/PWNED", b"escaped"))
+
+
+def test_every_member_of_a_symlink_chain_passes_the_per_member_check(tmp_path):
+    """The measurement the refusal is built on: judged alone, all four are
+    contained — `..` from `dir/x` normalises to `.`, `..` from `dir/x/up`
+    normalises to `dir`, and the last member holds no `..` at all."""
+    with tar_with(tmp_path, _chain) as tar:
+        assert [nb.check_member(m) for m in tar.getmembers()] == ["", "", "", ""]
+
+
+def test_safe_extract_refuses_a_chained_symlink_escape(tmp_path):
+    with tar_with(tmp_path, _chain) as tar, pytest.raises(nb.BundleError) as caught:
+        nb.safe_extract(tar, str(tmp_path / "out"))
+    assert "goes through" in str(caught.value)
+
+
+def test_the_chain_is_refused_by_us_and_not_by_the_extraction_filter(tmp_path):
+    """restore.sh accepts python3 >= 3.9, and the `except TypeError` branch
+    extracts UNFILTERED — so on Debian 11's 3.9 the escape would land. The
+    refusal is measured where the interpreter cannot help: `members_refusal`
+    runs before any extraction call at all."""
+    with tar_with(tmp_path, _chain) as tar:
+        assert "goes through" in nb.members_refusal(tar.getmembers())
+    marker = tmp_path / "PWNED"
+    assert not marker.exists()
+
+
+def test_the_reader_refuses_the_same_chain(tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "nova_restore_probe", BACKUP_DIR / "nova_restore.py"
+    )
+    reader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    with tar_with(tmp_path, _chain) as tar:
+        assert "goes through" in reader.members_refusal(tar.getmembers())
+        with pytest.raises(reader.RestoreError):
+            reader.safe_extract(tar, str(tmp_path / "out2"))
+
+
+# ── the KAT is what makes a wrong passphrase cost nothing ───────────────────
+
+
+def test_verify_runs_the_kat_before_it_writes_a_payload_byte(tmp_path, monkeypatch):
+    """On a many-GB bundle read off a removable drive, a wrong passphrase
+    must cost one scrypt, not a full copy. Measured by spying on the gate:
+    at the moment it runs, nothing is in the work directory."""
+    bundle, _, _ = make_bundle(tmp_path)
+    work = tmp_path / "work"
+    work.mkdir()
+    seen = []
+    real = nb.kat_gate
+
+    def spy(*args, **kwargs):
+        seen.append(sorted(os.listdir(work)))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(nb, "kat_gate", spy)
+    nb.verify_bundle(str(bundle), PASSPHRASE, str(work))
+    assert seen == [[]], f"the work directory already held {seen}"
+
+
+def test_a_wrong_passphrase_leaves_no_payload_behind(tmp_path):
+    bundle, _, _ = make_bundle(tmp_path)
+    work = tmp_path / "work2"
+    work.mkdir()
+    with pytest.raises(nb.CryptoError):
+        nb.verify_bundle(str(bundle), "wrong-wrong-wrong-wrong", str(work))
+    assert list(work.iterdir()) == []

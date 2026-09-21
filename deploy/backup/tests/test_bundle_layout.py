@@ -67,7 +67,14 @@ def test_the_cleartext_members_sit_before_the_payload(bundle):
         "meta.json",
     ):
         assert offsets[name] < offsets["payload.enc"]
-    assert offsets["payload.enc"] < 60 * 1024
+    # §5.1 estimated "under 60 KB" before the reader was written. Measured
+    # at this commit: 62464 bytes of cleartext prefix, because the reader
+    # grew a tag-checking self test, a chained-symlink refusal and its own
+    # path validation. The property is that `tar -xOf <bundle> restore.sh`
+    # reads a fixed small prefix of a many-GB file, not the exact figure, so
+    # the bound is stated with headroom and will notice a reader that
+    # doubles.
+    assert offsets["payload.enc"] < 128 * 1024, offsets["payload.enc"]
 
 
 def test_the_bundle_is_mode_0600(bundle):

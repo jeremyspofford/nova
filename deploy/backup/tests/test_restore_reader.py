@@ -81,15 +81,51 @@ def test_both_backends_produce_the_same_failure_sentence(bundle, force):
 
 
 @pytest.mark.parametrize("force", ["0", "1"])
-def test_a_wrong_passphrase_is_told_apart_from_a_damaged_file(bundle, force):
+def test_a_wrong_passphrase_reports_both_fingerprints_and_claims_neither(bundle, force):
     """§9.2 step 4: refuse with the one sentence PLUS the bundle's recorded
-    fingerprint, so a rotation is stated when it is known and never guessed."""
+    fingerprint, so a rotation is STATED when it is known.
+
+    And never more than that. Both numbers come from cleartext this reader
+    cannot authenticate — meta.json, and the salt in kat.enc's header — so an
+    edited salt makes the CORRECT passphrase derive a different value here.
+    Asserting "a DIFFERENT passphrase, not a damaged file" on those bytes is
+    the 3am failure the pinned sentence exists to prevent, inverted.
+    """
     path, _ = bundle
     done = reader(str(path), "--kat", passphrase="not-the-passphrase", force=force)
     with tarfile.open(path, "r:") as tar:
         meta = json.loads(tar.extractfile("meta.json").read().decode())
     assert meta["passphrase_fingerprint"] in done.stderr
-    assert "DIFFERENT passphrase" in done.stderr
+    assert "EITHER a different passphrase OR an edited file" in done.stderr
+    assert "cannot say which" in done.stderr
+    assert "not a damaged file" not in done.stderr
+
+
+@pytest.mark.parametrize("force", ["0", "1"])
+def test_an_edited_kat_salt_does_not_become_a_claim_about_the_passphrase(bundle, force, tmp_path):
+    """Measured by the reviewer: rewriting kat.enc's salt made the reader
+    tell an operator holding the CORRECT passphrase that his was a different
+    one. Both fingerprints are advisory; the file is what changed."""
+    path, _ = bundle
+    rebuilt = tmp_path / f"salted-{force}.tar"
+    import io as _io
+
+    with tarfile.open(path, "r:") as src, tarfile.open(rebuilt, "w") as dst:
+        for member in src.getmembers():
+            data = src.extractfile(member).read()
+            if member.name == "kat.enc":
+                header_length = int.from_bytes(data[8:12], "big")
+                header = json.loads(data[12 : 12 + header_length].decode())
+                header["salt"] = "ff" * 16
+                fresh = json.dumps(header, separators=(",", ":"), sort_keys=True).encode()
+                data = data[:8] + len(fresh).to_bytes(4, "big") + fresh + data[12 + header_length :]
+                member.size = len(data)
+            dst.addfile(member, _io.BytesIO(data))
+    done = reader(str(rebuilt), "--kat", force=force)
+    assert done.returncode == 1
+    assert nb.BAD_DECRYPT in done.stderr
+    assert "not a damaged file" not in done.stderr
+    assert "cannot say which" in done.stderr
 
 
 @pytest.mark.parametrize("force", ["0", "1"])
@@ -183,3 +219,101 @@ def test_the_umask_is_set_before_anything_is_opened(bundle, tmp_path):
         created = out / name
         if created.exists():
             assert os.stat(created).st_mode & 0o077 == 0, name
+
+
+# ── a broken backend is a fault of the MACHINE, not of the bundle ───────────
+#
+# A `cryptography` that imports and cannot decrypt is an ordinary thing: a
+# mismatched wheel, a half-finished upgrade, a musl/glibc mix. Reported as a
+# bundle fault it stopped restore.sh's probe dead on a machine where three
+# other backends worked, and told the operator holding his only copy that his
+# passphrase or his file was wrong.
+
+LYING_AESGCM = """
+class AESGCM:
+    def __init__(self, key):
+        pass
+
+    def decrypt(self, nonce, data, aad):
+        return b"garbage that is not the plaintext"
+"""
+
+UNAUTHENTICATED_AESGCM = '''
+_PLAIN = b"nova AES-256-GCM backend self-test"
+
+
+class AESGCM:
+    """Decrypts, and never looks at the tag — a CTR-mode stand-in."""
+
+    def __init__(self, key):
+        pass
+
+    def decrypt(self, nonce, data, aad):
+        return _PLAIN
+'''
+
+
+def fake_cryptography(root, body):
+    """A `cryptography` package that imports, on PYTHONPATH."""
+    pkg = root / "fake"
+    leaf = pkg / "cryptography" / "hazmat" / "primitives" / "ciphers"
+    leaf.mkdir(parents=True)
+    for part in (
+        pkg / "cryptography",
+        pkg / "cryptography" / "hazmat",
+        pkg / "cryptography" / "hazmat" / "primitives",
+        leaf,
+    ):
+        (part / "__init__.py").write_text("")
+    (leaf / "aead.py").write_text(body)
+    return pkg
+
+
+@pytest.mark.parametrize(
+    "body,why", [(LYING_AESGCM, "wrong bytes"), (UNAUTHENTICATED_AESGCM, "tag")]
+)
+def test_a_broken_backend_exits_4_so_the_probe_can_move_on(bundle, tmp_path, body, why):
+    path, _ = bundle
+    pkg = fake_cryptography(tmp_path / why.replace(" ", "-"), body)
+    env = dict(os.environ, PYTHONPATH=str(pkg))
+    env.pop("NOVA_FORCE_CTYPES_GCM", None)
+    done = subprocess.run(
+        [sys.executable, str(READER), str(path), "--kat"],
+        input=PASSPHRASE + "\n",
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    assert done.returncode == 4, (
+        f"exit {done.returncode}: a machine fault reported with the bundle's exit code "
+        f"stops the probe instead of moving to the next backend\n{done.stderr}"
+    )
+    assert "backend" in done.stderr
+    assert nb.BAD_DECRYPT not in done.stderr, "a broken backend is not a failed KAT"
+
+
+def test_a_backend_that_ignores_the_gcm_tag_is_refused(bundle, tmp_path):
+    """Every truncation and tampering guarantee in this file rests on the tag
+    check, so "it decrypted the known vector" is not enough to accept one."""
+    path, _ = bundle
+    pkg = fake_cryptography(tmp_path / "ctr", UNAUTHENTICATED_AESGCM)
+    env = dict(os.environ, PYTHONPATH=str(pkg))
+    env.pop("NOVA_FORCE_CTYPES_GCM", None)
+    done = subprocess.run(
+        [sys.executable, str(READER), str(path), "--kat"],
+        input=PASSPHRASE + "\n",
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+    assert done.returncode == 4
+    assert "tag is wrong" in done.stderr
+
+
+def test_the_real_backends_pass_their_own_self_test(bundle):
+    """The other half: the check must not be so strict that a working
+    backend fails it."""
+    path, _ = bundle
+    for force in ("0", "1"):
+        done = reader(str(path), "--kat", force=force)
+        assert done.returncode == 0, done.stderr
