@@ -28,10 +28,23 @@ run by name.** A silent skip is the defect; the refusal is the product.
 from __future__ import annotations
 
 import argparse
+import base64
+import calendar
+import gzip
+import hashlib
+import io
 import json
 import os
+import posixpath
 import re
+import secrets
+import shutil
+import stat
+import struct
 import sys
+import tarfile
+import tempfile
+import time
 from dataclasses import dataclass, field
 from typing import Any, NamedTuple
 
@@ -1414,7 +1427,68 @@ def load_compose_document(text: str, where: str) -> dict:
         raise ComposeTextError(
             f"{where}: parses to a {type(doc).__name__}, not a compose document."
         )
+    _refuse_unfollowable_merges(doc, where)
     return doc
+
+
+def _named_files(value: Any) -> list[str]:
+    """Whatever `include:` or `extends: file:` names, flattened to strings."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        out: list[str] = []
+        for key in ("path", "file"):
+            out.extend(_named_files(value.get(key)))
+        return out
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            out.extend(_named_files(item))
+        return out
+    return []
+
+
+def _refuse_unfollowable_merges(doc: dict, where: str) -> None:
+    """A compose file that merges a document this parser is not handed.
+
+    Compose's top-level `include:` merges another file's WHOLE document,
+    top-level `volumes:` and all. That file is not in `COMPOSE_FILE`, so
+    backup.sh never stages it and this parser never sees it — and a volume no
+    rendered service mounts is pruned from every render, so the render side
+    cannot see it either. A volume the operator declared, carrying
+    `x-nova-backup: include`, would then be absent from the plan with nothing
+    saying so: exactly the silent skip this module exists to prevent.
+    Measured on compose v5.3.0 and on this parser
+    (.superpowers/sdd/slice-41-portable-hub/task-1-rereview4.md, section F).
+
+    So it is a STATED CANNOT, never a key that is skipped. `deploy/docker-
+    compose.yml` uses neither key today; the refusal is what keeps it that
+    way, or makes the day it changes loud.
+    """
+    if "include" in doc:
+        named = _named_files(doc["include"]) or ["(unreadable)"]
+        raise ComposeTextError(
+            f"{where}: carries a top-level `include:` naming {', '.join(named)}. "
+            "Compose merges that file's whole document — its `volumes:` block too — and "
+            "this reader is handed only the files in COMPOSE_FILE, so anything declared "
+            "there would be carried by nothing and refused by nothing. "
+            "Fix: merge it into this file, or add it to COMPOSE_FILE so it is staged and "
+            "parsed like every other compose file."
+        )
+    services = doc.get("services")
+    if isinstance(services, dict):
+        for name, body in sorted(services.items(), key=lambda kv: str(kv[0])):
+            if not isinstance(body, dict):
+                continue
+            extends = body.get("extends")
+            named = _named_files(extends.get("file")) if isinstance(extends, dict) else []
+            if named:
+                raise ComposeTextError(
+                    f"{where}: service `{name}` extends a service in {', '.join(named)}, "
+                    "which this reader is not handed, so any mount it brings is invisible "
+                    "here. Fix: merge that service into this file, or add the file to "
+                    "COMPOSE_FILE."
+                )
 
 
 def raw_compose_rows(text: str, where: str) -> list[dict]:
@@ -1536,6 +1610,1854 @@ def load_facts(facts_dir: str) -> dict[str, Any]:
     return facts
 
 
+# ══ THE BUNDLE ══════════════════════════════════════════════════════════════
+#
+# design-verdict.md §5 (the bundle format), §7 (crypto). Ported from v3's
+# backend/app/backup_crypto.py with the NOVAENC1 wire format BYTE FOR BYTE
+# unchanged, so a v3-written payload still opens — pinned by a v3-written
+# fixture in tests/test_novaenc.py rather than by this sentence.
+#
+# Nothing below reads a fact or a disposition. It is handed a staged tree and
+# a manifest and it turns them into one file; the only thing it decides is
+# whether what it produced is what it said it produced.
+
+
+# ── NOVAENC1 (§7.1) ─────────────────────────────────────────────────────────
+
+MAGIC = b"NOVAENC1"
+
+# The WRITER's scrypt cost. ~34 MB per derivation, chosen so nova_restore.py
+# derives the same key with nothing but the standard library (§7.1).
+SCRYPT_N, SCRYPT_R, SCRYPT_P = 1 << 15, 8, 1
+DKLEN = 32
+
+# What a READER will pay for, checked BEFORE any allocation and separately
+# from the writer's cost. A decryptor must allocate 128*r*n bytes before the
+# first authentication check can run, so a tampered header naming an absurd
+# cost otherwise makes an honest reader allocate gigabytes — or name a cost
+# hashlib refuses under our own maxmem, turning "tampered" into a bare
+# ValueError (backend/app/backup_crypto.py:57-64).
+MAX_N, MAX_R, MAX_P = 1 << 18, 16, 4
+KDF_MEM_CAP = 128 * 1024 * 1024
+SCRYPT_MAXMEM = 256 * 1024 * 1024
+
+CHUNK = 4 * 1024 * 1024
+MAX_CHUNK = 64 * 1024 * 1024
+MAX_HEADER = 4096
+TAG_LEN = 16
+
+# ONE sentence for every decryption failure, identical here and in
+# nova_restore.py and pinned character-for-character by test_novaenc.py.
+# GCM genuinely cannot distinguish a wrong passphrase from a corrupt file,
+# and pretending otherwise is what produces "the passphrase must be right,
+# so the file must be broken" at 3am (§7.1).
+BAD_DECRYPT = (
+    "decryption failed — wrong passphrase, or the file is corrupt, truncated "
+    "or tampered with (GCM cannot tell these apart)"
+)
+
+# 64 known bytes, sealed under the same passphrase with their OWN fresh salt,
+# so a decryptor and a passphrase are proven before a payload byte is read.
+KAT_PLAINTEXT = (b"nova NOVAENC1 known-answer test vector v1 " * 2)[:64]
+assert len(KAT_PLAINTEXT) == 64
+
+
+class CryptoError(Exception):
+    """Wrong passphrase, or the file is corrupt/tampered/truncated, or a
+    header this reader will not obey. Never a bare ValueError, never a bare
+    MemoryError — a stranded operator needs a sentence, not a traceback."""
+
+
+def derive_key(passphrase: str, salt: bytes, n: int, r: int, p: int) -> bytes:
+    if not passphrase:
+        raise CryptoError("an empty passphrase is not a passphrase")
+    return hashlib.scrypt(
+        passphrase.encode("utf-8"), salt=salt, n=n, r=r, p=p, maxmem=SCRYPT_MAXMEM, dklen=DKLEN
+    )
+
+
+def _aad(header_bytes: bytes, index: int, final: bool) -> bytes:
+    """magic ‖ header ‖ uint64be(index) ‖ final flag.
+
+    Authenticates the header AND the frame's position in the sequence, which
+    is what makes a truncated file fail instead of quietly yielding a shorter
+    archive — the one that matters for a backup.
+    """
+    return MAGIC + header_bytes + struct.pack(">Q", index) + (b"\x01" if final else b"\x00")
+
+
+def _nonce(prefix: bytes, index: int) -> bytes:
+    return prefix + struct.pack(">Q", index)
+
+
+def is_encrypted(path: str) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(len(MAGIC)) == MAGIC
+    except OSError:
+        return False
+
+
+def parse_header(fh) -> dict[str, Any]:
+    """The KDF/cipher parameters, WITHOUT the key, from an open file left
+    positioned at the first frame.
+
+    Every value here is attacker-writable until the first frame
+    authenticates, so each is validated as a REFUSAL and the cost caps are
+    checked before `derive_key` is ever called.
+    """
+    if fh.read(len(MAGIC)) != MAGIC:
+        raise CryptoError("not a NOVAENC1 file")
+    raw = fh.read(4)
+    if len(raw) != 4:
+        raise CryptoError("truncated before the header")
+    hlen = struct.unpack(">I", raw)[0]
+    if hlen > MAX_HEADER:
+        raise CryptoError("implausible header size — corrupt or tampered")
+    hbytes = fh.read(hlen)
+    if len(hbytes) != hlen:
+        raise CryptoError("truncated inside the header")
+    try:
+        header = json.loads(hbytes.decode("utf-8"))
+    except ValueError as exc:
+        raise CryptoError(f"header is not JSON: {exc}") from exc
+    if not isinstance(header, dict):
+        raise CryptoError("header is not a JSON object — corrupt or tampered")
+    # LOWERCASE "aes-256-gcm". backend/app/backup_crypto.py:119 rejects any
+    # other spelling as `unsupported format`, so writing "AES-256-GCM" here
+    # would break the stated ability to open a v3-written payload.
+    if (
+        header.get("v") != 1
+        or header.get("cipher") != "aes-256-gcm"
+        or header.get("kdf") != "scrypt"
+    ):
+        raise CryptoError(f"unsupported format: {header}")
+    n, r, p = header.get("n", 0), header.get("r", 0), header.get("p", 0)
+    if not (
+        isinstance(n, int)
+        and isinstance(r, int)
+        and isinstance(p, int)
+        and not isinstance(n, bool)
+        and not isinstance(r, bool)
+        and not isinstance(p, bool)
+        and 0 < n <= MAX_N
+        and 0 < r <= MAX_R
+        and 0 < p <= MAX_P
+        and (n & (n - 1)) == 0
+        and 128 * r * n <= KDF_MEM_CAP
+    ):
+        raise CryptoError(
+            f"scrypt cost n={n} r={r} p={p} is outside what this reader will pay for "
+            "— the header may be tampered with"
+        )
+    chunk = header.get("chunk")
+    if not (isinstance(chunk, int) and not isinstance(chunk, bool) and 0 < chunk <= MAX_CHUNK):
+        raise CryptoError("implausible chunk size — corrupt or tampered")
+    for field_name, length in (("salt", 16), ("nonce_prefix", 4)):
+        value = header.get(field_name)
+        try:
+            if len(bytes.fromhex(value)) != length:
+                raise ValueError
+        except (TypeError, ValueError):
+            raise CryptoError(
+                f"header {field_name} is not {length} bytes of hex — corrupt or tampered"
+            ) from None
+    header["_bytes"] = hbytes
+    return header
+
+
+def read_header(path: str) -> dict[str, Any]:
+    with open(path, "rb") as fh:
+        return parse_header(fh)
+
+
+def _read_frame(fh, chunk: int) -> bytes | None:
+    raw = fh.read(4)
+    if not raw:
+        return None
+    if len(raw) != 4:
+        raise CryptoError("truncated mid-frame")
+    clen = struct.unpack(">I", raw)[0]
+    if not (TAG_LEN <= clen <= chunk + TAG_LEN):
+        raise CryptoError(f"implausible frame of {clen} bytes — corrupt")
+    ct = fh.read(clen)
+    if len(ct) != clen:
+        raise CryptoError("truncated inside a frame")
+    return ct
+
+
+def encrypt_stream(fin, fout, passphrase: str, size: int, chunk: int = CHUNK) -> dict[str, Any]:
+    """`size` plaintext bytes from `fin` into `fout` as NOVAENC1.
+
+    Returns the header that was written (without `_bytes`), because the
+    caller needs its salt to derive the cleartext fingerprint (§7.4).
+    """
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    salt, prefix = secrets.token_bytes(16), secrets.token_bytes(4)
+    header = {
+        "v": 1,
+        "cipher": "aes-256-gcm",
+        "kdf": "scrypt",
+        "n": SCRYPT_N,
+        "r": SCRYPT_R,
+        "p": SCRYPT_P,
+        "salt": salt.hex(),
+        "nonce_prefix": prefix.hex(),
+        "chunk": chunk,
+    }
+    hbytes = json.dumps(header, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    aes = AESGCM(derive_key(passphrase, salt, SCRYPT_N, SCRYPT_R, SCRYPT_P))
+    fout.write(MAGIC)
+    fout.write(struct.pack(">I", len(hbytes)))
+    fout.write(hbytes)
+    index, done = 0, 0
+    while True:
+        plain = fin.read(chunk)
+        done += len(plain)
+        # `final` is decided by POSITION, never by a short read: the last
+        # frame of an exact-multiple file is full length
+        # (backend/app/backup_crypto.py:169-171).
+        final = done >= size
+        ct = aes.encrypt(_nonce(prefix, index), plain, _aad(hbytes, index, final))
+        fout.write(struct.pack(">I", len(ct)))
+        fout.write(ct)
+        index += 1
+        if final:
+            break
+    if done != size:
+        raise CryptoError(f"read {done} plaintext bytes but was told to expect {size}")
+    return header
+
+
+def decrypt_stream(fin, fout, passphrase: str) -> dict[str, Any]:
+    """NOVAENC1 from `fin` into `fout`. Any failure raises CryptoError and
+    leaves `fout` incomplete; every caller here works in a temp dir precisely
+    so a half-decrypted file can never be mistaken for a finished one."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    header = parse_header(fin)
+    hbytes = header.pop("_bytes")
+    try:
+        salt = bytes.fromhex(header["salt"])
+        prefix = bytes.fromhex(header["nonce_prefix"])
+        aes = AESGCM(derive_key(passphrase, salt, header["n"], header["r"], header["p"]))
+    except CryptoError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — belt and braces over parse_header
+        raise CryptoError(f"unusable header: {type(exc).__name__}: {exc}") from exc
+    index, written = 0, 0
+    frame = _read_frame(fin, header["chunk"])
+    if frame is None:
+        raise CryptoError("no ciphertext at all — the file is truncated")
+    while frame is not None:
+        # Finality at READ time is decided by LOOKAHEAD: the next frame
+        # header is read before this one is decrypted, so the last frame's
+        # AAD carries the final flag and a truncation fails authentication
+        # (backend/app/backup_crypto.py:203-213).
+        nxt = _read_frame(fin, header["chunk"])
+        final = nxt is None
+        try:
+            plain = aes.decrypt(_nonce(prefix, index), frame, _aad(hbytes, index, final))
+        except Exception as exc:  # noqa: BLE001 — InvalidTag, deliberately widened
+            raise CryptoError(BAD_DECRYPT) from exc
+        fout.write(plain)
+        written += len(plain)
+        frame, index = nxt, index + 1
+    header["bytes"] = written
+    return header
+
+
+def encrypt_file(src: str, dst: str, passphrase: str, chunk: int = CHUNK) -> dict[str, Any]:
+    size = os.stat(src).st_size
+    with open(src, "rb") as fin, open(dst, "wb") as fout:
+        return encrypt_stream(fin, fout, passphrase, size, chunk)
+
+
+def decrypt_file(src: str, dst: str, passphrase: str) -> dict[str, Any]:
+    with open(src, "rb") as fin, open(dst, "wb") as fout:
+        return decrypt_stream(fin, fout, passphrase)
+
+
+def encrypt_bytes(data: bytes, passphrase: str, chunk: int = CHUNK) -> bytes:
+    out = io.BytesIO()
+    encrypt_stream(io.BytesIO(data), out, passphrase, len(data), chunk)
+    return out.getvalue()
+
+
+def decrypt_bytes(blob: bytes, passphrase: str) -> bytes:
+    out = io.BytesIO()
+    decrypt_stream(io.BytesIO(blob), out, passphrase)
+    return out.getvalue()
+
+
+def generate_passphrase() -> str:
+    """160 bits, grouped for a human writing it on paper: 8 groups of 4
+    lowercase base32 characters.
+
+    Generated HERE and never by `openssl rand 20` captured with `$( )`: bash
+    drops NUL bytes and strips trailing newlines from a command substitution,
+    so roughly one generated passphrase in thirteen would silently carry less
+    than 160 bits, undetectably (§7.2).
+    """
+    raw = base64.b32encode(secrets.token_bytes(20)).decode("ascii").lower()
+    return "-".join(raw[i : i + 4] for i in range(0, 32, 4))
+
+
+def key_fingerprint(
+    passphrase: str, salt: bytes, n: int = SCRYPT_N, r: int = SCRYPT_R, p: int = SCRYPT_P
+) -> str:
+    """sha256(scrypt(passphrase, THIS FILE'S salt))[:12] — §7.4.
+
+    NOT sha256(passphrase)[:12]. That form is v3's, it lives in cleartext
+    meta, and it lets an attacker holding the bundle test candidates at one
+    unsalted SHA-256 each and pay scrypt once for the confirmed hit —
+    annulling the entire work factor against an operator-chosen passphrase.
+    Under this form each guess costs one scrypt, which is the whole point of
+    having one.
+    """
+    return hashlib.sha256(derive_key(passphrase, salt, n, r, p)).hexdigest()[:12]
+
+
+def passphrase_sha256_12(passphrase: str) -> str:
+    """The RAW form, kept ONLY inside the encrypted manifest — behind the
+    thing it identifies (§7.4). Never written to meta.json."""
+    return hashlib.sha256(passphrase.encode("utf-8")).hexdigest()[:12]
+
+
+def file_fingerprint(path: str, passphrase: str) -> str:
+    header = read_header(path)
+    return key_fingerprint(
+        passphrase, bytes.fromhex(header["salt"]), header["n"], header["r"], header["p"]
+    )
+
+
+FINGERPRINT_KIND = "scrypt-key"
+
+
+# ── hashing (§5.5) ──────────────────────────────────────────────────────────
+
+
+def sha256_file(path: str) -> tuple[str, int]:
+    h, total = hashlib.sha256(), 0
+    with open(path, "rb") as fh:
+        while True:
+            block = fh.read(1 << 20)
+            if not block:
+                break
+            h.update(block)
+            total += len(block)
+    return h.hexdigest(), total
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _mode_octal(mode: int) -> str:
+    """GNU find's `%#m`: octal with a leading 0, and a bare `0` for zero."""
+    bits = mode & 0o7777
+    return "0" if bits == 0 else f"0{bits:o}"
+
+
+def tree_listing(root: str) -> str:
+    """§5.5's listing, byte-identical to what step 12's container produces.
+
+        d 0755 0 0 ./people
+        f 0644 1000 1000 ./people/example
+        l 0777 1000 1000 ./people/current
+        <sha256>  ./people/example/a-note.md
+
+    Type, mode, uid and gid for EVERY entry first, all LC_ALL=C sorted, then
+    one content-hash line per regular file. A `find . -type f` listing alone
+    cannot detect a missing symlink, a lost empty directory or a changed
+    mode, all of which are inside the tar.
+    """
+    meta: list[str] = []
+    hashes: list[str] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(dirnames + filenames):
+            full = os.path.join(dirpath, name)
+            rel = "./" + os.path.relpath(full, root).replace(os.sep, "/")
+            st = os.lstat(full)
+            if stat.S_ISLNK(st.st_mode):
+                kind = "l"
+            elif stat.S_ISDIR(st.st_mode):
+                kind = "d"
+            elif stat.S_ISREG(st.st_mode):
+                kind = "f"
+            else:
+                raise BundleError(f"{rel}: a listing cannot describe a {stat.S_IFMT(st.st_mode):o}")
+            meta.append(f"{kind} {_mode_octal(st.st_mode)} {st.st_uid} {st.st_gid} {rel}")
+            if kind == "f":
+                digest, _ = sha256_file(full)
+                hashes.append(f"{digest}  {rel}")
+    meta.sort()
+    hashes.sort()
+    lines = meta + hashes
+    return "".join(line + "\n" for line in lines)
+
+
+def verify_tree_against_listing(root: str, listing: str) -> list[str]:
+    """Every difference between an extracted tree and its recorded listing.
+
+    Parses rather than regenerates, on purpose: the listing that ships is
+    written by `find` + `sha256sum` inside a container and this side must not
+    have to reproduce that byte for byte to be able to check it. Returns the
+    differing entries by name, never "the tree differs".
+    """
+    problems: list[str] = []
+    want_meta: dict[str, str] = {}
+    want_hash: dict[str, str] = {}
+    for line in listing.splitlines():
+        if not line:
+            continue
+        if line[:1] in ("d", "f", "l") and line[1:2] == " ":
+            parts = line.split(" ", 4)
+            if len(parts) != 5:
+                problems.append(f"{line!r}: unreadable listing line")
+                continue
+            want_meta[parts[4]] = " ".join(parts[:4])
+        else:
+            digest, _, path = line.partition("  ")
+            if not path:
+                problems.append(f"{line!r}: unreadable listing line")
+                continue
+            want_hash[path] = digest
+    got_meta: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(dirnames + filenames):
+            full = os.path.join(dirpath, name)
+            rel = "./" + os.path.relpath(full, root).replace(os.sep, "/")
+            st = os.lstat(full)
+            kind = (
+                "l"
+                if stat.S_ISLNK(st.st_mode)
+                else "d"
+                if stat.S_ISDIR(st.st_mode)
+                else "f"
+                if stat.S_ISREG(st.st_mode)
+                else "?"
+            )
+            got_meta[rel] = f"{kind} {_mode_octal(st.st_mode)} {st.st_uid} {st.st_gid}"
+            if kind == "f":
+                digest, _ = sha256_file(full)
+                if rel not in want_hash:
+                    problems.append(f"{rel}: in the archive, absent from the listing")
+                elif want_hash[rel] != digest:
+                    problems.append(f"{rel}: content does not match its recorded checksum")
+    for rel, want in sorted(want_meta.items()):
+        got = got_meta.get(rel)
+        if got is None:
+            problems.append(f"{rel}: named in the listing, absent from the archive")
+        elif got != want:
+            problems.append(f"{rel}: type/mode/uid/gid is `{got}`, the listing recorded `{want}`")
+    for rel in sorted(set(got_meta) - set(want_meta)):
+        problems.append(f"{rel}: in the archive, absent from the listing")
+    for rel in sorted(set(want_hash) - set(got_meta)):
+        problems.append(f"{rel}: named in the listing, absent from the archive")
+    return sorted(set(problems))
+
+
+# ── safe_extract (§9.2 step 5) ──────────────────────────────────────────────
+
+
+class BundleError(Exception):
+    """The archive is not what the manifest says it is, or a member of it is
+    not something this code will write to disk."""
+
+
+_ALWAYS_REFUSED = {
+    tarfile.CHRTYPE: "a character device",
+    tarfile.BLKTYPE: "a block device",
+    tarfile.FIFOTYPE: "a fifo",
+}
+
+
+def _member_escapes(name: str) -> str:
+    if name.startswith("/") or (len(name) > 1 and name[1] == ":"):
+        return "an absolute path"
+    parts = name.replace("\\", "/").split("/")
+    if ".." in parts:
+        return "a `..` component"
+    return ""
+
+
+def _link_escapes(member_name: str, target: str) -> str:
+    """A link target that leaves the extraction root. An INTERNAL symlink is
+    legitimate — §5.2 carries volume trees as plain members and §5.5's own
+    example listing has one (`l 0777 … ./people/current`) — so the refusal is
+    about escape, not about the entry type."""
+    if target.startswith("/"):
+        return "an absolute target"
+    base = posixpath.dirname(member_name)
+    resolved = posixpath.normpath(posixpath.join(base, target))
+    if resolved == ".." or resolved.startswith("../"):
+        return "a target outside the archive"
+    return ""
+
+
+def check_member(member) -> str:
+    """Why this member will not be written to disk, or "" if it may be."""
+    bad = _member_escapes(member.name)
+    if bad:
+        return f"{member.name}: {bad}"
+    if member.type in _ALWAYS_REFUSED:
+        return f"{member.name}: {_ALWAYS_REFUSED[member.type]}"
+    if member.issym() or member.islnk():
+        bad = _member_escapes(member.linkname) if member.islnk() else ""
+        if bad:
+            return f"{member.name}: a hard link to {bad}"
+        bad = _link_escapes(member.name, member.linkname)
+        if bad:
+            kind = "a hard link" if member.islnk() else "a symlink"
+            return f"{member.name}: {kind} with {bad}"
+    return ""
+
+
+def safe_extract(tar: tarfile.TarFile, dest: str, members=None) -> list:
+    """Extract, or refuse by name.
+
+    No member escapes the target: no absolute path, no `..`, no link that
+    resolves outside, no device node and no fifo. Proven with an adversarial
+    tar built in tests/test_bundle_verify.py, not by argument.
+    """
+    chosen = list(tar.getmembers() if members is None else members)
+    for member in chosen:
+        bad = check_member(member)
+        if bad:
+            raise BundleError(f"bundle member refused — {bad}")
+    os.makedirs(dest, exist_ok=True)
+    try:
+        tar.extractall(dest, members=chosen, filter="data")
+    except TypeError:  # python < 3.12 has no `filter` keyword
+        tar.extractall(dest, members=chosen)
+    return chosen
+
+
+# ── MANIFEST.json (§5.3) ────────────────────────────────────────────────────
+#
+# Loading is STRICT: a documented key that is absent, or a value of the wrong
+# type, raises rather than defaulting, and an unknown key is an error —
+# because a manifest this code does not fully understand is not a manifest it
+# may restore from. `null` is a value, not an absence.
+
+MANIFEST_FORMAT = "nova-backup/2"
+BUNDLE_VERSION = 2
+OUTER_VERSION = 1
+TRANSPORTS = ("local", "tailnet", "removable")
+MIGRATION_MATCHES = ("content",)
+MEMBER_KINDS = ("db", "counts", "migrations", "listing", "tree", "file", "env")
+
+# The GUCs every digest in a bundle is measured under, pinned with SET LOCAL
+# in the SAME statement as the measurement (§9.1 step 9). A key restore does
+# not know is a refusal: a digest measured under an unknown frame is not
+# comparable (measurement-frames-outlive-their-code).
+SESSION_GUCS = (
+    "DateStyle",
+    "IntervalStyle",
+    "TimeZone",
+    "bytea_output",
+    "extra_float_digits",
+    "lc_numeric",
+)
+
+STAMP_RE = re.compile(r"^[0-9]{8}T[0-9]{6}Z$")
+HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
+HEX40_RE = re.compile(r"^[0-9a-f]{40}$")
+HEX12_RE = re.compile(r"^[0-9a-f]{12}$")
+SELFTEST_RE = re.compile(r"^nova_selftest_[0-9a-f]{8}$")
+RESTORE_TO_RE = re.compile(r"^(db:.+|volume:.+|[^/][^\0]*)$")
+
+
+class ManifestError(Exception):
+    """The manifest is absent a documented key, carries one this code does
+    not know, or holds a value of the wrong type."""
+
+
+def _spec_str(spec: Any) -> str:
+    if isinstance(spec, type):
+        return spec.__name__
+    return spec[0]
+
+
+def _check(value: Any, spec: Any, where: str, problems: list[str]) -> None:
+    if isinstance(spec, type):
+        if spec is int and isinstance(value, bool):
+            problems.append(f"{where}: expected int, got bool")
+        elif not isinstance(value, spec):
+            problems.append(f"{where}: expected {spec.__name__}, got {type(value).__name__}")
+        return
+    kind = spec[0]
+    if kind == "opt":
+        if value is None:
+            return
+        _check(value, spec[1], where, problems)
+    elif kind == "exact":
+        if value != spec[1]:
+            problems.append(f"{where}: expected {spec[1]!r}, got {value!r}")
+    elif kind == "one_of":
+        if value not in spec[1]:
+            problems.append(f"{where}: {value!r} is not one of {', '.join(map(str, spec[1]))}")
+    elif kind == "re":
+        if not isinstance(value, str) or not spec[1].match(value):
+            problems.append(f"{where}: {value!r} does not match {spec[2]}")
+    elif kind == "list":
+        if not isinstance(value, list):
+            problems.append(f"{where}: expected list, got {type(value).__name__}")
+            return
+        for i, item in enumerate(value):
+            _check(item, spec[1], f"{where}[{i}]", problems)
+    elif kind == "obj":
+        if not isinstance(value, dict):
+            problems.append(f"{where}: expected object, got {type(value).__name__}")
+            return
+        for key, sub in spec[1].items():
+            if key not in value:
+                problems.append(f"{where}.{key}: missing")
+            else:
+                _check(value[key], sub, f"{where}.{key}", problems)
+        for key in value:
+            if key not in spec[1]:
+                problems.append(f"{where}.{key}: unknown key")
+    elif kind == "exact_keys_str":
+        if not isinstance(value, dict):
+            problems.append(f"{where}: expected object, got {type(value).__name__}")
+            return
+        for key in spec[1]:
+            if key not in value:
+                problems.append(f"{where}.{key}: missing")
+            elif not isinstance(value[key], str):
+                problems.append(f"{where}.{key}: expected str")
+        for key in value:
+            if key not in spec[1]:
+                problems.append(f"{where}.{key}: unknown key")
+    elif kind == "nonempty_str":
+        if not isinstance(value, str):
+            problems.append(f"{where}: expected str, got {type(value).__name__}")
+        elif not value.strip():
+            problems.append(f"{where}: is empty, and this field is never empty")
+    else:  # pragma: no cover — a spec this function does not implement
+        raise AssertionError(f"unknown spec {kind!r}")
+
+
+_HEX64 = ("re", HEX64_RE, "64 hex")
+_HEX12 = ("re", HEX12_RE, "12 hex")
+_STR_LIST = ("list", str)
+
+MANIFEST_SPEC: dict[str, Any] = {
+    "format": ("exact", MANIFEST_FORMAT),
+    "bundle_version": ("exact", BUNDLE_VERSION),
+    "created_at": ("re", STAMP_RE, "%Y%m%dT%H%M%SZ"),
+    "mode": ("one_of", MODES),
+    "transport": ("one_of", TRANSPORTS),
+    "migration_match": ("one_of", MIGRATION_MATCHES),
+    "source": (
+        "obj",
+        {
+            "host": str,
+            "os": str,
+            "repo_sha": ("opt", ("re", HEX40_RE, "40 hex")),
+            "repo_dirty": ("opt", bool),
+            "project": ("nonempty_str",),
+            "compose_files": _STR_LIST,
+            "profiles": _STR_LIST,
+            "docker_version": str,
+            "compose_version": str,
+            "pack_image_id": str,
+        },
+    ),
+    "postgres": (
+        "obj",
+        {
+            "server_version": str,
+            "server_version_num": int,
+            "pg_dump_version": str,
+            "pg_dump_major": int,
+            "container_image": str,
+            "container_image_id": str,
+        },
+    ),
+    "session": ("exact_keys_str", SESSION_GUCS),
+    "databases": (
+        "list",
+        (
+            "obj",
+            {
+                "name": ("nonempty_str",),
+                "owner": ("nonempty_str",),
+                "dump_member": str,
+                "dump_bytes": int,
+                "dump_sha256": _HEX64,
+                "counts_member": str,
+                "migrations_member": str,
+                "tables": int,
+                "rows": int,
+                "selftest": (
+                    "obj",
+                    {
+                        "scratch_db": ("re", SELFTEST_RE, "^nova_selftest_[0-9a-f]{8}$"),
+                        "tables_compared": int,
+                        "equal": ("exact", True),
+                    },
+                ),
+            },
+        ),
+    ),
+    "volumes": (
+        "list",
+        (
+            "obj",
+            {
+                "key": ("nonempty_str",),
+                "full_name": ("nonempty_str",),
+                "disposition": ("one_of", DISPOSITIONS),
+                "prefix": ("nonempty_str",),
+                "listing_member": ("nonempty_str",),
+                "listing_sha256": _HEX64,
+                "entries": int,
+                "files": int,
+                "bytes": int,
+                "restore_to": ("nonempty_str",),
+            },
+        ),
+    ),
+    "binds": (
+        "list",
+        (
+            "obj",
+            {
+                "source": ("nonempty_str",),
+                "target": ("nonempty_str",),
+                "service": ("nonempty_str",),
+                "disposition": ("one_of", DISPOSITIONS),
+                "reason": str,
+            },
+        ),
+    ),
+    "files": (
+        "list",
+        (
+            "obj",
+            {
+                "member": ("nonempty_str",),
+                "origin": ("nonempty_str",),
+                "restore_to": ("nonempty_str",),
+                "mode": int,
+                "bytes": int,
+                "sha256": _HEX64,
+            },
+        ),
+    ),
+    "env_keys": _STR_LIST,
+    "members": (
+        "list",
+        (
+            "obj",
+            {
+                "path": ("nonempty_str",),
+                "origin": ("nonempty_str",),
+                "kind": ("one_of", MEMBER_KINDS),
+                "bytes": int,
+                "sha256": _HEX64,
+                "restore_to": ("re", RESTORE_TO_RE, "db:<name> | volume:<name> | a relative path"),
+            },
+        ),
+    ),
+    "member_count": int,
+    "excluded": (
+        "list",
+        (
+            "obj",
+            {
+                "kind": ("nonempty_str",),
+                "name": ("nonempty_str",),
+                "disposition": ("one_of", DISPOSITIONS),
+                "reason": ("nonempty_str",),
+            },
+        ),
+    ),
+    "coverage": (
+        "obj",
+        {
+            "sources": _STR_LIST,
+            "services": _STR_LIST,
+            "entries": int,
+            "refusals": ("list", dict),
+        },
+    ),
+    "identity": (
+        "obj",
+        {
+            "core_signing_key_sha256": ("opt", _HEX64),
+            "tailnet_dns_name": ("opt", str),
+            "tailnet_state_carried": bool,
+            "device_count": int,
+            "people_count": int,
+        },
+    ),
+    "encryption": (
+        "obj",
+        {
+            "container": ("exact", "NOVAENC1"),
+            "cipher": ("exact", "aes-256-gcm"),
+            "kdf": ("exact", "scrypt"),
+            "n": int,
+            "r": int,
+            "p": int,
+            "dklen": int,
+            "chunk": int,
+            "fingerprint_kind": ("exact", FINGERPRINT_KIND),
+            "passphrase_sha256_12": _HEX12,
+            "passphrase_source": ("nonempty_str",),
+        },
+    ),
+    "reader_sha256": _HEX64,
+}
+
+
+def load_manifest(data: Any) -> dict[str, Any]:
+    """§5.3's manifest, or a refusal that names every problem at once."""
+    if not isinstance(data, dict):
+        raise ManifestError(f"the manifest is a {type(data).__name__}, not an object")
+    # v3's shape, refused BY NAME rather than by a type error twelve fields
+    # later: its manifest.json has none of §5.3's structure and an operator
+    # holding one needs to be told which tool opens it.
+    if data.get("bundle_version") == 1:
+        raise ManifestError(
+            "bundle_version 1 is v3's bundle shape, which this tool does not restore. "
+            "Open it with v3's scripts/nova_restore.py."
+        )
+    problems: list[str] = []
+    _check(data, ("obj", MANIFEST_SPEC), "manifest", problems)
+    if problems:
+        raise ManifestError("; ".join(sorted(problems)))
+    if data["member_count"] != len(data["members"]):
+        raise ManifestError(
+            f"manifest.member_count is {data['member_count']} and manifest.members holds "
+            f"{len(data['members'])} rows"
+        )
+    if data["coverage"]["refusals"]:
+        raise ManifestError(
+            "manifest.coverage.refusals is not empty — a written bundle never carries a refusal"
+        )
+    for row in data["excluded"]:
+        if not row["reason"].strip():
+            raise ManifestError(f"excluded {row['name']}: every exclusion carries a reason")
+    seen: set[str] = set()
+    for row in data["members"]:
+        if row["path"] in seen:
+            raise ManifestError(f"manifest.members names {row['path']} twice")
+        seen.add(row["path"])
+    return data
+
+
+def load_manifest_text(text: str) -> dict[str, Any]:
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        raise ManifestError(f"the manifest is not JSON: {exc}") from exc
+    return load_manifest(data)
+
+
+def dump_manifest(manifest: dict[str, Any]) -> str:
+    """Written in §5.3's documented key order, so a human diffing two
+    manifests reads them in the order the design documents them."""
+    ordered = {key: manifest[key] for key in MANIFEST_SPEC}
+    return json.dumps(ordered, indent=2, sort_keys=False) + "\n"
+
+
+# ── meta.json (§5.4) — cleartext, UNAUTHENTICATED, advisory ─────────────────
+#
+# The rule, stated in README.txt and enforced in nova_restore.py: NOTHING
+# THAT SURVIVES A FAILED DECRYPT IS DECIDED BY meta.json. It exists to list
+# bundles without a passphrase, to choose a decryptor backend, to print the
+# `docker pull` lines — and for the one named exception, choosing WHICH
+# passphrase to try, which nothing else can answer before a decrypt (§2
+# rejection 5). Every other value it duplicates is re-read from the
+# authenticated manifest and compared; a disagreement is a refusal.
+
+META_DUPLICATES = (
+    ("format", "format"),
+    ("bundle_version", "bundle_version"),
+    ("created_at", "created_at"),
+    ("mode", "mode"),
+    ("transport", "transport"),
+    ("source_host", None),
+    ("member_count", "member_count"),
+    ("reader_sha256", "reader_sha256"),
+)
+
+
+def build_meta(
+    manifest: dict[str, Any],
+    *,
+    payload_bytes: int,
+    payload_sha256: str,
+    fingerprint: str,
+    crypto_image: str,
+    fallback_image: str,
+    needs_images: list[str],
+    chunk: int,
+) -> dict[str, Any]:
+    enc = manifest["encryption"]
+    return {
+        "outer_version": OUTER_VERSION,
+        "encrypted": True,
+        "format": manifest["format"],
+        "bundle_version": manifest["bundle_version"],
+        "created_at": manifest["created_at"],
+        "mode": manifest["mode"],
+        "transport": manifest["transport"],
+        "source_host": manifest["source"]["host"],
+        "member_count": manifest["member_count"],
+        "bytes_payload": payload_bytes,
+        "payload_sha256": payload_sha256,
+        "passphrase_fingerprint": fingerprint,
+        "fingerprint_kind": FINGERPRINT_KIND,
+        "crypto": {
+            "container": "NOVAENC1",
+            "cipher": "aes-256-gcm",
+            "kdf": "scrypt",
+            "n": enc["n"],
+            "r": enc["r"],
+            "p": enc["p"],
+            "chunk": chunk,
+        },
+        "crypto_image": crypto_image,
+        "fallback_image": fallback_image,
+        "needs_images": list(needs_images),
+        "reader_sha256": manifest["reader_sha256"],
+    }
+
+
+def meta_disagreements(meta: dict[str, Any], manifest: dict[str, Any]) -> list[str]:
+    """Every field cleartext meta duplicates from the authenticated manifest
+    and got wrong. A disagreement is a refusal, never a preference."""
+    out = []
+    for meta_key, manifest_key in META_DUPLICATES:
+        if manifest_key is None:
+            continue
+        if meta.get(meta_key) != manifest[manifest_key]:
+            out.append(
+                f"meta.{meta_key} is {meta.get(meta_key)!r} and the manifest says "
+                f"{manifest[manifest_key]!r}"
+            )
+    if meta.get("source_host") != manifest["source"]["host"]:
+        out.append(
+            f"meta.source_host is {meta.get('source_host')!r} and the manifest says "
+            f"{manifest['source']['host']!r}"
+        )
+    if meta.get("fingerprint_kind") != FINGERPRINT_KIND:
+        out.append(
+            f"meta.fingerprint_kind is {meta.get('fingerprint_kind')!r}, which this reader "
+            f"does not know — it will not compare the wrong thing"
+        )
+    return out
+
+
+# ── the archives (§5.1, §5.2) ───────────────────────────────────────────────
+
+INNER_MANIFEST = "MANIFEST.json"
+OUTER_README = "README.txt"
+OUTER_READER = "nova_restore.py"
+OUTER_SCRIPT = "restore.sh"
+OUTER_KAT_SHA = "kat.sha256"
+OUTER_KAT = "kat.enc"
+OUTER_META = "meta.json"
+OUTER_PAYLOAD = "payload.enc"
+
+# Forced, not alphabetical (§5.1): member 7 is incompressible AEAD ciphertext
+# and members 1-6 are under 60 KB together, so `tar -xOf <bundle> restore.sh`
+# works on a many-GB file without streaming past the payload.
+OUTER_ORDER = (
+    OUTER_README,
+    OUTER_READER,
+    OUTER_SCRIPT,
+    OUTER_KAT_SHA,
+    OUTER_KAT,
+    OUTER_META,
+    OUTER_PAYLOAD,
+)
+OUTER_CLEARTEXT = OUTER_ORDER[:4] + (OUTER_META,)
+
+
+def _tar_filter(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    """Numeric owner only. §5.2: python's tarfile records numeric uid/gid/mode
+    directly, so restore extracts with --numeric-owner and a name that does
+    not exist on the target can never silently become uid 0."""
+    info.uname = ""
+    info.gname = ""
+    return info
+
+
+def build_inner_archive(stage: str, manifest: dict[str, Any], out_path: str) -> int:
+    """MANIFEST.json FIRST, then every member in the manifest's order.
+
+    First because gzip cannot seek: listing a bundle otherwise means
+    decompressing everything ahead of the member you want, and v3 measured
+    3.4 s of pointless decompression on a 167 MB bundle before the order was
+    forced (backend/app/backup_snapshot.py:298-305).
+    """
+    inner_root = os.path.join(stage, "inner")
+    manifest_path = os.path.join(stage, INNER_MANIFEST)
+    if not os.path.isfile(manifest_path):
+        raise BundleError(f"{manifest_path}: the manifest to pack is not there")
+    emitted = 0
+    with open(out_path, "wb") as raw:
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0) as gz:
+            with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
+                tar.add(manifest_path, arcname=INNER_MANIFEST, filter=_tar_filter)
+                for row in manifest["members"]:
+                    path = row["path"]
+                    src = os.path.join(inner_root, path.rstrip("/"))
+                    if row["kind"] == "tree":
+                        if not os.path.isdir(src):
+                            raise BundleError(
+                                f"{path}: the manifest names a tree that is not there"
+                            )
+                        tar.add(src, arcname=path.rstrip("/"), recursive=True, filter=_tar_filter)
+                    else:
+                        if not os.path.isfile(src):
+                            raise BundleError(
+                                f"{path}: the manifest names a member that is not there"
+                            )
+                        tar.add(src, arcname=path, filter=_tar_filter)
+                    emitted += 1
+    return emitted
+
+
+def build_outer_bundle(out_path: str, members: list[tuple[str, str]], mtime: int) -> None:
+    """The outer tar, in §5.1's forced order, created O_EXCL and 0600 before
+    the first byte: the bundle holds every secret this machine has."""
+    names = [name for name, _ in members]
+    if names != list(OUTER_ORDER):
+        raise BundleError(f"outer members are {names}, and §5.1 forces {list(OUTER_ORDER)}")
+    try:
+        fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        # O_EXCL, not "overwrite if present": two runs in the same second
+        # otherwise both compute the same <final> and one clobbers the very
+        # bundle the other is publishing.
+        raise BundleError(
+            f"{out_path} already exists. This step never overwrites: pick another name, or "
+            "let the caller's collision loop append -2."
+        ) from exc
+    except OSError as exc:
+        raise BundleError(f"{out_path}: {exc}") from exc
+    with os.fdopen(fd, "wb") as raw:
+        with tarfile.open(fileobj=raw, mode="w", format=tarfile.PAX_FORMAT) as tar:
+            for name, src in members:
+                info = tarfile.TarInfo(name)
+                info.size = os.stat(src).st_size
+                info.mode = 0o600
+                info.uid = info.gid = 0
+                info.uname = info.gname = ""
+                info.mtime = mtime
+                with open(src, "rb") as fh:
+                    tar.addfile(info, fh)
+
+
+def read_outer_member(bundle: str, name: str) -> bytes:
+    with open_outer_tar(bundle) as tar:
+        try:
+            extracted = tar.extractfile(name)
+        except KeyError:
+            raise BundleError(f"{os.path.basename(bundle)} has no {name}") from None
+        if extracted is None:
+            raise BundleError(f"{name} is not a regular file in {os.path.basename(bundle)}")
+        return extracted.read()
+
+
+# ── verification (§9.1 steps 17 and 20, §9.2 step 5) ────────────────────────
+
+
+def verify_inner(root: str, manifest: dict[str, Any]) -> list[str]:
+    """Every member's sha256 RE-DERIVED from the extracted bytes.
+
+    Deliberately not trusting the numbers the manifest recorded moments ago:
+    the sha256-equality of a file the writer just wrote proves the writer can
+    hash, and nothing else.
+    """
+    problems: list[str] = []
+    accounted: set[str] = {INNER_MANIFEST}
+    by_prefix = {v["prefix"]: v for v in manifest["volumes"]}
+    for row in manifest["members"]:
+        path = row["path"]
+        target = os.path.join(root, path.rstrip("/"))
+        if row["kind"] == "tree":
+            if not os.path.isdir(target):
+                problems.append(f"{path}: named in the manifest, absent from the archive")
+                continue
+            volume = by_prefix.get(path)
+            if volume is None:
+                problems.append(f"{path}: a tree member with no volumes[] row to describe it")
+                continue
+            listing_path = os.path.join(root, volume["listing_member"])
+            if not os.path.isfile(listing_path):
+                problems.append(
+                    f"{volume['listing_member']}: the listing this tree is checked "
+                    f"against is absent"
+                )
+                continue
+            digest, _ = sha256_file(listing_path)
+            if digest != row["sha256"]:
+                problems.append(
+                    f"{path}: its listing does not match the hash recorded for the tree"
+                )
+            if digest != volume["listing_sha256"]:
+                problems.append(f"{path}: its listing does not match volumes[].listing_sha256")
+            with open(listing_path, encoding="utf-8") as fh:
+                listing = fh.read()
+            problems.extend(
+                f"{path}{p.lstrip('./')}" if p.startswith("./") else f"{path}: {p}"
+                for p in verify_tree_against_listing(target, listing)
+            )
+            for dirpath, _dirs, files in os.walk(target):
+                for name in files:
+                    full = os.path.join(dirpath, name)
+                    accounted.add(os.path.relpath(full, root).replace(os.sep, "/"))
+            continue
+        if not os.path.isfile(target):
+            problems.append(f"{path}: named in the manifest, absent from the archive")
+            continue
+        accounted.add(path)
+        digest, size = sha256_file(target)
+        if digest != row["sha256"]:
+            problems.append(f"{path}: content does not match its recorded checksum")
+        if size != row["bytes"]:
+            problems.append(f"{path}: {size} bytes, the manifest recorded {row['bytes']}")
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            rel = os.path.relpath(os.path.join(dirpath, name), root).replace(os.sep, "/")
+            if rel not in accounted:
+                problems.append(f"{rel}: in the archive and named by no member of the manifest")
+    return sorted(set(problems))
+
+
+def open_inner(path: str, dest: str) -> dict[str, Any]:
+    """Extract the inner archive into `dest` and return its manifest.
+
+    The exception handler is broad on purpose: a truncated gzip raises
+    EOFError, which is neither TarError nor OSError, and a narrower catch
+    turns "corrupt" into an uncaught crash
+    (backend/app/backup_snapshot.py:420-427).
+    """
+    try:
+        with tarfile.open(path, "r:gz") as tar:
+            first = tar.next()
+            if first is None or first.name != INNER_MANIFEST:
+                raise BundleError(
+                    f"the inner archive's first member is "
+                    f"{'nothing' if first is None else first.name!r}, and §5.2 forces "
+                    f"{INNER_MANIFEST}"
+                )
+            extracted = tar.extractfile(first)
+            if extracted is None:
+                raise BundleError(f"{INNER_MANIFEST} is not a regular file")
+            manifest = load_manifest_text(extracted.read().decode("utf-8"))
+            tar.members = []
+            safe_extract(tar, dest)
+    except (BundleError, ManifestError, CryptoError):
+        raise
+    except Exception as exc:  # noqa: BLE001 — EOFError, TarError, OSError, zlib
+        raise BundleError(
+            f"the inner archive could not be read: {type(exc).__name__}: {exc}"
+        ) from exc
+    return manifest
+
+
+def _payload_into(src: str, passphrase: str, work: str) -> str:
+    inner = os.path.join(work, "inner.tgz")
+    decrypt_file(src, inner, passphrase)
+    return inner
+
+
+def kat_gate(kat_enc: bytes, kat_sha256: str, passphrase: str) -> None:
+    """The known-answer test: 64 known bytes under the real passphrase with
+    their OWN fresh salt. This is what lets a wrong passphrase be refused
+    BEFORE a payload byte is read, instead of half-decrypting."""
+    plain = decrypt_bytes(kat_enc, passphrase)
+    if sha256_bytes(plain) != kat_sha256.strip():
+        raise CryptoError(BAD_DECRYPT)
+
+
+def open_outer_tar(bundle: str):
+    """The outer tar, or a stated refusal.
+
+    A truncated or damaged outer tar raises tarfile.ReadError, which is
+    neither CryptoError nor BundleError — and a traceback naming a python
+    module is not what a stranded operator needs. Every way this file can be
+    unreadable states the same kind of sentence.
+    """
+    return _OuterTar(bundle)
+
+
+class _OuterTar:
+    """A tarfile whose every read states a refusal instead of raising a
+    tarfile error. `tarfile.open` succeeds on a file truncated after the
+    first member header and only fails when the member list is walked, so
+    wrapping the open alone would still leave a bare ReadError in front of
+    the operator."""
+
+    def __init__(self, bundle: str):
+        self.bundle = bundle
+        try:
+            self.tar = tarfile.open(bundle, "r:")
+        except tarfile.TarError as exc:
+            raise self._refusal(exc) from exc
+        except OSError as exc:
+            raise BundleError(f"{bundle}: {exc}") from exc
+
+    def _refusal(self, exc: Exception) -> BundleError:
+        return BundleError(
+            f"{os.path.basename(self.bundle)} is not a readable tar: "
+            f"{type(exc).__name__}: {exc}. It is truncated or damaged — check the copy "
+            "that produced it."
+        )
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.tar.close()
+        return False
+
+    def __getattr__(self, name):
+        attribute = getattr(self.tar, name)
+        if not callable(attribute):
+            return attribute
+
+        def guarded(*args, **kwargs):
+            try:
+                return attribute(*args, **kwargs)
+            except tarfile.TarError as exc:
+                raise self._refusal(exc) from exc
+            except (EOFError, OSError) as exc:
+                raise self._refusal(exc) from exc
+
+        return guarded
+
+
+def verify_bundle(
+    bundle: str, passphrase: str, work: str, *, reader_dir: str | None = None
+) -> dict:
+    """Open a finished bundle and check everything in it against itself."""
+    with open_outer_tar(bundle) as tar:
+        names = [m.name for m in tar.getmembers()]
+        if names != list(OUTER_ORDER):
+            raise BundleError(f"outer members are {names}, and §5.1 forces {list(OUTER_ORDER)}")
+        blobs = {}
+        for name in OUTER_ORDER:
+            if name == OUTER_PAYLOAD:
+                continue
+            handle = tar.extractfile(name)
+            blobs[name] = b"" if handle is None else handle.read()
+        payload = os.path.join(work, OUTER_PAYLOAD)
+        safe_extract(tar, work, members=[tar.getmember(OUTER_PAYLOAD)])
+    kat_gate(blobs[OUTER_KAT], blobs[OUTER_KAT_SHA].decode("utf-8"), passphrase)
+    meta = json.loads(blobs[OUTER_META].decode("utf-8"))
+    payload_sha256, payload_bytes = sha256_file(payload)
+    inner = _payload_into(payload, passphrase, work)
+    root = os.path.join(work, "inner")
+    os.makedirs(root, mode=0o700, exist_ok=True)
+    manifest = open_inner(inner, root)
+    problems = verify_inner(root, manifest)
+    problems.extend(meta_disagreements(meta, manifest))
+    if meta.get("payload_sha256") != payload_sha256:
+        problems.append("meta.payload_sha256 does not match the payload this bundle carries")
+    if meta.get("bytes_payload") != payload_bytes:
+        problems.append("meta.bytes_payload does not match the payload this bundle carries")
+    reader_sha256 = sha256_bytes(blobs[OUTER_READER])
+    if reader_sha256 != manifest["reader_sha256"]:
+        problems.append(
+            "the nova_restore.py inside this bundle is not the one manifest.reader_sha256 names"
+        )
+    if reader_dir is not None:
+        for name in (OUTER_READER, OUTER_SCRIPT):
+            with open(os.path.join(reader_dir, name), "rb") as fh:
+                if fh.read() != blobs[name]:
+                    problems.append(f"{name} in the bundle is not byte-identical to the git copy")
+    return {
+        "manifest": manifest,
+        "meta": meta,
+        "problems": problems,
+        "payload_sha256": payload_sha256,
+        "reader_sha256": reader_sha256,
+        "root": root,
+    }
+
+
+# ── plan: assembling MANIFEST.json (§9.1 step 15) ───────────────────────────
+#
+# Everything the SHELL knows and this side cannot derive arrives in one fact
+# file, `facts/manifest-base.json`; everything that can be derived from the
+# staged tree and from coverage() is derived here, so the two can never
+# disagree about what the bundle holds.
+
+PLAN_BASE = "manifest-base.json"
+PLAN_BASE_KEYS = (
+    "created_at",
+    "mode",
+    "transport",
+    "source",
+    "postgres",
+    "session",
+    "databases",
+    "identity",
+    "passphrase_source",
+    "excluded",
+)
+
+
+def _listing_counts(path: str) -> tuple[int, int]:
+    """(every entry, regular files only) from a §5.5 listing file."""
+    entries = files = 0
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            if line[:1] in ("d", "f", "l") and line[1:2] == " ":
+                entries += 1
+                if line[:1] == "f":
+                    files += 1
+    return entries, files
+
+
+def _tree_bytes(root: str) -> int:
+    total = 0
+    for dirpath, _dirs, names in os.walk(root):
+        for name in names:
+            full = os.path.join(dirpath, name)
+            st = os.lstat(full)
+            if stat.S_ISREG(st.st_mode):
+                total += st.st_size
+    return total
+
+
+def build_manifest(
+    base: dict[str, Any],
+    stage: str,
+    entries: list[Entry],
+    services: list[str],
+    *,
+    passphrase: str,
+    reader_path: str,
+    chunk: int = CHUNK,
+) -> dict[str, Any]:
+    missing = [key for key in PLAN_BASE_KEYS if key not in base]
+    if missing:
+        raise ManifestError(f"facts/{PLAN_BASE} is missing {', '.join(missing)}")
+    unknown = [key for key in base if key not in PLAN_BASE_KEYS]
+    if unknown:
+        raise ManifestError(
+            f"facts/{PLAN_BASE} carries keys this tool does not know: {', '.join(sorted(unknown))}"
+        )
+    mode = base["mode"]
+    inner = os.path.join(stage, "inner")
+    carried_class = list(INCLUDE_CLASS) + ([CARRY_ON_MOVE] if mode == "move" else [])
+
+    volumes: list[dict[str, Any]] = []
+    members: list[dict[str, Any]] = []
+    excluded: list[dict[str, Any]] = list(base["excluded"])
+
+    for entry in sorted(entries, key=lambda e: (e.kind, e.name)):
+        if entry.disposition.startswith("exclude-") or (
+            entry.disposition == CARRY_ON_MOVE and mode != "move"
+        ):
+            excluded.append(
+                {
+                    "kind": entry.kind,
+                    "name": entry.name,
+                    "disposition": entry.disposition,
+                    "reason": entry.reason,
+                }
+            )
+
+    for db in base["databases"]:
+        for key, kind in (
+            ("dump_member", "db"),
+            ("counts_member", "counts"),
+            ("migrations_member", "migrations"),
+        ):
+            path = db[key]
+            target = os.path.join(inner, path)
+            if not os.path.isfile(target):
+                raise BundleError(f"{path}: facts/{PLAN_BASE} names it and it is not staged")
+            digest, size = sha256_file(target)
+            members.append(
+                {
+                    "path": path,
+                    "origin": f"postgres:{db['name']}",
+                    "kind": kind,
+                    "bytes": size,
+                    "sha256": digest,
+                    "restore_to": f"db:{db['name']}",
+                }
+            )
+
+    for entry in sorted(entries, key=lambda e: e.name):
+        if entry.kind not in ("volume", "anon") or entry.disposition not in carried_class:
+            continue
+        key = entry.name
+        full_name = entry.full_name or key
+        prefix = f"volumes/{key}/"
+        listing_member = f"listings/{key}.sha256"
+        listing_path = os.path.join(inner, listing_member)
+        tree_path = os.path.join(inner, "volumes", key)
+        if not os.path.isfile(listing_path):
+            raise BundleError(
+                f"{listing_member}: volume `{key}` is carried and its listing is not staged"
+            )
+        if not os.path.isdir(tree_path):
+            raise BundleError(f"{prefix}: volume `{key}` is carried and its tree is not staged")
+        listing_sha256, listing_bytes = sha256_file(listing_path)
+        count_entries, count_files = _listing_counts(listing_path)
+        volumes.append(
+            {
+                "key": key,
+                "full_name": full_name,
+                "disposition": entry.disposition,
+                "prefix": prefix,
+                "listing_member": listing_member,
+                "listing_sha256": listing_sha256,
+                "entries": count_entries,
+                "files": count_files,
+                "bytes": _tree_bytes(tree_path),
+                "restore_to": f"volume:{full_name}",
+            }
+        )
+        members.append(
+            {
+                "path": listing_member,
+                "origin": f"volume:{full_name}",
+                "kind": "listing",
+                "bytes": listing_bytes,
+                "sha256": listing_sha256,
+                "restore_to": f"volume:{full_name}",
+            }
+        )
+        members.append(
+            {
+                "path": prefix,
+                "origin": f"volume:{full_name}",
+                "kind": "tree",
+                "bytes": volumes[-1]["bytes"],
+                # §5.5: a tree has no single file to hash, so its recorded
+                # hash is its LISTING file's bytes, and the listing is what
+                # restore diffs against.
+                "sha256": listing_sha256,
+                "restore_to": f"volume:{full_name}",
+            }
+        )
+
+    files: list[dict[str, Any]] = []
+    files_root = os.path.join(inner, "files")
+    for dirpath, dirnames, names in os.walk(files_root):
+        dirnames.sort()
+        for name in sorted(names):
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, files_root).replace(os.sep, "/")
+            digest, size = sha256_file(full)
+            files.append(
+                {
+                    "member": f"files/{rel}",
+                    "origin": rel,
+                    "restore_to": rel,
+                    "mode": os.stat(full).st_mode & 0o777,
+                    "bytes": size,
+                    "sha256": digest,
+                }
+            )
+    files.sort(key=lambda row: row["member"])
+    for row in files:
+        members.append(
+            {
+                "path": row["member"],
+                "origin": row["origin"],
+                "kind": "file",
+                "bytes": row["bytes"],
+                "sha256": row["sha256"],
+                "restore_to": row["restore_to"],
+            }
+        )
+
+    env_keys: list[str] = []
+    env_member = "env/carried.env"
+    env_path = os.path.join(inner, env_member)
+    if os.path.isfile(env_path):
+        with open(env_path, encoding="utf-8") as fh:
+            for line in fh:
+                key = line.split("=", 1)[0].strip()
+                if key and not key.startswith("#"):
+                    env_keys.append(key)
+        digest, size = sha256_file(env_path)
+        members.append(
+            {
+                "path": env_member,
+                "origin": "deploy/.env",
+                "kind": "env",
+                "bytes": size,
+                "sha256": digest,
+                "restore_to": "deploy/.env",
+            }
+        )
+
+    binds = [
+        {
+            "source": entry.name,
+            "target": entry.target or "",
+            "service": entry.service or "",
+            "disposition": entry.disposition,
+            "reason": entry.reason,
+        }
+        for entry in sorted(entries, key=lambda e: (e.name, e.service or "", e.target or ""))
+        if entry.kind == "bind"
+    ]
+
+    reader_sha256, _ = sha256_file(reader_path)
+    manifest = {
+        "format": MANIFEST_FORMAT,
+        "bundle_version": BUNDLE_VERSION,
+        "created_at": base["created_at"],
+        "mode": mode,
+        "transport": base["transport"],
+        "migration_match": "content",
+        "source": base["source"],
+        "postgres": base["postgres"],
+        "session": base["session"],
+        "databases": base["databases"],
+        "volumes": volumes,
+        "binds": binds,
+        "files": files,
+        "env_keys": env_keys,
+        "members": members,
+        "member_count": len(members),
+        "excluded": excluded,
+        "coverage": {
+            "sources": sorted(FACT_NAMES),
+            "services": sorted(services),
+            "entries": len(entries),
+            "refusals": [],
+        },
+        "identity": base["identity"],
+        "encryption": {
+            "container": "NOVAENC1",
+            "cipher": "aes-256-gcm",
+            "kdf": "scrypt",
+            "n": SCRYPT_N,
+            "r": SCRYPT_R,
+            "p": SCRYPT_P,
+            "dklen": DKLEN,
+            "chunk": chunk,
+            "fingerprint_kind": FINGERPRINT_KIND,
+            "passphrase_sha256_12": passphrase_sha256_12(passphrase),
+            "passphrase_source": base["passphrase_source"],
+        },
+        "reader_sha256": reader_sha256,
+    }
+    return load_manifest(manifest)
+
+
+# ── the passphrase reaches exactly one place: stdin (§7.5) ──────────────────
+
+
+def read_passphrase(stream=None) -> str:
+    """The first line of stdin, consumed before anything else.
+
+    Never argv, never `-e` (which `docker inspect` would show for the
+    container's lifetime), never a positional argument, never a file the
+    container mounts. This is also why the design refuses `openssl enc`
+    outright: `openssl enc` and `openssl kdf` take the key in argv, so a
+    shell-native cipher would put the backup passphrase in `ps` output.
+    """
+    line = (sys.stdin if stream is None else stream).readline()
+    if not line:
+        raise CryptoError("no passphrase on stdin — nothing was piped in")
+    if line.endswith("\n"):
+        line = line[:-1]
+    if line.endswith("\r"):
+        line = line[:-1]
+    if not line:
+        raise CryptoError("an empty passphrase is not a passphrase")
+    return line
+
+
+DEFAULT_CRYPTO_IMAGE = "nova-core"
+DEFAULT_FALLBACK_IMAGE = "python:3.12-slim"
+DEFAULT_NEEDS_IMAGES = ("postgres:16", "python:3.12-slim")
+
+
+def _here(name: str) -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), name)
+
+
+def render_readme(template: str, values: dict[str, str]) -> str:
+    text = template
+    for key, value in values.items():
+        text = text.replace(f"@{key}@", value)
+    left = re.findall(r"@[A-Z_]+@", text)
+    if left:
+        raise BundleError(f"README.txt.in still holds {', '.join(sorted(set(left)))}")
+    return text
+
+
+# ── CLI verbs ───────────────────────────────────────────────────────────────
+
+
+def cmd_genpass(args: argparse.Namespace) -> int:
+    sys.stdout.write(generate_passphrase() + "\n")
+    return 0
+
+
+def cmd_kat(args: argparse.Namespace) -> int:
+    """§9.1 step 14: prove THIS image can do NOVAENC1 with THIS passphrase,
+    before anything is written."""
+    passphrase = read_passphrase()
+    blob = encrypt_bytes(KAT_PLAINTEXT, passphrase)
+    back = decrypt_bytes(blob, passphrase)
+    if back != KAT_PLAINTEXT:
+        sys.stderr.write("Error: this image round-tripped NOVAENC1 to different bytes\n")
+        return 1
+    header = parse_header(io.BytesIO(blob))
+    json.dump(
+        {
+            "kat": "ok",
+            "container": "NOVAENC1",
+            "cipher": "aes-256-gcm",
+            "fingerprint": key_fingerprint(passphrase, bytes.fromhex(header["salt"])),
+            "fingerprint_kind": FINGERPRINT_KIND,
+        },
+        sys.stdout,
+    )
+    sys.stdout.write("\n")
+    return 0
+
+
+def cmd_fingerprint(args: argparse.Namespace) -> int:
+    """The CLEARTEXT fingerprint of §7.4 — derived from the scrypt KEY under
+    one file's own salt, never from the passphrase."""
+    passphrase = read_passphrase()
+    if args.file:
+        sys.stdout.write(file_fingerprint(args.file, passphrase) + "\n")
+        return 0
+    salt = bytes.fromhex(args.salt)
+    if len(salt) != 16:
+        sys.stderr.write("Error: --salt is 16 bytes of hex\n")
+        return 1
+    sys.stdout.write(key_fingerprint(passphrase, salt) + "\n")
+    return 0
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    passphrase = read_passphrase()
+    facts = load_facts(args.facts)
+    base_path = os.path.join(args.facts, PLAN_BASE)
+    try:
+        with open(base_path, encoding="utf-8") as fh:
+            base = json.load(fh)
+    except (OSError, ValueError) as exc:
+        sys.stderr.write(f"Error: {base_path}: {exc}\n")
+        return 2
+    entries, refusals = coverage(facts, base.get("mode", args.mode))
+    if refusals:
+        sys.stderr.write(render_refusals(refusals) + "\n")
+        return 3
+    services = list(facts["config"].get("services") or {})
+    manifest = build_manifest(
+        base,
+        args.stage,
+        entries,
+        services,
+        passphrase=passphrase,
+        reader_path=args.reader or _here(OUTER_READER),
+        chunk=args.chunk,
+    )
+    out = args.out or os.path.join(args.stage, INNER_MANIFEST)
+    with open(out, "w", encoding="utf-8") as fh:
+        fh.write(dump_manifest(manifest))
+    json.dump(
+        {
+            "manifest": out,
+            "member_count": manifest["member_count"],
+            "volumes": len(manifest["volumes"]),
+            "databases": len(manifest["databases"]),
+            "excluded": len(manifest["excluded"]),
+        },
+        sys.stdout,
+    )
+    sys.stdout.write("\n")
+    return 0
+
+
+def cmd_pack(args: argparse.Namespace) -> int:
+    """§9.1 steps 16, 18 and 19: the inner archive, the payload, the outer
+    tar built as `<final>.part` with O_EXCL and mode 0600, and the chown the
+    operator's own verification depends on."""
+    passphrase = read_passphrase()
+    stage = args.stage
+    reader_dir = args.reader_dir or os.path.dirname(os.path.abspath(__file__))
+    with open(os.path.join(stage, INNER_MANIFEST), encoding="utf-8") as fh:
+        manifest = load_manifest_text(fh.read())
+    if manifest["encryption"]["passphrase_sha256_12"] != passphrase_sha256_12(passphrase):
+        sys.stderr.write(
+            "Error: this manifest was planned under a different passphrase. Re-run `plan` "
+            "with the passphrase this run will seal the bundle with.\n"
+        )
+        return 1
+
+    inner_tgz = os.path.join(stage, "inner.tgz")
+    emitted = build_inner_archive(stage, manifest, inner_tgz)
+    if emitted != manifest["member_count"]:
+        os.unlink(inner_tgz)
+        sys.stderr.write(
+            f"Error: packed {emitted} members and manifest.member_count is "
+            f"{manifest['member_count']}\n"
+        )
+        return 1
+
+    payload = os.path.join(stage, OUTER_PAYLOAD)
+    chunk = manifest["encryption"]["chunk"]
+    header = encrypt_file(inner_tgz, payload, passphrase, chunk)
+    payload_sha256, payload_bytes = sha256_file(payload)
+
+    kat_blob = encrypt_bytes(KAT_PLAINTEXT, passphrase)
+    kat_salt = bytes.fromhex(parse_header(io.BytesIO(kat_blob))["salt"])
+    # The cleartext fingerprint is derived under KAT.ENC's salt: it is the
+    # one NOVAENC1 file in the bundle a reader can open whole before it has
+    # chosen to spend anything on the payload (§7.4).
+    fingerprint = key_fingerprint(passphrase, kat_salt)
+    meta = build_meta(
+        manifest,
+        payload_bytes=payload_bytes,
+        payload_sha256=payload_sha256,
+        fingerprint=fingerprint,
+        crypto_image=args.crypto_image,
+        fallback_image=args.fallback_image,
+        needs_images=args.needs_image or list(DEFAULT_NEEDS_IMAGES),
+        chunk=chunk,
+    )
+
+    work = os.path.join(stage, "outer")
+    os.makedirs(work, mode=0o700, exist_ok=True)
+    final_name = os.path.basename(args.out)
+    if final_name.endswith(".part"):
+        final_name = final_name[: -len(".part")]
+    with open(os.path.join(reader_dir, "README.txt.in"), encoding="utf-8") as fh:
+        template = fh.read()
+    readme = render_readme(
+        template,
+        {
+            "BUNDLE": final_name,
+            "CREATED_AT": manifest["created_at"],
+            "HOST": manifest["source"]["host"],
+            "FINGERPRINT": fingerprint,
+            "READER_SHA256": manifest["reader_sha256"],
+            "NEEDS_IMAGES": " ".join(meta["needs_images"]),
+        },
+    )
+    staged: list[tuple[str, str]] = []
+    for name, blob in (
+        (OUTER_README, readme.encode("utf-8")),
+        (OUTER_KAT_SHA, (sha256_bytes(KAT_PLAINTEXT) + "\n").encode("utf-8")),
+        (OUTER_KAT, kat_blob),
+        (OUTER_META, (json.dumps(meta, indent=2) + "\n").encode("utf-8")),
+    ):
+        path = os.path.join(work, name)
+        with open(path, "wb") as fh:
+            fh.write(blob)
+        staged.append((name, path))
+    # nova_restore.py and restore.sh travel BYTE-IDENTICAL to their git
+    # copies — no templating, no stamping — so one published digest covers
+    # every bundle for a given commit (§7.6).
+    for name in (OUTER_READER, OUTER_SCRIPT):
+        staged.append((name, os.path.join(reader_dir, name)))
+    staged.append((OUTER_PAYLOAD, payload))
+    by_name = dict(staged)
+    build_outer_bundle(args.out, [(n, by_name[n]) for n in OUTER_ORDER], _stamp_epoch(manifest))
+
+    if args.uid is not None and args.gid is not None:
+        os.chown(args.out, args.uid, args.gid)
+        st = os.stat(args.out)
+        if (st.st_uid, st.st_gid) != (args.uid, args.gid):
+            os.unlink(args.out)
+            sys.stderr.write(
+                f"Error: the chown to {args.uid}:{args.gid} did not take — the operator could "
+                f"not read back the file this container wrote\n"
+            )
+            return 1
+    st = os.stat(args.out)
+    if stat.S_IMODE(st.st_mode) != 0o600:
+        os.unlink(args.out)
+        sys.stderr.write(f"Error: {args.out} is mode {stat.S_IMODE(st.st_mode):o}, not 600\n")
+        return 1
+    digest, size = sha256_file(args.out)
+    json.dump(
+        {
+            "path": args.out,
+            "bytes": size,
+            "sha256": digest,
+            "mode": "600",
+            "uid": st.st_uid,
+            "gid": st.st_gid,
+            "member_count": manifest["member_count"],
+            "payload_sha256": payload_sha256,
+            "payload_bytes": payload_bytes,
+            "payload_salt": header["salt"],
+            "passphrase_fingerprint": fingerprint,
+            "fingerprint_kind": FINGERPRINT_KIND,
+            "reader_sha256": manifest["reader_sha256"],
+        },
+        sys.stdout,
+    )
+    sys.stdout.write("\n")
+    return 0
+
+
+def _stamp_epoch(manifest: dict[str, Any]) -> int:
+    return calendar.timegm(time.strptime(manifest["created_at"], "%Y%m%dT%H%M%SZ"))
+
+
+def cmd_verify(args: argparse.Namespace) -> int:
+    """§9.1 step 17 (--payload, before the outer tar exists) and §9.1 step 20
+    / §9.2 step 5 (--bundle, the finished file)."""
+    passphrase = read_passphrase()
+    work = tempfile.mkdtemp(prefix="novabundle-verify-")
+    os.chmod(work, 0o700)
+    try:
+        if args.bundle:
+            result = verify_bundle(args.bundle, passphrase, work, reader_dir=args.reader_dir)
+            manifest, problems = result["manifest"], result["problems"]
+        else:
+            inner = _payload_into(args.payload, passphrase, work)
+            root = os.path.join(work, "inner")
+            os.makedirs(root, mode=0o700, exist_ok=True)
+            manifest = open_inner(inner, root)
+            problems = verify_inner(root, manifest)
+        if problems:
+            sys.stderr.write("Error: this bundle does not verify:\n")
+            for problem in problems:
+                sys.stderr.write(f"  {problem}\n")
+            return 1
+        json.dump(
+            {
+                "verified": True,
+                "members": manifest["member_count"],
+                "volumes": len(manifest["volumes"]),
+                "databases": len(manifest["databases"]),
+                "created_at": manifest["created_at"],
+                "reader_sha256": manifest["reader_sha256"],
+            },
+            sys.stdout,
+        )
+        sys.stdout.write("\n")
+        return 0
+    finally:
+        shutil.rmtree(work, ignore_errors=False)
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 #
 # Exit codes, uniform across every verb (design-verdict.md §9): 0 verified,
@@ -1573,12 +3495,57 @@ def build_parser() -> argparse.ArgumentParser:
     cov.add_argument("--mode", default="routine", choices=list(MODES))
     cov.set_defaults(func=cmd_coverage)
 
+    gen = sub.add_parser("genpass", help="a fresh 160-bit passphrase on stdout")
+    gen.set_defaults(func=cmd_genpass)
+
+    kat = sub.add_parser("kat", help="prove THIS image can do NOVAENC1 with THIS passphrase")
+    kat.set_defaults(func=cmd_kat)
+
+    fpr = sub.add_parser("fingerprint", help="the 12-hex cleartext fingerprint (§7.4)")
+    group = fpr.add_mutually_exclusive_group(required=True)
+    group.add_argument("--salt", help="16 bytes of hex — the salt to derive under")
+    group.add_argument("--file", help="a NOVAENC1 file whose header salt to derive under")
+    fpr.set_defaults(func=cmd_fingerprint)
+
+    plan = sub.add_parser("plan", help="assemble MANIFEST.json from the facts and the stage")
+    plan.add_argument("--facts", required=True)
+    plan.add_argument("--stage", required=True, help="the staging directory holding inner/")
+    plan.add_argument("--out", default=None, help="default: <stage>/MANIFEST.json")
+    plan.add_argument("--mode", default="routine", choices=list(MODES))
+    plan.add_argument("--reader", default=None, help="nova_restore.py, for reader_sha256")
+    plan.add_argument("--chunk", type=int, default=CHUNK)
+    plan.set_defaults(func=cmd_plan)
+
+    pack = sub.add_parser("pack", help="the inner archive, the payload and the outer tar")
+    pack.add_argument("--stage", required=True)
+    pack.add_argument("--out", required=True, help="the <final>.part path, in $OUT")
+    pack.add_argument("--reader-dir", default=None, help="where nova_restore.py and restore.sh are")
+    pack.add_argument("--uid", type=int, default=None, help="NOVA_HOST_UID")
+    pack.add_argument("--gid", type=int, default=None, help="NOVA_HOST_GID")
+    pack.add_argument("--crypto-image", default=DEFAULT_CRYPTO_IMAGE)
+    pack.add_argument("--fallback-image", default=DEFAULT_FALLBACK_IMAGE)
+    pack.add_argument("--needs-image", action="append", default=None)
+    pack.set_defaults(func=cmd_pack)
+
+    ver = sub.add_parser("verify", help="re-derive every member's hash from the bytes on disk")
+    target = ver.add_mutually_exclusive_group(required=True)
+    target.add_argument("--bundle", help="a finished outer tar")
+    target.add_argument("--payload", help="a NOVAENC1 payload, before the outer tar exists")
+    ver.add_argument("--reader-dir", default=None, help="assert the carried reader is this one")
+    ver.set_defaults(func=cmd_verify)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except (CryptoError, BundleError, ManifestError, CoverageRefused) as exc:
+        # A stated refusal, never a traceback: the person reading this is
+        # restoring at 3am and needs a sentence.
+        sys.stderr.write(f"Error: {exc}\n")
+        return 1
 
 
 if __name__ == "__main__":

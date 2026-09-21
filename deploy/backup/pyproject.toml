@@ -7,10 +7,11 @@
 # adding a second dependency statement would be a second thing to keep in step
 # with that image.
 #
-# `pyyaml` is in the DEV group below for one reason: the suites run this file
-# outside that image, so the interpreter they use needs what the image has.
-# tests/test_raw_compose.py is what checks the image still carries it — this
-# line cannot, because it is about a different interpreter.
+# `pyyaml` and `cryptography` are in the DEV group below for one reason: the
+# suites run this file outside that image, so the interpreter they use needs
+# what the image has. tests/test_raw_compose.py is what checks the image still
+# carries PyYAML and services/core/pyproject.toml:11 declares `cryptography`
+# — these lines cannot, because they are about a different interpreter.
 [project]
 name = "nova-backup"
 version = "0.0.1"
@@ -22,6 +23,7 @@ dev = [
     "ruff==0.15.21",
     "pytest",
     "pyyaml>=6.0.3",
+    "cryptography>=46.0.5",
 ]
 
 [tool.uv]
