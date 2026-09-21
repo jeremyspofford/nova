@@ -8,6 +8,8 @@ a belief; a tar that tries it is a measurement.
 
 import io
 import os
+import subprocess
+import sys
 import tarfile
 
 import pytest
@@ -502,3 +504,113 @@ def test_a_wrong_passphrase_leaves_no_payload_behind(tmp_path):
     with pytest.raises(nb.CryptoError):
         nb.verify_bundle(str(bundle), "wrong-wrong-wrong-wrong", str(work))
     assert list(work.iterdir()) == []
+
+
+# ── where a link points is data ─────────────────────────────────────────────
+#
+# §5.5's four columns record that a link EXISTS and nothing about its target,
+# so repointing `./people/current` from one person's notes to another passed
+# pack, verify and the carried reader. A backup that cannot notice its own
+# data being repointed is not verifying the tree. The listing gains a fifth
+# line kind for it: `L ./path -> target`.
+
+
+def test_a_retargeted_symlink_is_caught_by_verify(tmp_path):
+    def repoint(volume):
+        link = volume / "people" / "current"
+        link.unlink()
+        link.symlink_to("../shared")
+
+    bundle = _bundle_with(tmp_path, repoint, name="repointed.tar.part")
+    problems = _problems(bundle, tmp_path)
+    assert any("points at" in p and "people/current" in p for p in problems), problems
+
+
+@pytest.mark.parametrize("force", ["0", "1"])
+def test_a_retargeted_symlink_is_caught_by_the_carried_reader(tmp_path, force):
+    def repoint(volume):
+        link = volume / "people" / "current"
+        link.unlink()
+        link.symlink_to("../shared")
+
+    bundle = _bundle_with(tmp_path, repoint, name=f"repointed-{force}.tar.part")
+    done = subprocess.run(
+        [sys.executable, str(BACKUP_DIR / "nova_restore.py"), str(bundle), "--verify-only"],
+        input=PASSPHRASE + "\n",
+        text=True,
+        capture_output=True,
+        env=dict(os.environ, NOVA_FORCE_CTYPES_GCM=force),
+    )
+    assert done.returncode == 1, done.stdout
+    assert "points at" in done.stderr
+    assert "verified" not in done.stdout
+
+
+def test_the_listing_records_a_target_for_every_link_it_names(tmp_path):
+    stage = make_stage(tmp_path)
+    listing = (stage / "inner" / "listings" / "v4_memdata.sha256").read_text()
+    meta, hashes, links, problems = nb.parse_listing(listing)
+    assert problems == []
+    named = {rel for rel, value in meta.items() if value.startswith("l ")}
+    assert named == {"./people/current"}
+    assert links == {"./people/current": "example"}
+
+
+def test_a_listing_that_names_a_link_without_a_target_is_a_refusal(tmp_path):
+    """Not a skip: a listing that cannot answer the question this check
+    exists for must say so."""
+    stage = make_stage(tmp_path)
+    volume = stage / "inner" / "volumes" / "v4_memdata"
+    listing = nb.tree_listing(str(volume))
+    stripped = "".join(line + "\n" for line in listing.splitlines() if not line.startswith("L "))
+    assert any(
+        "records no target" in p for p in nb.verify_tree_against_listing(str(volume), stripped)
+    )
+
+
+def test_the_listing_parses_a_path_that_contains_the_separator(tmp_path):
+    """The target is split off the RIGHT, so a path holding ` -> ` still
+    parses. A target holding it would not, and that fails closed."""
+    meta, hashes, links, problems = nb.parse_listing("L ./a -> b -> c\n")
+    assert problems == []
+    assert links == {"./a -> b": "c"}
+
+
+# ── the chain refusal holds on a case-insensitive filesystem ───────────────
+
+
+def _cased_chain(tar):
+    """Exactly two hops, so the ONLY thing that can refuse it is the fold.
+
+    A longer chain is caught by the exact set at its second link, which is
+    why the first version of this case passed with the fold removed — the
+    test name claimed the property and the fixture measured a different one.
+    """
+    info = tarfile.TarInfo("dir")
+    info.type = tarfile.DIRTYPE
+    info.mode = 0o755
+    tar.addfile(info)
+    link = tarfile.TarInfo("dir/X")
+    link.type = tarfile.SYMTYPE
+    link.linkname = ".."
+    tar.addfile(link)
+    tar.addfile(*_regular("dir/x/PWNED", b"escaped"))
+
+
+def test_a_case_differing_chain_is_refused(tmp_path):
+    """On APFS and NTFS `dir/X` and `dir/x` are the same path, so an
+    exact-match symlink set lets the second hop in under another spelling.
+    Reasoned rather than run — no case-insensitive filesystem here — so the
+    fix is folded matching and this is the pin for it."""
+    with tar_with(tmp_path, _cased_chain) as tar:
+        assert "goes through" in nb.members_refusal(tar.getmembers())
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "nova_restore_case", BACKUP_DIR / "nova_restore.py"
+    )
+    reader = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reader)
+    with tar_with(tmp_path, _cased_chain) as tar:
+        assert "goes through" in reader.members_refusal(tar.getmembers())

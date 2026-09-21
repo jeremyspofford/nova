@@ -262,3 +262,109 @@ def test_a_traversing_listing_member_is_never_read(tmp_path):
     with pytest.raises(reader.RestoreError) as caught:
         reader.verify_extracted(str(root), manifest, {})
     assert "does not trust" in str(caught.value)
+
+
+# ── the two verifiers must not disagree about the same file ────────────────
+
+
+@pytest.mark.parametrize("force", ["0", "1"])
+def test_verify_only_refuses_what_novabundle_verify_refuses(tmp_path, force):
+    """`--verify-only` used to exit 0 with "all matching the manifest sealed
+    inside" on a bundle `novabundle verify` exited 1 on, because it never
+    looked at `restore_to`. An operator with two verifiers will believe
+    whichever one agrees with him."""
+    bundle, _, _ = forge_bundle(tmp_path, _escape)
+    assert run(["verify", "--bundle", str(bundle)]) == 1
+    done = subprocess.run(
+        [sys.executable, str(BACKUP_DIR / "nova_restore.py"), str(bundle), "--verify-only"],
+        input=PASSPHRASE + "\n",
+        text=True,
+        capture_output=True,
+        env=dict(os.environ, NOVA_FORCE_CTYPES_GCM=force),
+    )
+    assert done.returncode == 1, done.stdout
+    assert "verified" not in done.stdout
+    assert "does not trust" in done.stderr
+
+
+def test_the_word_verified_is_not_printed_before_the_paths_are_checked(tmp_path):
+    """It was: `verified: 7 members match their checksums` went to stdout and
+    the refusal came after it. The check moved in front of the print."""
+    deep = tmp_path / "a" / "b"
+    deep.mkdir(parents=True)
+    bundle, _, _ = forge_bundle(deep, _escape)
+    done = subprocess.run(
+        [
+            sys.executable,
+            str(BACKUP_DIR / "nova_restore.py"),
+            str(bundle),
+            "--out",
+            str(deep / "out"),
+        ],
+        input=PASSPHRASE + "\n",
+        text=True,
+        capture_output=True,
+    )
+    assert done.returncode == 1
+    assert "verified" not in done.stdout, done.stdout
+
+
+# ── a member that is a symlink changes meaning when it is placed ───────────
+
+
+def test_a_symlink_file_member_is_never_placed(tmp_path):
+    """Containment was checked against the member's depth INSIDE the archive.
+    Placement moves it to a different depth, and a relative target is
+    resolved from where the link sits — so a link that was contained can
+    point outside once placed. Nothing is written; this is a pointer.
+    """
+
+    def link_the_env(stage):
+        env = stage / "inner" / "files" / "deploy" / ".env"
+        env.unlink()
+        env.symlink_to("../../volumes/v4_memdata/people/example/a-note.md")
+
+    bundle, _, _ = forge_bundle(tmp_path, lambda m: None, mutate_stage=link_the_env)
+    out = tmp_path / "out"
+    done = subprocess.run(
+        [sys.executable, str(BACKUP_DIR / "nova_restore.py"), str(bundle), "--out", str(out)],
+        input=PASSPHRASE + "\n",
+        text=True,
+        capture_output=True,
+    )
+    assert done.returncode == 1, done.stdout
+    assert "is a symlink" in done.stderr
+    assert not out.exists() or not list(out.iterdir())
+
+
+# ── the two placement guards, pinned one at a time ─────────────────────────
+
+
+def test_volume_name_refuses_on_its_own(tmp_path):
+    reader = _reader_module()
+    for value in ("volume:../../../x", "volume:/abs", "volume:", "volume:a/b", "db:x"):
+        with pytest.raises(reader.RestoreError):
+            reader._volume_name(value)
+    assert reader._volume_name("volume:nova_v4_memdata") == "nova_v4_memdata"
+
+
+def test_must_stay_inside_refuses_on_its_own(tmp_path):
+    """The belt. With the two braces in place nothing in the product reaches
+    it — which is exactly why it needs its own pin: removing it alone was
+    caught by nothing."""
+    reader = _reader_module()
+    out = tmp_path / "out"
+    (out / "project").mkdir(parents=True)
+    reader._must_stay_inside(str(out), str(out / "project" / "x"))
+    for escape in ("..", "../x", "/etc/passwd"):
+        with pytest.raises(reader.RestoreError) as caught:
+            reader._must_stay_inside(str(out), str(out / escape))
+        assert "outside" in str(caught.value)
+
+
+def test_relative_refuses_on_its_own():
+    reader = _reader_module()
+    for value in ESCAPES + ["", None, "a\\b"]:
+        with pytest.raises(reader.RestoreError):
+            reader._relative(value)
+    assert reader._relative("deploy/.env") == "deploy/.env"

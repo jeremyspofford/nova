@@ -13,9 +13,11 @@ and the raw form is kept only inside the ciphertext it identifies.
 
 import hashlib
 import json
+import os
+import subprocess
 import tarfile
 
-from bundle_fixtures import OTHER_PASSPHRASE, PASSPHRASE, make_bundle, run
+from bundle_fixtures import BACKUP_DIR, OTHER_PASSPHRASE, PASSPHRASE, make_bundle, run
 
 import novabundle as nb
 
@@ -115,3 +117,120 @@ def test_the_kat_verb_proves_the_image_and_the_passphrase(capsys):
     assert printed["fingerprint_kind"] == "scrypt-key"
     assert len(printed["fingerprint"]) == 12
     assert PASSPHRASE not in json.dumps(printed)
+
+
+# ── deploy/passphrase.sh, driven as the shell (no docker, no live stack) ────
+#
+# The `file` resolver's multi-line refusal had no test: disabling it left
+# backup_test.sh fully green, which makes it a comment rather than a check.
+# Driven here rather than in backup_test.sh because that file is being
+# edited by another task and staging it would sweep their work into this
+# commit.
+
+DEPLOY = BACKUP_DIR.parent
+PASSPHRASE_SH = DEPLOY / "passphrase.sh"
+
+
+def drive(script, world, env=None):
+    """Run `script` with deploy/passphrase.sh sourced, against its own
+    throwaway deploy directory."""
+    body = (
+        "set -uo pipefail\n"
+        f'. "{PASSPHRASE_SH}"\n'
+        f'NP_DIR="{world}"\nNP_ENV_FILE="{world}/.env"\n'
+        f"{script}\n"
+    )
+    return subprocess.run(
+        ["bash", "-c", body],
+        capture_output=True,
+        text=True,
+        env=dict(os.environ, **(env or {})),
+    )
+
+
+def world(tmp_path, name="w"):
+    path = tmp_path / name
+    path.mkdir()
+    (path / ".env").write_text("")
+    return path
+
+
+def test_a_multi_line_passphrase_file_is_refused(tmp_path):
+    """The passphrase reaches novabundle.py as the FIRST LINE of stdin, so a
+    file like this would seal every bundle with something the operator does
+    not think he has."""
+    place = world(tmp_path)
+    store = place / ".backup-passphrase"
+    store.write_text(PASSPHRASE + "\nsecond line\n")
+    os.chmod(store, 0o600)
+    done = drive("resolve_passphrase", place)
+    assert done.returncode == 1, done.stdout
+    assert "more than one line" in done.stderr
+    assert PASSPHRASE not in done.stdout
+
+
+def test_a_trailing_newline_is_not_more_than_one_line(tmp_path):
+    """The other half: `$( )` strips the trailing newline every editor adds,
+    and a check written with `$(printf '\\n')` matches EVERYTHING — measured,
+    it refused every passphrase file in the suite."""
+    place = world(tmp_path, "ok")
+    store = place / ".backup-passphrase"
+    store.write_text(PASSPHRASE + "\n")
+    os.chmod(store, 0o600)
+    done = drive("resolve_passphrase", place)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == PASSPHRASE
+
+
+def test_a_file_with_no_trailing_newline_resolves(tmp_path):
+    place = world(tmp_path, "bare")
+    store = place / ".backup-passphrase"
+    store.write_text(PASSPHRASE)
+    os.chmod(store, 0o600)
+    done = drive("resolve_passphrase", place)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == PASSPHRASE
+
+
+def test_a_stale_create_lock_is_reclaimed_out_loud(tmp_path):
+    """A Ctrl-C between the mkdir and the rmdir used to be a permanent dead
+    end with no verb that cleared it."""
+    place = world(tmp_path, "stale")
+    lock = place / ".backup-passphrase.lock"
+    lock.mkdir()
+    (lock / "pid").write_text("999999\n")  # a pid that is not running
+    done = drive(f"create_passphrase printf '%s' '{PASSPHRASE}'", place)
+    assert done.returncode == 0, done.stderr
+    assert "clearing a stale passphrase lock" in done.stderr
+    assert (place / ".backup-passphrase").read_text() == PASSPHRASE
+    assert not lock.exists()
+
+
+def test_a_live_create_lock_is_not_reclaimed(tmp_path):
+    """And the other half: a lock whose process IS running refuses."""
+    place = world(tmp_path, "live")
+    lock = place / ".backup-passphrase.lock"
+    lock.mkdir()
+    (lock / "pid").write_text(f"{os.getpid()}\n")
+    done = drive(f"create_passphrase printf '%s' '{PASSPHRASE}'", place)
+    assert done.returncode == 1
+    assert "another run is creating the passphrase" in done.stderr
+    assert not (place / ".backup-passphrase").exists()
+
+
+def test_the_create_lock_does_not_touch_the_callers_traps(tmp_path):
+    """Measured the hard way: saving and restoring traps around the lock
+    re-installed the CALLER's EXIT trap inside a command substitution, where
+    it would never have run — and it deleted the caller's temp tree."""
+    place = world(tmp_path, "traps")
+    canary = tmp_path / "canary"
+    canary.mkdir()
+    script = (
+        f"trap 'rm -rf \"{canary}\"' EXIT\n"
+        f"value=\"$(create_passphrase printf '%s' '{PASSPHRASE}' 2>/dev/null)\"\n"
+        'printf "%s" "$value"\n'
+        f'[ -d "{canary}" ] || exit 9\n'
+    )
+    done = drive(script, place)
+    assert done.returncode == 0, f"exit {done.returncode}: the caller's EXIT trap fired early"
+    assert done.stdout == PASSPHRASE

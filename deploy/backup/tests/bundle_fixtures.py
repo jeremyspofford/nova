@@ -214,7 +214,17 @@ def make_bundle(root: pathlib.Path, *, passphrase=PASSPHRASE, out_name="nova-bac
     return final, manifest, stage
 
 
-def forge_bundle(root: pathlib.Path, mutate, *, passphrase=PASSPHRASE, name="forged.tar"):
+def forge_bundle(
+    root: pathlib.Path,
+    mutate,
+    *,
+    passphrase=PASSPHRASE,
+    name="forged.tar",
+    crypto_image="nova-core",
+    fallback_image="python:3.12-slim",
+    needs_images=("postgres:16", "python:3.12-slim"),
+    mutate_stage=None,
+):
     """A bundle whose MANIFEST never went through `load_manifest`.
 
     `pack` refuses a manifest this tool would not accept, which is the point
@@ -223,6 +233,8 @@ def forge_bundle(root: pathlib.Path, mutate, *, passphrase=PASSPHRASE, name="for
     what an attacker (or a future writer) could hand it.
     """
     stage = make_stage(root)
+    if mutate_stage is not None:
+        mutate_stage(stage)
     manifest = plan(stage, passphrase=passphrase)
     mutate(manifest)
     (stage / "MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -239,9 +251,9 @@ def forge_bundle(root: pathlib.Path, mutate, *, passphrase=PASSPHRASE, name="for
         payload_bytes=size,
         payload_sha256=digest,
         fingerprint=nb.key_fingerprint(passphrase, kat_salt),
-        crypto_image="nova-core",
-        fallback_image="python:3.12-slim",
-        needs_images=["postgres:16", "python:3.12-slim"],
+        crypto_image=crypto_image,
+        fallback_image=fallback_image,
+        needs_images=list(needs_images),
         chunk=manifest["encryption"]["chunk"],
     )
     work = stage / "outer"
