@@ -4992,6 +4992,19 @@ EOF
   while IFS=$'\037' read -r vol_key vol_full disp line n want; do
     [ -n "$vol_key" ] || continue
     bk_is_volume_key "$vol_key" || return 1
+    # full_name is joined into a path inside the container
+    # (bk_fill_volume builds /stage/open/volumes/$tree), so it is shape-checked
+    # HERE, where it is read. It was the one manifest value the restore path
+    # joined unchecked: novabundle.load_manifest validates it, but novabundle
+    # never runs during a restore (it imports cryptography, which is the whole
+    # reason bk_read_manifest exists), and nova_restore.check_manifest_paths
+    # validates prefix, listing_member and restore_to and not this. A manifest
+    # carrying a legal restore_to and an escaping full_name reached
+    # `cp -a /stage/open/volumes/../../../etc/. /dst/` — the copy completed and
+    # only the authenticated listing diff afterwards refused, leaving a
+    # correctly-labelled volume holding bytes that were never in the bundle.
+    # Fifth instance of one class: a value inside the bundle steering an action.
+    bk_is_volume_key "$vol_full" || return 1
     if [ "$line" != "volumes/$vol_key/" ] || [ "$want" = "" ] ||
       [ "$disp" = "" ] || [ "$vol_full" = "" ]; then
       bk_fail "the manifest's row for the volume \`$vol_key\` is not the shape a Nova
