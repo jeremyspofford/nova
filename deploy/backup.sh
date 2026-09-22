@@ -1650,6 +1650,22 @@ bk_need_out_kb() { printf '%s\n' "$(( $1 * 400 / 100 ))"; }
 # PGDATA's filesystem, not onto $OUT (port-v3 M6).
 bk_need_pgdata_kb() { printf '%s\n' "$(( $1 * 120 / 100 ))"; }
 
+# `tr -dc '0-9'` deletes anything that is not a digit, which silently WELDS a
+# decimal number into a huge integer: postgres returned `31933.067382812500`
+# and the caller read `31933067382812500` — a trillion times the real size —
+# and refused a backup on a disk with 800 GB free. Measured on the first real
+# run, 2026-09-22. A sanitiser that corrupts is worse than one that refuses.
+bk_digits_or_fail() {
+  case "$1" in
+    "" | *[!0-9]*)
+      bk_fail "$2 answered \`$1\`, which is not a whole number. Refusing to guess
+       what it meant."
+      return 1
+      ;;
+  esac
+  printf '%s\n' "$1"
+}
+
 bk_volume_du_kb() {
   bk_docker run --rm --network none --user 0:0 -v "$1:/src:ro" \
     --entrypoint sh "$2" -ec 'du -sk /src | cut -f1'
@@ -2835,7 +2851,11 @@ $(sed 's/^/       /' "$(bk_moved_marker)" 2>/dev/null)
 $(bk_coverage_rows < "$cov")
 EOF
 
-  pg_kb="$(bk_psql "$pg_id" postgres "SELECT coalesce(sum(pg_database_size(datname)), 0) / 1024 FROM pg_database WHERE datallowconn AND datname NOT IN ('postgres', 'template0', 'template1')" 2>/dev/null | tr -dc '0-9')"
+  # The cast is load-bearing: `sum(bigint)` is NUMERIC, so `/ 1024` yields a
+  # decimal, and the sanitiser used to strip the point rather than the value.
+  # Integer division in SQL, validated on the way in.
+  pg_kb="$(bk_psql "$pg_id" postgres "SELECT (coalesce(sum(pg_database_size(datname)), 0) / 1024)::bigint FROM pg_database WHERE datallowconn AND datname NOT IN ('postgres', 'template0', 'template1')" 2>/dev/null | tr -d '[:space:]')"
+  pg_kb="$(bk_digits_or_fail "$pg_kb" "the summed pg_database_size")" || return 1
   if [ -z "$pg_kb" ]; then
     bk_fail "could not read the summed pg_database_size from the live server."
     return 1
