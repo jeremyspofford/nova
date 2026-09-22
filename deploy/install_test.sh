@@ -95,7 +95,52 @@ expect_case "host ollama: points at the wizard's remote option" "$HOST_OLLAMA" 1
 # install.sh is documented idempotent. Refusing to re-run because the last
 # run's own container is still up would be a worse bug than the one above.
 OURS_LABEL="$SCRIPT_DIR/docker-compose.yml,$SCRIPT_DIR/docker-compose.gpu.yml"
-V3_LABEL="/home/jeremy/workspace/nova/docker-compose.yml,/home/jeremy/workspace/nova/docker-compose.gpu.yml"
+
+# A v3-SHAPED compose file, written here rather than pointed at a path that
+# happens to exist on one machine. Two reasons, and the second is the sharp one:
+#
+#   1. The literal path this used to carry was a real home directory with a
+#      username in it, in a public repo.
+#   2. classify_container only reads a config file it can actually open
+#      (install.sh:615). On the machine these cases were written on, that path
+#      existed, so they exercised the branch that matters: v3 ALSO declares
+#      `name: nova`, and is foreign only because its volume keys are not a
+#      subset of ours. On any machine without that file the loop skips, the
+#      verdict is still `foreign` -- for the wrong reason -- and the case goes
+#      green having measured nothing. A fixture that decides what it tests by
+#      what is lying around on the host is not a fixture.
+V3_DIR="$(mktemp -d)"
+TMPDIRS="${TMPDIRS:-} $V3_DIR"
+cat > "$V3_DIR/docker-compose.yml" <<'V3EOF'
+name: nova
+services:
+  ollama:
+    image: ollama/ollama:0.1.0
+    profiles: ["inference"]
+volumes:
+  ollama_models:
+  postgres_data:
+V3EOF
+cp "$V3_DIR/docker-compose.yml" "$V3_DIR/docker-compose.gpu.yml"
+V3_LABEL="$V3_DIR/docker-compose.yml,$V3_DIR/docker-compose.gpu.yml"
+
+# NOT PINNED, and it cannot be from here: install.sh:615-623 decides that
+# another compose file belongs to THIS project by reading it -- same project
+# name, volume keys a subset. `run_decide` sources install.sh and calls
+# decide_inference directly, so NOVA_OURS_PROJECT and NOVA_OURS_VOLK are still
+# the empty strings install.sh:546-547 initialises them to; they are only
+# populated at :562-571, by a path no test runs. With an empty ours-set the
+# subset test can never succeed, so that branch returns `foreign` for every
+# input a test can construct.
+#
+# Measured, 2026-09-22: a fixture with `name: nova` and volume keys v4_ollama +
+# v4_models -- a strict subset of ours -- is classified FOREIGN. And changing
+# the v3 fixture's project name to something else leaves all 374 cases green,
+# because "is it foreign" is true either way. So the v3 cases below assert the
+# verdict, not the reason for it.
+#
+# Pinning it means teaching the harness to populate the ours-set, which changes
+# what every foreign case measures. Carried deliberately rather than bodged.
 
 expect_case "our own ollama: re-install proceeds instead of refusing" \
   "$(run_decide "docker-proxy(1)" 0 "" "$OURS_LABEL" 0)" 0 "held by this stack's own ollama"
@@ -112,7 +157,7 @@ expect_case "leftover v3 ollama: refuses instead of adopting it" "$V3_LEFTOVER" 
 expect_case "leftover v3 ollama: says the container is not ours" "$V3_LEFTOVER" 1 \
   "is not this stack's"
 expect_case "leftover v3 ollama: quotes the foreign config files" "$V3_LEFTOVER" 1 \
-  "/home/jeremy/workspace/nova/docker-compose.yml"
+  "$V3_DIR/docker-compose.yml"
 expect_case "leftover v3 ollama: names the v3 cleanup" "$V3_LEFTOVER" 1 \
   "docker stop nova-ollama-1"
 expect_case "leftover v3 ollama: names the v3 tree teardown" "$V3_LEFTOVER" 1 \
