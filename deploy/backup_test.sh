@@ -1080,6 +1080,29 @@ expect_str "the_postgres_filesystem_is_sized_separately_at_1_2x" \
 expect_str "the_postgres_filesystem_ratio_truncates_rather_than_floating" \
   "$(bk_need_pgdata_kb 7)" "8"
 
+# The bug the FIRST REAL RUN found, 2026-09-22. `sum(bigint)` is NUMERIC in
+# postgres, so `sum(pg_database_size(...)) / 1024` returns `31933.067382812500`
+# — and the reader sanitised it with `tr -dc '0-9'`, which deletes the decimal
+# POINT rather than the fraction. 31933 KB became 31933067382812500 KB, and the
+# run refused a backup on a disk with 800 GB free, quoting a requirement of
+# 38 trillion GB. Two pins, because there were two faults:
+#   1. the arithmetic is done in SQL and returns an integer (the ::bigint cast);
+#   2. a value that is not a whole number REFUSES instead of being welded.
+expect_str "a_decimal_from_the_server_refuses_rather_than_being_welded_into_an_integer" \
+  "$(bk_digits_or_fail "31933.067382812500" "the summed pg_database_size" 2>/dev/null; printf 'rc=%s' "$?")" "rc=1"
+expect_str "a_whole_number_passes_through_unchanged" \
+  "$(bk_digits_or_fail "31933" "the summed pg_database_size")" "31933"
+expect_str "an_empty_answer_refuses_too_rather_than_reading_as_zero" \
+  "$(bk_digits_or_fail "" "the summed pg_database_size" 2>/dev/null; printf 'rc=%s' "$?")" "rc=1"
+expect_str "the_sizing_query_asks_the_server_for_an_integer" \
+  "$(grep -c "0) / 1024)::bigint" "$SCRIPT_DIR/backup.sh")" "1"
+# And that the validator is actually WIRED IN. Measured: reverting both halves
+# of the fix reddened only ONE case, because the three pins above exercise
+# bk_digits_or_fail in isolation and stay green when its call site is deleted.
+# A helper nothing calls is a comment.
+expect_str "the_summed_size_is_read_through_the_validator_not_raw" \
+  "$(grep -c 'bk_digits_or_fail "$pg_kb"' "$SCRIPT_DIR/backup.sh")" "1"
+
 # ^nova_selftest_[0-9a-f]{8}$, asserted before CREATE, before pg_restore and
 # before DROP. `nova_selftest_` and not `nova_verify_`: drill's orphan sweep
 # walks nova_verify_*, and a drill started during a backup would drop the live
