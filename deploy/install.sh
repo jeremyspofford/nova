@@ -1830,7 +1830,7 @@ main() {
   case "$cmd" in
     install) cmd_install ;;
     update) cmd_update ;;
-    backup|restore|drill)
+    backup|restore|drill|undo-move)
       # S41's verbs live in deploy/backup.sh, which states in its own header
       # that it is sourced from here and run as `./install backup`. That
       # sentence was true of the intent and false of the code until now:
@@ -1839,17 +1839,17 @@ main() {
       #
       # Sourced only when one of them is asked for, so `./install` does not
       # pay for it and a fault in backup.sh cannot stop someone installing.
+      #
+      # `undo-move` is here too since the owner's decision of 2026-09-21: it
+      # was a stated CANNOT pointing at by-hand steps, which is not good
+      # enough for the one night it is needed — every step of a move sits
+      # downstream of it. `cmd_undo-move` is not a legal function name, so
+      # the dash is translated to the underscore the definition uses.
       shift
       . "$DEPLOY_DIR/backup.sh"
-      "cmd_$cmd" "$@"
+      "cmd_$(printf '%s' "$cmd" | tr '-' '_')" "$@"
       ;;
-    undo-move)
-      # Named by the sidecar's refusal and by the README, but not built
-      # (deploy/backup.sh says so at its top). State the CANNOT and point at
-      # the by-hand steps rather than dispatching into nothing.
-      die "undo-move is not built yet. The by-hand equivalent is in deploy/README.md, under 'Moving Nova'."
-      ;;
-    *) die "unknown subcommand: $cmd (expected: install, update, backup, restore, drill)" ;;
+    *) die "unknown subcommand: $cmd (expected: install, update, backup, restore, drill, undo-move)" ;;
   esac
 }
 

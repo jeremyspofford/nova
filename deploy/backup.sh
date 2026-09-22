@@ -16,10 +16,11 @@
 # Entry-guarded like deploy/install.sh:1139-1141, so deploy/backup_test.sh can
 # source it and drive the real shipped functions with the seams stubbed.
 #
-# Three verbs live here: `cmd_backup` (design-verdict §9.1), `cmd_restore`
-# — which is also `restore --drill` (§9.2, §9.3) — and `cmd_drill` (§9.4),
-# above the fact renderers they all share. `cmd_undo_move` is still owed and
-# lands beside them on the same facts and the same staging layout.
+# Four verbs live here: `cmd_backup` (design-verdict §9.1), `cmd_restore`
+# — which is also `restore --drill` (§9.2, §9.3) — `cmd_drill` (§9.4) and
+# `cmd_undo_move` (§9.5), above the fact renderers they all share. All four
+# are dispatched by `./install <verb>`, which sources this file and nothing
+# else.
 
 BK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 BK_REPO_ROOT="$(cd "$BK_DIR/.." && pwd)"
@@ -51,6 +52,19 @@ bk_fail() {
   printf 'Error: %s\n' "$1" >&2
   return 1
 }
+
+# One TAB-separated column of $1, by position, counting from 1.
+#
+# NEVER `IFS=$'\t' read -r a b c …`. TAB is IFS *whitespace*: a run of tabs
+# collapses into ONE delimiter, so every field after an empty one shifts
+# left. `cfg_mounts` emits six fields and leaves `disposition` and `reason`
+# empty for every un-annotated mount, and a short-form anonymous volume
+# (`- /var/cache/foo`) renders as `type: volume` with no `source` at all — so
+# the row that shifts is an ordinary one, not an exotic one. This was already
+# fixed once, for the coverage rows, by moving them to US separators; it came
+# back here, in the derivation of step 7's writer set, which is the list the
+# EXIT trap restarts. `cut -f` counts delimiters instead of words.
+bk_col() { printf '%s' "$1" | cut -f"$2"; }
 
 # The env file a real install writes. Overridable so the suite never reads the
 # operator's own.
@@ -848,7 +862,10 @@ render_reachable() {
     # gave them. Without this an anon row declared `include` is carried with
     # nothing having proved it readable — coverage refuses R6 on the absence,
     # which is safe, but it would refuse for ever.
-    while IFS='	' read -r anon_svc anon_dest anon_name; do
+    while IFS= read -r line; do
+      anon_svc="$(bk_col "$line" 1)"
+      anon_dest="$(bk_col "$line" 2)"
+      anon_name="$(bk_col "$line" 3)"
       [ -n "$anon_name" ] || continue
       disp="$(cfg_anon_disposition "$anon_svc" "$anon_dest" < "$stage/facts/config.yaml" | cut -f1)"
       case "$disp" in
@@ -883,8 +900,13 @@ EOF
     # this loop only knew about the git scan's paths.
     for svc in $(cfg_service_keys < "$stage/facts/config.yaml"); do
       # cfg_mounts emits: type, source, target, read_only, disposition, reason
-      while IFS='	' read -r line src _tgt _ro disp _reason; do
-        [ "$line" = "bind" ] || continue
+      # — read by POSITION (bk_col), because an un-annotated mount leaves the
+      # last two empty and a short-form anonymous volume leaves `source`
+      # empty, and IFS word-splitting would shift every later field left.
+      while IFS= read -r line; do
+        [ "$(bk_col "$line" 1)" = "bind" ] || continue
+        src="$(bk_col "$line" 2)"
+        disp="$(bk_col "$line" 5)"
         case "$disp" in
           include) ;;
           move-only) [ "$mode" = "move" ] || continue ;;
@@ -993,6 +1015,10 @@ bk_mode_of() {
 # bundle nobody hashed is a bundle nobody verified, and this is the function
 # §9.1 step 19 runs AS THE OPERATOR to prove he can read what a root container
 # wrote.
+#
+# `-` is stdin, which both forms accept. That is how the carried .env is
+# hashed: its bytes hold every generated secret and must not touch the host
+# filesystem to be measured.
 sha256_of() {
   local path="$1" line out
   if command -v sha256sum >/dev/null 2>&1; then
@@ -1128,6 +1154,35 @@ bk_service_touches_postgres() {
   ' svc="$1"
 }
 
+# The database NAMES the rendered stack itself points at: every
+# `postgresql://…@postgres[:port]/<db>` anywhere in the render, with the three
+# names `render_databases`' own catalogue query excludes taken out again, so
+# the two sets are comparable (§6.1's two sources, applied to databases).
+#
+# This is the SECOND source. The first is the catalogue — facts/databases.json
+# — parsed into rows by bk_coverage_rows. Nothing compared them until the T3
+# re-review dropped one row and watched a bundle carrying two databases of
+# three publish and exit 0, while the identical injection on a VOLUME was
+# refused by name. A hand-written parser that silently skips what its author
+# did not anticipate cannot be the only thing standing between his stack and
+# a bundle that is missing a tier of it.
+bk_dsn_databases() {
+  awk '
+    {
+      s = $0
+      while (match(s, /postgresql:\/\/[^ \t"]*@postgres(:[0-9]+)?\/[A-Za-z0-9_]+/)) {
+        tok = substr(s, RSTART, RLENGTH)
+        s = substr(s, RSTART + RLENGTH)
+        sub(/^.*\//, "", tok)
+        # The same three the catalogue query excludes, so a DSN that names
+        # the maintenance database does not read as a missing carried one.
+        if (tok == "postgres" || tok == "template0" || tok == "template1") continue
+        if (tok != "") print tok
+      }
+    }
+  ' | LC_ALL=C sort -u
+}
+
 # The services this run must stop, derived from two facts in the render and
 # `postgres` removed BY NAME (§9.1 step 7):
 #   - a service mounting a volume THIS RUN CARRIES, read-write;
@@ -1140,8 +1195,8 @@ bk_service_touches_postgres() {
 # backup — dropping the hub off the tailnet the operator reaches it by — to
 # quiesce a volume that run never opens. See task-3-report.md.
 writer_services() {
-  local stage="$1" mode="${2:-routine}" yaml key disp carried svc hit
-  local mtype msrc _mtgt mro _mdisp _mreason
+  local stage="$1" mode="${2:-routine}" yaml key disp carried svc hit line
+  local mtype msrc mro
   yaml="$stage/facts/config.yaml"
   if [ ! -f "$yaml" ]; then
     bk_fail "the writer set is derived from $yaml and that render is not there."
@@ -1163,9 +1218,19 @@ $key"
   for svc in $(cfg_service_keys < "$yaml"); do
     [ "$svc" = "postgres" ] && continue
     hit=0
-    while IFS='	' read -r mtype msrc _mtgt mro _mdisp _mreason; do
+    # By POSITION, never by IFS word-splitting: cfg_mounts leaves
+    # `disposition` and `reason` empty for an un-annotated mount and leaves
+    # `source` empty for a short-form anonymous volume, and tab is IFS
+    # whitespace — so a null field used to shift every field after it and
+    # this loop could read a TARGET where a source belongs. Same class as the
+    # coverage-row defect, same fix.
+    while IFS= read -r line; do
+      mtype="$(bk_col "$line" 1)"
       [ "$mtype" = "volume" ] || continue
+      mro="$(bk_col "$line" 4)"
       [ "$mro" = "true" ] && continue
+      msrc="$(bk_col "$line" 2)"
+      [ -n "$msrc" ] || continue
       bk_list_has "$carried" "$msrc" && hit=1
     done <<EOF
 $(cfg_mounts "$svc" < "$yaml")
@@ -1397,6 +1462,39 @@ bk_stage_sha256() {
     --entrypoint sh "$image" -ec 'sha256sum "/stage/$1" | cut -d" " -f1' sh "$rel"
 }
 
+# Stage stdin at /stage/$3 and PROVE what landed is what was sent — §9.1 step
+# 13's "verifies each copy's sha256 equals the source's", for the members
+# this shell builds rather than copies from a host path.
+#
+# bk_stage_put reads one thing: the exit status of a `docker run … cat >
+# file`. Nothing hashed the result, so a member that arrived short then
+# hashed CONSISTENTLY everywhere after it — the manifest, the payload
+# self-verify, the shipped reader and `verify --bundle` all agreeing with
+# each other about a file that is not what this shell sent. Measured on
+# `env/carried.env`: three bytes landed, the run exited 0, the bundle
+# published, and the report still said "5 of 7 keys carried". That member is
+# how a restored hub rebuilds .env; three bytes means no POSTGRES_PASSWORD
+# and a hub that cannot open its own databases.
+#
+# $4 is the sha256 of the bytes the caller is piping in.
+bk_stage_put_verified() {
+  local vol="$1" image="$2" rel="$3" want="$4" got
+  bk_stage_put "$vol" "$image" "$rel" || {
+    bk_fail "could not stage $rel into the bundle."
+    return 1
+  }
+  got="$(bk_stage_sha256 "$vol" "$image" "$rel" | tr -d ' \n')"
+  if [ "$got" != "$want" ]; then
+    bk_fail "the member $rel did not arrive as it was sent: it hashes $want where it
+       was built and '${got:-nothing}' inside the bundle. A member that lands short
+       hashes consistently everywhere after this point — the manifest, the payload
+       self-verify and the shipped reader would all agree with each other about a
+       file that is not what this shell sent."
+    return 1
+  fi
+  return 0
+}
+
 # ── reading the answers other things gave us ────────────────────────────────
 
 # One field out of a compact json.dump line. The verbs below print one object
@@ -1616,6 +1714,17 @@ bk_mode_probe() {
 # that holds every plaintext dump, deletes an unpublished .part, and releases
 # the run lock. Every removal is READ BACK; anything it could not finish is
 # named and makes this return non-zero.
+#
+# THE TWO STATES, AND SAYING WHICH (s41/rulings.md, 2026-09-21). A `--move`
+# used to be exempt from the restart — the condition was `[ "$BK_RUN_MODE" !=
+# "move" ]` — so a move that failed anywhere between step 7 and step 21 left
+# `core`, `gateway`, `memory` AND `tailscale` stopped, wrote no marker, and
+# printed one sentence about whatever failed. The host was then neither
+# running nor parked, and off the tailnet, which is how the owner reaches
+# Nova at all. The exemption is gone: what makes a stopped host legitimate is
+# that the park SUCCEEDED, and bk_park says so by clearing BK_RUN_STOPPED
+# itself. Every exit path now ends in one of exactly two states and prints
+# which one.
 BK_RUN_CLEANED=0
 BK_RUN_LOCK=""
 BK_RUN_STAGE=""
@@ -1625,9 +1734,14 @@ BK_RUN_STOPPED=""
 BK_RUN_SCRATCH=""
 BK_RUN_PG_ID=""
 BK_RUN_MODE="routine"
+BK_RUN_SERVICES=""
+# 1 while bk_park has stopped the WHOLE project and has not yet proven both
+# markers written. A park that fails in that window has stopped more than
+# step 7 did, so bringing back step 7's list alone would leave the rest down.
+BK_RUN_PARKING=0
 
 bk_backup_cleanup() {
-  local failures=0 db svc left
+  local failures=0 db svc left pending
   # Never -e: this runs from the EXIT trap, with whatever flags are live at
   # the time, and under `-e` the first removal it cannot do would abort it
   # half way — skipping the writer restart, which is the one thing it exists
@@ -1682,7 +1796,34 @@ EOF
   fi
   BK_RUN_STAGE=""
 
-  if [ -n "$BK_RUN_STOPPED" ] && [ "$BK_RUN_MODE" != "move" ]; then
+  if [ "$BK_RUN_PARKING" = "1" ]; then
+    # The park stopped every service of the project and did not finish, so
+    # this host is NOT parked. Bring the whole project back — including the
+    # tailnet sidecar, whose absence is the one that makes the machine
+    # unreachable — and read every service back rather than trusting `up`.
+    if bk_docker compose "${BK_COMPOSE_ARGS[@]}" --profile '*' up -d >/dev/null 2>&1; then
+      pending="$(bk_verify_running "$BK_RUN_SERVICES")"
+      if [ -z "$pending" ]; then
+        printf 'cleanup: this host is NOT parked, so the stack was restarted: %s\n' \
+          "$(printf '%s\n' "$BK_RUN_SERVICES" | sed '/^$/d' | tr '\n' ' ' | sed 's/ $//')"
+      else
+        bk_fail "this host is NOT parked AND$pending did not come back. Start them by hand:
+       docker compose ${BK_COMPOSE_ARGS[*]} --profile '*' up -d
+       If \`tailscale\` is in that list, this machine is off the tailnet until it is."
+        failures=$((failures + 1))
+      fi
+    else
+      bk_fail "this host is NOT parked and \`docker compose up -d\` did not exit 0, so
+       the whole stack — the tailnet sidecar included — is still stopped. Start it
+       by hand:
+       docker compose ${BK_COMPOSE_ARGS[*]} --profile '*' up -d"
+      failures=$((failures + 1))
+    fi
+    BK_RUN_PARKING=0
+    BK_RUN_STOPPED=""
+  fi
+
+  if [ -n "$BK_RUN_STOPPED" ]; then
     left=""
     while IFS= read -r svc; do
       [ -n "$svc" ] || continue
@@ -1693,7 +1834,19 @@ EOF
     if [ -n "$left" ]; then
       # shellcheck disable=SC2086  # $left is a list of service names by design
       if bk_docker compose "${BK_COMPOSE_ARGS[@]}" --profile '*' up -d $left >/dev/null 2>&1; then
-        printf 'cleanup: restarted%s\n' "$left"
+        pending="$(bk_verify_running "$BK_RUN_STOPPED")"
+        if [ -z "$pending" ]; then
+          if [ "$BK_RUN_MODE" = "move" ]; then
+            printf 'cleanup: this host is NOT parked, so the writers are running again:%s\n' "$left"
+          else
+            printf 'cleanup: restarted%s\n' "$left"
+          fi
+        else
+          bk_fail "\`docker compose up -d$left\` exited 0 and$pending is still not running.
+       Start it by hand, and if \`tailscale\` is in that list this machine is off
+       the tailnet until it is."
+          failures=$((failures + 1))
+        fi
       else
         bk_fail "could not restart$left. Start them by hand:
        docker compose ${BK_COMPOSE_ARGS[*]} up -d$left"
@@ -1854,7 +2007,8 @@ $scratch"
 # directory or a changed mode, all of which are inside the archive
 # (python-tool minor 5). -print0/xargs -0 handles a name containing a newline.
 bk_tar_volume() {
-  local vol="$1" image="$2" key="$3" full="$4" line src_n out_n src_f hash_n bytes
+  local vol="$1" image="$2" key="$3" full="$4" want_kb="${5:-}"
+  local line src_n out_n src_f hash_n bytes
   local link_n target_n
   line="$(bk_pg_run --network none -v "$full:/src:ro" -v "$vol:/stage" \
     --entrypoint sh "$image" -ec '
@@ -1925,6 +2079,20 @@ bk_tar_volume() {
   if [ "$src_f" != "$hash_n" ]; then
     bk_fail "volume $key ($full) holds $src_f regular files and its listing carries
        $hash_n content hashes. The listing is what a restore diffs against."
+    return 1
+  fi
+  # The one check that is NOT self-relative, and the reason it exists: every
+  # check above compares this copy to itself, so on a volume that is empty AT
+  # THE COPY all three are 0 == 0 and the volume is recorded as carried.
+  # `$want_kb` is step 6's own `du -sk` of the same source, taken before
+  # anything was stopped. An empty result is legitimate only when the volume
+  # measured the same then — which is what tells `v4_workspace`, empty since
+  # it was created, from a volume that lost everything in it mid-run.
+  if [ "$src_n" = "0" ] && [ -n "$want_kb" ] && [ "$want_kb" -gt "${bytes:-0}" ]; then
+    bk_fail "volume $key ($full) measured $want_kb KB at the free-space pass and copied 0
+       entries, ${bytes:-0} KB. It emptied between the two readings, and 0 entries is
+       what a carried-and-empty volume looks like — so nothing else here could
+       tell this from the volume that is legitimately empty."
     return 1
   fi
   printf 'volume %s (%s): %s entries copied, %s files hashed, %s links targeted, %s KB\n' \
@@ -2110,17 +2278,32 @@ EOF
      \"reason\": \"this hub has no core_signing_key row, so there is no key to carry a digest of. A hub that has never paired a device has none (services/core/migrations/011_devices.sql:19-23); a restore generates one on first pair.\"}"
   fi
 
+  # A count nobody could read is NOT the number 0. `[ -n "$x" ] || x=0`
+  # recorded a failed query as "this hub has no devices", in the file whose
+  # whole job is to say what was measured — the same fallback-that-reads-as-a
+  # -measurement the core_signing_key count above already refuses. A table
+  # that is not in this database at all is a different fact, and stays 0.
   devices=0
   people=0
   f="$(bk_db_with_table "$pg_id" devices "$facts")"
   if [ -n "$f" ]; then
     devices="$(bk_psql "$pg_id" "$f" "SELECT count(*) FROM devices" 2>/dev/null | tr -dc '0-9')"
-    [ -n "$devices" ] || devices=0
+    if [ -z "$devices" ]; then
+      bk_fail "could not count the rows of devices in $f. The manifest records that
+       number as a measurement, and a query that answered nothing is not the
+       number zero."
+      return 1
+    fi
   fi
   f="$(bk_db_with_table "$pg_id" people "$facts")"
   if [ -n "$f" ]; then
     people="$(bk_psql "$pg_id" "$f" "SELECT count(*) FROM people" 2>/dev/null | tr -dc '0-9')"
-    [ -n "$people" ] || people=0
+    if [ -z "$people" ]; then
+      bk_fail "could not count the rows of people in $f. The manifest records that
+       number as a measurement, and a query that answered nothing is not the
+       number zero."
+      return 1
+    fi
   fi
 
   # Not a bare assignment: the pipeline ends in `grep`, which exits 1 when
@@ -2191,11 +2374,17 @@ bk_park() {
   # stopped and §9.1 step 22 adds "stop postgres too" — step 7 stopped only
   # the writers, so `web`, `searxng` and `ollama` would still be serving a
   # machine whose data now lives somewhere else.
+  # From here the WHOLE project is being stopped, which is more than step 7
+  # stopped. The trap needs to know that, because a park that does not finish
+  # leaves a host that is neither running nor parked — and off the tailnet,
+  # which is how the owner reaches Nova at all (s41/rulings.md, "a failed
+  # --move parks or restarts, and says which").
+  BK_RUN_PARKING=1
   if ! bk_docker compose "${BK_COMPOSE_ARGS[@]}" --profile '*' stop >/dev/null 2>&1; then
     bk_fail "the bundle IS written at $final.
        Separately: \`docker compose stop\` did not exit 0, so this host is NOT
        parked. Do not start Nova on the destination until it is."
-    return 1
+    return 4
   fi
   still=""
   for svc in $(cfg_service_keys < "$BK_RUN_STAGE/facts/config.yaml"); do
@@ -2206,9 +2395,9 @@ bk_park() {
   done
   if [ -n "$still" ]; then
     bk_fail "the bundle IS written at $final.
-       Separately:$still would not stop, so this host is NOT parked. Two live
-       Novas sharing one identity is the failure a move exists to avoid."
-    return 1
+       Separately:$still would not stop, so this host is NOT parked. Two live Novas
+       sharing one identity is the failure a move exists to avoid."
+    return 4
   fi
   printf 'parked: every service of this project reads .State.Running false\n'
   marker="$(bk_moved_to_marker)"
@@ -2221,17 +2410,29 @@ bk_park() {
       umask 077
       printf '%s\n' "$body" > "$path"
     ) || {
-      bk_fail "could not write the move marker $path, so this host is NOT parked."
-      return 1
+      # The two facts as two facts (§9.1 step 22): the bundle is written and
+      # verified, AND this host is not parked. Exit 4 and not 1, because 1 is
+      # "refused, nothing written" and install.sh exiting 1 for a run that
+      # produced a verified bundle is how an operator deletes one.
+      bk_fail "the bundle IS written and verified at $final.
+       Separately: the move marker $path could not be written, so this host is NOT
+       parked. Nobody should believe the source host is stopped when it is not."
+      return 4
     }
     chmod 600 "$path" 2>/dev/null
     if [ "$(cat "$path" 2>/dev/null)" != "$body" ]; then
-      bk_fail "the move marker $path did not read back as it was written, so this host
-       is NOT parked. Nobody should believe the source host is stopped when it is
-       not."
-      return 1
+      bk_fail "the bundle IS written and verified at $final.
+       Separately: the move marker $path did not read back as it was written, so
+       this host is NOT parked. Nobody should believe the source host is stopped
+       when it is not."
+      return 4
     fi
   done
+  # Parked, proven, and only now does the trap stop owning the restart: from
+  # here "stopped" is the state this run was asked to produce, not the state
+  # a failure left behind.
+  BK_RUN_PARKING=0
+  BK_RUN_STOPPED=""
   printf 'parked: the stack is stopped and %s and %s are in place\n' "$marker" "$moved"
   printf 'undo it with:\n  ./install undo-move\n'
 }
@@ -2294,6 +2495,43 @@ bk_stop_writers() {
     fi
   done
   return 0
+}
+
+# The services of $1 (one per line) that are NOT running. Empty output, exit
+# 0, means every one of them came back.
+#
+# `up -d` exiting 0 is not "it came back": compose returns 0 for a container
+# that starts and dies a second later, and the paths this is called from are
+# the ones that must never report a state they did not read. Running and not
+# healthy on purpose: this is the failure path, it runs from the EXIT trap
+# (Ctrl-C included), and a 240 s health budget there would turn an
+# interrupted backup into four minutes of silence.
+bk_verify_running() {
+  local list="$1" deadline pending svc id running now
+  [ -n "$list" ] || return 0
+  deadline=$(( $(date +%s) + 60 ))
+  while :; do
+    pending=""
+    while IFS= read -r svc; do
+      [ -n "$svc" ] || continue
+      id="$(bk_container_id "$svc" running)"
+      if [ -z "$id" ]; then
+        pending="$pending $svc"
+        continue
+      fi
+      running="$(bk_docker inspect "$id" --format '{{.State.Running}}' 2>/dev/null)"
+      [ "$running" = "true" ] || pending="$pending $svc"
+    done <<EOF
+$list
+EOF
+    [ -z "$pending" ] && return 0
+    now="$(date +%s)"
+    if [ "$now" -ge "$deadline" ]; then
+      printf '%s' "$pending"
+      return 1
+    fi
+    sleep 2
+  done
 }
 
 # Restart $@ and say whether each came back HEALTHY — not whether compose
@@ -2360,7 +2598,7 @@ bk_backup_run() {
   local mode="routine" transport="local" out=""
   local stage lock stamp host final part vol facts root
   local pw pw_source rc line
-  local cov entries_n writers writers_list issued
+  local cov entries_n writers writers_list issued missing extra vol_kb want_kb
   local pg_id pg_image_id pack_id pack_name pg_tag
   local srv_ver srv_num dump_ver dump_major net
   local db owner scratch census_src census_dst tables rows dumpline
@@ -2447,6 +2685,14 @@ $(sed 's/^/       /' "$(bk_moved_marker)" 2>/dev/null)
   facts="$stage/facts"
   render_facts "$stage" "$mode" || return 1
   bk_set_compose_args
+  # Every service this project declares, in every profile — what a `--move`
+  # stops, and therefore what a failed `--move` has to bring back.
+  BK_RUN_SERVICES="$(cfg_service_keys < "$facts/config.yaml")"
+  if [ -z "$BK_RUN_SERVICES" ]; then
+    bk_fail "the render names no service, so nothing here could say what a failed
+       run would have to restart."
+    return 1
+  fi
   printf 'facts: 8 rendered from this stack and parsed\n'
   root="$(bk_git_root "$facts")"
   if [ -z "$root" ]; then
@@ -2481,6 +2727,41 @@ $(sed 's/^/       /' "$(bk_moved_marker)" 2>/dev/null)
     return 1
   fi
   printf 'coverage: %s entries classified, 0 refusals\n' "$entries_n"
+
+  # ── 4b. the databases, against a SECOND source (§6.1), BEFORE the stop ───
+  #
+  # `plan` already refuses a carried VOLUME whose tree is not staged. For
+  # databases it iterates the list this shell wrote, and until now nothing
+  # compared that list with anything: one dropped row between pg_database and
+  # here published a bundle carrying two databases of three, exit 0, with the
+  # manifest, the payload self-verify and the shipped reader all agreeing
+  # with each other about the short set.
+  #
+  # Neither source is preferred. The catalogue can over-report (a database
+  # nothing uses) and the parse can under-report (a row it did not
+  # anticipate); a bundle that carries the wrong set of databases is the one
+  # failure this verb must never report as success, so a disagreement is a
+  # refusal and the operator is told what each side said.
+  bk_coverage_rows < "$cov" | awk -F'\037' '$1 == "database" { print $2 }' |
+    LC_ALL=C sort > "$stage/dbs.carried"
+  bk_dsn_databases < "$facts/config.yaml" > "$stage/dbs.named"
+  missing="$(comm -13 "$stage/dbs.carried" "$stage/dbs.named" | tr '\n' ' ')"
+  extra="$(comm -23 "$stage/dbs.carried" "$stage/dbs.named" | tr '\n' ' ')"
+  if [ -n "${missing# }" ] || [ -n "${extra# }" ]; then
+    bk_fail "the two sources disagree about which databases this stack holds, and
+       neither one is preferred over the other.
+         the catalogue (facts/databases.json, classified by coverage) says:$(sed 's/^/ /' "$stage/dbs.carried" | tr '\n' ' ')
+         the render's postgres DSNs say:$(sed 's/^/ /' "$stage/dbs.named" | tr '\n' ' ')
+         a service names it and this run would NOT carry it: ${missing:-nothing}
+         this run would carry it and no service names it: ${extra:-nothing}
+       Nothing was stopped, dumped or written. If a database here is genuinely
+       one nothing uses, drop it or give the service that owns it its DSN; if
+       one is missing from the first list, the reading that produced that list
+       failed and the bundle would have been short a tier of his data."
+    return 1
+  fi
+  printf 'databases: %s, and the render'"'"'s postgres DSNs name the same set\n' \
+    "$(tr '\n' ' ' < "$stage/dbs.carried" | sed 's/ $//')"
 
   # ── 5. the passphrase — before the du pass, so a missing one refuses
   #      without spending containers on measurement ─────────────────────────
@@ -2520,11 +2801,20 @@ $(sed 's/^/       /' "$(bk_moved_marker)" 2>/dev/null)
   [ -n "$pg_tag" ] || pg_tag="postgres"
 
   total_kb=0
+  # Step 6 measures every carried source; step 12 copies the same sources.
+  # The two numbers were never compared, so a volume that EMPTIED between
+  # them was carried as "0 entries, 0 files, 0 bytes" with exit 0 — every one
+  # of bk_tar_volume's checks is self-relative and 0 == 0 passes all three.
+  # `v4_workspace` is legitimately empty, which is precisely why the only
+  # thing that can tell the two apart is what this pass measured.
+  vol_kb=""
   while IFS=$'\037' read -r key name disp full svc _target why; do
     [ "$disp" = "include" ] || continue
     case "$key" in
       volume | anon)
         line="$(bk_volume_du_kb "${full:-$name}" "$pg_image_id" 2>/dev/null | tr -dc '0-9')"
+        vol_kb="$vol_kb$name	$line
+"
         ;;
       path)
         line="$(du -sk "$root/$name" 2>/dev/null | cut -f1 | tr -dc '0-9')"
@@ -2689,9 +2979,17 @@ EOF
     tables="$(wc -l < "$census_src" | tr -d ' ')"
     rows="$(awk -F'\t' '{ n += $2 } END { printf "%d", n }' "$census_src")"
     printf 'census %s: %s tables measured, %s rows\n' "$db" "$tables" "$rows"
-    bk_stage_put "$vol" "$pg_image_id" "inner/db/$db.counts.tsv" < "$census_src" || return 1
+    # Both TSVs are READ BACK out of the staging volume. The counts file is
+    # what step 11's self-test compares and what a restore diffs against; the
+    # migrations file is what §9.2 step 7's content gate reads. A copy nobody
+    # hashed is a copy nobody proved arrived.
+    line="$(sha256_of "$census_src")" || return 1
+    bk_stage_put_verified "$vol" "$pg_image_id" "inner/db/$db.counts.tsv" "$line" \
+      < "$census_src" || return 1
     bk_migrations_tsv "$pg_id" "$db" > "$stage/$db.migrations.tsv" || return 1
-    bk_stage_put "$vol" "$pg_image_id" "inner/db/$db.migrations.tsv" < "$stage/$db.migrations.tsv" || return 1
+    line="$(sha256_of "$stage/$db.migrations.tsv")" || return 1
+    bk_stage_put_verified "$vol" "$pg_image_id" "inner/db/$db.migrations.tsv" "$line" \
+      < "$stage/$db.migrations.tsv" || return 1
 
     # 10. the dump, into the stage volume, BEFORE any file is copied: an
     #     attachment written between the two shows up as a file with no row,
@@ -2743,7 +3041,8 @@ EOF
   while IFS=$'\037' read -r key name disp full svc _target why; do
     [ "$disp" = "include" ] || continue
     case "$key" in volume | anon) ;; *) continue ;; esac
-    bk_tar_volume "$vol" "$pg_image_id" "$name" "${full:-$name}" || return 1
+    want_kb="$(printf '%s' "$vol_kb" | awk -F'\t' -v k="$name" '$1 == k { print $2; exit }')"
+    bk_tar_volume "$vol" "$pg_image_id" "$name" "${full:-$name}" "$want_kb" || return 1
   done <<EOF
 $(bk_coverage_rows < "$cov")
 EOF
@@ -2782,7 +3081,12 @@ EOF
 $carried_keys
 EOF
   if [ -n "$env_body" ]; then
-    printf '%s' "$env_body" | bk_stage_put "$vol" "$pg_image_id" "inner/env/carried.env" || return 1
+    # Hashed from the bytes being sent, never from a host file: these are the
+    # generated secrets, and §9.1 step 10's whole point is that they never
+    # land on this filesystem. `sha256_of -` reads the same pipe.
+    line="$(printf '%s' "$env_body" | sha256_of -)" || return 1
+    printf '%s' "$env_body" |
+      bk_stage_put_verified "$vol" "$pg_image_id" "inner/env/carried.env" "$line" || return 1
   fi
   printf 'env: %s of %s keys carried; the rest are this machine'"'"'s and stay here\n' \
     "$(printf '%s\n' "$carried_keys" | sed '/^$/d' | wc -l | tr -d ' ')" \
@@ -2941,8 +3245,16 @@ EOF
 
   # ── 22. restart, or park ─────────────────────────────────────────────────
   if [ "$mode" = "move" ]; then
-    bk_park "$stamp" "$final" "$sha" "$host" "$(bk_tailnet_dns_name)" || return 1
-    BK_RUN_STOPPED=""
+    # `|| return $?`, never `|| return 1`: every branch of bk_park runs after
+    # step 21 has published, so every failure there is a 4 — the bundle IS
+    # written and something after it failed. bk_park clears BK_RUN_STOPPED
+    # itself, and only on success, so the trap owns the restart until the
+    # park is proven.
+    rc=0
+    bk_park "$stamp" "$final" "$sha" "$host" "$(bk_tailnet_dns_name)" || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      return "$rc"
+    fi
   else
     # shellcheck disable=SC2086  # $writers_list is a list of service names by design
     if ! bk_docker compose "${BK_COMPOSE_ARGS[@]}" --profile '*' up -d $writers_list >/dev/null 2>&1; then
@@ -5434,6 +5746,280 @@ EOF
   printf 'passphrases: %s older bundle(s) checked, every one sealed with the passphrase\n' "$kept"
   printf '             configured here (derived under each bundle'"'"'s own salt, no decrypt)\n'
   printf '\ndrill PASSED: %s\n' "$(basename "$newest")"
+  return 0
+}
+
+# ╔══════════════════════════════════════════════════════════════════════════╗
+# ║ `undo-move` (design-verdict §9.5, owner decision 3 of 2026-09-21)         ║
+# ╚══════════════════════════════════════════════════════════════════════════╝
+#
+# The way back from a park. He was asked whether to move before this existed
+# and chose to build it first, because every step of the cutover sits
+# downstream of a `--move` that could otherwise stop the machine and walk
+# away — and the by-hand equivalent (delete two files, start the stack by
+# hand, hope) is not good enough for the one night it is needed.
+#
+# §9.5 wrote this verb as "it starts nothing itself". It starts things now,
+# by his decision, and the ORDER is mechanical rather than a preference:
+# deploy/tailscale/start.sh refuses to run containerboot while
+# /config/MOVED_TO is there, so a restart with that marker still in place
+# brings back everything EXCEPT the tailnet — which is the one thing he
+# reaches Nova by. So MOVED_TO goes first, then the stack comes back and is
+# READ BACK, and only then is deploy/.moved removed. A marker that says "this
+# host is parked" is removed when the host is demonstrably not parked any
+# more, never before.
+#
+# What it does not do: decide. It states what it found on the tailnet or that
+# it could not look, says what bringing this node up will do, and takes the
+# owner's typed word. Refusing outright when a peer answers is the shape
+# shell-first's own critique called a "may not" — a half-dead hub answers
+# `tailscale status` long after it stops serving, and the owner would then be
+# deleting markers by hand at 3am, which is the whole failure this verb
+# exists to prevent.
+
+# The host's own tailscale CLI, which is NOT the sidecar's: on a parked host
+# the sidecar is stopped, so `docker exec tailscale …` has nothing to ask.
+# A seam, so the suite can drive both branches without a tailnet.
+bk_host_tailscale() { tailscale "$@"; }
+bk_have_host_tailscale() { command -v tailscale >/dev/null 2>&1; }
+
+# One `key=value` line out of a marker file. Non-zero when the key is not
+# there at all, which is different from an empty value.
+bk_marker_value() {
+  awk -v k="$1" '
+    index($0, k "=") == 1 { print substr($0, length(k) + 2); found = 1; exit }
+    END { exit (found ? 0 : 1) }
+  ' "$2"
+}
+
+# Is the peer carrying DNS name $1 online, per `tailscale status --json` on
+# stdin? Three ANSWERS, not two: 0 = a peer with that name is online, 1 = the
+# name is there and not online, 2 = the name is not in the status at all.
+# "Could not tell" is never folded into "no".
+bk_peer_online() {
+  tr -d '\n' | awk -v dns="$1" '
+    {
+      n = split($0, chunk, /\}[ \t]*,[ \t]*"/)
+      for (i = 1; i <= n; i++) {
+        if (index(chunk[i], "\"DNSName\"") == 0) continue
+        if (index(chunk[i], dns) == 0) continue
+        seen = 1
+        if (chunk[i] ~ /"Online"[ \t]*:[ \t]*true/) online = 1
+      }
+    }
+    END {
+      if (online) exit 0
+      if (seen) exit 1
+      exit 2
+    }
+  '
+}
+
+cmd_undo_move() {
+  local had_e=0 code=0
+  case "$-" in
+    *e*) had_e=1; set +e ;;
+  esac
+  bk_undo_move_run "$@"
+  code=$?
+  if [ "$had_e" -eq 1 ]; then
+    set -e
+  fi
+  return "$code"
+}
+
+bk_undo_move_run() {
+  local moved marker line bad key dns answer status rc svcs text err left
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h | --help)
+        printf './install undo-move\n'
+        printf 'Brings back a host that `./install backup --move` parked here.\n'
+        return 0
+        ;;
+      *)
+        bk_fail "undo-move: unknown option '$1'. Usage: ./install undo-move"
+        return 2
+        ;;
+    esac
+  done
+
+  moved="$(bk_moved_marker)"
+  marker="$(bk_moved_to_marker)"
+
+  # ── 1. the marker, and what it says ──────────────────────────────────────
+  if [ ! -e "$moved" ]; then
+    printf 'no marker here; nothing was moved from this machine.\n'
+    printf '  (%s is absent, so the postcondition this verb exists to produce\n' "$moved"
+    printf '   already holds. Nothing was started, stopped or removed.)\n'
+    return 0
+  fi
+  if [ ! -r "$moved" ]; then
+    bk_fail "$moved is there and this user cannot read it. Removing a marker nobody
+       could read is not something this verb may assume is safe."
+    return 1
+  fi
+  # A line is `<key>=<value>` with a key of [a-z0-9_] and nothing else. Checking
+  # only for a `=` somewhere accepts "this line is not key=value", which is
+  # the sentence a corrupted marker is most likely to be.
+  bad=""
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *=*)
+        key="${line%%=*}"
+        case "$key" in
+          "" | *[!a-z0-9_]*)
+            bad="$line"
+            break
+            ;;
+        esac
+        ;;
+      *)
+        bad="$line"
+        break
+        ;;
+    esac
+  done < "$moved"
+  if [ -n "$bad" ]; then
+    bk_fail "$moved carries a line this verb cannot read: '$bad'. A marker is
+       key=value per line; removing one that does not parse would be removing
+       something nobody here understands."
+    return 1
+  fi
+  for key in moved_at bundle bundle_sha256 source_host tailnet_dns_name; do
+    if ! bk_marker_value "$key" "$moved" >/dev/null; then
+      bk_fail "$moved names no \`$key\`. Every marker \`backup --move\` writes carries
+       all five keys, so this one was written by something else or truncated, and
+       this verb will not remove a marker it cannot account for."
+      return 1
+    fi
+  done
+
+  # ── 2. print it verbatim ─────────────────────────────────────────────────
+  printf 'this machine was parked by `./install backup --move`:\n\n'
+  sed 's/^/  /' "$moved"
+  printf '\n'
+
+  # ── 3. liveness, stated either way ───────────────────────────────────────
+  #
+  # Both branches print what was found or that nothing could be found. A
+  # check may state that something CANNOT be done; it may never decide that
+  # it MAY NOT.
+  dns="$(bk_marker_value tailnet_dns_name "$moved")" || dns=""
+  if [ -z "$dns" ]; then
+    printf 'the marker records no tailnet name, so there is no peer to look for.\n'
+  elif ! bk_have_host_tailscale; then
+    printf 'I cannot check from here whether `%s` is online: there is no host\n' "$dns"
+    printf '`tailscale` CLI, and this machine'"'"'s sidecar is stopped, so there is no\n'
+    printf 'tailscaled to ask.\n'
+  else
+    status="$(bk_host_tailscale status --json 2>/dev/null)" || status=""
+    if [ -z "$status" ]; then
+      printf 'I cannot check from here whether `%s` is online: `tailscale status\n' "$dns"
+      printf -- '--json` on this host answered nothing.\n'
+    else
+      rc=0
+      printf '%s' "$status" | bk_peer_online "$dns" || rc=$?
+      case "$rc" in
+        0) printf 'ONLINE NOW: a tailnet peer named `%s` is up. That is very likely\n           Nova, running on %s.\n' \
+          "$dns" "$(bk_marker_value source_host "$moved")" ;;
+        1) printf 'this tailnet knows `%s` and it is not online just now.\n' "$dns" ;;
+        *) printf 'this tailnet'"'"'s status does not mention `%s` at all.\n' "$dns" ;;
+      esac
+    fi
+  fi
+  printf '\n'
+  printf 'Bringing this machine up puts a tailscaled back on that node identity. If\n'
+  printf 'Nova is also running on the destination, the two share one node key and\n'
+  printf 'the address flaps — stop it there first.\n'
+  printf '\n'
+  printf 'This will: remove %s, start every service of this\n' "$marker"
+  printf 'project, read each one back, and then remove %s.\n' "$moved"
+  printf 'Type undo to do it, anything else to leave this machine parked: '
+  answer=""
+  IFS= read -r answer || answer=""
+  if [ "$answer" != "undo" ]; then
+    printf '\nnothing was changed: this machine is still parked, both markers are still\nin place, and nothing was started.\n'
+    return 1
+  fi
+  printf '\n'
+
+  # ── 4. the sidecar's marker FIRST, or the tailnet does not come back ─────
+  if [ -e "$marker" ]; then
+    rm -f "$marker"
+    if [ -e "$marker" ]; then
+      bk_fail "could not remove $marker. deploy/tailscale/start.sh refuses to start
+       containerboot while it is there, so starting the stack now would bring back
+       everything except the tailnet. Nothing was started; $moved is still in
+       place and this machine is still parked."
+      return 1
+    fi
+    printf 'removed %s, so the tailnet sidecar can start again\n' "$marker"
+  else
+    printf '%s is already gone\n' "$marker"
+  fi
+
+  # ── 5. start the whole project, and READ IT BACK ─────────────────────────
+  err="$(mktemp "${TMPDIR:-/tmp}/nova-undo-move.XXXXXX")" || return 1
+  text="$(bk_compose_config 2> "$err")" || {
+    bk_fail "\`docker compose --profile '*' config\` failed, so nothing here can say
+       which services this project has. stderr: $(tr '\n' ' ' < "$err")
+       Nothing was started; $moved is still in place."
+    rm -f "$err"
+    return 1
+  }
+  rm -f "$err"
+  svcs="$(printf '%s' "$text" | cfg_service_keys)"
+  if [ -z "$svcs" ]; then
+    bk_fail "the compose render names no service, so nothing here can say what to
+       start. Nothing was started; $moved is still in place."
+    return 1
+  fi
+  # Primed out of the render already in hand, so the read-back below selects
+  # containers by this project's label without a second whole render.
+  BK_PROJECT="$(printf '%s' "$text" | cfg_project_name)"
+  if [ -z "$BK_PROJECT" ]; then
+    bk_fail "the compose render carries no top-level \`name:\` line, so nothing here
+       can select this project's containers to read them back. Nothing was
+       started; $moved is still in place."
+    return 1
+  fi
+  if ! bk_docker compose "${BK_COMPOSE_ARGS[@]}" --profile '*' up -d >/dev/null 2>&1; then
+    bk_fail "\`docker compose --profile '*' up -d\` did not exit 0. This machine is
+       part-way back: $marker is gone and $moved is still in place, so \`./install\`
+       still refuses here. Fix what compose reported and run \`./install undo-move\`
+       again."
+    return 4
+  fi
+  # `up` exiting 0 is not "it came back", and this is the moment the verb
+  # would otherwise report a state it never read. The same reading step 22
+  # uses on the routine path: healthy where there is a healthcheck, running
+  # where there is none, and named either way.
+  # shellcheck disable=SC2086  # $svcs is a list of service names by design
+  left="$(bk_wait_healthy $svcs)" || {
+    bk_fail "\`docker compose up -d\` exited 0 and$left did not come back within 240s.
+       This machine is part-way back: $marker is gone, $moved is still in place, and
+       \`./install\` still refuses here. The last 20 log lines of each:
+$(for line in $left; do
+  printf '       --- %s ---\n' "$line"
+  bk_docker compose "${BK_COMPOSE_ARGS[@]}" --profile '*' logs --tail 20 "$line" 2>&1 | sed 's/^/       /'
+done)"
+    return 4
+  }
+  printf 'started: %s — every one running, and every one with a healthcheck healthy\n' \
+    "$(printf '%s\n' "$svcs" | sed '/^$/d' | tr '\n' ' ' | sed 's/ $//')"
+
+  # ── 6. and only now, the marker that says this host is parked ────────────
+  rm -f "$moved"
+  if [ -e "$moved" ]; then
+    bk_fail "the stack is running again and $moved could NOT be removed, so
+       \`./install\` will still refuse on this machine. Remove it by hand."
+    return 4
+  fi
+  printf 'removed %s\n' "$moved"
+  printf '\nthis machine is no longer parked: the stack is running and both markers are\ngone. It is serving Nova again.\n'
   return 0
 }
 
