@@ -657,20 +657,26 @@ $rows
 EOF
 }
 
-# Every volume this project's label selects, from TWO independent derivations
-# unioned — the label filter AND the mounts of the foreign containers
+# Every volume this project's label selects. TWO independent derivations are
+# SEARCHED — the label filter AND the mounts of the foreign containers
 # (python-tool M8: `docker compose down` without -v leaves volumes whose
-# containers are gone, and ruling 1 says name every volume). Writes:
+# containers are gone, and ruling 1 says name every volume) — but only ONE
+# thing SELECTS, in both halves: the com.docker.compose.project label. Writes:
 #   foreign_volumes.tsv   name  project label  volume key label
-#   decoy_volumes.tsv     name  project label   — NAMED <project>_* but owned
-#                                                 by someone else; the measured
-#                                                 near-miss, printed so the
-#                                                 operator sees it was spared
+#                         label reads exactly <project>; the removal set
+#   decoy_volumes.tsv     name  project label  why it was looked at
+#                         here, seen by one of the two searches, and NOT
+#                         labelled for this project — the measured near-miss
+#                         and anything the mounts half dragged in, printed so
+#                         the operator sees it was spared and why it appeared
 #   own_volumes.txt       this stack's own that exist
+#   notours_volumes.txt   what a search reached and the label declined; the
+#                         raw input to decoy_volumes.tsv, left in the capture
+#                         so the refusal can be audited from the files alone
 #   all_volumes.txt       the whole live listing, for the post-check
 # 2 — docker could not be asked.
 foreign_volumes() {
-  local project="$1" dir="$2" labelled mounted id v vproj vkey ours_ids all
+  local project="$1" dir="$2" labelled mounted id v vproj vkey ours_ids all why
   labelled="$(project_labelled_volumes "$project")" || return 2
   all="$(all_volume_names)" || return 2
   printf '%s\n' "$all" | awk 'NF' > "$dir/all_volumes.txt"
@@ -693,6 +699,7 @@ foreign_volumes() {
 
   : > "$dir/foreign_volumes.tsv"
   : > "$dir/own_volumes.txt"
+  : > "$dir/notours_volumes.txt"
   for v in $(printf '%s\n%s\n' "$labelled" "$mounted" | tr ' ' '\n' | awk 'NF && !seen[$0]++'); do
     vkey="$(volume_label "$v" com.docker.compose.volume)" || return 2
     if list_has "$NOVA_OURS_VOLN" "$v" || list_has "$NOVA_OURS_VOLK" "$vkey" \
@@ -701,22 +708,48 @@ foreign_volumes() {
       continue
     fi
     vproj="$(volume_label "$v" com.docker.compose.project)" || return 2
+    # Ruling 1's Global Constraint, applied HERE, at classification, to BOTH
+    # halves of the union. The label filter's half arrives already filtered by
+    # docker; the mounts half does not and cannot — `docker inspect .Mounts`
+    # returns whatever that container happens to mount, and an old `nova`
+    # container is perfectly free to mount a volume of another project of his
+    # (the measured near-miss: nova_pgdata is NAMED nova_* and labelled
+    # `docker`) or one with no project label at all. Being SEEN by a search is
+    # not being SELECTED: the label is the only thing that selects, and if it
+    # does not read this project the volume never enters the removal set,
+    # however it was discovered.
+    #
+    # This cannot be deferred to delete_foreign_project. The re-check there
+    # re-reads the label and compares it to the project — but a check that
+    # runs after a wrong row is already in the capture, and in front of an
+    # operator who has read that row as "the old Nova", is a second chance,
+    # not the control. The control is that the row is never written.
+    if [ "$vproj" != "$project" ]; then
+      printf '%s\n' "$v" >> "$dir/notours_volumes.txt"
+      continue
+    fi
     printf '%s\t%s\t%s\n' "$v" "$vproj" "$vkey" >> "$dir/foreign_volumes.tsv"
   done
 
-  # The decoys: what a name-prefix rule would have taken. Derived, not listed.
+  # The spared set: everything either search reached that a rule reading NAMES
+  # or MOUNTS would have taken and the label did not. Derived, not listed — the
+  # name half is what a `${project}_*` prefix rule would have destroyed, the
+  # mount half is what the union above just declined. Both are printed, with
+  # the reason each one was looked at, because "absent from the delete list" is
+  # not something an operator can read off a page.
   : > "$dir/decoy_volumes.tsv"
-  while IFS= read -r v; do
-    [ -n "$v" ] || continue
-    case "$v" in
-      "${project}_"*) ;;
-      *) continue ;;
-    esac
+  for v in $(awk 'NF && !seen[$0]++' "$dir/all_volumes.txt" "$dir/notours_volumes.txt"); do
+    why=""
+    case "$v" in "${project}_"*) why="named ${project}_*" ;; esac
+    if capture_has "$dir/notours_volumes.txt" "$v"; then
+      why="${why}${why:+, }mounted by a foreign container"
+    fi
+    [ -n "$why" ] || continue
     if capture_has "$dir/foreign_volumes.tsv" "$v"; then continue; fi
     vproj="$(volume_label "$v" com.docker.compose.project)" || return 2
     [ "$vproj" != "$project" ] || continue
-    printf '%s\t%s\n' "$v" "${vproj:-none}" >> "$dir/decoy_volumes.tsv"
-  done < "$dir/all_volumes.txt"
+    printf '%s\t%s\t%s\n' "$v" "${vproj:-none}" "$why" >> "$dir/decoy_volumes.tsv"
+  done
 }
 
 # The refusal, the capture, and the offer. The capture directory is PRINTED
@@ -802,11 +835,17 @@ check_foreign_project() {
   done < "$dir/foreign_volumes.tsv"
   if [ -s "$dir/decoy_volumes.tsv" ]; then
     log ""
-    log "  Left alone — NAMED ${project}_* but labelled for another project ($(awk 'NF' "$dir/decoy_volumes.tsv" | wc -l | tr -d ' '))"
+    log "  Left alone — here, but not labelled com.docker.compose.project=$project ($(awk 'NF' "$dir/decoy_volumes.tsv" | wc -l | tr -d ' '))"
+    log "  Nothing above is selected by its name, and nothing by which container"
+    log "  mounts it. These are NOT removed. The bracket says why each was looked at."
     while IFS= read -r line; do
       [ -n "$line" ] || continue
-      log "    $(printf '%s' "$line" | cut -f1)   label project=$(printf '%s' "$line" | cut -f2)"
+      log "    $(printf '%s' "$line" | cut -f1)   label project=$(printf '%s' "$line" | cut -f2)   ($(printf '%s' "$line" | cut -f3))"
     done < "$dir/decoy_volumes.tsv"
+    if awk -F'\t' '$2 == "none" { f = 1 } END { exit !f }' "$dir/decoy_volumes.tsv"; then
+      log "    project=none names no project, so nothing here can show such a volume"
+      log "    is this one's. It is left exactly as it is, like the rest of this list."
+    fi
   fi
   if [ -s "$dir/own_volumes.txt" ]; then
     log ""
@@ -926,8 +965,20 @@ delete_foreign_project() {
       log "skipping volume $vol: its labels could not be re-read"
       continue
     }
-    if [ "$now" != "$vproj" ]; then
-      log "skipping volume $vol: its project label now reads '${now:-none}', not the '$vproj' it was named under"
+    # Both halves, and BOTH against $project — never one recorded value
+    # against the other. Comparing the freshly-read label to the label the
+    # capture wrote only proves the capture is self-consistent, which it is by
+    # construction, so it passes on a row that should never have been written;
+    # that is what let a volume labelled for another project through. The
+    # classifier is the control (foreign_volumes: the label is the arbiter at
+    # the point of classification); these two are the re-derivation standing
+    # next to the destructive command.
+    if [ "$vproj" != "$project" ]; then
+      log "skipping volume $vol: the capture names it under project '${vproj:-none}', and this run removes '$project'"
+      continue
+    fi
+    if [ "$now" != "$project" ]; then
+      log "skipping volume $vol: its project label now reads '${now:-none}', not the '$project' it was named under"
       continue
     fi
     if list_has "$ours_now" "$vol"; then

@@ -1661,6 +1661,101 @@ expect_tn "foreign: the node identity volume is ours, not foreign" "$FG" 0 3 "no
 expect_tn "foreign: volumes are removed BEFORE containers" "$FG" 0 2 "volume rm nova_redis-data;container rm"
 expect_tn "foreign: the install continues once the refusal's cause is gone" "$FG" 0 3 "continuing with the install"
 
+# ── the SECOND derivation: the label has to be the arbiter there too ─────────
+# foreign_volumes() unions two derivations — the com.docker.compose.project
+# label filter, and the mounts of the foreign containers (python-tool M8: a
+# `docker compose down` without -v leaves volumes whose containers are gone,
+# so the mounts alone are not enough either). The label half arrives
+# pre-filtered by docker. The mounts half does NOT: `docker inspect .Mounts`
+# returns whatever that container happens to mount, and an old `nova` project
+# container is perfectly free to mount a volume belonging to another project
+# of his, or to no project at all.
+#
+# So ruling 1's Global Constraint — "nothing is selected by name; containers,
+# volumes and projects are selected by the com.docker.compose.project label
+# read from docker" — has to be applied at CLASSIFICATION, to both halves.
+# Applying it at deletion time does not work: the re-check there compares the
+# freshly-read label to the value THIS capture recorded, so on a wrongly
+# captured volume it agrees with itself and passes.
+#
+# Until this block existed, every FX_HOLDERS row in this file named a volume
+# the label filter already returned, so the mounts half contributed zero
+# volumes in zero cases and "another project's volume is never removed"
+# above passed vacuously.
+FX_CONTAINERS="$FX_OLD_CONTAINERS"
+FX_VOLUMES="$FX_OLD_VOLUMES"
+FG_HOLD2='nova_postgres-data;0000000000000000000000000000000000000000000000000000000000003f21\nnova_redis-data;0000000000000000000000000000000000000000000000000000000000005d9e'
+FG_ORCH='0000000000000000000000000000000000000000000000000000000000004b8c'
+# What the removal set must stay, in every case below: the two the LABEL
+# selected, and the three containers. Nothing a mount dragged in.
+FG_ONLY2="volume rm nova_postgres-data;volume rm nova_redis-data;container rm 0000000000000000000000000000000000000000000000000000000000003f21;container rm $FG_ORCH;container rm 0000000000000000000000000000000000000000000000000000000000005d9e;"
+
+# (a) another project's OWN labelled volume, mounted by a foreign container.
+FX_HOLDERS="$FG_HOLD2\njobhunter_postgres_data;$FG_ORCH"
+FG_MOUNT_OTHER="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete)"
+expect_tn_lacks "foreign: a volume labelled for another project is not removed for being mounted" \
+  "$FG_MOUNT_OTHER" 2 "jobhunter"
+expect_str "foreign: mounting another project's volume does not widen the removal set" \
+  "$(tn_field "$FG_MOUNT_OTHER" 2)" "$FG_ONLY2"
+expect_tn "foreign: it is printed as left alone, with the label that spared it" \
+  "$FG_MOUNT_OTHER" 0 3 "jobhunter_postgres_data   label project=jobhunter   (mounted by a foreign container)"
+expect_tn "foreign: and why it was looked at at all is printed" \
+  "$FG_MOUNT_OTHER" 0 3 "mounted by a foreign container"
+expect_tn "foreign: the left-alone heading counts it" \
+  "$FG_MOUNT_OTHER" 0 3 "not labelled com.docker.compose.project=nova (3)"
+expect_tn "foreign: the count of foreign volumes does not include it" \
+  "$FG_MOUNT_OTHER" 0 3 "Foreign volumes (2)"
+
+# (b) the measured near-miss itself: nova_pgdata is NAMED nova_* and labelled
+# project=docker (75.8 MB of his nova-ai-platform). A foreign container
+# mounting it must not move it out of the spared list and into the delete
+# list — which is exactly what the unfiltered mounts half did.
+FX_HOLDERS="$FG_HOLD2\nnova_pgdata;$FG_ORCH"
+FG_MOUNT_DECOY="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete)"
+expect_tn_lacks "foreign: the measured decoy is not removed for being mounted" \
+  "$FG_MOUNT_DECOY" 2 "nova_pgdata"
+expect_str "foreign: mounting the decoy does not widen the removal set" \
+  "$(tn_field "$FG_MOUNT_DECOY" 2)" "$FG_ONLY2"
+expect_tn "foreign: a mounted decoy stays in the left-alone list, with its label" \
+  "$FG_MOUNT_DECOY" 0 3 "nova_pgdata   label project=docker   (named nova_*, mounted by a foreign container)"
+expect_tn "foreign: and the left-alone list still holds both decoys" \
+  "$FG_MOUNT_DECOY" 0 3 "not labelled com.docker.compose.project=nova (2)"
+
+# (c) a volume with NO project label at all, mounted by a foreign container.
+# "unlabelled" is not "this project's" — the constraint says the label
+# selects, and there is no label to read. It is left exactly as it is, and
+# the refusal has to SAY so, because "absent from the delete list" is not
+# something an operator can read off a page.
+FX_VOLUMES="$FX_OLD_VOLUMES\nstray_cache;;"
+FX_HOLDERS="$FG_HOLD2\nstray_cache;$FG_ORCH"
+FG_MOUNT_BARE="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete)"
+expect_tn_lacks "foreign: an unlabelled volume a foreign container mounts is not removed" \
+  "$FG_MOUNT_BARE" 2 "stray_cache"
+expect_str "foreign: mounting an unlabelled volume does not widen the removal set" \
+  "$(tn_field "$FG_MOUNT_BARE" 2)" "$FG_ONLY2"
+expect_tn "foreign: the unlabelled volume is named, and its missing label said out loud" \
+  "$FG_MOUNT_BARE" 0 3 "stray_cache   label project=none   (mounted by a foreign container)"
+expect_tn "foreign: and the refusal says what happens to a volume with no project label" \
+  "$FG_MOUNT_BARE" 0 3 "names no project, so nothing here can show"
+FX_VOLUMES="$FX_OLD_VOLUMES"
+FX_HOLDERS="$FG_HOLD2"
+
+# (d) the second line, tested rather than asserted. The classifier above is
+# the control — the row is never written. This drives the case where one IS
+# written anyway, by injecting it into the capture between the operator
+# reading the list and the removal loop reading the file, and shows the
+# re-derivation next to `docker volume rm` catches it. It bites only because
+# that check compares the label to $project; comparing it to the project the
+# capture itself recorded would agree with itself and remove the volume.
+FX_HOLDERS=""
+FG_FORGED="$(run_foreign "$FX_RENDER_TAILNET" "" 1 delete \
+  'printf "jobhunter_postgres_data\tjobhunter\tpostgres_data\n" >> "$dir/foreign_volumes.tsv"')"
+expect_tn_lacks "foreign: a capture row naming another project is refused at the removal itself" \
+  "$FG_FORGED" 2 "jobhunter"
+expect_tn "foreign: and the skip names the project the capture claimed" \
+  "$FG_FORGED" 0 3 "the capture names it under project 'jobhunter', and this run removes 'nova'"
+FX_HOLDERS="$FG_HOLD2"
+
 # Default is to do nothing, and only the exact word proceeds.
 for FG_WORD in "" y Y yes DELETE "delete " " delete" no; do
   FG_TRY="$(run_foreign "$FX_RENDER_TAILNET" "" 1 "$FG_WORD")"
