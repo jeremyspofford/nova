@@ -1,0 +1,7 @@
+{
+  "written_by": "backend/app/backup_crypto.py (v3), encrypt_file",
+  "passphrase": "test-test-test-test-test-test-test-test",
+  "chunk": 4096,
+  "plaintext_sha256": "c0a797846b878ad9e80a9fc9a6b3a8398ed719cabf0b308a3f14e8bc9650ba80",
+  "plaintext_bytes": 11100
+}

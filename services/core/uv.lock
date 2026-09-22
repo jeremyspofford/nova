@@ -413,6 +413,7 @@ dependencies = [
     { name = "httpx" },
     { name = "pypdf" },
     { name = "python-multipart" },
+    { name = "pyyaml" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -421,7 +422,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout" },
-    { name = "pyyaml" },
     { name = "ruff" },
 ]
 
@@ -434,6 +434,7 @@ requires-dist = [
     { name = "httpx" },
     { name = "pypdf" },
     { name = "python-multipart" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "uvicorn", extras = ["standard"] },
 ]
 
@@ -442,7 +443,6 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
-    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "ruff", specifier = "==0.15.21" },
 ]
 

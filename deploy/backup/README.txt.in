@@ -1,0 +1,42 @@
+@BUNDLE@
+
+This is a complete, ENCRYPTED backup of a Nova hub: its databases, its
+volumes, the files it needs to come up, and the secrets those were created
+with. It was written on @HOST@ at @CREATED_AT@ (UTC).
+
+Without the passphrase it is 64 bytes of header and noise. Nobody at Nova has
+a copy; if the operator's recorded copy is gone, so is this bundle's content.
+The passphrase that opens it has fingerprint @FINGERPRINT@ (that is a
+fingerprint, not a hint — it identifies which passphrase, and reveals none of
+it).
+
+TO OPEN IT, on a machine that has python3 or docker:
+
+    tar -xOf @BUNDLE@ restore.sh | sh -s -- @BUNDLE@ ./nova-restored
+
+That probes for a working AES-256-GCM decryptor, proves the one it picks
+against a known-answer test with your real passphrase before it reads a byte
+of the payload, and then extracts and verifies every member against the
+manifest sealed inside. If it can find no decryptor it says exactly what to
+install; it never proceeds on a maybe.
+
+If you have only docker, it will use one of: @NEEDS_IMAGES@
+
+RUNNING THE CARRIED SCRIPT IS RUNNING CODE FROM THIS BUNDLE. `restore.sh` and
+`nova_restore.py` travel here in cleartext and nothing inside this file can
+authenticate them — the only hashes that could are sealed in the payload they
+exist to open. They are byte-identical to their copies in the Nova repository,
+and the published sha256 of nova_restore.py is:
+
+    @READER_SHA256@
+
+Compare that against the digest published in deploy/README.md in the
+repository — out of band, not with a number that travelled in this file — or,
+better, restore from a checkout of the repository instead. That is the
+verified path; this script is the one that works when there is no checkout
+yet, which is the situation this whole bundle exists for.
+
+WHAT IS IN IT: run `nova_restore.py --verify-only` to list every member and
+check it, or open MANIFEST.json after extracting. The manifest records what
+this bundle does NOT carry, and why, for every excluded item — a restore that
+cannot say what it is missing invites you to assume it is missing nothing.

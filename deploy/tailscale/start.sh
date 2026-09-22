@@ -22,6 +22,11 @@
 # recreated web keeps its address, so nothing here goes stale.
 #
 # Sequence, each step checked:
+#   0. Refuse outright while /config/MOVED_TO is present. `./install backup
+#      --move` parks this machine and writes that marker; the data now lives
+#      on another host that comes up under THIS node's tailnet identity, and
+#      two tailscaled processes sharing one node key flap it. The refusal
+#      lives here, at the layer that would cause the conflict.
 #   1. containerboot in the background (it runs tailscaled, logs in with
 #      TS_AUTHKEY when the state on the volume is not already logged in —
 #      TS_AUTH_ONCE — and keeps the node up). SIGTERM/SIGINT are forwarded
@@ -60,6 +65,41 @@ POLL_INTERVAL=2
 STOP_GRACE=15
 
 log() { printf 'nova-tailscale: %s\n' "$*" >&2; }
+
+# ---- 0. a parked host does not re-join the tailnet ---------------------------
+#
+# `./install backup --move` carries Nova's whole state to another machine and
+# parks this one, writing deploy/tailscale/MOVED_TO (design-verdict §9.5).
+# That path, for a mechanical reason: deploy/tailscale is the DIRECTORY already
+# bind-mounted here read-only at /config, so the marker arrives with no compose
+# change and no single-file bind — a single-file mount resolves to a host inode
+# at create time and dies with exit 127 when the WSL mount is recycled.
+#
+# The destination comes up under THIS node's tailnet identity. Two tailscaled
+# processes sharing one node key flap it, and the address the owner reaches
+# Nova at goes with it — so a moved-away host must not re-join, no matter what
+# restarted it (a reboot, compose's restart policy, a stray `up -d`).
+#
+# Bound, stated honestly: a `docker run` of this image that does NOT mount
+# /config bypasses this. That is a smaller hole than an env var nobody sets,
+# and it is the only shape that can reach a file the sidecar already sees.
+MOVED_TO="$CONFIG_DIR/MOVED_TO"
+if [ -e "$MOVED_TO" ]; then
+  log "refusing to start: this host was parked by \`./install backup --move\`"
+  if body="$(cat "$MOVED_TO" 2>/dev/null)" && [ -n "$body" ]; then
+    printf '%s\n' "$body" | sed 's/^/  moved: /' >&2
+  else
+    log "  $MOVED_TO is present but could not be read — refusing anyway, because"
+    log "  a marker this container cannot read is not a marker it may ignore"
+  fi
+  log "  Nova's data was carried to another machine, and that machine joins the"
+  log "  tailnet under this node's identity. Two tailscaled processes on one node"
+  log "  key flap it, and the tailnet address stops answering for both."
+  log "  If THIS machine should serve again, run \`./install undo-move\` here first:"
+  log "  it prints the marker, says what it cannot check, and removes it only when"
+  log "  you type the confirmation."
+  exit 1
+fi
 
 TARGET="$(serve_target)" || {
   log "refusing to start: NOVA_WEB_ADDR is not set (deploy/docker-compose.yml passes it)"

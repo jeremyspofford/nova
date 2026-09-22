@@ -19,6 +19,14 @@ dependencies = [
     # extraction STATES rather than an error, because "this PDF is pictures"
     # is the answer in that case.
     "pypdf",
+    # S41: the backup's pack step parses the raw compose text with PyYAML
+    # inside THIS image (s41/rulings.md, 2026-09-21). PyYAML was already in
+    # the runtime closure — but only TRANSITIVELY, through `uvicorn[standard]`,
+    # while the line that looked like a declaration sat in the dev group and
+    # the image builds `uv sync --frozen --no-dev`. A load-bearing import that
+    # rests on another package's optional extra is one dependency bump away
+    # from disappearing, so it is stated here.
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -28,7 +36,9 @@ dev = [
     "ruff==0.15.21",
     "pytest",
     "pytest-asyncio",
-    "pyyaml>=6.0.3",
+    # pyyaml moved to [project].dependencies (S41) — it is what the pack step
+    # imports at runtime, not only what the tests import. A runtime dependency
+    # is installed for the dev sync too, so nothing here needs to repeat it.
     "pytest-timeout>=2.4.0",
 ]
 

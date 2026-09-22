@@ -1,0 +1,47 @@
+name: novaxprobe
+services:
+  alpha:
+    command:
+      - "true"
+    image: alpine:3.20
+    networks:
+      default: null
+    volumes:
+      - type: volume
+        source: vol_one
+        target: /one
+        volume: {}
+      - type: bind
+        source: /repo/bindsrc
+        target: /b
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: from git
+    x-nova-backup-anon:
+      /var/cache/thing:
+        disposition: exclude-ephemeral
+        reason: a cache; it regenerates on use.
+  beta:
+    command:
+      - "true"
+    image: alpine:3.20
+    networks:
+      default: null
+    volumes:
+      - type: volume
+        source: vol_two
+        target: /two
+        volume: {}
+networks:
+  default:
+    name: novaxprobe_default
+volumes:
+  vol_one:
+    name: novaxprobe_vol_one
+    x-nova-backup: include
+    x-nova-backup-reason: 'the notes: they matter'
+  vol_two:
+    name: novaxprobe_vol_two
+    x-nova-backup: exclude-ephemeral
+    x-nova-backup-reason: a cache declared only in the overlay.
+x-nova-top-level: kept-or-not

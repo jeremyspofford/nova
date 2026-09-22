@@ -61,15 +61,31 @@ without WSL, or a combination. Nova should set up the networking between machine
 10. **Transports.** Tailscale first, with Nova joining machines herself. Self-hosted
     **Headscale** and **plain LAN** follow, each with a seam built now. Plain LAN relaxes the
     "tailnet-only exposure" rail, but only for machine-to-machine links. The web UI is never on the LAN.
-11. **No Mac to test on.** Mac support is built and CI-tested, and stated as **unwalked**.
+11. **No Mac to test on — CLOSED, do not reopen.** Mac support is built and CI-tested, and stated as **unwalked**. A Mac exists on the owner's tailnet; it is his **work device**, so Nova is never installed on it (owner, 2026-09-21). Seeing that machine in a tailnet listing is not a reason to ask again.
 12. **Binaries ship unsigned for now.** Each card states the one-time "Run anyway"/"Open" step.
     Machines with Smart App Control on are stated "cannot". Signing stays a seam in CI.
 13. **Tailscale OAuth credential allowed now.** Login links ship first; the credential follows.
-    - It is stored like provider keys are today: write-only, never in her context or logs, excluded from backups.
+    - It is stored like provider keys are today: write-only, never in her context or logs.
+      **Corrected 2026-09-21** (`s41/rulings.md`): this bullet used to end "excluded from
+      backups". Backups **carry** it. S41 ships an encrypted bundle, which is the condition
+      the exclusion existed to work around, and coverage is schema-driven — so the table
+      travels the day S43a creates it.
     - Proposal A (secrets at rest) is widened later to cover core.
 14. **A Windows hub requires WSL for now.** `install.ps1` says so. Windows nodes and clients are unaffected.
 15. **Order.** Roadmap item 0 (the core suite wedge) first, then this lane (S40–S49). That puts
     this lane ahead of S26 and doing-things; doing-things rebases onto the new novad later.
+
+### Owner decisions (2026-09-21, for S41)
+
+16. **The mini PC's old platform-line `nova` stack is deleted, containers and volumes.** `install.sh`
+    refuses while it is there, names every container and volume it found, and only then offers a
+    removal bounded to exactly what it named. Deletion is irreversible, so the offer states what it
+    destroys and defaults to doing nothing.
+17. **S41 ships the encrypted bundle of ARCS arc 8**, not the plain tar its own bullets below still
+    describe: encrypted bundle, passphrase **resolver seam** (not the secrets store), the restore
+    script inside every bundle, and coverage **derived from the compose file** that REFUSES on an
+    unclassified volume. `BACKUP_EXCLUDE_DATA`, the hand-kept list, is not built. Arc 8 wins wherever
+    it contradicts the S41 section; the reasoning is in `s41/rulings.md`.
 
 ### Measured facts (2026-09-18)
 
@@ -408,7 +424,12 @@ subjects then carry the 409 as evidence.
   - the `join_pending` frame.
 - **Release channel:** a CI release job with `SHA256SUMS`.
 - **Revoke** in the D12 order.
-- **Backups** exclude `network_credentials`; the `network_credential_missing` check asks for it again after a restore.
+- **Backups carry `network_credentials`.** *Corrected 2026-09-21 (`s41/rulings.md`); this
+  line used to read "Backups exclude `network_credentials`".* S41's bundle is encrypted and
+  its coverage is derived from the schema, so the table is carried the day S43a creates it.
+  `network_credential_missing` is unchanged and still the fallback — it asks for the
+  credential when a restored hub has none (a bundle written before S43a, or a hub that
+  never had one).
 - **Eval** (suite 18): `keeps-the-tailnet-key-off-the-page`.
 - **Walk:**
   1. With the OAuth client: a tagged join with no click.

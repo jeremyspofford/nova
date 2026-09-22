@@ -1,0 +1,319 @@
+name: nova
+services:
+  core:
+    build:
+      context: /repo/services/core
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      CORE_GATEWAY_TOKEN: ""
+      CORE_MEMORY_TOKEN: ""
+      DATABASE_URL: postgresql://core:@postgres:5432/nova_core
+      GATEWAY_URL: http://gateway:8001
+      MEMORY_URL: http://memory:8002
+      SEARXNG_URL: http://searxng:8080
+      SERVICE_TOKEN: ""
+      WORKSPACE_ROOT: /data/workspace
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')
+      timeout: 3s
+      interval: 5s
+      retries: 10
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 8000
+        published: "8000"
+        protocol: tcp
+    restart: unless-stopped
+    stop_grace_period: 5m30s
+    volumes:
+      - type: volume
+        source: v4_workspace
+        target: /data/workspace
+        volume: {}
+  gateway:
+    build:
+      context: /repo/services/gateway
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      DATABASE_URL: postgresql://gateway:@postgres:5432/nova_gateway
+      OLLAMA_URL: http://ollama:11434
+      SERVICE_TOKEN: ""
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live')
+      timeout: 3s
+      interval: 5s
+      retries: 10
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 8001
+        published: "8001"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /repo/data
+        target: /data
+        read_only: true
+        bind: {}
+        x-nova-backup: exclude-derived
+        x-nova-backup-reason: hardware.json, rewritten by detect_hardware on every install (deploy/install.sh:808-863). The restored host's GPUs are not the source host's, so carrying this would describe the wrong machine.
+      - type: volume
+        source: v4_models
+        target: /models
+        volume: {}
+  memory:
+    build:
+      context: /repo/services/memory
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: true
+    environment:
+      DATABASE_URL: postgresql://memory:@postgres:5432/nova_memory
+      SERVICE_TOKEN: ""
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health/live')
+      timeout: 3s
+      interval: 5s
+      retries: 10
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 8002
+        published: "8002"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: v4_memdata
+        target: /data/memory
+        volume: {}
+  ollama:
+    profiles:
+      - inference
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - ollama list > /dev/null 2>&1 || exit 1
+      timeout: 10s
+      interval: 5s
+      retries: 12
+      start_period: 20s
+    image: ollama/ollama:0.33.1
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 11434
+        published: "11434"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: v4_ollama
+        target: /root/.ollama
+        volume: {}
+  postgres:
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: ""
+      POSTGRES_USER: postgres
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U postgres
+      timeout: 3s
+      interval: 5s
+      retries: 10
+    image: postgres:16
+    networks:
+      default: null
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: v4_pgdata
+        target: /var/lib/postgresql/data
+        volume: {}
+      - type: bind
+        source: /repo/deploy/postgres-init
+        target: /docker-entrypoint-initdb.d
+        read_only: true
+        bind: {}
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: 01-databases.sql, in git. A fresh v4_pgdata re-runs it from the checkout at restore time with the carried POSTGRES_PASSWORD, so carrying a copy would only offer a second, staler one.
+  searxng:
+    environment:
+      SEARXNG_SECRET: nova-searxng-dev-secret
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1:8080/healthz
+      timeout: 3s
+      interval: 5s
+      retries: 10
+      start_period: 15s
+    image: searxng/searxng:latest
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 8080
+        published: "8380"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /repo/searxng
+        target: /etc/searxng
+        read_only: true
+        bind: {}
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: settings.yml, in git. This bind is also what covers the image's own /etc/searxng volume declaration at run time.
+    x-nova-backup-anon:
+      /etc/searxng:
+        disposition: exclude-code
+        reason: the generated runtime config. The settings come from ../searxng in git, which the bind below mounts over this target.
+      /var/cache/searxng:
+        disposition: exclude-ephemeral
+        reason: a search result cache; it regenerates on use.
+  tailscale:
+    profiles:
+      - tailnet
+    command:
+      - sh
+      - /config/start.sh
+    environment:
+      NOVA_WEB_ADDR: 172.18.128.10
+      TS_AUTH_ONCE: "true"
+      TS_AUTHKEY: ""
+      TS_HOSTNAME: nova
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+    hostname: nova
+    healthcheck:
+      test:
+        - CMD
+        - sh
+        - /config/serve_check.sh
+      timeout: 10s
+      interval: 15s
+      retries: 4
+      start_period: 1m30s
+    image: tailscale/tailscale:v1.102.3
+    init: true
+    networks:
+      default:
+        ipv4_address: 172.18.128.20
+    restart: unless-stopped
+    volumes:
+      - type: volume
+        source: v4_tailscale
+        target: /var/lib/tailscale
+        volume: {}
+      - type: bind
+        source: /repo/deploy/tailscale
+        target: /config
+        read_only: true
+        bind: {}
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: start.sh and serve_check.sh, in git. The node's identity is on v4_tailscale, not here.
+  web:
+    build:
+      context: /repo/apps/web
+      dockerfile: Dockerfile
+    depends_on:
+      core:
+        condition: service_started
+        required: true
+    environment:
+      NOVA_PUBLIC_GATE_TOKEN: ""
+      NOVA_TAILSCALE_ADDR: 172.18.128.20
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -O
+        - /dev/null
+        - http://127.0.0.1/healthz
+      timeout: 3s
+      interval: 5s
+      retries: 10
+    networks:
+      default:
+        ipv4_address: 172.18.128.10
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 80
+        published: "3000"
+        protocol: tcp
+    restart: unless-stopped
+networks:
+  default:
+    name: nova_default
+    ipam:
+      config:
+        - subnet: 172.18.0.0/16
+          gateway: 172.18.0.1
+          ip_range: 172.18.0.0/17
+volumes:
+  v4_memdata:
+    name: nova_v4_memdata
+    x-nova-backup: include
+    x-nova-backup-reason: the notes (services/memory/app/store.py:1-18) — the state with no other copy anywhere. .embeddings/*.jsonl rides along; it is a cache and carrying it only saves a rebuild.
+  v4_models:
+    name: nova_v4_models
+    x-nova-backup: exclude-redownload
+    x-nova-backup-reason: gateway's /models. Its only reader in the whole service is os.statvfs for a free-space check (services/gateway/app/admin.py:59,332).
+  v4_ollama:
+    name: nova_v4_ollama
+    x-nova-backup: exclude-redownload
+    x-nova-backup-reason: 'local model weights, tens of GB, re-pulled. Stated cost: a restore on a disconnected machine has no local inference until the pulls finish.'
+  v4_pgdata:
+    name: nova_v4_pgdata
+    x-nova-backup: dump-pg
+    x-nova-backup-reason: a live PGDATA file copy is torn. Captured as pg_dump -Fc per database; a fresh volume initialises from deploy/postgres-init/01-databases.sql with the carried password.
+  v4_tailscale:
+    name: nova_v4_tailscale
+    x-nova-backup: move-only
+    x-nova-backup-reason: the tailnet node identity. Two live nodes sharing one identity flap, so it travels only on a move — which also leaves MOVED_TO behind.
+  v4_workspace:
+    name: nova_v4_workspace
+    x-nova-backup: include
+    x-nova-backup-reason: Nova's own scratch space; a file she wrote lives only here.

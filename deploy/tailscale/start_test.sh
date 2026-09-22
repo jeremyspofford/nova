@@ -312,6 +312,9 @@ chmod +x "$TMP/fakes/tailscale" "$TMP/fakes/containerboot" "$TMP/fakes/driver.sh
 
 # $1 = CASE; the rest are extra `docker run` args (-e FAKE_...=...).
 # CASE_BOUND=<s> in the environment overrides the wrapper's ready bound.
+# CASE_CONFIG=<dir> mounts a COPY of this directory at /config instead of the
+# real one — the only way to test a file the sidecar reacts to (MOVED_TO)
+# without writing that file into the checkout everyone else is working in.
 run_wrapper() {
   local name="$1"
   shift
@@ -319,7 +322,7 @@ run_wrapper() {
     -e CASE="$name" -e NOVA_WEB_ADDR="$FAKE_WEB_ADDR" -e NOVA_TAILSCALE_READY_TIMEOUT="${CASE_BOUND:-$BOUND}" \
     -e PATH=/fakes:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     "$@" \
-    -v "$TMP/fakes:/fakes:ro" -v "$SCRIPT_DIR:/config:ro" \
+    -v "$TMP/fakes:/fakes:ro" -v "${CASE_CONFIG:-$SCRIPT_DIR}:/config:ro" \
     --entrypoint sh "$IMAGE" /fakes/driver.sh 2>&1
 }
 
@@ -403,6 +406,59 @@ expect_le "serve hangs: within the serve bound (3s + slack)" "$(field "$OUT" ela
 expect_contains "serve hangs: names the bound" "$OUT" "tailscale serve did not return within 3s"
 expect_contains "serve hangs: says why and what to enable" "$OUT" "HTTPS Certificates enabled"
 expect_contains "serve hangs: containerboot was sent TERM" "$(field "$OUT" cb_signals)" "TERM"
+
+# ── 1e''. parked by `backup --move`: step 0 refuses, before anything runs ────
+# design-verdict §9.5. `./install backup --move` carries Nova's state to
+# another machine and writes deploy/tailscale/MOVED_TO. That destination comes
+# up under THIS node's tailnet identity, so a moved-away host that re-joins
+# flaps the node key and the address stops answering for both. The refusal
+# belongs at the layer that would cause the conflict — here.
+#
+# The marker is written into a COPY of the config directory: the real one is
+# the checkout, and a test that drops a file there would be a test that can
+# park the developer's own sidecar if it dies half way.
+MOVED_DIR="$TMP/config-moved"
+mkdir -p "$MOVED_DIR"
+cp "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/serve_check.sh" "$MOVED_DIR/"
+# Synthetic values only — this repo is public. 64 'a's stand in for the digest.
+cat > "$MOVED_DIR/MOVED_TO" <<'MARKER'
+moved_at=20260921T143012Z
+bundle=nova-backup-parked-host-20260921T143012Z.tar
+bundle_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+source_host=parked-host
+tailnet_dns_name=nova.example-tailnet.ts.net
+MARKER
+chmod 600 "$MOVED_DIR/MOVED_TO"
+# Set and cleared around the call rather than used as an assignment prefix:
+# whether `VAR=x somefunction` leaks after the call differs between bash 3.2
+# and bash 5, and a silently-leaked /config mount would change every case
+# below this one.
+CASE_CONFIG="$MOVED_DIR"
+OUT="$(run_wrapper moved -e FAKE_STATE=Running)"
+CASE_CONFIG=""
+expect_eq "MOVED_TO: refuses" "$(field "$OUT" rc)" 1
+expect_contains "MOVED_TO: names the verb that parked this host" "$OUT" "parked by"
+expect_contains "MOVED_TO: names --move" "$OUT" "backup --move"
+expect_contains "MOVED_TO: prints the marker verbatim" "$OUT" "source_host=parked-host"
+expect_contains "MOVED_TO: prints which bundle carried the data" "$OUT" "bundle=nova-backup-parked-host-20260921T143012Z.tar"
+expect_contains "MOVED_TO: states the flap it is preventing" "$OUT" "node key"
+expect_contains "MOVED_TO: names the way back" "$OUT" "./install undo-move"
+expect_eq "MOVED_TO: containerboot was never started" "$(field "$OUT" cb_signals)" ""
+expect_eq "MOVED_TO: tailscaled was never asked anything" "$(field "$OUT" status_calls)" ""
+expect_eq "MOVED_TO: serve was never applied" "$(field "$OUT" serve_applied)" ""
+expect_le "MOVED_TO: refuses at once, not after the ready bound" "$(field "$OUT" elapsed)" $((BOUND - 1))
+
+# The negative control, from the SAME copied directory with the marker gone:
+# without it the wrapper runs all the way through and applies the mapping, so
+# the case above is measuring the marker and not the copy.
+CONTROL_DIR="$TMP/config-moved-control"
+mkdir -p "$CONTROL_DIR"
+cp "$SCRIPT_DIR/start.sh" "$SCRIPT_DIR/serve_check.sh" "$CONTROL_DIR/"
+CASE_CONFIG="$CONTROL_DIR"
+OUT="$(run_wrapper stays-up -e FAKE_STATE=Running)"
+CASE_CONFIG=""
+expect_eq "MOVED_TO control: no marker ⇒ the mapping is applied" "$(field "$OUT" serve_applied)" "$FAKE_TARGET"
+expect_lacks "MOVED_TO control: no marker ⇒ says nothing about a move" "$OUT" "parked by"
 
 # ── 1f. no target configured ────────────────────────────────────────────────
 OUT="$(run_wrapper no-target -e NOVA_WEB_ADDR=)"

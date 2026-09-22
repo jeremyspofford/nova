@@ -1,0 +1,7 @@
+{
+  "databases": [
+    {"name": "nova_core", "owner": "core"},
+    {"name": "nova_gateway", "owner": "gateway"},
+    {"name": "nova_memory", "owner": "memory"}
+  ]
+}

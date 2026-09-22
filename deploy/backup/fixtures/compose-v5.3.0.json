@@ -1,0 +1,424 @@
+{
+  "name": "nova",
+  "networks": {
+    "default": {
+      "name": "nova_default",
+      "ipam": {
+        "config": [
+          {
+            "subnet": "172.18.0.0/16",
+            "gateway": "172.18.0.1",
+            "ip_range": "172.18.0.0/17"
+          }
+        ]
+      }
+    }
+  },
+  "services": {
+    "core": {
+      "build": {
+        "context": "/repo/services/core",
+        "dockerfile": "Dockerfile"
+      },
+      "command": null,
+      "depends_on": {
+        "postgres": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "CORE_GATEWAY_TOKEN": "",
+        "CORE_MEMORY_TOKEN": "",
+        "DATABASE_URL": "postgresql://core:@postgres:5432/nova_core",
+        "GATEWAY_URL": "http://gateway:8001",
+        "MEMORY_URL": "http://memory:8002",
+        "SEARXNG_URL": "http://searxng:8080",
+        "SERVICE_TOKEN": "",
+        "WORKSPACE_ROOT": "/data/workspace"
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live')"
+        ],
+        "timeout": "3s",
+        "interval": "5s",
+        "retries": 10
+      },
+      "networks": {
+        "default": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "host_ip": "127.0.0.1",
+          "target": 8000,
+          "published": "8000",
+          "protocol": "tcp"
+        }
+      ],
+      "restart": "unless-stopped",
+      "stop_grace_period": "5m30s",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "v4_workspace",
+          "target": "/data/workspace",
+          "volume": {}
+        }
+      ]
+    },
+    "gateway": {
+      "build": {
+        "context": "/repo/services/gateway",
+        "dockerfile": "Dockerfile"
+      },
+      "command": null,
+      "depends_on": {
+        "postgres": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "DATABASE_URL": "postgresql://gateway:@postgres:5432/nova_gateway",
+        "OLLAMA_URL": "http://ollama:11434",
+        "SERVICE_TOKEN": ""
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/live')"
+        ],
+        "timeout": "3s",
+        "interval": "5s",
+        "retries": 10
+      },
+      "networks": {
+        "default": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "host_ip": "127.0.0.1",
+          "target": 8001,
+          "published": "8001",
+          "protocol": "tcp"
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/repo/data",
+          "target": "/data",
+          "read_only": true,
+          "bind": {}
+        },
+        {
+          "type": "volume",
+          "source": "v4_models",
+          "target": "/models",
+          "volume": {}
+        }
+      ]
+    },
+    "memory": {
+      "build": {
+        "context": "/repo/services/memory",
+        "dockerfile": "Dockerfile"
+      },
+      "command": null,
+      "depends_on": {
+        "postgres": {
+          "condition": "service_healthy",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "DATABASE_URL": "postgresql://memory:@postgres:5432/nova_memory",
+        "SERVICE_TOKEN": ""
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health/live')"
+        ],
+        "timeout": "3s",
+        "interval": "5s",
+        "retries": 10
+      },
+      "networks": {
+        "default": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "host_ip": "127.0.0.1",
+          "target": 8002,
+          "published": "8002",
+          "protocol": "tcp"
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "v4_memdata",
+          "target": "/data/memory",
+          "volume": {}
+        }
+      ]
+    },
+    "ollama": {
+      "profiles": [
+        "inference"
+      ],
+      "command": null,
+      "entrypoint": null,
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "ollama list \u003e /dev/null 2\u003e\u00261 || exit 1"
+        ],
+        "timeout": "10s",
+        "interval": "5s",
+        "retries": 12,
+        "start_period": "20s"
+      },
+      "image": "ollama/ollama:0.33.1",
+      "networks": {
+        "default": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "host_ip": "127.0.0.1",
+          "target": 11434,
+          "published": "11434",
+          "protocol": "tcp"
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "v4_ollama",
+          "target": "/root/.ollama",
+          "volume": {}
+        }
+      ]
+    },
+    "postgres": {
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "POSTGRES_DB": "postgres",
+        "POSTGRES_PASSWORD": "",
+        "POSTGRES_USER": "postgres"
+      },
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ],
+        "timeout": "3s",
+        "interval": "5s",
+        "retries": 10
+      },
+      "image": "postgres:16",
+      "networks": {
+        "default": null
+      },
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "v4_pgdata",
+          "target": "/var/lib/postgresql/data",
+          "volume": {}
+        },
+        {
+          "type": "bind",
+          "source": "/repo/deploy/postgres-init",
+          "target": "/docker-entrypoint-initdb.d",
+          "read_only": true,
+          "bind": {}
+        }
+      ]
+    },
+    "searxng": {
+      "command": null,
+      "entrypoint": null,
+      "environment": {
+        "SEARXNG_SECRET": "nova-searxng-dev-secret"
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1:8080/healthz"
+        ],
+        "timeout": "3s",
+        "interval": "5s",
+        "retries": 10,
+        "start_period": "15s"
+      },
+      "image": "searxng/searxng:latest",
+      "networks": {
+        "default": null
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "host_ip": "127.0.0.1",
+          "target": 8080,
+          "published": "8380",
+          "protocol": "tcp"
+        }
+      ],
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "bind",
+          "source": "/repo/searxng",
+          "target": "/etc/searxng",
+          "read_only": true,
+          "bind": {}
+        }
+      ]
+    },
+    "tailscale": {
+      "profiles": [
+        "tailnet"
+      ],
+      "command": [
+        "sh",
+        "/config/start.sh"
+      ],
+      "entrypoint": null,
+      "environment": {
+        "NOVA_WEB_ADDR": "172.18.128.10",
+        "TS_AUTHKEY": "",
+        "TS_AUTH_ONCE": "true",
+        "TS_HOSTNAME": "nova",
+        "TS_STATE_DIR": "/var/lib/tailscale",
+        "TS_USERSPACE": "true"
+      },
+      "hostname": "nova",
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "sh",
+          "/config/serve_check.sh"
+        ],
+        "timeout": "10s",
+        "interval": "15s",
+        "retries": 4,
+        "start_period": "1m30s"
+      },
+      "image": "tailscale/tailscale:v1.102.3",
+      "init": true,
+      "networks": {
+        "default": {
+          "ipv4_address": "172.18.128.20"
+        }
+      },
+      "restart": "unless-stopped",
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "v4_tailscale",
+          "target": "/var/lib/tailscale",
+          "volume": {}
+        },
+        {
+          "type": "bind",
+          "source": "/repo/deploy/tailscale",
+          "target": "/config",
+          "read_only": true,
+          "bind": {}
+        }
+      ]
+    },
+    "web": {
+      "build": {
+        "context": "/repo/apps/web",
+        "dockerfile": "Dockerfile"
+      },
+      "command": null,
+      "depends_on": {
+        "core": {
+          "condition": "service_started",
+          "required": true
+        }
+      },
+      "entrypoint": null,
+      "environment": {
+        "NOVA_PUBLIC_GATE_TOKEN": "",
+        "NOVA_TAILSCALE_ADDR": "172.18.128.20"
+      },
+      "healthcheck": {
+        "test": [
+          "CMD",
+          "wget",
+          "-q",
+          "-O",
+          "/dev/null",
+          "http://127.0.0.1/healthz"
+        ],
+        "timeout": "3s",
+        "interval": "5s",
+        "retries": 10
+      },
+      "networks": {
+        "default": {
+          "ipv4_address": "172.18.128.10"
+        }
+      },
+      "ports": [
+        {
+          "mode": "ingress",
+          "host_ip": "127.0.0.1",
+          "target": 80,
+          "published": "3000",
+          "protocol": "tcp"
+        }
+      ],
+      "restart": "unless-stopped"
+    }
+  },
+  "volumes": {
+    "v4_memdata": {
+      "name": "nova_v4_memdata"
+    },
+    "v4_models": {
+      "name": "nova_v4_models"
+    },
+    "v4_ollama": {
+      "name": "nova_v4_ollama"
+    },
+    "v4_pgdata": {
+      "name": "nova_v4_pgdata"
+    },
+    "v4_tailscale": {
+      "name": "nova_v4_tailscale"
+    },
+    "v4_workspace": {
+      "name": "nova_v4_workspace"
+    }
+  }
+}

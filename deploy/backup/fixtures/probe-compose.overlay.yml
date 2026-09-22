@@ -1,0 +1,13 @@
+# The second file in a two-file COMPOSE_FILE, the shape the GPU overlay makes
+# real (deploy/docker-compose.gpu.yml): a service and a volume that exist ONLY
+# here, so a reader that looks at one file sees neither.
+services:
+  beta:
+    image: alpine:3.20
+    command: ["true"]
+    volumes:
+      - vol_two:/two
+volumes:
+  vol_two:
+    x-nova-backup: exclude-ephemeral
+    x-nova-backup-reason: a cache declared only in the overlay.

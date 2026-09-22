@@ -35,6 +35,14 @@ data/runtime/
 # Kept on disk, out of git, until something consumes it.
 backend/uv.lock
 
+# Same rule for the backup worker's: nothing BUILDS from it (novabundle.py
+# runs inside the already-built core image, which locks its own deps in
+# services/core/uv.lock). It exists only because running the suite with
+# `uv run --project deploy/backup pytest` writes one. Left untracked it would
+# be a file git calls neither tracked nor ignored, which the backup's own
+# host-path scan refuses R2_UNCLASSIFIED — so it is ignored, deliberately.
+deploy/backup/uv.lock
+
 # Coverage output. An artifact of running the suite, not a statement about it —
 # and it changes on every run, so tracking it makes every test run a diff.
 backend/.coverage
@@ -51,3 +59,14 @@ tests/e2e/.auth/
 # The isolated e2e stack: generated throwaway secrets for the nova-e2e
 # project (tests/e2e/isolated.sh). Never deploy/.env, never committed.
 tests/e2e/.isolated/
+
+# S41: the backup passphrase and the bundles it seals. A bundle carries every
+# secret this machine has, and the passphrase is the only thing that opens
+# one — neither is ever a tracked file.
+deploy/.backup-passphrase
+deploy/.backup-passphrase.lock/
+deploy/backups/
+
+# S41 move markers: local state of THIS machine, never committed.
+deploy/.moved
+deploy/tailscale/MOVED_TO

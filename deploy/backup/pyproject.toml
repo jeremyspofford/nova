@@ -1,0 +1,41 @@
+# Mirrors services/core/pyproject.toml so the backup worker lints and tests
+# the same way the services do: `uv run --project deploy/backup pytest`.
+#
+# No runtime dependencies are declared here on purpose. novabundle.py runs
+# inside the ALREADY-BUILT core image, which carries `cryptography`
+# (services/core/pyproject.toml:11) and PyYAML (through `uvicorn[standard]`);
+# adding a second dependency statement would be a second thing to keep in step
+# with that image.
+#
+# `pyyaml` and `cryptography` are in the DEV group below for one reason: the
+# suites run this file outside that image, so the interpreter they use needs
+# what the image has. tests/test_raw_compose.py is what checks the image still
+# carries PyYAML and services/core/pyproject.toml:11 declares `cryptography`
+# — these lines cannot, because they are about a different interpreter.
+[project]
+name = "nova-backup"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ruff==0.15.21",
+    "pytest",
+    "pyyaml>=6.0.3",
+    "cryptography>=46.0.5",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
