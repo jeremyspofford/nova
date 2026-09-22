@@ -170,3 +170,22 @@ nova-ai-platform included." Done, in this order, each step verifying itself:
   this is the other half of it, and S41 must not assume the writer and the
   verifier are the same user.
 - Disk on the mini PC after: **353 GB free of 460 GB**.
+
+## One more leftover, found and disabled (2026-09-22, after the move)
+
+A **named Cloudflare tunnel** ran on the mini PC as a host systemd service
+(`cloudflared.service`, not part of any compose project), configured since
+2026-09-05 to route a public hostname on the owner's own domain to
+`http://127.0.0.1:3001`. Nothing listens on `:3001` — v4 serves on `:3000` —
+and the hostname sits behind Cloudflare Access, which answers `302` at the
+edge whether or not the tunnel is up. So it exposed nothing, and it was a
+leftover of the old stacks.
+
+On the owner's instruction it was **disabled, not deleted**:
+`sudo systemctl disable --now cloudflared` — inactive, not enabled at boot, no
+process left; the unit file and the Cloudflare-side configuration are
+untouched. Reverse with `sudo systemctl enable --now cloudflared`.
+
+**Found because a process listing prints full command lines**, and this
+service's credential is in its `ExecStart`. Anything that lists processes on
+that host with `pgrep -fa` or `ps -ef` will print it; redact before logging.
