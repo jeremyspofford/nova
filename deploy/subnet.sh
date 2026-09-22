@@ -230,8 +230,30 @@ host_routes_in_use() {
 docker_network_ids() { docker network ls -q 2>/dev/null; }
 docker_network_row() {
   docker network inspect --format \
-    '{{.Name}}{{"\t"}}{{index .Labels "com.docker.compose.project.config_files"}}{{"\t"}}{{range .IPAM.Config}}{{.Subnet}} {{end}}' \
+    '{{.Name}}{{"\t"}}{{index .Labels "com.docker.compose.project"}}/{{index .Labels "com.docker.compose.network"}}{{"\t"}}{{range .IPAM.Config}}{{.Subnet}} {{end}}' \
     "$1" 2>/dev/null
+}
+
+# Is this network THIS project's own default network?
+#
+# Decided by the two labels compose writes on a network it creates:
+# `com.docker.compose.project` and `com.docker.compose.network`. This used to
+# ask for `com.docker.compose.project.config_files`, and compose NEVER writes
+# that label on a network — only on containers. Measured 2026-09-22 on both
+# hosts (compose v5.3.0 and v5.5.1): a real nova_default carries project,
+# network, config-hash and version, and no config_files. So the old test could
+# not pass against any network compose made; it passed only against a test
+# fixture that stamped a label the product never sees. The first real move hit
+# it: the restore created nova_default, and the next ./install refused its own
+# network as "someone else's".
+#
+# Two checkouts sharing one project name on one machine are not told apart
+# here — they are refused earlier, by the foreign-project check, which asks
+# the containers (which DO carry config_files). A network named nova_default
+# made by hand carries no compose labels at all, reads "/", and stays foreign.
+network_is_ours() {
+  [ -n "$2" ] || return 1
+  [ "$1" = "$2/default" ]
 }
 
 # "<name>\t<config_files label>\t<subnet> <subnet> …" per network.
@@ -257,10 +279,10 @@ project_network_subnet() {
     name="$(printf '%s' "$row" | cut -f1)"
     [ "$name" = "${project}_default" ] || continue
     labels="$(printf '%s' "$row" | cut -f2)"
-    if ! config_files_are_ours "$labels"; then
-      log "subnet: a network named ${project}_default exists but was created from"
-      log "        [${labels:-no compose config-files label}], not from this checkout."
-      log "        Its addressing is someone else's; treating it as in use."
+    if ! network_is_ours "$labels" "$project"; then
+      log "subnet: a network named ${project}_default exists but its compose labels"
+      log "        read [${labels}], not [${project}/default] — it was not made by compose"
+      log "        for this project. Its addressing is someone else's; treating it as in use."
       continue
     fi
     subs="$(printf '%s' "$row" | cut -f3-)"
@@ -286,7 +308,7 @@ docker_subnets_in_use() {
     name="$(printf '%s' "$row" | cut -f1)"
     labels="$(printf '%s' "$row" | cut -f2)"
     subs="$(printf '%s' "$row" | cut -f3-)"
-    if [ -n "$project" ] && [ "$name" = "${project}_default" ] && config_files_are_ours "$labels"; then
+    if [ -n "$project" ] && [ "$name" = "${project}_default" ] && network_is_ours "$labels" "$project"; then
       continue
     fi
     for s in $subs; do

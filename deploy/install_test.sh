@@ -1372,7 +1372,10 @@ expect_tn_lacks "refuse_if_moved: no marker ⇒ says nothing about a move" "$MV_
 # `netstat` exist, and what each prints.
 #
 # Fixture shape: SB_NETWORKS is one network per line,
-#   <name>;<com.docker.compose.project.config_files>;<space-separated subnets>
+#   <name>;<com.docker.compose.project>/<com.docker.compose.network>;<space-separated subnets>
+# That is the shape docker_network_row really emits. It used to be the network's
+# config_files label, which compose never writes on a network — so every case
+# here tested a network the real world cannot produce.
 #   $1 SB_NETWORKS   $2 SB_IP_ROUTES (printf %b)   $3 initial .env body
 #   $4 NOVA_SUBNET in the environment ("" = unset)
 #   $5 "1" = `ip` exists     $6 "1" = `netstat` exists, with $7 its output
@@ -1423,7 +1426,7 @@ run_sb() {
   )
 }
 
-SB_OURS="$SCRIPT_DIR/docker-compose.yml"
+SB_OURS="nova/default"
 # The Dell's own shape: docker0 plus the project network.
 SB_IP_FREE='172.17.0.0/16 dev docker0 proto kernel scope link src 172.17.0.1\ndefault via 192.168.0.1 dev eth0 proto dhcp\n192.168.0.0/24 dev eth0 proto kernel scope link src 192.168.0.9\n'
 
@@ -1442,8 +1445,10 @@ expect_tn "subnet: adopt writes NOVA_TAILSCALE_ADDR" "$SB_ADOPT" 0 2 "NOVA_TAILS
 # it by NAME would take addressing someone else chose — and the compose
 # comment at docker-compose.yml:374-386 says the fixed address IS web's trust
 # boundary. It must be treated as in use, not as ours.
-SB_FOREIGN="$(run_subnet "nova_default;/somewhere/else/docker-compose.yml;172.18.0.0/16" "$SB_IP_FREE")"
-expect_tn "subnet: a nova_default labelled for another checkout is NOT adopted" "$SB_FOREIGN" 0 2 "NOVA_SUBNET=172.19.0.0/16;"
+# A nova_default made BY HAND (`docker network create nova_default`) carries no
+# compose labels at all, so it reads "/" — not ours, whatever it is called.
+SB_FOREIGN="$(run_subnet "nova_default;/;172.18.0.0/16" "$SB_IP_FREE")"
+expect_tn "subnet: a nova_default compose did not make for this project is NOT adopted" "$SB_FOREIGN" 0 2 "NOVA_SUBNET=172.19.0.0/16;"
 expect_tn_lacks "subnet: the foreign network is not called adopted" "$SB_FOREIGN" 3 "adopted"
 expect_tn "subnet: the foreign network counts as in use instead" "$SB_FOREIGN" 0 3 "is taken by 172.18.0.0/16 network nova_default"
 
