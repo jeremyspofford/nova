@@ -468,9 +468,19 @@ one that should serve after all — is `./install undo-move`. It prints the
 marker, says either what it found on the tailnet or that it cannot check from
 here (the sidecar is stopped, so there is no tailscaled to ask), warns that
 bringing this node up while the other is online will flap the node key, and
-removes both markers only after you type `undo`. It starts nothing itself.
-Doing it by hand is removing `deploy/.moved` and `deploy/tailscale/MOVED_TO`;
-the verb exists so you are told what you are undoing first.
+acts only after you type `undo`.
+
+It then **brings this machine back**: `MOVED_TO` is removed first, because the
+sidecar refuses to start while it exists; the project is started; **every
+service is read back** rather than trusting that `up` returned 0; and
+`deploy/.moved` is removed only once that has passed. A run that cannot finish
+names the half-done state it is leaving and exits 4 — it never reports a
+recovery it did not verify.
+
+Doing it by hand is removing `deploy/tailscale/MOVED_TO`, then
+`deploy/.moved`, then `./install` — in that order. The verb exists so you are
+told what you are undoing first, and so the "did it actually come back" check
+is not left to you at the moment you are least able to do it.
 
 ## Regenerating the backup fixtures
 
