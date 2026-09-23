@@ -500,6 +500,15 @@ Rollback: `undo-move`, then bring the Dell stack back up.
 
 ### S46: wake
 
+> **Reframed 2026-09-23 — read [`s46/design-basis.md`](s46/design-basis.md) first.**
+> The owner's discussion after the move added: machines as Kubernetes-style
+> nodes reconciled *on demand*; a **wake policy setting** offering both *wait*
+> and *answer now* (an interim model — cloud or hub-local — answers while the
+> target wakes); a **configurable hold**, default 15 minutes; and a spike on
+> multi-machine setup. It also records that the Dell is today a **provider row,
+> not an engine**, which this section's turn flow assumes it is. Most of the
+> mechanics below survive; the design basis says which do not.
+
 **Core migration `038_wake`:**
 - `machine_overrides(device_id, mac_override[1..4], relay_override)`;
 - `wake_attempts`, with outcomes `ready|ready_cpu|late|no_answer|not_asleep|not_waited|stopped|interrupted`. A row is written only after the relay's signed "sent".
