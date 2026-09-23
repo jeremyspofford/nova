@@ -163,6 +163,7 @@ make either policy safe.
 | How long Ollama keeps a model loaded after its last use | **5 minutes** (its default) |
 | Cloud fallback, first token | **9.3 s**, about **$0.0015** a turn |
 | After a real Dell reboot | only its ollama came back; GPU published on the right port; the parked Nova stayed parked |
+| Whether the Dell answers **ping** from the hub while fully awake (2026-09-23) | **No: 100% loss.** Its firewall drops ICMP on the Wi-Fi network. ARP does answer, but a sleeping Wi-Fi card can answer ARP too. So "the machine answered" must be read over the tailnet (the node answering `tailscale ping`, then the model port accepting a connection), never from ping or ARP. |
 
 **Not measured, and it gates everything: Wake-on-LAN over Wi-Fi from sleep
 (P0-1).** A lot of hardware cannot do it reliably. If this Dell cannot, then
