@@ -5983,6 +5983,13 @@ In `guards.py`, add as the last entry of `_CAPABILITY_TOOLS`:
 Run: `uv run pytest -q tests/test_capability_guard.py tests/test_guard_regex_timing.py`
 Expected: PASS. The timing sweep finds the new pattern by itself and holds it to 50 ms; there is no list to update.
 
+**The N150 edge.** The mini PC is the hub now, and it is slower than the Dell. On 2026-09-25 the S47 session measured `main`'s own patterns at the budget there. `_SUBJECT_KEY_LINE` against a string of spaces measured 50.3 ms in a full run, and in isolation it passed once and failed twice; three S40b patterns were also near the line.
+
+So:
+- **This task's pattern must pass with margin.** Print its time with `-k` and `-s` if needed.
+- **A timing failure on a pattern S42a did not touch is `main`'s.** Record it in the carries with the measured time and the pattern name.
+- **Never raise the budget** (memory: guard-regex-timing-sweep; "fix the regex, never the budget"). Fixing `main`'s patterns is not S42a's scope unless the owner asks.
+
 - [ ] **Step 5: Commit**
 
 ```bash
@@ -6745,6 +6752,8 @@ PW=$(docker inspect nova-scratch-pg --format '{{range .Config.Env}}{{println .}}
 ```
 
 Expected: all green, with the core count at Task 0's plus the new tests. Write the counts into the close-out's "Gates" section.
+
+The one known exception is `test_guard_regex_timing` failing on a pattern S42a did not touch, which is the N150 edge described in Task 16. Record it as a carry and do not raise the budget. Compare it against Task 0's baseline run: if Task 0 already showed it, it is not S42a's.
 
 - [ ] **Step 2: Adversarial review of the whole branch**
 
