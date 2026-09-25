@@ -41,6 +41,7 @@ Every task's requirements include these. Values are copied from the spec.
 - **Core migration is `036_agent_facts`.** 037 belongs to S46a.
 - **S42a adds no tool.** The registry stays at 41 (r2-integration:224).
 - **Eval numbering:** +1 case and +1 `suite_version`. If S42a lands first that is suite 16, corpus 27. If S47 (`slice/s47`, which claims 16/29) lands first, S42a renumbers once at rebase to 17/30. The rule: "whichever lands second renumbers once".
+  - S26 (the quality corpus, specced by the nova-f6 session on `slice/s26`) also changes the eval harness. S42a adds a `devices` field to `Case`, and S26 will reshape cases. The same rule holds: rebase onto whatever landed first, and move the numbers once.
 - **The repo is public.** No real username, MAC, GPU UUID, tailnet IP or tailnet name goes in code, fixtures or docs.
 - **Git:** work on branch `slice/s42a` in `.worktrees/s42a`. Always use `git -C <path>`. Stage by path, never `git add -A`. Check `git show --stat HEAD` after every commit.
 - **Formatting:** `ruff format` only the files you edited; v4 trees are not format-clean.
@@ -129,7 +130,17 @@ These are the failure modes the spec implies but no task's own tests would other
 
 ## Task 0: Baseline (prerequisite; no commit)
 
-The worktree `.worktrees/s42a` on `slice/s42a` already exists, branched from `origin/main` `ea6d3450`. `novad` is green (`go test ./...` and `go test -race ./...`, 2026-09-25).
+The worktree `.worktrees/s42a` on `slice/s42a` already exists, branched from `origin/main` `ea6d3450`. `novad` is green (`go test ./...` and `go test -race ./...`, 2026-09-25). `main` has moved since (PR #75, docs only), so rebase first.
+
+- [ ] **Step 0: Rebase onto today's `main`**
+
+```bash
+git -C /home/jeremy/workspace/nova fetch -q origin
+git -C /home/jeremy/workspace/nova/.worktrees/s42a rebase origin/main
+git -C /home/jeremy/workspace/nova/.worktrees/s42a log --oneline -3
+```
+
+Expected: the plan commits sit on top of `origin/main`. A conflict in a plan file means someone else edited `docs/plans/rebuild/s42a/`: read their change before resolving it.
 
 - [ ] **Step 1: Core, gateway and memory suites on your own scratch databases**
 
