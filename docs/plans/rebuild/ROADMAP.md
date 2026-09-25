@@ -239,32 +239,53 @@ it, build it, or decide not to. **When he says something is optional, add it
 here** with the date and the open question, and leave it alone until then
 unless he asks.
 
-### Jev and Kev (added 2026-09-25)
+### Jev and Kev (added 2026-09-25, re-checked the same day)
 
 - **What they are.** Jev is TypeSafe AI's hosted "decision model", launched
-  2026-09-15. Instead of text, it returns typed answers with probabilities.
-  Kev ([jaredpalmer/kev](https://github.com/jaredpalmer/kev)) is an
-  open-weight model that uses the same API.
-- **His questions.** Could either of them:
-  - cut hallucinations;
-  - check her answers, or replace or back up the guards;
-  - make her faster or cheaper;
-  - run locally?
-- **What's written.** The Jev section of [`ARCS.md`](ARCS.md) (2026-09-18).
-  A research pass on 2026-09-25 disagreed with parts of it, and **the owner
-  doubts that pass**. Its claims are unconfirmed, so check each one:
-  - Jev can't write text, so it can't replace her model.
-  - ARCS.md says Jev may only add to a mechanical control, so it can't replace
-    the guards.
-  - There is little speed or money to gain, because Nova makes almost no model
-    calls to decide things.
-  - Reading option probabilities from the `qwen3.8:27b` she already runs scored
-    level with Jev on JevBench.
-  - Kev doesn't fit on the 3090 next to that 27B.
-- **Start from primary sources.** The whole field was ten days old at the time:
-  [TypeSafe docs](https://docs.typesafe.ai/llms.txt),
+  2026-09-15. Instead of text, it returns typed answers with probabilities
+  (yes/no, pick one, a score on a scale). It costs $0.042 per million input
+  tokens, output free, and independent tests measured 200–300 ms a call. Kev
+  ([jaredpalmer/kev](https://github.com/jaredpalmer/kev)) is an Apache-2.0
+  open-weights look-alike, not TypeSafe's, that answers the same API.
+- **His questions, answered from primary sources on the second pass:**
+  - *Cut hallucinations?* Not in her replies, because it writes nothing. It
+    can catch some, such as a distilled fact whose cited message doesn't say
+    it. Out of distribution it is overconfident (right 44.7% of the time while
+    stating 0.74), so it can never be the only check.
+  - *Check her answers, or replace or back up the guards?* Back up, yes, as a
+    detector that can only add findings. Replace, no: TypeSafe's own docs say
+    the text being judged can steer it.
+  - *Make her faster or cheaper?* No. Only three v4 decisions use a model, two
+    of them off by default; everything else is rules. Jev adds calls.
+  - *Run locally?* Jev, no. Kev, yes: Kev-4B needs 9–14 GB in bf16, so it fits
+    beside the 8B on the 3090 but not beside the 27B. Or read option-letter
+    probabilities from her own model through Ollama's native API (untested on
+    the pinned 0.33.1).
+- **The first pass's five claims all hold**, two with a correction:
+  1. It can't write text, so it can't replace her model — confirmed.
+  2. It can't replace the guards — confirmed, but it can add to them.
+  3. Little speed or money to gain — confirmed; the value is in new decisions.
+  4. Her 27B's option probabilities are level with Jev on JevBench — right on
+     accuracy (a calibrated Qwen3.8-27B scores 51.5 against Jev's 53.1 for
+     intelligence), wrong on overall rank (26.9 against 63.3).
+  5. Kev doesn't fit beside the 27B on the 3090 — true for the 4B, 9B and 27B;
+     the 0.8B fits but is much weaker.
+- **What's written.** The Jev section of [`ARCS.md`](ARCS.md), re-checked and
+  corrected 2026-09-25: the fits, what is ruled out, Kev, the data terms.
+- **If he picks it up:** one decision interface in core that speaks the
+  `/v1/systemone` shape, a local backend as default and Jev as an
+  off-by-default switch. First experiment: a per-turn tool hint for the 8B,
+  measured through the eval runner. Second: check distilled facts against the
+  messages they cite.
+- **Primary sources:** [TypeSafe docs](https://docs.typesafe.ai/llms.txt),
+  [jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13),
+  [customer agreement](https://typesafe.ai/legal/mca),
   [Kev](https://github.com/jaredpalmer/kev),
-  [JevBench](https://github.com/fstandhartinger/jevbench).
+  [JevBench v1.4.2](https://github.com/fstandhartinger/jevbench/blob/main/results/v1.4.2/jevbench-v1.4.2-results.json),
+  [Archestra](https://archestra.ai/blog/we-tested-jev-on-100-real-agent-calls),
+  [Opper](https://opper.ai/blog/jev-vs-kev-open-decision-model),
+  [nibzard](https://github.com/nibzard/decision-model-benchmark),
+  [scienthoon](https://github.com/scienthoon/jev-ood-calibration).
 
 ---
 
