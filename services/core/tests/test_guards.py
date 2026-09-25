@@ -1052,16 +1052,30 @@ OFFER_MUST_FIRE = [
         "create_timer",
     ),
     (
-        # I3 (review fix round 1): _SETUP_QR_OFFER now requires "setup" or
-        # "pairing", or "putting Nova/you on a phone or tablet" — both sides
-        # qualify via "setup QR code". ("show me a QR code so I CAN put you
-        # on my phone" would instead qualify only through the "put ... on
-        # phone" alternative, and "I can" right before it reads as the
-        # user's own self-report, not a request — _USER_SELF_REPORT — so the
-        # instruction is worded to qualify earlier, through "setup".)
+        # B (review fix round 2): the brief's row, restored verbatim on both
+        # sides — spec §8's own example wins over round 1's narrowing. The
+        # reply is broad (_SETUP_QR_OFFER: any offer to show/make/send/give/
+        # generate/display a QR code or a setup/pairing card); the
+        # instruction qualifies through the ANCHORED "put you on my phone"
+        # (_SETUP_QR_INSTRUCTS, read only by _instructed_classes' special
+        # case) — "I can" right before it is the user's own self-report to
+        # _USER_SELF_REPORT, but the match itself starts at "put", not "I",
+        # so `before` never reaches the self-report text.
         "s47_setup_qr",
-        "show me a setup QR code so I can put you on my phone",
-        "Want me to show you a setup QR code for your phone?",
+        "show me a QR code so I can put you on my phone",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_setup_qr_qualified_instruction",
+        "show me a setup QR code for my phone",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_put_nova_on_my_phone",
+        "put Nova on my phone",
+        "Want me to show you a setup QR code?",
         "show_setup_qr",
     ),
 ]
@@ -1261,6 +1275,33 @@ OFFER_MUST_NOT_FIRE = [
         "s47_wifi_qr_is_not_setup_qr",
         "make me a QR code for my wifi password",
         "Want me to show you a QR code?",
+    ),
+    # B (review fix round 2): "put <anything else> on <device>" is not Nova
+    # herself, and a QR code with no device context at all is not hers either.
+    (
+        "s47_put_someone_elses_calendar",
+        "can you put my calendar on my phone?",
+        "Want me to show you a QR code for your phone?",
+    ),
+    (
+        "s47_put_the_shopping_list",
+        "put the shopping list on my phone",
+        "Want me to show you a QR code for your phone?",
+    ),
+    (
+        "s47_put_the_playlist",
+        "put the playlist on my tablet please",
+        "Want me to show you a QR code for your phone?",
+    ),
+    (
+        "s47_link_not_qr",
+        "send me the link, not a QR code",
+        "Want me to show you a QR code for your phone?",
+    ),
+    (
+        "s47_qr_for_wifi_reply_form",
+        "make a QR code for my wifi",
+        "Want me to show you a QR code for your phone?",
     ),
 ]
 

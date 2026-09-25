@@ -2303,16 +2303,46 @@ _SET_REMINDER = _ActionClass(
 # the offer shape below reads the full class table.
 _DEFERRAL_TOOLS: tuple[_ActionClass, ...] = (_WEB_SEARCH, _FETCH_URL, _SET_REMINDER)
 # S47: "want me to show you a QR code?" after he asked for one — an offer of
-# what show_setup_qr does. I3 (review fix round 1): narrowed to require
-# "setup"/"pairing" qualifying the QR code/card, OR "putting Nova/you on a
-# phone or tablet" — "make me a QR code for my wifi password" is a QR code
-# for something else entirely and must not read as instructing this tool.
-# Both alternatives are bounded ({0,40}/{0,20}/{0,10}) so the sweep's
-# 1,500-character inputs stay linear.
+# what show_setup_qr does. B (review fix round 2): the two sides read
+# DIFFERENT bars — the controller ruled spec §8's own example wins over
+# round 1's narrowing, which had narrowed BOTH sides and so missed the
+# brief's own pinned reply.
+#   - the REPLY/OFFER side (`_SETUP_QR_OFFER`, this class's `pattern`, read
+#     by _restated_offer) is BROAD again: any offer to show/make/send/give/
+#     generate/display a QR code, or a setup/pairing card — "Want me to show
+#     you a QR code for your phone?" must fire on nothing more than that.
+#   - the INSTRUCTION side (`_SETUP_QR_INSTRUCTS`, read INSTEAD of `pattern`
+#     by _instructed_classes for this one class, mirroring _CHECK_DEVICE's
+#     special case) stays NARROW, three ways: (1) a setup/pairing QR code or
+#     card, unconditionally; (2) a bare "QR code" — never on its own — ONLY
+#     when the SAME clause also names putting Nova/you/yourself on a device,
+#     checked with a bounded LOOKAHEAD so the match itself is just the "QR
+#     code" mention (early in the sentence, e.g. right after "show me a"),
+#     never the later "put" clause — that is what keeps the brief's exact
+#     row ("show me a QR code so I can put you on my phone") clear of
+#     _USER_SELF_REPORT, which reads the text BEFORE a match: matching at
+#     "put" would put "I can" in `before` and get cut as her own report,
+#     matching at "QR code" does not; (3) "put (you|nova|yourself) on
+#     <device>" anchored and standalone (no QR mention needed at all, for
+#     "put Nova on my phone") — never "put <anything else> on <device>"
+#     ("put my calendar/the shopping list/the playlist on my phone" names an
+#     object that is not Nova herself, and "send me the link, not a QR code"
+#     has no "put" phrase at all, so neither (2) nor (3) reaches it).
+# Both patterns are bounded so the sweep's 1,500-character inputs stay linear.
 _SETUP_QR_OFFER = re.compile(
-    r"\b(?:show|give|make|generate|send|display|get)\b[^.?!]{0,40}?"
-    r"(?:setup|pairing)\s*(?:qr(?:\s*codes?)?|cards?)\b"
-    r"|\bput(?:ting)?\b[^.?!]{0,20}?\bon\b[^.?!]{0,10}?\b(?:phones?|tablets?)\b",
+    r"\b(?:show|make|send|give|generate|display)\b[^.?!]{0,40}?"
+    r"(?:qr(?:\s*codes?)?|(?:setup|pairing)\s+cards?)\b",
+    re.I,
+)
+_PUT_ON_A_DEVICE = (
+    r"\bput(?:ting)?\s+(?:you|nova|yourself)\s+on\s+"
+    r"(?:a\s+|an\s+|my\s+|your\s+|another\s+)?"
+    r"(?:phones?|tablets?|iphones?|ipads?|android|laptops?|computers?|devices?|machines?)\b"
+)
+_SETUP_QR_INSTRUCTS = re.compile(
+    r"(?:setup|pairing)\s+(?:qr\s*codes?|cards?)\b"
+    rf"|\bqr\s*codes?\b(?=[^.?!]{{0,60}}?{_PUT_ON_A_DEVICE})"
+    rf"|{_PUT_ON_A_DEVICE}",
     re.I,
 )
 _SHOW_SETUP_QR = _ActionClass(_SETUP_QR_OFFER, ("show_setup_qr",), "show that QR code")
@@ -2555,7 +2585,12 @@ def _instructed_classes(user_message: str, registered: frozenset[str]) -> tuple[
                 continue
             if cls is _CHECK_DEVICE and not is_question and not _REQUEST_FRAME.search(clause):
                 continue  # "my disk usage has been high lately" states, asks nothing
-            for m in cls.pattern.finditer(clause):
+            # B (round 2): an INSTRUCTION reads the narrow _SETUP_QR_INSTRUCTS,
+            # never cls.pattern (the broad offer form) — "send me the link,
+            # not a QR code" would otherwise instruct through its own bounded
+            # bridge, with "not" inside the match rather than before it.
+            search_pattern = _SETUP_QR_INSTRUCTS if cls is _SHOW_SETUP_QR else cls.pattern
+            for m in search_pattern.finditer(clause):
                 before = clause[: m.start()]
                 if _USER_NEGATION.search(before) or _USER_SELF_REPORT.search(before):
                     continue
@@ -6004,10 +6039,11 @@ _CODE_WORD = re.compile(
     r"|\bnovad\b|\bone-time\s+code\b|\bsetup\s+code\b",
     re.I,
 )
-# I4 (review fix round 1): a token inside an /add# URL fragment is pairing
-# context by construction, even when no code-word sits in the same clause —
-# the fragment IS where the QR flow puts the code (spec §3).
-_ADD_FRAGMENT = re.compile(r"/add#", re.I)
+# I4 (review fix round 1) + C (round 2): a token inside an /add# URL
+# fragment OR an /add?query is pairing context by construction, even when no
+# code-word sits in the same clause — both are where the QR flow puts the
+# code (spec §3; /add?code=… is the query-string form of the same link).
+_ADD_QUERY_OR_FRAGMENT = re.compile(r"/add[#?]", re.I)
 CODE_ON_THE_CARD = "the code on the card"
 CODE_CLAIM_CORRECTION = (
     "Correction: I never see pairing codes — a code reaches only the card on your screen, "
@@ -6026,18 +6062,19 @@ def code_claim_check(reply_text: str, user_message: str = "") -> RewriteClaim | 
     a code-shaped token she presents as a code is invented by construction.
     Presented means: eight characters of the pairing alphabet with at least one
     digit and one letter, in a clause with PAIRING context (review fix round 1,
-    I4): pairing, pair, enroll/enrol*, --code, novad, "one-time code", "setup
-    code", or a token inside an /add# URL fragment. A bare "code" is not
-    enough on its own — "the verification code in that email is 48KX2M9P" and
-    "error code E4B7-9C2D came from the updater" are honest, code-shaped or
-    not. A token the owner's own message carries is his and is never touched.
-    Why it matters: five bad codes lock every enroll for 15 minutes."""
+    I4; extended round 2, C): pairing, pair, enroll/enrol*, --code, novad,
+    "one-time code", "setup code", or a token inside an /add# fragment or an
+    /add?query. A bare "code" is not enough on its own — "the verification
+    code in that email is 48KX2M9P" and "error code E4B7-9C2D came from the
+    updater" are honest, code-shaped or not. A token the owner's own message
+    carries is his and is never touched. Why it matters: five bad codes lock
+    every enroll for 15 minutes."""
     if not reply_text:
         return None
     theirs = {_code_key(m.group(1), m.group(2)) for m in _CODE_TOKEN.finditer(user_message or "")}
     invented: set[str] = set()
     for clause, _is_question in _clauses(reply_text):
-        if _CODE_WORD.search(clause) is None and _ADD_FRAGMENT.search(clause) is None:
+        if _CODE_WORD.search(clause) is None and _ADD_QUERY_OR_FRAGMENT.search(clause) is None:
             continue
         for m in _CODE_TOKEN.finditer(clause):
             key = _code_key(m.group(1), m.group(2))
@@ -6074,17 +6111,34 @@ _OTHER_DEVICE = re.compile(
     r"|another\s+(?:device|computer|machine))\b",
     re.I,
 )
-# Rule 2's "presented as Nova's own address" test (ruling I1): the word
-# "nova", a verb governing "me" (reach/open/find/use/access/scan me), or "my
-# address/url/link/web app". Without this, "Open Grafana at
-# http://192.168.1.5:3000" and "Your router's address is http://192.168.1.1"
-# read as claims about NOVA's address — they are claims about some OTHER
-# thing that happens to live on the LAN, the false positive the review found.
-_PRESENTED_AS_NOVA = re.compile(
-    r"\bnova\b"
-    r"|\b(?:reach|open|find|use|access|scan)\s+me\b"
-    r"|\bmy\s+(?:address|url|link|web\s*app)\b",
+# Rule 2's "Nova GOVERNS the url" test (ruling I1, amended round 2): a bare
+# "nova" ANYWHERE in the clause was too wide — "Add http://192.168.0.50:8080
+# as a provider in Nova's settings" has "Nova" nowhere near the url and is
+# some OTHER service's honest LAN address. The url must be the object or
+# complement of a Nova-referring phrase, checked against the text
+# IMMEDIATELY BEFORE the url (the caller passes it) and anchored to end
+# there ($): "Nova is/lives/runs at|on", "open|reach|find|use|access|scan
+# nova|me [on your <device>] at|on|via", or "nova's|my address|url|link|web
+# app is|:". A trailing "Nova's settings" (after the url, or governing a
+# DIFFERENT url) never enters `before` and so never matches.
+_NOVA_GOVERNS_URL = re.compile(
+    r"\bnova\s+(?:is|lives|runs)\s+(?:at|on)\s*$"
+    r"|\b(?:open|reach|find|use|access|scan)\s+(?:nova|me)\b"
+    r"(?:\s+on\s+your\s+[a-z]+)?\s+(?:at|on|via)\s*$"
+    r"|\b(?:nova['’]s|my)\s+(?:address|url|link|web\s*app)\s+(?:is\s+|:\s*)$",
     re.I,
+)
+# Local to the address rules (ruling I1 amended, round 2) — the shared
+# _has_negator (every other guard reads it) is never widened. Same shape as
+# _COMPLETION_NEGATION (the timer-completion guard, ~line 2643), which
+# already covers "cannot"/"unable"/curly apostrophes/"won't" (the generic
+# n['’]t\b matches inside "won't" with no "won" prefix needed) — a LOCAL
+# copy so a future change to the timer guard's negation can never silently
+# change what an address claim reads as denied. Checked over the WHOLE
+# clause (round 1's scope stays): "http://…:3000 won't work on your phone"
+# has the negation trailing the url, not preceding it, and must still count.
+_ADDRESS_NEGATION = re.compile(
+    r"\bno\b|\bnot\b|\bnever\b|n['’]t\b|\bwithout\b|\bcan(?:not|['’]t)\b|\bunable\b", re.I
 )
 NO_ADDRESS = "(no address another device can reach)"
 NO_APP = "(there is no Nova app yet)"
@@ -6118,16 +6172,22 @@ def _empty_or_setup_path(path: str) -> bool:
     return path in ("", "/") or _SETUP_PAGE.match(path) is not None
 
 
-def _strip_fragment(url: str) -> str:
-    return url.split("#", 1)[0]
+def _strip_query_and_fragment(url: str) -> str:
+    return url.split("?", 1)[0].split("#", 1)[0]
 
 
-def _wrong_address(url: str, clause: str, origin: str | None) -> tuple[str, str] | None:
+def _wrong_address(
+    url: str, clause: str, before: str, origin: str | None
+) -> tuple[str, str] | None:
     """(rule, replacement) when `url` is given as an address for Nova that is not
     the real one; None when it is the real one or not an address for Nova.
 
-    The caller has already ruled out a clause a negation precedes (ruling I1
-    — every one of the four rules skips a URL "won't work"/"can't use").
+    `before` is the clause text up to the url's own start — what rule 2's
+    "Nova governs the url" test reads, so a Nova phrase governing a
+    DIFFERENT url (earlier in the same clause) or trailing this one never
+    counts. The caller has already ruled out a clause a negation precedes
+    (ruling I1 — every one of the four rules skips a URL "won't work"/
+    "can't use").
     """
     try:
         parts = urlsplit(url)
@@ -6146,14 +6206,12 @@ def _wrong_address(url: str, clause: str, origin: str | None) -> tuple[str, str]
     ip = _ip(host)
     nova_like = host.endswith(".ts.net") or host == "localhost" or ip is not None
     if nova_like and _SETUP_PAGE.match(path or "/"):
-        # I7 (review fix round 1): the fragment is DROPPED, never carried into
-        # the replacement. An /add#CODE fragment is presumptively the very
-        # invented pairing code code_claim_check independently redacts; the
-        # corrected URL must never be a second place that code survives.
-        tail = parts.path
-        if parts.query:
-            tail += f"?{parts.query}"
-        return ("setup_page", f"{origin}{tail}" if origin else NO_ADDRESS)
+        # I7 (round 1) + C (round 2): BOTH the fragment and the query are
+        # DROPPED, never carried into the replacement. An /add#CODE or
+        # /add?code=CODE is presumptively the very invented pairing code
+        # code_claim_check independently redacts; the corrected URL must
+        # never be a second place that code survives.
+        return ("setup_page", f"{origin}{parts.path}" if origin else NO_ADDRESS)
     replacement = origin or NO_ADDRESS
     setup_or_root = _empty_or_setup_path(path)
     if (
@@ -6161,7 +6219,7 @@ def _wrong_address(url: str, clause: str, origin: str | None) -> tuple[str, str]
         and _is_lan_ip(ip)
         and port in (None, 3000, 8080)
         and setup_or_root
-        and _PRESENTED_AS_NOVA.search(clause)
+        and _NOVA_GOVERNS_URL.search(before)
     ):
         return ("lan", replacement)
     loopback = host == "localhost" or (ip is not None and ip.is_loopback)
@@ -6202,14 +6260,17 @@ def address_claim_check(
     its `reason`), read by the caller — the guard keeps no address of its own.
     Four shapes, each precision-first: a setup page (/install, /app, /add) on a
     tailnet, IP or localhost origin that is not the real one; a private-LAN URL
-    on an app port given as where to open Nova, presented as Nova's own (the
-    web UI is never on the LAN, and a LAN URL for some OTHER service is
-    honest — ruling I1); loopback in a sentence about another device
-    (loopback said about the hub itself, or about "your computer", is true —
-    ruling I1); and a store link for a Nova app that does not exist. A URL
-    the owner's own message carries is his and is never touched, and a URL a
-    negation precedes anywhere in its clause is a denial, never a claim
-    (ruling I1 — "http://…:3000 won't work on your phone").
+    on an app port given as where to open Nova, with a Nova phrase GOVERNING
+    the url — not just "nova" anywhere in the clause (the web UI is never on
+    the LAN, and a LAN URL for some OTHER service, even one that MENTIONS
+    Nova elsewhere in the sentence, is honest — ruling I1 amended, round 2);
+    loopback in a sentence about another device (loopback said about the hub
+    itself, or about "your computer", is true — ruling I1); and a store link
+    for a Nova app that does not exist. A URL the owner's own message carries
+    is his and is never touched, and a URL a negation precedes anywhere in
+    its clause is a denial, never a claim — cannot/unable/curly apostrophes
+    included, via a LOCAL negation pattern, never the shared _has_negator
+    (ruling I1 amended, round 2 — "Your phone cannot use http://…:3000").
 
     Rewrites by the OFFSET of each judged match, never a global str.replace
     (ruling I2): a URL judged wrong in one clause never touches the SAME url
@@ -6227,21 +6288,22 @@ def address_claim_check(
         if clause_start == -1:
             continue  # cannot be located (should not happen); touch nothing
         cursor = clause_start + len(clause)
-        if _has_negator(clause):
+        if _ADDRESS_NEGATION.search(clause) is not None:
             continue  # a negation anywhere in the clause: a denial, not a claim
         for m in _URL.finditer(clause):
             url = _strip_trailing_punct(m.group(0))
             if not url or url in theirs:
                 continue
-            verdict = _wrong_address(url, clause, origin)
+            verdict = _wrong_address(url, clause, clause[: m.start()], origin)
             if verdict is None:
                 continue
             rule, replacement = verdict
             abs_start = clause_start + m.start()
             spans.append((abs_start, abs_start + len(url), rule, replacement))
-            # I7: never carry a fragment into what is recorded either — a
-            # code embedded in one must not be echoed in a guard span.
-            wrong_urls.add(_strip_fragment(url))
+            # I7 (round 1) + C (round 2): never carry a query or a fragment
+            # into what is recorded either — a code embedded in one must not
+            # be echoed in a guard span.
+            wrong_urls.add(_strip_query_and_fragment(url))
     if not spans:
         return None
     rewritten = reply_text

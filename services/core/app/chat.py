@@ -89,6 +89,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from typing import Any
 from urllib.parse import unquote
 
 import asyncpg
@@ -3413,6 +3414,41 @@ def _state_claim_stands(
     return claim is not None and claim.device == subject
 
 
+def _failed_tool_names(spans: Sequence[Any]) -> frozenset[str]:
+    """Tool names THIS TURN attempted and never succeeded (review fix round 2,
+    D). "Attempted" is any tool-kind span naming it; "succeeded" is at least
+    one of those spans with `ok is True`. A tool that failed once but then
+    succeeded (a retry) is NOT in this set — it demonstrably can work this
+    turn. Derived from the live spans, for every tool, so a newly-registered
+    tool needs no matching entry here."""
+    attempted: set[str] = set()
+    succeeded: set[str] = set()
+    for span in spans:
+        if getattr(span, "kind", None) != "tool":
+            continue
+        name = getattr(span, "name", None)
+        if not name:
+            continue
+        attempted.add(name)
+        meta = getattr(span, "meta", None) or {}
+        if meta.get("ok") is True:
+            succeeded.add(name)
+    return frozenset(attempted - succeeded)
+
+
+def _capability_check_tools(available: Sequence[str], spans: Sequence[Any]) -> list[str]:
+    """The toolset `capability_claim_check` should judge a denial against
+    (review fix round 2, D): `available` minus any tool THIS TURN called and
+    did not succeed. "Nova has no address another device can reach" after a
+    failed show_setup_qr call, in the SAME turn, is a relay of the tool's own
+    refusal, not a false denial — the guard would otherwise "correct" a
+    report of the very call that just failed beside it.
+    `capability_claim_check`'s own signature and purity are unchanged; this
+    is computed once at each call site from the turn's own spans."""
+    failed = _failed_tool_names(spans)
+    return [name for name in available if name not in failed]
+
+
 def _safe_address() -> tuple[str | None, str | None]:
     """network.address(), fail-open like every guard (review fix round 1,
     I6): network.address() itself turns a malformed or unreadable status
@@ -3577,7 +3613,11 @@ def _regen_rejected_by(
         ),
         (
             "capability_claim",
-            lambda: guards.capability_claim_check(corrected, persona.tool_names),
+            # D (review fix round 2): same minus-the-failed-tools set the turn
+            # body computes, over this turn's live spans.
+            lambda: guards.capability_claim_check(
+                corrected, _capability_check_tools(persona.tool_names, turn.spans)
+            ),
         ),
         # The serving-state claim (S19), armed by the turn's kind exactly as
         # over the reply: a regeneration saying the model is down would be
@@ -4722,9 +4762,14 @@ async def _run_turn(
         # is only false when its satisfying tool is actually in the model's
         # hands, so registering/removing a tool moves the verdict by itself,
         # and an agent's honest "I can't browse the web" (it was given no
-        # fetch_url) is never "corrected" into a lie.
+        # fetch_url) is never "corrected" into a lie. D (review fix round 2):
+        # minus any tool THIS TURN called and did not succeed — a relay of
+        # show_setup_qr's own "no address" refusal, right beside the failed
+        # span that says so, is not a false denial either.
         try:
-            capability_correction = guards.capability_claim_check(text, persona.tool_names)
+            capability_correction = guards.capability_claim_check(
+                text, _capability_check_tools(persona.tool_names, turn.spans)
+            )
         except Exception:
             logger.exception("capability-claim guard raised; shipping the reply uncorrected")
             capability_correction = None

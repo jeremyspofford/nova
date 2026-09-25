@@ -11,7 +11,7 @@ from types import SimpleNamespace
 from app import agents, chat, guards
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
-from tests.test_chat_card import frames, set_chat_model, text
+from tests.test_chat_card import frames, set_chat_model, text, whole_call
 
 pytestmark = requires_db
 
@@ -130,3 +130,81 @@ def test_regen_rejected_by_is_fail_open_when_address_raises(monkeypatch):
         agent_names=[],
     )
     assert rejected == "code_claim"
+
+
+# -- D (review fix round 2): a relay of the tool's own refusal --------------
+
+
+def _no_address_env(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("NOVA_STATUS_FILE", str(tmp_path / "absent-tailscale.json"))
+
+
+async def _failed_show_setup_qr_turn(owner_client, mount_peers, reply: str) -> list:
+    gateway = ScriptedGateway(
+        rounds=(
+            (whole_call("call_1", "show_setup_qr", {"setup": "install_pwa"}),),
+            (text(reply),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await set_chat_model(owner_client)
+    resp = await owner_client.post("/api/v1/chat/stream", json={"message": "show me a QR code"})
+    assert resp.status_code == 200, resp.text
+    return frames(resp.text)
+
+
+async def test_a_relayed_refusal_beside_a_failed_call_is_not_corrected(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    _no_address_env(tmp_path, monkeypatch)
+    reply = (
+        "I can't show a setup QR code: Nova has no address another device can reach - "
+        "the tailnet sidecar is NeedsLogin, not Running."
+    )
+    sent = await _failed_show_setup_qr_turn(owner_client, mount_peers, reply)
+    corrections = [f["correction"] for f in sent if isinstance(f, dict) and "correction" in f]
+    assert corrections == [], corrections
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == reply
+    span_count = await pool.fetchval(
+        "SELECT count(*) FROM turn_spans WHERE kind = 'guard' AND name = 'capability_claim'"
+    )
+    assert span_count == 0
+
+
+async def test_a_leading_qualifier_relayed_refusal_is_not_corrected(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    _no_address_env(tmp_path, monkeypatch)
+    reply = (
+        "Right now I can't show you a setup QR code: Nova has no address another device can reach."
+    )
+    sent = await _failed_show_setup_qr_turn(owner_client, mount_peers, reply)
+    corrections = [f["correction"] for f in sent if isinstance(f, dict) and "correction" in f]
+    assert corrections == [], corrections
+    stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
+    assert stored == reply
+    span_count = await pool.fetchval(
+        "SELECT count(*) FROM turn_spans WHERE kind = 'guard' AND name = 'capability_claim'"
+    )
+    assert span_count == 0
+
+
+async def test_the_same_relay_is_corrected_when_the_tool_was_not_called(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    # The control: nothing ran this turn, so nothing failed — the guard is
+    # UNCHANGED, and this exact reply is still the false capability denial
+    # it always was.
+    _no_address_env(tmp_path, monkeypatch)
+    reply = (
+        "I can't show a setup QR code: Nova has no address another device can reach - "
+        "the tailnet sidecar is NeedsLogin, not Running."
+    )
+    sent = await _turn(owner_client, mount_peers, reply, "show me a QR code")
+    corrections = [f["correction"] for f in sent if isinstance(f, dict) and "correction" in f]
+    assert corrections != []
+    span_count = await pool.fetchval(
+        "SELECT count(*) FROM turn_spans WHERE kind = 'guard' AND name = 'capability_claim'"
+    )
+    assert span_count == 1

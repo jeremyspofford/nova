@@ -89,9 +89,9 @@ ADDRESS_MUST_FIRE = [
         f"Open {ORIGIN}/install on the phone.",
     ),
     (
-        # I1 (review fix round 1): rule 2 now requires the clause to PRESENT
-        # the URL as Nova's own (the word "nova", a verb governing "me", or
-        # "my address/url/link/web app") — "go to" alone no longer qualifies.
+        # I1 (review fix round 1; amended round 2): rule 2 requires a Nova
+        # phrase to GOVERN the url — "open Nova at" — never just the word
+        # "nova" anywhere in the clause.
         "the_lan_app_port",
         "On your tablet, open Nova at http://192.168.0.245:3000.",
         ("lan",),
@@ -114,6 +114,38 @@ ADDRESS_MUST_FIRE = [
         "Get the Nova app at https://apps.apple.com/app/nova/id123456789.",
         ("store_link",),
         f"Get the Nova app at {guards.NO_APP}.",
+    ),
+    # -- A (review fix round 2): the LAN rule with the GOVERNING phrase ------
+    (
+        "open_nova_at_url_then_device",
+        # Task 6's ARMED sentence — must fire.
+        "Open Nova at http://192.168.0.245:3000 on the tablet.",
+        ("lan",),
+        f"Open Nova at {ORIGIN} on the tablet.",
+    ),
+    (
+        "reach_me_at_url_from_device",
+        "You can reach me at http://192.168.0.245:3000 from your tablet.",
+        ("lan",),
+        f"You can reach me at {ORIGIN} from your tablet.",
+    ),
+    (
+        "my_address_is_url",
+        "My address is http://192.168.0.245:3000.",
+        ("lan",),
+        f"My address is {ORIGIN}.",
+    ),
+    (
+        "nova_is_at_url",
+        "Nova is at http://10.0.0.5:8080.",
+        ("lan",),
+        f"Nova is at {ORIGIN}.",
+    ),
+    (
+        "open_nova_on_device_at_url",
+        "Open Nova on your tablet at http://192.168.0.245:3000.",
+        ("lan",),
+        f"Open Nova on your tablet at {ORIGIN}.",
     ),
 ]
 
@@ -185,6 +217,50 @@ ADDRESS_MUST_NOT_FIRE = [
     (
         "negated_lan_trailing",
         "http://192.168.0.245:3000 won't work on your phone; use the tailnet address.",
+        "hi",
+    ),
+    # -- A (review fix round 2): the re-review's negation + governs probes --
+    # "cannot"/"unable"/curly n't are missed by the shared _has_negator
+    # (out of scope, never widened); the local _ADDRESS_NEGATION covers them.
+    (
+        "cannot_use_loopback",
+        "Your phone cannot use http://127.0.0.1:3000 - it only answers on the hub.",
+        "hi",
+    ),
+    (
+        "curly_apostrophe_dont",
+        "Don’t open http://localhost:3000 on your phone: it only answers on the hub.",
+        "hi",
+    ),
+    (
+        "unable_to_reach",
+        "Your laptop is unable to reach http://localhost:3000; use the tailnet address.",
+        "hi",
+    ),
+    (
+        "nova_cannot_be_opened",
+        "Nova cannot be opened at http://192.168.0.245:3000 from your tablet.",
+        "hi",
+    ),
+    (
+        "phone_cannot_open_setup_page",
+        "A phone cannot open https://nova-old.fake-tailnet.ts.net/install - that name is gone.",
+        "hi",
+    ),
+    # the GOVERNS test itself: "nova" mentioned but not governing THIS url.
+    (
+        "nova_mentioned_elsewhere_not_governing",
+        "Add http://192.168.0.50:8080 as a provider in Nova's settings.",
+        "hi",
+    ),
+    (
+        "nova_is_the_subject_not_the_object",
+        "Nova can use the llama.cpp server at http://192.168.0.50:8080 as a provider.",
+        "hi",
+    ),
+    (
+        "someone_elses_address_beside_the_real_one",
+        f"Your router is at http://192.168.1.1, and Nova is at {ORIGIN}.",
         "hi",
     ),
 ]
@@ -273,6 +349,34 @@ def test_a_code_inside_an_add_fragment_is_gone_even_on_the_real_origin():
     assert "K7PQ" not in final.upper()
     # the span's own token list never carries the fragment either.
     assert all("#" not in url for url in address_claim.tokens)
+
+
+# -- C (review fix round 2): a code inside an /add?code= query --------------
+
+
+def test_a_code_inside_an_add_query_is_gone_on_a_wrong_origin():
+    reply = "Open https://nova-old.fake-tailnet.ts.net/add?code=K7PQ-9XYZ on the laptop."
+    code_claim = guards.code_claim_check(reply, "add my laptop")
+    assert code_claim is not None
+    assert code_claim.tokens == ("K7PQ9XYZ",)
+    address_claim = guards.address_claim_check(code_claim.rewritten, "add my laptop", ORIGIN)
+    assert address_claim is not None
+    final = address_claim.rewritten
+    assert "K7PQ-9XYZ" not in final
+    assert "K7PQ9XYZ" not in final.upper().replace("-", "")
+    assert "K7PQ" not in final.upper()
+    assert all("?" not in url and "#" not in url for url in address_claim.tokens)
+
+
+def test_a_code_inside_an_add_query_is_gone_on_the_real_origin():
+    reply = f"Open {ORIGIN}/add?code=K7PQ-9XYZ on the laptop."
+    code_claim = guards.code_claim_check(reply, "add my laptop")
+    assert code_claim is not None
+    assert code_claim.tokens == ("K7PQ9XYZ",)
+    final = code_claim.rewritten
+    assert "K7PQ-9XYZ" not in final
+    assert "K7PQ9XYZ" not in final.upper().replace("-", "")
+    assert "K7PQ" not in final.upper()
 
 
 # -- narration: showed_setup_qr -----------------------------------------------
