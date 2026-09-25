@@ -26,7 +26,7 @@ from novabundle import (
     raw_compose_fact,
 )
 
-RENDER = FIXTURES / "compose-v5.3.0.yaml"
+RENDER = FIXTURES / "compose-v5.5.1.yaml"
 
 
 def load(name):
@@ -77,7 +77,7 @@ def real_facts(containers="containers-v4.json"):
         # stale the moment the file changed, which is the one thing this
         # fact exists to notice (s41/rulings.md 2026-09-21).
         "raw": raw_compose_fact([(str(COMPOSE_FILE), COMPOSE_FILE.read_text())]),
-        "config": load("compose-v5.3.0.json"),
+        "config": load("compose-v5.5.1.json"),
         "dispositions": json.loads(compose_read("dispositions_json", RENDER.read_text())),
         "containers": load(containers),
         "git": load("git-v4.json"),
@@ -205,7 +205,7 @@ def test_the_fixtures_were_captured_from_one_checkout():
     """A compose render from one machine beside a container capture from
     another proves nothing: every bind would look undeclared. refresh.sh
     normalises both to /repo, and this is the check that it did."""
-    config = load("compose-v5.3.0.json")
+    config = load("compose-v5.5.1.json")
     for svc in config["services"].values():
         for mount in svc.get("volumes") or []:
             if mount.get("type") == "bind":

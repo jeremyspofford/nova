@@ -27,7 +27,7 @@ from novabundle import (
     raw_compose_rows,
 )
 
-RENDER = FIXTURES / "compose-v5.3.0.yaml"
+RENDER = FIXTURES / "compose-v5.5.1.yaml"
 ENV_EXAMPLE = COMPOSE_FILE.parent / ".env.example"
 
 

@@ -60,8 +60,8 @@ expect_lacks() {
 
 printf '\n── compose readers ──────────────────────────────────────────────────\n'
 
-PROBE_YAML="$FIXTURES/probe-v5.3.0.yaml"
-PROBE_JSON="$FIXTURES/probe-v5.3.0.json"
+PROBE_YAML="$FIXTURES/probe-v5.5.1.yaml"
+PROBE_JSON="$FIXTURES/probe-v5.5.1.json"
 PROBE_SRC="$FIXTURES/probe-compose.yml"
 PROBE_OVERLAY="$FIXTURES/probe-compose.overlay.yml"
 
@@ -268,7 +268,7 @@ render_rows() {
 expect_str "the_real_compose_file_and_the_checked_in_render_declare_the_same_rows" \
   "$(raw_rows "$SCRIPT_DIR/docker-compose.yml" |
      awk -F'\t' '$1 == "volume" || $1 == "bind" || $1 == "anon"' | sort)" \
-  "$(render_rows < "$FIXTURES/compose-v5.3.0.yaml" | sort)"
+  "$(render_rows < "$FIXTURES/compose-v5.5.1.yaml" | sort)"
 
 expect_str "the_real_compose_file_uses_no_form_the_parser_cannot_read" \
   "$(raw_rows "$SCRIPT_DIR/docker-compose.yml" | awk -F'	' '$1 == "unreadable"')" ""
@@ -332,12 +332,12 @@ stub_docker() {
       [ -n "$STUB_COMPOSE_STDERR" ] && printf '%s\n' "$STUB_COMPOSE_STDERR" >&2
       [ -n "$STUB_COMPOSE_EMPTY" ] && return 0
       case " $* " in
-        *" --format json "*) sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.json" ;;
+        *" --format json "*) sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.5.1.json" ;;
         *)
           if [ -n "$STUB_COMPOSE_SED" ]; then
-            sed -e "s|/repo|$WORLD/repo|g" -e "$STUB_COMPOSE_SED" "$FIXTURES/compose-v5.3.0.yaml"
+            sed -e "s|/repo|$WORLD/repo|g" -e "$STUB_COMPOSE_SED" "$FIXTURES/compose-v5.5.1.yaml"
           else
-            sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.yaml"
+            sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.5.1.yaml"
           fi
           ;;
       esac
@@ -531,7 +531,7 @@ build_world
 # The declared set is the raw text's: the render the stub returns is the
 # UNCHANGED capture, so the only way v4_vectors can be seen at all is that
 # the compose text render_raw staged was read.
-grep -q 'v4_vectors' "$FIXTURES/compose-v5.3.0.yaml" && \
+grep -q 'v4_vectors' "$FIXTURES/compose-v5.5.1.yaml" && \
   report 1 "the_render_used_above_never_mentioned_the_new_volume" "the fixture carries it" || \
   report 0 "the_render_used_above_never_mentioned_the_new_volume"
 

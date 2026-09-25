@@ -1,8 +1,10 @@
 .superpowers/sdd/.gitignore
 .superpowers/sdd/slice-47-setup-qr/
 apps/web/node_modules/
+deploy/backup/.pytest_cache/
 deploy/backup/.venv/
-deploy/backup/uv.lock
+deploy/backup/__pycache__/
+deploy/backup/tests/__pycache__/
 services/core/.venv/
 services/core/app/__pycache__/
 services/core/app/checks/__pycache__/
