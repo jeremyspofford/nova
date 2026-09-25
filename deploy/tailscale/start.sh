@@ -212,7 +212,58 @@ if ! verdict="$(serve_ok)"; then
 fi
 log "$verdict"
 
+# ---- 4b. publish what the tailnet says, for core (D17, S47) -------------------
+#
+# Nova's address for another device is known only to tailscaled, in this
+# container. Every STATUS_INTERVAL seconds this writes one small JSON file on
+# the v4_status volume, which core mounts read-only and reads through
+# services/core/app/network.py — the only way core learns the address a QR
+# code must encode. Every field is read from tailscaled on THAT tick, never
+# carried over, and core refuses a file older than 45 s: a sidecar that stops
+# writing reads as "no address" within a minute, never as a stale address.
+#
+# Atomic: a temp file in the same directory, then mv, so core never reads half
+# a file. A failed write is logged and retried; it never takes the sidecar
+# down — the tailnet URL answering matters more than core being told about it.
+#
+# Only on the success path: step 0 (MOVED_TO) and every failure above have
+# already exited, so a parked host never writes, and the stale file it keeps
+# is rejected by core's 45 s rule.
+STATUS_DIR="${NOVA_STATUS_DIR:-/run/nova-status}"
+STATUS_INTERVAL="${NOVA_STATUS_INTERVAL:-15}"
+
+write_status() {
+  mkdir -p "$STATUS_DIR" 2>/dev/null
+  st="$(tailscale status --json 2>/dev/null)"
+  ts_state="$(printf '%s\n' "$st" | json_string BackendState | tr -d '"\\')"
+  ts_name="$(printf '%s\n' "$st" | json_string DNSName | sed 's/\.$//' | tr -d '"\\')"
+  if serve_mapping_present; then ts_serve=true; else ts_serve=false; fi
+  ts_certs="$(printf '%s\n' "$st" | tr -d ' \n\t\r' | grep -o '"CertDomains":\[[^]]*\]')"
+  ts_cert=false
+  if [ -n "$ts_name" ]; then
+    case "$ts_certs" in *"\"$ts_name\""*) ts_cert=true ;; esac
+  fi
+  printf '{"version": 1, "backend_state": "%s", "dns_name": "%s", "serve_ok": %s, "https_cert": %s, "written_at": "%s"}\n' \
+    "$ts_state" "$ts_name" "$ts_serve" "$ts_cert" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > "$STATUS_DIR/.tailscale.json.tmp" 2>/dev/null \
+    && mv -f "$STATUS_DIR/.tailscale.json.tmp" "$STATUS_DIR/tailscale.json" 2>/dev/null
+}
+
+status_loop() {
+  while :; do
+    if ! write_status; then
+      log "could not write $STATUS_DIR/tailscale.json — core reads no address until this succeeds; retrying in ${STATUS_INTERVAL}s"
+    fi
+    sleep "$STATUS_INTERVAL"
+  done
+}
+
+status_loop &
+STATUS_PID=$!
+
 # ---- 5. containerboot's exit is ours ----------------------------------------
 
 wait_for_containerboot
-exit $?
+rc=$?
+kill "$STATUS_PID" 2>/dev/null
+exit "$rc"

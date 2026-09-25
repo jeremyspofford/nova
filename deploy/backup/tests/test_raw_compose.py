@@ -495,6 +495,7 @@ def test_the_real_file_itself_is_read_whole():
         "v4_models",
         "v4_ollama",
         "v4_pgdata",
+        "v4_status",
         "v4_tailscale",
         "v4_workspace",
     ]

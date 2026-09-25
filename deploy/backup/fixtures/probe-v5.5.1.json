@@ -1,0 +1,62 @@
+{
+  "name": "novaxprobe",
+  "networks": {
+    "default": {
+      "name": "novaxprobe_default",
+      "ipam": {}
+    }
+  },
+  "services": {
+    "alpha": {
+      "command": [
+        "true"
+      ],
+      "entrypoint": null,
+      "image": "alpine:3.20",
+      "networks": {
+        "default": null
+      },
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "vol_one",
+          "target": "/one",
+          "volume": {}
+        },
+        {
+          "type": "bind",
+          "source": "/repo/bindsrc",
+          "target": "/b",
+          "read_only": true
+        }
+      ]
+    },
+    "beta": {
+      "command": [
+        "true"
+      ],
+      "entrypoint": null,
+      "image": "alpine:3.20",
+      "networks": {
+        "default": null
+      },
+      "volumes": [
+        {
+          "type": "volume",
+          "source": "vol_two",
+          "target": "/two",
+          "volume": {}
+        }
+      ]
+    }
+  },
+  "volumes": {
+    "vol_one": {
+      "name": "novaxprobe_vol_one"
+    },
+    "vol_two": {
+      "name": "novaxprobe_vol_two"
+    }
+  },
+  "x-nova-top-level": "kept-or-not"
+}

@@ -215,6 +215,7 @@ def test_the_dispositions_cover_every_v4_volume_by_name():
         "v4_models",
         "v4_ollama",
         "v4_pgdata",
+        "v4_status",
         "v4_tailscale",
         "v4_workspace",
     ]
