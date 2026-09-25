@@ -527,8 +527,19 @@ lane's own databases.
 - The backup suites' volume sets (`deploy/backup/tests/test_policy.py:216-229`,
   `test_raw_compose.py:496-498`, and whatever `test_coverage_v4_real.py`
   derives): `v4_status` joins as `exclude-derived`.
-- `test_no_approvals.py` stays **unchanged and green**. The card channel adds
-  no await, and no refusal here decides that a call *may not* run.
+- `test_no_approvals.py` stays **green**, with one deliberate move: its pin on
+  `ToolContext`'s exact field set (`tests/test_no_approvals.py:87-94`) gains
+  `card`, with the reason written beside `progress` and `step` — an OUTPUT
+  channel, not a principal a permission could bind to (the S18 precedent that
+  added `step`). The card channel adds no await (`_run_tool` and
+  `_dispatch_calls` keep their pinned await lists), and no refusal here decides
+  that a call *may not* run.
+- The message-key pins gain `cards`: `tests/test_conversations.py`
+  (`MESSAGE_KEYS`) and `tests/test_timers_api.py` (the exact key set).
+- `tests/test_scheduler.py` pins the keyword arguments the scheduler passes to
+  `_run_turn` (`{"ingest"}`, `{"ingest", "persona"}`), so `card` is
+  keyword-only with a default of `None`, and no caller but the stream route and
+  the eval runner ever passes it.
 
 If the other lane lands a registry or corpus bump first, whichever lands
 second renumbers and re-bumps once (hub-topology, "Migrations").
@@ -638,6 +649,8 @@ The other session owns S46/S46a now and S42a/S42b next.
 - **The public pages open for anyone on the tailnet without signing in.**
   They hold nothing secret: a code travels only inside a link its holder
   already has, and the page makes no request.
-- **Pushing is blocked on the mini PC today** (`gh` and git have no valid
-  credential). The work can be committed; it cannot reach `main`, and so
-  cannot be deployed, until the owner runs `gh auth login`.
+- **Pushing was blocked on the mini PC** when this spec was written. It was
+  fixed the same day (the hub:primary session): `origin` is now
+  `git@github.com:jeremyspofford/nova.git` with a deploy key in
+  `core.sshCommand`, so `git push` works from any worktree, and `gh` works as
+  `env -u GH_TOKEN gh …` until the stale `GH_TOKEN` line leaves `~/.secrets`.
