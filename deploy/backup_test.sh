@@ -647,12 +647,27 @@ esac
 
 # The same machine's other truth: v3's stopped containers still carry the
 # `nova` project label, so a backup HERE has state under its own label that
-# this compose file cannot account for. Real capture, not an invented fixture.
+# this compose file cannot account for. Real capture, not an invented fixture
+# — which means this case is only testable on a host that actually has one.
+# Some do (the Dell); this one, refreshed today, does not (`"containers": []`
+# in containers-foreign-v4.json) — the exact fact
+# test_the_v3_leftovers_under_this_project_name_really_do_refuse already
+# skips on in the pytest suite. Fabricating foreign-container data here would
+# be the invented fixture the comment above refuses to be.
 CONTAINERS_FIXTURE="containers-foreign-v4.json"
-build_world
-FOREIGN="$(run_coverage routine)"
-expect_cov "refuses_a_live_mount_compose_does_not_name" "$FOREIGN" 3 "R4_UNDECLARED_LIVE_MOUNT"
-expect_cov "and_names_the_compose_file_that_container_came_from" "$FOREIGN" 3 "config_files"
+if python3 -c "import json, sys; sys.exit(0 if json.load(open(sys.argv[1]))['containers'] else 1)" \
+  "$FIXTURES/$CONTAINERS_FIXTURE" 2>/dev/null; then
+  build_world
+  FOREIGN="$(run_coverage routine)"
+  expect_cov "refuses_a_live_mount_compose_does_not_name" "$FOREIGN" 3 "R4_UNDECLARED_LIVE_MOUNT"
+  expect_cov "and_names_the_compose_file_that_container_came_from" "$FOREIGN" 3 "config_files"
+else
+  SKIP=$((SKIP + 1))
+  printf 'SKIP refuses_a_live_mount_compose_does_not_name (+1): this host has no foreign\n'
+  printf '     container under the project label today — containers-foreign-v4.json, just\n'
+  printf '     refreshed from this machine, carries none. Same fact, same skip as\n'
+  printf '     test_the_v3_leftovers_under_this_project_name_really_do_refuse (pytest).\n'
+fi
 CONTAINERS_FIXTURE="containers-v4.json"
 build_world
 
@@ -749,6 +764,43 @@ for bad_home in /root "" /; do
     esac
   fi
 done
+
+# ── normalise() must not leak a nested worktree's path ──────────────────────
+#
+# Every lane's checkout lives at .worktrees/<name>, NESTED inside the live
+# checkout (CLAUDE.md, "Worktrees internal policy"), so LIVE_ROOT is
+# routinely a literal PREFIX of REPO_ROOT. Substituting the shorter root
+# first matches that prefix and leaves the longer root's own tail stuck onto
+# "/repo" — measured 2026-09-25 (S47 task 1): a captured bind source read
+# /repo/.worktrees/qr/data instead of /repo/data. This runs the SHIPPED
+# normalise(), extracted from the copy above, never a reimplementation of
+# the fix as a test — a bug in the extraction would show up as every case
+# below failing to run at all, not as a false green.
+NORMALISE_SRC="$(sed -n '/^normalise() {/,/^}/p' "$REFRESH")"
+if [ -z "$NORMALISE_SRC" ]; then
+  report 1 "normalise_is_findable_in_the_shipped_script" "no normalise() in $REFRESH"
+else
+  report 0 "normalise_is_findable_in_the_shipped_script"
+fi
+
+# $1 = LIVE_ROOT, $2 = REPO_ROOT, $3 = the path piped through normalise.
+run_normalise() {
+  printf '%s\n' "$3" | LIVE_ROOT="$1" REPO_ROOT="$2" HOME=/nonexistent-home bash -c "$NORMALISE_SRC
+normalise"
+}
+
+expect_str "normalise_a_nested_worktree_checkout_never_leaks_worktrees_into_the_path" \
+  "$(run_normalise /world/nova /world/nova/.worktrees/qr /world/nova/.worktrees/qr/data)" \
+  "/repo/data"
+expect_str "normalise_the_mirror_case_live_root_nested_in_repo_root" \
+  "$(run_normalise /world/nova/.worktrees/qr /world/nova /world/nova/data)" \
+  "/repo/data"
+expect_str "normalise_equal_roots_still_takes_the_single_substitution_branch" \
+  "$(run_normalise /world/nova /world/nova /world/nova/data)" \
+  "/repo/data"
+expect_str "normalise_unrelated_roots_are_unaffected_by_the_ordering" \
+  "$(run_normalise /world/other /world/nova/.worktrees/qr /world/nova/.worktrees/qr/data)" \
+  "/repo/data"
 
 printf '\n── the passphrase resolver seam ─────────────────────────────────────\n'
 

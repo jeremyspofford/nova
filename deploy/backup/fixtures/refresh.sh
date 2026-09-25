@@ -83,10 +83,24 @@ fi
 # here — and it becomes /elsewhere: the repo is public, the shape of the path
 # is the part that matters, and the username is not.
 #
-# Order is load-bearing: both roots are under $HOME, so $HOME goes last.
+# Order is load-bearing, and both roots are under $HOME, so $HOME goes last
+# regardless. Between the two roots, the LONGER one is substituted first.
+# Every lane's checkout lives at .worktrees/<name>, NESTED inside the live
+# checkout (CLAUDE.md, "Worktrees internal policy"), so LIVE_ROOT is
+# routinely a literal PREFIX of REPO_ROOT — substituting the shorter one
+# first matches that prefix and leaves the longer root's own tail (e.g.
+# "/.worktrees/qr") stuck onto "/repo" (measured 2026-09-25, S47 task 1: a
+# captured bind source read /repo/.worktrees/qr/data instead of /repo/data).
+# Substituting the longer root first handles that case correctly. When the
+# two are equal length or neither is a prefix of the other, they cannot
+# overlap, so which one runs first makes no difference to the result.
 normalise() {
   if [ -n "$LIVE_ROOT" ] && [ "$LIVE_ROOT" != "$REPO_ROOT" ]; then
-    sed -e "s|$LIVE_ROOT|/repo|g" -e "s|$REPO_ROOT|/repo|g" -e "s|$HOME|/elsewhere|g"
+    if [ "${#LIVE_ROOT}" -ge "${#REPO_ROOT}" ]; then
+      sed -e "s|$LIVE_ROOT|/repo|g" -e "s|$REPO_ROOT|/repo|g" -e "s|$HOME|/elsewhere|g"
+    else
+      sed -e "s|$REPO_ROOT|/repo|g" -e "s|$LIVE_ROOT|/repo|g" -e "s|$HOME|/elsewhere|g"
+    fi
   else
     sed -e "s|$REPO_ROOT|/repo|g" -e "s|$HOME|/elsewhere|g"
   fi

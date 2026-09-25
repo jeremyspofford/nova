@@ -1,12 +1,12 @@
 {
   "work_tree": true,
-  "root": "/repo/.worktrees/qr",
+  "root": "/repo",
   "scan_roots": [
-    "/repo/.worktrees/qr/data",
-    "/repo/.worktrees/qr/deploy",
-    "/repo/.worktrees/qr/deploy/postgres-init",
-    "/repo/.worktrees/qr/deploy/tailscale",
-    "/repo/.worktrees/qr/searxng"
+    "/repo/data",
+    "/repo/deploy",
+    "/repo/deploy/postgres-init",
+    "/repo/deploy/tailscale",
+    "/repo/searxng"
   ],
   "roots": {
     "data": "ignored",
@@ -21,8 +21,6 @@
     "deploy/backup/tests/__pycache__": "ignored",
     "deploy/backup/.venv": "ignored",
     "deploy/backup/fixtures/bindsrc/.keep": "tracked",
-    "deploy/backup/fixtures/compose-v5.3.0.json": "tracked",
-    "deploy/backup/fixtures/compose-v5.3.0.yaml": "tracked",
     "deploy/backup/fixtures/compose-v5.5.1.json": "tracked",
     "deploy/backup/fixtures/compose-v5.5.1.yaml": "tracked",
     "deploy/backup/fixtures/containers-foreign-v4.json": "tracked",
@@ -32,8 +30,6 @@
     "deploy/backup/fixtures/ignored-paths.txt": "tracked",
     "deploy/backup/fixtures/probe-compose.overlay.yml": "tracked",
     "deploy/backup/fixtures/probe-compose.yml": "tracked",
-    "deploy/backup/fixtures/probe-v5.3.0.json": "tracked",
-    "deploy/backup/fixtures/probe-v5.3.0.yaml": "tracked",
     "deploy/backup/fixtures/probe-v5.5.1.json": "tracked",
     "deploy/backup/fixtures/probe-v5.5.1.yaml": "tracked",
     "deploy/backup/fixtures/reachable-v4.json": "tracked",

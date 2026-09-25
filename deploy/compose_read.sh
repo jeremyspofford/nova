@@ -68,6 +68,35 @@ function cr_value(line, key,   v, p) {
   v = substr(line, p + length(key) + 1)
   return cr_unquote(v)
 }
+# The same, but RAW — no quote-stripping. A reason is prose an operator
+# wrote, long enough that the renderer wraps it onto indented continuation
+# lines (measured: compose v5.3.0 never wraps a reason, v5.5.1 always does
+# past roughly one sentence — every multi-word x-nova-backup-reason and
+# x-nova-backup-anon reason in this compose file wraps under v5.5.1,
+# including the v4_status one, S47). A wrapped value may open a quote on
+# its first line and close it only on its last (the v4_ollama reason,
+# whose text itself contains a colon), so quote-stripping the first line
+# alone — what cr_value() does — corrupts it: the leading quote survives
+# into the reason, and the following lines are silently dropped by every
+# caller below, because none of them read past the key line itself. The
+# fix is never fewer than two steps: collect this RAW first-line
+# remainder, then every continuation line (cr_indent() below decides
+# which are which), and call cr_unquote() exactly once on the fully-
+# joined string.
+function cr_rawvalue(line, key,   v, p) {
+  p = index(line, key ":")
+  if (p == 0) return ""
+  v = substr(line, p + length(key) + 1)
+  return cr_trim(v)
+}
+# The count of leading spaces. A continuation line of a wrapped scalar is
+# indented MORE than the key that opened it; nothing else at or under that
+# key is indented that deep, and no sibling key is ever indented deeper
+# than its own key, so "more indented than the key" is exactly "still part
+# of this value," independent of which key it followed.
+function cr_indent(line,   s) {
+  s = line; sub(/[^ ].*$/, "", s); return length(s)
+}
 # The key of an "  indent key:" line, indent-independent.
 function cr_key(line,   k) {
   k = cr_trim(line); sub(/:.*$/, "", k); return cr_unquote(k)
@@ -114,12 +143,13 @@ cfg_volume_name() {
 # Nothing is not a default: coverage turns it into R2_UNCLASSIFIED.
 cfg_volume_disposition() {
   awk "$_CR_AWK_LIB"'
-    /^[A-Za-z_][A-Za-z0-9_-]*:/ { sect = cr_key($0); inkey = 0; next }
+    /^[A-Za-z_][A-Za-z0-9_-]*:/ { sect = cr_key($0); inkey = 0; rind = -1; next }
     sect != "volumes" { next }
-    /^  [A-Za-z0-9._-]+:/ { inkey = (cr_key($0) == key); next }
-    inkey && /^    x-nova-backup:/ { d = cr_value($0, "x-nova-backup") }
-    inkey && /^    x-nova-backup-reason:/ { r = cr_value($0, "x-nova-backup-reason") }
-    END { if (d != "") printf "%s\t%s\n", d, r }
+    /^  [A-Za-z0-9._-]+:/ { inkey = (cr_key($0) == key); rind = -1; next }
+    inkey && rind >= 0 && cr_indent($0) > rind { r = r " " cr_trim($0); next }
+    inkey && /^    x-nova-backup:/ { d = cr_value($0, "x-nova-backup"); rind = -1; next }
+    inkey && /^    x-nova-backup-reason:/ { r = cr_rawvalue($0, "x-nova-backup-reason"); rind = cr_indent($0); next }
+    END { if (d != "") printf "%s\t%s\n", d, cr_unquote(r) }
   ' key="$1"
 }
 
@@ -132,9 +162,10 @@ cfg_volume_disposition() {
 cfg_mounts() {
   awk "$_CR_AWK_LIB"'
     function flush() {
-      if (have) printf "%s\t%s\t%s\t%s\t%s\t%s\n", t, s, g, ro, d, r
-      have = 0; t = ""; s = ""; g = ""; ro = "false"; d = ""; r = ""
+      if (have) printf "%s\t%s\t%s\t%s\t%s\t%s\n", t, s, g, ro, d, cr_unquote(r)
+      have = 0; t = ""; s = ""; g = ""; ro = "false"; d = ""; r = ""; rind = -1
     }
+    invol && rind >= 0 && cr_indent($0) > rind { r = r " " cr_trim($0); next }
     /^[A-Za-z_][A-Za-z0-9_-]*:/ { flush(); sect = cr_key($0); insvc = 0; invol = 0; next }
     sect != "services" { next }
     /^  [A-Za-z0-9._-]+:/ { flush(); insvc = (cr_key($0) == svc); invol = 0; next }
@@ -152,7 +183,7 @@ cfg_mounts() {
     /^        target:/ { g = cr_value($0, "target"); next }
     /^        read_only:/ { ro = cr_value($0, "read_only"); next }
     /^        x-nova-backup:/ { d = cr_value($0, "x-nova-backup"); next }
-    /^        x-nova-backup-reason:/ { r = cr_value($0, "x-nova-backup-reason"); next }
+    /^        x-nova-backup-reason:/ { r = cr_rawvalue($0, "x-nova-backup-reason"); rind = cr_indent($0); next }
     END { flush() }
   ' svc="$1"
 }
@@ -170,9 +201,10 @@ cfg_bind_disposition() {
 cfg_anon() {
   awk "$_CR_AWK_LIB"'
     function flush() {
-      if (tgt != "") printf "%s\t%s\t%s\n", tgt, d, r
-      tgt = ""; d = ""; r = ""
+      if (tgt != "") printf "%s\t%s\t%s\n", tgt, d, cr_unquote(r)
+      tgt = ""; d = ""; r = ""; rind = -1
     }
+    inanon && rind >= 0 && cr_indent($0) > rind { r = r " " cr_trim($0); next }
     /^[A-Za-z_][A-Za-z0-9_-]*:/ { flush(); sect = cr_key($0); insvc = 0; inanon = 0; next }
     sect != "services" { next }
     /^  [A-Za-z0-9._-]+:/ { flush(); insvc = (cr_key($0) == svc); inanon = 0; next }
@@ -181,7 +213,7 @@ cfg_anon() {
     !inanon { next }
     /^      [^ ]/ { flush(); tgt = cr_key($0); next }
     /^        disposition:/ { d = cr_value($0, "disposition"); next }
-    /^        reason:/ { r = cr_value($0, "reason"); next }
+    /^        reason:/ { r = cr_rawvalue($0, "reason"); rind = cr_indent($0); next }
     END { flush() }
   ' svc="$1"
 }

@@ -2,7 +2,7 @@ name: nova
 services:
   core:
     build:
-      context: /repo/.worktrees/qr/services/core
+      context: /repo/services/core
       dockerfile: Dockerfile
     depends_on:
       postgres:
@@ -47,7 +47,7 @@ services:
         read_only: true
   gateway:
     build:
-      context: /repo/.worktrees/qr/services/gateway
+      context: /repo/services/gateway
       dockerfile: Dockerfile
     depends_on:
       postgres:
@@ -77,7 +77,7 @@ services:
     restart: unless-stopped
     volumes:
       - type: bind
-        source: /repo/.worktrees/qr/data
+        source: /repo/data
         target: /data
         read_only: true
         bind: {}
@@ -91,7 +91,7 @@ services:
         volume: {}
   memory:
     build:
-      context: /repo/.worktrees/qr/services/memory
+      context: /repo/services/memory
       dockerfile: Dockerfile
     depends_on:
       postgres:
@@ -171,7 +171,7 @@ services:
         target: /var/lib/postgresql/data
         volume: {}
       - type: bind
-        source: /repo/.worktrees/qr/deploy/postgres-init
+        source: /repo/deploy/postgres-init
         target: /docker-entrypoint-initdb.d
         read_only: true
         bind: {}
@@ -206,7 +206,7 @@ services:
     restart: unless-stopped
     volumes:
       - type: bind
-        source: /repo/.worktrees/qr/searxng
+        source: /repo/searxng
         target: /etc/searxng
         read_only: true
         bind: {}
@@ -260,7 +260,7 @@ services:
         target: /run/nova-status
         volume: {}
       - type: bind
-        source: /repo/.worktrees/qr/deploy/tailscale
+        source: /repo/deploy/tailscale
         target: /config
         read_only: true
         bind: {}
@@ -269,7 +269,7 @@ services:
           is on v4_tailscale, not here.
   web:
     build:
-      context: /repo/.worktrees/qr/apps/web
+      context: /repo/apps/web
       dockerfile: Dockerfile
     depends_on:
       core:

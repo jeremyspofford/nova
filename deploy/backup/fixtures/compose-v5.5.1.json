@@ -17,7 +17,7 @@
   "services": {
     "core": {
       "build": {
-        "context": "/repo/.worktrees/qr/services/core",
+        "context": "/repo/services/core",
         "dockerfile": "Dockerfile"
       },
       "command": null,
@@ -80,7 +80,7 @@
     },
     "gateway": {
       "build": {
-        "context": "/repo/.worktrees/qr/services/gateway",
+        "context": "/repo/services/gateway",
         "dockerfile": "Dockerfile"
       },
       "command": null,
@@ -123,7 +123,7 @@
       "volumes": [
         {
           "type": "bind",
-          "source": "/repo/.worktrees/qr/data",
+          "source": "/repo/data",
           "target": "/data",
           "read_only": true,
           "bind": {}
@@ -138,7 +138,7 @@
     },
     "memory": {
       "build": {
-        "context": "/repo/.worktrees/qr/services/memory",
+        "context": "/repo/services/memory",
         "dockerfile": "Dockerfile"
       },
       "command": null,
@@ -256,7 +256,7 @@
         },
         {
           "type": "bind",
-          "source": "/repo/.worktrees/qr/deploy/postgres-init",
+          "source": "/repo/deploy/postgres-init",
           "target": "/docker-entrypoint-initdb.d",
           "read_only": true,
           "bind": {}
@@ -300,7 +300,7 @@
       "volumes": [
         {
           "type": "bind",
-          "source": "/repo/.worktrees/qr/searxng",
+          "source": "/repo/searxng",
           "target": "/etc/searxng",
           "read_only": true,
           "bind": {}
@@ -359,7 +359,7 @@
         },
         {
           "type": "bind",
-          "source": "/repo/.worktrees/qr/deploy/tailscale",
+          "source": "/repo/deploy/tailscale",
           "target": "/config",
           "read_only": true,
           "bind": {}
@@ -368,7 +368,7 @@
     },
     "web": {
       "build": {
-        "context": "/repo/.worktrees/qr/apps/web",
+        "context": "/repo/apps/web",
         "dockerfile": "Dockerfile"
       },
       "command": null,
