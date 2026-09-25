@@ -133,9 +133,28 @@ directory, then `mv`), reading every field from tailscaled through
 - A write that fails is logged and retried on the next tick. The loop never
   stops the sidecar and never touches its exit status.
 - `start.sh` is the file's only writer (D17).
+- **Step 0 stays first.** The refusal while `/config/MOVED_TO` exists runs
+  before anything else, exactly as now, and the loop starts only on the
+  success path, after step 4 has verified the mapping. A parked source
+  therefore never writes, and the stale file it keeps is rejected by the
+  45 s `written_at` rule below. `start_test.sh`'s `MOVED_TO` assertions stay
+  green, unchanged.
 
 **Compose.** A new named volume `v4_status`, mounted read-write in
 `tailscale` at `/run/nova-status` and read-only in `core` at the same path.
+Every top-level volume must carry a backup disposition, or every
+`./install backup`, restore and drill refuses by name (S41,
+`deploy/backup/novabundle.py`, R2_UNCLASSIFIED; the legal values are listed
+above `volumes:` in the compose file):
+
+```yaml
+  v4_status:
+    x-nova-backup: exclude-derived
+    x-nova-backup-reason: >-
+      tailscale.json, rewritten by deploy/tailscale/start.sh every 15 s from
+      tailscaled's own state; carried to another host it would describe the
+      source's tailnet, not the target's.
+```
 
 **Core, `app/network.py`.** One reader: `address()` returns
 `Address(origin, reason, read_at)`.
@@ -475,9 +494,18 @@ Both live in a new `services/core/app/tools/setup.py` and are registered in
 - **Native-app constants:** `native_app.py` is pinned equal to
   `nativeApp.ts`.
 
-**Deploy:** `deploy/tailscale/start_test.sh` covers the status loop: its
-fields, the atomic write, a tick with the backend not Running, and a failed
-write that does not stop the sidecar.
+**Deploy:**
+
+- `deploy/tailscale/start_test.sh` covers the status loop: its fields, the
+  atomic write, a tick with the backend not Running, a failed write that does
+  not stop the sidecar, and no loop at all while `MOVED_TO` is present.
+- **Backup coverage.** These read the real compose file and are tripwires
+  for the volume set, so all of them run, and any pinned set moves
+  deliberately:
+  - `deploy/backup/tests/test_coverage_v4_real.py`, `test_raw_compose.py`
+    and `test_policy.py` (pytest from `deploy/backup`, which has its own
+    `pyproject.toml`);
+  - `deploy/backup_test.sh` and `deploy/install_test.sh`.
 
 **By hand, before merge:** the full core suite; gateway and memory unchanged
 but run; web `npm test` and `npx tsc --noEmit`; the shell tests. This follows
@@ -496,6 +524,9 @@ lane's own databases.
 - `test_capability_guard.py`: MUST_FIRE gains the setup phrases.
 - `tabs.test.tsx`: the new section on the Devices tab.
 - `start_test.sh`: the status loop.
+- The backup suites' volume sets (`deploy/backup/tests/test_policy.py:216-229`,
+  `test_raw_compose.py:496-498`, and whatever `test_coverage_v4_real.py`
+  derives): `v4_status` joins as `exclude-derived`.
 - `test_no_approvals.py` stays **unchanged and green**. The card channel adds
   no await, and no refusal here decides that a call *may not* run.
 
@@ -565,8 +596,9 @@ The other session owns S46/S46a now and S42a/S42b next.
   - core: new `network.py`, `network_api.py`, `native_app.py` and
     `tools/setup.py`; plus `tools/__init__.py`, `tools/base.py`, `chat.py`,
     `conversations.py`, `guards.py`, `live_facts.py` and `evals/`.
-  - `deploy/docker-compose.yml`, and `deploy/tailscale/start.sh` with its
-    test.
+  - `deploy/docker-compose.yml` (the volume and its backup disposition),
+    `deploy/tailscale/start.sh` with its test, and the backup suites' pinned
+    volume sets.
   - Documents.
 - **It does not touch** `apps/novad`, the gateway, or any migration. No
   migration is needed.
@@ -574,7 +606,23 @@ The other session owns S46/S46a now and S42a/S42b next.
   one-liners, `for_os`, the transport — rather than adding a second tool.
   `/add`'s Linux step 1 becomes that installer. The card and `code_claim` are
   S42b's to reuse.
-- **The other session is told this before the first code commit.**
+- **The other session was told this on 2026-09-25 and answered** (from the
+  Nova Hub session):
+  - the backup disposition for `v4_status`, and `start.sh`'s step 0 staying
+    first — both now in §4;
+  - S46a (`docs/plans/rebuild/s46a/spec.md`, `13580a26` on `slice/s46`,
+    unpushed) takes registry +3, corpus +4, `suite_version` +1 and core
+    migration 037; S42a lands before it and adds one eval. Whichever lands
+    second renumbers once;
+  - S46a adds guards at both guard sites, so `guards.py` will conflict
+    textually — a rebase, with no design overlap;
+  - S43a's `join_link` card rides this card channel, and S43a extends
+    `network.py` rather than adding a second reader.
+- **hub:primary** has uncommitted edits to `docs/plans/rebuild/ROADMAP.md` in
+  the nova directory (a row 6 in "The order of work" and a new "After
+  release: the optional list" section). This lane's ROADMAP edit comes last
+  and merges around them; the deploy step's `git pull --ff-only` is checked
+  against those local edits before it runs.
 
 ---
 
