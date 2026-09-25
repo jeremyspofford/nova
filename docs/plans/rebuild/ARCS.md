@@ -477,9 +477,12 @@ multi-person ingest.
 
 ## Jev — a decision model, and the switch that keeps Nova local
 
-Researched 2026-09-18 from TypeSafe's published documentation. Nothing about
-this is in the repo yet and nothing here has been measured on this stack — the
-numbers below are the vendor's claims, cited so the next reader can check them.
+Researched 2026-09-18 from TypeSafe's published documentation. **Re-checked
+2026-09-25** against the whole docs site (111 pages, 18 cookbooks), TypeSafe's
+legal terms, Kev, JevBench, independent tests and v4's code; the corrections
+are marked below. Nothing about this is in the repo yet and nothing here has
+been measured on this stack — the numbers are the vendor's or third parties',
+cited so the next reader can check them.
 
 **What it is.** TypeSafe AI launched Jev on 2026-09-15 as the first "System
 One" model. It **does not generate text**. It takes a `state` plus typed
@@ -500,26 +503,117 @@ Three primitives:
 | type | question | answer |
 |---|---|---|
 | `noul` | is this statement true? | `{"noul": 0.92}` |
-| `choice` | which one of these? | `choice` + `probabilities` + `confidence` |
-| `score` | where on this scale? | float `score` + `legend` + `probabilities` + `confidence` |
+| `choice` | which one of these? (up to 255 options) | `choice` + `probabilities` + `confidence` |
+| `score` | where on this scale? (2–10 levels) | float `score` + `legend` + `probabilities` + `confidence` |
 
-Also reachable OpenAI-compatibly through OpenRouter as `typesafe/jev-1.13` or
-`~typesafe/jev-latest`, 32k context, **$0.042/M input and $0/M output**,
-reported at 70–500 ms. Official Python SDK: `pip install typesafe-sdk`.
+From the [Models page](https://docs.typesafe.ai/models): **$0.042 per million
+input tokens, output free**; 64k tokens per request, 32k for the state plus the
+longest question; text only; 1,200 requests a minute, "adjusting dynamically".
+TypeSafe says about 100 ms; independent tests measured a median of 200–300 ms.
+Official Python SDK: `pip install typesafe-sdk` — first released 2026-09-14,
+with breaking changes on 09-15 and 09-18.
 
-**Why it fits Nova unusually well.** This codebase is already a pile of typed
-decisions currently made by regex, or by asking a chat model for JSON and
-hoping:
+*Corrected 2026-09-25:* this said Jev is reachable "OpenAI-compatibly" through
+OpenRouter. It is not. OpenRouter lists `typesafe/jev-1.13` and
+`~typesafe/jev-latest` with a `text->decisions` modality and serves them in
+TypeSafe's request shape, not through chat completions. Nova's OpenRouter
+preset is `openai-chat`, so it cannot call Jev as it stands.
 
-- The honesty guards are **noul** questions about a reply given a trace.
-- S10's role routing and S28's vision routing are **choice** questions — and
-  S28 already hand-rolled `Choice.certain` to separate "no model here can see
-  images" from "I could not tell", which is exactly a confidence threshold.
-- Notice urgency, skill-repetition detection and distillation subject
-  extraction are classification.
-- **S26's judge is the sharpest fit.** The corpus needs "a judge with a
-  non-boolean score" — that is `score`, and per-question isolation blunts the
-  position bias that made a judge model a thing to distrust.
+**Where it is weak.** TypeSafe's own
+[jaggedness page](https://docs.typesafe.ai/model-jaggedness/jev-1.13) lists
+literal reading, numbers, counting, dates, multi-hop questions, irrelevant
+context in the state, and adversarial content: text that argues for its own
+classification can move the answer. Its answers don't agree across question
+shapes — "refund" at 0.72 and "not a refund" at 0.47 sum to 1.19. Independent
+tests agree:
+
+- Familiar ground is fine: 93% against Sonnet 5's 98% on 100 real Claude Code
+  tool calls, with no errors at confidence 0.7 or above
+  ([Archestra](https://archestra.ai/blog/we-tested-jev-on-100-real-agent-calls)).
+- Out of distribution it is overconfident: right 44.7% of the time on a rule
+  it could not know, while stating 0.74
+  ([scienthoon](https://github.com/scienthoon/jev-ood-calibration)). It admits
+  it can't tell on 49.7% of unknowable items, against 97–100% for LLMs, and
+  option order changes 4–13% of its choices
+  ([nibzard](https://github.com/nibzard/decision-model-benchmark)).
+- Hard held-out items: 36.7% on JevBench's sealed set, against 89–96% for
+  reasoning LLMs ([v1.4.2 results](https://github.com/fstandhartinger/jevbench/blob/main/results/v1.4.2/jevbench-v1.4.2-results.json)).
+
+**Data terms.** Hosted in the US. TypeSafe says it won't train on input, but
+keeps personal data "as long as reasonably necessary … or otherwise in support
+of our business or commercial purposes"
+([privacy policy](https://typesafe.ai/legal/privacy-policy)), and its
+[customer agreement](https://typesafe.ai/legal/mca) lets it use customer data
+"in perpetuity" to derive telemetry. Zero retention is enterprise-only. The
+agreement also forbids distilling a model from Jev's output.
+
+**Kev, the local twin.** [Kev](https://github.com/jaredpalmer/kev) (Apache-2.0,
+Jared Palmer, not TypeSafe; first released 2026-09-20) answers the same
+`/v1/systemone` shape — "the TypeSafe Python SDK works against a Kev server
+unchanged" — and was not trained on Jev output. Kev-4B needs about 9 GB of GPU
+memory in bf16, 14 GB with serving buffers: it fits beside the 8B on the 3090,
+not beside the 27B. Kev-9B needs about 17 GB and Kev-27B an 80 GB card; Kev-0.8B
+fits anywhere but scores 0.648 on new sources against Jev's 0.857 (Kev's own
+table). There are no official quantizations, and it isn't on Ollama or vLLM.
+Opper's independent test put Kev-4B within 2 points of Jev's accuracy on three
+tasks, with Jev better calibrated
+([Opper](https://opper.ai/blog/jev-vs-kev-open-decision-model)).
+
+**Or her own model.** Reading option-letter probabilities from a local model is
+the other local route. JevBench v1.4.2 scores a calibrated Qwen3.8-27B read that
+way (the NInfer entry) at 51.5 for intelligence against Jev's 53.1, but 26.9
+against 63.3 overall, on speed and cost. Ollama's native API returns token
+log-probabilities; its OpenAI-compatible endpoint does not
+([spec](https://github.com/ollama/ollama/blob/main/docs/openapi.yaml)).
+Untested on the pinned 0.33.1, and on the single 3090 these reads would queue
+behind her chat turns.
+
+**Where it fits Nova.** *Corrected 2026-09-25.* The 2026-09-18 text called this
+codebase "a pile of typed decisions currently made by regex, or by asking a
+chat model for JSON and hoping", and listed the fits. Checked in code, most of
+that list was wrong:
+
+- The honesty guards detect a claim with a regex, then look for its backing in
+  the turn's spans. Only the detection half is question-shaped; the lookup is
+  the control and stays mechanical.
+- S10's role routing and S28's vision routing are availability and capability
+  lookups, not judgments. S28's `Choice.certain` only says whether the model
+  catalogue could be read (`vision.py`); it is not a confidence threshold.
+- Notice urgency is declared per check in code, and skill repetition is a count
+  over rows. Only distillation's subject comes from a model.
+- The S26 judge is not the sharpest fit. The sealed-set score rules Jev out for
+  hard quality judgments, and option order moves some of its answers, so it
+  doesn't escape position bias either. It can serve narrow, atomic rubric
+  checks.
+
+No speed or money is saved either: only three v4 decisions use a model (the
+opt-in on-topic check, hourly distillation, the 6-hourly commitment review),
+and two of them are off by default. Jev would add calls, not replace them.
+
+What does fit is decisions v4 doesn't make yet:
+
+- **A tool hint.** All 41 tools are advertised every turn, and in the v11 corpus
+  run (`f91966d1`) 3 of the 8B's 4 failures were not reaching for a tool it
+  needed. A per-turn "this needs tool X, or none" hint targets exactly that.
+  TypeSafe's one real A/B (skill suggestion: 488 requests, Haiku 4.5) cut wrong
+  loads from 16.8% to 7.3%, and broke 7 turns for every 37 it fixed.
+- **A fact check in distillation.** `resolve_messages` proves that a cited
+  message exists and sits in the window, not that it says the fact. A supports /
+  contradicts / says-nothing question closes that gap (TypeSafe's citation-check
+  cookbook).
+- **A recall filter.** Per recalled note: relevant, conflicts with the
+  question, carries instructions. Local backend only — through Jev his notes
+  would leave the machine on every turn.
+- **The opt-in on-topic check**, where the chat model grades its own reply,
+  becomes a yes/no from a different model.
+- **Labels on fetched pages** that carry instructions: a label, never a block,
+  and not a security boundary.
+
+Ruled out: TypeSafe's content-safety recipe (block jailbreaks, medical
+questions, self-harm) refuses on the owner's behalf, which `no-approvals.md`
+forbids. A cloud router sends every turn off the machine even to decide "stay
+local", and switching models per turn meets the rule that she may state which
+model measured best, not switch to it.
 
 **The rule that makes this safe, and it is the whole design:**
 
@@ -529,7 +623,7 @@ hoping:
 A guard that fails open when the network is down, the key is unset or the
 switch is off is worse than no guard. The regex guards stay the floor; Jev may
 only *add* a finding, never remove one. The landing spots are the ones where
-degrading is honest: the S26 judge, routing hints, urgency and dedup.
+degrading is honest: the tool hint, the fact check, the recall filter.
 
 **The switch**, as the owner framed it: **On** — better capability, not
 local-only. **Off** — local-only, and the structured features are gone. Same
@@ -540,16 +634,26 @@ states what is unavailable; it never refuses on his behalf.** Every Jev-backed
 feature names what it degrades to when off, in the UI, derived rather than
 written.
 
-**Open, and his to decide** — whether Off is the default (privacy-first says
-yes); whether it routes through OpenRouter (one key, and S10's provider and
-spend machinery already handles it) or direct to `api.typesafe.ai` (a provider
-entry plus the secrets store that does not exist yet); and how spend reads when
-output is free.
+*Since then (2026-09-25):* Kev and option-probability reads mean Off need not
+take the features away — they could run on a local backend, less accurate and
+on the shared GPU. Whether that changes the framing is his call.
 
-Sources: [TypeSafe docs](https://docs.typesafe.ai/introduction) ·
+**Open, and his to decide** — whether Off is the default (privacy-first says
+yes); whether Off means a local backend (Kev-4B beside the 8B, or her own
+model's option probabilities) or no structured features at all; whether Jev
+goes through OpenRouter or direct to `api.typesafe.ai` — either way it needs a
+new adapter, because Jev on OpenRouter is not a chat model, and direct needs the
+secrets store that does not exist yet; and how spend reads when output is free.
+
+Sources: [TypeSafe docs](https://docs.typesafe.ai/llms.txt) ·
 [HTTP API](https://docs.typesafe.ai/api.md) ·
+[Models](https://docs.typesafe.ai/models) ·
+[jaggedness](https://docs.typesafe.ai/model-jaggedness/jev-1.13) ·
+[customer agreement](https://typesafe.ai/legal/mca) ·
 [OpenRouter](https://openrouter.ai/typesafe) ·
-[Python SDK](https://github.com/typesafe-ai/typesafe-sdk-python)
+[Python SDK](https://github.com/typesafe-ai/typesafe-sdk-python) ·
+[Kev](https://github.com/jaredpalmer/kev) ·
+[JevBench](https://github.com/fstandhartinger/jevbench)
 
 ---
 
