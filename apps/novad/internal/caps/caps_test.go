@@ -2,8 +2,10 @@ package caps
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -210,6 +212,65 @@ func TestSystemInfoReportsRealNumbers(t *testing.T) {
 		t.Fatalf("system.info should succeed: %q", out.Error)
 	}
 	for _, want := range []string{"disk", "mem", "host="} {
+		if !strings.Contains(out.Output, want) {
+			t.Errorf("system.info output missing %q: %s", want, out.Output)
+		}
+	}
+}
+
+// The capability list is DERIVED from the dispatch table: a capability is
+// listed because a handler exists (doing-things S30's daemon.info reads
+// Names), never because a name was written twice.
+func TestNamesAreDerivedFromTheTable(t *testing.T) {
+	want := []string{
+		"apps.launch", "apps.list", "facts.refresh", "fs.list", "fs.read",
+		"fs.write", "shell.exec", "system.info", "system.notify",
+	}
+	if got := Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Names() = %v, want %v", got, want)
+	}
+}
+
+// S30 restates these words to say a daemon is too old for a call.
+func TestUnknownCapabilityKeepsItsExactWords(t *testing.T) {
+	out := Dispatch(context.Background(), "fs.destroy", map[string]any{}, testDeps(t))
+	if out.OK || out.Error != `unknown capability "fs.destroy"` {
+		t.Fatalf("got ok=%v %q", out.OK, out.Error)
+	}
+}
+
+func TestFactsRefreshWithoutASocketSaysCannot(t *testing.T) {
+	out := Dispatch(context.Background(), "facts.refresh", map[string]any{}, testDeps(t))
+	if out.OK || !strings.HasPrefix(out.Error, "cannot:") {
+		t.Fatalf("got ok=%v %q", out.OK, out.Error)
+	}
+}
+
+// The frame goes out BEFORE the result: SendFacts runs inside the handler,
+// so by the time core's command returns, core has recorded the facts.
+func TestFactsRefreshSendsTheFrameThenAnswers(t *testing.T) {
+	sent := 0
+	d := testDeps(t)
+	d.SendFacts = func(context.Context) error { sent++; return nil }
+	out := Dispatch(context.Background(), "facts.refresh", map[string]any{}, d)
+	if !out.OK || sent != 1 {
+		t.Fatalf("ok=%v sent=%d %q", out.OK, sent, out.Error)
+	}
+	d.SendFacts = func(context.Context) error { return errors.New("socket gone") }
+	if out := Dispatch(context.Background(), "facts.refresh", map[string]any{}, d); out.OK {
+		t.Fatal("a frame that could not be written is ok:false, never 'facts sent'")
+	}
+}
+
+// Every fact is NAMED, as a value or as unknown — an omitted line reads as
+// though it was never asked. (Before S42a, os= and uptime= were silently
+// dropped off Linux.)
+func TestSystemInfoNamesEveryFactEvenWhenUnknown(t *testing.T) {
+	out := Dispatch(context.Background(), "system.info", map[string]any{}, testDeps(t))
+	if !out.OK {
+		t.Fatalf("system.info should succeed: %q", out.Error)
+	}
+	for _, want := range []string{"host=", "os=", "disk", "mem", "uptime="} {
 		if !strings.Contains(out.Output, want) {
 			t.Errorf("system.info output missing %q: %s", want, out.Output)
 		}

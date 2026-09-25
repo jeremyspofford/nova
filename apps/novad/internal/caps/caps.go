@@ -11,6 +11,7 @@ package caps
 import (
 	"context"
 	"fmt"
+	"sort"
 )
 
 // Caps for the byte budgets in the plan. ReadCap and WriteCap share the same
@@ -34,35 +35,47 @@ type Outcome struct {
 }
 
 // Deps are the ambient facts a handler needs: the default working directory
-// for shell.exec, which is also system.info's statfs target.
+// for shell.exec (also system.info's disk target), and — on a live socket —
+// SendFacts, which writes a facts frame on THIS connection (facts.refresh).
+// SendFacts is nil where there is no socket, and a handler that needs it says
+// "cannot" rather than pretending.
 type Deps struct {
-	Home string
+	Home      string
+	SendFacts func(context.Context) error
 }
 
-// Dispatch routes a verified capability to its handler. An unknown capability
-// is a refusal (ok:false), not a panic — core should never send one, but the
-// edge refuses rather than trusts.
+// Request is one verified call as its handler receives it.
+type Request struct {
+	Args map[string]any
+	Deps Deps
+}
+
+// Handler performs one capability and judges the outcome (see Outcome).
+type Handler func(ctx context.Context, req Request) Outcome
+
+// Dispatch routes a verified capability through the table (table.go). An
+// unknown capability is a refusal (ok:false), not a panic — core should never
+// send one, but the edge refuses rather than trusts. The words "unknown
+// capability" are load-bearing: doing-things S30 restates them to say a
+// daemon is too old for a call, so they do not change.
 func Dispatch(ctx context.Context, capability string, args map[string]any, d Deps) Outcome {
-	switch capability {
-	case "system.info":
-		return systemInfo(d)
-	case "system.notify":
-		return systemNotify(ctx, args)
-	case "fs.list":
-		return fsList(args, d)
-	case "fs.read":
-		return fsRead(args, d)
-	case "fs.write":
-		return fsWrite(args, d)
-	case "apps.list":
-		return appsList()
-	case "apps.launch":
-		return appsLaunch(ctx, args)
-	case "shell.exec":
-		return shellExec(ctx, args, d)
-	default:
+	h, ok := table[capability]
+	if !ok {
 		return fail("unknown capability %q", capability)
 	}
+	return h(ctx, Request{Args: args, Deps: d})
+}
+
+// Names is every capability this daemon performs, sorted — derived from the
+// table, so a capability is listed because a handler exists (S30's
+// daemon.info reads this), never from a second list kept by hand.
+func Names() []string {
+	names := make([]string, 0, len(table))
+	for name := range table {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // ok0 is a successful outcome whose capability has no process exit (exit_code 0

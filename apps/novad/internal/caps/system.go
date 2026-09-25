@@ -1,73 +1,54 @@
 package caps
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"strconv"
 	"strings"
-	"syscall"
+	"time"
+
+	"novad/internal/platform"
 )
 
-// systemInfo gathers disk, memory, OS and uptime with stdlib only — statfs via
-// syscall, the rest by reading /proc and /etc/os-release. Each fact that can be
-// read is reported; a fact that cannot is named as unknown rather than faked.
-func systemInfo(d Deps) Outcome {
+// systemInfo reports host, OS, disk, memory and uptime, plus this OS's extra
+// lines (home, and on Windows the Desktop folder). Every fact is NAMED: a
+// value when it could be read, "unknown" when it could not — never dropped,
+// because an omitted line reads as though it was never asked.
+func systemInfo(ctx context.Context, d Deps) Outcome {
 	var parts []string
-
 	if host, err := os.Hostname(); err == nil {
 		parts = append(parts, "host="+host)
+	} else {
+		parts = append(parts, "host=unknown")
 	}
-	if pretty := osReleasePretty(); pretty != "" {
-		parts = append(parts, "os="+pretty)
-	}
+	parts = append(parts, "os="+platform.OSVersion(ctx, platform.Exec{}))
 
 	target := d.Home
 	if target == "" {
-		target = "/"
+		target = platform.DiskRoot()
 	}
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(target, &st); err == nil {
-		bs := uint64(st.Bsize)
-		free := st.Bavail * bs
-		total := st.Blocks * bs
+	if free, total, err := platform.Disk(target); err == nil {
 		parts = append(parts, fmt.Sprintf("disk %s free %s of %s", target, gib(free), gib(total)))
 	} else {
 		parts = append(parts, "disk=unknown")
 	}
 
-	if total, avail, ok := memInfo(); ok {
-		parts = append(parts, fmt.Sprintf("mem available %s of %s", gib(avail), gib(total)))
-	} else {
+	switch m, err := platform.Memory(); {
+	case err != nil:
 		parts = append(parts, "mem=unknown")
+	case m.AvailableKnown:
+		parts = append(parts, fmt.Sprintf("mem available %s of %s", gib(m.Available), gib(m.Total)))
+	default:
+		parts = append(parts, fmt.Sprintf("mem total %s, available unknown", gib(m.Total)))
 	}
 
-	if up, ok := uptime(); ok {
-		parts = append(parts, "uptime="+up)
+	if up, err := platform.Uptime(); err == nil {
+		parts = append(parts, "uptime="+formatUptime(up))
+	} else {
+		parts = append(parts, "uptime=unknown")
 	}
-
+	parts = append(parts, platform.Extras(d.Home)...)
 	return ok0(strings.Join(parts, "; "))
-}
-
-// systemNotify sends a desktop notification via notify-send when it exists.
-// With no backend it is ok:false with a stated reason — it does not pretend to
-// have notified. It needs a graphical session (DISPLAY/DBUS); see the README.
-func systemNotify(ctx context.Context, args map[string]any) Outcome {
-	msg, ok := strArg(args, "message")
-	if !ok || msg == "" {
-		return fail("system.notify needs a 'message'")
-	}
-	path, err := exec.LookPath("notify-send")
-	if err != nil {
-		return fail("no desktop notification backend: notify-send is not installed")
-	}
-	cmd := exec.CommandContext(ctx, path, "Nova", msg)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fail("notify-send failed: %v: %s", err, strings.TrimSpace(string(out)))
-	}
-	return ok0("notified")
 }
 
 func gib(b uint64) string {
@@ -75,70 +56,8 @@ func gib(b uint64) string {
 	return fmt.Sprintf("%.1f GiB", float64(b)/float64(g))
 }
 
-func osReleasePretty() string {
-	f, err := os.Open("/etc/os-release")
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := sc.Text()
-		if strings.HasPrefix(line, "PRETTY_NAME=") {
-			v := strings.TrimPrefix(line, "PRETTY_NAME=")
-			return strings.Trim(v, `"`)
-		}
-	}
-	return ""
-}
-
-// memInfo reads MemTotal and MemAvailable from /proc/meminfo (both in kB).
-func memInfo() (total, avail uint64, ok bool) {
-	f, err := os.Open("/proc/meminfo")
-	if err != nil {
-		return 0, 0, false
-	}
-	defer f.Close()
-	var gotTotal, gotAvail bool
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		fields := strings.Fields(sc.Text())
-		if len(fields) < 2 {
-			continue
-		}
-		switch fields[0] {
-		case "MemTotal:":
-			if v, err := strconv.ParseUint(fields[1], 10, 64); err == nil {
-				total = v * 1024
-				gotTotal = true
-			}
-		case "MemAvailable:":
-			if v, err := strconv.ParseUint(fields[1], 10, 64); err == nil {
-				avail = v * 1024
-				gotAvail = true
-			}
-		}
-	}
-	return total, avail, gotTotal && gotAvail
-}
-
-// uptime reads /proc/uptime (seconds since boot) and formats it compactly.
-func uptime() (string, bool) {
-	body, err := os.ReadFile("/proc/uptime")
-	if err != nil {
-		return "", false
-	}
-	fields := strings.Fields(string(body))
-	if len(fields) == 0 {
-		return "", false
-	}
-	secs, err := strconv.ParseFloat(fields[0], 64)
-	if err != nil {
-		return "", false
-	}
-	total := int64(secs)
-	days := total / 86400
-	hours := (total % 86400) / 3600
-	mins := (total % 3600) / 60
-	return fmt.Sprintf("%dd %dh %dm", days, hours, mins), true
+// formatUptime is "Nd Nh Nm".
+func formatUptime(d time.Duration) string {
+	total := int64(d / time.Second)
+	return fmt.Sprintf("%dd %dh %dm", total/86400, (total%86400)/3600, (total%3600)/60)
 }

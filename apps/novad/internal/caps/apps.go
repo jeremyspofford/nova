@@ -105,7 +105,7 @@ func parseDesktop(path, id string) (desktopApp, bool) {
 	return app, true
 }
 
-func appsList() Outcome {
+func appsList(_ context.Context) Outcome {
 	apps := scanApps()
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d apps\n", len(apps))
