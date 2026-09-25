@@ -267,7 +267,9 @@ installs onto devices properly."*
   every OS) → S42b (install, now carrying the admin helper) → machine setup
   (wake first) → S46 (wake in chat); S43a, S43b and S44 follow. Neither blocks
   the wake: the Dell is already on the tailnet through its own Tailscale and
-  already serves models as a provider row (§7).
+  already serves models as a provider row (§7). The spec that followed splits
+  S46 into **S46a, machine setup** ([`../s46a/spec.md`](../s46a/spec.md)), and
+  **S46b, wake in chat**, and moves the hold from S44 into S46b.
 
 Constraints that already bind anything this spike produces:
 

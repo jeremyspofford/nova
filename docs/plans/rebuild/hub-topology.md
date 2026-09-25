@@ -508,6 +508,12 @@ Rollback: `undo-move`, then bring the Dell stack back up.
 > multi-machine setup. It also records that the Dell is today a **provider row,
 > not an engine**, which this section's turn flow assumes it is. Most of the
 > mechanics below survive; the design basis says which do not.
+>
+> **Split 2026-09-25:** S46a, machine setup — she reads, fixes, walks through and
+> proves a machine's wake settings herself, through an admin helper installed
+> with the agent ([`s46a/spec.md`](s46a/spec.md)) — then S46b, wake in chat,
+> which takes the hold from S44. Order: S42a → S42b → S46a → S46b, then S43a,
+> S43b, S44.
 
 **Core migration `038_wake`:**
 - `machine_overrides(device_id, mac_override[1..4], relay_override)`;
