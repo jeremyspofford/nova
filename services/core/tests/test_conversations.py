@@ -322,6 +322,10 @@ MESSAGE_KEYS = {
     # whole prompt, so summing them reports a three-round turn as three times
     # its own context. Derived off the span, like every key above it.
     "prompt_tokens",
+    # S47 (2026-09-25): `cards` — the setup QR cards this turn's show_setup_qr
+    # spans sent, redrawn from span facts that never carry a pairing code.
+    # Always present, empty where the turn sent none.
+    "cards",
 }
 
 
@@ -539,6 +543,65 @@ async def test_delegations_derive_from_the_turns_delegate_spans(owner_client, po
         {"agent": "writer", "agent_turn_id": None, "status": "error", "files": []},
         {"agent": "coder", "agent_turn_id": errored, "status": "error", "files": []},
         {"agent": None, "agent_turn_id": None, "status": "error", "files": []},
+    ]
+
+
+# -- S47: cards derive from the turn's successful show_setup_qr spans -------
+
+
+async def test_cards_derive_from_the_turns_successful_show_setup_qr_spans(owner_client, pool):
+    """One entry per successful show_setup_qr span on the row's turn: a failed
+    span (no facts) and a different tool (nova_address) redraw nothing — only
+    _card_json's own reading of the facts ever produces a card."""
+    conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]
+    turn = await _turn(pool, conversation)
+    await _row(pool, conversation, "user", "add my laptop")
+    await _row(pool, conversation, "assistant", "Sent a pairing card to the chat.", turn, offset=1)
+
+    await pool.execute(
+        "INSERT INTO turn_spans (turn_id, kind, name, started_at, meta) "
+        "VALUES ($1, 'tool', 'show_setup_qr', now() + make_interval(secs => 0), $2::jsonb)",
+        turn,
+        {
+            "ok": True,
+            "args_redacted": {"setup": "add_machine"},
+            "facts": [
+                {
+                    "setup": "add_machine",
+                    "address": "https://nova.fake-tailnet.ts.net",
+                    "url": "https://nova.fake-tailnet.ts.net/add",
+                    "expires_at": "2026-09-25T14:10:00+00:00",
+                    "code_shown": True,
+                }
+            ],
+        },
+    )
+    # A failed call — no facts, and it must redraw nothing.
+    await pool.execute(
+        "INSERT INTO turn_spans (turn_id, kind, name, started_at, meta) "
+        "VALUES ($1, 'tool', 'show_setup_qr', now() + make_interval(secs => 1), $2::jsonb)",
+        turn,
+        {"ok": False, "args_redacted": {"setup": "add_machine"}},
+    )
+    # A different tool entirely — never read as a card.
+    await pool.execute(
+        "INSERT INTO turn_spans (turn_id, kind, name, started_at, meta) "
+        "VALUES ($1, 'tool', 'nova_address', now() + make_interval(secs => 2), $2::jsonb)",
+        turn,
+        {"ok": True, "args_redacted": {}, "facts": [{"nova_address": "https://nova.fake-tailnet.ts.net"}]},
+    )
+
+    user, nova = await _messages(owner_client, conversation)
+    assert user["cards"] == []
+    assert nova["cards"] == [
+        {
+            "kind": "setup_qr",
+            "setup": "add_machine",
+            "address": "https://nova.fake-tailnet.ts.net",
+            "url": "https://nova.fake-tailnet.ts.net/add",
+            "code_shown": True,
+            "expires_at": "2026-09-25T14:10:00+00:00",
+        }
     ]
 
 

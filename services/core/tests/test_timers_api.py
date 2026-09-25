@@ -586,6 +586,10 @@ async def test_messages_carry_turn_kind_from_the_turn_that_wrote_them_and_null_o
         # targeted suites while the full one was wedged, so this pin only
         # caught up at item 0 (2026-09-18).
         "attachments",
+        # S47 (2026-09-25): the setup QR cards this turn's show_setup_qr spans
+        # sent, redrawn from span facts that never carry a pairing code — an
+        # empty list when the turn sent none.
+        "cards",
     }
 
 

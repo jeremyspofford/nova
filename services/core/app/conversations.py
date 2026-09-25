@@ -304,6 +304,30 @@ def _delegation_json(span: dict) -> dict:
     }
 
 
+def _card_json(facts: object) -> dict | None:
+    """One successful show_setup_qr span -> the card a reload redraws (S47).
+
+    Built from the span's FACTS, which never carry a pairing code: a machine
+    card comes back as "shown once", with its link and expiry and no code.
+    A span with no readable fact redraws nothing rather than a guessed card."""
+    fact = facts[0] if isinstance(facts, list) and facts and isinstance(facts[0], dict) else None
+    if fact is None:
+        return None
+    setup, address, url = fact.get("setup"), fact.get("address"), fact.get("url")
+    if not all(isinstance(v, str) and v for v in (setup, address, url)):
+        return None
+    card = {
+        "kind": "setup_qr",
+        "setup": setup,
+        "address": address,
+        "url": url,
+        "code_shown": fact.get("code_shown") is True,
+    }
+    if isinstance(fact.get("expires_at"), str):
+        card["expires_at"] = fact["expires_at"]
+    return card
+
+
 async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[dict]:
     """The rows of ONE conversation, oldest first, as the chat page renders
     them. No ownership check here — the caller scopes: get_messages proves the
@@ -330,11 +354,16 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
     `delegations` (S12) is one entry per delegate_to_agent tool span on the
     row's turn, so a reload can re-draw the chip for each agent Nova handed
     work to in that turn — see _delegation_json for what each entry says.
+    `cards` (S47) is one entry per successful show_setup_qr span on the row's
+    turn, redrawn from the span's own facts — which never carry a pairing
+    code — so a reload shows the same setup card minus the code, marked as
+    already shown once; see _card_json for what a span must state to redraw.
     """
     # Function-local: app.agents imports app.tools, whose timers module
     # imports this module at top level — the same one-way idiom
     # tools/timers.py uses to reach agents.
     from app import agents, attachments
+    from app.tools import setup as setup_tools
 
     rows = await pool.fetch(
         "SELECT m.id, m.role, m.content, m.created_at, t.kind AS turn_kind, a.name AS agent, "
@@ -363,12 +392,18 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
         "  (SELECT COALESCE(jsonb_agg(jsonb_build_object("
         "      'facts', s.meta->'facts', 'args', s.meta->'args_redacted') "
         "    ORDER BY s.started_at, s.id), '[]'::jsonb) FROM turn_spans s "
-        "    WHERE s.turn_id = m.turn_id AND s.kind = 'tool' AND s.name = $2) AS delegate_spans "
+        "    WHERE s.turn_id = m.turn_id AND s.kind = 'tool' AND s.name = $2) AS delegate_spans, "
+        # S47: every successful show_setup_qr span on the turn, in order, carrying
+        # just its facts — _card_json turns each into the card a reload redraws.
+        "  (SELECT COALESCE(jsonb_agg(s.meta->'facts' ORDER BY s.started_at, s.id), '[]'::jsonb) "
+        "    FROM turn_spans s WHERE s.turn_id = m.turn_id AND s.kind = 'tool' AND s.name = $3 "
+        "    AND s.meta->>'ok' = 'true') AS card_spans "
         "FROM messages m LEFT JOIN turns t ON t.id = m.turn_id "
         "LEFT JOIN agents a ON a.id = t.agent_id "
         "WHERE m.conversation_id = $1 ORDER BY m.created_at, m.id",
         conversation_id,
         agents.DELEGATE_TOOL,
+        setup_tools.SHOW_SETUP_QR.name,
     )
     # S28: the files each message carried, in ONE query for the whole page —
     # rendering a conversation must not be a round trip per message. Most
@@ -395,6 +430,9 @@ async def messages_json(pool: asyncpg.Pool, conversation_id: uuid.UUID) -> list[
             "prompt_tokens": row["prompt_tokens"],
             "agent": row["agent"],
             "delegations": [_delegation_json(span) for span in row["delegate_spans"]],
+            # S47: the setup QR cards her turn sent, redrawn from the span
+            # facts — never carrying a code (see _card_json).
+            "cards": [c for c in (_card_json(f) for f in row["card_spans"]) if c is not None],
             # S28: what he attached to this message. Always present, empty
             # for every row that carried nothing — a client should not have
             # to tell "no files" apart from "this server does not say".

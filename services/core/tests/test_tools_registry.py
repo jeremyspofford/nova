@@ -121,6 +121,11 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
     # question he had asked her. The switch is availability, never permission
     # (D2): the gateway's routing is its only reader and nothing waits on him,
     # which is why test_no_approvals stays green beside this.
+    #
+    # Deliberate snapshot update (slice 47, 2026-09-25): nova_address and
+    # show_setup_qr (tools/setup.py), so FORTY-ONE -> FORTY-THREE: Nova's
+    # address for another device, and the setup QR cards whose pairing code
+    # never reaches her.
     assert set(tools.REGISTRY) == {
         "workspace_write_file",
         "workspace_read_file",
@@ -195,6 +200,10 @@ def test_the_registered_tools_are_exactly_this_set_by_name():
         # THIRTY-NINE -> FORTY-ONE.
         "machine_status",
         "machine_configure",
+        # S47 (2026-09-25): Nova's address for another device, and the setup
+        # QR cards (tools/setup.py). FORTY-ONE -> FORTY-THREE.
+        "nova_address",
+        "show_setup_qr",
     }
 
 
@@ -560,6 +569,10 @@ def test_the_tools_that_change_nothing_are_pinned_by_name():
         # S40: reading the gateway's engine list changes nothing. Its twin,
         # machine_configure, is deliberately NOT here — it flips a switch.
         "machine_status",
+        # S47: reading the tailnet status file changes nothing. Its twin,
+        # show_setup_qr, is deliberately NOT here — it mints a code and sends
+        # a card.
+        "nova_address",
     }
 
 
@@ -584,5 +597,6 @@ def test_every_tool_that_writes_says_it_changes_something():
         "delete_agent",
         "delegate_to_agent",
         "machine_configure",
+        "show_setup_qr",
     ):
         assert name in changes, f"{name} changes something and must not be reads_only"

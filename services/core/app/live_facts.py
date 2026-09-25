@@ -112,6 +112,10 @@ AUTO_RUN = frozenset(
         # from three weeks ago. Its arguments are a fixed set of views and a
         # row limit, so there is no address a note could choose.
         "notices",
+        # S47. The address another device can open is answered by the tailnet
+        # sidecar's status file, read now — never by a note saying "Nova is at
+        # https://…". No arguments, a local file, nothing reached off this host.
+        "nova_address",
         "route_explain",
         "spend_report",
         "workspace_list_files",

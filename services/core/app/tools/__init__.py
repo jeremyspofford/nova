@@ -45,6 +45,7 @@ from app.tools import (
     notices,
     route,
     schema,
+    setup,
     skills,
     spend,
     timers,
@@ -113,6 +114,9 @@ REGISTRY: dict[str, Tool] = {
         # Reads, plus the two noise preferences the page offers him; nothing
         # here is an approval (owner ruling 2026-09-03).
         *notices.TOOLS,
+        # S47: Nova's address for another device, and the setup QR cards
+        # (tools/setup.py). A card is UI-only; a pairing code never reaches her.
+        *setup.TOOLS,
     )
 }
 
