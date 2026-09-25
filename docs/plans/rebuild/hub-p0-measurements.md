@@ -97,7 +97,7 @@ taken 2026-09-21 — see the section above.)
 
 | ID | Measurement | Gates | Needs |
 |---|---|---|---|
-| P0-1, P0-2, P0-3, P0-13 | Wi-Fi WoL from S3; whether probes wake the Dell; time to ready; broadcast egress | S46 | The Dell asleep (owner) |
+| P0-1, P0-2, P0-3, P0-13 | Wi-Fi WoL from S3; whether probes wake the Dell; time to ready; broadcast egress | S46 | The Dell asleep (owner). **P0-1 trial 1 taken 2026-09-23: did not wake** (below); the rest waits until the Dell's settings are read |
 | P0-4, P0-5, P0-6 | CUDA after resume; the hold from a Run-key process; Docker Desktop lifetime and clock | S44 | The Dell asleep and resumed (owner) |
 | P0-7 | tsnet through ProtonVPN, next to host Tailscale | S43a | A Go probe plus a tailnet approval (owner) |
 | P0-9 (desktop half only) | Does the desktop's auto-suspend honour the idle inhibitor | S44 | An owner graphical login with `sleep-inactive-ac-type=suspend` — it sleeps the hub |
@@ -446,3 +446,42 @@ that reads `systemctl is-active ufw` to decide would get the wrong answer;
 | P0-9, "does the desktop honour the idle inhibitor" | No graphical session is logged in on the mini PC — the only `loginctl` session during every probe was the SSH one — and `sleep-inactive-ac-type` is `'nothing'` with `IdleAction=ignore`, so there is nothing configured to suspend | An owner graphical login with `sleep-inactive-ac-type=suspend` and a short timeout. It would put the hub to sleep, so it is an owner call |
 | P0-8, end-to-end `/recall` against the real corpus on the Dell | The step that would have named a real `person_id` reads his notes; it was refused and not worked around | Not needed for the branch — the embed boundary was measured directly, which is where the N150 cost is |
 | P0-10 (longest silence in a pull) | The only pull taken was `nomic-embed-text`, 274 MB in 8.5 s — far too small to say anything about a silence window, and `/api/pull`'s NDJSON carries no timestamps | A multi-GB pull with per-line arrival times recorded by the client |
+
+## Measured 2026-09-23: P0-1 trial 1 — Wake-on-LAN over Wi-Fi did not wake the Dell
+
+**Setup.** The hub sends from its **host**, bound to its Wi-Fi address, using a
+throwaway probe kept outside the repo because it holds the Dell's MAC.
+Liveness is read over the tailnet once a second (about every 5 s while the Dell
+is down): `os` is the Dell's Windows node answering `tailscale ping`, and `svc`
+is a TCP connect to its model port. Plain ping is useless here: the Dell answers
+no ICMP from the LAN even when awake.
+
+| Step | Reading |
+|---|---|
+| Owner put the Dell to sleep (Start > Power > Sleep) | `svc DOWN` 15:28:03, `os DOWN` 15:28:06 |
+| After 5 min asleep: subnet-directed broadcast, UDP 9, 3 packets | no answer within 120 s |
+| Then the limited broadcast (255.255.255.255), UDP 9, 3 packets | no answer within 120 s |
+| Then subnet-directed, UDP 7, 3 packets | no answer within 120 s |
+| Two more directed sends, at about 12 and 14 min asleep | no answer |
+| **The sender, verified** | `tcpdump` on the hub's Wi-Fi: an Ethernet broadcast, UDP 9, a 102-byte payload of 6 × `FF` and 16 × the Dell's MAC, checked byte for byte; the interface's transmit counter rose by exactly 3 for a 3-packet send |
+| **The Dell's card while asleep** | answered **no ARP** — the hub's neighbour entry went `FAILED` on a fresh lookup. Awake, it answers ARP |
+
+**What it rules out, and what it does not.**
+
+- It rules out the sender: the right packet, on the right interface, on the air.
+- It suggests the Dell's Wi-Fi is off or disassociated while it sleeps: a card
+  armed for Wake-on-WLAN normally stays associated and usually answers ARP
+  through offload. **Not proven** — an associated card without ARP offload
+  looks the same from here.
+- **The cause is not established.** The candidates are all on the Dell: the
+  BIOS "Wake on LAN/WLAN" setting, the adapter's wake settings, or the sleep
+  state it entered (S3 or Modern Standby) not supporting Wi-Fi wake on this
+  platform.
+
+**The schedule was stopped on purpose.** The plan's P0-1 schedule is 5 min × 5,
+90 min × 3 and overnight × 2. Trial 1 failed completely at the shortest sleep,
+the condition most favourable to landing, and repeating an unchanged
+configuration measures nothing new. The remaining trials wait until the Dell's
+settings are read — by the owner's decision of 2026-09-25, through Nova's agent
+(`s46/design-basis.md` §9), not by hand.
+

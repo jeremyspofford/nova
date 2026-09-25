@@ -163,12 +163,19 @@ make either policy safe.
 | How long Ollama keeps a model loaded after its last use | **5 minutes** (its default) |
 | Cloud fallback, first token | **9.3 s**, about **$0.0015** a turn |
 | After a real Dell reboot | only its ollama came back; GPU published on the right port; the parked Nova stayed parked |
-| Whether the Dell answers **ping** from the hub while fully awake (2026-09-23) | **No: 100% loss.** Its firewall drops ICMP on the Wi-Fi network. ARP does answer, but a sleeping Wi-Fi card can answer ARP too. So "the machine answered" must be read over the tailnet (the node answering `tailscale ping`, then the model port accepting a connection), never from ping or ARP. |
+| Whether the Dell answers **ping** from the hub while fully awake (2026-09-23) | **No: 100% loss.** Why is not established: Windows' default firewall rules and ProtonVPN's LAN blocking would each do it. ARP answers while it is awake and did not while it was asleep (next row), but a card armed for Wake-on-WLAN can answer ARP asleep through offload, so ARP proves nothing either way. "The machine answered" must be read over the tailnet (the node answering `tailscale ping`, then the model port accepting a connection), never from ping or ARP. |
 
-**Not measured, and it gates everything: Wake-on-LAN over Wi-Fi from sleep
-(P0-1).** A lot of hardware cannot do it reliably. If this Dell cannot, then
-*answer now* is the only policy that works for it, and *wait* becomes a timeout
-on every message.
+**Measured once, 2026-09-23, and it gates everything: Wake-on-LAN over Wi-Fi
+from sleep (P0-1) did not wake the Dell.** After 5 minutes asleep it was sent
+all three packet variants, 2 minutes apart, then two more; it never answered.
+The sender is verified (the frames were captured on the hub's Wi-Fi and are
+valid magic packets). While asleep the Dell's card answered no ARP, which
+suggests its Wi-Fi is off during sleep. **The cause is not established** — the
+BIOS wake setting, the adapter's wake settings, or the sleep state itself — and
+reading it is the first job of the device-setup capability in §9. Detail:
+`../hub-p0-measurements.md`, P0-1 trial 1. Until a wake lands, *answer now* is
+the only policy that works for this machine, and *wait* is a timeout on every
+message.
 
 ---
 
@@ -231,6 +238,31 @@ this spike would join:
 | **Join by code, CLI command or QR** | S42b: a per-OS card with a one-line command (POSIX `sh` and PowerShell), each verifying the download's sha256 before running; the code never enters her context. S47: a QR code for thin clients. | A QR code suits a **phone**; on a desktop a copyable command is easier. Does one flow offer all three and let the device pick? |
 | **Prep the device for WoL, or walk the user through it** | S46: a per-OS wake checklist derived from the machine's facts — Windows WoMP, hibernate-after, Fast Startup; macOS "Wake for network access"; Linux `ethtool` and NetworkManager; BIOS steps stated but not performed. | **What the agent can do itself vs what needs admin, a reboot or the BIOS.** Firmware settings are unreachable from software, so some of this is always a walkthrough. Does the agent change what it can and hand the rest to the user? |
 | **Download models onto specific devices, kept in sync** | S44: pulls per engine, checked against that machine's free disk. | **Agreed by the owner, 2026-09-23:** each machine has a *desired model list*, and its agent **reconciles towards it** — pulling what is missing and reporting what cannot fit — rather than copying every model everywhere. It is the §2 frame again: the list is the desired state, the agent is the reconciler. Still open: who edits the list (the owner in Settings, Nova when asked, or both) and what happens to a model that is on the machine but no longer on its list. |
+
+### Owner decisions, 2026-09-25: Nova sets machines up herself
+
+Asked after the first wake trial failed, when the next step was the owner
+running PowerShell and reading his BIOS by hand: *"How do we teach nova to be
+able to do this? we need nova to be able to configure systems for users for her
+installs onto devices properly."*
+
+- **She configures machines herself, and the know-how lives in her agent's
+  code, not in her prompt.** For each role a machine plays (first: being woken)
+  the agent **reads** the real settings, applies **named fixes** and reads each
+  one back, **walks the owner through** what software cannot reach (BIOS and
+  firmware) for that make and model, and **proves** the result — for wake, a
+  wake that landed. A small local model only has to choose the fix; the code
+  knows the platform. The long tail of requests ("set up my printer") stays
+  with skills and `device_run`.
+- **OWNER: admin rights come from an admin helper installed with the agent** —
+  option A of three (B: an OS prompt for every fix; C: she never changes admin
+  settings). One OS prompt at install; after that she can apply the named fixes
+  remotely. **The helper accepts only named fixes, never arbitrary commands.**
+- **Not decided again, because standing rulings already settle them:** at
+  install she applies what the machine's roles need and states each change with
+  its undo, with no approval step (no approvals, 2026-09-03); and the wake proof
+  runs when the machine next sleeps, because Nova never puts a machine to sleep
+  (2026-09-18).
 
 Constraints that already bind anything this spike produces:
 
