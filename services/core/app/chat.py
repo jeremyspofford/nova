@@ -537,6 +537,17 @@ def _frame(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+def _card_channel(emit: Callable[[str | None], None]) -> Callable[[dict], None]:
+    """A turn's card channel (S47): each payload becomes one `card` frame on
+    the live stream, and goes nowhere else — not into `messages`, not onto a
+    span. See ToolContext.card for why only the stream route binds one."""
+
+    def send(payload: dict) -> None:
+        emit(_frame({"card": payload}))
+
+    return send
+
+
 # The cap on an activity frame's `reason` (see the frame contract docstring):
 # long enough to carry a stated error head, short enough that one runaway
 # tool result cannot bloat the SSE stream or dominate the chat tile.
@@ -3835,6 +3846,7 @@ async def _run_turn(
     ingest: bool = True,
     persona: agents.Persona | None = None,
     attached: Sequence[attachments.Attachment] = (),
+    card: Callable[[dict], None] | None = None,
 ) -> None:
     """The whole turn, run to completion regardless of who is still watching.
 
@@ -3872,6 +3884,9 @@ async def _run_turn(
     simply dropped and the work finishes anyway. `emit(None)` is the
     end-of-turn sentinel, sent LAST — after the atomic close — so a reader
     that drains the stream has, by [DONE], seen a fully-recorded turn.
+
+    `card` is the UI-only card channel (S47); only the stream route and the
+    eval runner pass one.
     """
     # Everything streamed to the client this turn, across every round, in
     # order — this is what persists, so a reload shows exactly what was
@@ -4038,6 +4053,7 @@ async def _run_turn(
                 # when it then refused, and _run_tool copies each call's
                 # slice onto its span.
                 facts_sink=[],
+                card=card,
             )
         else:
             advertised = tools.advertised_tools(persona.tool_names)
@@ -4049,6 +4065,7 @@ async def _run_turn(
                 # filesystem call this turn makes — the same gate as Nova's,
                 # rooted lower.
                 workspace_root=persona.workspace_root,
+                card=card,
             )
         # The live checks, BEFORE the prompt is built and therefore before she
         # is asked anything (S14, owner ruling 2026-09-10). A note that names
@@ -5697,6 +5714,8 @@ def _spawn_turn(
     conversation_id: uuid.UUID,
     started: _Started,
     emit: Callable[[str | None], None],
+    *,
+    card: Callable[[dict], None] | None = None,
 ) -> None:
     """Run an opened turn as its own detached task.
 
@@ -5722,6 +5741,7 @@ def _spawn_turn(
             emit,
             persona=started.persona,
             attached=started.attached,
+            card=card,
         )
     )
 
@@ -5933,7 +5953,14 @@ async def chat_stream(
         return JSONResponse(status_code=202, content={"queued": accepted})
 
     assert started is not None  # the else branch above, spelled for the reader
-    _spawn_turn(request.app, pool, conversation_id, started, queue.put_nowait)
+    _spawn_turn(
+        request.app,
+        pool,
+        conversation_id,
+        started,
+        queue.put_nowait,
+        card=_card_channel(queue.put_nowait),
+    )
     return StreamingResponse(
         _stream_from_queue(queue),
         media_type="text/event-stream",

@@ -84,6 +84,10 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
     # recorder, handed to a scripted skill so its steps land on the trace. It
     # runs what the stored script already said to run and decides nothing; a
     # context without one still runs the steps, and says they were not spanned.
+    # `card` (S47) is an OUTPUT channel too: a UI-only frame beside her reply
+    # (a setup QR card) that never enters her context, a span or a message.
+    # Bound only where there is a chat to show it in; nothing reads it to
+    # decide anything.
     assert set(ctx.__dataclass_fields__) == {
         "app",
         "person",
@@ -91,6 +95,7 @@ def test_context_for_states_a_missing_person_as_a_bug(monkeypatch, tmp_path):
         "facts_sink",
         "progress",
         "step",
+        "card",
     }
 
 
