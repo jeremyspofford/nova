@@ -23,12 +23,15 @@ load them (tests/test_tools_agents.py).
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
 
 from app import db, devices, native_app, network
 from app.tools.base import Tool, ToolContext, ToolFailure
+
+logger = logging.getLogger("core")
 
 SETUPS = ("install_pwa", "get_app", "add_machine", "add_model_server")
 MACHINE_SETUPS = frozenset({"add_machine", "add_model_server"})
@@ -130,7 +133,15 @@ async def show_setup_qr(args: dict, ctx: ToolContext) -> str:
         try:
             minted = await PAIRING.get()(ctx.person)
         except Exception as exc:
-            # The type only: whatever the failure said stays in the log.
+            # Only the TYPE reaches her: dispatch's own log call (app/tools/
+            # __init__.py) fires for an unlabeled bug, never for a raised
+            # ToolFailure, so this call is the only place the cause is ever
+            # recorded — `from exc` alone is read by nothing. Logging it in
+            # full is safe: mint_pairing_code hands Postgres only the code's
+            # HASH, a uuid and an int TTL (devices.py) — the plaintext code
+            # itself is never given to anything that could raise with it in
+            # the message, so nothing caught here can carry it into the log.
+            logger.exception("show_setup_qr: minting a pairing code failed")
             raise ToolFailure(
                 f"cannot show a pairing card: the pairing code could not be made "
                 f"({type(exc).__name__})"

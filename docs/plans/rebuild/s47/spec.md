@@ -339,7 +339,7 @@ Both live in a new `services/core/app/tools/setup.py` and are registered in
   ```json
   {"card": {"kind": "setup_qr", "setup": "add_machine",
             "address": "https://<nova>", "url": "https://<nova>/add#ABCD-2345",
-            "code": "ABCD2345", "expires_at": "2026-09-25T14:10:00+00:00"}}
+            "code": "ABCD-2345", "expires_at": "2026-09-25T14:10:00+00:00"}}
   ```
 
   `code` and `expires_at` appear only for the machine setups. The client adds

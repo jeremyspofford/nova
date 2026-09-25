@@ -1,14 +1,17 @@
 """S47 — a machine card through the real route, with a real mint: the code
 reaches the card frame and the pairing_codes table (as its hash), and nothing
-else — not the model's next round, not a span, not a message, not a reload."""
+else — not the model's next round, not a span, not a message, not a log
+line, not a reload."""
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 from datetime import UTC, datetime
 
-from app import devices
+from app import chat, devices
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
 from tests.test_chat_card import frames, set_chat_model, text, whole_call
@@ -19,8 +22,12 @@ CODE_SHAPE = re.compile(r"^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$")
 
 
 async def test_a_real_code_reaches_the_card_and_its_hash_and_nothing_else(
-    owner_client, pool, mount_peers, tmp_path, monkeypatch
+    owner_client, pool, mount_peers, tmp_path, monkeypatch, caplog
 ):
+    # Review fix round 1: a logger.debug of the frame anywhere on the card
+    # path would leak every code and keep the rest of this test green — the
+    # containment check below is the only thing that would catch it.
+    caplog.set_level(logging.DEBUG)
     status = tmp_path / "tailscale.json"
     status.write_text(
         json.dumps(
@@ -69,6 +76,12 @@ async def test_a_real_code_reaches_the_card_and_its_hash_and_nothing_else(
     ]
     for blob in everywhere_else:
         assert code not in blob and bare not in blob
+
+    # Nor the log: drain whatever background work the turn fired (the pool
+    # fixture's own teardown does this too, but that runs after the test has
+    # already asserted, which is too late) before reading the captured log.
+    await asyncio.wait_for(chat.drain_background(), timeout=15)
+    assert code not in caplog.text and bare not in caplog.text
 
     # The reload redraws the card without the code (Review Focus 4).
     conversation = (await owner_client.get("/api/v1/conversations/active")).json()["id"]

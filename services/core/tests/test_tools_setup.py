@@ -161,8 +161,12 @@ async def test_no_chat_is_a_stated_cannot_and_nothing_is_minted(status, minted):
     assert minted == []
 
 
-async def test_a_failed_mint_sends_no_card(status):
-    """Review Focus 3: the address was fine, the database was not."""
+async def test_a_failed_mint_sends_no_card(status, caplog):
+    """Review Focus 3: the address was fine, the database was not.
+
+    Review fix round 1: only the exception TYPE reaches her (ToolFailure's
+    message); the cause itself must still reach the log, or an operator
+    debugging a run of failed pairings has nothing to go on."""
     status()
 
     async def broken(person) -> dict:
@@ -171,9 +175,13 @@ async def test_a_failed_mint_sends_no_card(status):
     token = setup.PAIRING.set(broken)
     try:
         cards: list = []
-        with pytest.raises(ToolFailure, match="the pairing code could not be made"):
-            await _call("show_setup_qr", {"setup": "add_machine"}, cards=cards)
+        with caplog.at_level("ERROR", logger="core"):
+            with pytest.raises(ToolFailure, match="the pairing code could not be made"):
+                await _call("show_setup_qr", {"setup": "add_machine"}, cards=cards)
         assert cards == []
+        # The cause is logged in full — safe because mint_pairing_code never
+        # hands Postgres anything but the code's hash, a uuid and an int.
+        assert "database is down" in caplog.text
     finally:
         setup.PAIRING.reset(token)
 
