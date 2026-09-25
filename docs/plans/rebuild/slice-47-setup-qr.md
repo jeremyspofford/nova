@@ -2000,7 +2000,7 @@ protects, which is how every REPLACE guard works today.
     CODE_ON_THE_CARD = "the code on the card"
     CODE_CLAIM_CORRECTION = (
         "Correction: I never see pairing codes — a code reaches only the card on your screen, "
-        "so the code I wrote was not one. Use the code on the card, or ask me for a new card."
+        "so that code was not one. Use the code on the card, or ask me for a new card."
     )
 
 
@@ -2328,13 +2328,14 @@ protects, which is how every REPLACE guard works today.
   - `append_only_guard_fired` (`:5040`): `served_claim is not None or memory_claim is not None or bool(rewrite_claims)`,
     with a sentence saying why: the text-only commitment redirect and the responsiveness redirect
     re-run no guard, so either could bring the invented token back.
-  - `_regen_rejected_by` checks, right after `("consent_claim", …)`:
+  - `_regen_rejected_by`: read the address ONCE, `address = network.address()`, just before the
+    `checks` tuple (preflight ruling 3), then add right after `("consent_claim", …)`:
     ```python
             ("code_claim", lambda: guards.code_claim_check(corrected, user_message)),
             (
                 "address_claim",
                 lambda: guards.address_claim_check(
-                    corrected, user_message, network.address().origin, network.address().reason
+                    corrected, user_message, address.origin, address.reason
                 ),
             ),
     ```
@@ -2410,9 +2411,10 @@ protects, which is how every REPLACE guard works today.
       guard fires, so the predicate is shown able to fail — for the tablet case
       `"Open http://192.168.0.245:3000 on the tablet."` (address_claim False); for the laptop
       case `"Your pairing code is ABCD-2345."` (code_claim False); for the app case
-      `"Get it at https://apps.apple.com/app/nova/id123456789."` (address_claim False,
-      reply_absent True — the persisted reply was rewritten — which is why both predicates are
-      in the contract).
+      `"Get it at https://apps.apple.com/app/nova/id123456789."` (address_claim False). For
+      `reply_absent`, read which reply `runner.run_case` scores — the persisted, rewritten one
+      or the streamed one — and assert the value that follows from it, with a comment naming
+      the line you read (preflight ruling 2).
 
 - [ ] **Step 2: Run the corpus tests to see them fail.**
   `uv run pytest -q tests/test_eval_corpus.py`
