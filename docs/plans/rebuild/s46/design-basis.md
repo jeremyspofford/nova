@@ -263,6 +263,11 @@ installs onto devices properly."*
   its undo, with no approval step (no approvals, 2026-09-03); and the wake proof
   runs when the machine next sleeps, because Nova never puts a machine to sleep
   (2026-09-18).
+- **OWNER: setup and wake come next.** The order becomes S42a (the agent on
+  every OS) → S42b (install, now carrying the admin helper) → machine setup
+  (wake first) → S46 (wake in chat); S43a, S43b and S44 follow. Neither blocks
+  the wake: the Dell is already on the tailnet through its own Tailscale and
+  already serves models as a provider row (§7).
 
 Constraints that already bind anything this spike produces:
 
