@@ -11,16 +11,50 @@ services:
         source: vol_one
         target: /one
         volume: {}
+      - type: volume
+        source: vol_four
+        target: /four
+        volume: {}
+      - type: volume
+        source: vol_five
+        target: /five
+        volume: {}
       - type: bind
         source: /repo/bindsrc
         target: /b
         read_only: true
         x-nova-backup: exclude-code
         x-nova-backup-reason: from git
+      - type: bind
+        source: /repo/bindsrc
+        target: /wrapped
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: a reason long enough that the renderer wraps it onto
+          more than one indented continuation line, which is the one shape a single-line
+          reader cannot see past.
+      - type: bind
+        source: /repo/bindsrc
+        target: /quoted
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: 'a reason with a colon: long enough to need both wrapping
+          and quoting, so the renderer opens the quote on this line and closes it
+          only on the last one.'
     x-nova-backup-anon:
+      /var/cache/quoted:
+        disposition: exclude-ephemeral
+        reason: 'a reason with a colon: long enough to need both wrapping and quoting,
+          so the renderer opens the quote on this line and closes it only on the last
+          one.'
       /var/cache/thing:
         disposition: exclude-ephemeral
         reason: a cache; it regenerates on use.
+      /var/cache/wrapped:
+        disposition: exclude-ephemeral
+        reason: a reason long enough that the renderer wraps it onto more than one
+          indented continuation line, which is the one shape a single-line reader
+          cannot see past.
   beta:
     command:
       - "true"
@@ -36,6 +70,18 @@ networks:
   default:
     name: novaxprobe_default
 volumes:
+  vol_five:
+    name: novaxprobe_vol_five
+    x-nova-backup: include
+    x-nova-backup-reason: 'a reason with a colon: long enough to need both wrapping
+      and quoting, so the renderer opens the quote on this line and closes it only
+      on the last one.'
+  vol_four:
+    name: novaxprobe_vol_four
+    x-nova-backup: include
+    x-nova-backup-reason: a reason long enough that the renderer wraps it onto more
+      than one indented continuation line, which is the one shape a single-line reader
+      cannot see past.
   vol_one:
     name: novaxprobe_vol_one
     x-nova-backup: include

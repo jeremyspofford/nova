@@ -149,16 +149,27 @@ def test_move_mode_adds_the_node_identity_and_nothing_else():
 
 
 def test_the_v3_leftovers_under_this_project_name_really_do_refuse():
-    """Not a fixture somebody wrote to make R4 fire: these are the containers
-    `docker ps -a --filter label=com.docker.compose.project=nova` returns on
-    the Dell today. v3's stack was renamed to project `nova-v3`, but the
-    containers it created before that are still LABELLED `nova`, so a backup
-    run there has state under its own project label that this compose file
-    cannot account for."""
-    foreign = load("containers-foreign-v4.json")
-    if not foreign["containers"]:
-        pytest.skip("this host has no foreign container under the project label")
-    facts = real_facts(containers="containers-foreign-v4.json")
+    """Not a fixture somebody wrote to make R4 fire: containers-foreign-
+    v3-leftovers.json is `refresh.sh`'s own capture of what
+    `docker ps -a --filter label=com.docker.compose.project=nova` returned
+    on the Dell — a machine that ran v3's stack before it was renamed to
+    project `nova-v3`, leaving containers still LABELLED `nova` under this
+    project's own label, which this compose file cannot account for.
+    Preserved under its own stable name (never one `refresh.sh` itself
+    writes) at S47 task 1 review round 1: a refresh from a host with no
+    such leftovers — this one, today — would otherwise overwrite
+    `containers-foreign-v4.json` with `[]` and silence this exact real-data
+    proof, which a hand-written fixture would only pretend to restore.
+    Restored byte-for-byte from the commit this slice branched from
+    (`git show 3ce90763:deploy/backup/fixtures/containers-foreign-v4.json`,
+    verified clean of any home path, tailnet name or address beyond what
+    that commit already published)."""
+    foreign = load("containers-foreign-v3-leftovers.json")
+    assert foreign["containers"], (
+        "containers-foreign-v3-leftovers.json lost its real containers — this proof "
+        "cannot run against an empty capture; see the fixture provenance above"
+    )
+    facts = real_facts(containers="containers-foreign-v3-leftovers.json")
     _, refusals = coverage(facts, "routine")
     codes = {r.code for r in refusals}
     assert codes == {"R4_UNDECLARED_LIVE_MOUNT"}

@@ -76,11 +76,41 @@ expect_str "reads_volume_disposition_from_the_yaml_render" \
   "$(cfg_volume_disposition vol_one < "$PROBE_YAML")" \
   "$(printf 'include\tthe notes: they matter')"
 
-# A folded (`>-`) reason renders onto ONE line — measured, and the reason the
-# readers can be line-based at all.
-expect_str "reads_a_folded_reason_as_one_line" \
+# A short folded (`>-`) reason renders onto ONE line — a longer one does not
+# (below): compose v5.5.1 wraps a reason past roughly one sentence onto
+# indented continuation lines, which v5.3.0 never does (measured against
+# this repo's own gateway bind reason, S47 task 1 review round 1). This case
+# is still worth pinning on its own: a reader that only ever looked past the
+# key line would trivially pass it too, so it is not what proves the
+# continuation logic below — only that the short case still works.
+expect_str "reads_a_short_folded_reason_as_one_line" \
   "$(cfg_volume_disposition vol_two < "$PROBE_YAML")" \
   "$(printf 'exclude-ephemeral\ta cache declared only in the overlay.')"
+
+# The continuation logic, once per reader — each of cfg_volume_disposition,
+# cfg_mounts and cfg_anon has its OWN rule collecting the lines after a
+# reason's key, so one reader's coverage proves nothing about another's.
+# Each also gets a QUOTED long reason (an embedded colon forces YAML to
+# quote it, same as vol_one's): the quote opens on the first line and closes
+# only on the last, so unquoting the first partial line alone — correct for
+# a reason that never wraps — leaves a stray leading quote in the value.
+# Reverting the compose_read.sh continuation hunk turns every one of these
+# six red: each truncates at the first line break, and the two quoted ones
+# additionally keep their opening quote.
+WRAPPED="a reason long enough that the renderer wraps it onto more than one indented continuation line, which is the one shape a single-line reader cannot see past."
+QUOTED="a reason with a colon: long enough to need both wrapping and quoting, so the renderer opens the quote on this line and closes it only on the last one."
+expect_str "cfg_volume_disposition_joins_a_wrapped_reason" \
+  "$(cfg_volume_disposition vol_four < "$PROBE_YAML")" "$(printf 'include\t%s' "$WRAPPED")"
+expect_str "cfg_volume_disposition_unquotes_a_wrapped_reason_once" \
+  "$(cfg_volume_disposition vol_five < "$PROBE_YAML")" "$(printf 'include\t%s' "$QUOTED")"
+expect_str "cfg_mounts_joins_a_wrapped_bind_reason" \
+  "$(cfg_bind_disposition alpha /wrapped < "$PROBE_YAML")" "$(printf 'exclude-code\t%s' "$WRAPPED")"
+expect_str "cfg_mounts_unquotes_a_wrapped_bind_reason_once" \
+  "$(cfg_bind_disposition alpha /quoted < "$PROBE_YAML")" "$(printf 'exclude-code\t%s' "$QUOTED")"
+expect_str "cfg_anon_joins_a_wrapped_reason" \
+  "$(cfg_anon_disposition alpha /var/cache/wrapped < "$PROBE_YAML")" "$(printf 'exclude-ephemeral\t%s' "$WRAPPED")"
+expect_str "cfg_anon_unquotes_a_wrapped_reason_once" \
+  "$(cfg_anon_disposition alpha /var/cache/quoted < "$PROBE_YAML")" "$(printf 'exclude-ephemeral\t%s' "$QUOTED")"
 
 # The full name is READ, never assembled from <project>_<key>.
 expect_str "reads_the_full_volume_name_from_the_render" \
@@ -647,27 +677,23 @@ esac
 
 # The same machine's other truth: v3's stopped containers still carry the
 # `nova` project label, so a backup HERE has state under its own label that
-# this compose file cannot account for. Real capture, not an invented fixture
-# — which means this case is only testable on a host that actually has one.
-# Some do (the Dell); this one, refreshed today, does not (`"containers": []`
-# in containers-foreign-v4.json) — the exact fact
-# test_the_v3_leftovers_under_this_project_name_really_do_refuse already
-# skips on in the pytest suite. Fabricating foreign-container data here would
-# be the invented fixture the comment above refuses to be.
-CONTAINERS_FIXTURE="containers-foreign-v4.json"
-if python3 -c "import json, sys; sys.exit(0 if json.load(open(sys.argv[1]))['containers'] else 1)" \
-  "$FIXTURES/$CONTAINERS_FIXTURE" 2>/dev/null; then
-  build_world
-  FOREIGN="$(run_coverage routine)"
-  expect_cov "refuses_a_live_mount_compose_does_not_name" "$FOREIGN" 3 "R4_UNDECLARED_LIVE_MOUNT"
-  expect_cov "and_names_the_compose_file_that_container_came_from" "$FOREIGN" 3 "config_files"
-else
-  SKIP=$((SKIP + 1))
-  printf 'SKIP refuses_a_live_mount_compose_does_not_name (+1): this host has no foreign\n'
-  printf '     container under the project label today — containers-foreign-v4.json, just\n'
-  printf '     refreshed from this machine, carries none. Same fact, same skip as\n'
-  printf '     test_the_v3_leftovers_under_this_project_name_really_do_refuse (pytest).\n'
-fi
+# this compose file cannot account for. Real capture, not an invented
+# fixture: containers-foreign-v3-leftovers.json is `refresh.sh`'s own
+# capture, from the Dell, of `docker ps -a --filter
+# label=com.docker.compose.project=nova` — v3's stack there was renamed to
+# project `nova-v3`, but the containers it made before that are still
+# labelled `nova`. This machine, refreshed today, has none of its own
+# (`containers-foreign-v4.json` — the plain, unsuffixed name `refresh.sh`
+# writes here — is `"containers": []`), so the real proof is kept under its
+# own stable name that no refresh ever touches, restored byte-for-byte from
+# the commit this slice branched from (S47 task 1 review round 1;
+# test_the_v3_leftovers_under_this_project_name_really_do_refuse, the
+# pytest twin, carries the same fixture and the same provenance note).
+CONTAINERS_FIXTURE="containers-foreign-v3-leftovers.json"
+build_world
+FOREIGN="$(run_coverage routine)"
+expect_cov "refuses_a_live_mount_compose_does_not_name" "$FOREIGN" 3 "R4_UNDECLARED_LIVE_MOUNT"
+expect_cov "and_names_the_compose_file_that_container_came_from" "$FOREIGN" 3 "config_files"
 CONTAINERS_FIXTURE="containers-v4.json"
 build_world
 

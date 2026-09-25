@@ -24,9 +24,33 @@
           "volume": {}
         },
         {
+          "type": "volume",
+          "source": "vol_four",
+          "target": "/four",
+          "volume": {}
+        },
+        {
+          "type": "volume",
+          "source": "vol_five",
+          "target": "/five",
+          "volume": {}
+        },
+        {
           "type": "bind",
           "source": "/repo/bindsrc",
           "target": "/b",
+          "read_only": true
+        },
+        {
+          "type": "bind",
+          "source": "/repo/bindsrc",
+          "target": "/wrapped",
+          "read_only": true
+        },
+        {
+          "type": "bind",
+          "source": "/repo/bindsrc",
+          "target": "/quoted",
           "read_only": true
         }
       ]
@@ -51,6 +75,12 @@
     }
   },
   "volumes": {
+    "vol_five": {
+      "name": "novaxprobe_vol_five"
+    },
+    "vol_four": {
+      "name": "novaxprobe_vol_four"
+    },
     "vol_one": {
       "name": "novaxprobe_vol_one"
     },

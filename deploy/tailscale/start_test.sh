@@ -176,6 +176,16 @@ cat > "$TMP/fakes/tailscale" <<'FAKE'
 #                       when control answers "wait")
 #   FAKE_SERVE_TARGET   a mapping `serve status` reports regardless of what
 #                       was applied (a stale one)
+#   (no env var)        once $FAKE_DIR/flip exists: BackendState becomes
+#                       FAKE_FLIP_STATE (default Stopped), CertDomains drops
+#                       the node, and `serve status` reports no mapping —
+#                       all three at once, from the NEXT call on, so a test
+#                       can prove a later status_loop tick (D17, S47) reads
+#                       tailscaled fresh instead of the fake only ever being
+#                       asked to answer once. A file, not another env var:
+#                       the flip has to happen mid-run, after the container
+#                       is already up, which no env var set at `docker run`
+#                       time can do.
 printf '%s\n' "$*" >> "$FAKE_DIR/tailscale.calls"
 case "${1:-}" in
   status)
@@ -184,8 +194,13 @@ case "${1:-}" in
       n="$(grep -c '^status --json$' "$FAKE_DIR/tailscale.calls")"
       if [ "$n" -ge "$FAKE_RUNNING_AFTER" ]; then state=Running; else state=NeedsLogin; fi
     fi
-    printf '{\n  "Version": "fake",\n  "BackendState": "%s",\n  "AuthURL": "%s",\n  "Self": {\n    "HostName": "nova",\n    "DNSName": "nova.fake-tailnet.ts.net."\n  },\n  "CertDomains": [\n    "nova.fake-tailnet.ts.net"\n  ],\n  "Health": [\n    "%s"\n  ]\n}\n' \
-      "$state" "${FAKE_AUTH_URL:-}" "${FAKE_HEALTH:-Tailscale is stopped.}"
+    certs='    "nova.fake-tailnet.ts.net"'
+    if [ -f "$FAKE_DIR/flip" ]; then
+      state="${FAKE_FLIP_STATE:-Stopped}"
+      certs=""
+    fi
+    printf '{\n  "Version": "fake",\n  "BackendState": "%s",\n  "AuthURL": "%s",\n  "Self": {\n    "HostName": "nova",\n    "DNSName": "nova.fake-tailnet.ts.net."\n  },\n  "CertDomains": [\n%s\n  ],\n  "Health": [\n    "%s"\n  ]\n}\n' \
+      "$state" "${FAKE_AUTH_URL:-}" "$certs" "${FAKE_HEALTH:-Tailscale is stopped.}"
     ;;
   serve)
     case "${2:-}" in
@@ -204,8 +219,10 @@ case "${1:-}" in
         ;;
       status)
         target=""
-        [ -f "$FAKE_DIR/serve.applied" ] && target="$(cat "$FAKE_DIR/serve.applied")"
-        [ -n "${FAKE_SERVE_TARGET:-}" ] && target="$FAKE_SERVE_TARGET"
+        if [ ! -f "$FAKE_DIR/flip" ]; then
+          [ -f "$FAKE_DIR/serve.applied" ] && target="$(cat "$FAKE_DIR/serve.applied")"
+          [ -n "${FAKE_SERVE_TARGET:-}" ] && target="$FAKE_SERVE_TARGET"
+        fi
         if [ -z "$target" ]; then
           if [ "${3:-}" = "--json" ]; then echo '{}'; else echo "No serve config"; fi
         elif [ "${3:-}" = "--json" ]; then
@@ -307,6 +324,22 @@ case "$CASE" in
     if [ -n "$first" ] && [ "$first" != "$second" ]; then echo "rewritten=yes"; else echo "rewritten=no"; fi
     echo "status_dir_entries=$(ls -A "$SD" 2>/dev/null | tr '\n' ' ')"
     if kill -0 "$W" 2>/dev/null; then echo "wrapper_alive=yes"; else echo "wrapper_alive=no"; fi
+    # D17 (S47): every field is read from tailscaled on THAT tick, never
+    # carried over. Proof, not assertion by construction: flip what the fake
+    # answers only AFTER the loop has already written once (so this can never
+    # affect the wrapper's own startup, which finished before the first write
+    # existed), then wait for the NEXT write and let the caller check it
+    # differs from the pre-flip state a fake that only ever answers once could
+    # not produce.
+    if [ -n "${FAKE_FLIP_TICK:-}" ]; then
+      before="$second"
+      : > "$FAKE_DIR/flip"
+      j=0
+      while [ "$(sed -n 's/.*"written_at": "\([^"]*\)".*/\1/p' "$SD/tailscale.json" 2>/dev/null)" = "$before" ] && [ "$j" -lt 20 ]; do
+        sleep 0.5; j=$((j + 1))
+      done
+      echo "status_file_after_flip=$(tr -d '\n' < "$SD/tailscale.json" 2>/dev/null)"
+    fi
     kill -TERM "$W"
     wait "$W"
     rc=$?
@@ -354,6 +387,7 @@ expect_contains "never Running: prints tailscaled's Health line" "$OUT" "health:
 expect_contains "never Running: containerboot was sent TERM" "$(field "$OUT" cb_signals)" "TERM"
 expect_eq "never Running: serve was never invoked" "$(field "$OUT" serve_calls)" ""
 expect_contains "never Running: says what would fix it" "$OUT" "TS_AUTHKEY"
+expect_eq "never Running: no status file is ever written" "$(field "$OUT" status_file)" ""
 
 # ── 1a'. NeedsLogin with a login URL and no key: never resolves, exit NOW ───
 OUT="$(CASE_BOUND=30 run_wrapper needs-login-url -e FAKE_STATE=NeedsLogin -e FAKE_AUTH_URL=https://login.tailscale.com/a/fake123)"
@@ -429,8 +463,15 @@ OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -
 expect_eq "status, unwritable: the wrapper stays up" "$(field "$OUT" wrapper_alive)" yes
 expect_contains "status, unwritable: says it could not write" "$OUT" "could not write /proc/nova-status-cannot-exist/tailscale.json"
 
-OUT="$(run_wrapper never-running-status -e FAKE_STATE=NeedsLogin)"
-expect_eq "status: never written when tailscaled never reached Running" "$(field "$OUT" status_file)" ""
+# A LATER tick must read tailscaled fresh, not repeat the first tick's
+# values: the fake starts Running/certified/mapped (proving the happy tick
+# above), then flips all three to their opposite AFTER the loop has already
+# written once, and this checks the NEXT write reflects the flip.
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e FAKE_FLIP_TICK=1 -e FAKE_FLIP_STATE=Stopped)"
+SF2="$(field "$OUT" status_file_after_flip)"
+expect_contains "status: a later tick reports the backend going Stopped" "$SF2" '"backend_state": "Stopped"'
+expect_contains "status: a later tick reports the certificate dropping" "$SF2" '"https_cert": false'
+expect_contains "status: a later tick reports the mapping disappearing" "$SF2" '"serve_ok": false'
 
 # ── 1e. containerboot dies before Running ───────────────────────────────────
 OUT="$(CASE_BOUND=60 run_wrapper cb-dies -e FAKE_STATE=NeedsLogin -e FAKE_CB_EXIT=3)"
