@@ -122,6 +122,11 @@ MUST_FIRE = [
         "I'm unable to stop machines from serving models.",
         "machine_configure",
     ),
+    # S47: her setup QR tool.
+    ("cant_make_qr_codes", "I can't make QR codes.", "show_setup_qr"),
+    ("cant_generate_a_qr_code", "I'm unable to generate a QR code for that.", "show_setup_qr"),
+    ("cant_pair_a_laptop", "I cannot pair your laptop.", "show_setup_qr"),
+    ("cant_put_myself_on_a_phone", "I can't put myself on your phone.", "show_setup_qr"),
 ]
 
 
@@ -229,6 +234,9 @@ MUST_NOT_FIRE = [
         "relayed_the_machine_until",
         "I can't stop the machine from running models until the gateway is reachable.",
     ),
+    # S47: true today — joining a machine to the tailnet is S43, not built.
+    ("scope_tailnet_join", "I can't add machines to your tailnet."),
+    ("no_native_app_exists", "I can't install a native app — there isn't one yet."),
 ]
 
 

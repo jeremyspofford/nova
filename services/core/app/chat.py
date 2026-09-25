@@ -108,6 +108,7 @@ from app import (
     live_facts,
     markup_calls,
     model_speed,
+    network,
     peers,
     queued,
     settings_store,
@@ -3412,6 +3413,41 @@ def _state_claim_stands(
     return claim is not None and claim.device == subject
 
 
+def _rewrite_class_claims(text: str, user_message: str) -> list[tuple[str, object]]:
+    """S47's REWRITE-class claims over `text`, in order, each seeing the one
+    before it's rewrite: an invented pairing code, then a wrong address. Each is
+    fail-open on its own — a guard that raises is logged and rewrites nothing."""
+    found: list[tuple[str, object]] = []
+    current = text
+    address = network.address()
+    for name, check in (
+        ("code_claim", lambda t: guards.code_claim_check(t, user_message)),
+        (
+            "address_claim",
+            lambda t: guards.address_claim_check(t, user_message, address.origin, address.reason),
+        ),
+    ):
+        try:
+            claim = check(current)
+        except Exception:
+            logger.exception("%s guard raised; shipping the reply unrewritten", name)
+            claim = None
+        if claim is not None:
+            found.append((name, claim))
+            current = claim.rewritten
+    return found
+
+
+def _file_rewrite_span(turn: traces.Turn, name: str, claim) -> None:
+    """The span a REWRITE-class claim files. A code_claim records how many,
+    never the tokens: a guessed code is still code-shaped."""
+    with turn.span("guard", name) as span:
+        if name == "code_claim":
+            span.meta["count"] = len(claim.tokens)
+        else:
+            span.meta.update(rules=list(claim.rules), wrong=list(claim.tokens), truth=claim.truth)
+
+
 def _append_class_claims(text: str, turn: traces.Turn) -> list[tuple[str, object]]:
     """The APPEND-class claims — served-model and memory-outage (S40b) — over
     `text` and THIS turn's live spans, each fail-open on its own.
@@ -3500,8 +3536,19 @@ def _regen_rejected_by(
     `persona`, so the regeneration is judged by exactly the rule the
     original was.
     """
+    # Read once, exactly as the turn body reads it before its own checks tuple
+    # (S47) — a regen that invents an address is judged against the SAME
+    # now, never a second, possibly different, read.
+    address = network.address()
     checks: tuple[tuple[str, Callable[[], object | None]], ...] = (
         ("consent_claim", lambda: guards.consent_claim_check(corrected)),
+        ("code_claim", lambda: guards.code_claim_check(corrected, user_message)),
+        (
+            "address_claim",
+            lambda: guards.address_claim_check(
+                corrected, user_message, address.origin, address.reason
+            ),
+        ),
         ("narration", lambda: guards.narration_check(corrected, turn.spans)),
         (
             "delegation_claim",
@@ -4478,7 +4525,13 @@ async def _run_turn(
         # really said, not a copy already carrying the other's correction (a
         # correction sentence names no file/url and no pending state, so the
         # verdicts are the same either way; reading the raw reply just keeps
-        # that guarantee obvious). Each is PURE and fail-OPEN: a guard that
+        # that guarantee obvious). The ONE exception is the pair of S47
+        # REWRITE-class guards below, which run FIRST and change `text` itself:
+        # they catch a false TOKEN (an invented pairing code, a wrong address)
+        # inside prose that may otherwise be true, so the token must be gone
+        # before any later guard — or any composition, replace or append —
+        # can read the reply, or the invented token would survive in a
+        # correction built beside it. Each is PURE and fail-OPEN: a guard that
         # crashes logs and yields no correction, never an error frame and never
         # a lost reply. Derived from the spans and the live registry, never the
         # prompt (the prompt's honesty line still stands; this is the enforcement).
@@ -4538,6 +4591,19 @@ async def _run_turn(
         # the third person is not a delegation claim (it cannot delegate) —
         # it is narration, and gets narration's rule. None on Nova's turn.
         self_name = persona.agent.name if persona.agent is not None else None
+
+        # S47: the two REWRITE-class guards run FIRST and change `text` itself —
+        # an invented pairing code and a wrong address are false TOKENS inside
+        # prose that may otherwise be true, so the token is swapped for the truth
+        # and a correction follows (guards.py, "the REWRITE class"). Every guard
+        # below therefore judges the rewritten reply, and no composition — replace
+        # or append — can persist the invented token.
+        rewrites = _rewrite_class_claims(text, message)
+        for name, claim in rewrites:
+            _file_rewrite_span(turn, name, claim)
+            emit(_frame({"correction": claim.text}))
+            text = claim.rewritten
+        rewrite_claims = [claim for _, claim in rewrites]
 
         try:
             correction = guards.narration_check(text, turn.spans)
@@ -4988,12 +5054,16 @@ async def _run_turn(
                 if c is not None
             )
         elif appended_corrections := [
-            c for c in (correction, delegation_claim, served_claim, memory_claim) if c is not None
+            c
+            for c in (*rewrite_claims, correction, delegation_claim, served_claim, memory_claim)
+            if c is not None
         ]:
-            # The APPEND class: narration and its third-person mirror, the
-            # delegation claim (S12), and the served-model and memory-outage
-            # claims (S40b) — the prose stays, each correction follows it,
-            # once, in the order the guards ran.
+            # The APPEND class: the S47 rewrite claims (their token is already
+            # out of `text` by this point; their own correction still follows
+            # it), narration and its third-person mirror, the delegation claim
+            # (S12), and the served-model and memory-outage claims (S40b) — the
+            # prose stays, each correction follows it, once, in the order the
+            # guards ran.
             persisted = "\n\n".join([text, *(c.text for c in appended_corrections)])
         else:
             persisted = text
@@ -5053,8 +5123,14 @@ async def _run_turn(
         # the skip — that a regeneration could bring back what a hard guard
         # removed — does not hold for them. It does hold for the text-only
         # commitment redirect and the soft responsiveness one, which re-run
-        # neither guard: those two still yield.
-        append_only_guard_fired = served_claim is not None or memory_claim is not None
+        # neither guard: those two still yield. The S47 rewrite claims join the
+        # same count for the same reason: the text-only commitment redirect and
+        # the soft responsiveness redirect re-run no guard, so either could
+        # bring the invented token straight back into a reply this flag let
+        # them regenerate over.
+        append_only_guard_fired = (
+            served_claim is not None or memory_claim is not None or bool(rewrite_claims)
+        )
 
         # The ALWAYS-ON deferral guard, and the FIRST claim on the turn's single
         # redirect budget. Run on the composed reply + this turn's spans + the

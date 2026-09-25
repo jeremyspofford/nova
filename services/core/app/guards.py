@@ -45,11 +45,15 @@ flooded-and-clipped argument record) counts as backing any claim of its kind.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any, NamedTuple
+from urllib.parse import urlsplit
+
+from app import native_app
 
 # Successful spans of these tools ground each kind of claim. The names come
 # from the tool registry; a new filesystem/fetch tool must be added here, or
@@ -66,6 +70,7 @@ _CONFIGURE_TOOLS = frozenset({"machine_configure"})
 # test_state_guard pins _CONFIGURE_TOOLS to MACHINE_CONFIGURE.name, so a
 # rename in the registry turns that red. The READ of a machine is derived from
 # the registry instead (_machine_read_tools, S40b final fix wave C2).
+_SETUP_QR_TOOLS = frozenset({"show_setup_qr"})
 
 _KIND_TOOLS: dict[str, frozenset[str]] = {
     "wrote_file": _WRITE_TOOLS,
@@ -76,6 +81,7 @@ _KIND_TOOLS: dict[str, frozenset[str]] = {
     "pulled_model": _PULL_TOOLS,
     "removed_model": _REMOVE_TOOLS,
     "configured_machine": _CONFIGURE_TOOLS,
+    "showed_setup_qr": _SETUP_QR_TOOLS,
 }
 
 
@@ -313,6 +319,17 @@ _NOT_A_MACHINE = frozenset(
         "purpose",
         "maintenance",
     }
+)
+
+# S47: a claim that a setup QR card is on the screen. Backed only by a
+# successful show_setup_qr span this turn — "here's a QR code" with no card
+# sent is the narration lie in its newest shape.
+_SHOWED_SETUP_QR = re.compile(
+    r"\bhere(?:'s|’s|\s+is)\s+(?:a|the|your)\s+(?:qr|setup|pairing)\s+(?:code|card)\b"
+    r"|\bi(?:'ve|’ve|\s+have)?\s+(?:sent|put|shown|posted|added|shared|displayed|generated|made|created)\s+"
+    r"(?:you\s+)?(?:a|the)\s+(?:qr|setup|pairing)\s+(?:code|card)\b"
+    r"|\bscan\s+the\s+(?:qr\s+)?code\s+(?:above|below|on\s+(?:your|the)\s+screen)\b",
+    re.I,
 )
 
 # The stated correction, appended to the reply and streamed as its own frame.
@@ -1032,6 +1049,10 @@ def _claims_in(clause: str) -> list[tuple[str, str, str]]:
             named = None
         claims.append(("configured_machine", named, cm.group(0)))
 
+    # showed a setup QR card (S47): no target; any successful card backs it.
+    for qm in _SHOWED_SETUP_QR.finditer(clause):
+        claims.append(("showed_setup_qr", None, qm.group(0)))
+
     return claims
 
 
@@ -1457,6 +1478,26 @@ def consent_claim_check(reply_text: str) -> Correction | None:
 # unmapped, which is the intended alarm. Every phrase is a GENERAL ability, never
 # a specific target: plural/indefinite nouns only, so "read files"/"read a file"
 # match but "read that file"/"read report.md" do not.
+
+# S47: her setup QR cards. GENERAL abilities only: QR codes, pairing a device
+# or a machine, putting Nova on a phone. "Add machines to your tailnet" is NOT
+# here — that is S43 (not built), and "I can't" is true of it today.
+_CAP_SETUP_QR = re.compile(
+    r"(?:generat(?:e|ing)|mak(?:e|ing)|creat(?:e|ing)|show(?:ing)?|display(?:ing)?|giv(?:e|ing))\s+"
+    r"(?:you\s+)?(?:a\s+|an\s+|the\s+|any\s+)?(?:qr|setup)\s*codes?\b",
+    re.I,
+)
+_CAP_PAIR_MACHINE = re.compile(
+    r"pair(?:ing)?\s+(?:a\s+|an\s+|your\s+|new\s+|another\s+){0,2}"
+    r"(?:devices?|machines?|computers?|laptops?|servers?)\b",
+    re.I,
+)
+_CAP_ON_A_PHONE = re.compile(
+    r"(?:put(?:ting)?|install(?:ing)?)\s+(?:myself|me|nova)\s+on\s+"
+    r"(?:a\s+|an\s+|your\s+|another\s+)?(?:phones?|tablets?|iphones?|ipads?|android\s+phones?)\b",
+    re.I,
+)
+
 _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
     (
         re.compile(
@@ -1673,6 +1714,13 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         "machine_configure",
     ),
+    # S47: her setup QR cards. GENERAL abilities only: QR codes, pairing a
+    # device or a machine, putting Nova on a phone. "Add machines to your
+    # tailnet" is NOT here — that is S43 (not built), and "I can't" is true
+    # of it today.
+    (_CAP_SETUP_QR, "show_setup_qr"),
+    (_CAP_PAIR_MACHINE, "show_setup_qr"),
+    (_CAP_ON_A_PHONE, "show_setup_qr"),
 )
 
 # A first-person, PRESENT-tense inability lead — the capability denied follows
@@ -2229,6 +2277,13 @@ _SET_REMINDER = _ActionClass(
 # turn is exactly this shape. Widening this tuple widens the commitment shape;
 # the offer shape below reads the full class table.
 _DEFERRAL_TOOLS: tuple[_ActionClass, ...] = (_WEB_SEARCH, _FETCH_URL, _SET_REMINDER)
+# S47: "want me to show you a QR code?" after he asked for one — an offer of
+# what show_setup_qr does. The pattern is bounded ({0,40}) so the sweep's
+# 1,500-character inputs stay linear.
+_SETUP_QR_OFFER = re.compile(
+    r"\b(?:show|give|make|generate|send|display|get)\b[^.?!]{0,40}?\bqr(?:\s*codes?)?\b", re.I
+)
+_SHOW_SETUP_QR = _ActionClass(_SETUP_QR_OFFER, ("show_setup_qr",), "show that QR code")
 _OFFER_CLASSES: tuple[_ActionClass, ...] = (
     *_DEFERRAL_TOOLS,
     _LIST_FILES,
@@ -2237,6 +2292,7 @@ _OFFER_CLASSES: tuple[_ActionClass, ...] = (
     _CHECK_DEVICE,
     _PULL_MODEL,
     _SET_REMINDER,
+    _SHOW_SETUP_QR,
 )
 
 # A first-person future-commitment lead — the action follows it. "I'll" REQUIRES
@@ -5882,6 +5938,212 @@ def delivery_claim_check(reply_text: str, delivered_titles: Sequence[str]) -> Co
                 text=DELIVERY_CLAIM_CORRECTION,
             )
     return None
+
+
+# ---- S47: invented pairing codes and wrong addresses — the REWRITE class -----
+#
+# Every other guard REPLACES a reply (a whole-stance fabrication) or APPENDS a
+# correction beside it. These two catch a false TOKEN inside prose that may
+# otherwise be true. Neither drops the reply: the false token is swapped for
+# the truth in `rewritten`, and `text` is the correction that follows it.
+# chat.py runs them FIRST, so every later guard — and whatever composition
+# persists — sees the rewritten reply and never the invented token.
+
+
+@dataclass(frozen=True)
+class RewriteClaim:
+    kind: str
+    tokens: tuple[str, ...]
+    rewritten: str
+    text: str
+    rules: tuple[str, ...] = ()
+    truth: str | None = None
+
+
+_CODE_CHAR = "[2-9A-HJKMNP-Z]"
+# Eight characters of the pairing alphabet (devices.PAIRING_CODE_ALPHABET), 4+4
+# with an optional dash, standing alone. Case-insensitive: a code read aloud
+# comes back lowercase as often as not.
+_CODE_TOKEN = re.compile(
+    rf"(?<![A-Za-z0-9-])({_CODE_CHAR}{{4}})-?({_CODE_CHAR}{{4}})(?![A-Za-z0-9-])", re.I
+)
+_CODE_WORD = re.compile(r"\b(?:codes?|pairing|pair|enrol(?:l|ls|led|ling|ment)?)\b|--code", re.I)
+CODE_ON_THE_CARD = "the code on the card"
+CODE_CLAIM_CORRECTION = (
+    "Correction: I never see pairing codes — a code reaches only the card on your screen, "
+    "so that code was not one. Use the code on the card, or ask me for a new card."
+)
+
+
+def _code_key(first: str, second: str) -> str:
+    return (first + second).upper()
+
+
+def code_claim_check(reply_text: str, user_message: str = "") -> RewriteClaim | None:
+    """A pairing code in her reply that the owner did not type (S47).
+
+    She never receives a code — it goes to the card only (tools/setup.py) — so
+    a code-shaped token she presents as a code is invented by construction.
+    Presented means: eight characters of the pairing alphabet with at least one
+    digit and one letter, in a clause that names a code (code, pairing, enroll,
+    --code). A token the owner's own message carries is his and is never
+    touched. Why it matters: five bad codes lock every enroll for 15 minutes."""
+    if not reply_text:
+        return None
+    theirs = {_code_key(m.group(1), m.group(2)) for m in _CODE_TOKEN.finditer(user_message or "")}
+    invented: set[str] = set()
+    for clause, _is_question in _clauses(reply_text):
+        if not _CODE_WORD.search(clause):
+            continue
+        for m in _CODE_TOKEN.finditer(clause):
+            key = _code_key(m.group(1), m.group(2))
+            if key in theirs:
+                continue
+            if any(ch.isdigit() for ch in key) and any(ch.isalpha() for ch in key):
+                invented.add(key)
+    if not invented:
+        return None
+
+    def swap(m: re.Match[str]) -> str:
+        return CODE_ON_THE_CARD if _code_key(m.group(1), m.group(2)) in invented else m.group(0)
+
+    return RewriteClaim(
+        kind="invented_code",
+        tokens=tuple(sorted(invented)),
+        rewritten=_CODE_TOKEN.sub(swap, reply_text),
+        text=CODE_CLAIM_CORRECTION,
+    )
+
+
+_SETUP_PAGE = re.compile(r"^/(?:install|app|add)(?:[/?#]|$)")
+_STORE_HOSTS = frozenset(
+    {"apps.apple.com", "itunes.apple.com", "testflight.apple.com", "play.google.com"}
+)
+_OTHER_DEVICE = re.compile(
+    r"\b(?:phones?|iphones?|ipads?|tablets?|android|laptops?"
+    r"|another\s+(?:device|computer|machine)|other\s+(?:devices?|computers?)"
+    r"|your\s+(?:computer|mac|pc))\b",
+    re.I,
+)
+_OPEN_OR_INSTALL = re.compile(
+    r"\b(?:open(?:s|ing)?|visit|go\s+to|browse\s+to|install(?:s|ing)?|scan(?:s|ning)?"
+    r"|home\s+screen|bookmark|address|url|link)\b",
+    re.I,
+)
+NO_ADDRESS = "(no address another device can reach)"
+NO_APP = "(there is no Nova app yet)"
+
+
+def _ip(host: str):
+    try:
+        return ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        return None
+
+
+def _wrong_address(url: str, clause: str, origin: str | None) -> tuple[str, str] | None:
+    """(rule, replacement) when `url` is given as an address for Nova that is not
+    the real one; None when it is the real one or not an address for Nova."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    here = f"{parts.scheme}://{parts.netloc}".lower()
+    if origin is not None and here == origin.lower():
+        return None
+    if host in _STORE_HOSTS:
+        if "nova" in parts.path.lower() and not native_app.is_store_link(url):
+            return ("store_link", NO_APP)
+        return None
+    ip = _ip(host)
+    nova_like = host.endswith(".ts.net") or host == "localhost" or ip is not None
+    if nova_like and _SETUP_PAGE.match(parts.path or "/"):
+        tail = parts.path
+        if parts.query:
+            tail += f"?{parts.query}"
+        if parts.fragment:
+            tail += f"#{parts.fragment}"
+        return ("setup_page", f"{origin}{tail}" if origin else NO_ADDRESS)
+    replacement = origin or NO_ADDRESS
+    if (
+        ip is not None
+        and ip.version == 4
+        and ip.is_private
+        and not ip.is_loopback
+        and port in (None, 80, 3000, 8080)
+        and (_OPEN_OR_INSTALL.search(clause) or _OTHER_DEVICE.search(clause))
+    ):
+        return ("lan", replacement)
+    loopback = host == "localhost" or (ip is not None and ip.is_loopback)
+    if loopback and _OTHER_DEVICE.search(clause):
+        return ("loopback", replacement)
+    return None
+
+
+def _address_correction(rules: tuple[str, ...], origin: str | None, reason: str | None) -> str:
+    parts: list[str] = []
+    if set(rules) - {"store_link"}:
+        if origin:
+            parts.append(
+                f"Correction: Nova's address for another device is {origin} — the address "
+                "I gave was not it."
+            )
+        else:
+            why = f" ({reason})" if reason else ""
+            parts.append(
+                "Correction: Nova has no address another device can reach right now"
+                f"{why} — the address I gave was not one."
+            )
+    if "store_link" in rules:
+        lead = "" if parts else "Correction: "
+        parts.append(f"{lead}{native_app.stated()} The app link I gave was not one.")
+    return " ".join(parts)
+
+
+def address_claim_check(
+    reply_text: str,
+    user_message: str = "",
+    origin: str | None = None,
+    reason: str | None = None,
+) -> RewriteClaim | None:
+    """An address for Nova in her reply that is not the real one (S47).
+
+    `origin` is network.address()'s answer NOW (None when there is none, with
+    its `reason`), read by the caller — the guard keeps no address of its own.
+    Four shapes, each precision-first: a setup page (/install, /app, /add) on a
+    tailnet, IP or localhost origin that is not the real one; a private-LAN URL
+    on an app port given as where to open Nova (the web UI is never on the
+    LAN); loopback in a sentence about another device (loopback said about the
+    hub itself is true); and a store link for a Nova app that does not exist.
+    A URL the owner's own message carries is his and is never touched."""
+    if not reply_text:
+        return None
+    theirs = {_strip_trailing_punct(u) for u in _URL.findall(user_message or "")}
+    wrong: dict[str, tuple[str, str]] = {}
+    for clause, _is_question in _clauses(reply_text):
+        for m in _URL.finditer(clause):
+            url = _strip_trailing_punct(m.group(0))
+            if url in theirs or url in wrong:
+                continue
+            verdict = _wrong_address(url, clause, origin)
+            if verdict is not None:
+                wrong[url] = verdict
+    if not wrong:
+        return None
+    rewritten = reply_text
+    for url in sorted(wrong, key=len, reverse=True):
+        rewritten = rewritten.replace(url, wrong[url][1])
+    rules = tuple(sorted({rule for rule, _ in wrong.values()}))
+    return RewriteClaim(
+        kind="wrong_address",
+        tokens=tuple(wrong),
+        rewritten=rewritten,
+        text=_address_correction(rules, origin, reason),
+        rules=rules,
+        truth=origin,
+    )
 
 
 # -- the novelty-claim guard -------------------------------------------------

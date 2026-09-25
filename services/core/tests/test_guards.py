@@ -1051,6 +1051,12 @@ OFFER_MUST_FIRE = [
         "Want me to schedule that?",
         "create_timer",
     ),
+    (
+        "s47_setup_qr",
+        "show me a QR code so I can put you on my phone",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
 ]
 
 

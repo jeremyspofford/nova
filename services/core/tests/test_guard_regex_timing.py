@@ -111,6 +111,23 @@ def test_padded_machine_and_memory_lines_are_judged_in_milliseconds(label, reply
         assert took < BUDGET_S, f"{label}: {took * 1000:.1f} ms"
 
 
+SETUP_PADDED = [
+    ("code_words_then_padding", "your pairing code is" + " " * 1500 + "ABCD-2345"),
+    ("many_urls", " ".join(f"https://nova{i}.fake-tailnet.ts.net/install" for i in range(200))),
+    ("url_then_padding", "open http://192.168.0.245:3000" + " " * 1500 + "on your phone"),
+]
+
+
+@pytest.mark.parametrize("label,reply", SETUP_PADDED, ids=[c[0] for c in SETUP_PADDED])
+def test_the_setup_guards_are_judged_in_milliseconds(label, reply):
+    for check in (
+        lambda: guards.code_claim_check(reply, ""),
+        lambda: guards.address_claim_check(reply, "", "https://nova.fake-tailnet.ts.net"),
+    ):
+        took = _best_of(check)
+        assert took < BUDGET_S, f"{label}: {took * 1000:.1f} ms"
+
+
 def _every_pattern() -> dict[str, re.Pattern[str]]:
     """Every compiled pattern guards.py holds: module constants, tuples of
     them, and what the per-name builders compile for a machine set and a
