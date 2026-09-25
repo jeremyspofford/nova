@@ -86,11 +86,23 @@ def address(now: datetime | None = None) -> Address:
         raw = status_path().read_text(encoding="utf-8")
     except FileNotFoundError:
         return none(NO_FILE)
+    # A byte the sidecar never wrote (a torn write caught mid-flush, a
+    # corrupted volume) must be a stated reason like every other malformed
+    # file — never an uncaught UnicodeDecodeError out of core's one reader
+    # (review fix round 1, I6).
+    except UnicodeDecodeError:
+        return none("the tailnet status file is not UTF-8 text")
     except OSError as exc:
         return none(f"the tailnet status could not be read ({exc.strerror or exc})")
     try:
         data = json.loads(raw)
-    except json.JSONDecodeError:
+    # RecursionError (pathologically deep nesting) is not a ValueError and
+    # json.JSONDecodeError IS one, so the two are caught in this order:
+    # RecursionError first, then any ValueError (json.JSONDecodeError and any
+    # other parse failure) (review fix round 1, I6).
+    except RecursionError:
+        return none("the tailnet status file is nested too deeply to parse")
+    except ValueError:
         return none("the tailnet status file is not valid JSON")
     if not isinstance(data, dict):
         return none("the tailnet status file is not a JSON object")

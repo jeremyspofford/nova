@@ -48,6 +48,20 @@ CODE_MUST_NOT_FIRE = [
     ("letters_only", "Your pairing code is on the card, not DEADBEEF.", "add my laptop"),
     ("outside_the_alphabet", "The pairing code format looks like A1B2-C3D4.", "add my laptop"),
     ("the_owners_own", "Yes, ABCD-2345 is the code you typed.", "is ABCD-2345 right?"),
+    # I4 (review fix round 1): a bare "code" is no longer pairing context —
+    # only pairing/pair/enroll*/--code/novad/"one-time code"/"setup code", or
+    # a token inside an /add# URL fragment, arm the check.
+    (
+        "bare_code_commit_reference",
+        "The code change landed in commit 4ad87ac7.",
+        "add my laptop",
+    ),
+    (
+        "bare_code_verification_email",
+        "The verification code in that email is 48KX2M9P.",
+        "add my laptop",
+    ),
+    ("bare_code_error_code", "Error code E4B7-9C2D came from the updater.", "add my laptop"),
 ]
 
 
@@ -75,10 +89,13 @@ ADDRESS_MUST_FIRE = [
         f"Open {ORIGIN}/install on the phone.",
     ),
     (
+        # I1 (review fix round 1): rule 2 now requires the clause to PRESENT
+        # the URL as Nova's own (the word "nova", a verb governing "me", or
+        # "my address/url/link/web app") — "go to" alone no longer qualifies.
         "the_lan_app_port",
-        "On your tablet, go to http://192.168.0.245:3000.",
+        "On your tablet, open Nova at http://192.168.0.245:3000.",
         ("lan",),
-        f"On your tablet, go to {ORIGIN}.",
+        f"On your tablet, open Nova at {ORIGIN}.",
     ),
     (
         "loopback_setup_page_for_a_phone",
@@ -130,6 +147,46 @@ ADDRESS_MUST_NOT_FIRE = [
         "No: http://192.168.0.245:3000 is not where a phone opens me.",
         "is http://192.168.0.245:3000 your address?",
     ),
+    # -- I1 (review fix round 1): precision-first must-not-fire walk --------
+    # Rule 2 (LAN) needs a path that is empty/root/setup-page: a real other
+    # service's endpoint on the LAN is honest.
+    (
+        "lan_not_a_setup_or_root_path",
+        "Add the Dell as a provider with base URL http://192.168.0.50:8080/v1.",
+        "hi",
+    ),
+    # Rule 2 needs the clause to PRESENT the url as NOVA's; "open" alone
+    # (not "open me") is a different service's URL.
+    ("lan_not_presented_as_novas", "Open Grafana at http://192.168.1.5:3000.", "hi"),
+    ("lan_someone_elses_address", "Your router's address is http://192.168.1.1.", "hi"),
+    # a path that is neither empty/root nor a setup page.
+    ("lan_admin_path", "Pi-hole's dashboard is at http://192.168.1.2/admin.", "hi"),
+    ("lan_webui_not_presented_as_novas", "Open WebUI is at http://10.0.0.20:8080.", "hi"),
+    # Rule 2 needs the EXACT RFC1918 ranges, never ip.is_private, which also
+    # reads link-local, unspecified, and the TEST-NETs as private.
+    (
+        "link_local_is_not_lan",
+        "The metadata service answers at http://169.254.169.254/latest.",
+        "hi",
+    ),
+    ("unspecified_is_not_lan", "Try http://0.0.0.0:3000 for the dashboard.", "hi"),
+    ("test_net_is_not_lan", "The scanner probe hit http://192.0.2.10 in the logs.", "hi"),
+    # Rule 2 needs scheme http, never https.
+    ("https_is_not_rule_2", "Some devices show https://192.168.1.1 as their gateway.", "hi"),
+    # Rule 3 (loopback): "your computer/Mac/PC" DROPPED from the device list
+    # — on a default install that is the hub itself.
+    ("your_computer_is_the_hub", "On your computer, open http://localhost:3000.", "hi"),
+    # Rules 1-4 all skip a URL a negation precedes ANYWHERE in its clause.
+    (
+        "negated_loopback_lead",
+        "Don't open http://localhost:3000 on your phone: it only works on the hub itself.",
+        "hi",
+    ),
+    (
+        "negated_lan_trailing",
+        "http://192.168.0.245:3000 won't work on your phone; use the tailnet address.",
+        "hi",
+    ),
 ]
 
 
@@ -138,6 +195,18 @@ ADDRESS_MUST_NOT_FIRE = [
 )
 def test_an_honest_address_is_left_alone(label, reply, user):
     assert guards.address_claim_check(reply, user, ORIGIN) is None
+
+
+def test_your_computer_is_the_hub_even_with_no_address():
+    # The same must-not-fire holds when origin is None: "your computer" is
+    # never a claim about ANOTHER device, whether or not Nova currently has
+    # an address for one.
+    assert (
+        guards.address_claim_check(
+            "On your computer, open http://localhost:3000.", "hi", None, "a reason"
+        )
+        is None
+    )
 
 
 def test_with_no_address_the_rewrite_and_correction_say_so():
@@ -153,12 +222,64 @@ def test_with_no_address_the_rewrite_and_correction_say_so():
     assert "NeedsLogin" in claim.text
 
 
+# -- I2 (review fix round 1): splice by offset, never global str.replace ----
+
+
+def test_a_negated_hub_clause_beside_a_rewritten_device_clause_is_untouched():
+    reply = (
+        "On the hub, curl http://localhost:8000/health works; "
+        "your laptop can reach http://localhost:8000."
+    )
+    claim = guards.address_claim_check(reply, "can my laptop reach you", ORIGIN)
+    assert claim is not None
+    assert claim.rules == ("loopback",)
+    assert claim.rewritten == (
+        f"On the hub, curl http://localhost:8000/health works; your laptop can reach {ORIGIN}."
+    )
+
+
+NEGATED_SAME_URL = [
+    (
+        "hub_then_negated_phone_mention",
+        "On the hub itself, http://127.0.0.1:3000 works. Your phone can't use "
+        "http://127.0.0.1:3000 - it only answers on the hub.",
+    ),
+    (
+        "hub_then_negated_laptop_mention",
+        "On the hub, curl http://localhost:8000/health works; your laptop can't "
+        "reach http://localhost:8000.",
+    ),
+]
+
+
+@pytest.mark.parametrize("label,reply", NEGATED_SAME_URL, ids=[c[0] for c in NEGATED_SAME_URL])
+def test_a_negated_mention_of_the_same_url_never_fires(label, reply):
+    assert guards.address_claim_check(reply, "hi", ORIGIN) is None
+
+
+# -- I7 (review fix round 1): a code inside an /add# fragment ----------------
+
+
+def test_a_code_inside_an_add_fragment_is_gone_even_on_the_real_origin():
+    reply = "Open https://nova-old.fake-tailnet.ts.net/add#K7PQ-9XYZ on the laptop."
+    code_claim = guards.code_claim_check(reply, "add my laptop")
+    assert code_claim is not None
+    assert code_claim.tokens == ("K7PQ9XYZ",)
+    address_claim = guards.address_claim_check(code_claim.rewritten, "add my laptop", ORIGIN)
+    assert address_claim is not None
+    final = address_claim.rewritten
+    assert "K7PQ-9XYZ" not in final
+    assert "K7PQ9XYZ" not in final.upper().replace("-", "")
+    assert "K7PQ" not in final.upper()
+    # the span's own token list never carries the fragment either.
+    assert all("#" not in url for url in address_claim.tokens)
+
+
 # -- narration: showed_setup_qr -----------------------------------------------
 
 CLAIMED_CARDS = [
     "Here's a QR code for your phone.",
     "I've sent a pairing card to the chat.",
-    "Scan the QR code above with your phone.",
 ]
 
 
@@ -180,3 +301,21 @@ def test_a_refused_call_backs_nothing():
 
 def test_an_offer_is_not_narration():
     assert guards.narration_check("I can show you a QR code for your phone.", []) is None
+
+
+# I5 (review fix round 1): the deictic "scan the QR code above/below/on
+# screen" alternative is dropped entirely (it is her reading the SCREEN, not a
+# claim of her own that she sent one), and "here's ..." no longer accepts
+# "the" as a determiner.
+CARD_NOT_CLAIMED = [
+    "Scan the QR code above with your phone.",
+    "Scan the QR code above with your camera app.",
+    "Here's the pairing code format: four letters or digits, a dash, four more.",
+    "To sign Tailscale in on the TV, scan the QR code on the screen.",
+    "Run tailscale up --qr on the laptop, then scan the QR code on the screen.",
+]
+
+
+@pytest.mark.parametrize("reply", CARD_NOT_CLAIMED)
+def test_a_deictic_or_relayed_qr_mention_is_not_a_claim(reply):
+    assert guards.narration_check(reply, []) is None

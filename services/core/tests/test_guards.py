@@ -1052,9 +1052,16 @@ OFFER_MUST_FIRE = [
         "create_timer",
     ),
     (
+        # I3 (review fix round 1): _SETUP_QR_OFFER now requires "setup" or
+        # "pairing", or "putting Nova/you on a phone or tablet" — both sides
+        # qualify via "setup QR code". ("show me a QR code so I CAN put you
+        # on my phone" would instead qualify only through the "put ... on
+        # phone" alternative, and "I can" right before it reads as the
+        # user's own self-report, not a request — _USER_SELF_REPORT — so the
+        # instruction is worded to qualify earlier, through "setup".)
         "s47_setup_qr",
-        "show me a QR code so I can put you on my phone",
-        "Want me to show you a QR code for your phone?",
+        "show me a setup QR code so I can put you on my phone",
+        "Want me to show you a setup QR code for your phone?",
         "show_setup_qr",
     ),
 ]
@@ -1247,6 +1254,13 @@ OFFER_MUST_NOT_FIRE = [
         "s9_recall_of_is_not_a_timer",
         "remind me of what I said about the garage",
         "Want me to set a reminder?",
+    ),
+    # I3 (review fix round 1): a QR code for something else entirely (a wifi
+    # password, not a setup/pairing card) never instructs show_setup_qr.
+    (
+        "s47_wifi_qr_is_not_setup_qr",
+        "make me a QR code for my wifi password",
+        "Want me to show you a QR code?",
     ),
 ]
 

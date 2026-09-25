@@ -111,6 +111,26 @@ def test_unparseable_and_non_object_files_are_stated(status):
     assert "not a JSON object" in network.address(NOW).reason
 
 
+def test_a_non_utf8_byte_is_stated_never_raised(status):
+    # A torn write or a corrupted volume can leave a byte read_text cannot
+    # decode as UTF-8 — UnicodeDecodeError must become a reason, never
+    # propagate out of core's one reader (review fix round 1, I6).
+    status.path.write_bytes(b"\xff\xfe{\x00\x00")
+    got = network.address(NOW)
+    assert got.origin is None
+    assert got.reason is not None
+
+
+def test_deeply_nested_json_is_stated_never_raised(status):
+    # json.loads recurses per nesting level; pathologically deep nesting
+    # raises RecursionError, not a JSONDecodeError, and must be caught the
+    # same way (review fix round 1, I6).
+    status.path.write_text("[" * 10_000 + "]" * 10_000)
+    got = network.address(NOW)
+    assert got.origin is None
+    assert got.reason is not None
+
+
 def test_as_json_is_the_api_shape(status):
     status()
     assert network.address(NOW).as_json() == {

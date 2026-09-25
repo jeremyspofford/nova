@@ -3413,18 +3413,32 @@ def _state_claim_stands(
     return claim is not None and claim.device == subject
 
 
+def _safe_address() -> tuple[str | None, str | None]:
+    """network.address(), fail-open like every guard (review fix round 1,
+    I6): network.address() itself turns a malformed or unreadable status
+    file into a stated reason and never raises, but a chat turn must not
+    depend on that holding forever — a read that raises here is logged and
+    treated as no address, never a failed turn. Returns (origin, reason)."""
+    try:
+        got = network.address()
+    except Exception:
+        logger.exception("network.address() raised; treating it as no address")
+        return None, "the tailnet status could not be read"
+    return got.origin, got.reason
+
+
 def _rewrite_class_claims(text: str, user_message: str) -> list[tuple[str, object]]:
     """S47's REWRITE-class claims over `text`, in order, each seeing the one
     before it's rewrite: an invented pairing code, then a wrong address. Each is
     fail-open on its own — a guard that raises is logged and rewrites nothing."""
     found: list[tuple[str, object]] = []
     current = text
-    address = network.address()
+    origin, reason = _safe_address()
     for name, check in (
         ("code_claim", lambda t: guards.code_claim_check(t, user_message)),
         (
             "address_claim",
-            lambda t: guards.address_claim_check(t, user_message, address.origin, address.reason),
+            lambda t: guards.address_claim_check(t, user_message, origin, reason),
         ),
     ):
         try:
@@ -3538,16 +3552,15 @@ def _regen_rejected_by(
     """
     # Read once, exactly as the turn body reads it before its own checks tuple
     # (S47) — a regen that invents an address is judged against the SAME
-    # now, never a second, possibly different, read.
-    address = network.address()
+    # now, never a second, possibly different, read. Fail-open (I6): _safe_address
+    # never raises.
+    origin, reason = _safe_address()
     checks: tuple[tuple[str, Callable[[], object | None]], ...] = (
         ("consent_claim", lambda: guards.consent_claim_check(corrected)),
         ("code_claim", lambda: guards.code_claim_check(corrected, user_message)),
         (
             "address_claim",
-            lambda: guards.address_claim_check(
-                corrected, user_message, address.origin, address.reason
-            ),
+            lambda: guards.address_claim_check(corrected, user_message, origin, reason),
         ),
         ("narration", lambda: guards.narration_check(corrected, turn.spans)),
         (

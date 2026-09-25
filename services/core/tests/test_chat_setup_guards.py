@@ -73,12 +73,15 @@ async def test_a_wrong_address_is_rewritten_to_the_real_one(
     await _turn(
         owner_client,
         mount_peers,
-        "On your tablet, go to http://192.168.0.245:3000.",
+        # I1 (review fix round 1): rule 2 (LAN) now requires the clause to
+        # present the URL as Nova's own — "open Nova at" qualifies, "go to"
+        # alone no longer does.
+        "On your tablet, open Nova at http://192.168.0.245:3000.",
         "put you on my tablet",
     )
     stored = await pool.fetchval("SELECT content FROM messages WHERE role = 'assistant'")
     assert "192.168.0.245" not in stored
-    assert stored.startswith(f"On your tablet, go to {ORIGIN}.")
+    assert stored.startswith(f"On your tablet, open Nova at {ORIGIN}.")
     meta = await pool.fetchval(
         "SELECT meta FROM turn_spans WHERE kind = 'guard' AND name = 'address_claim'"
     )
@@ -86,6 +89,36 @@ async def test_a_wrong_address_is_rewritten_to_the_real_one(
 
 
 def test_a_regeneration_with_an_invented_code_is_refused_by_name():
+    turn = SimpleNamespace(spans=[], kind="chat")
+    rejected = chat._regen_rejected_by(
+        "Done: your pairing code is K7PQ-9XYZ.",
+        turn,
+        None,
+        [],
+        "add my laptop",
+        agents.nova_persona(),
+        agent_names=[],
+    )
+    assert rejected == "code_claim"
+
+
+# -- I6 (review fix round 1): chat.py's address reads are fail-open ---------
+
+
+def test_rewrite_class_claims_is_fail_open_when_address_raises(monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("status file exploded")
+
+    monkeypatch.setattr(chat.network, "address", boom)
+    found = chat._rewrite_class_claims("Your pairing code is ABCD-2345.", "add my laptop")
+    assert [name for name, _ in found] == ["code_claim"]
+
+
+def test_regen_rejected_by_is_fail_open_when_address_raises(monkeypatch):
+    def boom(*_a, **_k):
+        raise RuntimeError("status file exploded")
+
+    monkeypatch.setattr(chat.network, "address", boom)
     turn = SimpleNamespace(spans=[], kind="chat")
     rejected = chat._regen_rejected_by(
         "Done: your pairing code is K7PQ-9XYZ.",
