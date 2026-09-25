@@ -40,6 +40,7 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b shipped 2026-09-19** — the honesty guards the S40 walk showed were missing: machine subjects in `state_claim`, new `served_claim` and `memory_claim`, and history stamps that mark an old live reading as a record of its moment. **S41 next** (portable hub plus verified backup and restore). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
 | 4 | **S26 — the quality corpus** | Nothing built, nothing spec'd. After the hub lane. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
+| 6 | **After release: the optional list** ([below](#after-release-the-optional-list)) | Only after Nova is released. Things the owner marked optional, each one to research, build or decide on. |
 
 ### 0. Before S26 — the suite hang
 
@@ -227,6 +228,43 @@ replaces it, built from the intent corpus instead.
   do by reflex.
 - **CI does not cover `main`.** `.github/workflows/rebuild-ci.yml` triggers only
   on `rebuild/**`. A PR into `main` runs no checks at all.
+
+---
+
+## After release: the optional list
+
+These are things the owner marked **optional**. None of them is scheduled.
+Once Nova is released, go through them one at a time and, for each, research
+it, build it, or decide not to. **When he says something is optional, add it
+here** with the date and the open question, and leave it alone until then
+unless he asks.
+
+### Jev and Kev (added 2026-09-25)
+
+- **What they are.** Jev is TypeSafe AI's hosted "decision model", launched
+  2026-09-15. Instead of text, it returns typed answers with probabilities.
+  Kev ([jaredpalmer/kev](https://github.com/jaredpalmer/kev)) is an
+  open-weight model that uses the same API.
+- **His questions.** Could either of them:
+  - cut hallucinations;
+  - check her answers, or replace or back up the guards;
+  - make her faster or cheaper;
+  - run locally?
+- **What's written.** The Jev section of [`ARCS.md`](ARCS.md) (2026-09-18).
+  A research pass on 2026-09-25 disagreed with parts of it, and **the owner
+  doubts that pass**. Its claims are unconfirmed, so check each one:
+  - Jev can't write text, so it can't replace her model.
+  - ARCS.md says Jev may only add to a mechanical control, so it can't replace
+    the guards.
+  - There is little speed or money to gain, because Nova makes almost no model
+    calls to decide things.
+  - Reading option probabilities from the `qwen3.8:27b` she already runs scored
+    level with Jev on JevBench.
+  - Kev doesn't fit on the 3090 next to that 27B.
+- **Start from primary sources.** The whole field was ten days old at the time:
+  [TypeSafe docs](https://docs.typesafe.ai/llms.txt),
+  [Kev](https://github.com/jaredpalmer/kev),
+  [JevBench](https://github.com/fstandhartinger/jevbench).
 
 ---
 
