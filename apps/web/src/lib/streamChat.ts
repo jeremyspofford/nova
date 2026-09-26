@@ -46,10 +46,17 @@
  * activity relayed through the parent's one activity line. All four are
  * optional strings exactly like `detail`: present when the server stated
  * them, left off the event otherwise, never a shape violation.
+ *
+ * `card` (S47) is a UI-only card beside the reply — a setup QR code. It
+ * never enters her context; a machine card's code exists only here and in
+ * the tab that renders it.
  */
 
 import { createLineBuffer } from './lineBuffer'
 import { statedReason } from './statedReason'
+// Type-only: api.ts imports this module at runtime, so a value import here
+// would be a cycle.
+import type { SetupCard } from './api'
 
 export type StreamEvent =
   | { type: 'meta'; conversationId: string; model: string; turnId: string; agent: string | null }
@@ -108,6 +115,9 @@ export type StreamEvent =
   | { type: 'queued'; id: string; conversationId: string; body: string; ahead: number }
   | { type: 'done' }
   | { type: 'interrupted'; reason: string }
+  // {"card": {...}} — a UI-only card beside the reply (S47), a setup QR code.
+  // See the file comment.
+  | { type: 'card'; card: SetupCard }
 
 export interface TurnUsage {
   rounds: number
@@ -157,6 +167,7 @@ const KNOWN_FRAME_KEYS = new Set([
   'served_by',
   'usage',
   'route',
+  'card',
 ])
 
 function frameToEvent(payload: string): StreamEvent | null {
@@ -260,6 +271,18 @@ function frameToEvent(payload: string): StreamEvent | null {
     // Falls through to the generic "known key, wrong shape" refusal below
     // rather than being treated as an unknown frame — `activity` IS known,
     // it just did not carry the two fields it promises.
+  }
+  if (obj.card !== null && typeof obj.card === 'object') {
+    const c = obj.card as Record<string, unknown>
+    // A card kind this client does not draw (a later slice's) is ignored, the
+    // way a future frame type is. A setup card missing its parts is broken.
+    if (typeof c.kind === 'string' && c.kind !== 'setup_qr') return null
+    if (c.kind === 'setup_qr' && typeof c.setup === 'string' && typeof c.address === 'string' && typeof c.url === 'string') {
+      const card: SetupCard = { kind: 'setup_qr', setup: c.setup, address: c.address, url: c.url }
+      if (typeof c.code === 'string') card.code = c.code
+      if (typeof c.expires_at === 'string') card.expires_at = c.expires_at
+      return { type: 'card', card }
+    }
   }
   if (!Object.keys(obj).some(key => KNOWN_FRAME_KEYS.has(key))) {
     // Every key here is one this client has never heard of — a future frame

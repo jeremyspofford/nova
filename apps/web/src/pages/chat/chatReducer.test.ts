@@ -1358,3 +1358,88 @@ describe('chatReducer — the context gauge survives a reload', () => {
     expect(state.promptTokens).toBe(12_000)
   })
 })
+
+const LIVE = {
+  kind: 'setup_qr' as const,
+  setup: 'add_machine',
+  address: 'https://nova.fake-tailnet.ts.net',
+  url: 'https://nova.fake-tailnet.ts.net/add#ABCD-2345',
+  code: 'ABCD-2345',
+  expires_at: '2026-09-25T14:10:00+00:00',
+}
+const REDRAWN = {
+  kind: 'setup_qr' as const,
+  setup: 'add_machine',
+  address: 'https://nova.fake-tailnet.ts.net',
+  url: 'https://nova.fake-tailnet.ts.net/add',
+  code_shown: true,
+  expires_at: '2026-09-25T14:10:00+00:00',
+}
+
+function withMeta(): ChatState {
+  return chatReducer(started(), {
+    type: 'event',
+    event: { type: 'meta', conversationId: 'c1', model: 'qwen3:8b', turnId: 't1', agent: null },
+  })
+}
+
+describe('setup cards (S47)', () => {
+  it('a card frame lands on the pending row', () => {
+    const state = chatReducer(withMeta(), { type: 'event', event: { type: 'card', card: LIVE } })
+    expect(messages(state)[1].cards).toEqual([LIVE])
+  })
+
+  it('a reply that is only a card is kept, never replaced by "no reply"', () => {
+    let state = chatReducer(withMeta(), { type: 'event', event: { type: 'card', card: LIVE } })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    expect(errors(state)).toEqual([])
+    expect(messages(state)[1].cards).toEqual([LIVE])
+  })
+
+  it('a fetched row carries its cards verbatim, and none when the server stated none', () => {
+    const state = chatReducer(emptyChat(), {
+      type: 'loaded',
+      conversationId: 'c1',
+      messages: [
+        { id: 'u1', role: 'user', content: 'add my laptop' },
+        { id: 'a1', role: 'assistant', content: 'Scan the card.', cards: [REDRAWN] },
+        { id: 'a2', role: 'assistant', content: 'older core' },
+      ],
+    })
+    expect(messages(state)[1].cards).toEqual([REDRAWN])
+    expect(messages(state)[2].cards).toEqual([])
+  })
+
+  it('the idle poll keeps a live code on the card the server redrew without one (Review Focus 4)', () => {
+    let state = chatReducer(withMeta(), { type: 'event', event: { type: 'delta', text: 'Scan the card.' } })
+    state = chatReducer(state, { type: 'event', event: { type: 'card', card: LIVE } })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+    const fetched = [
+      { id: 'srv-u', role: 'user', content: 'hello' },
+      { id: 'srv-a', role: 'assistant', content: 'Scan the card.', turn_kind: 'chat', cards: [REDRAWN] },
+    ]
+    const once = chatReducer(state, { type: 'idlePolled', conversationId: 'c1', messages: fetched, observedRows: state.rows })
+    expect(messages(once)[1].cards[0].code).toBe('ABCD-2345')
+    const twice = chatReducer(once, { type: 'idlePolled', conversationId: 'c1', messages: fetched, observedRows: once.rows })
+    expect(messages(twice)[1].cards[0].code).toBe('ABCD-2345')
+    expect(twice).toBe(once)
+  })
+
+  it('the idle poll treats a new card as news', () => {
+    const state = chatReducer(emptyChat(), {
+      type: 'loaded',
+      conversationId: 'c1',
+      messages: [{ id: 'u1', role: 'user', content: 'hi' }, { id: 'a1', role: 'assistant', content: 'ok', turn_kind: 'chat' }],
+    })
+    const carded = chatReducer(state, {
+      type: 'idlePolled',
+      conversationId: 'c1',
+      messages: [
+        { id: 'u1', role: 'user', content: 'hi' },
+        { id: 'a1', role: 'assistant', content: 'ok', turn_kind: 'chat', cards: [REDRAWN] },
+      ],
+      observedRows: state.rows,
+    })
+    expect(messages(carded)[1].cards).toEqual([REDRAWN])
+  })
+})

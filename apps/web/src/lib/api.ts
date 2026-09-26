@@ -312,6 +312,25 @@ export interface StoredMessage {
    * has it, empty where nothing was attached — so "no files" and "this
    * server does not say" stay distinguishable. */
   attachments?: Attachment[]
+  /** S47: the setup QR cards the turn sent, redrawn from the trace — never
+   *  with a code. */
+  cards?: SetupCard[]
+}
+
+/**
+ * A setup QR card her turn sent (S47). Live, from the stream, a machine
+ * setup's card carries its one-time `code`; redrawn on reload from the trace,
+ * it never does (`code_shown` says one was). `setup` stays a string on the
+ * wire: a kind this build does not know is drawn as its link, not dropped.
+ */
+export interface SetupCard {
+  kind: 'setup_qr'
+  setup: string
+  address: string
+  url: string
+  code?: string | null
+  expires_at?: string | null
+  code_shown?: boolean
 }
 
 /** One `delegate_to_agent` call as the turn ledger recorded it (S12).

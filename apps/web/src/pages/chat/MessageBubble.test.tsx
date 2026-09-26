@@ -26,6 +26,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     delegationsDone: [],
     delegations: [],
     attachments: [],
+    cards: [],
     ...overrides,
   }
 }
@@ -226,6 +227,7 @@ function userRow(text: string): MessageRow {
     delegationsDone: [],
     delegations: [],
     attachments: [],
+    cards: [],
   }
 }
 
@@ -549,6 +551,41 @@ describe('MessageBubble — the delegation line (S12)', () => {
     render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false })} />)
     expect(screen.queryByTestId('delegation-line')).toBeNull()
     expect(screen.queryByTestId('delegation-chips')).toBeNull()
+  })
+})
+
+describe('MessageBubble — setup cards (S47)', () => {
+  it('draws a setup card after the reply, and nothing when there is none', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          text: 'Scan the card with the tablet.',
+          streaming: false,
+          cards: [
+            {
+              kind: 'setup_qr',
+              setup: 'install_pwa',
+              address: 'https://nova.fake-tailnet.ts.net',
+              url: 'https://nova.fake-tailnet.ts.net/install',
+            },
+          ],
+        })}
+      />,
+    )
+    expect(screen.getByRole('img').getAttribute('aria-label')).toBe('QR code for https://nova.fake-tailnet.ts.net/install')
+  })
+
+  it('a card kind this build does not know is drawn as its link, never dropped', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          text: 'Here.',
+          streaming: false,
+          cards: [{ kind: 'setup_qr', setup: 'fax_machine', address: 'https://nova.fake-tailnet.ts.net', url: 'https://nova.fake-tailnet.ts.net/fax' }],
+        })}
+      />,
+    )
+    expect(screen.getByRole('link', { name: 'https://nova.fake-tailnet.ts.net/fax' })).toBeTruthy()
   })
 })
 

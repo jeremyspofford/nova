@@ -1,4 +1,4 @@
-import type { Attachment, Delegation } from '../../lib/api'
+import type { Attachment, Delegation, SetupCard } from '../../lib/api'
 import type { StreamEvent } from '../../lib/streamChat'
 
 /**
@@ -129,6 +129,8 @@ export type MessageRow = {
    * the upload's own id is what the send carried, and the record of what
    * landed is the server's to state. */
   attachments: Attachment[]
+  /** S47: the setup QR cards this reply carries — live from the stream, or redrawn from the trace (never with a code). */
+  cards: SetupCard[]
 }
 
 export type ErrorRow = {
@@ -263,6 +265,8 @@ export type FetchedMessage = {
   delegations?: Delegation[]
   /** S28: the files this message carried. Absent on a core older than S28. */
   attachments?: Attachment[]
+  /** S47: the setup QR cards this row carries, redrawn from the trace (never with a code). */
+  cards?: SetupCard[]
 }
 
 export const NO_REPLY = 'the turn finished without a reply'
@@ -307,6 +311,7 @@ function message(row: Partial<MessageRow> & { id: string; role: MessageRow['role
     delegationsDone: [],
     delegations: [],
     attachments: [],
+    cards: [],
     ...row,
   }
 }
@@ -391,10 +396,11 @@ function pendingRow(state: ChatState): MessageRow | null {
 function replacePendingWithError(state: ChatState, reason: string): ChatState {
   const pending = pendingRow(state)
   const errorRow: ErrorRow = { kind: 'error', id: `${state.pendingId}:error`, reason }
-  // Text that really streamed is kept — deleting it would hide what the model
-  // actually said before it failed.
+  // Text that really streamed, or a card the turn already sent, is kept —
+  // deleting either would hide what the model actually said or sent before
+  // it failed.
   const keptRows =
-    pending && pending.text
+    pending && (pending.text || pending.cards.length > 0)
       ? state.rows.map(row =>
           row === pending ? settleDelegation({ ...pending, streaming: false, activity: null }) : row,
         )
@@ -482,6 +488,10 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
         servedBy: event.route.servedBy ?? row.servedBy,
       }))
 
+    case 'card':
+      if (state.pendingId === null) return state
+      return withPending(state, row => ({ ...row, cards: [...row.cards, event.card] }))
+
     case 'error':
       if (state.pendingId === null) {
         return {
@@ -519,8 +529,12 @@ function applyEvent(state: ChatState, event: StreamEvent): ChatState {
     case 'done': {
       if (state.pendingId === null) return { ...state, streaming: false, turnId: null }
       const pending = pendingRow(state)
-      // No text and no error frame: still a failure, said out loud.
-      if (pending && !pending.text) return { ...replacePendingWithError(state, NO_REPLY), turnId: null }
+      // No text, no card, and no error frame: still a failure, said out loud.
+      // A card is content too — a reply that was only "here's the QR code" is
+      // not the same as one that finished with nothing to show at all.
+      if (pending && !pending.text && pending.cards.length === 0) {
+        return { ...replacePendingWithError(state, NO_REPLY), turnId: null }
+      }
       return {
         ...withPending(state, row => settleDelegation({ ...row, streaming: false, activity: null })),
         streaming: false,
@@ -567,6 +581,9 @@ function serverRow(m: FetchedMessage): MessageRow {
     // with no key and a row with no files render identically, so [] is the
     // honest normalisation here.
     attachments: Array.isArray(m.attachments) ? m.attachments : [],
+    // S47: the cards this row carries, verbatim from the trace — absent (a
+    // core older than S47, or a row with none) normalises to [] the same way.
+    cards: Array.isArray(m.cards) ? m.cards : [],
   })
 }
 
@@ -579,6 +596,35 @@ function sameDelegations(a: Delegation[], b: Delegation[]): boolean {
       d.status === b[i].status &&
       d.files.length === b[i].files.length,
   )
+}
+
+function sameCards(a: SetupCard[], b: SetupCard[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every(
+    (c, i) =>
+      c.setup === b[i].setup &&
+      c.url === b[i].url &&
+      (c.code ?? null) === (b[i].code ?? null) &&
+      (c.expires_at ?? null) === (b[i].expires_at ?? null),
+  )
+}
+
+/**
+ * S47: a machine card's code reaches this tab once, on the live stream, and
+ * is never stored — the server's row redraws the card without it. While this
+ * tab holds the code, the merge keeps it on the card that stands for it (same
+ * setup, same expiry), so the idle poll never takes a still-valid code off
+ * the screen. A reload has no code to keep, which is the design.
+ */
+function withLiveCodes(server: MessageRow, local: MessageRow): MessageRow {
+  if (!local.cards.some(card => card.code)) return server
+  const cards = server.cards.map(card => {
+    const twin = local.cards.find(
+      l => l.code && l.setup === card.setup && (l.expires_at ?? null) === (card.expires_at ?? null),
+    )
+    return twin ? { ...card, code: twin.code, url: twin.url } : card
+  })
+  return { ...server, cards }
 }
 
 function fromFetchedMessages(
@@ -701,6 +747,9 @@ function mergeServerRows(rows: ChatRow[], fetched: FetchedMessage[]): ChatRow[] 
       continue
     }
     claimed.add(resolved)
+    // S47: a live code this tab holds on its own copy of the row survives
+    // being replaced by the spine's redrawn (code-less) copy.
+    if (row.kind === 'message') spine[resolved] = withLiveCodes(spine[resolved], row)
     cursor = resolved + 1
     // A client assistant row directly after a resolved USER row is that
     // turn's reply. This holds whether the user row resolved by text (first
@@ -721,6 +770,7 @@ function mergeServerRows(rows: ChatRow[], fetched: FetchedMessage[]): ChatRow[] 
     i += 1
     const reply = spine[cursor]
     if (reply !== undefined && !claimed.has(cursor) && couldBeOurReply(reply)) {
+      spine[cursor] = withLiveCodes(spine[cursor], next)
       claimed.add(cursor)
       cursor += 1
     } else {
@@ -756,7 +806,8 @@ function sameRows(a: ChatRow[], b: ChatRow[]): boolean {
       row.streaming === other.streaming &&
       row.interrupted === other.interrupted &&
       row.agent === other.agent &&
-      sameDelegations(row.delegations, other.delegations)
+      sameDelegations(row.delegations, other.delegations) &&
+      sameCards(row.cards, other.cards)
     )
   })
 }
