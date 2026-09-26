@@ -43,6 +43,25 @@ describe('AddToNovaSection', () => {
     expect(api.mintPairingCode).not.toHaveBeenCalled()
   })
 
+  it('an already-expired minted code shows New code, and clicking it mints a second code', async () => {
+    const expired = new Date(Date.now() - 60_000).toISOString()
+    const fresh = new Date(Date.now() + 10 * 60 * 1000).toISOString()
+    const mintPairingCode = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 'K7PQ9XYZ', expires_at: expired })
+      .mockResolvedValueOnce({ code: 'W4RS9YCD', expires_at: fresh })
+    const api = renderSection({ mintPairingCode })
+
+    fireEvent.click(screen.getByRole('button', { name: /A machine Nova controls/ }))
+    const dialog = await screen.findByRole('dialog')
+
+    const newCodeButton = await within(dialog).findByRole('button', { name: 'New code' })
+    fireEvent.click(newCodeButton)
+
+    expect((await within(dialog).findByTestId('setup-code')).textContent).toBe('W4RS-9YCD')
+    expect(api.mintPairingCode).toHaveBeenCalledTimes(2)
+  })
+
   it('an address that cannot be read is stated, not guessed', async () => {
     renderSection({ getNetworkAddress: vi.fn(async () => Promise.reject(new Error('Nova did not answer'))) })
     fireEvent.click(screen.getByRole('button', { name: /The Nova app/ }))

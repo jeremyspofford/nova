@@ -3,7 +3,11 @@
  * the Settings panels, her chat card and the public pages cannot drift apart —
  * and every install step carries the page its wording was checked against.
  *
- * Checked against each vendor's page on 2026-09-26.
+ * Checked on 2026-09-26. Most sources were read directly; Apple's iPhone
+ * guide (APPLE_WEB_APP) and Mozilla's Firefox-for-Windows page
+ * (FIREFOX_WINDOWS) would not render as fetched pages and were
+ * corroborated through search results instead — task-8-vendor-wording.md
+ * has the page-by-page record.
  */
 import type { DevicePlatform } from './devicePlatform'
 
@@ -103,7 +107,7 @@ const EDGE =
 const SAFARI_MAC = 'https://support.apple.com/en-us/104996'
 const FIREFOX_WINDOWS = 'https://support.mozilla.org/kb/web-apps-firefox-windows'
 
-const INSTALL: Record<string, PlatformSteps> = {
+const INSTALL = {
   ios_safari: {
     label: 'iPhone or iPad, Safari',
     steps: [
@@ -169,9 +173,13 @@ const INSTALL: Record<string, PlatformSteps> = {
     label: 'A computer, another browser',
     steps: [{ text: 'Bookmark this page, or open it in Chrome or Edge to install it.' }],
   },
-}
+} satisfies Record<string, PlatformSteps>
 
-function installKey({ os, browser }: DevicePlatform): string | null {
+/** Every row `installKey` may return. A key it returns that is not one of
+ *  these (a rename on one side, not the other) fails tsc, not just a test. */
+type InstallKey = keyof typeof INSTALL
+
+function installKey({ os, browser }: DevicePlatform): InstallKey | null {
   if (os === 'ios') return browser === 'safari' ? 'ios_safari' : browser === 'chrome' ? 'ios_chrome' : 'ios_other'
   if (os === 'android') {
     if (browser === 'chrome') return 'android_chrome'

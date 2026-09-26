@@ -34,7 +34,7 @@ function renderSection(
     listDevices: vi.fn(async () => [] as Device[]),
     mintPairingCode: vi.fn(
       async (): Promise<PairingCode> => ({
-        code: 'A1B2C3D4',
+        code: 'K7PQ9XYZ',
         expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
       }),
     ),
@@ -184,9 +184,9 @@ describe('DevicesSection', () => {
     await waitFor(() => expect(api.mintPairingCode).toHaveBeenCalled())
     const dialog = await screen.findByRole('dialog')
     // The code is shown big, formatted the way it is read aloud.
-    expect(within(dialog).getByTestId('setup-code').textContent).toBe('A1B2-C3D4')
+    expect(within(dialog).getByTestId('setup-code').textContent).toBe('K7PQ-9XYZ')
     // The enroll command carries the DERIVED address, never window.location.
-    const expected = 'novad enroll --server https://nova.fake-tailnet.ts.net --code A1B2-C3D4'
+    const expected = 'novad enroll --server https://nova.fake-tailnet.ts.net --code K7PQ-9XYZ'
     expect(within(dialog).getByText(content => content.includes(expected))).toBeTruthy()
   })
 })

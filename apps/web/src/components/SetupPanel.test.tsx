@@ -9,11 +9,30 @@ const AFTER = () => new Date('2026-09-25T14:11:00Z')
 
 describe('SetupPanel', () => {
   it('encodes the derived address, never the origin this page was opened at (Review Focus 1)', () => {
-    render(<SetupPanel setup="install_pwa" address={ADDRESS} />)
+    render(<SetupPanel setup="install_pwa" address={ADDRESS} fallbackOrigin="http://127.0.0.1:3000" />)
     const label = screen.getByRole('img').getAttribute('aria-label')
     expect(label).toBe(`QR code for ${ADDRESS}/install`)
     expect(label).not.toContain(window.location.host)
+    expect(label).not.toContain('127.0.0.1')
     expect(screen.getByText(/signed in to the same tailnet/)).toBeTruthy()
+  })
+
+  it('an add_machine setup uses the derived address for the QR and the command, never the loopback fallback (Review Focus 1)', () => {
+    render(
+      <SetupPanel
+        setup="add_machine"
+        address={ADDRESS}
+        code="ABCD2345"
+        expiresAt={EXPIRES}
+        clock={BEFORE}
+        fallbackOrigin="http://127.0.0.1:3000"
+      />,
+    )
+    const label = screen.getByRole('img').getAttribute('aria-label')
+    expect(label).toBe(`QR code for ${ADDRESS}/add#ABCD-2345`)
+    expect(label).not.toContain('127.0.0.1')
+    expect(screen.getByText(`novad enroll --server ${ADDRESS} --code ABCD-2345`)).toBeTruthy()
+    expect(screen.queryByText(/127\.0\.0\.1/)).toBeNull()
   })
 
   it('states why there is no QR code', () => {

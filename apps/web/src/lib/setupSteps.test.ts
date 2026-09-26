@@ -49,8 +49,11 @@ describe('installSteps', () => {
     }
   })
   it('sends Samsung Internet and Firefox on Android to the shared "Android, another browser" steps', () => {
-    const other = installSteps({ os: 'android', browser: 'other', phone: true })
-    expect(installSteps({ os: 'android', browser: 'samsung', phone: true })).toEqual(other)
-    expect(installSteps({ os: 'android', browser: 'firefox', phone: true })).toEqual(other)
+    expect(installSteps({ os: 'android', browser: 'samsung', phone: true }).map(s => s.label)).toEqual([
+      'Android, another browser',
+    ])
+    expect(installSteps({ os: 'android', browser: 'firefox', phone: true }).map(s => s.label)).toEqual([
+      'Android, another browser',
+    ])
   })
 })

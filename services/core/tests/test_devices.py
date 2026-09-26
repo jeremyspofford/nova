@@ -247,6 +247,27 @@ async def test_a_code_is_accepted_however_the_operator_retypes_it(pool):
     assert result["device_id"]
 
 
+async def test_a_dashed_code_is_accepted(pool):
+    """Settings, the chat card and /add all show the code dashed
+    (ABCD-2345, S47's `formatCode`), and every enroll command they hand out
+    carries it dashed. Core must accept that shape back, in either case."""
+    person = await _owner(pool)
+
+    upper = await devices.mint_pairing_code(pool, created_by=person.id)
+    upper_dashed = f"{upper['code'][:4]}-{upper['code'][4:]}"
+    result = await devices.enroll(
+        pool, code=upper_dashed, pubkey=PUBKEY_A, name="x-upper", platform="linux", hostname="h"
+    )
+    assert result["device_id"]
+
+    lower = await devices.mint_pairing_code(pool, created_by=person.id)
+    lower_dashed = f"{lower['code'][:4]}-{lower['code'][4:]}".lower()
+    result = await devices.enroll(
+        pool, code=lower_dashed, pubkey=PUBKEY_B, name="x-lower", platform="linux", hostname="h"
+    )
+    assert result["device_id"]
+
+
 async def test_a_pubkey_that_is_not_32_raw_bytes_of_hex_is_refused(pool):
     person = await _owner(pool)
     for bad in ("", "xyz", "a" * 63, "a" * 65, "g" * 64, "A" * 63 + "!"):
