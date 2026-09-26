@@ -38,6 +38,22 @@ const CommandTimeout = 110 * time.Second
 // tile state from when it last heard, never from the reported ts.
 const HeartbeatInterval = 20 * time.Second
 
+// PingTimeout bounds each heartbeat's ping: a write can succeed into a dead
+// TCP connection for minutes, a pong cannot.
+const PingTimeout = 10 * time.Second
+
+// FactsEvery and FactsMinGap are the facts frame's cadence
+// (r2-integration): unchanged facts every ten minutes; changed facts at most
+// once a minute.
+const (
+	FactsEvery  = 10 * time.Minute
+	FactsMinGap = time.Minute
+)
+
+// defaultBackoffs is the reconnect ladder. It resets after every session
+// that authenticated (Run).
+var defaultBackoffs = []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
+
 // wsReadLimit raises coder/websocket's 32 KiB default so a signed fs.write
 // command (content up to the 256 KiB write domain) is not rejected on read.
 const wsReadLimit = 4 << 20
@@ -78,6 +94,23 @@ type Agent struct {
 	// socket. Tests shorten it to prove a hung gather cannot block ready.
 	authGatherBudget time.Duration
 
+	// Liveness knobs: the constants above, as fields so a test runs them fast.
+	heartbeatEvery time.Duration
+	pingTimeout    time.Duration
+	factsEvery     time.Duration
+	factsMinGap    time.Duration
+	backoffs       []time.Duration
+
+	// factsSendMu serializes the whole build (frameBytes) -> write -> record
+	// sequence across every path that can send a facts frame on a
+	// connection: the post-ready send, a facts.refresh command, and
+	// heartbeat's own periodic/on-change sender (maybeSendFacts) running
+	// beside them. Without it, two of those sequences racing here could land
+	// on the wire out of order, or an older build's record could clobber a
+	// newer one's lastFacts/lastFactsAt after the fact — and maybeSendFacts's
+	// byte-equality check could then withhold a real change until factsEvery.
+	factsSendMu sync.Mutex
+
 	// factsMu guards what the facts frames remember: what GatherAuth could
 	// not read (repeated in every frame), and the last frame written and
 	// when — the heartbeat's change check compares against them.
@@ -117,6 +150,11 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		gatherFrame:      facts.GatherFrame,
 		now:              time.Now,
 		authGatherBudget: 5 * time.Second,
+		heartbeatEvery:   HeartbeatInterval,
+		pingTimeout:      PingTimeout,
+		factsEvery:       FactsEvery,
+		factsMinGap:      FactsMinGap,
+		backoffs:         defaultBackoffs,
 	}, nil
 }
 
@@ -143,12 +181,11 @@ func WSURL(server string) (string, error) {
 }
 
 // Run connects, serves, and reconnects with a capped backoff until ctx is done
-// or a fatal condition (a changed core key) is hit.
+// or a fatal condition is hit (a changed core key; a revoked device).
 func (a *Agent) Run(ctx context.Context) error {
-	backoffs := []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
 	attempt := 0
 	for {
-		err := a.connectOnce(ctx)
+		authed, err := a.connectOnce(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -160,7 +197,14 @@ func (a *Agent) Run(ctx context.Context) error {
 		if err != nil {
 			a.logf("connection ended: %v", err)
 		}
-		d := backoffs[min(attempt, len(backoffs)-1)]
+		if authed {
+			// A session that authenticated proves the path works, so the next
+			// wait starts from the shortest step again. Before S42a the ladder
+			// never reset, and after five drops every reconnect waited 30 s for
+			// the life of the process.
+			attempt = 0
+		}
+		d := a.backoffs[min(attempt, len(a.backoffs)-1)]
 		attempt++
 		a.logf("reconnecting in %s", d)
 		select {
@@ -171,21 +215,23 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-func (a *Agent) connectOnce(ctx context.Context) error {
+// connectOnce dials, authenticates and serves one session. It reports whether
+// the session authenticated (Run's backoff reset reads it), and why it ended.
+func (a *Agent) connectOnce(ctx context.Context) (bool, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	c, _, err := websocket.Dial(dialCtx, a.wsURL, nil)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", a.wsURL, err)
+		return false, fmt.Errorf("dial %s: %w", a.wsURL, err)
 	}
 	defer c.CloseNow()
 	c.SetReadLimit(wsReadLimit)
 
 	if err := a.handshake(ctx, c); err != nil {
-		return err
+		return false, err
 	}
 	a.logf("authenticated; serving")
-	return a.serve(ctx, c)
+	return true, a.serve(ctx, c)
 }
 
 // handshake reads the challenge, refuses a core key that is not the pinned one
@@ -287,12 +333,18 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	defer cancel()
 
 	// The facts frame follows ready at once (r2-integration): core records
-	// the slower facts before the first command could need them.
-	if err := a.sendFacts(serveCtx, c); err != nil {
+	// the slower facts before the first command could need them. Bounded by
+	// pingTimeout: a write blocking on a dead path must not prevent the
+	// heartbeat below — and its own ping, which WOULD catch a dead path —
+	// from ever starting on this connection.
+	factsCtx, factsCancel := context.WithTimeout(serveCtx, a.pingTimeout)
+	err := a.sendFacts(factsCtx, c)
+	factsCancel()
+	if err != nil {
 		a.logf("facts frame not sent: %v", err)
 	}
 
-	go a.heartbeat(serveCtx, c)
+	go a.heartbeat(serveCtx, cancel, c)
 
 	for {
 		frame, err := readFrame(serveCtx, c)
@@ -311,19 +363,81 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	}
 }
 
-func (a *Agent) heartbeat(ctx context.Context, c *websocket.Conn) {
-	ticker := time.NewTicker(HeartbeatInterval)
+// heartbeat keeps the session honest in both directions, once per tick:
+//
+//   - a wall-clock gap between ticks wider than two intervals means this
+//     machine slept. The ticker runs on the monotonic clock, which stops
+//     while the machine sleeps on Linux, macOS and Windows; the wall clock
+//     does not. The socket is presumed dead, so the session ends;
+//   - the heartbeat frame (core stamps last_seen from it);
+//   - a ping core must answer within pingTimeout;
+//   - the facts frame, when the facts changed or it is due.
+//
+// Any failure ends the session through cancel: serve returns, and Run
+// reconnects from the first step of the ladder.
+func (a *Agent) heartbeat(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn) {
+	ticker := time.NewTicker(a.heartbeatEvery)
 	defer ticker.Stop()
+	last := a.now().Round(0)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := writeFrame(ctx, c, wire.Heartbeat{Type: wire.TypeHeartbeat, Ts: time.Now().Unix()}); err != nil {
-				a.logf("heartbeat write failed: %v", err)
-				return
-			}
 		}
+		now := a.now().Round(0) // Round(0) drops the monotonic reading: wall clock only
+		if gap := now.Sub(last); gap > 2*a.heartbeatEvery {
+			a.logf("the clock jumped %s between heartbeats — this machine slept; reconnecting", gap.Round(time.Second))
+			cancel()
+			return
+		}
+		last = now
+		if err := writeFrame(ctx, c, wire.Heartbeat{Type: wire.TypeHeartbeat, Ts: now.Unix()}); err != nil {
+			if ctx.Err() == nil {
+				a.logf("heartbeat write failed: %v — reconnecting", err)
+				cancel()
+			}
+			return
+		}
+		pingCtx, pingCancel := context.WithTimeout(ctx, a.pingTimeout)
+		err := c.Ping(pingCtx)
+		pingCancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				a.logf("core did not answer a ping within %s: %v — reconnecting", a.pingTimeout, err)
+				cancel()
+			}
+			return
+		}
+		a.maybeSendFacts(ctx, c)
+	}
+}
+
+// maybeSendFacts writes a facts frame when the facts changed and the last
+// frame is at least factsMinGap old, or when factsEvery has passed anyway.
+// factsSendMu holds this decision through the write and record (see its
+// field comment) so it cannot interleave with a concurrent sendFacts call —
+// a facts.refresh command on the same connection.
+func (a *Agent) maybeSendFacts(ctx context.Context, c *websocket.Conn) {
+	a.factsSendMu.Lock()
+	defer a.factsSendMu.Unlock()
+	a.factsMu.Lock()
+	last, lastAt := a.lastFacts, a.lastFactsAt
+	a.factsMu.Unlock()
+	since := a.now().Sub(lastAt)
+	if since < a.factsMinGap {
+		return
+	}
+	data, err := a.frameBytes()
+	if err != nil {
+		a.logf("facts frame not built: %v", err)
+		return
+	}
+	if since < a.factsEvery && bytes.Equal(data, last) {
+		return
+	}
+	if err := a.writeFacts(ctx, c, data); err != nil && ctx.Err() == nil {
+		a.logf("facts frame not sent: %v", err)
 	}
 }
 
@@ -390,8 +504,12 @@ func (a *Agent) emit(ctx context.Context, c *websocket.Conn, result wire.Result,
 	}
 }
 
-// sendFacts gathers a facts frame and writes it on c.
+// sendFacts gathers a facts frame and writes it on c. factsSendMu holds the
+// build through the write and record (see its field comment) so this cannot
+// interleave with a concurrent maybeSendFacts call on the same connection.
 func (a *Agent) sendFacts(ctx context.Context, c *websocket.Conn) error {
+	a.factsSendMu.Lock()
+	defer a.factsSendMu.Unlock()
 	data, err := a.frameBytes()
 	if err != nil {
 		return err

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -741,5 +742,182 @@ func TestTheRepointProbeSendsNoFacts(t *testing.T) {
 	}
 	if <-sawFacts {
 		t.Fatal("the repoint probe must not send facts")
+	}
+}
+
+// countingCore authenticates every connection, records when each arrived,
+// then either closes it at once or holds it (hold=true), reading frames so
+// pings are answered.
+func countingCore(t *testing.T, corePub, devPub ed25519.PublicKey, hold, answerPings bool) (*httptest.Server, func() []time.Time) {
+	t.Helper()
+	var mu sync.Mutex
+	var arrivals []time.Time
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		mu.Lock()
+		arrivals = append(arrivals, time.Now())
+		mu.Unlock()
+		if fakeCoreHandshake(r.Context(), c, corePub, devPub) == nil {
+			return
+		}
+		if !hold {
+			_ = c.Close(websocket.StatusNormalClosure, "cycling")
+			return
+		}
+		if answerPings {
+			for {
+				if _, err := coreRead(r.Context(), c); err != nil {
+					return
+				}
+			}
+		}
+		<-r.Context().Done() // never reads: pings go unanswered
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, func() []time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Time(nil), arrivals...)
+	}
+}
+
+func waitFor(t *testing.T, within time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %s", within)
+}
+
+// Before S42a the ladder never reset: after five drops EVERY reconnect
+// waited the longest step for the life of the process.
+func TestTheBackoffResetsAfterASessionThatAuthenticated(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, arrivals := countingCore(t, corePub, devPub, false, false)
+	agent, _ := buildAgent(t, srv.URL, "dev-backoff-1", hex.EncodeToString(corePub), devPriv)
+	agent.backoffs = []time.Duration{20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond, 10 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	// Seven authenticated sessions: without the reset, the sixth waits 10 s.
+	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 7 })
+}
+
+func TestAPingThatGoesUnansweredEndsTheSession(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, arrivals := countingCore(t, corePub, devPub, true, false)
+	agent, _ := buildAgent(t, srv.URL, "dev-ping-1", hex.EncodeToString(corePub), devPriv)
+	agent.heartbeatEvery, agent.pingTimeout = 50*time.Millisecond, 100*time.Millisecond
+	agent.backoffs = []time.Duration{20 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 2 })
+}
+
+// Review focus 4: a wall-clock jump between ticks is a sleep — the session
+// ends and the next connect comes after the FIRST step of the ladder (the
+// reset), not after a TCP timeout or a 30 s wait.
+func TestAClockJumpEndsTheSessionAndTheNextConnectIsQuick(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, arrivals := countingCore(t, corePub, devPub, true, true)
+	agent, _ := buildAgent(t, srv.URL, "dev-resume-1", hex.EncodeToString(corePub), devPriv)
+	agent.heartbeatEvery = 50 * time.Millisecond
+	var mu sync.Mutex
+	offset := time.Duration(0)
+	agent.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return time.Now().Add(offset) }
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	waitFor(t, 2*time.Second, func() bool { return len(arrivals()) >= 1 })
+	time.Sleep(120 * time.Millisecond) // a couple of normal ticks first
+	mu.Lock()
+	offset = 10 * time.Minute // the laptop "slept" ten minutes
+	mu.Unlock()
+	jumped := time.Now()
+	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 2 })
+	// Controller ruling 3: a spurious reconnect BEFORE the deliberate jump (a
+	// scheduler stall alone tripping the same >2x-interval gap check) would
+	// let this test pass vacuously — arrivals()[1] would predate jumped, its
+	// Sub would be negative, and the bound below would hold without the
+	// resume path ever running. Assert causality first.
+	if !arrivals()[1].After(jumped) {
+		t.Fatalf("arrivals()[1] = %s is not after the jump at %s — a spurious reconnect before the deliberate jump", arrivals()[1], jumped)
+	}
+	if gap := arrivals()[1].Sub(jumped); gap > 2500*time.Millisecond {
+		t.Fatalf("reconnected %s after the jump; the reset ladder's first step is 1 s", gap)
+	}
+}
+
+// Changed facts go out at most once per factsMinGap; unchanged ones only
+// every factsEvery.
+func TestFactsAreResentOnChangeAtMostOncePerGap(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	var mu sync.Mutex
+	count := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		if fakeCoreHandshake(r.Context(), c, corePub, devPub) == nil {
+			return
+		}
+		for {
+			f, err := coreRead(r.Context(), c)
+			if err != nil {
+				return
+			}
+			if f["type"] == "facts" {
+				mu.Lock()
+				count++
+				mu.Unlock()
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, "dev-cadence-1", hex.EncodeToString(corePub), devPriv)
+	// Controller ruling 2 (pre-flight finding F3): the brief's 20ms/40ms
+	// heartbeat/gap made a single >=40ms scheduler stall on a -race runner
+	// enough to trip the machine-slept rule and end the session, which could
+	// drop the count below 3. 50ms/100ms needs a much wider stall, and the
+	// 10ms backoff means a spurious reconnect (if a stall happens anyway)
+	// costs almost nothing inside the 1.1s window.
+	agent.heartbeatEvery, agent.factsMinGap, agent.factsEvery = 50*time.Millisecond, 200*time.Millisecond, time.Hour
+	agent.backoffs = []time.Duration{10 * time.Millisecond}
+	n := 0
+	agent.gatherFrame = func([]facts.Unreadable) facts.Frame { // changes on every gather
+		n++
+		return facts.Frame{Type: "facts", Net: facts.Net{Ifaces: []facts.Iface{}},
+			Unreadable: []facts.Unreadable{{Item: "tick", Reason: fmt.Sprint(n)}}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1100*time.Millisecond)
+	defer cancel()
+	_ = agent.Run(ctx)
+	mu.Lock()
+	defer mu.Unlock()
+	// One after ready, then about one per 200 ms — never one per tick. Ticks
+	// land near t=0,200,400,600,800,1000ms over ~1.1s, so ~6 sends; bounds
+	// stay [3,8] as in the brief (kept per ruling 2: adjust only if the
+	// arithmetic requires it — it does not).
+	if count < 3 || count > 8 {
+		t.Fatalf("%d facts frames in ~1 s", count)
 	}
 }
