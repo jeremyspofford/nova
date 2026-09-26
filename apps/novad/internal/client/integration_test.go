@@ -1065,13 +1065,104 @@ func refusingCore(t *testing.T, corePub, devPub ed25519.PublicKey, reason string
 	return srv, func() int { mu.Lock(); defer mu.Unlock(); return n }
 }
 
-// Review focus 5 / P5: the ONE refusal that is final. Run must return
-// ErrRevoked and must NOT reconnect — a revoke is final, not a retry.
-func TestARevokedDeviceIsFatalAndRunSaysSo(t *testing.T) {
+// Fix round 1, Finding 1: the reason string alone is unsigned — anyone who
+// can terminate the socket can send it. Any other refusal (a restored
+// database that forgot the device, a transient core fault, or exactly this
+// reason text with no valid proof) is retried — only the exact reason
+// "revoked", PROVEN by a signature the pinned core key actually produced
+// over THIS handshake, wipes anything. core's own current text for an
+// unknown/ambiguous device (devices_ws.py authenticate(), before Task 12
+// adds the signed proof) is the first case; the rest are near-misses on the
+// exact string a naive substring or case-insensitive check would wrongly
+// treat as a match.
+func TestAnyOtherAuthErrorIsRetried(t *testing.T) {
 	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
 	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
-	srv, attempts := refusingCore(t, corePub, devPub, "revoked")
-	agent, _ := buildAgent(t, srv.URL, "dev-revoked-1", hex.EncodeToString(corePub), devPriv)
+	reasons := []string{
+		"no such device, or it has been revoked", // core's real text today; unsigned, no proof at all
+		"Revoked",
+		" revoked",
+		"revoked ",
+	}
+	for _, reason := range reasons {
+		t.Run(reason, func(t *testing.T) {
+			srv, attempts := refusingCore(t, corePub, devPub, reason)
+			agent, _ := buildAgent(t, srv.URL, "dev-unknown-1", hex.EncodeToString(corePub), devPriv)
+			agent.backoffs = []time.Duration{20 * time.Millisecond}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			go func() { _ = agent.Run(ctx) }()
+			waitFor(t, 2*time.Second, func() bool { return attempts() >= 3 })
+		})
+	}
+}
+
+// provenRevokedCore answers the handshake, then sends the auth_error frame
+// buildReply returns — given THIS handshake's own nonce hex, so a genuine
+// proof can echo it and a near-miss can deliberately not — and closes.
+// attempts() counts accepted connections.
+func provenRevokedCore(t *testing.T, corePub, devPub ed25519.PublicKey, buildReply func(nonceHex string) map[string]any) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	n := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		mu.Lock()
+		n++
+		mu.Unlock()
+		nonce := make([]byte, 32)
+		_, _ = rand.Read(nonce)
+		nonceHex := hex.EncodeToString(nonce)
+		_ = coreWrite(r.Context(), c, map[string]any{"type": "challenge", "nonce": nonceHex, "core_pubkey": hex.EncodeToString(corePub)})
+		if _, err := coreRead(r.Context(), c); err != nil {
+			return
+		}
+		_ = coreWrite(r.Context(), c, buildReply(nonceHex))
+		_ = c.Close(4403, "revoked")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, func() int { mu.Lock(); defer mu.Unlock(); return n }
+}
+
+// canonicalRevokedProof builds a genuine proof body: kind and v exactly as
+// core will sign them, deviceID and nonceHex echoing one particular
+// handshake.
+func canonicalRevokedProof(deviceID, nonceHex string) map[string]any {
+	return map[string]any{"kind": wire.RevokedProofKind, "v": int64(wire.RevokedProofVersion), "device_id": deviceID, "nonce": nonceHex}
+}
+
+// signedRevokedReply signs proof's canonical encoding with signer and wraps
+// it in the auth_error frame shape the handshake reads.
+func signedRevokedReply(t *testing.T, signer ed25519.PrivateKey, proof map[string]any) map[string]any {
+	t.Helper()
+	canon, err := wire.Canonical(proof)
+	if err != nil {
+		t.Fatalf("canonical: %v", err)
+	}
+	return map[string]any{
+		"type": wire.TypeAuthError, "reason": wire.ReasonRevoked,
+		"proof": proof, "sig": hex.EncodeToString(ed25519.Sign(signer, canon)),
+	}
+}
+
+// Review focus 5 / P5, as fixed in round 1: the ONE refusal that is final is
+// a revoke core's PINNED key actually signed, over this device's own id and
+// this exact handshake's own nonce. Run must return ErrRevoked and must NOT
+// reconnect — a PROVEN revoke is final, not a retry.
+func TestARevokedDeviceProvenByCoresSignatureIsFatalAndRunSaysSo(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-revoked-proven-1"
+	srv, attempts := provenRevokedCore(t, corePub, devPub, func(nonceHex string) map[string]any {
+		return signedRevokedReply(t, corePriv, canonicalRevokedProof(deviceID, nonceHex))
+	})
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
 	agent.backoffs = []time.Duration{20 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -1080,20 +1171,71 @@ func TestARevokedDeviceIsFatalAndRunSaysSo(t *testing.T) {
 		t.Fatalf("Run = %v, want ErrRevoked", err)
 	}
 	if attempts() != 1 {
-		t.Fatalf("a revoke is final: %d connection attempts", attempts())
+		t.Fatalf("a PROVEN revoke is final: %d connection attempts", attempts())
 	}
 }
 
-// Any other refusal (a restored database that forgot the device, a transient
-// core fault) is retried — only the exact reason "revoked" wipes anything.
-func TestAnyOtherAuthErrorIsRetried(t *testing.T) {
-	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+// Fix round 1, Finding 1: every near-miss on the required proof shape must
+// be retried, never wiped — the exact vulnerability the finding named. A
+// missing proof, a wrong kind/device_id/nonce (even signed correctly BY THE
+// PINNED KEY over that wrong content), a signature from a key that is not
+// the one pinned at enrollment (never the key merely claimed in the
+// challenge frame — that IS the forged-socket attack), and a signature
+// valid for some OTHER proof body tampered onto a different one, must all
+// leave Run retrying with backoff and must never return ErrRevoked.
+func TestAnUnprovenRevocationIsRetriedNeverWiped(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader) // NOT the pinned key
 	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
-	srv, attempts := refusingCore(t, corePub, devPub, "no such device — it was never paired here, or its record is gone")
-	agent, _ := buildAgent(t, srv.URL, "dev-unknown-1", hex.EncodeToString(corePub), devPriv)
-	agent.backoffs = []time.Duration{20 * time.Millisecond}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	go func() { _ = agent.Run(ctx) }()
-	waitFor(t, 2*time.Second, func() bool { return attempts() >= 3 })
+	const deviceID = "dev-revoked-unproven-1"
+
+	cases := []struct {
+		name  string
+		build func(nonceHex string) map[string]any
+	}{
+		{"no proof at all", func(nonceHex string) map[string]any {
+			return map[string]any{"type": wire.TypeAuthError, "reason": wire.ReasonRevoked}
+		}},
+		{"wrong kind", func(nonceHex string) map[string]any {
+			p := canonicalRevokedProof(deviceID, nonceHex)
+			p["kind"] = "not-revoked"
+			return signedRevokedReply(t, corePriv, p)
+		}},
+		{"wrong device_id", func(nonceHex string) map[string]any {
+			return signedRevokedReply(t, corePriv, canonicalRevokedProof("some-other-device", nonceHex))
+		}},
+		{"wrong nonce", func(nonceHex string) map[string]any {
+			return signedRevokedReply(t, corePriv, canonicalRevokedProof(deviceID, strings.Repeat("00", 32)))
+		}},
+		{"signed by a different key", func(nonceHex string) map[string]any {
+			return signedRevokedReply(t, otherPriv, canonicalRevokedProof(deviceID, nonceHex))
+		}},
+		{"tampered after signing", func(nonceHex string) map[string]any {
+			signed := signedRevokedReply(t, corePriv, canonicalRevokedProof(deviceID, nonceHex))
+			signed["proof"] = canonicalRevokedProof("swapped-after-signing", nonceHex)
+			return signed
+		}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, attempts := provenRevokedCore(t, corePub, devPub, c.build)
+			agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+			agent.backoffs = []time.Duration{20 * time.Millisecond}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			runErr := make(chan error, 1)
+			go func() { runErr <- agent.Run(ctx) }()
+			waitFor(t, 2*time.Second, func() bool { return attempts() >= 2 })
+			cancel()
+			select {
+			case err := <-runErr:
+				if errors.Is(err, ErrRevoked) {
+					t.Fatalf("%s: an unproven revocation must never wipe (ErrRevoked), got %v", c.name, err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s: Run did not return after ctx was cancelled", c.name)
+			}
+		})
+	}
 }

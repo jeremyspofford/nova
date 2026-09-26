@@ -93,13 +93,30 @@ func TestAfterRunWipesARevokedDeviceAndExits78(t *testing.T) {
 }
 
 // Review focus 5: systemd must not restart a daemon that can never get in.
+// Fix round 1, folded-in item: the directive must be an ACTIVE line inside
+// [Service] — not merely somewhere in the file's bytes, where a comment
+// naming it (novad.service carries one) or a line in the wrong section would
+// pass a bare substring check without the directive doing anything.
 func TestTheServiceUnitDoesNotRestartARevokedDevice(t *testing.T) {
 	body, err := os.ReadFile("novad.service")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "RestartPreventExitStatus=78") {
-		t.Fatal("novad.service must carry RestartPreventExitStatus=78 (exitConfig)")
+	section := ""
+	found := false
+	for _, line := range strings.Split(string(body), "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]"):
+			section = trimmed
+		case trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";"):
+			// blank or comment: not an active directive
+		case section == "[Service]" && trimmed == "RestartPreventExitStatus=78":
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("novad.service must carry an ACTIVE RestartPreventExitStatus=78 line inside [Service] (exitConfig) — not merely the text somewhere in the file")
 	}
 }
 
@@ -136,5 +153,131 @@ func TestAfterRunKeepsExit78EvenWhenTheWipeOnlyPartlySucceeds(t *testing.T) {
 	}
 	if strings.Contains(msg, "its identity is wiped") {
 		t.Fatalf("a partly-failed wipe must never be reported as a clean wipe, got %q", msg)
+	}
+}
+
+// Fix round 1, Finding 2: config.json and key are removed CLEANLY (they are
+// really gone), but the audit step fails with ENOTDIR — its parent path
+// component is a regular file, not a directory, so config.Wipe cannot even
+// Lstat it (a real error, never fs.ErrNotExist). The message must name the
+// audit path (still might be live — Wipe never confirmed otherwise) and
+// must NOT name config.json or key (confirmed gone), matching afterRun's own
+// doc: the status says what is true on disk. ENOTDIR is deterministic
+// regardless of the user running the test, unlike a permission bit (root
+// ignores those).
+func TestAfterFailedWipeNamesOnlyWhatIsStillThere(t *testing.T) {
+	home := t.TempDir()
+	p := config.Paths{
+		ConfigDir: filepath.Join(home, "c"), StateDir: filepath.Join(home, "s"),
+		ConfigFile: filepath.Join(home, "c", "config.json"), KeyFile: filepath.Join(home, "c", "key"),
+		AuditFile: filepath.Join(home, "not-a-dir", "audit.jsonl"), Home: home,
+	}
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := config.Save(p, config.Config{DeviceID: "d"}, priv); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "not-a-dir"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, msg := afterRun(p, client.ErrRevoked, time.Now())
+	if code != 78 {
+		t.Fatalf("a wipe that fails on the audit step must still exit 78, got %d: %q", code, msg)
+	}
+	if p.Enrolled() {
+		t.Fatalf("config.json and key must actually be gone: %q", msg)
+	}
+	if !strings.Contains(msg, p.AuditFile) {
+		t.Fatalf("the message must name the audit path that could not be confirmed set aside, got %q", msg)
+	}
+	if strings.Contains(msg, p.ConfigFile) || strings.Contains(msg, p.KeyFile) {
+		t.Fatalf("the message must not name files that are already gone, got %q", msg)
+	}
+}
+
+// Fix round 1, folded-in item: the success message must say the audit log
+// was set aside ONLY when one existed, and must name where it went — never
+// a blanket claim (a device that never ran has no audit.jsonl at all) or
+// something unverifiable (which of possibly several audit.jsonl.revoked-*
+// names is THIS wipe's).
+func TestAfterRunNamesWhereTheAuditLogWentOnlyWhenOneExisted(t *testing.T) {
+	home := t.TempDir()
+	p := config.Paths{
+		ConfigDir: filepath.Join(home, "c"), StateDir: filepath.Join(home, "s"),
+		ConfigFile: filepath.Join(home, "c", "config.json"), KeyFile: filepath.Join(home, "c", "key"),
+		AuditFile: filepath.Join(home, "s", "audit.jsonl"), Home: home,
+	}
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := config.Save(p, config.Config{DeviceID: "d"}, priv); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.AuditFile, []byte(`{"seq":0}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantAside := p.AuditFile + ".revoked-1790000001"
+	_, msg := afterRun(p, client.ErrRevoked, time.Unix(1790000001, 0))
+	if !strings.Contains(msg, wantAside) {
+		t.Fatalf("the message must name where the audit log went (%s), got %q", wantAside, msg)
+	}
+	if _, err := os.Stat(wantAside); err != nil {
+		t.Fatalf("the audit log was not actually renamed to %s: %v", wantAside, err)
+	}
+
+	// A device that never ran: no audit.jsonl was ever created.
+	home2 := t.TempDir()
+	p2 := config.Paths{
+		ConfigDir: filepath.Join(home2, "c"), StateDir: filepath.Join(home2, "s"),
+		ConfigFile: filepath.Join(home2, "c", "config.json"), KeyFile: filepath.Join(home2, "c", "key"),
+		AuditFile: filepath.Join(home2, "s", "audit.jsonl"), Home: home2,
+	}
+	_, priv2, _ := ed25519.GenerateKey(rand.Reader)
+	if err := config.Save(p2, config.Config{DeviceID: "d2"}, priv2); err != nil {
+		t.Fatal(err)
+	}
+	_, msg2 := afterRun(p2, client.ErrRevoked, time.Now())
+	if strings.Contains(msg2, "audit log") {
+		t.Fatalf("no audit log ever existed — the message must not claim one was set aside, got %q", msg2)
+	}
+}
+
+// Fix round 1, folded-in item: cmdRun's not-enrolled guard (checkEnrolled)
+// must only treat a CONFIRMED-missing config/key as "not enrolled" (exit
+// 78). Any other Lstat error is a real problem re-enrolling cannot fix, so
+// it must be returned as itself, never folded into errNotEnrolled. The
+// second case forces a real (ENOTDIR) error the same deterministic way as
+// TestAfterFailedWipeNamesOnlyWhatIsStillThere, rather than a permission bit
+// a root-run test would not observe.
+func TestCheckEnrolledDistinguishesMissingFromAnyOtherError(t *testing.T) {
+	home := t.TempDir()
+	p := config.Paths{
+		ConfigDir: filepath.Join(home, "c"), StateDir: filepath.Join(home, "s"),
+		ConfigFile: filepath.Join(home, "c", "config.json"), KeyFile: filepath.Join(home, "c", "key"),
+		AuditFile: filepath.Join(home, "s", "audit.jsonl"), Home: home,
+	}
+	if err := checkEnrolled(p); !errors.Is(err, errNotEnrolled) {
+		t.Fatalf("a missing config/key must report errNotEnrolled (exit 78), got %v", err)
+	}
+
+	notADir := filepath.Join(home, "not-a-dir")
+	if err := os.WriteFile(notADir, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p2 := p
+	p2.ConfigFile = filepath.Join(notADir, "config.json") // ENOTDIR, never ErrNotExist
+	if err := checkEnrolled(p2); err == nil || errors.Is(err, errNotEnrolled) {
+		t.Fatalf("a real Lstat error (ENOTDIR) must not be reported as errNotEnrolled, got %v", err)
+	}
+
+	if err := os.MkdirAll(p.ConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.ConfigFile, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.KeyFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkEnrolled(p); err != nil {
+		t.Fatalf("both files present must report no error, got %v", err)
 	}
 }

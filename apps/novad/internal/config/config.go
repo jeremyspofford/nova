@@ -155,14 +155,18 @@ func writeFile0600(path string, body []byte) error {
 // of what this machine did) so a later enroll starts a fresh chain instead of
 // replaying the revoked device's chain under the new id. Missing files are
 // fine; any other failure is returned, because a wipe that silently
-// half-happened is the one outcome worse than none.
-func Wipe(p Paths, now time.Time) error {
+// half-happened is the one outcome worse than none. The returned string is
+// where the audit log went — "" when there was none to move, or when the
+// rename did not complete — so a caller can say exactly what happened
+// instead of assuming every wipe moves one.
+func Wipe(p Paths, now time.Time) (string, error) {
 	var errs []error
 	for _, f := range []string{p.ConfigFile, p.KeyFile} {
 		if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			errs = append(errs, err)
 		}
 	}
+	asidePath := ""
 	// Lstat the SOURCE first: on a second Wipe in the same unix second the
 	// live file is already gone, so this is a no-op rather than a second,
 	// pointless search for a free set-aside name. Any Stat/Lstat error
@@ -177,8 +181,10 @@ func Wipe(p Paths, now time.Time) error {
 		errs = append(errs, err)
 	} else if err := os.Rename(p.AuditFile, aside); err != nil {
 		errs = append(errs, err)
+	} else {
+		asidePath = aside
 	}
-	return errors.Join(errs...)
+	return asidePath, errors.Join(errs...)
 }
 
 // setAsideName is the first "<audit file>.revoked-<unix>[-N]" name that does

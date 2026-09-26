@@ -74,8 +74,13 @@ func TestWipeRemovesTheIdentityAndSetsTheAuditAside(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Unix(1790000000, 0)
-	if err := Wipe(p, now); err != nil {
+	wantAside := p.AuditFile + ".revoked-1790000000"
+	gotAside, err := Wipe(p, now)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if gotAside != wantAside {
+		t.Fatalf("Wipe returned aside path %q, want %q", gotAside, wantAside)
 	}
 	if p.Enrolled() {
 		t.Fatal("after a wipe the device must not be enrolled")
@@ -95,8 +100,10 @@ func TestWipeRemovesTheIdentityAndSetsTheAuditAside(t *testing.T) {
 	if err != nil || !strings.Contains(string(aside), "{}") {
 		t.Fatalf("the audit log must be set aside intact: %q %v", aside, err)
 	}
-	if err := Wipe(p, now); err != nil {
+	if secondAside, err := Wipe(p, now); err != nil {
 		t.Fatalf("wiping an already-wiped device is not an error: %v", err)
+	} else if secondAside != "" {
+		t.Fatalf("nothing was live to set aside the second time, got %q", secondAside)
 	}
 }
 
@@ -119,7 +126,7 @@ func TestWipeDoesNotClobberAnExistingSetAside(t *testing.T) {
 	if err := os.WriteFile(existing, priorContent, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := Wipe(p, now); err != nil {
+	if _, err := Wipe(p, now); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(existing)

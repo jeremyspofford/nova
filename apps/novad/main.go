@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -190,31 +191,103 @@ func enrollBody(code, pubkeyHex, name, hostname string) ([]byte, error) {
 }
 
 // exitConfig (EX_CONFIG, 78) is the exit status for "this daemon has no
-// identity to run as" — never enrolled, or revoked and wiped. novad.service
-// names it in RestartPreventExitStatus, so systemd stops instead of restarting
-// a daemon that can never get in.
+// identity to run as" — never enrolled, or revoked. The wipe is attempted
+// either way, and 78 covers both outcomes (a clean wipe, or one that could
+// not fully remove everything): restarting cannot help in either case, so
+// this is the ONE status novad.service's RestartPreventExitStatus names, and
+// systemd stops instead of restarting a daemon that can never get in.
 const exitConfig = 78
+
+// afterFailedWipe turns a config.Wipe failure into an instruction built from
+// what is ACTUALLY still on disk, checked fresh rather than assumed from
+// which of Wipe's three independent steps (config, key, audit) errored — any
+// one of them may already have succeeded. A file Lstat cannot confirm gone is
+// named; a file already confirmed gone is not — so an operator who does
+// exactly what this says, then re-enrolls, never replays a revoked device's
+// audit chain under the new id (P5's whole reason config.Wipe renames
+// audit.jsonl instead of deleting it, and afterRun's own reason to exist:
+// the status must say what is true on disk).
+func afterFailedWipe(paths config.Paths, werr error) string {
+	// "Still there" errs toward CAUTION: only a confirmed-missing (ErrNotExist)
+	// Lstat suppresses the instruction. Any other outcome — it exists, or Wipe
+	// could not even check (EACCES, ENOTDIR, ...) — is named, because staying
+	// silent about a file that might still be live is the failure mode this
+	// whole finding is about.
+	stillThere := func(p string) bool {
+		_, err := os.Lstat(p)
+		return err == nil || !errors.Is(err, fs.ErrNotExist)
+	}
+	var toDelete []string
+	for _, f := range []string{paths.ConfigFile, paths.KeyFile} {
+		if stillThere(f) {
+			toDelete = append(toDelete, f)
+		}
+	}
+	var clauses []string
+	if len(toDelete) > 0 {
+		clauses = append(clauses, fmt.Sprintf("delete %s by hand", strings.Join(toDelete, " and ")))
+	}
+	if stillThere(paths.AuditFile) {
+		clauses = append(clauses, fmt.Sprintf("move %s aside before pairing again", paths.AuditFile))
+	}
+	msg := fmt.Sprintf("this device was revoked in Nova, and wiping its identity failed: %v", werr)
+	if len(clauses) > 0 {
+		msg += " — " + strings.Join(clauses, "; ")
+	}
+	return msg
+}
 
 // afterRun turns Run's return into the exit status and the line to print. A
 // revoke wipes the identity FIRST, so the status says what is true on disk.
 // Even a wipe that only PARTLY succeeds still exits exitConfig, never 1:
 // restarting cannot help either way — core will refuse this same device
 // again at the very next handshake — so a supervisor must not loop on it.
-// The message never claims a clean wipe when the disk says otherwise.
+// The message never claims a clean wipe when the disk says otherwise, and
+// names the audit log's new path only when one genuinely existed and moved
+// (a device that never ran has no audit.jsonl to claim was set aside).
 func afterRun(paths config.Paths, err error, now time.Time) (int, string) {
 	switch {
 	case err == nil:
 		return 0, ""
 	case errors.Is(err, client.ErrRevoked):
-		if werr := config.Wipe(paths, now); werr != nil {
-			return exitConfig, fmt.Sprintf("this device was revoked in Nova, and wiping its identity failed: %v — delete %s and %s by hand",
-				werr, paths.ConfigFile, paths.KeyFile)
+		asidePath, werr := config.Wipe(paths, now)
+		if werr != nil {
+			return exitConfig, afterFailedWipe(paths, werr)
 		}
-		return exitConfig, "this device was revoked in Nova — its identity is wiped (config and key removed, " +
-			"the audit log set aside). Pair it again with `novad enroll`."
+		msg := "this device was revoked in Nova — its identity is wiped (config and key removed"
+		if asidePath != "" {
+			msg += fmt.Sprintf(", the audit log set aside as %s", asidePath)
+		}
+		msg += "). Pair it again with `novad enroll`."
+		return exitConfig, msg
 	default:
 		return 1, fmt.Sprintf("run stopped: %v", err)
 	}
+}
+
+// errNotEnrolled is checkEnrolled's return when the config or key is simply
+// MISSING — never enrolled, or wiped after a revoke. Any OTHER error
+// checkEnrolled returns is the real cause (permission, I/O, a config dir
+// that is itself unreadable) and must never be folded into the same "not
+// enrolled" message: re-enrolling cannot fix a real error, so cmdRun exits 1
+// on it, never 78.
+var errNotEnrolled = errors.New("not enrolled")
+
+// checkEnrolled distinguishes confirmed-missing (errNotEnrolled) from every
+// other Lstat failure (returned as itself). Paths.Enrolled is a plain bool
+// cmdEnroll uses only to decide whether --force is needed; cmdRun needs this
+// finer distinction because a real error and "run novad enroll" are not the
+// same advice, and printing the wrong one hides the real problem.
+func checkEnrolled(paths config.Paths) error {
+	for _, f := range []string{paths.ConfigFile, paths.KeyFile} {
+		if _, err := os.Lstat(f); err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return errNotEnrolled
+			}
+			return err
+		}
+	}
+	return nil
 }
 
 func cmdRun(argv []string) {
@@ -225,9 +298,12 @@ func cmdRun(argv []string) {
 	if err != nil {
 		fail("%v", err)
 	}
-	if !paths.Enrolled() {
-		fmt.Fprintf(os.Stderr, "novad: not enrolled — run `novad enroll` first (config dir: %s)\n", paths.ConfigDir)
-		os.Exit(exitConfig)
+	if err := checkEnrolled(paths); err != nil {
+		if errors.Is(err, errNotEnrolled) {
+			fmt.Fprintf(os.Stderr, "novad: not enrolled — run `novad enroll` first (config dir: %s)\n", paths.ConfigDir)
+			os.Exit(exitConfig)
+		}
+		fail("could not check enrollment: %v", err)
 	}
 	cfg, priv, err := config.Load(paths)
 	if err != nil {

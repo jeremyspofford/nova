@@ -51,7 +51,7 @@ func TestWipeFailsLoudlyWhenTheAuditLogCannotBeChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(p.StateDir, 0o700) })
-	if err := Wipe(p, time.Unix(1790000000, 0)); err == nil {
+	if _, err := Wipe(p, time.Unix(1790000000, 0)); err == nil {
 		t.Fatal("Wipe must fail when it cannot check the audit log, not report success")
 	}
 }

@@ -3,8 +3,14 @@
 // commands in steady state. Every command is verified ON the device before it
 // runs, and every outcome — success OR refusal — is both a result frame and an
 // audit entry. The run loop reconnects on any socket error; a changed core key
-// and a revoked device are the fatal conditions (the daemon's half of the
-// mutual pinning).
+// and a revoked device are the fatal conditions — but they authenticate
+// differently. The handshake's own core_pubkey compare is an unsigned claim
+// from whoever answers the socket, not a proof of anything, so it — and
+// everything else in the handshake — rests on the TRANSPORT (TLS, WireGuard,
+// loopback) for its integrity, never on itself. The one exception is a
+// revoke: the device wipes its identity only when core's SIGNATURE over the
+// revoke proof verifies against the key pinned at enrollment
+// (wire.VerifyRevokedProof), a check independent of the transport.
 package client
 
 import (
@@ -313,7 +319,17 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 	case wire.TypeAuthError:
 		reason, _ := reply["reason"].(string)
 		if reason == wire.ReasonRevoked {
-			return fatal{ErrRevoked}
+			// The reason string is unsigned — anyone who can terminate this
+			// socket can send it. Only a proof core's PINNED key actually
+			// signed, over THIS handshake's own nonce and this device's own
+			// id, is final. a.verifier.CorePubKey() is the key pinned at
+			// enrollment, never the key merely claimed in the challenge frame
+			// above (that claim is exactly what would let a forged socket
+			// prove itself to itself).
+			if wire.VerifyRevokedProof(reply, a.cfg.DeviceID, nonceHex, a.verifier.CorePubKey()) {
+				return fatal{ErrRevoked}
+			}
+			a.logf("core said revoked but the refusal is not signed by the pinned core key — not wiping")
 		}
 		// Any other refusal is retried: a transient core-side fault heals on
 		// the next attempt, and a restored database that forgot this device is
