@@ -62,6 +62,19 @@ CODE_MUST_NOT_FIRE = [
         "add my laptop",
     ),
     ("bare_code_error_code", "Error code E4B7-9C2D came from the updater.", "add my laptop"),
+    # C (review fix round 3): arming must be anchored to a host rule 1
+    # accepts and the path /add itself — a bare "/add?" or "/add#" substring
+    # anywhere used to arm on ANY host's own /add endpoint.
+    (
+        "add_path_on_an_unrelated_host",
+        "The endpoint is https://api.example.com/cart/add?sku=HX42KP97.",
+        "add my laptop",
+    ),
+    (
+        "add_path_segment_on_an_unrelated_host",
+        "Your build is at https://ci.example.com/jobs/add?commit=a3f6c9e2 now.",
+        "add my laptop",
+    ),
 ]
 
 
@@ -146,6 +159,63 @@ ADDRESS_MUST_FIRE = [
         "Open Nova on your tablet at http://192.168.0.245:3000.",
         ("lan",),
         f"Open Nova on your tablet at {ORIGIN}.",
+    ),
+    # -- A (review fix round 3): the "I" lead-in, a colon with or without a
+    # space before it, and a delimiter between the governing phrase and the
+    # url (a backtick, <, ( — the model wrapping the url in something).
+    (
+        "my_address_colon_no_space",
+        "My address: http://192.168.0.245:3000",
+        ("lan",),
+        f"My address: {ORIGIN}",
+    ),
+    (
+        "novas_url_colon_no_space",
+        "Nova's URL: http://192.168.0.245:3000",
+        ("lan",),
+        f"Nova's URL: {ORIGIN}",
+    ),
+    (
+        "my_address_colon_with_space",
+        "My address : http://192.168.0.245:3000",
+        ("lan",),
+        f"My address : {ORIGIN}",
+    ),
+    (
+        "im_at_url",
+        "I'm at http://192.168.0.245:3000.",
+        ("lan",),
+        f"I'm at {ORIGIN}.",
+    ),
+    (
+        "i_live_at_url",
+        "I live at http://192.168.0.245:3000.",
+        ("lan",),
+        f"I live at {ORIGIN}.",
+    ),
+    (
+        "im_reachable_at_url_from_device",
+        "I'm reachable at http://192.168.0.245:3000 from your tablet.",
+        ("lan",),
+        f"I'm reachable at {ORIGIN} from your tablet.",
+    ),
+    (
+        "backtick_delimited_url",
+        "Open Nova at `http://192.168.0.245:3000` on the tablet.",
+        ("lan",),
+        f"Open Nova at `{ORIGIN}` on the tablet.",
+    ),
+    (
+        "angle_delimited_url",
+        "Open Nova at <http://192.168.0.245:3000> on the tablet.",
+        ("lan",),
+        f"Open Nova at <{ORIGIN}> on the tablet.",
+    ),
+    (
+        "paren_delimited_url",
+        "Open Nova at (http://192.168.0.245:3000) on the tablet.",
+        ("lan",),
+        f"Open Nova at ({ORIGIN}) on the tablet.",
     ),
 ]
 
@@ -263,6 +333,26 @@ ADDRESS_MUST_NOT_FIRE = [
         f"Your router is at http://192.168.1.1, and Nova is at {ORIGIN}.",
         "hi",
     ),
+    # -- negation (review fix round 3): _ADDRESS_NEGATION must be a superset
+    # of _NEGATORS (no, not, never, nothing, none, without, n't) — "none" and
+    # "nothing" were silently missing (neither is caught by \bno\b/\bnot\b,
+    # which need a word boundary right after "no"/"not").
+    (
+        "none_of_your_phones",
+        "None of your phones can reach http://localhost:3000 - it only answers on the hub.",
+        "hi",
+    ),
+    (
+        "nothing_on_your_phone",
+        "Nothing on your phone can open http://127.0.0.1:3000; it only answers on the hub.",
+        "hi",
+    ),
+    (
+        "none_of_your_tablets_setup_page",
+        "None of your tablets will load https://nova-old.fake-tailnet.ts.net/install - "
+        "that name is gone.",
+        "hi",
+    ),
 ]
 
 
@@ -377,6 +467,37 @@ def test_a_code_inside_an_add_query_is_gone_on_the_real_origin():
     assert "K7PQ-9XYZ" not in final
     assert "K7PQ9XYZ" not in final.upper().replace("-", "")
     assert "K7PQ" not in final.upper()
+
+
+# -- C (review fix round 3): anchored to /add's own path — the query, the
+# fragment, or a single path segment after /add/ — on a host rule 1 accepts,
+# whether that host is the real origin or a wrong one (code_claim_check
+# takes no origin of its own, so both must be armed the same way).
+ADD_PATH_MUST_LOSE_CODE = [
+    ("query_wrong_origin", "https://nova-old.fake-tailnet.ts.net/add/?code=K7PQ-9XYZ"),
+    ("query_real_origin", f"{ORIGIN}/add/?code=K7PQ-9XYZ"),
+    ("fragment_wrong_origin", "https://nova-old.fake-tailnet.ts.net/add/#K7PQ-9XYZ"),
+    ("fragment_real_origin", f"{ORIGIN}/add/#K7PQ-9XYZ"),
+    ("path_segment_wrong_origin", "https://nova-old.fake-tailnet.ts.net/add/K7PQ-9XYZ"),
+    ("path_segment_real_origin", f"{ORIGIN}/add/K7PQ-9XYZ"),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "url"), ADD_PATH_MUST_LOSE_CODE, ids=[c[0] for c in ADD_PATH_MUST_LOSE_CODE]
+)
+def test_a_code_after_add_slash_is_gone_regardless_of_shape(label, url):
+    reply = f"Open {url} on the laptop."
+    code_claim = guards.code_claim_check(reply, "add my laptop")
+    assert code_claim is not None, f"{label!r} should have armed pairing context"
+    assert code_claim.tokens == ("K7PQ9XYZ",)
+    address_claim = guards.address_claim_check(code_claim.rewritten, "add my laptop", ORIGIN)
+    final = address_claim.rewritten if address_claim is not None else code_claim.rewritten
+    assert "K7PQ-9XYZ" not in final
+    assert "K7PQ9XYZ" not in final.upper().replace("-", "")
+    assert "K7PQ" not in final.upper()
+    if address_claim is not None:
+        assert all("?" not in tok and "#" not in tok for tok in address_claim.tokens)
 
 
 # -- narration: showed_setup_qr -----------------------------------------------

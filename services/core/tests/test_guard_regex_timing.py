@@ -115,6 +115,15 @@ SETUP_PADDED = [
     ("code_words_then_padding", "your pairing code is" + " " * 1500 + "ABCD-2345"),
     ("many_urls", " ".join(f"https://nova{i}.fake-tailnet.ts.net/install" for i in range(200))),
     ("url_then_padding", "open http://192.168.0.245:3000" + " " * 1500 + "on your phone"),
+    # A (review fix round 3): 200 GOVERNED urls in ONE clause, no sentence
+    # breaks — each one makes address_claim_check compute a `before` slice
+    # for _NOVA_GOVERNS_URL; unbounded (clause[:m.start()]), that slice grows
+    # with each url and the whole clause is O(n^2). Bounded to its last 80
+    # characters (ruling A), it stays linear.
+    (
+        "many_governed_lan_urls",
+        " ".join(f"open nova at http://192.168.{i}.1:3000" for i in range(200)),
+    ),
 ]
 
 

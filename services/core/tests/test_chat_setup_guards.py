@@ -208,3 +208,47 @@ async def test_the_same_relay_is_corrected_when_the_tool_was_not_called(
         "SELECT count(*) FROM turn_spans WHERE kind = 'guard' AND name = 'capability_claim'"
     )
     assert span_count == 1
+
+
+# -- D clarified (review fix round 3): a refused markup call is not attempted
+
+
+FETCH_URL_MARKUP = (
+    "<atem:function_calls>\n"
+    '<atem:invoke name="fetch_url">\n'
+    '<atem:parameter name="url">https://example.com</atem:parameter>\n'
+    "</atem:invoke>\n"
+    "</atem:function_calls>"
+)
+
+
+async def test_a_refused_markup_call_is_not_a_failed_call(owner_client, pool, mount_peers):
+    """ "Called this turn and did not succeed" means ATTEMPTED as
+    guards._attempted defines it (ruling D clarified, round 3): a call
+    written as markup and refused (chat._refuse_call, never dispatched) is
+    not a call she made this turn, so it must not silence a capability
+    correction beside it — exactly like a tool never called at all."""
+    gateway = ScriptedGateway(
+        rounds=(
+            (text(FETCH_URL_MARKUP),),
+            (text("I cannot access external websites."),),
+        )
+    )
+    mount_peers(gateway=gateway, memory=FakeMemory())
+    await set_chat_model(owner_client)
+    resp = await owner_client.post(
+        "/api/v1/chat/stream", json={"message": "what does example.com say?"}
+    )
+    assert resp.status_code == 200, resp.text
+    sent = frames(resp.text)
+    corrections = [f["correction"] for f in sent if isinstance(f, dict) and "correction" in f]
+    assert corrections != [], "the refused markup call wrongly silenced the correction"
+    span_count = await pool.fetchval(
+        "SELECT count(*) FROM turn_spans WHERE kind = 'guard' AND name = 'capability_claim'"
+    )
+    assert span_count == 1
+    tool_meta = await pool.fetchval(
+        "SELECT meta FROM turn_spans WHERE kind = 'tool' AND name = 'fetch_url'"
+    )
+    assert tool_meta["refused_markup_as_text"] is True
+    assert tool_meta["ok"] is False

@@ -3415,25 +3415,33 @@ def _state_claim_stands(
 
 
 def _failed_tool_names(spans: Sequence[Any]) -> frozenset[str]:
-    """Tool names THIS TURN attempted and never succeeded (review fix round 2,
-    D). "Attempted" is any tool-kind span naming it; "succeeded" is at least
-    one of those spans with `ok is True`. A tool that failed once but then
-    succeeded (a retry) is NOT in this set — it demonstrably can work this
-    turn. Derived from the live spans, for every tool, so a newly-registered
-    tool needs no matching entry here."""
-    attempted: set[str] = set()
-    succeeded: set[str] = set()
-    for span in spans:
-        if getattr(span, "kind", None) != "tool":
-            continue
-        name = getattr(span, "name", None)
-        if not name:
-            continue
-        attempted.add(name)
-        meta = getattr(span, "meta", None) or {}
-        if meta.get("ok") is True:
-            succeeded.add(name)
-    return frozenset(attempted - succeeded)
+    """Tool names THIS TURN attempted (guards._attempted's own definition —
+    round 3, D clarified: never a refused markup/closed-round call, never a
+    backend-run `unasked` live_facts check) and never succeeded. "Succeeded"
+    is at least one of those spans with `ok is True`. A tool that failed once
+    but then succeeded (a retry) is NOT in this set — it demonstrably can
+    work this turn. `guards._attempted` is the one place "attempted" is
+    decided; this does not keep a second definition of it, so a refused
+    markup call or an unasked backend check can never silence a capability
+    correction beside it."""
+    names = {
+        getattr(span, "name", None)
+        for span in spans
+        if getattr(span, "kind", None) == "tool" and getattr(span, "name", None)
+    }
+    failed: set[str] = set()
+    for name in names:
+        if not guards._attempted(frozenset({name}), spans):
+            continue  # every span for it was refused or an unasked backend check
+        succeeded = any(
+            getattr(span, "kind", None) == "tool"
+            and getattr(span, "name", None) == name
+            and (getattr(span, "meta", None) or {}).get("ok") is True
+            for span in spans
+        )
+        if not succeeded:
+            failed.add(name)
+    return frozenset(failed)
 
 
 def _capability_check_tools(available: Sequence[str], spans: Sequence[Any]) -> list[str]:

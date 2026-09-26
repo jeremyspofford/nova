@@ -1052,15 +1052,21 @@ OFFER_MUST_FIRE = [
         "create_timer",
     ),
     (
-        # B (review fix round 2): the brief's row, restored verbatim on both
-        # sides — spec §8's own example wins over round 1's narrowing. The
-        # reply is broad (_SETUP_QR_OFFER: any offer to show/make/send/give/
-        # generate/display a QR code or a setup/pairing card); the
-        # instruction qualifies through the ANCHORED "put you on my phone"
-        # (_SETUP_QR_INSTRUCTS, read only by _instructed_classes' special
-        # case) — "I can" right before it is the user's own self-report to
-        # _USER_SELF_REPORT, but the match itself starts at "put", not "I",
-        # so `before` never reaches the self-report text.
+        # B (review fix round 2, comment corrected round 3): the brief's row,
+        # restored verbatim on both sides — spec §8's own example wins over
+        # round 1's narrowing. The reply is broad (_SETUP_QR_OFFER: any offer
+        # to show/make/send/give/generate/display a QR code or a setup/
+        # pairing card). The INSTRUCTION fires through leg (2) of
+        # _SETUP_QR_INSTRUCTS (guards.py ~2317-2325) — the bare "QR code"
+        # mention ITSELF, matched only because a "put you on a device" phrase
+        # follows later in the same clause — never through the anchored "put
+        # you on my phone" phrase (leg 3) directly: that match starts at
+        # "put", and "so I can " sits immediately before it, which IS
+        # _USER_SELF_REPORT's own shape (a subject pronoun plus one trailing
+        # word before the cut) and WOULD be excluded if leg 3's match were
+        # what _instructed_classes read. Leg (2)'s match is the earlier "QR
+        # code" mention, so `before` is "show me a " — nothing self-report
+        # shaped — and the self-report check never has anything to catch.
         "s47_setup_qr",
         "show me a QR code so I can put you on my phone",
         "Want me to show you a QR code for your phone?",
@@ -1076,6 +1082,15 @@ OFFER_MUST_FIRE = [
         "s47_put_nova_on_my_phone",
         "put Nova on my phone",
         "Want me to show you a setup QR code?",
+        "show_setup_qr",
+    ),
+    (
+        # B (review fix round 3): a bare "QR code for|of|to <X>" counts
+        # UNCONDITIONALLY when X is a qualifying object — here, "my phone" is
+        # a device word — with no put-phrase needed anywhere in the message.
+        "s47_qr_code_for_my_phone",
+        "show me a QR code for my phone",
+        "Want me to show you a QR code for your phone?",
         "show_setup_qr",
     ),
 ]
@@ -1302,6 +1317,20 @@ OFFER_MUST_NOT_FIRE = [
         "s47_qr_for_wifi_reply_form",
         "make a QR code for my wifi",
         "Want me to show you a QR code for your phone?",
+    ),
+    # B (review fix round 3): a bare "QR code" disqualifies itself when its
+    # OWN "for|of|to <X>" phrase names something else — REGARDLESS of a later
+    # put-phrase in the same clause (that "put" match is excluded anyway, on
+    # its own, by _USER_SELF_REPORT's "so I can").
+    (
+        "s47_qr_for_wifi_then_put_you_on_phone",
+        "make a QR code for my wifi so I can put you on my phone",
+        "Want me to make a QR code for your wifi?",
+    ),
+    (
+        "s47_qr_of_the_link_then_put_nova_on_tablet",
+        "give me a QR code of the link so I can put Nova on my tablet",
+        "Want me to give you a QR code of the link?",
     ),
 ]
 
