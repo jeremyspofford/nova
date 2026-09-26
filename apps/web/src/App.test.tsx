@@ -332,6 +332,20 @@ describe('App gate', () => {
   })
 })
 
+describe('the setup pages (S47)', () => {
+  it.each([
+    ['/install', 'Nova on this device'],
+    ['/app', 'The Nova app'],
+    ['/add', 'Add a machine to Nova'],
+  ])('%s opens before the sign-in gate and asks the server nothing', async (path, heading) => {
+    const fetchMock = mockApi({})
+    window.history.pushState({}, '', path)
+    render(<App />)
+    expect(await screen.findByRole('heading', { level: 1, name: heading })).toBeTruthy()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
+
 describe('components/ui index', () => {
   it('exports at least 30 distinct component bindings', () => {
     const keys = Object.keys(ui)
