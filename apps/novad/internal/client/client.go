@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -23,6 +24,8 @@ import (
 	"novad/internal/audit"
 	"novad/internal/caps"
 	"novad/internal/config"
+	"novad/internal/facts"
+	"novad/internal/platform"
 	"novad/internal/wire"
 )
 
@@ -62,10 +65,26 @@ type Agent struct {
 	// RE-EXECUTE — the replay defence has to outlive the socket. Its own pruning
 	// (past expiry + skew) keeps the set from growing unbounded.
 	verifier *wire.Verifier
+
+	// version is the build stamp the auth facts carry (main.version).
+	version string
+	// gatherAuth and gatherFrame read the facts; fields so a test hands in
+	// its own. now is the clock (Task 8's resume detector reads it too).
+	gatherAuth  func(context.Context) (facts.Auth, []facts.Unreadable)
+	gatherFrame func([]facts.Unreadable) facts.Frame
+	now         func() time.Time
+
+	// factsMu guards what the facts frames remember: what GatherAuth could
+	// not read (repeated in every frame), and the last frame written and
+	// when — the heartbeat's change check compares against them.
+	factsMu     sync.Mutex
+	authUnread  []facts.Unreadable
+	lastFacts   []byte
+	lastFactsAt time.Time
 }
 
 // New assembles an agent from loaded custody. logf may be nil.
-func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home string, logf func(string, ...any)) (*Agent, error) {
+func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, version string, logf func(string, ...any)) (*Agent, error) {
 	wsURL, err := WSURL(cfg.Server)
 	if err != nil {
 		return nil, err
@@ -88,6 +107,12 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home string
 		wsURL:    wsURL,
 		logf:     logf,
 		verifier: verifier,
+		version:  version,
+		gatherAuth: func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
+			return facts.GatherAuth(ctx, platform.Exec{}, version)
+		},
+		gatherFrame: facts.GatherFrame,
+		now:         time.Now,
 	}, nil
 }
 
@@ -188,10 +213,15 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 		return fmt.Errorf("challenge nonce is not hex: %w", err)
 	}
 	sig := ed25519.Sign(a.priv, nonce) // RAW nonce bytes, not the hex string
+	auth, unread := a.gatherAuth(hsCtx)
+	a.factsMu.Lock()
+	a.authUnread = unread
+	a.factsMu.Unlock()
 	if err := writeFrame(hsCtx, c, wire.Auth{
 		Type:     wire.TypeAuth,
 		DeviceID: a.cfg.DeviceID,
 		Sig:      hex.EncodeToString(sig),
+		Facts:    auth,
 	}); err != nil {
 		return fmt.Errorf("sending auth: %w", err)
 	}
@@ -244,6 +274,12 @@ func (a *Agent) replayAudit(ctx context.Context, c *websocket.Conn, lastSeqField
 func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+
+	// The facts frame follows ready at once (r2-integration): core records
+	// the slower facts before the first command could need them.
+	if err := a.sendFacts(serveCtx, c); err != nil {
+		a.logf("facts frame not sent: %v", err)
+	}
 
 	go a.heartbeat(serveCtx, c)
 
@@ -307,7 +343,10 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 
 	cmdCtx, cancel := context.WithTimeout(ctx, CommandTimeout)
 	defer cancel()
-	outcome := caps.Dispatch(cmdCtx, capability, args, a.deps)
+	// facts.refresh writes its frame on THIS connection, before its result.
+	deps := a.deps
+	deps.SendFacts = func(ctx context.Context) error { return a.sendFacts(ctx, c) }
+	outcome := caps.Dispatch(cmdCtx, capability, args, deps)
 
 	errStr := ""
 	if !outcome.OK {
@@ -338,6 +377,42 @@ func (a *Agent) emit(ctx context.Context, c *websocket.Conn, result wire.Result,
 	if err := writeFrame(ctx, c, auditFrame{Type: wire.TypeAudit, Entries: []map[string]any{entry}}); err != nil {
 		a.logf("audit write failed for %s: %v", envelopeID, err)
 	}
+}
+
+// sendFacts gathers a facts frame and writes it on c.
+func (a *Agent) sendFacts(ctx context.Context, c *websocket.Conn) error {
+	data, err := a.frameBytes()
+	if err != nil {
+		return err
+	}
+	return a.writeFacts(ctx, c, data)
+}
+
+// frameBytes gathers and encodes a facts frame. One over core's cap is an
+// error here — never sent to be refused over there.
+func (a *Agent) frameBytes() ([]byte, error) {
+	a.factsMu.Lock()
+	carried := append([]facts.Unreadable(nil), a.authUnread...)
+	a.factsMu.Unlock()
+	data, err := json.Marshal(a.gatherFrame(carried))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > facts.MaxFrameBytes {
+		return nil, fmt.Errorf("the facts frame is %d bytes, over the %d-byte cap", len(data), facts.MaxFrameBytes)
+	}
+	return data, nil
+}
+
+// writeFacts writes an encoded frame and remembers what went out and when.
+func (a *Agent) writeFacts(ctx context.Context, c *websocket.Conn, data []byte) error {
+	if err := c.Write(ctx, websocket.MessageText, data); err != nil {
+		return err
+	}
+	a.factsMu.Lock()
+	a.lastFacts, a.lastFactsAt = data, a.now()
+	a.factsMu.Unlock()
+	return nil
 }
 
 type auditFrame struct {

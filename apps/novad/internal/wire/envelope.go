@@ -32,6 +32,7 @@ const (
 	TypeResult    = "result"
 	TypeAudit     = "audit"
 	TypeAuthError = "auth_error"
+	TypeFacts     = "facts"
 )
 
 // Challenge is core -> device: a nonce to sign and core's pinned public key.
@@ -47,7 +48,16 @@ type Auth struct {
 	Type     string `json:"type"`
 	DeviceID string `json:"device_id"`
 	Sig      string `json:"sig"`
+	// Facts are the agent's auth-frame facts (internal/facts.Auth), recorded
+	// by core only after Sig verifies and never a reason to refuse. The
+	// repoint probe omits them: it writes nothing on either side.
+	Facts any `json:"facts,omitempty"`
 }
+
+// ReasonRevoked is the auth_error reason core sends for a device it revoked
+// — the one refusal that is final (client.ErrRevoked). Any other reason is
+// retried.
+const ReasonRevoked = "revoked"
 
 // Ready is core -> device: the last audit seq core has stored (null when none).
 type Ready struct {

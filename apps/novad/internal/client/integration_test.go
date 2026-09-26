@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -123,7 +124,7 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{DeviceID: deviceID, Name: "itest", Server: srv.URL, CorePubKey: hex.EncodeToString(corePub)}
-	agent, err := New(cfg, devPriv, auditLog, home, nil)
+	agent, err := New(cfg, devPriv, auditLog, home, "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +198,7 @@ func buildAgent(t *testing.T, serverURL, deviceID, corePubHex string, devPriv ed
 		t.Fatal(err)
 	}
 	cfg := config.Config{DeviceID: deviceID, Name: "itest", Server: serverURL, CorePubKey: corePubHex}
-	agent, err := New(cfg, devPriv, auditLog, home, nil)
+	agent, err := New(cfg, devPriv, auditLog, home, "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,4 +515,158 @@ func coreRead(ctx context.Context, c *websocket.Conn) (map[string]any, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+// fakeCoreHandshake runs challenge -> auth (verified) -> ready on c and
+// returns the auth frame, or nil if the signature did not verify.
+func fakeCoreHandshake(ctx context.Context, c *websocket.Conn, corePub ed25519.PublicKey, devPub ed25519.PublicKey) map[string]any {
+	nonce := make([]byte, 32)
+	_, _ = rand.Read(nonce)
+	_ = coreWrite(ctx, c, map[string]any{"type": "challenge", "nonce": hex.EncodeToString(nonce), "core_pubkey": hex.EncodeToString(corePub)})
+	auth, err := coreRead(ctx, c)
+	if err != nil {
+		return nil
+	}
+	sigHex, _ := auth["sig"].(string)
+	sig, _ := hex.DecodeString(sigHex)
+	if !ed25519.Verify(devPub, nonce, sig) {
+		return nil
+	}
+	_ = coreWrite(ctx, c, map[string]any{"type": "ready", "last_seq": nil})
+	return auth
+}
+
+func TestTheAuthFrameCarriesFactsAndAFactsFrameFollowsReady(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	type seen struct{ auth, next map[string]any }
+	ch := make(chan seen, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		auth := fakeCoreHandshake(r.Context(), c, corePub, devPub)
+		if auth == nil {
+			return
+		}
+		next, _ := coreRead(r.Context(), c)
+		ch <- seen{auth: auth, next: next}
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, "dev-facts-1", hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	var got seen
+	select {
+	case got = <-ch:
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+	cancel()
+	fm, ok := got.auth["facts"].(map[string]any)
+	if !ok {
+		t.Fatalf("the auth frame carries no facts: %v", got.auth)
+	}
+	if v, _ := fm["v"].(json.Number); v.String() != "2" {
+		t.Fatalf("facts v = %v", fm["v"])
+	}
+	if osm, _ := fm["os"].(map[string]any); osm["goos"] != runtime.GOOS {
+		t.Fatalf("facts os = %v", fm["os"])
+	}
+	if got.next["type"] != "facts" {
+		t.Fatalf("the first frame after ready must be facts, got %v", got.next["type"])
+	}
+	if _, ok := got.next["net"].(map[string]any); !ok {
+		t.Fatalf("the facts frame has no net: %v", got.next)
+	}
+}
+
+// The facts frame goes out BEFORE facts.refresh's own result, so core has
+// recorded the facts by the time its command returns.
+func TestFactsRefreshWritesTheFrameBeforeItsResult(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-refresh-1"
+	order := make(chan []string, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		if first, _ := coreRead(ctx, c); first["type"] != "facts" {
+			return
+		}
+		now := time.Now().Unix()
+		env := map[string]any{
+			"v": int64(1), "envelope_id": "refresh-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{},
+			"issued_at": now, "expires_at": now + 60,
+		}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		var types []string
+		for len(types) < 2 {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				break
+			}
+			if typ, _ := f["type"].(string); typ == "facts" || typ == "result" {
+				types = append(types, typ)
+			}
+		}
+		order <- types
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	select {
+	case got := <-order:
+		if len(got) != 2 || got[0] != "facts" || got[1] != "result" {
+			t.Fatalf("frames after facts.refresh = %v, want [facts result]", got)
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+}
+
+// novad repoint's probe writes nothing on either side: no facts.
+func TestTheRepointProbeSendsNoFacts(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	sawFacts := make(chan bool, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		auth := fakeCoreHandshake(r.Context(), c, corePub, devPub)
+		_, present := auth["facts"]
+		sawFacts <- present
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	cfg := config.Config{DeviceID: "dev-probe-1", Server: srv.URL, CorePubKey: hex.EncodeToString(corePub)}
+	if err := VerifyServer(context.Background(), cfg, devPriv); err != nil {
+		t.Fatal(err)
+	}
+	if <-sawFacts {
+		t.Fatal("the repoint probe must not send facts")
+	}
 }

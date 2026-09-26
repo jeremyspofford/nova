@@ -207,7 +207,7 @@ func cmdRun(argv []string) {
 	}
 
 	logger := log.New(os.Stderr, "novad ", log.LstdFlags)
-	agent, err := client.New(cfg, priv, auditLog, paths.Home, func(format string, a ...any) {
+	agent, err := client.New(cfg, priv, auditLog, paths.Home, version, func(format string, a ...any) {
 		logger.Printf(format, a...)
 	})
 	if err != nil {
