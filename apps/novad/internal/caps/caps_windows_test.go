@@ -33,11 +33,11 @@ func TestShellExecOutputIsCappedAndStatedOnWindows(t *testing.T) {
 
 // A long-running command killed by a short deadline must be reported as a
 // timeout, not as a process that ran. This is the Windows twin of
-// TestAShellTimeoutKillsTheWholeGroup: it exercises prepareCommand's
-// taskkill-based Cancel, which must report nil (a real kill of the still-
-// alive root) rather than letting taskkill's own exit code — or the
-// already-dead-root ACCESS_DENIED from a bare Process.Kill — leak through
-// and make a killed command read as "ran" (ok:true) or "could not run".
+// TestAShellTimeoutKillsTheWholeGroup. ping has no descendants racing to
+// exit mid-kill, so taskkill exits 0 here — this is a smoke test that the
+// deadline -> Cancel -> WithHandle -> taskkill -> reported-timeout path
+// works end to end, not a regression test for taskkill's own exit code
+// (that needs a multi-process tree this test doesn't build).
 func TestShellExecTimeoutIsOkFalseOnWindows(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()

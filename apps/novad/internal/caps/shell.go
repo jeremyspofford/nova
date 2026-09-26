@@ -44,11 +44,17 @@ func shellExec(ctx context.Context, args map[string]any, d Deps) Outcome {
 
 	// killedByCancel records exactly one fact: Cancel reported that it
 	// terminated the running command (its wrapped call returned nil). It
-	// is never set merely because ctx became Done — exec.Cmd races Cancel
-	// against the process's own exit (watchCtx): once the process has
-	// already exited on its own, Cancel is never called at all. Run can
-	// then still block up to killGrace draining a backgrounded
-	// grandchild's output pipe (WaitDelay), and ctx may go Done during
+	// is never set merely because ctx became Done — exec.Cmd's watchCtx
+	// races Cancel against the process's own exit two different ways.
+	// First: if Cmd.Wait observes the process already exited before ctx
+	// goes Done, Cancel is never called at all. Second, a closer race:
+	// even when ctx.Done wins that first race and Cancel IS called, the
+	// process can still be reaped by Cmd.Wait's own concurrent wait before
+	// Cancel's body actually runs, so Cancel itself must notice that (the
+	// Windows Cancel's WithHandle error check exists for exactly this —
+	// see procattr_windows.go). Either way, Run can also still block up to
+	// killGrace draining a backgrounded grandchild's output pipe
+	// (WaitDelay) with Cancel never invoked, and ctx may go Done during
 	// that unrelated wait for reasons that never touched the process. So
 	// ctx.Err() at the time Run returns is not proof that anything was
 	// killed — only killedByCancel, or ctx already being done before the
