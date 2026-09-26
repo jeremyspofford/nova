@@ -1425,6 +1425,89 @@ describe('setup cards (S47)', () => {
     expect(twice).toBe(once)
   })
 
+  it('keeps a live code whose server twin has not landed yet, then attaches it once the twin arrives (round 1, Important #2)', () => {
+    // The span that would persist the card lands in close_turn AFTER [DONE],
+    // and a failed close is only logged — a poll can land in that gap, where
+    // the message row itself exists (matched by turn_kind='chat') but its
+    // `cards` have not caught up yet. Dropping the live card here would take
+    // a still-valid code off the screen for no reason the owner caused.
+    let state = chatReducer(withMeta(), { type: 'event', event: { type: 'delta', text: 'Scan the card.' } })
+    state = chatReducer(state, { type: 'event', event: { type: 'card', card: LIVE } })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+
+    // (a) No twin at all yet — the live card, code and all, survives.
+    const noCardsYet = [
+      { id: 'srv-u', role: 'user', content: 'hello' },
+      { id: 'srv-a', role: 'assistant', content: 'Scan the card.', turn_kind: 'chat' },
+    ]
+    const once = chatReducer(state, { type: 'idlePolled', conversationId: 'c1', messages: noCardsYet, observedRows: state.rows })
+    expect(messages(once)[1].cards).toEqual([LIVE])
+
+    // (b) The next poll brings the twin: the code attaches to it — one
+    // card, never two.
+    const withTwin = [
+      { id: 'srv-u', role: 'user', content: 'hello' },
+      { id: 'srv-a', role: 'assistant', content: 'Scan the card.', turn_kind: 'chat', cards: [REDRAWN] },
+    ]
+    const twice = chatReducer(once, { type: 'idlePolled', conversationId: 'c1', messages: withTwin, observedRows: once.rows })
+    expect(messages(twice)[1].cards).toHaveLength(1)
+    expect(messages(twice)[1].cards[0].code).toBe('ABCD-2345')
+
+    // (c) A third, identical poll is a no-op.
+    const thrice = chatReducer(twice, { type: 'idlePolled', conversationId: 'c1', messages: withTwin, observedRows: twice.rows })
+    expect(thrice).toBe(twice)
+  })
+
+  it('matches each of two live cards to its own twin by expiry — in order, each twin used once (round 1, Folded Minor #3)', () => {
+    const CARD_A = {
+      kind: 'setup_qr' as const,
+      setup: 'add_machine',
+      address: 'https://nova.fake-tailnet.ts.net',
+      url: 'https://nova.fake-tailnet.ts.net/add#AAAA-1111',
+      code: 'AAAA-1111',
+      expires_at: '2026-09-25T14:10:00+00:00',
+    }
+    const CARD_B = {
+      kind: 'setup_qr' as const,
+      setup: 'add_machine',
+      address: 'https://nova.fake-tailnet.ts.net',
+      url: 'https://nova.fake-tailnet.ts.net/add#BBBB-2222',
+      code: 'BBBB-2222',
+      expires_at: '2026-09-25T15:00:00+00:00',
+    }
+    const REDRAWN_A = {
+      kind: 'setup_qr' as const,
+      setup: 'add_machine',
+      address: 'https://nova.fake-tailnet.ts.net',
+      url: 'https://nova.fake-tailnet.ts.net/add',
+      code_shown: true,
+      expires_at: '2026-09-25T14:10:00+00:00',
+    }
+    const REDRAWN_B = {
+      kind: 'setup_qr' as const,
+      setup: 'add_machine',
+      address: 'https://nova.fake-tailnet.ts.net',
+      url: 'https://nova.fake-tailnet.ts.net/add',
+      code_shown: true,
+      expires_at: '2026-09-25T15:00:00+00:00',
+    }
+
+    let state = chatReducer(withMeta(), { type: 'event', event: { type: 'delta', text: 'Two machines to add.' } })
+    state = chatReducer(state, { type: 'event', event: { type: 'card', card: CARD_A } })
+    state = chatReducer(state, { type: 'event', event: { type: 'card', card: CARD_B } })
+    state = chatReducer(state, { type: 'event', event: { type: 'done' } })
+
+    const fetched = [
+      { id: 'srv-u', role: 'user', content: 'hello' },
+      { id: 'srv-a', role: 'assistant', content: 'Two machines to add.', turn_kind: 'chat', cards: [REDRAWN_A, REDRAWN_B] },
+    ]
+    const polled = chatReducer(state, { type: 'idlePolled', conversationId: 'c1', messages: fetched, observedRows: state.rows })
+    expect(messages(polled)[1].cards).toEqual([
+      { ...REDRAWN_A, code: 'AAAA-1111', url: CARD_A.url },
+      { ...REDRAWN_B, code: 'BBBB-2222', url: CARD_B.url },
+    ])
+  })
+
   it('the idle poll treats a new card as news', () => {
     const state = chatReducer(emptyChat(), {
       type: 'loaded',

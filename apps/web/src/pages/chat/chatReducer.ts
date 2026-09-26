@@ -611,20 +611,37 @@ function sameCards(a: SetupCard[], b: SetupCard[]): boolean {
 
 /**
  * S47: a machine card's code reaches this tab once, on the live stream, and
- * is never stored — the server's row redraws the card without it. While this
- * tab holds the code, the merge keeps it on the card that stands for it (same
- * setup, same expiry), so the idle poll never takes a still-valid code off
- * the screen. A reload has no code to keep, which is the design.
+ * is never stored — the server's row redraws the card without it, and may
+ * carry no card AT ALL yet: the span that would persist it lands in
+ * close_turn AFTER [DONE], and a failed close is only logged, so a poll can
+ * land in that gap (round 1, Important #2). While this tab holds a code, the
+ * merge:
+ *   - matches it to its server twin (same setup, same expiry) when one has
+ *     landed, replacing the twin's code-less code/url with the live ones;
+ *   - keeps it as its own card, unmatched, when no twin has landed yet —
+ *     dropping it here would take a still-valid code off the screen for no
+ *     reason the owner caused; the next poll's twin absorbs it in place;
+ *   - consumes each live card at most once, in the order its twin appears in
+ *     the server's list (round 1, Folded Minor #3), so two cards in one row
+ *     never cross codes, and a twin that already claimed one is never handed
+ *     out again as though it were still unmatched — which would show the
+ *     same card twice.
+ * A reload has no code to keep, which is the design.
  */
 function withLiveCodes(server: MessageRow, local: MessageRow): MessageRow {
-  if (!local.cards.some(card => card.code)) return server
-  const cards = server.cards.map(card => {
-    const twin = local.cards.find(
-      l => l.code && l.setup === card.setup && (l.expires_at ?? null) === (card.expires_at ?? null),
+  const liveCoded = local.cards.filter(card => card.code)
+  if (liveCoded.length === 0) return server
+  const used = new Set<number>()
+  const matched = server.cards.map(card => {
+    const i = liveCoded.findIndex(
+      (l, idx) => !used.has(idx) && l.setup === card.setup && (l.expires_at ?? null) === (card.expires_at ?? null),
     )
-    return twin ? { ...card, code: twin.code, url: twin.url } : card
+    if (i === -1) return card
+    used.add(i)
+    return { ...card, code: liveCoded[i].code, url: liveCoded[i].url }
   })
-  return { ...server, cards }
+  const unmatched = liveCoded.filter((_, idx) => !used.has(idx))
+  return { ...server, cards: [...matched, ...unmatched] }
 }
 
 function fromFetchedMessages(
