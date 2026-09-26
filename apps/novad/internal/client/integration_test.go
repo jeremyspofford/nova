@@ -19,6 +19,7 @@ import (
 
 	"novad/internal/audit"
 	"novad/internal/config"
+	"novad/internal/facts"
 	"novad/internal/wire"
 )
 
@@ -579,11 +580,63 @@ func TestTheAuthFrameCarriesFactsAndAFactsFrameFollowsReady(t *testing.T) {
 	if osm, _ := fm["os"].(map[string]any); osm["goos"] != runtime.GOOS {
 		t.Fatalf("facts os = %v", fm["os"])
 	}
+	// The one value this task plumbs through New -> gatherAuth: the build
+	// stamp, passed as "test" by buildAgent.
+	if am, _ := fm["agent"].(map[string]any); am["version"] != "test" {
+		t.Fatalf("facts.agent.version = %v, want %q", am["version"], "test")
+	}
 	if got.next["type"] != "facts" {
 		t.Fatalf("the first frame after ready must be facts, got %v", got.next["type"])
 	}
 	if _, ok := got.next["net"].(map[string]any); !ok {
 		t.Fatalf("the facts frame has no net: %v", got.next)
+	}
+}
+
+// The Global Constraint says auth facts are never a reason to refuse the
+// socket. gatherAuth runs a platform call (macOS ioreg, machine-id reads)
+// that has no timeout of its own; if it hung, using hsCtx's full 30s for it
+// would let a single stuck read burn the whole handshake, fail the auth
+// write or the ready read with "context deadline exceeded", and leave the
+// device offline forever on reconnect. gatherAuth must be cut off well
+// inside the handshake so ready is still reached quickly.
+func TestAHungFactsGatherDoesNotBlockTheHandshake(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	readySeen := make(chan bool, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		auth := fakeCoreHandshake(r.Context(), c, corePub, devPub)
+		readySeen <- auth != nil
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, "dev-hung-gather-1", hex.EncodeToString(corePub), devPriv)
+	agent.authGatherBudget = 100 * time.Millisecond
+	agent.gatherAuth = func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
+		<-ctx.Done() // simulates a platform call that never returns on its own
+		return facts.Auth{}, []facts.Unreadable{{Item: "test", Reason: "blocked"}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	go func() { _ = agent.Run(ctx) }()
+	select {
+	case ok := <-readySeen:
+		if !ok {
+			t.Fatal("the auth frame's signature did not verify")
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("handshake took %s — a hung gatherAuth burned most of the 30s handshake budget instead of being cut off at ~100ms", elapsed)
+		}
+	case <-ctx.Done():
+		t.Fatal("handshake never completed — a hung facts gather blocked ready")
 	}
 }
 
@@ -593,7 +646,11 @@ func TestFactsRefreshWritesTheFrameBeforeItsResult(t *testing.T) {
 	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
 	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
 	const deviceID = "dev-refresh-1"
-	order := make(chan []string, 1)
+	type observed struct {
+		types  []string
+		result map[string]any
+	}
+	order := make(chan observed, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
 		c, err := websocket.Accept(w, r, nil)
@@ -616,17 +673,30 @@ func TestFactsRefreshWritesTheFrameBeforeItsResult(t *testing.T) {
 		}
 		canon, _ := wire.Canonical(env)
 		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
-		var types []string
-		for len(types) < 2 {
+		// Read through the audit frame too, not just facts+result: the
+		// audit frame only goes out AFTER the daemon's audit.Append (which
+		// lazily creates audit.jsonl inside this test's TempDir) returns.
+		// Stopping at "result" let the test race that Append against
+		// TempDir's RemoveAll cleanup.
+		var obs observed
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
 			f, err := coreRead(ctx, c)
 			if err != nil {
 				break
 			}
-			if typ, _ := f["type"].(string); typ == "facts" || typ == "result" {
-				types = append(types, typ)
+			switch typ, _ := f["type"].(string); typ {
+			case "facts", "result":
+				obs.types = append(obs.types, typ)
+				if typ == "result" {
+					obs.result = f
+				}
+			case "audit":
+				order <- obs
+				return
 			}
 		}
-		order <- types
+		order <- obs
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -636,8 +706,11 @@ func TestFactsRefreshWritesTheFrameBeforeItsResult(t *testing.T) {
 	go func() { _ = agent.Run(ctx) }()
 	select {
 	case got := <-order:
-		if len(got) != 2 || got[0] != "facts" || got[1] != "result" {
-			t.Fatalf("frames after facts.refresh = %v, want [facts result]", got)
+		if len(got.types) != 2 || got.types[0] != "facts" || got.types[1] != "result" {
+			t.Fatalf("frames after facts.refresh = %v, want [facts result]", got.types)
+		}
+		if ok, _ := got.result["ok"].(bool); !ok {
+			t.Fatalf("facts.refresh result ok = %v, want true (error=%v)", got.result["ok"], got.result["error"])
 		}
 	case <-ctx.Done():
 		t.Fatal("timed out")

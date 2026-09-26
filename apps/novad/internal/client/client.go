@@ -66,13 +66,17 @@ type Agent struct {
 	// (past expiry + skew) keeps the set from growing unbounded.
 	verifier *wire.Verifier
 
-	// version is the build stamp the auth facts carry (main.version).
-	version string
 	// gatherAuth and gatherFrame read the facts; fields so a test hands in
 	// its own. now is the clock (Task 8's resume detector reads it too).
 	gatherAuth  func(context.Context) (facts.Auth, []facts.Unreadable)
 	gatherFrame func([]facts.Unreadable) facts.Frame
 	now         func() time.Time
+
+	// authGatherBudget bounds gatherAuth independently of hsCtx's 30s: a
+	// platform call with no timeout of its own (macOS ioreg) must not burn
+	// the whole handshake — auth facts are never a reason to refuse the
+	// socket. Tests shorten it to prove a hung gather cannot block ready.
+	authGatherBudget time.Duration
 
 	// factsMu guards what the facts frames remember: what GatherAuth could
 	// not read (repeated in every frame), and the last frame written and
@@ -107,12 +111,12 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		wsURL:    wsURL,
 		logf:     logf,
 		verifier: verifier,
-		version:  version,
 		gatherAuth: func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
 			return facts.GatherAuth(ctx, platform.Exec{}, version)
 		},
-		gatherFrame: facts.GatherFrame,
-		now:         time.Now,
+		gatherFrame:      facts.GatherFrame,
+		now:              time.Now,
+		authGatherBudget: 5 * time.Second,
 	}, nil
 }
 
@@ -213,7 +217,14 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 		return fmt.Errorf("challenge nonce is not hex: %w", err)
 	}
 	sig := ed25519.Sign(a.priv, nonce) // RAW nonce bytes, not the hex string
-	auth, unread := a.gatherAuth(hsCtx)
+	// gatherAuth gets its OWN short budget, not the whole 30s hsCtx: a
+	// platform call with no timeout of its own (macOS ioreg) must not burn
+	// the handshake. A cut-off gather yields empty values plus unreadable
+	// entries (GatherAuth already reports what it could not read); the auth
+	// frame still goes out on hsCtx regardless.
+	gctx, gcancel := context.WithTimeout(hsCtx, a.authGatherBudget)
+	auth, unread := a.gatherAuth(gctx)
+	gcancel()
 	a.factsMu.Lock()
 	a.authUnread = unread
 	a.factsMu.Unlock()
