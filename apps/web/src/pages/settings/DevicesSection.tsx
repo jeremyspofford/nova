@@ -1,15 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Copy, Laptop, Plus, RefreshCw } from 'lucide-react'
-import { Badge, Button, EmptyState, Input, Modal, Section, Skeleton, StatusDot } from '../../components/ui'
+import { Laptop, Plus, RefreshCw } from 'lucide-react'
+import { Badge, Button, EmptyState, Input, Section, Skeleton, StatusDot } from '../../components/ui'
 import {
+  getNetworkAddress as apiGetNetworkAddress,
   listDevices as apiListDevices,
   mintPairingCode as apiMintPairingCode,
   renameDevice as apiRenameDevice,
   revokeDevice as apiRevokeDevice,
   type Device,
-  type PairingCode,
 } from '../../lib/api'
-import { deviceLiveness, enrollCommand } from './devicesFormat'
+import { deviceLiveness } from './devicesFormat'
+import { SetupModal } from './SetupModal'
 
 /**
  * Settings → Devices (S5-T4): the machines Nova can act on. Each tile is a
@@ -25,6 +26,10 @@ import { deviceLiveness, enrollCommand } from './devicesFormat'
  * does everything the user novad runs as can do, and the two controls that
  * remain are a name and Revoke, which ends the pairing.
  *
+ * "Pair a device" opens the S47 machine setup (SetupModal, setup="add_machine"):
+ * the same QR code, code and command on Nova's derived address that the
+ * Add-to-Nova tile opens, so there is exactly one pairing UI in this app.
+ *
  * `api` is the same dependency-injection seam ActivityPage uses: production
  * binds the real lib/api calls; tests inject fakes. `pollIntervalMs` is
  * injectable so a test can drive the refresh, like ChatPage's poll knobs.
@@ -34,6 +39,7 @@ interface DevicesApi {
   mintPairingCode: typeof apiMintPairingCode
   renameDevice: typeof apiRenameDevice
   revokeDevice: typeof apiRevokeDevice
+  getNetworkAddress: typeof apiGetNetworkAddress
 }
 
 const DEFAULT_API: DevicesApi = {
@@ -41,6 +47,7 @@ const DEFAULT_API: DevicesApi = {
   mintPairingCode: apiMintPairingCode,
   renameDevice: apiRenameDevice,
   revokeDevice: apiRevokeDevice,
+  getNetworkAddress: apiGetNetworkAddress,
 }
 
 const POLL_INTERVAL_MS = 15_000
@@ -158,7 +165,7 @@ export function DevicesSection({
         </>
       )}
 
-      <PairingModal open={pairingOpen} onClose={closePairing} api={api} />
+      <SetupModal setup={pairingOpen ? 'add_machine' : null} onClose={closePairing} api={api} />
     </Section>
   )
 }
@@ -310,91 +317,5 @@ function LivenessIndicator({ state, label, pulse }: { state: string; label: stri
       <StatusDot status="neutral" pulse={pulse} size="sm" />
       <span>{label}</span>
     </span>
-  )
-}
-
-// ── pairing modal ────────────────────────────────────────────────────────
-
-type PairingState =
-  | { status: 'minting' }
-  | { status: 'error'; reason: string }
-  | { status: 'ready'; code: PairingCode }
-
-function PairingModal({
-  open,
-  onClose,
-  api,
-}: {
-  open: boolean
-  onClose: () => void
-  api: DevicesApi
-}) {
-  const [state, setState] = useState<PairingState>({ status: 'minting' })
-
-  useEffect(() => {
-    if (!open) return
-    let live = true
-    setState({ status: 'minting' })
-    api
-      .mintPairingCode()
-      .then(code => {
-        if (live) setState({ status: 'ready', code })
-      })
-      .catch(err => {
-        if (live) setState({ status: 'error', reason: reasonOf(err) })
-      })
-    return () => {
-      live = false
-    }
-  }, [open, api])
-
-  const oneLiner =
-    state.status === 'ready' ? enrollCommand(window.location.origin, state.code.code) : ''
-
-  return (
-    <Modal open={open} onClose={onClose} size="md" title="Pair a device">
-      <div role="dialog" aria-label="Pair a device" className="space-y-4">
-        {state.status === 'minting' && <Skeleton lines={3} />}
-        {state.status === 'error' && (
-          <div role="alert" className={bannerClass}>
-            Could not create a pairing code: {state.reason}
-          </div>
-        )}
-        {state.status === 'ready' && (
-          <>
-            <p className="text-caption text-content-secondary">
-              On the machine you want to pair, run novad with this code. The code
-              is shown once and expires — mint a new one if it lapses.
-            </p>
-            <div className="text-center">
-              <div className="font-mono text-h1 tracking-[0.2em] text-content-primary">
-                {state.code.code}
-              </div>
-              <p className="mt-1 text-caption text-content-tertiary">
-                Expires at {new Date(state.code.expires_at).toLocaleTimeString()}
-              </p>
-            </div>
-            <div>
-              <p className="mb-1.5 text-caption font-medium text-content-secondary">
-                Run this on the device
-              </p>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 overflow-x-auto whitespace-nowrap rounded-sm bg-surface-elevated px-3 py-2 font-mono text-mono-sm text-content-primary">
-                  {oneLiner}
-                </code>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  icon={<Copy size={12} />}
-                  onClick={() => void navigator.clipboard?.writeText(oneLiner)}
-                >
-                  Copy
-                </Button>
-              </div>
-            </div>
-          </>
-        )}
-      </div>
-    </Modal>
   )
 }

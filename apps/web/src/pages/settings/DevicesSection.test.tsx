@@ -26,6 +26,7 @@ function renderSection(
     mintPairingCode: ReturnType<typeof vi.fn>
     renameDevice: ReturnType<typeof vi.fn>
     revokeDevice: ReturnType<typeof vi.fn>
+    getNetworkAddress: ReturnType<typeof vi.fn>
   }> = {},
   pollIntervalMs = 1_000_000,
 ) {
@@ -39,6 +40,7 @@ function renderSection(
     ),
     renameDevice: vi.fn(),
     revokeDevice: vi.fn(),
+    getNetworkAddress: vi.fn(async () => ({ address: 'https://nova.fake-tailnet.ts.net', reason: null, read_at: new Date().toISOString() })),
     ...api,
   }
   return { ...render(<DevicesSection api={full} pollIntervalMs={pollIntervalMs} />), api: full }
@@ -173,7 +175,7 @@ describe('DevicesSection', () => {
     await waitFor(() => expect(screen.getByText('workstation')).toBeTruthy())
   })
 
-  it('the pairing modal mints a code and shows the enroll one-liner with this origin and the code', async () => {
+  it("the pairing modal mints a code and shows it with the command on Nova's derived address", async () => {
     const { api } = renderSection({ listDevices: vi.fn(async () => []) })
     await waitFor(() => screen.getByRole('button', { name: /pair a device/i }))
 
@@ -181,10 +183,10 @@ describe('DevicesSection', () => {
 
     await waitFor(() => expect(api.mintPairingCode).toHaveBeenCalled())
     const dialog = await screen.findByRole('dialog')
-    // The code is shown big.
-    expect(within(dialog).getByText('A1B2C3D4')).toBeTruthy()
-    // The enroll one-liner carries THIS origin and the code, verbatim.
-    const expected = `novad enroll --server ${window.location.origin} --code A1B2C3D4`
+    // The code is shown big, formatted the way it is read aloud.
+    expect(within(dialog).getByTestId('setup-code').textContent).toBe('A1B2-C3D4')
+    // The enroll command carries the DERIVED address, never window.location.
+    const expected = 'novad enroll --server https://nova.fake-tailnet.ts.net --code A1B2-C3D4'
     expect(within(dialog).getByText(content => content.includes(expected))).toBeTruthy()
   })
 })

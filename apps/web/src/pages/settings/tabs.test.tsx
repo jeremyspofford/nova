@@ -24,6 +24,8 @@ vi.mock('../../lib/api', async () => {
     getInstalledModels: vi.fn(async () => []),
     getSuggestion: vi.fn(async () => null),
     listDevices: vi.fn(async () => []),
+    getNetworkAddress: vi.fn(async () => ({ address: null, reason: 'not in a test', read_at: '2026-09-25T14:00:00Z' })),
+    mintPairingCode: vi.fn(),
     listProviders: vi.fn(async () => []),
     getProviderPresets: vi.fn(async () => []),
     getProviderModels: vi.fn(async () => []),
@@ -50,7 +52,7 @@ const SECTIONS_BY_TAB: Record<string, string[]> = {
   appearance: ['Appearance', 'Display diagnostics'],
   models: ['Machines', 'Models', 'Providers', 'Routing'],
   behaviour: ['Response quality'],
-  devices: ['Devices'],
+  devices: ['Add to Nova', 'Devices'],
 }
 
 function renderAt(path: string) {

@@ -41,7 +41,7 @@ export const SETTINGS_TABS: SettingsTab[] = [
   {
     slug: 'devices',
     label: 'Devices',
-    blurb: 'The machines paired to this instance.',
+    blurb: 'Add machines and phones to Nova, and the machines paired to it.',
   },
 ]
 

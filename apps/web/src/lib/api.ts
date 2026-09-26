@@ -1174,6 +1174,15 @@ export async function revokeDevice(id: string): Promise<Device> {
   return body.device
 }
 
+/** Nova's address for another device, as core's one reader states it now (S47). */
+export interface NetworkAddress {
+  address: string | null
+  reason: string | null
+  read_at: string
+}
+
+export const getNetworkAddress = () => apiGet<NetworkAddress>('/api/v1/network/address')
+
 // ── machines (services/core/app/machines_api.py, S40) ───────────────────
 
 /**
