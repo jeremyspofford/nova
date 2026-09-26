@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -23,7 +25,7 @@ func TestEnrollBodyCarriesIdentityOnly(t *testing.T) {
 		"code":     "A1B2C3D4",
 		"pubkey":   "abcd",
 		"name":     "laptop",
-		"platform": "linux",
+		"platform": runtime.GOOS,
 		"hostname": "thinkpad",
 	}
 	for k, v := range want {
@@ -36,5 +38,21 @@ func TestEnrollBodyCarriesIdentityOnly(t *testing.T) {
 	}
 	if _, present := body["home_dir"]; present {
 		t.Error("home_dir is gone with the fs-roots suggestion it fed; the enroll body must not carry it")
+	}
+}
+
+// D1: on Windows the agent is the native build. Inside WSL, enroll refuses
+// with "cannot" — never a question, never an override flag.
+func TestEnrollRefusesInsideWSL(t *testing.T) {
+	old := inWSL
+	t.Cleanup(func() { inWSL = old })
+	inWSL = func() bool { return true }
+	err := enrollPreflight()
+	if err == nil || !strings.HasPrefix(err.Error(), "cannot: on Windows, Nova's agent runs on Windows itself") {
+		t.Fatalf("got %v", err)
+	}
+	inWSL = func() bool { return false }
+	if err := enrollPreflight(); err != nil {
+		t.Fatalf("outside WSL enroll proceeds, got %v", err)
 	}
 }

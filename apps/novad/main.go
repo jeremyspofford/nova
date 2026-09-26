@@ -13,6 +13,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -20,6 +21,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -27,10 +29,12 @@ import (
 	"novad/internal/audit"
 	"novad/internal/client"
 	"novad/internal/config"
+	"novad/internal/platform"
 )
 
-// version is a const for now; S6 wires a -ldflags build stamp.
-var version = "0.1.0-dev"
+// version is the build stamp: builds set it with
+// -ldflags "-X main.version=<rev>" (CI and the walk build do; see README).
+var version = "0.2.0-dev"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -81,6 +85,9 @@ func cmdEnroll(argv []string) {
 
 	if *server == "" || *code == "" {
 		fail("enroll needs --server and --code")
+	}
+	if err := enrollPreflight(); err != nil {
+		fail("%v", err)
 	}
 	paths, err := config.DefaultPaths()
 	if err != nil {
@@ -154,6 +161,21 @@ func cmdEnroll(argv []string) {
 	fmt.Printf("\nnext: run `novad run` in a desktop session, or install the user service (see README).\n")
 }
 
+// inWSL is platform.WSL, a variable so a test can say "inside WSL".
+var inWSL = func() bool { in, _ := platform.WSL(); return in }
+
+// enrollPreflight refuses to enroll inside WSL (hub decision D1): on Windows,
+// Nova's agent runs on Windows itself and reaches WSL through wsl.exe and
+// \\wsl.localhost. An agent inside WSL cannot reach Windows' desktop,
+// adapters or sleep settings — the machine belongs to its Windows agent.
+func enrollPreflight() error {
+	if inWSL() {
+		return errors.New("cannot: on Windows, Nova's agent runs on Windows itself; " +
+			"run the Windows command (novad.exe enroll) in PowerShell, not this one inside WSL")
+	}
+	return nil
+}
+
 // enrollBody is the POST /api/v1/devices/enroll payload: the pairing code and
 // the identity this machine will be known by. Nothing else travels — core has
 // no per-device settings to seed.
@@ -162,7 +184,7 @@ func enrollBody(code, pubkeyHex, name, hostname string) ([]byte, error) {
 		"code":     code,
 		"pubkey":   pubkeyHex,
 		"name":     name,
-		"platform": "linux",
+		"platform": runtime.GOOS,
 		"hostname": hostname,
 	})
 }
