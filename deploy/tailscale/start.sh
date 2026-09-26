@@ -46,6 +46,13 @@
 #   4. READ `tailscale serve status --json` (serve_check.sh, the same code
 #      the compose healthcheck runs) and exit non-zero if the mapping is not
 #      there. Never reports success it did not check.
+#   4b. In the background, every NOVA_STATUS_INTERVAL seconds (default 15),
+#       write what tailscaled reports on that tick — BackendState, the DNS
+#       name, whether the serve mapping and an HTTPS certificate are there —
+#       to $NOVA_STATUS_DIR/tailscale.json (default /run/nova-status), for
+#       core (services/core/app/network.py). Atomic: a temp file, then mv.
+#       Only after step 4 verified the mapping; a failed write is logged and
+#       retried, never fatal. Stopped when containerboot exits.
 #   5. `wait` on containerboot.
 #
 # POSIX sh (the image is Alpine/busybox). Mounted from the DIRECTORY

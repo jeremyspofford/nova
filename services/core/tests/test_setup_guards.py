@@ -51,6 +51,17 @@ CODE_MUST_FIRE = [
         f"Run novad enroll --server {ORIGIN} --code K7PQ-9XYZ on the laptop.",
         "K7PQ9XYZ",
     ),
+    # Final review (ruling, amended): the SHA-shaped and non-pairing-qualifier
+    # exemptions below leave these three firing.
+    ("the_enroll_flag", "Run novad enroll --code K7PQ-9XYZ on the laptop.", "K7PQ9XYZ"),
+    (
+        "enter_the_code_beside_add",
+        "Open https://nova.fake-tailnet.ts.net/add on the laptop and enter the code K7PQ-9XYZ.",
+        "K7PQ9XYZ",
+    ),
+    # The ruling's accepted cost, pinned so it is visible: a SHA-shaped token
+    # straight after a bare "code" is still presented as a code.
+    ("sha_shaped_after_a_bare_code", "novad's code 4ad87ac7 is the one to type.", "4AD87AC7"),
 ]
 
 
@@ -99,6 +110,35 @@ CODE_MUST_NOT_FIRE = [
         "Your build is at https://ci.example.com/jobs/add?commit=a3f6c9e2 now.",
         "add my laptop",
     ),
+    # Final review (ruling, amended): wherever the check arms — a pairing word
+    # in the clause, or a token presented as a code beside an /add URL — it
+    # never claims a token a non-pairing qualifier names (commit, build, sha,
+    # hash, version, release, revision, rev, error, exit, status,
+    # verification, promo, zip, order, ticket, sku, id, source; optionally
+    # followed by "code"), nor a SHA-shaped one (exactly 8 lowercase hex
+    # characters, no dash) anywhere but straight after a bare "code".
+    (
+        "a_commit_beside_novad",
+        "The novad binary on the laptop is at commit 4ad87ac7 and it enrolled fine.",
+        "add my laptop",
+    ),
+    (
+        "a_pair_of_commits",
+        "A pair of commits landed this morning: 4ad87ac7 and 9aea023d.",
+        "add my laptop",
+    ),
+    ("an_enroll_error_code", "The enroll failed with error code E4B7-9C2D.", "add my laptop"),
+    (
+        "an_error_code_beside_add",
+        "Open https://nova.fake-tailnet.ts.net/add and check error code E4B7-9C2D.",
+        "add my laptop",
+    ),
+    (
+        "a_build_beside_add",
+        "Open https://nova.fake-tailnet.ts.net/add and use 4ad87ac7 as the build.",
+        "add my laptop",
+    ),
+    ("a_source_code_sha", "The source code 4ad87ac7 has the novad fix.", "add my laptop"),
 ]
 
 
@@ -124,6 +164,13 @@ ADDRESS_MUST_FIRE = [
         "Open https://nova-old.fake-tailnet.ts.net/install on the phone.",
         ("setup_page",),
         f"Open {ORIGIN}/install on the phone.",
+    ),
+    # Final review (ruling): tailnet names stay unconditional for rule 1.
+    (
+        "another_tailnet_name_for_a_setup_page_on_a_tablet",
+        "Open https://nova-old.fake-tailnet.ts.net/install on the tablet.",
+        ("setup_page",),
+        f"Open {ORIGIN}/install on the tablet.",
     ),
     (
         # I1 (review fix round 1; amended round 2): rule 2 requires a Nova
@@ -270,6 +317,15 @@ ADDRESS_MUST_NOT_FIRE = [
     ("the_real_setup_page", f"Open {ORIGIN}/install on the phone.", "put you on my phone"),
     ("the_real_origin", f"Nova is at {ORIGIN}.", "where are you"),
     ("loopback_on_the_hub_itself", "On the hub itself, http://127.0.0.1:3000 works too.", "hi"),
+    # Final review (ruling): the hub's own browser installs the web app at its
+    # loopback address, so a loopback setup page is wrong only when the clause
+    # names another device (rule 3's list). The same row with no address for
+    # another device is test_a_loopback_setup_page_on_the_hub_itself_with_no_address.
+    (
+        "loopback_setup_page_on_the_hub_itself",
+        "On this computer, open http://127.0.0.1:3000/install to see the steps.",
+        "hi",
+    ),
     ("tailscale_download", "Install Tailscale from https://tailscale.com/download first.", "hi"),
     (
         "tailscale_in_the_app_store",
@@ -419,6 +475,31 @@ def test_your_computer_is_the_hub_even_with_no_address():
         )
         is None
     )
+
+
+def test_a_loopback_setup_page_on_the_hub_itself_with_no_address():
+    # Final review (ruling): with no address another device can reach, the
+    # hub's own loopback setup page is still true, so nothing is rewritten and
+    # no correction claims there is no address for it. The control: naming
+    # another device still fires, rewritten to the no-address wording.
+    assert (
+        guards.address_claim_check(
+            "On this computer, open http://127.0.0.1:3000/install to see the steps.",
+            "hi",
+            None,
+            "the tailnet sidecar is NeedsLogin, not Running",
+        )
+        is None
+    )
+    claim = guards.address_claim_check(
+        "On your phone, open http://127.0.0.1:3000/install.",
+        "hi",
+        None,
+        "the tailnet sidecar is NeedsLogin, not Running",
+    )
+    assert claim is not None
+    assert claim.rules == ("setup_page",)
+    assert claim.rewritten == f"On your phone, open {guards.NO_ADDRESS}."
 
 
 def test_with_no_address_the_rewrite_and_correction_say_so():

@@ -149,10 +149,13 @@ export function SetupPanel({
             >
               {formatCode(code)}
             </div>
+            {/* Spec §10: a lapsed code has a way forward. Settings passes
+                onNewCode (the New code button below); her chat card cannot
+                mint one, so it says where the next code comes from. */}
             {expiresAt && (
               <p className="mt-1 text-caption text-content-tertiary">
                 {expired
-                  ? `Expired at ${clockTime(expiresAt)}.`
+                  ? `Expired at ${clockTime(expiresAt)}.${onNewCode ? '' : ' Ask Nova for a new card.'}`
                   : `Works once. Expires at ${clockTime(expiresAt)} (${remaining(new Date(expiresAt).getTime() - now.getTime())} left).`}
               </p>
             )}

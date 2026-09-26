@@ -60,6 +60,25 @@ describe('SetupPanel', () => {
     expect(onNewCode).toHaveBeenCalledTimes(1)
   })
 
+  // Final review: spec §10 promises a way forward once a code lapses. Her
+  // chat card has no onNewCode (only Settings can mint), so a lapsed LIVE card
+  // there says where the next code comes from; Settings keeps its button.
+  it('a lapsed live code with no way to mint here says to ask Nova for a new card', () => {
+    render(<SetupPanel setup="add_machine" address={ADDRESS} code="ABCD2345" expiresAt={EXPIRES} clock={AFTER} />)
+    expect(screen.getByText(/^Expired at .+\. Ask Nova for a new card\.$/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'New code' })).toBeNull()
+    expect(screen.queryByRole('img')).toBeNull()
+  })
+
+  it('a lapsed live code where a new one can be minted offers the button, not the sentence', () => {
+    render(
+      <SetupPanel setup="add_machine" address={ADDRESS} code="ABCD2345" expiresAt={EXPIRES} clock={AFTER} onNewCode={vi.fn()} />,
+    )
+    expect(screen.getByRole('button', { name: 'New code' })).toBeTruthy()
+    expect(screen.getByText(/^Expired at .+\.$/)).toBeTruthy()
+    expect(screen.queryByText(/Ask Nova for a new card/)).toBeNull()
+  })
+
   it('a reloaded machine card has no code, no QR and no command (Review Focus 4)', () => {
     render(<SetupPanel setup="add_machine" address={ADDRESS} code={null} expiresAt={EXPIRES} clock={BEFORE} />)
     expect(screen.getByTestId('setup-shown-once').textContent).toContain('shown once and expires')

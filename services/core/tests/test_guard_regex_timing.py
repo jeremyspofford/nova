@@ -124,6 +124,15 @@ SETUP_PADDED = [
         "many_governed_lan_urls",
         " ".join(f"open nova at http://192.168.{i}.1:3000" for i in range(200)),
     ),
+    # Final review (item 2): rule 1 asks, for a loopback setup page, whether
+    # the clause names another device, as rule 3 does for a loopback root.
+    # Read once per clause (about 10 ms here); asked per url, it is quadratic,
+    # and 400 urls keep that well over the budget on a fast machine.
+    (
+        "many_loopback_setup_urls",
+        " ".join(f"http://127.0.0.{i % 250 + 1}:3000/install" for i in range(400))
+        + " on this computer",
+    ),
 ]
 
 

@@ -5520,6 +5520,14 @@ async def _run_turn(
             # (C12): a redirect that stood replaced it, and its own
             # regeneration's corrections are what count then.
             or ((served_claim is not None or memory_claim is not None) and not prose_replaced)
+            # And S47's REWRITE-class claims, the same way (final review,
+            # deferred L133): the invented token is gone from the prose but its
+            # correction follows it — "Nova has no address another device can
+            # reach right now (…)" — and a recalled one would hand a later turn
+            # that transient state as a standing fact. A redirect that stood
+            # replaced the prose, and its regeneration was vetted by both
+            # rewrite guards.
+            or (bool(rewrite_claims) and not prose_replaced)
             or bool(redirect_appended)
             # A presented listing nothing produced is the same noise again —
             # and the worst of it, because a recalled listing is exactly what

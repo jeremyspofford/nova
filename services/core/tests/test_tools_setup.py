@@ -5,12 +5,13 @@ cannot be shown sends nothing at all."""
 from __future__ import annotations
 
 import json
+import re
 import uuid
 from datetime import UTC, datetime
 
 import pytest
 
-from app import tools
+from app import devices, tools
 from app.identity import Person
 from app.main import app as core_app
 from app.tools import setup
@@ -142,6 +143,21 @@ async def test_a_machine_setup_puts_the_code_on_the_card_and_nowhere_else(
     assert "You do not have the code" in said
     if setup_name == "add_model_server":
         assert "models role (S44), which is not built" in said
+
+
+@pytest.mark.parametrize("ttl_s", [devices.PAIRING_CODE_TTL_SECONDS, 15 * 60])
+async def test_her_result_states_the_expiry_relatively_never_as_a_clock_time(
+    status, minted, monkeypatch, ttl_s
+):
+    """Final review: the card shows the expiry in the browser's local time, so a
+    clock time in her result (UTC) would disagree with it. She says how long
+    the code lasts — read from the real TTL, never a copy of it."""
+    status()
+    monkeypatch.setattr(devices, "PAIRING_CODE_TTL_SECONDS", ttl_s)
+    said = await _call("show_setup_qr", {"setup": "add_machine"}, cards=[])
+    assert f"a one-time code that expires in {ttl_s // 60} minutes." in said
+    assert "UTC" not in said
+    assert re.search(r"\b\d{1,2}:\d{2}\b", said) is None, said
 
 
 async def test_no_address_is_a_stated_cannot_and_nothing_is_minted_or_sent(

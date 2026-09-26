@@ -20,7 +20,7 @@ from datetime import timedelta
 
 import pytest
 
-from app import chat, scheduler
+from app import chat, guards, scheduler
 from app.main import app
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
@@ -271,3 +271,76 @@ async def test_a_fired_served_claim_outranks_a_deferral_redirect(owner_client, p
     assert names[0] == "served_claim"
     await chat.drain_background()
     assert memory.ingests == []
+
+
+# -- S47 (final review, deferred L133): the REWRITE-class claims, the same way --
+#
+# A reply S47's rewrite guards corrected is the same noise one class over: the
+# token is gone from the prose and a correction follows it — "Nova has no
+# address another device can reach right now (...)" — and ingested, recall
+# would hand a later turn that transient state as a standing fact. Kept out of
+# memory exactly as the served-model and memory-outage claims are, and only
+# while the prose they were about is what persists.
+
+REWRITTEN = [
+    ("address_claim", "Open https://nova-old.fake-tailnet.ts.net/install on the phone."),
+    ("code_claim", "Your pairing code is ABCD-2345."),
+]
+
+
+@pytest.mark.parametrize(("guard", "reply"), REWRITTEN, ids=[c[0] for c in REWRITTEN])
+async def test_a_rewritten_reply_is_corrected_and_kept_out_of_memory(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch, guard, reply
+):
+    # No status file: Nova has no address another device can reach right now.
+    monkeypatch.setenv("NOVA_STATUS_FILE", str(tmp_path / "absent-tailscale.json"))
+    gateway = ScriptedGateway(rounds=((text(reply),),), served_by=HUB)
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    sent = await _say(owner_client, "How do I set this up?")
+
+    assert gateway.calls == 1  # the rewrite classes never redirect
+    assert [s["name"] for s in await _guard_spans(pool)] == [guard]
+    (correction,) = _corrections(sent)
+    stored = await _stored(pool)
+    assert stored.endswith(f"\n\n{correction}")
+    if guard == "address_claim":
+        assert stored.startswith(f"Open {guards.NO_ADDRESS} on the phone.")
+        assert "Nova has no address another device can reach right now" in correction
+    await chat.drain_background()
+    assert memory.ingests == []
+
+
+async def test_a_rewrite_whose_prose_a_consent_regen_replaced_is_ingested(
+    owner_client, pool, mount_peers, tmp_path, monkeypatch
+):
+    """…and only while that prose persists (C12, the S40b rule): a consent
+    redirect that STOOD replaced the rewritten reply with its regeneration —
+    vetted by both rewrite guards — so the turn is ordinary knowledge again."""
+    monkeypatch.setenv("NOVA_STATUS_FILE", str(tmp_path / "absent-tailscale.json"))
+    regen = "Done."
+    gateway = ScriptedGateway(
+        rounds=(
+            (
+                text(
+                    "That's still awaiting your approval — I can't run it until you OK it. "
+                    "Your pairing code is ABCD-2345."
+                ),
+            ),
+            (text(regen),),
+        ),
+        served_by=HUB,
+    )
+    memory = FakeMemory()
+    mount_peers(gateway=gateway, memory=memory)
+
+    await _say(owner_client, "try again")
+
+    assert gateway.calls == 2
+    assert await _stored(pool) == regen
+    spans = await _guard_spans(pool)
+    assert [s["name"] for s in spans] == ["code_claim", "consent_claim"]
+    assert spans[1]["meta"]["redirected"] is True
+    await chat.drain_background()
+    assert len(memory.ingests) == 1

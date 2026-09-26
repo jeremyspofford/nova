@@ -6217,6 +6217,45 @@ _CODE_PRESENTED = re.compile(
     rf"({_CODE_CHAR}{{4}})-?({_CODE_CHAR}{{4}})(?![A-Za-z0-9-])",
     re.I,
 )
+# Final review (ruling, amended): wherever the check arms — a pairing word in
+# the clause, or a token presented as a code beside an /add URL — a pairing
+# word nearby does not make every code-shaped token a code. Two never are:
+#   * one a NON-PAIRING QUALIFIER names right before it, optionally followed
+#     by "code" (then "is", "was" or ":"): "at commit 4ad87ac7", "error code
+#     E4B7-9C2D", "the source code 4ad87ac7" — some other thing's identifier;
+#   * a SHA-SHAPED one (exactly 8 lowercase hex characters, no dash — git's
+#     short form, a third of which fall inside the pairing alphabet) anywhere
+#     but straight after a bare "code" ("code", "code is", "code was",
+#     "code:"): "a pair of commits: 4ad87ac7", "use 4ad87ac7 as the build".
+# The accepted cost, pinned: straight after a bare "code", a SHA-shaped token
+# is still presented as a code ("novad's code 4ad87ac7 is the one to type").
+# Neither rule judges a token in an /add URL's OWN tail: that is where the QR
+# flow puts the code, whatever its shape (C, round 4).
+_NON_PAIRING_LEAD = re.compile(
+    r"\b(?:commit|build|sha|hash|version|release|revision|rev|error|exit|status"
+    r"|verification|promo|zip|order|ticket|sku|id|source)"
+    r"(?:\s++code)?(?:\s++(?:is|was))?(?:\s*+:\s*+|\s++)$",
+    re.I,
+)
+_BARE_CODE_LEAD = re.compile(r"\bcode(?:\s++(?:is|was))?(?:\s*+:\s*+|\s++)$", re.I)
+_SHA_SHAPED = re.compile(r"[0-9a-f]{8}")
+# How far back from a token its lead is read: the longest ("verification code
+# was: ") is a few dozen characters, and a fixed window keeps a clause of many
+# tokens linear.
+_LEAD_WINDOW = 64
+
+
+def _never_a_pairing_code(text: str, start: int, end: int) -> bool:
+    """True when the code-shaped token at text[start:end] is one code_claim
+    never claims (the two rules above). Read with pos/endpos, never a slice,
+    so the window's edge is no word boundary of its own ("recommit" is not
+    "commit")."""
+    lead_from = max(0, start - _LEAD_WINDOW)
+    if _NON_PAIRING_LEAD.search(text, lead_from, start) is not None:
+        return True
+    if _SHA_SHAPED.fullmatch(text, start, end) is None:
+        return False
+    return _BARE_CODE_LEAD.search(text, lead_from, start) is None
 
 
 CODE_ON_THE_CARD = "the code on the card"
@@ -6250,9 +6289,14 @@ def code_claim_check(reply_text: str, user_message: str = "") -> RewriteClaim | 
     email is 48KX2M9P" and "error code E4B7-9C2D came from the updater" are
     honest, code-shaped or not — and neither is a different service's own
     /add endpoint ("https://api.example.com/cart/add?sku=HX42KP97" is not a
-    pairing link). A token the owner's own message carries is his and is
-    never touched. Why it matters: five bad codes lock every enroll for 15
-    minutes."""
+    pairing link). Where the pairing words or a presented code arm it, a
+    token a non-pairing qualifier names ("commit 4ad87ac7", "error code
+    E4B7-9C2D") is never claimed, nor a SHA-shaped one (8 lowercase hex, no
+    dash) anywhere but straight after a bare "code" (final review,
+    `_never_a_pairing_code`); a token in an /add URL's own tail is claimed
+    whatever its shape. A token the owner's own message carries is his and
+    is never touched. Why it matters: five bad codes lock every enroll for
+    15 minutes."""
     if not reply_text:
         return None
     theirs = {_code_key(m.group(1), m.group(2)) for m in _CODE_TOKEN.finditer(user_message or "")}
@@ -6267,18 +6311,31 @@ def code_claim_check(reply_text: str, user_message: str = "") -> RewriteClaim | 
 
     for clause, _is_question in _clauses(reply_text):
         whole_clause = _CODE_WORD.search(clause) is not None
-        own = [] if whole_clause else _own_add_tails(clause)
-        if not whole_clause and not own:
-            continue
+        # The /add URLs' own tails, read only when needed: a clause with no
+        # pairing word needs them to arm at all, one with a pairing word only
+        # for a token the final review's two rules leave unclaimed.
+        own: list[tuple[int, int]] | None = None
+        if not whole_clause:
+            own = _own_add_tails(clause)
+            if not own:
+                continue
         for m in _CODE_TOKEN.finditer(clause):
-            if not whole_clause and not _in_own_tail(own, m.start(), m.end()):
-                continue  # C (round 4): an /add URL arms its own token, no other
-            consider(m)
-    # C (round 5): a token PRESENTED AS A CODE beside a qualifying /add URL.
+            if whole_clause and not _never_a_pairing_code(clause, m.start(), m.end()):
+                consider(m)
+                continue
+            # C (round 4): an /add URL arms its own token and no other,
+            # whatever that token's shape or lead.
+            if own is None:
+                own = _own_add_tails(clause)
+            if _in_own_tail(own, m.start(), m.end()):
+                consider(m)
+    # C (round 5): a token PRESENTED AS A CODE beside a qualifying /add URL,
+    # under the same two rules (final review).
     for sentence in _sentences(reply_text):
         if _CODE_PRESENTED.search(sentence) is not None and _own_add_tails(sentence):
             for m in _CODE_PRESENTED.finditer(sentence):
-                consider(m)
+                if not _never_a_pairing_code(sentence, m.start(1), m.end(2)):
+                    consider(m)
     if not invented:
         return None
 
@@ -6302,7 +6359,8 @@ _STORE_HOSTS = frozenset(
 # "another device/computer/machine". "your computer/Mac/PC" and bare "other
 # devices/computers" are DROPPED: on a default install, "your computer" IS
 # the hub, and "On your computer, open http://localhost:3000" is a true
-# sentence about the hub, not a wrong address for another device.
+# sentence about the hub, not a wrong address for another device. Rule 1
+# reads the same list for a loopback setup page (final review).
 _OTHER_DEVICE = re.compile(
     r"\b(?:phones?|iphones?|ipads?|tablets?|android|laptops?"
     r"|another\s+(?:device|computer|machine))\b",
@@ -6422,7 +6480,7 @@ def _cut_after_setup_page(url: str) -> str:
 
 
 def _wrong_address(
-    url: str, clause: str, before: str, origin: str | None
+    url: str, other_device: bool, before: str, origin: str | None
 ) -> tuple[str, str] | None:
     """(rule, replacement) when `url` is given as an address for Nova that is not
     the real one; None when it is the real one or not an address for Nova.
@@ -6431,9 +6489,12 @@ def _wrong_address(
     caller to its last _GOVERNS_LOOKBEHIND characters (ruling A, round 3) —
     what rule 2's "Nova governs the url" test reads, so a Nova phrase
     governing a DIFFERENT url (earlier in the same clause) or trailing this
-    one never counts. The caller has already ruled out a clause a negation
-    precedes (ruling I1 — every one of the four rules skips a URL "won't
-    work"/"can't use").
+    one never counts. `other_device` is whether the url's clause names
+    another device (_OTHER_DEVICE), read ONCE per clause by the caller (final
+    review): rules 1 and 3 both ask it, and asking per url made a clause of
+    many loopback urls quadratic. The caller has already ruled out a clause a
+    negation precedes (ruling I1 — every one of the four rules skips a URL
+    "won't work"/"can't use").
     """
     try:
         parts = urlsplit(url)
@@ -6451,7 +6512,13 @@ def _wrong_address(
         return None
     ip = _ip(host)
     nova_like = host.endswith(".ts.net") or host == "localhost" or ip is not None
-    if nova_like and _SETUP_PAGE.match(path or "/"):
+    loopback = host == "localhost" or (ip is not None and ip.is_loopback)
+    # Final review (ruling): a LOOPBACK setup page is true on the hub itself —
+    # its own browser installs the web app at exactly that address ("On this
+    # computer, open http://127.0.0.1:3000/install") — so for a loopback host
+    # rule 1 fires only when the clause names another device, as rule 3 asks.
+    # A tailnet name or a non-loopback IP stays unconditional.
+    if nova_like and _SETUP_PAGE.match(path or "/") and (not loopback or other_device):
         # I7 (round 1) + C (round 2): BOTH the fragment and the query are
         # DROPPED, never carried into the replacement. An /add#CODE or
         # /add?code=CODE is presumptively the very invented pairing code
@@ -6474,8 +6541,7 @@ def _wrong_address(
         and _NOVA_GOVERNS_URL.search(before)
     ):
         return ("lan", replacement)
-    loopback = host == "localhost" or (ip is not None and ip.is_loopback)
-    if loopback and setup_or_root and _OTHER_DEVICE.search(clause):
+    if loopback and setup_or_root and other_device:
         return ("loopback", replacement)
     return None
 
@@ -6511,7 +6577,9 @@ def address_claim_check(
     `origin` is network.address()'s answer NOW (None when there is none, with
     its `reason`), read by the caller — the guard keeps no address of its own.
     Four shapes, each precision-first: a setup page (/install, /app, /add) on a
-    tailnet, IP or localhost origin that is not the real one; a private-LAN URL
+    tailnet, IP or localhost origin that is not the real one — a loopback one
+    only in a clause naming another device, since the hub's own browser
+    installs the web app there (final review); a private-LAN URL
     on an app port given as where to open Nova, with a Nova phrase GOVERNING
     the url — not just "nova" anywhere in the clause (the web UI is never on
     the LAN, and a LAN URL for some OTHER service, even one that MENTIONS
@@ -6548,6 +6616,8 @@ def address_claim_check(
         cursor = clause_start + len(clause)
         if _ADDRESS_NEGATION.search(clause) is not None:
             continue  # a negation anywhere in the clause: a denial, not a claim
+        # Read once per clause, when its first url needs it (final review).
+        other_device: bool | None = None
         for m in _URL.finditer(clause):
             url = _strip_trailing_punct(m.group(0))
             if not url or url in theirs:
@@ -6557,7 +6627,9 @@ def address_claim_check(
             # prefix first, which is exactly the O(n^2) a clause of many urls
             # would hit.
             before = clause[max(0, m.start() - _GOVERNS_LOOKBEHIND) : m.start()]
-            verdict = _wrong_address(url, clause, before, origin)
+            if other_device is None:
+                other_device = _OTHER_DEVICE.search(clause) is not None
+            verdict = _wrong_address(url, other_device, before, origin)
             if verdict is None:
                 continue
             rule, replacement = verdict

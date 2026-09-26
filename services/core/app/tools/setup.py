@@ -26,7 +26,6 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from datetime import UTC, datetime
 
 from app import db, devices, native_app, network
 from app.tools.base import Tool, ToolContext, ToolFailure
@@ -70,13 +69,6 @@ def _dashed(code: str) -> str:
     return f"{clean[:4]}-{clean[4:]}" if len(clean) == 8 else clean
 
 
-def _clock(iso: str) -> str:
-    try:
-        return datetime.fromisoformat(iso).astimezone(UTC).strftime("%H:%M UTC")
-    except ValueError:
-        return iso
-
-
 async def nova_address(args: dict, ctx: ToolContext) -> str:
     got = network.address()
     if ctx.facts_sink is not None:
@@ -92,7 +84,7 @@ async def nova_address(args: dict, ctx: ToolContext) -> str:
     )
 
 
-def _result(setup: str, link: str, expires_at: str | None) -> str:
+def _result(setup: str, link: str) -> str:
     if setup == "install_pwa":
         return (
             f"Sent a QR card to the chat. It opens {link}, which shows the phone its own steps "
@@ -105,12 +97,15 @@ def _result(setup: str, link: str, expires_at: str | None) -> str:
             f"{native_app.stated()} Until there is one, that page shows the web app's install "
             f"steps instead. {TAILSCALE_STEP}"
         )
+    # Relative, never a clock time (final review): the card shows the expiry in
+    # the browser's own local time, and a UTC clock time here would disagree
+    # with it. Read from the real TTL, never a copy of it.
     minutes = devices.PAIRING_CODE_TTL_SECONDS // 60
     said = (
         f"Sent a pairing card to the chat: a QR code, a short link ({link}) and a one-time "
-        f"code that expires in {minutes} minutes, at {_clock(expires_at or '')}. The machine "
-        f"needs Nova's agent, novad (Linux today); the card shows the command to run on it. "
-        f"You do not have the code — it is only on the card."
+        f"code that expires in {minutes} minutes. The machine needs Nova's agent, novad "
+        f"(Linux today); the card shows the command to run on it. You do not have the "
+        f"code — it is only on the card."
     )
     return f"{said} {MODEL_SERVER_NOTE}" if setup == "add_model_server" else said
 
@@ -160,7 +155,7 @@ async def show_setup_qr(args: dict, ctx: ToolContext) -> str:
                 "code_shown": setup in MACHINE_SETUPS,
             }
         )
-    return _result(setup, link, expires_at)
+    return _result(setup, link)
 
 
 NOVA_ADDRESS = Tool(

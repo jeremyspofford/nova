@@ -17,7 +17,8 @@ from app.tools.base import Tool
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
 
-pytestmark = requires_db
+# requires_db per test, never for the module (final review): the channel's
+# pure tests below need no database and must run where there is none.
 
 DONE = "[DONE]"
 # A marker that must appear in the card frame and NOWHERE else.
@@ -84,6 +85,7 @@ async def set_chat_model(client) -> None:
     assert resp.status_code == 200, resp.text
 
 
+@requires_db
 async def test_a_card_reaches_the_stream_and_nowhere_else(
     owner_client, pool, mount_peers, card_tool
 ):
