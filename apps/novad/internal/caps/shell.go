@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"time"
 )
 
 // shellExec runs argv with NO shell — exec.CommandContext(argv[0], argv[1:]...).
@@ -38,12 +39,19 @@ func shellExec(ctx context.Context, args map[string]any, d Deps) Outcome {
 	cmd.Dir = cwd
 	cmd.Stdout = cw
 	cmd.Stderr = cw
+	prepareCommand(cmd)
 
 	runErr := cmd.Run()
 
 	// A timeout is the daemon failing to complete the capability -> ok:false.
-	if ctx.Err() == context.DeadlineExceeded {
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return fail("timed out; partial output:\n%s", cw.string())
+	}
+	// Cancelled without a deadline: the connection to Nova dropped mid-run
+	// (serve's context). The process was killed, not finished — never
+	// "ran, exit -1".
+	if errors.Is(ctx.Err(), context.Canceled) {
+		return fail("cancelled before it finished — the connection to Nova dropped; partial output:\n%s", cw.string())
 	}
 
 	if runErr == nil {
@@ -57,6 +65,17 @@ func shellExec(ctx context.Context, args map[string]any, d Deps) Outcome {
 		code := exitErr.ExitCode()
 		out := cw.string()
 		out += fmt.Sprintf("\n[process exited with code %d]", code)
+		return Outcome{OK: true, Output: out, ExitCode: &code}
+	}
+	if errors.Is(runErr, exec.ErrWaitDelay) {
+		// The command itself exited 0, but a background process it started
+		// still held the output pipe when WaitDelay closed it, so Wait
+		// reports ErrWaitDelay instead of nil (exec.Cmd.WaitDelay's own
+		// doc). That is still a process that RAN — ok:true, exit 0 — not
+		// "could not run"; the note says why later output is missing.
+		code := 0
+		out := cw.string()
+		out += "\n[exited 0, but a background process it started kept its output open; output after the exit was not read]"
 		return Outcome{OK: true, Output: out, ExitCode: &code}
 	}
 	// Anything else (binary not found, permission, cwd missing) is the daemon
@@ -101,3 +120,7 @@ func (w *capWriter) string() string {
 	}
 	return s
 }
+
+// killGrace bounds how long Wait may block on output pipes after the command
+// is killed, so a stuck descendant cannot hold a handler past its budget.
+const killGrace = 5 * time.Second
