@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -41,17 +42,45 @@ func shellExec(ctx context.Context, args map[string]any, d Deps) Outcome {
 	cmd.Stderr = cw
 	prepareCommand(cmd)
 
+	// killedByCancel is set only when OUR Cancel actually terminated the
+	// process (its wrapped call returned nil) — never merely because ctx
+	// became Done. exec.Cmd races Cancel against the process's own exit
+	// (watchCtx): once the process has already exited, Cancel is never
+	// called at all. Run can then still block up to killGrace draining a
+	// backgrounded grandchild's output pipe (WaitDelay), and ctx may go
+	// Done during that unrelated wait for reasons that never touched the
+	// process. So ctx.Err() at the time Run returns is not proof that
+	// anything was killed — only killedByCancel, or ctx already being done
+	// before the process ever started, is.
+	var killedByCancel atomic.Bool
+	innerCancel := cmd.Cancel
+	cmd.Cancel = func() error {
+		err := innerCancel()
+		if err == nil {
+			killedByCancel.Store(true)
+		}
+		return err
+	}
+
 	runErr := cmd.Run()
 
-	// A timeout is the daemon failing to complete the capability -> ok:false.
-	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fail("timed out; partial output:\n%s", cw.string())
-	}
-	// Cancelled without a deadline: the connection to Nova dropped mid-run
-	// (serve's context). The process was killed, not finished — never
-	// "ran, exit -1".
-	if errors.Is(ctx.Err(), context.Canceled) {
-		return fail("cancelled before it finished — the connection to Nova dropped; partial output:\n%s", cw.string())
+	// ctx was already done before Start ever ran: Start returns ctx's own
+	// error directly in that case and never calls Cancel (exec.Cmd.Start),
+	// so killedByCancel would stay false even though the command never got
+	// to run at all.
+	ctxDoneBeforeStart := errors.Is(runErr, context.DeadlineExceeded) || errors.Is(runErr, context.Canceled)
+	if killedByCancel.Load() || ctxDoneBeforeStart {
+		// A timeout is the daemon failing to complete the capability -> ok:false.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return fail("timed out; partial output:\n%s", cw.string())
+		}
+		// Cancelled without a deadline: novad stopped serving the call —
+		// either the connection to Nova dropped mid-run, or novad itself is
+		// stopping (both derive from the same serve context). The process
+		// was killed, not finished — never "ran, exit -1".
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return fail("cancelled before it finished — novad stopped serving it (the connection to Nova dropped, or novad is stopping); partial output:\n%s", cw.string())
+		}
 	}
 
 	if runErr == nil {
