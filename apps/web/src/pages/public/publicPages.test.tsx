@@ -20,6 +20,14 @@ function renderPage(ui: ReactElement) {
   return render(<ThemeProvider>{ui}</ThemeProvider>)
 }
 
+// This project carries no @types/node (a browser app), so process is typed
+// locally, just enough to listen for a real unhandled rejection below.
+declare const process: {
+  on(event: 'unhandledRejection', listener: (reason: unknown) => void): void
+  off(event: 'unhandledRejection', listener: (reason: unknown) => void): void
+}
+const nodeProcess = process
+
 afterEach(() => vi.unstubAllGlobals())
 
 describe('InstallPage', () => {
@@ -75,6 +83,12 @@ describe('AddPage', () => {
     expect(screen.getByTestId('add-code').textContent).toBe('ABCD-2345')
     expect(screen.getByText(`novad enroll --server ${ORIGIN} --code ABCD-2345`)).toBeTruthy()
   })
+  it('a bare "#" carries no code either, and asks the same friendly way (Review Focus 2)', () => {
+    renderPage(<AddPage platform={LINUX} hash="#" origin={ORIGIN} share={undefined} />)
+    expect(screen.getByText('This page adds a machine to Nova. Type the code Nova showed you.')).toBeTruthy()
+    expect(screen.queryByText(/That link carries no code Nova can read/)).toBeNull()
+    expect(screen.getByLabelText('The code Nova showed you')).toBeTruthy()
+  })
   it('asks for the code when the link carries none, and never calls the server', () => {
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
@@ -92,6 +106,38 @@ describe('AddPage', () => {
     unmount()
     renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={undefined} />)
     expect(screen.queryByRole('button', { name: /Share/ })).toBeNull()
+  })
+  it('a cancelled share leaves no unhandled rejection, and the page stays as it was', async () => {
+    // A plain function, not vi.fn: vi.fn's own instrumentation attaches a
+    // .then/.catch to any promise a mock returns (to populate
+    // mock.settledResults), which would quietly "handle" the rejection for
+    // us and hide exactly the bug this test exists to catch.
+    const abort = Object.assign(new Error('cancelled'), { name: 'AbortError' })
+    let calledWith: { title: string; url: string } | null = null
+    const share = (data: { title: string; url: string }) => {
+      calledWith = data
+      return Promise.reject(abort)
+    }
+    const rejections: unknown[] = []
+    const onUnhandledRejection = (reason: unknown) => rejections.push(reason)
+    // jsdom's own 'unhandledrejection' window event never fires for a plain
+    // promise like this one — it only relays rejections from scripts jsdom
+    // itself executes. Node's real tracking is the only thing that actually
+    // sees this, so this listens there directly.
+    nodeProcess.on('unhandledRejection', onUnhandledRejection)
+    try {
+      renderPage(<AddPage platform={ANDROID} hash="#ABCD-2345" origin={ORIGIN} share={share} />)
+      fireEvent.click(screen.getByRole('button', { name: /Share this link/ }))
+      // Flushes past the microtask the rejection settles on. If nothing in
+      // AddPage catches it, it surfaces here as an unhandled rejection —
+      // the page itself never shows an error for a cancelled share.
+      await new Promise(resolve => setTimeout(resolve, 0))
+    } finally {
+      nodeProcess.off('unhandledRejection', onUnhandledRejection)
+    }
+    expect(calledWith).toEqual({ title: 'Add a machine to Nova', url: `${ORIGIN}/add#ABCD-2345` })
+    expect(rejections).toEqual([])
+    expect(screen.getByRole('button', { name: /Share this link/ })).toBeTruthy()
   })
   it('on Windows, says the agent is Linux-only today', () => {
     renderPage(<AddPage platform={WINDOWS} hash="#ABCD-2345" origin={ORIGIN} share={undefined} />)

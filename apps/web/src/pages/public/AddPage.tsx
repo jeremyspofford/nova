@@ -70,7 +70,13 @@ export function AddPage({
                 <Button
                   variant="secondary"
                   icon={<Share2 size={14} />}
-                  onClick={() => void share({ title: 'Add a machine to Nova', url: link })}
+                  onClick={() => {
+                    // Cancelling the native share sheet is a normal action,
+                    // not a failure: navigator.share() rejects (usually with
+                    // an AbortError) when the owner backs out of it, and
+                    // nothing here should surface that as an error.
+                    share({ title: 'Add a machine to Nova', url: link }).catch(() => {})
+                  }}
                 >
                   Share this link
                 </Button>
