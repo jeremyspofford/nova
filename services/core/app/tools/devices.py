@@ -25,6 +25,7 @@ here refuses on the owner's behalf.
 Reads are ephemeral (a live point-in-time answer, like fetch_url); writes,
 launches and shell runs are not.
 """
+
 from __future__ import annotations
 
 import posixpath
@@ -68,9 +69,7 @@ async def _resolve(pool, name: object):
         live = sorted(
             d["name"] for d in await devices.list_devices(pool) if d["revoked_at"] is None
         )
-        known = (
-            f"the paired devices are: {', '.join(live)}" if live else "no device is paired"
-        )
+        known = f"the paired devices are: {', '.join(live)}" if live else "no device is paired"
         raise ToolFailure(
             f"no paired device named {name!r} — {known}; check the name in Settings → "
             "Devices (a revoked device is gone until it is paired again)"
@@ -195,7 +194,10 @@ async def device_list(args: dict, ctx: ToolContext) -> str:
     for d in live:
         status = "connected" if d["id"] in connected else "offline"
         last = d["last_seen"] or "never"
-        lines.append(f"- {d['name']} ({d['platform']}) — {status}, last seen {last}")
+        where = d["os"] or d["platform"]
+        if d["wsl"] is not None:
+            where += ", inside WSL"
+        lines.append(f"- {d['name']} ({where}) — {status}, last seen {last}")
     return "Paired devices:\n" + "\n".join(lines)
 
 
@@ -283,7 +285,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="device_list",
         description=(
-            "List the computers paired with Nova (name, platform, whether they are "
+            "List the computers paired with Nova (name, the OS it runs, whether they are "
             "connected right now, and when each was last seen). Reads Nova's own records."
         ),
         parameters=_obj({}, []),
@@ -364,7 +366,7 @@ TOOLS: tuple[Tool, ...] = (
         name="device_run",
         description=(
             "Run a command on a paired device. Give the command as argv — a list of strings, "
-            "the program first (e.g. [\"ls\", \"-la\", \"/tmp\"]) — never a shell string."
+            'the program first (e.g. ["ls", "-la", "/tmp"]) — never a shell string.'
         ),
         parameters=_obj(
             {

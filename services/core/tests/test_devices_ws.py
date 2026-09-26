@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from app import devices, devices_ws, governance, tools
+from app import devices, devices_ws, envelopes, governance, tools
 from app.identity import Person
 from app.tools.base import ToolContext, ToolFailure
 from tests.conftest import requires_db
@@ -69,7 +69,9 @@ async def _person(pool, role: str = "adult") -> Person:
     return Person(id=pid, name=name, role=role)
 
 
-async def _enroll(pool, *, name: str = "laptop") -> tuple[uuid.UUID, FakeDevice]:
+async def _enroll(
+    pool, *, name: str = "laptop", platform: str = "linux"
+) -> tuple[uuid.UUID, FakeDevice]:
     device = FakeDevice()
     person = await _person(pool)
     code = await devices.mint_pairing_code(pool, created_by=person.id)
@@ -78,7 +80,7 @@ async def _enroll(pool, *, name: str = "laptop") -> tuple[uuid.UUID, FakeDevice]
         code=code["code"],
         pubkey=device.pubkey_hex,
         name=name,
-        platform="linux",
+        platform=platform,
         hostname="host",
     )
     return uuid.UUID(result["device_id"]), device
@@ -820,3 +822,152 @@ async def test_replaying_stored_entries_is_idempotent(pool):
     assert res == {"stored": 2, "break": None}
     count = await pool.fetchval("SELECT count(*) FROM device_audit WHERE device_id = $1", device_id)
     assert count == 2  # ON CONFLICT DO NOTHING — no duplicates
+
+
+# -- S42a: facts on the socket ------------------------------------------------
+
+AUTH_FACTS = {
+    "v": 2,
+    "agent": {"version": "0.2.0", "mode": "foreground", "session_interactive": True},
+    "os": {
+        "goos": "windows",
+        "arch": "amd64",
+        "version": "Windows 11 Pro 24H2 (build 26100)",
+        "wsl": None,
+    },
+    "hostname": "PC-ONE",
+    "machine_uid": "c" * 64,
+}
+
+
+async def _facts_of(pool, device_id):
+    return await pool.fetchrow("SELECT facts, facts_at FROM devices WHERE id = $1", device_id)
+
+
+async def _auth_with(
+    pool, device_id, device: FakeDevice, facts: dict | None, *, key: FakeDevice | None = None
+) -> tuple[FakeWSConn, asyncio.Task, dict]:
+    """Drive one connection through serve()'s challenge/auth/reply using
+    `FakeDevice.handshake`, so the exchange is written exactly once and every
+    test below walks the same real path `_connect` does.
+
+    `key`, when given, signs as a DIFFERENT device — its own key — while
+    claiming `device_id`: the shape of a bad signature (the right id, the
+    wrong key), produced by pointing that fake's own `device_id` at the real
+    target rather than re-implementing a second signing path to keep honest
+    against `handshake`."""
+    signer = key or device
+    signer.device_id = str(device_id)
+    conn = FakeWSConn()
+    task = asyncio.create_task(devices_ws.serve(conn, pool))
+    reply = await signer.handshake(conn, facts)
+    return conn, task, reply
+
+
+async def test_auth_facts_are_recorded_after_the_signature_verifies(pool):
+    device_id, device = await _enroll(pool, name="pc", platform="windows")
+    conn, task, reply = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    assert reply["type"] == "ready"
+    row = await _facts_of(pool, device_id)
+    assert row["facts"] == AUTH_FACTS and row["facts_at"] is not None
+    await _close(conn, task)
+
+
+async def test_a_bad_signature_records_no_facts(pool):
+    device_id, device = await _enroll(pool, name="pc")
+    conn, task, reply = await _auth_with(pool, device_id, device, AUTH_FACTS, key=FakeDevice())
+    assert reply["type"] == "auth_error"
+    assert (await _facts_of(pool, device_id))["facts"] is None
+    await asyncio.wait_for(task, 2)
+
+
+async def test_facts_that_do_not_validate_never_refuse_the_socket(pool):
+    device_id, device = await _enroll(pool, name="pc")
+    conn, task, reply = await _auth_with(pool, device_id, device, {"v": 1})
+    assert reply["type"] == "ready"
+    assert (await _facts_of(pool, device_id))["facts"] is None
+    await _close(conn, task)
+
+
+async def _until(predicate, within: float = 2.0):
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        if await predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("condition not met in time")
+
+
+async def test_a_facts_frame_merges_and_a_new_connection_replaces(pool):
+    device_id, device = await _enroll(pool, name="pc", platform="windows")
+    conn, task, _ready = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed(
+        {"type": "facts", "net": {"ifaces": []}, "unreadable": [{"item": "x", "reason": "y"}]}
+    )
+
+    async def merged():
+        facts = (await _facts_of(pool, device_id))["facts"]
+        return facts is not None and "net" in facts
+
+    await _until(merged)
+    facts = (await _facts_of(pool, device_id))["facts"]
+    assert facts["machine_uid"] == "c" * 64  # the auth facts survived the merge
+    await _close(conn, task)
+    renamed = {**AUTH_FACTS, "hostname": "PC-ONE-RENAMED"}
+    conn2, task2, _ = await _auth_with(pool, device_id, device, renamed)
+    assert (await _facts_of(pool, device_id))[
+        "facts"
+    ] == renamed  # net is gone until the next frame
+    await _close(conn2, task2)
+
+
+async def test_a_revoked_device_is_told_revoked_and_an_unknown_one_is_not(pool):
+    """P5 + the Task 9 security ruling: a revoked row gets `REVOKED_REASON`
+    paired with a proof CORE ITSELF signed — {kind, v, device_id, nonce} over
+    the nonce THIS connection's own challenge carried — so the agent
+    (wire.VerifyRevokedProof) can tell a genuine revoke from anyone who can
+    merely terminate the socket. An unknown id gets a different reason and no
+    proof at all: core must never sign a proof for a device it does not know,
+    or a restored database that forgot a device would make it wipe itself."""
+    device_id, device = await _enroll(pool, name="pc")
+    person = await _person(pool)
+    await devices.revoke(pool, device_id=device_id, actor=str(person.id))
+    core_pubkey_hex = await devices.core_public_key_hex(pool)
+
+    conn, task, reply = await _auth_with(pool, device_id, device, None)
+    assert set(reply) == {"type", "reason", "proof", "sig"}
+    assert reply["type"] == "auth_error"
+    assert reply["reason"] == devices_ws.REVOKED_REASON
+    challenge_nonce = conn.sent[0]["nonce"]  # this connection's own challenge, nothing else's
+    assert reply["proof"] == {
+        "kind": "revoked",
+        "v": 1,
+        "device_id": str(device_id),
+        "nonce": challenge_nonce,
+    }
+    assert envelopes.verify(core_pubkey_hex, reply["proof"], reply["sig"]) is True
+    await asyncio.wait_for(task, 2)
+
+    conn2, task2, reply2 = await _auth_with(pool, uuid.uuid4(), device, None)
+    assert reply2 == {"type": "auth_error", "reason": devices_ws.UNKNOWN_DEVICE_REASON}
+    assert devices_ws.UNKNOWN_DEVICE_REASON != devices_ws.REVOKED_REASON
+    await asyncio.wait_for(task2, 2)
+
+
+async def test_device_list_names_the_os_and_says_inside_wsl(pool):
+    device_id, device = await _enroll(pool, name="pc-wsl")
+    wsl = {
+        **AUTH_FACTS,
+        "os": {
+            "goos": "linux",
+            "arch": "amd64",
+            "version": "Ubuntu 26.04 LTS",
+            "wsl": {"distro": "Ubuntu-26.04"},
+        },
+    }
+    conn, task, _ = await _auth_with(pool, device_id, device, wsl)
+    person = await _person(pool)
+    result, ok = await tools.dispatch("device_list", {}, _ctx(person))
+    assert ok is True
+    assert "- pc-wsl (Ubuntu 26.04 LTS, inside WSL) — connected" in result
+    await _close(conn, task)

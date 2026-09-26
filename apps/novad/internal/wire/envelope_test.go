@@ -267,3 +267,49 @@ func TestVerifierCorePubKeyReturnsThePinnedKey(t *testing.T) {
 		t.Fatal("CorePubKey must return the pinned key")
 	}
 }
+
+// TestVerifyRevokedProofAcceptsTheCommittedVector is the cross-language pin
+// for S42a (controller ruling 2): core's actual signer
+// (services/core/app/devices_ws.py, via envelopes.sign with the SAME fixed
+// seed) and this Verifier's checker must agree on the SAME bytes. The
+// fixture's last vector is the revoked-proof body — decoded exactly as the
+// wire does (UseNumber) — and must verify against the seed's own public key,
+// addressed to the vector's own device_id and nonce. A one-character change
+// to the proof must then be refused, proving the check reads the received
+// object rather than trusting its shape.
+func TestVerifyRevokedProofAcceptsTheCommittedVector(t *testing.T) {
+	vf := loadVectors(t)
+	v := vf.Vectors[len(vf.Vectors)-1]
+	proof := decodePayload(t, v.Payload)
+	if kind, _ := proof["kind"].(string); kind != RevokedProofKind {
+		t.Fatalf("expected the last fixture vector to be the revoked-proof vector, got %v", proof)
+	}
+	deviceID, _ := proof["device_id"].(string)
+	nonceHex, _ := proof["nonce"].(string)
+	pub, err := hex.DecodeString(vf.PublicKeyHex)
+	if err != nil {
+		t.Fatalf("public key hex: %v", err)
+	}
+	corePub := ed25519.PublicKey(pub)
+
+	reply := map[string]any{
+		"type": TypeAuthError, "reason": ReasonRevoked,
+		"proof": proof, "sig": v.SigHex,
+	}
+	if !VerifyRevokedProof(reply, deviceID, nonceHex, corePub) {
+		t.Fatal("the committed revoked-proof vector must verify against the seed's public key")
+	}
+
+	// A one-character change to the proof (not the signature, not the
+	// parameters this device already knows) must be refused.
+	tampered := map[string]any{}
+	for k, val := range proof {
+		tampered[k] = val
+	}
+	did, _ := tampered["device_id"].(string)
+	tampered["device_id"] = "2" + did[1:]
+	reply["proof"] = tampered
+	if VerifyRevokedProof(reply, deviceID, nonceHex, corePub) {
+		t.Fatal("a one-character change to the proof must be refused")
+	}
+}

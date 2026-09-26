@@ -18,6 +18,7 @@ ruling 2026-09-03); the identity columns are the whole row.
 The API half of this file (further down) additionally pins that enroll is the
 ONE route in core reachable without an identity, and that it is rate-limited.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -371,6 +372,9 @@ async def test_listing_reports_the_stored_state_and_never_a_fake_green(pool):
     # Tripwire, moved deliberately 2026-09-03 (no approvals): identity columns
     # only. capabilities / fs_roots / home_dir left with the grants editor — a
     # key that reappears here is a grant growing back.
+    # Moved deliberately again for S42a: os / wsl / agent_version / facts_at are
+    # what the agent OBSERVED about its machine — facts, never grants; roles are
+    # derived on every read and never stored or returned here.
     assert set(spec) == {
         "id",
         "name",
@@ -380,6 +384,10 @@ async def test_listing_reports_the_stored_state_and_never_a_fake_green(pool):
         "last_seen",
         "revoked_at",
         "connected",
+        "os",
+        "wsl",
+        "agent_version",
+        "facts_at",
     }
 
 
@@ -469,9 +477,7 @@ async def test_a_revoked_devices_burned_code_cannot_walk_back_in(pool):
     enrolled = await devices.enroll(
         pool, code=minted["code"], pubkey=PUBKEY_A, name="laptop", platform="linux", hostname="h"
     )
-    await devices.revoke(
-        pool, device_id=uuid.UUID(enrolled["device_id"]), actor=str(person.id)
-    )
+    await devices.revoke(pool, device_id=uuid.UUID(enrolled["device_id"]), actor=str(person.id))
 
     with pytest.raises(devices.DeviceRefused):
         await devices.enroll(
@@ -729,3 +735,24 @@ async def test_the_whole_arc_reads_back_off_the_governance_ledger(owner_client, 
         )
     ]
     assert kinds == ["device.enrolled", "device.revoked"]
+
+
+# -- S42a: enroll holds the platform -----------------------------------------
+
+
+async def test_enroll_refuses_a_platform_it_does_not_know_before_the_code_is_spent(pool):
+    person = await _owner(pool)
+    minted = await devices.mint_pairing_code(pool, created_by=person.id)
+    with pytest.raises(devices.DeviceRefused) as exc:
+        await devices.enroll(
+            pool, code=minted["code"], pubkey=PUBKEY_A, name="x", platform="freebsd", hostname="h"
+        )
+    assert exc.value.status_code == 400
+    assert "linux, darwin, windows" in exc.value.reason
+    result = await devices.enroll(
+        pool, code=minted["code"], pubkey=PUBKEY_A, name="x", platform="windows", hostname="h"
+    )
+    row = await pool.fetchrow(
+        "SELECT platform FROM devices WHERE id = $1", uuid.UUID(result["device_id"])
+    )
+    assert row["platform"] == "windows"  # the code was still good, and the OS is recorded

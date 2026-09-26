@@ -19,6 +19,7 @@ and every command it answers appends a real hash-chained audit entry — it neve
 rubber-stamps, so a test that reaches past it has proven the envelope was real
 and the chain joins up.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -89,9 +90,7 @@ class FakeDevice:
     to AGREE, never just core's word for it.
     """
 
-    key: ed25519.Ed25519PrivateKey = field(
-        default_factory=ed25519.Ed25519PrivateKey.generate
-    )
+    key: ed25519.Ed25519PrivateKey = field(default_factory=ed25519.Ed25519PrivateKey.generate)
     # Set from the enroll result before the handshake — a real daemon knows its
     # own id from enrollment. Left None until then so a handshake without an
     # enroll fails loud rather than signing for nobody.
@@ -139,7 +138,7 @@ class FakeDevice:
 
     # -- the full protocol (grown for T5) -----------------------------------
 
-    async def handshake(self, conn: FakeWSConn) -> dict:
+    async def handshake(self, conn: FakeWSConn, facts: dict | None = None) -> dict:
         """Drive `serve()`'s challenge -> auth -> ready over `conn` and return
         the `ready` frame.
 
@@ -147,19 +146,24 @@ class FakeDevice:
         then signs the RAW nonce with its own key and sends the `auth` frame —
         so reaching `ready` proves the socket authenticated BY KEY, never by any
         exemption. Requires `device_id` (set it from the enroll result first).
+
+        `facts`, when given, rides in the auth frame exactly as a real novad's
+        auth-frame facts would (S42a) — omitted entirely when None, so a fake
+        that never passes it looks exactly like a pre-S42a daemon.
         """
         challenge = await conn.next_sent()
         assert challenge["type"] == "challenge", challenge
         self.core_pubkey_hex = challenge["core_pubkey"]
         if self.device_id is None:
             raise AssertionError("set device_id from the enroll result before the handshake")
-        conn.feed(
-            {
-                "type": "auth",
-                "device_id": str(self.device_id),
-                "sig": self.sign_nonce(challenge["nonce"]),
-            }
-        )
+        frame = {
+            "type": "auth",
+            "device_id": str(self.device_id),
+            "sig": self.sign_nonce(challenge["nonce"]),
+        }
+        if facts is not None:
+            frame["facts"] = facts
+        conn.feed(frame)
         return await conn.next_sent()
 
     def _audit_entry(

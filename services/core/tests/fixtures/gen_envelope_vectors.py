@@ -20,18 +20,25 @@ seed is the ASCII of a phrase so it is legible in both the JSON and a Go test:
 
     "novad-slice-05-envelope-vectors!"  — exactly 32 bytes, an ed25519 seed.
 
-The three vectors cover what actually breaks cross-language JSON:
+The four vectors cover what actually breaks cross-language JSON:
   1. empty args — the baseline shape, and the case a Go `map[string]any`
      round-trips to `null` if the daemon is careless;
   2. non-ASCII AND angle-bracket/ampersand text — python escapes the former
      and not the latter, Go's encoding/json does exactly the opposite by
      default;
   3. a payload whose keys are written scrambled — its committed canonical
-     bytes are in sorted order, which is what proves canonicalization ran.
+     bytes are in sorted order, which is what proves canonicalization ran;
+  4. a revoked-proof body (S42a) — the shape devices_ws.py signs into a
+     revoked auth_error and apps/novad's wire.VerifyRevokedProof checks. Not
+     a command envelope: no capability, no args, a different key set
+     (kind/v/device_id/nonce) — proving the SAME canonicalizer and the SAME
+     seed sign this shape identically on both sides too, not only the
+     envelope shape the first three vectors cover.
 
 issued_at/expires_at are frozen literals rather than time.time(): a vector
 that changes every run pins nothing.
 """
+
 from __future__ import annotations
 
 import json
@@ -99,6 +106,21 @@ PAYLOADS = [
             "args": {"timeout_s": 30, "argv": ["echo", "hello"], "cwd": "/tmp"},
             "device_id": "11111111-2222-3333-4444-555555555555",
             "envelope_id": "c4b3a2d1-5566-4778-99aa-bbccddeeff00",
+        },
+    },
+    {
+        "note": (
+            "the revoked-proof body (S42a) — devices_ws.py signs this into a "
+            "revoked auth_error's `proof`, and apps/novad's "
+            "wire.VerifyRevokedProof checks it against the pinned core key. "
+            "No capability, no args: a different shape than a command "
+            "envelope, canonicalized and signed the same way."
+        ),
+        "payload": {
+            "kind": "revoked",
+            "v": 1,
+            "device_id": "11111111-2222-3333-4444-555555555555",
+            "nonce": "0123456789abcdef" * 4,
         },
     },
 ]

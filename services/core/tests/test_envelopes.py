@@ -20,6 +20,7 @@ What is pinned here:
   * build() emits epoch-SECOND integers, not isoformat strings: the daemon
     reads issued_at/expires_at as int64.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -221,3 +222,22 @@ def test_the_vectors_cover_the_cases_that_break_interop():
     scrambled = vectors[2]
     assert list(scrambled["payload"]) != sorted(scrambled["payload"])
     assert scrambled["canonical"].startswith('{"args":')
+
+
+def test_the_revoked_proof_vector_matches_devices_ws_shape():
+    """S42a, controller ruling 2: the proof devices_ws.py signs into a revoked
+    auth_error, and apps/novad's wire.VerifyRevokedProof checks — pinned
+    across languages exactly like an envelope, even though it is not one: no
+    capability, no args, just {kind, v, device_id, nonce}. envelopes.sign
+    over the committed payload must reproduce the committed sig, the same way
+    it does for a command envelope."""
+    data = _vectors()
+    key = ed25519.Ed25519PrivateKey.from_private_bytes(bytes.fromhex(data["seed_hex"]))
+    vector = data["vectors"][-1]
+    proof = vector["payload"]
+
+    assert proof["kind"] == "revoked"
+    assert proof["v"] == 1
+    assert envelopes.canonical(proof).decode("utf-8") == vector["canonical"]
+    assert envelopes.sign(key, proof) == vector["sig_hex"]
+    assert envelopes.verify(data["public_key_hex"], proof, vector["sig_hex"]) is True
