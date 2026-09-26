@@ -1,7 +1,7 @@
 {
   "id": "reads-the-skill-before-doing-the-work",
   "suite": "agent_quality",
-  "suite_version": 15,
+  "suite_version": 16,
   "skills": [
     {
       "name": "eval_clear_superseded_notes",

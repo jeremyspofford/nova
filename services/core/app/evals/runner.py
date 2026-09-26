@@ -78,6 +78,14 @@ Three properties are enforced mechanically, not by intention:
     unchanged by this note). There is no orphan sweep for the plant because
     there is nothing to orphan.
 
+    THE PAIRING FIXTURE (S47). Every case's turn is offered show_setup_qr,
+    whose machine setups mint a real pairing code. A case must never make a
+    code that could enroll a machine, so every case runs with
+    runner._fixture_mint as its pairing seam — a code containing 0, which the
+    pairing alphabet leaves out. Its card goes to the turn's own frames, like
+    every other frame. There is no orphan sweep for it because there is nothing
+    to orphan.
+
   * NO TEST-AWARENESS LEAKAGE. _run_turn builds the prompt from the normal
     stable/volatile system prompt — this module injects nothing. No "eval mode"
     string reaches the model; the only eval-ness is the turn's kind='eval' tag
@@ -141,16 +149,17 @@ import uuid
 from collections.abc import Sequence
 from contextvars import Token
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import asyncpg
 import httpx
 
-from app import agents, chat, machines, peers, settings_store, skills, traces
+from app import agents, chat, devices, machines, peers, settings_store, skills, traces
 from app.evals import cases as cases_mod
 from app.evals import predicates
 from app.identity import Person
+from app.tools import setup as setup_tools
 
 logger = logging.getLogger("core")
 
@@ -398,6 +407,21 @@ def _install_fixture_plant(case: cases_mod.Case) -> Token:
     ContextVar, so the turn (and every task it spawns, which copies the
     context) sees it, and nothing else in the process ever does."""
     return machines.PLANT.set(machines.FixturePlant({m.name: m.as_row() for m in case.machines}))
+
+
+async def _fixture_mint(person) -> dict:
+    """What show_setup_qr mints inside a case, instead of a real code (S47).
+    The code is all zeros, and 0 is not in the pairing alphabet, so it can never
+    enroll a machine; nothing is written anywhere."""
+    expires = datetime.now(UTC) + timedelta(seconds=devices.PAIRING_CODE_TTL_SECONDS)
+    return {"code": "00000000", "expires_at": expires.isoformat()}
+
+
+def _install_fixture_pairing() -> Token:
+    """Make _fixture_mint THIS task's pairing seam for the turn (S47), and hand
+    back the token that removes it. A ContextVar, like the plant: the turn sees
+    it, and nothing else in the process ever does."""
+    return setup_tools.PAIRING.set(_fixture_mint)
 
 
 async def _create_fixture_agents(
@@ -981,6 +1005,11 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
     # machines), reset first thing in the finally below. None only until it
     # is installed: a world that failed to build before it leaves nothing.
     plant_token: Token | None = None
+    # The case's pairing seam (S47) — every case runs with the fixture mint
+    # installed, reset the same way, beside the plant, in the finally below.
+    # None only until it is installed: a world that failed to build before it
+    # leaves nothing.
+    pairing_token: Token | None = None
 
     # Everything from here on runs against this case's OWN fresh scratch
     # person — the finally below tears it down (person + its conversation +
@@ -1001,6 +1030,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
             await _create_fixture_agents(app, pool, case, fixture_agents)
             fixture_skills = await _build_fixture_skills(pool, case)
             plant_token = _install_fixture_plant(case)
+            pairing_token = _install_fixture_pairing()
         except Exception as exc:
             logger.exception(
                 "eval run_case: the declared world for case %s could not be built", case.id
@@ -1084,6 +1114,7 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
                 model,
                 max_tool_rounds,
                 emit,
+                card=chat._card_channel(emit),
             )
         except Exception as exc:
             # _run_turn is built never to raise (it catches everything and closes
@@ -1141,6 +1172,11 @@ async def run_case(app, pool: asyncpg.Pool, case: cases_mod.Case, model: str) ->
         # and whatever this task runs next must never see a case's plant.
         if plant_token is not None:
             machines.PLANT.reset(plant_token)
+        # The pairing seam leaves the same way, beside it (S47): synchronously,
+        # before any await, so nothing after this point can mint through the
+        # fixture.
+        if pairing_token is not None:
+            setup_tools.PAIRING.reset(pairing_token)
 
         # The cleanup must not race the turn's queued ingest (/forget before
         # the journal is written leaves the journal behind). The settle above

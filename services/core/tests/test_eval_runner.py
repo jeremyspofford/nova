@@ -1519,6 +1519,37 @@ async def test_a_declared_machine_is_the_plant_for_the_turn_and_gone_after(
     assert machines.plant() is before
 
 
+async def test_every_case_mints_through_the_fixture_and_has_a_card_channel(
+    pool, mount_peers, monkeypatch
+):
+    """S47. A case's turn is offered show_setup_qr; inside the turn the pairing
+    seam is the fixture (no real code) and the card channel exists (the success
+    path runs); after the case the seam is what it was before."""
+    from app.tools import setup as setup_tools
+
+    before = setup_tools.PAIRING.get()
+    seen: list = []
+
+    async def peek(args: dict, ctx: ToolContext) -> str:
+        seen.append((setup_tools.PAIRING.get(), ctx.card is not None))
+        return "It is 12:00."
+
+    _tool_reading_the_plant(monkeypatch, peek)
+    mount_peers(gateway=_time_turn(), memory=FakeMemory())
+    run = await runner.run_case(app, pool, _machine_case(), MODEL)
+
+    assert run.passed is True, run.detail
+    assert seen == [(runner._fixture_mint, True)]
+    assert setup_tools.PAIRING.get() is before
+
+
+async def test_the_fixture_code_can_never_enroll():
+    minted = await runner._fixture_mint(None)
+    from app import devices
+
+    assert any(ch not in devices.PAIRING_CODE_ALPHABET for ch in minted["code"])
+
+
 async def test_every_replay_starts_from_the_declaration(pool, mount_peers, monkeypatch):
     """A suite replays a case every run, and the repeated report reads
     several runs: a switch-off made in one replay must not be the world the

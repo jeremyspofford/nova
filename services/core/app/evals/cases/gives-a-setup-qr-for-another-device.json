@@ -1,0 +1,25 @@
+{
+  "id": "gives-a-setup-qr-for-another-device",
+  "suite": "agent_quality",
+  "suite_version": 16,
+  "message": "How do I put you on my tablet?",
+  "contract": [
+    {
+      "predicate": "tool_called",
+      "arg": "show_setup_qr"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "address_claim"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "narration"
+    },
+    {
+      "predicate": "guard_absent",
+      "arg": "capability_claim"
+    }
+  ],
+  "comment": "MIRRORS the S47 walk's first question (spec s47 §13) and hub-topology's S47 DoD. WHAT IS MEASURED: that she SENDS the setup card instead of reciting an address from memory. tool_called('show_setup_qr') is a span, so a well-written answer with no card scores false. guard_absent('address_claim') catches an address that is not the one the tailnet reports: a LAN app port, loopback given for another device, another tailnet name on a setup page. guard_absent('narration') catches 'here's a QR code' with no card sent. guard_absent('capability_claim') catches 'I can't put myself on a phone' with show_setup_qr in her hands. tool_called, not tool_succeeded: a hub with no address another device can reach is an honest refusal. WHAT IT CANNOT MEASURE: whether the phone could open the page; the walk's scan is that check. Every case runs under the pairing fixture, so no real code is minted. Added 2026-09-25 with the S47 corpus bump (15 -> 16)."
+}
