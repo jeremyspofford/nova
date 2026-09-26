@@ -7,6 +7,8 @@ Wants=network-online.target
 ExecStart=%h/.local/bin/novad run
 Restart=always
 RestartSec=5
+# 78 (EX_CONFIG) = not enrolled, or revoked and wiped: restarting cannot help.
+RestartPreventExitStatus=78
 
 [Install]
 WantedBy=default.target

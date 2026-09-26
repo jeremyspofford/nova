@@ -3,7 +3,8 @@
 // commands in steady state. Every command is verified ON the device before it
 // runs, and every outcome — success OR refusal — is both a result frame and an
 // audit entry. The run loop reconnects on any socket error; a changed core key
-// is the one fatal condition (the daemon's half of the mutual pinning).
+// and a revoked device are the fatal conditions (the daemon's half of the
+// mutual pinning).
 package client
 
 import (
@@ -73,11 +74,16 @@ const sleepGap = 5 * time.Second
 const wsReadLimit = 4 << 20
 
 // fatal wraps a non-retryable condition: the run loop exits rather than
-// reconnecting. Today that is exactly a changed core key.
+// reconnecting. Today that is a changed core key or a revoked device.
 type fatal struct{ err error }
 
 func (f fatal) Error() string { return f.err.Error() }
 func (f fatal) Unwrap() error { return f.err }
+
+// ErrRevoked is Run's return when core says this device was revoked — the one
+// refusal that is final. The caller wipes the identity (config.Wipe) and
+// exits 78 so no supervisor restarts a daemon that can never get in.
+var ErrRevoked = errors.New("core says this device was revoked")
 
 // Agent holds the pinned identity and the local capability + audit surfaces.
 type Agent struct {
@@ -306,9 +312,12 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 	switch t, _ := reply["type"].(string); t {
 	case wire.TypeAuthError:
 		reason, _ := reply["reason"].(string)
-		// Retryable: a revoked device keeps being refused here, correctly — it
-		// cannot get in — while a transient core-side refusal heals on the
-		// next attempt without a manual restart.
+		if reason == wire.ReasonRevoked {
+			return fatal{ErrRevoked}
+		}
+		// Any other refusal is retried: a transient core-side fault heals on
+		// the next attempt, and a restored database that forgot this device is
+		// re-enrolled by hand (s45 move runbook) — never wiped from here.
 		return fmt.Errorf("core refused auth: %s", reason)
 	case wire.TypeReady:
 		if err := a.replayAudit(hsCtx, c, reply["last_seq"]); err != nil {

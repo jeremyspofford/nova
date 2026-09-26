@@ -189,6 +189,34 @@ func enrollBody(code, pubkeyHex, name, hostname string) ([]byte, error) {
 	})
 }
 
+// exitConfig (EX_CONFIG, 78) is the exit status for "this daemon has no
+// identity to run as" — never enrolled, or revoked and wiped. novad.service
+// names it in RestartPreventExitStatus, so systemd stops instead of restarting
+// a daemon that can never get in.
+const exitConfig = 78
+
+// afterRun turns Run's return into the exit status and the line to print. A
+// revoke wipes the identity FIRST, so the status says what is true on disk.
+// Even a wipe that only PARTLY succeeds still exits exitConfig, never 1:
+// restarting cannot help either way — core will refuse this same device
+// again at the very next handshake — so a supervisor must not loop on it.
+// The message never claims a clean wipe when the disk says otherwise.
+func afterRun(paths config.Paths, err error, now time.Time) (int, string) {
+	switch {
+	case err == nil:
+		return 0, ""
+	case errors.Is(err, client.ErrRevoked):
+		if werr := config.Wipe(paths, now); werr != nil {
+			return exitConfig, fmt.Sprintf("this device was revoked in Nova, and wiping its identity failed: %v — delete %s and %s by hand",
+				werr, paths.ConfigFile, paths.KeyFile)
+		}
+		return exitConfig, "this device was revoked in Nova — its identity is wiped (config and key removed, " +
+			"the audit log set aside). Pair it again with `novad enroll`."
+	default:
+		return 1, fmt.Sprintf("run stopped: %v", err)
+	}
+}
+
 func cmdRun(argv []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	_ = fs.Parse(argv)
@@ -196,6 +224,10 @@ func cmdRun(argv []string) {
 	paths, err := config.DefaultPaths()
 	if err != nil {
 		fail("%v", err)
+	}
+	if !paths.Enrolled() {
+		fmt.Fprintf(os.Stderr, "novad: not enrolled — run `novad enroll` first (config dir: %s)\n", paths.ConfigDir)
+		os.Exit(exitConfig)
 	}
 	cfg, priv, err := config.Load(paths)
 	if err != nil {
@@ -218,10 +250,16 @@ func cmdRun(argv []string) {
 	defer stop()
 
 	logger.Printf("device %s connecting to %s", cfg.DeviceID, cfg.Server)
-	if err := agent.Run(ctx); err != nil && ctx.Err() == nil {
-		fail("run stopped: %v", err)
+	runErr := agent.Run(ctx)
+	if ctx.Err() != nil {
+		logger.Printf("stopped")
+		return
 	}
-	logger.Printf("stopped")
+	code, msg := afterRun(paths, runErr, time.Now())
+	if msg != "" {
+		fmt.Fprintf(os.Stderr, "novad: %s\n", msg)
+	}
+	os.Exit(code)
 }
 
 func cmdStatus(argv []string) {

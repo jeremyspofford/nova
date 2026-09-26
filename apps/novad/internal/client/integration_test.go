@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1032,4 +1033,67 @@ func TestHeartbeatsOwnWriteEndsWithinPingTimeoutWhenTheConnectionIsBlocked(t *te
 		t.Fatal("heartbeat never ended the session — its own frame write blocked forever behind the held lock (fix round 1 finding 1)")
 	}
 	<-done // heartbeat's goroutine actually returned, not just cancelled
+}
+
+// refusingCore answers the handshake, then always sends the given auth_error
+// reason and closes. attempts() counts how many connections it accepted.
+func refusingCore(t *testing.T, corePub, devPub ed25519.PublicKey, reason string) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	n := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		mu.Lock()
+		n++
+		mu.Unlock()
+		nonce := make([]byte, 32)
+		_, _ = rand.Read(nonce)
+		_ = coreWrite(r.Context(), c, map[string]any{"type": "challenge", "nonce": hex.EncodeToString(nonce), "core_pubkey": hex.EncodeToString(corePub)})
+		if _, err := coreRead(r.Context(), c); err != nil {
+			return
+		}
+		_ = coreWrite(r.Context(), c, map[string]any{"type": "auth_error", "reason": reason})
+		_ = c.Close(4401, "auth failed")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, func() int { mu.Lock(); defer mu.Unlock(); return n }
+}
+
+// Review focus 5 / P5: the ONE refusal that is final. Run must return
+// ErrRevoked and must NOT reconnect — a revoke is final, not a retry.
+func TestARevokedDeviceIsFatalAndRunSaysSo(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, attempts := refusingCore(t, corePub, devPub, "revoked")
+	agent, _ := buildAgent(t, srv.URL, "dev-revoked-1", hex.EncodeToString(corePub), devPriv)
+	agent.backoffs = []time.Duration{20 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := agent.Run(ctx)
+	if !errors.Is(err, ErrRevoked) {
+		t.Fatalf("Run = %v, want ErrRevoked", err)
+	}
+	if attempts() != 1 {
+		t.Fatalf("a revoke is final: %d connection attempts", attempts())
+	}
+}
+
+// Any other refusal (a restored database that forgot the device, a transient
+// core fault) is retried — only the exact reason "revoked" wipes anything.
+func TestAnyOtherAuthErrorIsRetried(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, attempts := refusingCore(t, corePub, devPub, "no such device — it was never paired here, or its record is gone")
+	agent, _ := buildAgent(t, srv.URL, "dev-unknown-1", hex.EncodeToString(corePub), devPriv)
+	agent.backoffs = []time.Duration{20 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	waitFor(t, 2*time.Second, func() bool { return attempts() >= 3 })
 }
