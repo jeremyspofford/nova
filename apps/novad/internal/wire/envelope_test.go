@@ -268,15 +268,28 @@ func TestVerifierCorePubKeyReturnsThePinnedKey(t *testing.T) {
 	}
 }
 
+// flipLastChar returns s with its final character changed to a different,
+// deterministic one — a one-character mutation that works whether s is hex
+// (a signature) or a UUID (a device_id), since both end in a character other
+// than a dash in every fixture value this file uses.
+func flipLastChar(s string) string {
+	if s == "" {
+		return s
+	}
+	replacement := byte('0')
+	if s[len(s)-1] == '0' {
+		replacement = '1'
+	}
+	return s[:len(s)-1] + string(replacement)
+}
+
 // TestVerifyRevokedProofAcceptsTheCommittedVector is the cross-language pin
 // for S42a (controller ruling 2): core's actual signer
-// (services/core/app/devices_ws.py, via envelopes.sign with the SAME fixed
-// seed) and this Verifier's checker must agree on the SAME bytes. The
-// fixture's last vector is the revoked-proof body — decoded exactly as the
-// wire does (UseNumber) — and must verify against the seed's own public key,
-// addressed to the vector's own device_id and nonce. A one-character change
-// to the proof must then be refused, proving the check reads the received
-// object rather than trusting its shape.
+// (services/core/app/devices_ws.py's revoked_proof, via envelopes.sign with
+// the SAME fixed seed) and this Verifier's checker must agree on the SAME
+// bytes. The fixture's last vector is the revoked-proof body — decoded
+// exactly as the wire does (UseNumber) — and must verify against the seed's
+// own public key, addressed to the vector's own device_id and nonce.
 func TestVerifyRevokedProofAcceptsTheCommittedVector(t *testing.T) {
 	vf := loadVectors(t)
 	v := vf.Vectors[len(vf.Vectors)-1]
@@ -300,16 +313,24 @@ func TestVerifyRevokedProofAcceptsTheCommittedVector(t *testing.T) {
 		t.Fatal("the committed revoked-proof vector must verify against the seed's public key")
 	}
 
-	// A one-character change to the proof (not the signature, not the
-	// parameters this device already knows) must be refused.
+	// Fix round 1: a one-character change to the SIGNATURE, with the proof
+	// left exactly as committed so every content check still passes — this
+	// is the case that actually reaches ed25519.Verify.
+	reply["sig"] = flipLastChar(v.SigHex)
+	if VerifyRevokedProof(reply, deviceID, nonceHex, corePub) {
+		t.Fatal("a one-character change to the signature must be refused")
+	}
+
+	// A one-character change to the proof's device_id, caught by the content
+	// check before the signature is ever verified.
 	tampered := map[string]any{}
 	for k, val := range proof {
 		tampered[k] = val
 	}
 	did, _ := tampered["device_id"].(string)
-	tampered["device_id"] = "2" + did[1:]
-	reply["proof"] = tampered
+	tampered["device_id"] = flipLastChar(did)
+	reply["proof"], reply["sig"] = tampered, v.SigHex
 	if VerifyRevokedProof(reply, deviceID, nonceHex, corePub) {
-		t.Fatal("a one-character change to the proof must be refused")
+		t.Fatal("a one-character change to the proof's device_id must be refused")
 	}
 }

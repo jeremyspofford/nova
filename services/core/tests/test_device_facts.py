@@ -70,6 +70,16 @@ def test_unknown_keys_are_dropped_never_stored():
         (_with(WINDOWS, "machine_uid", "ABC"), "machine_uid"),
         (_with(WINDOWS, "hostname", "h" * 256), "longer than 255"),
         ("not an object", "must be an object"),
+        # Fix round 1: a NUL byte is accepted by json.loads and by a bare
+        # isinstance/length check, but postgres refuses it in text/jsonb
+        # outright (UntranslatableCharacterError) — caught here, naming the
+        # field, so the database is never where this is found out.
+        (_with(WINDOWS, "os.version", "Windows 11 Pro\x00"), "facts.os.version"),
+        # A lone UTF-16 surrogate is likewise accepted by json.loads (it is a
+        # valid string escape) but has no UTF-8 encoding; _encoded_size must
+        # turn the UnicodeEncodeError it would otherwise raise into a named
+        # FactsRejected rather than let it escape uncaught.
+        (_with(WINDOWS, "hostname", "PC-ONE\ud800"), "surrogate"),
     ],
 )
 def test_facts_an_agent_could_not_send_are_refused_with_the_reason(facts, reason):
@@ -137,6 +147,14 @@ def test_a_frame_keeps_its_known_sections_and_drops_the_rest():
         ),
         ({"type": "facts", "unreadable": [{"item": "x"}] * 33}, "more than 32"),
         ({"type": "facts", "unreadable": [], "pad": "x" * 17000}, "over the 16384-byte cap"),
+        (
+            {"type": "facts", "unreadable": [{"item": "x\x00", "reason": "y"}]},
+            "unreadable[0].item",
+        ),
+        (
+            {"type": "facts", "unreadable": [{"item": "x", "reason": "y\ud800"}]},
+            "surrogate",
+        ),
     ],
 )
 def test_a_frame_that_does_not_fit_is_refused_with_the_reason(frame, reason):

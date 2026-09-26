@@ -31,7 +31,11 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from app import envelopes
+from app import devices_ws, envelopes
+
+# devices_ws imports app.db, but nothing in it touches the database at import
+# time (db.get_pool only connects when actually awaited) — this file stays
+# DB-free; devices_ws.revoked_proof is a pure function.
 
 VECTORS_PATH = Path(__file__).parent / "fixtures" / "envelope_vectors.json"
 
@@ -236,8 +240,10 @@ def test_the_revoked_proof_vector_matches_devices_ws_shape():
     vector = data["vectors"][-1]
     proof = vector["payload"]
 
-    assert proof["kind"] == "revoked"
-    assert proof["v"] == 1
+    # Fix round 1: built from devices_ws.revoked_proof itself, not a hand
+    # literal — so the wire shape and this committed vector cannot drift
+    # apart silently.
+    assert proof == devices_ws.revoked_proof(proof["device_id"], proof["nonce"])
     assert envelopes.canonical(proof).decode("utf-8") == vector["canonical"]
     assert envelopes.sign(key, proof) == vector["sig_hex"]
     assert envelopes.verify(data["public_key_hex"], proof, vector["sig_hex"]) is True

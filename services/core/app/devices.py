@@ -208,12 +208,16 @@ def _clean_platform(platform: str) -> str:
     """The OS the agent says it runs — Go's runtime.GOOS — or a refusal.
     Before S42a any text was stored (every agent sent "linux"); migration 036's
     CHECK now holds devices.platform to the known values, and this is where a
-    new row is held to them. Checked BEFORE the code is spent, like the key."""
+    new row is held to them. Checked BEFORE the code is spent, like the key.
+
+    The refusal echoes what was sent, clipped to 64 characters: enroll is
+    core's one unauthenticated route (T2), so this string is attacker
+    controlled and must not be echoed back unbounded."""
     candidate = (platform or "").strip().lower()
     if candidate not in device_facts.PLATFORMS:
         raise DeviceRefused(
             f"platform must be one of {', '.join(device_facts.PLATFORMS)} (the agent's own "
-            f"runtime.GOOS), got {platform!r}"
+            f"runtime.GOOS), got {(platform or '')[:64]!r}"
         )
     return candidate
 

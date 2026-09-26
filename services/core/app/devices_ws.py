@@ -35,6 +35,7 @@ import secrets
 import uuid
 from datetime import UTC, datetime
 
+import asyncpg
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
@@ -296,19 +297,28 @@ async def _auth_error(conn: object, reason: str) -> None:
         logger.warning("sending auth_error failed", exc_info=True)
 
 
+def revoked_proof(device_id: uuid.UUID | str, nonce_hex: str) -> dict:
+    """The exact body core signs into a revoked auth_error's `proof`:
+    {kind: "revoked", v: 1, device_id, nonce}. A free function, not inlined
+    into `_auth_error_revoked`, so this wire shape and the committed
+    cross-language vector (tests/test_envelopes.py,
+    test_the_revoked_proof_vector_matches_devices_ws_shape) are built from
+    the SAME place and cannot drift apart silently."""
+    return {"kind": "revoked", "v": 1, "device_id": str(device_id), "nonce": nonce_hex}
+
+
 async def _auth_error_revoked(conn: object, pool, device_id: uuid.UUID, nonce_hex: str) -> None:
     """The one auth_error that carries a proof: reason is REVOKED_REASON, and
-    the proof — {kind: "revoked", v: 1, device_id, nonce} — is signed with
-    core's OWN key (the same key every device pins at enrollment and verifies
-    every command against), never the bare reason string. `nonce_hex` is
-    THIS connection's own challenge nonce, so a proof cannot be replayed from
-    a different handshake (apps/novad's wire.VerifyRevokedProof checks
-    exactly this).
+    the proof (`revoked_proof`) is signed with core's OWN key (the same key
+    every device pins at enrollment and verifies every command against),
+    never the bare reason string. `nonce_hex` is THIS connection's own
+    challenge nonce, so a proof cannot be replayed from a different
+    handshake (apps/novad's wire.VerifyRevokedProof checks exactly this).
 
     Called only when the row IS revoked (revoked_at is set). An unknown id
     goes through the plain `_auth_error` above with no proof at all — core
     must never sign a proof for a device it merely does not know."""
-    proof = {"kind": "revoked", "v": 1, "device_id": str(device_id), "nonce": nonce_hex}
+    proof = revoked_proof(device_id, nonce_hex)
     key = await devices.signing_key(pool)
     reply = {
         "type": "auth_error",
@@ -483,36 +493,64 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
 
 async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object) -> None:
     """Record the auth frame's facts — AFTER the signature verified — REPLACING
-    what the device said before: a new connection is a fresh truth, and its
-    facts frame follows ready at once. Facts that do not validate are logged
-    and not recorded; they never refuse the socket, and an older agent that
-    sends none is simply not asked for any."""
-    if raw is None:
-        return
-    try:
-        clean = device_facts.validate_auth(raw)
-    except device_facts.FactsRejected as exc:
-        logger.warning("device %s: auth-frame facts not recorded — %s", device_id, exc.reason)
-        return
-    await pool.execute(
-        "UPDATE devices SET facts = $2, facts_at = now() WHERE id = $1", device_id, clean
-    )
+    what the device said before: a new connection is a fresh truth.
+
+    Facts that are ABSENT, REJECTED, or that postgres itself refuses
+    (asyncpg.DataError — UntranslatableCharacterError, a NUL byte, is one
+    instance of it; device_facts already catches the two known shapes before
+    the write, so this is the belt-and-suspenders half) all take the SAME
+    path: clear facts/facts_at to NULL/NULL rather than leave a PREVIOUS
+    connection's identity facts in the row for the next facts frame to merge
+    into and re-date "reported just now" — a misstatement exactly during an
+    agent/core version skew (controller ruling revising P2). None of this is
+    ever a reason to refuse the socket, and a facts frame still merges into
+    the cleared (NULL) row afterward, so an agent's net section — its MACs,
+    for wake — survives even without identity facts."""
+    if raw is not None:
+        try:
+            clean = device_facts.validate_auth(raw)
+        except device_facts.FactsRejected as exc:
+            logger.warning("device %s: auth-frame facts not recorded — %s", device_id, exc.reason)
+        else:
+            try:
+                await pool.execute(
+                    "UPDATE devices SET facts = $2, facts_at = now() WHERE id = $1",
+                    device_id,
+                    clean,
+                )
+                return
+            except asyncpg.DataError as exc:
+                logger.warning(
+                    "device %s: auth-frame facts not recorded — postgres refused them: %s",
+                    device_id,
+                    exc,
+                )
+    await pool.execute("UPDATE devices SET facts = NULL, facts_at = NULL WHERE id = $1", device_id)
 
 
 async def _record_facts_frame(pool, device_id: uuid.UUID, frame: dict) -> None:
     """MERGE a facts frame's sections into what the device said (jsonb ||), so
-    the auth facts survive a frame that carries only net/unreadable."""
+    the auth facts survive a frame that carries only net/unreadable. A shape
+    device_facts refuses, or one postgres itself refuses (asyncpg.DataError —
+    the belt-and-suspenders half, beside device_facts already catching the
+    two known postgres-hostile shapes before the write), is logged and
+    dropped: never a reason to take the socket down."""
     try:
         sections = device_facts.validate_frame(frame)
     except device_facts.FactsRejected as exc:
         logger.warning("device %s: facts frame not recorded — %s", device_id, exc.reason)
         return
-    await pool.execute(
-        "UPDATE devices SET facts = COALESCE(facts, '{}'::jsonb) || $2::jsonb, "
-        "facts_at = now() WHERE id = $1",
-        device_id,
-        sections,
-    )
+    try:
+        await pool.execute(
+            "UPDATE devices SET facts = COALESCE(facts, '{}'::jsonb) || $2::jsonb, "
+            "facts_at = now() WHERE id = $1",
+            device_id,
+            sections,
+        )
+    except asyncpg.DataError as exc:
+        logger.warning(
+            "device %s: facts frame not recorded — postgres refused it: %s", device_id, exc
+        )
 
 
 async def _handle_frame(pool, device_id: uuid.UUID, frame: object) -> None:

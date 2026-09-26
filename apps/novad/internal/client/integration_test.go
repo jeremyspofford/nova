@@ -1070,16 +1070,18 @@ func refusingCore(t *testing.T, corePub, devPub ed25519.PublicKey, reason string
 // database that forgot the device, a transient core fault, or exactly this
 // reason text with no valid proof) is retried — only the exact reason
 // "revoked", PROVEN by a signature the pinned core key actually produced
-// over THIS handshake, wipes anything. core's own current text for an
-// unknown/ambiguous device (devices_ws.py authenticate(), before Task 12
-// adds the signed proof) is the first case; the rest are near-misses on the
-// exact string a naive substring or case-insensitive check would wrongly
-// treat as a match.
+// over THIS handshake, wipes anything. The first case below was core's own
+// text for an unknown/ambiguous device before Task 12 introduced
+// devices_ws.UNKNOWN_DEVICE_REASON and the signed proof for a genuine
+// revoke; it stays here as a near-miss precisely because it still is NOT
+// "revoked" and carries no proof — the rest are near-misses on the exact
+// string a naive substring or case-insensitive check would wrongly treat as
+// a match.
 func TestAnyOtherAuthErrorIsRetried(t *testing.T) {
 	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
 	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
 	reasons := []string{
-		"no such device, or it has been revoked", // core's real text today; unsigned, no proof at all
+		"no such device, or it has been revoked", // core's PRE-Task-12 text; still just "any other reason", unsigned and proof-less
 		"Revoked",
 		" revoked",
 		"revoked ",

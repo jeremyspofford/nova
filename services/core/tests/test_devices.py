@@ -756,3 +756,22 @@ async def test_enroll_refuses_a_platform_it_does_not_know_before_the_code_is_spe
         "SELECT platform FROM devices WHERE id = $1", uuid.UUID(result["device_id"])
     )
     assert row["platform"] == "windows"  # the code was still good, and the OS is recorded
+
+
+async def test_enroll_clips_a_huge_platform_string_in_the_refusal(pool):
+    """Fix round 1: enroll is core's one unauthenticated route — the platform
+    string in the 400 detail is attacker-controlled and must not be echoed
+    back unbounded."""
+    person = await _owner(pool)
+    minted = await devices.mint_pairing_code(pool, created_by=person.id)
+    with pytest.raises(devices.DeviceRefused) as exc:
+        await devices.enroll(
+            pool,
+            code=minted["code"],
+            pubkey=PUBKEY_A,
+            name="x",
+            platform="x" * 5000,
+            hostname="h",
+        )
+    assert exc.value.status_code == 400
+    assert len(exc.value.reason) < 200

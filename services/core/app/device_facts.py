@@ -66,7 +66,16 @@ class FactsRejected(ValueError):
 
 
 def _encoded_size(raw: object) -> int:
-    return len(json.dumps(raw, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    """The byte size a cap compares against — and, incidentally, the one place
+    every field in `raw` gets encoded to UTF-8 at once. json.loads happily
+    accepts a lone UTF-16 surrogate (`"\\ud800"`) inside a JSON string escape;
+    `.encode("utf-8")` on the resulting str cannot represent it and raises
+    UnicodeEncodeError. That is not this core's problem to crash on — it is
+    exactly the shape of facts this function exists to reject."""
+    try:
+        return len(json.dumps(raw, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    except UnicodeEncodeError as exc:
+        raise FactsRejected(f"facts contain an unpaired UTF-16 surrogate ({exc})") from exc
 
 
 def _object(value: object, where: str) -> dict:
@@ -78,6 +87,11 @@ def _object(value: object, where: str) -> dict:
 def _text(value: object, where: str) -> str:
     if not isinstance(value, str):
         raise FactsRejected(f"{where} must be text, got {type(value).__name__}")
+    if "\x00" in value:
+        # Postgres cannot store a NUL byte in text/jsonb at all (it fails the
+        # UPDATE with UntranslatableCharacterError) — refuse it here, naming
+        # the field, rather than let the database be where this is found out.
+        raise FactsRejected(f"{where} contains a NUL byte, which postgres cannot store")
     if len(value) > _MAX_TEXT:
         raise FactsRejected(f"{where} is longer than {_MAX_TEXT} characters")
     return value
