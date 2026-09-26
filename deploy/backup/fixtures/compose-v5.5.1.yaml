@@ -41,6 +41,10 @@ services:
         source: v4_workspace
         target: /data/workspace
         volume: {}
+      - type: volume
+        source: v4_status
+        target: /run/nova-status
+        read_only: true
   gateway:
     build:
       context: /repo/services/gateway
@@ -78,7 +82,9 @@ services:
         read_only: true
         bind: {}
         x-nova-backup: exclude-derived
-        x-nova-backup-reason: hardware.json, rewritten by detect_hardware on every install (deploy/install.sh:808-863). The restored host's GPUs are not the source host's, so carrying this would describe the wrong machine.
+        x-nova-backup-reason: hardware.json, rewritten by detect_hardware on every
+          install (deploy/install.sh:808-863). The restored host's GPUs are not the
+          source host's, so carrying this would describe the wrong machine.
       - type: volume
         source: v4_models
         target: /models
@@ -170,7 +176,9 @@ services:
         read_only: true
         bind: {}
         x-nova-backup: exclude-code
-        x-nova-backup-reason: 01-databases.sql, in git. A fresh v4_pgdata re-runs it from the checkout at restore time with the carried POSTGRES_PASSWORD, so carrying a copy would only offer a second, staler one.
+        x-nova-backup-reason: 01-databases.sql, in git. A fresh v4_pgdata re-runs
+          it from the checkout at restore time with the carried POSTGRES_PASSWORD,
+          so carrying a copy would only offer a second, staler one.
   searxng:
     environment:
       SEARXNG_SECRET: nova-searxng-dev-secret
@@ -203,11 +211,13 @@ services:
         read_only: true
         bind: {}
         x-nova-backup: exclude-code
-        x-nova-backup-reason: settings.yml, in git. This bind is also what covers the image's own /etc/searxng volume declaration at run time.
+        x-nova-backup-reason: settings.yml, in git. This bind is also what covers
+          the image's own /etc/searxng volume declaration at run time.
     x-nova-backup-anon:
       /etc/searxng:
         disposition: exclude-code
-        reason: the generated runtime config. The settings come from ../searxng in git, which the bind below mounts over this target.
+        reason: the generated runtime config. The settings come from ../searxng in
+          git, which the bind below mounts over this target.
       /var/cache/searxng:
         disposition: exclude-ephemeral
         reason: a search result cache; it regenerates on use.
@@ -245,13 +255,18 @@ services:
         source: v4_tailscale
         target: /var/lib/tailscale
         volume: {}
+      - type: volume
+        source: v4_status
+        target: /run/nova-status
+        volume: {}
       - type: bind
         source: /repo/deploy/tailscale
         target: /config
         read_only: true
         bind: {}
         x-nova-backup: exclude-code
-        x-nova-backup-reason: start.sh and serve_check.sh, in git. The node's identity is on v4_tailscale, not here.
+        x-nova-backup-reason: start.sh and serve_check.sh, in git. The node's identity
+          is on v4_tailscale, not here.
   web:
     build:
       context: /repo/apps/web
@@ -296,23 +311,36 @@ volumes:
   v4_memdata:
     name: nova_v4_memdata
     x-nova-backup: include
-    x-nova-backup-reason: the notes (services/memory/app/store.py:1-18) — the state with no other copy anywhere. .embeddings/*.jsonl rides along; it is a cache and carrying it only saves a rebuild.
+    x-nova-backup-reason: the notes (services/memory/app/store.py:1-18) — the state
+      with no other copy anywhere. .embeddings/*.jsonl rides along; it is a cache
+      and carrying it only saves a rebuild.
   v4_models:
     name: nova_v4_models
     x-nova-backup: exclude-redownload
-    x-nova-backup-reason: gateway's /models. Its only reader in the whole service is os.statvfs for a free-space check (services/gateway/app/admin.py:59,332).
+    x-nova-backup-reason: gateway's /models. Its only reader in the whole service
+      is os.statvfs for a free-space check (services/gateway/app/admin.py:59,332).
   v4_ollama:
     name: nova_v4_ollama
     x-nova-backup: exclude-redownload
-    x-nova-backup-reason: 'local model weights, tens of GB, re-pulled. Stated cost: a restore on a disconnected machine has no local inference until the pulls finish.'
+    x-nova-backup-reason: 'local model weights, tens of GB, re-pulled. Stated cost:
+      a restore on a disconnected machine has no local inference until the pulls finish.'
   v4_pgdata:
     name: nova_v4_pgdata
     x-nova-backup: dump-pg
-    x-nova-backup-reason: a live PGDATA file copy is torn. Captured as pg_dump -Fc per database; a fresh volume initialises from deploy/postgres-init/01-databases.sql with the carried password.
+    x-nova-backup-reason: a live PGDATA file copy is torn. Captured as pg_dump -Fc
+      per database; a fresh volume initialises from deploy/postgres-init/01-databases.sql
+      with the carried password.
+  v4_status:
+    name: nova_v4_status
+    x-nova-backup: exclude-derived
+    x-nova-backup-reason: tailscale.json, rewritten by deploy/tailscale/start.sh every
+      15 s from tailscaled's own state; carried to another host it would describe
+      the source's tailnet, not the target's.
   v4_tailscale:
     name: nova_v4_tailscale
     x-nova-backup: move-only
-    x-nova-backup-reason: the tailnet node identity. Two live nodes sharing one identity flap, so it travels only on a move — which also leaves MOVED_TO behind.
+    x-nova-backup-reason: the tailnet node identity. Two live nodes sharing one identity
+      flap, so it travels only on a move — which also leaves MOVED_TO behind.
   v4_workspace:
     name: nova_v4_workspace
     x-nova-backup: include

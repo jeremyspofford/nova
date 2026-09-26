@@ -8,6 +8,15 @@
 #   - alpha                 a service                (stripped)
 #   - the long-syntax bind  a mount                  (stripped)
 #   - vol_three             declared, mounted by nothing (PRUNED from both)
+#
+# vol_four/vol_five, /wrapped and /quoted on alpha's bind and anon rows exist
+# ONLY to prove compose_read.sh's continuation logic (S47 task 1 review
+# round 1): compose v5.5.1 wraps a reason long enough onto indented
+# continuation lines, which v5.3.0 never does, and a quoted one (an embedded
+# colon forces quoting, same as vol_one's) can open its quote on one line and
+# close it only on its last. cfg_volume_disposition, cfg_mounts and cfg_anon
+# each have their OWN continuation rule, so each row kind carries both shapes
+# rather than one reader borrowing another's coverage.
 name: novaxprobe
 x-nova-top-level: kept-or-not
 services:
@@ -18,14 +27,46 @@ services:
       /var/cache/thing:
         disposition: exclude-ephemeral
         reason: a cache; it regenerates on use.
+      /var/cache/wrapped:
+        disposition: exclude-ephemeral
+        reason: >-
+          a reason long enough that the renderer wraps it onto more than one
+          indented continuation line, which is the one shape a single-line
+          reader cannot see past.
+      /var/cache/quoted:
+        disposition: exclude-ephemeral
+        reason: >-
+          a reason with a colon: long enough to need both wrapping and
+          quoting, so the renderer opens the quote on this line and closes
+          it only on the last one.
     volumes:
       - vol_one:/one
+      - vol_four:/four
+      - vol_five:/five
       - type: bind
         source: ./bindsrc
         target: /b
         read_only: true
         x-nova-backup: exclude-code
         x-nova-backup-reason: from git
+      - type: bind
+        source: ./bindsrc
+        target: /wrapped
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: >-
+          a reason long enough that the renderer wraps it onto more than one
+          indented continuation line, which is the one shape a single-line
+          reader cannot see past.
+      - type: bind
+        source: ./bindsrc
+        target: /quoted
+        read_only: true
+        x-nova-backup: exclude-code
+        x-nova-backup-reason: >-
+          a reason with a colon: long enough to need both wrapping and
+          quoting, so the renderer opens the quote on this line and closes
+          it only on the last one.
 volumes:
   vol_one:
     x-nova-backup: include
@@ -36,3 +77,15 @@ volumes:
       declared here and mounted by no service, which is the one case a render
       cannot show; folded so the fixture also proves a multi-line reason
       renders onto a single line.
+  vol_four:
+    x-nova-backup: include
+    x-nova-backup-reason: >-
+      a reason long enough that the renderer wraps it onto more than one
+      indented continuation line, which is the one shape a single-line
+      reader cannot see past.
+  vol_five:
+    x-nova-backup: include
+    x-nova-backup-reason: >-
+      a reason with a colon: long enough to need both wrapping and
+      quoting, so the renderer opens the quote on this line and closes
+      it only on the last one.

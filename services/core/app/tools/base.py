@@ -115,6 +115,14 @@ class ToolContext:
     #
     # Not a principal either: it runs what the script already said to run.
     step: Callable[..., Awaitable[tuple[str, bool]]] | None = None
+    # The OUTPUT channel for a UI-only CARD (S47): a structured payload the
+    # chat renders beside her reply — a setup QR card — that never enters her
+    # context, the trace or the messages table. A pairing code travels ONLY
+    # here. Bound only where there is a chat to show it in (the stream
+    # route; the eval runner's recorder) and None everywhere else, so a tool
+    # that needs one states that it cannot. Not a principal either: it is
+    # where output goes, and nothing reads it to decide.
+    card: Callable[[dict], None] | None = None
 
 
 @dataclass(frozen=True)

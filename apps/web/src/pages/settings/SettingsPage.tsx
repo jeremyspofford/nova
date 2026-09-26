@@ -14,6 +14,7 @@ import { AccountSection } from './AccountSection'
 import { MachinesSection } from './MachinesSection'
 import { ModelsSection } from './ModelsSection'
 import { DevicesSection } from './DevicesSection'
+import { AddToNovaSection } from './AddToNovaSection'
 import { ProvidersSection } from './ProvidersSection'
 import { ResponseQualitySection } from './ResponseQualitySection'
 import { RoutingSection } from './RoutingSection'
@@ -250,7 +251,12 @@ export function SettingsPage() {
                 />
               </>
             )}
-            {tab === 'devices' && <DevicesSection />}
+            {tab === 'devices' && (
+              <>
+                <AddToNovaSection />
+                <DevicesSection />
+              </>
+            )}
           </>
         )}
         {/* Signing out is not one of the five errands above, and hunting for

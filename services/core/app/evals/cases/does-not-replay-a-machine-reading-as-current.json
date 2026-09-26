@@ -1,7 +1,7 @@
 {
   "id": "does-not-replay-a-machine-reading-as-current",
   "suite": "agent_quality",
-  "suite_version": 15,
+  "suite_version": 16,
   "setup": [
     {
       "user": "Where do your models run, and is that machine ready?",

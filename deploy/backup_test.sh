@@ -60,8 +60,8 @@ expect_lacks() {
 
 printf '\n── compose readers ──────────────────────────────────────────────────\n'
 
-PROBE_YAML="$FIXTURES/probe-v5.3.0.yaml"
-PROBE_JSON="$FIXTURES/probe-v5.3.0.json"
+PROBE_YAML="$FIXTURES/probe-v5.5.1.yaml"
+PROBE_JSON="$FIXTURES/probe-v5.5.1.json"
 PROBE_SRC="$FIXTURES/probe-compose.yml"
 PROBE_OVERLAY="$FIXTURES/probe-compose.overlay.yml"
 
@@ -76,11 +76,41 @@ expect_str "reads_volume_disposition_from_the_yaml_render" \
   "$(cfg_volume_disposition vol_one < "$PROBE_YAML")" \
   "$(printf 'include\tthe notes: they matter')"
 
-# A folded (`>-`) reason renders onto ONE line — measured, and the reason the
-# readers can be line-based at all.
-expect_str "reads_a_folded_reason_as_one_line" \
+# A short folded (`>-`) reason renders onto ONE line — a longer one does not
+# (below): compose v5.5.1 wraps a reason past roughly one sentence onto
+# indented continuation lines, which v5.3.0 never does (measured against
+# this repo's own gateway bind reason, S47 task 1 review round 1). This case
+# is still worth pinning on its own: a reader that only ever looked past the
+# key line would trivially pass it too, so it is not what proves the
+# continuation logic below — only that the short case still works.
+expect_str "reads_a_short_folded_reason_as_one_line" \
   "$(cfg_volume_disposition vol_two < "$PROBE_YAML")" \
   "$(printf 'exclude-ephemeral\ta cache declared only in the overlay.')"
+
+# The continuation logic, once per reader — each of cfg_volume_disposition,
+# cfg_mounts and cfg_anon has its OWN rule collecting the lines after a
+# reason's key, so one reader's coverage proves nothing about another's.
+# Each also gets a QUOTED long reason (an embedded colon forces YAML to
+# quote it, same as vol_one's): the quote opens on the first line and closes
+# only on the last, so unquoting the first partial line alone — correct for
+# a reason that never wraps — leaves a stray leading quote in the value.
+# Reverting the compose_read.sh continuation hunk turns every one of these
+# six red: each truncates at the first line break, and the two quoted ones
+# additionally keep their opening quote.
+WRAPPED="a reason long enough that the renderer wraps it onto more than one indented continuation line, which is the one shape a single-line reader cannot see past."
+QUOTED="a reason with a colon: long enough to need both wrapping and quoting, so the renderer opens the quote on this line and closes it only on the last one."
+expect_str "cfg_volume_disposition_joins_a_wrapped_reason" \
+  "$(cfg_volume_disposition vol_four < "$PROBE_YAML")" "$(printf 'include\t%s' "$WRAPPED")"
+expect_str "cfg_volume_disposition_unquotes_a_wrapped_reason_once" \
+  "$(cfg_volume_disposition vol_five < "$PROBE_YAML")" "$(printf 'include\t%s' "$QUOTED")"
+expect_str "cfg_mounts_joins_a_wrapped_bind_reason" \
+  "$(cfg_bind_disposition alpha /wrapped < "$PROBE_YAML")" "$(printf 'exclude-code\t%s' "$WRAPPED")"
+expect_str "cfg_mounts_unquotes_a_wrapped_bind_reason_once" \
+  "$(cfg_bind_disposition alpha /quoted < "$PROBE_YAML")" "$(printf 'exclude-code\t%s' "$QUOTED")"
+expect_str "cfg_anon_joins_a_wrapped_reason" \
+  "$(cfg_anon_disposition alpha /var/cache/wrapped < "$PROBE_YAML")" "$(printf 'exclude-ephemeral\t%s' "$WRAPPED")"
+expect_str "cfg_anon_unquotes_a_wrapped_reason_once" \
+  "$(cfg_anon_disposition alpha /var/cache/quoted < "$PROBE_YAML")" "$(printf 'exclude-ephemeral\t%s' "$QUOTED")"
 
 # The full name is READ, never assembled from <project>_<key>.
 expect_str "reads_the_full_volume_name_from_the_render" \
@@ -268,7 +298,7 @@ render_rows() {
 expect_str "the_real_compose_file_and_the_checked_in_render_declare_the_same_rows" \
   "$(raw_rows "$SCRIPT_DIR/docker-compose.yml" |
      awk -F'\t' '$1 == "volume" || $1 == "bind" || $1 == "anon"' | sort)" \
-  "$(render_rows < "$FIXTURES/compose-v5.3.0.yaml" | sort)"
+  "$(render_rows < "$FIXTURES/compose-v5.5.1.yaml" | sort)"
 
 expect_str "the_real_compose_file_uses_no_form_the_parser_cannot_read" \
   "$(raw_rows "$SCRIPT_DIR/docker-compose.yml" | awk -F'	' '$1 == "unreadable"')" ""
@@ -332,12 +362,12 @@ stub_docker() {
       [ -n "$STUB_COMPOSE_STDERR" ] && printf '%s\n' "$STUB_COMPOSE_STDERR" >&2
       [ -n "$STUB_COMPOSE_EMPTY" ] && return 0
       case " $* " in
-        *" --format json "*) sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.json" ;;
+        *" --format json "*) sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.5.1.json" ;;
         *)
           if [ -n "$STUB_COMPOSE_SED" ]; then
-            sed -e "s|/repo|$WORLD/repo|g" -e "$STUB_COMPOSE_SED" "$FIXTURES/compose-v5.3.0.yaml"
+            sed -e "s|/repo|$WORLD/repo|g" -e "$STUB_COMPOSE_SED" "$FIXTURES/compose-v5.5.1.yaml"
           else
-            sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.3.0.yaml"
+            sed "s|/repo|$WORLD/repo|g" "$FIXTURES/compose-v5.5.1.yaml"
           fi
           ;;
       esac
@@ -531,7 +561,7 @@ build_world
 # The declared set is the raw text's: the render the stub returns is the
 # UNCHANGED capture, so the only way v4_vectors can be seen at all is that
 # the compose text render_raw staged was read.
-grep -q 'v4_vectors' "$FIXTURES/compose-v5.3.0.yaml" && \
+grep -q 'v4_vectors' "$FIXTURES/compose-v5.5.1.yaml" && \
   report 1 "the_render_used_above_never_mentioned_the_new_volume" "the fixture carries it" || \
   report 0 "the_render_used_above_never_mentioned_the_new_volume"
 
@@ -647,8 +677,19 @@ esac
 
 # The same machine's other truth: v3's stopped containers still carry the
 # `nova` project label, so a backup HERE has state under its own label that
-# this compose file cannot account for. Real capture, not an invented fixture.
-CONTAINERS_FIXTURE="containers-foreign-v4.json"
+# this compose file cannot account for. Real capture, not an invented
+# fixture: containers-foreign-v3-leftovers.json is `refresh.sh`'s own
+# capture, from the Dell, of `docker ps -a --filter
+# label=com.docker.compose.project=nova` — v3's stack there was renamed to
+# project `nova-v3`, but the containers it made before that are still
+# labelled `nova`. This machine, refreshed today, has none of its own
+# (`containers-foreign-v4.json` — the plain, unsuffixed name `refresh.sh`
+# writes here — is `"containers": []`), so the real proof is kept under its
+# own stable name that no refresh ever touches, restored byte-for-byte from
+# the commit this slice branched from (S47 task 1 review round 1;
+# test_the_v3_leftovers_under_this_project_name_really_do_refuse, the
+# pytest twin, carries the same fixture and the same provenance note).
+CONTAINERS_FIXTURE="containers-foreign-v3-leftovers.json"
 build_world
 FOREIGN="$(run_coverage routine)"
 expect_cov "refuses_a_live_mount_compose_does_not_name" "$FOREIGN" 3 "R4_UNDECLARED_LIVE_MOUNT"
@@ -749,6 +790,43 @@ for bad_home in /root "" /; do
     esac
   fi
 done
+
+# ── normalise() must not leak a nested worktree's path ──────────────────────
+#
+# Every lane's checkout lives at .worktrees/<name>, NESTED inside the live
+# checkout (CLAUDE.md, "Worktrees internal policy"), so LIVE_ROOT is
+# routinely a literal PREFIX of REPO_ROOT. Substituting the shorter root
+# first matches that prefix and leaves the longer root's own tail stuck onto
+# "/repo" — measured 2026-09-25 (S47 task 1): a captured bind source read
+# /repo/.worktrees/qr/data instead of /repo/data. This runs the SHIPPED
+# normalise(), extracted from the copy above, never a reimplementation of
+# the fix as a test — a bug in the extraction would show up as every case
+# below failing to run at all, not as a false green.
+NORMALISE_SRC="$(sed -n '/^normalise() {/,/^}/p' "$REFRESH")"
+if [ -z "$NORMALISE_SRC" ]; then
+  report 1 "normalise_is_findable_in_the_shipped_script" "no normalise() in $REFRESH"
+else
+  report 0 "normalise_is_findable_in_the_shipped_script"
+fi
+
+# $1 = LIVE_ROOT, $2 = REPO_ROOT, $3 = the path piped through normalise.
+run_normalise() {
+  printf '%s\n' "$3" | LIVE_ROOT="$1" REPO_ROOT="$2" HOME=/nonexistent-home bash -c "$NORMALISE_SRC
+normalise"
+}
+
+expect_str "normalise_a_nested_worktree_checkout_never_leaks_worktrees_into_the_path" \
+  "$(run_normalise /world/nova /world/nova/.worktrees/qr /world/nova/.worktrees/qr/data)" \
+  "/repo/data"
+expect_str "normalise_the_mirror_case_live_root_nested_in_repo_root" \
+  "$(run_normalise /world/nova/.worktrees/qr /world/nova /world/nova/data)" \
+  "/repo/data"
+expect_str "normalise_equal_roots_still_takes_the_single_substitution_branch" \
+  "$(run_normalise /world/nova /world/nova /world/nova/data)" \
+  "/repo/data"
+expect_str "normalise_unrelated_roots_are_unaffected_by_the_ordering" \
+  "$(run_normalise /world/other /world/nova/.worktrees/qr /world/nova/.worktrees/qr/data)" \
+  "/repo/data"
 
 printf '\n── the passphrase resolver seam ─────────────────────────────────────\n'
 

@@ -111,6 +111,41 @@ def test_padded_machine_and_memory_lines_are_judged_in_milliseconds(label, reply
         assert took < BUDGET_S, f"{label}: {took * 1000:.1f} ms"
 
 
+SETUP_PADDED = [
+    ("code_words_then_padding", "your pairing code is" + " " * 1500 + "ABCD-2345"),
+    ("many_urls", " ".join(f"https://nova{i}.fake-tailnet.ts.net/install" for i in range(200))),
+    ("url_then_padding", "open http://192.168.0.245:3000" + " " * 1500 + "on your phone"),
+    # A (review fix round 3): 200 GOVERNED urls in ONE clause, no sentence
+    # breaks — each one makes address_claim_check compute a `before` slice
+    # for _NOVA_GOVERNS_URL; unbounded (clause[:m.start()]), that slice grows
+    # with each url and the whole clause is O(n^2). Bounded to its last 80
+    # characters (ruling A), it stays linear.
+    (
+        "many_governed_lan_urls",
+        " ".join(f"open nova at http://192.168.{i}.1:3000" for i in range(200)),
+    ),
+    # Final review (item 2): rule 1 asks, for a loopback setup page, whether
+    # the clause names another device, as rule 3 does for a loopback root.
+    # Read once per clause (about 10 ms here); asked per url, it is quadratic,
+    # and 400 urls keep that well over the budget on a fast machine.
+    (
+        "many_loopback_setup_urls",
+        " ".join(f"http://127.0.0.{i % 250 + 1}:3000/install" for i in range(400))
+        + " on this computer",
+    ),
+]
+
+
+@pytest.mark.parametrize("label,reply", SETUP_PADDED, ids=[c[0] for c in SETUP_PADDED])
+def test_the_setup_guards_are_judged_in_milliseconds(label, reply):
+    for check in (
+        lambda: guards.code_claim_check(reply, ""),
+        lambda: guards.address_claim_check(reply, "", "https://nova.fake-tailnet.ts.net"),
+    ):
+        took = _best_of(check)
+        assert took < BUDGET_S, f"{label}: {took * 1000:.1f} ms"
+
+
 def _every_pattern() -> dict[str, re.Pattern[str]]:
     """Every compiled pattern guards.py holds: module constants, tuples of
     them, and what the per-name builders compile for a machine set and a
@@ -170,6 +205,11 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         # A listing entry whose name is set off from the padding: the shape
         # `presented_listing_check` reads on every reply (follow-up, below).
         "bullet_name_then_spaces": "- report.md" + pad + "x",
+        # S47 review fix round 5: leg (2a) of _SETUP_QR_INSTRUCTS only starts
+        # after "qr code for|of|to", so padding without those words never
+        # times it. The padding sits after the HEAD, where the model number
+        # and every boundary alternative walk the whitespace.
+        "qr_object_then_spaces": "qr code for my phone" + pad + "x",
     }
 
 
@@ -217,6 +257,15 @@ def test_a_padded_listing_is_judged_in_milliseconds(width):
     )
     took = _best_of(lambda: guards.presented_listing_check(reply, [], []))
     assert took < BUDGET_S, f"padded_listing_{width}: {took * 1000:.1f} ms"
+
+
+def test_the_sweep_times_the_qr_object_leg():
+    """S47 review fix round 5: leg (2a) of _SETUP_QR_INSTRUCTS is a lookahead
+    that only starts after "qr code for|of|to" — padding without those words
+    never enters it, so the sweep carries a padded input that does, at both
+    widths."""
+    for inputs in (SWEEP_INPUTS, LONG_SWEEP_INPUTS):
+        assert any(re.search(r"qr code for\b.*\s{100,}", text) for text in inputs.values())
 
 
 def test_the_sweep_reaches_the_in_use_and_line_patterns():

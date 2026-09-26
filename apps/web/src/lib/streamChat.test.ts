@@ -161,6 +161,34 @@ describe('createSseParser', () => {
     ).toEqual([{ type: 'route', route: { role: 'chat', link: 2, reason: 'fell back to link 2', servedBy: 'hub:qwen3:8b' } }])
   })
 
+  const LIVE_CARD =
+    '{"kind":"setup_qr","setup":"add_machine","address":"https://nova.fake-tailnet.ts.net","url":"https://nova.fake-tailnet.ts.net/add#ABCD-2345","code":"ABCD-2345","expires_at":"2026-09-25T14:10:00+00:00"}'
+
+  it('turns a setup card frame into a card event', () => {
+    expect(parseAll([`data: {"card":${LIVE_CARD}}\n\n`])).toEqual([
+      {
+        type: 'card',
+        card: {
+          kind: 'setup_qr',
+          setup: 'add_machine',
+          address: 'https://nova.fake-tailnet.ts.net',
+          url: 'https://nova.fake-tailnet.ts.net/add#ABCD-2345',
+          code: 'ABCD-2345',
+          expires_at: '2026-09-25T14:10:00+00:00',
+        },
+      },
+    ])
+  })
+
+  it('ignores a card kind this client does not draw, like any future frame', () => {
+    expect(parseAll(['data: {"card":{"kind":"join_link","url":"https://example.invalid/a"}}\n\n'])).toEqual([])
+  })
+
+  it('a setup card with no link is a broken frame, said out loud', () => {
+    const events = parseAll(['data: {"card":{"kind":"setup_qr","setup":"install_pwa"}}\n\n'])
+    expect(events.map(e => e.type)).toEqual(['error'])
+  })
+
   it('turns a usage frame into a usage event, defaulting what the server left out', () => {
     expect(
       parseAll([

@@ -98,6 +98,7 @@ cleanup() {
   ids="$(docker ps -aq --filter "name=^${PROJECT}-wrap-" 2>/dev/null)"
   [ -n "$ids" ] && printf '%s\n' "$ids" | xargs docker rm -f >/dev/null 2>&1
   docker volume rm "${PROJECT}_v4_tailscale" >/dev/null 2>&1 || true
+  docker volume rm "${PROJECT}_v4_status" >/dev/null 2>&1 || true
   docker network rm "$NET" >/dev/null 2>&1 || true
   [ -n "$TMP" ] && rm -rf "$TMP"
 }
@@ -175,6 +176,16 @@ cat > "$TMP/fakes/tailscale" <<'FAKE'
 #                       when control answers "wait")
 #   FAKE_SERVE_TARGET   a mapping `serve status` reports regardless of what
 #                       was applied (a stale one)
+#   (no env var)        once $FAKE_DIR/flip exists: BackendState becomes
+#                       FAKE_FLIP_STATE (default Stopped), CertDomains drops
+#                       the node, and `serve status` reports no mapping —
+#                       all three at once, from the NEXT call on, so a test
+#                       can prove a later status_loop tick (D17, S47) reads
+#                       tailscaled fresh instead of the fake only ever being
+#                       asked to answer once. A file, not another env var:
+#                       the flip has to happen mid-run, after the container
+#                       is already up, which no env var set at `docker run`
+#                       time can do.
 printf '%s\n' "$*" >> "$FAKE_DIR/tailscale.calls"
 case "${1:-}" in
   status)
@@ -183,8 +194,13 @@ case "${1:-}" in
       n="$(grep -c '^status --json$' "$FAKE_DIR/tailscale.calls")"
       if [ "$n" -ge "$FAKE_RUNNING_AFTER" ]; then state=Running; else state=NeedsLogin; fi
     fi
-    printf '{\n  "Version": "fake",\n  "BackendState": "%s",\n  "AuthURL": "%s",\n  "Self": {\n    "HostName": "nova",\n    "DNSName": "nova.fake-tailnet.ts.net."\n  },\n  "CertDomains": [\n    "nova.fake-tailnet.ts.net"\n  ],\n  "Health": [\n    "%s"\n  ]\n}\n' \
-      "$state" "${FAKE_AUTH_URL:-}" "${FAKE_HEALTH:-Tailscale is stopped.}"
+    certs='    "nova.fake-tailnet.ts.net"'
+    if [ -f "$FAKE_DIR/flip" ]; then
+      state="${FAKE_FLIP_STATE:-Stopped}"
+      certs=""
+    fi
+    printf '{\n  "Version": "fake",\n  "BackendState": "%s",\n  "AuthURL": "%s",\n  "Self": {\n    "HostName": "nova",\n    "DNSName": "nova.fake-tailnet.ts.net."\n  },\n  "CertDomains": [\n%s\n  ],\n  "Health": [\n    "%s"\n  ]\n}\n' \
+      "$state" "${FAKE_AUTH_URL:-}" "$certs" "${FAKE_HEALTH:-Tailscale is stopped.}"
     ;;
   serve)
     case "${2:-}" in
@@ -203,8 +219,10 @@ case "${1:-}" in
         ;;
       status)
         target=""
-        [ -f "$FAKE_DIR/serve.applied" ] && target="$(cat "$FAKE_DIR/serve.applied")"
-        [ -n "${FAKE_SERVE_TARGET:-}" ] && target="$FAKE_SERVE_TARGET"
+        if [ ! -f "$FAKE_DIR/flip" ]; then
+          [ -f "$FAKE_DIR/serve.applied" ] && target="$(cat "$FAKE_DIR/serve.applied")"
+          [ -n "${FAKE_SERVE_TARGET:-}" ] && target="$FAKE_SERVE_TARGET"
+        fi
         if [ -z "$target" ]; then
           if [ "${3:-}" = "--json" ]; then echo '{}'; else echo "No serve config"; fi
         elif [ "${3:-}" = "--json" ]; then
@@ -294,6 +312,38 @@ case "$CASE" in
     echo "real_state=$(tailscale status --json 2>/dev/null | grep -o '"BackendState": *"[^"]*"' | head -n 1)"
     echo "real_serve=$(tailscale serve status --json 2>/dev/null | tr -d ' \n')"
     ;;
+  status-loop)
+    sh /config/start.sh > "$FAKE_DIR/out" 2>&1 &
+    W=$!
+    SD="${NOVA_STATUS_DIR:-/run/nova-status}"
+    i=0
+    while [ ! -f "$SD/tailscale.json" ] && [ "$i" -lt 60 ]; do sleep 0.5; i=$((i + 1)); done
+    first="$(sed -n 's/.*"written_at": "\([^"]*\)".*/\1/p' "$SD/tailscale.json" 2>/dev/null)"
+    sleep 3
+    second="$(sed -n 's/.*"written_at": "\([^"]*\)".*/\1/p' "$SD/tailscale.json" 2>/dev/null)"
+    if [ -n "$first" ] && [ "$first" != "$second" ]; then echo "rewritten=yes"; else echo "rewritten=no"; fi
+    echo "status_dir_entries=$(ls -A "$SD" 2>/dev/null | tr '\n' ' ')"
+    if kill -0 "$W" 2>/dev/null; then echo "wrapper_alive=yes"; else echo "wrapper_alive=no"; fi
+    # D17 (S47): every field is read from tailscaled on THAT tick, never
+    # carried over. Proof, not assertion by construction: flip what the fake
+    # answers only AFTER the loop has already written once (so this can never
+    # affect the wrapper's own startup, which finished before the first write
+    # existed), then wait for the NEXT write and let the caller check it
+    # differs from the pre-flip state a fake that only ever answers once could
+    # not produce.
+    if [ -n "${FAKE_FLIP_TICK:-}" ]; then
+      before="$second"
+      : > "$FAKE_DIR/flip"
+      j=0
+      while [ "$(sed -n 's/.*"written_at": "\([^"]*\)".*/\1/p' "$SD/tailscale.json" 2>/dev/null)" = "$before" ] && [ "$j" -lt 20 ]; do
+        sleep 0.5; j=$((j + 1))
+      done
+      echo "status_file_after_flip=$(tr -d '\n' < "$SD/tailscale.json" 2>/dev/null)"
+    fi
+    kill -TERM "$W"
+    wait "$W"
+    rc=$?
+    ;;
   *)
     sh /config/start.sh > "$FAKE_DIR/out" 2>&1
     rc=$?
@@ -305,6 +355,7 @@ echo "cb_signals=$(tr '\n' ',' < "$FAKE_DIR/cb.signals" 2>/dev/null)"
 echo "serve_applied=$(cat "$FAKE_DIR/serve.applied" 2>/dev/null)"
 echo "status_calls=$(grep -c '^status --json$' "$FAKE_DIR/tailscale.calls" 2>/dev/null)"
 echo "serve_calls=$(grep '^serve --bg' "$FAKE_DIR/tailscale.calls" 2>/dev/null | tr '\n' ';')"
+echo "status_file=$(tr -d '\n' < "${NOVA_STATUS_DIR:-/run/nova-status}/tailscale.json" 2>/dev/null)"
 echo "--- output"
 cat "$FAKE_DIR/out"
 FAKE
@@ -336,6 +387,7 @@ expect_contains "never Running: prints tailscaled's Health line" "$OUT" "health:
 expect_contains "never Running: containerboot was sent TERM" "$(field "$OUT" cb_signals)" "TERM"
 expect_eq "never Running: serve was never invoked" "$(field "$OUT" serve_calls)" ""
 expect_contains "never Running: says what would fix it" "$OUT" "TS_AUTHKEY"
+expect_eq "never Running: no status file is ever written" "$(field "$OUT" status_file)" ""
 
 # ── 1a'. NeedsLogin with a login URL and no key: never resolves, exit NOW ───
 OUT="$(CASE_BOUND=30 run_wrapper needs-login-url -e FAKE_STATE=NeedsLogin -e FAKE_AUTH_URL=https://login.tailscale.com/a/fake123)"
@@ -393,6 +445,34 @@ expect_le "TERM while waiting: exited promptly, not after the 60s bound" "$(fiel
 expect_contains "TERM while waiting: TERM reached containerboot" "$(field "$OUT" cb_signals)" "TERM"
 expect_contains "TERM while waiting: says containerboot exited" "$OUT" "containerboot exited (status 37) before tailscaled reported Running"
 
+# ── 1d''. the status file core reads (D17, S47) ──────────────────────────────
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1)"
+SF="$(field "$OUT" status_file)"
+expect_contains "status: version 1" "$SF" '"version": 1'
+expect_contains "status: the state tailscaled reports" "$SF" '"backend_state": "Running"'
+expect_contains "status: the DNS name without its trailing dot" "$SF" '"dns_name": "nova.fake-tailnet.ts.net"'
+expect_contains "status: the mapping, read on the tick" "$SF" '"serve_ok": true'
+expect_contains "status: the certificate domain" "$SF" '"https_cert": true'
+expect_contains "status: a UTC timestamp" "$SF" '"written_at": "20'
+expect_eq "status: rewritten on the next tick" "$(field "$OUT" rewritten)" yes
+expect_eq "status: the atomic write leaves no temp file" "$(field "$OUT" status_dir_entries)" "tailscale.json "
+expect_eq "status: the wrapper is still up while it writes" "$(field "$OUT" wrapper_alive)" yes
+expect_eq "status: containerboot's status is still the wrapper's" "$(field "$OUT" rc)" 37
+
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e NOVA_STATUS_DIR=/proc/nova-status-cannot-exist)"
+expect_eq "status, unwritable: the wrapper stays up" "$(field "$OUT" wrapper_alive)" yes
+expect_contains "status, unwritable: says it could not write" "$OUT" "could not write /proc/nova-status-cannot-exist/tailscale.json"
+
+# A LATER tick must read tailscaled fresh, not repeat the first tick's
+# values: the fake starts Running/certified/mapped (proving the happy tick
+# above), then flips all three to their opposite AFTER the loop has already
+# written once, and this checks the NEXT write reflects the flip.
+OUT="$(run_wrapper status-loop -e FAKE_STATE=Running -e NOVA_STATUS_INTERVAL=1 -e FAKE_FLIP_TICK=1 -e FAKE_FLIP_STATE=Stopped)"
+SF2="$(field "$OUT" status_file_after_flip)"
+expect_contains "status: a later tick reports the backend going Stopped" "$SF2" '"backend_state": "Stopped"'
+expect_contains "status: a later tick reports the certificate dropping" "$SF2" '"https_cert": false'
+expect_contains "status: a later tick reports the mapping disappearing" "$SF2" '"serve_ok": false'
+
 # ── 1e. containerboot dies before Running ───────────────────────────────────
 OUT="$(CASE_BOUND=60 run_wrapper cb-dies -e FAKE_STATE=NeedsLogin -e FAKE_CB_EXIT=3)"
 expect_eq "containerboot dies: its status is the wrapper's" "$(field "$OUT" rc)" 3
@@ -447,6 +527,7 @@ expect_eq "MOVED_TO: containerboot was never started" "$(field "$OUT" cb_signals
 expect_eq "MOVED_TO: tailscaled was never asked anything" "$(field "$OUT" status_calls)" ""
 expect_eq "MOVED_TO: serve was never applied" "$(field "$OUT" serve_applied)" ""
 expect_le "MOVED_TO: refuses at once, not after the ready bound" "$(field "$OUT" elapsed)" $((BOUND - 1))
+expect_eq "MOVED_TO: no status file is ever written" "$(field "$OUT" status_file)" ""
 
 # The negative control, from the SAME copied directory with the marker gone:
 # without it the wrapper runs all the way through and applies the mapping, so
@@ -548,6 +629,12 @@ expect_contains "config: ...mounted at TS_STATE_DIR" "$TS_BLOCK" "target: /var/l
 expect_contains "config: the wrapper's DIRECTORY is what is mounted" "$TS_BLOCK" "source: $SCRIPT_DIR"
 expect_contains "config: ...at /config" "$TS_BLOCK" "target: /config"
 expect_contains "config: ...read-only" "$TS_BLOCK" "read_only: true"
+expect_contains "config: the status volume in the sidecar" "$TS_BLOCK" "source: v4_status"
+expect_contains "config: ...at /run/nova-status" "$TS_BLOCK" "target: /run/nova-status"
+CORE_BLOCK="$(printf '%s\n' "$CFG" | awk '/^  core:/{f=1; print; next} f && /^  [a-z]/{f=0} f')"
+STATUS_MOUNT="$(printf '%s\n' "$CORE_BLOCK" | grep -A3 'source: v4_status')"
+expect_contains "config: core mounts the status volume" "$STATUS_MOUNT" "target: /run/nova-status"
+expect_contains "config: ...read-only" "$STATUS_MOUNT" "read_only: true"
 expect_contains "config: TS_HOSTNAME from TAILNET_HOSTNAME" "$TS_BLOCK" "TS_HOSTNAME: $NODE_NAME"
 expect_contains "config: TS_AUTH_ONCE" "$TS_BLOCK" 'TS_AUTH_ONCE: "true"'
 expect_contains "config: TS_USERSPACE" "$TS_BLOCK" 'TS_USERSPACE: "true"'
@@ -600,7 +687,9 @@ fi
 expect_contains "create: the bind spec ends :/config:ro" \
   "$(docker inspect -f '{{json .HostConfig.Binds}}' "$CID")" ':/config:ro"'
 
-expect_eq "create: exactly two mounts" "$(printf '%s\n' "$MOUNTS" | grep -c .)" 2
+expect_contains "create: the status volume is mounted rw at /run/nova-status" "$MOUNTS" "volume ${PROJECT}_v4_status "
+expect_contains "create: ...writable" "$MOUNTS" " /run/nova-status rw=true"
+expect_eq "create: exactly three mounts" "$(printf '%s\n' "$MOUNTS" | grep -c .)" 3
 ENV="$(docker inspect -f '{{range .Config.Env}}{{.}}{{"\n"}}{{end}}' "$CID")"
 expect_contains "create: TS_HOSTNAME reaches the container" "$ENV" "TS_HOSTNAME=$NODE_NAME"
 expect_contains "create: TS_AUTHKEY reaches the container" "$ENV" "TS_AUTHKEY=tskey-auth-dummy-not-a-real-key"

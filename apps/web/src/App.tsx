@@ -28,6 +28,9 @@ import { SkillsPage } from './pages/skills/SkillsPage'
 import { AgentPage } from './pages/agents/AgentPage'
 import { deletedSummary } from './pages/agents/agentsFormat'
 import type { AgentDeleted } from './lib/api'
+import { InstallPage } from './pages/public/InstallPage'
+import { AppPage } from './pages/public/AppPage'
+import { AddPage } from './pages/public/AddPage'
 
 function Centred({ children }: { children: React.ReactNode }) {
   return (
@@ -282,9 +285,22 @@ export default function App() {
     <ThemeProvider>
       <ToastProvider>
         <BrowserRouter>
-          <AuthProvider>
-            <Gate />
-          </AuthProvider>
+          <Routes>
+            {/* S47: the pages a scanned setup QR code opens, BEFORE the sign-in gate.
+                They call no API and read only the URL and the browser, so a phone
+                that has never signed in can follow them. */}
+            <Route path="/install" element={<InstallPage />} />
+            <Route path="/app" element={<AppPage />} />
+            <Route path="/add" element={<AddPage />} />
+            <Route
+              path="/*"
+              element={
+                <AuthProvider>
+                  <Gate />
+                </AuthProvider>
+              }
+            />
+          </Routes>
         </BrowserRouter>
       </ToastProvider>
     </ThemeProvider>

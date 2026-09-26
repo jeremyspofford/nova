@@ -16,7 +16,9 @@ import {
 } from 'lucide-react'
 import { Badge, ProgressBar } from '../../components/ui'
 import { Markdown } from '../../components/Markdown'
+import { SetupPanel } from '../../components/SetupPanel'
 import type { Attachment, Delegation } from '../../lib/api'
+import { isSetupKind } from '../../lib/setupSteps'
 import { Attached } from './Attached'
 import { DELEGATE_TOOL, type ErrorRow, type LiveDelegation, type MessageRow } from './chatReducer'
 
@@ -456,6 +458,30 @@ export const MessageBubble = memo(function MessageBubble({
               <DelegationChip key={delegation.agent_turn_id} delegation={delegation} />
             ))}
           </p>
+        )}
+        {/* Her setup QR cards (S47) — live from the stream, or redrawn from
+            the trace with no code. A kind this build does not know is drawn
+            as its link, never dropped. */}
+        {row.cards.length > 0 && (
+          <div data-testid="setup-cards" className="mt-2 space-y-3">
+            {row.cards.map((card, i) =>
+              isSetupKind(card.setup) ? (
+                <div key={i} className="rounded-md border border-border bg-surface-card p-3">
+                  <SetupPanel
+                    compact
+                    setup={card.setup}
+                    address={card.address}
+                    code={card.code ?? null}
+                    expiresAt={card.expires_at ?? null}
+                  />
+                </div>
+              ) : (
+                <a key={i} className="text-accent underline" href={card.url}>
+                  {card.url}
+                </a>
+              ),
+            )}
+          </div>
         )}
         {/* Before the first word only: the reply supersedes the working. */}
         {row.thinking !== '' && row.text === '' && row.streaming && (

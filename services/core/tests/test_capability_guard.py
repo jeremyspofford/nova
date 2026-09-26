@@ -122,6 +122,13 @@ MUST_FIRE = [
         "I'm unable to stop machines from serving models.",
         "machine_configure",
     ),
+    # S47: her setup QR tool.
+    # I3 (review fix round 1): the noun must be QUALIFIED (setup or pairing),
+    # never a bare "QR code(s)".
+    ("cant_make_setup_qr_codes", "I can't make setup QR codes.", "show_setup_qr"),
+    ("cant_show_a_pairing_card", "I'm unable to show you a pairing card.", "show_setup_qr"),
+    ("cant_pair_a_laptop", "I cannot pair your laptop.", "show_setup_qr"),
+    ("cant_put_myself_on_a_phone", "I can't put myself on your phone.", "show_setup_qr"),
 ]
 
 
@@ -228,6 +235,28 @@ MUST_NOT_FIRE = [
     (
         "relayed_the_machine_until",
         "I can't stop the machine from running models until the gateway is reachable.",
+    ),
+    # S47: true today — joining a machine to the tailnet is S43, not built.
+    ("scope_tailnet_join", "I can't add machines to your tailnet."),
+    ("no_native_app_exists", "I can't install a native app — there isn't one yet."),
+    # I3 (review fix round 1): a denial qualified as a PRESENT STATE is
+    # honest, never a general capability denial.
+    (
+        "qr_present_state_no_address",
+        "I can't show you the QR code right now: Nova has no address another device can reach.",
+    ),
+    (
+        "pairing_card_present_state_reason",
+        "I can't show a pairing card right now because the tailnet sidecar is NeedsLogin.",
+    ),
+    # a bare, unqualified "QR code(s)" is never the setup-QR ability.
+    ("qr_for_wifi", "I can't make QR codes for Wi-Fi networks."),
+    ("qr_for_arbitrary_link", "I can't generate a QR code for an arbitrary link."),
+    # "install" dropped from the phone row — installing IS on the operator,
+    # via Safari's Share menu, never Nova.
+    (
+        "install_native_app_is_hers_not_nova",
+        "I can't install Nova on your phone for you: you add it from Safari's Share menu.",
     ),
 ]
 

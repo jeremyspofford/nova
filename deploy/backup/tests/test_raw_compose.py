@@ -317,7 +317,7 @@ OVERLAY = (FIXTURES / "probe-compose.overlay.yml").read_text()
 def test_the_declared_set_is_the_union_of_every_file():
     fact = raw_compose_fact([("base.yml", BASE), ("overlay.yml", OVERLAY)])
     assert fact["services"] == ["alpha", "beta"]
-    assert fact["volumes"] == ["vol_one", "vol_three", "vol_two"]
+    assert fact["volumes"] == ["vol_five", "vol_four", "vol_one", "vol_three", "vol_two"]
     assert fact["compose_files"] == ["base.yml", "overlay.yml"]
 
 
@@ -333,7 +333,7 @@ def test_a_services_own_mount_list_is_not_a_declaration():
     """`- vol_one:/one` sits under a service. A reader keyed on the word
     `volumes` alone reports `/one` as a declared volume."""
     fact = raw_compose_fact([("base.yml", BASE)])
-    assert fact["volumes"] == ["vol_one", "vol_three"]
+    assert fact["volumes"] == ["vol_five", "vol_four", "vol_one", "vol_three"]
     assert fact["services"] == ["alpha"]
 
 
@@ -495,6 +495,7 @@ def test_the_real_file_itself_is_read_whole():
         "v4_models",
         "v4_ollama",
         "v4_pgdata",
+        "v4_status",
         "v4_tailscale",
         "v4_workspace",
     ]
@@ -521,7 +522,7 @@ def test_load_facts_derives_the_raw_fact_from_the_staged_text(tmp_path):
     )
     raw = load_facts(str(facts))["raw"]
     assert raw["project"] == "novaxprobe"
-    assert raw["volumes"] == ["vol_one", "vol_three", "vol_two"]
+    assert raw["volumes"] == ["vol_five", "vol_four", "vol_one", "vol_three", "vol_two"]
     assert raw["compose_files"] == [
         "/repo/deploy/docker-compose.yml",
         "/repo/deploy/docker-compose.gpu.yml",

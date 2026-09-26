@@ -89,6 +89,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from typing import Any
 from urllib.parse import unquote
 
 import asyncpg
@@ -108,6 +109,7 @@ from app import (
     live_facts,
     markup_calls,
     model_speed,
+    network,
     peers,
     queued,
     settings_store,
@@ -535,6 +537,17 @@ async def settle_detached(spawned_before: set[asyncio.Task]) -> None:
 
 def _frame(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
+
+
+def _card_channel(emit: Callable[[str | None], None]) -> Callable[[dict], None]:
+    """A turn's card channel (S47): each payload becomes one `card` frame on
+    the live stream, and goes nowhere else — not into `messages`, not onto a
+    span. See ToolContext.card for why only the stream route binds one."""
+
+    def send(payload: dict) -> None:
+        emit(_frame({"card": payload}))
+
+    return send
 
 
 # The cap on an activity frame's `reason` (see the frame contract docstring):
@@ -3401,6 +3414,105 @@ def _state_claim_stands(
     return claim is not None and claim.device == subject
 
 
+def _failed_tool_names(spans: Sequence[Any]) -> frozenset[str]:
+    """Tool names THIS TURN she attempted (guards._attempted's own definition —
+    round 3, D clarified: never a refused markup/closed-round call) and never
+    succeeded. "Succeeded" is at least one of those spans with `ok is True`.
+    A tool that failed once but then succeeded (a retry) is NOT in this set —
+    it demonstrably can work this turn. `guards._attempted` is the one place
+    "attempted" is decided; this does not keep a second definition of it, so
+    a refused markup call can never silence a capability correction beside
+    it.
+
+    A backend-run `unasked` live_facts check is not her call either, and that
+    exclusion lives HERE only (review fix round 4, item 1): those spans are
+    dropped before guards._attempted is asked, because _attempted's other
+    caller — the offer shape — must keep counting a check that really ran."""
+    hers = [
+        span for span in spans if (getattr(span, "meta", None) or {}).get("unasked") is not True
+    ]
+    names = {
+        getattr(span, "name", None)
+        for span in spans
+        if getattr(span, "kind", None) == "tool" and getattr(span, "name", None)
+    }
+    failed: set[str] = set()
+    for name in names:
+        if not guards._attempted(frozenset({name}), hers):
+            continue  # every span for it was refused, or a check she never asked for
+        succeeded = any(
+            getattr(span, "kind", None) == "tool"
+            and getattr(span, "name", None) == name
+            and (getattr(span, "meta", None) or {}).get("ok") is True
+            for span in spans
+        )
+        if not succeeded:
+            failed.add(name)
+    return frozenset(failed)
+
+
+def _capability_check_tools(available: Sequence[str], spans: Sequence[Any]) -> list[str]:
+    """The toolset `capability_claim_check` should judge a denial against
+    (review fix round 2, D): `available` minus any tool THIS TURN called and
+    did not succeed. "Nova has no address another device can reach" after a
+    failed show_setup_qr call, in the SAME turn, is a relay of the tool's own
+    refusal, not a false denial — the guard would otherwise "correct" a
+    report of the very call that just failed beside it.
+    `capability_claim_check`'s own signature and purity are unchanged; this
+    is computed once at each call site from the turn's own spans."""
+    failed = _failed_tool_names(spans)
+    return [name for name in available if name not in failed]
+
+
+def _safe_address() -> tuple[str | None, str | None]:
+    """network.address(), fail-open like every guard (review fix round 1,
+    I6): network.address() itself turns a malformed or unreadable status
+    file into a stated reason and never raises, but a chat turn must not
+    depend on that holding forever — a read that raises here is logged and
+    treated as no address, never a failed turn. Returns (origin, reason)."""
+    try:
+        got = network.address()
+    except Exception:
+        logger.exception("network.address() raised; treating it as no address")
+        return None, "the tailnet status could not be read"
+    return got.origin, got.reason
+
+
+def _rewrite_class_claims(text: str, user_message: str) -> list[tuple[str, object]]:
+    """S47's REWRITE-class claims over `text`, in order, each seeing the one
+    before it's rewrite: an invented pairing code, then a wrong address. Each is
+    fail-open on its own — a guard that raises is logged and rewrites nothing."""
+    found: list[tuple[str, object]] = []
+    current = text
+    origin, reason = _safe_address()
+    for name, check in (
+        ("code_claim", lambda t: guards.code_claim_check(t, user_message)),
+        (
+            "address_claim",
+            lambda t: guards.address_claim_check(t, user_message, origin, reason),
+        ),
+    ):
+        try:
+            claim = check(current)
+        except Exception:
+            logger.exception("%s guard raised; shipping the reply unrewritten", name)
+            claim = None
+        if claim is not None:
+            found.append((name, claim))
+            current = claim.rewritten
+    return found
+
+
+def _file_rewrite_span(turn: traces.Turn, name: str, claim) -> None:
+    """The span a REWRITE-class claim files. A code_claim records how many,
+    never the tokens: a guessed code is still code-shaped."""
+    with turn.span("guard", name) as span:
+        if name == "code_claim":
+            span.meta["count"] = len(claim.tokens)
+        else:
+            span.meta.update(rules=list(claim.rules), wrong=list(claim.tokens), truth=claim.truth)
+
+
 def _append_class_claims(text: str, turn: traces.Turn) -> list[tuple[str, object]]:
     """The APPEND-class claims — served-model and memory-outage (S40b) — over
     `text` and THIS turn's live spans, each fail-open on its own.
@@ -3489,8 +3601,18 @@ def _regen_rejected_by(
     `persona`, so the regeneration is judged by exactly the rule the
     original was.
     """
+    # Read once, exactly as the turn body reads it before its own checks tuple
+    # (S47) — a regen that invents an address is judged against the SAME
+    # now, never a second, possibly different, read. Fail-open (I6): _safe_address
+    # never raises.
+    origin, reason = _safe_address()
     checks: tuple[tuple[str, Callable[[], object | None]], ...] = (
         ("consent_claim", lambda: guards.consent_claim_check(corrected)),
+        ("code_claim", lambda: guards.code_claim_check(corrected, user_message)),
+        (
+            "address_claim",
+            lambda: guards.address_claim_check(corrected, user_message, origin, reason),
+        ),
         ("narration", lambda: guards.narration_check(corrected, turn.spans)),
         (
             "delegation_claim",
@@ -3506,7 +3628,11 @@ def _regen_rejected_by(
         ),
         (
             "capability_claim",
-            lambda: guards.capability_claim_check(corrected, persona.tool_names),
+            # D (review fix round 2): same minus-the-failed-tools set the turn
+            # body computes, over this turn's live spans.
+            lambda: guards.capability_claim_check(
+                corrected, _capability_check_tools(persona.tool_names, turn.spans)
+            ),
         ),
         # The serving-state claim (S19), armed by the turn's kind exactly as
         # over the reply: a regeneration saying the model is down would be
@@ -3835,6 +3961,7 @@ async def _run_turn(
     ingest: bool = True,
     persona: agents.Persona | None = None,
     attached: Sequence[attachments.Attachment] = (),
+    card: Callable[[dict], None] | None = None,
 ) -> None:
     """The whole turn, run to completion regardless of who is still watching.
 
@@ -3872,6 +3999,9 @@ async def _run_turn(
     simply dropped and the work finishes anyway. `emit(None)` is the
     end-of-turn sentinel, sent LAST — after the atomic close — so a reader
     that drains the stream has, by [DONE], seen a fully-recorded turn.
+
+    `card` is the UI-only card channel (S47); only the stream route and the
+    eval runner pass one.
     """
     # Everything streamed to the client this turn, across every round, in
     # order — this is what persists, so a reload shows exactly what was
@@ -4038,6 +4168,7 @@ async def _run_turn(
                 # when it then refused, and _run_tool copies each call's
                 # slice onto its span.
                 facts_sink=[],
+                card=card,
             )
         else:
             advertised = tools.advertised_tools(persona.tool_names)
@@ -4049,6 +4180,7 @@ async def _run_turn(
                 # filesystem call this turn makes — the same gate as Nova's,
                 # rooted lower.
                 workspace_root=persona.workspace_root,
+                card=card,
             )
         # The live checks, BEFORE the prompt is built and therefore before she
         # is asked anything (S14, owner ruling 2026-09-10). A note that names
@@ -4461,7 +4593,13 @@ async def _run_turn(
         # really said, not a copy already carrying the other's correction (a
         # correction sentence names no file/url and no pending state, so the
         # verdicts are the same either way; reading the raw reply just keeps
-        # that guarantee obvious). Each is PURE and fail-OPEN: a guard that
+        # that guarantee obvious). The ONE exception is the pair of S47
+        # REWRITE-class guards below, which run FIRST and change `text` itself:
+        # they catch a false TOKEN (an invented pairing code, a wrong address)
+        # inside prose that may otherwise be true, so the token must be gone
+        # before any later guard — or any composition, replace or append —
+        # can read the reply, or the invented token would survive in a
+        # correction built beside it. Each is PURE and fail-OPEN: a guard that
         # crashes logs and yields no correction, never an error frame and never
         # a lost reply. Derived from the spans and the live registry, never the
         # prompt (the prompt's honesty line still stands; this is the enforcement).
@@ -4521,6 +4659,19 @@ async def _run_turn(
         # the third person is not a delegation claim (it cannot delegate) —
         # it is narration, and gets narration's rule. None on Nova's turn.
         self_name = persona.agent.name if persona.agent is not None else None
+
+        # S47: the two REWRITE-class guards run FIRST and change `text` itself —
+        # an invented pairing code and a wrong address are false TOKENS inside
+        # prose that may otherwise be true, so the token is swapped for the truth
+        # and a correction follows (guards.py, "the REWRITE class"). Every guard
+        # below therefore judges the rewritten reply, and no composition — replace
+        # or append — can persist the invented token.
+        rewrites = _rewrite_class_claims(text, message)
+        for name, claim in rewrites:
+            _file_rewrite_span(turn, name, claim)
+            emit(_frame({"correction": claim.text}))
+            text = claim.rewritten
+        rewrite_claims = [claim for _, claim in rewrites]
 
         try:
             correction = guards.narration_check(text, turn.spans)
@@ -4626,9 +4777,14 @@ async def _run_turn(
         # is only false when its satisfying tool is actually in the model's
         # hands, so registering/removing a tool moves the verdict by itself,
         # and an agent's honest "I can't browse the web" (it was given no
-        # fetch_url) is never "corrected" into a lie.
+        # fetch_url) is never "corrected" into a lie. D (review fix round 2):
+        # minus any tool THIS TURN called and did not succeed — a relay of
+        # show_setup_qr's own "no address" refusal, right beside the failed
+        # span that says so, is not a false denial either.
         try:
-            capability_correction = guards.capability_claim_check(text, persona.tool_names)
+            capability_correction = guards.capability_claim_check(
+                text, _capability_check_tools(persona.tool_names, turn.spans)
+            )
         except Exception:
             logger.exception("capability-claim guard raised; shipping the reply uncorrected")
             capability_correction = None
@@ -4971,12 +5127,16 @@ async def _run_turn(
                 if c is not None
             )
         elif appended_corrections := [
-            c for c in (correction, delegation_claim, served_claim, memory_claim) if c is not None
+            c
+            for c in (*rewrite_claims, correction, delegation_claim, served_claim, memory_claim)
+            if c is not None
         ]:
-            # The APPEND class: narration and its third-person mirror, the
-            # delegation claim (S12), and the served-model and memory-outage
-            # claims (S40b) — the prose stays, each correction follows it,
-            # once, in the order the guards ran.
+            # The APPEND class: the S47 rewrite claims (their token is already
+            # out of `text` by this point; their own correction still follows
+            # it), narration and its third-person mirror, the delegation claim
+            # (S12), and the served-model and memory-outage claims (S40b) — the
+            # prose stays, each correction follows it, once, in the order the
+            # guards ran.
             persisted = "\n\n".join([text, *(c.text for c in appended_corrections)])
         else:
             persisted = text
@@ -5036,8 +5196,14 @@ async def _run_turn(
         # the skip — that a regeneration could bring back what a hard guard
         # removed — does not hold for them. It does hold for the text-only
         # commitment redirect and the soft responsiveness one, which re-run
-        # neither guard: those two still yield.
-        append_only_guard_fired = served_claim is not None or memory_claim is not None
+        # neither guard: those two still yield. The S47 rewrite claims join the
+        # same count for the same reason: the text-only commitment redirect and
+        # the soft responsiveness redirect re-run no guard, so either could
+        # bring the invented token straight back into a reply this flag let
+        # them regenerate over.
+        append_only_guard_fired = (
+            served_claim is not None or memory_claim is not None or bool(rewrite_claims)
+        )
 
         # The ALWAYS-ON deferral guard, and the FIRST claim on the turn's single
         # redirect budget. Run on the composed reply + this turn's spans + the
@@ -5354,6 +5520,14 @@ async def _run_turn(
             # (C12): a redirect that stood replaced it, and its own
             # regeneration's corrections are what count then.
             or ((served_claim is not None or memory_claim is not None) and not prose_replaced)
+            # And S47's REWRITE-class claims, the same way (final review,
+            # deferred L133): the invented token is gone from the prose but its
+            # correction follows it — "Nova has no address another device can
+            # reach right now (…)" — and a recalled one would hand a later turn
+            # that transient state as a standing fact. A redirect that stood
+            # replaced the prose, and its regeneration was vetted by both
+            # rewrite guards.
+            or (bool(rewrite_claims) and not prose_replaced)
             or bool(redirect_appended)
             # A presented listing nothing produced is the same noise again —
             # and the worst of it, because a recalled listing is exactly what
@@ -5697,6 +5871,8 @@ def _spawn_turn(
     conversation_id: uuid.UUID,
     started: _Started,
     emit: Callable[[str | None], None],
+    *,
+    card: Callable[[dict], None] | None = None,
 ) -> None:
     """Run an opened turn as its own detached task.
 
@@ -5722,6 +5898,7 @@ def _spawn_turn(
             emit,
             persona=started.persona,
             attached=started.attached,
+            card=card,
         )
     )
 
@@ -5933,7 +6110,14 @@ async def chat_stream(
         return JSONResponse(status_code=202, content={"queued": accepted})
 
     assert started is not None  # the else branch above, spelled for the reader
-    _spawn_turn(request.app, pool, conversation_id, started, queue.put_nowait)
+    _spawn_turn(
+        request.app,
+        pool,
+        conversation_id,
+        started,
+        queue.put_nowait,
+        card=_card_channel(queue.put_nowait),
+    )
     return StreamingResponse(
         _stream_from_queue(queue),
         media_type="text/event-stream",

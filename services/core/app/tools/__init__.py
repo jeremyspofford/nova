@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 
 from app.tools import (
@@ -45,6 +45,7 @@ from app.tools import (
     notices,
     route,
     schema,
+    setup,
     skills,
     spend,
     timers,
@@ -113,6 +114,9 @@ REGISTRY: dict[str, Tool] = {
         # Reads, plus the two noise preferences the page offers him; nothing
         # here is an approval (owner ruling 2026-09-03).
         *notices.TOOLS,
+        # S47: Nova's address for another device, and the setup QR cards
+        # (tools/setup.py). A card is UI-only; a pairing code never reaches her.
+        *setup.TOOLS,
     )
 }
 
@@ -171,6 +175,7 @@ def context_for(
     *,
     facts_sink: list[dict] | None = None,
     workspace_root: Path | None = None,
+    card: Callable[[dict], None] | None = None,
 ) -> ToolContext:
     """The context a turn hands its tools. The workspace root is decided
     once, here, so a single decision sets the boundary for every filesystem
@@ -184,7 +189,9 @@ def context_for(
     given here is used as-is: this function does not check that it lies
     under the env root, because the caller that derived it is the one place
     that knows why it is where it is. `facts_sink` collects the facts a call
-    DETERMINED even when it refused (see ToolContext).
+    DETERMINED even when it refused (see ToolContext). `card` is the UI-only
+    card channel (S47): the stream route binds it, and every other caller
+    leaves it None.
 
     `person` must be a real identity: every route resolves one before a turn
     starts (identity.require_person) and the memory tools scope to it. A None
@@ -197,6 +204,7 @@ def context_for(
         person=person,
         workspace_root=workspace.root_from_env() if workspace_root is None else workspace_root,
         facts_sink=facts_sink,
+        card=card,
     )
 
 

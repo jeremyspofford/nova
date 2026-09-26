@@ -28,6 +28,7 @@ from app import (
     governance_api,
     machines_api,
     models_catalog,
+    network_api,
     notices_api,
     proxies,
     queued,
@@ -136,6 +137,7 @@ app.include_router(proxies.router)
 app.include_router(models_catalog.router)
 app.include_router(resources_api.router)
 app.include_router(machines_api.router)
+app.include_router(network_api.router)
 app.include_router(spend_api.router)
 app.include_router(workspace_api.router)
 app.include_router(timers_api.router)

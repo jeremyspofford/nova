@@ -73,6 +73,13 @@ services:
       # survives a rebuild, and nothing outside this volume is reachable
       # from a workspace tool.
       - v4_workspace:/data/workspace
+      # The tailnet's state as the sidecar last wrote it — how core learns the
+      # address a QR code encodes (app/network.py, S47). Read-only: core never
+      # writes it, and nothing in core may pretend to be the sidecar.
+      - type: volume
+        source: v4_status
+        target: /run/nova-status
+        read_only: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -340,6 +347,9 @@ services:
       NOVA_WEB_ADDR: ${NOVA_WEB_ADDR:-172.18.128.10}
     volumes:
       - v4_tailscale:/var/lib/tailscale
+      # What tailscaled says, rewritten every 15 s by start.sh (section 4b) for
+      # core's one reader, app/network.py (S47).
+      - v4_status:/run/nova-status
       # The DIRECTORY, read-only — never a single-file bind (a single-file
       # mount resolves to a host inode at create time and dies with exit 127
       # when Docker Desktop recycles its WSL mount; searxng above says why).
@@ -455,3 +465,9 @@ volumes:
     x-nova-backup-reason: >-
       the tailnet node identity. Two live nodes sharing one identity flap, so
       it travels only on a move — which also leaves MOVED_TO behind.
+  v4_status:
+    x-nova-backup: exclude-derived
+    x-nova-backup-reason: >-
+      tailscale.json, rewritten by deploy/tailscale/start.sh every 15 s from
+      tailscaled's own state; carried to another host it would describe the
+      source's tailnet, not the target's.

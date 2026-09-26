@@ -1051,6 +1051,134 @@ OFFER_MUST_FIRE = [
         "Want me to schedule that?",
         "create_timer",
     ),
+    (
+        # B (review fix round 2, comment corrected round 3): the brief's row,
+        # restored verbatim on both sides — spec §8's own example wins over
+        # round 1's narrowing. The reply is broad (_SETUP_QR_OFFER: any offer
+        # to show/make/send/give/generate/display a QR code or a setup/
+        # pairing card). The INSTRUCTION fires through leg (2) of
+        # _SETUP_QR_INSTRUCTS (guards.py ~2317-2325) — the bare "QR code"
+        # mention ITSELF, matched only because a "put you on a device" phrase
+        # follows later in the same clause — never through the anchored "put
+        # you on my phone" phrase (leg 3) directly: that match starts at
+        # "put", and "so I can " sits immediately before it, which IS
+        # _USER_SELF_REPORT's own shape (a subject pronoun plus one trailing
+        # word before the cut) and WOULD be excluded if leg 3's match were
+        # what _instructed_classes read. Leg (2)'s match is the earlier "QR
+        # code" mention, so `before` is "show me a " — nothing self-report
+        # shaped — and the self-report check never has anything to catch.
+        "s47_setup_qr",
+        "show me a QR code so I can put you on my phone",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_setup_qr_qualified_instruction",
+        "show me a setup QR code for my phone",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_put_nova_on_my_phone",
+        "put Nova on my phone",
+        "Want me to show you a setup QR code?",
+        "show_setup_qr",
+    ),
+    (
+        # B (review fix round 3): a bare "QR code for|of|to <X>" counts
+        # UNCONDITIONALLY when X is a qualifying object — here, "my phone" is
+        # a device word — with no put-phrase needed anywhere in the message.
+        "s47_qr_code_for_my_phone",
+        "show me a QR code for my phone",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        # B (review fix round 4): X is the WHOLE noun phrase after "for|of|to"
+        # and its HEAD (last) noun decides — "my new phone" is headed by
+        # "phone", with an adjective in front of it.
+        "s47_qr_code_for_my_new_phone",
+        "show me a QR code for my new phone",
+        "Want me to show you a QR code for your new phone?",
+        "show_setup_qr",
+    ),
+    # B (review fix round 5): X is a closed grammar — [determiner] [closed
+    # modifiers] HEAD [model number] BOUNDARY — and the boundary after the
+    # head may be a preposition, a conjunction or complementizer, a trailer
+    # (please/now/too/again/real/quickly), or any non-letter character; the
+    # heads include Nova/you/yourself/setup/pairing again.
+    (
+        "s47_qr_for_my_phone_to_scan",
+        "show me a QR code for my phone to scan",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_that_i_can_scan",
+        "show me a QR code for my phone that I can scan",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_real_quick",
+        "show me a QR code for my phone real quick",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_double_dash",
+        "show me a QR code for my phone -- thanks",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_slash_tablet",
+        "show me a QR code for my phone/tablet",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_iphone_15",
+        "show me a QR code for my iPhone 15",
+        "Want me to show you a QR code for your iPhone 15?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_ellipsis",
+        "show me a QR code for my phone…",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_emoji",
+        "show me a QR code for my phone \U0001f642",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_the_phone_on_my_desk",
+        "show me a QR code for the phone on my desk",
+        "Want me to show you a QR code for the phone on your desk?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_nova",
+        "show me a QR code for Nova",
+        "Want me to show you a QR code for Nova?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_you",
+        "give me a QR code for you",
+        "Want me to give you a QR code?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_setup",
+        "show me a QR code for setup",
+        "Want me to show you a QR code for setup?",
+        "show_setup_qr",
+    ),
 ]
 
 
@@ -1242,6 +1370,116 @@ OFFER_MUST_NOT_FIRE = [
         "remind me of what I said about the garage",
         "Want me to set a reminder?",
     ),
+    # I3 (review fix round 1): a QR code for something else entirely (a wifi
+    # password, not a setup/pairing card) never instructs show_setup_qr.
+    (
+        "s47_wifi_qr_is_not_setup_qr",
+        "make me a QR code for my wifi password",
+        "Want me to show you a QR code?",
+    ),
+    # B (review fix round 2): "put <anything else> on <device>" is not Nova
+    # herself, and a QR code with no device context at all is not hers either.
+    (
+        "s47_put_someone_elses_calendar",
+        "can you put my calendar on my phone?",
+        "Want me to show you a QR code for your phone?",
+    ),
+    (
+        "s47_put_the_shopping_list",
+        "put the shopping list on my phone",
+        "Want me to show you a QR code for your phone?",
+    ),
+    (
+        "s47_put_the_playlist",
+        "put the playlist on my tablet please",
+        "Want me to show you a QR code for your phone?",
+    ),
+    (
+        "s47_link_not_qr",
+        "send me the link, not a QR code",
+        "Want me to show you a QR code for your phone?",
+    ),
+    (
+        "s47_qr_for_wifi_reply_form",
+        "make a QR code for my wifi",
+        "Want me to show you a QR code for your phone?",
+    ),
+    # B (review fix round 3): a bare "QR code" disqualifies itself when its
+    # OWN "for|of|to <X>" phrase names something else — REGARDLESS of a later
+    # put-phrase in the same clause (that "put" match is excluded anyway, on
+    # its own, by _USER_SELF_REPORT's "so I can").
+    (
+        "s47_qr_for_wifi_then_put_you_on_phone",
+        "make a QR code for my wifi so I can put you on my phone",
+        "Want me to make a QR code for your wifi?",
+    ),
+    (
+        "s47_qr_of_the_link_then_put_nova_on_tablet",
+        "give me a QR code of the link so I can put Nova on my tablet",
+        "Want me to give you a QR code of the link?",
+    ),
+    # B (review fix round 4): a device word that MODIFIES another noun is not
+    # the head of X — the QR code is for the number, the wifi, the manual,
+    # the listing.
+    (
+        "s47_qr_for_my_phone_number",
+        "make a QR code for my phone number",
+        "Want me to make a QR code for your phone number?",
+    ),
+    (
+        "s47_qr_for_my_phones_wifi",
+        "make a QR code for my phone's wifi",
+        "Want me to make a QR code for your phone's wifi?",
+    ),
+    (
+        "s47_qr_for_the_device_manual",
+        "give me a QR code for the device manual",
+        "Want me to give you a QR code for the device manual?",
+    ),
+    (
+        "s47_qr_to_my_android_app_listing",
+        "make a QR code to my Android app listing",
+        "Want me to make a QR code to your Android app listing?",
+    ),
+    # B (review fix round 5): X's closed grammar admits no verb before the
+    # head (a QR code that calls or texts a phone is not the phone's), and
+    # "machine" is no head for this rule (a washing machine is not a device
+    # she runs on).
+    (
+        "s47_qr_to_call_my_phone",
+        "make a QR code to call my phone",
+        "Want me to make a QR code to call your phone?",
+    ),
+    (
+        "s47_qr_to_text_my_phone",
+        "make a QR code to text my phone",
+        "Want me to make a QR code to text your phone?",
+    ),
+    (
+        "s47_qr_to_unlock_my_phone",
+        "make a QR code to unlock my phone",
+        "Want me to make a QR code to unlock your phone?",
+    ),
+    (
+        "s47_qr_to_find_my_phone",
+        "make a QR code to find my phone",
+        "Want me to make a QR code to find your phone?",
+    ),
+    (
+        "s47_qr_for_the_washing_machine",
+        "make a QR code for the washing machine",
+        "Want me to make a QR code for the washing machine?",
+    ),
+    (
+        "s47_qr_for_a_coffee_machine",
+        "make a QR code for a coffee machine",
+        "Want me to make a QR code for a coffee machine?",
+    ),
+    (
+        "s47_qr_for_the_vending_machine",
+        "make a QR code for the vending machine",
+        "Want me to make a QR code for the vending machine?",
+    ),
 ]
 
 
@@ -1322,6 +1560,27 @@ def test_a_refused_call_is_not_an_attempt():
     failed = [tool_span("web_search", ok=False)]
     assert (
         guards.deferral_check(reply, failed, DEFERRAL_TOOLS, user_message=WEB_INSTRUCTION) is None
+    )
+
+
+def test_an_offer_beside_a_listing_the_backend_ran_is_extra_work():
+    """S47 review fix round 4, item 1: a listing the BACKEND ran unasked (a
+    live_facts check, `meta["unasked"] = True`) is a real listing that really
+    ran this turn — the offer after it is about what comes next, exactly as
+    after her own listing. The "not her call" exclusion lives only in
+    chat._failed_tool_names (the capability relay); guards._attempted keeps
+    its c54cd621 behaviour for the offer shape."""
+    reply = "Here they are: a.md and b.md. Want me to list the files in the notes folder too?"
+    backend_ran = SimpleNamespace(
+        kind="tool",
+        name="workspace_list_files",
+        meta={"ok": True, "args_redacted": {}, "unasked": True},
+    )
+    assert (
+        guards.deferral_check(
+            reply, [backend_ran], DEFERRAL_TOOLS, user_message="list the files in my workspace"
+        )
+        is None
     )
 
 

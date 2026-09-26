@@ -26,6 +26,7 @@ function assistantRow(overrides: Partial<MessageRow> = {}): MessageRow {
     delegationsDone: [],
     delegations: [],
     attachments: [],
+    cards: [],
     ...overrides,
   }
 }
@@ -226,6 +227,7 @@ function userRow(text: string): MessageRow {
     delegationsDone: [],
     delegations: [],
     attachments: [],
+    cards: [],
   }
 }
 
@@ -549,6 +551,98 @@ describe('MessageBubble — the delegation line (S12)', () => {
     render(<MessageBubble row={assistantRow({ text: 'hi', streaming: false })} />)
     expect(screen.queryByTestId('delegation-line')).toBeNull()
     expect(screen.queryByTestId('delegation-chips')).toBeNull()
+  })
+})
+
+describe('MessageBubble — setup cards (S47)', () => {
+  it('draws a setup card after the reply, and nothing when there is none', () => {
+    const { rerender } = render(
+      <MessageBubble
+        row={assistantRow({
+          text: 'Scan the card with the tablet.',
+          streaming: false,
+          cards: [
+            {
+              kind: 'setup_qr',
+              setup: 'install_pwa',
+              address: 'https://nova.fake-tailnet.ts.net',
+              url: 'https://nova.fake-tailnet.ts.net/install',
+            },
+          ],
+        })}
+      />,
+    )
+    expect(screen.getByRole('img').getAttribute('aria-label')).toBe('QR code for https://nova.fake-tailnet.ts.net/install')
+    // The card sits AFTER the reply, not before it.
+    const reply = screen.getByText('Scan the card with the tablet.')
+    const cards = screen.getByTestId('setup-cards')
+    expect(reply.compareDocumentPosition(cards) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+
+    // And nothing when there is none (round 1, Folded Minor #4 — this title
+    // claimed both halves; only the first was ever checked).
+    rerender(<MessageBubble row={assistantRow({ text: 'Nothing to scan.', streaming: false })} />)
+    expect(screen.queryByTestId('setup-cards')).toBeNull()
+  })
+
+  it('a reloaded machine card past expiry says so, drawing no QR and no code (Review Focus 4)', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          text: 'Scan the card.',
+          streaming: false,
+          cards: [
+            {
+              kind: 'setup_qr',
+              setup: 'add_machine',
+              address: 'https://nova.fake-tailnet.ts.net',
+              url: 'https://nova.fake-tailnet.ts.net/add',
+              code_shown: true,
+              expires_at: '2020-01-01T00:00:00Z',
+            },
+          ],
+        })}
+      />,
+    )
+    expect(screen.getByTestId('setup-shown-once').textContent).toContain('shown once and expired')
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(screen.queryByTestId('setup-code')).toBeNull()
+  })
+
+  it('a reloaded machine card not yet expired still shows no QR and no code (Review Focus 4)', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          text: 'Scan the card.',
+          streaming: false,
+          cards: [
+            {
+              kind: 'setup_qr',
+              setup: 'add_machine',
+              address: 'https://nova.fake-tailnet.ts.net',
+              url: 'https://nova.fake-tailnet.ts.net/add',
+              code_shown: true,
+              expires_at: '2099-01-01T00:00:00Z',
+            },
+          ],
+        })}
+      />,
+    )
+    expect(screen.getByTestId('setup-shown-once').textContent).toContain('shown once and expires')
+    expect(screen.queryByRole('img')).toBeNull()
+    expect(screen.queryByTestId('setup-code')).toBeNull()
+  })
+
+  it('a card kind this build does not know is drawn as its link, never dropped', () => {
+    render(
+      <MessageBubble
+        row={assistantRow({
+          text: 'Here.',
+          streaming: false,
+          cards: [{ kind: 'setup_qr', setup: 'fax_machine', address: 'https://nova.fake-tailnet.ts.net', url: 'https://nova.fake-tailnet.ts.net/fax' }],
+        })}
+      />,
+    )
+    expect(screen.getByRole('link', { name: 'https://nova.fake-tailnet.ts.net/fax' })).toBeTruthy()
   })
 })
 

@@ -27,7 +27,7 @@ from novabundle import (
     raw_compose_rows,
 )
 
-RENDER = FIXTURES / "compose-v5.3.0.yaml"
+RENDER = FIXTURES / "compose-v5.5.1.yaml"
 ENV_EXAMPLE = COMPOSE_FILE.parent / ".env.example"
 
 
@@ -215,6 +215,7 @@ def test_the_dispositions_cover_every_v4_volume_by_name():
         "v4_models",
         "v4_ollama",
         "v4_pgdata",
+        "v4_status",
         "v4_tailscale",
         "v4_workspace",
     ]

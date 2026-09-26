@@ -69,6 +69,12 @@
           "source": "v4_workspace",
           "target": "/data/workspace",
           "volume": {}
+        },
+        {
+          "type": "volume",
+          "source": "v4_status",
+          "target": "/run/nova-status",
+          "read_only": true
         }
       ]
     },
@@ -346,6 +352,12 @@
           "volume": {}
         },
         {
+          "type": "volume",
+          "source": "v4_status",
+          "target": "/run/nova-status",
+          "volume": {}
+        },
+        {
           "type": "bind",
           "source": "/repo/deploy/tailscale",
           "target": "/config",
@@ -413,6 +425,9 @@
     },
     "v4_pgdata": {
       "name": "nova_v4_pgdata"
+    },
+    "v4_status": {
+      "name": "nova_v4_status"
     },
     "v4_tailscale": {
       "name": "nova_v4_tailscale"

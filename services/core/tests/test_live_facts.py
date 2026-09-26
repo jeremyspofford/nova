@@ -72,6 +72,12 @@ def test_a_tool_that_changes_something_is_refused_by_name():
     assert refusal and "changes something" in refusal
 
 
+def test_showing_a_setup_card_is_never_run_unasked():
+    """S47: it mints a pairing code and sends a card — it changes something."""
+    refusal = live_facts.runnable(_call("show_setup_qr", {"setup": "add_machine"}))
+    assert refusal and "changes something" in refusal
+
+
 def test_a_tool_that_reaches_an_address_the_note_chose_is_refused():
     """The reason reads_only is necessary and not sufficient.
 
