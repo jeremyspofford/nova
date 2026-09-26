@@ -1,8 +1,11 @@
 package config
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +80,14 @@ func TestWipeRemovesTheIdentityAndSetsTheAuditAside(t *testing.T) {
 	if p.Enrolled() {
 		t.Fatal("after a wipe the device must not be enrolled")
 	}
+	// Enrolled() is false if EITHER file is missing, so it cannot tell a
+	// clean wipe from one that left the other behind — check both by name.
+	if _, err := os.Stat(p.ConfigFile); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("config.json must be gone, got err=%v", err)
+	}
+	if _, err := os.Stat(p.KeyFile); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("key must be gone, got err=%v", err)
+	}
 	if _, err := os.Stat(p.AuditFile); !os.IsNotExist(err) {
 		t.Fatal("the live audit file must be gone")
 	}
@@ -86,5 +97,37 @@ func TestWipeRemovesTheIdentityAndSetsTheAuditAside(t *testing.T) {
 	}
 	if err := Wipe(p, now); err != nil {
 		t.Fatalf("wiping an already-wiped device is not an error: %v", err)
+	}
+}
+
+// A second wipe in the same unix second (or a set-aside name a previous
+// wipe already left behind) must not destroy an earlier set-aside audit
+// log: os.Rename REPLACES an existing destination on both Unix and Windows,
+// so Wipe must pick a name that does not exist yet.
+func TestWipeDoesNotClobberAnExistingSetAside(t *testing.T) {
+	p := testPaths(t)
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	if err := Save(p, Config{DeviceID: "d"}, priv); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p.AuditFile, []byte(`{"live":true}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Unix(1790000000, 0)
+	existing := p.AuditFile + ".revoked-1790000000"
+	priorContent := []byte(`{"earlier":true}` + "\n")
+	if err := os.WriteFile(existing, priorContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Wipe(p, now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(existing)
+	if err != nil || !bytes.Equal(got, priorContent) {
+		t.Fatalf("the earlier set-aside must be byte-identical afterwards: %q %v", got, err)
+	}
+	moved, err := os.ReadFile(existing + "-1")
+	if err != nil || !strings.Contains(string(moved), `"live":true`) {
+		t.Fatalf("the live audit log must move to the next free name (-1): %q %v", moved, err)
 	}
 }

@@ -1,7 +1,8 @@
 // Package config is the daemon's on-disk custody: the enrollment config and
-// the ed25519 private key (0600, in a 0700 dir). It holds the identity that
-// proves WHO signed a command; nothing here decides WHAT a verified command
-// may do.
+// the ed25519 private key (0600, in a 0700 dir on Linux and macOS; on
+// Windows, in a directory whose DACL is protected and grants only SYSTEM and
+// this user — custody_windows.go). It holds the identity that proves WHO
+// signed a command; nothing here decides WHAT a verified command may do.
 package config
 
 import (
@@ -162,11 +163,39 @@ func Wipe(p Paths, now time.Time) error {
 			errs = append(errs, err)
 		}
 	}
-	if _, err := os.Stat(p.AuditFile); err == nil {
-		aside := fmt.Sprintf("%s.revoked-%d", p.AuditFile, now.Unix())
-		if err := os.Rename(p.AuditFile, aside); err != nil {
-			errs = append(errs, err)
+	// Lstat the SOURCE first: on a second Wipe in the same unix second the
+	// live file is already gone, so this is a no-op rather than a second,
+	// pointless search for a free set-aside name. Any Stat/Lstat error
+	// other than "missing" (EACCES, EIO, ...) is reported, never swallowed
+	// as "nothing to do" — a wipe that silently left the audit log live is
+	// the one outcome worse than a crash.
+	if _, err := os.Lstat(p.AuditFile); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("checking the audit log %s: %w", p.AuditFile, err))
 		}
+	} else if aside, err := setAsideName(p.AuditFile, now); err != nil {
+		errs = append(errs, err)
+	} else if err := os.Rename(p.AuditFile, aside); err != nil {
+		errs = append(errs, err)
 	}
 	return errors.Join(errs...)
+}
+
+// setAsideName is the first "<audit file>.revoked-<unix>[-N]" name that does
+// not exist yet. os.Rename REPLACES an existing destination on both Unix and
+// Windows, so reusing a name a previous wipe already claimed would silently
+// destroy that earlier audit log instead of keeping it.
+func setAsideName(auditFile string, now time.Time) (string, error) {
+	base := fmt.Sprintf("%s.revoked-%d", auditFile, now.Unix())
+	candidate := base
+	for n := 0; ; n++ {
+		if n > 0 {
+			candidate = fmt.Sprintf("%s-%d", base, n)
+		}
+		if _, err := os.Lstat(candidate); errors.Is(err, fs.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", fmt.Errorf("checking a set-aside name %s: %w", candidate, err)
+		}
+	}
 }
