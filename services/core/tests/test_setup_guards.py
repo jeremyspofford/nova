@@ -217,6 +217,15 @@ ADDRESS_MUST_FIRE = [
         ("lan",),
         f"Open Nova at ({ORIGIN}) on the tablet.",
     ),
+    # -- review fix round 4 (markdown link): a judged url that is the TEXT of
+    # a markdown link whose TARGET is the same url is rewritten in both
+    # places — the link must not show the truth and still open the old url.
+    (
+        "markdown_link_text_and_target",
+        "Open Nova at [http://192.168.0.245:3000](http://192.168.0.245:3000) on the tablet.",
+        ("lan",),
+        f"Open Nova at [{ORIGIN}]({ORIGIN}) on the tablet.",
+    ),
 ]
 
 
@@ -353,6 +362,19 @@ ADDRESS_MUST_NOT_FIRE = [
         "that name is gone.",
         "hi",
     ),
+    # -- review fix round 4 (I-forms): the I-forms take "at" only — "I run
+    # on"/"I'm running on" name the machine a MODEL runs on (a provider's
+    # base_url, spec §8's must-not-fire), never where to open Nova.
+    (
+        "im_running_on_a_provider",
+        "Right now I'm running on http://192.168.0.50:8080, the llama.cpp server on the Dell.",
+        "hi",
+    ),
+    (
+        "i_run_on_a_provider",
+        "It's the llama.cpp server I run on http://192.168.0.50:8080.",
+        "hi",
+    ),
 ]
 
 
@@ -480,6 +502,11 @@ ADD_PATH_MUST_LOSE_CODE = [
     ("fragment_real_origin", f"{ORIGIN}/add/#K7PQ-9XYZ"),
     ("path_segment_wrong_origin", "https://nova-old.fake-tailnet.ts.net/add/K7PQ-9XYZ"),
     ("path_segment_real_origin", f"{ORIGIN}/add/K7PQ-9XYZ"),
+    # C (review fix round 4): the /add URL is recognised with or without a
+    # scheme, and case-insensitively on its path.
+    ("no_scheme_fragment_wrong_origin", "nova-old.fake-tailnet.ts.net/add#K7PQ-9XYZ"),
+    ("no_scheme_query_real_origin", "nova.fake-tailnet.ts.net/add?code=K7PQ-9XYZ"),
+    ("uppercase_path_fragment_real_origin", f"{ORIGIN}/ADD#K7PQ-9XYZ"),
 ]
 
 
@@ -498,6 +525,36 @@ def test_a_code_after_add_slash_is_gone_regardless_of_shape(label, url):
     assert "K7PQ" not in final.upper()
     if address_claim is not None:
         assert all("?" not in tok and "#" not in tok for tok in address_claim.tokens)
+        # C (review fix round 4): `wrong` never carries the token itself, and
+        # keeps nothing after /add — no segment, query or fragment — whether
+        # or not code_claim swapped the token first.
+        assert all("K7PQ" not in tok.upper() for tok in address_claim.tokens)
+        assert all(tok.endswith("/add") for tok in address_claim.tokens), address_claim.tokens
+
+
+# C (review fix round 4): a qualifying /add URL arms only ITS OWN token — in
+# its query, its fragment or its one segment after /add/ — never another
+# code-shaped token that merely shares its clause (a build, a commit).
+ADD_URL_ARMS_ONLY_ITS_OWN_TOKEN = [
+    (
+        "build_beside_the_add_page",
+        "Open https://nova.fake-tailnet.ts.net/add on the laptop running build 4ad87ac7.",
+    ),
+    (
+        "commit_beside_the_add_page",
+        "The add page https://nova.fake-tailnet.ts.net/add shipped in commit 4ad87ac7.",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "reply"),
+    ADD_URL_ARMS_ONLY_ITS_OWN_TOKEN,
+    ids=[c[0] for c in ADD_URL_ARMS_ONLY_ITS_OWN_TOKEN],
+)
+def test_an_add_url_arms_only_its_own_token(label, reply):
+    assert guards.code_claim_check(reply, "add my laptop") is None
+    assert guards.address_claim_check(reply, "add my laptop", ORIGIN) is None
 
 
 # -- narration: showed_setup_qr -----------------------------------------------

@@ -3415,15 +3415,22 @@ def _state_claim_stands(
 
 
 def _failed_tool_names(spans: Sequence[Any]) -> frozenset[str]:
-    """Tool names THIS TURN attempted (guards._attempted's own definition —
-    round 3, D clarified: never a refused markup/closed-round call, never a
-    backend-run `unasked` live_facts check) and never succeeded. "Succeeded"
-    is at least one of those spans with `ok is True`. A tool that failed once
-    but then succeeded (a retry) is NOT in this set — it demonstrably can
-    work this turn. `guards._attempted` is the one place "attempted" is
-    decided; this does not keep a second definition of it, so a refused
-    markup call or an unasked backend check can never silence a capability
-    correction beside it."""
+    """Tool names THIS TURN she attempted (guards._attempted's own definition —
+    round 3, D clarified: never a refused markup/closed-round call) and never
+    succeeded. "Succeeded" is at least one of those spans with `ok is True`.
+    A tool that failed once but then succeeded (a retry) is NOT in this set —
+    it demonstrably can work this turn. `guards._attempted` is the one place
+    "attempted" is decided; this does not keep a second definition of it, so
+    a refused markup call can never silence a capability correction beside
+    it.
+
+    A backend-run `unasked` live_facts check is not her call either, and that
+    exclusion lives HERE only (review fix round 4, item 1): those spans are
+    dropped before guards._attempted is asked, because _attempted's other
+    caller — the offer shape — must keep counting a check that really ran."""
+    hers = [
+        span for span in spans if (getattr(span, "meta", None) or {}).get("unasked") is not True
+    ]
     names = {
         getattr(span, "name", None)
         for span in spans
@@ -3431,8 +3438,8 @@ def _failed_tool_names(spans: Sequence[Any]) -> frozenset[str]:
     }
     failed: set[str] = set()
     for name in names:
-        if not guards._attempted(frozenset({name}), spans):
-            continue  # every span for it was refused or an unasked backend check
+        if not guards._attempted(frozenset({name}), hers):
+            continue  # every span for it was refused, or a check she never asked for
         succeeded = any(
             getattr(span, "kind", None) == "tool"
             and getattr(span, "name", None) == name

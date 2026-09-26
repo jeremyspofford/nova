@@ -1093,6 +1093,15 @@ OFFER_MUST_FIRE = [
         "Want me to show you a QR code for your phone?",
         "show_setup_qr",
     ),
+    (
+        # B (review fix round 4): X is the WHOLE noun phrase after "for|of|to"
+        # and its HEAD (last) noun decides — "my new phone" is headed by
+        # "phone", with an adjective in front of it.
+        "s47_qr_code_for_my_new_phone",
+        "show me a QR code for my new phone",
+        "Want me to show you a QR code for your new phone?",
+        "show_setup_qr",
+    ),
 ]
 
 
@@ -1332,6 +1341,29 @@ OFFER_MUST_NOT_FIRE = [
         "give me a QR code of the link so I can put Nova on my tablet",
         "Want me to give you a QR code of the link?",
     ),
+    # B (review fix round 4): a device word that MODIFIES another noun is not
+    # the head of X — the QR code is for the number, the wifi, the manual,
+    # the listing.
+    (
+        "s47_qr_for_my_phone_number",
+        "make a QR code for my phone number",
+        "Want me to make a QR code for your phone number?",
+    ),
+    (
+        "s47_qr_for_my_phones_wifi",
+        "make a QR code for my phone's wifi",
+        "Want me to make a QR code for your phone's wifi?",
+    ),
+    (
+        "s47_qr_for_the_device_manual",
+        "give me a QR code for the device manual",
+        "Want me to give you a QR code for the device manual?",
+    ),
+    (
+        "s47_qr_to_my_android_app_listing",
+        "make a QR code to my Android app listing",
+        "Want me to make a QR code to your Android app listing?",
+    ),
 ]
 
 
@@ -1412,6 +1444,27 @@ def test_a_refused_call_is_not_an_attempt():
     failed = [tool_span("web_search", ok=False)]
     assert (
         guards.deferral_check(reply, failed, DEFERRAL_TOOLS, user_message=WEB_INSTRUCTION) is None
+    )
+
+
+def test_an_offer_beside_a_listing_the_backend_ran_is_extra_work():
+    """S47 review fix round 4, item 1: a listing the BACKEND ran unasked (a
+    live_facts check, `meta["unasked"] = True`) is a real listing that really
+    ran this turn — the offer after it is about what comes next, exactly as
+    after her own listing. The "not her call" exclusion lives only in
+    chat._failed_tool_names (the capability relay); guards._attempted keeps
+    its c54cd621 behaviour for the offer shape."""
+    reply = "Here they are: a.md and b.md. Want me to list the files in the notes folder too?"
+    backend_ran = SimpleNamespace(
+        kind="tool",
+        name="workspace_list_files",
+        meta={"ok": True, "args_redacted": {}, "unasked": True},
+    )
+    assert (
+        guards.deferral_check(
+            reply, [backend_ran], DEFERRAL_TOOLS, user_message="list the files in my workspace"
+        )
+        is None
     )
 
 
