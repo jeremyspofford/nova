@@ -8,10 +8,15 @@ import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"novad/internal/platform"
 )
 
 // Config is the enrollment record written by `novad enroll`.
@@ -22,9 +27,11 @@ type Config struct {
 	CorePubKey string `json:"core_pubkey"` // pinned at enrollment; 64 hex
 }
 
-// Paths resolves the daemon's file locations, honoring XDG_CONFIG_HOME and
-// XDG_STATE_HOME. The audit log lives in the state dir; the key and config in
-// the config dir.
+// Paths resolves the daemon's file locations per OS (platform.ConfigBase and
+// StateBase): Linux keeps XDG (unchanged, so an enrolled daemon finds its
+// key), macOS uses ~/Library/Application Support, Windows puts config in
+// %AppData% and the audit log in %LocalAppData%. The audit log lives in the
+// state dir; the key and config in the config dir.
 type Paths struct {
 	ConfigDir  string
 	StateDir   string
@@ -40,16 +47,16 @@ func DefaultPaths() (Paths, error) {
 	if err != nil {
 		return Paths{}, fmt.Errorf("cannot resolve home dir: %w", err)
 	}
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		configHome = filepath.Join(home, ".config")
+	configBase, err := platform.ConfigBase()
+	if err != nil {
+		return Paths{}, fmt.Errorf("cannot resolve the config dir: %w", err)
 	}
-	stateHome := os.Getenv("XDG_STATE_HOME")
-	if stateHome == "" {
-		stateHome = filepath.Join(home, ".local", "state")
+	stateBase, err := platform.StateBase()
+	if err != nil {
+		return Paths{}, fmt.Errorf("cannot resolve the state dir: %w", err)
 	}
-	configDir := filepath.Join(configHome, "novad")
-	stateDir := filepath.Join(stateHome, "novad")
+	configDir := filepath.Join(configBase, "novad")
+	stateDir := filepath.Join(stateBase, "novad")
 	return Paths{
 		ConfigDir:  configDir,
 		StateDir:   stateDir,
@@ -81,6 +88,14 @@ func Save(p Paths, cfg Config, priv ed25519.PrivateKey) error {
 	}
 	if err := os.MkdirAll(p.StateDir, 0o700); err != nil {
 		return err
+	}
+	// Windows ignores the mode bits above; harden sets the DACL that makes
+	// them true there (custody_windows.go). Before the files are written, so
+	// they inherit it. A no-op elsewhere.
+	for _, dir := range []string{p.ConfigDir, p.StateDir} {
+		if err := harden(dir); err != nil {
+			return err
+		}
 	}
 	body, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -131,4 +146,27 @@ func writeFile0600(path string, body []byte) error {
 		return err
 	}
 	return f.Close()
+}
+
+// Wipe removes this device's identity after core revoked it: the config and
+// the key go, so a restart cannot reconnect as a device core has disowned,
+// and the audit log is SET ASIDE (renamed, never deleted — it is the record
+// of what this machine did) so a later enroll starts a fresh chain instead of
+// replaying the revoked device's chain under the new id. Missing files are
+// fine; any other failure is returned, because a wipe that silently
+// half-happened is the one outcome worse than none.
+func Wipe(p Paths, now time.Time) error {
+	var errs []error
+	for _, f := range []string{p.ConfigFile, p.KeyFile} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	if _, err := os.Stat(p.AuditFile); err == nil {
+		aside := fmt.Sprintf("%s.revoked-%d", p.AuditFile, now.Unix())
+		if err := os.Rename(p.AuditFile, aside); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
