@@ -4,17 +4,41 @@ must-not-fire row is a sentence she may truly say."""
 
 from __future__ import annotations
 
+import json
+import uuid
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 
-from app import guards
+from app import chat, guards, network, traces
 
 ORIGIN = "https://nova.fake-tailnet.ts.net"
 
 
 def _span(name: str, *, ok: bool = True) -> SimpleNamespace:
     return SimpleNamespace(kind="tool", name=name, meta={"ok": ok, "args_redacted": {}})
+
+
+def _patch_origin(monkeypatch) -> None:
+    """network.address() answers the fixture origin — no status file, no DB."""
+    monkeypatch.setattr(
+        chat.network,
+        "address",
+        lambda *_a, **_k: network.Address(origin=ORIGIN, reason=None, read_at=datetime.now(UTC)),
+    )
+
+
+def _rewrite_and_file(reply: str, user: str) -> tuple[list, traces.Turn]:
+    """chat._rewrite_class_claims over `reply`, each claim filed through the
+    real chat._file_rewrite_span onto a real traces.Turn — what persists is
+    the last claim's `rewritten`, and the turn's spans are what turn_spans
+    would hold."""
+    found = chat._rewrite_class_claims(reply, user)
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    for name, claim in found:
+        chat._file_rewrite_span(turn, name, claim)
+    return found, turn
 
 
 # -- code_claim ---------------------------------------------------------------
@@ -557,6 +581,88 @@ def test_an_add_url_arms_only_its_own_token(label, reply):
     assert guards.address_claim_check(reply, "add my laptop", ORIGIN) is None
 
 
+# C (review fix round 5): a sentence holding a qualifying /add URL also arms
+# a code-shaped token PRESENTED AS A CODE — right after "code" (optionally
+# "is"/"was"/":"), or after enter|type|use|input|paste with at most one
+# determiner between. The two rows above ("build …", "commit …") stay
+# untouched.
+CODE_PRESENTED_BESIDE_ADD = [
+    (
+        "enter_the_code",
+        "Open https://nova.fake-tailnet.ts.net/add on the laptop and enter the code K7PQ-9XYZ.",
+    ),
+    ("type_the_token", "Open https://nova.fake-tailnet.ts.net/add and type K7PQ-9XYZ."),
+    (
+        "the_code_is_after_a_semicolon",
+        "Open https://nova.fake-tailnet.ts.net/add on the laptop; the code is K7PQ-9XYZ.",
+    ),
+    ("use_code_colon", "Go to https://nova.fake-tailnet.ts.net/add and use code: K7PQ-9XYZ."),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "reply"), CODE_PRESENTED_BESIDE_ADD, ids=[c[0] for c in CODE_PRESENTED_BESIDE_ADD]
+)
+def test_a_code_presented_beside_an_add_url_is_gone(label, reply, monkeypatch):
+    _patch_origin(monkeypatch)
+    found, turn = _rewrite_and_file(reply, "add my laptop")
+    assert "code_claim" in [name for name, _ in found], f"{label!r} kept its code"
+    final = found[-1][1].rewritten
+    assert "K7PQ" not in final.upper()
+    assert "K7PQ" not in json.dumps([span.meta for span in turn.spans]).upper()
+
+
+# -- review fix round 4, item 3 (C): nothing after /add survives --------------
+# (moved here from tests/test_chat_setup_guards.py in review fix round 5, so
+# it runs without a database; the body is unchanged)
+
+
+def test_an_owner_typed_code_after_add_never_reaches_span_meta(monkeypatch):
+    """The owner's own code is exempt from code_claim, so nothing swaps it —
+    and the setup-page rewrite and `wrong` must still drop everything after
+    /add, or his code lands in the persisted reply and in turn_spans."""
+    monkeypatch.setattr(
+        chat.network,
+        "address",
+        lambda *_a, **_k: network.Address(origin=ORIGIN, reason=None, read_at=datetime.now(UTC)),
+    )
+    found = chat._rewrite_class_claims(
+        "Open https://nova-old.fake-tailnet.ts.net/add/K7PQ-9XYZ on the laptop.",
+        "my code is K7PQ-9XYZ, where do I use it?",
+    )
+    assert [name for name, _ in found] == ["address_claim"]
+    assert found[-1][1].rewritten == f"Open {ORIGIN}/add on the laptop."
+    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
+    for name, claim in found:
+        chat._file_rewrite_span(turn, name, claim)
+    [span] = turn.spans
+    assert span.meta["wrong"] == ["https://nova-old.fake-tailnet.ts.net/add"]
+    assert "K7PQ" not in json.dumps(span.meta).upper()
+
+
+# C (review fix round 5): /install and /app get the same cut as /add — the
+# setup-page rewrite and `wrong` drop everything after the setup page's
+# path — so an owner-typed code (exempt from code_claim) never reaches span
+# meta on ANY setup page.
+SETUP_PAGES_WITH_A_TAIL = [("install", "/install"), ("app", "/app")]
+
+
+@pytest.mark.parametrize(
+    ("label", "page"), SETUP_PAGES_WITH_A_TAIL, ids=[c[0] for c in SETUP_PAGES_WITH_A_TAIL]
+)
+def test_an_owner_typed_code_after_install_or_app_never_reaches_span_meta(label, page, monkeypatch):
+    _patch_origin(monkeypatch)
+    found, turn = _rewrite_and_file(
+        f"Open https://nova-old.fake-tailnet.ts.net{page}/K7PQ-9XYZ on the laptop.",
+        "my code is K7PQ-9XYZ",
+    )
+    assert [name for name, _ in found] == ["address_claim"]
+    assert found[-1][1].rewritten == f"Open {ORIGIN}{page} on the laptop."
+    [span] = turn.spans
+    assert span.meta["wrong"] == [f"https://nova-old.fake-tailnet.ts.net{page}"]
+    assert "K7PQ" not in json.dumps(span.meta).upper()
+
+
 # -- narration: showed_setup_qr -----------------------------------------------
 
 CLAIMED_CARDS = [
@@ -601,3 +707,23 @@ CARD_NOT_CLAIMED = [
 @pytest.mark.parametrize("reply", CARD_NOT_CLAIMED)
 def test_a_deictic_or_relayed_qr_mention_is_not_a_claim(reply):
     assert guards.narration_check(reply, []) is None
+
+
+# -- review fix round 4, item 1: the "unasked" exclusion lives only here -----
+# (moved here from tests/test_chat_setup_guards.py in review fix round 5, so
+# it runs without a database; the body is unchanged)
+
+
+def test_a_failed_unasked_backend_check_is_not_her_failed_call():
+    """A live_facts check the backend ran unasked (`meta["unasked"] = True`)
+    is not a call she made, so its failure must not silence a capability
+    correction beside it (ruling D clarified, round 3). Round 4 moved that
+    exclusion out of guards._attempted — whose offer-shape caller must keep
+    counting a backend-run listing — into chat._failed_tool_names alone."""
+
+    def span(**meta):
+        return SimpleNamespace(kind="tool", name="machine_status", meta=meta)
+
+    assert chat._failed_tool_names([span(ok=False, unasked=True)]) == frozenset()
+    # the control: the same failure as her own call is her failed call
+    assert chat._failed_tool_names([span(ok=False)]) == frozenset({"machine_status"})

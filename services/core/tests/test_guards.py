@@ -1102,6 +1102,83 @@ OFFER_MUST_FIRE = [
         "Want me to show you a QR code for your new phone?",
         "show_setup_qr",
     ),
+    # B (review fix round 5): X is a closed grammar — [determiner] [closed
+    # modifiers] HEAD [model number] BOUNDARY — and the boundary after the
+    # head may be a preposition, a conjunction or complementizer, a trailer
+    # (please/now/too/again/real/quickly), or any non-letter character; the
+    # heads include Nova/you/yourself/setup/pairing again.
+    (
+        "s47_qr_for_my_phone_to_scan",
+        "show me a QR code for my phone to scan",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_that_i_can_scan",
+        "show me a QR code for my phone that I can scan",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_real_quick",
+        "show me a QR code for my phone real quick",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_double_dash",
+        "show me a QR code for my phone -- thanks",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_slash_tablet",
+        "show me a QR code for my phone/tablet",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_iphone_15",
+        "show me a QR code for my iPhone 15",
+        "Want me to show you a QR code for your iPhone 15?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_ellipsis",
+        "show me a QR code for my phone…",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_my_phone_emoji",
+        "show me a QR code for my phone \U0001f642",
+        "Want me to show you a QR code for your phone?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_the_phone_on_my_desk",
+        "show me a QR code for the phone on my desk",
+        "Want me to show you a QR code for the phone on your desk?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_nova",
+        "show me a QR code for Nova",
+        "Want me to show you a QR code for Nova?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_you",
+        "give me a QR code for you",
+        "Want me to give you a QR code?",
+        "show_setup_qr",
+    ),
+    (
+        "s47_qr_for_setup",
+        "show me a QR code for setup",
+        "Want me to show you a QR code for setup?",
+        "show_setup_qr",
+    ),
 ]
 
 
@@ -1363,6 +1440,45 @@ OFFER_MUST_NOT_FIRE = [
         "s47_qr_to_my_android_app_listing",
         "make a QR code to my Android app listing",
         "Want me to make a QR code to your Android app listing?",
+    ),
+    # B (review fix round 5): X's closed grammar admits no verb before the
+    # head (a QR code that calls or texts a phone is not the phone's), and
+    # "machine" is no head for this rule (a washing machine is not a device
+    # she runs on).
+    (
+        "s47_qr_to_call_my_phone",
+        "make a QR code to call my phone",
+        "Want me to make a QR code to call your phone?",
+    ),
+    (
+        "s47_qr_to_text_my_phone",
+        "make a QR code to text my phone",
+        "Want me to make a QR code to text your phone?",
+    ),
+    (
+        "s47_qr_to_unlock_my_phone",
+        "make a QR code to unlock my phone",
+        "Want me to make a QR code to unlock your phone?",
+    ),
+    (
+        "s47_qr_to_find_my_phone",
+        "make a QR code to find my phone",
+        "Want me to make a QR code to find your phone?",
+    ),
+    (
+        "s47_qr_for_the_washing_machine",
+        "make a QR code for the washing machine",
+        "Want me to make a QR code for the washing machine?",
+    ),
+    (
+        "s47_qr_for_a_coffee_machine",
+        "make a QR code for a coffee machine",
+        "Want me to make a QR code for a coffee machine?",
+    ),
+    (
+        "s47_qr_for_the_vending_machine",
+        "make a QR code for the vending machine",
+        "Want me to make a QR code for the vending machine?",
     ),
 ]
 

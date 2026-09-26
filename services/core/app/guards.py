@@ -2319,12 +2319,12 @@ _DEFERRAL_TOOLS: tuple[_ActionClass, ...] = (_WEB_SEARCH, _FETCH_URL, _SET_REMIN
 #     counts two ways (round 3, B): (2a) its OWN "for|of|to <X>" phrase, when
 #     it has one, names a QUALIFYING object, and then it counts
 #     UNCONDITIONALLY ("show me a QR code for my phone" needs no "put" phrase
-#     anywhere). X is the WHOLE noun phrase up to the next clause break,
-#     conjunction or "so", and it qualifies only when its HEAD (last) noun is
-#     a device word (round 4, B) — "my new phone" does, while a device word
-#     that MODIFIES another noun does not: "my phone number", "my phone's
-#     wifi", "the device manual", "my Android app listing" (see
-#     _QR_OBJECT_HEADED_BY_A_DEVICE for how the head is read); (2b) it has
+#     anywhere). X is a closed grammar (round 5, B — see _QR_OBJECT): a
+#     determiner, closed modifiers, a HEAD that is a device word or
+#     Nova/you/yourself/setup/pairing, then a boundary — "my new phone" and
+#     "Nova" do, while a device word that MODIFIES another noun does not:
+#     "my phone number", "my phone's wifi", "the device manual", "my Android
+#     app listing"; (2b) it has
 #     NO "for|of|to" phrase of its own, and the SAME clause names putting
 #     Nova/you/yourself on a device LATER, checked with a bounded LOOKAHEAD
 #     so the match itself is just the "QR code" mention (early in the
@@ -2357,53 +2357,63 @@ _PUT_ON_A_DEVICE = (
     r"\bput(?:ting)?\s+(?:you|nova|yourself)\s+on\s+"
     r"(?:a\s+|an\s+|my\s+|your\s+|another\s+)?" + _DEVICE_WORD + r"\b"
 )
-# B (round 4): the object X of "QR code for|of|to <X>" qualifies only when
-# its HEAD — its last noun — is a device word (the same words
-# _PUT_ON_A_DEVICE knows). Round 3 read only the FIRST word after one
-# optional article, so a device word that MODIFIES another noun qualified:
-# "a QR code for my phone number" is for the number, not the phone. X runs
-# up to the next clause break, conjunction or "so" (_QR_OBJECT_BREAK_WORD,
-# or punctuation), and the device word must END it:
-#   - it is a whole word — no "phone's" (a possessive: "my phone's wifi")
-#     and no "phone-case" (a compound);
-#   - after it come only words that are never a noun — please, now, too,
-#     again, here, as well, right now (_QR_OBJECT_TRAILER) — then X's end.
-#     Anything else after it ("number", "manual", "app listing", "in the
-#     kitchen") is a later noun, and that noun is the head;
-#   - the words before it (at most four) name no preposition: in "the wifi
-#     on my phone" the device word sits inside a phrase modifying "wifi",
-#     which is X's head (silent at round 3, and it stays silent).
-# Round 3's non-device objects (Nova/you/yourself, setup/pairing) are not
-# device words and no longer qualify here; a "setup/pairing QR code" still
-# counts through leg (1), and "put you/Nova on my phone" through leg (3).
-# Every repeat is bounded and the whole test is a LOOKAHEAD after "QR
-# code", so the sweep's padding inputs never reach it and the match itself
-# stays the "QR code" mention that _USER_SELF_REPORT reads `before` of.
-_QR_OBJECT_BREAK_WORD = (
-    r"(?:and|or|nor|but|yet|so|because|since|while|whereas|although|though"
-    r"|if|unless|until|when|whenever|then)\b"
+# B (round 5, replacing round 4's wording): the object X of "QR code
+# for|of|to <X>" is a CLOSED grammar:
+#   [determiner] [closed modifiers] HEAD [model number] BOUNDARY
+#   - determiner or possessive (_QR_OBJECT_DETERMINER): my, your, the, a,
+#     an, this, that, our — at most one;
+#   - modifiers (_QR_OBJECT_MODIFIER): new, other, second, old, work, home,
+#     personal, spare, kid's, kids' — zero or more (bounded);
+#   - HEAD (_QR_OBJECT_HEAD): phone, tablet, iPhone, iPad, Android, laptop,
+#     computer, device, singular or plural — WITHOUT "machine" for this rule
+#     (nobody puts Nova on a washing machine) — or Nova, you, yourself,
+#     setup, pairing;
+#   - an optional model number (digits): "my iPhone 15";
+#   - BOUNDARY (_QR_OBJECT_BOUNDARY): the end of the text, any non-letter
+#     character (punctuation, dashes, slash, ellipsis, emoji), a preposition
+#     (to, on, in, with, at, from, for, by), a conjunction or complementizer
+#     (and, or, but, so, because, since, while, if, when, that, which), or
+#     please/now/too/again/real/quickly.
+# Nothing else may sit before the head, so a verb ("to call/text/unlock/find
+# my phone") or an unlisted modifier ("the washing machine") never
+# qualifies; and only a boundary may follow it, so a device word that
+# MODIFIES another noun ("my phone number", "the device manual", "my Android
+# app listing") never does. One reading the ruling leaves to the code: an
+# apostrophe GLUED to the head is a possessive, not a boundary ("my phone's
+# wifi" is round 4's must-not row; "my phones' chargers" is the same), and so
+# is a hyphen joining a compound ("phone-case"), while a free-standing dash
+# ("my phone -- thanks") is one. Every repeat is bounded and the whole test is a
+# LOOKAHEAD after "QR code", so the match itself stays the "QR code" mention
+# that _USER_SELF_REPORT reads `before` of.
+_QR_OBJECT_DETERMINER = r"(?:my|your|the|a|an|this|that|our)"
+_QR_OBJECT_MODIFIER = r"(?:new|other|second|old|work|home|personal|spare|kid['’]s|kids['’])"
+_QR_OBJECT_HEAD = (
+    r"(?:phones?|tablets?|iphones?|ipads?|androids?|laptops?|computers?|devices?"
+    r"|nova|yourself|you|setup|pairing)"
 )
-_QR_OBJECT_PREPOSITION = (
-    r"(?:on|in|at|with|from|for|of|to|into|onto|by|via|about|over|under"
-    r"|inside|near|through|across|like|without|within)\b"
+_QR_OBJECT_BOUNDARY = (
+    r"(?=\s*$"
+    # glued to the head: any non-letter but an apostrophe (a possessive,
+    # "phone's"/"phones'") or a hyphen that joins a compound ("phone-case")
+    r"|(?!['’]|-[^\W\d_])(?![^\W\d_])\S"
+    # after whitespace: a free-standing non-letter ("-- thanks", "🙂")
+    r"|\s+(?!['’-][^\W\d_])(?![^\W\d_])\S"
+    r"|\s+(?:to|on|in|with|at|from|for|by|and|or|but|so|because|since|while|if|when"
+    r"|that|which|please|now|too|again|real|quickly)\b)"
 )
-_QR_OBJECT_TRAILER = r"(?:please|now|too|again|here|as\s+well|right\s+now)\b"
-_QR_OBJECT_HEADED_BY_A_DEVICE = (
-    r"(?:(?!"
-    + _QR_OBJECT_BREAK_WORD
-    + r"|"
-    + _QR_OBJECT_PREPOSITION
-    + r")[\w'’-]+\s+){0,4}"
-    + _DEVICE_WORD
-    + r"(?![\w'’-])(?:\s+"
-    + _QR_OBJECT_TRAILER
-    + r")*(?=\s*(?:[,;:.?!()\[\]\"“”—–]|$)|\s+-(?:\s|$)|\s+"
-    + _QR_OBJECT_BREAK_WORD
-    + r")"
+_QR_OBJECT = (
+    r"(?:"
+    + _QR_OBJECT_DETERMINER
+    + r"\s+)?(?:"
+    + _QR_OBJECT_MODIFIER
+    + r"\s+){0,4}"
+    + _QR_OBJECT_HEAD
+    + r"(?:\s*\d+)?"
+    + _QR_OBJECT_BOUNDARY
 )
 _SETUP_QR_INSTRUCTS = re.compile(
     r"(?:setup|pairing)\s+(?:qr\s*codes?|cards?)\b"
-    r"|\bqr\s*codes?\b(?=\s*(?:for|of|to)\s+" + _QR_OBJECT_HEADED_BY_A_DEVICE + r")"
+    r"|\bqr\s*codes?\b(?=\s*(?:for|of|to)\s+" + _QR_OBJECT + r")"
     rf"|\bqr\s*codes?\b(?!\s*(?:for|of|to)\b)(?=[^.?!]{{0,60}}?{_PUT_ON_A_DEVICE})"
     rf"|{_PUT_ON_A_DEVICE}",
     re.I,
@@ -6193,6 +6203,22 @@ def _in_own_tail(tails: list[tuple[int, int]], start: int, end: int) -> bool:
     return i >= 0 and tails[i][1] >= end
 
 
+# C (round 5): beside a qualifying /add URL, a code-shaped token PRESENTED
+# AS A CODE is pairing context too — right after "code" (optionally "is",
+# "was" or ":"), or after enter|type|use|input|paste with at most one
+# determiner (the, this, that, your) between: "…/add on the laptop and enter
+# the code K7PQ-9XYZ", "…/add and type K7PQ-9XYZ". A build or a commit
+# ("…/add on the laptop running build 4ad87ac7") is neither, and stays
+# untouched. Groups 1 and 2 are the token's halves, as in _CODE_TOKEN; the
+# lead ends in whitespace or ":", so nothing is glued to the token's left.
+_CODE_PRESENTED = re.compile(
+    r"(?:\bcode(?:\s+(?:is|was))?(?:\s*:\s*|\s+)"
+    r"|\b(?:enter|type|use|input|paste)\s+(?:(?:the|this|that|your)\s+)?)"
+    rf"({_CODE_CHAR}{{4}})-?({_CODE_CHAR}{{4}})(?![A-Za-z0-9-])",
+    re.I,
+)
+
+
 CODE_ON_THE_CARD = "the code on the card"
 CODE_CLAIM_CORRECTION = (
     "Correction: I never see pairing codes — a code reaches only the card on your screen, "
@@ -6215,7 +6241,11 @@ def code_claim_check(reply_text: str, user_message: str = "") -> RewriteClaim | 
     --code, novad, "one-time code", "setup code" — or, for the token riding
     in an /add URL itself (its query, its fragment, or a single path segment
     after /add/) and for that token ONLY (round 4), the URL, on a host rule 1
-    accepts, with or without a scheme (`_add_url_token_start`). A
+    accepts, with or without a scheme (`_add_url_token_start`); and, in a
+    SENTENCE holding such a URL, a token PRESENTED AS A CODE (round 5,
+    `_CODE_PRESENTED` — "enter the code K7PQ-9XYZ", "type K7PQ-9XYZ"). The
+    scope is the sentence because ";" splits clauses and "…/add on the
+    laptop; the code is K7PQ-9XYZ." must still lose its code. A
     bare "code" is not enough on its own — "the verification code in that
     email is 48KX2M9P" and "error code E4B7-9C2D came from the updater" are
     honest, code-shaped or not — and neither is a different service's own
@@ -6227,6 +6257,14 @@ def code_claim_check(reply_text: str, user_message: str = "") -> RewriteClaim | 
         return None
     theirs = {_code_key(m.group(1), m.group(2)) for m in _CODE_TOKEN.finditer(user_message or "")}
     invented: set[str] = set()
+
+    def consider(m: re.Match[str]) -> None:
+        key = _code_key(m.group(1), m.group(2))
+        if key in theirs:
+            return
+        if any(ch.isdigit() for ch in key) and any(ch.isalpha() for ch in key):
+            invented.add(key)
+
     for clause, _is_question in _clauses(reply_text):
         whole_clause = _CODE_WORD.search(clause) is not None
         own = [] if whole_clause else _own_add_tails(clause)
@@ -6235,11 +6273,12 @@ def code_claim_check(reply_text: str, user_message: str = "") -> RewriteClaim | 
         for m in _CODE_TOKEN.finditer(clause):
             if not whole_clause and not _in_own_tail(own, m.start(), m.end()):
                 continue  # C (round 4): an /add URL arms its own token, no other
-            key = _code_key(m.group(1), m.group(2))
-            if key in theirs:
-                continue
-            if any(ch.isdigit() for ch in key) and any(ch.isalpha() for ch in key):
-                invented.add(key)
+            consider(m)
+    # C (round 5): a token PRESENTED AS A CODE beside a qualifying /add URL.
+    for sentence in _sentences(reply_text):
+        if _CODE_PRESENTED.search(sentence) is not None and _own_add_tails(sentence):
+            for m in _CODE_PRESENTED.finditer(sentence):
+                consider(m)
     if not invented:
         return None
 
@@ -6356,25 +6395,30 @@ def _strip_query_and_fragment(url: str) -> str:
     return url.split("?", 1)[0].split("#", 1)[0]
 
 
-def _is_add_page(path: str) -> bool:
-    """The /add setup page, whatever rides after it (a segment, a query and a
-    fragment are not in `path`, which urlsplit has already cut)."""
-    return path == "/add" or path.startswith("/add/")
+def _setup_page_of(path: str) -> str | None:
+    """The setup page `path` names — "/install", "/app" or "/add" — whatever
+    rides after it (a segment; a query and a fragment are not in `path`,
+    which urlsplit has already cut); None for any other path."""
+    if _SETUP_PAGE.match(path) is None:
+        return None
+    return "/" + path.split("/", 2)[1]
 
 
-def _cut_after_add(url: str) -> str:
-    """`url` with EVERYTHING after an /add page's "/add" dropped — a segment,
-    a query, a fragment (ruling C, round 4); any other url unchanged. What
-    address_claim records of a judged /add url: a code, typed by the owner
-    or invented, rides in a segment as readily as in a query, and the span's
+def _cut_after_setup_page(url: str) -> str:
+    """`url` with EVERYTHING after its setup page's path dropped — a segment,
+    a query, a fragment (ruling C, round 4, for /add; round 5, for /install
+    and /app too); any other url unchanged. What address_claim records of a
+    judged setup-page url: a code, typed by the owner or invented, rides in a
+    segment as readily as in a query, on any setup page, and the span's
     `wrong` must never carry one."""
     try:
         parts = urlsplit(url)
     except ValueError:
         return url
-    if not _is_add_page(parts.path or ""):
+    page = _setup_page_of(parts.path or "")
+    if page is None:
         return url
-    return url[: len(parts.scheme) + len("://") + len(parts.netloc)] + "/add"
+    return url[: len(parts.scheme) + len("://") + len(parts.netloc)] + page
 
 
 def _wrong_address(
@@ -6416,7 +6460,9 @@ def _wrong_address(
         # a path SEGMENT goes too — everything after /add — whether or not
         # code_claim swapped the token first: an owner-typed code is exempt
         # from code_claim, so nothing else would ever cut it out of /add/<code>.
-        page = "/add" if _is_add_page(path) else parts.path
+        # Round 5: /install and /app get the same cut, so no setup page ever
+        # carries an owner-typed code into the corrected URL.
+        page = _setup_page_of(path) or path
         return ("setup_page", f"{origin}{page}" if origin else NO_ADDRESS)
     replacement = origin or NO_ADDRESS
     setup_or_root = _empty_or_setup_path(path)
@@ -6525,11 +6571,12 @@ def address_claim_check(
                 spans.setdefault(target, (target + len(url), rule, replacement))
             # I7 (round 1) + C (round 2): never carry a query or a fragment
             # into what is recorded either — a code embedded in one must not
-            # be echoed in a guard span. C (round 4): nor, for /add, anything
-            # after /add at all (rule 1's own replacement drops the same).
+            # be echoed in a guard span. C (round 4, /add; round 5, every
+            # setup page): nor anything after the setup page's path at all
+            # (rule 1's own replacement drops the same).
             recorded = _strip_query_and_fragment(url)
             if rule == "setup_page":
-                recorded = _cut_after_add(recorded)
+                recorded = _cut_after_setup_page(recorded)
             wrong_urls.add(recorded)
     if not spans:
         return None

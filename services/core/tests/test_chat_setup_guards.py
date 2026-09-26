@@ -5,11 +5,10 @@ fact and never a code."""
 from __future__ import annotations
 
 import json
-import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from app import agents, chat, guards, network, traces
+from app import agents, chat, guards
 from tests.conftest import requires_db
 from tests.fakes import FakeMemory, ScriptedGateway
 from tests.test_chat_card import frames, set_chat_model, text, whole_call
@@ -255,45 +254,7 @@ async def test_a_refused_markup_call_is_not_a_failed_call(owner_client, pool, mo
     assert tool_meta["ok"] is False
 
 
-# -- review fix round 4, item 1: the "unasked" exclusion lives only here -----
-
-
-def test_a_failed_unasked_backend_check_is_not_her_failed_call():
-    """A live_facts check the backend ran unasked (`meta["unasked"] = True`)
-    is not a call she made, so its failure must not silence a capability
-    correction beside it (ruling D clarified, round 3). Round 4 moved that
-    exclusion out of guards._attempted — whose offer-shape caller must keep
-    counting a backend-run listing — into chat._failed_tool_names alone."""
-
-    def span(**meta):
-        return SimpleNamespace(kind="tool", name="machine_status", meta=meta)
-
-    assert chat._failed_tool_names([span(ok=False, unasked=True)]) == frozenset()
-    # the control: the same failure as her own call is her failed call
-    assert chat._failed_tool_names([span(ok=False)]) == frozenset({"machine_status"})
-
-
-# -- review fix round 4, item 3 (C): nothing after /add survives --------------
-
-
-def test_an_owner_typed_code_after_add_never_reaches_span_meta(monkeypatch):
-    """The owner's own code is exempt from code_claim, so nothing swaps it —
-    and the setup-page rewrite and `wrong` must still drop everything after
-    /add, or his code lands in the persisted reply and in turn_spans."""
-    monkeypatch.setattr(
-        chat.network,
-        "address",
-        lambda *_a, **_k: network.Address(origin=ORIGIN, reason=None, read_at=datetime.now(UTC)),
-    )
-    found = chat._rewrite_class_claims(
-        "Open https://nova-old.fake-tailnet.ts.net/add/K7PQ-9XYZ on the laptop.",
-        "my code is K7PQ-9XYZ, where do I use it?",
-    )
-    assert [name for name, _ in found] == ["address_claim"]
-    assert found[-1][1].rewritten == f"Open {ORIGIN}/add on the laptop."
-    turn = traces.Turn(id=uuid.uuid4(), started_at=datetime.now(UTC))
-    for name, claim in found:
-        chat._file_rewrite_span(turn, name, claim)
-    [span] = turn.spans
-    assert span.meta["wrong"] == ["https://nova-old.fake-tailnet.ts.net/add"]
-    assert "K7PQ" not in json.dumps(span.meta).upper()
+# Round 4's two DB-free pins — the `_failed_tool_names` "unasked" pin and the
+# owner-typed /add pin — moved to tests/test_setup_guards.py in review fix
+# round 5, so they run without a database (this module's pytestmark skips
+# every test in it when TEST_DATABASE_URL is unset).

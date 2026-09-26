@@ -196,6 +196,11 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         # A listing entry whose name is set off from the padding: the shape
         # `presented_listing_check` reads on every reply (follow-up, below).
         "bullet_name_then_spaces": "- report.md" + pad + "x",
+        # S47 review fix round 5: leg (2a) of _SETUP_QR_INSTRUCTS only starts
+        # after "qr code for|of|to", so padding without those words never
+        # times it. The padding sits after the HEAD, where the model number
+        # and every boundary alternative walk the whitespace.
+        "qr_object_then_spaces": "qr code for my phone" + pad + "x",
     }
 
 
@@ -243,6 +248,15 @@ def test_a_padded_listing_is_judged_in_milliseconds(width):
     )
     took = _best_of(lambda: guards.presented_listing_check(reply, [], []))
     assert took < BUDGET_S, f"padded_listing_{width}: {took * 1000:.1f} ms"
+
+
+def test_the_sweep_times_the_qr_object_leg():
+    """S47 review fix round 5: leg (2a) of _SETUP_QR_INSTRUCTS is a lookahead
+    that only starts after "qr code for|of|to" — padding without those words
+    never enters it, so the sweep carries a padded input that does, at both
+    widths."""
+    for inputs in (SWEEP_INPUTS, LONG_SWEEP_INPUTS):
+        assert any(re.search(r"qr code for\b.*\s{100,}", text) for text in inputs.values())
 
 
 def test_the_sweep_reaches_the_in_use_and_line_patterns():
