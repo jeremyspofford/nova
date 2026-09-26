@@ -42,16 +42,17 @@ func shellExec(ctx context.Context, args map[string]any, d Deps) Outcome {
 	cmd.Stderr = cw
 	prepareCommand(cmd)
 
-	// killedByCancel is set only when OUR Cancel actually terminated the
-	// process (its wrapped call returned nil) — never merely because ctx
-	// became Done. exec.Cmd races Cancel against the process's own exit
-	// (watchCtx): once the process has already exited, Cancel is never
-	// called at all. Run can then still block up to killGrace draining a
-	// backgrounded grandchild's output pipe (WaitDelay), and ctx may go
-	// Done during that unrelated wait for reasons that never touched the
-	// process. So ctx.Err() at the time Run returns is not proof that
-	// anything was killed — only killedByCancel, or ctx already being done
-	// before the process ever started, is.
+	// killedByCancel records exactly one fact: Cancel reported that it
+	// terminated the running command (its wrapped call returned nil). It
+	// is never set merely because ctx became Done — exec.Cmd races Cancel
+	// against the process's own exit (watchCtx): once the process has
+	// already exited on its own, Cancel is never called at all. Run can
+	// then still block up to killGrace draining a backgrounded
+	// grandchild's output pipe (WaitDelay), and ctx may go Done during
+	// that unrelated wait for reasons that never touched the process. So
+	// ctx.Err() at the time Run returns is not proof that anything was
+	// killed — only killedByCancel, or ctx already being done before the
+	// process ever started, is.
 	var killedByCancel atomic.Bool
 	innerCancel := cmd.Cancel
 	cmd.Cancel = func() error {
