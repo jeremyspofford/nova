@@ -54,6 +54,20 @@ const (
 // that authenticated (Run).
 var defaultBackoffs = []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
 
+// WatchdogEvery is how often the wall-clock watchdog samples the clock: far
+// tighter than any realistic heartbeatEvery, so a laptop that sleeps is
+// caught on the first sample after resume rather than after whatever was
+// left of a much longer heartbeat interval when it slept (Review Focus 4).
+// P12's own heartbeat-gap rule stays exactly as it is — the watchdog is a
+// second, faster, I/O-free path beside it, not a replacement for it.
+const WatchdogEvery = 1 * time.Second
+
+// sleepGap is the watchdog's own threshold: a wall-clock gap between its
+// samples wider than this means the machine slept, not just a scheduler
+// stall. It is a fixed margin over WatchdogEvery, not a multiple of it —
+// changing the sample rate must not change what counts as a sleep.
+const sleepGap = 5 * time.Second
+
 // wsReadLimit raises coder/websocket's 32 KiB default so a signed fs.write
 // command (content up to the 256 KiB write domain) is not rejected on read.
 const wsReadLimit = 4 << 20
@@ -100,6 +114,7 @@ type Agent struct {
 	factsEvery     time.Duration
 	factsMinGap    time.Duration
 	backoffs       []time.Duration
+	watchdogEvery  time.Duration
 
 	// factsSendMu serializes the whole build (frameBytes) -> write -> record
 	// sequence across every path that can send a facts frame on a
@@ -155,6 +170,7 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, versi
 		factsEvery:       FactsEvery,
 		factsMinGap:      FactsMinGap,
 		backoffs:         defaultBackoffs,
+		watchdogEvery:    WatchdogEvery,
 	}, nil
 }
 
@@ -333,18 +349,17 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	defer cancel()
 
 	// The facts frame follows ready at once (r2-integration): core records
-	// the slower facts before the first command could need them. Bounded by
-	// pingTimeout: a write blocking on a dead path must not prevent the
-	// heartbeat below — and its own ping, which WOULD catch a dead path —
-	// from ever starting on this connection.
-	factsCtx, factsCancel := context.WithTimeout(serveCtx, a.pingTimeout)
-	err := a.sendFacts(factsCtx, c)
-	factsCancel()
-	if err != nil {
+	// the slower facts before the first command could need them. writeFacts
+	// itself bounds the write with pingTimeout (fix round 1), so a write
+	// blocking on a dead path cannot prevent the heartbeat below — and its
+	// own ping, which would otherwise catch that same dead path — from ever
+	// starting on this connection; no extra context needed here.
+	if err := a.sendFacts(serveCtx, c); err != nil {
 		a.logf("facts frame not sent: %v", err)
 	}
 
 	go a.heartbeat(serveCtx, cancel, c)
+	go a.watchdog(serveCtx, cancel)
 
 	for {
 		frame, err := readFrame(serveCtx, c)
@@ -366,10 +381,19 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 // heartbeat keeps the session honest in both directions, once per tick:
 //
 //   - a wall-clock gap between ticks wider than two intervals means this
-//     machine slept. The ticker runs on the monotonic clock, which stops
-//     while the machine sleeps on Linux, macOS and Windows; the wall clock
-//     does not. The socket is presumed dead, so the session ends;
-//   - the heartbeat frame (core stamps last_seen from it);
+//     machine slept: Round(0) drops the monotonic reading so the comparison
+//     is wall-clock only, and that holds regardless of how a given OS's
+//     ticker or monotonic clock itself behaves across suspend. watchdog
+//     (below) runs the same wall-clock check on a much tighter tick, and
+//     normally reconnects first — this is the slower, I/O-coupled backstop
+//     beside it, kept exactly as P12 specifies;
+//   - the heartbeat frame (core stamps last_seen from it), bounded by
+//     pingTimeout: a write can block for a long time into a dead path (the
+//     kernel is still accepting bytes into its send buffer), and coder/
+//     websocket closes the whole connection when a write's own context
+//     expires, which is what actually frees a write stuck on a dead path —
+//     including one from a DIFFERENT call, like a stuck facts.refresh, once
+//     this cancel() below cancels serveCtx;
 //   - a ping core must answer within pingTimeout;
 //   - the facts frame, when the facts changed or it is due.
 //
@@ -392,7 +416,10 @@ func (a *Agent) heartbeat(ctx context.Context, cancel context.CancelFunc, c *web
 			return
 		}
 		last = now
-		if err := writeFrame(ctx, c, wire.Heartbeat{Type: wire.TypeHeartbeat, Ts: now.Unix()}); err != nil {
+		hbCtx, hbCancel := context.WithTimeout(ctx, a.pingTimeout)
+		err := writeFrame(hbCtx, c, wire.Heartbeat{Type: wire.TypeHeartbeat, Ts: now.Unix()})
+		hbCancel()
+		if err != nil {
 			if ctx.Err() == nil {
 				a.logf("heartbeat write failed: %v — reconnecting", err)
 				cancel()
@@ -400,7 +427,7 @@ func (a *Agent) heartbeat(ctx context.Context, cancel context.CancelFunc, c *web
 			return
 		}
 		pingCtx, pingCancel := context.WithTimeout(ctx, a.pingTimeout)
-		err := c.Ping(pingCtx)
+		err = c.Ping(pingCtx)
 		pingCancel()
 		if err != nil {
 			if ctx.Err() == nil {
@@ -410,6 +437,32 @@ func (a *Agent) heartbeat(ctx context.Context, cancel context.CancelFunc, c *web
 			return
 		}
 		a.maybeSendFacts(ctx, c)
+	}
+}
+
+// watchdog is heartbeat's fast path for the SAME wall-clock check (P12),
+// running beside it on a much tighter tick and doing no I/O of its own: a
+// laptop that sleeps is caught on the first watchdog sample after resume
+// (about watchdogEvery, default 1s) rather than after however much of a
+// realistic, much longer heartbeatEvery was left when it slept. It ends the
+// session the same way heartbeat's own gap check does, through cancel.
+func (a *Agent) watchdog(ctx context.Context, cancel context.CancelFunc) {
+	ticker := time.NewTicker(a.watchdogEvery)
+	defer ticker.Stop()
+	last := a.now().Round(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		now := a.now().Round(0) // wall clock only, same as heartbeat's own check
+		if gap := now.Sub(last); gap > sleepGap {
+			a.logf("the clock jumped %s between watchdog samples — this machine slept; reconnecting", gap.Round(time.Second))
+			cancel()
+			return
+		}
+		last = now
 	}
 }
 
@@ -534,8 +587,17 @@ func (a *Agent) frameBytes() ([]byte, error) {
 }
 
 // writeFacts writes an encoded frame and remembers what went out and when.
+// The write is bounded by pingTimeout (fix round 1): a facts write can block
+// for a long time into a dead path (the kernel is still accepting bytes),
+// and coder/websocket closes the whole connection when a write's own
+// context expires — the only thing that frees a write truly stuck on a dead
+// path. Without this, a stuck sendFacts (facts.refresh, up to the 110s
+// command timeout) or a stuck maybeSendFacts held the connection's write
+// lock for far longer, blocking the heartbeat's own write behind it.
 func (a *Agent) writeFacts(ctx context.Context, c *websocket.Conn, data []byte) error {
-	if err := c.Write(ctx, websocket.MessageText, data); err != nil {
+	wctx, cancel := context.WithTimeout(ctx, a.pingTimeout)
+	defer cancel()
+	if err := c.Write(wctx, websocket.MessageText, data); err != nil {
 		return err
 	}
 	a.factsMu.Lock()

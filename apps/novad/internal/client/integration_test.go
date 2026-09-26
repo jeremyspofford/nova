@@ -830,12 +830,25 @@ func TestAPingThatGoesUnansweredEndsTheSession(t *testing.T) {
 // Review focus 4: a wall-clock jump between ticks is a sleep — the session
 // ends and the next connect comes after the FIRST step of the ladder (the
 // reset), not after a TCP timeout or a 30 s wait.
+//
+// Fix round 1 finding 2: heartbeatEvery is REALISTIC here (5s) and the
+// watchdog is left at its DEFAULT (watchdogEvery 1s, sleepGap 5s) — proving
+// the watchdog catches the jump quickly, not a fast heartbeat ticker standing
+// in for it (a 50ms heartbeat, as this test used before, would catch the
+// jump itself and never exercise the watchdog at all). Arithmetic for the
+// 2.5s bound: worst-case watchdog detection is just under one watchdogEvery
+// (~1s) after the jump, plus the reset ladder's first step (1s, DEFAULT
+// backoffs — this session authenticates, so Run resets to attempt 0), plus a
+// fast local dial+handshake (tens of ms) — about 2.0-2.1s, comfortably under
+// 2.5s. The heartbeat's own 5s ticker never even fires before the session
+// ends, so its slower P12 gap rule (kept exactly as specified) plays no part
+// in this particular test — that is the point.
 func TestAClockJumpEndsTheSessionAndTheNextConnectIsQuick(t *testing.T) {
 	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
 	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
 	srv, arrivals := countingCore(t, corePub, devPub, true, true)
 	agent, _ := buildAgent(t, srv.URL, "dev-resume-1", hex.EncodeToString(corePub), devPriv)
-	agent.heartbeatEvery = 50 * time.Millisecond
+	agent.heartbeatEvery = 5 * time.Second // realistic; the DEFAULT watchdog must catch this, not this ticker
 	var mu sync.Mutex
 	offset := time.Duration(0)
 	agent.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return time.Now().Add(offset) }
@@ -843,22 +856,21 @@ func TestAClockJumpEndsTheSessionAndTheNextConnectIsQuick(t *testing.T) {
 	defer cancel()
 	go func() { _ = agent.Run(ctx) }()
 	waitFor(t, 2*time.Second, func() bool { return len(arrivals()) >= 1 })
-	time.Sleep(120 * time.Millisecond) // a couple of normal ticks first
+	time.Sleep(120 * time.Millisecond) // let the session settle before jumping
 	mu.Lock()
 	offset = 10 * time.Minute // the laptop "slept" ten minutes
 	mu.Unlock()
 	jumped := time.Now()
 	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 2 })
-	// Controller ruling 3: a spurious reconnect BEFORE the deliberate jump (a
-	// scheduler stall alone tripping the same >2x-interval gap check) would
-	// let this test pass vacuously — arrivals()[1] would predate jumped, its
-	// Sub would be negative, and the bound below would hold without the
-	// resume path ever running. Assert causality first.
+	// Controller ruling 3: a spurious reconnect BEFORE the deliberate jump
+	// would let this test pass vacuously — arrivals()[1] would predate
+	// jumped, its Sub would be negative, and the bound below would hold
+	// without the watchdog ever running. Assert causality first.
 	if !arrivals()[1].After(jumped) {
 		t.Fatalf("arrivals()[1] = %s is not after the jump at %s — a spurious reconnect before the deliberate jump", arrivals()[1], jumped)
 	}
 	if gap := arrivals()[1].Sub(jumped); gap > 2500*time.Millisecond {
-		t.Fatalf("reconnected %s after the jump; the reset ladder's first step is 1 s", gap)
+		t.Fatalf("reconnected %s after the jump; watchdog detection (~1s) plus the reset ladder's first step (1s) should be well under this", gap)
 	}
 }
 
@@ -920,4 +932,104 @@ func TestFactsAreResentOnChangeAtMostOncePerGap(t *testing.T) {
 	if count < 3 || count > 8 {
 		t.Fatalf("%d facts frames in ~1 s", count)
 	}
+}
+
+// blockedConn dials a live websocket connection against a throwaway server
+// and holds its write lock open forever — a Writer the test never Closes.
+// coder/websocket serializes every Write/Writer call on a connection behind
+// this one internal lock (see (*Conn).Writer's own doc: "multiple calls will
+// block until the previous writer is closed"), so this reproduces fix round
+// 1 finding 1's exact failure mode — a write stuck holding the connection's
+// write lock — deterministically and OS-independently. Filling a REAL kernel
+// send/receive buffer would need an amount of unread data that varies by
+// OS/kernel autotuning and is not controllable from client.go's own Dial
+// call (it always uses http.DefaultClient), so a test that depended on that
+// would risk flaking across machines rather than proving the fix.
+func blockedConn(t *testing.T) *websocket.Conn {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		<-r.Context().Done() // never reads or writes again
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	wsURL, err := WSURL(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, _, err := websocket.Dial(context.Background(), wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.CloseNow() })
+	wr, err := conn.Writer(context.Background(), websocket.MessageText)
+	if err != nil {
+		t.Fatalf("opening the blocking writer: %v", err)
+	}
+	if _, err := wr.Write([]byte("x")); err != nil {
+		t.Fatalf("priming the blocking writer: %v", err)
+	}
+	// wr is deliberately never Closed: the connection's write lock stays
+	// held for the rest of the test.
+	return conn
+}
+
+// Fix round 1 finding 1: writeFacts had no deadline of its own, so a write
+// stuck behind the connection's write lock (a hung facts.refresh, up to the
+// 110s command timeout; or a hung maybeSendFacts) would block indefinitely.
+// It now bounds its own write with pingTimeout.
+func TestWriteFactsEndsWithinPingTimeoutWhenTheConnectionIsBlocked(t *testing.T) {
+	conn := blockedConn(t)
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	agent, _ := buildAgent(t, "http://unused.invalid", "dev-lock-1", hex.EncodeToString(corePub), devPriv)
+	agent.pingTimeout = 200 * time.Millisecond
+
+	errCh := make(chan error, 1)
+	start := time.Now()
+	go func() { errCh <- agent.writeFacts(context.Background(), conn, []byte(`{"type":"facts"}`)) }()
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("writeFacts should fail: the connection's write lock is held by another writer and never released")
+		}
+		if elapsed := time.Since(start); elapsed > 6*agent.pingTimeout {
+			t.Fatalf("writeFacts took %s to give up; want at most a small multiple of pingTimeout (%s)", elapsed, agent.pingTimeout)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("writeFacts never returned — its write has no deadline of its own (fix round 1 finding 1)")
+	}
+}
+
+// Fix round 1 finding 1, the heartbeat's own frame write: before the fix, a
+// write stuck on the connection's write lock ran under serveCtx with no
+// deadline, so the heartbeat blocked on its OWN write before ever reaching
+// the ping or maybeSendFacts that tick. It now bounds that write with
+// pingTimeout too, and ends the session (via cancel) on failure.
+func TestHeartbeatsOwnWriteEndsWithinPingTimeoutWhenTheConnectionIsBlocked(t *testing.T) {
+	conn := blockedConn(t)
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	agent, _ := buildAgent(t, "http://unused.invalid", "dev-lock-2", hex.EncodeToString(corePub), devPriv)
+	agent.heartbeatEvery = 30 * time.Millisecond
+	agent.pingTimeout = 200 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	start := time.Now()
+	go func() { agent.heartbeat(ctx, cancel, conn); close(done) }()
+	select {
+	case <-ctx.Done():
+		if elapsed := time.Since(start); elapsed > 6*agent.pingTimeout {
+			t.Fatalf("heartbeat took %s to end the session; want at most a small multiple of pingTimeout (%s)", elapsed, agent.pingTimeout)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("heartbeat never ended the session — its own frame write blocked forever behind the held lock (fix round 1 finding 1)")
+	}
+	<-done // heartbeat's goroutine actually returned, not just cancelled
 }
