@@ -252,7 +252,19 @@ def test_the_tools_say_which_side_they_are_on():
     assert configure.parameters["properties"]["serving"]["type"] == "boolean"
 
 
-async def test_an_eval_machine_is_switched_in_the_fixture_never_at_the_gateway(mount_peers):
+async def test_an_eval_machine_is_switched_in_the_fixture_never_at_the_gateway(
+    mount_peers, monkeypatch
+):
+    # Fix round 1 (folded in): this test predates the DB-free `_AgentsPlant`
+    # (it builds a real FixturePlant directly), and used to reach
+    # GatewayPlant.agents -> db.get_pool() by accident, only "working"
+    # because DATABASE_URL happens to be unset for a test that skips the
+    # `pool` fixture. Stub the real half explicitly so this stays true
+    # regardless of the environment.
+    async def no_real_agents(self, app):
+        return []
+
+    monkeypatch.setattr(machines.GatewayPlant, "agents", no_real_agents)
     gateway = FakeGateway(engines=[fakes.engine_view()])
     mount_peers(gateway=gateway)
     token = machines.PLANT.set(machines.FixturePlant({"eval_box": {}}))
@@ -345,6 +357,19 @@ async def test_two_agents_reporting_one_machine_are_said_to_be_one_too_many(moun
     assert "2 Nova agents report this one machine (pc-a, pc-b)" in said
 
 
+async def test_an_offline_agent_says_so_and_records_connected_false(mount_peers, _plant):
+    """Fix round 1 (folded in): `_view` defaults to connected=True in every
+    other test here — exercise the offline branch of _describe_agent and its
+    fact explicitly."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_view("PC-ONE", "windows", WINDOWS, connected=False)])
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    assert f"offline (last seen {AT.isoformat()})" in said
+    assert "hands: cannot: not connected" in said
+    assert {"device": "PC-ONE", "connected": False} in sink
+
+
 async def test_status_lists_an_agent_that_sends_no_facts(mount_peers, _plant):
     mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
     _plant(agents=[_view("old-wsl", "linux", None)])
@@ -365,6 +390,32 @@ async def test_agents_that_cannot_be_read_are_said_and_the_engines_still_answer(
     assert not any("device" in fact for fact in sink)  # nothing claims a device was checked
 
 
+async def test_a_filtered_status_with_unreadable_agents_never_says_none_or_asserts_absence(
+    mount_peers, _plant
+):
+    """Fix round 1 (Important 1). Demonstrated bug: filtering by a name no
+    engine has, with agents unreadable, used to fold the read failure into
+    "Nova's agents: none" and "runs models or Nova's agent" — an outage
+    silently became "no such agent exists". The read failure must be STATED,
+    never turned into evidence of absence."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(error=RuntimeError("the database is gone"))
+    sink: list[dict] = []
+    with pytest.raises(ToolFailure) as exc:
+        await _call("machine_status", {"machine": "pc-one"}, sink)
+    message = str(exc.value)
+    assert "Nova's agents: none" not in message
+    assert "or Nova's agent" not in message
+    assert "no machine named 'pc-one' runs models — the gateway lists: hub" in message
+    assert "Nova's agents could not be read — RuntimeError: the database is gone" in message
+    assert sink == []
+    # An engine that DOES match still answers; the read failure is stated
+    # beside it, never hidden by the name filter.
+    said = await _call("machine_status", {"machine": "hub"})
+    assert "hub: answering" in said
+    assert "Nova's agents could not be read — RuntimeError: the database is gone." in said
+
+
 async def test_a_machine_filter_matches_an_agent_by_name_or_hostname(mount_peers, _plant):
     mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
     _plant(agents=[_view("PC-ONE", "windows", WINDOWS)])
@@ -373,6 +424,17 @@ async def test_a_machine_filter_matches_an_agent_by_name_or_hostname(mount_peers
     with pytest.raises(ToolFailure) as exc:
         await _call("machine_status", {"machine": "nope"})
     assert "Nova's agents: PC-ONE" in str(exc.value)
+
+
+async def test_a_machine_filter_matches_an_agent_by_hostname_alone(mount_peers, _plant):
+    """Fix round 1 (folded in): every other filter test here names an agent
+    whose `name` and `hostname` happen to be equal (both "PC-ONE"), so a
+    matcher that checked only `name` would pass them too. Give the agent a
+    DIFFERENT name and filter on the hostname alone."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_view("dell-agent", "windows", WINDOWS, hostname="DESKTOP-7XQ2")])
+    said = await _call("machine_status", {"machine": "desktop-7xq2"})
+    assert "agent dell-agent" in said
 
 
 async def test_no_agent_paired_is_said(mount_peers):

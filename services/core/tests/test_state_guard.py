@@ -314,8 +314,24 @@ def test_the_redirect_nudge_refuses_to_state_a_fact_that_is_not_true():
 # function this file names in `_ALLOWED_CONNECTIVITY_SITES`, together with why
 # it is safe not to be treated as an ungoverned read: it RECORDS what it
 # determines onto a facts_sink, it is a documented REPORTER whose own success
-# already backs the claim, or it is internal BOOKKEEPING that never surfaces a
-# connectivity claim anywhere a guard or a reply reads from.
+# already backs the claim, it is internal BOOKKEEPING that never surfaces a
+# connectivity claim anywhere a guard or a reply reads from, or (fix round 1,
+# Important 2) it is READ here and RECORDED one call up, by a function this
+# file also names and holds to the same facts_sink check.
+#
+# That fourth kind needs a SECOND scan to close the gap the first one cannot
+# see. GatewayPlant.agents's `connected_ids()` read IS shown to her
+# ("connected now"/"offline") and IS read by a guard (_checked_a_device) — it
+# just is not RECORDED in the same function that reads it; that happens one
+# call up, in tools/machines.py._describe_agents, which no `is_connected`/
+# `connected_ids`/`_conns.get` scan would ever visit. So this file also
+# AST-walks every `.agents(...)` call under app/ and holds each to a fixed
+# consumer list (`_AGENTS_CALL_CONSUMERS`): a new caller of GatewayPlant.agents
+# (or FixturePlant.agents) — the obvious shape being an S44 tool that reads
+# `plant().agents(...)` directly and shows `connected` without going through
+# the named recorder — adds a `.agents(` call site this file does not already
+# name, and that reddens just the same as an unlisted `connected_ids()` call
+# would.
 #
 # The alarm this exists to raise: a device tool shipped tomorrow that reads
 # connectivity a FOURTH way — a new hub method, a raw dict poke — and forgets
@@ -332,6 +348,18 @@ def test_the_redirect_nudge_refuses_to_state_a_fact_that_is_not_true():
 _RECORDS = "records"
 _REPORTER = "reporter"
 _BOOKKEEPING = "bookkeeping"
+_READ_HERE_RECORDED_UP = "read_here_recorded_up"
+
+# For a _READ_HERE_RECORDED_UP site only: the (relative path under app/,
+# dotted Class.method or bare function name) of the ONE function that turns
+# its read into the fact a guard reads. Checked below the same way a
+# _RECORDS site is (facts_sink appears in its source), so the pin catches the
+# day the read and its record come apart — never move the recording INTO the
+# read (it would record every row before the caller's own name filter runs;
+# fix round 1 ruling).
+_RECORDED_BY: dict[tuple[str, str], tuple[str, str]] = {
+    ("machines.py", "GatewayPlant.agents"): ("tools/machines.py", "_describe_agents"),
+}
 
 # (relative path under app/, dotted Class.method or bare function name) -> a
 # (kind, reason) pair. `kind` gates a light structural check below; the reason
@@ -385,16 +413,19 @@ _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
         "does not also need a fact recorded to be honest.",
     ),
     ("machines.py", "GatewayPlant.agents"): (
-        _BOOKKEEPING,
-        "S42a: reads connected_ids() to compute each paired row's live "
-        "`connected` flag for device_facts.agent_view. This read itself "
-        "writes no fact and states no claim — the one caller that turns it "
-        "into either, tools/machines.py._describe_agents, records "
-        "{device, connected} onto ctx.facts_sink for every agent it lists "
-        "(the same shape _require_connected uses), which is why the new "
-        "state-guard branch backs an OK machine_status span that carries "
-        "one. Audit THAT site if the recording and this read ever come "
-        "apart.",
+        _READ_HERE_RECORDED_UP,
+        "S42a, reclassified fix round 1 (Important 2): reads connected_ids() "
+        "to compute each paired row's live `connected` flag for "
+        "device_facts.agent_view — shown to her ('connected now'/'offline') "
+        "and read by the state guard, so this is NOT bookkeeping (that kind "
+        "is for a read whose OWN claim is never surfaced; this one's is, one "
+        "call up). Named in _RECORDED_BY: tools/machines.py._describe_agents "
+        "records {device, connected} onto ctx.facts_sink for every agent it "
+        "lists (the same shape _require_connected uses), checked below the "
+        "way a _RECORDS site is. A caller that reaches this read WITHOUT "
+        "going through that recorder is caught separately, by the "
+        "`.agents(...)` consumer scan below (_AGENTS_CALL_CONSUMERS) — not "
+        "by this entry, since a new caller adds no NEW connected_ids() site.",
     ),
 }
 
@@ -403,11 +434,16 @@ class _ConnectivityCallFinder(ast.NodeVisitor):
     """Every `hub.is_connected(...)`, `.connected_ids(...)`, and
     `self._conns.get(...)` / `_conns.get(...)` CALL in a module, tagged with
     its enclosing Class.method (or bare function) — never its definition line,
-    only where it is actually invoked."""
+    only where it is actually invoked. `.agents(...)` calls are tracked
+    separately (`agents_hits`): none of them reads a live socket itself, but
+    every one of them is a path TO `GatewayPlant.agents`, which does — so a
+    new caller is exactly the gap the _READ_HERE_RECORDED_UP check cannot see
+    on its own (fix round 1, Important 2)."""
 
     def __init__(self) -> None:
         self._stack: list[str] = []
         self.hits: list[tuple[str, str, int]] = []  # (kind, qualname, lineno)
+        self.agents_hits: list[tuple[str, int]] = []  # (qualname, lineno)
 
     def _dotted(self, node: ast.AST) -> str:
         if isinstance(node, ast.Name):
@@ -440,10 +476,27 @@ class _ConnectivityCallFinder(ast.NodeVisitor):
                 kind = "connected_ids("
             elif func.attr == "get" and self._dotted(func.value) in ("self._conns", "_conns"):
                 kind = "_conns.get("
+            elif func.attr == "agents":
+                qualname = ".".join(self._stack) if self._stack else "<module>"
+                self.agents_hits.append((qualname, node.lineno))
         if kind is not None:
             qualname = ".".join(self._stack) if self._stack else "<module>"
             self.hits.append((kind, qualname, node.lineno))
         self.generic_visit(node)
+
+
+# Every `.agents(...)` CALL under app/ — not itself a connectivity read, but
+# the only path to GatewayPlant.agents's `connected_ids()` read, so a NEW
+# caller closes the gap the _READ_HERE_RECORDED_UP structural check cannot
+# see by itself: a future tool that reads `plant().agents(...)` directly and
+# shows `connected` without going through the named recorder would add a
+# site HERE, not in `_ALLOWED_CONNECTIVITY_SITES` (fix round 1, Important 2).
+_AGENTS_CALL_CONSUMERS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("tools/machines.py", "_agents"),
+        ("machines.py", "FixturePlant.agents"),
+    }
+)
 
 
 def test_every_connectivity_read_site_is_allow_listed():
@@ -454,6 +507,8 @@ def test_every_connectivity_read_site_is_allow_listed():
     app_dir = Path(guards.__file__).parent
     offenders: list[str] = []
     seen: set[tuple[str, str]] = set()
+    agents_offenders: list[str] = []
+    agents_seen: set[tuple[str, str]] = set()
     for py in sorted(app_dir.rglob("*.py")):
         tree = ast.parse(py.read_text(encoding="utf-8"))
         finder = _ConnectivityCallFinder()
@@ -474,16 +529,48 @@ def test_every_connectivity_read_site_is_allow_listed():
                     "longer mentions facts_sink — update the allow-list or "
                     "restore the recording"
                 )
+            elif site_kind == _READ_HERE_RECORDED_UP:
+                recorder_rel, recorder_qualname = _RECORDED_BY[key]
+                recorder_source = (app_dir / recorder_rel).read_text(encoding="utf-8")
+                recorder_tree = ast.parse(recorder_source)
+                recorder_src = ast.get_source_segment(
+                    recorder_source, _find(recorder_tree, recorder_qualname)
+                )
+                assert (
+                    recorder_src is not None
+                    and "facts_sink" in recorder_src
+                    and "connected" in recorder_src
+                ), (
+                    f"{key} is allow-listed as 'read_here_recorded_up' naming "
+                    f"{_RECORDED_BY[key]} as its recorder, but that function's "
+                    "source no longer appends a connected fact to facts_sink "
+                    "— update the allow-list or restore the recording"
+                )
+        for qualname, lineno in finder.agents_hits:
+            key = (rel, qualname)
+            agents_seen.add(key)
+            if key not in _AGENTS_CALL_CONSUMERS:
+                agents_offenders.append(f"{rel}:{lineno} {qualname}")
     assert offenders == [], (
         "a new connectivity read site is not allow-listed in "
         f"_ALLOWED_CONNECTIVITY_SITES — classify it (records/reporter/"
-        f"bookkeeping) and say why: {offenders}"
+        f"bookkeeping/read_here_recorded_up) and say why: {offenders}"
     )
     # The allow-list itself must not go stale: every entry names a site that
     # really exists, or the pin is testing nothing.
     assert seen == set(_ALLOWED_CONNECTIVITY_SITES), (
         f"allow-listed sites with no matching call left in the source: "
         f"{set(_ALLOWED_CONNECTIVITY_SITES) - seen}"
+    )
+    assert agents_offenders == [], (
+        "a new caller of .agents(...) is not in _AGENTS_CALL_CONSUMERS — a "
+        "connectivity fact could now reach a reply or a guard without going "
+        "through the named recorder; classify it there and say why (or route "
+        f"it through tools/machines._agents instead): {agents_offenders}"
+    )
+    assert agents_seen == _AGENTS_CALL_CONSUMERS, (
+        "_AGENTS_CALL_CONSUMERS names a site with no matching .agents(...) "
+        f"call left in the source: {_AGENTS_CALL_CONSUMERS - agents_seen}"
     )
 
 
@@ -2698,3 +2785,17 @@ def test_engine_facts_alone_back_no_device_claim():
     ]
     spans = [Span("machine_status", facts=facts)]
     assert guards.state_claim_check(f"{DEVICE} is offline.", spans, NAMES) is not None
+
+
+def test_a_connected_fact_with_the_wrong_shape_backs_nothing():
+    """Fix round 1 (folded in): the non-device_* branch checks the SHAPE, not
+    just the "connected" key — a future fact naming a different subject (a
+    peer, a session) or carrying a non-bool "connected" must not silently
+    back a device claim just because it happens to carry that key."""
+    for facts in (
+        [{"peer": DEVICE, "connected": True}],
+        [{"device": DEVICE, "connected": "yes"}],
+        [{"connected": True}],
+    ):
+        spans = [Span("machine_status", facts=facts)]
+        assert guards.state_claim_check(f"{DEVICE} is offline.", spans, NAMES) is not None

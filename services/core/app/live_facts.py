@@ -101,6 +101,12 @@ AUTO_RUN = frozenset(
         # it reads is the bundled engine on this host. (Carried to S44/S46: once
         # a machine can be asleep, re-decide whether an UNASKED live read may
         # reach it.)
+        # S42a: it also reads Nova's own paired agents — core's device rows
+        # plus the hub's live connection registry — beside the engines. Still
+        # safe unasked: no argument reaches a second machine (a device TOOL
+        # does; this is core reading its own rows and its own in-process hub
+        # state), and a read that fails is stated in the result, never a
+        # silent success.
         "machine_status",
         "model_catalog_search",
         "model_check_update",

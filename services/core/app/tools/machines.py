@@ -5,12 +5,15 @@ A MACHINE here is an engine the gateway serves models through (the bundled
 is read from the gateway at the moment she is asked, through app/machines.py
 — core's one reader — and nothing is kept between turns.
 
-machine_status reads. It changes nothing, reaches only the gateway's own
-list, and its one argument is a name checked against that list, which is why
-the backend may run it unasked (live_facts.AUTO_RUN). Each machine it reports
-leaves a structured fact on the span — {"machine", "answering",
-"checked_now", "at"} — so what she then says about it is checkable against a
-record rather than a sentence.
+machine_status reads. It changes nothing: it reaches the gateway's engine
+list, and — for Nova's agents (S42a) — core's OWN device rows plus the hub's
+live connection registry, never a second network call. Its one argument is a
+name checked against BOTH lists, which is why the backend may run it unasked
+(live_facts.AUTO_RUN). Each machine it reports leaves a structured fact on
+the span — {"machine", "answering", "checked_now", "at"} — and each agent
+leaves {"device", "connected"}, the same shape a device tool leaves — so what
+she then says about either is checkable against a record rather than a
+sentence.
 
 machine_configure sets `serving`: whether that machine runs models for the
 routing chains. It reports the value the gateway READS BACK, never the value
@@ -21,10 +24,13 @@ anything (owner ruling 2026-09-03).
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
 from app import device_facts, machines
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
+
+logger = logging.getLogger("core")
 
 # How a model id says where it runs — the TRUE rule (S40 fix wave B4). A bare
 # id's first colon is its tag's own, so the part before it is not a machine.
@@ -110,18 +116,33 @@ async def machine_status(args: dict, ctx: ToolContext) -> str:
     agents, agents_error = await _agents(reader, ctx)
     if wanted:
         named = [view for view in views if view["name"] == wanted]
-        named_agents = [
-            agent
-            for agent in agents
-            if wanted.casefold() in (agent["name"].casefold(), agent["hostname"].casefold())
-        ]
-        if not named and not named_agents:
-            engines_listed = ", ".join(view["name"] for view in views) or "none"
-            agents_listed = ", ".join(agent["name"] for agent in agents) or "none"
-            raise ToolFailure(
-                f"no machine named {wanted!r} runs models or Nova's agent — the gateway lists: "
-                f"{engines_listed}; Nova's agents: {agents_listed}"
-            )
+        if agents_error is not None:
+            # Fix round 1 (Important 1): Nova's agents could not be read AT
+            # ALL, so their absence is not evidence of anything. Never say
+            # "Nova's agents: none" — that claims a checked, empty list — and
+            # never fold "or Nova's agent" into the not-found clause, which
+            # would assert no agent of this name exists. Only the gateway's
+            # own list is asserted; the agents half states its own failure.
+            named_agents: list[dict] = []
+            if not named:
+                engines_listed = ", ".join(view["name"] for view in views) or "none"
+                raise ToolFailure(
+                    f"no machine named {wanted!r} runs models — the gateway lists: "
+                    f"{engines_listed}; Nova's agents could not be read — {agents_error}"
+                )
+        else:
+            named_agents = [
+                agent
+                for agent in agents
+                if wanted.casefold() in (agent["name"].casefold(), agent["hostname"].casefold())
+            ]
+            if not named and not named_agents:
+                engines_listed = ", ".join(view["name"] for view in views) or "none"
+                agents_listed = ", ".join(agent["name"] for agent in agents) or "none"
+                raise ToolFailure(
+                    f"no machine named {wanted!r} runs models or Nova's agent — the gateway "
+                    f"lists: {engines_listed}; Nova's agents: {agents_listed}"
+                )
         views, agents = named, named_agents
     lines: list[str] = []
     if views:
@@ -155,6 +176,7 @@ async def _agents(reader, ctx: ToolContext) -> tuple[list[dict], str | None]:
     try:
         return await reader.agents(ctx.app), None
     except Exception as exc:  # noqa: BLE001 — stated in the result, in words
+        logger.warning("machine_status: Nova's agents could not be read", exc_info=True)
         return [], f"{type(exc).__name__}: {exc}"
 
 
@@ -186,8 +208,10 @@ def _describe_agents(
     agents: list[dict], error: str | None, ctx: ToolContext, *, filtered: bool
 ) -> list[str]:
     """Nova's agents grouped by MACHINE — the agents that report one
-    machine_uid. An agent that reported none is a machine of its own (said,
-    never merged by a name). Each listed agent leaves {"device", "connected"}
+    machine_uid. An agent that reported none is a machine of its own: its
+    group is never merged with another by name, but nothing in the output
+    says so either — a lone agent's listing reads exactly like any other
+    one-agent machine's. Each listed agent leaves {"device", "connected"}
     on the span, the record a device tool leaves, so what she says about its
     connection is backed (guards._checked_a_device)."""
     if error is not None:

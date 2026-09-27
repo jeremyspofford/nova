@@ -4153,23 +4153,35 @@ def _determined_connectivity(span: Any) -> bool:
     """True if this span carries a structured connectivity fact — the record the
     per-device layer writes the moment it decides whether a machine's socket is
     live, for BOTH outcomes (app/tools/base.py ToolContext.facts_sink). Read as
-    data, never as prose: no refusal string is ever inspected."""
+    data, never as prose: no refusal string is ever inspected. The SHAPE is
+    checked, not just the "connected" key: {"device": <str>, "connected":
+    <bool>} — fix round 1 (Important, folded in). A future fact naming a
+    different subject (a peer, a session — anything that is not a paired
+    device) must not silently back a DEVICE claim just because it happens to
+    carry a key called "connected"."""
     facts = (getattr(span, "meta", None) or {}).get("facts")
     if not isinstance(facts, list):
         return False
-    return any(isinstance(fact, dict) and "connected" in fact for fact in facts)
+    return any(
+        isinstance(fact, dict)
+        and isinstance(fact.get("device"), str)
+        and isinstance(fact.get("connected"), bool)
+        for fact in facts
+    )
 
 
 def _checked_a_device(spans: Sequence[Any]) -> bool:
-    """Did this turn actually LOOK at a device? Two ways, both mechanical:
+    """Did this turn actually LOOK at a device? Three ways, all mechanical:
 
       * a successful device_* span (the ordinary case), or
       * a device_* span that DETERMINED connectivity and then refused — an
         offline machine refuses every device tool before sending, and that
         refusal is exactly the check the reply is reporting (see the section
-        header; this is the guard's worst failure mode without it).
-      * (S42a) any OK tool span that recorded a device's connectivity —
-        machine_status lists every agent's connection now, the same record.
+        header; this is the guard's worst failure mode without it), or
+      * (S42a) any OTHER ok tool span that recorded a device's connectivity
+        in the same {"device", "connected"} shape — today only
+        machine_status, whose agent listing leaves one such fact per agent
+        (tools/machines._describe_agents).
 
     A device_* span that settled nothing — an unknown device name, a schema
     refusal — backs nothing.
@@ -4206,8 +4218,10 @@ def state_claim_check(
     """Contradict a live-state claim no check backs this turn.
 
     Returns a StateClaim when the reply asserts the CURRENT connectivity or
-    availability of a paired device and NO successful device_* span ran this
-    turn; None otherwise — an honest reply backed by a real check, a past/
+    availability of a paired device and nothing this turn backs it
+    (`_checked_a_device`: no successful device_* span, and no other ok span
+    recorded that same {"device", "connected"} shape — see its docstring);
+    None otherwise — an honest reply backed by a real check, a past/
     hedged/questioned/reported form, or a household with nothing paired. Pure
     and precision-first (see the section header). Derived from `device_names`:
     with no paired devices there is no such claim to make, so the guard is

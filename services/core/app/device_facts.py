@@ -266,9 +266,10 @@ def place(d: Mapping) -> str:
     its OS version when one was reported (else its bare platform), plus
     ", inside WSL" and the distro name when it runs inside WSL — the one
     composition device_list (app/tools/devices.py) and _describe_agent
-    (app/tools/machines.py) both need, so it lives here once rather than
-    twice (S42a; controller ruling, no verbatim copies). `d["wsl"]` is None
-    outside WSL, "" inside an unnamed one, or the distro name."""
+    (app/tools/machines.py) both need (S42a). One source here, rather than
+    two copies in those callers, is what keeps them saying the same thing
+    the day only one of them is edited. `d["wsl"]` is None outside WSL, ""
+    inside an unnamed one, or the distro name."""
     where = d["os"] or d["platform"]
     if d["wsl"] is not None:
         where += f", inside WSL{' ' + d['wsl'] if d['wsl'] else ''}"
