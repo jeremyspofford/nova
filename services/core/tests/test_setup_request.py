@@ -134,6 +134,36 @@ NEAR_MISSES = [
     ("any_apps_for_you", "are there any apps for you?"),
     ("not_today", "Put you on my phone, but not today"),
     ("troubleshooting", "how do I get you working on my phone"),
+    # Review fix round 2: the past carries into coordinated clauses. A
+    # sentence that opens past or retrospective reports what was done; a verb
+    # coordinated after it is the same report, not a new request.
+    (
+        "already_then_coordinated",
+        "I already put you on my phone and set up my laptop so you can control it",
+    ),
+    (
+        "paired_then_set_up",
+        "I paired my laptop, then set up the Dell to serve models. Why is it slow?",
+    ),
+    ("did_i_pair", "Did I pair my laptop and set up the Dell to serve models?"),
+    ("paired_and_then_put", "I paired my laptop and then put you on my phone"),
+    # Review fix round 2: a later "No", "Actually, no", "not yet" or "No way"
+    # takes it back.
+    ("no_not_yet", "Pair my laptop? No, not yet."),
+    ("actually_no", "Pair my laptop. Actually, no."),
+    ("no_way", "Pair my laptop? No way."),
+    ("no_thanks_later", "Pair my laptop? No. Thanks."),
+    # Review fix round 2: a machine as an AI or inference server is the
+    # generic question too, unless it is for her.
+    ("laptop_into_an_ai_server", "How do I turn my old laptop into an AI server?"),
+    ("laptop_as_an_ai_server", "set up my laptop as an AI server"),
+    # Review fix round 2: "the phone" with no modifier is a phone call.
+    ("the_phone", "Can I get you on the phone?"),
+    # Review fix round 2: with the bare model server restored, this is two
+    # setups again — nothing is sent, and she can call for either.
+    ("model_server_and_laptop", "Set up a model server and pair my laptop"),
+    # A trailing clause is kept only when it is not a take-back.
+    ("trailing_not_today", "How do I put you on my phone, not today though"),
     ("empty", ""),
     ("blank", "   "),
 ]
@@ -172,6 +202,38 @@ VARIANTS = [
     ("Hey Nova, how do I put you on my phone?", "install_pwa"),
     ("Can you, please, put yourself on my phone?", "install_pwa"),
     ("set up a model server for Nova", "add_model_server"),
+    # Review fix round 2: the plain requests round 1's tightening missed.
+    # A phone may take any modifier but a non-device one (speaker, ...).
+    ("put you on my brand new phone", "install_pwa"),
+    ("Put Nova on the family iPad", "install_pwa"),
+    ("put you on my kids' tablet", "install_pwa"),
+    ("put you on my daughters iPad", "install_pwa"),
+    ("put you on my new Galaxy phone", "install_pwa"),
+    ("put you on my current phone", "install_pwa"),
+    ("put you on the kitchen iPad", "install_pwa"),
+    # A phone or app request keeps a trailing clause that is not another setup.
+    ("How do I put you on my phone, I have an iPhone", "install_pwa"),
+    ("How do I put you on my phone, and does it work offline?", "install_pwa"),
+    ("Put you on my phone and send me the link", "install_pwa"),
+    ("Where do I download your app, and is it free?", "get_app"),
+    ("Get me the Nova app and tell me how to install it", "get_app"),
+    # A bare model or LLM server is the model-server request.
+    ("How do I set up a model server?", "add_model_server"),
+    ("Set up a model server", "add_model_server"),
+    ("Can you set up a model server?", "add_model_server"),
+    ("set up an LLM server", "add_model_server"),
+    # Access, manage, run commands on and wake are purposes about her.
+    ("add my laptop so you can run commands on it", "add_machine"),
+    ("add my laptop so you can access it", "add_machine"),
+    ("add my laptop so you can manage it", "add_machine"),
+    ("set up my desktop so you can wake it up", "add_machine"),
+    # The known fillers are not counted.
+    ("ok so hey nova please put you on my phone", "install_pwa"),
+    # "running" after "get you" / "want you" is the setup.
+    ("How do I get you running on my phone?", "install_pwa"),
+    ("I want you running on my phone", "install_pwa"),
+    # An AI server without "for Nova" is no setup, so the laptop is the one ask.
+    ("Set up an AI server and pair my laptop", "add_machine"),
 ]
 
 
@@ -254,3 +316,68 @@ def test_a_1500_character_padded_message_is_judged_in_milliseconds(label, messag
     assert len(message) >= PAD - 30, label
     took = _best_of(lambda: setup_request(message))
     assert took < BUDGET_S, f"{label}: {took * 1000:.1f} ms"
+
+
+# -- review fix round 2: the cost is bounded ----------------------------------
+#
+# Round 1's comma rule re-read the whole rest of a sentence at every comma or
+# conjunction whose tail opened like a request — quadratic, with no length
+# cap, in core's event loop (the re-review: ",use" x 6,000 took 3.6 s). Now a
+# message over MAX_REQUEST_CHARS is not a plain request and answers None
+# before anything is read, and within the cap each tail is re-read through a
+# fixed window.
+
+CAP = 500
+
+
+def _to(text: str, size: int) -> str:
+    """`text` repeated to exactly `size` characters."""
+    return (text * (size // len(text) + 1))[:size]
+
+
+TODO_LIST = (
+    "todo: buy milk, add my laptop charger to the bag, use the good pan, pair the socks, "
+    "set up the tent, put the phone on the charger, get the nova app sticker, "
+)
+JSON_ARRAY = '["add my laptop", "use my desktop to serve models", "pair my laptop", '
+
+AT_THE_CAP = [
+    ("comma_add", _to(",add", CAP)),
+    ("comma_use", _to(",use", CAP)),
+    ("todo_list", _to(TODO_LIST, CAP)),
+    ("json_array", _to(JSON_ARRAY, CAP)),
+    ("comma_pair_my_laptop", _to(", pair my laptop", CAP)),
+    ("and_use_my_desktop", _to(" and use my desktop to serve models", CAP)),
+]
+
+
+@pytest.mark.parametrize(("label", "message"), AT_THE_CAP, ids=[label for label, _ in AT_THE_CAP])
+def test_an_adversarial_message_at_the_cap_is_judged_well_under_budget(label, message):
+    assert len(message) == CAP, label
+    took = _best_of(lambda: setup_request(message))
+    assert took < BUDGET_S / 5, f"{label}: {took * 1000:.2f} ms"
+
+
+LONG_BUDGET_S = 0.005
+OVER_THE_CAP = [
+    ("comma_use_6000", _to(",use", 6_000)),
+    ("comma_use_24000", _to(",use", 24_000)),
+    ("todo_list_24000", _to(TODO_LIST, 24_000)),
+    ("json_array_24000", _to(JSON_ARRAY, 24_000)),
+    ("a_request_then_24000", "How do I put you on my phone? " + _to(",use", 24_000)),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "message"), OVER_THE_CAP, ids=[label for label, _ in OVER_THE_CAP]
+)
+def test_a_message_over_the_cap_answers_none_at_once(label, message):
+    took = _best_of(lambda: setup_request(message))
+    assert setup_request(message) is None, label
+    assert took < LONG_BUDGET_S, f"{label}: {took * 1000:.2f} ms"
+
+
+def test_a_plain_request_at_the_cap_still_answers_and_one_over_does_not():
+    ask = "How do I put you on my phone?"
+    assert setup_request(ask + " " * (CAP - len(ask))) == "install_pwa"
+    assert setup_request(ask + " " * (CAP + 1 - len(ask))) is None

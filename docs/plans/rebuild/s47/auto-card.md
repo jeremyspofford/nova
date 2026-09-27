@@ -106,8 +106,8 @@ measures that the card goes out, not the model's own choice. The stored numbers 
 meaning, so the corpus moves to `suite_version` 17. The rule is "measurement frames
 outlive their code"; `test_eval_corpus` pins the version and each case's comment. Each of
 the three comments gains one sentence: core sends the card on this plain request, so the
-case measures the product's guarantee; the model's own call is measured by the phrasings
-`setup_request` leaves alone. The contracts do not change.
+case measures the product's guarantee; nothing in the corpus measures the model's own call
+yet. The contracts do not change.
 
 ### 5. Not in scope
 
