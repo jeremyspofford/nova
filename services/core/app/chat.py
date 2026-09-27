@@ -113,12 +113,14 @@ from app import (
     peers,
     queued,
     settings_store,
+    setup_request,
     skills,
     tools,
     traces,
     vision,
 )
 from app.identity import Person
+from app.tools import setup as setup_tools
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 logger = logging.getLogger("core")
@@ -1054,7 +1056,10 @@ NOTES_HEADER = (
 
 
 def volatile_system_prompt(
-    recall: Recalled, roster: str | None = None, skills_roster: str | None = None
+    recall: Recalled,
+    roster: str | None = None,
+    skills_roster: str | None = None,
+    requested_card: str | None = None,
 ) -> str | None:
     """The half that changes every turn — omitted entirely when there is nothing in it.
 
@@ -1068,6 +1073,11 @@ def volatile_system_prompt(
     observable. None when no skill is active — a draft is not a procedure she
     has been given — and then the prompt is byte-identical to before skills
     existed.
+
+    `requested_card` (S47 follow-up) is the one factual line saying which
+    setup card the owner's message asked for and what core's own
+    show_setup_qr call did about it (requested_card_line). None when his
+    message asked for none, and then the prompt is byte-identical to before.
     """
     parts: list[str] = []
     if recall.notes:
@@ -1088,6 +1098,12 @@ def volatile_system_prompt(
             "these disagrees with a note above, the check is the current answer and the note is "
             "history:\n" + "\n".join(f"- {line}" for line in recall.live)
         )
+    if requested_card:
+        # Beside the live checks, because it is the same kind of fact — what
+        # the backend did for this turn before she was asked anything — and
+        # never folded into them: a live check READ something, and this SENT
+        # something he asked for.
+        parts.append(requested_card)
     if recall.unreachable:
         parts.append(
             f"Her memory could not be read this turn — {recall.unreachable}. Nothing here is "
@@ -1122,14 +1138,16 @@ def base_messages(
     persona: agents.Persona | None = None,
     roster: str | None = None,
     skills_roster: str | None = None,
+    requested_card: str | None = None,
 ) -> list[dict]:
     """The transcript the first round of the turn starts from.
 
     `persona` (S12) decides whose prompt this is: None is Nova's, exactly as
     before — the whole live registry and no block; an agent's names its
     subset and carries its block. `roster` is Nova's line about who she can
-    delegate to, and `skills_roster` (S17) her line about the procedures
-    written down for this household (see volatile_system_prompt)."""
+    delegate to, `skills_roster` (S17) her line about the procedures written
+    down for this household, and `requested_card` (S47 follow-up) the line
+    about the setup card core sent on his request (see volatile_system_prompt)."""
     if persona is None:
         stable = stable_system_prompt(model, tools.tool_names())
     else:
@@ -1137,7 +1155,7 @@ def base_messages(
             model, persona.tool_names, agent_block=persona.instructions_block
         )
     messages = [{"role": "system", "content": stable}]
-    volatile = volatile_system_prompt(recall, roster, skills_roster)
+    volatile = volatile_system_prompt(recall, roster, skills_roster, requested_card)
     if volatile is not None:
         messages.append({"role": "system", "content": volatile})
     messages.extend(history)
@@ -2431,22 +2449,193 @@ async def _run_script_step(
 
     It emits an activity frame per step for the same reason `progress` exists:
     a run of eight calls should move the bubble, not sit silent.
+
+    A step asking for the setup card core already sent this turn is answered,
+    not run (S47 follow-up, review fix round 1): steps reach tools.dispatch
+    here without passing through the dispatch funnel, so the funnel's check
+    (`_already_sent`) is made here too — synchronously, so the one await on
+    this path is still the dispatch. Otherwise a script could send a second
+    card and, for a machine, mint a second code.
     """
+    answer = _already_sent(turn, name, args)
     with turn.span("tool", name) as span:
         span.meta["args_redacted"] = _span_arguments(args)
         span.meta["via_skill"] = True
         span.meta["step"] = index
         if item is not None:
             span.meta["item"] = _redact(item)
-        span.meta["ok"] = False
-        span.meta["result_head"] = NEVER_RETURNED
-        result, ok = await tools.dispatch(name, args, tool_ctx)
+        if answer is not None:
+            span.meta["already_sent"] = True
+            result, ok = answer, True
+        else:
+            span.meta["ok"] = False
+            span.meta["result_head"] = NEVER_RETURNED
+            result, ok = await tools.dispatch(name, args, tool_ctx)
         span.meta["ok"] = ok
         span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
         if not ok:
             span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
     emit(_activity_frame(name, "ok" if ok else "error", result))
     return result, ok
+
+
+# -- the setup card the owner asked for (S47 follow-up) -----------------------
+#
+# docs/plans/rebuild/s47/auto-card.md. Owner decision 2026-09-26: when his
+# message plainly asks for one of the four setups (app/setup_request.py), core
+# runs show_setup_qr ITSELF before her first round, and she writes around the
+# result — the card never depends on the model. The walk that decided it: turn
+# 798ccf87 asked "How do I put you on my phone?", show_setup_qr was advertised,
+# and the model made no call at all and answered with an invented plan.
+#
+# Not live_facts. Its invariant is that nothing it runs unasked may change
+# anything, and this call changes something: a card is sent, and for a machine
+# a code is minted. It is not unasked either — he asked, in so many words — so
+# it has this small path of its own, and live_facts is untouched.
+
+# How her call for a card core already sent comes back: the first result, then this.
+ALREADY_SENT_MARK = "(already sent to the chat this turn)"
+
+
+def requested_card_line(setup: str, result: str, *, ok: bool) -> str:
+    """The one factual line her turn carries when core sent — or tried to
+    send — the setup card his message asked for: what he asked for, what core
+    did, and what show_setup_qr returned, as-is. On a failure it carries the
+    stated reason instead, so her reply can say why.
+
+    It asks her not to call show_setup_qr for it again, and that is a request,
+    not a control. The control is `_already_sent` in the dispatch funnel: her
+    call for the same card is answered with this result and never runs."""
+
+    def _said(text: str) -> str:
+        # The tool's words as-is, ended as a sentence so the next one reads.
+        text = text.strip()
+        return text if text.endswith((".", "!", "?")) else f"{text}."
+
+    if ok:
+        return (
+            f"The owner's message asked for the {setup} setup, so before asking her anything "
+            f"the backend ran show_setup_qr for it and sent its card to the chat. "
+            f"show_setup_qr returned: {_said(result)} "
+            f"That card is already in the chat: do not call show_setup_qr for it again this "
+            f"turn, and write the reply around it."
+        )
+    reason = result[len(tools.ERROR_PREFIX) :] if result.startswith(tools.ERROR_PREFIX) else result
+    return (
+        f"The owner's message asked for the {setup} setup, so before asking her anything "
+        f"the backend tried to send its card with show_setup_qr, and could not: {_said(reason)} "
+        f"No card was sent. Say why, rather than that a card is in the chat."
+    )
+
+
+async def _send_requested_card(
+    turn: traces.Turn,
+    tool_ctx: tools.ToolContext,
+    emit: Callable[[str | None], None],
+    setup: str,
+) -> tuple[str, bool]:
+    """Send the setup card his message asked for, on a real tool span.
+
+    The span follows S18's `_run_script_step` precedent: `kind="tool"` under
+    show_setup_qr's own name, with args_redacted, ok, result_head and facts
+    exactly as `_run_tool` files them, so every reader downstream keeps
+    working without being told this path exists — the narration guard's
+    showed_setup_qr backing, the eval's tool_called, the reload's card
+    (conversations._card_json, from the span's facts) and the pairing-code
+    containment tests. An activity frame goes out for it like any call.
+
+    `requested_by_owner` tells a reader why it ran without her call. It is
+    deliberately NOT live_facts' `unasked`: he asked. `result` keeps the WHOLE
+    result — one sentence of a few hundred characters, which never carries a
+    code (tools/setup.py) — because it is what `_already_sent` hands back
+    when she asks for the same card, and a head could cut it.
+
+    It runs on the turn's own ToolContext: its card channel, its person and
+    its facts sink. Nothing here decides whether she may call anything, and
+    it cannot raise: dispatch turns every failure into a stated result."""
+    name = setup_tools.SHOW_SETUP_QR.name
+    args = {"setup": setup}
+    facts = tool_ctx.facts_sink
+    emit(_activity_frame(name, "start"))
+    traces.set_doing(turn.id, name)
+    with turn.span("tool", name) as span:
+        span.meta["args_redacted"] = _span_arguments(args)
+        span.meta["requested_by_owner"] = True
+        span.meta["ok"] = False
+        span.meta["result_head"] = NEVER_RETURNED
+        facts_before = len(facts) if facts is not None else 0
+        result, ok = await tools.dispatch(name, args, tool_ctx)
+        span.meta["ok"] = ok
+        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result"] = result
+        if facts is not None and len(facts) > facts_before:
+            span.meta["facts"] = list(facts[facts_before:])
+        if not ok:
+            span.meta["error"] = result[:SPAN_RESULT_HEAD_CHARS]
+    emit(_activity_frame(name, "ok" if ok else "error", result))
+    return result, ok
+
+
+def _setup_named(arguments: object) -> str | None:
+    """The one setup a show_setup_qr call's arguments name, or None when
+    they are anything else — unparseable, or carrying more than the setup."""
+    parsed = arguments
+    if isinstance(arguments, str):
+        try:
+            parsed = json.loads(arguments) if arguments.strip() else {}
+        except json.JSONDecodeError:
+            return None
+    if isinstance(parsed, dict) and parsed.keys() == {"setup"} and isinstance(parsed["setup"], str):
+        return parsed["setup"]
+    return None
+
+
+def _already_sent(turn: traces.Turn, name: str, arguments: object) -> str | None:
+    """What a call is ANSWERED with — the first result, marked — when it asks
+    for the card core already sent this turn on his request; None for every
+    other call, which then runs.
+
+    Read off the turn's own spans — the record of what ran — never a flag
+    passed down: a `requested_by_owner` show_setup_qr span that is ok, for
+    the SAME setup. Only a card that went out counts: when core tried and
+    could not, nothing was sent for the call to repeat, so it runs. A call
+    for a different setup runs, and so does one whose arguments say anything
+    but that one setup. Synchronous, so no await joins either path that asks
+    it: the dispatch funnel for her own calls, and _run_script_step for a
+    scripted skill's steps (review fix round 1), which reach tools.dispatch
+    without passing through the funnel."""
+    tool = setup_tools.SHOW_SETUP_QR.name
+    if name != tool:
+        return None
+    wanted = _setup_named(arguments)
+    if wanted is None:
+        return None
+    for span in turn.spans:
+        meta = getattr(span, "meta", None) or {}
+        if (
+            getattr(span, "kind", None) == "tool"
+            and getattr(span, "name", None) == tool
+            and meta.get("requested_by_owner") is True
+            and meta.get("ok") is True
+            and meta.get("args_redacted") == {"setup": wanted}
+            and isinstance(meta.get("result"), str)
+        ):
+            return f"{meta['result']} {ALREADY_SENT_MARK}"
+    return None
+
+
+def _answer_already_sent(turn: traces.Turn, call: ToolCall, answer: str) -> str:
+    """Her call for a card core already sent: answered with `answer` (the
+    first result, marked) and NOT dispatched — so no second card goes out and
+    no second code is minted. Recorded as a tool span with `already_sent`, so
+    the trace shows the call she made and why it did not run twice. It carries
+    no facts: the card a reload redraws is the first one's, once."""
+    with turn.span("tool", call.name) as span:
+        span.meta["args_redacted"] = _span_arguments(call.arguments)
+        span.meta["ok"] = True
+        span.meta["result_head"] = answer[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["already_sent"] = True
+    return answer
 
 
 async def _dispatch_calls(
@@ -2474,6 +2663,12 @@ async def _dispatch_calls(
     successful call was an ephemeral (point-in-time) read. The caller ORs it
     into its own. `subset` is handed to _run_tool unchanged (S12: the
     persona's toolset, or None for Nova) — it marks, it never gates.
+
+    One call is ANSWERED rather than run (S47 follow-up): show_setup_qr for
+    the card core already sent this turn on his request gets that first
+    result back, marked, because running it again would send a second card
+    and mint a second code (`_already_sent`). It is here, in the one funnel,
+    so a redirect's round cannot send the card twice either.
     """
     ran_ephemeral = False
     for call in calls:
@@ -2501,6 +2696,20 @@ async def _dispatch_calls(
             # registry IS her hands.
             result = _refuse_unknown_tool(turn, call, subset)
             emit(_activity_frame(call.name, "error", result))
+            messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+            continue
+        answer = _already_sent(turn, call.name, call.arguments)
+        if answer is not None:
+            # S47 follow-up: the card this call asks for is already in the
+            # chat — core sent it on his plain request before her first round.
+            # A second would be a duplicate card and, for a machine, a second
+            # live code. Not a refusal and not a decision about whether she
+            # may: the call is ANSWERED, ok, with the first result, and the
+            # line in her prompt asking her not to call it is only a request —
+            # this is what holds. Decided synchronously, so no await joins the
+            # funnel (test_no_approvals pins the await list).
+            result = _answer_already_sent(turn, call, answer)
+            emit(_activity_frame(call.name, "ok", result))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             continue
         # The call's own progress channel: a frame per report, under this
@@ -4206,6 +4415,29 @@ async def _run_turn(
         if recalled.live_calls:
             checked_live = await live_facts.run(list(recalled.live_calls), turn, tool_ctx)
             recalled = dataclasses.replace(recalled, live=tuple(live_facts.lines(checked_live)))
+        # S47 follow-up — THE CARD HE ASKED FOR (docs/plans/rebuild/s47/
+        # auto-card.md). Owner decision 2026-09-26: when his message plainly
+        # asks for one of the four setups, core sends its card BEFORE she is
+        # asked anything, and she writes around it; the card never depends on
+        # the model. Only where there is a chat to show it in — a stream turn,
+        # or an eval case's recorder. Scheduled, drained and delegated turns
+        # have no channel, so nothing is tried there, exactly as her own call
+        # would state. The match reads his MESSAGE and nothing else (not the
+        # notes recalled above, not the history). Not narrowed to an agent's
+        # subset, for the live checks' reason: this is the backend acting on
+        # his words, not the agent reaching for a tool.
+        requested_card: str | None = None
+        if card is not None:
+            try:
+                asked_for = setup_request.setup_request(message)
+            except Exception:
+                # Fail-open like every guard: a matcher bug costs the card,
+                # never the turn — and her own call still works.
+                logger.exception("setup_request raised; no card is sent on its word this turn")
+                asked_for = None
+            if asked_for is not None:
+                card_result, card_ok = await _send_requested_card(turn, tool_ctx, emit, asked_for)
+                requested_card = requested_card_line(asked_for, card_result, ok=card_ok)
         # S28 — THE FILES HE SENT.
         #
         # Three things happen here and each is stated rather than silent:
@@ -4296,6 +4528,7 @@ async def _run_turn(
             persona,
             roster=roster,
             skills_roster=skills_roster,
+            requested_card=requested_card,
         )
         # The toolset the trace marks a call against (None: Nova, who holds
         # everything). Computed once, threaded into every dispatch site.
