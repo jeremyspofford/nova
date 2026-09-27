@@ -45,8 +45,10 @@
     `ruff check`; `rebuild-ci.yml` has no `concurrency`/`cancel-in-progress`
     setting, so why the final state reads "cancelled" rather than that
     isn't explained by anything checked here.)
-  - `services (memory)` — **failure**, at the `Initialize containers` step
-    itself, before any of the job's own commands ran.
+  - `services (memory)` — **cancelled**, per the run's final result — the
+    same shape as `services (gateway)`, two lines above: the
+    `Initialize containers` step never completed and every step after it is
+    marked skipped, so none of the job's own commands ran.
   - `web` — **failure**, at `ProvidersSection.test.tsx`'s "adding from the
     OpenRouter preset sends the preset shape and shows the new row": expected
     `''` to be `'https://openrouter.ai/api/v1'`. Passes locally, so this
