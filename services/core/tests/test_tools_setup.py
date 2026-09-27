@@ -202,48 +202,6 @@ async def test_a_failed_mint_sends_no_card(status, caplog):
         setup.PAIRING.reset(token)
 
 
-def _agent() -> Person:
-    """An agent turn's ctx.person: a Person VALUE with the agent role and no
-    people row (agents.Agent.person)."""
-    from app import agents
-
-    return Person(id=uuid.uuid4(), name="coder", role=agents.AGENT_PERSON_ROLE)
-
-
-@pytest.mark.parametrize("setup_name", ["add_machine", "add_model_server"])
-async def test_an_agents_machine_card_is_a_stated_cannot_and_nothing_is_minted(
-    status, minted, caplog, setup_name
-):
-    """Review fix round 1: a pairing code is made for a PERSON (pairing_codes.
-    created_by is a people row), and an agent is not one. So the tool states
-    that before any mint, instead of failing inside it with a foreign-key
-    error and a traceback."""
-    status()
-    cards: list = []
-    ctx = tools.context_for(core_app, _agent(), card=cards.append)
-    with caplog.at_level("DEBUG", logger="core"):
-        with pytest.raises(
-            ToolFailure,
-            match="^cannot show a pairing card on an agent's turn: a pairing code is made for a "
-            "person; ask Nova directly$",
-        ):
-            await tools.REGISTRY["show_setup_qr"].executor({"setup": setup_name}, ctx)
-    assert cards == [] and minted == []
-    assert "minting a pairing code failed" not in caplog.text
-    assert "Traceback" not in caplog.text
-
-
-@pytest.mark.parametrize(("setup_name", "page"), [("install_pwa", "/install"), ("get_app", "/app")])
-async def test_an_agents_phone_and_app_cards_still_go_out(status, minted, setup_name, page):
-    status()
-    cards: list = []
-    ctx = tools.context_for(core_app, _agent(), card=cards.append)
-    said = await tools.REGISTRY["show_setup_qr"].executor({"setup": setup_name}, ctx)
-    assert said.startswith("Sent a QR card to the chat.")
-    assert [card["url"] for card in cards] == [f"https://nova.fake-tailnet.ts.net{page}"]
-    assert minted == []
-
-
 async def test_an_unknown_setup_is_refused_by_name(status, minted):
     status()
     with pytest.raises(ToolFailure, match="setup must be one of"):

@@ -15,8 +15,7 @@ says plainly that she does not have the code.
 
 Neither is an approval of anything (owner ruling 2026-09-03). A setup that
 cannot be shown — no address another device can reach, no chat to show it in,
-a machine card on an agent's turn (a code is made for a person), a mint that
-failed — says it cannot and why, and sends nothing.
+a mint that failed — says it cannot and why, and sends nothing.
 
 Imports stay off app.chat and app.agents: a cold `import app.tools` must not
 load them (tests/test_tools_agents.py).
@@ -51,26 +50,7 @@ MODEL_SERVER_NOTE = (
     "machine Nova controls."
 )
 
-# Why a machine card cannot go out on an agent's turn (review fix round 1). On
-# an @agent turn ctx.person is the agent — a Person VALUE with no people row —
-# and pairing_codes.created_by is a people row, so the mint could only fail on
-# its foreign key: a traceback in the log and a reason nobody could act on.
-AGENT_CANNOT_PAIR = (
-    "cannot show a pairing card on an agent's turn: a pairing code is made for a person; "
-    "ask Nova directly"
-)
-
 Mint = Callable[[object], Awaitable[dict]]
-
-
-def _is_agent(person) -> bool:
-    """Whether this turn runs as an agent: its Person VALUE carries the agent
-    role and has no people row (agents.Agent.person). app.agents is imported
-    at call time, as tools/timers.py does, so a cold `import app.tools` still
-    loads neither it nor app.chat (tests/test_tools_agents.py)."""
-    from app import agents
-
-    return getattr(person, "role", None) == agents.AGENT_PERSON_ROLE
 
 
 async def _mint_for(person) -> dict:
@@ -145,12 +125,6 @@ async def show_setup_qr(args: dict, ctx: ToolContext) -> str:
     card: dict = {"kind": "setup_qr", "setup": setup, "address": got.origin, "url": link}
     expires_at: str | None = None
     if setup in MACHINE_SETUPS:
-        if _is_agent(ctx.person):
-            # Said BEFORE any mint, so nothing is minted, nothing is logged,
-            # and the reason is the real one. A statement that the call
-            # cannot run, never a decision that it may not (owner ruling
-            # 2026-09-03): the same card goes out when he asks Nova.
-            raise ToolFailure(AGENT_CANNOT_PAIR)
         try:
             minted = await PAIRING.get()(ctx.person)
         except Exception as exc:
