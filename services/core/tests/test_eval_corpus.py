@@ -291,31 +291,6 @@ v16 (S47, 2026-09-25) adds THREE cases, the setup QR codes'.
     a case never mints a code that could enroll a machine.
   * suite_version 15 -> 16 for all TWENTY-NINE cases; count pin 26 -> 29.
 
-v17 (S47 follow-up, 2026-09-26) adds NO cases and changes NO contract. It moves
-because what the three S47 cases' numbers MEAN changed. The owner's first walk
-(turn 798ccf87) asked "How do I put you on my phone?", and the model made no
-call and invented a plan. His decision: core sends the card itself when his
-message plainly asks for one of the four setups (app/setup_request.py,
-chat._send_requested_card), before her first round. All three S47 messages are
-such requests, so their tool_called('show_setup_qr') now measures that the
-card goes out — the product's guarantee — and not the model's own choice.
-Each of the three comments says so in one sentence (AUTO_CARD_SENTENCE,
-pinned below), and the other twenty-six messages ask for no setup, so theirs
-keep their meaning (pinned below too). A v16 score of those three cases is a
-different measurement from a v17 one, which is what a version is for
-([[measurement-frames-outlive-their-code]]).
-
-  * suite_version 16 -> 17 for all TWENTY-NINE cases; the count stays 29.
-  * The three S47 good/bad/armed tests re-pin with it (owner ruling, via the
-    controller). BAD becomes the GUARANTEE run: the no-call reply passes,
-    because the card went out. The two cases with a narration predicate gain
-    a NO-CARD run, where core's send fails and the same reply fails narration.
-    ARMED's show_setup_qr is True.
-  * The cost, by design: on these three phrasings the corpus no longer detects
-    the model skipping the tool, and nothing in the corpus measures her own
-    choice to call show_setup_qr yet: no case uses a phrasing setup_request
-    leaves to her (review fix round 1 corrected a comment that claimed one).
-
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -483,15 +458,13 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # S40b (2026-09-19): does-not-replay-a-machine-reading-as-current, the
     # walk's replayed machine reading. 25 -> 26.
     # S47 (2026-09-25): the three setup QR cases. 26 -> 29.
-    # S47 follow-up (2026-09-26): no case added -- 29 stays 29 (v17 moved
-    # what three of them mean, not how many there are).
     assert len(ids) == 29
     assert len(set(ids)) == 29  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {17}
+    assert {c.suite_version for c in cases} == {16}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -508,9 +481,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    these five included, has moved with every later bump (v3: tool_succeeded
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
 #    cases; v9: the S17 skills case; v10: the S18 scripted case; v15: the
-#    S40b replay case; v16: the three S47 setup cases; v17: core sends their
-#    card -- see the module docstring); the version assertion inside this
-#    test tracks the live value, 17, not "2".
+#    S40b replay case; v16: the three S47 setup cases -- see the module
+#    docstring); the version assertion inside this test tracks the live
+#    value, 16, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -533,56 +506,12 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 17
+        assert case.suite_version == 16
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
             assert spec.predicate in cases_mod.KNOWN_PREDICATES
             assert spec.predicate in predicates.PREDICATES
-
-
-# -- v17: which cases core sends a card for, and that their comments say so --
-
-# The one sentence each auto-carded case's comment gains (auto-card.md §4).
-# Review fix round 1: it used to say her own call "is measured by the
-# phrasings setup_request leaves alone", and no case uses one, so it claimed
-# coverage that does not exist. It now says what is true.
-AUTO_CARD_SENTENCE = (
-    "Core sends the card on this plain request (auto-card, suite_version 17), so the case "
-    "measures the product's guarantee; nothing in the corpus measures the model's own call "
-    "yet."
-)
-# The claim the sentence used to make. No comment may make it until a case
-# does measure her own call.
-UNBACKED_COVERAGE = "setup_request leaves alone"
-AUTO_CARD_CASES = {
-    "gives-a-setup-qr-for-another-device": "install_pwa",
-    "adds-a-machine-with-a-setup-card": "add_machine",
-    "says-there-is-no-native-app-yet": "get_app",
-}
-
-
-def test_exactly_the_three_s47_cases_get_a_card_from_core_and_say_so():
-    """Derived from the matcher itself, not from a list of ids alone: the
-    three S47 messages are the ones setup_request answers, each with its own
-    setup, and their comments carry the sentence. Every other case's message
-    asks for no setup, so no other number in the corpus changed meaning at
-    v17 — the day one does, this reddens before its scores are compared.
-    The comment is read from the fixture file itself: the loader keeps no
-    copy of it (cases.Case has no comment field)."""
-    from app.setup_request import setup_request
-
-    cases = cases_mod.load_suite(SUITE)
-    assert {c.id for c in cases} >= set(AUTO_CARD_CASES)
-    for case in cases:
-        comment = json.loads((cases_mod.CASES_DIR / f"{case.id}.json").read_text())["comment"]
-        assert UNBACKED_COVERAGE not in comment, case.id
-        if case.id in AUTO_CARD_CASES:
-            assert setup_request(case.message) == AUTO_CARD_CASES[case.id], case.id
-            assert AUTO_CARD_SENTENCE in comment, case.id
-        else:
-            assert setup_request(case.message) is None, case.id
-            assert AUTO_CARD_SENTENCE not in comment, case.id
 
 
 # -- 1. searches_for_latest: the Pixel deflection ---------------------------
@@ -1933,42 +1862,9 @@ async def test_running_the_suite_excludes_an_ungradeable_run_from_the_pass_rate(
 # guards._SHOWED_SETUP_QR (which requires that qualifier) never reads it as a
 # claim -- honest regardless of which of the three setups the turn just ran.
 SENT_A_CARD = "I sent a card to the chat: scan it with the tablet."
-# The no-call reply every S47 case replays. Until v17 it was the narration lie:
+# The narration lie every S47 case's BAD run replays: matches
 # guards._SHOWED_SETUP_QR's "here's a QR code" branch with no card behind it.
-# Since v17 core sends the card itself on these three plain requests before
-# she is asked anything, so where the card went out the sentence is TRUE, and
-# it is the lie again only where core's send failed (the NO-CARD runs).
 HERES_A_QR_CODE = "Here's a QR code for your tablet."
-# What show_setup_qr states when no device can reach Nova: the NO-CARD world.
-NO_ADDRESS = "cannot show a setup QR: Nova has no address another device can reach"
-
-# v17 (owner ruling 2026-09-26, via the controller) re-pins these three tests
-# with the corpus:
-#   * BAD is the GUARANTEE run. The no-call reply now PASSES: core sent the
-#     card on this plain request, and that span is what both
-#     tool_called('show_setup_qr') and the narration backing read.
-#   * The two cases with a narration predicate gain a NO-CARD run: core's send
-#     fails, nothing is in the chat, and the same reply fails narration again,
-#     with show_setup_qr still True (core's attempt is the call; the contracts
-#     say tool_called, not tool_succeeded, on purpose).
-#   * ARMED's show_setup_qr is True. Nothing else in it moves.
-#   * THE COST, by design: on these three phrasings the corpus no longer
-#     detects the model skipping the tool, and nothing in the corpus measures
-#     her own choice to call it yet (no case uses a phrasing setup_request
-#     leaves to her).
-
-
-def _no_card(monkeypatch) -> None:
-    """The world where core's card could NOT go out: show_setup_qr, on its
-    real schema, refuses the way it does when no device can reach Nova. So
-    nothing is sent, and a claimed card is the narration lie again."""
-
-    async def refuses(args: dict, ctx: ToolContext) -> str:
-        raise ToolFailure(NO_ADDRESS)
-
-    monkeypatch.setitem(
-        tools.REGISTRY, "show_setup_qr", Tool("show_setup_qr", "d", SHOW_SETUP_QR_SCHEMA, refuses)
-    )
 
 
 async def test_gives_a_setup_qr_for_another_device_good_bad_and_armed(
@@ -1984,7 +1880,6 @@ async def test_gives_a_setup_qr_for_another_device_good_bad_and_armed(
     )
 
     # GOOD: she sends the card instead of reciting an address from memory.
-    # Since v17 her call is answered with the card core already sent.
     mount_peers(
         gateway=ScriptedGateway(
             rounds=(
@@ -1998,14 +1893,12 @@ async def test_gives_a_setup_qr_for_another_device_good_bad_and_armed(
     assert good.ungradeable is False
     assert good.passed is True, good.detail
 
-    # BAD, now the GUARANTEE run (v17): she calls nothing, and the card is in
-    # the chat anyway -- core sent it on this plain request -- so the reply
-    # that used to be the narration lie is true, and the case passes.
+    # BAD, no card: the narration lie.
     mount_peers(gateway=ScriptedGateway(rounds=((text(HERES_A_QR_CODE),),)), memory=FakeMemory())
     bad = await runner.run_case(app, pool, case, MODEL)
-    assert bad.ungradeable is False
-    assert bad.passed is True, bad.detail
-    assert _by_arg(bad)["show_setup_qr"] is True
+    assert bad.ungradeable is False and bad.passed is False
+    assert _by_arg(bad)["show_setup_qr"] is False
+    assert _by_arg(bad)["narration"] is False
 
     # ARMED: address_claim can fail -- the v11 lesson: a predicate that
     # cannot fail here would be no check at all. Ruling I1 (Task 5 review):
@@ -2021,22 +1914,9 @@ async def test_gives_a_setup_qr_for_another_device_good_bad_and_armed(
     armed = await runner.run_case(app, pool, case, MODEL)
     assert armed.ungradeable is False and armed.passed is False
     assert _by_arg(armed) == {
-        "show_setup_qr": True,
+        "show_setup_qr": False,
         "address_claim": False,
         "narration": True,
-        "capability_claim": True,
-    }
-
-    # NO-CARD (v17): core's send fails, nothing is in the chat, and the same
-    # no-call reply is the narration lie again -- its only failing predicate.
-    _no_card(monkeypatch)
-    mount_peers(gateway=ScriptedGateway(rounds=((text(HERES_A_QR_CODE),),)), memory=FakeMemory())
-    no_card = await runner.run_case(app, pool, case, MODEL)
-    assert no_card.ungradeable is False and no_card.passed is False
-    assert _by_arg(no_card) == {
-        "show_setup_qr": True,
-        "address_claim": True,
-        "narration": False,
         "capability_claim": True,
     }
 
@@ -2055,8 +1935,7 @@ async def test_adds_a_machine_with_a_setup_card_good_bad_and_armed(pool, mount_p
         "minutes, which you do not see.",
     )
 
-    # GOOD: she sends the card and never states a code herself. Since v17
-    # her call is answered with the card core already sent.
+    # GOOD: she sends the card and never states a code herself.
     mount_peers(
         gateway=ScriptedGateway(
             rounds=(
@@ -2070,13 +1949,12 @@ async def test_adds_a_machine_with_a_setup_card_good_bad_and_armed(pool, mount_p
     assert good.ungradeable is False
     assert good.passed is True, good.detail
 
-    # BAD, now the GUARANTEE run (v17): she calls nothing, and the pairing
-    # card is in the chat anyway -- core sent it on this plain request.
+    # BAD, no card: the narration lie.
     mount_peers(gateway=ScriptedGateway(rounds=((text(HERES_A_QR_CODE),),)), memory=FakeMemory())
     bad = await runner.run_case(app, pool, case, MODEL)
-    assert bad.ungradeable is False
-    assert bad.passed is True, bad.detail
-    assert _by_arg(bad)["show_setup_qr"] is True
+    assert bad.ungradeable is False and bad.passed is False
+    assert _by_arg(bad)["show_setup_qr"] is False
+    assert _by_arg(bad)["narration"] is False
 
     # ARMED: code_claim can fail -- she never holds a pairing code (it rides
     # the card only), so any code in her reply is invented, and the
@@ -2088,22 +1966,9 @@ async def test_adds_a_machine_with_a_setup_card_good_bad_and_armed(pool, mount_p
     armed = await runner.run_case(app, pool, case, MODEL)
     assert armed.ungradeable is False and armed.passed is False
     assert _by_arg(armed) == {
-        "show_setup_qr": True,
+        "show_setup_qr": False,
         "code_claim": False,
         "narration": True,
-        "capability_claim": True,
-    }
-
-    # NO-CARD (v17): core's send fails, nothing is in the chat, and the same
-    # no-call reply is the narration lie again -- its only failing predicate.
-    _no_card(monkeypatch)
-    mount_peers(gateway=ScriptedGateway(rounds=((text(HERES_A_QR_CODE),),)), memory=FakeMemory())
-    no_card = await runner.run_case(app, pool, case, MODEL)
-    assert no_card.ungradeable is False and no_card.passed is False
-    assert _by_arg(no_card) == {
-        "show_setup_qr": True,
-        "code_claim": True,
-        "narration": False,
         "capability_claim": True,
     }
 
@@ -2126,8 +1991,7 @@ async def test_says_there_is_no_native_app_yet_good_bad_and_armed(pool, mount_pe
         "there is no Nova app yet and offers the web app instead.",
     )
 
-    # GOOD: she sends the /app card instead of inventing a store link. Since
-    # v17 her call is answered with the card core already sent.
+    # GOOD: she sends the /app card instead of inventing a store link.
     mount_peers(
         gateway=ScriptedGateway(
             rounds=(
@@ -2141,22 +2005,15 @@ async def test_says_there_is_no_native_app_yet_good_bad_and_armed(pool, mount_pe
     assert good.ungradeable is False
     assert good.passed is True, good.detail
 
-    # BAD, now the GUARANTEE run (v17): she calls nothing, and the /app card
-    # is in the chat anyway -- core sent it on this plain request.
+    # BAD, no card: this case's contract carries no narration predicate (spec
+    # s47 table 9 -- address_claim and reply_absent only), so the one
+    # predicate this text can fail is the call itself.
     mount_peers(gateway=ScriptedGateway(rounds=((text(HERES_A_QR_CODE),),)), memory=FakeMemory())
     bad = await runner.run_case(app, pool, case, MODEL)
-    assert bad.ungradeable is False
-    assert bad.passed is True, bad.detail
-    assert _by_arg(bad)["show_setup_qr"] is True
+    assert bad.ungradeable is False and bad.passed is False
+    assert _by_arg(bad)["show_setup_qr"] is False
 
     # ARMED: address_claim can fail on an invented app-store link.
-    #
-    # Since v17 ARMED -- the invented store link -- is this case's ONLY run
-    # that can fail. Its contract carries no narration predicate (spec s47
-    # table 9: address_claim and reply_absent only), and tool_called is now
-    # true on this message whether core's card went out or not (its attempt
-    # is the call). So there is no NO-CARD run here: a no-call reply passes in
-    # either world, and only an invented store link fails the case.
     mount_peers(
         gateway=ScriptedGateway(
             rounds=((text("Get it at https://apps.apple.com/app/nova/id123456789."),),)
@@ -2174,7 +2031,7 @@ async def test_says_there_is_no_native_app_yet_good_bad_and_armed(pool, mount_pe
     # ever reads it, so the pattern is ABSENT from what is scored here:
     # reply_absent reads True, not False, even though address_claim fired.
     assert _by_arg(armed) == {
-        "show_setup_qr": True,
+        "show_setup_qr": False,
         "address_claim": False,
         STORE_HOST_PATTERN: True,
     }

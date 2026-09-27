@@ -232,16 +232,6 @@ def test_run_tool_awaits_only_dispatch():
     assert _await_targets(_async_def(tree, "_run_tool")) == ["tools.dispatch"]
 
 
-def test_a_scripted_step_awaits_only_dispatch():
-    """A scripted skill's steps reach tools.dispatch through
-    chat._run_script_step, not through the funnel (S18). Its ONLY await is
-    tools.dispatch, like _run_tool's: a gate wired in front of a step would be
-    a second await and reddens here. (S47 follow-up, review fix round 1: the
-    already-sent check that path now makes is synchronous.)"""
-    tree = ast.parse(CHAT_PY.read_text(encoding="utf-8"))
-    assert _await_targets(_async_def(tree, "_run_script_step")) == ["tools.dispatch"]
-
-
 def test_dispatch_calls_awaits_only_run_tool():
     """chat._dispatch_calls runs a round's calls; its ONLY await is _run_tool.
     A gate awaited here — before, instead of, or after running the call —

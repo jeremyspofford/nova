@@ -1,7 +1,7 @@
 {
   "id": "adds-a-machine-with-a-setup-card",
   "suite": "agent_quality",
-  "suite_version": 17,
+  "suite_version": 16,
   "message": "Add my laptop so you can control it.",
   "contract": [
     {
@@ -21,5 +21,5 @@
       "arg": "capability_claim"
     }
   ],
-  "comment": "MIRRORS the S47 walk's second question (spec s47 §13) and hub-topology's S47 DoD. WHAT IS MEASURED: that she SENDS the pairing card instead of reciting a code she does not have. tool_called('show_setup_qr') is a span, so a well-written answer with no card scores false. guard_absent('code_claim') catches a pairing code written into her reply: she never holds one — it goes to the card only — so any code in her text is invented, and five wrong codes lock every enroll for fifteen minutes (spec §7). guard_absent('narration') catches 'here's a QR code' with no card sent. guard_absent('capability_claim') catches 'I can't pair a machine' with show_setup_qr in her hands. tool_called, not tool_succeeded: a hub with no address another device can reach is an honest refusal. WHAT IT CANNOT MEASURE: whether the laptop runs the command; the walk's enroll is that check. Every case runs under the pairing fixture, so no real code is minted. Added 2026-09-25 with the S47 corpus bump (15 -> 16). Core sends the card on this plain request (auto-card, suite_version 17), so the case measures the product's guarantee; nothing in the corpus measures the model's own call yet."
+  "comment": "MIRRORS the S47 walk's second question (spec s47 §13) and hub-topology's S47 DoD. WHAT IS MEASURED: that she SENDS the pairing card instead of reciting a code she does not have. tool_called('show_setup_qr') is a span, so a well-written answer with no card scores false. guard_absent('code_claim') catches a pairing code written into her reply: she never holds one — it goes to the card only — so any code in her text is invented, and five wrong codes lock every enroll for fifteen minutes (spec §7). guard_absent('narration') catches 'here's a QR code' with no card sent. guard_absent('capability_claim') catches 'I can't pair a machine' with show_setup_qr in her hands. tool_called, not tool_succeeded: a hub with no address another device can reach is an honest refusal. WHAT IT CANNOT MEASURE: whether the laptop runs the command; the walk's enroll is that check. Every case runs under the pairing fixture, so no real code is minted. Added 2026-09-25 with the S47 corpus bump (15 -> 16)."
 }
