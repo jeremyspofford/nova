@@ -516,7 +516,10 @@ async def test_a_journal_recalls_as_the_exchange_that_matched(monkeypatch, tmp_p
     assert hit["document"] == "people/alice/journals/2026-09-09.md"
     assert hit["fragment"] == "16:45"
     assert hit["kind"] == "journal" and hit["created"] == "2026-09-09"
-    assert "descaling" in hit["snippet"] and "64GB" not in hit["snippet"]
+    assert "espresso machine" in hit["snippet"]
+    # Her half of the exchange is never served back (owner, 2026-09-27): the
+    # exchange still matched, and the snippet is his words only.
+    assert "descaling" not in hit["snippet"] and "64GB" not in hit["snippet"]
 
 
 async def test_a_question_the_notes_have_no_answer_to_comes_back_saying_so(monkeypatch, tmp_path):

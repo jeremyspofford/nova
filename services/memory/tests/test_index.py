@@ -301,3 +301,29 @@ def test_a_note_embedded_in_windows_of_mixed_widths_is_not_half_believed():
     idx.set_vector_width(2)
     assert idx.has_vector(digest) is False
     assert idx.vector_coverage("people/a/") == (0, 1)
+
+
+def test_a_recalled_exchange_carries_the_owners_words_never_her_answer():
+    """2026-09-27: her wrong answer to "how do I put you on my phone?" was
+    ingested, recalled on the next phone question, and repeated word for word,
+    turn after turn. Recall serves what the owner said; her half stays in the
+    file (and still ranks the exchange) but never comes back as a snippet."""
+    idx = BM25Index()
+    answer = (
+        "Option 1: Web Page (No Mac Required). Open your Dell's firewall, serve a page, "
+        "then sideload the app with AltStore on the phone. "
+    ) * 3
+    idx.upsert(
+        "people/a/journals/2026-09-26.md",
+        title="Journal - 2026-09-26",
+        kind="journal",
+        created=date.today(),
+        body=f"## 22:50\n\nUser: How do I put you on my phone?\n\nAssistant: {answer}",
+    )
+    for query in ("put you on my phone", "AltStore sideload firewall"):
+        results = idx.search(query, scope_prefix="people/a/", k=5)
+        assert results, query
+        snippet = results[0]["snippet"]
+        assert "How do I put you on my phone?" in snippet, (query, snippet)
+        assert "AltStore" not in snippet and "Option 1" not in snippet, (query, snippet)
+        assert "Assistant:" not in snippet, (query, snippet)
