@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { ONLINE_THRESHOLD_SECONDS, deviceLiveness, enrollCommand } from './devicesFormat'
+import { ONLINE_THRESHOLD_SECONDS, deviceLiveness, deviceSubtitle, enrollCommand, wslNote } from './devicesFormat'
 import type { Device } from '../../lib/api'
 
 function device(overrides: Partial<Device> = {}): Device {
@@ -13,6 +13,10 @@ function device(overrides: Partial<Device> = {}): Device {
     revoked_at: null,
     // Always false from the REST list by design — deviceLiveness must ignore it.
     connected: false,
+    os: null,
+    wsl: null,
+    agent_version: null,
+    facts_at: null,
     ...overrides,
   }
 }
@@ -70,5 +74,29 @@ describe('enrollCommand', () => {
     expect(enrollCommand('https://nova.example', 'A1B2C3D4')).toBe(
       'novad enroll --server https://nova.example --code A1B2C3D4',
     )
+  })
+})
+
+describe('deviceSubtitle — what the agent reported, when it did', () => {
+  it('names the OS the agent reported, the hostname and the agent version', () => {
+    expect(
+      deviceSubtitle(device({ os: 'Windows 11 Pro 24H2 (build 26100)', agent_version: '0.2.0' })),
+    ).toBe('Windows 11 Pro 24H2 (build 26100) · thinkpad · agent 0.2.0')
+  })
+  it('falls back to the enrolled platform for an agent that sends no facts', () => {
+    expect(deviceSubtitle(device())).toBe('linux · thinkpad')
+  })
+})
+
+describe('wslNote — an agent inside WSL gives way to the Windows agent', () => {
+  it('says so, naming the distro when it is known', () => {
+    expect(wslNote(device({ wsl: 'Ubuntu-26.04' }))).toBe(
+      "Runs inside WSL (Ubuntu-26.04). On Windows, Nova's agent runs on Windows itself — install the Windows agent, then revoke this one.",
+    )
+    expect(wslNote(device({ wsl: '' }))).toContain('Runs inside WSL.')
+  })
+  it('is null for a native agent, and for a revoked one', () => {
+    expect(wslNote(device())).toBeNull()
+    expect(wslNote(device({ wsl: 'Ubuntu-26.04', revoked_at: '2026-09-26T00:00:00Z' }))).toBeNull()
   })
 })

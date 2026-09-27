@@ -13,6 +13,10 @@ function device(overrides: Partial<Device> = {}): Device {
     last_seen: null,
     revoked_at: null,
     connected: false,
+    os: null,
+    wsl: null,
+    agent_version: null,
+    facts_at: null,
     ...overrides,
   }
 }
@@ -188,5 +192,16 @@ describe('DevicesSection', () => {
     // The enroll command carries the DERIVED address, never window.location.
     const expected = 'novad enroll --server https://nova.fake-tailnet.ts.net --code K7PQ-9XYZ'
     expect(within(dialog).getByText(content => content.includes(expected))).toBeTruthy()
+  })
+
+  it('shows what the agent reported, and the WSL note on an agent inside WSL', async () => {
+    renderSection({
+      listDevices: vi.fn().mockResolvedValue([
+        device({ id: 'd-1', name: 'pc', os: 'Windows 11 Pro 24H2 (build 26100)', agent_version: '0.2.0', last_seen: freshIso() }),
+        device({ id: 'd-2', name: 'pc-wsl', wsl: 'Ubuntu-26.04', last_seen: freshIso() }),
+      ]),
+    })
+    expect(await screen.findByText('Windows 11 Pro 24H2 (build 26100) · thinkpad · agent 0.2.0')).toBeTruthy()
+    expect(screen.getByText(/Runs inside WSL \(Ubuntu-26\.04\)/)).toBeTruthy()
   })
 })
