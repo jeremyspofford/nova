@@ -204,7 +204,13 @@ K = 5
 # and is not in the code: on one sample it bought two and cost one, which is
 # inside the noise above, for a magic constant in a slice this one does not own.
 # ---------------------------------------------------------------------------
-ANSWER_IN_CONTEXT_FLOOR = 7
+# 2026-09-27, owner ruling, LOWERED 7 -> 6 on purpose: an exchange's snippet is
+# cut from the owner's words only (index._recallable). Her own past answer,
+# recalled into the next turn, was repeated word for word by the 8B chat model
+# (0/3 with her 09-15 sideloading answer recalled, 3/3 with only his words, on
+# the S47 setup question). The cost is the one case whose answer only she ever
+# stated; it is the price of never replaying her own mistakes.
+ANSWER_IN_CONTEXT_FLOOR = 6
 ABSENT_ANSWER_HITS_CEILING = 0
 
 # ---------------------------------------------------------------------------
@@ -274,7 +280,9 @@ ABSENT_ANSWER_HITS_CEILING = 0
 # WHOLE inside the excerpt window while the exchange it came from does not —
 # is real and visible in individual cases, and it is not worth a measurable
 # number of questions here. The floor stays where S13 left it.
-HYBRID_ANSWER_IN_CONTEXT_FLOOR = 12
+# 2026-09-27, owner ruling, LOWERED 12 -> 9 on purpose, for the same reason as
+# ANSWER_IN_CONTEXT_FLOOR: three of these answers lived only in her replies.
+HYBRID_ANSWER_IN_CONTEXT_FLOOR = 9
 HYBRID_ABSENT_ANSWER_HITS_CEILING = 0
 
 # Opt-in, and named separately from MEMORY_EMBED_URL so that turning the

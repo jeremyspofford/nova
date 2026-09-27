@@ -30,6 +30,7 @@ recency + a snippet window". S13 measured what recall was actually doing
 from __future__ import annotations
 
 import math
+import re
 import time
 from collections import Counter
 from dataclasses import dataclass
@@ -702,7 +703,7 @@ class BM25Index:
                     "title": doc.title,
                     "kind": doc.kind,
                     "created": doc.created.isoformat(),
-                    "snippet": _snippet(doc.text, terms),
+                    "snippet": _snippet(_recallable(doc.text), terms),
                     # The fused RANK score. An ordering key and nothing else:
                     # it is not a similarity, not a probability, and never to
                     # be shown to the model or the owner as a confidence.
@@ -1005,6 +1006,22 @@ def _idf(term: str, stats: _Stats) -> float:
     """
     df = stats.df.get(term, 0)
     return math.log(1 + (stats.n - df + 0.5) / (df + 0.5))
+
+
+# Her half of an exchange is never served back as recall (owner, 2026-09-27).
+# One wrong answer to "how do I put you on my phone?" was ingested, recalled on
+# the next phone question, and repeated word for word, turn after turn: a model
+# reads its own recalled answer as the template for the next one. Recall keeps
+# what the owner SAID. Her reply stays in the file, and still ranks the exchange,
+# but the snippet is cut from his words only.
+_ASSISTANT_TURN = re.compile(r"\n\nAssistant: .*?(?=\n\nUser: |\n#{1,6} |\Z)", re.S)
+
+
+def _recallable(text: str) -> str:
+    """The text a snippet may be cut from: an exchange without her replies."""
+    if "\n\nAssistant: " not in text:
+        return text
+    return _ASSISTANT_TURN.sub("", text)
 
 
 def _snippet(text: str, terms: list[str]) -> str:
