@@ -35,7 +35,7 @@ from urllib.parse import quote
 
 import httpx
 
-from app import peers
+from app import db, device_facts, devices_ws, peers
 
 logger = logging.getLogger("core")
 
@@ -131,6 +131,28 @@ class GatewayPlant:
                 f"the gateway refused to set {name}'s switch — {_error_of(response)}"
             )
         return await self.engine(app, name)
+
+    async def agents(self, app) -> list[dict]:
+        """Nova's agent on each paired machine (S42a): the live device rows,
+        whether each is connected NOW (the hub's registry — never a stored
+        flag), and what its facts say, as device_facts.agent_view. Core's own
+        records, so no gateway call; the name is the plant's so an eval can
+        overlay its declared devices the same way it overlays machines."""
+        pool = await db.get_pool()
+        rows = await pool.fetch("SELECT * FROM devices WHERE revoked_at IS NULL ORDER BY name")
+        connected = devices_ws.hub.connected_ids()
+        return [
+            device_facts.agent_view(
+                name=row["name"],
+                platform=row["platform"],
+                hostname=row["hostname"],
+                connected=str(row["id"]) in connected,
+                last_seen=row["last_seen"],
+                facts=row["facts"],
+                facts_at=row["facts_at"],
+            )
+            for row in rows
+        ]
 
 
 PLANT: ContextVar[GatewayPlant] = ContextVar("machines_plant", default=GatewayPlant())
@@ -261,14 +283,17 @@ class FixturePlant(GatewayPlant):
     measured. Why a write was refused — an eval never changes a real machine
     — goes to the log, where a person reads it."""
 
-    def __init__(self, fixtures: dict[str, dict]) -> None:
+    def __init__(self, fixtures: dict[str, dict], devices: dict[str, dict] | None = None) -> None:
         # The roster's own reserved prefix (agents.EVAL_FIXTURE_PREFIX), read
         # here rather than retyped. Imported in the call: app.agents imports
         # app.tools, which imports the tool module that imports this one.
         from app import agents
 
         self._prefix = agents.EVAL_FIXTURE_PREFIX
-        wrong = sorted(name for name in fixtures if not name.startswith(self._prefix))
+        declared_devices = devices or {}
+        wrong = sorted(
+            name for name in (*fixtures, *declared_devices) if not name.startswith(self._prefix)
+        )
         if wrong:
             raise ValueError(
                 f"a fixture machine must be named {self._prefix}…, got {', '.join(wrong)}"
@@ -286,6 +311,7 @@ class FixturePlant(GatewayPlant):
                     spec.get("state", "ready"), True
                 )
             self._views[name] = view
+        self._devices = {name: copy.deepcopy(view) for name, view in declared_devices.items()}
 
     def _mine(self, name: str) -> bool:
         return name.startswith(self._prefix)
@@ -302,6 +328,14 @@ class FixturePlant(GatewayPlant):
             view for view in await super().engines(app, live=live) if not self._mine(view["name"])
         ]
         return real + [self._stamped(view) for view in self._views.values()]
+
+    async def agents(self, app) -> list[dict]:
+        """The real agents, then this case's declared devices (S42a) — a real
+        row that happens to carry the eval prefix is shadowed, never listed
+        twice. Nothing is written: a declared device exists for this replay
+        only, and the device TOOLS do not see it (no key exists to sign for)."""
+        real = [view for view in await super().agents(app) if not self._mine(view["name"])]
+        return real + [copy.deepcopy(view) for view in self._devices.values()]
 
     async def engine(self, app, name: str) -> dict:
         if not self._mine(name):

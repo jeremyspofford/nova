@@ -384,6 +384,18 @@ _ALLOWED_CONNECTIVITY_SITES: dict[tuple[str, str], tuple[str, str]] = {
         "successful device_* span as backing (meta.ok is True), so this one "
         "does not also need a fact recorded to be honest.",
     ),
+    ("machines.py", "GatewayPlant.agents"): (
+        _BOOKKEEPING,
+        "S42a: reads connected_ids() to compute each paired row's live "
+        "`connected` flag for device_facts.agent_view. This read itself "
+        "writes no fact and states no claim — the one caller that turns it "
+        "into either, tools/machines.py._describe_agents, records "
+        "{device, connected} onto ctx.facts_sink for every agent it lists "
+        "(the same shape _require_connected uses), which is why the new "
+        "state-guard branch backs an OK machine_status span that carries "
+        "one. Audit THAT site if the recording and this read ever come "
+        "apart.",
+    ),
 }
 
 
@@ -2657,3 +2669,32 @@ def test_a_misused_lead_word_does_not_bind_the_machine(label, reply):
 )
 def test_a_lead_word_that_opens_the_claim_still_binds(label, reply):
     assert _fires_on_hub(reply), label
+
+
+# ============================================================================
+# S42a: machine_status reads every agent's connection NOW and records it the
+# way a device tool does — so an honest claim it backs is not corrected.
+# ============================================================================
+
+
+def test_an_ok_machine_status_that_read_a_devices_connection_backs_a_claim():
+    spans = [Span("machine_status", facts=[{"device": DEVICE, "connected": False}])]
+    assert guards.state_claim_check(f"{DEVICE} is offline.", spans, NAMES) is None
+
+
+def test_a_failed_machine_status_backs_nothing():
+    spans = [Span("machine_status", ok=False, facts=[{"device": DEVICE, "connected": False}])]
+    assert guards.state_claim_check(f"{DEVICE} is offline.", spans, NAMES) is not None
+
+
+def test_engine_facts_alone_back_no_device_claim():
+    facts = [
+        {
+            "machine": "hub",
+            "answering": True,
+            "checked_now": True,
+            "at": "2026-09-26T10:00:00+00:00",
+        }
+    ]
+    spans = [Span("machine_status", facts=facts)]
+    assert guards.state_claim_check(f"{DEVICE} is offline.", spans, NAMES) is not None

@@ -29,6 +29,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import re
+from collections.abc import Mapping
 from datetime import datetime
 
 # What an agent may say it runs: Go's runtime.GOOS for the three builds.
@@ -258,6 +259,20 @@ def os_label(facts: dict | None) -> str | None:
 def agent_version(facts: dict | None) -> str | None:
     version = (facts.get("agent") or {}).get("version") if isinstance(facts, dict) else None
     return version if isinstance(version, str) and version else None
+
+
+def place(d: Mapping) -> str:
+    """Where a device or its agent runs, as one clause for a line of prose:
+    its OS version when one was reported (else its bare platform), plus
+    ", inside WSL" and the distro name when it runs inside WSL — the one
+    composition device_list (app/tools/devices.py) and _describe_agent
+    (app/tools/machines.py) both need, so it lives here once rather than
+    twice (S42a; controller ruling, no verbatim copies). `d["wsl"]` is None
+    outside WSL, "" inside an unnamed one, or the distro name."""
+    where = d["os"] or d["platform"]
+    if d["wsl"] is not None:
+        where += f", inside WSL{' ' + d['wsl'] if d['wsl'] else ''}"
+    return where
 
 
 # -- roles -----------------------------------------------------------------

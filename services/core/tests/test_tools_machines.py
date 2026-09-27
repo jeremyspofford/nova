@@ -8,16 +8,75 @@ from __future__ import annotations
 
 import inspect
 import uuid
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 
-from app import chat, machines, tools
+from app import chat, device_facts, machines, tools
 from app.identity import Person
 from app.main import app as core_app
 from app.tools.base import ToolFailure
 from tests import fakes
 from tests.fakes import FakeGateway
+
+AT = datetime(2026, 9, 26, 10, 0, tzinfo=UTC)
+WINDOWS = {
+    "v": 2,
+    "agent": {"version": "0.2.0", "mode": "foreground", "session_interactive": True},
+    "os": {
+        "goos": "windows",
+        "arch": "amd64",
+        "version": "Windows 11 Pro 24H2 (build 26100)",
+        "wsl": None,
+    },
+    "hostname": "PC-ONE",
+    "machine_uid": "a" * 64,
+}
+WSL = {
+    **WINDOWS,
+    "agent": {**WINDOWS["agent"], "mode": "systemd-user"},
+    "os": {
+        "goos": "linux",
+        "arch": "amd64",
+        "version": "Ubuntu 26.04 LTS",
+        "wsl": {"distro": "Ubuntu-26.04"},
+    },
+    "machine_uid": "b" * 64,
+}
+
+
+def _view(name, platform, facts, *, connected=True, hostname="PC-ONE"):
+    return device_facts.agent_view(
+        name=name,
+        platform=platform,
+        hostname=hostname,
+        connected=connected,
+        last_seen=AT,
+        facts=facts,
+        facts_at=AT if facts else None,
+    )
+
+
+class _AgentsPlant(machines.GatewayPlant):
+    """The real gateway reader, with Nova's agents answered from a list — so
+    these DB-free tests never open a database for the agents half."""
+
+    def __init__(self, agents=None, error: Exception | None = None) -> None:
+        self._agents, self._error = list(agents or []), error
+
+    async def agents(self, app):
+        if self._error is not None:
+            raise self._error
+        return [dict(a) for a in self._agents]
+
+
+@pytest.fixture(autouse=True)
+def _plant():
+    """Every test here runs with no agents paired unless it installs its own."""
+    token = machines.PLANT.set(_AgentsPlant())
+    yield lambda **kw: machines.PLANT.set(_AgentsPlant(**kw))
+    machines.PLANT.reset(token)
 
 
 def _owner() -> Person:
@@ -115,8 +174,12 @@ async def test_one_machine_by_name_and_an_unlisted_name_is_a_stated_failure(moun
     mount_peers(gateway=FakeGateway(engines=[fakes.engine_view(), fakes.engine_view("box")]))
     said = await _call("machine_status", {"machine": "box"})
     assert "box: answering" in said and "hub: answering" not in said
+    # S42a: the refusal now also states Nova's agents (none, in this test's
+    # DB-free autouse plant) beside the gateway's engines.
     with pytest.raises(
-        ToolFailure, match="no machine named 'dell' runs models — the gateway lists: hub, box"
+        ToolFailure,
+        match="no machine named 'dell' runs models or Nova's agent — the gateway lists: "
+        "hub, box; Nova's agents: none",
     ):
         await _call("machine_status", {"machine": "dell"})
 
@@ -256,3 +319,63 @@ def test_machine_status_describes_the_true_rule_for_ids():
     description = tools.REGISTRY["machine_status"].description
     assert TRUE_RULE in description.replace("A model id", "a model id")
     assert FALSE_RULE not in description
+
+
+# -- S42a: Nova's agents, grouped by machine, alongside the gateway's engines --
+
+
+async def test_status_lists_nova_agents_grouped_by_machine_with_a_fact_each(mount_peers, _plant):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_view("PC-ONE", "windows", WINDOWS), _view("pc-wsl", "linux", WSL)])
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    assert "Nova's agents, by machine — 2 machine(s)" in said
+    assert "agent PC-ONE (Windows 11 Pro 24H2 (build 26100); agent 0.2.0): connected now" in said
+    assert "hands: available (connected now)" in said
+    assert "agent pc-wsl (Ubuntu 26.04 LTS, inside WSL Ubuntu-26.04; agent 0.2.0)" in said
+    assert "hands: cannot: this machine's Windows agent owns it" in said
+    assert {"device": "PC-ONE", "connected": True} in sink
+    assert {"device": "pc-wsl", "connected": True} in sink
+
+
+async def test_two_agents_reporting_one_machine_are_said_to_be_one_too_many(mount_peers, _plant):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_view("pc-a", "windows", WINDOWS), _view("pc-b", "windows", WINDOWS)])
+    said = await _call("machine_status", {})
+    assert "2 Nova agents report this one machine (pc-a, pc-b)" in said
+
+
+async def test_status_lists_an_agent_that_sends_no_facts(mount_peers, _plant):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_view("old-wsl", "linux", None)])
+    said = await _call("machine_status", {})
+    assert "agent old-wsl (linux): connected now; hands: available (connected now)" in said
+    assert "facts: unknown — this agent sends no facts — it predates S42a" in said
+
+
+async def test_agents_that_cannot_be_read_are_said_and_the_engines_still_answer(
+    mount_peers, _plant
+):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(error=RuntimeError("the database is gone"))
+    sink: list[dict] = []
+    said = await _call("machine_status", {}, sink)
+    assert "hub: answering" in said
+    assert "Nova's agents could not be read — RuntimeError: the database is gone." in said
+    assert not any("device" in fact for fact in sink)  # nothing claims a device was checked
+
+
+async def test_a_machine_filter_matches_an_agent_by_name_or_hostname(mount_peers, _plant):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    _plant(agents=[_view("PC-ONE", "windows", WINDOWS)])
+    said = await _call("machine_status", {"machine": "pc-one"})
+    assert "agent PC-ONE" in said and "hub:" not in said
+    with pytest.raises(ToolFailure) as exc:
+        await _call("machine_status", {"machine": "nope"})
+    assert "Nova's agents: PC-ONE" in str(exc.value)
+
+
+async def test_no_agent_paired_is_said(mount_peers):
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
+    said = await _call("machine_status", {})
+    assert "No Nova agent is paired to any machine." in said

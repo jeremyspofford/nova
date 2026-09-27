@@ -409,3 +409,23 @@ def test_both_card_readers_choose_through_the_one_helper():
         source = inspect.getsource(reader)
         assert "machines.the_card(" in source
         assert "len(read)" not in source
+
+
+# -- S42a: the fixture plant overlays declared devices on the real agents ----
+
+
+async def test_a_fixture_plant_overlays_its_declared_devices_on_the_real_agents(monkeypatch):
+    async def real_agents(self, app):
+        return [{"name": "real-pc"}, {"name": "eval_stale"}]
+
+    monkeypatch.setattr(machines.GatewayPlant, "agents", real_agents)
+    plant = machines.FixturePlant(
+        {}, devices={"eval_pc": {"name": "eval_pc", "platform": "windows"}}
+    )
+    names = [a["name"] for a in await plant.agents(None)]
+    assert names == ["real-pc", "eval_pc"]  # a real eval_-named row is shadowed, never shown twice
+
+
+def test_a_fixture_device_must_carry_the_prefix():
+    with pytest.raises(ValueError):
+        machines.FixturePlant({}, devices={"real-pc": {"name": "real-pc"}})

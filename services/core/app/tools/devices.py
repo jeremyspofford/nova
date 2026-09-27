@@ -33,7 +33,7 @@ import ntpath
 import posixpath
 import re
 
-from app import db, devices, devices_ws, envelopes
+from app import db, device_facts, devices, devices_ws, envelopes
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 # How long core waits for a device to answer one command. Bounded (<=120s per
@@ -231,9 +231,7 @@ async def device_list(args: dict, ctx: ToolContext) -> str:
     for d in live:
         status = "connected" if d["id"] in connected else "offline"
         last = d["last_seen"] or "never"
-        where = d["os"] or d["platform"]
-        if d["wsl"] is not None:
-            where += ", inside WSL"
+        where = device_facts.place(d)
         lines.append(f"- {d['name']} ({where}) — {status}, last seen {last}")
     return "Paired devices:\n" + "\n".join(lines)
 

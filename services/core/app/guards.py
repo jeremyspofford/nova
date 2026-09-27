@@ -4168,6 +4168,8 @@ def _checked_a_device(spans: Sequence[Any]) -> bool:
         offline machine refuses every device tool before sending, and that
         refusal is exactly the check the reply is reporting (see the section
         header; this is the guard's worst failure mode without it).
+      * (S42a) any OK tool span that recorded a device's connectivity —
+        machine_status lists every agent's connection now, the same record.
 
     A device_* span that settled nothing — an unknown device name, a schema
     refusal — backs nothing.
@@ -4176,10 +4178,14 @@ def _checked_a_device(spans: Sequence[Any]) -> bool:
         if getattr(span, "kind", None) != "tool":
             continue
         name = str(getattr(span, "name", "") or "")
-        if not name.startswith(_DEVICE_SPAN_PREFIX):
-            continue
         meta = getattr(span, "meta", None) or {}
-        if meta.get("ok") is True or _determined_connectivity(span):
+        if name.startswith(_DEVICE_SPAN_PREFIX):
+            if meta.get("ok") is True or _determined_connectivity(span):
+                return True
+        elif meta.get("ok") is True and _determined_connectivity(span):
+            # S42a: machine_status reads every agent's connection NOW and
+            # records it the same way (tools/machines._describe_agents). Only
+            # an OK span: a failed read determined nothing.
             return True
     return False
 

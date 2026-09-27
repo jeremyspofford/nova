@@ -30,7 +30,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
-from app import devices, devices_ws, envelopes, governance, tools
+from app import devices, devices_ws, envelopes, governance, machines, tools
 from app.identity import Person
 from app.tools.base import ToolContext, ToolFailure
 from tests.conftest import requires_db
@@ -876,6 +876,16 @@ async def test_auth_facts_are_recorded_after_the_signature_verifies(pool):
     await _close(conn, task)
 
 
+async def test_the_gateway_plant_reads_agents_from_the_rows_and_the_hub(pool):
+    device_id, device = await _enroll(pool, name="pc", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    views = await machines.GatewayPlant().agents(None)
+    [pc] = [v for v in views if v["name"] == "pc"]
+    assert pc["connected"] is True and pc["os"] == "Windows 11 Pro 24H2 (build 26100)"
+    assert pc["machine"] == "c" * 64 and pc["roles"]["hands"]["state"] == "available"
+    await _close(conn, task)
+
+
 async def test_a_bad_signature_records_no_facts(pool):
     device_id, device = await _enroll(pool, name="pc")
     conn, task, reply = await _auth_with(pool, device_id, device, AUTH_FACTS, key=FakeDevice())
@@ -974,7 +984,9 @@ async def test_device_list_names_the_os_and_says_inside_wsl(pool):
     person = await _person(pool)
     result, ok = await tools.dispatch("device_list", {}, _ctx(person))
     assert ok is True
-    assert "- pc-wsl (Ubuntu 26.04 LTS, inside WSL) — connected" in result
+    # S42a: device_list now shares device_facts.place() with _describe_agent,
+    # which also names the distro rather than just "inside WSL".
+    assert "- pc-wsl (Ubuntu 26.04 LTS, inside WSL Ubuntu-26.04) — connected" in result
     await _close(conn, task)
 
 

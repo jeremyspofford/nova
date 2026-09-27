@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from app import machines
+from app import device_facts, machines
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 # How a model id says where it runs — the TRUE rule (S40 fix wave B4). A bare
@@ -102,25 +102,36 @@ def _describe(view: dict, checked_now: bool) -> str:
 
 async def machine_status(args: dict, ctx: ToolContext) -> str:
     wanted = str(args.get("machine") or "").strip()
+    reader = machines.plant()
     try:
-        views = await machines.plant().engines(ctx.app, live=True)
+        views = await reader.engines(ctx.app, live=True)
     except machines.PlantUnavailable as exc:
         raise ToolFailure(f"could not ask the gateway where models run — {exc}") from exc
+    agents, agents_error = await _agents(reader, ctx)
     if wanted:
         named = [view for view in views if view["name"] == wanted]
-        if not named:
-            listed = ", ".join(view["name"] for view in views) or "none"
+        named_agents = [
+            agent
+            for agent in agents
+            if wanted.casefold() in (agent["name"].casefold(), agent["hostname"].casefold())
+        ]
+        if not named and not named_agents:
+            engines_listed = ", ".join(view["name"] for view in views) or "none"
+            agents_listed = ", ".join(agent["name"] for agent in agents) or "none"
             raise ToolFailure(
-                f"no machine named {wanted!r} runs models — the gateway lists: {listed}"
+                f"no machine named {wanted!r} runs models or Nova's agent — the gateway lists: "
+                f"{engines_listed}; Nova's agents: {agents_listed}"
             )
-        views = named
-    if not views:
-        return "The gateway lists no machine that runs models."
-    first = views[0]["name"]
-    lines = [
-        f"{len(views)} machine(s) run models for Nova, read from the gateway now. "
-        f"{_ID_RULE_QUALIFIED} ({first}:<model> runs on {first}); {_ID_RULE_BARE}."
-    ]
+        views, agents = named, named_agents
+    lines: list[str] = []
+    if views:
+        first = views[0]["name"]
+        lines.append(
+            f"{len(views)} machine(s) run models for Nova, read from the gateway now. "
+            f"{_ID_RULE_QUALIFIED} ({first}:<model> runs on {first}); {_ID_RULE_BARE}."
+        )
+    elif not wanted:
+        lines.append("The gateway lists no machine that runs models.")
     for view in views:
         checked_now = view.get("state") != "unobserved"
         lines.append(_describe(view, checked_now))
@@ -133,7 +144,78 @@ async def machine_status(args: dict, ctx: ToolContext) -> str:
                     "at": view.get("observed_at") or _now(),
                 }
             )
+    lines.extend(_describe_agents(agents, agents_error, ctx, filtered=bool(wanted)))
     return "\n".join(lines)
+
+
+async def _agents(reader, ctx: ToolContext) -> tuple[list[dict], str | None]:
+    """Nova's agents, or the reason they could not be read. A failure here is
+    STATED in the result, never raised: the engines above are still a true
+    reading, and one half failing must not hide the other."""
+    try:
+        return await reader.agents(ctx.app), None
+    except Exception as exc:  # noqa: BLE001 — stated in the result, in words
+        return [], f"{type(exc).__name__}: {exc}"
+
+
+def _role(name: str, role: dict) -> str:
+    if role["state"] == "cannot":
+        return f"{name}: {role['reason']}"
+    return f"{name}: {role['state']}" + (
+        f" ({role['reason']})" if role["state"] == "available" else f" — {role['reason']}"
+    )
+
+
+def _describe_agent(agent: dict) -> str:
+    where = device_facts.place(agent)
+    if agent["agent_version"]:
+        where += f"; agent {agent['agent_version']}"
+    state = (
+        "connected now"
+        if agent["connected"]
+        else f"offline (last seen {agent['last_seen'] or 'never'})"
+    )
+    roles = agent["roles"]
+    return (
+        f"agent {agent['name']} ({where}): {state}; "
+        f"{_role('hands', roles['hands'])}; {_role('facts', roles['facts'])}."
+    )
+
+
+def _describe_agents(
+    agents: list[dict], error: str | None, ctx: ToolContext, *, filtered: bool
+) -> list[str]:
+    """Nova's agents grouped by MACHINE — the agents that report one
+    machine_uid. An agent that reported none is a machine of its own (said,
+    never merged by a name). Each listed agent leaves {"device", "connected"}
+    on the span, the record a device tool leaves, so what she says about its
+    connection is backed (guards._checked_a_device)."""
+    if error is not None:
+        return [f"Nova's agents could not be read — {error}."]
+    if not agents:
+        return [] if filtered else ["No Nova agent is paired to any machine."]
+    groups: dict[str, list[dict]] = {}
+    for agent in agents:
+        groups.setdefault(agent["machine"] or f"agent:{agent['name']}", []).append(agent)
+    lines = [
+        f"Nova's agents, by machine — {len(groups)} machine(s), read from Nova's records and "
+        "live connections now:"
+    ]
+    for members in groups.values():
+        host = members[0]["hostname"]
+        if len(members) > 1:
+            names = ", ".join(agent["name"] for agent in members)
+            lines.append(
+                f"- machine {host}: {len(members)} Nova agents report this one machine ({names}) "
+                "— a machine runs one agent; the owner revokes the extra in Settings → Devices."
+            )
+        else:
+            lines.append(f"- machine {host}:")
+        for agent in members:
+            lines.append("  " + _describe_agent(agent))
+            if ctx.facts_sink is not None:
+                ctx.facts_sink.append({"device": agent["name"], "connected": agent["connected"]})
+    return lines
 
 
 async def machine_configure(args: dict, ctx: ToolContext) -> str:
@@ -172,8 +254,11 @@ MACHINE_STATUS = Tool(
         "Where Nova's models run, read from the gateway right now: every machine that runs "
         "models, whether it is answering (checked now), whether it is switched on for "
         "models, what it computes on and in which runtime, and which models it has "
-        f"installed. {_ID_RULE}. Use it before saying where a model runs, whether a machine "
-        "is up, or what is installed on it. Reads only."
+        f"installed. {_ID_RULE}. Also Nova's agent on each paired machine, grouped by "
+        "machine: the OS it runs (and whether it runs inside WSL), whether it is connected "
+        "now, and what it can do there, with the reason. Use it before saying where a model "
+        "runs, whether a machine is up, what is installed on it, or which agent can act on "
+        "a machine. Reads only."
     ),
     parameters={
         "type": "object",
