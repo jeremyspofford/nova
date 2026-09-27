@@ -39,6 +39,7 @@ from app.checks import (
     Check,
     CheckRun,
     Finding,
+    devices,
     inference,
     money,
     prose,
@@ -233,13 +234,20 @@ def test_exactly_the_stack_family_declares_urgent():
     assert {checks.REGISTRY[name].run.__module__ for name in urgent} == {"app.checks.stack"}
     # And the other two families are registered and not urgent, so this is a
     # statement about the whole registry rather than about an empty one.
-    assert (set(work.NAMES) | set(money.NAMES) | set(skills.NAMES) | set(inference.NAMES)) <= set(
-        checks.REGISTRY
-    )
+    assert (
+        set(work.NAMES)
+        | set(money.NAMES)
+        | set(skills.NAMES)
+        | set(inference.NAMES)
+        | set(devices.NAMES)
+    ) <= set(checks.REGISTRY)
     # S17 (2026-09-11): the skills family joins the non-urgent side. A
     # procedure she has walked twice with nothing written down for it is
     # something to mention in the digest, never something to wake anyone with.
-    assert not ({*work.NAMES, *money.NAMES, *skills.NAMES, *inference.NAMES} & urgent)
+    # S42a (2026-09-27): the devices family joins the non-urgent side.
+    assert not (
+        {*work.NAMES, *money.NAMES, *skills.NAMES, *inference.NAMES, *devices.NAMES} & urgent
+    )
     assert checks.check_names() == sorted(checks.REGISTRY)
     assert checks.urgent_names() == sorted(urgent)
 
