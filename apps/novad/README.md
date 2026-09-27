@@ -283,9 +283,11 @@ most once a minute), every ten minutes regardless, and on `facts.refresh`:
 {"type": "facts", "net": {"ifaces": [{"name": "eth0", "mac": "...", "ipv4_cidr": ["192.0.2.10/24"], "up": true}]}, "unreadable": [{"item": "...", "reason": "..."}]}
 ```
 
-Loopback interfaces are dropped; at most 32 interfaces and 8 IPv4 addresses
-each are sent, and going over either is itself an `unreadable` entry rather
-than a silent cut. `net` and `unreadable` are everything S42a fills in —
+Loopback interfaces are dropped; at most 32 interfaces are sent, and going
+over that is itself an `unreadable` entry rather than a silent cut — but a
+single interface's own IPv4 addresses are capped at 8 with no such note, so
+a multi-homed interface can lose addresses silently past the eighth. `net`
+and `unreadable` are everything S42a fills in —
 power, ollama, compute, hold and overlay are later slices' sections (see the
 carries); a section this build does not know is dropped by core, never
 stored as a mystery key.
