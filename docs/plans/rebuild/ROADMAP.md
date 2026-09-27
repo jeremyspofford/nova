@@ -21,9 +21,11 @@ source for anything v4 has not rebuilt.
 
 v4 merged to `main` on 2026-09-17 (`0996a31`). Shipped slices: S01–S05b, S09,
 S10/S10a/S10pre, S11–S19, S22, S24, S25, S28, S40, S40b (2026-09-19) and
-**S41** (2026-09-22, portable hub, verified backup and restore). **S42a
-merged <date>, walk pending** (the agent on every OS). Parked: S23. Unbuilt:
-S26, S27, S42b–S49.
+**S41** (2026-09-22, portable hub, verified backup and restore). **S47
+merged 2026-09-26** (PR #76: `nova_address`/`show_setup_qr`, thin-client
+setup QR codes — no walked status is recorded on this branch, so read it as
+landed, not shipped). **S42a merged <date>, walk pending** (the agent on
+every OS). Parked: S23. Unbuilt: S26, S27, S42b–S46, S48–S49.
 
 ---
 

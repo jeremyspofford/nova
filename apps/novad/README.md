@@ -227,7 +227,7 @@ dropped or novad itself is stopping is `ok:false` ("cancelled…").
 |                            | Linux                                   | macOS                                                              | Windows |
 |----------------------------|------------------------------------------|---------------------------------------------------------------------|---------|
 | `system.notify`            | `notify-send`                           | `osascript` (`display notification`)                                | a WinRT toast via Windows PowerShell 5.1, the message read from stdin as UTF-8 bytes so `café` survives |
-| `apps.list` / `apps.launch`| the XDG `.desktop` catalogue, via `gtk-launch`/`gio` | every `*.app` under `/Applications`, `/System/Applications` and `~/Applications`, via `open -a` | the Start menu's own list (`Get-StartApps`), launched through `explorer.exe shell:AppsFolder\<AppID>` — the same way the Start menu itself launches it, Store apps included |
+| `apps.list` / `apps.launch`| the XDG `.desktop` catalogue, via `gtk-launch`/`gio` | every `*.app` under `/Applications`, `/Applications/Utilities`, `/System/Applications`, `/System/Applications/Utilities` and `~/Applications`, via `open -a` | the Start menu's own list (`Get-StartApps`), launched through `explorer.exe shell:AppsFolder\<AppID>` — the same way the Start menu itself launches it, Store apps included |
 
 `result.ok` means the daemon **performed** the capability and captured a
 result — it is *not* the command's own success. A `shell.exec` that runs to
