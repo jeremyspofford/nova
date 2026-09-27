@@ -111,6 +111,29 @@ NEAR_MISSES = [
     ("washing_machine", "add a washing machine so you can control it"),
     ("discord_server", "pair my discord server"),
     ("minecraft_server", "pair my minecraft server with Nova"),
+    # Review fix round 1 (the Important): a coordinated object is not a setup
+    # request. A comma or a conjunction ends a request only where a new
+    # request starts, so what follows the machine is read as part of it.
+    ("pair_laptop_and_phone", "Can I pair my laptop and my phone?"),
+    ("pair_laptop_and_headphones", "How do I pair my laptop and my headphones?"),
+    ("pair_laptop_and_mouse", "Tell me how to pair my laptop and my mouse"),
+    ("pair_laptop_and_tv", "can we pair my laptop and my tv?"),
+    ("pair_laptop_then_headphones", "pair my laptop then my headphones"),
+    ("pair_laptop_but_not_phone", "pair my laptop but not my phone"),
+    ("trailing_no", "Pair my laptop? No."),
+    # Running models on a machine is routing, not a model-server setup.
+    ("use_dell_to_run_models", "use the Dell to run models again"),
+    ("switch_back_to_the_dell", "switch back to the dell: use the dell to run models"),
+    ("use_laptop_to_run_models", "Can I use my laptop to run models?"),
+    ("generic_ai_server", "How do I set up an AI server?"),
+    # A purpose about her must be about controlling, using or reaching it.
+    ("remind_me", "add my laptop so you can remind me to charge it"),
+    # Review fix round 1 (folded): card-only false matches.
+    ("speaker_phone", "put you on the speaker phone"),
+    ("any_apps", "Do you have any apps?"),
+    ("any_apps_for_you", "are there any apps for you?"),
+    ("not_today", "Put you on my phone, but not today"),
+    ("troubleshooting", "how do I get you working on my phone"),
     ("empty", ""),
     ("blank", "   "),
 ]
@@ -136,6 +159,19 @@ VARIANTS = [
     ("Install the Nova app on my phone", "get_app"),
     ("Add the Dell as a model server", "add_model_server"),
     ("@coder add my laptop so you can control it", "add_machine"),
+    # Review fix round 1: the plain requests the review confirmed must keep
+    # answering once coordinated objects stop matching.
+    ("How do I put Nova on my phone?", "install_pwa"),
+    ("Install yourself on my phone", "install_pwa"),
+    ("How do I add my laptop to you?", "add_machine"),
+    ("Can you help me pair my laptop with you?", "add_machine"),
+    ("How do I connect my PC to Nova?", "add_machine"),
+    ("how do I set up the Dell as a model server?", "add_model_server"),
+    ("Where can I get the Nova app?", "get_app"),
+    # A second request after a comma or a conjunction still counts as one.
+    ("Hey Nova, how do I put you on my phone?", "install_pwa"),
+    ("Can you, please, put yourself on my phone?", "install_pwa"),
+    ("set up a model server for Nova", "add_model_server"),
 ]
 
 
@@ -203,6 +239,13 @@ PADDED = [
     ("one_long_word", "a" * PAD),
     ("devices_without_a_verb", "my laptop " * (PAD // 10)),
     ("tabs_and_newlines", "add my\t\n" * (PAD // 8) + "laptop"),
+    # Review fix round 1: every comma and conjunction now has what follows it
+    # read as a possible request, so these are the shapes that could go
+    # quadratic.
+    ("coordinated_objects", "pair my laptop" + " and my phone" * (PAD // 13)),
+    ("many_commas", "put you on my phone" + ", x" * (PAD // 3)),
+    ("many_fillers_after_commas", "pair my laptop" + ", please and please" * (PAD // 19)),
+    ("many_verbs_after_commas", "pair my laptop" + ", pair" * (PAD // 6)),
 ]
 
 

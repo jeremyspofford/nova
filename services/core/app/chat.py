@@ -2449,16 +2449,28 @@ async def _run_script_step(
 
     It emits an activity frame per step for the same reason `progress` exists:
     a run of eight calls should move the bubble, not sit silent.
+
+    A step asking for the setup card core already sent this turn is answered,
+    not run (S47 follow-up, review fix round 1): steps reach tools.dispatch
+    here without passing through the dispatch funnel, so the funnel's check
+    (`_already_sent`) is made here too — synchronously, so the one await on
+    this path is still the dispatch. Otherwise a script could send a second
+    card and, for a machine, mint a second code.
     """
+    answer = _already_sent(turn, name, args)
     with turn.span("tool", name) as span:
         span.meta["args_redacted"] = _span_arguments(args)
         span.meta["via_skill"] = True
         span.meta["step"] = index
         if item is not None:
             span.meta["item"] = _redact(item)
-        span.meta["ok"] = False
-        span.meta["result_head"] = NEVER_RETURNED
-        result, ok = await tools.dispatch(name, args, tool_ctx)
+        if answer is not None:
+            span.meta["already_sent"] = True
+            result, ok = answer, True
+        else:
+            span.meta["ok"] = False
+            span.meta["result_head"] = NEVER_RETURNED
+            result, ok = await tools.dispatch(name, args, tool_ctx)
         span.meta["ok"] = ok
         span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
         if not ok:
@@ -2578,49 +2590,52 @@ def _setup_named(arguments: object) -> str | None:
     return None
 
 
-def _already_sent(turn: traces.Turn, call: ToolCall) -> str | None:
-    """The first result, when this call asks for the card core already sent
-    this turn on his request; None for every other call.
+def _already_sent(turn: traces.Turn, name: str, arguments: object) -> str | None:
+    """What a call is ANSWERED with — the first result, marked — when it asks
+    for the card core already sent this turn on his request; None for every
+    other call, which then runs.
 
     Read off the turn's own spans — the record of what ran — never a flag
     passed down: a `requested_by_owner` show_setup_qr span that is ok, for
     the SAME setup. Only a card that went out counts: when core tried and
-    could not, nothing was sent for her call to repeat, so it runs. A call
+    could not, nothing was sent for the call to repeat, so it runs. A call
     for a different setup runs, and so does one whose arguments say anything
-    but that one setup. Synchronous, so no await joins the dispatch funnel."""
-    name = setup_tools.SHOW_SETUP_QR.name
-    if call.name != name:
+    but that one setup. Synchronous, so no await joins either path that asks
+    it: the dispatch funnel for her own calls, and _run_script_step for a
+    scripted skill's steps (review fix round 1), which reach tools.dispatch
+    without passing through the funnel."""
+    tool = setup_tools.SHOW_SETUP_QR.name
+    if name != tool:
         return None
-    wanted = _setup_named(call.arguments)
+    wanted = _setup_named(arguments)
     if wanted is None:
         return None
     for span in turn.spans:
         meta = getattr(span, "meta", None) or {}
         if (
             getattr(span, "kind", None) == "tool"
-            and getattr(span, "name", None) == name
+            and getattr(span, "name", None) == tool
             and meta.get("requested_by_owner") is True
             and meta.get("ok") is True
             and meta.get("args_redacted") == {"setup": wanted}
             and isinstance(meta.get("result"), str)
         ):
-            return meta["result"]
+            return f"{meta['result']} {ALREADY_SENT_MARK}"
     return None
 
 
-def _answer_already_sent(turn: traces.Turn, call: ToolCall, first: str) -> str:
-    """Her call for a card core already sent: answered with the first result,
-    marked, and NOT dispatched — so no second card goes out and no second code
-    is minted. Recorded as a tool span with `already_sent`, so the trace shows
-    the call she made and why it did not run twice. It carries no facts: the
-    card a reload redraws is the first one's, once. Returns the answer."""
-    result = f"{first} {ALREADY_SENT_MARK}"
+def _answer_already_sent(turn: traces.Turn, call: ToolCall, answer: str) -> str:
+    """Her call for a card core already sent: answered with `answer` (the
+    first result, marked) and NOT dispatched — so no second card goes out and
+    no second code is minted. Recorded as a tool span with `already_sent`, so
+    the trace shows the call she made and why it did not run twice. It carries
+    no facts: the card a reload redraws is the first one's, once."""
     with turn.span("tool", call.name) as span:
         span.meta["args_redacted"] = _span_arguments(call.arguments)
         span.meta["ok"] = True
-        span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
+        span.meta["result_head"] = answer[:SPAN_RESULT_HEAD_CHARS]
         span.meta["already_sent"] = True
-    return result
+    return answer
 
 
 async def _dispatch_calls(
@@ -2683,8 +2698,8 @@ async def _dispatch_calls(
             emit(_activity_frame(call.name, "error", result))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             continue
-        first = _already_sent(turn, call)
-        if first is not None:
+        answer = _already_sent(turn, call.name, call.arguments)
+        if answer is not None:
             # S47 follow-up: the card this call asks for is already in the
             # chat — core sent it on his plain request before her first round.
             # A second would be a duplicate card and, for a machine, a second
@@ -2693,7 +2708,7 @@ async def _dispatch_calls(
             # line in her prompt asking her not to call it is only a request —
             # this is what holds. Decided synchronously, so no await joins the
             # funnel (test_no_approvals pins the await list).
-            result = _answer_already_sent(turn, call, first)
+            result = _answer_already_sent(turn, call, answer)
             emit(_activity_frame(call.name, "ok", result))
             messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
             continue

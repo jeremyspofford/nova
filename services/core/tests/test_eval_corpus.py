@@ -312,8 +312,9 @@ different measurement from a v17 one, which is what a version is for
     a NO-CARD run, where core's send fails and the same reply fails narration.
     ARMED's show_setup_qr is True.
   * The cost, by design: on these three phrasings the corpus no longer detects
-    the model skipping the tool. Her own choice to call show_setup_qr is
-    measured only on phrasings setup_request leaves alone.
+    the model skipping the tool, and nothing in the corpus measures her own
+    choice to call show_setup_qr yet: no case uses a phrasing setup_request
+    leaves to her (review fix round 1 corrected a comment that claimed one).
 
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
@@ -543,11 +544,17 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
 # -- v17: which cases core sends a card for, and that their comments say so --
 
 # The one sentence each auto-carded case's comment gains (auto-card.md §4).
+# Review fix round 1: it used to say her own call "is measured by the
+# phrasings setup_request leaves alone", and no case uses one, so it claimed
+# coverage that does not exist. It now says what is true.
 AUTO_CARD_SENTENCE = (
     "Core sends the card on this plain request (auto-card, suite_version 17), so the case "
-    "measures the product's guarantee; the model's own call is measured by the phrasings "
-    "setup_request leaves alone."
+    "measures the product's guarantee; nothing in the corpus measures the model's own call "
+    "yet."
 )
+# The claim the sentence used to make. No comment may make it until a case
+# does measure her own call.
+UNBACKED_COVERAGE = "setup_request leaves alone"
 AUTO_CARD_CASES = {
     "gives-a-setup-qr-for-another-device": "install_pwa",
     "adds-a-machine-with-a-setup-card": "add_machine",
@@ -569,6 +576,7 @@ def test_exactly_the_three_s47_cases_get_a_card_from_core_and_say_so():
     assert {c.id for c in cases} >= set(AUTO_CARD_CASES)
     for case in cases:
         comment = json.loads((cases_mod.CASES_DIR / f"{case.id}.json").read_text())["comment"]
+        assert UNBACKED_COVERAGE not in comment, case.id
         if case.id in AUTO_CARD_CASES:
             assert setup_request(case.message) == AUTO_CARD_CASES[case.id], case.id
             assert AUTO_CARD_SENTENCE in comment, case.id
@@ -1945,8 +1953,9 @@ NO_ADDRESS = "cannot show a setup QR: Nova has no address another device can rea
 #     say tool_called, not tool_succeeded, on purpose).
 #   * ARMED's show_setup_qr is True. Nothing else in it moves.
 #   * THE COST, by design: on these three phrasings the corpus no longer
-#     detects the model skipping the tool. Her own choice to call it is
-#     measured only on phrasings setup_request leaves alone.
+#     detects the model skipping the tool, and nothing in the corpus measures
+#     her own choice to call it yet (no case uses a phrasing setup_request
+#     leaves to her).
 
 
 def _no_card(monkeypatch) -> None:

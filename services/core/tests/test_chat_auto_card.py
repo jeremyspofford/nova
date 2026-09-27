@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from app import chat, conversations, devices, traces
+from app import chat, conversations, devices, skills, traces
 from app.identity import Person
 from app.main import app
 from app.tools import setup as setup_tools
@@ -418,18 +418,104 @@ def root(monkeypatch, tmp_path) -> Path:
     return root
 
 
+@pytest.mark.parametrize(
+    ("message", "setup"),
+    [(PHONE, "install_pwa"), ("Where do I download your iPhone app?", "get_app")],
+)
 async def test_an_agent_turn_in_the_chat_gets_the_card_too(
-    owner_client, pool, mount_peers, tailnet, root
+    owner_client, pool, mount_peers, tailnet, root, message, setup
 ):
     """Controller ruling for this follow-up: any turn with a card channel. An
     @mention runs as the agent on the stream route, so it has one; the check
     is the backend acting on HIS words, not the agent reaching for a tool, so
-    it is not narrowed to the agent's subset (the live checks' rule)."""
+    it is not narrowed to the agent's subset (the live checks' rule). The
+    phone and app cards mint nothing, so an agent's turn sends them."""
     await _create(pool, mount_peers)
     sent, _ = await _stream(
-        owner_client, mount_peers, f"@coder {PHONE}", (text("It is in the chat."),)
+        owner_client, mount_peers, f"@coder {message}", (text("It is in the chat."),)
     )
 
-    assert [card["setup"] for card in _cards(sent)] == ["install_pwa"]
+    assert [card["setup"] for card in _cards(sent)] == [setup]
     (span,) = await _setup_spans(pool)
     assert span["requested_by_owner"] is True and span["ok"] is True
+
+
+# -- a scripted skill's step cannot send it twice either (review fix round 1) --
+
+
+@pytest.mark.parametrize(
+    ("message", "setup", "codes"), [(PHONE, "install_pwa", 0), (LAPTOP, "add_machine", 1)]
+)
+async def test_a_scripted_step_for_the_card_core_sent_is_answered_not_run(
+    owner_client, pool, mount_peers, tailnet, root, message, setup, codes
+):
+    """A scripted skill's steps dispatch through chat._run_script_step, not the
+    funnel — so the same synchronous check has to live there too, or a step
+    asking for the card core already sent would send a second one and, for a
+    machine, mint a second code."""
+    await skills.create(
+        pool,
+        name="setupcard",
+        title="the setup card",
+        summary="asked as: 'the setup card please'",
+        created_via="page",
+        body="1. show the card\n",
+        root=root,
+    )
+    await skills.set_status(pool, "setupcard", skills.ACTIVE)
+    await skills.set_script(
+        pool,
+        "setupcard",
+        {"version": 1, "steps": [{"tool": "show_setup_qr", "args": {"setup": setup}}]},
+        {"type": "object", "properties": {}, "additionalProperties": False},
+    )
+    sent, _ = await _stream(
+        owner_client,
+        mount_peers,
+        message,
+        (whole_call("call_1", "run_skill", {"name": "setupcard", "inputs": {}}),),
+        (text("It is in the chat."),),
+    )
+
+    assert [card["setup"] for card in _cards(sent)] == [setup]
+    assert await pool.fetchval("SELECT count(*) FROM pairing_codes") == codes
+    first, step = await _setup_spans(pool)
+    assert first["requested_by_owner"] is True
+    assert step["via_skill"] is True and step["step"] == 1  # steps count from 1
+    assert step["already_sent"] is True and step["ok"] is True
+    assert step["result_head"] == f"{first['result']} {chat.ALREADY_SENT_MARK}"[:500]
+    assert "facts" not in step
+
+
+# Review fix round 1: the stated cause, word for word.
+AGENT_CANNOT_PAIR = (
+    "cannot show a pairing card on an agent's turn: a pairing code is made for a person; "
+    "ask Nova directly"
+)
+
+
+async def test_an_agent_turns_machine_card_states_why_and_mints_nothing(
+    owner_client, pool, mount_peers, tailnet, root, caplog
+):
+    """Review fix round 1: on an @agent turn ctx.person is the AGENT — a value
+    with no people row — so a pairing code cannot be made for it. The tool
+    says so before any mint: no card, no code, no traceback, and one failed
+    span whose stated reason is the real one (it used to be the mint's
+    ForeignKeyViolationError, with a traceback in the log)."""
+    caplog.set_level(logging.DEBUG)
+    await _create(pool, mount_peers)
+    sent, gateway = await _stream(
+        owner_client, mount_peers, f"@coder {LAPTOP}", (text("I cannot pair it from here."),)
+    )
+
+    assert _cards(sent) == []
+    assert _activity(sent) == ["start", "error"]
+    (span,) = await _setup_spans(pool)
+    assert span["requested_by_owner"] is True and span["ok"] is False
+    assert span["error"] == f"Error: {AGENT_CANNOT_PAIR}"
+    assert await pool.fetchval("SELECT count(*) FROM pairing_codes") == 0
+    # Her turn is told the real cause, so her reply can say it.
+    assert AGENT_CANNOT_PAIR in _system_text(gateway.payloads[0])
+    await asyncio.wait_for(chat.drain_background(), timeout=15)
+    assert "minting a pairing code failed" not in caplog.text
+    assert "ForeignKeyViolation" not in caplog.text

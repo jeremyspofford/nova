@@ -24,12 +24,20 @@ So every rule below narrows, and "when in doubt" is None:
     have". A statement ("I put you on my phone yesterday", "I already did")
     starts no clause with a frame, so it asks for nothing; neither does a
     negation ("don't put you on my phone"), which is not a frame.
+  * A clause runs to the end of its SENTENCE. A comma or an and/or/then/but
+    ends it only where what follows is itself a request ("put you on my
+    phone and add my laptop so you can control it" is two). Anywhere else
+    what follows is part of it: "Can I pair my laptop and my phone?" names
+    two things to pair, and "Put you on my phone, but not today" is not a
+    request for now (review fix round 1).
   * The object is Nova herself (you, yourself, Nova) for the phone setup, her
     app for the app setup, and a device of his for the two machine setups —
     each device named by a word from a fixed list, never "any noun": "put my
     calendar on my phone" puts his calendar somewhere, not Nova.
-  * The device ends the request. "my phone contacts", "my laptop's files" and
-    "my laptop to the shopping list" are about something else.
+  * The device ends the request. "my phone contacts", "my laptop's files",
+    "my laptop to the shopping list" and "my laptop and my phone" are about
+    something else. A phone is named with at most a listed modifier ("my new
+    phone"), so "the speaker phone" is not one.
   * A machine request is held to more, because a false match mints a code.
     "add", "connect" and "link" must say it is to her or for her ("add my
     laptop so you can control it"): "add my laptop" alone is as likely a
@@ -37,13 +45,18 @@ So every rule below narrows, and "when in doubt" is None:
     and "enroll" mean pairing on their own. The machine is a computer word
     with at most a listed modifier ("my old linux server"), never any noun
     that ends in "machine" or "server" (a coffee machine, a Discord server).
-    And nothing may follow it but a courtesy or a purpose about her — "pair
-    my laptop for the presentation" is someone else's pairing.
+    And nothing may follow it but a courtesy or a purpose about her, which
+    is controlling, using or reaching it — "pair my laptop for the
+    presentation" is someone else's pairing, and "so you can remind me to
+    charge it" is a reminder.
+  * Using a machine to RUN models is routing, not setting up a model server:
+    only "use it to SERVE models" is that setup. "Set up an AI server" is a
+    general question unless it says it is for her.
   * A word that could mean either setup is left alone: a phone is never a
     machine to pair (novad does not run on one), and "put you on my laptop"
     could be the web app or a machine she controls.
-  * A message that takes it back ("never mind", "scratch that") asks for
-    nothing.
+  * A message that takes it back ("never mind", "scratch that", or a bare
+    "No." at the end) asks for nothing.
   * Two different setups in one message answer None: nothing is sent, and she
     can call for either herself.
 
@@ -54,22 +67,30 @@ Pure: no I/O, no clock, no app import. It runs on every turn that has a chat
 to show a card in, synchronously inside core's event loop, so every pattern is
 anchored at a clause start with only bounded repetition, and whitespace is
 collapsed before any pattern sees it (tests/test_setup_request.py times 1,500
-characters of padding against the guard family's 50 ms budget).
+characters of padding, commas and conjunctions included, against the guard
+family's 50 ms budget).
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Literal
 
 # The four setups show_setup_qr takes (tools/setup.py SETUPS), written out so
 # this module imports nothing; tests/test_setup_request.py pins the two equal.
 SetupKind = Literal["install_pwa", "get_app", "add_machine", "add_model_server"]
 
-# Where one request ends and the next may begin: sentence punctuation, a comma
-# (a vocative "Nova," or a "please," comes before the request), and the
-# conjunctions a second request rides on ("... and pair my laptop").
-_CLAUSE_BREAK = re.compile(r"[.!?;:,\n\r]+| (?:and|but|then|or|also) ")
+# Where a sentence ends. A clause never runs past one.
+_SENTENCE_BREAK = re.compile(r"[.!?;:\n\r]+")
+# Where a SECOND request may begin inside a sentence — a comma ("Nova, put
+# yourself ...") or a conjunction ("... and pair my laptop"). A clause is cut
+# here only where what follows is itself a request (_clauses); anywhere else
+# it is part of the clause before it, and that clause's end has to take it.
+_SOFT_BREAK = re.compile(r",| (?:and|but|then|or|also) ")
+# A sentence that is only this, at the end, takes the request back: "Pair my
+# laptop? No."
+_TRAILING_NO = frozenset({"no", "nope", "nah", "no thanks", "no thank you"})
 # Everything that is not a word character is a space by the time a pattern
 # reads a clause, so a pattern never has to split a run of whitespace.
 _NOT_WORDISH = re.compile(r"[^a-z0-9' ]+")
@@ -85,10 +106,11 @@ _CANCEL = re.compile(
 
 # -- the pieces --------------------------------------------------------------
 
-# Words before the request that change nothing about it.
+# Words before the request that change nothing about it — a few at most, so a
+# run of them is never walked to its end.
 _FILLER = (
     r"(?:(?:please|pls|ok|okay|so|hey|hi|hello|nova|now|then|also|just|and|but|alright"
-    r"|right|well|um|oh|quick question|real quick) )*"
+    r"|right|well|um|oh|quick question|real quick) ){0,4}"
 )
 # How a request is posed. The empty alternative last is the imperative.
 _FRAME = (
@@ -112,8 +134,13 @@ _COURTESY = (
 # How a phone request ends: nothing, a courtesy, or any purpose. A false match
 # here costs a card and mints nothing.
 _END = rf"{_COURTESY}(?: (?:so|because|since|for|if|when|once)\b.*)?$"
-# A purpose that is about HER: "so you can control it", "for Nova to use".
-_NOVA_PURPOSE = r" (?:so (?:that )?(?:you|nova) (?:can|could|will)|for (?:you|nova) to)\b.*"
+# A purpose that is about HER having the machine: controlling it, using it or
+# reaching it. "so you can remind me to charge it" is a reminder, not a
+# pairing (review fix round 1).
+_NOVA_PURPOSE = (
+    r" (?:so (?:that )?(?:you|nova) (?:can|could|will)|for (?:you|nova) to)"
+    r" (?:control|use|reach)\b.*"
+)
 # How a machine request ends, which is stricter, because a false match mints
 # a code: nothing, a courtesy, or a purpose about her. "Pair my laptop for the
 # presentation" is someone else's pairing.
@@ -125,9 +152,16 @@ _DET = r"(?:my|our|the|this|that|a|an|another|his|her|their)"
 _ADJ = r"(?:[a-z0-9][a-z0-9']* ){0,2}"
 
 _PHONE = r"(?:phone|iphone|ipad|tablet|android|smartphone|cellphone|cell|mobile)"
+# What may stand between the determiner and the phone. A LIST, like the
+# machine's below: "the speaker phone" is not a phone to put her on (review
+# fix round 1).
+_PHONE_ADJ = (
+    r"(?:(?:new|old|other|second|spare|work|personal|main|backup|android|apple|samsung"
+    r"|google|pixel|[a-z]+'s) ){0,2}"
+)
 _HOME_SCREEN = r"(?:(?:my|the|your) )?(?:(?:phone|iphone|ipad|tablet)'s )?home ?screen"
 # "on my phone", "on my new phone", "on Android".
-_ON_A_PHONE = rf"(?:{_HOME_SCREEN}|(?:{_DET} {_ADJ})?{_PHONE})"
+_ON_A_PHONE = rf"(?:{_HOME_SCREEN}|(?:{_DET} {_PHONE_ADJ})?{_PHONE})"
 _NOVA = r"(?:you|yourself|nova|(?:the |your )?(?:nova )?(?:web app|pwa))"
 
 # A machine she can be paired with. No phone-class word: novad does not run on
@@ -161,97 +195,142 @@ _APP_FOR = rf"(?: (?:for|on) (?:(?:my|the|a|an|this|your) )?(?:{_PLATFORM}|{_PHO
 _APP_END = rf"{_COURTESY}(?: (?:so|because|since|if|when|once)\b.*)?$"
 _APP_VERB = r"(?:get|download|install|grab|find|send)"
 
+# What a model server does. "use the Dell to RUN models" is routing — he wants
+# his turns served from it — so "use" takes only "serve" (review fix round 1);
+# the setup verbs ("set up the Dell to run models") keep all three.
 _SERVE = r"(?:serve|serving|run|running|host|hosting)"
+_SERVE_ONLY = r"(?:serve|serving)"
 _MODELS = r"(?:(?:the|my|your|our|some|local|ai|big|large|language) ){0,2}(?:models|llms)"
 _SERVER_KIND = r"(?:model|models|llm|ai|inference)"
-_AS_MODEL_SERVER = (
-    rf"(?: (?:to|for|and) {_SERVE} {_MODELS}"
-    rf"| as (?:a|an|my|the|your|our) {_SERVER_KIND} server"
-    rf"| into (?:a|an) {_SERVER_KIND} server"
-    rf"| (?:a|an) {_SERVER_KIND} server)"
-)
+# The model-server kinds specific enough to need no "for you": an "AI server"
+# or an "inference server" is as likely anyone's.
+_OWN_SERVER_KIND = r"(?:model|models|llm)"
 
 
-def _framed(body: str) -> re.Pattern[str]:
-    """A body posed in any request frame, at the start of a clause."""
-    return re.compile(rf"{_FILLER}{_FRAME}{body}")
+def _as_model_server(serve: str) -> str:
+    return (
+        rf"(?: (?:to|for|and) {serve} {_MODELS}"
+        rf"| as (?:a|an|my|the|your|our) {_SERVER_KIND} server"
+        rf"| into (?:a|an) {_SERVER_KIND} server"
+        rf"| (?:a|an) {_SERVER_KIND} server)"
+    )
 
 
-def _bare(body: str) -> re.Pattern[str]:
-    """A body that carries its own frame ("where do I ...", "is there ...")."""
-    return re.compile(rf"{_FILLER}{body}")
+@dataclass(frozen=True)
+class _Body:
+    """One way to ask for a setup: the whole request, and how it OPENS.
+
+    The opening is kept beside the pattern it was compiled into, so the
+    opening test in _clauses (_OPENS) is built from the very same text and can
+    never disagree with a request it would have to find."""
+
+    whole: re.Pattern[str]
+    opening: str
+    framed: bool
 
 
-_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+def _framed(opening: str, rest: str) -> _Body:
+    """A request posed in any request frame, at the start of a clause."""
+    return _Body(re.compile(rf"{_FILLER}{_FRAME}{opening}{rest}"), opening, True)
+
+
+def _bare(opening: str, rest: str) -> _Body:
+    """A request that carries its own frame ("where do I ...", "is there ...")."""
+    return _Body(re.compile(rf"{_FILLER}{opening}{rest}"), opening, False)
+
+
+_PATTERNS: dict[str, tuple[_Body, ...]] = {
     "install_pwa": (
-        # "How do I put you on my phone?", "Add you to my home screen"
+        # "How do I put you on my phone?", "Add you to my home screen". Not
+        # "get you working/running on my phone": that is a question about one
+        # that is already there (review fix round 1).
         _framed(
-            rf"(?:put|get|install|add|download|load|set up|setup) {_NOVA}"
-            rf"(?: (?:set up|installed|running|working))? (?:on|onto|on to|to) "
-            rf"{_ON_A_PHONE}{_END}"
+            r"(?:put|get|install|add|download|load|set up|setup)",
+            rf" {_NOVA}(?: (?:set up|installed))? (?:on|onto|on to|to) {_ON_A_PHONE}{_END}",
         ),
         # "I want you on my phone"
         _bare(
-            rf"(?:i|we)(?: want| need|'d like| would like|'d love| would love) "
-            rf"(?:you|nova)(?: (?:installed|set up|running))? (?:on|onto) {_ON_A_PHONE}{_END}"
+            r"(?:i|we)(?: want| need|'d like| would like|'d love| would love) (?:you|nova)",
+            rf"(?: (?:installed|set up))? (?:on|onto) {_ON_A_PHONE}{_END}",
         ),
     ),
     "get_app": (
         # "Get me the Nova app", "How do I download your Android app?"
-        _framed(rf"{_APP_VERB}(?: me)? {_APP_MINE}{_APP_FOR}{_APP_END}"),
+        _framed(_APP_VERB, rf"(?: me)? {_APP_MINE}{_APP_FOR}{_APP_END}"),
         # "Where do I download your iPhone app?"
         _bare(
-            rf"where (?:do|can|could|should|would) (?:i|we) {_APP_VERB} {_APP_MINE}"
-            rf"{_APP_FOR}{_APP_END}"
+            rf"where (?:do|can|could|should|would) (?:i|we) {_APP_VERB}",
+            rf" {_APP_MINE}{_APP_FOR}{_APP_END}",
         ),
-        _bare(rf"where(?:'s| is) {_APP_MINE}{_APP_FOR}{_APP_END}"),
+        _bare(r"where(?:'s| is)", rf" {_APP_MINE}{_APP_FOR}{_APP_END}"),
         # "Is there a Nova app for Android?"
         _bare(
-            rf"(?:is|are) there (?:a|an|any) (?:nova|nova's) (?:{_PLATFORM} ){{0,2}}apps?"
-            rf"{_APP_FOR}{_APP_END}"
+            r"(?:is|are) there",
+            rf" (?:a|an|any) (?:nova|nova's) (?:{_PLATFORM} ){{0,2}}apps?{_APP_FOR}{_APP_END}",
         ),
+        # "Is there an iPhone app for you?" — one app, hers. "Are there any
+        # apps for you?" asks what exists, so it is not this (review fix
+        # round 1).
         _bare(
-            rf"(?:is|are) there (?:a|an|any) (?:{_PLATFORM} ){{0,2}}apps? (?:for|of) "
-            rf"(?:you|nova){_APP_FOR}{_APP_END}"
+            r"is there",
+            rf" (?:a|an) (?:{_PLATFORM} ){{0,2}}app (?:for|of) (?:you|nova){_APP_FOR}{_APP_END}",
         ),
         # "Do you have an iPhone app?" — asked of her, so the app is hers.
+        # "Do you have any apps?" is the same what-exists question.
         _bare(
-            rf"(?:do|does) (?:you|nova) have (?:a|an|any) (?:{_PLATFORM} ){{0,2}}apps?"
-            rf"{_APP_FOR}{_APP_END}"
+            r"(?:do|does) (?:you|nova) have",
+            rf" (?:a|an) (?:{_PLATFORM} ){{0,2}}app{_APP_FOR}{_APP_END}",
         ),
     ),
     "add_machine": (
         # "Pair my desktop with Nova" — the two verbs that mean pairing on
         # their own.
-        _framed(rf"(?:pair|enroll) {_MACHINE_OBJ}{_TO_NOVA}{_MACHINE_END}"),
+        _framed(r"(?:pair|enroll)", rf" {_MACHINE_OBJ}{_TO_NOVA}{_MACHINE_END}"),
         # "Add my laptop so you can control it.", "Connect my laptop to you" —
         # "add my laptop" alone is as likely a packing list as a pairing, and
         # "connect my laptop" could be to anything, so these verbs have to say
         # it is to her, or for her.
         _framed(
-            rf"(?:add|connect|link|hook up) {_MACHINE_OBJ}"
-            rf"(?:{_WITH_NOVA}{_MACHINE_END}|{_COURTESY}{_NOVA_PURPOSE}$)"
+            r"(?:add|connect|link|hook up)",
+            rf" {_MACHINE_OBJ}(?:{_WITH_NOVA}{_MACHINE_END}|{_COURTESY}{_NOVA_PURPOSE}$)",
         ),
         # "Set up my laptop so you can control it" — the same, for "set up".
-        _framed(rf"(?:set up|setup) {_MACHINE_OBJ}{_TO_NOVA}{_COURTESY}{_NOVA_PURPOSE}$"),
+        _framed(r"(?:set up|setup)", rf" {_MACHINE_OBJ}{_TO_NOVA}{_COURTESY}{_NOVA_PURPOSE}$"),
     ),
     "add_model_server": (
-        # "Set up the Dell to serve models.", "Use my desktop to serve models"
+        # "Set up the Dell to serve models.", "set up the Dell as a model server"
         _framed(
-            rf"(?:set up|setup|use|add|pair|connect|make|turn|configure|enroll) "
-            rf"{_MACHINE_OBJ}{_AS_MODEL_SERVER}{_MACHINE_END}"
+            r"(?:set up|setup|add|pair|connect|make|turn|configure|enroll)",
+            rf" {_MACHINE_OBJ}{_as_model_server(_SERVE)}{_MACHINE_END}",
         ),
+        # "Use my desktop to serve models" — serve only (see _SERVE_ONLY).
+        _framed("use", rf" {_MACHINE_OBJ}{_as_model_server(_SERVE_ONLY)}{_MACHINE_END}"),
         # "Add a model server"
         _framed(
-            rf"(?:add|pair|connect|set up|setup|enroll) "
-            rf"(?:(?:a|an|another|the|my|one more) )?(?:new )?{_SERVER_KIND} server{_MACHINE_END}"
+            r"(?:add|pair|connect|enroll)",
+            rf" (?:(?:a|an|another|the|my|one more) )?(?:new )?{_OWN_SERVER_KIND} server"
+            rf"{_MACHINE_END}",
+        ),
+        # "How do I set up an AI server?" is a general question; "set up an
+        # AI server for Nova" is this setup (review fix round 1).
+        _framed(
+            r"(?:add|pair|connect|set up|setup|enroll)",
+            rf" (?:(?:a|an|another|the|my|one more) )?(?:new )?{_SERVER_KIND} server "
+            rf"(?:for|to) (?:you|nova){_MACHINE_END}",
         ),
     ),
 }
+_BODIES: tuple[_Body, ...] = tuple(body for bodies in _PATTERNS.values() for body in bodies)
+# How every request above OPENS, in one pattern: the framed openings after a
+# frame, the bare ones after nothing. Built from _BODIES, never written out.
+_OPENS = re.compile(
+    rf"{_FILLER}(?:{_FRAME}(?:{'|'.join(b.opening for b in _BODIES if b.framed)})"
+    rf"|(?:{'|'.join(b.opening for b in _BODIES if not b.framed)}))\b"
+)
+# How far into a break's tail a request's opening can reach: a few filler
+# words, the longest frame and a verb, with room for stray punctuation.
+_START_WINDOW = 160
 
-# When one clause reads as two setups, the more specific one is what was
-# asked: "add a model server" is also "add a ... server", and "install the
-# Nova app on my phone" names the app, not the web app.
 _MORE_SPECIFIC = (("add_model_server", "add_machine"), ("get_app", "install_pwa"))
 
 
@@ -261,7 +340,9 @@ def _words(text: str) -> str:
 
 def _asked_in(clause: str) -> set[str]:
     found = {
-        setup for setup, patterns in _PATTERNS.items() if any(p.match(clause) for p in patterns)
+        setup
+        for setup, bodies in _PATTERNS.items()
+        if any(body.whole.match(clause) for body in bodies)
     }
     for specific, general in _MORE_SPECIFIC:
         if specific in found:
@@ -269,21 +350,56 @@ def _asked_in(clause: str) -> set[str]:
     return found
 
 
+def _clauses(sentence: str) -> list[str]:
+    """A sentence's clauses, as words: cut at a comma or a conjunction ONLY
+    where what follows is itself a request (review fix round 1).
+
+    Read right to left, so the text after a break is already a whole clause
+    when it is tested: "A, B and C" cuts before C first, then asks whether B
+    alone is a request. Where it is not, the break stays inside the clause and
+    that clause's own end has to take what follows — so "pair my laptop and
+    my phone" is one clause, and a machine's end takes nothing but a courtesy
+    or a purpose about her. The cut exists to see a SECOND request, never to
+    shorten the first.
+
+    Every break's tail is first read only as far as a request's START can
+    reach (_START_WINDOW): a tail that does not open like a request cannot be
+    one, and reading the whole of every tail would make a message of commas
+    quadratic."""
+    clauses: list[str] = []
+    end = len(sentence)
+    for brk in reversed(list(_SOFT_BREAK.finditer(sentence))):
+        opening = _words(sentence[brk.end() : min(end, brk.end() + _START_WINDOW)])
+        if not _OPENS.match(opening):
+            continue
+        tail = _words(sentence[brk.end() : end])
+        if tail and _asked_in(tail):
+            clauses.append(tail)
+            end = brk.start()
+    head = _words(sentence[:end])
+    if head:
+        clauses.append(head)
+    return clauses
+
+
 def setup_request(message: str) -> SetupKind | None:
     """The one setup the owner's message plainly asks for, or None.
 
     None whenever it is not plain: no request frame, an object that is not
-    Nova or a device of his, a request taken back, or two different setups in
-    one message. See the module docstring for why every doubt is None."""
+    Nova or a device of his, something else coordinated with it, a request
+    taken back, or two different setups in one message. See the module
+    docstring for why every doubt is None."""
     if not isinstance(message, str) or not message.strip():
         return None
     text = _MENTION.sub("", message.lower().translate(_APOSTROPHES))
     if _CANCEL.search(_words(text)):
         return None
+    sentences = [raw for raw in _SENTENCE_BREAK.split(text) if _words(raw)]
+    if sentences and _words(sentences[-1]) in _TRAILING_NO:
+        return None
     asked: set[str] = set()
-    for raw in _CLAUSE_BREAK.split(text):
-        clause = _words(raw)
-        if clause:
+    for sentence in sentences:
+        for clause in _clauses(sentence):
             asked |= _asked_in(clause)
     if len(asked) != 1:
         return None
