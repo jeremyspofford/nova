@@ -287,15 +287,17 @@ func flipLastChar(s string) string {
 // for S42a (controller ruling 2): core's actual signer
 // (services/core/app/devices_ws.py's revoked_proof, via envelopes.sign with
 // the SAME fixed seed) and this Verifier's checker must agree on the SAME
-// bytes. The fixture's last vector is the revoked-proof body — decoded
-// exactly as the wire does (UseNumber) — and must verify against the seed's
-// own public key, addressed to the vector's own device_id and nonce.
+// bytes. The fixture's fourth vector (index 3) is the revoked-proof body —
+// decoded exactly as the wire does (UseNumber) — and must verify against the
+// seed's own public key, addressed to the vector's own device_id and nonce.
+// A fixed index, not "last": Task 13 appends a fifth (Windows-path) vector
+// AFTER this one, so "last" would silently pick up the wrong payload.
 func TestVerifyRevokedProofAcceptsTheCommittedVector(t *testing.T) {
 	vf := loadVectors(t)
-	v := vf.Vectors[len(vf.Vectors)-1]
+	v := vf.Vectors[3]
 	proof := decodePayload(t, v.Payload)
 	if kind, _ := proof["kind"].(string); kind != RevokedProofKind {
-		t.Fatalf("expected the last fixture vector to be the revoked-proof vector, got %v", proof)
+		t.Fatalf("expected fixture vector 4 (index 3) to be the revoked-proof vector, got %v", proof)
 	}
 	deviceID, _ := proof["device_id"].(string)
 	nonceHex, _ := proof["nonce"].(string)

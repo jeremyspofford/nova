@@ -234,10 +234,13 @@ def test_the_revoked_proof_vector_matches_devices_ws_shape():
     across languages exactly like an envelope, even though it is not one: no
     capability, no args, just {kind, v, device_id, nonce}. envelopes.sign
     over the committed payload must reproduce the committed sig, the same way
-    it does for a command envelope."""
+    it does for a command envelope.
+
+    Fixed index, not [-1]: S42a Task 13 appends a fifth (Windows-path) vector
+    AFTER this one, so "last" would silently grab the wrong payload."""
     data = _vectors()
     key = ed25519.Ed25519PrivateKey.from_private_bytes(bytes.fromhex(data["seed_hex"]))
-    vector = data["vectors"][-1]
+    vector = data["vectors"][3]
     proof = vector["payload"]
 
     # Fix round 1: built from devices_ws.revoked_proof itself, not a hand

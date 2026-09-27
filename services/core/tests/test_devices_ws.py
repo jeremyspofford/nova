@@ -1140,3 +1140,62 @@ async def test_a_facts_frame_still_merges_into_a_cleared_row(pool):
     row = await _facts_of(pool, device_id)
     assert row["facts"] == {"net": {"ifaces": []}, "unreadable": []}
     await _close(conn2, task2)
+
+
+# -- S42a Task 13: a path check for the device's own OS -----------------------
+
+# Review focus 2: a Windows path however it is typed, normalized once, and the
+# spellings that name no file refused before the wire.
+WINDOWS_PATHS_SENT = [
+    ("C:\\Users\\owner\\Desktop", "C:\\Users\\owner\\Desktop"),
+    ("c:/users/owner/desktop", "c:\\users\\owner\\desktop"),
+    ("C:\\Users\\owner\\..\\..\\Windows\\System32", "C:\\Windows\\System32"),
+    (
+        "\\\\wsl.localhost\\Ubuntu-26.04\\home\\owner",
+        "\\\\wsl.localhost\\Ubuntu-26.04\\home\\owner",
+    ),
+    ("\\\\wsl.localhost\\Ubuntu-26.04\\..\\etc", "\\\\wsl.localhost\\Ubuntu-26.04\\etc"),
+]
+WINDOWS_PATHS_REFUSED = [
+    ("notes.txt", "must be absolute on Windows"),
+    ("\\foo", "must be absolute on Windows"),  # rooted, no drive: 3.12's ntpath.isabs says True
+    ("C:foo", "must be absolute on Windows"),  # drive-relative
+    ("/home/owner", "must be absolute on Windows"),  # a POSIX path on a Windows machine
+    ("\\\\?\\C:\\x", "device path"),
+    ("\\\\.\\PhysicalDrive0", "device path"),
+]
+
+
+async def test_windows_paths_are_normalized_and_device_paths_refused(pool):
+    device_id, device, conn, task = await _connect(pool, name="pc", platform="windows")
+    person = await _person(pool)
+    for given, sent in WINDOWS_PATHS_SENT:
+
+        async def answer(expected=sent):
+            frame = await asyncio.wait_for(conn.next_sent(), 2)
+            assert frame["envelope"]["args"]["path"] == expected
+            conn.feed(device.result(frame["envelope"], ok=True, output="listing", exit_code=0))
+
+        ans = asyncio.create_task(answer())
+        _r, ok = await tools.dispatch(
+            "device_list_files", {"device": "pc", "path": given}, _ctx(person)
+        )
+        await asyncio.wait_for(ans, 2)
+        assert ok is True, given
+    for given, words in WINDOWS_PATHS_REFUSED:
+        result, ok = await tools.dispatch(
+            "device_list_files", {"device": "pc", "path": given}, _ctx(person)
+        )
+        assert ok is False and words in result, (given, result)
+    await _close(conn, task)
+
+
+async def test_a_device_whose_platform_is_unknown_cannot_have_a_path_checked(pool):
+    device_id, _device = await _enroll(pool, name="old-box")
+    await pool.execute("UPDATE devices SET platform = 'unknown' WHERE id = $1", device_id)
+    devices_ws.hub.register(device_id, FakeWSConn())
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_read_file", {"device": "old-box", "path": "/etc/hosts"}, _ctx(person)
+    )
+    assert ok is False and "cannot: platform unknown" in result

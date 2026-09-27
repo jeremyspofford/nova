@@ -20,7 +20,7 @@ seed is the ASCII of a phrase so it is legible in both the JSON and a Go test:
 
     "novad-slice-05-envelope-vectors!"  — exactly 32 bytes, an ed25519 seed.
 
-The four vectors cover what actually breaks cross-language JSON:
+The five vectors cover what actually breaks cross-language JSON:
   1. empty args — the baseline shape, and the case a Go `map[string]any`
      round-trips to `null` if the daemon is careless;
   2. non-ASCII AND angle-bracket/ampersand text — python escapes the former
@@ -33,7 +33,11 @@ The four vectors cover what actually breaks cross-language JSON:
      a command envelope: no capability, no args, a different key set
      (kind/v/device_id/nonce) — proving the SAME canonicalizer and the SAME
      seed sign this shape identically on both sides too, not only the
-     envelope shape the first three vectors cover.
+     envelope shape the first three vectors cover;
+  5. a Windows path — backslashes and a drive colon (S42a Task 13), as
+     device_list_files sends in a `fs.list` envelope's args once the path
+     check accepts a device's own OS. Every backslash must be escaped as
+     `\\` by BOTH encoders; nothing else here exercises that byte.
 
 issued_at/expires_at are frozen literals rather than time.time(): a vector
 that changes every run pins nothing.
@@ -121,6 +125,22 @@ PAYLOADS = [
             "v": 1,
             "device_id": "11111111-2222-3333-4444-555555555555",
             "nonce": "0123456789abcdef" * 4,
+        },
+    },
+    {
+        "note": (
+            "a Windows path — backslashes and a drive colon, as device_list_files "
+            "sends on Windows (S42a); the JSON escapes each backslash, and both "
+            "encoders must agree on those bytes"
+        ),
+        "payload": {
+            "v": 1,
+            "envelope_id": "5e8a1f0c-7d42-4c1e-9a3b-2f6d8c0e4b71",
+            "device_id": "11111111-2222-3333-4444-555555555555",
+            "capability": "fs.list",
+            "args": {"path": "C:\\Users\\owner\\Desktop"},
+            "issued_at": ISSUED_AT,
+            "expires_at": EXPIRES_AT,
         },
     },
 ]
