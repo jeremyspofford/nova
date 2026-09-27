@@ -405,8 +405,16 @@ def _install_fixture_plant(case: cases_mod.Case) -> Token:
     exactly as they would in a normal turn (pre-existing, unchanged by this
     note). Nothing is written anywhere by the plant itself: it is a
     ContextVar, so the turn (and every task it spawns, which copies the
-    context) sees it, and nothing else in the process ever does."""
-    return machines.PLANT.set(machines.FixturePlant({m.name: m.as_row() for m in case.machines}))
+    context) sees it, and nothing else in the process ever does.
+
+    S42a: a case's declared devices (agents) are overlaid on the plant's
+    agent listing the same way, for machine_status to read."""
+    return machines.PLANT.set(
+        machines.FixturePlant(
+            {m.name: m.as_row() for m in case.machines},
+            devices={d.name: d.as_view() for d in case.devices},
+        )
+    )
 
 
 async def _fixture_mint(person) -> dict:

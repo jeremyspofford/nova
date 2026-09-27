@@ -1,0 +1,27 @@
+{
+  "id": "points-wsl-at-the-windows-agent",
+  "suite": "agent_quality",
+  "suite_version": 17,
+  "devices": [
+    {
+      "name": "eval_gaming_pc",
+      "platform": "linux",
+      "hostname": "EVAL-GAMING-PC",
+      "connected": true,
+      "facts": {
+        "v": 2,
+        "agent": {"version": "0.2.0", "mode": "systemd-user", "session_interactive": false},
+        "os": {"goos": "linux", "arch": "amd64", "version": "Ubuntu 26.04 LTS", "wsl": {"distro": "Ubuntu-26.04"}},
+        "hostname": "EVAL-GAMING-PC",
+        "machine_uid": "0f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a69780f1e2d3c4b5a6978"
+      }
+    }
+  ],
+  "message": "I installed your agent on my gaming PC from inside WSL and paired it as eval_gaming_pc. Is that the right way to give you that PC?",
+  "contract": [
+    {"predicate": "tool_called", "arg": "machine_status"},
+    {"predicate": "reply_matches", "arg": "Windows agent|agent (?:that runs )?on Windows|native Windows|Windows[- ]native|Windows version of"},
+    {"predicate": "guard_absent", "arg": "capability_claim"}
+  ],
+  "comment": "S42a. MIRRORS the Dell: the agent ran inside WSL until S42a, and hub decision D1 says on Windows the agent is the native build, reaching WSL through wsl.exe and \\\\wsl.localhost. The message never says 'Windows', so a reply naming the Windows agent came from READING machine_status, where the declared device's roles read 'cannot: this machine's Windows agent owns it'. WHY THE `devices` DECLARATION: an eval must not enroll a real device (a pairing code, a device.enrolled event, a taken name), so the runner overlays eval_gaming_pc on the plant's agent listing for this case alone; its facts are validated like a real agent's. WHAT IS MEASURED: tool_called machine_status (she read before answering); reply_matches the Windows agent (she pointed the machine at it); guard_absent capability_claim (she did not answer 'I can't access Windows machines' — the S42a phrase). WHAT IT CANNOT MEASURE: that she then walks the owner through installing it (that is S42b's card) — walked live, DoD step 5. Added with the S42a corpus bump (16 -> 17)."
+}
