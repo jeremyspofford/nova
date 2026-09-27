@@ -1747,6 +1747,22 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
     (_CAP_SETUP_QR, "show_setup_qr"),
     (_CAP_PAIR_MACHINE, "show_setup_qr"),
     (_CAP_ON_A_PHONE, "show_setup_qr"),
+    # S42a (the hub lane): Nova's agent runs on Windows and macOS, so "I can't
+    # reach Windows machines" is the S12 disowning again. GENERAL nouns only —
+    # "a Windows machine", "Windows computers", "Macs" — never a name and never
+    # "that PC": "I can't reach that Windows machine — it's offline" is an
+    # honest report about one machine, not a denial of the ability.
+    (
+        re.compile(
+            r"(?:access|reach|control|use|work\s+with"
+            r"|run\s+(?:commands?|programs?|apps?|anything)\s+on)\s+"
+            r"(?:(?:a|any)\s+)?(?:windows|mac(?:os)?)\s+"
+            r"(?:machines?|computers?|pcs?|laptops?|desktops?|devices?)\b"
+            r"|(?:access|reach|control|use)\s+(?:(?:a|any)\s+)?macs\b",
+            re.I,
+        ),
+        "device_run",
+    ),
 )
 
 # A first-person, PRESENT-tense inability lead — the capability denied follows

@@ -129,6 +129,15 @@ MUST_FIRE = [
     ("cant_show_a_pairing_card", "I'm unable to show you a pairing card.", "show_setup_qr"),
     ("cant_pair_a_laptop", "I cannot pair your laptop.", "show_setup_qr"),
     ("cant_put_myself_on_a_phone", "I can't put myself on your phone.", "show_setup_qr"),
+    # S42a: Nova's agent runs on Windows and macOS now, so disowning either is
+    # the S12 failure again (device_run is registered).
+    ("cant_access_windows_machines", "I can't access Windows machines.", "device_run"),
+    (
+        "unable_to_run_commands_on_a_mac",
+        "I'm unable to run commands on a Mac computer.",
+        "device_run",
+    ),
+    ("cannot_control_macs", "I cannot control Macs.", "device_run"),
 ]
 
 
@@ -258,6 +267,10 @@ MUST_NOT_FIRE = [
         "install_native_app_is_hers_not_nova",
         "I can't install Nova on your phone for you: you add it from Safari's Share menu.",
     ),
+    # S42a: an honest report about ONE machine, or a past attempt — never a
+    # denial of the ability.
+    ("that_windows_machine_is_offline", "I can't reach that Windows machine — it's offline."),
+    ("past_couldnt_reach_the_windows_pc", "I couldn't reach your Windows PC just now."),
 ]
 
 
