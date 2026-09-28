@@ -366,3 +366,33 @@ key. This is small; the plan picks.
     +1 and +4 renumber after);
   - `platform-walks.json` and `gate_test.sh`.
 - **`test_no_approvals` stays unchanged.** Every refusal says "cannot".
+
+---
+
+## Owner decisions — 2026-09-28
+
+The owner answered "all recommended":
+
+1. **Scope: (b).** S42b = install, service, the card, the hub's agent, re-pairing and
+   Nova-managed updates. The admin helper moves to **S42c**. Both land before S46a.
+2. **Updates: (c).** Nova updates an agent that is behind the hub's build on her own when
+   its machine is idle, one machine at a time, the hub's agent first. Each update is
+   confirmed by the agent's reconnect on the new build and rolled back if it fails.
+   There is also a tool for "update it now".
+3. **The WSL agent: retire it.** The walk on 2026-09-28 proved the Windows agent reaches WSL
+   through `wsl.exe` (turn e2cf16ab: `uname -a` inside WSL) and WSL files through
+   `\\wsl.localhost\…`. This supersedes option (b) above. D1 stands: one agent per Windows
+   machine, the native one.
+4. **Re-pairing: (b).** A "Re-pair" code from the machine's tile rebinds its row to the
+   new key. The code is single use and lasts 10 minutes; the row keeps its name and history.
+5. **Where the binary lives: (a).** The user's folders (`~/.local/bin`,
+   `%LocalAppData%\Programs\Nova`, and the macOS equivalent), plus the admin-only copy that
+   S42c's helper runs.
+6. **The hub in Devices: (a).** `./install` always installs the hub's own agent.
+
+**Also for S42b, from the S42a walk and eval:**
+- Resolve "Desktop" on the agent, so she never guesses a path. In the walk she listed
+  `C:\Users\Public\Desktop`.
+- Give `device_list` and the device tools the WSL fact too. In the eval, the 8B model
+  answered from `device_list`, never called `machine_status`, and gave wrong advice in all
+  three runs.
