@@ -86,6 +86,15 @@ class Listing:
             out["note"] = self.note
         return out
 
+    def summary(self) -> str:
+        """ "N models listed", extended with what the listing could not
+        include. The one sentence both the verify-before-save note
+        (OpenAIChat.verify) and the provider's stored listing state
+        (admin._listing_for) build from, so a partial list reads the same
+        words wherever it is said."""
+        text = f"{len(self.models)} models listed"
+        return f"{text}; {self.note}" if self.note else text
+
 
 @dataclass
 class VerifyResult:

@@ -134,6 +134,31 @@ class FailingTransport(httpx.AsyncBaseTransport):
         raise self.failure("simulated: no answer", request=request)
 
 
+class QueryFailingTransport(httpx.AsyncBaseTransport):
+    """Wraps a normal fake peer, but fails ONE query shape at the transport
+    level — FailingTransport's shape, a connection that never answers —
+    while every other request to the same host still reaches the fake
+    normally. For a peer whose second listing (OpenRouter's own
+    `?output_modalities=decisions`) is unreachable while its default
+    listing still answers."""
+
+    def __init__(
+        self,
+        fake_app,
+        *,
+        query: dict[str, str],
+        failure: type[httpx.TransportError] = httpx.ConnectError,
+    ) -> None:
+        self._inner = StreamingASGITransport(fake_app)
+        self._query = query
+        self._failure = failure
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if all(request.url.params.get(k) == v for k, v in self._query.items()):
+            raise self._failure("simulated: no answer", request=request)
+        return await self._inner.handle_async_request(request)
+
+
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
@@ -463,6 +488,10 @@ class FakeOpenAICompat:
     # query and answers its one listing.
     decisions_models_body: dict | None = None
     decisions_models_status: int = 200
+    # A 200 that is not an answer to the decisions query — the same shape
+    # systemone_raw simulates for /systemone, here for the decisions
+    # listing: these bytes instead of JSON, always status 200.
+    decisions_models_raw: bytes | None = None
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -491,10 +520,11 @@ class FakeOpenAICompat:
             return JSONResponse(
                 {"error": {"message": "Invalid API key"}}, status_code=self.models_wrong_key_status
             )
-        if (
-            request.query_params.get("output_modalities") == "decisions"
-            and self.decisions_models_body is not None
+        if request.query_params.get("output_modalities") == "decisions" and (
+            self.decisions_models_body is not None or self.decisions_models_raw is not None
         ):
+            if self.decisions_models_raw is not None:
+                return Response(self.decisions_models_raw)
             return JSONResponse(
                 self.decisions_models_body, status_code=self.decisions_models_status
             )

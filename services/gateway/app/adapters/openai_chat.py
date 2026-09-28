@@ -463,9 +463,7 @@ class OpenAIChat:
                 note=f"{exc} — the key was not tested; the first chat turn will tell",
                 key_proven=None,
             )
-        note = f"{len(listing.models)} models listed"
-        if listing.note:
-            note = f"{note}; {listing.note}"
+        note = listing.summary()
         if row.get("auth_shape") == "none":
             return VerifyResult(
                 listing="available", models=listing.models, note=note, key_proven=None

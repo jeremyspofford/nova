@@ -13,7 +13,7 @@ import pytest
 
 from app.adapters import openai_chat
 from tests.conftest import requires_db
-from tests.fakes import FakeOllama, FakeOpenAICompat
+from tests.fakes import FakeOllama, FakeOpenAICompat, QueryFailingTransport
 
 pytestmark = requires_db
 
@@ -125,6 +125,61 @@ async def test_a_decision_listing_that_fails_is_said_and_the_chat_models_still_l
     assert "openrouter:~typesafe/jev-latest" not in _rows(body)
 
 
+async def test_a_decision_listing_transport_failure_is_said_and_the_chat_models_still_list(
+    client, local, mount_transport
+):
+    """The OTHER way a fetch can fail: never a response at all (a dead
+    connection), not a non-200 one. `_decision_models`'s own words for it,
+    never `fetch_listing`'s "could not reach" phrasing."""
+    fake = FakeOpenAICompat(accepts_key="sk-1", models_body={"object": "list", "data": [CHAT_ROW]})
+    mount_transport(
+        "http://openrouter.test",
+        QueryFailingTransport(fake.app, query={"output_modalities": "decisions"}),
+    )
+
+    resp = await client.post(
+        "/admin/providers",
+        json={
+            "name": "openrouter",
+            "adapter": "openai-chat",
+            "base_url": "http://openrouter.test/v1",
+            "auth_shape": "static-bearer",
+            "api_key": "sk-1",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    body = (await client.get("/admin/catalog")).json()
+
+    source = {s["key"]: s for s in body["sources"]}["openrouter"]
+    assert source["ok"] is True
+    assert source["note"].startswith("its decision models could not be listed — ConnectError")
+    assert "openrouter:openai/gpt-6-astra" in _rows(body)
+    assert "openrouter:~typesafe/jev-latest" not in _rows(body)
+
+
+async def test_an_unreadable_decision_listing_is_said_and_the_chat_models_still_list(
+    client, local, mount_backend
+):
+    """The THIRD way `_decision_models` can fail: a 200 that is not JSON —
+    a proxy's error page in front of the real server, say."""
+    await _provider(
+        client,
+        mount_backend,
+        "openrouter",
+        models_body={"object": "list", "data": [CHAT_ROW]},
+        decisions_models_raw=b"not json at all",
+    )
+
+    body = (await client.get("/admin/catalog")).json()
+
+    source = {s["key"]: s for s in body["sources"]}["openrouter"]
+    assert source["ok"] is True
+    assert source["note"].startswith("its decision-model listing was unreadable — ")
+    assert "openrouter:openai/gpt-6-astra" in _rows(body)
+    assert "openrouter:~typesafe/jev-latest" not in _rows(body)
+
+
 async def test_a_local_decision_server_lists_as_installed_on_the_owners_machine(
     client, local, mount_backend
 ):
@@ -214,6 +269,32 @@ async def test_verifys_models_listed_note_says_when_the_decision_listing_failed(
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["verify_note"] == (
+        "1 models listed; its decision models could not be listed (500: upstream hiccup)"
+    )
+
+
+async def test_the_admin_listing_path_also_says_when_the_decision_listing_failed(
+    client, local, mount_backend
+):
+    """`_listing_for` (GET /admin/providers/{name}/models, and the
+    catalogue build behind it) stores the same extended sentence on the
+    provider row that `verify` writes at save time — nothing asserted that
+    before this test."""
+    await _provider(
+        client,
+        mount_backend,
+        "openrouter",
+        models_body={"object": "list", "data": [CHAT_ROW]},
+        decisions_models_body={"error": {"message": "upstream hiccup"}},
+        decisions_models_status=500,
+    )
+
+    listing = (await client.get("/admin/providers/openrouter/models")).json()
+    assert listing["note"] == "its decision models could not be listed (500: upstream hiccup)"
+
+    providers_list = (await client.get("/admin/providers")).json()["providers"]
+    row = next(p for p in providers_list if p["name"] == "openrouter")
+    assert row["listing_note"] == (
         "1 models listed; its decision models could not be listed (500: upstream hiccup)"
     )
 
