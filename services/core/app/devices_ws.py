@@ -427,7 +427,13 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
     NOT store past the break — it writes DEVICE_AUDIT_BREAK and returns, leaving
     the socket alive (the operator decides what a tampered device means).
     Good entries are stored with ON CONFLICT DO NOTHING, so replaying a batch
-    core already has is a no-op."""
+    core already has is a no-op.
+
+    A verified entry postgres itself refuses (asyncpg.DataError — an
+    out-of-range exit_code was the live case) also does NOT store past
+    itself, and also leaves the socket alive — but writes no
+    DEVICE_AUDIT_BREAK, since the chain was never tampered with; only an
+    ERROR log names the device and seq."""
     device_uuid = _as_uuid(device_id)
     ordered = sorted(
         (e for e in entries if isinstance(e, dict) and isinstance(e.get("seq"), int)),
@@ -468,22 +474,41 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
             )
             return {"stored": stored, "break": seq}
 
-        await pool.execute(
-            "INSERT INTO device_audit (device_id, seq, prev_hash, hash, ts, envelope_id, "
-            "capability, summary, ok, exit_code) "
-            "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
-            "ON CONFLICT (device_id, seq) DO NOTHING",
-            device_uuid,
-            seq,
-            got_prev or None,
-            claimed_hash,
-            datetime.fromtimestamp(int(entry.get("ts") or 0), tz=UTC),
-            entry.get("envelope_id"),
-            entry.get("capability"),
-            entry.get("summary"),
-            bool(entry.get("ok")),
-            entry.get("exit_code"),
-        )
+        try:
+            await pool.execute(
+                "INSERT INTO device_audit (device_id, seq, prev_hash, hash, ts, envelope_id, "
+                "capability, summary, ok, exit_code) "
+                "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) "
+                "ON CONFLICT (device_id, seq) DO NOTHING",
+                device_uuid,
+                seq,
+                got_prev or None,
+                claimed_hash,
+                datetime.fromtimestamp(int(entry.get("ts") or 0), tz=UTC),
+                entry.get("envelope_id"),
+                entry.get("capability"),
+                entry.get("summary"),
+                bool(entry.get("ok")),
+                entry.get("exit_code"),
+            )
+        except asyncpg.DataError as exc:
+            # A poison entry (an out-of-range exit_code was the live case —
+            # T3's Windows agent sent a uint32 DWORD too big for the int4
+            # column of the day; anything else postgres refuses lands here
+            # the same way) must never take the socket down. The hash still
+            # verified — this is NOT a tamper detection, so no
+            # DEVICE_AUDIT_BREAK governance event — it is postgres refusing
+            # to store a value core's own chain already accepted as genuine.
+            # Stop AT this entry: it is not stored (ON CONFLICT never ran),
+            # and nothing after it in the batch is attempted, so the return
+            # shape below never claims more than what actually landed.
+            logger.error(
+                "device %s: audit entry seq=%s not stored — postgres refused it: %s",
+                device_uuid,
+                seq,
+                exc,
+            )
+            return {"stored": stored, "break": seq}
         stored += 1
     return {"stored": stored, "break": None}
 

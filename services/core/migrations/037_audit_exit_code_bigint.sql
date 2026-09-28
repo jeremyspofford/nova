@@ -1,0 +1,20 @@
+-- device_audit.exit_code widens from int4 to int8.
+--
+-- Windows process exit codes are a Win32 DWORD — uint32, up to 4294967295 —
+-- and novad's Go agent sends the raw value it got from GetExitCodeProcess
+-- (apps/novad/internal/caps/shell.go, exitCodeValue widens it to int64
+-- before it ever reaches the wire). A command that failed with
+-- 0x80070005 (2147942405) does not fit int4's signed 32-bit range, so
+-- asyncpg raised DataError on the INSERT in devices_ws.ingest_audit, that
+-- exception escaped the frame handler, and the socket closed under the
+-- device. The agent's backoff resets after any authenticated session, so it
+-- reconnected in about a second, replayed the same audit backlog, and hit
+-- the same DataError again — a permanent crash-reconnect-crash loop that
+-- never let the device stay attached.
+--
+-- bigint holds every value a uint32 exit code or a signal-derived negative
+-- code can carry, with room to spare. int4 -> int8 is a safe widening
+-- (ALTER COLUMN TYPE never loses data going up), and re-running this
+-- statement once the column is already bigint is a no-op type change —
+-- idempotent on a live table exactly like every other migration here.
+ALTER TABLE device_audit ALTER COLUMN exit_code TYPE bigint;
