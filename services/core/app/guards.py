@@ -1752,13 +1752,17 @@ _CAPABILITY_TOOLS: tuple[tuple[re.Pattern[str], str], ...] = (
     # "a Windows machine", "Windows computers", "Macs" — never a name and never
     # "that PC": "I can't reach that Windows machine — it's offline" is an
     # honest report about one machine, not a denial of the ability.
+    # Only verbs that ARE device_run's ability (access, reach, control, run
+    # commands on). "use" and "work with" are not here (final review I1): they
+    # accept any purpose, and a Windows machine or a Mac cannot serve models
+    # until S44, so "I can't use a Windows PC as a model server yet" is true.
     (
         re.compile(
-            r"(?:access|reach|control|use|work\s+with"
+            r"(?:access|reach|control"
             r"|run\s+(?:commands?|programs?|apps?|anything)\s+on)\s+"
             r"(?:(?:a|any)\s+)?(?:windows|mac(?:os)?)\s+"
             r"(?:machines?|computers?|pcs?|laptops?|desktops?|devices?)\b"
-            r"|(?:access|reach|control|use)\s+(?:(?:a|any)\s+)?macs\b",
+            r"|(?:access|reach|control)\s+(?:(?:a|any)\s+)?macs\b",
             re.I,
         ),
         "device_run",

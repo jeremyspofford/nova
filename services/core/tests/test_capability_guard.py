@@ -271,6 +271,17 @@ MUST_NOT_FIRE = [
     # denial of the ability.
     ("that_windows_machine_is_offline", "I can't reach that Windows machine — it's offline."),
     ("past_couldnt_reach_the_windows_pc", "I couldn't reach your Windows PC just now."),
+    # S42a final review I1: a Windows machine or a Mac cannot serve models
+    # until S44, so "I can't use one for models yet" is TRUE. The verbs "use"
+    # and "work with" accept any purpose, which is why they are not in the
+    # device_run row: correcting these with "I have a tool for it
+    # (device_run)" would make the guard the liar.
+    (
+        "no_windows_machines_for_models_yet",
+        "I can't use Windows machines to run models yet; that arrives with a later update.",
+    ),
+    ("no_windows_pc_as_a_model_server_yet", "I can't use a Windows PC as a model server yet."),
+    ("no_macs_for_local_models_yet", "I can't use Macs for local models yet."),
 ]
 
 
