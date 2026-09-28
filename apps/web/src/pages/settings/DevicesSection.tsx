@@ -9,7 +9,7 @@ import {
   revokeDevice as apiRevokeDevice,
   type Device,
 } from '../../lib/api'
-import { deviceLiveness, deviceSubtitle, wslNote } from './devicesFormat'
+import { deviceLiveness, deviceSubtitle, revokedToggleLabel, splitDevicesByRevoked, wslNote } from './devicesFormat'
 import { SetupModal } from './SetupModal'
 
 /**
@@ -25,6 +25,11 @@ import { SetupModal } from './SetupModal'
  * here because there is no grant (owner ruling 2026-09-03) — a paired device
  * does everything the user novad runs as can do, and the two controls that
  * remain are a name and Revoke, which ends the pairing.
+ *
+ * Revoked devices are hidden from the list by default (owner ruling
+ * 2026-09-28) behind a "Show revoked (N)" toggle — display only; the API
+ * still returns them and history/audit records are untouched. See
+ * devicesFormat.splitDevicesByRevoked.
  *
  * "Pair a device" opens the S47 machine setup (SetupModal, setup="add_machine"):
  * the same QR code, code and command on Nova's derived address that the
@@ -66,6 +71,7 @@ export function DevicesSection({
   const [devices, setDevices] = useState<Device[] | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [pairingOpen, setPairingOpen] = useState(false)
+  const [showRevoked, setShowRevoked] = useState(false)
 
   const applyRows = useCallback((rows: Device[]) => {
     setDevices(rows)
@@ -117,6 +123,8 @@ export function DevicesSection({
     void refresh()
   }, [refresh])
 
+  const { live: liveDevices, revoked: revokedDevices } = splitDevicesByRevoked(devices ?? [])
+
   return (
     <Section
       icon={Laptop}
@@ -135,19 +143,50 @@ export function DevicesSection({
             <Skeleton lines={3} />
           </div>
         )
-      ) : devices.length === 0 ? (
+      ) : liveDevices.length === 0 && revokedDevices.length === 0 ? (
         <EmptyState
           icon={Laptop}
           title="No devices paired"
           description="Pair a computer to let Nova read from it and act on it — a paired device can do everything you can."
           action={{ label: 'Pair a device', onClick: () => setPairingOpen(true) }}
         />
+      ) : liveDevices.length === 0 ? (
+        <div className="flex flex-col items-center gap-3">
+          <EmptyState
+            icon={Laptop}
+            title="No devices paired"
+            description="Pair a computer to let Nova read from it and act on it — a paired device can do everything you can."
+            action={{ label: 'Pair a device', onClick: () => setPairingOpen(true) }}
+          />
+          <RevokedToggle
+            count={revokedDevices.length}
+            shown={showRevoked}
+            onToggle={() => setShowRevoked(v => !v)}
+            className="-mt-4"
+          />
+          {showRevoked && (
+            <div className="w-full divide-y divide-border-subtle">
+              {revokedDevices.map(device => (
+                <DeviceTile key={device.id} device={device} api={api} onUpdated={onDeviceUpdated} />
+              ))}
+            </div>
+          )}
+        </div>
       ) : (
         <>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-caption text-content-tertiary">
-              {devices.length} {devices.length === 1 ? 'device' : 'devices'}
-            </span>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-caption text-content-tertiary">
+                {liveDevices.length} {liveDevices.length === 1 ? 'device' : 'devices'}
+              </span>
+              {revokedDevices.length > 0 && (
+                <RevokedToggle
+                  count={revokedDevices.length}
+                  shown={showRevoked}
+                  onToggle={() => setShowRevoked(v => !v)}
+                />
+              )}
+            </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="ghost" icon={<RefreshCw size={12} />} onClick={() => void refresh()}>
                 Refresh
@@ -158,9 +197,13 @@ export function DevicesSection({
             </div>
           </div>
           <div className="divide-y divide-border-subtle">
-            {devices.map(device => (
+            {liveDevices.map(device => (
               <DeviceTile key={device.id} device={device} api={api} onUpdated={onDeviceUpdated} />
             ))}
+            {showRevoked &&
+              revokedDevices.map(device => (
+                <DeviceTile key={device.id} device={device} api={api} onUpdated={onDeviceUpdated} />
+              ))}
           </div>
         </>
       )}
@@ -296,6 +339,29 @@ function DeviceTile({
       {revokeError && <p className="mt-2 text-caption text-danger">Could not revoke: {revokeError}</p>}
       {note && <p className="mt-2 text-caption text-content-secondary">{note}</p>}
     </div>
+  )
+}
+
+/**
+ * "Show revoked (N)" / "Hide revoked" — a real button (not a checkbox, per
+ * the ConfirmDialog/Section idiom of state-via-aria-pressed/aria-expanded on
+ * a plain <button>) so it is keyboard-reachable without extra label wiring.
+ */
+function RevokedToggle({
+  count,
+  shown,
+  onToggle,
+  className,
+}: {
+  count: number
+  shown: boolean
+  onToggle: () => void
+  className?: string
+}) {
+  return (
+    <Button size="sm" variant="ghost" aria-pressed={shown} onClick={onToggle} className={className}>
+      {revokedToggleLabel(count, shown)}
+    </Button>
   )
 }
 

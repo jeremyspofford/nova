@@ -147,19 +147,81 @@ describe('DevicesSection', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /confirm revoke/i }))
     await waitFor(() => expect(api.revokeDevice).toHaveBeenCalledWith('d-1'))
-    // The row flips to the revoked rendering; its controls disappear.
-    await waitFor(() => expect(screen.getByText(/revoked/i)).toBeTruthy())
+    // Now revoked, the device drops out of the default (live-only) view —
+    // reveal it via the toggle to check the row flipped.
+    fireEvent.click(await screen.findByRole('button', { name: /show revoked \(1\)/i }))
+    const tile = await screen.findByTestId('device-d-1')
+    expect(within(tile).getByText(/revoked/i)).toBeTruthy()
     expect(screen.queryByRole('button', { name: /^revoke$/i })).toBeNull()
   })
 
-  it('a revoked device is still shown, muted, with no rename/revoke controls', async () => {
+  it('a revoked device, once revealed, is shown muted with no rename/revoke controls', async () => {
     renderSection({
       listDevices: vi.fn(async () => [device({ revoked_at: new Date().toISOString() })]),
     })
+    fireEvent.click(await screen.findByRole('button', { name: /show revoked \(1\)/i }))
+    const tile = await screen.findByTestId('device-d-1')
+    expect(within(tile).getByText('laptop')).toBeTruthy()
+    expect(within(tile).getByText(/revoked/i)).toBeTruthy()
+    expect(within(tile).queryByRole('button', { name: /rename/i })).toBeNull()
+    expect(within(tile).queryByRole('button', { name: /^revoke$/i })).toBeNull()
+  })
+
+  it('revoked devices are hidden by default; live devices render exactly as before', async () => {
+    renderSection({
+      listDevices: vi.fn(async () => [
+        device({ id: 'd-1', name: 'laptop', last_seen: freshIso() }),
+        device({ id: 'd-2', name: 'old-wsl-box', revoked_at: new Date().toISOString() }),
+      ]),
+    })
+    await waitFor(() => expect(screen.getByText('laptop')).toBeTruthy())
+    expect(screen.getByText('online')).toBeTruthy()
+    expect(screen.queryByText('old-wsl-box')).toBeNull()
+    expect(screen.getByRole('button', { name: /show revoked \(1\)/i })).toBeTruthy()
+  })
+
+  it('no toggle appears when no device is revoked', async () => {
+    renderSection({ listDevices: vi.fn(async () => [device({ last_seen: freshIso() })]) })
+    await waitFor(() => expect(screen.getByText('laptop')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /revoked/i })).toBeNull()
+  })
+
+  it('the toggle names the count, reveals the revoked devices, and toggling back hides them', async () => {
+    renderSection({
+      listDevices: vi.fn(async () => [
+        device({ id: 'd-1', name: 'laptop', last_seen: freshIso() }),
+        device({ id: 'd-2', name: 'old-wsl-box', revoked_at: new Date().toISOString() }),
+      ]),
+    })
     await waitFor(() => screen.getByText('laptop'))
-    expect(screen.getByText(/revoked/i)).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /rename/i })).toBeNull()
-    expect(screen.queryByRole('button', { name: /^revoke$/i })).toBeNull()
+
+    const showButton = screen.getByRole('button', { name: /show revoked \(1\)/i })
+    expect(showButton.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(showButton)
+
+    expect(screen.getByText('old-wsl-box')).toBeTruthy()
+    const hideButton = screen.getByRole('button', { name: /^hide revoked$/i })
+    expect(hideButton.getAttribute('aria-pressed')).toBe('true')
+
+    fireEvent.click(hideButton)
+    expect(screen.queryByText('old-wsl-box')).toBeNull()
+    expect(screen.getByRole('button', { name: /show revoked \(1\)/i })).toBeTruthy()
+  })
+
+  it('when every device is revoked, the empty state says so plainly and still offers the toggle', async () => {
+    renderSection({
+      listDevices: vi.fn(async () => [
+        device({ id: 'd-1', name: 'old-box', revoked_at: new Date().toISOString() }),
+      ]),
+    })
+    await waitFor(() => expect(screen.getByText(/no devices paired/i)).toBeTruthy())
+    expect(screen.queryByText('old-box')).toBeNull()
+
+    const toggle = screen.getByRole('button', { name: /show revoked \(1\)/i })
+    fireEvent.click(toggle)
+
+    await waitFor(() => expect(screen.getByText('old-box')).toBeTruthy())
+    expect(screen.getByText(/no devices paired/i)).toBeTruthy()
   })
 
   it('rename calls the API and echoes the new name', async () => {
