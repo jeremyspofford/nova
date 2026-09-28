@@ -102,6 +102,7 @@ from app import (
     attachments,
     conversations,
     db,
+    decisions,
     devices,
     guards,
     identity,
@@ -4025,6 +4026,7 @@ async def _run_turn(
     persona: agents.Persona | None = None,
     attached: Sequence[attachments.Attachment] = (),
     card: Callable[[dict], None] | None = None,
+    decide: bool = False,
 ) -> None:
     """The whole turn, run to completion regardless of who is still watching.
 
@@ -4065,6 +4067,13 @@ async def _run_turn(
 
     `card` is the UI-only card channel (S47); only the stream route and the
     eval runner pass one.
+
+    `decide` (decision-role spec §2) runs the decision step — a decision model
+    asked which tool the message needs and which recalled notes still hold —
+    before the first round. Only the stream route (a turn he typed) and the
+    eval runner (which measures that path) pass True; a scheduled firing, a
+    drained queue and delegation never do, and an agent's persona never asks
+    whatever is passed (spec: "Not on … to start. Measure first").
     """
     # Everything streamed to the client this turn, across every round, in
     # order — this is what persists, so a reload shows exactly what was
@@ -4269,6 +4278,24 @@ async def _run_turn(
         if recalled.live_calls:
             checked_live = await live_facts.run(list(recalled.live_calls), turn, tool_ctx)
             recalled = dataclasses.replace(recalled, live=tuple(live_facts.lines(checked_live)))
+        # THE DECISION ROLE (decisions.py, decision-role spec §2), before she is
+        # asked anything: which of her tools his message needs, and which of the
+        # recalled notes still hold. (plan decision 4) Here because it needs the
+        # notes and the advertised tools, and must come before the first round.
+        # Fail-open by construction: `advice` is a whole decision or nothing,
+        # and the `decisions` span says which. The hint is a request — nothing
+        # here or downstream refuses, reorders or runs a call because of it.
+        hint: str | None = None
+        if decide and persona.agent is None:
+            advice = await decisions.run(
+                app, turn, message, recalled.notes, recalled.paths, advertised
+            )
+            if recalled.notes:
+                # Only a recall that returned notes is narrowed: with none there
+                # is nothing to set aside, and "set aside all 0 notes" would
+                # tell her a search found notes when it found nothing.
+                recalled = _with_notes_kept(recalled, advice.keep)
+            hint = advice.hint.line() if advice.hint is not None else None
         # S28 — THE FILES HE SENT.
         #
         # Three things happen here and each is stated rather than silent:
@@ -4359,6 +4386,7 @@ async def _run_turn(
             persona,
             roster=roster,
             skills_roster=skills_roster,
+            hint=hint,
         )
         # The toolset the trace marks a call against (None: Nova, who holds
         # everything). Computed once, threaded into every dispatch site.
@@ -5938,6 +5966,7 @@ def _spawn_turn(
     emit: Callable[[str | None], None],
     *,
     card: Callable[[dict], None] | None = None,
+    decide: bool = False,
 ) -> None:
     """Run an opened turn as its own detached task.
 
@@ -5948,6 +5977,8 @@ def _spawn_turn(
     absent reader — the frames it emits after the client is gone are simply never
     read. A drained queued turn has no reader from the start, and that is the
     same path, not a second one.
+
+    `decide` is passed through to `_run_turn` (the stream route alone sets it).
     """
     _spawn(
         _run_turn(
@@ -5964,6 +5995,7 @@ def _spawn_turn(
             persona=started.persona,
             attached=started.attached,
             card=card,
+            decide=decide,
         )
     )
 
@@ -6182,6 +6214,8 @@ async def chat_stream(
         started,
         queue.put_nowait,
         card=_card_channel(queue.put_nowait),
+        # A turn he typed asks the decision role (decision-role spec §2).
+        decide=True,
     )
     return StreamingResponse(
         _stream_from_queue(queue),

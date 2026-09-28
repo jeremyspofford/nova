@@ -201,14 +201,19 @@ async def test_a_timeout_after_a_tool_ran_says_what_ran_instead_of_nothing(
         )
     )
     mount_peers(gateway=scripted, memory=memory)
+    # A turn he typed asks the decision role before its first round (decision-role
+    # spec §2), so request 1 on the gateway link is that /v1/systemone (the script
+    # has no decision model: a 503, and the step fails open), request 2 is round 1,
+    # and request 3 — round 2 — is the one that dies.
     _mount_gateway_transport(
-        RaisingTransport(_read_timeout, inner=fakes.StreamingASGITransport(scripted.app), fail_on=2)
+        RaisingTransport(_read_timeout, inner=fakes.StreamingASGITransport(scripted.app), fail_on=3)
     )
     await _set_model(owner_client)
 
     sent = await _say(owner_client, "what time is it?")
     await chat.drain_background()
 
+    assert len(scripted.decision_calls) == 1, "request 1 was the decision step's"
     assert [(f["activity"]["tool"], f["activity"]["status"]) for f in sent if "activity" in f] == [
         ("get_time", "start"),
         ("get_time", "ok"),
