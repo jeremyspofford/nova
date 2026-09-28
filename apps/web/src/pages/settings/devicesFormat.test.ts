@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { ONLINE_THRESHOLD_SECONDS, deviceLiveness, deviceSubtitle, enrollCommand, wslNote } from './devicesFormat'
+import {
+  ONLINE_THRESHOLD_SECONDS,
+  deviceLiveness,
+  deviceSubtitle,
+  enrollCommand,
+  revokedToggleLabel,
+  splitDevicesByRevoked,
+  wslNote,
+} from './devicesFormat'
 import type { Device } from '../../lib/api'
 
 function device(overrides: Partial<Device> = {}): Device {
@@ -98,5 +106,39 @@ describe('wslNote — an agent inside WSL gives way to the Windows agent', () =>
   it('is null for a native agent, and for a revoked one', () => {
     expect(wslNote(device())).toBeNull()
     expect(wslNote(device({ wsl: 'Ubuntu-26.04', revoked_at: '2026-09-26T00:00:00Z' }))).toBeNull()
+  })
+})
+
+describe('splitDevicesByRevoked — revoked hidden by default behind a toggle (owner 2026-09-28)', () => {
+  it('splits live from revoked, each list keeping the original order', () => {
+    const a = device({ id: 'a', name: 'a' })
+    const b = device({ id: 'b', name: 'b', revoked_at: '2026-09-01T00:00:00Z' })
+    const c = device({ id: 'c', name: 'c' })
+    expect(splitDevicesByRevoked([a, b, c])).toEqual({ live: [a, c], revoked: [b] })
+  })
+
+  it('an all-live list has no revoked devices', () => {
+    const a = device({ id: 'a' })
+    expect(splitDevicesByRevoked([a])).toEqual({ live: [a], revoked: [] })
+  })
+
+  it('an all-revoked list has no live devices', () => {
+    const a = device({ id: 'a', revoked_at: '2026-09-01T00:00:00Z' })
+    expect(splitDevicesByRevoked([a])).toEqual({ live: [], revoked: [a] })
+  })
+
+  it('an empty list splits into two empty lists', () => {
+    expect(splitDevicesByRevoked([])).toEqual({ live: [], revoked: [] })
+  })
+})
+
+describe('revokedToggleLabel', () => {
+  it('names the count while offering to reveal them', () => {
+    expect(revokedToggleLabel(1, false)).toBe('Show revoked (1)')
+    expect(revokedToggleLabel(3, false)).toBe('Show revoked (3)')
+  })
+
+  it('drops the count once they are revealed', () => {
+    expect(revokedToggleLabel(3, true)).toBe('Hide revoked')
   })
 })

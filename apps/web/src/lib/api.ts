@@ -1146,8 +1146,10 @@ export async function* pullModel(
  * route by design (only the model-facing device_list tool overwrites it from
  * live WS hub membership), so the tile derives liveness from `last_seen`
  * freshness, never from `connected`. See pages/settings/devicesFormat.ts. A
- * revoked device is still listed — a machine that was revoked is part of what
- * the operator needs to see.
+ * revoked device is still returned by this list — a machine that was revoked
+ * is part of what the operator can look up — but Settings → Devices hides it
+ * from the default view (owner ruling 2026-09-28) behind a "Show revoked"
+ * toggle; this is a display choice in DevicesSection, not a filter here.
  */
 export interface Device {
   id: string

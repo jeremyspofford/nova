@@ -77,3 +77,29 @@ export function wslNote(device: Device): string | null {
   const distro = device.wsl ? ` (${device.wsl})` : ''
   return `Runs inside WSL${distro}. On Windows, Nova's agent runs on Windows itself — install the Windows agent, then revoke this one.`
 }
+
+/**
+ * Owner ruling 2026-09-28 ("the revoked machine is still in the devices
+ * list, just crossed out" → "Hide them (Recommended)"): revoked devices are
+ * kept out of the Devices list by default, behind a "Show revoked" toggle —
+ * display only, the API and the audit/history record are untouched. Kept
+ * pure and apart from the section component so the split is a function a
+ * test pins without rendering. Order within each list is preserved.
+ */
+export function splitDevicesByRevoked(devices: Device[]): { live: Device[]; revoked: Device[] } {
+  const live: Device[] = []
+  const revoked: Device[] = []
+  for (const d of devices) {
+    ;(d.revoked_at === null ? live : revoked).push(d)
+  }
+  return { live, revoked }
+}
+
+/**
+ * The "Show/Hide revoked" toggle's label — named with the count only while
+ * it is offering to reveal them, per the owner's example ("Show revoked (1)"
+ * / "Hide revoked").
+ */
+export function revokedToggleLabel(revokedCount: number, showRevoked: boolean): string {
+  return showRevoked ? 'Hide revoked' : `Show revoked (${revokedCount})`
+}
