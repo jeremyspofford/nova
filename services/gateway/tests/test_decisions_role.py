@@ -59,7 +59,14 @@ def test_decisions_is_a_built_in_role_that_speaks_typed_questions():
 
 def test_each_adapter_states_the_protocols_it_carries():
     """Read off the adapter, never a vendor list: the ENDPOINT decides the
-    protocol, and an openai-chat provider (OpenRouter) carries both."""
+    protocol, and an openai-chat provider (OpenRouter) carries both. Walks
+    the live registry (adapters._BY_NAME) rather than naming adapters by
+    hand, so a later adapter (Task 2's `systemone`) is covered here without
+    editing this test."""
+    protocol_words = set(routing._ANSWERS)
+    for name, adapter in adapters._BY_NAME.items():
+        assert adapter.protocols and isinstance(adapter.protocols, frozenset), name
+        assert adapter.protocols <= protocol_words, name
     assert adapters.for_row({"adapter": "ollama"}).protocols == {"chat"}
     assert adapters.for_row({"adapter": "anthropic-messages"}).protocols == {"chat"}
     assert adapters.for_row({"adapter": "openai-chat"}).protocols == {"chat", "systemone"}
@@ -78,7 +85,8 @@ async def test_an_empty_decisions_chain_borrows_no_chat_link_and_no_standby(clie
     no local link falls to the local standby — both right for chat, both
     wrong here: a chat model asked a typed question at /systemone has nothing
     to say. Empty means no decision model, stated, and nothing is asked."""
-    await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b"]})
+    resp = await client.put("/admin/routes/chat", json={"chain": ["hub:qwen3:8b"]})
+    assert resp.status_code == 200, resp.text
 
     ex = (await client.get("/admin/route/explain?role=decisions")).json()
 
@@ -128,11 +136,13 @@ async def test_a_chain_link_that_cannot_serve_its_role_is_walked_past_with_its_r
         f'["hub:qwen3:8b", "openrouter:{JEV}"]',
     )
 
+    seen_before = len(local.seen)
     ex = (await client.get("/admin/route/explain?role=decisions")).json()
 
     assert [v["verdict"] for v in ex["chain"]] == ["wrong_protocol", "runnable"]
     assert ex["chain"][0]["reason"] == "hub answers chat — this role needs typed questions"
     assert ex["would_serve"]["served_by"] == f"openrouter:{JEV}"
+    assert len(local.seen) == seen_before, "hub was never dialled for a link it cannot serve"
 
 
 async def test_the_chat_endpoint_refuses_the_decisions_role(client, pool, local):
@@ -148,3 +158,23 @@ async def test_the_chat_endpoint_refuses_the_decisions_role(client, pool, local)
         "a chat completion cannot be served from its chain"
     )
     assert not [p for p, _ in local.seen if p.endswith("/chat/completions")]
+
+
+async def test_a_walled_decisions_chain_never_falls_to_the_local_standby(
+    client, pool, local, mount_backend
+):
+    """A systemone role with a NON-EMPTY chain that has nothing runnable must
+    still never derive the local standby. The empty-chain test above only
+    reaches the walk's earlier, separate empty-chain raise, before the loop
+    ever runs — it cannot pin the end-of-loop gate. `local` serves qwen3:8b,
+    so if the standby ran, it would show up as `would_serve`."""
+    await _openrouter(client, mount_backend)
+    put = await client.put("/admin/routes/decisions", json={"chain": [f"openrouter:{JEV}"]})
+    assert put.status_code == 200, put.text
+
+    await routing.record_refusal(pool, {"name": "openrouter"}, 402, "out of credit", model=JEV)
+
+    ex = (await client.get("/admin/route/explain?role=decisions")).json()
+
+    assert ex["would_serve"] is None
+    assert [v["verdict"] for v in ex["chain"]] == ["walled"]

@@ -174,9 +174,10 @@ async def chains(pool: asyncpg.Pool) -> dict[str, list[str]]:
 def _clean_chain(role: str, chain: object, by_name: dict[str, dict]) -> list[str]:
     """The chain as it would be stored, or ValueError naming the first bad
     link. Every link is `provider:model` on a registered provider whose
-    adapter carries the role's protocol — a typo, or a chat model in the
-    decisions chain, is refused by name before anything is stored. A
-    repeated link is kept once, where it first appears."""
+    adapter carries the role's protocol — a typo, or a link on an adapter
+    that cannot carry the role's protocol, is refused by name before
+    anything is stored. A repeated link is kept once, where it first
+    appears."""
     if not isinstance(chain, list):
         raise ValueError("chain must be a list of provider:model ids")
     protocol = protocol_of(role)

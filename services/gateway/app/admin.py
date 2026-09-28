@@ -1040,7 +1040,8 @@ async def get_routes(request: Request) -> dict:
 @router.put("/routes/{role}")
 async def put_route(role: str, request: Request) -> dict:
     """{chain: [provider:model, ...]} — validated against the live provider
-    names before anything is stored; a bad link is refused by name."""
+    ROWS before anything is stored: their names, and whether each one's
+    adapter carries the role's protocol; a bad link is refused by name."""
     body = await request.json() if await request.body() else {}
     pool = await db.get_pool()
     by_name = {r["name"]: r for r in await providers.list_rows(pool)}
