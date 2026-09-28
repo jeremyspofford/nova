@@ -15,9 +15,12 @@ Windows the agent is always the native build; it reaches WSL through
 `wsl.exe` and `\\wsl.localhost` rather than running a second copy of itself
 inside WSL.
 
-|        | linux/amd64 | linux/arm64 | darwin/amd64          | darwin/arm64          | windows/amd64          | windows/arm64          |
-|--------|-------------|-------------|-----------------------|-----------------------|------------------------|------------------------|
-| status | walked      | built + CI  | built + CI, unwalked  | built + CI, unwalked  | built + CI; walk pending | built + CI, unwalked |
+|        | linux/amd64                     | linux/arm64 | darwin/amd64          | darwin/arm64          | windows/amd64            | windows/arm64          |
+|--------|---------------------------------|-------------|-----------------------|-----------------------|--------------------------|------------------------|
+| status | walked before S42a; S42a: CI    | built + CI  | built + CI, unwalked  | built + CI, unwalked  | built + CI; walk pending | built + CI, unwalked   |
+
+linux/amd64 was walked before S42a. S42a's walk has no Linux agent step, so
+this slice's Linux changes are tested in CI, not walked.
 
 Mac is unwalked by owner decision 11: Mac support is built and CI-tested, but
 the owner's only Mac is his work device, so Nova is never installed on it.
@@ -337,15 +340,19 @@ session that authenticated — five dropped connections in a row no longer
 means every later reconnect waits the full 30 s for the life of the process.
 
 Once serving, a heartbeat goes out every 20 s, each one followed by a
-WebSocket ping core must answer within 10 s; that same 10 s bounds every
-heartbeat and facts-frame write, so a write stuck on a dead path (the kernel
-still accepting bytes into a connection nobody is reading any more) ends the
-session rather than hanging it. Beside that, a 1 s wall-clock watchdog — no
-I/O of its own — notices a sleep (a wall-clock jump of more than about 5 s
-between its samples) and reconnects within about 2 s of the machine waking;
-the heartbeat's own slower version of the same check (a gap of more than
-twice its own 20 s interval) stays as a backstop beside it, not a
-replacement.
+WebSocket ping core must answer within 10 s. The ping is what catches a dead
+path: on one, the kernel keeps taking bytes into its send buffer, so a write
+can return although its bytes never arrive — no write error reports that, but
+the ping's answer never comes. That same 10 s bounds every heartbeat and
+facts-frame write: once the send buffer is full a write blocks, and a write
+stuck on a dead path ends the session rather than hanging it. The bound holds
+on a live link too: any one write that takes longer than 10 s — a slow link,
+say — ends the session, which then reconnects. Beside that, a 1 s wall-clock
+watchdog — no I/O of its own — notices a sleep (a wall-clock jump of more
+than about 5 s between its samples) and reconnects within about 2 s of the
+machine waking; the heartbeat's own slower version of the same check (a gap
+of more than twice its own 20 s interval) stays as a backstop beside it,
+not a replacement.
 
 ## Audit
 

@@ -11,8 +11,13 @@ import (
 type appEntry struct{ id, name string }
 
 // appsList lists launchable apps from this OS's own catalogue (apps_*.go).
-// A catalogue that cannot be read is ok:false with the reason — never
-// "0 apps", which would read as a machine with nothing installed.
+// Where listApps can fail, a catalogue that cannot be read is ok:false with
+// the reason, never "0 apps", which would read as a machine with nothing
+// installed: on Windows when the Start menu cannot be read, on macOS when no
+// .app bundle can be read in any of its application folders. On Linux
+// listApps never fails — it skips an application directory it cannot read,
+// as it skips a missing one — so "0 apps" there is a real reading: no
+// .desktop entry in any directory it could read.
 func appsList(ctx context.Context) Outcome {
 	apps, err := listApps(ctx)
 	if err != nil {

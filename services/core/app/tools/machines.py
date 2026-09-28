@@ -172,8 +172,11 @@ async def machine_status(args: dict, ctx: ToolContext) -> str:
 
 async def _agents(reader, ctx: ToolContext) -> tuple[list[dict], str | None]:
     """Nova's agents, or the reason they could not be read. A failure here is
-    STATED in the result, never raised: the engines above are still a true
-    reading, and one half failing must not hide the other."""
+    STATED in the result, never raised: the engines are still a true reading,
+    and the agents failing must not hide them. It holds one way only: the
+    gateway is read first, and a gateway that cannot be asked fails the whole
+    call (machine_status raises before this runs), so no agent is reported
+    then."""
     try:
         return await reader.agents(ctx.app), None
     except Exception as exc:  # noqa: BLE001 — stated in the result, in words

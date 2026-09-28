@@ -44,12 +44,13 @@ func launchApp(ctx context.Context, app string) Outcome {
 			cmd := exec.Command("explorer.exe", `shell:AppsFolder\`+id)
 			// explorer.exe hands the launch to the shell and exits — often with
 			// status 1 even when the app opened — so STARTING it is the signal,
-			// never its exit code.
+			// never its exit code. That signal is only that the shell accepted
+			// the request, not that the app is running, so the result says so.
 			if err := cmd.Start(); err != nil {
 				return fail("could not launch %q: %v", app, err)
 			}
 			_ = cmd.Process.Release()
-			return ok0("launched " + app)
+			return ok0("asked Windows to launch " + app)
 		}
 	}
 	if path, err := exec.LookPath(app); err == nil {

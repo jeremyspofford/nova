@@ -299,7 +299,13 @@ def derive_roles(
     elif platform not in PLATFORMS:
         hands = {
             "state": "cannot",
-            "reason": "cannot: platform unknown — this agent did not say which OS it runs",
+            # The OS is written only at pairing (enroll); 'unknown' is what
+            # migration 036 made of a value outside the known ones, and no
+            # newer agent rewrites it — only a new pairing does.
+            "reason": (
+                "cannot: platform unknown — its pairing recorded no OS Nova knows, and the "
+                "OS is recorded only at pairing; revoke it and pair it again"
+            ),
         }
     elif not connected:
         seen = last_seen.isoformat() if last_seen else "never"

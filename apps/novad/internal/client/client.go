@@ -329,7 +329,7 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 			if wire.VerifyRevokedProof(reply, a.cfg.DeviceID, nonceHex, a.verifier.CorePubKey()) {
 				return fatal{ErrRevoked}
 			}
-			a.logf("core said revoked but the refusal is not signed by the pinned core key — not wiping")
+			a.logf("core said revoked but the refusal carries no proof for this device and handshake that the pinned core key verifies — not wiping")
 		}
 		// Any other refusal is retried: a transient core-side fault heals on
 		// the next attempt, and a restored database that forgot this device is
@@ -413,13 +413,16 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 //     normally reconnects first — this is the slower, I/O-coupled backstop
 //     beside it, kept exactly as P12 specifies;
 //   - the heartbeat frame (core stamps last_seen from it), bounded by
-//     pingTimeout: a write can block for a long time into a dead path (the
-//     kernel is still accepting bytes into its send buffer), and coder/
+//     pingTimeout: on a dead path the kernel keeps taking bytes until its
+//     send buffer is full, and from then on a write BLOCKS; coder/
 //     websocket closes the whole connection when a write's own context
 //     expires, which is what actually frees a write stuck on a dead path —
 //     including one from a DIFFERENT call, like a stuck facts.refresh, once
-//     this cancel() below cancels serveCtx;
-//   - a ping core must answer within pingTimeout;
+//     this cancel() below cancels serveCtx. A write that took longer than
+//     pingTimeout ends the session even on a live but slow link;
+//   - a ping core must answer within pingTimeout — what catches a write
+//     that SUCCEEDED into a dead path (its bytes only reached the send
+//     buffer), which no write error ever reports;
 //   - the facts frame, when the facts changed or it is due.
 //
 // Any failure ends the session through cancel: serve returns, and Run
@@ -612,13 +615,15 @@ func (a *Agent) frameBytes() ([]byte, error) {
 }
 
 // writeFacts writes an encoded frame and remembers what went out and when.
-// The write is bounded by pingTimeout (fix round 1): a facts write can block
-// for a long time into a dead path (the kernel is still accepting bytes),
-// and coder/websocket closes the whole connection when a write's own
-// context expires — the only thing that frees a write truly stuck on a dead
-// path. Without this, a stuck sendFacts (facts.refresh, up to the 110s
-// command timeout) or a stuck maybeSendFacts held the connection's write
-// lock for far longer, blocking the heartbeat's own write behind it.
+// The write is bounded by pingTimeout (fix round 1): on a dead path, once
+// the kernel's send buffer is full a facts write BLOCKS, and coder/websocket
+// closes the whole connection when a write's own context expires — the only
+// thing that frees a write truly stuck on a dead path. (A write that returns
+// proves nothing about the path: its bytes may only be buffered; the
+// heartbeat's ping is what catches that.) Without this, a stuck sendFacts
+// (facts.refresh, up to the 110s command timeout) or a stuck maybeSendFacts
+// held the connection's write lock for far longer, blocking the
+// heartbeat's own write behind it.
 func (a *Agent) writeFacts(ctx context.Context, c *websocket.Conn, data []byte) error {
 	wctx, cancel := context.WithTimeout(ctx, a.pingTimeout)
 	defer cancel()

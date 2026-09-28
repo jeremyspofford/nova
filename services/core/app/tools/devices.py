@@ -147,8 +147,9 @@ def _check_fs_path(path: object, platform: str) -> str:
             )
         return ntpath.normpath(path)
     raise ToolFailure(
-        "cannot: platform unknown — this device's agent did not say which OS it runs, so a "
-        "path on it cannot be checked; update its agent"
+        "cannot: platform unknown — this device's pairing recorded no OS Nova knows, and the "
+        "OS is recorded only at pairing, so a path on it cannot be checked; revoke it and "
+        "pair it again"
     )
 
 
