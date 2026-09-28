@@ -11,6 +11,8 @@
 4. If no decision model answers, the turn runs exactly as today, and the trace says so.
 5. Order: gateway, then core, then Routing and Models, then a Kev engine on the Dell that
    downloads models.
+6. Model routing is a switch per role: off, the role uses the cloud model you picked; on,
+   Jev Router picks the best model for each request.
 
 Status: owner-approved design, 2026-09-27/28. Branch `slice/decisions`.
 
@@ -98,7 +100,24 @@ concurrent batch of calls to the gateway's `/v1/systemone` with role `decisions`
   `text->decisions`), and Kev from the Dell once the engine exists.
 - Providers: a preset for a Kev server (`systemone` adapter, local).
 
-### 4. Kev engine on the Dell (last)
+### 4. Model routing: a switch per role (owner, 2026-09-28)
+
+"People may want a determined cloud model and not routing, or they may choose to use
+routing and use the best models for the task regardless of cost."
+
+- Settings → Routing gains a switch on each chat-kind role (chat, scheduled, agents): "Let
+  Jev Router pick the cloud model".
+- Off (the default): the role's cloud link is the model he picked, exactly as today.
+- On: the role's cloud link becomes `openrouter:typesafe/jev-router`. On OpenRouter it
+  "picks the best model and reasoning effort for each request", and you pay the model it
+  picks. The model it picked is recorded on the turn (OpenRouter returns it).
+- The chain stays the one source of truth. The switch is an edit to the chain: switching
+  off restores the cloud model that was there before, which is kept in a setting. Local
+  links before the cloud link are untouched, so local first still holds.
+- If Jev Router exposes a quality-first setting, the switch uses it ("regardless of cost").
+  If it does not, the switch says what Jev Router balances.
+
+### 5. Kev engine on the Dell (last)
 
 This is a small service on the Dell that downloads, removes and serves Kev models from Hugging
 Face, keeps one model loaded, and unloads it when idle so the GPU is free. The gateway treats it
@@ -129,8 +148,5 @@ like the hub's Ollama for downloads. Until it exists, the Kev server the owner s
 
 ## Not in scope
 
-- **Jev Router** (`typesafe/jev-router`) is an OpenRouter chat model that picks the cloud model
-  and reasoning effort per request. It fits as the cloud link of the chat chain, and it is a
-  one-line chain change the owner can make today. A decision-role pick of local versus cloud per
-  turn is a later slice.
+- A decision-role pick of local versus cloud per turn: a later slice (the switch above routes among cloud models only).
 - Decisions on the honesty guards: detection stays mechanical (ARCS.md's corrected analysis).
