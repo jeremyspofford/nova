@@ -7,9 +7,10 @@ works against a Kev server unchanged"). A provider row on THIS adapter is a
 server that speaks nothing else — a Kev box on the owner's network: a base
 URL and an optional bearer key, and no chat, which it says.
 
-The decision call itself is not a method here: POST /v1/systemone forwards to
-ANY link whose adapter carries `systemone` (Adapter.protocols) — OpenRouter's
-openai-chat row carries both — with that row's own adapter's auth headers.
+The decision call itself is a function here (`call`), not an Adapter method:
+POST /v1/systemone forwards to ANY link whose adapter carries `systemone`
+(Adapter.protocols) — OpenRouter's openai-chat row carries both — with that
+row's own adapter's auth headers.
 
 F6: the listing fetch and the wrong-key probe are shared with
 `openai_chat.OpenAIChat` (`base.fetch_listing`, `base.wrong_key_probe`) —
@@ -19,6 +20,7 @@ normaliser and its own wording.
 
 from __future__ import annotations
 
+import httpx
 from fastapi import Request
 from starlette.responses import Response
 
@@ -29,6 +31,9 @@ from app.adapters.base import (
     ListingUnavailable,
     ProviderRefused,
     VerifyResult,
+    http_client,
+    reason,
+    refusal_detail,
 )
 from app.adapters.openai_chat import DESCRIPTION_CAP
 from app.providers import base_url_of
@@ -147,4 +152,68 @@ class SystemOne:
 
 ADAPTER = SystemOne()
 
-__all__ = ["ADAPTER", "DECISIONS", "SystemOne", "normalize_models"]
+#: A decision is one prefill on the model's side, but Kev measured 21-47 s cold
+#: on the Dell (decision-role spec, "Open risks"): the read budget covers a
+#: cold load. Core's own per-turn budget is what bounds a turn; this bounds
+#: the gateway's call, which finishes — and is metered, and walled when it
+#: fails — even after core has stopped waiting.
+SYSTEMONE_TIMEOUT = httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=5.0)
+
+#: What an endpoint that serves no typed questions answers at /systemone: no
+#: such path (404), or not for POST (405).
+NOT_CARRIED_STATUSES = frozenset({404, 405})
+
+
+class NotCarried(ProviderRefused):
+    """The endpoint answered 404 or 405 at `{base_url}/systemone`: it served no
+    typed questions for this link. An openai-chat row's adapter carries both
+    protocols, because OpenRouter serves both at one base URL, but Groq,
+    OpenAI and the rest have no /systemone.
+
+    It is neither an account refusal nor an outage — what a wall is for — so
+    the decision walk passes the link over for this request, in these words,
+    and never walls it. Relayed as the answer instead, it would strand every
+    link behind it: a Groq link ahead of Jev would end every decision."""
+
+
+async def call(
+    app, row: dict, model: str, body: dict, headers: dict[str, str]
+) -> tuple[int, bytes]:
+    """POST the typed questions to `{base_url}/systemone` with THIS link's model
+    id and the provider's key: (status, body bytes). The body is forwarded
+    unchanged but for `model` (decision-role spec §1). An answer comes back as
+    it came — a 200, or the provider's refusal of this request or this key.
+    Two raise instead: a 404/405, where the endpoint served no typed questions
+    (NotCarried), and a failure to get any answer — a stated 502, which the
+    walk walls like any refusal."""
+    url = base_url_of(row)
+    if not url:
+        raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
+    client = http_client(app, SYSTEMONE_TIMEOUT, base_url=url, headers=headers)
+    try:
+        async with client as c:
+            resp = await c.post("/systemone", json=dict(body, model=model))
+    except httpx.HTTPError as exc:
+        raise ProviderRefused(
+            502, f"could not reach {row['name']} at {url} — {reason(exc)}"
+        ) from exc
+    if resp.status_code in NOT_CARRIED_STATUSES:
+        # Bounded like a wall's words: the provider's own, never a whole page.
+        raise NotCarried(
+            resp.status_code,
+            f"{row['name']} answered {resp.status_code} at {url}/systemone — "
+            f"{refusal_detail(resp)[:200]}",
+        )
+    return resp.status_code, resp.content
+
+
+__all__ = [
+    "ADAPTER",
+    "DECISIONS",
+    "NOT_CARRIED_STATUSES",
+    "SYSTEMONE_TIMEOUT",
+    "NotCarried",
+    "SystemOne",
+    "call",
+    "normalize_models",
+]

@@ -443,12 +443,27 @@ class FakeOpenAICompat:
     # What a WRONG key gets on /models when the listing is not public —
     # 401 normally; 429 models a provider that rate-limits the second call.
     models_wrong_key_status: int = 401
+    # The decision role (decision-role spec §1): typed questions at
+    # {prefix}/systemone with the same key as chat. OpenRouter states its own
+    # `usage.cost`; a Kev server states tokens and no cost (pass
+    # systemone_usage without it).
+    systemone_status: int = 200
+    systemone_answers: dict = field(
+        default_factory=lambda: {"acts": {"type": "noul", "noul": 0.91}}
+    )
+    systemone_usage: dict = field(
+        default_factory=lambda: {"input_tokens": 40, "output_tokens": 6, "cost": 0.00001}
+    )
+    # A 200 that is not an answer: these bytes instead of the JSON — what an
+    # error page from a proxy in front of the server looks like to a caller.
+    systemone_raw: bytes | None = None
 
     def __post_init__(self) -> None:
         self.app = Starlette(
             routes=[
                 Route(f"{self.prefix}/models", self._models, methods=["GET"]),
                 Route(f"{self.prefix}/chat/completions", self._completions, methods=["POST"]),
+                Route(f"{self.prefix}/systemone", self._systemone, methods=["POST"]),
             ]
         )
 
@@ -502,6 +517,31 @@ class FakeOpenAICompat:
             yield "data: [DONE]\n\n"
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    async def _systemone(self, request):
+        raw = await request.body()
+        body = json.loads(raw) if raw else None
+        self._note(request)
+        self.seen.append((request.url.path, body))
+        if not self._key_ok(request):
+            return JSONResponse(
+                {"error": {"message": "User not found.", "code": 401}}, status_code=401
+            )
+        if self.systemone_status != 200:
+            return JSONResponse(
+                {"error": {"message": f"refused ({self.systemone_status})"}},
+                status_code=self.systemone_status,
+            )
+        if self.systemone_raw is not None:
+            return Response(self.systemone_raw)
+        return JSONResponse(
+            {
+                "model": (body or {}).get("model"),
+                "answers": self.systemone_answers,
+                "usage": self.systemone_usage,
+                "id": "sys-1",
+            }
+        )
 
     def _usage(self, body: dict) -> dict | None:
         if self.prompt_tokens is None or self.completion_tokens is None:

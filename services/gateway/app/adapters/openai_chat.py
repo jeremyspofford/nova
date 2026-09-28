@@ -321,7 +321,8 @@ class OpenAIChat:
     # OpenRouter serves Jev's typed questions at {base}/systemone with the
     # same key it serves chat with (decision-role spec §1), so an endpoint
     # of this protocol MAY carry both; one that does not answers /systemone
-    # with a 404, which is relayed in its own words.
+    # with a 404, and the decision walk passes that link over in the
+    # provider's own words (systemone.NotCarried), never walling it.
     protocols = frozenset({"chat", "systemone"})
 
     def headers(self, row: dict) -> dict[str, str]:
