@@ -1,6 +1,6 @@
 # The decision role: Jev and Kev decide what her turn needs
 
-**In five lines**
+**In short**
 
 1. A new model role, `decisions`, works like chat. You pick a model and fallbacks, local or
    cloud, in Settings → Routing.
