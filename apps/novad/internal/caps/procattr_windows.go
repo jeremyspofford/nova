@@ -2,6 +2,7 @@ package caps
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,12 +24,17 @@ const taskkillWait = 3 * time.Second
 //
 // Cancel's return value is the only thing shell.go's killedByCancel trusts,
 // so it must answer one question about the ROOT process, never taskkill's
-// own exit code: nil when the root was alive and is now dead because of
-// this call, os.ErrProcessDone when it had already exited. taskkill /T /F
-// can exit nonzero even after successfully killing the root — a descendant
-// that exits mid-kill makes it report "There is no running instance of the
-// task" for that PID — so the root's own state is checked directly instead
-// of trusting taskkill's exit code.
+// own exit code: nil when the root was alive and this call killed it —
+// dead, or still terminating from this call's kill (terminateVerdict) —
+// and os.ErrProcessDone when it had already exited. Any other error says
+// this call could not confirm a kill, and then (exec.Cmd.Cancel's
+// contract) Wait returns the process's own exit status, which shell.go
+// reports as a command that RAN — so every case in which this call set the
+// root dying must answer nil. taskkill /T /F can exit nonzero even after
+// successfully killing the root — a descendant that exits mid-kill makes
+// it report "There is no running instance of the task" for that PID — so
+// the root's own state is checked directly instead of trusting taskkill's
+// exit code.
 //
 // The root's handle comes from cmd.Process.WithHandle, never a fresh
 // OpenProcess(pid). Cancel can run AFTER Cmd.Wait has already reaped the
@@ -72,18 +78,10 @@ func prepareCommand(cmd *exec.Cmd) {
 				result = nil
 				return
 			}
-			// Still alive per its own handle: taskkill missed the root (or
-			// never ran). Terminate it directly.
-			if killErr := windows.TerminateProcess(h, 1); killErr != nil {
-				if signaled(h, 0) {
-					// Died between the check above and this call.
-					result = nil
-					return
-				}
-				result = killErr
-				return
-			}
-			result = nil
+			// Not signaled per its own handle: taskkill missed the root,
+			// never ran, or left it still terminating. Terminate it directly.
+			killErr := windows.TerminateProcess(h, 1)
+			result = terminateVerdict(killErr, killErr != nil && signaled(h, 0))
 		})
 		if err != nil {
 			// WithHandle errors only when Wait has already consumed the
@@ -96,6 +94,35 @@ func prepareCommand(cmd *exec.Cmd) {
 	}
 	cmd.WaitDelay = killGrace
 	cmd.Env = append(os.Environ(), "WSL_UTF8=1")
+}
+
+// terminateVerdict is Cancel's answer once TerminateProcess(h, 1) has been
+// tried on the root because it was still not signaled 2 s after taskkill
+// /T /F. killErr is TerminateProcess's error; exited says the root exited
+// after that call failed.
+//
+// nil — this call's kill — when the call succeeded, when the root exited in
+// the meantime, and when it failed with ERROR_ACCESS_DENIED. h is Go's OWN
+// handle, the one CreateProcess returned with PROCESS_ALL_ACCESS, so access
+// denied is not a permission problem: it is what TerminateProcess returns
+// for a process that is already terminating, and this Cancel's taskkill /F
+// is what set it terminating (it was alive when Cancel began). Any other
+// error is returned: this call could not confirm a kill.
+//
+// It errs toward nil on purpose. A non-nil answer leaves shell.go's
+// killedByCancel false, and Wait then returns the process's own non-zero
+// exit status (exec.Cmd.Cancel's contract), so a command novad killed would
+// be reported as one that ran — "[process exited with code 1]" — instead of
+// timed out or cancelled.
+func terminateVerdict(killErr error, exited bool) error {
+	switch {
+	case killErr == nil, exited:
+		return nil
+	case errors.Is(killErr, windows.ERROR_ACCESS_DENIED):
+		return nil
+	default:
+		return killErr
+	}
 }
 
 // signaled reports whether the process behind h has already exited, waiting
