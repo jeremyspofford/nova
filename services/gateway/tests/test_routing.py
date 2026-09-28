@@ -27,9 +27,10 @@ from tests.fakes import FailingTransport, FakeOllama, FakeOpenAICompat
 pytestmark = requires_db
 
 # validate_role's exact refusal (S12-2): names the rule and the offending name.
+# The decision role (decision-role spec §1) joined the built-ins after judge.
 BAD_ROLE_MESSAGE = (
-    "role must be a built-in (chat, scheduled, judge, coding, vision) or a lowercase "
-    "[a-z_] name of at most 32 chars — got 'Vibes-1'"
+    "role must be a built-in (chat, scheduled, judge, decisions, coding, vision) or a "
+    "lowercase [a-z_] name of at most 32 chars — got 'Vibes-1'"
 )
 
 
@@ -478,8 +479,20 @@ async def test_the_routes_page_lists_built_ins_first_and_a_derived_role_can_be_r
     assert [r["role"] for r in page] == [*routing.BUILTIN_ROLES, "agent_alpha", "agent_zed"]
     derived = [r for r in page if not r["builtin"]]
     assert derived == [
-        {"role": "agent_alpha", "chain": ["hub:qwen3:4b"], "reserved": False, "builtin": False},
-        {"role": "agent_zed", "chain": ["hub:qwen3:4b"], "reserved": False, "builtin": False},
+        {
+            "role": "agent_alpha",
+            "chain": ["hub:qwen3:4b"],
+            "reserved": False,
+            "builtin": False,
+            "protocol": "chat",
+        },
+        {
+            "role": "agent_zed",
+            "chain": ["hub:qwen3:4b"],
+            "reserved": False,
+            "builtin": False,
+            "protocol": "chat",
+        },
     ]
 
     # A built-in is never removed, row or not.

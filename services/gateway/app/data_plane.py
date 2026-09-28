@@ -60,6 +60,15 @@ def _served_by(row: dict, model: str) -> str:
     return providers.served_by(row, model)
 
 
+def _nothing_runnable(exc: routing.NothingRunnable) -> str:
+    """The 503's words: the walk's own sentence, then every link's verdict. A
+    chain with no links (the empty decisions chain) is the sentence alone —
+    never a dangling dash."""
+    if not exc.verdicts:
+        return str(exc)
+    return f"{exc} — " + "; ".join(f"{v['id']}: {v['reason']}" for v in exc.verdicts)
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> Response:
     try:
@@ -75,6 +84,14 @@ async def chat_completions(request: Request) -> Response:
     requested = body.get("model") if isinstance(body.get("model"), str) else None
     attribution = usage.Attribution.from_headers(request.headers)
     if attribution.role:
+        if routing.protocol_of(attribution.role) != routing.CHAT:
+            # The endpoint decides the protocol (decision-role spec §1): the
+            # decisions chain holds decision models, which have no chat.
+            raise HTTPException(
+                status_code=400,
+                detail=f"the {attribution.role} role answers typed questions at POST "
+                "/v1/systemone — a chat completion cannot be served from its chain",
+            )
         return await serve_by_role(request, pool, attribution.role, requested, body, attribution)
     row, model = await providers.resolve(pool, requested)
     # No role: the explicit model, as before — but a capped provider is
@@ -127,10 +144,7 @@ async def serve_by_role(
                 unreachable=unreachable,
             )
         except routing.NothingRunnable as exc:
-            raise HTTPException(
-                status_code=503,
-                detail=f"{exc} — " + "; ".join(f"{v['id']}: {v['reason']}" for v in exc.verdicts),
-            ) from exc
+            raise HTTPException(status_code=503, detail=_nothing_runnable(exc)) from exc
         link = f"{decision.row['name']}:{decision.model}"
         try:
             response = await serve_completion(

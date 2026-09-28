@@ -1029,6 +1029,7 @@ async def get_routes(request: Request) -> dict:
                 "chain": chains.get(role, []),
                 "reserved": role in routing.RESERVED_ROLES,
                 "builtin": role in routing.BUILTIN_ROLES,
+                "protocol": routing.protocol_of(role),
             }
             for role in (*routing.BUILTIN_ROLES, *derived)
         ],
@@ -1042,10 +1043,10 @@ async def put_route(role: str, request: Request) -> dict:
     names before anything is stored; a bad link is refused by name."""
     body = await request.json() if await request.body() else {}
     pool = await db.get_pool()
-    names = {r["name"] for r in await providers.list_rows(pool)}
+    by_name = {r["name"]: r for r in await providers.list_rows(pool)}
     try:
         chain = await routing.set_chain(
-            pool, role, body.get("chain") if isinstance(body, dict) else None, names
+            pool, role, body.get("chain") if isinstance(body, dict) else None, by_name
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

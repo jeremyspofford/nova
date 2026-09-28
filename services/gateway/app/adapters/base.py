@@ -99,6 +99,12 @@ class VerifyResult:
 class Adapter(Protocol):
     name: str
 
+    #: The wire protocols a provider on this adapter can carry — "chat"
+    #: (/v1/chat/completions) and "systemone" (typed questions, /v1/systemone).
+    #: The ENDPOINT decides which one a call speaks (decision-role spec §1);
+    #: routing reads this to refuse, by name, a link that cannot carry it.
+    protocols: frozenset[str]
+
     def headers(self, row: dict) -> dict[str, str]: ...
 
     async def verify(self, app, row: dict) -> VerifyResult: ...

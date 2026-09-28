@@ -33,6 +33,14 @@ Roles are BUILT-INS ∪ any name the ledger's own usage.ROLE_RE accepts
 and the ledger already meters it under that role, so the same rule lets
 it own a chain — one with no chain (or an empty one) walks the chat chain,
 exactly as scheduled/judge do. Nothing here keeps a second list of roles.
+
+THE PROTOCOL (decision-role spec §1). A role's calls speak ONE protocol,
+and the endpoint decides which: /v1/chat/completions is `chat`,
+/v1/systemone is `systemone` — typed questions, the decision role's. A
+link is runnable only on a provider whose adapter carries the role's
+protocol (Adapter.protocols), and a systemone role never borrows the chat
+chain and never falls to the local standby: a chat model has nothing to
+answer a typed question with.
 """
 
 from __future__ import annotations
@@ -49,13 +57,42 @@ import asyncpg
 from app import curated as curated_mod
 from app import engines, providers, usage
 from app import fit as fit_mod
-from app.adapters import ProviderRefused, ollama
+from app.adapters import ProviderRefused, for_row, ollama
 
 logger = logging.getLogger("gateway")
 
-BUILTIN_ROLES = ("chat", "scheduled", "judge", "coding", "vision")
+BUILTIN_ROLES = ("chat", "scheduled", "judge", "decisions", "coding", "vision")
 # Roles nothing calls yet — shown on the page as "no user yet".
 RESERVED_ROLES = frozenset({"coding", "vision"})
+#: The decision role (decision-role spec §1): typed questions at
+#: POST /v1/systemone, answered by a decision model, never a chat completion.
+DECISIONS_ROLE = "decisions"
+#: The two protocols a role's calls can speak (see the module docstring).
+CHAT = "chat"
+SYSTEMONE = "systemone"
+SYSTEMONE_ROLES = frozenset({DECISIONS_ROLE})
+# How a protocol is said to the owner, in a verdict's reason.
+_ANSWERS = {CHAT: "chat", SYSTEMONE: "typed questions"}
+
+
+def protocol_of(role: str) -> str:
+    """The protocol a role's calls speak: systemone for the decision role,
+    chat for every other role — built-in or an agent's derived one."""
+    return SYSTEMONE if role in SYSTEMONE_ROLES else CHAT
+
+
+def speaks(row: dict, protocol: str) -> bool:
+    """Can a link on this provider carry `protocol`? Read off the provider's
+    own adapter (Adapter.protocols), never a list of vendors kept here."""
+    return protocol in for_row(row).protocols
+
+
+def cannot_serve(provider_name: str, row: dict, protocol: str) -> str:
+    """Why a link on `row` cannot serve a role that speaks `protocol`."""
+    carries = " and ".join(_ANSWERS[p] for p in sorted(for_row(row).protocols))
+    return f"{provider_name} answers {carries} — this role needs {_ANSWERS[protocol]}"
+
+
 # The statuses that are about the ACCOUNT rather than about one model: a key
 # with no credit, a key that is not allowed, a key being rate-limited. Another
 # model on the same key refuses identically, so these wall the whole provider.
@@ -74,8 +111,9 @@ WHOLE_PROVIDER = ""
 
 
 class NothingRunnable(RuntimeError):
-    def __init__(self, role: str, verdicts: list[dict]) -> None:
-        super().__init__(f"no model in the {role!r} chain can serve right now")
+    def __init__(self, role: str, verdicts: list[dict], *, why: str | None = None) -> None:
+        said = f"no model in the {role!r} chain can serve right now"
+        super().__init__(f"{said} — {why}" if why else said)
         self.role = role
         self.verdicts = verdicts
 
@@ -133,12 +171,16 @@ async def chains(pool: asyncpg.Pool) -> dict[str, list[str]]:
     return out
 
 
-async def set_chain(pool: asyncpg.Pool, role: str, chain: list, names: set[str]) -> list[str]:
-    """Store a role's chain; every link must be `provider:model` with a
-    registered provider (a typo is refused by name, before it is stored)."""
-    validate_role(role)
+def _clean_chain(role: str, chain: object, by_name: dict[str, dict]) -> list[str]:
+    """The chain as it would be stored, or ValueError naming the first bad
+    link. Every link is `provider:model` on a registered provider whose
+    adapter carries the role's protocol — a typo, or a chat model in the
+    decisions chain, is refused by name before anything is stored. A
+    repeated link is kept once, where it first appears."""
     if not isinstance(chain, list):
         raise ValueError("chain must be a list of provider:model ids")
+    protocol = protocol_of(role)
+    names = set(by_name)
     cleaned: list[str] = []
     for link in chain:
         if not isinstance(link, str) or not link.strip():
@@ -150,9 +192,25 @@ async def set_chain(pool: asyncpg.Pool, role: str, chain: list, names: set[str])
                 f"link {link!r} does not name a registered provider — write it as "
                 f"<provider>:<model> (providers: {', '.join(sorted(names))})"
             )
+        if not speaks(by_name[provider], protocol):
+            raise ValueError(
+                f"link {link!r} cannot serve the {role} role — "
+                f"{cannot_serve(provider, by_name[provider], protocol)}"
+            )
         if link in cleaned:
             continue
         cleaned.append(link)
+    return cleaned
+
+
+async def set_chain(
+    pool: asyncpg.Pool, role: str, chain: list, by_name: dict[str, dict]
+) -> list[str]:
+    """Store a role's chain. `by_name` is the live provider rows by name — a
+    link is judged against its provider's adapter, not only its name (see
+    _clean_chain for everything that is refused)."""
+    validate_role(role)
+    cleaned = _clean_chain(role, chain, by_name)
     await pool.execute(
         "INSERT INTO routes (role, chain) VALUES ($1, $2::jsonb) "
         "ON CONFLICT (role) DO UPDATE SET chain = EXCLUDED.chain, updated_at = now()",
@@ -318,12 +376,16 @@ async def judge_link(
     walled: dict,
     timezone: str,
     seen: dict[str, engines.EngineView],
+    *,
+    protocol: str = CHAT,
 ) -> dict:
     """One link's live verdict: runnable, or why not — in words.
 
     `seen` is this walk's observation of each engine the chain names
     (engines.observe), keyed by engine name. An engine its owner switched
-    off is judged first, and nothing is asked of it."""
+    off is judged first, and nothing is asked of it. A link whose provider
+    cannot carry the role's `protocol` is judged `wrong_protocol` first, and
+    nothing is asked of it."""
     provider_name, model = _provider_of(link, by_name)
     if provider_name is None or not model:
         return {
@@ -333,6 +395,12 @@ async def judge_link(
         }
     row = by_name[provider_name]
     entry = {"id": link, "provider": provider_name, "model": model, "local": bool(row.get("local"))}
+    if not speaks(row, protocol):
+        return {
+            **entry,
+            "verdict": "wrong_protocol",
+            "reason": cannot_serve(provider_name, row, protocol),
+        }
     off = switched_off(row)
     if off is not None:
         return {**entry, "verdict": "switched_off", "reason": off}
@@ -482,6 +550,7 @@ async def resolve(
     served id (`provider:model`), so a bare link in the chain matches too,
     and neither is asked again in the same request."""
     validate_role(role)
+    protocol = protocol_of(role)
     by_name = {r["name"]: r for r in await providers.list_rows(pool)}
     engine_names: list[str] = []
     for row in await engines.rows(pool):
@@ -490,12 +559,24 @@ async def resolve(
         engine_names.append(row["name"])
     all_chains = await chains(pool)
     chain = list(all_chains.get(role) or [])
-    if not chain and role != "chat":
+    if not chain and role != "chat" and protocol == CHAT:
+        # A chat role with no chain of its own walks chat's. A systemone role
+        # never does: chat's links answer chat, and a chat model asked a typed
+        # question at /systemone has nothing to say (decision-role spec §1).
         chain = list(all_chains.get("chat") or [])
     if requested:
         # The explicit pick is link 1; the chain holds the fallbacks.
         chain = [requested] + [c for c in chain if c != requested]
     if not chain:
+        if protocol == SYSTEMONE:
+            # (plan decision 10) Empty is "no decision model", stated — never
+            # the default provider's chat model below.
+            raise NothingRunnable(
+                role,
+                [],
+                why=f"the {role} chain is empty, so no decision model is set "
+                "(add one in Settings → Routing)",
+            )
         # No pick and no chain: today's rule — the default provider's model,
         # unless the default is an engine its owner switched off.
         default = await providers.default_row(pool)
@@ -543,12 +624,15 @@ async def resolve(
             and name not in seen
             and engines.is_engine(row)
             and switched_off(row) is None
+            and speaks(row, protocol)
         ):
             seen[name] = await engines.observe(app, pool, row, live=False)
     verdicts: list[dict] = []
     has_local = False
     for index, link in enumerate(chain, 1):
-        verdict = await judge_link(app, pool, link, by_name, walled, timezone, seen)
+        verdict = await judge_link(
+            app, pool, link, by_name, walled, timezone, seen, protocol=protocol
+        )
         verdict["link"] = index
         served_as = f"{verdict['provider']}:{verdict['model']}" if verdict.get("provider") else link
         if unreachable and served_as in unreachable:
@@ -572,7 +656,7 @@ async def resolve(
                 role=role,
                 verdicts=verdicts,
             )
-    if not has_local:
+    if not has_local and protocol == CHAT:
         candidates = [by_name[name] for name in engine_names]
         fallback = await standby(app, pool, fit_context, latest_probes, candidates, seen)
         if fallback is not None:
@@ -633,10 +717,17 @@ async def explain(
 __all__ = [
     "BUILTIN_ROLES",
     "RESERVED_ROLES",
+    "CHAT",
+    "DECISIONS_ROLE",
+    "SYSTEMONE",
+    "SYSTEMONE_ROLES",
     "Decision",
     "NothingRunnable",
+    "cannot_serve",
+    "protocol_of",
     "resolve",
     "explain",
+    "speaks",
     "switched_off",
 ]
 _ = time  # noqa: F841 — kept for callers that time the walk

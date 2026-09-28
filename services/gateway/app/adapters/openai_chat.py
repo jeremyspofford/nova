@@ -320,6 +320,11 @@ async def _remember_usage_support(row: dict, supported: bool) -> None:
 
 class OpenAIChat:
     name = "openai-chat"
+    # OpenRouter serves Jev's typed questions at {base}/systemone with the
+    # same key it serves chat with (decision-role spec §1), so an endpoint
+    # of this protocol MAY carry both; one that does not answers /systemone
+    # with a 404, which is relayed in its own words.
+    protocols = frozenset({"chat", "systemone"})
 
     def headers(self, row: dict) -> dict[str, str]:
         # `api-key-header` on this protocol is Azure's header name.
