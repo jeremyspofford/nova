@@ -5,12 +5,16 @@ A MACHINE here is an engine the gateway serves models through (the bundled
 is read from the gateway at the moment she is asked, through app/machines.py
 — core's one reader — and nothing is kept between turns.
 
-machine_status reads. It changes nothing, reaches only the gateway's own
-list, and its one argument is a name checked against that list, which is why
-the backend may run it unasked (live_facts.AUTO_RUN). Each machine it reports
-leaves a structured fact on the span — {"machine", "answering",
-"checked_now", "at"} — so what she then says about it is checkable against a
-record rather than a sentence.
+machine_status reads. It changes nothing: it reaches the gateway's engine
+list, and — for Nova's agents (S42a) — core's OWN device rows plus the hub's
+live connection registry, never a second network call. Its one argument is a
+name checked against BOTH lists, which is why the backend may run it unasked
+(live_facts.AUTO_RUN). Each machine it reports leaves a structured fact on
+the span — {"machine", "answering", "checked_now", "at"} — and each agent
+leaves {"device", "connected"}, the same shape a device tool leaves — so what
+she then says about either is checkable against a record rather than a
+sentence. Run unasked (live_facts), its result reaches her cut short, and an
+agent's fact is kept only when its line was shown (device_line_shown).
 
 machine_configure sets `serving`: whether that machine runs models for the
 routing chains. It reports the value the gateway READS BACK, never the value
@@ -21,10 +25,13 @@ anything (owner ruling 2026-09-03).
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 
-from app import machines
+from app import device_facts, machines
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
+
+logger = logging.getLogger("core")
 
 # How a model id says where it runs — the TRUE rule (S40 fix wave B4). A bare
 # id's first colon is its tag's own, so the part before it is not a machine.
@@ -102,25 +109,51 @@ def _describe(view: dict, checked_now: bool) -> str:
 
 async def machine_status(args: dict, ctx: ToolContext) -> str:
     wanted = str(args.get("machine") or "").strip()
+    reader = machines.plant()
     try:
-        views = await machines.plant().engines(ctx.app, live=True)
+        views = await reader.engines(ctx.app, live=True)
     except machines.PlantUnavailable as exc:
         raise ToolFailure(f"could not ask the gateway where models run — {exc}") from exc
+    agents, agents_error = await _agents(reader, ctx)
     if wanted:
         named = [view for view in views if view["name"] == wanted]
-        if not named:
-            listed = ", ".join(view["name"] for view in views) or "none"
-            raise ToolFailure(
-                f"no machine named {wanted!r} runs models — the gateway lists: {listed}"
-            )
-        views = named
-    if not views:
-        return "The gateway lists no machine that runs models."
-    first = views[0]["name"]
-    lines = [
-        f"{len(views)} machine(s) run models for Nova, read from the gateway now. "
-        f"{_ID_RULE_QUALIFIED} ({first}:<model> runs on {first}); {_ID_RULE_BARE}."
-    ]
+        if agents_error is not None:
+            # Fix round 1 (Important 1): Nova's agents could not be read AT
+            # ALL, so their absence is not evidence of anything. Never say
+            # "Nova's agents: none" — that claims a checked, empty list — and
+            # never fold "or Nova's agent" into the not-found clause, which
+            # would assert no agent of this name exists. Only the gateway's
+            # own list is asserted; the agents half states its own failure.
+            named_agents: list[dict] = []
+            if not named:
+                engines_listed = ", ".join(view["name"] for view in views) or "none"
+                raise ToolFailure(
+                    f"no machine named {wanted!r} runs models — the gateway lists: "
+                    f"{engines_listed}; Nova's agents could not be read — {agents_error}"
+                )
+        else:
+            named_agents = [
+                agent
+                for agent in agents
+                if wanted.casefold() in (agent["name"].casefold(), agent["hostname"].casefold())
+            ]
+            if not named and not named_agents:
+                engines_listed = ", ".join(view["name"] for view in views) or "none"
+                agents_listed = ", ".join(agent["name"] for agent in agents) or "none"
+                raise ToolFailure(
+                    f"no machine named {wanted!r} runs models or Nova's agent — the gateway "
+                    f"lists: {engines_listed}; Nova's agents: {agents_listed}"
+                )
+        views, agents = named, named_agents
+    lines: list[str] = []
+    if views:
+        first = views[0]["name"]
+        lines.append(
+            f"{len(views)} machine(s) run models for Nova, read from the gateway now. "
+            f"{_ID_RULE_QUALIFIED} ({first}:<model> runs on {first}); {_ID_RULE_BARE}."
+        )
+    elif not wanted:
+        lines.append("The gateway lists no machine that runs models.")
     for view in views:
         checked_now = view.get("state") != "unobserved"
         lines.append(_describe(view, checked_now))
@@ -133,7 +166,127 @@ async def machine_status(args: dict, ctx: ToolContext) -> str:
                     "at": view.get("observed_at") or _now(),
                 }
             )
+    lines.extend(_describe_agents(agents, agents_error, ctx, filtered=bool(wanted)))
     return "\n".join(lines)
+
+
+async def _agents(reader, ctx: ToolContext) -> tuple[list[dict], str | None]:
+    """Nova's agents, or the reason they could not be read. A failure here is
+    STATED in the result, never raised: the engines are still a true reading,
+    and the agents failing must not hide them. It holds one way only: the
+    gateway is read first, and a gateway that cannot be asked fails the whole
+    call (machine_status raises before this runs), so no agent is reported
+    then."""
+    try:
+        return await reader.agents(ctx.app), None
+    except Exception as exc:  # noqa: BLE001 — stated in the result, in words
+        logger.warning("machine_status: Nova's agents could not be read", exc_info=True)
+        return [], f"{type(exc).__name__}: {exc}"
+
+
+def _role(name: str, role: dict) -> str:
+    if role["state"] == "cannot":
+        return f"{name}: {role['reason']}"
+    return f"{name}: {role['state']}" + (
+        f" ({role['reason']})" if role["state"] == "available" else f" — {role['reason']}"
+    )
+
+
+# How each line of the agents section begins, below its header: a machine, then
+# one line per agent on it. device_line_shown reads a listing back by these
+# two, so both the writer and the reader take them from here.
+_MACHINE_LINE = "- machine "
+_AGENT_LINE = "  agent "
+
+
+def _describe_agent(agent: dict) -> str:
+    where = device_facts.place(agent)
+    if agent["agent_version"]:
+        where += f"; agent {agent['agent_version']}"
+    state = (
+        "connected now"
+        if agent["connected"]
+        else f"offline (last seen {agent['last_seen'] or 'never'})"
+    )
+    roles = agent["roles"]
+    return (
+        f"{_AGENT_LINE}{agent['name']} ({where}): {state}; "
+        f"{_role('hands', roles['hands'])}; {_role('facts', roles['facts'])}."
+    )
+
+
+def _describe_agents(
+    agents: list[dict], error: str | None, ctx: ToolContext, *, filtered: bool
+) -> list[str]:
+    """Nova's agents grouped by MACHINE — the agents that report one
+    machine_uid. An agent that reported none is a machine of its own: its
+    group is never merged with another by name, but nothing in the output
+    says so either — a lone agent's listing reads exactly like any other
+    one-agent machine's. Each listed agent leaves {"device", "connected"}
+    on the span, the record a device tool leaves, so what she says about its
+    connection is backed (guards._checked_a_device) — on an unasked check,
+    only for an agent whose line she was shown (device_line_shown)."""
+    if error is not None:
+        return [f"Nova's agents could not be read — {error}."]
+    if not agents:
+        return [] if filtered else ["No Nova agent is paired to any machine."]
+    groups: dict[str, list[dict]] = {}
+    for agent in agents:
+        groups.setdefault(agent["machine"] or f"agent:{agent['name']}", []).append(agent)
+    lines = [
+        f"Nova's agents, by machine — {len(groups)} machine(s), read from Nova's records and "
+        "live connections now:"
+    ]
+    for members in groups.values():
+        host = members[0]["hostname"]
+        if len(members) > 1:
+            names = ", ".join(agent["name"] for agent in members)
+            lines.append(
+                f"{_MACHINE_LINE}{host}: {len(members)} Nova agents report this one machine "
+                f"({names}) — a machine runs one agent; the owner revokes the extra in "
+                "Settings → Devices."
+            )
+        else:
+            lines.append(f"{_MACHINE_LINE}{host}:")
+        for agent in members:
+            lines.append(_describe_agent(agent))
+            if ctx.facts_sink is not None:
+                ctx.facts_sink.append({"device": agent["name"], "connected": agent["connected"]})
+    return lines
+
+
+def device_line_shown(name: str, result: str, shown: int) -> bool:
+    """Did the first `shown` characters of machine_status's `result` hold agent
+    `name`'s WHOLE line? machine_status's Tool.device_line_shown: a live check
+    keeps that agent's {"device", "connected"} fact only when this says yes
+    (live_facts._shown_facts; S42a final review I2).
+
+    Exact for the format _describe_agents writes, never the name found
+    anywhere: the line begins, at a line start, with "  agent <name> (", and
+    ends at the newline before the agents section's next line (another agent,
+    or a "- machine" line) or at the end of the result — the agents section is
+    the result's last. It fails closed, answering False, when there is no such
+    line; when a line runs on past a newline this format never writes (text an
+    agent reported can carry one); and when ANY line that could be this
+    agent's ends past `shown` — "dell"'s head also begins the line of an agent
+    named "dell (old)", and a line that cannot be told apart from another is
+    not confirmed shown.
+    """
+    head = f"{_AGENT_LINE}{name} ("
+    found = False
+    start = result.find(head)
+    while start != -1:
+        if start == 0 or result[start - 1] == "\n":
+            end = result.find("\n", start + len(head))
+            if end == -1:
+                end = len(result)
+            elif not result.startswith((_AGENT_LINE, _MACHINE_LINE), end + 1):
+                return False
+            if end > shown:
+                return False
+            found = True
+        start = result.find(head, start + 1)
+    return found
 
 
 async def machine_configure(args: dict, ctx: ToolContext) -> str:
@@ -172,8 +325,11 @@ MACHINE_STATUS = Tool(
         "Where Nova's models run, read from the gateway right now: every machine that runs "
         "models, whether it is answering (checked now), whether it is switched on for "
         "models, what it computes on and in which runtime, and which models it has "
-        f"installed. {_ID_RULE}. Use it before saying where a model runs, whether a machine "
-        "is up, or what is installed on it. Reads only."
+        f"installed. {_ID_RULE}. Also Nova's agent on each paired machine, grouped by "
+        "machine: the OS it runs (and whether it runs inside WSL), whether it is connected "
+        "now, and what it can do there, with the reason. Use it before saying where a model "
+        "runs, whether a machine is up, what is installed on it, or which agent can act on "
+        "a machine. Reads only."
     ),
     parameters={
         "type": "object",
@@ -196,6 +352,10 @@ MACHINE_STATUS = Tool(
     # Its result states each machine's state as read now: a read of a machine
     # for the state guard (guards._machine_read_tools; S40b fix wave C2).
     reads_machines=True,
+    # One result, one line per agent, each leaving a connectivity fact: a
+    # live check keeps an agent's fact only when its line was shown (S42a
+    # final review I2).
+    device_line_shown=device_line_shown,
 )
 
 MACHINE_CONFIGURE = Tool(

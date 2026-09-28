@@ -63,6 +63,33 @@
       },
       "canonical": "{\"args\":{\"argv\":[\"echo\",\"hello\"],\"cwd\":\"/tmp\",\"timeout_s\":30},\"capability\":\"shell.exec\",\"device_id\":\"11111111-2222-3333-4444-555555555555\",\"envelope_id\":\"c4b3a2d1-5566-4778-99aa-bbccddeeff00\",\"expires_at\":1756600060,\"issued_at\":1756600000,\"v\":1}",
       "sig_hex": "d4353a0f4ae3afb1a99ce01a7113a478a93b805f5b23a9244508a3817b85690e0d89e259ffb62999aa401eabbf82c1853220b0f355a3de26ccca70baf74dc604"
+    },
+    {
+      "note": "the revoked-proof body (S42a) — devices_ws.py signs this into a revoked auth_error's `proof`, and apps/novad's wire.VerifyRevokedProof checks it against the pinned core key. No capability, no args: a different shape than a command envelope, canonicalized and signed the same way.",
+      "payload": {
+        "kind": "revoked",
+        "v": 1,
+        "device_id": "11111111-2222-3333-4444-555555555555",
+        "nonce": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "canonical": "{\"device_id\":\"11111111-2222-3333-4444-555555555555\",\"kind\":\"revoked\",\"nonce\":\"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\",\"v\":1}",
+      "sig_hex": "c490054c73129e712d2042e07d26deb5d0147294054ca357d6d31b3d428e80e9895c86e6ff2aaa272555486359e2abcaeab069eba0f5404bc9c04b646f725d05"
+    },
+    {
+      "note": "a Windows path — backslashes and a drive colon, as device_list_files sends on Windows (S42a); the JSON escapes each backslash, and both encoders must agree on those bytes",
+      "payload": {
+        "v": 1,
+        "envelope_id": "5e8a1f0c-7d42-4c1e-9a3b-2f6d8c0e4b71",
+        "device_id": "11111111-2222-3333-4444-555555555555",
+        "capability": "fs.list",
+        "args": {
+          "path": "C:\\Users\\owner\\Desktop"
+        },
+        "issued_at": 1756600000,
+        "expires_at": 1756600060
+      },
+      "canonical": "{\"args\":{\"path\":\"C:\\\\Users\\\\owner\\\\Desktop\"},\"capability\":\"fs.list\",\"device_id\":\"11111111-2222-3333-4444-555555555555\",\"envelope_id\":\"5e8a1f0c-7d42-4c1e-9a3b-2f6d8c0e4b71\",\"expires_at\":1756600060,\"issued_at\":1756600000,\"v\":1}",
+      "sig_hex": "e2d9f04ede780879c81939bdb8496fd854f7d871c99569d8fcdc3ecbcc262be23c6be6f25a2af35d4cb589e22664fe4d8c9fa2e2d715e3f4bac2c6af13a5250f"
     }
   ]
 }

@@ -25,6 +25,7 @@ Four mechanical properties live here, and each is code, not a request:
     break is a loud DEVICE_AUDIT_BREAK governance event naming the seq and never
     a silent reindex — a chain that quietly heals proves nothing afterward.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -34,11 +35,12 @@ import secrets
 import uuid
 from datetime import UTC, datetime
 
+import asyncpg
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app import db, devices, envelopes, governance
+from app import db, device_facts, devices, envelopes, governance
 
 logger = logging.getLogger("core")
 
@@ -56,21 +58,39 @@ NONCE_BYTES = 32
 #   core -> device
 #     challenge  {nonce: hex(32 bytes), core_pubkey: hex}
 #     ready      {last_seq: int | null}
-#     auth_error {reason}                        then close 4401
+#     auth_error {reason, proof?, sig?}           then close 4401. reason is
+#                exactly "revoked" for a revoked device, and ONLY then paired
+#                with a proof core signs ({kind, v, device_id, nonce}, plus
+#                sig) — the agent verifies it against the key pinned at
+#                enrollment before wiping (wire.VerifyRevokedProof, S42a).
+#                An unknown device gets a different reason and no proof,
+#                ever: core must never sign one for an id it merely does not
+#                know, or a restored database that forgot a device would make
+#                it wipe itself.
 #     command    {envelope, sig}                  (envelopes.build / sign)
 #   device -> core
-#     auth       {device_id, sig: hex(sign(raw nonce))}
+#     auth       {device_id, sig: hex(sign(raw nonce)), facts?}
 #                (an older novad also sends home_dir; it is one of the unknown
 #                keys ignored above — nothing reads it)
+#                facts: device_facts.validate_auth's shape, recorded only
+#                after sig verifies, never a reason to refuse (S42a)
 #     heartbeat  {ts}                            -> devices.last_seen = now()
 #     result     {envelope_id, ok, output, exit_code, error}
 #     audit      {entries: [_ENTRY_KEYS...]}     (ingest_audit)
+#     facts      {net?, unreadable?}              (S42a; merged into facts)
 
 # WebSocket close codes in the application-private 4000-4999 range. 4401 mirrors
 # HTTP 401 (the challenge did not authenticate); 4403 mirrors 403 (the row is
 # gone from under a live socket — a revoke).
 AUTH_FAILED_CLOSE = 4401
 REVOKED_CLOSE = 4403
+
+# The auth_error reasons. REVOKED_REASON is the ONE the agent treats as final
+# (wipe, exit 78 — apps/novad client.ErrRevoked), so it is sent for a revoked
+# row and nothing else: a restored database that forgot a device must never
+# make that device wipe itself.
+REVOKED_REASON = "revoked"
+UNKNOWN_DEVICE_REASON = "no such device — it was never paired here, or its record is gone"
 
 # The audit entry a daemon sends has exactly these keys; the chain hash is
 # computed over all of them EXCEPT `hash`, canonicalised the SAME way the
@@ -277,6 +297,42 @@ async def _auth_error(conn: object, reason: str) -> None:
         logger.warning("sending auth_error failed", exc_info=True)
 
 
+def revoked_proof(device_id: uuid.UUID | str, nonce_hex: str) -> dict:
+    """The exact body core signs into a revoked auth_error's `proof`:
+    {kind: "revoked", v: 1, device_id, nonce}. A free function, not inlined
+    into `_auth_error_revoked`, so this wire shape and the committed
+    cross-language vector (tests/test_envelopes.py,
+    test_the_revoked_proof_vector_matches_devices_ws_shape) are built from
+    the SAME place and cannot drift apart silently."""
+    return {"kind": "revoked", "v": 1, "device_id": str(device_id), "nonce": nonce_hex}
+
+
+async def _auth_error_revoked(conn: object, pool, device_id: uuid.UUID, nonce_hex: str) -> None:
+    """The one auth_error that carries a proof: reason is REVOKED_REASON, and
+    the proof (`revoked_proof`) is signed with core's OWN key (the same key
+    every device pins at enrollment and verifies every command against),
+    never the bare reason string. `nonce_hex` is THIS connection's own
+    challenge nonce, so a proof cannot be replayed from a different
+    handshake (apps/novad's wire.VerifyRevokedProof checks exactly this).
+
+    Called only when the row IS revoked (revoked_at is set). An unknown id
+    goes through the plain `_auth_error` above with no proof at all — core
+    must never sign a proof for a device it merely does not know."""
+    proof = revoked_proof(device_id, nonce_hex)
+    key = await devices.signing_key(pool)
+    reply = {
+        "type": "auth_error",
+        "reason": REVOKED_REASON,
+        "proof": proof,
+        "sig": envelopes.sign(key, proof),
+    }
+    try:
+        await conn.send(reply)
+        await conn.close(AUTH_FAILED_CLOSE)
+    except Exception:
+        logger.warning("sending revoked auth_error failed", exc_info=True)
+
+
 async def authenticate(conn: object, pool) -> object | None:
     """Challenge the socket and return the device row on success, else None.
 
@@ -304,13 +360,19 @@ async def authenticate(conn: object, pool) -> object | None:
 
     row = await devices.get_live(pool, device_id)
     if row is None:
-        await _auth_error(conn, "no such device, or it has been revoked")
+        gone = await devices.get(pool, device_id)
+        if gone is not None and gone["revoked_at"] is not None:
+            await _auth_error_revoked(conn, pool, device_id, nonce.hex())
+        else:
+            await _auth_error(conn, UNKNOWN_DEVICE_REASON)
         return None
 
     sig = frame.get("sig")
     if not isinstance(sig, str) or not verify_nonce(row["pubkey"], nonce, sig):
         await _auth_error(conn, "the challenge signature did not verify")
         return None
+
+    await _record_auth_facts(pool, device_id, frame.get("facts"))
 
     last_seq = await pool.fetchval(
         "SELECT max(seq) FROM device_audit WHERE device_id = $1", device_id
@@ -429,6 +491,68 @@ async def ingest_audit(pool, device_id: str | uuid.UUID, entries: list) -> dict:
 # -- the connection lifecycle ------------------------------------------------
 
 
+async def _record_auth_facts(pool, device_id: uuid.UUID, raw: object) -> None:
+    """Record the auth frame's facts — AFTER the signature verified — REPLACING
+    what the device said before: a new connection is a fresh truth.
+
+    Facts that are ABSENT, REJECTED, or that postgres itself refuses
+    (asyncpg.DataError — UntranslatableCharacterError, a NUL byte, is one
+    instance of it; device_facts already catches the two known shapes before
+    the write, so this is the belt-and-suspenders half) all take the SAME
+    path: clear facts/facts_at to NULL/NULL rather than leave a PREVIOUS
+    connection's identity facts in the row for the next facts frame to merge
+    into and re-date "reported just now" — a misstatement exactly during an
+    agent/core version skew (controller ruling revising P2). None of this is
+    ever a reason to refuse the socket, and a facts frame still merges into
+    the cleared (NULL) row afterward, so an agent's net section — its MACs,
+    for wake — survives even without identity facts."""
+    if raw is not None:
+        try:
+            clean = device_facts.validate_auth(raw)
+        except device_facts.FactsRejected as exc:
+            logger.warning("device %s: auth-frame facts not recorded — %s", device_id, exc.reason)
+        else:
+            try:
+                await pool.execute(
+                    "UPDATE devices SET facts = $2, facts_at = now() WHERE id = $1",
+                    device_id,
+                    clean,
+                )
+                return
+            except asyncpg.DataError as exc:
+                logger.warning(
+                    "device %s: auth-frame facts not recorded — postgres refused them: %s",
+                    device_id,
+                    exc,
+                )
+    await pool.execute("UPDATE devices SET facts = NULL, facts_at = NULL WHERE id = $1", device_id)
+
+
+async def _record_facts_frame(pool, device_id: uuid.UUID, frame: dict) -> None:
+    """MERGE a facts frame's sections into what the device said (jsonb ||), so
+    the auth facts survive a frame that carries only net/unreadable. A shape
+    device_facts refuses, or one postgres itself refuses (asyncpg.DataError —
+    the belt-and-suspenders half, beside device_facts already catching the
+    two known postgres-hostile shapes before the write), is logged and
+    dropped: never a reason to take the socket down."""
+    try:
+        sections = device_facts.validate_frame(frame)
+    except device_facts.FactsRejected as exc:
+        logger.warning("device %s: facts frame not recorded — %s", device_id, exc.reason)
+        return
+    try:
+        await pool.execute(
+            "UPDATE devices SET facts = COALESCE(facts, '{}'::jsonb) || $2::jsonb, "
+            "facts_at = now() WHERE id = $1",
+            device_id,
+            sections,
+        )
+    except asyncpg.DataError as exc:
+        logger.warning(
+            "device %s: facts frame not recorded — postgres refused it: %s", device_id, exc
+        )
+
+
 async def _handle_frame(pool, device_id: uuid.UUID, frame: object) -> None:
     if not isinstance(frame, dict):
         return
@@ -443,6 +567,8 @@ async def _handle_frame(pool, device_id: uuid.UUID, frame: object) -> None:
         entries = frame.get("entries")
         if isinstance(entries, list):
             await ingest_audit(pool, device_id, entries)
+    elif kind == "facts":
+        await _record_facts_frame(pool, device_id, frame)
     else:
         logger.info("device %s sent an unknown frame type %r", device_id, kind)
 

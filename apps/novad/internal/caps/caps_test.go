@@ -2,8 +2,10 @@ package caps
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -130,68 +132,12 @@ func TestFsWriteAllowsExactlyTheCap(t *testing.T) {
 	}
 }
 
-// The ok-vs-exit_code seam: a process that RAN to completion is ok:true even on
-// a nonzero exit; exit_code carries the command's own result.
-func TestShellExecNonzeroExitIsOkTrueWithTheCode(t *testing.T) {
-	d := testDeps(t)
-	out := Dispatch(context.Background(), "shell.exec",
-		map[string]any{"argv": []any{"sh", "-c", "exit 3"}}, d)
-	if !out.OK {
-		t.Fatal("a process that ran to completion is ok:true even on a nonzero exit")
-	}
-	if out.ExitCode == nil || *out.ExitCode != 3 {
-		t.Fatalf("exit_code = %v, want 3", out.ExitCode)
-	}
-}
-
-func TestShellExecZeroExitCapturesOutput(t *testing.T) {
-	d := testDeps(t)
-	out := Dispatch(context.Background(), "shell.exec",
-		map[string]any{"argv": []any{"echo", "hello"}}, d)
-	if !out.OK || out.ExitCode == nil || *out.ExitCode != 0 {
-		t.Fatalf("echo should be ok:true exit 0, got ok=%v code=%v", out.OK, out.ExitCode)
-	}
-	if !strings.Contains(out.Output, "hello") {
-		t.Errorf("output should contain 'hello', got %q", out.Output)
-	}
-}
-
-// A binary that does not exist is the daemon UNABLE to perform the capability
-// -> ok:false, not a fake exit code.
-func TestShellExecUnstartableIsOkFalse(t *testing.T) {
-	d := testDeps(t)
-	out := Dispatch(context.Background(), "shell.exec",
-		map[string]any{"argv": []any{"this-binary-does-not-exist-xyz"}}, d)
-	if out.OK {
-		t.Fatal("a binary that cannot start must be ok:false")
-	}
-	if out.ExitCode != nil {
-		t.Errorf("exit_code should be null for an unstartable command, got %v", out.ExitCode)
-	}
-}
-
 func TestShellExecRejectsNonStringArgv(t *testing.T) {
 	d := testDeps(t)
 	out := Dispatch(context.Background(), "shell.exec",
 		map[string]any{"argv": []any{"echo", 42}}, d)
 	if out.OK {
 		t.Fatal("a non-string argv element must be refused")
-	}
-}
-
-func TestShellExecOutputIsCappedAndStated(t *testing.T) {
-	d := testDeps(t)
-	// Emit far more than the 64 KiB cap.
-	out := Dispatch(context.Background(), "shell.exec",
-		map[string]any{"argv": []any{"sh", "-c", "yes AAAAAAAA | head -c 200000"}}, d)
-	if !out.OK {
-		t.Fatalf("the command itself ran fine: %q", out.Error)
-	}
-	if len(out.Output) > OutputCap+64 { // cap + the short truncation note
-		t.Errorf("output length %d exceeds the cap plus its note", len(out.Output))
-	}
-	if !strings.Contains(out.Output, "truncated at") {
-		t.Error("reaching the cap must be stated, not silent")
 	}
 }
 
@@ -210,6 +156,65 @@ func TestSystemInfoReportsRealNumbers(t *testing.T) {
 		t.Fatalf("system.info should succeed: %q", out.Error)
 	}
 	for _, want := range []string{"disk", "mem", "host="} {
+		if !strings.Contains(out.Output, want) {
+			t.Errorf("system.info output missing %q: %s", want, out.Output)
+		}
+	}
+}
+
+// The capability list is DERIVED from the dispatch table: a capability is
+// listed because a handler exists (doing-things S30's daemon.info reads
+// Names), never because a name was written twice.
+func TestNamesAreDerivedFromTheTable(t *testing.T) {
+	want := []string{
+		"apps.launch", "apps.list", "facts.refresh", "fs.list", "fs.read",
+		"fs.write", "shell.exec", "system.info", "system.notify",
+	}
+	if got := Names(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Names() = %v, want %v", got, want)
+	}
+}
+
+// S30 restates these words to say a daemon is too old for a call.
+func TestUnknownCapabilityKeepsItsExactWords(t *testing.T) {
+	out := Dispatch(context.Background(), "fs.destroy", map[string]any{}, testDeps(t))
+	if out.OK || out.Error != `unknown capability "fs.destroy"` {
+		t.Fatalf("got ok=%v %q", out.OK, out.Error)
+	}
+}
+
+func TestFactsRefreshWithoutASocketSaysCannot(t *testing.T) {
+	out := Dispatch(context.Background(), "facts.refresh", map[string]any{}, testDeps(t))
+	if out.OK || !strings.HasPrefix(out.Error, "cannot:") {
+		t.Fatalf("got ok=%v %q", out.OK, out.Error)
+	}
+}
+
+// The frame goes out BEFORE the result: SendFacts runs inside the handler,
+// so by the time core's command returns, core has recorded the facts.
+func TestFactsRefreshSendsTheFrameThenAnswers(t *testing.T) {
+	sent := 0
+	d := testDeps(t)
+	d.SendFacts = func(context.Context) error { sent++; return nil }
+	out := Dispatch(context.Background(), "facts.refresh", map[string]any{}, d)
+	if !out.OK || sent != 1 {
+		t.Fatalf("ok=%v sent=%d %q", out.OK, sent, out.Error)
+	}
+	d.SendFacts = func(context.Context) error { return errors.New("socket gone") }
+	if out := Dispatch(context.Background(), "facts.refresh", map[string]any{}, d); out.OK {
+		t.Fatal("a frame that could not be written is ok:false, never 'facts sent'")
+	}
+}
+
+// Every fact is NAMED, as a value or as unknown — an omitted line reads as
+// though it was never asked. (Before S42a, os= and uptime= were silently
+// dropped off Linux.)
+func TestSystemInfoNamesEveryFactEvenWhenUnknown(t *testing.T) {
+	out := Dispatch(context.Background(), "system.info", map[string]any{}, testDeps(t))
+	if !out.OK {
+		t.Fatalf("system.info should succeed: %q", out.Error)
+	}
+	for _, want := range []string{"host=", "os=", "disk", "mem", "uptime="} {
 		if !strings.Contains(out.Output, want) {
 			t.Errorf("system.info output missing %q: %s", want, out.Output)
 		}

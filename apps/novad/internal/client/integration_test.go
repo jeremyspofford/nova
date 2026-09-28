@@ -6,9 +6,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +21,7 @@ import (
 
 	"novad/internal/audit"
 	"novad/internal/config"
+	"novad/internal/facts"
 	"novad/internal/wire"
 )
 
@@ -123,7 +127,7 @@ func TestFullWalkAgainstAFakeCore(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{DeviceID: deviceID, Name: "itest", Server: srv.URL, CorePubKey: hex.EncodeToString(corePub)}
-	agent, err := New(cfg, devPriv, auditLog, home, nil)
+	agent, err := New(cfg, devPriv, auditLog, home, "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +201,7 @@ func buildAgent(t *testing.T, serverURL, deviceID, corePubHex string, devPriv ed
 		t.Fatal(err)
 	}
 	cfg := config.Config{DeviceID: deviceID, Name: "itest", Server: serverURL, CorePubKey: corePubHex}
-	agent, err := New(cfg, devPriv, auditLog, home, nil)
+	agent, err := New(cfg, devPriv, auditLog, home, "test", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -514,4 +518,726 @@ func coreRead(ctx context.Context, c *websocket.Conn) (map[string]any, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+// fakeCoreHandshake runs challenge -> auth (verified) -> ready on c and
+// returns the auth frame, or nil if the signature did not verify.
+func fakeCoreHandshake(ctx context.Context, c *websocket.Conn, corePub ed25519.PublicKey, devPub ed25519.PublicKey) map[string]any {
+	nonce := make([]byte, 32)
+	_, _ = rand.Read(nonce)
+	_ = coreWrite(ctx, c, map[string]any{"type": "challenge", "nonce": hex.EncodeToString(nonce), "core_pubkey": hex.EncodeToString(corePub)})
+	auth, err := coreRead(ctx, c)
+	if err != nil {
+		return nil
+	}
+	sigHex, _ := auth["sig"].(string)
+	sig, _ := hex.DecodeString(sigHex)
+	if !ed25519.Verify(devPub, nonce, sig) {
+		return nil
+	}
+	_ = coreWrite(ctx, c, map[string]any{"type": "ready", "last_seq": nil})
+	return auth
+}
+
+func TestTheAuthFrameCarriesFactsAndAFactsFrameFollowsReady(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	type seen struct{ auth, next map[string]any }
+	ch := make(chan seen, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		auth := fakeCoreHandshake(r.Context(), c, corePub, devPub)
+		if auth == nil {
+			return
+		}
+		next, _ := coreRead(r.Context(), c)
+		ch <- seen{auth: auth, next: next}
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, "dev-facts-1", hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	var got seen
+	select {
+	case got = <-ch:
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+	cancel()
+	fm, ok := got.auth["facts"].(map[string]any)
+	if !ok {
+		t.Fatalf("the auth frame carries no facts: %v", got.auth)
+	}
+	if v, _ := fm["v"].(json.Number); v.String() != "2" {
+		t.Fatalf("facts v = %v", fm["v"])
+	}
+	if osm, _ := fm["os"].(map[string]any); osm["goos"] != runtime.GOOS {
+		t.Fatalf("facts os = %v", fm["os"])
+	}
+	// The one value this task plumbs through New -> gatherAuth: the build
+	// stamp, passed as "test" by buildAgent.
+	if am, _ := fm["agent"].(map[string]any); am["version"] != "test" {
+		t.Fatalf("facts.agent.version = %v, want %q", am["version"], "test")
+	}
+	if got.next["type"] != "facts" {
+		t.Fatalf("the first frame after ready must be facts, got %v", got.next["type"])
+	}
+	if _, ok := got.next["net"].(map[string]any); !ok {
+		t.Fatalf("the facts frame has no net: %v", got.next)
+	}
+}
+
+// The Global Constraint says auth facts are never a reason to refuse the
+// socket. gatherAuth runs a platform call (macOS ioreg, machine-id reads)
+// that has no timeout of its own; if it hung, using hsCtx's full 30s for it
+// would let a single stuck read burn the whole handshake, fail the auth
+// write or the ready read with "context deadline exceeded", and leave the
+// device offline forever on reconnect. gatherAuth must be cut off well
+// inside the handshake so ready is still reached quickly.
+func TestAHungFactsGatherDoesNotBlockTheHandshake(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	readySeen := make(chan bool, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		auth := fakeCoreHandshake(r.Context(), c, corePub, devPub)
+		readySeen <- auth != nil
+		<-r.Context().Done()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, "dev-hung-gather-1", hex.EncodeToString(corePub), devPriv)
+	agent.authGatherBudget = 100 * time.Millisecond
+	agent.gatherAuth = func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
+		<-ctx.Done() // simulates a platform call that never returns on its own
+		return facts.Auth{}, []facts.Unreadable{{Item: "test", Reason: "blocked"}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	go func() { _ = agent.Run(ctx) }()
+	select {
+	case ok := <-readySeen:
+		if !ok {
+			t.Fatal("the auth frame's signature did not verify")
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("handshake took %s — a hung gatherAuth burned most of the 30s handshake budget instead of being cut off at ~100ms", elapsed)
+		}
+	case <-ctx.Done():
+		t.Fatal("handshake never completed — a hung facts gather blocked ready")
+	}
+}
+
+// The facts frame goes out BEFORE facts.refresh's own result, so core has
+// recorded the facts by the time its command returns.
+func TestFactsRefreshWritesTheFrameBeforeItsResult(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-refresh-1"
+	type observed struct {
+		types  []string
+		result map[string]any
+	}
+	order := make(chan observed, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		ctx := r.Context()
+		if fakeCoreHandshake(ctx, c, corePub, devPub) == nil {
+			return
+		}
+		if first, _ := coreRead(ctx, c); first["type"] != "facts" {
+			return
+		}
+		now := time.Now().Unix()
+		env := map[string]any{
+			"v": int64(1), "envelope_id": "refresh-e1", "device_id": deviceID,
+			"capability": "facts.refresh", "args": map[string]any{},
+			"issued_at": now, "expires_at": now + 60,
+		}
+		canon, _ := wire.Canonical(env)
+		_ = coreWrite(ctx, c, map[string]any{"type": "command", "envelope": env, "sig": hex.EncodeToString(ed25519.Sign(corePriv, canon))})
+		// Read through the audit frame too, not just facts+result: the
+		// audit frame only goes out AFTER the daemon's audit.Append (which
+		// lazily creates audit.jsonl inside this test's TempDir) returns.
+		// Stopping at "result" let the test race that Append against
+		// TempDir's RemoveAll cleanup.
+		var obs observed
+		deadline := time.Now().Add(8 * time.Second)
+		for time.Now().Before(deadline) {
+			f, err := coreRead(ctx, c)
+			if err != nil {
+				break
+			}
+			switch typ, _ := f["type"].(string); typ {
+			case "facts", "result":
+				obs.types = append(obs.types, typ)
+				if typ == "result" {
+					obs.result = f
+				}
+			case "audit":
+				order <- obs
+				return
+			}
+		}
+		order <- obs
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	select {
+	case got := <-order:
+		if len(got.types) != 2 || got.types[0] != "facts" || got.types[1] != "result" {
+			t.Fatalf("frames after facts.refresh = %v, want [facts result]", got.types)
+		}
+		if ok, _ := got.result["ok"].(bool); !ok {
+			t.Fatalf("facts.refresh result ok = %v, want true (error=%v)", got.result["ok"], got.result["error"])
+		}
+	case <-ctx.Done():
+		t.Fatal("timed out")
+	}
+}
+
+// novad repoint's probe writes nothing on either side: no facts.
+func TestTheRepointProbeSendsNoFacts(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	sawFacts := make(chan bool, 1)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		auth := fakeCoreHandshake(r.Context(), c, corePub, devPub)
+		_, present := auth["facts"]
+		sawFacts <- present
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	cfg := config.Config{DeviceID: "dev-probe-1", Server: srv.URL, CorePubKey: hex.EncodeToString(corePub)}
+	if err := VerifyServer(context.Background(), cfg, devPriv); err != nil {
+		t.Fatal(err)
+	}
+	if <-sawFacts {
+		t.Fatal("the repoint probe must not send facts")
+	}
+}
+
+// countingCore authenticates every connection, records when each arrived,
+// then either closes it at once or holds it (hold=true), reading frames so
+// pings are answered.
+func countingCore(t *testing.T, corePub, devPub ed25519.PublicKey, hold, answerPings bool) (*httptest.Server, func() []time.Time) {
+	t.Helper()
+	var mu sync.Mutex
+	var arrivals []time.Time
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		mu.Lock()
+		arrivals = append(arrivals, time.Now())
+		mu.Unlock()
+		if fakeCoreHandshake(r.Context(), c, corePub, devPub) == nil {
+			return
+		}
+		if !hold {
+			_ = c.Close(websocket.StatusNormalClosure, "cycling")
+			return
+		}
+		if answerPings {
+			for {
+				if _, err := coreRead(r.Context(), c); err != nil {
+					return
+				}
+			}
+		}
+		<-r.Context().Done() // never reads: pings go unanswered
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, func() []time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Time(nil), arrivals...)
+	}
+}
+
+func waitFor(t *testing.T, within time.Duration, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("condition not met within %s", within)
+}
+
+// Before S42a the ladder never reset: after five drops EVERY reconnect
+// waited the longest step for the life of the process.
+func TestTheBackoffResetsAfterASessionThatAuthenticated(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, arrivals := countingCore(t, corePub, devPub, false, false)
+	agent, _ := buildAgent(t, srv.URL, "dev-backoff-1", hex.EncodeToString(corePub), devPriv)
+	agent.backoffs = []time.Duration{20 * time.Millisecond, 40 * time.Millisecond, 80 * time.Millisecond, 160 * time.Millisecond, 10 * time.Second}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	// Seven authenticated sessions: without the reset, the sixth waits 10 s.
+	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 7 })
+}
+
+func TestAPingThatGoesUnansweredEndsTheSession(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, arrivals := countingCore(t, corePub, devPub, true, false)
+	agent, _ := buildAgent(t, srv.URL, "dev-ping-1", hex.EncodeToString(corePub), devPriv)
+	agent.heartbeatEvery, agent.pingTimeout = 50*time.Millisecond, 100*time.Millisecond
+	agent.backoffs = []time.Duration{20 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 2 })
+}
+
+// Review focus 4: a wall-clock jump between ticks is a sleep — the session
+// ends and the next connect comes after the FIRST step of the ladder (the
+// reset), not after a TCP timeout or a 30 s wait.
+//
+// Fix round 1 finding 2: heartbeatEvery is REALISTIC here (5s) and the
+// watchdog is left at its DEFAULT (watchdogEvery 1s, sleepGap 5s) — proving
+// the watchdog catches the jump quickly, not a fast heartbeat ticker standing
+// in for it (a 50ms heartbeat, as this test used before, would catch the
+// jump itself and never exercise the watchdog at all). Arithmetic for the
+// 2.5s bound: worst-case watchdog detection is just under one watchdogEvery
+// (~1s) after the jump, plus the reset ladder's first step (1s, DEFAULT
+// backoffs — this session authenticates, so Run resets to attempt 0), plus a
+// fast local dial+handshake (tens of ms) — about 2.0-2.1s, comfortably under
+// 2.5s. The heartbeat's own 5s ticker never even fires before the session
+// ends, so its slower P12 gap rule (kept exactly as specified) plays no part
+// in this particular test — that is the point.
+func TestAClockJumpEndsTheSessionAndTheNextConnectIsQuick(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	srv, arrivals := countingCore(t, corePub, devPub, true, true)
+	agent, _ := buildAgent(t, srv.URL, "dev-resume-1", hex.EncodeToString(corePub), devPriv)
+	agent.heartbeatEvery = 5 * time.Second // realistic; the DEFAULT watchdog must catch this, not this ticker
+	var mu sync.Mutex
+	offset := time.Duration(0)
+	agent.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return time.Now().Add(offset) }
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	go func() { _ = agent.Run(ctx) }()
+	waitFor(t, 2*time.Second, func() bool { return len(arrivals()) >= 1 })
+	time.Sleep(120 * time.Millisecond) // let the session settle before jumping
+	mu.Lock()
+	offset = 10 * time.Minute // the laptop "slept" ten minutes
+	mu.Unlock()
+	jumped := time.Now()
+	waitFor(t, 3*time.Second, func() bool { return len(arrivals()) >= 2 })
+	// Controller ruling 3: a spurious reconnect BEFORE the deliberate jump
+	// would let this test pass vacuously — arrivals()[1] would predate
+	// jumped, its Sub would be negative, and the bound below would hold
+	// without the watchdog ever running. Assert causality first.
+	if !arrivals()[1].After(jumped) {
+		t.Fatalf("arrivals()[1] = %s is not after the jump at %s — a spurious reconnect before the deliberate jump", arrivals()[1], jumped)
+	}
+	if gap := arrivals()[1].Sub(jumped); gap > 2500*time.Millisecond {
+		t.Fatalf("reconnected %s after the jump; watchdog detection (~1s) plus the reset ladder's first step (1s) should be well under this", gap)
+	}
+}
+
+// Changed facts go out at most once per factsMinGap; unchanged ones only
+// every factsEvery.
+func TestFactsAreResentOnChangeAtMostOncePerGap(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	var mu sync.Mutex
+	count := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		if fakeCoreHandshake(r.Context(), c, corePub, devPub) == nil {
+			return
+		}
+		for {
+			f, err := coreRead(r.Context(), c)
+			if err != nil {
+				return
+			}
+			if f["type"] == "facts" {
+				mu.Lock()
+				count++
+				mu.Unlock()
+			}
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	agent, _ := buildAgent(t, srv.URL, "dev-cadence-1", hex.EncodeToString(corePub), devPriv)
+	// Controller ruling 2 (pre-flight finding F3): the brief's 20ms/40ms
+	// heartbeat/gap made a single >=40ms scheduler stall on a -race runner
+	// enough to trip the machine-slept rule and end the session, which could
+	// drop the count below 3. 50ms/100ms needs a much wider stall, and the
+	// 10ms backoff means a spurious reconnect (if a stall happens anyway)
+	// costs almost nothing inside the 1.1s window.
+	agent.heartbeatEvery, agent.factsMinGap, agent.factsEvery = 50*time.Millisecond, 200*time.Millisecond, time.Hour
+	agent.backoffs = []time.Duration{10 * time.Millisecond}
+	n := 0
+	agent.gatherFrame = func([]facts.Unreadable) facts.Frame { // changes on every gather
+		n++
+		return facts.Frame{Type: "facts", Net: facts.Net{Ifaces: []facts.Iface{}},
+			Unreadable: []facts.Unreadable{{Item: "tick", Reason: fmt.Sprint(n)}}}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 1100*time.Millisecond)
+	defer cancel()
+	_ = agent.Run(ctx)
+	mu.Lock()
+	defer mu.Unlock()
+	// One after ready, then about one per 200 ms — never one per tick. Ticks
+	// land near t=0,200,400,600,800,1000ms over ~1.1s, so ~6 sends; bounds
+	// stay [3,8] as in the brief (kept per ruling 2: adjust only if the
+	// arithmetic requires it — it does not).
+	if count < 3 || count > 8 {
+		t.Fatalf("%d facts frames in ~1 s", count)
+	}
+}
+
+// blockedConn dials a live websocket connection against a throwaway server
+// and holds its write lock open forever — a Writer the test never Closes.
+// coder/websocket serializes every Write/Writer call on a connection behind
+// this one internal lock (see (*Conn).Writer's own doc: "multiple calls will
+// block until the previous writer is closed"), so this reproduces fix round
+// 1 finding 1's exact failure mode — a write stuck holding the connection's
+// write lock — deterministically and OS-independently. Filling a REAL kernel
+// send/receive buffer would need an amount of unread data that varies by
+// OS/kernel autotuning and is not controllable from client.go's own Dial
+// call (it always uses http.DefaultClient), so a test that depended on that
+// would risk flaking across machines rather than proving the fix.
+func blockedConn(t *testing.T) *websocket.Conn {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		<-r.Context().Done() // never reads or writes again
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	wsURL, err := WSURL(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, _, err := websocket.Dial(context.Background(), wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.CloseNow() })
+	wr, err := conn.Writer(context.Background(), websocket.MessageText)
+	if err != nil {
+		t.Fatalf("opening the blocking writer: %v", err)
+	}
+	if _, err := wr.Write([]byte("x")); err != nil {
+		t.Fatalf("priming the blocking writer: %v", err)
+	}
+	// wr is deliberately never Closed: the connection's write lock stays
+	// held for the rest of the test.
+	return conn
+}
+
+// Fix round 1 finding 1: writeFacts had no deadline of its own, so a write
+// stuck behind the connection's write lock (a hung facts.refresh, up to the
+// 110s command timeout; or a hung maybeSendFacts) would block indefinitely.
+// It now bounds its own write with pingTimeout.
+func TestWriteFactsEndsWithinPingTimeoutWhenTheConnectionIsBlocked(t *testing.T) {
+	conn := blockedConn(t)
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	agent, _ := buildAgent(t, "http://unused.invalid", "dev-lock-1", hex.EncodeToString(corePub), devPriv)
+	agent.pingTimeout = 200 * time.Millisecond
+
+	errCh := make(chan error, 1)
+	start := time.Now()
+	go func() { errCh <- agent.writeFacts(context.Background(), conn, []byte(`{"type":"facts"}`)) }()
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("writeFacts should fail: the connection's write lock is held by another writer and never released")
+		}
+		if elapsed := time.Since(start); elapsed > 6*agent.pingTimeout {
+			t.Fatalf("writeFacts took %s to give up; want at most a small multiple of pingTimeout (%s)", elapsed, agent.pingTimeout)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("writeFacts never returned — its write has no deadline of its own (fix round 1 finding 1)")
+	}
+}
+
+// Fix round 1 finding 1, the heartbeat's own frame write: before the fix, a
+// write stuck on the connection's write lock ran under serveCtx with no
+// deadline, so the heartbeat blocked on its OWN write before ever reaching
+// the ping or maybeSendFacts that tick. It now bounds that write with
+// pingTimeout too, and ends the session (via cancel) on failure.
+func TestHeartbeatsOwnWriteEndsWithinPingTimeoutWhenTheConnectionIsBlocked(t *testing.T) {
+	conn := blockedConn(t)
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	agent, _ := buildAgent(t, "http://unused.invalid", "dev-lock-2", hex.EncodeToString(corePub), devPriv)
+	agent.heartbeatEvery = 30 * time.Millisecond
+	agent.pingTimeout = 200 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	start := time.Now()
+	go func() { agent.heartbeat(ctx, cancel, conn); close(done) }()
+	select {
+	case <-ctx.Done():
+		if elapsed := time.Since(start); elapsed > 6*agent.pingTimeout {
+			t.Fatalf("heartbeat took %s to end the session; want at most a small multiple of pingTimeout (%s)", elapsed, agent.pingTimeout)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("heartbeat never ended the session — its own frame write blocked forever behind the held lock (fix round 1 finding 1)")
+	}
+	<-done // heartbeat's goroutine actually returned, not just cancelled
+}
+
+// refusingCore answers the handshake, then always sends the given auth_error
+// reason and closes. attempts() counts how many connections it accepted.
+func refusingCore(t *testing.T, corePub, devPub ed25519.PublicKey, reason string) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	n := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		mu.Lock()
+		n++
+		mu.Unlock()
+		nonce := make([]byte, 32)
+		_, _ = rand.Read(nonce)
+		_ = coreWrite(r.Context(), c, map[string]any{"type": "challenge", "nonce": hex.EncodeToString(nonce), "core_pubkey": hex.EncodeToString(corePub)})
+		if _, err := coreRead(r.Context(), c); err != nil {
+			return
+		}
+		_ = coreWrite(r.Context(), c, map[string]any{"type": "auth_error", "reason": reason})
+		_ = c.Close(4401, "auth failed")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, func() int { mu.Lock(); defer mu.Unlock(); return n }
+}
+
+// Fix round 1, Finding 1: the reason string alone is unsigned — anyone who
+// can terminate the socket can send it. Any other refusal (a restored
+// database that forgot the device, a transient core fault, or exactly this
+// reason text with no valid proof) is retried — only the exact reason
+// "revoked", PROVEN by a signature the pinned core key actually produced
+// over THIS handshake, wipes anything. The first case below was core's own
+// text for an unknown/ambiguous device before Task 12 introduced
+// devices_ws.UNKNOWN_DEVICE_REASON and the signed proof for a genuine
+// revoke; it stays here as a near-miss precisely because it still is NOT
+// "revoked" and carries no proof — the rest are near-misses on the exact
+// string a naive substring or case-insensitive check would wrongly treat as
+// a match.
+func TestAnyOtherAuthErrorIsRetried(t *testing.T) {
+	corePub, _, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	reasons := []string{
+		"no such device, or it has been revoked", // core's PRE-Task-12 text; still just "any other reason", unsigned and proof-less
+		"Revoked",
+		" revoked",
+		"revoked ",
+	}
+	for _, reason := range reasons {
+		t.Run(reason, func(t *testing.T) {
+			srv, attempts := refusingCore(t, corePub, devPub, reason)
+			agent, _ := buildAgent(t, srv.URL, "dev-unknown-1", hex.EncodeToString(corePub), devPriv)
+			agent.backoffs = []time.Duration{20 * time.Millisecond}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			go func() { _ = agent.Run(ctx) }()
+			waitFor(t, 2*time.Second, func() bool { return attempts() >= 3 })
+		})
+	}
+}
+
+// provenRevokedCore answers the handshake, then sends the auth_error frame
+// buildReply returns — given THIS handshake's own nonce hex, so a genuine
+// proof can echo it and a near-miss can deliberately not — and closes.
+// attempts() counts accepted connections.
+func provenRevokedCore(t *testing.T, corePub, devPub ed25519.PublicKey, buildReply func(nonceHex string) map[string]any) (*httptest.Server, func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	n := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/devices/ws", func(w http.ResponseWriter, r *http.Request) {
+		c, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.CloseNow()
+		mu.Lock()
+		n++
+		mu.Unlock()
+		nonce := make([]byte, 32)
+		_, _ = rand.Read(nonce)
+		nonceHex := hex.EncodeToString(nonce)
+		_ = coreWrite(r.Context(), c, map[string]any{"type": "challenge", "nonce": nonceHex, "core_pubkey": hex.EncodeToString(corePub)})
+		if _, err := coreRead(r.Context(), c); err != nil {
+			return
+		}
+		_ = coreWrite(r.Context(), c, buildReply(nonceHex))
+		_ = c.Close(4403, "revoked")
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, func() int { mu.Lock(); defer mu.Unlock(); return n }
+}
+
+// canonicalRevokedProof builds a genuine proof body: kind and v exactly as
+// core will sign them, deviceID and nonceHex echoing one particular
+// handshake.
+func canonicalRevokedProof(deviceID, nonceHex string) map[string]any {
+	return map[string]any{"kind": wire.RevokedProofKind, "v": int64(wire.RevokedProofVersion), "device_id": deviceID, "nonce": nonceHex}
+}
+
+// signedRevokedReply signs proof's canonical encoding with signer and wraps
+// it in the auth_error frame shape the handshake reads.
+func signedRevokedReply(t *testing.T, signer ed25519.PrivateKey, proof map[string]any) map[string]any {
+	t.Helper()
+	canon, err := wire.Canonical(proof)
+	if err != nil {
+		t.Fatalf("canonical: %v", err)
+	}
+	return map[string]any{
+		"type": wire.TypeAuthError, "reason": wire.ReasonRevoked,
+		"proof": proof, "sig": hex.EncodeToString(ed25519.Sign(signer, canon)),
+	}
+}
+
+// Review focus 5 / P5, as fixed in round 1: the ONE refusal that is final is
+// a revoke core's PINNED key actually signed, over this device's own id and
+// this exact handshake's own nonce. Run must return ErrRevoked and must NOT
+// reconnect — a PROVEN revoke is final, not a retry.
+func TestARevokedDeviceProvenByCoresSignatureIsFatalAndRunSaysSo(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-revoked-proven-1"
+	srv, attempts := provenRevokedCore(t, corePub, devPub, func(nonceHex string) map[string]any {
+		return signedRevokedReply(t, corePriv, canonicalRevokedProof(deviceID, nonceHex))
+	})
+	agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+	agent.backoffs = []time.Duration{20 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := agent.Run(ctx)
+	if !errors.Is(err, ErrRevoked) {
+		t.Fatalf("Run = %v, want ErrRevoked", err)
+	}
+	if attempts() != 1 {
+		t.Fatalf("a PROVEN revoke is final: %d connection attempts", attempts())
+	}
+}
+
+// Fix round 1, Finding 1: every near-miss on the required proof shape must
+// be retried, never wiped — the exact vulnerability the finding named. A
+// missing proof, a wrong kind/device_id/nonce (even signed correctly BY THE
+// PINNED KEY over that wrong content), a signature from a key that is not
+// the one pinned at enrollment (never the key merely claimed in the
+// challenge frame — that IS the forged-socket attack), and a signature
+// valid for some OTHER proof body tampered onto a different one, must all
+// leave Run retrying with backoff and must never return ErrRevoked.
+func TestAnUnprovenRevocationIsRetriedNeverWiped(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader) // NOT the pinned key
+	devPub, devPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID = "dev-revoked-unproven-1"
+
+	cases := []struct {
+		name  string
+		build func(nonceHex string) map[string]any
+	}{
+		{"no proof at all", func(nonceHex string) map[string]any {
+			return map[string]any{"type": wire.TypeAuthError, "reason": wire.ReasonRevoked}
+		}},
+		{"wrong kind", func(nonceHex string) map[string]any {
+			p := canonicalRevokedProof(deviceID, nonceHex)
+			p["kind"] = "not-revoked"
+			return signedRevokedReply(t, corePriv, p)
+		}},
+		{"wrong device_id", func(nonceHex string) map[string]any {
+			return signedRevokedReply(t, corePriv, canonicalRevokedProof("some-other-device", nonceHex))
+		}},
+		{"wrong nonce", func(nonceHex string) map[string]any {
+			return signedRevokedReply(t, corePriv, canonicalRevokedProof(deviceID, strings.Repeat("00", 32)))
+		}},
+		{"signed by a different key", func(nonceHex string) map[string]any {
+			return signedRevokedReply(t, otherPriv, canonicalRevokedProof(deviceID, nonceHex))
+		}},
+		{"tampered after signing", func(nonceHex string) map[string]any {
+			signed := signedRevokedReply(t, corePriv, canonicalRevokedProof(deviceID, nonceHex))
+			signed["proof"] = canonicalRevokedProof("swapped-after-signing", nonceHex)
+			return signed
+		}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv, attempts := provenRevokedCore(t, corePub, devPub, c.build)
+			agent, _ := buildAgent(t, srv.URL, deviceID, hex.EncodeToString(corePub), devPriv)
+			agent.backoffs = []time.Duration{20 * time.Millisecond}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			runErr := make(chan error, 1)
+			go func() { runErr <- agent.Run(ctx) }()
+			waitFor(t, 2*time.Second, func() bool { return attempts() >= 2 })
+			cancel()
+			select {
+			case err := <-runErr:
+				if errors.Is(err, ErrRevoked) {
+					t.Fatalf("%s: an unproven revocation must never wipe (ErrRevoked), got %v", c.name, err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatalf("%s: Run did not return after ctx was cancelled", c.name)
+			}
+		})
+	}
 }

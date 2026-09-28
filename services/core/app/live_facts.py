@@ -41,7 +41,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from app import tools
+from app import guards, tools
 from app.tools import schema
 
 logger = logging.getLogger(__name__)
@@ -101,6 +101,12 @@ AUTO_RUN = frozenset(
         # it reads is the bundled engine on this host. (Carried to S44/S46: once
         # a machine can be asleep, re-decide whether an UNASKED live read may
         # reach it.)
+        # S42a: it also reads Nova's own paired agents — core's device rows
+        # plus the hub's live connection registry — beside the engines. Still
+        # safe unasked: no argument reaches a second machine (a device TOOL
+        # does; this is core reading its own rows and its own in-process hub
+        # state), and a read that fails is stated in the result, never a
+        # silent success.
         "machine_status",
         "model_catalog_search",
         "model_check_update",
@@ -224,6 +230,47 @@ def _clip(text: str) -> str:
     return f"{text[:MAX_RESULT_CHARS].rstrip()} […cut off at {MAX_RESULT_CHARS} characters]"
 
 
+def _shown_facts(tool_name: str, facts: list[dict], result: str | None) -> list[dict]:
+    """The facts a check keeps: all of them, except a device's connectivity
+    whose line she was never shown (S42a final review I2).
+
+    `_clip` hands her the first MAX_RESULT_CHARS of a result, and a tool whose
+    one result lists many devices records {"device", "connected"} for every one
+    of them. machine_status lists Nova's agents AFTER the engines, so one engine
+    with three models put every agent line past the cut: the span said the Dell
+    had been read as offline while she was shown no agent line at all, and the
+    state guard — which reads any such fact on an ok span as "she looked"
+    (guards._checked_a_device) — let "the Dell is online" stand.
+
+    The filter lives HERE because this is the one place that holds both halves:
+    the text she is handed and the facts the call recorded. A call she makes
+    herself is handed its whole result (chat._run_tool), so nothing is cut
+    there. Which line is a device's is the listing tool's own format, so the
+    tool answers it (Tool.device_line_shown — machine_status's reads its exact
+    "  agent <name> (" line). A device fact is kept only when that says the
+    whole line was shown, and withheld when it cannot be confirmed — including
+    when nothing came back at all (a timeout: no line was shown). Every other
+    fact is kept as it was: an engine's reading, and whatever a tool that
+    declares no listing records — a device tool's fact is about the one
+    device it was called on, and the check's own line says how that call
+    ended however much of its result was cut.
+    """
+    tool = tools.REGISTRY.get(tool_name)
+    line_shown = tool.device_line_shown if tool is not None else None
+    if line_shown is None:
+        return facts
+    text = (result or "").strip()
+    if result is not None and len(text) <= MAX_RESULT_CHARS:
+        return facts  # handed whole: every line was shown
+    shown = min(len(text), MAX_RESULT_CHARS)
+    return [
+        fact
+        for fact in facts
+        if not guards.is_connectivity_fact(fact)
+        or (shown > 0 and line_shown(fact["device"], text, shown))
+    ]
+
+
 async def _run_one(call: LiveCall, turn, ctx) -> Checked:
     """One check, on its OWN tool span, under its own timeout.
 
@@ -251,14 +298,17 @@ async def _run_one(call: LiveCall, turn, ctx) -> Checked:
     determined is copied onto its span and then into the turn's sink —
     whether it answered, refused or timed out. Before this nothing was copied
     at all, and an honest "the Dell is offline" after an unasked refusal was
-    corrected as unchecked.
+    corrected as unchecked. What is copied is what she could have SEEN
+    (`_shown_facts`): a listing's device fact whose line was cut is withheld.
     """
     shared = ctx.facts_sink
     call_ctx = dataclasses.replace(ctx, facts_sink=[]) if shared is not None else ctx
 
-    def _keep_facts(span) -> None:
-        facts = call_ctx.facts_sink
-        if shared is not None and facts:
+    def _keep_facts(span, result: str | None) -> None:
+        if shared is None or not call_ctx.facts_sink:
+            return
+        facts = _shown_facts(call.tool, call_ctx.facts_sink, result)
+        if facts:
             span.meta["facts"] = list(facts)
             shared.extend(facts)
 
@@ -276,9 +326,9 @@ async def _run_one(call: LiveCall, turn, ctx) -> Checked:
             problem = f"the check did not answer within {CHECK_TIMEOUT:g}s"
             span.meta["error"] = problem
             span.meta["result_head"] = problem
-            _keep_facts(span)
+            _keep_facts(span, None)
             return Checked(call, problem=problem)
-        _keep_facts(span)
+        _keep_facts(span, result)
         span.meta["ok"] = ok
         span.meta["result_head"] = result[:SPAN_RESULT_HEAD_CHARS]
         if not ok:

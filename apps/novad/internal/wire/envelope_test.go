@@ -2,6 +2,7 @@ package wire
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/hex"
 	"testing"
 )
@@ -164,4 +165,174 @@ func TestVerifyIsCheckedOnceAtReceiptNotDuringExecution(t *testing.T) {
 	}
 	// No second VerifyCommand call happens for a command mid-execution; the
 	// seen-set now refuses a genuine replay, which is the only re-entry path.
+}
+
+// canonicalRevokedProof builds a genuine proof body: kind and v exactly as
+// core will sign them, deviceID and nonceHex echoing one particular
+// handshake.
+func canonicalRevokedProof(deviceID, nonceHex string) map[string]any {
+	return map[string]any{"kind": RevokedProofKind, "v": int64(RevokedProofVersion), "device_id": deviceID, "nonce": nonceHex}
+}
+
+// signedRevokedReply signs proof's canonical encoding with signer and wraps
+// it in the auth_error frame shape VerifyRevokedProof reads.
+func signedRevokedReply(t *testing.T, signer ed25519.PrivateKey, proof map[string]any) map[string]any {
+	t.Helper()
+	canon, err := Canonical(proof)
+	if err != nil {
+		t.Fatalf("canonical: %v", err)
+	}
+	return map[string]any{
+		"type": TypeAuthError, "reason": ReasonRevoked,
+		"proof": proof, "sig": hex.EncodeToString(ed25519.Sign(signer, canon)),
+	}
+}
+
+// Fix round 1, Finding 1: the ONE destructive path (the device wiping its
+// own identity) must be authenticated by core's signature over the proof —
+// never by the handshake's unsigned core_pubkey claim. A genuinely signed,
+// exactly-matching proof, verified against the PINNED key, is the only thing
+// that passes.
+func TestVerifyRevokedProofAcceptsAGenuinelySignedProof(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID, nonceHex = "dev-1", "aa"
+	reply := signedRevokedReply(t, corePriv, canonicalRevokedProof(deviceID, nonceHex))
+	if !VerifyRevokedProof(reply, deviceID, nonceHex, corePub) {
+		t.Fatal("a genuinely signed, matching proof must verify")
+	}
+}
+
+// Every near-miss on the required shape must be refused: a missing proof, a
+// wrong kind/version/device/nonce (even with a VALID signature over that
+// wrong content), a signature by a key that is not the pinned one, and a
+// signature valid for some OTHER proof body tampered onto a different one
+// (proving content checks and the signature check both run over the exact
+// same received object, not two independently-trusted views of it).
+func TestVerifyRevokedProofRejectsEveryNearMiss(t *testing.T) {
+	corePub, corePriv, _ := ed25519.GenerateKey(rand.Reader)
+	_, otherPriv, _ := ed25519.GenerateKey(rand.Reader)
+	const deviceID, nonceHex = "dev-1", "aa"
+
+	cases := []struct {
+		name  string
+		build func() map[string]any
+	}{
+		{"no proof at all", func() map[string]any {
+			return map[string]any{"type": TypeAuthError, "reason": ReasonRevoked}
+		}},
+		{"wrong kind", func() map[string]any {
+			p := canonicalRevokedProof(deviceID, nonceHex)
+			p["kind"] = "not-revoked"
+			return signedRevokedReply(t, corePriv, p)
+		}},
+		{"wrong version", func() map[string]any {
+			p := canonicalRevokedProof(deviceID, nonceHex)
+			p["v"] = int64(2)
+			return signedRevokedReply(t, corePriv, p)
+		}},
+		{"wrong device_id", func() map[string]any {
+			return signedRevokedReply(t, corePriv, canonicalRevokedProof("some-other-device", nonceHex))
+		}},
+		{"wrong nonce", func() map[string]any {
+			return signedRevokedReply(t, corePriv, canonicalRevokedProof(deviceID, "bb"))
+		}},
+		{"signed by a different key", func() map[string]any {
+			return signedRevokedReply(t, otherPriv, canonicalRevokedProof(deviceID, nonceHex))
+		}},
+		{"tampered after signing", func() map[string]any {
+			signed := signedRevokedReply(t, corePriv, canonicalRevokedProof(deviceID, nonceHex))
+			signed["proof"] = canonicalRevokedProof("swapped-after-signing", nonceHex)
+			return signed
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if VerifyRevokedProof(c.build(), deviceID, nonceHex, corePub) {
+				t.Fatalf("%s: must not verify", c.name)
+			}
+		})
+	}
+}
+
+// VerifyRevokedProof must check against the key pinned at enrollment, never
+// the key a peer merely claims in a challenge frame — CorePubKey is that
+// pinned key's one parsed, trusted copy.
+func TestVerifierCorePubKeyReturnsThePinnedKey(t *testing.T) {
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	ver, err := NewVerifier(hex.EncodeToString(pub), "dev-1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ver.CorePubKey().Equal(pub) {
+		t.Fatal("CorePubKey must return the pinned key")
+	}
+}
+
+// flipLastChar returns s with its final character changed to a different,
+// deterministic one — a one-character mutation that works whether s is hex
+// (a signature) or a UUID (a device_id), since both end in a character other
+// than a dash in every fixture value this file uses.
+func flipLastChar(s string) string {
+	if s == "" {
+		return s
+	}
+	replacement := byte('0')
+	if s[len(s)-1] == '0' {
+		replacement = '1'
+	}
+	return s[:len(s)-1] + string(replacement)
+}
+
+// TestVerifyRevokedProofAcceptsTheCommittedVector is the cross-language pin
+// for S42a (controller ruling 2): core's actual signer
+// (services/core/app/devices_ws.py's revoked_proof, via envelopes.sign with
+// the SAME fixed seed) and this Verifier's checker must agree on the SAME
+// bytes. The fixture's fourth vector (index 3) is the revoked-proof body —
+// decoded exactly as the wire does (UseNumber) — and must verify against the
+// seed's own public key, addressed to the vector's own device_id and nonce.
+// A fixed index, not "last": Task 13 appends a fifth (Windows-path) vector
+// AFTER this one, so "last" would silently pick up the wrong payload.
+func TestVerifyRevokedProofAcceptsTheCommittedVector(t *testing.T) {
+	vf := loadVectors(t)
+	v := vf.Vectors[3]
+	proof := decodePayload(t, v.Payload)
+	if kind, _ := proof["kind"].(string); kind != RevokedProofKind {
+		t.Fatalf("expected fixture vector 4 (index 3) to be the revoked-proof vector, got %v", proof)
+	}
+	deviceID, _ := proof["device_id"].(string)
+	nonceHex, _ := proof["nonce"].(string)
+	pub, err := hex.DecodeString(vf.PublicKeyHex)
+	if err != nil {
+		t.Fatalf("public key hex: %v", err)
+	}
+	corePub := ed25519.PublicKey(pub)
+
+	reply := map[string]any{
+		"type": TypeAuthError, "reason": ReasonRevoked,
+		"proof": proof, "sig": v.SigHex,
+	}
+	if !VerifyRevokedProof(reply, deviceID, nonceHex, corePub) {
+		t.Fatal("the committed revoked-proof vector must verify against the seed's public key")
+	}
+
+	// Fix round 1: a one-character change to the SIGNATURE, with the proof
+	// left exactly as committed so every content check still passes — this
+	// is the case that actually reaches ed25519.Verify.
+	reply["sig"] = flipLastChar(v.SigHex)
+	if VerifyRevokedProof(reply, deviceID, nonceHex, corePub) {
+		t.Fatal("a one-character change to the signature must be refused")
+	}
+
+	// A one-character change to the proof's device_id, caught by the content
+	// check before the signature is ever verified.
+	tampered := map[string]any{}
+	for k, val := range proof {
+		tampered[k] = val
+	}
+	did, _ := tampered["device_id"].(string)
+	tampered["device_id"] = flipLastChar(did)
+	reply["proof"], reply["sig"] = tampered, v.SigHex
+	if VerifyRevokedProof(reply, deviceID, nonceHex, corePub) {
+		t.Fatal("a one-character change to the proof's device_id must be refused")
+	}
 }

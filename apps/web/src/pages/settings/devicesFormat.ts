@@ -55,3 +55,25 @@ export function deviceLiveness(device: Device, now: Date = new Date()): Liveness
 export function enrollCommand(origin: string, code: string): string {
   return `novad enroll --server ${origin} --code ${code}`
 }
+
+/**
+ * The tile's second line: the OS the agent REPORTED (its facts, S42a) when it
+ * did, else the platform it enrolled with — then the hostname and, when known,
+ * the agent's version. Read from facts, never guessed from a name.
+ */
+export function deviceSubtitle(device: Device): string {
+  const parts = [device.os ?? device.platform, device.hostname]
+  if (device.agent_version) parts.push(`agent ${device.agent_version}`)
+  return parts.join(' · ')
+}
+
+/**
+ * The note an agent inside WSL carries (hub decision D1): on Windows, Nova's
+ * agent runs on Windows itself and reaches WSL through wsl.exe, so this one
+ * gives way to it. null for every other device, and for a revoked one.
+ */
+export function wslNote(device: Device): string | null {
+  if (device.wsl === null || device.revoked_at !== null) return null
+  const distro = device.wsl ? ` (${device.wsl})` : ''
+  return `Runs inside WSL${distro}. On Windows, Nova's agent runs on Windows itself — install the Windows agent, then revoke this one.`
+}

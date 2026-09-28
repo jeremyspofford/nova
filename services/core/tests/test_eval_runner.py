@@ -28,7 +28,14 @@ import pytest
 from app import chat, machines, tools
 from app.evals import cases as cases_mod
 from app.evals import runner
-from app.evals.cases import Case, CaseError, FixtureAgent, FixtureMachine, PredicateSpec
+from app.evals.cases import (
+    Case,
+    CaseError,
+    FixtureAgent,
+    FixtureDevice,
+    FixtureMachine,
+    PredicateSpec,
+)
 from app.main import MIGRATIONS_DIR, app
 from app.migrations_runner import discover_migrations
 from app.tools import web
@@ -1580,7 +1587,7 @@ async def test_every_replay_starts_from_the_declaration(pool, mount_peers, monke
 async def test_a_plant_that_cannot_be_built_is_ungradeable_and_leaves_none(
     pool, mount_peers, monkeypatch
 ):
-    def _broken(fixtures):
+    def _broken(fixtures, devices=None):
         raise RuntimeError("the plant would not build")
 
     monkeypatch.setattr(runner.machines, "FixturePlant", _broken)
@@ -1624,3 +1631,71 @@ async def test_an_eval_can_never_switch_off_a_real_machine(monkeypatch):
     with pytest.raises(machines.PlantUnavailable, match="cannot"):
         await plant.set_serving(app, "hub", False)
     assert (await plant.set_serving(app, "eval_box", False))["serving"] is False
+
+
+# -- S42a: a case can declare a device (an agent the plant answers for) -----
+
+WSL_FACTS = {
+    "v": 2,
+    "agent": {"version": "0.2.0", "mode": "systemd-user", "session_interactive": False},
+    "os": {
+        "goos": "linux",
+        "arch": "amd64",
+        "version": "Ubuntu 26.04 LTS",
+        "wsl": {"distro": "Ubuntu-26.04"},
+    },
+    "hostname": "EVAL-PC",
+    "machine_uid": "0f1e2d3c4b5a6978" * 4,
+}
+
+
+def test_a_case_device_must_carry_the_fixture_prefix():
+    with pytest.raises(CaseError):
+        FixtureDevice(name="real-pc", platform="windows", hostname="PC")
+
+
+def test_a_case_device_whose_facts_no_agent_could_send_is_refused():
+    with pytest.raises(CaseError) as exc:
+        FixtureDevice(name="eval_pc", platform="windows", hostname="PC", facts={"v": 1})
+    assert "not what an agent sends" in str(exc.value)
+
+
+def test_a_case_device_round_trips_and_views_like_a_real_one():
+    raw = {"name": "eval_pc", "platform": "linux", "hostname": "EVAL-PC", "facts": WSL_FACTS}
+    case = cases_mod.case_from_dict(
+        {
+            "id": "d",
+            "suite": "s",
+            "suite_version": 1,
+            "message": "m",
+            "contract": [{"predicate": "tool_called", "arg": "machine_status"}],
+            "devices": [raw],
+        }
+    )
+    [device] = case.devices
+    assert case.as_json()["devices"] == [{**raw, "connected": True}]
+    view = device.as_view()
+    assert view["wsl"] == "Ubuntu-26.04" and view["roles"]["hands"]["state"] == "cannot"
+
+
+async def test_the_fixture_plant_answers_for_a_cases_declared_devices(monkeypatch):
+    async def no_real_agents(self, app):
+        return []
+
+    monkeypatch.setattr(machines.GatewayPlant, "agents", no_real_agents)
+    case = Case(
+        id="declared-device",
+        suite="s",
+        suite_version=1,
+        message="m",
+        contract=(PredicateSpec("tool_called", "machine_status"),),
+        devices=(
+            FixtureDevice(name="eval_pc", platform="linux", hostname="EVAL-PC", facts=WSL_FACTS),
+        ),
+    )
+    token = runner._install_fixture_plant(case)
+    try:
+        [agent] = await machines.plant().agents(None)
+        assert agent["name"] == "eval_pc" and agent["wsl"] == "Ubuntu-26.04"
+    finally:
+        machines.PLANT.reset(token)

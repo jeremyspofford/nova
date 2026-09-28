@@ -458,3 +458,64 @@ async def test_a_check_that_determined_nothing_carries_no_facts():
     turn = _Turn()
     (check,) = await live_facts.run([_call("get_time")], turn, _ctx())
     assert check.ok and "facts" not in turn.spans[0].meta
+
+
+# -- S42a final review I2: a device fact is kept only if its line was shown -----
+#
+# A tool whose one result lists MANY devices (machine_status) declares how to
+# read which device lines a cut result still shows (Tool.device_line_shown), and
+# a check keeps a device's fact only when its line was shown. The machine_status
+# cases themselves are in test_tools_machines.py; these pin the two edges of the
+# rule here, where it lives.
+
+
+def _listing_tool(name: str, *, line_shown=None, text: str = "", hang: bool = False):
+    """A reads-only check that records one device fact and one other fact, then
+    answers with `text` or hangs."""
+
+    async def _run(args, ctx):
+        ctx.facts_sink.append({"device": "dell", "connected": False})
+        ctx.facts_sink.append({"machine": "hub", "answering": True})
+        if hang:
+            await asyncio.sleep(30)
+        return text
+
+    return tools.Tool(
+        name=name,
+        description="lists devices",
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        executor=_run,
+        reads_only=True,
+        device_line_shown=line_shown,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_tool_that_declares_no_device_lines_keeps_every_fact_when_cut(monkeypatch):
+    """The device tools' rule is unchanged: each records the one device it was
+    called on, and the check's own line says how that call ended however much
+    of its result was cut — so nothing it recorded is withheld."""
+    _arm(monkeypatch, _listing_tool("device_check_long", text="x" * 5_000))
+    turn, ctx = _Turn(), _sink_ctx()
+    (check,) = await live_facts.run([_call("device_check_long")], turn, ctx)
+    assert check.ok and "cut off" in check.result
+    assert _facts_of(turn, "device_check_long") == [
+        {"device": "dell", "connected": False},
+        {"machine": "hub", "answering": True},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_listing_check_that_times_out_keeps_no_device_fact(monkeypatch):
+    """Nothing came back, so no device line was shown: even a reader that would
+    say yes to anything is never asked, and only the other fact is kept."""
+    _arm(
+        monkeypatch,
+        _listing_tool("listing_slow", line_shown=lambda name, result, shown: True, hang=True),
+    )
+    monkeypatch.setattr(live_facts, "CHECK_TIMEOUT", 0.05)
+    turn, ctx = _Turn(), _sink_ctx()
+    (check,) = await live_facts.run([_call("listing_slow")], turn, ctx)
+    assert not check.ok
+    assert _facts_of(turn, "listing_slow") == [{"machine": "hub", "answering": True}]
+    assert ctx.facts_sink == [{"machine": "hub", "answering": True}]

@@ -146,11 +146,97 @@ def test_the_setup_guards_are_judged_in_milliseconds(label, reply):
         assert took < BUDGET_S, f"{label}: {took * 1000:.1f} ms"
 
 
+def _collect_patterns(
+    value: object,
+    path: str,
+    out: dict[str, re.Pattern[str]],
+    depth: int = 0,
+) -> None:
+    """Record every re.Pattern reachable from `value` into `out`, keyed by an
+    index-path id built from `path` (e.g. `_CAPABILITY_TOOLS[21][0]` for the
+    Pattern half of that entry's `(Pattern, str)` pair, or
+    `_DEFERRAL_TOOLS[1][0]` for an `_ActionClass.pattern` field reached
+    through a tuple of them). Recurses into tuples, lists and dict values
+    ONLY -- builtin containers, never a custom object's `__dict__` or an
+    arbitrary class -- so nothing walked here can hold a back-reference and
+    cycle; `depth` is a second, structural guarantee that the walk always
+    terminates regardless.
+
+    No de-duplication by object identity, ON PURPOSE. The same compiled
+    Pattern is sometimes reachable more than one way -- `_CAP_SETUP_QR` is
+    both its own module constant AND `_CAPABILITY_TOOLS[18][0]`;
+    `_SERVED_SENTENCES[5]` has always been the SAME object as the module
+    constant `_SERVED_ANSWERING`, since before this function existed. An
+    earlier version of this walk deduped by identity so each object was
+    timed once, under whichever path was found first -- and that SILENTLY
+    DROPPED `_SERVED_SENTENCES[5]`'s id the moment `_SERVED_ANSWERING` (its
+    alphabetically-earlier alias) claimed the object first, which is exactly
+    the "an existing id moved" failure this amendment exists to prevent.
+    Every path that reaches a Pattern gets its own key here; a pattern timed
+    under two ids costs a little redundant test time and loses nothing."""
+    if depth > 8:
+        return
+    if isinstance(value, re.Pattern):
+        out[path] = value
+    elif isinstance(value, (tuple, list)):
+        for i, item in enumerate(value):
+            _collect_patterns(item, f"{path}[{i}]", out, depth + 1)
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            _collect_patterns(item, f"{path}[{key!r}]", out, depth + 1)
+
+
 def _every_pattern() -> dict[str, re.Pattern[str]]:
-    """Every compiled pattern guards.py holds: module constants, tuples of
-    them, and what the per-name builders compile for a machine set and a
-    paired device. Derived by walking the module, so a new regex is swept the
-    day it is added."""
+    """Every compiled pattern guards.py holds: every module attribute,
+    walked recursively (`_collect_patterns` above) through tuples, lists and
+    dict values, nested arbitrarily deep and bounded -- so a bare Pattern
+    module attribute is found exactly as before (the recursion's base case
+    on the FIRST call), a flat tuple of bare Patterns (`_SERVED_SENTENCES`)
+    is found exactly as before, and now `_CAPABILITY_TOOLS`'s `(Pattern,
+    str)` pairs and the `_ActionClass` NamedTuples (`_WEB_SEARCH`,
+    `_FETCH_URL`, `_LIST_FILES`, `_READ_FILE`, `_RUN_COMMAND`,
+    `_CHECK_DEVICE`, `_PULL_MODEL`, `_SET_REMINDER`, `_SHOW_SETUP_QR`, each
+    holding a `pattern` field and an optional `restated` Pattern) are ALSO
+    found, even though neither shape is "a tuple where every element is
+    directly a Pattern."
+
+    Before this walked containers recursively (pre S42a task 16 amendment),
+    a pattern living inside anything more complex than a flat tuple of bare
+    Patterns was invisible to this sweep, so most of `_CAPABILITY_TOOLS` and
+    every `_ActionClass` field were never timed here -- "the sweep finds a
+    new pattern by itself" was true only for a pattern bound to its own
+    module name or sitting in a bare tuple of only Patterns.
+
+    Plus what the per-name builders compile for a machine set and a paired
+    device. Derived by walking the module, so a new regex is swept the day
+    it is added, wherever in the module's data it is added."""
+    found: dict[str, re.Pattern[str]] = {}
+    for name in dir(guards):
+        if name.startswith("__"):
+            continue
+        _collect_patterns(getattr(guards, name), name, found)
+    for i, pattern in enumerate(guards._machine_patterns(("hub", "eval_box"))):
+        found[f"_machine_patterns[{i}]"] = pattern
+    for i, pattern in enumerate(guards._state_patterns(("DELL-XPS-8950",))):
+        found[f"_state_patterns[{i}]"] = pattern
+    device = guards._device_mention(("DELL-XPS-8950",))
+    if device is not None:
+        found["_device_mention"] = device
+    found["_not_run_pattern"] = guards._not_run_pattern(tuple(sorted(guards._machine_read_tools())))
+    return found
+
+
+def _pre_s42a_amendment_pattern_sweep() -> dict[str, re.Pattern[str]]:
+    """A frozen copy of `_every_pattern`'s FULL output exactly as it was
+    before the S42a task 16 amendment: the module-attribute walk covered
+    only a bare Pattern module attribute, or a tuple where EVERY element is
+    directly a Pattern (only `_SERVED_SENTENCES` qualified) -- plus the same
+    per-name-builder tail `_every_pattern` still calls today, unchanged by
+    this amendment. Kept ONLY to pin the amendment against it -- every id it
+    produces must still resolve to the SAME Pattern object under the SAME id
+    in the new, recursive `_every_pattern`, and the new sweep must reach
+    strictly more. Do not evolve this copy; it is a fossil, not a second
+    implementation to maintain."""
     found: dict[str, re.Pattern[str]] = {}
     for name in dir(guards):
         value = getattr(guards, name)
@@ -168,6 +254,72 @@ def _every_pattern() -> dict[str, re.Pattern[str]]:
         found["_device_mention"] = device
     found["_not_run_pattern"] = guards._not_run_pattern(tuple(sorted(guards._machine_read_tools())))
     return found
+
+
+def test_every_pre_amendment_id_still_resolves_to_the_same_pattern_object():
+    """History stays comparable (the controller's ruling on this amendment):
+    nothing the OLD sweep already covered moved to a new id, or now resolves
+    to a different object, under the new recursive walk."""
+    old = _pre_s42a_amendment_pattern_sweep()
+    new = _every_pattern()
+    missing = old.keys() - new.keys()
+    assert not missing, f"ids the old sweep had that the new one lost: {sorted(missing)}"
+    moved = [name for name, pattern in old.items() if new[name] is not pattern]
+    assert not moved, f"ids that now resolve to a DIFFERENT Pattern object: {moved}"
+
+
+def test_the_sweep_now_reaches_the_new_capability_pattern():
+    """RED before the amendment, GREEN after -- task 16's own finding: the
+    old walk never reached a Pattern nested inside `_CAPABILITY_TOOLS`
+    unless it ALSO happened to be bound to its own module name, so "the
+    timing sweep finds the new pattern by itself" was false the day task
+    16's brief said it (`_CAPABILITY_TOOLS` is a tuple of `(Pattern, str)`
+    pairs, never a tuple where every element is directly a Pattern). This is
+    the reachability proof for the S42a `device_run` entry specifically --
+    the fossil sweep above must NOT see it; the real one must."""
+    old = _pre_s42a_amendment_pattern_sweep()
+    new = _every_pattern()
+    my_pattern = guards._CAPABILITY_TOOLS[-1][0]
+    assert not any(p is my_pattern for p in old.values()), (
+        "the fossil (pre-amendment) sweep should not reach the new capability pattern"
+    )
+    assert any(p is my_pattern for p in new.values()), (
+        "the new capability pattern must be reachable by the fixed sweep"
+    )
+
+
+def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
+    """Pinned like test_tools_registry/test_eval_corpus (CLAUDE.md's
+    pinned-expectation-suite convention): 162 -> 221, +59. This catches the
+    sweep silently losing reach (the count drops below 221) as sharply as it
+    catches a change that inflates it for the wrong reason (a NEW id that
+    was not really newly reachable, or a regression back to deduping by
+    object identity, which would UNDER-count here since several of the 59
+    are additional ids for objects `old` already reached another way).
+
+    The 59, by source (measured, not estimated):
+      22  `_CAPABILITY_TOOLS[i][0]` -- all 22 `(Pattern, str)` pairs (19
+          were reached NOWHERE before this amendment; the other 3 alias
+          `_CAP_SETUP_QR`/`_CAP_PAIR_MACHINE`/`_CAP_ON_A_PHONE`, already
+          reached under those bare names -- this id is additional, not a
+          new object).
+      15  the 9 `_ActionClass` instances' OWN bare-name fields
+          (`_WEB_SEARCH`, `_FETCH_URL`, `_LIST_FILES`, `_READ_FILE`,
+          `_RUN_COMMAND`, `_CHECK_DEVICE`, `_PULL_MODEL`, `_SET_REMINDER`,
+          `_SHOW_SETUP_QR`): `pattern` always (9) plus `restated` on the 6
+          that set it (6) = 15.
+       5  the same fields again via `_DEFERRAL_TOOLS` (`_WEB_SEARCH`,
+          `_FETCH_URL`, `_SET_REMINDER` -- 1 + 2 + 2).
+      17  the same fields again via `_OFFER_CLASSES` (it unpacks
+          `_DEFERRAL_TOOLS` AND lists `_SET_REMINDER` a second time, so all
+          9 classes appear, one of them twice: 1+2+2+2+2+1+2+2+2+1).
+      = 59. Update this deliberately, in the same commit as whatever changes
+    guards.py's container shapes, and say in the commit body why it moved."""
+    old = _pre_s42a_amendment_pattern_sweep()
+    new = _every_pattern()
+    assert len(old) == 162, len(old)
+    assert len(new) == 221, len(new)
+    assert len(new) - len(old) == 59
 
 
 def _sweep_inputs(n: int) -> dict[str, str]:

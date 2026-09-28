@@ -1158,6 +1158,14 @@ export interface Device {
   last_seen: string | null
   revoked_at: string | null
   connected: boolean
+  /** What the device's agent last REPORTED about its machine (S42a facts) — the
+   *  OS as it names itself; null for an agent that has sent no facts. */
+  os: string | null
+  /** The WSL distro the agent runs inside ('' when unnamed); null when it does
+   *  not run inside WSL, or never said. */
+  wsl: string | null
+  agent_version: string | null
+  facts_at: string | null
 }
 
 /** A freshly minted pairing code — shown ONCE (core stores only its hash). */

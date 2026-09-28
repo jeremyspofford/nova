@@ -24,6 +24,8 @@ Fixture JSON (one file per case, under app/evals/cases/):
       "agents": [{"name": "eval_writer", "purpose": "...",   # optional; default []
                   "instructions": "...", "tools": ["workspace_write_file"]}],
       "machines": [{"name": "eval_box", "serving": true}],   # optional; default []
+      "devices": [{"name": "eval_pc", "platform": "windows",  # optional; default [] (S42a)
+                   "hostname": "EVAL-PC", "connected": true, "facts": {...}}],
       "message": "what's the latest on the pixel camera?",
       "contract": [
         {"predicate": "tool_called", "arg": "web_search"},
@@ -36,6 +38,8 @@ WORLD it is replayed in (see FixtureAgent) — the same spirit, one file, and
 both are torn down with the rest of the scratch state. `machines` (S40) is the
 one declaration that is never built: they are the gateway's rows, so the
 runner answers for them from the declaration instead (see FixtureMachine).
+`devices` (S42a) is the same kind of declaration: an agent the plant answers
+for (see FixtureDevice).
 
 `suite_version` is pinned on every case so a score is only ever compared across
 runs of the SAME version (comparability rail): change a suite's cases, bump its
@@ -44,11 +48,13 @@ version, and old runs stay out of the new denominator.
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
-from app import agents
+from app import agents, device_facts
 
 # The predicate names a contract may use. Kept here (not imported from
 # predicates.py) so a fixture is validated at LOAD time against the known set,
@@ -399,6 +405,100 @@ def machine_from_dict(raw: object) -> FixtureMachine:
 
 
 @dataclass(frozen=True)
+class FixtureDevice:
+    """A paired machine's AGENT the plant must answer for (S42a).
+
+    Like FixtureMachine, never built: a device row is the owner's pairing —
+    enrolling one would spend a pairing code, write a device.enrolled event and
+    take a name — so the runner overlays this declaration on the plant's agent
+    listing (machines.FixturePlant.agents) for this case alone. machine_status
+    reads it; the device TOOLS do not (a declared device is for her to READ —
+    acting on one gets the ordinary "no paired device named …" refusal, since
+    no key exists to sign for).
+
+    `facts` go through device_facts.validate_auth at load, so a case can never
+    describe an agent a real one could not."""
+
+    name: str
+    platform: str
+    hostname: str
+    connected: bool = True
+    facts: dict | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name.startswith(FIXTURE_AGENT_PREFIX):
+            raise CaseError(
+                f"a case's device name must start with {FIXTURE_AGENT_PREFIX!r} (the harness "
+                f"answers for it instead of the real registry), got {self.name!r}"
+            )
+        if self.platform not in device_facts.STORED_PLATFORMS:
+            raise CaseError(
+                f"a case device's platform must be one of "
+                f"{', '.join(device_facts.STORED_PLATFORMS)}, got {self.platform!r}"
+            )
+        if self.facts is not None:
+            try:
+                clean = device_facts.validate_auth(self.facts)
+            except device_facts.FactsRejected as exc:
+                raise CaseError(
+                    f"a case device's facts are not what an agent sends — {exc.reason}"
+                ) from exc
+            object.__setattr__(self, "facts", clean)
+
+    def as_view(self) -> dict:
+        """device_facts.agent_view, fresh on every call, stamped now."""
+        now = datetime.now(UTC)
+        return device_facts.agent_view(
+            name=self.name,
+            platform=self.platform,
+            hostname=self.hostname,
+            connected=self.connected,
+            last_seen=now if self.connected else None,
+            facts=copy.deepcopy(self.facts),
+            facts_at=now if self.facts is not None else None,
+        )
+
+    def as_json(self) -> dict:
+        out: dict = {
+            "name": self.name,
+            "platform": self.platform,
+            "hostname": self.hostname,
+            "connected": self.connected,
+        }
+        if self.facts is not None:
+            out["facts"] = copy.deepcopy(self.facts)
+        return out
+
+
+_DEVICE_KEYS = frozenset(FixtureDevice.__dataclass_fields__)
+
+
+def device_from_dict(raw: object) -> FixtureDevice:
+    """Parse one declared device, refusing a malformed one by name at LOAD."""
+    if not isinstance(raw, dict):
+        raise CaseError(f"a case's device must be a JSON object, got {type(raw).__name__}")
+    unknown = sorted(set(raw) - _DEVICE_KEYS)
+    if unknown:
+        raise CaseError(
+            f"a case device takes only {', '.join(sorted(_DEVICE_KEYS))}, got "
+            f"{', '.join(map(repr, unknown))}"
+        )
+    connected = raw.get("connected", True)
+    if not isinstance(connected, bool):
+        raise CaseError(f"a case device's connected must be true or false, got {connected!r}")
+    facts = raw.get("facts")
+    if facts is not None and not isinstance(facts, dict):
+        raise CaseError(f"a case device's facts must be an object, got {facts!r}")
+    return FixtureDevice(
+        name=_require(raw, "name", str),
+        platform=_require(raw, "platform", str),
+        hostname=_require(raw, "hostname", str),
+        connected=connected,
+        facts=facts,
+    )
+
+
+@dataclass(frozen=True)
 class Case:
     """One eval case. `contract` passes iff EVERY predicate passes (subset match
     against the trace, never equality against a recorded reply)."""
@@ -418,6 +518,8 @@ class Case:
     skills: tuple[FixtureSkill, ...] = ()
     # S40: the machines the plant must answer for (see FixtureMachine).
     machines: tuple[FixtureMachine, ...] = ()
+    # S42a: the agents the plant must answer for (see FixtureDevice).
+    devices: tuple[FixtureDevice, ...] = ()
 
     def as_json(self) -> dict:
         return {
@@ -429,6 +531,7 @@ class Case:
             "agents": [a.as_json() for a in self.agents],
             "skills": [s.as_json() for s in self.skills],
             "machines": [m.as_json() for m in self.machines],
+            "devices": [d.as_json() for d in self.devices],
             "contract": [p.as_json() for p in self.contract],
         }
 
@@ -501,6 +604,15 @@ def case_from_dict(raw: dict) -> Case:
         if machine.name in seen:
             raise CaseError(f"a case declares the machine {machine.name!r} more than once")
         seen.add(machine.name)
+    devices_raw = raw.get("devices", [])
+    if not isinstance(devices_raw, list):
+        raise CaseError(f"a case's devices must be a list, got {type(devices_raw).__name__}")
+    fixture_devices = tuple(device_from_dict(entry) for entry in devices_raw)
+    seen_devices: set[str] = set()
+    for device in fixture_devices:
+        if device.name in seen_devices:
+            raise CaseError(f"a case declares the device {device.name!r} more than once")
+        seen_devices.add(device.name)
     return Case(
         id=_require(raw, "id", str),
         suite=_require(raw, "suite", str),
@@ -511,6 +623,7 @@ def case_from_dict(raw: dict) -> Case:
         agents=fixture_agents,
         skills=fixture_skills,
         machines=fixture_machines,
+        devices=fixture_devices,
     )
 
 

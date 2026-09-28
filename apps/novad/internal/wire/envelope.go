@@ -32,6 +32,7 @@ const (
 	TypeResult    = "result"
 	TypeAudit     = "audit"
 	TypeAuthError = "auth_error"
+	TypeFacts     = "facts"
 )
 
 // Challenge is core -> device: a nonce to sign and core's pinned public key.
@@ -47,6 +48,81 @@ type Auth struct {
 	Type     string `json:"type"`
 	DeviceID string `json:"device_id"`
 	Sig      string `json:"sig"`
+	// Facts are the agent's auth-frame facts (internal/facts.Auth), recorded
+	// by core only after Sig verifies and never a reason to refuse. The
+	// repoint probe omits them: it writes nothing on either side.
+	Facts any `json:"facts,omitempty"`
+}
+
+// ReasonRevoked is the auth_error reason core sends for a device it revoked.
+// The reason string ALONE is an unsigned claim from whoever is on the other
+// end of the socket — the handshake's core_pubkey compare authenticates
+// nothing, it is a plain string compare of a value the peer claims, not a
+// proof. So this exact reason is final (client.ErrRevoked) only paired with
+// a proof VerifyRevokedProof confirms core itself signed. Any other reason,
+// or this exact reason without a verified proof, is retried.
+const ReasonRevoked = "revoked"
+
+// RevokedProofKind and RevokedProofVersion are the exact values a genuine,
+// core-signed revoke proof's "proof" object carries. Anything else —
+// including a missing proof — proves nothing.
+const (
+	RevokedProofKind    = "revoked"
+	RevokedProofVersion = 1
+)
+
+// VerifyRevokedProof reports whether reply — an auth_error frame already
+// known to carry reason == ReasonRevoked — is cryptographically PROVEN to be
+// core, for THIS device, in answer to THIS handshake. The wire shape is
+// {type:"auth_error", reason:"revoked", proof:{kind:"revoked", v:1,
+// device_id, nonce}, sig}, with sig the hex ed25519 signature over
+// wire.Canonical(proof).
+//
+// corePubKey must be the key THIS DEVICE PINNED at enrollment — never the
+// key the peer merely presented in this same handshake's challenge frame,
+// even though the two are compared elsewhere: that compare is exactly the
+// unsigned claim ReasonRevoked's doc warns about, and using it here would
+// let whoever terminates the socket forge its own proof of itself. All of
+// the following must hold, or this returns false and the caller must treat
+// the refusal as ordinary and retryable, never as a wipe trigger:
+//
+//   - proof.kind == RevokedProofKind (exactly "revoked") and
+//     proof.v == RevokedProofVersion (exactly 1);
+//   - proof.device_id == deviceID (this device's own configured id);
+//   - proof.nonce == nonceHex (the hex nonce THIS handshake's challenge
+//     carried, so a proof cannot be replayed from a different handshake —
+//     this device's own earlier one, or another device's);
+//   - sig verifies, by corePubKey, over wire.Canonical(proof) — the exact
+//     object received, not a reconstruction, so a signature valid for some
+//     OTHER proof body can never be credited to a tampered one sent
+//     alongside it.
+func VerifyRevokedProof(reply map[string]any, deviceID, nonceHex string, corePubKey ed25519.PublicKey) bool {
+	proof, ok := reply["proof"].(map[string]any)
+	if !ok || proof == nil {
+		return false
+	}
+	if kind, _ := proof["kind"].(string); kind != RevokedProofKind {
+		return false
+	}
+	if v, ok := asInt64(proof["v"]); !ok || v != int64(RevokedProofVersion) {
+		return false
+	}
+	if did, _ := proof["device_id"].(string); did == "" || did != deviceID {
+		return false
+	}
+	if n, _ := proof["nonce"].(string); n == "" || n != nonceHex {
+		return false
+	}
+	sigHex, _ := reply["sig"].(string)
+	sig, err := hex.DecodeString(sigHex)
+	if err != nil {
+		return false
+	}
+	canon, err := Canonical(proof)
+	if err != nil {
+		return false
+	}
+	return ed25519.Verify(corePubKey, canon, sig)
 }
 
 // Ready is core -> device: the last audit seq core has stored (null when none).
@@ -207,6 +283,15 @@ func (v *Verifier) VerifyCommand(envelope map[string]any, sigHex string) (capabi
 	}
 	v.seen[eid] = expiresAt
 	return capName, a, nil
+}
+
+// CorePubKey returns the pinned core public key this Verifier checks command
+// signatures against — the SAME already-decoded, already-validated key
+// VerifyRevokedProof must check a revoke proof's signature against. There is
+// exactly one parsed, trusted copy of the pinned key per process; nothing
+// re-decodes the config string a second time and risks the two disagreeing.
+func (v *Verifier) CorePubKey() ed25519.PublicKey {
+	return v.corePubKey
 }
 
 func (v *Verifier) clock() int64 {

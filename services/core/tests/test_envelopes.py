@@ -20,6 +20,7 @@ What is pinned here:
   * build() emits epoch-SECOND integers, not isoformat strings: the daemon
     reads issued_at/expires_at as int64.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -30,7 +31,11 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from app import envelopes
+from app import devices_ws, envelopes
+
+# devices_ws imports app.db, but nothing in it touches the database at import
+# time (db.get_pool only connects when actually awaited) — this file stays
+# DB-free; devices_ws.revoked_proof is a pure function.
 
 VECTORS_PATH = Path(__file__).parent / "fixtures" / "envelope_vectors.json"
 
@@ -221,3 +226,27 @@ def test_the_vectors_cover_the_cases_that_break_interop():
     scrambled = vectors[2]
     assert list(scrambled["payload"]) != sorted(scrambled["payload"])
     assert scrambled["canonical"].startswith('{"args":')
+
+
+def test_the_revoked_proof_vector_matches_devices_ws_shape():
+    """S42a, controller ruling 2: the proof devices_ws.py signs into a revoked
+    auth_error, and apps/novad's wire.VerifyRevokedProof checks — pinned
+    across languages exactly like an envelope, even though it is not one: no
+    capability, no args, just {kind, v, device_id, nonce}. envelopes.sign
+    over the committed payload must reproduce the committed sig, the same way
+    it does for a command envelope.
+
+    Fixed index, not [-1]: S42a Task 13 appends a fifth (Windows-path) vector
+    AFTER this one, so "last" would silently grab the wrong payload."""
+    data = _vectors()
+    key = ed25519.Ed25519PrivateKey.from_private_bytes(bytes.fromhex(data["seed_hex"]))
+    vector = data["vectors"][3]
+    proof = vector["payload"]
+
+    # Fix round 1: built from devices_ws.revoked_proof itself, not a hand
+    # literal — so the wire shape and this committed vector cannot drift
+    # apart silently.
+    assert proof == devices_ws.revoked_proof(proof["device_id"], proof["nonce"])
+    assert envelopes.canonical(proof).decode("utf-8") == vector["canonical"]
+    assert envelopes.sign(key, proof) == vector["sig_hex"]
+    assert envelopes.verify(data["public_key_hex"], proof, vector["sig_hex"]) is True

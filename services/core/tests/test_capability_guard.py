@@ -129,6 +129,15 @@ MUST_FIRE = [
     ("cant_show_a_pairing_card", "I'm unable to show you a pairing card.", "show_setup_qr"),
     ("cant_pair_a_laptop", "I cannot pair your laptop.", "show_setup_qr"),
     ("cant_put_myself_on_a_phone", "I can't put myself on your phone.", "show_setup_qr"),
+    # S42a: Nova's agent runs on Windows and macOS now, so disowning either is
+    # the S12 failure again (device_run is registered).
+    ("cant_access_windows_machines", "I can't access Windows machines.", "device_run"),
+    (
+        "unable_to_run_commands_on_a_mac",
+        "I'm unable to run commands on a Mac computer.",
+        "device_run",
+    ),
+    ("cannot_control_macs", "I cannot control Macs.", "device_run"),
 ]
 
 
@@ -258,6 +267,21 @@ MUST_NOT_FIRE = [
         "install_native_app_is_hers_not_nova",
         "I can't install Nova on your phone for you: you add it from Safari's Share menu.",
     ),
+    # S42a: an honest report about ONE machine, or a past attempt — never a
+    # denial of the ability.
+    ("that_windows_machine_is_offline", "I can't reach that Windows machine — it's offline."),
+    ("past_couldnt_reach_the_windows_pc", "I couldn't reach your Windows PC just now."),
+    # S42a final review I1: a Windows machine or a Mac cannot serve models
+    # until S44, so "I can't use one for models yet" is TRUE. The verbs "use"
+    # and "work with" accept any purpose, which is why they are not in the
+    # device_run row: correcting these with "I have a tool for it
+    # (device_run)" would make the guard the liar.
+    (
+        "no_windows_machines_for_models_yet",
+        "I can't use Windows machines to run models yet; that arrives with a later update.",
+    ),
+    ("no_windows_pc_as_a_model_server_yet", "I can't use a Windows PC as a model server yet."),
+    ("no_macs_for_local_models_yet", "I can't use Macs for local models yet."),
 ]
 
 

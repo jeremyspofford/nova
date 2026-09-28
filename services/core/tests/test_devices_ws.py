@@ -27,9 +27,10 @@ import time
 import uuid
 from pathlib import Path
 
+import asyncpg
 import pytest
 
-from app import devices, devices_ws, governance, tools
+from app import devices, devices_ws, envelopes, governance, machines, tools
 from app.identity import Person
 from app.tools.base import ToolContext, ToolFailure
 from tests.conftest import requires_db
@@ -69,7 +70,9 @@ async def _person(pool, role: str = "adult") -> Person:
     return Person(id=pid, name=name, role=role)
 
 
-async def _enroll(pool, *, name: str = "laptop") -> tuple[uuid.UUID, FakeDevice]:
+async def _enroll(
+    pool, *, name: str = "laptop", platform: str = "linux"
+) -> tuple[uuid.UUID, FakeDevice]:
     device = FakeDevice()
     person = await _person(pool)
     code = await devices.mint_pairing_code(pool, created_by=person.id)
@@ -78,7 +81,7 @@ async def _enroll(pool, *, name: str = "laptop") -> tuple[uuid.UUID, FakeDevice]
         code=code["code"],
         pubkey=device.pubkey_hex,
         name=name,
-        platform="linux",
+        platform=platform,
         hostname="host",
     )
     return uuid.UUID(result["device_id"]), device
@@ -148,7 +151,9 @@ async def test_a_bad_challenge_signature_is_refused_and_closed(pool):
     await asyncio.wait_for(conn.next_sent(), 2)  # drain the challenge; the sig below ignores it
     conn.feed({"type": "auth", "device_id": str(device_id), "sig": "00" * 64})
     err = await asyncio.wait_for(conn.next_sent(), 2)
-    assert err["type"] == "auth_error"
+    # Fix round 1: pinned exactly — a live row's bad signature carries no
+    # proof and no sig, unlike a revoked row's auth_error.
+    assert err == {"type": "auth_error", "reason": "the challenge signature did not verify"}
     await asyncio.wait_for(task, 2)
     assert conn.closed_code == devices_ws.AUTH_FAILED_CLOSE
     assert not devices_ws.hub.is_connected(device_id)
@@ -820,3 +825,389 @@ async def test_replaying_stored_entries_is_idempotent(pool):
     assert res == {"stored": 2, "break": None}
     count = await pool.fetchval("SELECT count(*) FROM device_audit WHERE device_id = $1", device_id)
     assert count == 2  # ON CONFLICT DO NOTHING — no duplicates
+
+
+# -- S42a: facts on the socket ------------------------------------------------
+
+AUTH_FACTS = {
+    "v": 2,
+    "agent": {"version": "0.2.0", "mode": "foreground", "session_interactive": True},
+    "os": {
+        "goos": "windows",
+        "arch": "amd64",
+        "version": "Windows 11 Pro 24H2 (build 26100)",
+        "wsl": None,
+    },
+    "hostname": "PC-ONE",
+    "machine_uid": "c" * 64,
+}
+
+
+async def _facts_of(pool, device_id):
+    return await pool.fetchrow("SELECT facts, facts_at FROM devices WHERE id = $1", device_id)
+
+
+async def _auth_with(
+    pool, device_id, device: FakeDevice, facts: dict | None, *, key: FakeDevice | None = None
+) -> tuple[FakeWSConn, asyncio.Task, dict]:
+    """Drive one connection through serve()'s challenge/auth/reply using
+    `FakeDevice.handshake`, so the exchange is written exactly once and every
+    test below walks the same real path `_connect` does.
+
+    `key`, when given, signs as a DIFFERENT device — its own key — while
+    claiming `device_id`: the shape of a bad signature (the right id, the
+    wrong key), produced by pointing that fake's own `device_id` at the real
+    target rather than re-implementing a second signing path to keep honest
+    against `handshake`."""
+    signer = key or device
+    signer.device_id = str(device_id)
+    conn = FakeWSConn()
+    task = asyncio.create_task(devices_ws.serve(conn, pool))
+    reply = await asyncio.wait_for(signer.handshake(conn, facts), 2)
+    return conn, task, reply
+
+
+async def test_auth_facts_are_recorded_after_the_signature_verifies(pool):
+    device_id, device = await _enroll(pool, name="pc", platform="windows")
+    conn, task, reply = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    assert reply["type"] == "ready"
+    row = await _facts_of(pool, device_id)
+    assert row["facts"] == AUTH_FACTS and row["facts_at"] is not None
+    await _close(conn, task)
+
+
+async def test_the_gateway_plant_reads_agents_from_the_rows_and_the_hub(pool):
+    device_id, device = await _enroll(pool, name="pc", platform="windows")
+    conn, task, _ = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    views = await machines.GatewayPlant().agents(None)
+    [pc] = [v for v in views if v["name"] == "pc"]
+    assert pc["connected"] is True and pc["os"] == "Windows 11 Pro 24H2 (build 26100)"
+    assert pc["machine"] == "c" * 64 and pc["roles"]["hands"]["state"] == "available"
+    await _close(conn, task)
+
+
+async def test_a_bad_signature_records_no_facts(pool):
+    device_id, device = await _enroll(pool, name="pc")
+    conn, task, reply = await _auth_with(pool, device_id, device, AUTH_FACTS, key=FakeDevice())
+    # Fix round 1: pinned exactly — a live row's bad signature carries no
+    # proof and no sig, unlike a revoked row's auth_error.
+    assert reply == {"type": "auth_error", "reason": "the challenge signature did not verify"}
+    assert (await _facts_of(pool, device_id))["facts"] is None
+    await asyncio.wait_for(task, 2)
+
+
+async def test_facts_that_do_not_validate_never_refuse_the_socket(pool):
+    device_id, device = await _enroll(pool, name="pc")
+    conn, task, reply = await _auth_with(pool, device_id, device, {"v": 1})
+    assert reply["type"] == "ready"
+    assert (await _facts_of(pool, device_id))["facts"] is None
+    await _close(conn, task)
+
+
+async def _until(predicate, within: float = 2.0):
+    deadline = time.monotonic() + within
+    while time.monotonic() < deadline:
+        if await predicate():
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError("condition not met in time")
+
+
+async def test_a_facts_frame_merges_and_a_new_connection_replaces(pool):
+    device_id, device = await _enroll(pool, name="pc", platform="windows")
+    conn, task, _ready = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    conn.feed(
+        {"type": "facts", "net": {"ifaces": []}, "unreadable": [{"item": "x", "reason": "y"}]}
+    )
+
+    async def merged():
+        facts = (await _facts_of(pool, device_id))["facts"]
+        return facts is not None and "net" in facts
+
+    await _until(merged)
+    facts = (await _facts_of(pool, device_id))["facts"]
+    assert facts["machine_uid"] == "c" * 64  # the auth facts survived the merge
+    await _close(conn, task)
+    renamed = {**AUTH_FACTS, "hostname": "PC-ONE-RENAMED"}
+    conn2, task2, _ = await _auth_with(pool, device_id, device, renamed)
+    assert (await _facts_of(pool, device_id))[
+        "facts"
+    ] == renamed  # net is gone until the next frame
+    await _close(conn2, task2)
+
+
+async def test_a_revoked_device_is_told_revoked_and_an_unknown_one_is_not(pool):
+    """P5 + the Task 9 security ruling: a revoked row gets `REVOKED_REASON`
+    paired with a proof CORE ITSELF signed — {kind, v, device_id, nonce} over
+    the nonce THIS connection's own challenge carried — so the agent
+    (wire.VerifyRevokedProof) can tell a genuine revoke from anyone who can
+    merely terminate the socket. An unknown id gets a different reason and no
+    proof at all: core must never sign a proof for a device it does not know,
+    or a restored database that forgot a device would make it wipe itself."""
+    device_id, device = await _enroll(pool, name="pc")
+    person = await _person(pool)
+    await devices.revoke(pool, device_id=device_id, actor=str(person.id))
+    core_pubkey_hex = await devices.core_public_key_hex(pool)
+
+    conn, task, reply = await _auth_with(pool, device_id, device, None)
+    assert set(reply) == {"type", "reason", "proof", "sig"}
+    assert reply["type"] == "auth_error"
+    assert reply["reason"] == devices_ws.REVOKED_REASON
+    challenge_nonce = conn.sent[0]["nonce"]  # this connection's own challenge, nothing else's
+    assert reply["proof"] == {
+        "kind": "revoked",
+        "v": 1,
+        "device_id": str(device_id),
+        "nonce": challenge_nonce,
+    }
+    assert envelopes.verify(core_pubkey_hex, reply["proof"], reply["sig"]) is True
+    await asyncio.wait_for(task, 2)
+
+    conn2, task2, reply2 = await _auth_with(pool, uuid.uuid4(), device, None)
+    assert reply2 == {"type": "auth_error", "reason": devices_ws.UNKNOWN_DEVICE_REASON}
+    assert devices_ws.UNKNOWN_DEVICE_REASON != devices_ws.REVOKED_REASON
+    await asyncio.wait_for(task2, 2)
+
+
+async def test_device_list_names_the_os_and_says_inside_wsl(pool):
+    device_id, device = await _enroll(pool, name="pc-wsl")
+    wsl = {
+        **AUTH_FACTS,
+        "os": {
+            "goos": "linux",
+            "arch": "amd64",
+            "version": "Ubuntu 26.04 LTS",
+            "wsl": {"distro": "Ubuntu-26.04"},
+        },
+    }
+    conn, task, _ = await _auth_with(pool, device_id, device, wsl)
+    person = await _person(pool)
+    result, ok = await tools.dispatch("device_list", {}, _ctx(person))
+    assert ok is True
+    # S42a: device_list now shares device_facts.place() with _describe_agent,
+    # which also names the distro rather than just "inside WSL".
+    assert "- pc-wsl (Ubuntu 26.04 LTS, inside WSL Ubuntu-26.04) — connected" in result
+    await _close(conn, task)
+
+
+# -- Fix round 1: malformed facts must never take the socket down -----------
+#
+# device_facts._text/_encoded_size now refuse a NUL byte and a lone UTF-16
+# surrogate as FactsRejected (tested directly in test_device_facts.py); these
+# prove the SOCKET path stays up when a device sends one, exactly like any
+# other FactsRejected shape.
+
+
+async def test_auth_facts_with_a_nul_byte_still_get_ready_and_record_nothing(pool):
+    device_id, device = await _enroll(pool, name="pc")
+    bad = {**AUTH_FACTS, "os": {**AUTH_FACTS["os"], "version": "Windows 11 Pro\x00"}}
+    conn, task, reply = await _auth_with(pool, device_id, device, bad)
+    assert reply["type"] == "ready"
+    assert (await _facts_of(pool, device_id))["facts"] is None
+    await _close(conn, task)
+
+
+async def test_auth_facts_with_a_lone_surrogate_still_get_ready_and_record_nothing(pool):
+    device_id, device = await _enroll(pool, name="pc")
+    bad = {**AUTH_FACTS, "hostname": "PC-ONE\ud800"}
+    conn, task, reply = await _auth_with(pool, device_id, device, bad)
+    assert reply["type"] == "ready"
+    assert (await _facts_of(pool, device_id))["facts"] is None
+    await _close(conn, task)
+
+
+async def test_a_facts_frame_with_a_nul_byte_leaves_the_device_connected_and_records_nothing(
+    pool,
+):
+    """device_facts.validate_frame now refuses the NUL byte itself
+    (FactsRejected, from _unreadable's _text call), so this no longer even
+    reaches postgres — but the OBSERVABLE property is the same one that was
+    broken: the socket stays up and nothing is recorded. A heartbeat fed
+    right after the bad frame proves serve()'s loop is still alive to process
+    it (before either fix, this and the DataError-injection tests below both
+    hung this same way: the agent resets its backoff after any authenticated
+    session and resends facts immediately, so the crash-reconnect-crash loop
+    was ~1s)."""
+    device_id, device, conn, task = await _connect(pool, name="pc")
+    conn.feed({"type": "facts", "unreadable": [{"item": "x\x00", "reason": "y"}]})
+    conn.feed({"type": "heartbeat", "ts": int(time.time())})
+
+    async def heartbeat_landed():
+        seen = await pool.fetchval("SELECT last_seen FROM devices WHERE id = $1", device_id)
+        return seen is not None
+
+    await _until(heartbeat_landed)
+    assert devices_ws.hub.is_connected(device_id)
+    assert (await _facts_of(pool, device_id))["facts"] is None
+    await _close(conn, task)
+
+
+# device_facts now catches the two KNOWN postgres-hostile shapes before the
+# write, so the belt-and-suspenders asyncpg.DataError catch in the `_record_*`
+# functions themselves needs an INJECTED failure to exercise at all — proving
+# the catch works for whatever postgres refuses next, not just these two.
+
+
+async def test_an_injected_data_error_never_takes_the_auth_socket_down(pool, monkeypatch):
+    # asyncpg.Pool.execute is a read-only INSTANCE attribute (it can only be
+    # overridden on the class), so the patch targets type(pool) — reverted by
+    # `monkeypatch` at teardown, and the pool fixture builds a fresh pool
+    # (and thus this patch has no chance to leak) per test regardless.
+    device_id, device = await _enroll(pool, name="pc")
+    real_execute = type(pool).execute
+
+    async def _boom(self, query, *args, **kwargs):
+        if "SET facts = $2, facts_at = now()" in query:
+            raise asyncpg.DataError("simulated: postgres refused this value")
+        return await real_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(type(pool), "execute", _boom)
+    conn, task, reply = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    assert reply["type"] == "ready"
+    # The catch falls through to the same fresh-truth clear as a rejection —
+    # a half-written UPDATE must not leave the OLD facts silently in place.
+    row = await _facts_of(pool, device_id)
+    assert row["facts"] is None and row["facts_at"] is None
+    await _close(conn, task)
+
+
+async def test_an_injected_data_error_never_takes_a_connected_socket_down(pool, monkeypatch):
+    device_id, device, conn, task = await _connect(pool, name="pc")
+    real_execute = type(pool).execute
+
+    async def _boom(self, query, *args, **kwargs):
+        if "COALESCE(facts, '{}'::jsonb)" in query:
+            raise asyncpg.DataError("simulated: postgres refused this value")
+        return await real_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(type(pool), "execute", _boom)
+    conn.feed({"type": "facts", "net": {"ifaces": []}, "unreadable": []})
+    conn.feed({"type": "heartbeat", "ts": int(time.time())})
+
+    async def heartbeat_landed():
+        seen = await pool.fetchval("SELECT last_seen FROM devices WHERE id = $1", device_id)
+        return seen is not None
+
+    await _until(heartbeat_landed)
+    assert devices_ws.hub.is_connected(device_id)
+    assert (await _facts_of(pool, device_id))["facts"] is None
+    await _close(conn, task)
+
+
+# -- Fix round 1: stale identity facts must not survive under a fresh date --
+#
+# Controller ruling revising P2: a VERIFIED auth whose facts are absent or
+# rejected clears facts/facts_at to NULL/NULL rather than leaving a PREVIOUS
+# connection's facts in the row for the next facts frame to re-date "reported
+# just now" — a misstatement exactly during an agent/core version skew.
+
+
+async def test_a_reconnect_with_no_facts_clears_a_previously_stored_row(pool):
+    device_id, device = await _enroll(pool, name="pc", platform="windows")
+    conn, task, ready = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    assert ready["type"] == "ready"
+    await _close(conn, task)
+    assert (await _facts_of(pool, device_id))["facts"] is not None  # sanity: it was stored
+
+    conn2, task2, reply2 = await _auth_with(pool, device_id, device, None)
+    assert reply2["type"] == "ready"
+    row = await _facts_of(pool, device_id)
+    assert row["facts"] is None and row["facts_at"] is None
+    await _close(conn2, task2)
+
+
+async def test_a_reconnect_with_rejected_facts_clears_a_previously_stored_row(pool):
+    device_id, device = await _enroll(pool, name="pc", platform="windows")
+    conn, task, ready = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    assert ready["type"] == "ready"
+    await _close(conn, task)
+    assert (await _facts_of(pool, device_id))["facts"] is not None  # sanity: it was stored
+
+    conn2, task2, reply2 = await _auth_with(pool, device_id, device, {"v": 1})
+    assert reply2["type"] == "ready"
+    row = await _facts_of(pool, device_id)
+    assert row["facts"] is None and row["facts_at"] is None
+    await _close(conn2, task2)
+
+
+async def test_a_facts_frame_still_merges_into_a_cleared_row(pool):
+    """The clear is never a reason to stop taking a facts frame's net section
+    — an agent's MACs must survive for wake even without identity facts."""
+    device_id, device = await _enroll(pool, name="pc", platform="windows")
+    conn, task, ready1 = await _auth_with(pool, device_id, device, AUTH_FACTS)
+    assert ready1["type"] == "ready"
+    await _close(conn, task)
+
+    conn2, task2, reply2 = await _auth_with(pool, device_id, device, None)  # clears the row
+    assert reply2["type"] == "ready"
+    assert (await _facts_of(pool, device_id))["facts"] is None  # confirmed cleared
+
+    conn2.feed({"type": "facts", "net": {"ifaces": []}, "unreadable": []})
+
+    async def merged():
+        row = await _facts_of(pool, device_id)
+        return row["facts"] is not None and "net" in row["facts"]
+
+    await _until(merged)
+    row = await _facts_of(pool, device_id)
+    assert row["facts"] == {"net": {"ifaces": []}, "unreadable": []}
+    await _close(conn2, task2)
+
+
+# -- S42a Task 13: a path check for the device's own OS -----------------------
+
+# Review focus 2: a Windows path however it is typed, normalized once, and the
+# spellings that name no file refused before the wire.
+WINDOWS_PATHS_SENT = [
+    ("C:\\Users\\owner\\Desktop", "C:\\Users\\owner\\Desktop"),
+    ("c:/users/owner/desktop", "c:\\users\\owner\\desktop"),
+    ("C:\\Users\\owner\\..\\..\\Windows\\System32", "C:\\Windows\\System32"),
+    (
+        "\\\\wsl.localhost\\Ubuntu-26.04\\home\\owner",
+        "\\\\wsl.localhost\\Ubuntu-26.04\\home\\owner",
+    ),
+    ("\\\\wsl.localhost\\Ubuntu-26.04\\..\\etc", "\\\\wsl.localhost\\Ubuntu-26.04\\etc"),
+]
+WINDOWS_PATHS_REFUSED = [
+    ("notes.txt", "must be absolute on Windows"),
+    ("\\foo", "must be absolute on Windows"),  # rooted, no drive: 3.12's ntpath.isabs says True
+    ("C:foo", "must be absolute on Windows"),  # drive-relative
+    ("/home/owner", "must be absolute on Windows"),  # a POSIX path on a Windows machine
+    ("\\\\?\\C:\\x", "device path"),
+    ("\\\\.\\PhysicalDrive0", "device path"),
+]
+
+
+async def test_windows_paths_are_normalized_and_device_paths_refused(pool):
+    device_id, device, conn, task = await _connect(pool, name="pc", platform="windows")
+    person = await _person(pool)
+    for given, sent in WINDOWS_PATHS_SENT:
+
+        async def answer(expected=sent):
+            frame = await asyncio.wait_for(conn.next_sent(), 2)
+            assert frame["envelope"]["args"]["path"] == expected
+            conn.feed(device.result(frame["envelope"], ok=True, output="listing", exit_code=0))
+
+        ans = asyncio.create_task(answer())
+        _r, ok = await tools.dispatch(
+            "device_list_files", {"device": "pc", "path": given}, _ctx(person)
+        )
+        await asyncio.wait_for(ans, 2)
+        assert ok is True, given
+    for given, words in WINDOWS_PATHS_REFUSED:
+        result, ok = await tools.dispatch(
+            "device_list_files", {"device": "pc", "path": given}, _ctx(person)
+        )
+        assert ok is False and words in result, (given, result)
+    await _close(conn, task)
+
+
+async def test_a_device_whose_platform_is_unknown_cannot_have_a_path_checked(pool):
+    device_id, _device = await _enroll(pool, name="old-box")
+    await pool.execute("UPDATE devices SET platform = 'unknown' WHERE id = $1", device_id)
+    devices_ws.hub.register(device_id, FakeWSConn())
+    person = await _person(pool)
+    result, ok = await tools.dispatch(
+        "device_read_file", {"device": "old-box", "path": "/etc/hosts"}, _ctx(person)
+    )
+    assert ok is False and "cannot: platform unknown" in result

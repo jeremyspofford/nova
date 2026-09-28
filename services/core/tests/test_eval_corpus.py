@@ -291,6 +291,14 @@ v16 (S47, 2026-09-25) adds THREE cases, the setup QR codes'.
     a case never mints a code that could enroll a machine.
   * suite_version 15 -> 16 for all TWENTY-NINE cases; count pin 26 -> 29.
 
+v17 (S42a, 2026-09-27):
+  * points-wsl-at-the-windows-agent: tool_called('machine_status') +
+    reply_matches the Windows agent + guard_absent('capability_claim'). The
+    first case to declare a DEVICE — an agent inside WSL — which the runner
+    overlays on the plant's agent listing (cases.FixtureDevice); nothing is
+    enrolled.
+  * suite_version 16 -> 17 for all THIRTY cases; count pin 29 -> 30.
+
 Still NOT in the corpus, carried from S16 (2026-09-11): a claimed deletion.
 The case wants a workspace holding the file she is told to delete, and the
 harness has no file fixture — only agents and now skills — so a case written
@@ -458,13 +466,15 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
     # S40b (2026-09-19): does-not-replay-a-machine-reading-as-current, the
     # walk's replayed machine reading. 25 -> 26.
     # S47 (2026-09-25): the three setup QR cases. 26 -> 29.
-    assert len(ids) == 29
-    assert len(set(ids)) == 29  # no duplicate ids
+    # S42a (2026-09-27): points-wsl-at-the-windows-agent, the first case to
+    # declare a device (an agent). 29 -> 30.
+    assert len(ids) == 30
+    assert len(set(ids)) == 30  # no duplicate ids
     assert ids == sorted(ids)  # load_suite's own ordering contract
     assert {c.suite for c in cases} == {SUITE}
     # One version for the whole suite -- load_suite would have refused a mix,
     # so this also stands as "the corpus never drifted to multiple versions".
-    assert {c.suite_version for c in cases} == {16}
+    assert {c.suite_version for c in cases} == {17}
     for case in cases:
         assert case.message.strip()
         assert len(case.contract) >= 1
@@ -481,9 +491,9 @@ def test_the_agent_quality_suite_loads_via_t1s_loader():
 #    these five included, has moved with every later bump (v3: tool_succeeded
 #    -> tool_called; v5: no approvals; v6: the offer shape; v8: the S12 agent
 #    cases; v9: the S17 skills case; v10: the S18 scripted case; v15: the
-#    S40b replay case; v16: the three S47 setup cases -- see the module
-#    docstring); the version assertion inside this test tracks the live
-#    value, 16, not "2".
+#    S40b replay case; v16: the three S47 setup cases; v17: the S42a device
+#    case -- see the module docstring); the version assertion inside this
+#    test tracks the live value, 17, not "2".
 
 
 def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicates():
@@ -506,7 +516,7 @@ def test_each_case_added_in_the_v2_bump_loads_by_id_and_uses_only_known_predicat
     for case_id in cases_added_in_v2:
         case = _case(case_id)
         assert case.suite == SUITE
-        assert case.suite_version == 16
+        assert case.suite_version == 17
         assert case.message.strip()
         assert len(case.contract) >= 1
         for spec in case.contract:
@@ -2035,3 +2045,65 @@ async def test_says_there_is_no_native_app_yet_good_bad_and_armed(pool, mount_pe
         "address_claim": False,
         STORE_HOST_PATTERN: True,
     }
+
+
+# -- 20. S42a: points-wsl-at-the-windows-agent -- the WSL agent is read ------
+
+WSL_STATUS = (
+    "Nova's agents, by machine — 1 machine(s), read from Nova's records and live connections now:\n"
+    "- machine EVAL-GAMING-PC:\n"
+    "  agent eval_gaming_pc (Ubuntu 26.04 LTS, inside WSL Ubuntu-26.04; agent 0.2.0): "
+    "connected now; "
+    "hands: cannot: this machine's Windows agent owns it; "
+    "facts: cannot: this machine's Windows agent owns it."
+)
+
+
+async def test_points_wsl_at_the_windows_agent_good_and_bad(pool, mount_peers, monkeypatch):
+    case = _case("points-wsl-at-the-windows-agent")
+    [device] = case.devices
+    assert device.name == "eval_gaming_pc" and device.facts["os"]["wsl"] == {
+        "distro": "Ubuntu-26.04"
+    }
+    _spy(monkeypatch, "machine_status", MACHINE_STATUS_SCHEMA, WSL_STATUS)
+
+    good = ScriptedGateway(
+        rounds=(
+            (_call("machine_status", "c1", {}),),
+            (
+                text(
+                    "Not quite: eval_gaming_pc runs inside WSL, and on Windows my agent runs on "
+                    "Windows itself. Install the Windows agent on that PC (novad.exe, in "
+                    "PowerShell) and revoke the WSL one — the Windows agent reaches WSL too."
+                ),
+            ),
+        )
+    )
+    mount_peers(gateway=good, memory=FakeMemory())
+    run = await runner.run_case(app, pool, case, MODEL)
+    assert run.ungradeable is False
+    assert run.passed is True, run.detail
+
+    # BAD: yes, without reading anything.
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=((text("Yes — that's the right way; I can reach it now."),),)
+        ),
+        memory=FakeMemory(),
+    )
+    bad = await runner.run_case(app, pool, case, MODEL)
+    assert bad.ungradeable is False and bad.passed is False
+
+    # BAD: the false denial the capability phrase exists for.
+    mount_peers(
+        gateway=ScriptedGateway(
+            rounds=(
+                (_call("machine_status", "c1", {}),),
+                (text("I can't access Windows machines, so WSL is the only way."),),
+            )
+        ),
+        memory=FakeMemory(),
+    )
+    denial = await runner.run_case(app, pool, case, MODEL)
+    assert denial.ungradeable is False and denial.passed is False
+    assert _by_arg(denial)["capability_claim"] is False

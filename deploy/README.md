@@ -78,6 +78,13 @@ state). Today there is one, the bundled container, and its provider name is
   4. `docker tag nova-<svc>:pre-s40 nova-<svc>:latest`.
   5. `up -d --no-deps --no-build --force-recreate gateway core web`.
 
+**Since S42a, `machine_status` also lists Nova's agents** — hands and facts,
+never models — as a separate listing from the engines above, grouping the
+agents **among themselves** by machine identity (an agent's `machine_uid`).
+Nothing here links a specific engine to a specific agent by that identity
+yet — that join is S44's. A machine with no models still shows up, through
+its agent alone. See "Devices and daemons" below and `apps/novad/README.md`.
+
 ## Tailnet access
 
 One durable HTTPS origin on your tailnet — `https://<node>.<tailnet>.ts.net`
@@ -176,6 +183,12 @@ a phone on the tailnet, are the owner's walk.
 - A remote `novad` runs with `--server https://<node>.<tailnet>.ts.net`
   (serve carries the WebSocket upgrade). A daemon on the same box as the
   stack keeps `http://127.0.0.1:3000`.
+
+Nova's agent runs on Linux, macOS and Windows (S42a); install it on Windows
+itself, never inside WSL. How: `apps/novad/README.md`. `machine_status` lists
+every agent by machine, with what it can do; two agents on one machine raise
+a digest notice (`devices_duplicate_agents`); a revoked agent wipes its
+identity and stops.
 
 ### Public visitors (optional): funnel
 

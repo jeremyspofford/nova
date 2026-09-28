@@ -9,7 +9,7 @@ import {
   revokeDevice as apiRevokeDevice,
   type Device,
 } from '../../lib/api'
-import { deviceLiveness } from './devicesFormat'
+import { deviceLiveness, deviceSubtitle, wslNote } from './devicesFormat'
 import { SetupModal } from './SetupModal'
 
 /**
@@ -183,6 +183,7 @@ function DeviceTile({
 }) {
   const live = deviceLiveness(device)
   const revoked = live.state === 'revoked'
+  const note = wslNote(device)
 
   // Rename
   const [renaming, setRenaming] = useState(false)
@@ -268,7 +269,7 @@ function DeviceTile({
         )}
 
         <span className="font-mono text-micro text-content-tertiary truncate">
-          {device.platform} · {device.hostname}
+          {deviceSubtitle(device)}
         </span>
 
         {!revoked && (
@@ -293,6 +294,7 @@ function DeviceTile({
 
       {renameError && <p className="mt-2 text-caption text-danger">Could not rename: {renameError}</p>}
       {revokeError && <p className="mt-2 text-caption text-danger">Could not revoke: {revokeError}</p>}
+      {note && <p className="mt-2 text-caption text-content-secondary">{note}</p>}
     </div>
   )
 }

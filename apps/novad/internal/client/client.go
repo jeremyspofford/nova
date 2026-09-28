@@ -3,7 +3,14 @@
 // commands in steady state. Every command is verified ON the device before it
 // runs, and every outcome — success OR refusal — is both a result frame and an
 // audit entry. The run loop reconnects on any socket error; a changed core key
-// is the one fatal condition (the daemon's half of the mutual pinning).
+// and a revoked device are the fatal conditions — but they authenticate
+// differently. The handshake's own core_pubkey compare is an unsigned claim
+// from whoever answers the socket, not a proof of anything, so it — and
+// everything else in the handshake — rests on the TRANSPORT (TLS, WireGuard,
+// loopback) for its integrity, never on itself. The one exception is a
+// revoke: the device wipes its identity only when core's SIGNATURE over the
+// revoke proof verifies against the key pinned at enrollment
+// (wire.VerifyRevokedProof), a check independent of the transport.
 package client
 
 import (
@@ -15,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -23,6 +31,8 @@ import (
 	"novad/internal/audit"
 	"novad/internal/caps"
 	"novad/internal/config"
+	"novad/internal/facts"
+	"novad/internal/platform"
 	"novad/internal/wire"
 )
 
@@ -35,16 +45,51 @@ const CommandTimeout = 110 * time.Second
 // tile state from when it last heard, never from the reported ts.
 const HeartbeatInterval = 20 * time.Second
 
+// PingTimeout bounds each heartbeat's ping: a write can succeed into a dead
+// TCP connection for minutes, a pong cannot.
+const PingTimeout = 10 * time.Second
+
+// FactsEvery and FactsMinGap are the facts frame's cadence
+// (r2-integration): unchanged facts every ten minutes; changed facts at most
+// once a minute.
+const (
+	FactsEvery  = 10 * time.Minute
+	FactsMinGap = time.Minute
+)
+
+// defaultBackoffs is the reconnect ladder. It resets after every session
+// that authenticated (Run).
+var defaultBackoffs = []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
+
+// WatchdogEvery is how often the wall-clock watchdog samples the clock: far
+// tighter than any realistic heartbeatEvery, so a laptop that sleeps is
+// caught on the first sample after resume rather than after whatever was
+// left of a much longer heartbeat interval when it slept (Review Focus 4).
+// P12's own heartbeat-gap rule stays exactly as it is — the watchdog is a
+// second, faster, I/O-free path beside it, not a replacement for it.
+const WatchdogEvery = 1 * time.Second
+
+// sleepGap is the watchdog's own threshold: a wall-clock gap between its
+// samples wider than this means the machine slept, not just a scheduler
+// stall. It is a fixed margin over WatchdogEvery, not a multiple of it —
+// changing the sample rate must not change what counts as a sleep.
+const sleepGap = 5 * time.Second
+
 // wsReadLimit raises coder/websocket's 32 KiB default so a signed fs.write
 // command (content up to the 256 KiB write domain) is not rejected on read.
 const wsReadLimit = 4 << 20
 
 // fatal wraps a non-retryable condition: the run loop exits rather than
-// reconnecting. Today that is exactly a changed core key.
+// reconnecting. Today that is a changed core key or a revoked device.
 type fatal struct{ err error }
 
 func (f fatal) Error() string { return f.err.Error() }
 func (f fatal) Unwrap() error { return f.err }
+
+// ErrRevoked is Run's return when core says this device was revoked — the one
+// refusal that is final. The caller wipes the identity (config.Wipe) and
+// exits 78 so no supervisor restarts a daemon that can never get in.
+var ErrRevoked = errors.New("core says this device was revoked")
 
 // Agent holds the pinned identity and the local capability + audit surfaces.
 type Agent struct {
@@ -62,10 +107,48 @@ type Agent struct {
 	// RE-EXECUTE — the replay defence has to outlive the socket. Its own pruning
 	// (past expiry + skew) keeps the set from growing unbounded.
 	verifier *wire.Verifier
+
+	// gatherAuth and gatherFrame read the facts; fields so a test hands in
+	// its own. now is the clock (Task 8's resume detector reads it too).
+	gatherAuth  func(context.Context) (facts.Auth, []facts.Unreadable)
+	gatherFrame func([]facts.Unreadable) facts.Frame
+	now         func() time.Time
+
+	// authGatherBudget bounds gatherAuth independently of hsCtx's 30s: a
+	// platform call with no timeout of its own (macOS ioreg) must not burn
+	// the whole handshake — auth facts are never a reason to refuse the
+	// socket. Tests shorten it to prove a hung gather cannot block ready.
+	authGatherBudget time.Duration
+
+	// Liveness knobs: the constants above, as fields so a test runs them fast.
+	heartbeatEvery time.Duration
+	pingTimeout    time.Duration
+	factsEvery     time.Duration
+	factsMinGap    time.Duration
+	backoffs       []time.Duration
+	watchdogEvery  time.Duration
+
+	// factsSendMu serializes the whole build (frameBytes) -> write -> record
+	// sequence across every path that can send a facts frame on a
+	// connection: the post-ready send, a facts.refresh command, and
+	// heartbeat's own periodic/on-change sender (maybeSendFacts) running
+	// beside them. Without it, two of those sequences racing here could land
+	// on the wire out of order, or an older build's record could clobber a
+	// newer one's lastFacts/lastFactsAt after the fact — and maybeSendFacts's
+	// byte-equality check could then withhold a real change until factsEvery.
+	factsSendMu sync.Mutex
+
+	// factsMu guards what the facts frames remember: what GatherAuth could
+	// not read (repeated in every frame), and the last frame written and
+	// when — the heartbeat's change check compares against them.
+	factsMu     sync.Mutex
+	authUnread  []facts.Unreadable
+	lastFacts   []byte
+	lastFactsAt time.Time
 }
 
 // New assembles an agent from loaded custody. logf may be nil.
-func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home string, logf func(string, ...any)) (*Agent, error) {
+func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home, version string, logf func(string, ...any)) (*Agent, error) {
 	wsURL, err := WSURL(cfg.Server)
 	if err != nil {
 		return nil, err
@@ -88,6 +171,18 @@ func New(cfg config.Config, priv ed25519.PrivateKey, log *audit.Log, home string
 		wsURL:    wsURL,
 		logf:     logf,
 		verifier: verifier,
+		gatherAuth: func(ctx context.Context) (facts.Auth, []facts.Unreadable) {
+			return facts.GatherAuth(ctx, platform.Exec{}, version)
+		},
+		gatherFrame:      facts.GatherFrame,
+		now:              time.Now,
+		authGatherBudget: 5 * time.Second,
+		heartbeatEvery:   HeartbeatInterval,
+		pingTimeout:      PingTimeout,
+		factsEvery:       FactsEvery,
+		factsMinGap:      FactsMinGap,
+		backoffs:         defaultBackoffs,
+		watchdogEvery:    WatchdogEvery,
 	}, nil
 }
 
@@ -114,12 +209,11 @@ func WSURL(server string) (string, error) {
 }
 
 // Run connects, serves, and reconnects with a capped backoff until ctx is done
-// or a fatal condition (a changed core key) is hit.
+// or a fatal condition is hit (a changed core key; a revoked device).
 func (a *Agent) Run(ctx context.Context) error {
-	backoffs := []time.Duration{1 * time.Second, 2 * time.Second, 5 * time.Second, 15 * time.Second, 30 * time.Second}
 	attempt := 0
 	for {
-		err := a.connectOnce(ctx)
+		authed, err := a.connectOnce(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
@@ -131,7 +225,14 @@ func (a *Agent) Run(ctx context.Context) error {
 		if err != nil {
 			a.logf("connection ended: %v", err)
 		}
-		d := backoffs[min(attempt, len(backoffs)-1)]
+		if authed {
+			// A session that authenticated proves the path works, so the next
+			// wait starts from the shortest step again. Before S42a the ladder
+			// never reset, and after five drops every reconnect waited 30 s for
+			// the life of the process.
+			attempt = 0
+		}
+		d := a.backoffs[min(attempt, len(a.backoffs)-1)]
 		attempt++
 		a.logf("reconnecting in %s", d)
 		select {
@@ -142,21 +243,23 @@ func (a *Agent) Run(ctx context.Context) error {
 	}
 }
 
-func (a *Agent) connectOnce(ctx context.Context) error {
+// connectOnce dials, authenticates and serves one session. It reports whether
+// the session authenticated (Run's backoff reset reads it), and why it ended.
+func (a *Agent) connectOnce(ctx context.Context) (bool, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	c, _, err := websocket.Dial(dialCtx, a.wsURL, nil)
 	cancel()
 	if err != nil {
-		return fmt.Errorf("dial %s: %w", a.wsURL, err)
+		return false, fmt.Errorf("dial %s: %w", a.wsURL, err)
 	}
 	defer c.CloseNow()
 	c.SetReadLimit(wsReadLimit)
 
 	if err := a.handshake(ctx, c); err != nil {
-		return err
+		return false, err
 	}
 	a.logf("authenticated; serving")
-	return a.serve(ctx, c)
+	return true, a.serve(ctx, c)
 }
 
 // handshake reads the challenge, refuses a core key that is not the pinned one
@@ -188,10 +291,22 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 		return fmt.Errorf("challenge nonce is not hex: %w", err)
 	}
 	sig := ed25519.Sign(a.priv, nonce) // RAW nonce bytes, not the hex string
+	// gatherAuth gets its OWN short budget, not the whole 30s hsCtx: a
+	// platform call with no timeout of its own (macOS ioreg) must not burn
+	// the handshake. A cut-off gather yields empty values plus unreadable
+	// entries (GatherAuth already reports what it could not read); the auth
+	// frame still goes out on hsCtx regardless.
+	gctx, gcancel := context.WithTimeout(hsCtx, a.authGatherBudget)
+	auth, unread := a.gatherAuth(gctx)
+	gcancel()
+	a.factsMu.Lock()
+	a.authUnread = unread
+	a.factsMu.Unlock()
 	if err := writeFrame(hsCtx, c, wire.Auth{
 		Type:     wire.TypeAuth,
 		DeviceID: a.cfg.DeviceID,
 		Sig:      hex.EncodeToString(sig),
+		Facts:    auth,
 	}); err != nil {
 		return fmt.Errorf("sending auth: %w", err)
 	}
@@ -203,9 +318,22 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) error {
 	switch t, _ := reply["type"].(string); t {
 	case wire.TypeAuthError:
 		reason, _ := reply["reason"].(string)
-		// Retryable: a revoked device keeps being refused here, correctly — it
-		// cannot get in — while a transient core-side refusal heals on the
-		// next attempt without a manual restart.
+		if reason == wire.ReasonRevoked {
+			// The reason string is unsigned — anyone who can terminate this
+			// socket can send it. Only a proof core's PINNED key actually
+			// signed, over THIS handshake's own nonce and this device's own
+			// id, is final. a.verifier.CorePubKey() is the key pinned at
+			// enrollment, never the key merely claimed in the challenge frame
+			// above (that claim is exactly what would let a forged socket
+			// prove itself to itself).
+			if wire.VerifyRevokedProof(reply, a.cfg.DeviceID, nonceHex, a.verifier.CorePubKey()) {
+				return fatal{ErrRevoked}
+			}
+			a.logf("core said revoked but the refusal carries no proof for this device and handshake that the pinned core key verifies — not wiping")
+		}
+		// Any other refusal is retried: a transient core-side fault heals on
+		// the next attempt, and a restored database that forgot this device is
+		// re-enrolled by hand (s45 move runbook) — never wiped from here.
 		return fmt.Errorf("core refused auth: %s", reason)
 	case wire.TypeReady:
 		if err := a.replayAudit(hsCtx, c, reply["last_seq"]); err != nil {
@@ -245,7 +373,18 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	serveCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	go a.heartbeat(serveCtx, c)
+	// The facts frame follows ready at once (r2-integration): core records
+	// the slower facts before the first command could need them. writeFacts
+	// itself bounds the write with pingTimeout (fix round 1), so a write
+	// blocking on a dead path cannot prevent the heartbeat below — and its
+	// own ping, which would otherwise catch that same dead path — from ever
+	// starting on this connection; no extra context needed here.
+	if err := a.sendFacts(serveCtx, c); err != nil {
+		a.logf("facts frame not sent: %v", err)
+	}
+
+	go a.heartbeat(serveCtx, cancel, c)
+	go a.watchdog(serveCtx, cancel)
 
 	for {
 		frame, err := readFrame(serveCtx, c)
@@ -264,19 +403,122 @@ func (a *Agent) serve(ctx context.Context, c *websocket.Conn) error {
 	}
 }
 
-func (a *Agent) heartbeat(ctx context.Context, c *websocket.Conn) {
-	ticker := time.NewTicker(HeartbeatInterval)
+// heartbeat keeps the session honest in both directions, once per tick:
+//
+//   - a wall-clock gap between ticks wider than two intervals means this
+//     machine slept: Round(0) drops the monotonic reading so the comparison
+//     is wall-clock only, and that holds regardless of how a given OS's
+//     ticker or monotonic clock itself behaves across suspend. watchdog
+//     (below) runs the same wall-clock check on a much tighter tick, and
+//     normally reconnects first — this is the slower, I/O-coupled backstop
+//     beside it, kept exactly as P12 specifies;
+//   - the heartbeat frame (core stamps last_seen from it), bounded by
+//     pingTimeout: on a dead path the kernel keeps taking bytes until its
+//     send buffer is full, and from then on a write BLOCKS; coder/
+//     websocket closes the whole connection when a write's own context
+//     expires, which is what actually frees a write stuck on a dead path —
+//     including one from a DIFFERENT call, like a stuck facts.refresh, once
+//     this cancel() below cancels serveCtx. A write that took longer than
+//     pingTimeout ends the session even on a live but slow link;
+//   - a ping core must answer within pingTimeout — what catches a write
+//     that SUCCEEDED into a dead path (its bytes only reached the send
+//     buffer), which no write error ever reports;
+//   - the facts frame, when the facts changed or it is due.
+//
+// Any failure ends the session through cancel: serve returns, and Run
+// reconnects from the first step of the ladder.
+func (a *Agent) heartbeat(ctx context.Context, cancel context.CancelFunc, c *websocket.Conn) {
+	ticker := time.NewTicker(a.heartbeatEvery)
 	defer ticker.Stop()
+	last := a.now().Round(0)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if err := writeFrame(ctx, c, wire.Heartbeat{Type: wire.TypeHeartbeat, Ts: time.Now().Unix()}); err != nil {
-				a.logf("heartbeat write failed: %v", err)
-				return
-			}
 		}
+		now := a.now().Round(0) // Round(0) drops the monotonic reading: wall clock only
+		if gap := now.Sub(last); gap > 2*a.heartbeatEvery {
+			a.logf("the clock jumped %s between heartbeats — this machine slept; reconnecting", gap.Round(time.Second))
+			cancel()
+			return
+		}
+		last = now
+		hbCtx, hbCancel := context.WithTimeout(ctx, a.pingTimeout)
+		err := writeFrame(hbCtx, c, wire.Heartbeat{Type: wire.TypeHeartbeat, Ts: now.Unix()})
+		hbCancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				a.logf("heartbeat write failed: %v — reconnecting", err)
+				cancel()
+			}
+			return
+		}
+		pingCtx, pingCancel := context.WithTimeout(ctx, a.pingTimeout)
+		err = c.Ping(pingCtx)
+		pingCancel()
+		if err != nil {
+			if ctx.Err() == nil {
+				a.logf("core did not answer a ping within %s: %v — reconnecting", a.pingTimeout, err)
+				cancel()
+			}
+			return
+		}
+		a.maybeSendFacts(ctx, c)
+	}
+}
+
+// watchdog is heartbeat's fast path for the SAME wall-clock check (P12),
+// running beside it on a much tighter tick and doing no I/O of its own: a
+// laptop that sleeps is caught on the first watchdog sample after resume
+// (about watchdogEvery, default 1s) rather than after however much of a
+// realistic, much longer heartbeatEvery was left when it slept. It ends the
+// session the same way heartbeat's own gap check does, through cancel.
+func (a *Agent) watchdog(ctx context.Context, cancel context.CancelFunc) {
+	ticker := time.NewTicker(a.watchdogEvery)
+	defer ticker.Stop()
+	last := a.now().Round(0)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		now := a.now().Round(0) // wall clock only, same as heartbeat's own check
+		if gap := now.Sub(last); gap > sleepGap {
+			a.logf("the clock jumped %s between watchdog samples — this machine slept; reconnecting", gap.Round(time.Second))
+			cancel()
+			return
+		}
+		last = now
+	}
+}
+
+// maybeSendFacts writes a facts frame when the facts changed and the last
+// frame is at least factsMinGap old, or when factsEvery has passed anyway.
+// factsSendMu holds this decision through the write and record (see its
+// field comment) so it cannot interleave with a concurrent sendFacts call —
+// a facts.refresh command on the same connection.
+func (a *Agent) maybeSendFacts(ctx context.Context, c *websocket.Conn) {
+	a.factsSendMu.Lock()
+	defer a.factsSendMu.Unlock()
+	a.factsMu.Lock()
+	last, lastAt := a.lastFacts, a.lastFactsAt
+	a.factsMu.Unlock()
+	since := a.now().Sub(lastAt)
+	if since < a.factsMinGap {
+		return
+	}
+	data, err := a.frameBytes()
+	if err != nil {
+		a.logf("facts frame not built: %v", err)
+		return
+	}
+	if since < a.factsEvery && bytes.Equal(data, last) {
+		return
+	}
+	if err := a.writeFacts(ctx, c, data); err != nil && ctx.Err() == nil {
+		a.logf("facts frame not sent: %v", err)
 	}
 }
 
@@ -307,7 +549,10 @@ func (a *Agent) handleCommand(ctx context.Context, c *websocket.Conn, frame map[
 
 	cmdCtx, cancel := context.WithTimeout(ctx, CommandTimeout)
 	defer cancel()
-	outcome := caps.Dispatch(cmdCtx, capability, args, a.deps)
+	// facts.refresh writes its frame on THIS connection, before its result.
+	deps := a.deps
+	deps.SendFacts = func(ctx context.Context) error { return a.sendFacts(ctx, c) }
+	outcome := caps.Dispatch(cmdCtx, capability, args, deps)
 
 	errStr := ""
 	if !outcome.OK {
@@ -338,6 +583,57 @@ func (a *Agent) emit(ctx context.Context, c *websocket.Conn, result wire.Result,
 	if err := writeFrame(ctx, c, auditFrame{Type: wire.TypeAudit, Entries: []map[string]any{entry}}); err != nil {
 		a.logf("audit write failed for %s: %v", envelopeID, err)
 	}
+}
+
+// sendFacts gathers a facts frame and writes it on c. factsSendMu holds the
+// build through the write and record (see its field comment) so this cannot
+// interleave with a concurrent maybeSendFacts call on the same connection.
+func (a *Agent) sendFacts(ctx context.Context, c *websocket.Conn) error {
+	a.factsSendMu.Lock()
+	defer a.factsSendMu.Unlock()
+	data, err := a.frameBytes()
+	if err != nil {
+		return err
+	}
+	return a.writeFacts(ctx, c, data)
+}
+
+// frameBytes gathers and encodes a facts frame. One over core's cap is an
+// error here — never sent to be refused over there.
+func (a *Agent) frameBytes() ([]byte, error) {
+	a.factsMu.Lock()
+	carried := append([]facts.Unreadable(nil), a.authUnread...)
+	a.factsMu.Unlock()
+	data, err := json.Marshal(a.gatherFrame(carried))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > facts.MaxFrameBytes {
+		return nil, fmt.Errorf("the facts frame is %d bytes, over the %d-byte cap", len(data), facts.MaxFrameBytes)
+	}
+	return data, nil
+}
+
+// writeFacts writes an encoded frame and remembers what went out and when.
+// The write is bounded by pingTimeout (fix round 1): on a dead path, once
+// the kernel's send buffer is full a facts write BLOCKS, and coder/websocket
+// closes the whole connection when a write's own context expires — the only
+// thing that frees a write truly stuck on a dead path. (A write that returns
+// proves nothing about the path: its bytes may only be buffered; the
+// heartbeat's ping is what catches that.) Without this, a stuck sendFacts
+// (facts.refresh, up to the 110s command timeout) or a stuck maybeSendFacts
+// held the connection's write lock for far longer, blocking the
+// heartbeat's own write behind it.
+func (a *Agent) writeFacts(ctx context.Context, c *websocket.Conn, data []byte) error {
+	wctx, cancel := context.WithTimeout(ctx, a.pingTimeout)
+	defer cancel()
+	if err := c.Write(wctx, websocket.MessageText, data); err != nil {
+		return err
+	}
+	a.factsMu.Lock()
+	a.lastFacts, a.lastFactsAt = data, a.now()
+	a.factsMu.Unlock()
+	return nil
 }
 
 type auditFrame struct {

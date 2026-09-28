@@ -28,6 +28,7 @@ alone has five distinct ways to be refused, and collapsing them into a single
 falsy value would leave the operator reading "enrollment failed" while the
 actual cause — a name already taken — sits in nobody's output.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -38,7 +39,7 @@ import uuid
 import asyncpg
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
-from app import governance
+from app import device_facts, governance
 
 PAIRING_CODE_TTL_SECONDS = 10 * 60
 PAIRING_CODE_LENGTH = 8
@@ -101,6 +102,8 @@ def device_spec(row: asyncpg.Record | dict) -> dict:
     first heartbeat) is the only liveness fact core has. T2 overwrites this
     field from live hub membership — never from a stored flag.
     """
+    facts = row.get("facts")
+    facts_at = row.get("facts_at")
     return {
         "id": str(row["id"]),
         "name": row["name"],
@@ -110,6 +113,13 @@ def device_spec(row: asyncpg.Record | dict) -> dict:
         "last_seen": row["last_seen"].isoformat() if row["last_seen"] else None,
         "revoked_at": row["revoked_at"].isoformat() if row["revoked_at"] else None,
         "connected": False,
+        # S42a: what the agent OBSERVED about its machine (device_facts), for
+        # the tile. Facts, never grants — roles are derived on read and are
+        # not part of this shape.
+        "os": device_facts.os_label(facts),
+        "wsl": device_facts.in_wsl(facts),
+        "agent_version": device_facts.agent_version(facts),
+        "facts_at": facts_at.isoformat() if facts_at else None,
     }
 
 
@@ -194,6 +204,24 @@ def _clean_name(name: str) -> str:
     return candidate
 
 
+def _clean_platform(platform: str) -> str:
+    """The OS the agent says it runs — Go's runtime.GOOS — or a refusal.
+    Before S42a any text was stored (every agent sent "linux"); migration 036's
+    CHECK now holds devices.platform to the known values, and this is where a
+    new row is held to them. Checked BEFORE the code is spent, like the key.
+
+    The refusal echoes what was sent, clipped to 64 characters: enroll is
+    core's one unauthenticated route (T2), so this string is attacker
+    controlled and must not be echoed back unbounded."""
+    candidate = (platform or "").strip().lower()
+    if candidate not in device_facts.PLATFORMS:
+        raise DeviceRefused(
+            f"platform must be one of {', '.join(device_facts.PLATFORMS)} (the agent's own "
+            f"runtime.GOOS), got {(platform or '')[:64]!r}"
+        )
+    return candidate
+
+
 async def enroll(
     pool: asyncpg.Pool,
     *,
@@ -218,7 +246,7 @@ async def enroll(
     """
     clean_pubkey = _clean_pubkey(pubkey)
     clean_name = _clean_name(name)
-    clean_platform = (platform or "").strip() or "unknown"
+    clean_platform = _clean_platform(platform)
     clean_hostname = (hostname or "").strip() or "unknown"
     core_pubkey = await core_public_key_hex(pool)
 
@@ -282,9 +310,7 @@ async def get_live(pool: asyncpg.Pool, device_id: uuid.UUID) -> asyncpg.Record |
 async def get_live_by_name(pool: asyncpg.Pool, name: str) -> asyncpg.Record | None:
     """Resolve the name a person (or the model, via T2's tools) used. The
     partial unique index guarantees at most one live match."""
-    return await pool.fetchrow(
-        "SELECT * FROM devices WHERE name = $1 AND revoked_at IS NULL", name
-    )
+    return await pool.fetchrow("SELECT * FROM devices WHERE name = $1 AND revoked_at IS NULL", name)
 
 
 async def list_devices(pool: asyncpg.Pool) -> list[dict]:
@@ -346,9 +372,7 @@ async def revoke(pool: asyncpg.Pool, *, device_id: uuid.UUID, actor: str) -> dic
             device_id,
         )
         if row is None:
-            raise DeviceRefused(
-                f"{exists} was already revoked", status_code=_REVOKED_STATUS
-            )
+            raise DeviceRefused(f"{exists} was already revoked", status_code=_REVOKED_STATUS)
         await governance.record_event(
             conn,
             kind=governance.DEVICE_REVOKED,

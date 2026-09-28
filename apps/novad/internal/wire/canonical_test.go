@@ -107,9 +107,10 @@ func TestSignatureVerifiesOverCanonicalForEveryVector(t *testing.T) {
 }
 
 // The astral / surrogate-pair branch is the one path no committed vector
-// reaches (all three stay within the BMP). Python emits a lowercase UTF-16
-// surrogate pair for a rune beyond U+FFFF; the daemon must match. 😀 is
-// U+1F600 -> 😀.
+// reaches (all five stay within the BMP — the S42a revoked-proof vector and
+// the S42a Task 13 Windows-path vector are both plain ASCII, same as the
+// first three). Python emits a lowercase UTF-16 surrogate pair for a rune
+// beyond U+FFFF; the daemon must match. 😀 is U+1F600 -> 😀.
 func TestCanonicalEmitsAstralAsASurrogatePair(t *testing.T) {
 	got, err := Canonical(map[string]any{"x": "😀"})
 	if err != nil {

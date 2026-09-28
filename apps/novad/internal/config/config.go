@@ -1,17 +1,23 @@
 // Package config is the daemon's on-disk custody: the enrollment config and
-// the ed25519 private key (0600, in a 0700 dir). It holds the identity that
-// proves WHO signed a command; nothing here decides WHAT a verified command
-// may do.
+// the ed25519 private key (0600, in a 0700 dir on Linux and macOS; on
+// Windows, in a directory whose DACL is protected and grants only SYSTEM and
+// this user — custody_windows.go). It holds the identity that proves WHO
+// signed a command; nothing here decides WHAT a verified command may do.
 package config
 
 import (
 	"crypto/ed25519"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"novad/internal/platform"
 )
 
 // Config is the enrollment record written by `novad enroll`.
@@ -22,9 +28,11 @@ type Config struct {
 	CorePubKey string `json:"core_pubkey"` // pinned at enrollment; 64 hex
 }
 
-// Paths resolves the daemon's file locations, honoring XDG_CONFIG_HOME and
-// XDG_STATE_HOME. The audit log lives in the state dir; the key and config in
-// the config dir.
+// Paths resolves the daemon's file locations per OS (platform.ConfigBase and
+// StateBase): Linux keeps XDG (unchanged, so an enrolled daemon finds its
+// key), macOS uses ~/Library/Application Support, Windows puts config in
+// %AppData% and the audit log in %LocalAppData%. The audit log lives in the
+// state dir; the key and config in the config dir.
 type Paths struct {
 	ConfigDir  string
 	StateDir   string
@@ -40,16 +48,16 @@ func DefaultPaths() (Paths, error) {
 	if err != nil {
 		return Paths{}, fmt.Errorf("cannot resolve home dir: %w", err)
 	}
-	configHome := os.Getenv("XDG_CONFIG_HOME")
-	if configHome == "" {
-		configHome = filepath.Join(home, ".config")
+	configBase, err := platform.ConfigBase()
+	if err != nil {
+		return Paths{}, fmt.Errorf("cannot resolve the config dir: %w", err)
 	}
-	stateHome := os.Getenv("XDG_STATE_HOME")
-	if stateHome == "" {
-		stateHome = filepath.Join(home, ".local", "state")
+	stateBase, err := platform.StateBase()
+	if err != nil {
+		return Paths{}, fmt.Errorf("cannot resolve the state dir: %w", err)
 	}
-	configDir := filepath.Join(configHome, "novad")
-	stateDir := filepath.Join(stateHome, "novad")
+	configDir := filepath.Join(configBase, "novad")
+	stateDir := filepath.Join(stateBase, "novad")
 	return Paths{
 		ConfigDir:  configDir,
 		StateDir:   stateDir,
@@ -81,6 +89,14 @@ func Save(p Paths, cfg Config, priv ed25519.PrivateKey) error {
 	}
 	if err := os.MkdirAll(p.StateDir, 0o700); err != nil {
 		return err
+	}
+	// Windows ignores the mode bits above; harden sets the DACL that makes
+	// them true there (custody_windows.go). Before the files are written, so
+	// they inherit it. A no-op elsewhere.
+	for _, dir := range []string{p.ConfigDir, p.StateDir} {
+		if err := harden(dir); err != nil {
+			return err
+		}
 	}
 	body, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -131,4 +147,61 @@ func writeFile0600(path string, body []byte) error {
 		return err
 	}
 	return f.Close()
+}
+
+// Wipe removes this device's identity after core revoked it: the config and
+// the key go, so a restart cannot reconnect as a device core has disowned,
+// and the audit log is SET ASIDE (renamed, never deleted — it is the record
+// of what this machine did) so a later enroll starts a fresh chain instead of
+// replaying the revoked device's chain under the new id. Missing files are
+// fine; any other failure is returned, because a wipe that silently
+// half-happened is the one outcome worse than none. The returned string is
+// where the audit log went — "" when there was none to move, or when the
+// rename did not complete — so a caller can say exactly what happened
+// instead of assuming every wipe moves one.
+func Wipe(p Paths, now time.Time) (string, error) {
+	var errs []error
+	for _, f := range []string{p.ConfigFile, p.KeyFile} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, err)
+		}
+	}
+	asidePath := ""
+	// Lstat the SOURCE first: on a second Wipe in the same unix second the
+	// live file is already gone, so this is a no-op rather than a second,
+	// pointless search for a free set-aside name. Any Stat/Lstat error
+	// other than "missing" (EACCES, EIO, ...) is reported, never swallowed
+	// as "nothing to do" — a wipe that silently left the audit log live is
+	// the one outcome worse than a crash.
+	if _, err := os.Lstat(p.AuditFile); err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			errs = append(errs, fmt.Errorf("checking the audit log %s: %w", p.AuditFile, err))
+		}
+	} else if aside, err := setAsideName(p.AuditFile, now); err != nil {
+		errs = append(errs, err)
+	} else if err := os.Rename(p.AuditFile, aside); err != nil {
+		errs = append(errs, err)
+	} else {
+		asidePath = aside
+	}
+	return asidePath, errors.Join(errs...)
+}
+
+// setAsideName is the first "<audit file>.revoked-<unix>[-N]" name that does
+// not exist yet. os.Rename REPLACES an existing destination on both Unix and
+// Windows, so reusing a name a previous wipe already claimed would silently
+// destroy that earlier audit log instead of keeping it.
+func setAsideName(auditFile string, now time.Time) (string, error) {
+	base := fmt.Sprintf("%s.revoked-%d", auditFile, now.Unix())
+	candidate := base
+	for n := 0; ; n++ {
+		if n > 0 {
+			candidate = fmt.Sprintf("%s-%d", base, n)
+		}
+		if _, err := os.Lstat(candidate); errors.Is(err, fs.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", fmt.Errorf("checking a set-aside name %s: %w", candidate, err)
+		}
+	}
 }

@@ -10,10 +10,11 @@ decisions). In order (`_admit`):
      never a silent no-op. Core signs only for a key it bound at pairing.
   2. reachable (transport) — the device's socket is live in the hub. An
      offline machine is the stated "not connected — its tile is stale" refusal.
-  3. for fs.* tools, the path is absolute, `posixpath.normpath`'d. A relative
-     path would resolve against the daemon's cwd, so it cannot be sent as
-     asked. This is a shape check, not a boundary: there are no filesystem
-     roots, and any absolute path is sent.
+  3. for fs.* tools, the path is absolute ON THE DEVICE'S OS — posix on Linux
+     and macOS; a drive or a share on Windows — and normalized once with that
+     OS's own rules. A relative path would resolve against the daemon's cwd,
+     so it cannot be sent as asked. This is a shape check, not a boundary:
+     there are no filesystem roots, and any absolute path is sent.
 
 Then core signs the envelope and sends it (`_command`), and only the device's
 own `result` frame comes back as success: a timeout, a dropped socket or a
@@ -25,11 +26,14 @@ here refuses on the owner's behalf.
 Reads are ephemeral (a live point-in-time answer, like fetch_url); writes,
 launches and shell runs are not.
 """
+
 from __future__ import annotations
 
+import ntpath
 import posixpath
+import re
 
-from app import db, devices, devices_ws, envelopes
+from app import db, device_facts, devices, devices_ws, envelopes
 from app.tools.base import RESULT_KIND_LISTING, Tool, ToolContext, ToolFailure
 
 # How long core waits for a device to answer one command. Bounded (<=120s per
@@ -68,9 +72,7 @@ async def _resolve(pool, name: object):
         live = sorted(
             d["name"] for d in await devices.list_devices(pool) if d["revoked_at"] is None
         )
-        known = (
-            f"the paired devices are: {', '.join(live)}" if live else "no device is paired"
-        )
+        known = f"the paired devices are: {', '.join(live)}" if live else "no device is paired"
         raise ToolFailure(
             f"no paired device named {name!r} — {known}; check the name in Settings → "
             "Devices (a revoked device is gone until it is paired again)"
@@ -105,22 +107,57 @@ def _require_connected(row, ctx: ToolContext | None = None) -> None:
         )
 
 
-def _check_fs_path(path: object) -> str:
-    """The requested path must be absolute; it is returned normalized. Lexical
-    on purpose: the path names a file on the REMOTE machine, so it cannot be
-    resolved here. A relative path would resolve against the daemon's cwd — a
-    different file from the one asked for — so it is refused as malformed.
-    `..` and `.` collapse under normpath so the daemon receives one spelling."""
-    if not isinstance(path, str) or not path.startswith("/"):
-        raise ToolFailure(f"path {path!r} must be absolute — start it with /")
-    return posixpath.normpath(path)
+# A Windows path the agent can open: a drive (C:\ or C:/) or a share
+# (\\server\share\..., which is how \\wsl.localhost\<distro>\... reaches WSL).
+_WINDOWS_DRIVE = re.compile(r"^[A-Za-z]:[\\/]")
+_WINDOWS_SHARE = re.compile(r"^[\\/]{2}[^\\/?.][^\\/]*[\\/][^\\/]+")
+_WINDOWS_DEVICE = ("\\\\?\\", "\\\\.\\", "//?/", "//./")
+
+
+def _check_fs_path(path: object, platform: str) -> str:
+    """The requested path must be absolute ON THE DEVICE'S OS; it is returned
+    normalized. Lexical on purpose: the path names a file on the REMOTE
+    machine, so it cannot be resolved here. A relative path would resolve
+    against the daemon's cwd — a different file from the one asked for — so it
+    is refused as malformed. `..` and `.` collapse under the OS's own normpath
+    so the daemon receives one spelling.
+
+    linux/darwin: posix, a leading "/". windows: a drive or a share, checked
+    EXPLICITLY — Python 3.12's ntpath.isabs also accepts a rooted path with
+    no drive ("\\foo"), which names no file — then ntpath.normpath. Device
+    paths (\\\\?\\, \\\\.\\) are refused: ntpath leaves them unnormalized, which
+    would break the one-spelling rule. An unknown platform cannot be checked,
+    and says so."""
+    if not isinstance(path, str):
+        raise ToolFailure(f"path {path!r} must be text")
+    if platform in ("linux", "darwin"):
+        if not path.startswith("/"):
+            raise ToolFailure(f"path {path!r} must be absolute — start it with /")
+        return posixpath.normpath(path)
+    if platform == "windows":
+        if path.startswith(_WINDOWS_DEVICE):
+            raise ToolFailure(
+                f"path {path!r} is a Windows device path — give a drive path (C:\\...) or a "
+                "share (\\\\server\\share\\...)"
+            )
+        if not (_WINDOWS_DRIVE.match(path) or _WINDOWS_SHARE.match(path)):
+            raise ToolFailure(
+                f"path {path!r} must be absolute on Windows — start it with a drive (C:\\) or a "
+                "share (\\\\wsl.localhost\\<distro>\\ reaches WSL)"
+            )
+        return ntpath.normpath(path)
+    raise ToolFailure(
+        "cannot: platform unknown — this device's pairing recorded no OS Nova knows, and the "
+        "OS is recorded only at pairing, so a path on it cannot be checked; revoke it and "
+        "pair it again"
+    )
 
 
 async def _admit(args: dict, *, ctx: ToolContext | None = None, fs_path: bool = False):
     """The per-device layer, in order: paired (not revoked) -> connected ->
-    (fs tools) absolute path. Returns (pool, row, normalized path or None) for
-    an executor to send with; raises ToolFailure to refuse. This is the ONLY
-    place the order lives.
+    (fs tools) absolute path on its OS. Returns (pool, row, normalized path or
+    None) for an executor to send with; raises ToolFailure to refuse. This is
+    the ONLY place the order lives.
 
     `ctx` is threaded through only so `_require_connected` can record the
     connectivity it determined on the turn's facts_sink; nothing here reads it
@@ -130,7 +167,7 @@ async def _admit(args: dict, *, ctx: ToolContext | None = None, fs_path: bool = 
     pool = await db.get_pool()
     row = await _resolve(pool, args["device"])
     _require_connected(row, ctx)
-    path = _check_fs_path(args["path"]) if fs_path else None
+    path = _check_fs_path(args["path"], row["platform"]) if fs_path else None
     return pool, row, path
 
 
@@ -195,7 +232,8 @@ async def device_list(args: dict, ctx: ToolContext) -> str:
     for d in live:
         status = "connected" if d["id"] in connected else "offline"
         last = d["last_seen"] or "never"
-        lines.append(f"- {d['name']} ({d['platform']}) — {status}, last seen {last}")
+        where = device_facts.place(d)
+        lines.append(f"- {d['name']} ({where}) — {status}, last seen {last}")
     return "Paired devices:\n" + "\n".join(lines)
 
 
@@ -283,7 +321,7 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="device_list",
         description=(
-            "List the computers paired with Nova (name, platform, whether they are "
+            "List the computers paired with Nova (name, the OS it runs, whether they are "
             "connected right now, and when each was last seen). Reads Nova's own records."
         ),
         parameters=_obj({}, []),
@@ -297,7 +335,10 @@ TOOLS: tuple[Tool, ...] = (
     ),
     Tool(
         name="device_info",
-        description="Report a paired device's OS, disk and memory summary.",
+        description=(
+            "Report a paired device's OS, disk, memory and uptime, and its home folder "
+            "(on Windows also its Desktop folder, which OneDrive may move)."
+        ),
         parameters=_obj({"device": _DEVICE_ARG}, ["device"]),
         executor=device_info,
         reads_only=True,
@@ -307,12 +348,18 @@ TOOLS: tuple[Tool, ...] = (
         name="device_list_files",
         description=(
             "List the contents of a directory on a paired device. Give an absolute path "
-            "on the device."
+            "in the device's own OS: /home/… on Linux and macOS; C:\\Users\\… or a share "
+            "such as \\\\wsl.localhost\\<distro>\\… on Windows."
         ),
         parameters=_obj(
             {
                 "device": _DEVICE_ARG,
-                "path": {"type": "string", "description": "Absolute directory path on the device."},
+                "path": {
+                    "type": "string",
+                    "description": (
+                        "Absolute directory path on the device. (in the device's own OS)"
+                    ),
+                },
             },
             ["device", "path"],
         ),
@@ -324,13 +371,18 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="device_read_file",
         description=(
-            "Read a text file on a paired device. Give an absolute path on the device; "
-            f"files larger than {READ_FILE_CAP_KIB} KiB are refused by the device."
+            "Read a text file on a paired device. Give an absolute path in the device's "
+            "own OS: /home/… on Linux and macOS; C:\\Users\\… or a share such as "
+            "\\\\wsl.localhost\\<distro>\\… on Windows. "
+            f"Files larger than {READ_FILE_CAP_KIB} KiB are refused by the device."
         ),
         parameters=_obj(
             {
                 "device": _DEVICE_ARG,
-                "path": {"type": "string", "description": "Absolute file path on the device."},
+                "path": {
+                    "type": "string",
+                    "description": "Absolute file path on the device. (in the device's own OS)",
+                },
             },
             ["device", "path"],
         ),
@@ -364,7 +416,9 @@ TOOLS: tuple[Tool, ...] = (
         name="device_run",
         description=(
             "Run a command on a paired device. Give the command as argv — a list of strings, "
-            "the program first (e.g. [\"ls\", \"-la\", \"/tmp\"]) — never a shell string."
+            'the program first (e.g. ["ls", "-la", "/tmp"]) — never a shell string.'
+            ' On Windows a built-in command runs through cmd: ["cmd", "/c", "dir", "C:\\\\Users"]; '
+            'WSL is reached through wsl.exe: ["wsl.exe", "-d", "<distro>", "--", "uname", "-a"].'
         ),
         parameters=_obj(
             {
@@ -384,13 +438,18 @@ TOOLS: tuple[Tool, ...] = (
     Tool(
         name="device_write_file",
         description=(
-            "Write a text file on a paired device. Give an absolute path on the device; "
-            f"content larger than {WRITE_FILE_CAP_KIB} KiB is refused."
+            "Write a text file on a paired device. Give an absolute path in the device's "
+            "own OS: /home/… on Linux and macOS; C:\\Users\\… or a share such as "
+            "\\\\wsl.localhost\\<distro>\\… on Windows. "
+            f"Content larger than {WRITE_FILE_CAP_KIB} KiB is refused."
         ),
         parameters=_obj(
             {
                 "device": _DEVICE_ARG,
-                "path": {"type": "string", "description": "Absolute file path on the device."},
+                "path": {
+                    "type": "string",
+                    "description": "Absolute file path on the device. (in the device's own OS)",
+                },
                 "content": {
                     "type": "string",
                     "description": f"The full new file contents (up to {WRITE_FILE_CAP_KIB} KiB).",
