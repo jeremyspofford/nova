@@ -1022,7 +1022,8 @@ async def get_routes(request: Request) -> dict:
     `?chat_model=` is chat.model — core's setting, which core passes here
     (the gateway never reads core's settings) — and `?chat_model_roles=`
     names, comma-separated, the roles whose turns send it as link 1. The
-    Jev Router switch reads it as link 1 of those roles and no other."""
+    Jev Router switch reads it as link 1 of those roles and no other, in
+    front of the chain each walks: its own, or chat's when it has none."""
     pool = await db.get_pool()
     chains = await routing.chains(pool)
     walled = await routing.walls(pool)
@@ -1037,12 +1038,15 @@ async def get_routes(request: Request) -> dict:
 
     def switch_state(role: str) -> dict | None:
         """The Jev Router switch (decision-role spec §4): its state, DERIVED
-        from the effective chain; None where it is not offered."""
+        from the chain the role's turns walk — its own, or chat's when it has
+        none (routing.role_state); None where it is not offered."""
         if not routing.router_switchable(role):
             return None
         kept_link, kept_slot = kept.get(role, (None, None))
-        return routing.router_state(
+        return routing.role_state(
+            role,
             chains.get(role, []),
+            chains.get("chat", []),
             by_name,
             kept_link,
             kept_slot,

@@ -82,6 +82,14 @@ def protocol_of(role: str) -> str:
     return SYSTEMONE if role in SYSTEMONE_ROLES else CHAT
 
 
+def borrows_chat_chain(role: str, chain: Sequence[str]) -> bool:
+    """Does `role` walk chat's chain? A role whose calls speak chat and that
+    has no chain of its own does — the one rule the walk (resolve) and the
+    Jev Router switch both read. Chat's chain is chat's own, and a systemone
+    role never borrows: chat's links answer chat."""
+    return not chain and role != "chat" and protocol_of(role) == CHAT
+
+
 def speaks(row: dict, protocol: str) -> bool:
     """Can a link on this provider carry `protocol`? Read off the provider's
     own adapter (Adapter.protocols), never a list of vendors kept here."""
@@ -247,8 +255,12 @@ async def set_chain(
 
 async def delete_chain(pool: asyncpg.Pool, role: str) -> bool:
     """Drop a role's row. True only when a row was actually deleted — the
-    command tag is read, never assumed (role is the primary key: 0 or 1)."""
-    result = await pool.execute("DELETE FROM routes WHERE role = $1", role)
+    command tag is read, never assumed (role is the primary key: 0 or 1).
+    Under the role's lock, like every other write of the row, so a switch
+    that read it before the delete never writes it back after."""
+    async with pool.acquire() as conn, conn.transaction():
+        await _lock_role(conn, role)
+        result = await conn.execute("DELETE FROM routes WHERE role = $1", role)
     return result == "DELETE 1"
 
 
@@ -277,11 +289,13 @@ def router_switchable(role: str) -> bool:
 
 
 def is_router_link(link: str) -> bool:
-    """Is this link Jev Router? Read off the link's own text — its model, after
-    the FIRST colon — never off the provider list: deleting the provider that
-    served it must never make the switch read off or lose what it kept."""
+    """Is this link Jev Router? Read off the link's own text — the bare model,
+    or the model after the FIRST colon — never off the provider list:
+    deleting the provider that served it must never make the switch read off
+    or lose what it kept. A bare id (a chat.model with no provider) is a
+    model on the default provider, and Jev Router all the same."""
     _provider, colon, model = link.partition(":")
-    return bool(colon) and model == JEV_ROUTER_MODEL
+    return link == JEV_ROUTER_MODEL or (bool(colon) and model == JEV_ROUTER_MODEL)
 
 
 def router_link(chain: Sequence[str]) -> str | None:
@@ -300,9 +314,9 @@ def _cloud_slot(
 ) -> tuple[str, int | None] | None:
     """Where the role's cloud link sits in its EFFECTIVE chain — `chat_model`,
     the chat model core passes for a role whose turns send it as link 1, then
-    the stored chain: the first link that is Jev Router or on a cloud
-    provider. (CHAT_MODEL_SLOT, None), (CHAIN_SLOT, its index in the stored
-    chain), or None when every link is local."""
+    `chain`, the stored chain those turns walk: the first link that is Jev
+    Router or on a cloud provider. (CHAT_MODEL_SLOT, None), (CHAIN_SLOT, its
+    index in `chain`), or None when every link is local."""
     if chat_model and (is_router_link(chat_model) or _is_cloud(chat_model, by_name)):
         return CHAT_MODEL_SLOT, None
     for index, link in enumerate(chain):
@@ -336,6 +350,24 @@ def router_state(
     if at is None:
         return {"on": False, "kept": None}
     return {"on": True, "kept": kept if kept_slot == at[0] else None}
+
+
+def role_state(
+    role: str,
+    chain: Sequence[str],
+    chat_chain: Sequence[str],
+    by_name: dict[str, dict],
+    kept: str | None,
+    kept_slot: str | None,
+    chat_model: str | None = None,
+) -> dict:
+    """The switch's state on `role`, read off the chain its turns walk: its
+    own stored `chain`, or chat's when it has none of its own
+    (borrows_chat_chain). There the router, and the link it kept, are
+    chat's, so no kept link is shown."""
+    if borrows_chat_chain(role, chain):
+        return router_state(chat_chain, by_name, None, None, chat_model)
+    return router_state(chain, by_name, kept, kept_slot, chat_model)
 
 
 async def router_kept(pool: asyncpg.Pool) -> dict[str, tuple[str | None, str | None]]:
@@ -437,33 +469,40 @@ async def set_router(
 
     The state is read off the role's EFFECTIVE chain: `chat_model` — the chat
     model core passes for a role whose turns send it as link 1 (None or '' is
-    no pick) — then the stored chain. The cloud slot is the first link there
-    that is Jev Router or on a cloud provider, and the switch is on exactly
-    when that slot holds Jev Router. Asking for the state it is already in
-    changes nothing, except that OFF while off forgets a stale kept link.
+    no pick) — then the stored chain those turns walk. The cloud slot is the
+    first link there that is Jev Router or on a cloud provider, and the
+    switch is on exactly when that slot holds Jev Router.
 
-    ON puts `link` (`<provider>:typesafe/jev-router`) in the cloud slot and
-    keeps what it replaced, with the slot it was kept for. On the chat model
-    (chat only) the stored chain is not touched: the pick is kept as
-    provider:model, and the answer's `chat_model` is what chat.model must
-    become — core writes it; chat.model has one writer. In the stored chain
-    the link is replaced in place; with no cloud slot the router goes after
-    the local links, kept ''. A router the switch placed in the stored chain
-    and a cloud chat model has since displaced gets what it replaced back
-    first: a role never holds two routers the switch placed.
+    A non-chat role with no chain of its own walks chat's, so its switch is
+    read there and nothing is written for it: asked for the state it reads,
+    it answers with that state; asked for the other, it is refused in words
+    pointing at chat's switch (a one-link chain of its own would silently
+    stop it walking chat's).
+
+    ON while on changes nothing. ON puts `link`
+    (`<provider>:typesafe/jev-router`) in the cloud slot and keeps what it
+    replaced, with the slot it was kept for. On the chat model (chat only)
+    the stored chain is not touched: the pick is kept as provider:model, and
+    the answer's `chat_model` is what chat.model must become — core writes
+    it; chat.model has one writer. In the stored chain the link is replaced
+    in place; with no cloud slot the router goes after the local links, kept
+    ''. A router the switch placed in the stored chain and a cloud chat model
+    has since displaced gets what it replaced back first: a role never holds
+    two routers the switch placed.
 
     OFF puts the kept link back in the router's slot. On the chat model it
     answers with the pick and keeps it until core has written it, so OFF can
     be asked again. A link is never doubled, and a kept link whose provider
-    no longer exists is not put back — the answer's `note` says so.
+    no longer exists is not put back — the answer's `note` says so. OFF while
+    off puts back what a displaced router replaced, as ON does, and forgets
+    any other kept link: its slot does not hold the router.
 
     Refused, in words (ValueError): a role the switch is not offered on; a
     link that is not Jev Router, or whose provider cannot carry the role's
     calls; a role sharing chat's cloud chat model (its switch is chat's); a
-    non-chat role with no chain of its own — it walks chat's, and a one-link
-    chain would silently stop it; chat with neither a chain nor a chat model
-    (it answers with the gateway's default model); and OFF on a chat model
-    the switch did not replace."""
+    role with no chain of its own, as above; chat with neither a chain nor a
+    chat model (it answers with the gateway's default model); and OFF on a
+    chat model the switch did not replace."""
     validate_role(role)
     if not router_switchable(role):
         raise ValueError(
@@ -478,6 +517,11 @@ async def set_router(
         chain = list(json.loads(row["chain"])) if row else []
         kept = row["router_kept"] if row else None
         kept_slot = row["router_kept_slot"] if row else None
+        if borrows_chat_chain(role, chain):
+            chat_chain = json.loads(
+                await conn.fetchval("SELECT chain FROM routes WHERE role = 'chat'") or "[]"
+            )
+            return _walks_chat(role, on, chat_chain, pick, by_name)
         at = _router_at(chain, by_name, pick)
         if on and at is not None:
             return _answer(role, chain, by_name, kept, kept_slot, pick)
@@ -486,6 +530,27 @@ async def set_router(
         if at is not None:
             return await _switch_off(conn, role, chain, kept, kept_slot, pick, at, by_name)
         return await _off_while_off(conn, role, chain, kept, kept_slot, pick, by_name)
+
+
+def _walks_chat(
+    role: str, on: bool, chat_chain: list[str], pick: str, by_name: dict[str, dict]
+) -> dict:
+    """ON or OFF on a role with no chain of its own. Its turns walk chat's
+    chain, so its switch is read there (role_state), and nothing there is
+    this role's to change: asked for the state it reads, it answers with it;
+    asked for the other, it is refused in words pointing at chat's switch."""
+    router = role_state(role, [], chat_chain, by_name, None, None, pick)
+    if on and not router["on"]:
+        raise ValueError(
+            f"{role} has no chain of its own — it walks the chat chain; switch Jev Router "
+            f"on for chat, or give {role} its own chain first"
+        )
+    if router["on"] and not on:
+        raise ValueError(
+            f"{role} has no chain of its own — it walks the chat chain; switch Jev Router "
+            "off for chat"
+        )
+    return {"role": role, "chain": [], "router": router}
 
 
 async def _switch_on(
@@ -948,7 +1013,7 @@ async def resolve(
         engine_names.append(row["name"])
     all_chains = await chains(pool)
     chain = list(all_chains.get(role) or [])
-    if not chain and role != "chat" and protocol == CHAT:
+    if borrows_chat_chain(role, chain):
         # A chat role with no chain of its own walks chat's. A systemone role
         # never does: chat's links answer chat, and a chat model asked a typed
         # question at /systemone has nothing to say (decision-role spec §1).

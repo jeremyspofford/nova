@@ -9,14 +9,15 @@ words, where it cannot apply; the routes page says where it applies.
 
 The state, read the same way everywhere: a role's EFFECTIVE chain is the
 chat model core passes for it (link 1 of chat's, scheduled's and beat's
-turns), then its stored chain. Its cloud slot is the first link there that
-is Jev Router or on a cloud provider, and the switch is on exactly when that
-slot holds Jev Router — read off the link's own text, so a deleted provider
-never turns it off. On chat a cloud chat model is that slot: the answer names
-the chat model core must write (core is chat.model's one writer), and a role
-that shares it is switched on chat. OFF always works, and never doubles a
-link: a kept link whose provider is gone is not put back, and the answer
-says so."""
+turns), then the stored chain its turns walk — chat's, for a role with none
+of its own. Its cloud slot is the first link there that is Jev Router or on
+a cloud provider, and the switch is on exactly when that slot holds Jev
+Router — read off the link's own text, bare or after a provider, so a
+deleted provider never turns it off. On chat a cloud chat model is that
+slot: the answer names the chat model core must write (core is chat.model's
+one writer), and a role that shares it is switched on chat. OFF always
+works, and never doubles a link: a kept link whose provider is gone is not
+put back, and the answer says so."""
 
 from __future__ import annotations
 
@@ -326,6 +327,30 @@ async def test_a_bare_cloud_pick_is_kept_and_put_back_qualified(client, pool, wo
     }
 
 
+async def test_a_bare_jev_router_chat_model_reads_on_and_off_hands_the_pick_back(
+    client, pool, world
+):
+    """chat.model can name Jev Router bare, with no provider: a model on the
+    default provider. It is Jev Router all the same: the switch reads on, and
+    OFF hands back the pick it kept."""
+    bare = "typesafe/jev-router"
+    await _switch(client, "chat", True, chat_model=PICKED)
+
+    assert (await _roles(client, chat_model=bare))["chat"]["router"] == {
+        "on": True,
+        "kept": PICKED,
+    }
+    off = await _switch(client, "chat", False, chat_model=bare)
+
+    assert off.status_code == 200, off.text
+    assert off.json() == {
+        "role": "chat",
+        "chain": [],
+        "router": {"on": False, "kept": None},
+        "chat_model": PICKED,
+    }
+
+
 async def test_a_chain_edit_while_the_router_is_the_chat_model_keeps_the_pick(client, pool, world):
     """The router sits in chat.model, not in the stored chain, so an edit to
     chat's fallbacks removes no router link: the pick stays kept, and OFF
@@ -498,6 +523,39 @@ async def test_scheduled_shares_the_chat_model_so_its_cloud_link_is_switched_on_
     }
 
 
+async def test_a_role_with_no_chain_of_its_own_reads_the_switch_off_the_chat_chain_it_walks(
+    client, pool, world
+):
+    """Scheduled with no chain of its own walks chat's, so its switch is read
+    there: on when chat's router is its cloud slot, and never with a kept
+    link, which is chat's. Nothing there is scheduled's to change: its OFF is
+    refused in words pointing at chat's switch, its ON answers as on and
+    writes nothing, and after chat's OFF it reads off."""
+    local = "hub:qwen3:8b"
+    await client.put("/admin/routes/chat", json={"chain": [local, "cerebras:llama"]})
+    await _switch(client, "chat", True, chat_model=local)
+
+    roles = await _roles(client, chat_model=local)
+
+    assert roles["scheduled"]["chain"] == []
+    assert roles["scheduled"]["router"] == {"on": True, "kept": None}
+    off = await _switch(client, "scheduled", False, chat_model=local)
+    assert off.status_code == 400
+    assert off.json()["error"] == (
+        "scheduled has no chain of its own — it walks the chat chain; switch Jev Router off "
+        "for chat"
+    )
+    on = await _switch(client, "scheduled", True, chat_model=local)
+    assert on.status_code == 200, on.text
+    assert on.json() == {"role": "scheduled", "chain": [], "router": {"on": True, "kept": None}}
+    assert await pool.fetchval("SELECT count(*) FROM routes WHERE role = 'scheduled'") == 0
+    await _switch(client, "chat", False, chat_model=local)
+    assert (await _roles(client, chat_model=local))["scheduled"]["router"] == {
+        "on": False,
+        "kept": None,
+    }
+
+
 async def test_beat_walks_the_chat_model_when_core_passes_it(client, pool, world):
     """Core's beat turns send chat.model as link 1 too. The gateway keeps no
     list of such roles: a chat model core passes for a role is that role's
@@ -605,26 +663,31 @@ async def test_a_kept_link_is_stored_with_its_slot_or_not_at_all(pool):
             await pool.execute(sql)
 
 
-async def test_a_chain_edit_and_the_switch_on_one_role_wait_for_each_other(client, pool, world):
-    """Each reads the role's row and writes it back, so neither may run
-    between the other's read and write. Both hold the role's lock for the
-    whole of it — seen here by holding that lock from outside, on a role
-    with no row yet (where a row lock would lock nothing), and watching
-    each wait for it."""
-    for put in (
-        lambda: client.put("/admin/routes/chat", json={"chain": [PICKED]}),
-        lambda: _switch(client, "chat", True),
+async def test_a_chain_edit_the_switch_and_a_delete_on_one_role_wait_for_each_other(
+    client, pool, world
+):
+    """Each reads the role's row and writes it back, or deletes it, so none
+    may run between another's read and write: a switch must never re-insert
+    a row a delete has just removed. Each holds the role's lock for the whole
+    of it — seen here by holding that lock from outside and watching each
+    wait for it. The first runs on a role with no row yet, where a row lock
+    would lock nothing."""
+    await client.put("/admin/routes/agent_coder", json={"chain": [PICKED]})
+    for role, act in (
+        ("chat", lambda: client.put("/admin/routes/chat", json={"chain": [PICKED]})),
+        ("chat", lambda: _switch(client, "chat", True)),
+        ("agent_coder", lambda: client.delete("/admin/routes/agent_coder")),
     ):
         async with pool.acquire() as conn:
             held = conn.transaction()
             await held.start()
-            await conn.execute("SELECT pg_advisory_xact_lock(hashtext('routes:chat'))")
-            task = asyncio.create_task(put())
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1::text))", f"routes:{role}")
+            task = asyncio.create_task(act())
             await asyncio.sleep(0.3)
             waited = not task.done()
             await held.rollback()
         resp = await asyncio.wait_for(task, 5)
-        assert waited
+        assert waited, role
         assert resp.status_code == 200, resp.text
 
 
