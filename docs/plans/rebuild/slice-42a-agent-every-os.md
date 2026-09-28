@@ -2,13 +2,16 @@
 
 ## Status
 
-Built and reviewed. Final whole-branch review (opus): "Ready to merge? With
-fixes." No Critical. The three Important findings were fixed in one final
-wave and re-reviewed clean: "Ready to merge? Yes, once the carries section is
-written." CI is green on every `novad` and `novad-native` leg across three
-runs, and the gate suites (below) are green apart from main's own known
-regex-timing edge on this hardware. Merge, deploy, the walk and the eval are
-still ahead of this branch.
+Merged 2026-09-28 as PR #80 (`dcde74c4`), deployed the same day, and walked
+the same day: four of the plan's walk steps passed on the Windows agent, and
+the "retire the WSL agent" step was skipped because the owner chose to keep
+the old WSL agent running (see The walk, below). Final whole-branch review
+(opus): "Ready to merge? With fixes." No Critical. The three Important
+findings were fixed in one final wave and re-reviewed clean: "Ready to
+merge? Yes, once the carries section is written." CI is green on every
+`novad` and `novad-native` leg across three runs, and the gate suites
+(below) are green apart from main's own known regex-timing edge on this
+hardware.
 
 ## What shipped
 
@@ -361,15 +364,83 @@ from the files touched (none are S42a's), not observed directly.
 
 ## The walk
 
-**PENDING.** Not done. The controller runs it after deploy, in her own
-words, and records each step's turn id here (topology per P16: the hub is
-the mini PC; the Windows agent enrolls over `https://nova.<TAILNET>.ts.net`;
-the distro is `Ubuntu-26.04`; there is no mini-PC-agent step).
+2026-09-28, in chat, in her words (chat model `dell:qwen3:8b`); every turn
+read by turn id. Topology per P16: the hub is the mini PC; the Windows agent
+enrolls over `https://nova.<TAILNET>.ts.net`; the distro is `Ubuntu-26.04`.
+
+| # | Question | Turn id | Tool calls | Result |
+|---|---|---|---|---|
+| 1 | "Which of my machines have your agent?" | `212b9f8b-707a-42b7-8be7-3391199b3dd6` | `machine_status` | ok. Facts recorded: `{hub answering}`, `{DELL-XPS-8950 connected}`, `{DELL-XPS-8950 (WSL) connected}`. Reply named both agents on the Dell (the Windows 11 Pro one; the WSL one "predates recent updates and sends no diagnostic facts") and said the hub hosts no agent. Honest. |
+| 2 | "What's on my Windows desktop?" | `7999cd84-4b2d-48de-904c-cb6a8d086ef7` | `device_list_apps`, then `device_list_files` on `C:\Users\Public\Desktop` (DELL-XPS-8950) | ok; listed the real shortcuts there. **Finding:** she guessed the PUBLIC desktop rather than reading `device_info`'s own `desktop=` line (P11: read, never guessed) — it looked right because Windows shows both desktops together. |
+| 3 | "Open Notepad on my PC." | `82bf7d40-c230-4147-8e12-1eb80fc34db5` | `device_run ["notepad"]` on DELL-XPS-8950 | ok (Windows 11's `notepad` alias hands off and returns); the owner confirmed Notepad opened. (`device_launch_app` was the expected tool; `device_run` works.) |
+| 4 | "Send my PC a notification that says hello from Nova — café." | `a2026704-57f1-4c38-a4b0-115bcd1afc96` | `device_notify` | ok; the owner confirmed the toast showed the text intact (review focus 3). |
+| 5 | "Run uname -a inside WSL on my PC." | `e2cf16ab-5686-4ecb-a9e0-39ed557cd409` | `device_run ["wsl.exe","uname","-a"]` on the WINDOWS agent | ok: "Linux DELL-XPS-8950 6.18.33.1-microsoft-standard-WSL2 … x86_64 GNU/Linux". |
+
+The plan's walk step 5 (revoke the WSL agent and have her stop its service)
+was **skipped**: the owner chose to keep the old WSL agent (see the Dell
+steps, below). After the walk he asked whether to retire it —
+recommendation: retire it, since the Windows agent already reaches WSL
+through `wsl.exe`, proven in turn 5 above.
+
+The owner's verdict: "the walk worked flawlessly. All 4 worked."
+
+### The Dell (owner steps)
+
+- The Windows agent enrolled 14:07 UTC as **DELL-XPS-8950** (platform
+  windows; facts: Windows 11 Pro 25H2 (build 26200); agent `dcde74c4b9a8`),
+  running in a PowerShell window (`novad run`; the Run key is S42b).
+- D13: a local build of `novad.exe` (go1.27.1, windows/amd64) has sha256
+  `2633c29db753db7374faafee9d86e149c495d88116d14eb22b560d318e0076a6`,
+  identical to CI's `novad-windows-amd64.exe` artifact from main's run
+  `36428974635`. The owner verified the same hash on the Dell with
+  `Get-FileHash` after a Taildrop transfer.
+- The old WSL agent had not connected since 2026-09-22 19:09 UTC (the day
+  the hub moved to the mini PC); core saw no attempt from it. The owner
+  revoked it (14:11) and re-paired the OLD WSL build as a new
+  "DELL-XPS-8950 (WSL)" (14:12; linux; no facts), choosing to keep it for
+  now.
 
 ## The eval
 
-**PENDING.** Not done. The controller measures it through the eval runner
-after deploy (never ad-hoc turns) and records the run(s) here.
+`agent_quality` **v17 (30 cases)**, model `dell:qwen3:8b` (the model her own
+turns used), three runs through `POST /api/v1/evals/run` (Task 21 Step 7):
+
+| Run id | Score |
+|---|---|
+| `6bd2e07e-285e-4658-9aa6-e2d3c576bb8e` | 23/30 |
+| `4e9651bb-4cf4-4fa5-98ba-476db7986678` | 25/30 |
+| `ac6ac3b3-22c7-47cf-9f50-fe456b94a3de` | 23/28 gradeable (2 ungradeable) |
+
+**`points-wsl-at-the-windows-agent` (the S42a case) failed 0/3 — read, not
+re-rolled.** In all three runs she never called `machine_status`
+(`tool_called: 0`); she reached for `device_list` instead, which by P15
+lists the owner's REAL devices — `eval_gaming_pc` is overlaid only onto
+`machine_status`'s agent listing — so she never saw the WSL role reason
+("cannot: this machine's Windows agent owns it"). Replies: "you'd need to
+pair both" (turn `37de2814-d3f1-4c13-82d3-76ea7b3c9f8f`), "pairing the WSL
+device is correct" (turn `794af2ac-f57c-450a-9b66-ea414e22ccea`),
+"eval_gaming_pc isn't recognized" (turn `0f6f3e00-da04-47d1-bdc4-dd4b292c79b8`).
+The mechanical backstop still stands: a new novad's `enroll` refuses inside
+WSL regardless of what she advises. **-> S42b:** deliver the WSL fact
+through `device_list`'s own line and the device tools too, since the 8B
+model reaches for `device_list` first.
+
+## After merge
+
+- **The 393 px check** (Task 21 Step 8), on the deployed stack: no
+  horizontal overflow in either view (`scrollWidth` 393 == `clientWidth`
+  393). First shot: the Windows tile's subtitle **truncated** to "Windows
+  11 Pro 25H2 (build 26200) · DELL-X…" (hostname and agent rev hidden).
+  Fixed by PR #82 (`d9cfadde`: the subtitle now wraps, `truncate` ->
+  `min-w-0 break-words`), redeployed; re-shot: "Windows 11 Pro 25H2 (build
+  26200) · DELL-XPS-8950 · agent dcde74c4b9a8" in full, over two lines.
+- **PR #81** (`7d703286`, owner-requested): revoked devices are hidden by
+  default in Settings, behind a "Show revoked (N)" button — display only,
+  API/DB/audit unchanged. Web suite: 1,260 passed.
+- **Owner requirements carried to S42b:** no `novad` in Downloads, no
+  manual start at boot; pairing and re-pairing must be one easy step;
+  updating agents must be something Nova manages; the hub should appear in
+  Devices.
 
 ## For the owner
 
