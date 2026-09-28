@@ -135,9 +135,9 @@ The worktree `.worktrees/s42a` on `slice/s42a` already exists, branched from `or
 - [ ] **Step 0: Rebase onto today's `main`**
 
 ```bash
-git -C /home/jeremy/workspace/nova fetch -q origin
-git -C /home/jeremy/workspace/nova/.worktrees/s42a rebase origin/main
-git -C /home/jeremy/workspace/nova/.worktrees/s42a log --oneline -3
+git -C ~/workspace/nova fetch -q origin
+git -C ~/workspace/nova/.worktrees/s42a rebase origin/main
+git -C ~/workspace/nova/.worktrees/s42a log --oneline -3
 ```
 
 Expected: the plan commits sit on top of `origin/main`. A conflict in a plan file means someone else edited `docs/plans/rebuild/s42a/`: read their change before resolving it.
@@ -145,7 +145,7 @@ Expected: the plan commits sit on top of `origin/main`. A conflict in a plan fil
 - [ ] **Step 1: Core, gateway and memory suites on your own scratch databases**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 PW=$(docker inspect nova-scratch-pg --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^POSTGRES_PASSWORD=//p')
 for svc in core gateway memory; do docker exec nova-scratch-pg createdb -U postgres nova_${svc}_s42a 2>/dev/null; done
 cd $W/services/core && uv sync && TEST_DATABASE_URL=postgresql://postgres:$PW@127.0.0.1:55432/nova_core_s42a uv run pytest -q 2>&1 | tail -3
@@ -158,7 +158,7 @@ Expected: all green. Record the three pass counts in the slice's carries file (T
 - [ ] **Step 2: Web**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/web && npm ci && npm test 2>&1 | tail -3 && npx tsc --noEmit && echo TSC-OK
+cd ~/workspace/nova/.worktrees/s42a/apps/web && npm ci && npm test 2>&1 | tail -3 && npx tsc --noEmit && echo TSC-OK
 ```
 
 Expected: tests pass and `TSC-OK`. Use `npm test`, never `npx vitest run`: the latter fails on Node 26 at `localStorage.clear`.
@@ -199,7 +199,7 @@ Expected: tests pass and `TSC-OK`. Use `npm test`, never `npx vitest run`: the l
 - [ ] **Step 1: Add the dependency**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad && ~/.local/bin/mise x -- go get golang.org/x/sys@v0.48.0
+cd ~/workspace/nova/.worktrees/s42a/apps/novad && ~/.local/bin/mise x -- go get golang.org/x/sys@v0.48.0
 ```
 
 Expected: `go.mod` gains `golang.org/x/sys v0.48.0` and `go.sum` gains its lines. (The `mise x --` prefix runs the repo's pinned Go. In an interactive shell plain `go` is the same binary.)
@@ -1152,7 +1152,7 @@ func StateBase() (string, error) { return os.UserCacheDir() }
 - [ ] **Step 5: Run the tests and the cross-OS vet**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad
+cd ~/workspace/nova/.worktrees/s42a/apps/novad
 ~/.local/bin/mise x -- go test ./internal/platform/ -v 2>&1 | tail -20
 for t in darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 ~/.local/bin/mise x -- go vet ./internal/platform/ && echo "vet ok $t"; done
 ```
@@ -1162,7 +1162,7 @@ Expected: every platform test passes, followed by four `vet ok` lines.
 - [ ] **Step 6: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/go.mod apps/novad/go.sum apps/novad/internal/platform/
 git -C $W commit -m "feat(novad): internal/platform, the one OS seam for Linux, macOS and Windows"
 git -C $W show --stat HEAD | tail -25
@@ -1692,7 +1692,7 @@ In `apps/novad/internal/caps/apps.go`, change `func appsList() Outcome {` to `fu
 - [ ] **Step 4: Run the tests**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad
+cd ~/workspace/nova/.worktrees/s42a/apps/novad
 ~/.local/bin/mise x -- go test ./... 2>&1 | tail -8
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 ~/.local/bin/mise x -- go vet ./... && echo "vet ok darwin"
 ```
@@ -1702,7 +1702,7 @@ Expected: all packages pass on Linux, then `vet ok darwin`. Windows still fails 
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/internal/caps/caps.go apps/novad/internal/caps/table.go apps/novad/internal/caps/system.go apps/novad/internal/caps/notify.go apps/novad/internal/caps/notify_linux.go apps/novad/internal/caps/notify_darwin.go apps/novad/internal/caps/notify_windows.go apps/novad/internal/caps/powershell.go apps/novad/internal/caps/apps.go apps/novad/internal/caps/caps_test.go apps/novad/internal/caps/powershell_test.go apps/novad/internal/caps/notify_darwin_test.go apps/novad/internal/caps/notify_windows_test.go
 git -C $W commit -m "feat(novad): a dispatch table, facts.refresh, system.info and notify on every OS"
 git -C $W show --stat HEAD | tail -20
@@ -2104,7 +2104,7 @@ func matchStartApp(apps []platform.StartApp, app string) (string, bool) {
 - [ ] **Step 4: Run the tests and all six builds**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad
+cd ~/workspace/nova/.worktrees/s42a/apps/novad
 ~/.local/bin/mise x -- go test ./... 2>&1 | tail -8
 for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 ~/.local/bin/mise x -- go vet ./... && echo "vet ok $t"; done
 ```
@@ -2114,7 +2114,7 @@ Expected: every package passes, followed by six `vet ok` lines. **This is the fi
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/internal/caps/apps.go apps/novad/internal/caps/apps_linux.go apps/novad/internal/caps/apps_darwin.go apps/novad/internal/caps/apps_windows.go apps/novad/internal/caps/apps_match.go apps/novad/internal/caps/apps_match_test.go apps/novad/internal/caps/apps_linux_test.go apps/novad/internal/caps/apps_windows_test.go
 git -C $W commit -m "feat(novad): apps on Linux, macOS and Windows — the build compiles for all six targets"
 git -C $W show --stat HEAD | tail -12
@@ -2344,7 +2344,7 @@ const killGrace = 5 * time.Second
 - [ ] **Step 4: Run the tests and the six builds**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad
+cd ~/workspace/nova/.worktrees/s42a/apps/novad
 ~/.local/bin/mise x -- go test -race ./... 2>&1 | tail -8
 for t in darwin/arm64 windows/amd64 windows/arm64; do GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 ~/.local/bin/mise x -- go vet ./... && echo "vet ok $t"; done
 ```
@@ -2354,7 +2354,7 @@ Expected: all pass, including the timeout test in under 3 s, followed by three `
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/internal/caps/shell.go apps/novad/internal/caps/procattr_unix.go apps/novad/internal/caps/procattr_windows.go apps/novad/internal/caps/caps_test.go apps/novad/internal/caps/caps_unix_test.go apps/novad/internal/caps/shell_unix_test.go apps/novad/internal/caps/caps_windows_test.go
 git -C $W commit -m "fix(novad): a timed-out command's whole group dies, and a dropped connection is never 'ran'"
 git -C $W show --stat HEAD | tail -10
@@ -2632,7 +2632,7 @@ Create `apps/novad/internal/config/config_unix_test.go`, starting with `//go:bui
 - [ ] **Step 4: Run the tests and the six builds**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad
+cd ~/workspace/nova/.worktrees/s42a/apps/novad
 ~/.local/bin/mise x -- go test -race ./... 2>&1 | tail -8
 for t in darwin/arm64 windows/amd64 windows/arm64; do GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 ~/.local/bin/mise x -- go vet ./... && echo "vet ok $t"; done
 ```
@@ -2642,7 +2642,7 @@ Expected: all pass, followed by three `vet ok` lines. The DACL test runs on the 
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/internal/config/
 git -C $W commit -m "feat(novad): custody per OS — a protected DACL on Windows, and Wipe for a revoked device"
 git -C $W show --stat HEAD | tail -10
@@ -2734,7 +2734,7 @@ func withIfaces(t *testing.T, ifs []ifaceInfo, err error) {
 func TestAFrameListsInterfacesSkipsLoopbackAndSaysWhatItCouldNotRead(t *testing.T) {
 	withIfaces(t, []ifaceInfo{
 		{Name: "lo", Loopback: true, Up: true, CIDRs: []string{"127.0.0.1/8"}},
-		{Name: "wlp2s0", MAC: "aa:bb:cc:dd:ee:ff", Up: true, CIDRs: []string{"192.168.0.245/24"}},
+		{Name: "wlp2s0", MAC: "aa:bb:cc:dd:ee:ff", Up: true, CIDRs: []string{"192.0.2.10/24"}},
 		{Name: "tailscale0", Up: true, CIDRs: []string{"100.64.0.1/32"}},
 		{Name: "docker0", MAC: "02:42:ac:11:00:01", AddrErr: errors.New("addrs unreadable")},
 	}, nil)
@@ -2742,7 +2742,7 @@ func TestAFrameListsInterfacesSkipsLoopbackAndSaysWhatItCouldNotRead(t *testing.
 	if f.Type != "facts" || len(f.Net.Ifaces) != 3 {
 		t.Fatalf("%+v", f)
 	}
-	if f.Net.Ifaces[0].Name != "wlp2s0" || f.Net.Ifaces[0].IPv4CIDR[0] != "192.168.0.245/24" || !f.Net.Ifaces[0].Up {
+	if f.Net.Ifaces[0].Name != "wlp2s0" || f.Net.Ifaces[0].IPv4CIDR[0] != "192.0.2.10/24" || !f.Net.Ifaces[0].Up {
 		t.Fatalf("%+v", f.Net.Ifaces[0])
 	}
 	if f.Net.Ifaces[1].MAC != "" {
@@ -3100,7 +3100,7 @@ func enrollPreflight() error {
 - [ ] **Step 4: Run the tests and the six builds**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad
+cd ~/workspace/nova/.worktrees/s42a/apps/novad
 ~/.local/bin/mise x -- go test -race ./... 2>&1 | tail -8
 for t in darwin/arm64 windows/amd64 windows/arm64; do GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 ~/.local/bin/mise x -- go vet ./... && echo "vet ok $t"; done
 ```
@@ -3110,7 +3110,7 @@ Expected: all pass, followed by three `vet ok` lines.
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/internal/facts/ apps/novad/main.go apps/novad/main_test.go
 git -C $W commit -m "feat(novad): facts about the machine, enroll sends its real OS, and enroll refuses inside WSL"
 git -C $W show --stat HEAD | tail -8
@@ -3453,7 +3453,7 @@ In `apps/novad/main.go` `cmdRun`, change `client.New(cfg, priv, auditLog, paths.
 - [ ] **Step 4: Run the tests and the six builds**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad
+cd ~/workspace/nova/.worktrees/s42a/apps/novad
 ~/.local/bin/mise x -- go test -race ./... 2>&1 | tail -8
 for t in darwin/arm64 windows/amd64; do GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 ~/.local/bin/mise x -- go vet ./... && echo "vet ok $t"; done
 ```
@@ -3463,7 +3463,7 @@ Expected: all pass, including the three new tests, followed by two `vet ok` line
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/internal/wire/envelope.go apps/novad/internal/client/client.go apps/novad/internal/client/integration_test.go apps/novad/main.go
 git -C $W commit -m "feat(novad): facts on the wire — in the auth frame, a facts frame after ready, and facts.refresh"
 git -C $W show --stat HEAD | tail -8
@@ -3840,7 +3840,7 @@ func (a *Agent) maybeSendFacts(ctx context.Context, c *websocket.Conn) {
 - [ ] **Step 4: Run the tests**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad
+cd ~/workspace/nova/.worktrees/s42a/apps/novad
 ~/.local/bin/mise x -- go test -race ./... 2>&1 | tail -8
 ~/.local/bin/mise x -- go test -race -count=3 ./internal/client/ 2>&1 | tail -3
 ```
@@ -3850,7 +3850,7 @@ Expected: all pass, and they pass three times over. Time-based tests must not fl
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/internal/client/client.go apps/novad/internal/client/integration_test.go
 git -C $W commit -m "fix(novad): the backoff resets, a ping proves the path, and a machine that slept reconnects at once"
 git -C $W show --stat HEAD | tail -6
@@ -4084,7 +4084,7 @@ RestartPreventExitStatus=78
 - [ ] **Step 4: Run the tests and the six builds**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad
+cd ~/workspace/nova/.worktrees/s42a/apps/novad
 ~/.local/bin/mise x -- go test -race ./... 2>&1 | tail -8
 for t in linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do GOOS=${t%/*} GOARCH=${t#*/} CGO_ENABLED=0 ~/.local/bin/mise x -- go vet ./... && echo "vet ok $t"; done
 ```
@@ -4094,7 +4094,7 @@ Expected: all pass, followed by five `vet ok` lines.
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/internal/client/client.go apps/novad/internal/client/integration_test.go apps/novad/main.go apps/novad/main_test.go apps/novad/novad.service
 git -C $W commit -m "feat(novad): a revoked device wipes its identity and stops — exit 78, never a restart loop"
 git -C $W show --stat HEAD | tail -8
@@ -4116,8 +4116,8 @@ git -C $W show --stat HEAD | tail -8
 - [ ] **Step 1: Check the number is still free**
 
 ```bash
-ls /home/jeremy/workspace/nova/.worktrees/s42a/services/core/migrations/ | tail -3
-git -C /home/jeremy/workspace/nova fetch -q origin && git -C /home/jeremy/workspace/nova log --oneline origin/main -- 'services/core/migrations/036*' | head
+ls ~/workspace/nova/.worktrees/s42a/services/core/migrations/ | tail -3
+git -C ~/workspace/nova fetch -q origin && git -C ~/workspace/nova log --oneline origin/main -- 'services/core/migrations/036*' | head
 ```
 
 Expected: the last file is `035_hub_engine.sql`, and no `036*` exists on `origin/main`. If another lane took 036, take the next free number, rename every reference in this plan, and say so in the commit.
@@ -4201,7 +4201,7 @@ async def test_applied_twice_it_changes_nothing_more(pool):
 - [ ] **Step 3: Run it to verify it fails**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/services/core
+cd ~/workspace/nova/.worktrees/s42a/services/core
 PW=$(docker inspect nova-scratch-pg --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^POSTGRES_PASSWORD=//p')
 export TEST_DATABASE_URL=postgresql://postgres:$PW@127.0.0.1:55432/nova_core_s42a
 uv run pytest -q tests/test_migration_036_agent_facts.py
@@ -4267,7 +4267,7 @@ Expected: PASS. `test_no_approvals`'s schema test stays green: no `capabilities`
 - [ ] **Step 6: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add services/core/migrations/036_agent_facts.sql services/core/tests/test_migration_036_agent_facts.py
 git -C $W commit -m "feat(core): migration 036 — a platform CHECK, and the facts a device's agent reports"
 git -C $W show --stat HEAD | tail -4
@@ -4372,12 +4372,12 @@ def test_an_empty_machine_uid_is_unknown_not_refused():
 def test_a_frame_keeps_its_known_sections_and_drops_the_rest():
     frame = {
         "type": "facts",
-        "net": {"ifaces": [{"name": "wlp2s0", "mac": "AA:BB:CC:DD:EE:FF", "ipv4_cidr": ["192.168.0.245/24"], "up": True}]},
+        "net": {"ifaces": [{"name": "wlp2s0", "mac": "AA:BB:CC:DD:EE:FF", "ipv4_cidr": ["192.0.2.10/24"], "up": True}]},
         "unreadable": [{"item": "machine_uid", "reason": "no id"}],
         "power": {"womp": True},
     }
     assert df.validate_frame(frame) == {
-        "net": {"ifaces": [{"name": "wlp2s0", "mac": "aa:bb:cc:dd:ee:ff", "ipv4_cidr": ["192.168.0.245/24"], "up": True}]},
+        "net": {"ifaces": [{"name": "wlp2s0", "mac": "aa:bb:cc:dd:ee:ff", "ipv4_cidr": ["192.0.2.10/24"], "up": True}]},
         "unreadable": [{"item": "machine_uid", "reason": "no id"}],
     }
 
@@ -4797,7 +4797,7 @@ Expected: PASS and ruff clean. If a parametrize id is too long for ruff's line l
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add services/core/app/device_facts.py services/core/tests/test_device_facts.py
 git -C $W commit -m "feat(core): device_facts — validate what an agent says, derive its roles, one agent view"
 git -C $W show --stat HEAD | tail -4
@@ -5139,7 +5139,7 @@ Expected: all pass, including the old ones: every enroll in them sends `"linux"`
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 cd $W/services/core
 uv run ruff check app/devices.py app/devices_ws.py app/tools/devices.py tests/device_fakes.py tests/test_devices_ws.py tests/test_devices.py
 uv run ruff format app/devices.py app/devices_ws.py app/tools/devices.py tests/device_fakes.py tests/test_devices_ws.py tests/test_devices.py
@@ -5314,9 +5314,9 @@ In `tests/fixtures/gen_envelope_vectors.py`, append a fourth entry to `PAYLOADS`
 Regenerate, then prove the old three vectors did not move:
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/services/core && uv run python tests/fixtures/gen_envelope_vectors.py
-git -C /home/jeremy/workspace/nova/.worktrees/s42a diff --stat -- services/core/tests/fixtures/envelope_vectors.json
-git -C /home/jeremy/workspace/nova/.worktrees/s42a diff -- services/core/tests/fixtures/envelope_vectors.json | grep '^-' | grep -v '^---' | head
+cd ~/workspace/nova/.worktrees/s42a/services/core && uv run python tests/fixtures/gen_envelope_vectors.py
+git -C ~/workspace/nova/.worktrees/s42a diff --stat -- services/core/tests/fixtures/envelope_vectors.json
+git -C ~/workspace/nova/.worktrees/s42a diff -- services/core/tests/fixtures/envelope_vectors.json | grep '^-' | grep -v '^---' | head
 ```
 
 Expected: only additions. The last command prints nothing, or at most the closing `]` of the list moved. A changed old vector means an encoder moved: **stop**, the generator's docstring explains why.
@@ -5324,8 +5324,8 @@ Expected: only additions. The last command prints nothing, or at most the closin
 - [ ] **Step 4: Run the tests on both sides of the wire**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/services/core && uv run pytest -q tests/test_devices_ws.py tests/test_envelopes.py
-cd /home/jeremy/workspace/nova/.worktrees/s42a/apps/novad && ~/.local/bin/mise x -- go test ./internal/wire/
+cd ~/workspace/nova/.worktrees/s42a/services/core && uv run pytest -q tests/test_devices_ws.py tests/test_envelopes.py
+cd ~/workspace/nova/.worktrees/s42a/apps/novad && ~/.local/bin/mise x -- go test ./internal/wire/
 ```
 
 Expected: all pass. The Go canonical test now also asserts the backslash vector.
@@ -5333,7 +5333,7 @@ Expected: all pass. The Go canonical test now also asserts the backslash vector.
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 (cd $W/services/core && uv run ruff check app/tools/devices.py tests/test_devices_ws.py tests/fixtures/gen_envelope_vectors.py && uv run ruff format app/tools/devices.py tests/test_devices_ws.py tests/fixtures/gen_envelope_vectors.py)
 git -C $W add services/core/app/tools/devices.py services/core/tests/test_devices_ws.py services/core/tests/fixtures/gen_envelope_vectors.py services/core/tests/fixtures/envelope_vectors.json
 git -C $W commit -m "feat(core): a path is checked in the device's own OS — drives and shares on Windows, one spelling"
@@ -5504,7 +5504,7 @@ Expected: PASS. The urgent set is still exactly the stack family.
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 (cd $W/services/core && uv run ruff check app/checks/devices.py app/checks/__init__.py tests/test_checks_devices.py tests/test_checks.py && uv run ruff format app/checks/devices.py tests/test_checks_devices.py)
 git -C $W add services/core/app/checks/devices.py services/core/app/checks/__init__.py services/core/tests/test_checks_devices.py services/core/tests/test_checks.py
 git -C $W commit -m "feat(core): a non-urgent check for two Nova agents reporting one machine"
@@ -5921,7 +5921,7 @@ Expected: all pass. `test_machines.py:308-320` pins core's copies of the engine 
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 cd $W/services/core
 uv run ruff check app/machines.py app/tools/machines.py app/guards.py tests/test_tools_machines.py tests/test_machines.py tests/test_state_guard.py tests/test_devices_ws.py
 uv run ruff format app/machines.py app/tools/machines.py tests/test_tools_machines.py tests/test_machines.py
@@ -6004,7 +6004,7 @@ So:
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add services/core/app/guards.py services/core/tests/test_capability_guard.py
 git -C $W commit -m "feat(core): disowning a Windows or Mac machine is a false denial now that her agent runs there"
 git -C $W show --stat HEAD | tail -4
@@ -6031,8 +6031,8 @@ git -C $W show --stat HEAD | tail -4
 - [ ] **Step 1: Check the eval numbers against `main` first**
 
 ```bash
-git -C /home/jeremy/workspace/nova fetch -q origin
-git -C /home/jeremy/workspace/nova show origin/main:services/core/tests/test_eval_corpus.py | grep -n "assert len(ids) ==\|suite_version for c in cases"
+git -C ~/workspace/nova fetch -q origin
+git -C ~/workspace/nova show origin/main:services/core/tests/test_eval_corpus.py | grep -n "assert len(ids) ==\|suite_version for c in cases"
 ```
 
 Expected: `== 26` and `{15}`, so S42a takes 16 and 27. If S47 already landed (`29`, `{16}`), take **17 and 30** throughout this task instead.
@@ -6336,7 +6336,7 @@ Create `app/evals/cases/points-wsl-at-the-windows-agent.json`:
 Bump the corpus:
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/services/core/app/evals/cases
+cd ~/workspace/nova/.worktrees/s42a/services/core/app/evals/cases
 grep -L '"suite_version": 15' *.json | grep -v points-wsl-at-the-windows-agent.json   # expect: nothing
 sed -i 's/"suite_version": 15,/"suite_version": 16,/' *.json
 grep -c '"suite_version": 16' *.json | grep -v ':1$'   # expect: nothing (every file exactly once)
@@ -6365,7 +6365,7 @@ v16 (S42a, <the date this lands, YYYY-MM-DD>):
 Then grep for any other pin on the old number and move it deliberately:
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a/services/core && grep -rn "suite_version.*15\b\|== 15\b\|{15}" tests/ app/evals/ | grep -v "^tests/test_eval_corpus.py:.*v15\|S40b" | head
+cd ~/workspace/nova/.worktrees/s42a/services/core && grep -rn "suite_version.*15\b\|== 15\b\|{15}" tests/ app/evals/ | grep -v "^tests/test_eval_corpus.py:.*v15\|S40b" | head
 ```
 
 Expected: nothing left that pins 15 as the live version. History prose mentioning v15 stays.
@@ -6378,7 +6378,7 @@ Expected: all pass: 27 cases, version 16, and the new case's good, bad and denia
 - [ ] **Step 6: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 (cd $W/services/core && uv run ruff check app/evals/cases.py app/evals/runner.py tests/test_eval_corpus.py tests/test_eval_runner.py && uv run ruff format app/evals/cases.py tests/test_eval_runner.py)
 git -C $W add services/core/app/evals/ services/core/tests/test_eval_corpus.py services/core/tests/test_eval_runner.py
 git -C $W commit -m "feat(evals): a case can declare a device; points-wsl-at-the-windows-agent — corpus 26 -> 27, suite_version 15 -> 16"
@@ -6517,7 +6517,7 @@ Expected: all tests pass, followed by `TSC-OK`.
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/web/src/lib/api.ts apps/web/src/pages/settings/devicesFormat.ts apps/web/src/pages/settings/DevicesSection.tsx apps/web/src/pages/settings/devicesFormat.test.ts apps/web/src/pages/settings/DevicesSection.test.tsx
 git -C $W commit -m "feat(web): the Devices tile shows the OS the agent reported, and a WSL agent's note"
 git -C $W show --stat HEAD | tail -7
@@ -6614,7 +6614,7 @@ Replace the `novad:` job (keep the comment block above it, extended as shown) wi
 - [ ] **Step 2: Lint the workflow locally**
 
 ```bash
-cd /home/jeremy/workspace/nova/.worktrees/s42a && python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/rebuild-ci.yml')); print('yaml ok')"
+cd ~/workspace/nova/.worktrees/s42a && python3 -c "import yaml,sys; yaml.safe_load(open('.github/workflows/rebuild-ci.yml')); print('yaml ok')"
 ```
 
 Expected: `yaml ok`.
@@ -6622,7 +6622,7 @@ Expected: `yaml ok`.
 - [ ] **Step 3: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add .github/workflows/rebuild-ci.yml
 git -C $W commit -m "ci(novad): six targets built twice and compared, native tests on Linux arm, macOS and Windows"
 git -C $W show --stat HEAD | tail -3
@@ -6633,7 +6633,7 @@ git -C $W show --stat HEAD | tail -3
 The owner ruled on 2026-09-21 (`s41/rulings.md:95-120`) that `rebuild-ci` is re-enabled ("both halves or neither"). Commit `1b61b0eb` left the enable to the controller "so the first green run is verified rather than assumed".
 
 ```bash
-git -C /home/jeremy/workspace/nova/.worktrees/s42a push -u origin slice/s42a
+git -C ~/workspace/nova/.worktrees/s42a push -u origin slice/s42a
 unset GH_TOKEN; gh workflow enable rebuild-ci --repo jeremyspofford/nova
 gh run list --repo jeremyspofford/nova --workflow rebuild-ci --branch slice/s42a --limit 1
 ```
@@ -6738,7 +6738,7 @@ Create `docs/plans/rebuild/slice-42a-carries.md` with these known carries, one l
 - [ ] **Step 5: Commit**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 git -C $W add apps/novad/README.md deploy/README.md docs/plans/rebuild/hub-topology.md docs/plans/rebuild/ROADMAP.md docs/plans/rebuild/slice-42a-agent-every-os.md docs/plans/rebuild/slice-42a-carries.md
 git -C $W commit -m "docs(s42a): the agent on every OS — README, deploy notes, roadmap, close-out skeleton, carries"
 git -C $W show --stat HEAD | tail -8
@@ -6753,7 +6753,7 @@ This task is the controller's. The steps marked **(owner)** are Jeremy's (hub-to
 - [ ] **Step 1: Full gates by hand, on the branch**
 
 ```bash
-W=/home/jeremy/workspace/nova/.worktrees/s42a
+W=~/workspace/nova/.worktrees/s42a
 PW=$(docker inspect nova-scratch-pg --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's/^POSTGRES_PASSWORD=//p')
 (cd $W/services/core && TEST_DATABASE_URL=postgresql://postgres:$PW@127.0.0.1:55432/nova_core_s42a uv run pytest -q 2>&1 | tail -3)
 (cd $W/services/gateway && TEST_DATABASE_URL=postgresql://postgres:$PW@127.0.0.1:55432/nova_gateway_s42a uv run pytest -q 2>&1 | tail -2)
@@ -6795,7 +6795,7 @@ Merge only when the novad legs are green and Step 1 is green. A red CI leg outsi
 - [ ] **Step 4: Deploy core and web from the nova directory**
 
 ```bash
-cd /home/jeremy/workspace/nova && git fetch -q origin && git checkout -q --detach origin/main && git log --oneline -1
+cd ~/workspace/nova && git fetch -q origin && git checkout -q --detach origin/main && git log --oneline -1
 docker compose --project-directory deploy build core web
 docker compose --project-directory deploy up -d core web
 docker compose --project-directory deploy logs core --since 10m | grep -E "036_agent_facts|Application startup complete"
@@ -6814,8 +6814,8 @@ It must show a `{"device": …, "connected": true}` fact.
 - [ ] **Step 5: Build the Windows agent from `main` and hand it over (owner)**
 
 ```bash
-cd /home/jeremy/workspace/nova/apps/novad
-REV=$(git -C /home/jeremy/workspace/nova rev-parse --short HEAD)
+cd ~/workspace/nova/apps/novad
+REV=$(git -C ~/workspace/nova rev-parse --short HEAD)
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 ~/.local/bin/mise x -- go build -trimpath -buildvcs=false \
   -ldflags "-s -w -buildid= -X main.version=$REV" -o /tmp/claude-novad-windows/novad.exe .
 sha256sum /tmp/claude-novad-windows/novad.exe
@@ -6862,7 +6862,7 @@ Take a screenshot of Settings → Devices at 393 × 852 on the deployed stack, w
 3. Clean up: remove `.worktrees/s42a` and the scratch databases:
 
 ```bash
-git -C /home/jeremy/workspace/nova worktree remove .worktrees/s42a
+git -C ~/workspace/nova worktree remove .worktrees/s42a
 for svc in core gateway memory; do docker exec nova-scratch-pg dropdb -U postgres nova_${svc}_s42a; done
 ```
 
