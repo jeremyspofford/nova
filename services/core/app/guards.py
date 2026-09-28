@@ -4258,7 +4258,7 @@ def state_claim_check(
     silent by construction rather than by a special case.
 
     S40b: in a turn whose kind is in STACK_CLAIM_KINDS (`purpose`, the turn's
-    kind — chat._purpose_of), it also reads MACHINES, derived from the turn's
+    kind — traces.purpose_of), it also reads MACHINES, derived from the turn's
     own spans (machine_names): a negative state, or a reading time, about a
     machine nothing read this turn (see the machine section above). `purpose`
     defaults to None, which leaves every pre-S40b call exactly as it was.
@@ -7019,7 +7019,7 @@ def served_this_turn(spans: Sequence[Any], purpose: str) -> bool:
     error on it.
 
     `purpose` is what the turn's own rounds are recorded under — its kind
-    (chat._purpose_of): `chat`, and equally `scheduled`, `beat`, `agent` or
+    (traces.purpose_of): `chat`, and equally `scheduled`, `beat`, `agent` or
     `eval`, each of them a turn a model answers. It is the caller's to state,
     never a default: reading only `chat` left every eval case scoring
     guard_absent('stack_claim') green by construction (found by S40 T7,
@@ -7562,7 +7562,7 @@ def served_claim_check(
     """Contradict a claim about which model wrote this reply that the turn's
     own rounds refute (see the section header). None otherwise — pure,
     precision-first, fail-open at the call site. `purpose` is the turn's kind
-    (chat._purpose_of); outside STACK_CLAIM_KINDS it says nothing.
+    (traces.purpose_of); outside STACK_CLAIM_KINDS it says nothing.
 
     A NAMED claim fires when the model named served no round of this turn,
     some round was stamped, and the round that WROTE the reply (_reply_served_

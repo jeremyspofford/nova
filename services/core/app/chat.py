@@ -2838,7 +2838,7 @@ async def _gateway_round(
     # is generation, and `completion_tokens` counts all three.
     t_first_any: float | None = None
     reasoning_chars = 0
-    purpose = purpose or _purpose_of(turn)
+    purpose = purpose or traces.purpose_of(turn)
     role = role if role is not None else _role_of(turn)
     with turn.span("llm_call", model or None) as span:
         span.meta["model"] = model
@@ -3114,12 +3114,6 @@ def _note_served(span, headers) -> None:
         span.meta["served_runtime"] = runtime
 
 
-def _purpose_of(turn: traces.Turn) -> str:
-    """What the ledger records a turn's own rounds as: its kind."""
-    kind = getattr(turn, "kind", None)
-    return kind if isinstance(kind, str) and kind else "chat"
-
-
 # The routing chain a turn's own rounds walk (S10-2): a chat turn the chat
 # chain, a scheduled turn the scheduled chain, a beat the beat chain; an eval
 # NAMES its model and walks none — a measurement on a substituted model would
@@ -3138,7 +3132,7 @@ def _role_of(turn: traces.Turn) -> str | None:
     `agent_<name>`, whatever kind the turn is), else the kind's. An eval turn
     is opened with none and its kind maps to none — rail 17 holds by the same
     line."""
-    return turn.role or _ROLE_BY_KIND.get(_purpose_of(turn))
+    return turn.role or _ROLE_BY_KIND.get(traces.purpose_of(turn))
 
 
 async def _collect_completion(
@@ -3474,7 +3468,9 @@ def _state_claim_stands(
     the same subject, so what persists is true of the final state. Fail-open:
     a guard that raises leaves the correction as it was."""
     try:
-        claim = guards.state_claim_check(text, turn.spans, device_names, purpose=_purpose_of(turn))
+        claim = guards.state_claim_check(
+            text, turn.spans, device_names, purpose=traces.purpose_of(turn)
+        )
     except Exception:
         logger.exception("state-claim re-check raised; keeping the correction")
         return True
@@ -3596,7 +3592,7 @@ def _append_class_claims(text: str, turn: traces.Turn) -> list[tuple[str, object
         ("memory_claim", guards.memory_claim_check),
     ):
         try:
-            claim = check(text, turn.spans, purpose=_purpose_of(turn))
+            claim = check(text, turn.spans, purpose=traces.purpose_of(turn))
         except Exception:
             logger.exception("%s guard raised; shipping the reply uncorrected", name)
             claim = None
@@ -3709,7 +3705,9 @@ def _regen_rejected_by(
         # thrown away (_append_class_claims; S40b final fix wave, A9).
         (
             "stack_claim",
-            lambda: guards.stack_claim_check(corrected, turn.spans, purpose=_purpose_of(turn)),
+            lambda: guards.stack_claim_check(
+                corrected, turn.spans, purpose=traces.purpose_of(turn)
+            ),
         ),
         (
             "state_claim",
@@ -3717,7 +3715,7 @@ def _regen_rejected_by(
             # over the reply this regeneration replaces (S40b): a regen that
             # repeats an unchecked machine claim is refused by name.
             lambda: guards.state_claim_check(
-                corrected, turn.spans, device_names, purpose=_purpose_of(turn)
+                corrected, turn.spans, device_names, purpose=traces.purpose_of(turn)
             ),
         ),
         (
@@ -4880,7 +4878,9 @@ async def _run_turn(
             # "chat". The guard reads them in the kinds it is armed in
             # (guards.STACK_CLAIM_KINDS: chat and the eval that replays it)
             # and says nothing in the others, where it is unmeasured.
-            stack_claim = guards.stack_claim_check(text, turn.spans, purpose=_purpose_of(turn))
+            stack_claim = guards.stack_claim_check(
+                text, turn.spans, purpose=traces.purpose_of(turn)
+            )
         except Exception:
             logger.exception("serving-state guard raised; shipping the reply uncorrected")
             stack_claim = None
@@ -4940,7 +4940,7 @@ async def _run_turn(
         if not consent_redirected:
             try:
                 state_claim = guards.state_claim_check(
-                    text, turn.spans, device_names, purpose=_purpose_of(turn)
+                    text, turn.spans, device_names, purpose=traces.purpose_of(turn)
                 )
             except Exception:
                 logger.exception("state-claim guard raised; shipping the reply uncorrected")

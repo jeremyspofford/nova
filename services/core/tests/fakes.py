@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -139,6 +140,57 @@ def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
 
+# POST /v1/systemone as the gateway answers it with an EMPTY decisions chain —
+# the state every install starts in (services/gateway/app/routing.py). The
+# gateway's words exactly, so a test reads what a real turn would.
+NO_DECISION_MODEL = (
+    "no model in the 'decisions' chain can serve right now — the decisions chain is "
+    "empty, so no decision model is set (add one in Settings → Routing)"
+)
+
+
+async def answer_decision(
+    request,
+    *,
+    answer: Callable[[dict], object] | None,
+    served_by: str,
+    hold: asyncio.Event | None,
+    calls: list[dict],
+) -> Response:
+    """The gateway's POST /v1/systemone (decision-role spec §1), for a fake:
+    the body and headers recorded; 503 in the gateway's words with no
+    decision model; else `answer(body)` — the answers object, or a Response
+    sent as is — with the ledger's usage and the route headers."""
+    raw = await request.body()
+    body = json.loads(raw) if raw else {}
+    calls.append({"body": body, "headers": {k.lower(): v for k, v in request.headers.items()}})
+    if not _bearer_ok(request, GATEWAY_TOKEN):
+        return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
+    if hold is not None:
+        await hold.wait()
+    if answer is None:
+        return JSONResponse({"error": NO_DECISION_MODEL}, status_code=503)
+    answers = answer(body)
+    if isinstance(answers, Response):
+        return answers
+    return JSONResponse(
+        {
+            "model": served_by.partition(":")[2],
+            "answers": answers,
+            "usage": {
+                "prompt_tokens": 40,
+                "completion_tokens": 6,
+                "cost_usd": 1e-05,
+                "cost_basis": "provider-reported",
+                "local": False,
+                "metered": True,
+                "recorded": True,
+            },
+        },
+        headers={"X-Nova-Served-By": served_by, "X-Nova-Route": "role=decisions;link=1"},
+    )
+
+
 # S40: one engine exactly as the gateway's GET /admin/engines lists it
 # (services/gateway/app/engines.py EngineView). A mirror, not an invention: a
 # test that needs another state says so by name, over these defaults.
@@ -251,12 +303,25 @@ class FakeGateway:
     # A PUT that does not store what was asked — the read-back mismatch a
     # write must never report as done.
     engine_put_sticks: bool = True
+    # The decision role (decision-role spec §2): POST /v1/systemone. With no
+    # `decision_answer` it answers 503 in the gateway's words for an EMPTY
+    # decisions chain — every install's first state — so every test turn
+    # sees what a real turn with no decision model sees. `decision_answer`
+    # returns the answers for a body (or a Response, sent as is);
+    # `decision_hold` stalls the answer until it is set; every call lands in
+    # `decision_calls`, apart from `seen`, so the completion and admin
+    # traffic other tests count is unchanged by a turn's decision calls.
+    decision_answer: Callable[[dict], object] | None = None
+    decision_served_by: str = "openrouter:~typesafe/jev-latest"
+    decision_hold: asyncio.Event | None = None
+    decision_calls: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.app = Starlette(
             routes=[
                 Route("/health/live", self._health, methods=["GET"]),
                 Route("/v1/chat/completions", self._completions, methods=["POST"]),
+                Route("/v1/systemone", self._systemone, methods=["POST"]),
                 Route("/admin/hardware", self._admin, methods=["GET"]),
                 Route("/admin/suggest", self._admin, methods=["GET"]),
                 Route("/admin/probe", self._admin, methods=["POST"]),
@@ -305,6 +370,15 @@ class FakeGateway:
         """Liveness, exactly as the real service serves it: no bearer needed
         (it is not an admin route) and no body worth recording."""
         return JSONResponse({"status": "live"}, status_code=self.health_status)
+
+    async def _systemone(self, request):
+        return await answer_decision(
+            request,
+            answer=self.decision_answer,
+            served_by=self.decision_served_by,
+            hold=self.decision_hold,
+            calls=self.decision_calls,
+        )
 
     async def _explain(self, request):
         if self.explain_body is None:
@@ -716,16 +790,34 @@ class ScriptedGateway:
     # absent by design when there is no time to divide by — so a test about
     # throughput has to let the clock move.
     chunk_delay_s: float = 0.0
+    # The decision role, exactly as on FakeGateway: 503 in the gateway's words
+    # for an empty decisions chain unless `decision_answer` is set.
+    decision_answer: Callable[[dict], object] | None = None
+    decision_served_by: str = "openrouter:~typesafe/jev-latest"
+    decision_hold: asyncio.Event | None = None
+    decision_calls: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.calls = 0
         self.app = Starlette(
-            routes=[Route("/v1/chat/completions", self._completions, methods=["POST"])]
+            routes=[
+                Route("/v1/chat/completions", self._completions, methods=["POST"]),
+                Route("/v1/systemone", self._systemone, methods=["POST"]),
+            ]
         )
 
     @property
     def payloads(self) -> list[dict]:
         return [body for _path, body in self.seen if body is not None]
+
+    async def _systemone(self, request):
+        return await answer_decision(
+            request,
+            answer=self.decision_answer,
+            served_by=self.decision_served_by,
+            hold=self.decision_hold,
+            calls=self.decision_calls,
+        )
 
     async def _completions(self, request):
         raw = await request.body()
