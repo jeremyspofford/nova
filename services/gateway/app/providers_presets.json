@@ -143,5 +143,17 @@
     "model_note": "The key is a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK). Model ids carry a vendor prefix, e.g. openai.gpt-oss-120b.",
     "quirks": "Fill in {region}, e.g. us-east-1.",
     "placeholders": ["region"]
+  },
+  {
+    "name": "kev",
+    "label": "Kev decision-model server (your own machine)",
+    "adapter": "systemone",
+    "base_url": "http://{host}:8009/v1",
+    "auth_shape": "none",
+    "local": true,
+    "placeholders": ["host"],
+    "docs_url": "https://github.com/jaredpalmer/kev",
+    "model_note": "kev-latest is whatever checkpoint the server was started with (kev.serve --run jaredpalmer/kev-4b).",
+    "quirks": "A decision model answers typed questions for the Decisions role and has no chat. Start the server with --host 0.0.0.0 so the gateway can reach it; set KEV_API_KEY on the server, and add it as a custom provider with a bearer key, to require one."
   }
 ]

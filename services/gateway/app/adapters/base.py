@@ -16,6 +16,12 @@ COMPLETIONS_TIMEOUT = httpx.Timeout(connect=5.0, read=300.0, write=10.0, pool=5.
 MODELS_TIMEOUT = httpx.Timeout(10.0)
 VERIFY_TIMEOUT = httpx.Timeout(10.0)
 
+#: What a decision model's listing row says it outputs — OpenRouter's own word
+#: (`architecture.output_modalities`), so the catalogue reads a Kev box and
+#: OpenRouter's Jev the same way. Defined once here (never per-adapter) so
+#: every adapter that lists decision models imports the same value.
+DECISIONS = "decisions"
+
 
 class ProviderRefused(RuntimeError):
     """The provider answered, and the answer was a refusal — its status and
@@ -216,3 +222,75 @@ def refusal_detail(resp: httpx.Response) -> str:
         if body.get("message"):
             return str(body["message"])[:400]
     return text[:400] or resp.reason_phrase or f"HTTP {resp.status_code}"
+
+
+async def fetch_listing(
+    app,
+    row: dict,
+    url: str,
+    *,
+    headers: dict[str, str],
+    normalize,
+    unavailable_note: str,
+) -> Listing:
+    """The `GET {url}/models` call every listing-backed adapter makes: the
+    same reachability, status and JSON handling (OpenAIChat's and SystemOne's
+    `list_models` were byte-for-byte copies of this before F6's refactor).
+    Each caller supplies its own row normaliser (`normalize`) and its own
+    words for "no listing here" (`unavailable_note` — OpenAIChat's says
+    "type a model id"; a systemone server has no page that offers one, so
+    it does not, per decision-role spec Task 2 ruling F13)."""
+    if not url:
+        raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
+    client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=headers)
+    try:
+        async with client as c:
+            resp = await c.get("/models")
+    except httpx.HTTPError as exc:
+        raise ProviderRefused(502, f"could not reach {url} — {reason(exc)}") from exc
+    if resp.status_code in (404, 405):
+        raise ListingUnavailable(f"{url}/models answered {resp.status_code} — {unavailable_note}")
+    if resp.status_code != 200:
+        raise ProviderRefused(resp.status_code, refusal_detail(resp))
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        raise ProviderRefused(502, f"{url}/models returned non-JSON: {exc}") from exc
+    return Listing(source=row["name"], models=normalize(body, owned_by=row["name"]))
+
+
+#: A key that is certainly wrong, for the wrong-key probe below: a listing
+#: that refuses THIS key proves the real key was accepted, never guessed.
+_WRONG_KEY = "nova-verify-this-key-is-wrong"
+
+
+async def wrong_key_probe(app, row: dict, url: str, *, headers_for) -> tuple[str, int | None, str]:
+    """Re-asks `GET {url}/models` with a key that is certainly wrong
+    (`_WRONG_KEY`) — the one way to learn whether a listing NEEDS a key at
+    all, shared by every adapter that proves a key this way (OpenAIChat's
+    `_listing_is_public` and SystemOne's `verify` both drove this exact
+    fetch-and-branch before F6's refactor; only the PROSE each builds from
+    it differs, which stays with the caller).
+
+    Returns `(bucket, status, detail)`:
+      * `"protected"`, the status (401/403) — the listing refused this key,
+        so the real key's earlier acceptance proves it.
+      * `"public"`, 200, `""` — the listing answered 200 to a wrong key too,
+        so nothing about the real key was proven.
+      * `"undetermined"`, a status or None, and words — any other status
+        (`detail` is `refusal_detail(resp)`) or a transport failure
+        (`status` is None, `detail` is `reason(exc)`): neither decides
+        anything about the key.
+    """
+    wrong = dict(row, api_key=_WRONG_KEY)
+    client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=headers_for(wrong))
+    try:
+        async with client as c:
+            resp = await c.get("/models")
+    except httpx.HTTPError as exc:
+        return "undetermined", None, reason(exc)
+    if resp.status_code == 200:
+        return "public", 200, ""
+    if resp.status_code in (401, 403):
+        return "protected", resp.status_code, ""
+    return "undetermined", resp.status_code, refusal_detail(resp)

@@ -24,7 +24,6 @@ from app.adapters import base
 from app.adapters.base import (
     COMPLETIONS_TIMEOUT,
     CONNECT_PHASE_ERRORS,
-    MODELS_TIMEOUT,
     VERIFY_TIMEOUT,
     Listing,
     ListingUnavailable,
@@ -34,7 +33,6 @@ from app.adapters.base import (
     http_client,
     positive_int,
     reason,
-    refusal_detail,
 )
 from app.providers import base_url_of
 
@@ -331,51 +329,35 @@ class OpenAIChat:
         return base.bearer_or_header(row, header_name="api-key")
 
     async def list_models(self, app, row: dict) -> Listing:
-        url = base_url_of(row)
-        if not url:
-            raise ProviderRefused(502, f"provider {row['name']!r} has no base URL")
-        client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=self.headers(row))
-        try:
-            async with client as c:
-                resp = await c.get("/models")
-        except httpx.HTTPError as exc:
-            raise ProviderRefused(502, f"could not reach {url} — {reason(exc)}") from exc
-        if resp.status_code in (404, 405):
-            raise ListingUnavailable(
-                f"{url}/models answered {resp.status_code} — this provider has no model "
-                "listing; type a model id"
-            )
-        if resp.status_code != 200:
-            raise ProviderRefused(resp.status_code, refusal_detail(resp))
-        try:
-            body = resp.json()
-        except ValueError as exc:
-            raise ProviderRefused(502, f"{url}/models returned non-JSON: {exc}") from exc
-        return Listing(source=row["name"], models=normalize_models(body, owned_by=row["name"]))
+        return await base.fetch_listing(
+            app,
+            row,
+            base_url_of(row),
+            headers=self.headers(row),
+            normalize=normalize_models,
+            unavailable_note="this provider has no model listing; type a model id",
+        )
 
     async def _listing_is_public(self, app, row: dict) -> tuple[bool | None, str]:
         """(is the listing public?, what decided it).
 
-        Re-asks /models with a key that is certainly wrong. A 401/403 means
-        the listing REQUIRES the key — so the real key's 200 was the provider
-        accepting it. A 200 means the listing is public and proved nothing
-        about the key. Anything else (429, 5xx, a transport error) decides
-        NOTHING: it is returned as None with the words, never read as either
-        answer (a rate-limited second call used to paint 'Key verified').
+        Re-asks /models with a key that is certainly wrong (base.wrong_key_probe).
+        A 401/403 means the listing REQUIRES the key — so the real key's 200
+        was the provider accepting it. A 200 means the listing is public and
+        proved nothing about the key. Anything else (429, 5xx, a transport
+        error) decides NOTHING: it is returned as None with the words, never
+        read as either answer (a rate-limited second call used to paint 'Key
+        verified').
         """
-        probe_row = dict(row, api_key="nova-verify-this-key-is-wrong")
         url = base_url_of(row)
-        client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=self.headers(probe_row))
-        try:
-            async with client as c:
-                resp = await c.get("/models")
-        except httpx.HTTPError as exc:
-            return None, f"the wrong-key check could not reach {url}/models — {reason(exc)}"
-        if resp.status_code == 200:
+        bucket, status, detail = await base.wrong_key_probe(app, row, url, headers_for=self.headers)
+        if bucket == "public":
             return True, "the listing answered 200 to a wrong key"
-        if resp.status_code in (401, 403):
-            return False, f"the listing refused a wrong key ({resp.status_code})"
-        return None, f"the wrong-key check answered {resp.status_code} ({refusal_detail(resp)})"
+        if bucket == "protected":
+            return False, f"the listing refused a wrong key ({status})"
+        if status is None:
+            return None, f"the wrong-key check could not reach {url}/models — {detail}"
+        return None, f"the wrong-key check answered {status} ({detail})"
 
     async def _key_probe(self, app, row: dict, model: str) -> tuple[int, str, bool]:
         """A 1-token completion through the SAME code path a turn uses —

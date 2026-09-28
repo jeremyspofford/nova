@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import asyncpg
 from fastapi import HTTPException
 
-ADAPTERS = ("ollama", "openai-chat", "anthropic-messages")
+ADAPTERS = ("ollama", "openai-chat", "anthropic-messages", "systemone")
 AUTH_SHAPES = ("none", "static-bearer", "api-key-header")
 LISTING_STATES = ("available", "unavailable", "unknown")
 
@@ -162,6 +162,12 @@ def validate_shape(payload: dict, *, existing: dict | None = None) -> dict:
             detail="the anthropic-messages adapter authenticates with x-api-key — "
             "auth_shape must be api-key-header",
         )
+    if adapter == "systemone" and auth_shape == "api-key-header":
+        raise HTTPException(
+            status_code=400,
+            detail="a systemone server authenticates with a bearer key or none — "
+            "auth_shape must be static-bearer or none",
+        )
     base_url = merged.get("base_url")
     if adapter != "ollama":
         if not isinstance(base_url, str) or not base_url.strip():
@@ -188,6 +194,18 @@ def validate_shape(payload: dict, *, existing: dict | None = None) -> dict:
         )
     if auth_shape == "none":
         merged["api_key"] = None
+    # `local` (decision-role spec §1): the provider runs on the owner's own
+    # machine, so its calls are never priced and never capped (usage.over_cap,
+    # usage.price_call). An engine always is; any other row is what the owner
+    # says — false until he says so, and kept when an update omits it.
+    if "local" in payload:
+        if not isinstance(payload["local"], bool):
+            raise HTTPException(status_code=400, detail="local must be true or false")
+        merged["local"] = payload["local"]
+    else:
+        merged["local"] = bool((existing or {}).get("local", False))
+    if adapter == "ollama":
+        merged["local"] = True
     for field in ("default_model", "model_note", "preset"):
         value = merged.get(field)
         if value is not None and not isinstance(value, str):
@@ -295,7 +313,7 @@ async def insert_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
             "default_model, model_note, preset, verified_at, listing, listing_note, "
             "key_proven, verify_note, local) "
             "VALUES ($1, $2, $3, $4, $5, $6, $7, $8, "
-            "CASE WHEN $13 THEN now() ELSE NULL END, $9, $10, $11, $12, $2 = 'ollama') "
+            "CASE WHEN $13 THEN now() ELSE NULL END, $9, $10, $11, $12, $14) "
             f"RETURNING {_COLUMNS}",
             name,
             shape["adapter"],
@@ -310,6 +328,8 @@ async def insert_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
             shape.get("key_proven"),
             shape.get("verify_note"),
             bool(shape.get("verified")),
+            # validate_shape decided it; an engine is local whatever a caller sent.
+            bool(shape.get("local")) or shape["adapter"] == "ollama",
         )
     except asyncpg.UniqueViolationError as exc:
         raise HTTPException(
@@ -324,7 +344,7 @@ async def update_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
         "default_model = $6, model_note = $7, preset = $8, "
         "verified_at = CASE WHEN $13 THEN now() ELSE verified_at END, "
         "listing = $9, listing_note = $10, key_proven = $11, verify_note = $12, "
-        "updated_at = now() "
+        "local = $14, updated_at = now() "
         f"WHERE name = $1 RETURNING {_COLUMNS}",
         name,
         shape["adapter"],
@@ -339,6 +359,8 @@ async def update_row(pool: asyncpg.Pool, name: str, shape: dict) -> dict:
         shape.get("key_proven"),
         shape.get("verify_note"),
         bool(shape.get("verified")),
+        # validate_shape decided it; an engine is local whatever a caller sent.
+        bool(shape.get("local")) or shape["adapter"] == "ollama",
     )
     if row is None:
         raise UnknownProvider(name)

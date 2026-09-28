@@ -370,6 +370,36 @@ async def test_a_chain_with_no_runnable_and_no_local_link_falls_to_the_stated_st
     assert len(cloud.seen) == before
 
 
+async def test_a_wrong_protocol_link_does_not_block_the_standby(client, pool, local, mount_backend):
+    """F7 (decision-role spec, Task 2 rulings). chat.model can be a Kev link
+    left behind by a misclick on a model list — wrong_protocol on the chat
+    endpoint. Its provider row is `local` (a Kev box lives on the owner's own
+    network), but it never served anything: before the fix, has_local read
+    that `local` anyway and skipped the cross-tier standby outright, 503ing a
+    turn a local engine could answer. Here the chain's only cloud link is
+    walled too, so only the Kev link and the standby exist to serve."""
+    await pool.execute(
+        "INSERT INTO providers (name, adapter, base_url, auth_shape, local) "
+        "VALUES ('dell-kev', 'systemone', 'http://kev.test/v1', 'none', true)"
+    )
+    await _cloud(client, mount_backend, "openrouter", FakeOpenAICompat(accepts_key="sk-1"))
+    await client.put("/admin/routes/chat", json={"chain": ["openrouter:remote-model"]})
+    await routing.record_refusal(
+        pool, {"name": "openrouter"}, 402, "out of credit", model="remote-model"
+    )
+
+    resp = await _chat(client, "chat", model="dell-kev:kev-latest")
+
+    assert resp.status_code == 200
+    route = _route_chunk(resp.content)
+    assert route["standby"] is True and route["served_by"] == "hub:qwen3:8b"
+    assert (
+        "dell-kev:kev-latest: dell-kev answers typed questions — this role needs chat"
+        in route["reason"]
+    )
+    assert "walled for another" in route["reason"]
+
+
 async def test_nothing_runnable_is_a_503_that_lists_every_verdict(client, pool, local, monkeypatch):
     local.tags = ()
     engines.clear_cache()

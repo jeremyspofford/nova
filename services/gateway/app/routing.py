@@ -643,7 +643,14 @@ async def resolve(
             verdict["verdict"] = "refused"
             verdict["reason"] = f"{link} refused this request"
         verdicts.append(verdict)
-        has_local = has_local or bool(verdict.get("local"))
+        # F7 (decision-role spec, Task 2 rulings): a wrong_protocol link never
+        # served anything and never will on this role — its `local` says only
+        # where the PROVIDER sits, so counting it would let a local decision
+        # server (Kev, marked local) sitting in chat.model by mistake block
+        # the cross-tier standby it can never itself become.
+        has_local = has_local or (
+            bool(verdict.get("local")) and verdict["verdict"] != "wrong_protocol"
+        )
         if verdict["verdict"] == "runnable":
             reason = None
             if index > 1:
