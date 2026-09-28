@@ -335,7 +335,7 @@ subjects then carry the 409 as evidence.
 
 ### S42a: the agent on every OS (hands + facts)
 
-**Status: merged <date>; walk pending.** Plan: [s42a/plan.md](s42a/plan.md);
+**Status: merged 2026-09-28; walk pending.** Plan: [s42a/plan.md](s42a/plan.md);
 close-out in [slice-42a-agent-every-os.md](slice-42a-agent-every-os.md);
 carries in [slice-42a-carries.md](slice-42a-carries.md). Core 036 is used.
 

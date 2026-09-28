@@ -24,7 +24,7 @@ S10/S10a/S10pre, S11–S19, S22, S24, S25, S28, S40, S40b (2026-09-19) and
 **S41** (2026-09-22, portable hub, verified backup and restore). **S47
 merged 2026-09-26** (PR #76: `nova_address`/`show_setup_qr`, thin-client
 setup QR codes — no walked status is recorded on this branch, so read it as
-landed, not shipped). **S42a merged <date>, walk pending** (the agent on
+landed, not shipped). **S42a merged 2026-09-28, walk pending** (the agent on
 every OS). Parked: S23. Unbuilt: S26, S27, S42b–S46, S48–S49.
 
 ---
@@ -41,7 +41,7 @@ amended 2026-09-16. S28 (attachments) was inserted and completed after S25.
 | 3 | **S25** the Inbox | done |
 | — | **S28** attachments | done (inserted) |
 | 0 | **The suite hang** (below) | **DONE 2026-09-18**: root-caused and fixed; full core suite 2,957/2,957 green twice |
-| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b shipped 2026-09-19** — the honesty guards the S40 walk showed were missing: machine subjects in `state_claim`, new `served_claim` and `memory_claim`, and history stamps that mark an old live reading as a record of its moment. **S41 shipped 2026-09-22** (portable hub, verified backup and restore). **S42a merged <date>, walk pending** (the agent on every OS). **S42b next** (install, service, downloads, the code card), then S46a → S46b → S43a (order reset 2026-09-25). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
+| — | **S40–S49 — the hub lane** ([`hub-topology.md`](hub-topology.md)) | **In progress.** Approved 2026-09-18, ahead of S26. **S40 shipped 2026-09-19** (engines and measurement identity). **S40b shipped 2026-09-19** — the honesty guards the S40 walk showed were missing: machine subjects in `state_claim`, new `served_claim` and `memory_claim`, and history stamps that mark an old live reading as a record of its moment. **S41 shipped 2026-09-22** (portable hub, verified backup and restore). **S42a merged 2026-09-28, walk pending** (the agent on every OS). **S42b next** (install, service, downloads, the code card), then S46a → S46b → S43a (order reset 2026-09-25). An always-on hub, a Nova agent on every machine (any OS), per-machine local models, Wake-on-LAN, Tailscale-first transports, thin clients. |
 | 4 | **S26 — the quality corpus** | Nothing built, nothing spec'd. After the hub lane. |
 | 5 | **S27** feature flags | **deliberately last** (owner, 2026-09-16: "Add it late") |
 | 6 | **After release: the optional list** ([below](#after-release-the-optional-list)) | Only after Nova is released. Things the owner marked optional, each one to research, build or decide on. |
