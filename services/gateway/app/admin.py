@@ -1017,10 +1017,17 @@ async def delete_owner_price(request: Request) -> dict:
 async def get_routes(request: Request) -> dict:
     """Every role with a chain: the built-ins first (in their own order,
     a row or not), then every other routes row — a derived agent role —
-    by name. `builtin` says which is which; `reserved` is unchanged."""
+    by name. `builtin` says which is which; `reserved` is unchanged.
+
+    `?chat_model=` is chat.model, link 1 of chat's and scheduled's turns —
+    core's setting, which core passes here (the gateway never reads core's
+    settings) so the Jev Router switch reads true on those two."""
     pool = await db.get_pool()
     chains = await routing.chains(pool)
     walled = await routing.walls(pool)
+    kept = await routing.router_kept(pool)
+    names = {r["name"] for r in await providers.list_rows(pool)}
+    chat_model = (request.query_params.get("chat_model") or "").strip() or None
     derived = sorted(role for role in chains if role not in routing.BUILTIN_ROLES)
     return {
         "roles": [
@@ -1030,6 +1037,16 @@ async def get_routes(request: Request) -> dict:
                 "reserved": role in routing.RESERVED_ROLES,
                 "builtin": role in routing.BUILTIN_ROLES,
                 "protocol": routing.protocol_of(role),
+                # The Jev Router switch (decision-role spec §4): its state,
+                # DERIVED from the chain; None where it is not offered.
+                "router": routing.router_state(
+                    chains.get(role, []),
+                    names,
+                    kept.get(role),
+                    chat_model if role in routing.ROUTER_BUILTINS else None,
+                )
+                if routing.router_switchable(role)
+                else None,
             }
             for role in (*routing.BUILTIN_ROLES, *derived)
         ],
@@ -1053,6 +1070,33 @@ async def put_route(role: str, request: Request) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     logger.info("route set: %s = %s", role, chain)
     return {"role": role, "chain": chain}
+
+
+@router.put("/routes/{role}/jev-router")
+async def put_jev_router(role: str, request: Request) -> dict:
+    """{on: bool, link?: <provider>:typesafe/jev-router, chat_model?: str} —
+    the Jev Router switch (decision-role spec §4), an edit to the role's
+    chain. The link is the caller's, read from the live catalogue;
+    `chat_model` is chat.model, which core passes (link 1 of chat's and
+    scheduled's turns). An answer carrying `chat_model` names what chat.model
+    must become — core writes it. The refusals are routing.set_router's own
+    words."""
+    body = await request.json() if await request.body() else {}
+    if not isinstance(body, dict) or not isinstance(body.get("on"), bool):
+        raise HTTPException(status_code=400, detail="on (true or false) is required")
+    chat_model = body.get("chat_model")
+    if chat_model is not None and not isinstance(chat_model, str):
+        raise HTTPException(status_code=400, detail="chat_model must be a string")
+    pool = await db.get_pool()
+    by_name = {r["name"]: r for r in await providers.list_rows(pool)}
+    try:
+        result = await routing.set_router(
+            pool, role, body["on"], body.get("link"), by_name, chat_model=chat_model
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info("jev router %s: %s", role, result["router"])
+    return result
 
 
 @router.get("/route/explain")

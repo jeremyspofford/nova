@@ -1,0 +1,12 @@
+-- The Jev Router switch (docs/plans/rebuild/decision-role/spec.md §4): an edit
+-- to a role's chain, which stays the one source of truth. Whether the switch
+-- is ON is read off the chain itself (a `typesafe/jev-router` link in it) —
+-- never stored. On chat and scheduled, link 1 is chat.model, core's setting
+-- (core sends it ahead of the chain), so the router there can be chat.model.
+-- What is stored is the one thing the chain cannot say after the edit: the
+-- cloud link the router replaced, so switching off puts it back.
+--
+--   NULL  the switch is off (or the router link was removed by hand)
+--   ''    on, and it replaced nothing (it was added after the local links)
+--   text  on, in place of this link — on chat, possibly the chat model
+ALTER TABLE routes ADD COLUMN IF NOT EXISTS router_kept text;

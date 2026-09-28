@@ -515,6 +515,7 @@ async def test_the_routes_page_lists_built_ins_first_and_a_derived_role_can_be_r
             "reserved": False,
             "builtin": False,
             "protocol": "chat",
+            "router": {"on": False, "kept": None},
         },
         {
             "role": "agent_zed",
@@ -522,6 +523,7 @@ async def test_the_routes_page_lists_built_ins_first_and_a_derived_role_can_be_r
             "reserved": False,
             "builtin": False,
             "protocol": "chat",
+            "router": {"on": False, "kept": None},
         },
     ]
 
