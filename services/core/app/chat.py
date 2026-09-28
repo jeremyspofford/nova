@@ -1040,6 +1040,38 @@ class Recalled:
     # live_facts.lines(). Filled in after the checks run; empty when no note
     # named one.
     live: tuple[str, ...] = ()
+    # WHICH note each of `notes` is, by path, in the same order — "" for one
+    # memory named no path for (recalled_sources' rule: paths, never bodies).
+    # The decision role records its per-note verdicts by path (decisions.py,
+    # decision-role spec §2) and must know which note is which.
+    paths: tuple[str, ...] = ()
+    # The decision role set aside EVERY note recall returned: its sentence,
+    # said in place of the notes. Without it the prompt would read like a
+    # search that found nothing, which is not what happened (plan decision 8).
+    set_aside: str | None = None
+
+
+def _with_notes_kept(recalled: Recalled, keep: Sequence[int] | None) -> Recalled:
+    """The recall after the decision role's check (decisions.py): only the
+    notes at `keep`, each path beside its note. None leaves it untouched. When
+    every note was set aside the prompt says so (`set_aside`) — an empty block
+    would read as a search that came back empty."""
+    if keep is None:
+        return recalled
+    notes = tuple(recalled.notes[i] for i in keep if i < len(recalled.notes))
+    paths = tuple(recalled.paths[i] for i in keep if i < len(recalled.paths))
+    if notes:
+        return dataclasses.replace(recalled, notes=notes, paths=paths)
+    count = len(recalled.notes)
+    return dataclasses.replace(
+        recalled,
+        notes=(),
+        paths=(),
+        set_aside=(
+            f"a decision model set aside all {count} note{'s' if count != 1 else ''} it "
+            "returned as unrelated to this message or superseded by what she can do now"
+        ),
+    )
 
 
 # The line above the notes. It says only what is mechanically true of every hit
@@ -1073,6 +1105,11 @@ def volatile_system_prompt(
     if recall.notes:
         notes = "\n".join(f"- {snippet}" for snippet in recall.notes)
         parts.append(f"{NOTES_HEADER}\n{notes}")
+    elif recall.set_aside:
+        # The decision role set every note aside (decisions.py). Said: this
+        # search FOUND notes, which a decision model judged unrelated or out of
+        # date — not the same fact as "nothing matched".
+        parts.append(f"Her memory was searched for this turn; {recall.set_aside}.")
     elif recall.empty:
         # Said, rather than left as an absence: an empty prompt block reads to
         # the model exactly like a turn where memory was never consulted, and
@@ -1122,6 +1159,7 @@ def base_messages(
     persona: agents.Persona | None = None,
     roster: str | None = None,
     skills_roster: str | None = None,
+    hint: str | None = None,
 ) -> list[dict]:
     """The transcript the first round of the turn starts from.
 
@@ -1129,7 +1167,11 @@ def base_messages(
     before — the whole live registry and no block; an agent's names its
     subset and carries its block. `roster` is Nova's line about who she can
     delegate to, and `skills_roster` (S17) her line about the procedures
-    written down for this household (see volatile_system_prompt)."""
+    written down for this household (see volatile_system_prompt). `hint`
+    (decision-role spec §2) is the decision role's one line: its own system
+    message immediately before his message — the position measured at 3/3 —
+    so the cached prefix (the system prompts and the history) is the same
+    bytes with or without it."""
     if persona is None:
         stable = stable_system_prompt(model, tools.tool_names())
     else:
@@ -1141,6 +1183,8 @@ def base_messages(
     if volatile is not None:
         messages.append({"role": "system", "content": volatile})
     messages.extend(history)
+    if hint:
+        messages.append({"role": "system", "content": hint})
     messages.append({"role": "user", "content": message})
     return messages
 
@@ -1352,6 +1396,20 @@ def _snippets(results: Iterable, today: date | None = None) -> list[str]:
         if text:
             snippets.append(text)
     return snippets
+
+
+def _note_paths(results: Iterable) -> list[str]:
+    """The path of each note _snippets makes from the same hits — one per note,
+    in the same order, "" for a hit memory named no path for. PATHS, never
+    bodies (recalled_sources' rule): the decision role records WHICH note it
+    set aside by this, never by its text (decision-role spec §2)."""
+    paths: list[str] = []
+    for hit in results:
+        if not _snippets([hit]):
+            continue
+        named = recalled_sources([hit])
+        paths.append(named[0] if named else "")
+    return paths
 
 
 def _degraded_from(body: object) -> str | None:
@@ -1981,6 +2039,10 @@ async def _recall(
         # The PATHS behind those hits, per scope, for the span — see
         # recalled_sources.
         sources: dict[str, list[str]] = {}
+        # The same paths, aligned one-for-one with `hits[name]` rather than
+        # collapsed into one list — the decision role needs to know WHICH
+        # note in the prompt a path names (decisions.py, decision-role spec §2).
+        note_paths: dict[str, list[str]] = {}
         calls: list[live_facts.LiveCall] = []
         said: dict[str, str | None] = {}
         reduced: dict[str, str | None] = {}
@@ -1989,11 +2051,13 @@ async def _recall(
             if isinstance(outcome, BaseException):
                 errors[name] = peers.reason(outcome)
                 hits[name] = []
+                note_paths[name] = []
                 said[name] = None
                 reduced[name] = None
             else:
                 results, statement, degraded = outcome
                 hits[name] = _snippets(results)
+                note_paths[name] = _note_paths(results)
                 sources[name] = recalled_sources(results)
                 # From every scope that answered: an agent allowed to read the
                 # household's notes gets the same check on them that Nova does,
@@ -2013,6 +2077,7 @@ async def _recall(
                 logger.warning("memory recall failed, continuing without notes: %s", errors["own"])
                 return Recalled(unreachable=errors["own"])
             snippets = hits["own"]
+            paths = note_paths["own"]
         else:
             for name, reason in errors.items():
                 logger.warning(
@@ -2023,6 +2088,7 @@ async def _recall(
             if errors:
                 span.meta["errors"] = errors
             snippets = [*hits["own"], *(f"(shared) {s}" for s in hits["shared"])]
+            paths = [*note_paths["own"], *note_paths["shared"]]
             span.meta["scopes"] = {"own": len(hits["own"]), "shared": len(hits["shared"])}
         span.meta["hits"] = len(snippets)
         # WHICH ones, not just how many (2026-09-16). See recalled_sources:
@@ -2041,6 +2107,7 @@ async def _recall(
         if snippets:
             return Recalled(
                 notes=tuple(snippets),
+                paths=tuple(paths),
                 unreachable=unreachable,
                 degraded=degraded,
                 live_calls=tuple(calls),
