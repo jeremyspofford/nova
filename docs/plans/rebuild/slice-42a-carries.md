@@ -128,3 +128,22 @@ Carries with reasons (fine to ship):
   stub duplicated darwin/windows, Linux notify's `LookPath` bypassing the
   Runner, a few coverage gaps) — recorded in the SDD ledger
   (`.superpowers/sdd/plan/progress.md`), none affects behavior.
+
+## From the walk and the eval (appended at close-out)
+
+- CI's `web` job: `deploy/tailscale/start_test.sh`'s "MOVED_TO: states the
+  flap it is preventing" fails against main's own `start.sh` (expects "node
+  key" in the refusal) — pre-existing, and had been masked earlier while the
+  job stopped first at the flaky `ProvidersSection` test.
+- The desktop guess (walk turn 2): she read `C:\Users\Public\Desktop`
+  instead of `device_info`'s own `desktop=` line — it looked right because
+  Windows shows both desktops together. -> **S42b:** resolve "Desktop" on
+  the agent so there is nothing to guess.
+- The WSL-advice eval failure: `points-wsl-at-the-windows-agent` failed 0/3
+  because she reaches for `device_list` before `machine_status`, and
+  `device_list` carries no WSL role reason. -> **S42b:** deliver the WSL
+  fact through `device_list`'s own line and the device tools too.
+- The WSL agent the owner chose to keep running on the Dell is the
+  pre-S42a build: it sends no facts, carries none of S42a's fixes, and Nova
+  cannot update it yet. -> **S42b:** update it in place, or retire it — the
+  Windows agent already reaches WSL through `wsl.exe`, proven in the walk.

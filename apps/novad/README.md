@@ -17,7 +17,7 @@ inside WSL.
 
 |        | linux/amd64                     | linux/arm64 | darwin/amd64          | darwin/arm64          | windows/amd64            | windows/arm64          |
 |--------|---------------------------------|-------------|-----------------------|-----------------------|--------------------------|------------------------|
-| status | walked before S42a; S42a: CI    | built + CI  | built + CI, unwalked  | built + CI, unwalked  | built + CI; walk pending | built + CI, unwalked   |
+| status | walked before S42a; S42a: CI    | built + CI  | built + CI, unwalked  | built + CI, unwalked  | walked 2026-09-28 (the Dell) | built + CI, unwalked   |
 
 linux/amd64 was walked before S42a. S42a's walk has no Linux agent step, so
 this slice's Linux changes are tested in CI, not walked.
