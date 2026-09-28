@@ -90,7 +90,6 @@ from collections.abc import AsyncIterator, Callable, Collection, Iterable, Seque
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from typing import Any
-from urllib.parse import unquote
 
 import asyncpg
 import httpx
@@ -3080,16 +3079,15 @@ def _note_throughput(
 
 
 def _note_route(span, header: str | None) -> None:
-    """The gateway's X-Nova-Route (S10-2): `role=…;link=N;reason=…`."""
-    if not header:
-        return
-    fields = dict(part.split("=", 1) for part in header.split(";") if "=" in part)
+    """The gateway's X-Nova-Route (S10-2): `role=…;link=N;reason=…`, read by
+    peers.route_fields — the one reader chat and the decision role share."""
+    fields = peers.route_fields(header)
     if fields.get("role"):
         span.meta["route_role"] = fields["role"]
     if fields.get("link", "").isdigit():
         span.meta["route_link"] = int(fields["link"])
     if fields.get("reason"):
-        span.meta["route_reason"] = unquote(fields["reason"])
+        span.meta["route_reason"] = fields["reason"]
 
 
 def _note_served(span, headers) -> None:

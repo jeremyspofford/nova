@@ -4,32 +4,39 @@ Pins, with no database: the options are exactly the tools the turn advertises,
 each with its full registry description (a tool registered tomorrow is an
 option by that fact alone), plus `none`; stage 2 asks about stage 1's top three,
 quoting each full description; TypeSafe's thresholds, at their boundaries; an
-answer of the wrong shape is unreadable, never guessed; the hint line is the
-spec's sentence; the module cannot reach the dispatch funnel. And through a fake
-gateway: a decision hints the tool and sets aside the superseded note, recording
-paths and never note text; the hint is stage 2's pick; every call walks the
-decisions role under the turn's attribution and names no model; a fallback link
-is on the span in the gateway's words; no decision model, the budget, an
-unreadable answer and a failed or refused note check each leave nothing applied
-and say why; with no hint the notes stand unasked."""
+answer of the wrong shape is unreadable, never guessed, and a number it did not
+give is never invented; the hint line is the spec's sentence; the module cannot
+reach the dispatch funnel, by an absolute import or a relative one. And through
+a fake gateway: a decision hints the tool and sets aside the superseded note,
+recording paths and never note text; the hint is stage 2's pick, and `none`
+winning stage 1 hints nothing; every call walks the decisions role under the
+turn's attribution and names no model; a fallback link is on the span in the
+gateway's words; no decision model, the budget at any round, an unreadable
+answer, a failed or refused note check, an unreachable or unconfigured gateway,
+notes that do not line up with their paths and a bug in the step each leave
+nothing applied and say why; a cancelled turn says so and keeps what the step
+spent; with no hint, or no tools, the notes stand unasked."""
 
 from __future__ import annotations
 
 import ast
 import asyncio
+import importlib.util
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import quote
 
+import httpx
 import pytest
 from starlette.responses import JSONResponse, Response
 
 from app import decisions, tools, traces
 from app.main import app
 from app.tools.base import Tool
-from tests.fakes import FakeGateway
+from tests.fakes import GATEWAY_URL, FakeGateway
 
 SETUP = "show_setup_qr"
 PHONE = "How do I get you on my phone"
@@ -188,6 +195,25 @@ def test_an_answer_of_the_wrong_shape_is_unreadable_never_guessed():
     ) == ("a", {"a": 0.7})
 
 
+def test_an_offered_option_with_no_real_probability_is_unreadable_by_name():
+    """Never a number invented or hidden: an option we offered, given something
+    that is not a probability, makes the answer unreadable and names the option;
+    a key nobody offered is dropped unread, whatever it carries."""
+    for junk in ("high", 1.5, -0.1, True, None, [0.3]):
+        with pytest.raises(
+            decisions.Unreadable,
+            match="'tool' gave the option 'b' a probability that is not a number between 0 and 1",
+        ):
+            decisions.read_choice(
+                {"tool": {"choice": "a", "probabilities": {"a": 0.7, "b": junk}}},
+                "tool",
+                {"a", "b"},
+            )
+    assert decisions.read_choice(
+        {"tool": {"choice": "a", "probabilities": {"a": 0.7, "zzz": "junk"}}}, "tool", {"a", "b"}
+    ) == ("a", {"a": 0.7})
+
+
 def test_the_hint_line_is_the_specs_sentence():
     hint = decisions.Hint(tool=SETUP, fit=0.85, gate=0.9)
     assert hint.line() == (
@@ -203,8 +229,14 @@ def test_the_decision_role_cannot_reach_the_dispatch_funnel():
     tree = ast.parse(Path(decisions.__file__).read_text(encoding="utf-8"))
     imported: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("app"):
-            imported |= {f"{node.module}.{alias.name}" for alias in node.names}
+        if isinstance(node, ast.ImportFrom):
+            # A relative import (`from . import chat`) has no module name of its
+            # own: resolved against this module's package, it is app's too.
+            module = importlib.util.resolve_name(
+                "." * node.level + (node.module or ""), decisions.__package__
+            )
+            if module == "app" or module.startswith("app."):
+                imported |= {f"{module}.{alias.name}" for alias in node.names}
         elif isinstance(node, ast.Import):
             imported |= {alias.name for alias in node.names if alias.name.startswith("app")}
     assert imported == {"app.peers", "app.traces"}
@@ -464,3 +496,231 @@ async def test_a_fallback_link_is_on_the_span_with_the_gateways_reason(mount_pee
     meta = _span(turn).meta
     assert meta["served_by"] == ["openrouter:~typesafe/jev-latest"]
     assert meta["fell_back"] == [why]
+
+
+# -- every way the step ends, said on the span -------------------------------
+
+
+async def _until_calls(gateway: FakeGateway, count: int) -> None:
+    """Wait, bounded, until `count` decision calls have reached the fake."""
+    for _ in range(500):
+        if len(gateway.decision_calls) >= count:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"only {len(gateway.decision_calls)} of {count} decision calls arrived")
+
+
+@pytest.mark.parametrize(
+    ("held", "calls", "priced"),
+    [("pick", 2, 1), ("relevant", 4, 2)],
+    ids=["at-stage-two", "mid-note-check"],
+)
+async def test_the_budget_bounds_every_round_not_only_the_first(
+    mount_peers, monkeypatch, held, calls, priced
+):
+    """The budget is the whole step's: stage 2 held, or every note check held,
+    and the step still ends at the budget, fails open and says so, with how far
+    it got. Bounded from outside as well, so a round moved out from under the
+    budget fails here in seconds instead of hanging on the held call."""
+    monkeypatch.setattr(decisions, "TURN_BUDGET_S", 0.2)
+    hold = asyncio.Event()
+    gateway = FakeGateway(decision_answer=decider(), decision_hold=hold, decision_hold_on=held)
+    mount_peers(gateway=gateway)
+    turn = _turn()
+    try:
+        advice = await asyncio.wait_for(
+            decisions.run(app, turn, PHONE, NOTES, PATHS, tools.advertised_tools()), 3.0
+        )
+    finally:
+        hold.set()
+
+    assert advice == decisions.Advice()
+    span = _span(turn)
+    assert span.meta["outcome"] == "failed_open"
+    assert span.meta["reason"] == "no decision within the 0.2 s budget"
+    assert span.duration_ms < 1000
+    assert span.meta["calls"] == calls and span.meta["priced_calls"] == priced
+    assert span.meta["reached"]["shortlist"][0]["tool"] == SETUP
+    assert ("hint" in span.meta["reached"]) is (held == "relevant")
+    assert "hint" not in span.meta
+
+
+async def test_a_cancelled_turn_says_so_with_the_calls_it_made_and_their_cost(mount_peers):
+    """The turn itself cancelled mid-step (a stop, a shutdown): the cancellation
+    is never swallowed, but the span says so and keeps the calls made, what they
+    cost, and how far the step got."""
+    hold = asyncio.Event()
+    gateway = FakeGateway(decision_answer=decider(), decision_hold=hold, decision_hold_on="pick")
+    mount_peers(gateway=gateway)
+    turn = _turn()
+    step = asyncio.create_task(
+        decisions.run(app, turn, PHONE, NOTES, PATHS, tools.advertised_tools())
+    )
+    try:
+        await _until_calls(gateway, 2)
+        step.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await step
+    finally:
+        hold.set()
+
+    meta = _span(turn).meta
+    assert meta["outcome"] == "cancelled"
+    assert meta["why"] == "the turn was cancelled during the decision step"
+    assert meta["calls"] == 2
+    assert meta["cost_usd"] == 1e-05 and meta["priced_calls"] == 1
+    assert meta["served_by"] == ["openrouter:~typesafe/jev-latest"]
+    assert meta["reached"]["shortlist"][0]["tool"] == SETUP
+    assert "hint" not in meta
+
+
+async def test_a_probability_the_answer_never_gave_is_absent_never_zero(mount_peers):
+    fine = decider()
+
+    def answer(body: dict) -> dict:
+        out = fine(body)
+        if "tool" in body["questions"]:
+            del out["tool"]["probabilities"][decisions.NONE]
+        return out
+
+    mount_peers(gateway=FakeGateway(decision_answer=answer))
+    turn = _turn()
+
+    await decisions.run(app, turn, PHONE, (), (), tools.advertised_tools())
+
+    assert _span(turn).meta["none_p"] is None
+
+
+async def test_notes_and_paths_that_do_not_line_up_fail_open_before_any_call(mount_peers):
+    """A caller bug, stated: each verdict is filed by its note's path, and a
+    guessed path would file one note's verdict under another."""
+    gateway = FakeGateway(decision_answer=decider())
+    mount_peers(gateway=gateway)
+    turn = _turn()
+
+    advice = await decisions.run(app, turn, PHONE, NOTES, PATHS[:1], tools.advertised_tools())
+
+    assert advice == decisions.Advice()
+    assert gateway.decision_calls == []
+    meta = _span(turn).meta
+    assert meta["outcome"] == "failed_open"
+    assert meta["reason"] == (
+        "the recalled notes and their paths do not line up (notes: 2, paths: 1) — each "
+        "verdict is filed by its note's path, so nothing was asked (a caller bug)"
+    )
+    assert meta["calls"] == 0
+
+
+async def test_a_turn_that_advertises_no_tools_asks_nothing(mount_peers):
+    gateway = FakeGateway(decision_answer=decider())
+    mount_peers(gateway=gateway)
+    turn = _turn()
+
+    advice = await decisions.run(app, turn, PHONE, NOTES, PATHS, [])
+
+    assert advice == decisions.Advice()
+    assert gateway.decision_calls == []
+    meta = _span(turn).meta
+    assert meta["outcome"] == "decided" and meta["hint"] is None
+    assert meta["why"] == "the turn advertises no tools, so there is nothing to choose between"
+    assert meta["calls"] == 0
+
+
+async def test_none_winning_stage_one_hints_nothing_and_the_notes_stand(mount_peers):
+    """`none` is a stage-1 option and never a stage-2 candidate: the shortlist is
+    tools only, and none's probability rides on the span as `none_p`. A model
+    that reads the message as talk (none first, the action gate low, no
+    candidate fitting) hints nothing, and with no hint the notes stand unasked.
+    As built, `none` alone does not end the question: stage 2 is still asked,
+    and the gate and the fit decide."""
+
+    def answer(body: dict) -> dict:
+        questions = body["questions"]
+        if "tool" in questions:
+            offered = [name for name in questions["tool"]["criteria"] if name != "none"]
+            return {
+                "tool": {
+                    "type": "choice",
+                    "choice": "none",
+                    "probabilities": {"none": 0.7, **dict.fromkeys(offered, 0.3 / len(offered))},
+                },
+                "acts": {"type": "noul", "noul": 0.1},
+            }
+        short = list(questions["pick"]["criteria"])
+        return {
+            "pick": {
+                "type": "choice",
+                "choice": short[0],
+                "probabilities": dict.fromkeys(short, 1 / len(short)),
+            },
+            **{f"fit{index}": {"type": "noul", "noul": 0.1} for index in range(len(short))},
+        }
+
+    gateway = FakeGateway(decision_answer=answer)
+    mount_peers(gateway=gateway)
+    turn = _turn()
+
+    advice = await decisions.run(app, turn, PHONE, NOTES, PATHS, tools.advertised_tools())
+
+    assert advice == decisions.Advice()
+    meta = _span(turn).meta
+    assert meta["outcome"] == "decided" and meta["hint"] is None
+    assert meta["none_p"] == 0.7
+    assert all(entry["p"] < meta["none_p"] for entry in meta["shortlist"])
+    assert "none" not in gateway.decision_calls[1]["body"]["questions"]["pick"]["criteria"]
+    assert meta["notes_checked"] is False
+    assert len(gateway.decision_calls) == 2, "stage 2 is still asked; no note is"
+
+
+async def test_a_bug_in_the_step_is_logged_and_fails_open_in_words(
+    mount_peers, monkeypatch, caplog
+):
+    def broken(*args, **kwargs):
+        raise RuntimeError("the shortlist broke")
+
+    monkeypatch.setattr(decisions, "shortlist", broken)
+    mount_peers(gateway=FakeGateway(decision_answer=decider()))
+    turn = _turn()
+
+    with caplog.at_level(logging.ERROR, logger="core"):
+        advice = await decisions.run(app, turn, PHONE, (), (), tools.advertised_tools())
+
+    assert advice == decisions.Advice()
+    meta = _span(turn).meta
+    assert meta["outcome"] == "failed_open"
+    assert meta["reason"] == "the decision step failed — RuntimeError: the shortlist broke"
+    assert "the decision step raised" in caplog.text
+
+
+async def test_a_gateway_that_cannot_be_reached_fails_open_in_the_transports_words(
+    mount_peers,
+):
+    mount_peers(gateway=FakeGateway(decision_answer=decider()))
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    app.state.peer_transports[GATEWAY_URL] = httpx.MockTransport(refuse)
+    turn = _turn()
+
+    advice = await decisions.run(app, turn, PHONE, NOTES, PATHS, tools.advertised_tools())
+
+    assert advice == decisions.Advice()
+    meta = _span(turn).meta
+    assert meta["outcome"] == "failed_open"
+    assert meta["reason"] == "the gateway could not be reached — ConnectError: connection refused"
+    assert meta["calls"] == 1 and meta["served_by"] == []
+
+
+async def test_an_unconfigured_gateway_link_fails_open_and_names_the_setting(monkeypatch):
+    monkeypatch.delenv("GATEWAY_URL", raising=False)
+    monkeypatch.delenv("CORE_GATEWAY_TOKEN", raising=False)
+    turn = _turn()
+
+    advice = await decisions.run(app, turn, PHONE, (), (), tools.advertised_tools())
+
+    assert advice == decisions.Advice()
+    meta = _span(turn).meta
+    assert meta["outcome"] == "failed_open"
+    assert meta["reason"] == "the gateway link is not configured — GATEWAY_URL is unset"
+    assert meta["calls"] == 0

@@ -10,7 +10,8 @@ THE TOOL HINT. Stage 1 is one request: a `choice` over every tool this turn
 advertises, each with its FULL registry description (never a truncated line),
 plus `none`, and one `noul` gate — does answering require doing, showing or
 looking something up? Stage 2 is a second request: a `choice` over stage 1's
-top three and one fit `noul` per candidate, each quoting that candidate's full
+top three tools (never `none`, whose probability is only recorded, as
+`none_p`) and one fit `noul` per candidate, each quoting that candidate's full
 description. The stage-2 pick becomes a hint when its fit is at least FIT_MIN
 and the gate at least GATE_MIN; a hint is ONE system line in her turn
 (Hint.line). It is a request: she still decides, and every guard still judges
@@ -31,9 +32,12 @@ Nothing here names a tool.
 
 FAIL-OPEN, AND SAID. A decision is applied whole or not at all (plan decision
 3). No decision model (the decisions chain is empty, or nothing in it can run),
-a refusal, an answer that cannot be read, or the per-turn budget running out
-leaves the turn exactly as it was before this module existed — no hint, every
-note — and the `decisions` span says which.
+a refusal, an answer that cannot be read, the per-turn budget running out, or
+notes handed in without their paths (a caller bug) leaves the turn exactly as
+it was before this module existed — no hint, every note — and the `decisions`
+span says which. A cancellation of the turn itself is said on the span too,
+then passed on, never swallowed; either way the span keeps the calls made and
+what they cost.
 
 WHAT IT NEVER DOES. Refuse, reorder or rewrite a tool call, or touch the
 dispatch funnel (tests/test_no_approvals.py pins it; this module imports
@@ -48,7 +52,6 @@ import json
 import logging
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
-from urllib.parse import unquote
 
 import httpx
 
@@ -79,9 +82,12 @@ NONE = "none"
 NONE_MEANS = "No tool: the reply only talks, from knowledge or the conversation."
 #: Who the decision model is told the assistant is (the measured wording).
 ASSISTANT = "Nova, a household AI assistant with tools"
-#: The span's two outcomes.
+#: The span's outcomes: a decision applied whole, none applied (fail-open, with
+#: the reason), or the turn itself cancelled while the step ran.
 DECIDED = "decided"
 FAILED_OPEN = "failed_open"
+CANCELLED = "cancelled"
+CANCELLED_WHY = "the turn was cancelled during the decision step"
 NO_HINT_NO_FACTS = (
     "no tool hint, so there are no current facts to judge the notes against — they "
     "stand as recalled"
@@ -178,12 +184,10 @@ class Calls:
         served = response.headers.get("x-nova-served-by")
         if served and served not in self.served_by:
             self.served_by.append(served)
-        header = response.headers.get("x-nova-route") or ""
-        fields = dict(part.split("=", 1) for part in header.split(";") if "=" in part)
-        if fields.get("link", "1") != "1" and fields.get("reason"):
-            reason = unquote(fields["reason"])
-            if reason not in self.fell_back:
-                self.fell_back.append(reason)
+        route = peers.route_fields(response.headers.get("x-nova-route"))
+        reason = route.get("reason")
+        if route.get("link", "1") != "1" and reason and reason not in self.fell_back:
+            self.fell_back.append(reason)
 
     def note_cost(self, usage: object) -> None:
         cost = usage.get("cost_usd") if isinstance(usage, dict) else None
@@ -305,11 +309,18 @@ def read_choice(answers: dict, key: str, options: Collection[str]) -> tuple[str,
     stated = entry.get("probabilities")
     if not isinstance(stated, dict):
         raise Unreadable(f"{key!r} carried no probabilities")
-    probabilities = {
-        name: float(value)
-        for name, value in stated.items()
-        if name in options and _is_probability(value)
-    }
+    probabilities: dict[str, float] = {}
+    for name, value in stated.items():
+        if name not in options:
+            continue  # a key nobody offered is dropped unread
+        if not _is_probability(value):
+            # Never a number invented or hidden: an offered option with no real
+            # probability makes the whole answer unreadable, by name.
+            raise Unreadable(
+                f"{key!r} gave the option {name!r} a probability that is not a number "
+                "between 0 and 1"
+            )
+        probabilities[name] = float(value)
     if not probabilities:
         raise Unreadable(f"{key!r} carried no probability for any option")
     return chosen, probabilities
@@ -382,7 +393,10 @@ async def decide(
         if not short:
             raise Unreadable("stage 1 gave no probability to any advertised tool")
         meta["shortlist"] = [{"tool": name, "p": round(probabilities[name], 4)} for name in short]
-        meta["none_p"] = round(probabilities.get(NONE, 0.0), 4)
+        # Not stated is not zero: an answer that gave `none` no probability is
+        # recorded as having given none.
+        none_p = probabilities.get(NONE)
+        meta["none_p"] = round(none_p, 4) if none_p is not None else None
         meta["gate"] = round(gate, 4)
         second = await ask(client, turn, state, stage_two(short, descriptions), calls)
         pick, _probabilities = read_choice(second, "pick", set(short))
@@ -414,12 +428,13 @@ async def decide(
             raise failed
         verdicts = [
             NoteVerdict(
-                path=paths[index] if index < len(paths) else "",
+                path=path,
                 relevant=read_noul(answer, "relevant"),
                 contradicts=read_noul(answer, "contradicts"),
                 superseded=read_noul(answer, "superseded"),
             )
-            for index, answer in enumerate(answers)
+            # run() refuses notes and paths that do not line up; strict says so again.
+            for answer, path in zip(answers, paths, strict=True)
         ]
         meta["notes_checked"] = True
         meta["notes"] = [verdict.as_meta() for verdict in verdicts]
@@ -443,18 +458,43 @@ async def run(
     advertised: Sequence[dict],
 ) -> Advice:
     """The decision step as a turn runs it: under ONE `decisions` span, inside
-    TURN_BUDGET_S, fail-open with the reason on the span. Never raises — a
-    failure here costs the hint, never the turn. The span's own duration is the
-    step's latency."""
+    TURN_BUDGET_S, fail-open with the reason on the span. Never raises a
+    failure — it costs the hint, never the turn — and passes a cancellation of
+    the turn on, after saying so on the span. However the step ends, the span
+    keeps the calls it made and what they cost. The span's own duration is
+    the step's latency."""
     calls = Calls()
     reached: dict = {}
     with turn.span("decisions") as span:
         span.meta["budget_s"] = TURN_BUDGET_S
+        if len(paths) != len(notes):
+            # A caller bug, said rather than papered over: each verdict is filed
+            # by its note's path, and a guessed path would file one note's
+            # verdict under another.
+            logger.error(
+                "decisions: turn %s passed %d recalled notes with %d paths",
+                turn.id,
+                len(notes),
+                len(paths),
+            )
+            span.meta.update(calls.meta())
+            return _fail_open(
+                span,
+                f"the recalled notes and their paths do not line up (notes: {len(notes)}, "
+                f"paths: {len(paths)}) — each verdict is filed by its note's path, so nothing "
+                "was asked (a caller bug)",
+            )
         try:
             advice = await asyncio.wait_for(
                 decide(app, turn, message, notes, paths, advertised, calls, reached),
                 TURN_BUDGET_S,
             )
+        except asyncio.CancelledError:
+            # The turn itself is being cancelled: said here, then passed on, never
+            # swallowed — a swallowed cancellation keeps a stopped turn running.
+            span.meta["outcome"] = CANCELLED
+            span.meta["why"] = CANCELLED_WHY
+            raise
         except TimeoutError:
             advice = _fail_open(span, f"no decision within the {TURN_BUDGET_S:g} s budget")
         except Unanswered as exc:
@@ -469,8 +509,10 @@ async def run(
         else:
             span.meta["outcome"] = DECIDED
             span.meta.update(reached)
-        if span.meta["outcome"] == FAILED_OPEN and reached:
-            # How far it got before it failed — evidence for tuning, never applied.
-            span.meta["reached"] = reached
-        span.meta.update(calls.meta())
+        finally:
+            if span.meta.get("outcome") != DECIDED and reached:
+                # How far it got before it failed or was cancelled — evidence for
+                # tuning, never applied.
+                span.meta["reached"] = reached
+            span.meta.update(calls.meta())
     return advice

@@ -156,17 +156,20 @@ async def answer_decision(
     served_by: str,
     hold: asyncio.Event | None,
     calls: list[dict],
+    hold_on: str | None = None,
 ) -> Response:
     """The gateway's POST /v1/systemone (decision-role spec §1), for a fake:
     the body and headers recorded; 503 in the gateway's words with no
     decision model; else `answer(body)` — the answers object, or a Response
-    sent as is — with the ledger's usage and the route headers."""
+    sent as is — with the ledger's usage and the route headers. `hold` stalls
+    every call until it is set, or with `hold_on` only the calls whose
+    questions carry that key ("pick": stage 2, "relevant": each note check)."""
     raw = await request.body()
     body = json.loads(raw) if raw else {}
     calls.append({"body": body, "headers": {k.lower(): v for k, v in request.headers.items()}})
     if not _bearer_ok(request, GATEWAY_TOKEN):
         return JSONResponse({"error": "bad gateway bearer"}, status_code=401)
-    if hold is not None:
+    if hold is not None and (hold_on is None or hold_on in body.get("questions", {})):
         await hold.wait()
     if answer is None:
         return JSONResponse({"error": NO_DECISION_MODEL}, status_code=503)
@@ -308,12 +311,15 @@ class FakeGateway:
     # decisions chain — every install's first state — so every test turn
     # sees what a real turn with no decision model sees. `decision_answer`
     # returns the answers for a body (or a Response, sent as is);
-    # `decision_hold` stalls the answer until it is set; every call lands in
-    # `decision_calls`, apart from `seen`, so the completion and admin
-    # traffic other tests count is unchanged by a turn's decision calls.
+    # `decision_hold` stalls the answer until it is set — every call, or with
+    # `decision_hold_on` only the calls whose questions carry that key, so
+    # the rounds before it answer; every call lands in `decision_calls`,
+    # apart from `seen`, so the completion and admin traffic other tests
+    # count is unchanged by a turn's decision calls.
     decision_answer: Callable[[dict], object] | None = None
     decision_served_by: str = "openrouter:~typesafe/jev-latest"
     decision_hold: asyncio.Event | None = None
+    decision_hold_on: str | None = None
     decision_calls: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -378,6 +384,7 @@ class FakeGateway:
             served_by=self.decision_served_by,
             hold=self.decision_hold,
             calls=self.decision_calls,
+            hold_on=self.decision_hold_on,
         )
 
     async def _explain(self, request):
@@ -795,6 +802,7 @@ class ScriptedGateway:
     decision_answer: Callable[[dict], object] | None = None
     decision_served_by: str = "openrouter:~typesafe/jev-latest"
     decision_hold: asyncio.Event | None = None
+    decision_hold_on: str | None = None
     decision_calls: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -817,6 +825,7 @@ class ScriptedGateway:
             served_by=self.decision_served_by,
             hold=self.decision_hold,
             calls=self.decision_calls,
+            hold_on=self.decision_hold_on,
         )
 
     async def _completions(self, request):
