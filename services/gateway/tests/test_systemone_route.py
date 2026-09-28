@@ -11,22 +11,27 @@ walled and the next request passes it undialled; an empty chain is a 503 in
 words that dials nothing; a body with no questions, or another role, is a 400;
 a provider's own 4xx is relayed and walls nothing.
 
-And: a link whose endpoint has no /systemone (a 404 or 405 there — an
-OpenAI-compatible provider such as Groq carries chat only) is passed over for
-the request, never walled, its words in the route, and the next link answers;
-a decision that got no answer at all is metered under the role and its turn;
-a 200 that is not a JSON object is metered with its error, never as a clean
-completion; a decision's usage is read by the same rules as a completion's."""
+And: a link that serves no typed questions is passed over for the request,
+never walled, its words in the route, and the next link answers — whether its
+endpoint has no /systemone (a 404 or 405 there: an OpenAI-compatible provider
+such as Groq carries chat only) or it answered 200 with a body that is not a
+JSON object, which is still metered with its error and never read as a
+success; a decision server that answers again after a wall is unwalled like a
+cloud link; a decision that got no answer at all is metered under the role and
+its turn, and so is one whose caller named no role; a body that is not typed
+questions is a 400 in its words; a decision's usage is read by the same rules
+as a completion's."""
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from urllib.parse import unquote
 
 import httpx
 import pytest
 
-from app import backends, engines
+from app import backends, engines, routing
 from app import usage as ledger
 from tests.conftest import requires_db
 from tests.fakes import FailingTransport, FakeOllama, FakeOpenAICompat
@@ -43,6 +48,14 @@ EMPTY = (
     "no model in the 'decisions' chain can serve right now — the decisions chain is empty, "
     "so no decision model is set (add one in Settings → Routing)"
 )
+NO_QUESTIONS = "questions must be a non-empty object — the typed questions a decision model answers"
+# A 200 that is not an answer: what a proxy in front of the server says.
+HTML = b"<html>upstream warming up</html>"
+NOT_AN_ANSWER = (
+    "dell-kev answered 200 at http://kev.test/v1/systemone but not a JSON object — "
+    "not a decision server"
+)
+UNREADABLE = "the answer is not a JSON object, so no answers can be read from it"
 
 
 @pytest.fixture
@@ -301,9 +314,7 @@ async def test_a_body_without_questions_or_another_role_is_refused_before_any_ca
     )
 
     assert none.status_code == 400
-    assert none.json()["error"] == (
-        "questions must be a non-empty object — the typed questions a decision model answers"
-    )
+    assert none.json()["error"] == NO_QUESTIONS
     assert other.status_code == 400
     assert other.json()["error"] == (
         "POST /v1/systemone serves the decisions role — X-Nova-Role named 'chat'"
@@ -395,25 +406,162 @@ async def test_a_decision_that_got_no_answer_is_metered_under_the_role_and_its_t
     assert row["error"].startswith("could not reach dell-kev at http://kev.test/v1 — ConnectError")
 
 
-@pytest.mark.parametrize("raw", [b"<html>upstream warming up</html>", b'["acts", 0.91]'])
-async def test_an_answer_that_is_not_a_json_object_is_metered_with_its_error(
+async def test_an_answer_that_is_not_a_json_object_is_passed_over_and_the_next_link_answers(
+    client, pool, local, mount_backend
+):
+    """A 200 no answers can be read from — an HTML page from a proxy in front
+    of the Dell — is no decision server's answer. Relayed, it would end every
+    decision at that link and Jev would never be asked. It is passed over for
+    the request, never walled, its words in the route; it is still metered,
+    with its error; and the next link answers."""
+    kev = await _kev(client, mount_backend)
+    jev = await _openrouter(client, mount_backend)
+    await _chain(client, KEV, f"openrouter:{JEV}")
+    kev.systemone_raw = HTML
+
+    resp = await _decide(client)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-nova-served-by"] == f"openrouter:{JEV}"
+    assert resp.json()["answers"] == jev.systemone_answers
+    route = resp.json()["route"]
+    assert route["link"] == 2 and f"{KEV}: {NOT_AN_ANSWER}" in route["reason"]
+    assert await pool.fetch("SELECT provider FROM provider_walls") == []
+    rows = await pool.fetch(
+        "SELECT kind, provider, status, role, error FROM usage_events ORDER BY id"
+    )
+    assert [(r["kind"], r["provider"], r["status"], r["role"]) for r in rows] == [
+        ("completion", "dell-kev", 200, "decisions"),
+        ("completion", "openrouter", 200, "decisions"),
+    ]
+    assert [r["error"] for r in rows] == [UNREADABLE, None]
+
+
+async def test_an_answer_that_is_not_a_json_object_is_never_read_as_a_success(
+    client, pool, local, mount_backend
+):
+    """A success clears a decision server's lapsed wall (the next test); an
+    unreadable 200 is not one. Kev's lapsed wall is left exactly as it was:
+    not cleared as if Kev had answered, and not climbed as if it had refused."""
+    kev = await _kev(client, mount_backend)
+    await _openrouter(client, mount_backend)
+    await _chain(client, KEV, f"openrouter:{JEV}")
+    await routing.record_refusal(pool, {"name": "dell-kev"}, 502, "asleep", model="kev-latest")
+    await pool.execute("UPDATE provider_walls SET walled_until = now() - interval '1 minute'")
+    before = [dict(w) for w in await pool.fetch("SELECT * FROM provider_walls")]
+    kev.systemone_raw = HTML
+
+    resp = await _decide(client)
+
+    assert resp.headers["x-nova-served-by"] == f"openrouter:{JEV}"
+    assert len(_asked(kev)) == 1, "the lapsed wall let Kev be asked"
+    assert [dict(w) for w in await pool.fetch("SELECT * FROM provider_walls")] == before
+
+
+@pytest.mark.parametrize("raw", [HTML, b'["acts", 0.91]'])
+async def test_a_chain_whose_only_link_answers_no_json_object_is_a_503_in_its_words(
     client, pool, local, mount_backend, raw
 ):
-    """A 200 core cannot read answers from is metered — never as a clean
-    completion — and relayed as it came, so core states why it failed open."""
+    """With nothing behind it, the walk says why — never the unreadable body
+    under a 200. The call is still metered, with its error, and walls nothing."""
     kev = await _kev(client, mount_backend)
     await _chain(client, KEV)
     kev.systemone_raw = raw
 
     resp = await _decide(client)
 
-    assert resp.status_code == 200 and resp.content == raw
+    assert resp.status_code == 503
+    assert resp.json()["error"] == (
+        f"no model in the 'decisions' chain can serve right now — {KEV}: {NOT_AN_ANSWER}"
+    )
     (row,) = await pool.fetch(
         "SELECT kind, status, role, error, prompt_tokens, completion_tokens FROM usage_events"
     )
     assert (row["kind"], row["status"], row["role"]) == ("completion", 200, "decisions")
-    assert row["error"] == "the answer is not a JSON object, so no answers can be read from it"
+    assert row["error"] == UNREADABLE
     assert (row["prompt_tokens"], row["completion_tokens"]) == (None, None)
+    assert await pool.fetch("SELECT provider FROM provider_walls") == []
+
+
+async def test_a_decision_server_that_answers_again_is_unwalled_and_its_ladder_starts_over(
+    client, pool, local, mount_backend, mount_transport
+):
+    """Kev is local but not an engine: a clean answer clears its wall the way
+    it clears a walled cloud link's. Were the lapsed wall kept, its strikes
+    would only ever climb — after three outages, every blip on the Dell would
+    wall Kev for 30 minutes."""
+    kev = await _kev(client, mount_backend)
+    await _chain(client, KEV)
+    mount_transport("http://kev.test", FailingTransport(httpx.ConnectError))
+    assert (await _decide(client)).status_code == 503
+    walls = await pool.fetch("SELECT provider, model, status, strikes FROM provider_walls")
+    assert [tuple(w) for w in walls] == [("dell-kev", "kev-latest", 502, 1)]
+    await pool.execute("UPDATE provider_walls SET walled_until = now() - interval '1 minute'")
+    mount_backend("http://kev.test", kev.app)  # the Dell is awake again
+
+    resp = await _decide(client)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-nova-served-by"] == KEV
+    assert await pool.fetch("SELECT provider FROM provider_walls") == []
+
+    mount_transport("http://kev.test", FailingTransport(httpx.ConnectError))
+    assert (await _decide(client)).status_code == 503
+    strikes = await pool.fetch("SELECT strikes FROM provider_walls")
+    assert [w["strikes"] for w in strikes] == [1], "the next blip is a first outage again"
+
+
+async def test_a_decision_with_no_role_header_is_still_metered_under_the_decisions_role(
+    client, pool, local, mount_backend
+):
+    """The endpoint decides the protocol, and so the role: a caller that sent
+    no X-Nova-Role is walked through the decisions chain AND metered under it,
+    so the Spend page never shows a decision under no role."""
+    await _openrouter(client, mount_backend)
+    await _chain(client, f"openrouter:{JEV}")
+
+    resp = await client.post(
+        "/v1/systemone",
+        json={"state": STATE, "questions": QUESTIONS},
+        headers={"X-Nova-Purpose": "chat", "X-Nova-Turn-Id": TURN},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["x-nova-route"] == "role=decisions;link=1"
+    (row,) = await pool.fetch("SELECT role, purpose, turn_id::text AS turn FROM usage_events")
+    assert (row["role"], row["purpose"], row["turn"]) == ("decisions", "chat", TURN)
+
+
+@pytest.mark.parametrize(
+    ("content", "said"),
+    [
+        (
+            b"{",
+            "request body is not valid JSON: Expecting property name enclosed in double "
+            "quotes: line 1 column 2 (char 1)",
+        ),
+        (b'["state", "questions"]', "request body must be a JSON object"),
+        (json.dumps({"state": STATE, "questions": {}}).encode(), NO_QUESTIONS),
+        (json.dumps({"state": STATE, "questions": ["acts"]}).encode(), NO_QUESTIONS),
+    ],
+    ids=["invalid-json", "not-an-object", "empty-questions", "questions-not-an-object"],
+)
+async def test_a_body_that_is_not_typed_questions_is_a_400_in_its_words(
+    client, pool, local, mount_backend, content, said
+):
+    jev = await _openrouter(client, mount_backend)
+    await _chain(client, f"openrouter:{JEV}")
+
+    resp = await client.post(
+        "/v1/systemone",
+        content=content,
+        headers={"Content-Type": "application/json", "X-Nova-Role": "decisions"},
+    )
+
+    assert resp.status_code == 400
+    assert resp.json()["error"] == said
+    assert _asked(jev) == []
+    assert await pool.fetchval("SELECT count(*) FROM usage_events") == 0
 
 
 def test_a_decisions_usage_is_read_by_the_rules_a_completions_is():

@@ -20,9 +20,10 @@ POST /v1/systemone (decision-role spec §1) is the decision role's route:
 typed questions, never a chat completion. It walks the `decisions` chain
 through the SAME loop as chat (walk_role) — walls, fallback, X-Nova-Route
 — and meters each call under the role (usage.observe_decision). A link
-whose endpoint has no /systemone (a 404 or 405 there) is passed over for
-the request in its own words and never walled: it is neither an account
-refusal nor an outage.
+that serves no typed questions — its endpoint has no /systemone (a 404 or
+405 there), or it answered 200 with a body that is not a JSON object — is
+passed over for the request in its own words and never walled: it is
+neither an account refusal nor an outage.
 """
 
 from __future__ import annotations
@@ -145,8 +146,8 @@ async def walk_role(
     REFUSES before answering is recorded, walled, and the next runnable link
     is tried in this same request — the reply then states the fallback (rail
     20). A link PASSED OVER (PassedOver: an engine that could not be REACHED,
-    D21, or an endpoint with no /systemone) is recorded and the next link
-    tried the same way, but it is never walled."""
+    D21, or a link that serves no typed questions) is recorded and the next
+    link tried the same way, but it is never walled."""
     from app import admin  # the fit context and probe query /admin/suggest uses
 
     skip: set[str] = set()
@@ -201,7 +202,12 @@ async def walk_role(
             )
             skip.add(link)
             continue
-        if response.status_code == 200 and not decision.row.get("local"):
+        if response.status_code == 200 and not engines.is_engine(decision.row):
+            # A clean answer clears the wall on every row but an engine's.
+            # An engine's wall is never cleared by a success; it lapses on
+            # its own ladder (D21). A local link that is not an engine — a
+            # decision server on the owner's own machine — recovers the way
+            # a cloud link does, or its strikes would only ever climb.
             await routing.note_success(pool, decision.row["name"], decision.model)
         response.headers[ROUTE_HEADER] = decision.header()
         return response
@@ -314,21 +320,18 @@ async def serve_systemone(
     (usage.observe_decision), with the provider's key from its own adapter's
     auth rule. A call that got no answer at all is metered as a refusal and
     raised with its status — the walk walls it and tries the next link, as
-    for chat. An endpoint with no /systemone (systemone.NotCarried) is metered
-    the same way and passed over, never walled."""
+    for chat. A link that serves no typed questions is metered the same way
+    and passed over, never walled: an endpoint with no /systemone
+    (systemone.NotCarried), or a 200 that is not a JSON object
+    (usage.UnreadableAnswer)."""
     served_by = _served_by(row, model)
     started = time.monotonic()
-    try:
-        status, content = await systemone.call(
-            request.app, row, model, body, adapters.for_row(row).headers(row)
-        )
-    except ProviderRefused as exc:
-        # A decision's row like any other — its role and its turn, in the
-        # words it was refused with — never a probe row that carries neither.
-        await usage.observe_decision(
+
+    async def meter(status: int, content: bytes) -> Response:
+        return await usage.observe_decision(
             pool,
-            status=exc.status,
-            content=json.dumps({"error": exc.detail}).encode(),
+            status=status,
+            content=content,
             row=row,
             model=model,
             served_by=served_by,
@@ -336,21 +339,31 @@ async def serve_systemone(
             started=started,
             route=route,
         )
+
+    try:
+        status, content = await systemone.call(
+            request.app, row, model, body, adapters.for_row(row).headers(row)
+        )
+    except ProviderRefused as exc:
+        # A decision's row like any other — its role and its turn, in the
+        # words it was refused with — never a probe row that carries neither.
+        await meter(exc.status, json.dumps({"error": exc.detail}).encode())
         relay = PassedOver if isinstance(exc, systemone.NotCarried) else HTTPException
         raise relay(
             status_code=exc.status, detail=exc.detail, headers={SERVED_BY_HEADER: served_by}
         ) from exc
-    response = await usage.observe_decision(
-        pool,
-        status=status,
-        content=content,
-        row=row,
-        model=model,
-        served_by=served_by,
-        attribution=attribution,
-        started=started,
-        route=route,
-    )
+    try:
+        response = await meter(status, content)
+    except usage.UnreadableAnswer as exc:
+        # Metered, with its error. It is no answer, and says nothing about the
+        # key or the model's health: passed over like an endpoint with no
+        # /systemone — never walled, and never a success that clears a wall.
+        raise PassedOver(
+            status_code=502,
+            detail=f"{row['name']} answered 200 at {providers.base_url_of(row)}/systemone "
+            "but not a JSON object — not a decision server",
+            headers={SERVED_BY_HEADER: served_by},
+        ) from exc
     response.headers[SERVED_BY_HEADER] = served_by
     return response
 

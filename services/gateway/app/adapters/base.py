@@ -39,10 +39,10 @@ class ProviderUnreachable(ProviderRefused):
 
     A ProviderRefused, so every path that relays a refusal still relays this
     one in the same words. It exists for one decision: data_plane never walls
-    it (D21). A wall outlives the outage it describes — a local model's wall
-    is never cleared by a success (routing.note_success clears cloud rows
-    only) — while the engine's own observation (engines.observe, a failure
-    cached 10 s) is the fact the next walk reads.
+    it (D21). A wall outlives the outage it describes — an engine's wall is
+    never cleared by a success (the walk runs routing.note_success for every
+    other row) — while the engine's own observation (engines.observe, a
+    failure cached 10 s) is the fact the next walk reads.
 
     Raised only for an engine. A cloud provider's connect failure stays a
     plain ProviderRefused and walls as it always has."""

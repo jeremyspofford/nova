@@ -799,6 +799,23 @@ async def test_a_cloud_provider_that_cannot_be_reached_is_still_walled(
     ]
 
 
+async def test_an_engines_wall_outlives_a_success_on_it(client, pool, local):
+    """D21: an ENGINE's wall is never cleared by a success — the walk clears a
+    wall on every other row it serves from, local or cloud — so it lapses on
+    its own ladder, and the engine's own observation is what the next walk
+    reads. Here the wall has lapsed and the engine answers; the row stays as
+    it was."""
+    await routing.record_refusal(pool, {"name": "hub"}, 503, "loading", model="qwen3:8b")
+    await pool.execute("UPDATE provider_walls SET walled_until = now() - interval '1 minute'")
+    before = [dict(w) for w in await pool.fetch("SELECT * FROM provider_walls")]
+
+    resp = await _chat(client, "chat", model="hub:qwen3:8b")
+
+    assert resp.status_code == 200
+    assert resp.headers["x-nova-served-by"] == "hub:qwen3:8b"
+    assert [dict(w) for w in await pool.fetch("SELECT * FROM provider_walls")] == before
+
+
 async def test_an_unreachable_standby_is_tried_once_and_the_503_says_why(
     client, pool, local, mount_backend, mount_transport
 ):
