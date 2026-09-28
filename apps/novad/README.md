@@ -344,10 +344,14 @@ WebSocket ping core must answer within 10 s. The ping is what catches a dead
 path: on one, the kernel keeps taking bytes into its send buffer, so a write
 can return although its bytes never arrive — no write error reports that, but
 the ping's answer never comes. That same 10 s bounds every heartbeat and
-facts-frame write: once the send buffer is full a write blocks, and a write
-stuck on a dead path ends the session rather than hanging it. The bound holds
-on a live link too: any one write that takes longer than 10 s — a slow link,
-say — ends the session, which then reconnects. Beside that, a 1 s wall-clock
+facts-frame write directly: once the send buffer is full a write blocks, and
+a write stuck on a dead path ends the session rather than hanging it. The
+bound holds on a live link too: a heartbeat or facts write that takes longer
+than 10 s — a slow link, say — ends the session, which then reconnects. A
+command's result write carries no bound of its own: it ends the session only
+once the next heartbeat (or facts) write queues in behind it and that write's
+own 10 s bound fires, closing the connection under the stuck result write
+too. Beside that, a 1 s wall-clock
 watchdog — no I/O of its own — notices a sleep (a wall-clock jump of more
 than about 5 s between its samples) and reconnects within about 2 s of the
 machine waking; the heartbeat's own slower version of the same check (a gap

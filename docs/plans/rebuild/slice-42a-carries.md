@@ -62,3 +62,69 @@
   belong at close-out (Task 21).
 
 ## From the build's reviews (appended at close-out)
+
+From the final whole-branch review and its triage
+(`.superpowers/sdd/plan/final-review-triage.md`). Named follow-ups first,
+each a known gap; an owner slice is given only where the triage names one.
+None of these duplicate a carry listed above this heading.
+
+- A handler `WaitGroup` / sealed audit log: a late audit `Append` from a
+  command still in its `WaitDelay` can recreate `audit.jsonl` after a
+  revoke's wipe and continue the old chain (core then flags
+  `DEVICE_AUDIT_BREAK` after a re-pair); also `main` returns without waiting
+  for in-flight handlers on SIGTERM (`Setpgid` children can be orphaned).
+  README's "never replays" holds barring this race.
+- A Windows Job object: descendants survive when the root exited before
+  Cancel (`taskkill /T` cannot walk from a dead root).
+- A test that the reconnect backoff resets ONLY after an authenticated
+  session (the behavior is built; nothing pins it).
+- Device-aware state guard: `_checked_a_device` credits per turn, not per
+  device (inherited from `device_*` spans); a `machine_status` filtered to
+  agent A, or a shown agent's fact, can back a claim about agent B.
+- Core signs a revoked proof before the device proves its key (anyone
+  presenting a revoked id can collect proofs over core's nonces and learn the
+  id is revoked; matters only after a DB restore) — verify the auth signature
+  against the revoked row's key first; and `envelope.go`'s comment overclaims
+  the nonce's replay protection (the peer chooses the challenge nonce).
+- Engine facts are not clip-filtered (S44): once S44 lists more engines, a
+  long list could clip engine lines the same way a device's own line could be
+  clipped before this build's I2 fix.
+- The I2 filter fails closed in two rare cases (an agent-reported text with a
+  newline — novad trims them; one device name being another's prefix followed
+  by " (") — a shown line's fact can be dropped and an honest claim
+  corrected.
+- The `device_run` capability row still fires on some purpose/possessive
+  phrasings with kept verbs ("I can't access a Windows machine's GPU for
+  models yet") and misses some disowning forms ("I don't have access to
+  Windows machines", "I can't reach any Mac"); capability patterns guard-wide
+  have no hypothetical/quoted-speech detection.
+- `Paths.Enrolled()` treats any `Stat` error as "not enrolled" in `cmdEnroll`
+  (an unreadable config dir spends a pairing code and leaves an orphan row;
+  `Save` would fail, so no overwrite) — use `checkEnrolled` there instead.
+- The Windows `TerminateProcess` path, the DACL read-back, the invalid-name
+  test twins and the toast/apps mechanisms are verified by CI's native
+  runners and by reading, not yet by a human on the machine — the Dell walk
+  is their first human-observed run.
+
+Carries with reasons (fine to ship):
+
+- Near-miss revoke reason tests send no proof (the proof check is the real
+  boundary; six proof cases pin it).
+- The clock-jump test can fail falsely (never pass falsely) if its setup
+  outlasts a 120 ms settle.
+- Pre-existing, guard-wide: capability patterns fire on hypothetical or
+  quoted denials.
+- "2 machine(s)" for one PC plus its WSL distro (P13 grouping kept) — the
+  label is an owner wording call.
+- Main's regex timing edge on the N150: `_IN_USE_AFTER_GAP`, `_IN_USE_DENIED`,
+  `_READING_LINE` fail every run here (~52-75 ms vs a 50 ms budget);
+  `_IN_USE_CONJUNCT`, `_SUBJECT_KEY_LINE`, `_LINE_LABEL` intermittently under
+  load. Not S42a's; the budget was never raised. The sweep now reaches 221+
+  patterns (was 162) — none of the newly swept ones is slow.
+- The raw websocket frame is bounded only by uvicorn's 16 MiB default before
+  `json.loads` (pre-existing; the auth frame is parsed before identity).
+- Cosmetic/test-only minors from the per-task reviews (comment wording, test
+  hygiene: hijacked test handlers parked for the binary's life, the `WSL()`
+  stub duplicated darwin/windows, Linux notify's `LookPath` bypassing the
+  Runner, a few coverage gaps) — recorded in the SDD ledger
+  (`.superpowers/sdd/plan/progress.md`), none affects behavior.
