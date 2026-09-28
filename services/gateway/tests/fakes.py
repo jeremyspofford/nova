@@ -457,6 +457,12 @@ class FakeOpenAICompat:
     # A 200 that is not an answer: these bytes instead of the JSON — what an
     # error page from a proxy in front of the server looks like to a caller.
     systemone_raw: bytes | None = None
+    # OpenRouter lists its decision models (Jev, Kev-4B) only when asked for
+    # them — GET /models?output_modalities=decisions; its default listing is
+    # text models (checked live 2026-09-28). None: this provider ignores the
+    # query and answers its one listing.
+    decisions_models_body: dict | None = None
+    decisions_models_status: int = 200
 
     def __post_init__(self) -> None:
         self.app = Starlette(
@@ -478,10 +484,19 @@ class FakeOpenAICompat:
 
     async def _models(self, request):
         self._note(request)
-        self.seen.append((request.url.path, None))
+        # The query as it arrived (None when there was none), so a test can
+        # tell the decision-model listing from the default one.
+        self.seen.append((request.url.path, dict(request.query_params) or None))
         if not self.models_public and not self._key_ok(request):
             return JSONResponse(
                 {"error": {"message": "Invalid API key"}}, status_code=self.models_wrong_key_status
+            )
+        if (
+            request.query_params.get("output_modalities") == "decisions"
+            and self.decisions_models_body is not None
+        ):
+            return JSONResponse(
+                self.decisions_models_body, status_code=self.decisions_models_status
             )
         return JSONResponse(self.models_body, status_code=self.models_status)
 

@@ -24,6 +24,8 @@ from app.adapters import base
 from app.adapters.base import (
     COMPLETIONS_TIMEOUT,
     CONNECT_PHASE_ERRORS,
+    DECISIONS,
+    MODELS_TIMEOUT,
     VERIFY_TIMEOUT,
     Listing,
     ListingUnavailable,
@@ -33,6 +35,7 @@ from app.adapters.base import (
     http_client,
     positive_int,
     reason,
+    refusal_detail,
 )
 from app.providers import base_url_of
 
@@ -228,6 +231,12 @@ def listing_capabilities(row: dict) -> tuple[dict, dict]:
         suitability["chat"] = _listed(True, "architecture.output_modalities lists text")
     elif isinstance(row.get("supported_parameters"), list) and row["supported_parameters"]:
         suitability["chat"] = _listed(True, "supported_parameters are stated (a chat model)")
+    # A decision model answers typed questions (decision-role spec §3) — a
+    # fact the row states, and the one thing it is suitable for.
+    if isinstance(output_modalities, list) and DECISIONS in output_modalities:
+        suitability["decisions"] = _listed(
+            True, "the listing says it outputs decisions (a decision model)"
+        )
     benchmarks = row.get("benchmarks") or {}
     for key, field in (
         ("coding", "coding_index"),
@@ -330,14 +339,55 @@ class OpenAIChat:
         return base.bearer_or_header(row, header_name="api-key")
 
     async def list_models(self, app, row: dict) -> Listing:
-        return await base.fetch_listing(
+        url = base_url_of(row)
+        listing = await base.fetch_listing(
             app,
             row,
-            base_url_of(row),
+            url,
             headers=self.headers(row),
             normalize=normalize_models,
             unavailable_note="this provider has no model listing; type a model id",
         )
+        models = listing.models
+        note = None
+        # Only a listing that speaks the modality vocabulary can be asked for
+        # a modality; anything else is never asked.
+        if any("output_modalities" in model for model in models):
+            extra, note = await self._decision_models(
+                app, row, url, {model["id"] for model in models}
+            )
+            models = models + extra
+        return Listing(source=row["name"], models=models, fetched_at=listing.fetched_at, note=note)
+
+    async def _decision_models(
+        self, app, row: dict, url: str, listed: set[str]
+    ) -> tuple[list[dict], str | None]:
+        """The provider's DECISION models (decision-role spec §3). OpenRouter
+        lists a model that outputs `decisions` — Jev, Kev-4B — only when asked
+        for `?output_modalities=decisions`; its default listing is text
+        models. A failure here is a NOTE on the listing, never a failed
+        listing and never silence: the chat models it did list are still
+        true, and the page says the decision models are missing."""
+        client = http_client(app, MODELS_TIMEOUT, base_url=url, headers=self.headers(row))
+        try:
+            async with client as c:
+                resp = await c.get("/models", params={"output_modalities": DECISIONS})
+        except httpx.HTTPError as exc:
+            return [], f"its decision models could not be listed — {reason(exc)}"
+        if resp.status_code != 200:
+            return [], (
+                f"its decision models could not be listed "
+                f"({resp.status_code}: {refusal_detail(resp)})"
+            )
+        try:
+            rows = normalize_models(resp.json(), owned_by=row["name"])
+        except (ValueError, ProviderRefused) as exc:
+            return [], f"its decision-model listing was unreadable — {exc}"
+        return [
+            model
+            for model in rows
+            if model["id"] not in listed and DECISIONS in (model.get("output_modalities") or [])
+        ], None
 
     async def _listing_is_public(self, app, row: dict) -> tuple[bool | None, str]:
         """(is the listing public?, what decided it).
@@ -414,6 +464,8 @@ class OpenAIChat:
                 key_proven=None,
             )
         note = f"{len(listing.models)} models listed"
+        if listing.note:
+            note = f"{note}; {listing.note}"
         if row.get("auth_shape") == "none":
             return VerifyResult(
                 listing="available", models=listing.models, note=note, key_proven=None

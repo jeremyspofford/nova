@@ -71,14 +71,20 @@ class ListingUnavailable(RuntimeError):
 @dataclass
 class Listing:
     """A live model list, always labelled with where and when it came from —
-    never an unlabelled number (S10a's rail, adopted here)."""
+    never an unlabelled number (S10a's rail, adopted here). `note` says what
+    the listing could NOT include, in words (a decision-model listing that
+    failed) — a partial list is never passed off as a whole one."""
 
     source: str
     models: list[dict]
     fetched_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
+    note: str | None = None
 
     def as_dict(self) -> dict:
-        return {"source": self.source, "fetched_at": self.fetched_at, "models": self.models}
+        out = {"source": self.source, "fetched_at": self.fetched_at, "models": self.models}
+        if self.note:
+            out["note"] = self.note
+        return out
 
 
 @dataclass

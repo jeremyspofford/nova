@@ -861,7 +861,10 @@ async def _listing_for(app, pool, row: dict) -> adapters.Listing:
             pool, name, "unknown", f"the last listing was refused ({exc.status}): {exc.detail}"
         )
         raise
-    await providers.record_listing(pool, name, "available", f"{len(listing.models)} models listed")
+    said = f"{len(listing.models)} models listed"
+    if listing.note:
+        said = f"{said}; {listing.note}"
+    await providers.record_listing(pool, name, "available", said)
     # The listing's prices, kept: a chat call never fetches a listing to be priced.
     try:
         await usage.record_listing_prices(pool, row, listing.models)

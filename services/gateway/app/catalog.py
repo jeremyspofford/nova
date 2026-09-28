@@ -34,6 +34,7 @@ from app.adapters import (
     ollama,
     openai_chat,
 )
+from app.adapters.base import DECISIONS
 from app.catalog_row import (  # noqa: F401 — the shared shape
     BASES,
     LIBRARY,
@@ -294,7 +295,18 @@ def cloud_row(provider_row: dict, model: dict, fetched_at: str, *, cached: bool 
     coding = _coding_inferred(model_id)
     if coding:
         _put_suitability(row["suitability"], "coding", coding)
-    row["actions"] = ["use"]
+    # A decision model answers typed questions and has no chat (decision-role
+    # spec §3): it is never offered as the chat model — `use` writes
+    # chat.model — and its place is the decisions chain on Settings → Routing.
+    row["actions"] = [] if DECISIONS in row["suitability"] else ["use"]
+    # A provider the owner marked local — a Kev box on his own machine — lists
+    # DECISION models that run THERE: its own listing says it serves them, so
+    # they are installed, not cloud rows. The same provider's CHAT rows (an
+    # openai-chat endpoint that also answers chat, OpenRouter's own shape)
+    # stay cloud, where the chat picker finds them.
+    if provider_row.get("local") and DECISIONS in row["suitability"]:
+        row["kind"] = "local"
+        row["installed"] = True
     return row
 
 
@@ -482,11 +494,11 @@ async def build(
         except Exception as exc:  # a bug or a DB error: NAMED, never an anonymous "provider"
             logger.exception("catalogue: provider %s raised", name)
             return {**failed, "note": f"the listing raised — {adapters.reason(exc)}"}, []
-        return (
-            {"key": name, "ok": True, "rows": len(listing.models)}
-            | {"fetched_at": listing.fetched_at},
-            [cloud_row(provider_row, m, listing.fetched_at) for m in listing.models],
-        )
+        source = {"key": name, "ok": True, "rows": len(listing.models)}
+        source["fetched_at"] = listing.fetched_at
+        if listing.note:
+            source["note"] = listing.note
+        return source, [cloud_row(provider_row, m, listing.fetched_at) for m in listing.models]
 
     # A machine that runs models is an engine section, never a cloud listing.
     cloud_rows = [r for r in await providers.list_rows(pool) if not engines.is_engine(r)]
