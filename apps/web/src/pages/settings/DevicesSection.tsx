@@ -311,7 +311,7 @@ function DeviceTile({
           </span>
         )}
 
-        <span className="font-mono text-micro text-content-tertiary truncate">
+        <span className="font-mono text-micro text-content-tertiary min-w-0 break-words">
           {deviceSubtitle(device)}
         </span>
 
