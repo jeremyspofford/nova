@@ -827,6 +827,100 @@ async def test_replaying_stored_entries_is_idempotent(pool):
     assert count == 2  # ON CONFLICT DO NOTHING — no duplicates
 
 
+# -- Fix round 2: a poison audit entry must never take the socket down ------
+#
+# The live bug: novad on Windows sent exit_code 0x80070005 (2147942405),
+# which does not fit device_audit.exit_code's old int4 — asyncpg's DataError
+# on the INSERT escaped ingest_audit, escaped _handle_frame, and killed the
+# socket. The agent's backoff resets after any authenticated session, so it
+# reconnected in about a second, replayed the same poison entry, and hit the
+# same DataError again — a permanent crash-reconnect-crash loop.
+#
+# Migration 037 widens the column, so the real value no longer triggers
+# postgres at all (proven below with no monkeypatch — the actual bug, fixed).
+# The try/except is the belt-and-suspenders half, proven by an INJECTED
+# DataError exactly like the facts-frame tests below: it protects against
+# whatever postgres refuses NEXT, not just this one value.
+
+
+async def test_a_data_error_on_insert_stops_the_batch_and_does_not_claim_the_entry(
+    pool, monkeypatch
+):
+    """A postgres refusal on the INSERT must stop ingestion AT that entry —
+    not skip it and carry on (e2 is never attempted), and not claim it as
+    stored (only e0's seq lands). This is deliberately NOT a chain break: the
+    hash still verified and nothing was tampered with, so no
+    DEVICE_AUDIT_BREAK governance event is written for what is a storage
+    failure, not a tamper detection."""
+    device_id, _device = await _enroll(pool)
+    e0 = _entry(0, "")
+    e1 = _entry(1, e0["hash"])
+    e2 = _entry(2, e1["hash"])
+    real_execute = type(pool).execute
+
+    async def _boom(self, query, *args, **kwargs):
+        if "INSERT INTO device_audit" in query and args[1] == 1:
+            raise asyncpg.DataError("simulated: postgres refused this value")
+        return await real_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(type(pool), "execute", _boom)
+    res = await devices_ws.ingest_audit(pool, device_id, [e0, e1, e2])
+    assert res == {"stored": 1, "break": 1}
+    rows = await pool.fetch(
+        "SELECT seq FROM device_audit WHERE device_id = $1 ORDER BY seq", device_id
+    )
+    assert [r["seq"] for r in rows] == [0]  # e1 not stored, e2 never attempted
+    events = await pool.fetch(
+        "SELECT meta FROM governance_events WHERE kind = $1", governance.DEVICE_AUDIT_BREAK
+    )
+    assert events == []  # not a tamper detection — no chain-break event
+
+
+async def test_an_injected_data_error_on_audit_insert_never_takes_the_socket_down(
+    pool, monkeypatch
+):
+    """Same belt-and-suspenders shape as the facts-frame DataError tests
+    below: whatever postgres refuses on the INSERT, the frame loop must
+    survive it and keep serving later frames, exactly the property missing
+    live — a heartbeat fed right after the poison entry proves serve()'s
+    loop is still alive to process it."""
+    device_id, _device, conn, task = await _connect(pool, name="pc")
+    real_execute = type(pool).execute
+
+    async def _boom(self, query, *args, **kwargs):
+        if "INSERT INTO device_audit" in query:
+            raise asyncpg.DataError("simulated: postgres refused this value")
+        return await real_execute(self, query, *args, **kwargs)
+
+    monkeypatch.setattr(type(pool), "execute", _boom)
+    conn.feed({"type": "audit", "entries": [_entry(0, "")]})
+    conn.feed({"type": "heartbeat", "ts": int(time.time())})
+
+    async def heartbeat_landed():
+        seen = await pool.fetchval("SELECT last_seen FROM devices WHERE id = $1", device_id)
+        return seen is not None
+
+    await _until(heartbeat_landed)
+    assert devices_ws.hub.is_connected(device_id)
+    count = await pool.fetchval("SELECT count(*) FROM device_audit WHERE device_id = $1", device_id)
+    assert count == 0  # the poisoned entry was never stored
+    await _close(conn, task)
+
+
+async def test_a_windows_exit_code_over_int32_range_is_stored_after_the_migration(pool):
+    """The actual bug, fixed, with no monkeypatch: novad sent 0x80070005
+    (2147942405) as exit_code — migration 037 widened the column, so this is
+    now an ordinary value that stores and reads back exactly."""
+    device_id, _device = await _enroll(pool, name="dell", platform="windows")
+    e0 = _entry(0, "", exit_code=2147942405)
+    res = await devices_ws.ingest_audit(pool, device_id, [e0])
+    assert res == {"stored": 1, "break": None}
+    stored = await pool.fetchval(
+        "SELECT exit_code FROM device_audit WHERE device_id = $1 AND seq = 0", device_id
+    )
+    assert stored == 2147942405
+
+
 # -- S42a: facts on the socket ------------------------------------------------
 
 AUTH_FACTS = {
