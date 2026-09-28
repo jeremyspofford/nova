@@ -13,7 +13,8 @@ name checked against BOTH lists, which is why the backend may run it unasked
 the span — {"machine", "answering", "checked_now", "at"} — and each agent
 leaves {"device", "connected"}, the same shape a device tool leaves — so what
 she then says about either is checkable against a record rather than a
-sentence.
+sentence. Run unasked (live_facts), its result reaches her cut short, and an
+agent's fact is kept only when its line was shown (device_line_shown).
 
 machine_configure sets `serving`: whether that machine runs models for the
 routing chains. It reports the value the gateway READS BACK, never the value
@@ -188,6 +189,13 @@ def _role(name: str, role: dict) -> str:
     )
 
 
+# How each line of the agents section begins, below its header: a machine, then
+# one line per agent on it. device_line_shown reads a listing back by these
+# two, so both the writer and the reader take them from here.
+_MACHINE_LINE = "- machine "
+_AGENT_LINE = "  agent "
+
+
 def _describe_agent(agent: dict) -> str:
     where = device_facts.place(agent)
     if agent["agent_version"]:
@@ -199,7 +207,7 @@ def _describe_agent(agent: dict) -> str:
     )
     roles = agent["roles"]
     return (
-        f"agent {agent['name']} ({where}): {state}; "
+        f"{_AGENT_LINE}{agent['name']} ({where}): {state}; "
         f"{_role('hands', roles['hands'])}; {_role('facts', roles['facts'])}."
     )
 
@@ -213,7 +221,8 @@ def _describe_agents(
     says so either — a lone agent's listing reads exactly like any other
     one-agent machine's. Each listed agent leaves {"device", "connected"}
     on the span, the record a device tool leaves, so what she says about its
-    connection is backed (guards._checked_a_device)."""
+    connection is backed (guards._checked_a_device) — on an unasked check,
+    only for an agent whose line she was shown (device_line_shown)."""
     if error is not None:
         return [f"Nova's agents could not be read — {error}."]
     if not agents:
@@ -230,16 +239,51 @@ def _describe_agents(
         if len(members) > 1:
             names = ", ".join(agent["name"] for agent in members)
             lines.append(
-                f"- machine {host}: {len(members)} Nova agents report this one machine ({names}) "
-                "— a machine runs one agent; the owner revokes the extra in Settings → Devices."
+                f"{_MACHINE_LINE}{host}: {len(members)} Nova agents report this one machine "
+                f"({names}) — a machine runs one agent; the owner revokes the extra in "
+                "Settings → Devices."
             )
         else:
-            lines.append(f"- machine {host}:")
+            lines.append(f"{_MACHINE_LINE}{host}:")
         for agent in members:
-            lines.append("  " + _describe_agent(agent))
+            lines.append(_describe_agent(agent))
             if ctx.facts_sink is not None:
                 ctx.facts_sink.append({"device": agent["name"], "connected": agent["connected"]})
     return lines
+
+
+def device_line_shown(name: str, result: str, shown: int) -> bool:
+    """Did the first `shown` characters of machine_status's `result` hold agent
+    `name`'s WHOLE line? machine_status's Tool.device_line_shown: a live check
+    keeps that agent's {"device", "connected"} fact only when this says yes
+    (live_facts._shown_facts; S42a final review I2).
+
+    Exact for the format _describe_agents writes, never the name found
+    anywhere: the line begins, at a line start, with "  agent <name> (", and
+    ends at the newline before the agents section's next line (another agent,
+    or a "- machine" line) or at the end of the result — the agents section is
+    the result's last. It fails closed, answering False, when there is no such
+    line; when a line runs on past a newline this format never writes (text an
+    agent reported can carry one); and when ANY line that could be this
+    agent's ends past `shown` — "dell"'s head also begins the line of an agent
+    named "dell (old)", and a line that cannot be told apart from another is
+    not confirmed shown.
+    """
+    head = f"{_AGENT_LINE}{name} ("
+    found = False
+    start = result.find(head)
+    while start != -1:
+        if start == 0 or result[start - 1] == "\n":
+            end = result.find("\n", start + len(head))
+            if end == -1:
+                end = len(result)
+            elif not result.startswith((_AGENT_LINE, _MACHINE_LINE), end + 1):
+                return False
+            if end > shown:
+                return False
+            found = True
+        start = result.find(head, start + 1)
+    return found
 
 
 async def machine_configure(args: dict, ctx: ToolContext) -> str:
@@ -305,6 +349,10 @@ MACHINE_STATUS = Tool(
     # Its result states each machine's state as read now: a read of a machine
     # for the state guard (guards._machine_read_tools; S40b fix wave C2).
     reads_machines=True,
+    # One result, one line per agent, each leaving a connectivity fact: a
+    # live check keeps an agent's fact only when its line was shown (S42a
+    # final review I2).
+    device_line_shown=device_line_shown,
 )
 
 MACHINE_CONFIGURE = Tool(

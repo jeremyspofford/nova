@@ -128,6 +128,14 @@ def test_tool_carries_no_precheck_or_gate_field():
     # of one name, so an honest "hub is switched off" after inference_health
     # was replaced with "I did not check hub". Nothing reads it to refuse a
     # call; the guard reads it AFTER the fact (and dispatch never does — below).
+    # 2026-09-28 (S42a final review I2): `device_line_shown` joins on the same
+    # terms. It is a fact about the RESULT — which of a listing's device lines
+    # the first N characters hold — and it exists because an unasked
+    # machine_status, cut to 600 characters, recorded every agent's
+    # connectivity although she was shown no agent line, so the state guard
+    # let "the Dell is online" stand. live_facts reads it AFTER the call to
+    # decide which recorded facts she could have seen; nothing reads it to
+    # refuse a call, and dispatch never does (below).
     assert set(Tool.__dataclass_fields__) == {
         "name",
         "description",
@@ -138,6 +146,7 @@ def test_tool_carries_no_precheck_or_gate_field():
         "reads_only",
         "reports_spend",
         "reads_machines",
+        "device_line_shown",
     }
 
 
@@ -160,6 +169,12 @@ def test_dispatch_never_reads_reads_only():
     # after the call, never one dispatch consults before it.
     assert "reads_machines" not in names, (
         "dispatch reads Tool.reads_machines — a property dispatch consults to decide "
+        "is a gate, whatever it is named"
+    )
+    # And for `device_line_shown` (S42a final review I2): live_facts reads it
+    # after a check ran, to keep the facts she was shown — never dispatch.
+    assert "device_line_shown" not in names, (
+        "dispatch reads Tool.device_line_shown — a property dispatch consults to decide "
         "is a gate, whatever it is named"
     )
 

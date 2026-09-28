@@ -4182,11 +4182,19 @@ def _determined_connectivity(span: Any) -> bool:
     facts = (getattr(span, "meta", None) or {}).get("facts")
     if not isinstance(facts, list):
         return False
-    return any(
+    return any(is_connectivity_fact(fact) for fact in facts)
+
+
+def is_connectivity_fact(fact: object) -> bool:
+    """One recorded fact in the connectivity shape, {"device": <str>,
+    "connected": <bool>}. The one definition: _determined_connectivity reads
+    it, and live_facts._shown_facts withholds by it (S42a final review I2), so
+    what a live check keeps and what this guard reads as a device check cannot
+    drift apart."""
+    return (
         isinstance(fact, dict)
         and isinstance(fact.get("device"), str)
         and isinstance(fact.get("connected"), bool)
-        for fact in facts
     )
 
 
@@ -4201,7 +4209,9 @@ def _checked_a_device(spans: Sequence[Any]) -> bool:
       * (S42a) any OTHER ok tool span that recorded a device's connectivity
         in the same {"device", "connected"} shape — today only
         machine_status, whose agent listing leaves one such fact per agent
-        (tools/machines._describe_agents).
+        (tools/machines._describe_agents). Run unasked, its result reaches
+        her cut short, and the span keeps only the facts of the agent lines
+        she was shown (live_facts._shown_facts; final review I2).
 
     A device_* span that settled nothing — an unknown device name, a schema
     refusal — backs nothing.

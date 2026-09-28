@@ -13,12 +13,14 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 
-from app import chat, device_facts, machines, tools
+from app import chat, device_facts, guards, live_facts, machines, tools
 from app.identity import Person
 from app.main import app as core_app
+from app.tools import machines as machines_tool
 from app.tools.base import ToolFailure
 from tests import fakes
 from tests.fakes import FakeGateway
+from tests.test_live_facts import _Turn
 
 AT = datetime(2026, 9, 26, 10, 0, tzinfo=UTC)
 WINDOWS = {
@@ -441,3 +443,176 @@ async def test_no_agent_paired_is_said(mount_peers):
     mount_peers(gateway=FakeGateway(engines=[fakes.engine_view()]))
     said = await _call("machine_status", {})
     assert "No Nova agent is paired to any machine." in said
+
+
+# -- S42a final review I2: a live check backs only the agent lines she was shown --
+#
+# live_facts hands her the first MAX_RESULT_CHARS of a check's result, but
+# machine_status records {"device", "connected"} for EVERY agent it lists, after
+# the engines — and the state guard reads any such fact on an ok span as "she
+# looked" (guards._checked_a_device). One engine with three models pushed both
+# agent lines past the cut: the span said the dell had been read (offline)
+# while she was shown no agent line at all, and "The dell is online right now."
+# stood uncorrected. A live check now keeps an agent's fact only when that
+# agent's whole line was shown (Tool.device_line_shown, live_facts._shown_facts).
+
+LAPTOP = {
+    **WINDOWS,
+    "agent": {**WINDOWS["agent"], "mode": "systemd-user"},
+    "os": {"goos": "linux", "arch": "amd64", "version": "Ubuntu 26.04 LTS", "wsl": None},
+    "hostname": "laptop",
+    "machine_uid": "c" * 64,
+}
+THREE_MODELS = {
+    "qwen3.8:27b": 17_817_600_000,
+    "qwen3:8b": 5_225_388_164,
+    "qwen3:4b": 2_600_000_000,
+}
+HUB_FACT = {"machine": "hub", "answering": True, "checked_now": True, "at": fakes.ENGINE_AT}
+AGENT_NAMES = ["dell", "laptop"]
+
+
+def _dell_and_laptop(_plant, *, laptop_first: bool = False) -> None:
+    dell = _view("dell", "windows", WINDOWS, connected=False, hostname="DELL")
+    laptop = _view("laptop", "linux", LAPTOP, hostname="laptop")
+    _plant(agents=[laptop, dell] if laptop_first else [dell, laptop])
+
+
+async def _unasked_status() -> tuple[live_facts.Checked, _Turn, list[dict]]:
+    """machine_status run the way a recalled note runs it: unasked, by live_facts,
+    on a turn's own facts sink."""
+    turn, sink = _Turn(), []
+    ctx = tools.context_for(core_app, _owner(), facts_sink=sink)
+    call = live_facts.LiveCall(tool="machine_status", args={}, note="machines")
+    (check,) = await live_facts.run([call], turn, ctx)
+    return check, turn, sink
+
+
+async def test_an_unasked_status_records_no_fact_for_an_agent_line_it_cut_off(mount_peers, _plant):
+    """The final review's reproduction, with real code. Every agent line starts
+    past the cut, so no agent fact is kept — the engine's is — and the state
+    guard fires on a claim that nothing she was shown checked."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view(tags=THREE_MODELS)]))
+    _dell_and_laptop(_plant)
+    full = (await _call("machine_status", {})).strip()
+    # The premise, measured rather than assumed: the first agent line starts
+    # past the cut.
+    assert full.index("\n  agent ") >= live_facts.MAX_RESULT_CHARS
+    check, turn, sink = await _unasked_status()
+    assert check.ok
+    assert "agent dell" not in check.result and "agent laptop" not in check.result
+    (span,) = turn.spans
+    assert span.meta["facts"] == [HUB_FACT]
+    assert sink == [HUB_FACT]
+    claim = guards.state_claim_check("The dell is online right now.", turn.spans, AGENT_NAMES)
+    assert claim is not None and "dell" in claim.phrase.lower()
+
+
+async def test_an_unasked_status_keeps_the_fact_of_an_agent_line_it_showed(
+    mount_peers, _plant, monkeypatch
+):
+    """The laptop's whole line is shown and the dell's is cut just after its
+    head: "agent dell (" is in what she read, the dell's state is not. Only the
+    laptop's fact is kept, beside the engine's, and it backs her honest report
+    of the laptop."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view(tags=THREE_MODELS)]))
+    _dell_and_laptop(_plant, laptop_first=True)
+    full = (await _call("machine_status", {})).strip()
+    cut = full.index("  agent dell (") + len("  agent dell (Windows")
+    monkeypatch.setattr(live_facts, "MAX_RESULT_CHARS", cut)
+    check, turn, sink = await _unasked_status()
+    assert check.ok
+    assert "agent laptop (Ubuntu 26.04 LTS; agent 0.2.0): connected now" in check.result
+    assert "agent dell (" in check.result and "offline (last seen" not in check.result
+    (span,) = turn.spans
+    assert span.meta["facts"] == [HUB_FACT, {"device": "laptop", "connected": True}]
+    assert sink == span.meta["facts"]
+    honest = "The laptop is online right now."
+    # Unbacked, it fires; backed by the laptop line she was shown, it does not.
+    assert guards.state_claim_check(honest, [], AGENT_NAMES) is not None
+    assert guards.state_claim_check(honest, turn.spans, AGENT_NAMES) is None
+
+
+async def test_an_unasked_status_shown_whole_keeps_every_agent_fact(
+    mount_peers, _plant, monkeypatch
+):
+    """Nothing cut, nothing withheld: the filter reads only a result she was
+    not handed whole."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view(tags=THREE_MODELS)]))
+    _dell_and_laptop(_plant)
+    monkeypatch.setattr(live_facts, "MAX_RESULT_CHARS", 10_000)
+    check, turn, _sink = await _unasked_status()
+    assert "[…cut off" not in check.result
+    (span,) = turn.spans
+    assert span.meta["facts"] == [
+        HUB_FACT,
+        {"device": "dell", "connected": False},
+        {"device": "laptop", "connected": True},
+    ]
+
+
+async def test_every_agent_line_the_status_writes_is_read_back_whole(mount_peers, _plant):
+    """device_line_shown reads the format _describe_agents writes. If the two
+    drift apart, every cut check drops its agent facts without a word (it fails
+    closed), so they are pinned together here: each agent's whole line is
+    found, shown up to its last character, and not shown one character short."""
+    mount_peers(gateway=FakeGateway(engines=[fakes.engine_view(tags=THREE_MODELS)]))
+    _plant(
+        agents=[
+            _view("pc-a", "windows", WINDOWS),
+            _view("pc-b", "windows", WINDOWS),
+            _view("laptop", "linux", LAPTOP, hostname="laptop"),
+            _view("old-wsl", "linux", None, hostname="old"),
+        ]
+    )
+    full = (await _call("machine_status", {})).strip()
+    assert "2 Nova agents report this one machine (pc-a, pc-b)" in full
+    for name in ("pc-a", "pc-b", "laptop", "old-wsl"):
+        start = full.index(f"\n  agent {name} (") + 1
+        end = full.find("\n", start)
+        end = len(full) if end == -1 else end
+        assert machines_tool.device_line_shown(name, full, len(full)), name
+        assert machines_tool.device_line_shown(name, full, end), name
+        assert not machines_tool.device_line_shown(name, full, end - 1), name
+
+
+def _listing(*agents: dict) -> str:
+    """The agents section exactly as machine_status writes it."""
+    ctx = tools.context_for(core_app, _owner())
+    return "\n".join(machines_tool._describe_agents(list(agents), None, ctx, filtered=False))
+
+
+def test_a_device_line_is_read_by_its_format_never_by_the_name_anywhere():
+    # Named in a machine's header, its own line cut off: not shown.
+    two = _listing(_view("dell", "windows", WINDOWS), _view("laptop", "windows", WINDOWS))
+    assert "2 Nova agents report this one machine (dell, laptop)" in two
+    laptop_line = two.index("\n  agent laptop (") + 1
+    assert machines_tool.device_line_shown("dell", two, laptop_line)
+    assert not machines_tool.device_line_shown("laptop", two, laptop_line)
+    # Not listed at all: nothing to confirm.
+    assert not machines_tool.device_line_shown("pc-nine", two, len(two))
+
+
+def test_a_line_that_could_be_another_agents_is_not_confirmed_shown():
+    """The head of "dell"'s line also begins the line of an agent named "dell
+    (old)". While both lines are shown either answer is safe; once one is cut,
+    "dell" cannot be told apart from it, so it is not confirmed (fail closed)."""
+    both = _listing(
+        _view("dell (old)", "windows", WINDOWS, hostname="OLD"),
+        _view("dell", "windows", {**WINDOWS, "machine_uid": "d" * 64}, hostname="NEW"),
+    )
+    assert machines_tool.device_line_shown("dell", both, len(both))
+    assert machines_tool.device_line_shown("dell (old)", both, len(both))
+    second = both.index("\n  agent dell (Windows") + 1
+    assert machines_tool.device_line_shown("dell (old)", both, second)
+    assert not machines_tool.device_line_shown("dell", both, second)
+
+
+def test_a_line_that_runs_on_past_a_newline_is_not_confirmed_shown():
+    """Text an agent reported can carry a newline this format never writes; the
+    line it breaks cannot be confirmed whole, so it fails closed even when the
+    whole listing was shown."""
+    broken = {**WINDOWS, "os": {**WINDOWS["os"], "version": "Windows 11\nPro"}}
+    listing = _listing(_view("pc-one", "windows", broken))
+    assert "\nPro; agent 0.2.0): connected now" in listing
+    assert not machines_tool.device_line_shown("pc-one", listing, len(listing))

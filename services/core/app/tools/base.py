@@ -191,3 +191,20 @@ class Tool:
     # from this field (tools.machine_read_tool_names), as the spend guard does
     # from `reports_spend`. A fact about the OUTPUT, never a permission.
     reads_machines: bool = False
+    # For a tool whose ONE result reports MANY devices' connectivity, one line
+    # per device (machine_status's agent listing): did the first `shown`
+    # characters of `result` hold device `name`'s whole line? (S42a final
+    # review I2.)
+    #
+    # A live check (live_facts) hands her only the head of a long result, but
+    # such a call records {"device", "connected"} for EVERY device it read, and
+    # the state guard reads a recorded fact as "she checked". An unasked
+    # machine_status whose agent lines were all past the cut left facts saying
+    # the Dell had been read as offline, and "the Dell is online" stood
+    # uncorrected. So a check keeps a device's fact only when this says its
+    # line was shown (live_facts._shown_facts). None — every device tool —
+    # means each such fact is about the one device the call was made on, and
+    # the check's own line says how that call ended however much of the result
+    # was cut. A fact about the OUTPUT, never a permission: read after the
+    # call, and never by dispatch (test_no_approvals).
+    device_line_shown: Callable[[str, str, int], bool] | None = None
