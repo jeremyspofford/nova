@@ -213,29 +213,34 @@ async def set_chain(
     _clean_chain for everything that is refused).
 
     A hand edit is the chain speaking (plan decision 16): an edit that
-    REMOVES the Jev Router link turns the switch off, and the link it kept
-    is forgotten, so nothing stale can come back later. An edit to a chain
-    that held no router link removes none and leaves the kept link alone —
-    on chat the router can be the chat model, link 1, which no chain edit
-    touches, and switching off must still put the pick back."""
+    REMOVES the Jev Router link the switch placed in the stored chain turns
+    the switch off, and the link it kept is forgotten with its slot, so
+    nothing stale can come back later. An edit that removes no router link,
+    or one the switch did not place there, leaves them alone: on chat the
+    router can be the chat model, link 1, which no chain edit touches, and
+    switching off must still hand the pick back."""
     validate_role(role)
     cleaned = _clean_chain(role, chain, by_name)
-    names = set(by_name)
     async with pool.acquire() as conn, conn.transaction():
-        before = await conn.fetchval("SELECT chain FROM routes WHERE role = $1 FOR UPDATE", role)
-        removes_router = (
+        await _lock_role(conn, role)
+        before = await conn.fetchrow(
+            "SELECT chain, router_kept_slot FROM routes WHERE role = $1", role
+        )
+        forgets = (
             before is not None
-            and router_link(json.loads(before), names) is not None
-            and router_link(cleaned, names) is None
+            and before["router_kept_slot"] == CHAIN_SLOT
+            and router_link(json.loads(before["chain"])) is not None
+            and router_link(cleaned) is None
         )
         await conn.execute(
             "INSERT INTO routes (role, chain) VALUES ($1, $2::jsonb) "
             "ON CONFLICT (role) DO UPDATE SET chain = EXCLUDED.chain, "
             "router_kept = CASE WHEN $3 THEN NULL ELSE routes.router_kept END, "
+            "router_kept_slot = CASE WHEN $3 THEN NULL ELSE routes.router_kept_slot END, "
             "updated_at = now()",
             role,
             json.dumps(cleaned),
-            removes_router,
+            forgets,
         )
     return cleaned
 
@@ -255,11 +260,14 @@ async def delete_chain(pool: asyncpg.Pool, role: str) -> bool:
 JEV_ROUTER_MODEL = "typesafe/jev-router"
 #: (plan decision 18) The chat-kind roles the switch is offered on — the spec's
 #: "(chat, scheduled, agents)". Not judge (a one-word verdict), never a
-#: systemone role (it has no cloud chat link), never a reserved one. These two
-#: are also the roles whose turns send chat.model as link 1 (an agent's turn
-#: sends none), so the switch reads chat.model on them. The gateway never
-#: reads core's settings: core supplies it.
+#: systemone role (it has no cloud chat link), never a reserved one. Which
+#: roles' turns send chat.model as link 1 is core's to say — it passes the
+#: chat model for them — so the gateway keeps no list of those.
 ROUTER_BUILTINS = ("chat", "scheduled")
+#: Where the router sits, and so where its kept link goes back
+#: (routes.router_kept_slot): the stored chain, or the chat model.
+CHAIN_SLOT = "chain"
+CHAT_MODEL_SLOT = "chat_model"
 
 
 def router_switchable(role: str) -> bool:
@@ -268,30 +276,17 @@ def router_switchable(role: str) -> bool:
     return role in ROUTER_BUILTINS or role not in BUILTIN_ROLES
 
 
-def router_link(chain: Sequence[str], names: set[str]) -> str | None:
-    """The chain's Jev Router link, if it holds one. The switch's on/off IS
-    this — derived from the chain, never a flag stored beside it."""
-    for link in chain:
-        _provider, model = providers.split_model_id(link, names)
-        if model == JEV_ROUTER_MODEL:
-            return link
-    return None
+def is_router_link(link: str) -> bool:
+    """Is this link Jev Router? Read off the link's own text — its model, after
+    the FIRST colon — never off the provider list: deleting the provider that
+    served it must never make the switch read off or lose what it kept."""
+    _provider, colon, model = link.partition(":")
+    return bool(colon) and model == JEV_ROUTER_MODEL
 
 
-def router_state(
-    chain: Sequence[str], names: set[str], kept: str | None, chat_model: str | None = None
-) -> dict:
-    """What the routes page says of the switch on one role. `chat_model` is
-    link 1 of chat's and scheduled's turns — the caller passes it for those
-    two only — so the router there is on as surely as one in the chain."""
-    on = router_link([chat_model, *chain] if chat_model else chain, names) is not None
-    return {"on": on, "kept": kept if on else None}
-
-
-async def router_kept(pool: asyncpg.Pool) -> dict[str, str | None]:
-    """Each routes row's kept link (routes.router_kept), by role."""
-    rows = await pool.fetch("SELECT role, router_kept FROM routes")
-    return {r["role"]: r["router_kept"] for r in rows}
+def router_link(chain: Sequence[str]) -> str | None:
+    """The chain's first Jev Router link, if it holds one."""
+    return next((link for link in chain if is_router_link(link)), None)
 
 
 def _is_cloud(link: str, by_name: dict[str, dict]) -> bool:
@@ -300,42 +295,133 @@ def _is_cloud(link: str, by_name: dict[str, dict]) -> bool:
     return row is not None and not row.get("local")
 
 
+def _cloud_slot(
+    chain: Sequence[str], by_name: dict[str, dict], chat_model: str | None
+) -> tuple[str, int | None] | None:
+    """Where the role's cloud link sits in its EFFECTIVE chain — `chat_model`,
+    the chat model core passes for a role whose turns send it as link 1, then
+    the stored chain: the first link that is Jev Router or on a cloud
+    provider. (CHAT_MODEL_SLOT, None), (CHAIN_SLOT, its index in the stored
+    chain), or None when every link is local."""
+    if chat_model and (is_router_link(chat_model) or _is_cloud(chat_model, by_name)):
+        return CHAT_MODEL_SLOT, None
+    for index, link in enumerate(chain):
+        if is_router_link(link) or _is_cloud(link, by_name):
+            return CHAIN_SLOT, index
+    return None
+
+
+def _router_at(
+    chain: Sequence[str], by_name: dict[str, dict], chat_model: str | None
+) -> tuple[str, int | None] | None:
+    """The cloud slot when it holds Jev Router — the switch is on — else None."""
+    slot = _cloud_slot(chain, by_name, chat_model)
+    if slot is None:
+        return None
+    link = chat_model if slot[0] == CHAT_MODEL_SLOT else chain[slot[1]]
+    return slot if is_router_link(link) else None
+
+
+def router_state(
+    chain: Sequence[str],
+    by_name: dict[str, dict],
+    kept: str | None,
+    kept_slot: str | None,
+    chat_model: str | None = None,
+) -> dict:
+    """What the routes page says of the switch on one role: on exactly when
+    the cloud slot of its effective chain holds Jev Router. `kept` shows only
+    while on, and only when it was kept for the slot the router sits in."""
+    at = _router_at(chain, by_name, chat_model)
+    if at is None:
+        return {"on": False, "kept": None}
+    return {"on": True, "kept": kept if kept_slot == at[0] else None}
+
+
+async def router_kept(pool: asyncpg.Pool) -> dict[str, tuple[str | None, str | None]]:
+    """Each routes row's kept link and the slot it was kept for, by role."""
+    rows = await pool.fetch("SELECT role, router_kept, router_kept_slot FROM routes")
+    return {r["role"]: (r["router_kept"], r["router_kept_slot"]) for r in rows}
+
+
 def _names_a_provider(link: str, names: set[str]) -> bool:
     """Does a kept link still name a registered provider? One whose provider
     the owner has since deleted names nothing to put back."""
     return providers.split_model_id(link, names)[0] is not None
 
 
-async def _store_route(conn, role: str, chain: list[str], kept: str | None) -> None:
+async def _lock_role(conn, role: str) -> None:
+    """Hold this role's routes row for the rest of the transaction, so a
+    chain edit and a switch never interleave. An advisory lock keyed by role:
+    FOR UPDATE locks nothing on a row that does not exist yet."""
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtext('routes:' || $1::text))", role)
+
+
+async def _store(
+    conn, role: str, chain: list[str], kept: str | None, kept_slot: str | None
+) -> None:
     await conn.execute(
-        "INSERT INTO routes (role, chain, router_kept) VALUES ($1, $2::jsonb, $3) "
-        "ON CONFLICT (role) DO UPDATE SET chain = EXCLUDED.chain, "
-        "router_kept = EXCLUDED.router_kept, updated_at = now()",
+        "INSERT INTO routes (role, chain, router_kept, router_kept_slot) "
+        "VALUES ($1, $2::jsonb, $3, $4) ON CONFLICT (role) DO UPDATE SET "
+        "chain = EXCLUDED.chain, router_kept = EXCLUDED.router_kept, "
+        "router_kept_slot = EXCLUDED.router_kept_slot, updated_at = now()",
         role,
         json.dumps(chain),
         kept,
+        kept_slot,
     )
 
 
-async def _store_kept(conn, role: str, kept: str | None) -> None:
-    """The kept link alone: the stored chain is not touched. A role with no
-    row yet gets the empty chain that no row already means."""
-    await conn.execute(
-        "INSERT INTO routes (role, chain, router_kept) VALUES ($1, '[]'::jsonb, $2) "
-        "ON CONFLICT (role) DO UPDATE SET router_kept = EXCLUDED.router_kept, "
-        "updated_at = now()",
-        role,
-        kept,
-    )
+def _put_back(
+    role: str, chain: list[str], index: int, kept: str | None, names: set[str]
+) -> tuple[list[str], str | None]:
+    """`chain` with the router at `index` replaced by the link it kept, and a
+    note when something could not be. The router is removed instead when it
+    kept nothing (''), when the kept link is already elsewhere in the chain
+    (a link is never doubled), or when the kept link's provider no longer
+    exists — said in the note. Only the link put back is judged: the rest is
+    as the owner stored it, and a link there whose provider has since gone
+    must not stop the switch going off."""
+    out = list(chain)
+    if kept and not _names_a_provider(kept, names):
+        note = (
+            f"the link Jev Router replaced, {kept}, names a provider that no longer exists, "
+            "so it was not put back"
+        )
+        logger.warning("jev router %s: %s", role, note)
+        del out[index]
+        return out, note
+    if kept and kept not in out:
+        out[index] = kept
+    else:
+        del out[index]
+    return out, None
 
 
 def _answer(
-    role: str, chain: list[str], kept: str | None, chat_model: str, names: set[str]
+    role: str,
+    chain: list[str],
+    by_name: dict[str, dict],
+    kept: str | None,
+    kept_slot: str | None,
+    chat_model: str,
+    *,
+    writes: bool = False,
+    note: str | None = None,
 ) -> dict:
-    """The switch's answer. `router` is read off the result (router_state),
-    never assumed: `chat_model` is chat.model as it stands once core has
-    written what the answer asks for."""
-    return {"role": role, "chain": chain, "router": router_state(chain, names, kept, chat_model)}
+    """The switch's answer, its `router` read off the result (router_state),
+    never assumed. `chat_model` is the chat model once core has written what
+    the answer asks for; `writes` puts it in the answer as that request."""
+    answer = {
+        "role": role,
+        "chain": chain,
+        "router": router_state(chain, by_name, kept, kept_slot, chat_model or None),
+    }
+    if writes:
+        answer["chat_model"] = chat_model
+    if note:
+        answer["note"] = note
+    return answer
 
 
 async def set_router(
@@ -349,63 +435,70 @@ async def set_router(
     """Switch Jev Router on or off for `role` — an EDIT to the role's chain,
     which stays the one source of truth (decision-role spec §4).
 
-    ON puts `link` (`<provider>:typesafe/jev-router`) in place of the role's
-    cloud link and keeps the replaced link in routes.router_kept; OFF puts
-    it back. Local links are never touched, so local first still holds.
-    Asking for the state it is already in changes nothing.
+    The state is read off the role's EFFECTIVE chain: `chat_model` — the chat
+    model core passes for a role whose turns send it as link 1 (None or '' is
+    no pick) — then the stored chain. The cloud slot is the first link there
+    that is Jev Router or on a cloud provider, and the switch is on exactly
+    when that slot holds Jev Router. Asking for the state it is already in
+    changes nothing, except that OFF while off forgets a stale kept link.
 
-    Which link is the cloud link: chat's and scheduled's turns send
-    chat.model as link 1, ahead of the chain. `chat_model` is it, passed by
-    core (ignored on every other role; None or '' is no pick). A cloud
-    chat.model IS their cloud link:
+    ON puts `link` (`<provider>:typesafe/jev-router`) in the cloud slot and
+    keeps what it replaced, with the slot it was kept for. On the chat model
+    (chat only) the stored chain is not touched: the pick is kept as
+    provider:model, and the answer's `chat_model` is what chat.model must
+    become — core writes it; chat.model has one writer. In the stored chain
+    the link is replaced in place; with no cloud slot the router goes after
+    the local links, kept ''. A router the switch placed in the stored chain
+    and a cloud chat model has since displaced gets what it replaced back
+    first: a role never holds two routers the switch placed.
 
-      * on chat the stored chain is not touched: the pick is kept, and the
-        answer's `chat_model` is what chat.model must become — the router
-        on ON, the pick on OFF. Core writes it: chat.model has one writer.
-      * scheduled shares chat.model with chat, so it cannot swap it alone:
-        refused in words — the switch for it is chat's.
-
-    Otherwise the router takes the place of the FIRST cloud link of the
-    role's stored chain; a chain with none gets it after its local links
-    (kept ''), and OFF removes it.
+    OFF puts the kept link back in the router's slot. On the chat model it
+    answers with the pick and keeps it until core has written it, so OFF can
+    be asked again. A link is never doubled, and a kept link whose provider
+    no longer exists is not put back — the answer's `note` says so.
 
     Refused, in words (ValueError): a role the switch is not offered on; a
     link that is not Jev Router, or whose provider cannot carry the role's
-    calls; a non-chat role with no chain of its own — it walks chat's, and
-    a one-link chain would silently stop it walking chat's local links; and
-    OFF with nothing it replaced to put back.
-
-    OFF always works otherwise: a kept link whose provider no longer exists
-    is not put back, and the answer's `note` says so."""
+    calls; a role sharing chat's cloud chat model (its switch is chat's); a
+    non-chat role with no chain of its own — it walks chat's, and a one-link
+    chain would silently stop it; chat with neither a chain nor a chat model
+    (it answers with the gateway's default model); and OFF on a chat model
+    the switch did not replace."""
     validate_role(role)
     if not router_switchable(role):
         raise ValueError(
             f"the Jev Router switch is for the chat, scheduled and agent roles — not {role}"
         )
-    pick = (chat_model or "").strip() if role in ROUTER_BUILTINS else ""
+    pick = (chat_model or "").strip()
     async with pool.acquire() as conn, conn.transaction():
+        await _lock_role(conn, role)
         row = await conn.fetchrow(
-            "SELECT chain, router_kept FROM routes WHERE role = $1 FOR UPDATE", role
+            "SELECT chain, router_kept, router_kept_slot FROM routes WHERE role = $1", role
         )
         chain = list(json.loads(row["chain"])) if row else []
         kept = row["router_kept"] if row else None
+        kept_slot = row["router_kept_slot"] if row else None
+        at = _router_at(chain, by_name, pick)
+        if on and at is not None:
+            return _answer(role, chain, by_name, kept, kept_slot, pick)
         if on:
-            return await _router_on(conn, role, chain, kept, pick, link, by_name)
-        return await _router_off(conn, role, chain, kept, pick, by_name)
+            return await _switch_on(conn, role, chain, kept, kept_slot, pick, link, by_name)
+        if at is not None:
+            return await _switch_off(conn, role, chain, kept, kept_slot, pick, at, by_name)
+        return await _off_while_off(conn, role, chain, kept, kept_slot, pick, by_name)
 
 
-async def _router_on(
+async def _switch_on(
     conn,
     role: str,
     chain: list[str],
     kept: str | None,
+    kept_slot: str | None,
     pick: str,
     link: object,
     by_name: dict[str, dict],
 ) -> dict:
     names = set(by_name)
-    if router_link([pick, *chain] if pick else chain, names) is not None:
-        return _answer(role, chain, kept, pick, names)
     if not isinstance(link, str) or not link.strip():
         raise ValueError(
             "link is required to switch Jev Router on — the provider:model that serves "
@@ -422,79 +515,105 @@ async def _router_on(
     # itself — so a provider that cannot carry the role's calls is refused
     # by name before anything is stored or handed to core.
     _clean_chain(role, [link], by_name)
-    if pick and _is_cloud(pick, by_name):
+    note = None
+    placed = router_link(chain) if kept_slot == CHAIN_SLOT else None
+    if placed is not None:
+        # The switch is off, so this router is not the cloud slot: a cloud
+        # link sits in front of it. What it replaced goes back first.
+        chain, note = _put_back(role, chain, chain.index(placed), kept, names)
+    slot = _cloud_slot(chain, by_name, pick)
+    if slot is not None and slot[0] == CHAT_MODEL_SLOT:
         if role != "chat":
             raise ValueError(
                 f"{role}'s first link is the chat model, {pick}, a cloud model it shares "
                 "with chat — switch Jev Router on for chat"
             )
-        await _store_kept(conn, role, pick)
-        return {**_answer(role, chain, pick, link, names), "chat_model": link}
-    if not chain and role != "chat":
-        raise ValueError(
-            f"{role} has no chain of its own — it walks the chat chain; switch Jev Router "
-            f"on for chat, or give {role} its own chain first"
-        )
-    index = next((i for i, item in enumerate(chain) if _is_cloud(item, by_name)), None)
-    if index is None:
+        # Kept qualified — the provider a bare pick reached — so OFF hands back
+        # the link that served, and a bare id is never taken for a gone one.
+        provider_name, model = _provider_of(pick, by_name)
+        kept = f"{provider_name}:{model}"
+        await _store(conn, role, chain, kept, CHAT_MODEL_SLOT)
+        return _answer(role, chain, by_name, kept, CHAT_MODEL_SLOT, link, writes=True, note=note)
+    if slot is not None:
+        kept = chain[slot[1]]
+        chain[slot[1]] = link
+    else:
+        if not chain and role != "chat":
+            raise ValueError(
+                f"{role} has no chain of its own — it walks the chat chain; switch Jev Router "
+                f"on for chat, or give {role} its own chain first"
+            )
+        if not chain and not pick:
+            raise ValueError(
+                "chat has no chain and no chat model, so it answers with the gateway's default "
+                "model — pick a chat model or give chat a chain first"
+            )
         kept = ""
         chain.append(link)
-    else:
-        kept = chain[index]
-        chain[index] = link
     cleaned = _clean_chain(role, chain, by_name)
-    await _store_route(conn, role, cleaned, kept)
-    return _answer(role, cleaned, kept, pick, names)
+    await _store(conn, role, cleaned, kept, CHAIN_SLOT)
+    return _answer(role, cleaned, by_name, kept, CHAIN_SLOT, pick, note=note)
 
 
-async def _router_off(
-    conn, role: str, chain: list[str], kept: str | None, pick: str, by_name: dict[str, dict]
+async def _switch_off(
+    conn,
+    role: str,
+    chain: list[str],
+    kept: str | None,
+    kept_slot: str | None,
+    pick: str,
+    at: tuple[str, int | None],
+    by_name: dict[str, dict],
 ) -> dict:
     names = set(by_name)
-    present = router_link(chain, names)
-    if present is not None:
-        # Only the link put back is judged: the rest of the chain is as the
-        # owner stored it, and a link there whose provider has since gone
-        # must not stop the switch going off.
-        note = None
-        if kept and not _names_a_provider(kept, names):
-            note = (
-                f"the link Jev Router replaced, {kept}, names a provider that no longer "
-                "exists, so it was not put back"
-            )
-            logger.warning("jev router off for %s: %s", role, note)
-            chain.remove(present)
-        elif kept and kept not in chain:
-            chain[chain.index(present)] = kept
-        else:
-            chain.remove(present)
-        await _store_route(conn, role, chain, None)
-        answer = _answer(role, chain, None, pick, names)
-        return {**answer, "note": note} if note else answer
-    if pick and router_link([pick], names) is not None:
+    where, index = at
+    if where == CHAT_MODEL_SLOT:
         if role != "chat":
             raise ValueError(
                 f"{role}'s first link is the chat model, which is Jev Router — switch it off "
                 "on chat"
             )
-        if not kept:
+        if kept_slot != CHAT_MODEL_SLOT or not kept:
             raise ValueError(
                 "Jev Router is the chat model, picked in chat — the switch replaced nothing "
                 "there, so there is nothing to put back; pick a chat model in chat"
             )
-        await _store_kept(conn, role, None)
+        # The pick stays kept: until core has written it, the router is still
+        # link 1 and the switch still reads on, so OFF can be asked again. The
+        # next ON overwrites it.
         if not _names_a_provider(kept, names):
             note = (
                 f"the chat model Jev Router replaced, {kept}, names a provider that no longer "
                 "exists, so the chat model is cleared — pick one in chat"
             )
-            logger.warning("jev router off for %s: %s", role, note)
-            return {**_answer(role, chain, None, "", names), "chat_model": "", "note": note}
-        return {**_answer(role, chain, None, kept, names), "chat_model": kept}
-    # Not on: nothing to switch off, and a kept link left over is forgotten.
+            logger.warning("jev router %s: %s", role, note)
+            return _answer(role, chain, by_name, kept, kept_slot, "", writes=True, note=note)
+        return _answer(role, chain, by_name, kept, kept_slot, kept, writes=True)
+    chain, note = _put_back(role, chain, index, kept if kept_slot == CHAIN_SLOT else "", names)
+    await _store(conn, role, chain, None, None)
+    return _answer(role, chain, by_name, None, None, pick, note=note)
+
+
+async def _off_while_off(
+    conn,
+    role: str,
+    chain: list[str],
+    kept: str | None,
+    kept_slot: str | None,
+    pick: str,
+    by_name: dict[str, dict],
+) -> dict:
+    """OFF asked while off. A router the switch placed in the stored chain
+    that a cloud chat model has since displaced gets what it replaced back;
+    any other kept link is stale — its slot does not hold the router — and
+    is forgotten."""
+    note = None
+    placed = router_link(chain) if kept_slot == CHAIN_SLOT else None
+    if placed is not None:
+        chain, note = _put_back(role, chain, chain.index(placed), kept, set(by_name))
     if kept is not None:
-        await _store_kept(conn, role, None)
-    return _answer(role, chain, None, pick, names)
+        await _store(conn, role, chain, None, None)
+    return _answer(role, chain, by_name, None, None, pick, note=note)
 
 
 # ── walls ──────────────────────────────────────────────────────────────────
