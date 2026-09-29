@@ -308,7 +308,9 @@ describe('RoutingSection', () => {
     await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
     const panel = screen.getByTestId('route-chat-router')
     expect(panel.textContent).toContain('balancing quality, speed and cost')
-    expect(panel.textContent).toContain('Switching on puts Jev Router in place of the first cloud model a chat turn reaches')
+    expect(panel.textContent).toContain(
+      'Switching on puts Jev Router in place of the first cloud model a chat turn reaches: the model picked in chat when that is a cloud model, otherwise the first cloud link after it. Local links keep their places.',
+    )
     const toggle = within(panel).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
     expect(toggle.checked).toBe(false)
     fireEvent.click(toggle)
@@ -318,13 +320,29 @@ describe('RoutingSection', () => {
 
   it('says what the switch took the place of, and switches off with no link', async () => {
     const on: Routes = { ...ROUTES_SWITCH, roles: ROUTES_SWITCH.roles.map(r => (r.role === 'scheduled' ? { ...r, chain: ['openrouter:typesafe/jev-router'], router: { on: true, kept: 'openrouter:openai/gpt-x' } } : r)) }
-    const api = renderSection({ getRoutes: vi.fn(async () => on), getCatalog: catalogWith(ROUTER_ROW) })
+    // The kept link's provider (openrouter) is still among the catalogue's
+    // sources, so the promise that it comes back holds.
+    const api = renderSection({
+      getRoutes: vi.fn(async () => on),
+      getCatalog: vi.fn(async () => ({ fetched_at: 't', sources: [{ key: 'openrouter' }], rows: [ROUTER_ROW] })),
+    })
     await waitFor(() => expect(screen.getByTestId('route-scheduled-router-kept')).toBeTruthy())
     expect(screen.getByTestId('route-scheduled-router-kept').textContent).toBe(
       'in place of openrouter:openai/gpt-x, which comes back when you switch it off',
     )
     fireEvent.click(within(screen.getByTestId('route-scheduled-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }))
     await waitFor(() => expect(api.putJevRouter).toHaveBeenCalledWith('scheduled', false, undefined))
+  })
+
+  it('says the kept link\'s provider is gone when the catalogue no longer lists it', async () => {
+    const on: Routes = { ...ROUTES_SWITCH, roles: ROUTES_SWITCH.roles.map(r => (r.role === 'scheduled' ? { ...r, chain: ['openrouter:typesafe/jev-router'], router: { on: true, kept: 'openrouter:openai/gpt-x' } } : r)) }
+    // catalogWith's sources are always [] — no provider is registered, so
+    // the kept link's own provider (openrouter) is not among them.
+    renderSection({ getRoutes: vi.fn(async () => on), getCatalog: catalogWith(ROUTER_ROW) })
+    await waitFor(() => expect(screen.getByTestId('route-scheduled-router-kept')).toBeTruthy())
+    expect(screen.getByTestId('route-scheduled-router-kept').textContent).toBe(
+      'in place of openrouter:openai/gpt-x — its provider is gone, so switching off will not put it back',
+    )
   })
 
   it('offers no switch where it does not apply', async () => {
@@ -341,7 +359,10 @@ describe('RoutingSection', () => {
     const panel = screen.getByTestId('route-chat-router')
     const toggle = within(panel).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
     expect(toggle.disabled).toBe(true)
-    expect(panel.textContent).toContain('no provider lists typesafe/jev-router right now (OpenRouter serves it)')
+    // The whole string, not a substring: an unconditional suffix must fail this.
+    expect(screen.getByTestId('route-chat-router-unavailable').textContent).toBe(
+      'no provider lists typesafe/jev-router right now (OpenRouter serves it)',
+    )
     fireEvent.click(toggle)
     expect(api.putJevRouter).not.toHaveBeenCalled()
   })
@@ -356,8 +377,26 @@ describe('RoutingSection', () => {
       })),
     })
     await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
-    expect(screen.getByTestId('route-chat-router').textContent).toContain(
+    expect(screen.getByTestId('route-chat-router-unavailable').textContent).toBe(
       'no provider lists typesafe/jev-router right now (OpenRouter serves it) — these model lists could not be read: openrouter (rate limited (429))',
+    )
+  })
+
+  it('joins several failed catalogue sources with a comma', async () => {
+    renderSection({
+      getRoutes: vi.fn(async () => ROUTES_SWITCH),
+      getCatalog: vi.fn(async () => ({
+        fetched_at: 't',
+        sources: [
+          { key: 'openrouter', ok: false, note: 'rate limited (429)' },
+          { key: 'cerebras', ok: false, note: 'timed out' },
+        ],
+        rows: [],
+      })),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
+    expect(screen.getByTestId('route-chat-router-unavailable').textContent).toBe(
+      'no provider lists typesafe/jev-router right now (OpenRouter serves it) — these model lists could not be read: openrouter (rate limited (429)), cerebras (timed out)',
     )
   })
 
@@ -531,5 +570,112 @@ describe('RoutingSection', () => {
       expect(toggle.checked).toBe(true)
     })
     expect(screen.queryByTestId('route-scheduled-router-error')).toBeNull()
+  })
+
+  it('keeps the note when a later reload changes the router state', async () => {
+    const note = 'the link Jev Router replaced, openrouter:openai/gpt-old, names a provider that no longer exists, so it was not put back'
+    let reloaded = false
+    const getRoutes = vi.fn(async () =>
+      reloaded
+        ? {
+            ...ROUTES_SWITCH,
+            roles: ROUTES_SWITCH.roles.map(r =>
+              r.role === 'chat' ? { ...r, chain: ['openrouter:typesafe/jev-router'], router: { on: true, kept: '' } } : r,
+            ),
+          }
+        : ROUTES_SWITCH,
+    )
+    renderSection({
+      getRoutes,
+      getCatalog: catalogWith(ROUTER_ROW),
+      putJevRouter: vi.fn(async (role: string, on: boolean) => ({ role, chain: [], router: { on, kept: null }, note })),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('route-chat-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }))
+    await waitFor(() => expect(screen.getByTestId('route-chat-router-note').textContent).toBe(note))
+    // A later, unrelated reload changes this role's router state...
+    reloaded = true
+    fireEvent.click(screen.getByRole('button', { name: 'Re-check' }))
+    await waitFor(() => {
+      const toggle = within(screen.getByTestId('route-chat-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
+      expect(toggle.checked).toBe(true)
+    })
+    // ...and the note, which is about that same original switch, must stay.
+    expect(screen.getByTestId('route-chat-router-note').textContent).toBe(note)
+  })
+
+  it('reloads with the switch answer\'s own chat_model, even when nothing else changes it', async () => {
+    const NEW_MODEL = 'openrouter:typesafe/jev-router'
+    const explainRoute = vi.fn(async (role: string) => ({ role, chain: [], would_serve: null, reason: 'no chain' }))
+    renderSection(
+      {
+        getRoutes: vi.fn(async () => ROUTES_SWITCH),
+        getCatalog: catalogWith(ROUTER_ROW),
+        putJevRouter: vi.fn(async () => ({ role: 'chat', chain: [], router: { on: true, kept: '' }, chat_model: NEW_MODEL })),
+        explainRoute,
+      },
+      // A no-op onChatModelChanged: the parent never re-renders with a new
+      // chatModel, so the click's OWN reload is the only reload there is —
+      // isolating fix 1's override from the two-reloads race it also fixes.
+      { onChatModelChanged: () => {} },
+    )
+    await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
+    fireEvent.click(within(screen.getByTestId('route-chat-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }))
+    await waitFor(() => expect(explainRoute).toHaveBeenCalledWith('chat', NEW_MODEL))
+  })
+
+  it('still turns off when no catalogue row lists Jev Router any more', async () => {
+    // A guard reduced to `!routerLink` would refuse this: turning OFF never
+    // needed the link: only turning on does.
+    const on: Routes = { ...ROUTES_SWITCH, roles: ROUTES_SWITCH.roles.map(r => (r.role === 'chat' ? { ...r, chain: ['openrouter:typesafe/jev-router'], router: { on: true, kept: 'openrouter:openai/gpt-x' } } : r)) }
+    const api = renderSection({ getRoutes: vi.fn(async () => on), getCatalog: catalogWith(row('hub:qwen3:8b', 'local', true)) })
+    await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
+    const toggle = within(screen.getByTestId('route-chat-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
+    expect(toggle.checked).toBe(true)
+    expect(toggle.disabled).toBe(false)
+    fireEvent.click(toggle)
+    await waitFor(() => expect(api.putJevRouter).toHaveBeenCalledWith('chat', false, undefined))
+  })
+
+  it('waits for the load that actually landed, not a superseded one, before clearing busy', async () => {
+    let callCount = 0
+    let resolveSecond: (value: Routes) => void = () => {}
+    let resolveThird: (value: Routes) => void = () => {}
+    const secondRoutes = new Promise<Routes>(resolve => {
+      resolveSecond = resolve
+    })
+    const thirdRoutes = new Promise<Routes>(resolve => {
+      resolveThird = resolve
+    })
+    const freshRoutes: Routes = { ...ROUTES_SWITCH, roles: ROUTES_SWITCH.roles.map(r => (r.role === 'chat' ? { ...r, router: { on: true, kept: '' } } : r)) }
+    const getRoutes = vi.fn(async () => {
+      callCount += 1
+      if (callCount === 1) return ROUTES_SWITCH
+      if (callCount === 2) return secondRoutes
+      return thirdRoutes
+    })
+    const api = renderSection({
+      getRoutes,
+      getCatalog: catalogWith(ROUTER_ROW),
+      putJevRouter: vi.fn(async () => ({ role: 'chat', chain: [], router: { on: true, kept: '' }, note: 'a note from the switch' })),
+    })
+    await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())
+    const toggle = within(screen.getByTestId('route-chat-router')).getByRole('switch', { name: 'Let Jev Router pick the cloud model' }) as HTMLInputElement
+    fireEvent.click(toggle)
+    await waitFor(() => expect(getRoutes).toHaveBeenCalledTimes(2))
+    fireEvent.click(screen.getByRole('button', { name: 'Re-check' }))
+    await waitFor(() => expect(getRoutes).toHaveBeenCalledTimes(3))
+    // The click's own (second) load finishes its own round trip and finds
+    // itself superseded by Re-check's (third, still held) — it must not
+    // clear busy or show the note until the load that actually landed does.
+    resolveSecond(ROUTES_SWITCH)
+    await new Promise(r => setTimeout(r, 20))
+    expect(toggle.disabled).toBe(true)
+    expect(screen.queryByTestId('route-chat-router-note')).toBeNull()
+    resolveThird(freshRoutes)
+    await waitFor(() => expect(toggle.disabled).toBe(false))
+    expect(toggle.checked).toBe(true)
+    expect(screen.getByTestId('route-chat-router-note').textContent).toBe('a note from the switch')
+    expect(api.putJevRouter).toHaveBeenCalledTimes(1)
   })
 })

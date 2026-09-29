@@ -182,56 +182,85 @@ export function RoutingSection({
     (failedSources.length > 0
       ? ` — these model lists could not be read: ${failedSources.map(s => `${s.key} (${s.note ?? 'failed'})`).join(', ')}`
       : '')
+  // Which providers are still registered, for the "in place of X" promise: a
+  // kept link's provider (the part before its first colon) that is no
+  // longer among these will never come back.
+  const catalogProviders = new Set(catalogSources.map(s => s.key))
 
   // Answers arriving out of order — an older reload landing after a newer one
   // (two quick switches on different roles, or this reload racing the
   // parent's own re-render once a switch moves chat.model) — must not
   // publish over what the newer one already wrote: every load takes a
-  // sequence number, and only the newest one may set state.
+  // sequence number, and only the newest one may set state. `loadPromise`
+  // carries this further: a CALLER awaiting `load(...)` (onRouter, onSave)
+  // must not resolve, and so must not clear its own busy/message state,
+  // until the load that actually wrote has — never a superseded one that
+  // wrote nothing part way through.
   const loadSeq = useRef(0)
+  const loadPromise = useRef<Promise<void> | null>(null)
 
-  const load = useCallback(async (overrideChatModel?: string) => {
+  const load = useCallback((overrideChatModel?: string): Promise<void> => {
     const seq = ++loadSeq.current
     // The model to explain chat against: an override the CALLER already
     // knows is current (a switch answer's own chat_model) beats this
     // closure's own `chatModel`, which can still be one render behind it.
     const modelForChat = overrideChatModel ?? chatModel
-    setError(null)
-    try {
-      const [r, cat, agentsRead] = await Promise.all([
-        api.getRoutes(),
-        api.getCatalog(),
-        // The agents list decides whether a role's Remove is offered, so its
-        // failure is kept as a fact of its own, never folded into "no agents".
-        api.listAgents().then(
-          list => ({ list, error: null as string | null }),
-          (err: unknown) => ({ list: null as AgentSummary[] | null, error: reasonOf(err) }),
-        ),
-      ])
-      if (seq !== loadSeq.current) return
-      setRoutes(r)
-      setCatalog(cat.rows)
-      setCatalogSources(cat.sources)
-      setAgents(agentsRead.list)
-      setAgentsError(agentsRead.error)
-      const entries = await Promise.all(
-        r.roles
-          .filter(role => !role.reserved)
-          .map(async role => {
-            try {
-              const model = role.role === 'chat' && modelForChat ? modelForChat : undefined
-              return [role.role, await api.explainRoute(role.role, model)] as const
-            } catch (err) {
-              return [role.role, { error: reasonOf(err) }] as const
-            }
-          }),
-      )
-      if (seq !== loadSeq.current) return
-      setExplains(Object.fromEntries(entries))
-    } catch (err) {
-      if (seq !== loadSeq.current) return
-      setError(reasonOf(err))
-    }
+
+    const p: Promise<void> = (async (): Promise<void> => {
+      setError(null)
+      try {
+        const [r, cat, agentsRead] = await Promise.all([
+          api.getRoutes(),
+          api.getCatalog(),
+          // The agents list decides whether a role's Remove is offered, so its
+          // failure is kept as a fact of its own, never folded into "no agents".
+          api.listAgents().then(
+            list => ({ list, error: null as string | null }),
+            (err: unknown) => ({ list: null as AgentSummary[] | null, error: reasonOf(err) }),
+          ),
+        ])
+        if (seq === loadSeq.current) {
+          setRoutes(r)
+          setCatalog(cat.rows)
+          setCatalogSources(cat.sources)
+          setAgents(agentsRead.list)
+          setAgentsError(agentsRead.error)
+          const entries = await Promise.all(
+            r.roles
+              .filter(role => !role.reserved)
+              .map(async role => {
+                try {
+                  const model = role.role === 'chat' && modelForChat ? modelForChat : undefined
+                  return [role.role, await api.explainRoute(role.role, model)] as const
+                } catch (err) {
+                  return [role.role, { error: reasonOf(err) }] as const
+                }
+              }),
+          )
+          if (seq === loadSeq.current) {
+            setExplains(Object.fromEntries(entries))
+          }
+        }
+      } catch (err) {
+        if (seq === loadSeq.current) setError(reasonOf(err))
+      }
+      // This call wrote nothing (it was superseded before either checkpoint
+      // above) exactly when `seq` is no longer the latest — a caller
+      // awaiting THIS promise actually wants to know when the load that
+      // superseded it, or whatever has superseded THAT one by now in turn,
+      // has landed. `seq === loadSeq.current` is what tells this call it IS
+      // the latest, without ever needing to name its own promise.
+      for (;;) {
+        if (seq === loadSeq.current) return
+        const latest = loadPromise.current
+        if (!latest) return
+        await latest
+        if (loadPromise.current === latest) return
+      }
+    })()
+
+    loadPromise.current = p
+    return p
   }, [api, chatModel])
 
   useEffect(() => {
@@ -273,6 +302,7 @@ export function RoutingSection({
               router={entry.router ?? null}
               routerLink={routerLink}
               routerUnavailableReason={routerUnavailableReason}
+              catalogProviders={catalogProviders}
               onRouter={async on => {
                 const result = await api.putJevRouter(entry.role, on, on ? routerLink ?? undefined : undefined)
                 // Reload with the model the ANSWER just named, not this
@@ -343,6 +373,7 @@ function RoleEditor({
   router,
   routerLink,
   routerUnavailableReason,
+  catalogProviders,
   onRouter,
   onSave,
   onRemove,
@@ -364,6 +395,10 @@ function RoleEditor({
    * plus a named reason for each catalogue source that failed outright.
    * Always a real sentence; only ever shown when `routerLink` is null. */
   routerUnavailableReason: string
+  /** Provider keys the catalogue's sources still list — never assumed just
+   * because a row happens to be offered. A kept link whose provider has
+   * fallen out of this set will not come back off a switch off. */
+  catalogProviders: Set<string>
   /** Flips the switch. Resolves to the gateway's `note` (undefined for none)
    * on success; a refusal is thrown, in the gateway's own words. */
   onRouter: (on: boolean) => Promise<string | undefined>
@@ -381,12 +416,17 @@ function RoleEditor({
   const [routerBusy, setRouterBusy] = useState(false)
   const [routerError, setRouterError] = useState<string | null>(null)
   const [routerNote, setRouterNote] = useState<string | null>(null)
+  // The ONE reason the switch cannot be flipped right now: mid-flight, or
+  // off with no link to turn it on with (turning off never needs one). The
+  // toggle's `disabled` and the guard inside `flipRouter` both read this
+  // and only this, so they cannot drift apart.
+  const routerDisabled = routerBusy || !router || (!router.on && !routerLink)
   const flipRouter = async (on: boolean) => {
-    // The same condition the toggle's `disabled` reflects, checked again
-    // here: an input's `disabled` attribute is what a pointer respects, not
-    // what a dispatched event is required to. Nothing may reach `onRouter`
-    // while either holds.
-    if (routerBusy || !router || (!router.on && !routerLink)) return
+    // Checked again here, not just reflected in `disabled`: an input's
+    // `disabled` attribute is what a pointer respects, not what a
+    // dispatched event is required to. Nothing may reach `onRouter` while
+    // this holds.
+    if (routerDisabled) return
     setRouterBusy(true)
     setRouterError(null)
     setRouterNote(null)
@@ -564,19 +604,21 @@ function RoleEditor({
             id={`jev-router-${role}`}
             size="sm"
             checked={router.on}
-            disabled={routerBusy || (!router.on && !routerLink)}
+            disabled={routerDisabled}
             onChange={on => void flipRouter(on)}
             label="Let Jev Router pick the cloud model"
           />
           <p className="text-caption text-content-tertiary">{JEV_ROUTER_BALANCES}</p>
           {role === 'chat' && (
             <p className="text-caption text-content-tertiary">
-              Switching on puts Jev Router in place of the first cloud model a chat turn reaches: the model picked in chat when that is a cloud model, otherwise the first cloud link after it. Local links stay first.
+              Switching on puts Jev Router in place of the first cloud model a chat turn reaches: the model picked in chat when that is a cloud model, otherwise the first cloud link after it. Local links keep their places.
             </p>
           )}
           {router.on && router.kept && (
             <p className="text-caption text-content-tertiary" data-testid={`route-${role}-router-kept`}>
-              in place of {router.kept}, which comes back when you switch it off
+              {catalogProviders.has(router.kept.split(':')[0])
+                ? `in place of ${router.kept}, which comes back when you switch it off`
+                : `in place of ${router.kept} — its provider is gone, so switching off will not put it back`}
             </p>
           )}
           {router.on && router.kept === '' && (
@@ -585,7 +627,9 @@ function RoleEditor({
             </p>
           )}
           {!router.on && !routerLink && (
-            <p className="text-caption text-content-tertiary">{routerUnavailableReason}</p>
+            <p className="text-caption text-content-tertiary" data-testid={`route-${role}-router-unavailable`}>
+              {routerUnavailableReason}
+            </p>
           )}
           {routerNote && (
             <p role="status" className="text-caption text-content-tertiary" data-testid={`route-${role}-router-note`}>
