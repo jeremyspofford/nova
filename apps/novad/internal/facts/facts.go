@@ -77,9 +77,12 @@ type WSL struct {
 
 // Frame is the facts frame.
 type Frame struct {
-	Type       string       `json:"type"`
-	Net        Net          `json:"net"`
-	Unreadable []Unreadable `json:"unreadable"`
+	Type string `json:"type"`
+	Net  Net    `json:"net"`
+	// Folders are the known folders as this OS names them (S42b P16); core
+	// admits an @folder path only for a folder listed here.
+	Folders    map[string]string `json:"folders,omitempty"`
+	Unreadable []Unreadable      `json:"unreadable"`
 }
 
 // Net is this machine's network interfaces, loopback excluded.
@@ -147,6 +150,9 @@ type ifaceInfo struct {
 	AddrErr  error
 }
 
+// readFolder is the real reader; a variable so a test replaces it.
+var readFolder = platform.Folder
+
 // readIfaces is the real reader; a variable so a test replaces it.
 var readIfaces = func() ([]ifaceInfo, error) {
 	ifs, err := net.Interfaces()
@@ -179,6 +185,29 @@ var readIfaces = func() ([]ifaceInfo, error) {
 // entries, repeated so every frame states them.
 func GatherFrame(carried []Unreadable) Frame {
 	f := Frame{Type: "facts", Net: Net{Ifaces: []Iface{}}, Unreadable: append([]Unreadable{}, carried...)}
+	folders := map[string]string{}
+	for _, name := range platform.FolderNames {
+		p, err := readFolder(name)
+		if err != nil {
+			f.Unreadable = append(f.Unreadable, Unreadable{Item: "folders." + name, Reason: clip(err.Error())})
+			continue
+		}
+		// RULING (S42b Task 7 preflight, overriding the brief's clip(p)):
+		// clipping a too-long folder path would silently truncate it into a
+		// WRONG path she would then act on. Too long is omitted and reported
+		// unreadable, never guessed-by-truncation.
+		if len(p) > maxText {
+			f.Unreadable = append(f.Unreadable, Unreadable{
+				Item:   "folders." + name,
+				Reason: fmt.Sprintf("path is %d bytes, over the %d limit", len(p), maxText),
+			})
+			continue
+		}
+		folders[name] = p
+	}
+	if len(folders) > 0 {
+		f.Folders = folders
+	}
 	ifs, err := readIfaces()
 	if err != nil {
 		f.Unreadable = append(f.Unreadable, Unreadable{Item: "net.ifaces", Reason: clip(err.Error())})

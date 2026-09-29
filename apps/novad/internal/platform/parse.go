@@ -87,6 +87,38 @@ func ParseStartApps(out string) ([]StartApp, error) {
 	return many, nil
 }
 
+// ParseUserDirs reads xdg-user-dirs' user-dirs.dirs (lines such as
+// XDG_DESKTOP_DIR="$HOME/Desktop") into name -> absolute path for desktop,
+// documents and downloads. "$HOME" alone is how xdg-user-dirs disables a
+// folder, and a relative path names nothing: both are skipped, never guessed.
+func ParseUserDirs(body, home string) map[string]string {
+	keys := map[string]string{"XDG_DESKTOP_DIR": "desktop", "XDG_DOCUMENTS_DIR": "documents", "XDG_DOWNLOAD_DIR": "downloads"}
+	out := map[string]string{}
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		name, known := keys[strings.TrimSpace(k)]
+		if !ok || !known {
+			continue
+		}
+		v = strings.Trim(strings.TrimSpace(v), `"`)
+		switch {
+		case v == "$HOME":
+			continue
+		case strings.HasPrefix(v, "$HOME/"):
+			v = home + v[len("$HOME"):]
+		case strings.HasPrefix(v, "/"):
+		default:
+			continue
+		}
+		out[name] = v
+	}
+	return out
+}
+
 // EncodePowerShell is script in the form `powershell -EncodedCommand` takes:
 // UTF-16LE, then base64. The script travels as ONE argv element, with no
 // quoting for anything to get wrong.

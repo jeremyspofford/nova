@@ -72,3 +72,22 @@ func TestEncodePowerShellIsUTF16LEBase64(t *testing.T) {
 		t.Fatalf("got %q -> %v (%v)", got, raw, err)
 	}
 }
+
+// xdg-user-dirs writes a disabled folder as "$HOME" — that is "no such
+// folder", never the home directory.
+func TestParseUserDirsReadsTheFoldersAndSkipsDisabledOnes(t *testing.T) {
+	body := `# written by xdg-user-dirs-update
+XDG_DESKTOP_DIR="$HOME/Desktop"
+XDG_DOCUMENTS_DIR="/data/docs"
+XDG_DOWNLOAD_DIR="$HOME"
+XDG_MUSIC_DIR="$HOME/Music"
+`
+	got := ParseUserDirs(body, "/home/sam")
+	want := map[string]string{"desktop": "/home/sam/Desktop", "documents": "/data/docs"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	if len(ParseUserDirs("XDG_DESKTOP_DIR=Desktop\n", "/home/sam")) != 0 {
+		t.Fatal("a relative path is not a folder the OS names — never guessed")
+	}
+}

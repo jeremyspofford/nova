@@ -117,3 +117,67 @@ func TestAnInterfaceListThatCannotBeReadIsSaidNeverEmpty(t *testing.T) {
 		t.Fatalf("%+v", f.Unreadable)
 	}
 }
+
+func TestTheFactsFrameCarriesTheFoldersAndSaysWhichCouldNotBeRead(t *testing.T) {
+	oldIf, oldF := readIfaces, readFolder
+	t.Cleanup(func() { readIfaces, readFolder = oldIf, oldF })
+	readIfaces = func() ([]ifaceInfo, error) { return nil, nil }
+	readFolder = func(name string) (string, error) {
+		if name == "desktop" {
+			return "", errors.New("this machine names no desktop folder")
+		}
+		return "/home/sam/" + name, nil
+	}
+	f := GatherFrame(nil)
+	if f.Folders["home"] != "/home/sam/home" || f.Folders["documents"] != "/home/sam/documents" {
+		t.Fatalf("folders = %v", f.Folders)
+	}
+	if _, present := f.Folders["desktop"]; present {
+		t.Fatal("an unnamed folder must be absent, never a guess")
+	}
+	found := false
+	for _, u := range f.Unreadable {
+		if u.Item == "folders.desktop" && strings.Contains(u.Reason, "no desktop folder") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the missing folder must be named in unreadable: %v", f.Unreadable)
+	}
+}
+
+// Controller ruling (S42b Task 7 preflight): clipping a too-long folder path
+// would silently truncate it into a WRONG path that she would then act on.
+// It must be omitted — reported unreadable — never clipped into a lie.
+func TestATooLongFolderPathIsOmittedNeverClippedIntoAWrongPath(t *testing.T) {
+	oldIf, oldF := readIfaces, readFolder
+	t.Cleanup(func() { readIfaces, readFolder = oldIf, oldF })
+	readIfaces = func() ([]ifaceInfo, error) { return nil, nil }
+	long := "/home/sam/" + strings.Repeat("x", 300)
+	readFolder = func(name string) (string, error) {
+		if name == "desktop" {
+			return long, nil
+		}
+		return "", errors.New("this machine names no " + name + " folder")
+	}
+	f := GatherFrame(nil)
+	if _, present := f.Folders["desktop"]; present {
+		t.Fatalf("a too-long path must be omitted, never clipped into a wrong path: %v", f.Folders["desktop"])
+	}
+	found := false
+	for _, u := range f.Unreadable {
+		if u.Item == "folders.desktop" {
+			found = true
+			if strings.Contains(u.Reason, long) || strings.Contains(u.Reason, strings.Repeat("x", 300)) {
+				t.Fatalf("the reason must say the path was too long, never repeat the clipped path: %q", u.Reason)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("a too-long folder path must be reported unreadable: %v", f.Unreadable)
+	}
+	data, err := json.Marshal(f)
+	if err != nil || len(data) > MaxFrameBytes {
+		t.Fatalf("%d bytes, %v", len(data), err)
+	}
+}
