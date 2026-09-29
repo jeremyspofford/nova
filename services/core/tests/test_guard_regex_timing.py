@@ -27,7 +27,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app import guards
+from app import guards, tools
 
 BUDGET_S = 0.05
 
@@ -223,6 +223,11 @@ def _every_pattern() -> dict[str, re.Pattern[str]]:
     if device is not None:
         found["_device_mention"] = device
     found["_not_run_pattern"] = guards._not_run_pattern(tuple(sorted(guards._machine_read_tools())))
+    # The said-not-done pair (2026-09-29): the written-call pattern over the
+    # WHOLE live registry — the alternation production runs — and the device
+    # anchor over a paired name and its words.
+    found["_written_call_pattern"] = guards._written_call_pattern(tuple(tools.tool_names()))
+    found["_device_anchor"] = guards._device_anchor(("DELL-XPS-8950",))
     return found
 
 
@@ -290,7 +295,8 @@ def test_the_sweep_now_reaches_the_new_capability_pattern():
 
 def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     """Pinned like test_tools_registry/test_eval_corpus (CLAUDE.md's
-    pinned-expectation-suite convention): 162 -> 221, +59. This catches the
+    pinned-expectation-suite convention): 162 -> 221, +59 at the amendment;
+    172 -> 233, +61 since the said-not-done pair (2026-09-29, below). This catches the
     sweep silently losing reach (the count drops below 221) as sharply as it
     catches a change that inflates it for the wrong reason (a NEW id that
     was not really newly reachable, or a regression back to deduping by
@@ -314,12 +320,22 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
           `_DEFERRAL_TOOLS` AND lists `_SET_REMINDER` a second time, so all
           9 classes appear, one of them twice: 1+2+2+2+2+1+2+2+2+1).
       = 59. Update this deliberately, in the same commit as whatever changes
-    guards.py's container shapes, and say in the commit body why it moved."""
+    guards.py's container shapes, and say in the commit body why it moved.
+
+    The said-not-done pair (2026-09-29) moved all three, deliberately:
+      10  new BARE module Patterns (`_EXAMPLE_INTRO`, `_ACTION_CLAIM`,
+          `_FIRST_PERSON_ACTION`, `_HEAD_ACTION`, `_APP_OBJECT`,
+          `_ANCHOR_BREAK`, `_SERVING_SUBJECT`, `_ACTION_NEGATION`,
+          `_ACTION_HEDGE`, `_ACTION_INTENT`). Both walks reach a bare
+          module Pattern, so the fossil grows too: 162 -> 172, 221 -> 231.
+       2  per-name builders added to the live walk only (the fossil is not
+          evolved): `_written_call_pattern`, `_device_anchor`. 231 -> 233, and
+          the difference 59 -> 61."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 162, len(old)
-    assert len(new) == 221, len(new)
-    assert len(new) - len(old) == 59
+    assert len(old) == 172, len(old)
+    assert len(new) == 233, len(new)
+    assert len(new) - len(old) == 61
 
 
 def _sweep_inputs(n: int) -> dict[str, str]:
@@ -362,6 +378,16 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         # times it. The padding sits after the HEAD, where the model number
         # and every boundary alternative walk the whitespace.
         "qr_object_then_spaces": "qr code for my phone" + pad + "x",
+        # The said-not-done pair (2026-09-29): padding after a tool's name
+        # (the spaces before a quote or a bracket), inside an opened call,
+        # after a copula, after her own action verb, inside a device anchor,
+        # and before an example's word.
+        "tool_name_then_spaces": "device_run" + pad + "x",
+        "tool_call_then_spaces": "device_run(" + pad + "x",
+        "copula_then_spaces": "Notepad is" + pad + "x",
+        "first_person_then_spaces": "I have" + pad + "x",
+        "anchor_then_spaces": "on your" + pad + "x",
+        "example_then_spaces": "for" + pad + "x",
     }
 
 
@@ -433,3 +459,59 @@ def test_the_sweep_reaches_the_in_use_and_line_patterns():
         "_machine_patterns[1]",
     ):
         assert name in swept, name
+
+
+def test_the_sweep_walks_the_said_not_done_legs():
+    """The pair's patterns only get past their first token on inputs that
+    reach it — a tool's name, an open call, a copula, her own verb, an anchor
+    — so the sweep carries padding after each, at both widths."""
+    swept = _every_pattern()
+    for name in ("_written_call_pattern", "_device_anchor", "_ACTION_CLAIM", "_APP_OBJECT"):
+        assert name in swept, name
+    for inputs in (SWEEP_INPUTS, LONG_SWEEP_INPUTS):
+        for lead in ("device_run", "device_run(", "Notepad is", "I have", "on your"):
+            assert any(re.match(re.escape(lead) + r"\s{100,}", text) for text in inputs.values())
+
+
+# The WHOLE guards, not one pattern each: a reply is read line by line and
+# clause by clause, and every cut is found once per line or clause, so 50 KB of
+# the worst shapes each guard reads stays inside 100 ms — guards run in core's
+# only event loop (one took 15.4 s on an honest reply).
+WHOLE_GUARD_BUDGET_S = 0.1
+_NAMES = tools.tool_names()
+
+
+def _fifty_kb(unit: str) -> str:
+    return (unit * (50_000 // len(unit) + 1))[:50_000]
+
+
+FIFTY_KB = [
+    ("written_names_and_spaces", _fifty_kb("device_run " + " " * 40)),
+    ("written_names_then_quotes", _fifty_kb('device_info "x" ')),
+    ("written_names_glued", _fifty_kb("device_rundevice_info")),
+    ("written_open_parens", _fifty_kb("device_run(" + " " * 30)),
+    ("written_fences", _fifty_kb('```\ndevice_launch_app "DELL" "Teams"\n```\n')),
+    ("written_one_padded_line", "device_info" + " " * 50_000 + '"x"'),
+    ("written_quotes", _fifty_kb('"device_run" ')),
+    ("written_examples", _fifty_kb('for example device_run(["ls"]) ')),
+    ("claims", _fifty_kb("Notepad is now open on your DELL-XPS-8950 ")),
+    ("copulas", _fifty_kb("it is now now now ")),
+    ("first_person", _fifty_kb("I opened ")),
+    ("padded_copula", "Notepad is" + " " * 50_000 + "open on your Dell"),
+    ("padded_anchor", "Notepad is now open" + " " * 50_000 + "on your Dell"),
+    ("no_sentence_breaks", _fifty_kb("I have just opened and started and ran ")),
+    ("anchors", _fifty_kb("on your Dell to the PC ")),
+    ("capitalised_run", "I opened " + "A" * 50_000),
+    ("prose", _fifty_kb("The quick brown fox jumps over the lazy dog. ")),
+    ("stars", _fifty_kb("**DELL-XPS-8950** ")),
+]
+
+
+@pytest.mark.parametrize("label,reply", FIFTY_KB, ids=[c[0] for c in FIFTY_KB])
+def test_the_said_not_done_guards_read_50_kb_in_100_ms(label, reply):
+    for check in (
+        lambda: guards.written_call_check(reply, [], _NAMES),
+        lambda: guards.device_completion_check(reply, [], _NAMES, ["DELL-XPS-8950"]),
+    ):
+        took = _best_of(check)
+        assert took < WHOLE_GUARD_BUDGET_S, f"{label}: {took * 1000:.1f} ms"
