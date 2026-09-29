@@ -1305,3 +1305,65 @@ async def test_a_device_whose_platform_is_unknown_cannot_have_a_path_checked(poo
         "device_read_file", {"device": "old-box", "path": "/etc/hosts"}, _ctx(person)
     )
     assert ok is False and "cannot: platform unknown" in result
+
+
+# -- device_launch_app says what the agent said, and no more -------------------
+#
+# The owner's test, 2026-09-28 23:56 (turn fe7e3198): the Windows agent hands a
+# launch to explorer.exe, which proves only that the shell ACCEPTED the
+# request, and it answered "asked Windows to launch brave". Core threw those
+# words away and wrote "Launched brave on DELL-XPS-8950.", and she told him
+# "Brave is now running". He saw no Brave. The result is now the agent's own
+# outcome words — every OS's, never a sentence core writes per OS — and says
+# what no agent's apps.launch result carries: whether a window opened.
+
+
+async def _launch_answered_with(
+    pool, output: str, *, platform: str = "windows", name: str = "DELL-XPS-8950"
+) -> str:
+    device_id, device, conn, task = await _connect(pool, name=name, platform=platform)
+    person = await _person(pool)
+
+    async def answer():
+        frame = await asyncio.wait_for(conn.next_sent(), 2)
+        assert frame["envelope"]["capability"] == "apps.launch"
+        conn.feed(device.result(frame["envelope"], ok=True, output=output, exit_code=0))
+
+    ans = asyncio.create_task(answer())
+    result, ok = await tools.dispatch(
+        "device_launch_app", {"device": name, "app": "brave"}, _ctx(person)
+    )
+    await asyncio.wait_for(ans, 2)
+    await _close(conn, task)
+    assert ok is True
+    return result
+
+
+async def test_a_windows_hand_off_is_reported_as_the_request_it_was(pool):
+    result = await _launch_answered_with(pool, "asked Windows to launch brave")
+    assert result == (
+        "DELL-XPS-8950: asked Windows to launch brave — whether a window opened is not confirmed."
+    )
+    assert "Launched" not in result
+
+
+async def test_every_os_keeps_its_own_words(pool):
+    """Linux's gtk-launch and macOS's `open -a` say "launched <app>"; the
+    Windows PATH fallback names the program it started. Core renders each as
+    the agent put it."""
+    for platform, said in (
+        ("linux", "launched brave-browser"),
+        ("darwin", "launched Brave Browser"),
+        ("windows", "launched C:\\Program Files\\BraveSoftware\\brave.exe"),
+    ):
+        name = f"box-{platform}"
+        result = await _launch_answered_with(pool, said, platform=platform, name=name)
+        assert result == f"{name}: {said} — whether a window opened is not confirmed.", platform
+
+
+async def test_an_agent_that_says_nothing_is_not_quoted_as_having_launched_it(pool):
+    result = await _launch_answered_with(pool, "   ")
+    assert result == (
+        "DELL-XPS-8950: answered ok to launching brave and said nothing more — whether a "
+        "window opened is not confirmed."
+    )
