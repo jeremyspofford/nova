@@ -276,7 +276,12 @@ func TestAStagedFileWhoseHashDoesNotMatchIsNotSwapped(t *testing.T) {
 func TestTheBackoffResetsAfterAStableRun(t *testing.T) {
 	r := newRig(t, step{exit: 1}, step{exit: 1})
 	cfg := r.config()
-	cfg.StableAfter = time.Nanosecond // every run counts as stable
+	// Each read of this clock is a minute after the last, so every run
+	// measures a full StableAfter (the default minute) — never 0, which a
+	// coarse OS clock (a Windows tick) can measure for a fast run.
+	start := time.Now()
+	var reads atomic.Int64
+	cfg.Now = func() time.Time { return start.Add(time.Duration(reads.Add(1)) * time.Minute) }
 	runUntil(t, cfg, func() bool { return len(r.sp.spawned()) == 3 })
 	r.mu.Lock()
 	defer r.mu.Unlock()
