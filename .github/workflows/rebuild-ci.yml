@@ -69,6 +69,9 @@ jobs:
       - run: shellcheck -S warning -s sh deploy/backup/restore.sh deploy/tailscale/start.sh deploy/tailscale/serve_check.sh
       - run: ./deploy/install_test.sh
       - run: ./deploy/backup_test.sh
+      - run: bash -n deploy/agent_version.sh && bash -n deploy/agent_version_test.sh
+      - run: shellcheck -S warning deploy/agent_version.sh deploy/agent_version_test.sh
+      - run: ./deploy/agent_version_test.sh
       # A REAL bash 3.2 parser, on Linux, needing no macOS runner. S41's
       # portability rule (map-portability.md §6) is otherwise enforced by code
       # review alone, and one bash-4-ism already slipped into the tree
@@ -210,17 +213,18 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           set -eu
+          # The version is 12 hex of the apps/novad TREE (S42b P2) — the same
+          # value deploy/agent_version.sh and agent-dist stamp, so the hub's
+          # build and CI's build of one tree are byte-identical.
+          V=$(git rev-parse HEAD:apps/novad | cut -c1-12)
           for pass in a b; do
             export GOCACHE="/tmp/gocache-$pass"
             mkdir -p "/tmp/novad-$pass"
             for t in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
               os=${t%/*}; arch=${t#*/}; ext=""
               if [ "$os" = windows ]; then ext=".exe"; fi
-              # 12 hex chars of the commit, no "ci-" prefix: Task 21's local
-              # build reproduces this exact stamp, so CI and a local build of
-              # the same commit must land on the same sha256, byte for byte.
               GOOS=$os GOARCH=$arch go build -trimpath -buildvcs=false \
-                -ldflags "-s -w -buildid= -X main.version=${GITHUB_SHA::12}" \
+                -ldflags "-s -w -buildid= -X main.version=$V" \
                 -o "/tmp/novad-$pass/novad-$os-$arch$ext" .
             done
           done

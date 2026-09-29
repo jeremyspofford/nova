@@ -27,19 +27,19 @@ the owner's only Mac is his work device, so Nova is never installed on it.
 
 ## Build
 
-The reproducible command — the same flags CI uses, so a hash you compute
-locally matches CI's and a downloaded binary's:
+The reproducible command, run from the repo root — the same flags CI uses,
+so a hash you compute locally matches CI's and a downloaded binary's:
 
 ```sh
 CGO_ENABLED=0 GOOS=<os> GOARCH=<arch> go build -trimpath -buildvcs=false \
-  -ldflags "-s -w -buildid= -X main.version=$(git rev-parse --short=12 HEAD)" -o novad[.exe] .
+  -ldflags "-s -w -buildid= -X main.version=$(bash deploy/agent_version.sh)" -o novad[.exe] .
 ```
 
 `<os>`/`<arch>` is one of the six targets above; give `-o novad.exe` on
-Windows. The version stamp is always 12 hex characters of the commit — CI
-stamps the identical value from `${GITHUB_SHA::12}` — so a build of the same
-commit lands on the same sha256 byte for byte, which is what a downloaded
-binary's card (S42b) verifies against.
+Windows. The version stamp is 12 hex characters of the **`apps/novad` tree**
+— CI, the hub's `agent-dist` and this command stamp the same value — so one
+tree builds one sha256, byte for byte, wherever it is built. A change
+outside `apps/novad` does not change the agent's version.
 
 **Anything installed on a machine is built from `~/workspace/nova` on
 `main`**, never from a worktree.
