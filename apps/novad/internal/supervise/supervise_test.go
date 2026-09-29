@@ -566,3 +566,57 @@ func TestAStagedBuildBesideAnOlderPrevIsNotConfirmed(t *testing.T) {
 		t.Fatalf(".prev = %q", got)
 	}
 }
+
+// A Windows sign-out ends the agent first, and the detached supervisor gets no
+// signal. A supervisor torn down inside the grace after its agent's exit never
+// reverts: the build stays staged for the next start to confirm.
+func TestASupervisorTornDownInsideTheExitGraceNeverReverts(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{exit: 1})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cfg := r.config()
+	var graced atomic.Bool
+	cfg.Sleep = func(ctx context.Context, d time.Duration) error {
+		if d == exitGrace {
+			graced.Store(true)
+			cancel() // torn down while it waits
+		}
+		return ctx.Err()
+	}
+	Run(ctx, cfg)
+	if !graced.Load() || !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("the agent's exit was not given its grace (graced %v, ctx %v)", graced.Load(), ctx.Err())
+	}
+	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+		t.Fatalf("a supervisor torn down inside the grace recorded %+v", u)
+	}
+	if got := read(t, r.bin); got != "new" {
+		t.Fatalf("installed build = %q: a supervisor torn down inside the grace reverted", got)
+	}
+}
+
+// A build whose status says it connected is never reported as exiting
+// "before it connected" (here it connected as another version).
+func TestABuildThatConnectedAndThenExitedIsNotSaidToHaveExitedBeforeItConnected(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{ready: "bbbbbbbbbbbb", exit: 2})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 3 })
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || strings.Contains(u.Reason, "before it connected") ||
+		!strings.Contains(u.Reason, "exited with 2 after it connected as bbbbbbbbbbbb") {
+		t.Fatalf("update = %+v", u)
+	}
+}
+
+// ...nor, when it never exits, as one that "did not connect".
+func TestABuildThatConnectedAsAnotherVersionIsNotSaidNotToHaveConnected(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{ready: "bbbbbbbbbbbb", block: true})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 3 })
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || strings.Contains(u.Reason, "did not connect") ||
+		!strings.Contains(u.Reason, "connected as bbbbbbbbbbbb, not aaaaaaaaaaaa") {
+		t.Fatalf("update = %+v", u)
+	}
+}

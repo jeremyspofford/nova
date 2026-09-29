@@ -106,6 +106,14 @@ type sup struct {
 	childPID int
 }
 
+// exitGrace is how long an agent's exit inside the confirm window waits
+// before it counts as a failed build. A supervisor torn down with its agent
+// ends inside it and so never reverts a build that was fine. On Windows a
+// sign-out ends the session's processes, the agent perhaps first, with no
+// signal to a detached supervisor. Elsewhere a service stop's SIGTERM to
+// the whole group can land after the agent has already exited.
+const exitGrace = 2 * time.Second
+
 type readyOutcome int
 
 const (
@@ -221,35 +229,62 @@ func (s *sup) loop(ctx context.Context) int {
 
 // awaitReady waits for the new agent to write "ready" as version (its own
 // pid, since it started), to exit, or for the bound — whichever is first.
-// A stop is never a failed build: an exit seen once ctx has ended is the
-// stop (a service manager ends the whole group at once) and returns
-// readyStopped with the code it consumed.
+// A stop is never a failed build: an exit seen once ctx has ended — or
+// before exitGrace has passed — is the stop, and returns readyStopped with
+// the code it consumed.
 func (s *sup) awaitReady(ctx context.Context, pid int, exited <-chan int, version string, started time.Time) (readyOutcome, *int, string) {
 	path := filepath.Join(s.cfg.StateDir, state.AgentStatusFile)
 	deadline := s.cfg.Now().Add(s.cfg.ConfirmWithin)
+	connectedAs := "" // the version this agent's status said it connected as
 	for {
 		var st state.AgentStatus
-		if state.ReadJSON(path, &st) == nil && st.PID == pid && st.State == state.StateReady &&
-			st.Version == version && !st.Since.Before(started.Add(-time.Second)) {
-			return readyOK, nil, ""
+		if state.ReadJSON(path, &st) == nil && st.PID == pid && st.State == state.StateReady {
+			if st.Version == version && !st.Since.Before(started.Add(-time.Second)) {
+				return readyOK, nil, ""
+			}
+			connectedAs = st.Version
 		}
 		select {
 		case code := <-exited:
-			if ctx.Err() != nil {
+			if ctx.Err() != nil || s.cfg.Sleep(ctx, exitGrace) != nil || ctx.Err() != nil {
 				return readyStopped, &code, ""
 			}
-			return readyFailed, &code, fmt.Sprintf("the new build exited with %d before it connected%s", code, lastError(path, pid))
+			return readyFailed, &code, s.failure(path, pid, version, &code, connectedAs)
 		case <-ctx.Done():
 			return readyStopped, nil, ""
 		default:
 		}
 		if !s.cfg.Now().Before(deadline) {
-			return readyFailed, nil, fmt.Sprintf("the new build did not connect within %s%s", s.cfg.ConfirmWithin, lastError(path, pid))
+			return readyFailed, nil, s.failure(path, pid, version, nil, connectedAs)
 		}
 		if s.cfg.Sleep(ctx, s.cfg.PollEvery) != nil {
 			return readyStopped, nil, ""
 		}
 	}
+}
+
+// failure says why a new build was not confirmed — its exit (code), else
+// the bound — from the last status its agent wrote. It never says "before
+// it connected" or "did not connect" of a build whose status said it had
+// connected, under another version (connectedAs, from an earlier read, or
+// this one).
+func (s *sup) failure(path string, pid int, version string, code *int, connectedAs string) string {
+	var st state.AgentStatus
+	if state.ReadJSON(path, &st) == nil && st.PID == pid && st.State == state.StateReady {
+		connectedAs = st.Version
+	}
+	var reason string
+	switch {
+	case code != nil && connectedAs != "":
+		reason = fmt.Sprintf("the new build exited with %d after it connected as %s", *code, connectedAs)
+	case code != nil:
+		reason = fmt.Sprintf("the new build exited with %d before it connected", *code)
+	case connectedAs != "":
+		reason = fmt.Sprintf("the new build connected as %s, not %s", connectedAs, version)
+	default:
+		reason = fmt.Sprintf("the new build did not connect within %s", s.cfg.ConfirmWithin)
+	}
+	return reason + lastError(path, pid)
 }
 
 // unconfirmed is the version a swap put in place that no supervisor
