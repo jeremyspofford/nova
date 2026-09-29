@@ -673,9 +673,8 @@ describe('ProvidersSection — the Kev preset and decision-model servers', () =>
   })
 
   it('a decision-model server\'s listing summary never invites a chat "Use", even when a listing loads', async () => {
-    // Controller ruling F13: the summary line's "press Use" suffix is gated
-    // on adapter !== 'systemone', independent of whether any listing ever
-    // succeeds for one — a decision server has nothing chat can use.
+    // The summary's "press Use" suffix never appears for a decision-model
+    // server, even once its listing loads; it has nothing chat can use.
     const kev = provider({ name: 'dell-kev', adapter: 'systemone', base_url: 'http://100.122.40.93:8009/v1', auth_shape: 'none', api_key: null, local: true, preset: 'kev' })
     renderSection({
       getProviders: vi.fn(async () => [HUB, kev]),
@@ -691,5 +690,50 @@ describe('ProvidersSection — the Kev preset and decision-model servers', () =>
     await waitFor(() => expect(panel.textContent).toContain('1 models from dell-kev'))
     expect(panel.textContent).not.toContain('press Use')
     expect(within(panel).queryByRole('button', { name: /use/i })).toBeNull()
+  })
+
+  it('switching Protocol to systemone downgrades an Azure-shaped auth to a bearer key', async () => {
+    renderSection({ getProviders: vi.fn(async () => [HUB]) })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: '__custom__' } })
+    fireEvent.change(within(form).getByLabelText('Auth'), { target: { value: 'api-key-header' } })
+    expect((within(form).getByLabelText('Auth') as HTMLSelectElement).value).toBe('api-key-header')
+
+    fireEvent.change(within(form).getByLabelText('Protocol'), { target: { value: 'systemone' } })
+    // Switch back to a protocol where the Azure-shaped option is valid again:
+    // if the downgrade really rewrote the draft (rather than merely hiding an
+    // option the select fell off of), the stale api-key-header choice does
+    // not reappear.
+    fireEvent.change(within(form).getByLabelText('Protocol'), { target: { value: 'openai-chat' } })
+
+    expect((within(form).getByLabelText('Auth') as HTMLSelectElement).value).toBe('static-bearer')
+  })
+
+  it('the Auth select drops the Azure-shaped option for a decision-model server', async () => {
+    renderSection({ getProviders: vi.fn(async () => [HUB]) })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: '__custom__' } })
+    fireEvent.change(within(form).getByLabelText('Protocol'), { target: { value: 'systemone' } })
+
+    const authOptions = Array.from(
+      (within(form).getByLabelText('Auth') as HTMLSelectElement).options,
+    ).map(o => o.value)
+    expect(authOptions).not.toContain('api-key-header')
+    expect(authOptions).toEqual(['static-bearer', 'none'])
+  })
+
+  it('the local badge shows only for a non-builtin local provider', async () => {
+    renderSection({
+      getProviders: vi.fn(async () => [HUB, provider({ local: true })]),
+    })
+    await waitFor(() => expect(screen.getByTestId('provider-openrouter')).toBeTruthy())
+    // hub is local too (the bundled engine), but builtin — no badge to state
+    // what is already true of every builtin row.
+    expect(screen.getByTestId('provider-hub').textContent).not.toContain('local')
+    expect(screen.getByTestId('provider-openrouter').textContent).toContain('local')
   })
 })
