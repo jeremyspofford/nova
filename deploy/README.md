@@ -133,12 +133,17 @@ still decides, and every guard still judges what she writes.
   Router. On, the role's first cloud link becomes `openrouter:typesafe/jev-router`,
   which picks a model and reasoning effort per request, balancing quality, speed and
   cost — you pay for the model it picks. Off puts the link it replaced back. Local links
-  stay first: when chat's own pick is a cloud model, the switch puts Jev Router in its
-  place, and switching off puts the pick back. A role that shares chat's cloud pick, or
-  has no chain of its own, is switched on chat. With no chain and no chat model, chat
-  answers with the gateway's default model, and switching Jev Router on asks you to pick
-  a chat model or give chat a chain first. The model it picked is on the round's
-  `llm_call` span as `upstream_model`.
+  keep their places: when chat's own pick is a cloud model, the switch puts Jev Router in
+  its place, and switching off puts the pick back. Scheduled tasks send chat's pick first
+  too, so while that pick is a cloud model their switch is chat's: use chat's switch, or,
+  when Jev Router is the pick because you chose it in chat, pick another model there. A
+  role with no chain of its own walks chat's chain, and its switch reads it there; to
+  switch it by itself, give it a chain of its own — an agent's role always needs one for
+  that, because its turns send no chat model. Switching a role off can empty its own
+  chain; it then walks chat's chain again, and the switch says so when Jev Router is on
+  there. With no chain and no chat model, chat answers with the gateway's default model,
+  and switching Jev Router on asks you to pick a chat model or give chat a chain first.
+  The model it picked is on the round's `llm_call` span as `upstream_model`.
 
 ## Tailnet access
 
