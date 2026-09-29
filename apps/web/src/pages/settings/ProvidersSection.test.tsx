@@ -623,6 +623,43 @@ describe('ProvidersSection — the Kev preset and decision-model servers', () =>
     })
   })
 
+  it('offers "Runs on my own machine" for a custom provider and the kev preset, never an https preset', async () => {
+    // Ticked on an internet provider, its calls would go unpriced and uncapped.
+    const KEV: ProviderPreset = {
+      name: 'kev',
+      label: 'Kev decision-model server (your own machine)',
+      adapter: 'systemone',
+      base_url: 'http://{host}:8009/v1',
+      auth_shape: 'none',
+      local: true,
+      placeholders: ['host'],
+    }
+    const { api } = renderSection({
+      getProviders: vi.fn(async () => [HUB]),
+      getProviderPresets: vi.fn(async () => [...PRESETS, KEV]),
+    })
+    await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /add a provider/i }))
+    const form = screen.getByTestId('provider-form')
+    const tick = () => within(form).queryByLabelText(/Runs on my own machine/) as HTMLInputElement | null
+
+    // The form opens on the first preset: OpenRouter, at https://.
+    expect((within(form).getByLabelText('Preset') as HTMLSelectElement).value).toBe('openrouter')
+    expect(tick()).toBeNull()
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: 'kev' } })
+    expect(tick()?.checked).toBe(true)
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: '__custom__' } })
+    expect(tick()?.checked).toBe(false)
+    fireEvent.click(tick()!)
+    fireEvent.change(within(form).getByLabelText('Preset'), { target: { value: 'openrouter' } })
+    expect(tick()).toBeNull()
+    fireEvent.change(within(form).getByLabelText('API key'), { target: { value: 'sk-1' } })
+    fireEvent.submit(form)
+
+    await waitFor(() => expect(api.createProvider).toHaveBeenCalledTimes(1))
+    expect(api.createProvider.mock.calls[0][0]).toEqual(expect.objectContaining({ name: 'openrouter', local: false }))
+  })
+
   it('a custom provider is local only when the owner ticks it', async () => {
     const { api } = renderSection({ getProviders: vi.fn(async () => [HUB]) })
     await waitFor(() => expect(screen.getByRole('button', { name: /add a provider/i })).toBeTruthy())

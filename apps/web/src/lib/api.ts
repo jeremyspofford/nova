@@ -627,15 +627,18 @@ export type RouteProtocol = 'chat' | 'systemone'
 
 /** The Jev Router switch on a role (decision-role spec §4). `on` is DERIVED by
  * the gateway from the chain a turn actually walks — chat.model first, where
- * core passes it, then the stored chain — true only when the FIRST CLOUD
- * link there is a Jev Router link; one elsewhere in the chain, behind an
- * earlier cloud link, reads off (`[hub, gpt-x, jev-router]` is off). `kept`
- * is the cloud link the switch replaced ('' when it replaced none and was
- * added after the local links) — null when off, and also null while on: for
- * a role that walks chat's chain (the kept link, if any, is chat's, never
- * shown here), for a kept link recorded for a slot the router no longer
- * holds, and for a router link added by hand in the chain editor, which
- * records no kept link at all. Null where the switch is not offered. */
+ * core passes it, then the stored chain (chat's, for a role with none of its
+ * own) — true only when the FIRST CLOUD link there is a Jev Router link; one
+ * elsewhere in the chain, behind an earlier cloud link, reads off
+ * (`[hub, gpt-x, jev-router]` is off). `kept` is the cloud link the switch
+ * replaced ('' when it replaced none and the router went after the local
+ * links). It shows only while the switch is on, and only when it was kept
+ * for the slot the router now holds (the chat model, or the stored chain) —
+ * the gateway's routing.router_state. That is every null: off; a router
+ * typed in the chain editor, or Jev Router picked by hand as chat.model,
+ * which kept nothing; a kept link recorded for a slot the router no longer
+ * holds; a role that walks chat's chain, whose router is chat's. The whole
+ * field is null where the switch is not offered. */
 export interface RouteRouter {
   on: boolean
   kept: string | null

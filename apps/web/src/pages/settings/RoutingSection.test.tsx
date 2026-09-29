@@ -615,8 +615,9 @@ describe('RoutingSection', () => {
         explainRoute,
       },
       // A no-op onChatModelChanged: the parent never re-renders with a new
-      // chatModel, so the click's OWN reload is the only reload there is —
-      // isolating fix 1's override from the two-reloads race it also fixes.
+      // chatModel, so the click's OWN reload is the only reload there is.
+      // This checks the reload's override (the answer's own chat_model) on
+      // its own, apart from the race between two reloads it also settles.
       { onChatModelChanged: () => {} },
     )
     await waitFor(() => expect(screen.getByTestId('route-chat-router')).toBeTruthy())

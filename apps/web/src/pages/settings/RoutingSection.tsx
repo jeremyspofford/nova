@@ -194,8 +194,8 @@ export function RoutingSection({
   // sequence number, and only the newest one may set state. `loadPromise`
   // carries this further: a CALLER awaiting `load(...)` (onRouter, onSave)
   // must not resolve, and so must not clear its own busy/message state,
-  // until the load that actually wrote has — never a superseded one that
-  // wrote nothing part way through.
+  // until the newest load has landed — never on a superseded one, whatever
+  // it wrote before a newer load started.
   const loadSeq = useRef(0)
   const loadPromise = useRef<Promise<void> | null>(null)
 
@@ -244,8 +244,10 @@ export function RoutingSection({
       } catch (err) {
         if (seq === loadSeq.current) setError(reasonOf(err))
       }
-      // This call wrote nothing (it was superseded before either checkpoint
-      // above) exactly when `seq` is no longer the latest — a caller
+      // `seq` is no longer the latest exactly when a newer load has started
+      // since this one — before, between or after the two checkpoints above,
+      // so this call may have written all of its reads, some, or none.
+      // Either way it is not the load a caller is waiting for: a caller
       // awaiting THIS promise actually wants to know when the load that
       // superseded it, or whatever has superseded THAT one by now in turn,
       // has landed. `seq === loadSeq.current` is what tells this call it IS

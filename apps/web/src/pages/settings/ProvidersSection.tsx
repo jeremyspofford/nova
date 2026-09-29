@@ -198,6 +198,16 @@ export function ProvidersSection({
   const unfilled = (selectedPreset?.placeholders ?? []).filter(
     key => !draft.placeholders[key]?.trim(),
   )
+  // "Runs on my own machine" makes every call on the provider free: never
+  // priced, never capped. Read off the preset, never a list kept here. A
+  // custom provider may be anywhere, and a preset that says it is local is
+  // there, so both offer it. A preset at an https:// address is a service on
+  // the internet (every one shipped is), so it does not: ticked there, its
+  // calls would go unpriced and uncapped.
+  const offersLocal =
+    draft.preset === CUSTOM ||
+    selectedPreset?.local === true ||
+    !/^https:\/\//i.test(selectedPreset?.base_url ?? '')
 
   const save = async () => {
     setSaving(true)
@@ -208,7 +218,9 @@ export function ProvidersSection({
         adapter: draft.adapter,
         base_url: effectiveBaseUrl.trim(),
         auth_shape: draft.auth_shape,
-        local: draft.local,
+        // What is sent is what the form shows: a provider the tick is not
+        // offered on is never local.
+        local: offersLocal && draft.local,
         api_key: draft.auth_shape === 'none' ? undefined : draft.api_key,
         preset: selectedPreset?.name,
         model_note: selectedPreset?.model_note,
@@ -437,12 +449,14 @@ export function ProvidersSection({
               ].filter(item => draft.adapter !== 'systemone' || item.value !== 'api-key-header')}
             />
           )}
-          <Checkbox
-            label="Runs on my own machine"
-            description="Free: its calls are never priced and never count against a spend cap."
-            checked={draft.local}
-            onChange={checked => setDraft(d => ({ ...d, local: checked }))}
-          />
+          {offersLocal && (
+            <Checkbox
+              label="Runs on my own machine"
+              description="Free: its calls are never priced and never count against a spend cap."
+              checked={draft.local}
+              onChange={checked => setDraft(d => ({ ...d, local: checked }))}
+            />
+          )}
           {draft.auth_shape !== 'none' && (
             <Input
               label="API key"
