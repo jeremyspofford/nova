@@ -23,7 +23,10 @@ through the SAME loop as chat (walk_role) — walls, fallback, X-Nova-Route
 that serves no typed questions — its endpoint has no /systemone (a 404 or
 405 there), or it answered 200 with a body that is not a JSON object — is
 passed over for the request in its own words and never walled: it is
-neither an account refusal nor an outage.
+neither an account refusal nor an outage. A link whose kind the owner
+switched off in Settings (decision-role spec §6; X-Nova-Decision-Kinds names
+the kinds core allows, and no header allows every kind) is passed over
+before it is dialled, in words, and never walled either.
 """
 
 from __future__ import annotations
@@ -49,6 +52,9 @@ SERVED_BY_HEADER = "X-Nova-Served-By"
 SERVED_ON_HEADER = "X-Nova-Served-On"
 SERVED_RUNTIME_HEADER = "X-Nova-Served-Runtime"
 ROUTE_HEADER = "X-Nova-Route"
+# The decision-model kinds a decision call allows, comma-separated
+# (routing.allowed_kinds): core states the owner's two switches on every call.
+KINDS_HEADER = "X-Nova-Decision-Kinds"
 # ollama's /api/ps is local and answers in milliseconds; bounded so a wedged
 # engine costs the stamp (omitted), never the reply (S40 ruling C2: 2 s).
 STAMP_TIMEOUT = httpx.Timeout(2.0)
@@ -138,6 +144,7 @@ async def walk_role(
     requested: str | None,
     attribution,
     serve: Callable[[routing.Decision], Awaitable[Response]],
+    kinds: frozenset[str] | None = None,
 ) -> Response:
     """Walk the role's chain (app/routing.py) and serve from the first link
     that can — the ONE loop both data-plane routes use, so walls and fallback
@@ -147,7 +154,9 @@ async def walk_role(
     is tried in this same request — the reply then states the fallback (rail
     20). A link PASSED OVER (PassedOver: an engine that could not be REACHED,
     D21, or a link that serves no typed questions) is recorded and the next
-    link tried the same way, but it is never walled."""
+    link tried the same way, but it is never walled. A link whose kind is not
+    among `kinds` is never chosen at all (routing.resolve judges it
+    `kind_off`), so it is neither dialled nor walled."""
     from app import admin  # the fit context and probe query /admin/suggest uses
 
     skip: set[str] = set()
@@ -172,6 +181,7 @@ async def walk_role(
                 latest_probes=admin._latest_probes,
                 skip=skip,
                 unreachable=passed,
+                kinds=kinds,
             )
         except routing.NothingRunnable as exc:
             raise HTTPException(status_code=503, detail=_nothing_runnable(exc)) from exc
@@ -381,7 +391,9 @@ async def systemone_decide(request: Request) -> Response:
     unchanged but for `model`, which becomes the winning link's own id, to
     `{base_url}/systemone` with that provider's key. Only the decisions role
     is served here, whatever the header says: the endpoint decides the
-    protocol."""
+    protocol. X-Nova-Decision-Kinds (KINDS_HEADER) names the kinds of
+    decision model the owner allows; a link of another kind — the requested
+    model included — is passed over, and no header allows every kind."""
     try:
         body = await request.json()
     except Exception as exc:
@@ -404,6 +416,12 @@ async def systemone_decide(request: Request) -> Response:
             detail=f"POST /v1/systemone serves the {routing.DECISIONS_ROLE} role — "
             f"X-Nova-Role named {attribution.role!r}",
         )
+    try:
+        kinds = routing.allowed_kinds(
+            routing.DECISIONS_ROLE, request.headers.get(KINDS_HEADER), KINDS_HEADER
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Metered under the role even when the caller sent no header.
     attribution = replace(attribution, role=routing.DECISIONS_ROLE)
     requested = body["model"] if isinstance(body.get("model"), str) and body["model"] else None
@@ -420,7 +438,9 @@ async def systemone_decide(request: Request) -> Response:
             route=decision.as_route(),
         )
 
-    return await walk_role(request, pool, routing.DECISIONS_ROLE, requested, attribution, serve)
+    return await walk_role(
+        request, pool, routing.DECISIONS_ROLE, requested, attribution, serve, kinds=kinds
+    )
 
 
 # ── where a reply ran (D10) ────────────────────────────────────────────────
