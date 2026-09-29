@@ -485,3 +485,68 @@ configuration measures nothing new. The remaining trials wait until the Dell's
 settings are read — by the owner's decision of 2026-09-25, through Nova's agent
 (`s46/design-basis.md` §9), not by hand.
 
+## Measured 2026-09-28
+
+### agent-dist on the N150
+
+**Measured.** `docker run --rm golang:1.27.1 go version` → `go1.27.1
+linux/amd64`.
+
+**Step 1, the image pin.** `docker buildx imagetools inspect golang:1.27.1`
+resolves to one manifest digest:
+
+```
+sha256:3680233e3204827fbdc66088528ae6d4b3d034f51d03a99d454f6de034888244
+```
+
+Task 25 pins `golang:1.27.1@<that digest>`.
+
+**Step 2, cold/warm build vs CI.** `origin/main` was `9724e203004d` (full
+40-char sha `9724e203004d9fadd02446ecd588137d57365268`) at measurement time.
+That commit's `rebuild-ci` run reported an overall conclusion of
+**failure** — from unrelated jobs (`web`, `services (core)`,
+`backup-macos`) — but its `novad` job, which builds and uploads the
+comparison artifact, **passed**, so that commit's artifact was used as-is;
+no newer main commit was needed. The same tree was cross-compiled to all
+six targets (`linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`,
+`windows/amd64`, `windows/arm64`) inside the pinned image, stamped
+`-X main.version=9724e203004d` to match CI exactly:
+
+| Pass | Wall time |
+|---|---|
+| Cold (`GOCACHE`/`GOMODCACHE` emptied first) | 88 s |
+| Warm | 2 s |
+
+All six `sha256sum`s matched CI's `novad-9724e203004d9fadd02446ecd588137d57365268`
+artifact, file for file: **IDENTICAL** (the hashes themselves are not
+recorded here — this file is public).
+
+**Branches.** `IDENTICAL` → D13 holds on the N150 too (previously checked
+only for one target, `windows/amd64`, on the Dell — `s42b/design-inputs.md`).
+Task 25 proceeds as written. The cold pass was 88 s, well under the
+10-minute threshold, so Task 27's `./install` prints no "building Nova's
+agent for six systems…" line for this tree on this machine — that message
+only fires past 10 minutes, and the build is keyed by the `apps/novad` tree
+either way.
+
+### The loopback door
+
+**Measured** (mini PC). `docker compose --project-directory deploy logs web`
+was read right after a request on each path, comparing the client address
+`web` recorded against `deploy/.env`:
+
+| Path | HTTP | Access-log client address |
+|---|---|---|
+| `http://127.0.0.1:3000/api/v1/auth/state` (loopback) | 200 | **the gateway** — matches `NOVA_SUBNET_GATEWAY` |
+| `https://nova.<TAILNET>.ts.net/api/v1/auth/state` (tailnet) | 200 | **the sidecar** — matches `NOVA_TAILSCALE_ADDR` |
+
+Both matched exactly. The tailnet line also carries a trailing field with
+the real originating tailnet peer's own address; not recorded here (this
+file redacts tailnet and LAN addresses).
+
+**Branch.** Both readings landed as expected → P15 and Task 17's `door_of`
+run as written on this host: `NOVA_SUBNET_GATEWAY` maps to `"host"`,
+`NOVA_TAILSCALE_ADDR` maps to `"tailnet"`. The stop condition (the loopback
+line showing something else, e.g. bare `127.0.0.1` from the userland proxy
+being off) did not occur here.
+
