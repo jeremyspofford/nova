@@ -1,14 +1,17 @@
 [Unit]
-Description=Nova agent daemon (novad)
+Description=Nova agent (novad)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=%h/.local/bin/novad run
-Restart=always
+# novad install writes this unit with the absolute path; this copy is for a
+# hand install (README). supervise is the parent: it restarts the agent and
+# exits 0 when the agent can never get in (not enrolled, revoked), so
+# on-failure never restarts that. 78 stays named for an agent from before
+# S42b that a unit runs directly.
+ExecStart=%h/.local/bin/novad supervise --mode systemd-user
+Restart=on-failure
 RestartSec=5
-# 78 (EX_CONFIG) = not enrolled, or revoked (wiped, or a wipe that only
-# partly succeeded): restarting cannot help either way.
 RestartPreventExitStatus=78
 
 [Install]

@@ -98,13 +98,25 @@ func TestAfterRunWipesARevokedDeviceAndExits78(t *testing.T) {
 // [Service] — not merely somewhere in the file's bytes, where a comment
 // naming it (novad.service carries one) or a line in the wrong section would
 // pass a bare substring check without the directive doing anything.
+//
+// S42b (Task 8): supervise, not `novad run`, is now the parent ExecStart
+// starts, and P3 moves the restart-suppression itself onto Restart=on-failure
+// (supervise exits 0 — not a systemd "failure" — when the agent can never get
+// in), with RestartPreventExitStatus=78 kept as a second line of defense for
+// an agent from before S42b that a hand-written unit still runs directly. Both
+// new checks stay in this test's own section-aware style — never a bare
+// strings.Contains over the whole file — so the same "wrong section, or just
+// a comment" false pass this test was written to close cannot reopen for
+// them.
 func TestTheServiceUnitDoesNotRestartARevokedDevice(t *testing.T) {
 	body, err := os.ReadFile("novad.service")
 	if err != nil {
 		t.Fatal(err)
 	}
 	section := ""
-	found := false
+	foundPreventExit := false
+	foundExecStartsSupervise := false
+	foundRestartOnFailure := false
 	for _, line := range strings.Split(string(body), "\n") {
 		trimmed := strings.TrimSpace(line)
 		switch {
@@ -113,11 +125,21 @@ func TestTheServiceUnitDoesNotRestartARevokedDevice(t *testing.T) {
 		case trimmed == "" || strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, ";"):
 			// blank or comment: not an active directive
 		case section == "[Service]" && trimmed == "RestartPreventExitStatus=78":
-			found = true
+			foundPreventExit = true
+		case section == "[Service]" && strings.HasPrefix(trimmed, "ExecStart=") && strings.HasSuffix(trimmed, "supervise --mode systemd-user"):
+			foundExecStartsSupervise = true
+		case section == "[Service]" && trimmed == "Restart=on-failure":
+			foundRestartOnFailure = true
 		}
 	}
-	if !found {
+	if !foundPreventExit {
 		t.Fatal("novad.service must carry an ACTIVE RestartPreventExitStatus=78 line inside [Service] (exitConfig) — not merely the text somewhere in the file")
+	}
+	if !foundExecStartsSupervise {
+		t.Errorf("novad.service must carry an ACTIVE ExecStart line inside [Service] that starts supervise --mode systemd-user:\n%s", body)
+	}
+	if !foundRestartOnFailure {
+		t.Errorf("novad.service must carry an ACTIVE Restart=on-failure line inside [Service] — Restart=always would restart a supervisor that stopped for good:\n%s", body)
 	}
 }
 
