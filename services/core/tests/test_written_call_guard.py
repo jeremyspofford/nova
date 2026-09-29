@@ -16,10 +16,20 @@ tool she wrote, and the turn's one redirect asks HER to make the call.
 The rule (guards.written_call_check): the exact name of a tool advertised THIS
 turn, then argument syntax — `(` straight after the name, or after optional
 spaces a `[`/`{`, or after a space a quote or a `--flag`; the bracket forms
-must open onto a value, so a signature `(device, argv)` is not a call — in a
-fence, inline code or prose, and no span of that tool (successful or
-attempted) this turn. Silent on an explanation, a report of a call that ran,
-a question, relayed or quoted text, an example, and a table.
+must open onto a value, so a signature `(device, argv)` is not a call — in
+CODE (a fence or inline code), framed as her action now, and no span of that
+tool (successful or attempted) this turn. Silent on an explanation, a report of
+a call that ran, a question, relayed or quoted text, an example, and a table.
+
+Fix round 2 (2026-09-29, the scoped re-review of 83ae4c99): "her action now" is
+an intent and a verb of DOING ("I'll confirm…", "let me launch…"); "let me
+know / warn you / walk you through", "I'll wait / skip / avoid" are not leads,
+and a gerund opening a sentence is not one either ("Calling `…` returns…")
+except as a fragment above a fence (890b1c63's "Launching Microsoft Teams via
+the Windows desktop environment."). A hedge ("would", any subject), a
+condition ("once you confirm", "if"), waiting for his go-ahead, or a recap
+anywhere in the sentence rules the call out, and a fence is judged with the
+sentence after it ("Shall I go ahead?").
 """
 
 from __future__ import annotations
@@ -84,10 +94,8 @@ def test_the_brave_turn_wrote_no_call():
     [
         'Let me check:\n```\ndevice_info("DELL-XPS-8950")\n```',
         "I'll check now: `device_info('DELL-XPS-8950')`",
-        'Running `device_info(device="DELL-XPS-8950")` now.',
         'Now calling `device_info(device: "DELL-XPS-8950")`.',
         'I\'ll run it:\n```\ndevice_run(["ls", "-la"])\n```',
-        'Launching it: `device_run(argv=["ls"])`',
         'I\'m running `device_run ["ls", "-la"]` on your Dell.',
         'Let me run:\n```\ndevice_run {"device": "DELL-XPS-8950", "argv": ["ls"]}\n```',
         "No problem — I'll run `device_info 'DELL-XPS-8950'`.",
@@ -98,12 +106,173 @@ def test_the_brave_turn_wrote_no_call():
         # A fence with nothing before it IS the answer.
         '```\ndevice_info "DELL-XPS-8950"\n```',
         '```python\nresult = device_run(["ls"])\n```',
+        # fix round 2: a verb of doing after the intent, and what still leads
+        'I\'ll go ahead and run `device_run ["notepad"]` on your Dell.',
+        'Let me first check the OS:\n```\ndevice_info "DELL-XPS-8950"\n```',
+        # "if" after a verb of finding out is "whether" (3dee5106's own intro)
+        'I\'ll confirm if **DELL-XPS-8950** is online:\n```bash\ndevice_info "DELL-XPS-8950"\n```',
+        'Let me verify it (even if it is hidden):\n```\ndevice_run ["tasklist"]\n```',
+        # a gerund FRAGMENT above a fence narrates her action (890b1c63's shape)
+        'Launching **Notepad** on your Dell.\n\n```bash\ndevice_run ["notepad"]\n```',
+        # a question LATER in the paragraph after the fence does not take it back
+        '```\ndevice_info "DELL-XPS-8950"\n```\nChecking now. Want anything else?',
     ],
 )
 def test_a_written_call_framed_as_her_action_now_fires(reply):
     claim = check(reply)
     assert claim is not None, reply
     assert claim.tools[0] in ("device_info", "device_run", "device_list_files")
+
+
+# -- fix round 2 (C2): the second review's shapes, none her action now ----------
+#
+# The re-reviewer's 23 fresh shapes (scratchpad rr2/probe_c2_wc.py), each silent
+# for the cause it names: waiting for his go-ahead, a warning, an explanation.
+
+
+@pytest.mark.parametrize(
+    "label,reply",
+    [
+        (
+            "let-me-know",
+            'Let me know if this looks right:\n```\ndevice_run ["cmd", "/c", "rmdir", "/s", '
+            '"/q", "C:\\\\Temp"]\n```',
+        ),
+        (
+            "wait-for-go-ahead",
+            'I\'ll wait for your go-ahead before running `device_run ["cmd", "/c", "del", "/q", '
+            '"C:\\\\Temp\\\\*"]`.',
+        ),
+        (
+            "once-you-confirm",
+            'Once you confirm, I\'ll run `device_run ["shutdown", "/r", "/t", "0"]`.',
+        ),
+        ("confirm-after", 'I\'ll run `device_run ["shutdown", "/r", "/t", "0"]` once you confirm.'),
+        ("say-the-word", 'Say the word and I\'ll run `device_run ["shutdown", "/r", "/t", "0"]`.'),
+        (
+            "as-soon-as",
+            'I\'ll run `device_run ["shutdown", "/r", "/t", "0"]` as soon as you give the '
+            "go-ahead.",
+        ),
+        (
+            "shall-i-after-the-fence",
+            'To clear the temp folder, I\'ll run this:\n```\ndevice_run ["cmd", "/c", "del", "/q", '
+            '"/s", "C:\\\\Temp\\\\*"]\n```\nShall I go ahead?',
+        ),
+        (
+            "hold-off",
+            'I\'m going to hold off on `device_run ["format", "C:", "/q"]` until you confirm.',
+        ),
+        ("would-wipe", 'Running `device_run ["format", "C:", "/q"]` would wipe your disk.'),
+        (
+            "let-me-warn",
+            'Let me warn you: `device_run ["format", "C:", "/q"]` wipes the whole disk.',
+        ),
+        (
+            "caution-then-never",
+            'Now, a word of caution:\n```\ndevice_run ["format", "C:", "/q"]\n```\nNever run this.',
+        ),
+        (
+            "stop-you",
+            'Let me stop you right there — `device_run ["format", "C:", "/q"]` would erase '
+            "your disk.",
+        ),
+        ("skip", 'I\'ll skip `device_run ["format", "C:", "/q"]` — it is too risky.'),
+        ("refrain", 'I\'ll refrain from calling `device_run ["format", "C:", "/q"]`.'),
+        ("avoid", 'I\'ll avoid `device_run ["format", "C:", "/q"]` here.'),
+        ("calling-returns", 'Calling `device_info "DELL-XPS-8950"` returns the OS and hardware.'),
+        (
+            "break-down",
+            'Let me break down the command: `device_run ["cmd", "/c", "del", "/s", "/q", '
+            '"C:\\\\Temp\\\\*"]` deletes every file in Temp.',
+        ),
+        (
+            "walk-through",
+            'Let me walk you through it:\n```\ndevice_run ["cmd", "/c", "rmdir", "/s", "/q", '
+            '"C:\\\\Temp"]\n```\nThis removes the folder.',
+        ),
+        (
+            "clarify",
+            'Let me clarify what this does:\n```\ndevice_run ["cmd", "/c", "rmdir", "/s", "/q", '
+            '"C:\\\\Temp"]\n```',
+        ),
+        (
+            "should-have-run",
+            'Now, the call that should have run is `device_launch_app "DELL-XPS-8950" "Teams"`.',
+        ),
+        (
+            "another-way",
+            'Let me put it another way: `device_run ["shutdown", "/r"]` restarts the machine.',
+        ),
+        (
+            "opening-needs",
+            'Opening `device_launch_app "DELL-XPS-8950" "Notepad"` needs the agent online.',
+        ),
+        (
+            "paste-for-reference",
+            "Here is the exact call, for your reference. I'll paste it:\n```\n"
+            'device_launch_app "DELL-XPS-8950" "Teams"\n```',
+        ),
+    ],
+)
+def test_the_second_reviews_shapes_are_never_calls(label, reply):
+    assert check(reply) is None, label
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        # round 1 read these as leads; a gerund opening a sentence is not one
+        'Running `device_info(device="DELL-XPS-8950")` now.',
+        'Launching it: `device_run(argv=["ls"])`',
+        'Checking `device_info "DELL-XPS-8950"` is how you read the OS.',
+        # a gerund above a fence with a verb of its own is the subject of it
+        'Calling it returns the OS:\n```\ndevice_info "DELL-XPS-8950"\n```',
+        'Running this wipes the disk:\n```\ndevice_run ["format", "C:"]\n```',
+    ],
+)
+def test_a_gerund_is_not_her_lead(reply):
+    assert check(reply) is None, reply
+
+
+@pytest.mark.parametrize(
+    "after",
+    [
+        "Shall I run it?",
+        "Never run this on a live machine.",
+        "Do not run this yet.",
+        "This would erase the drive.",
+        "If you want, I can run it for you.",
+        "Let me know when you're ready.",
+    ],
+)
+def test_a_fence_is_judged_with_the_sentence_after_it(after):
+    """(C2) The first sentence after a fence can take it back: the same intro
+    fires with nothing after it, and is silent with each of these."""
+    fence = 'I\'ll run it:\n```\ndevice_run ["format", "C:"]\n```'
+    assert check(fence) is not None
+    assert check(f"{fence}\n{after}") is None, after
+    assert check(f"{fence}\n\n---\n\n{after}") is None, after
+
+
+def test_the_teams_turns_fence_is_hers_by_its_gerund_fragment_and_its_follow():
+    """890b1c63: the fence's intro is the gerund fragment "Launching Microsoft
+    Teams via the Windows desktop environment." and the sentence after it is
+    "Teams is now opening…" — not a question. Its question comes two
+    sentences later and takes nothing back."""
+    claim = check(T890B1C63)
+    assert claim is not None and claim.fenced == (True,)
+    assert claim.where == "a code block"
+
+
+def test_where_says_fence_inline_or_both():
+    fenced = check('```\ndevice_info "DELL-XPS-8950"\n```')
+    inline = check("I'll check now: `device_info('DELL-XPS-8950')`")
+    both = check("I'll check now: `device_info('DELL-XPS-8950')`\n```\ndevice_run [\"ls\"]\n```")
+    assert fenced is not None and fenced.where == "a code block"
+    assert inline is not None and inline.where == "inline code"
+    assert both is not None and both.tools == ("device_info", "device_run")
+    assert both.where == "code"
 
 
 def test_the_longest_name_is_the_one_written():

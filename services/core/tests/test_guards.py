@@ -3710,3 +3710,38 @@ def test_the_claim_names_what_it_matched_for_the_span():
     claim = guards.stack_claim_check("The gateway is down.", SERVED, purpose="chat")
     assert claim.subject
     assert "down" in claim.phrase
+
+
+# -- one binding per name, module-wide -------------------------------------------
+#
+# The guards build patterns from shared fragments (_PRESENT_COPULA, _STATE_ADVERB,
+# …) at import and at call time, and a function reads a module name when it
+# RUNS. So a second top-level binding of a name silently replaces the first for
+# every reader, earlier in the file or later: said-not-done fix round 2 bound
+# `_PRESENT_COPULA` again as a frozenset, and the state guard, the observation
+# guard and the memory-outage guard stopped firing without an error. This is the
+# line that refuses the next one.
+
+
+def test_no_name_is_bound_twice_at_the_top_of_guards_or_chat():
+    import ast
+    from pathlib import Path
+
+    for module in (guards, chat):
+        tree = ast.parse(Path(module.__file__).read_text())
+        seen: dict[str, int] = {}
+        twice: list[str] = []
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names = [node.name]
+            elif isinstance(node, ast.Assign):
+                names = [target.id for target in node.targets if isinstance(target, ast.Name)]
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names = [node.target.id]
+            else:
+                names = []
+            for name in names:
+                if name in seen:
+                    twice.append(f"{name} (lines {seen[name]} and {node.lineno})")
+                seen[name] = node.lineno
+        assert not twice, f"{module.__name__}: bound twice: {twice}"

@@ -340,11 +340,19 @@ def test_the_sweep_count_grew_by_exactly_the_newly_reachable_patterns():
     `_STARTUP`, `_MD_LINK`, `_NOW_AFTER`, `_THEN_A_VERB`, `_RELAYED_THAT`,
     `_CONTRACTION`, and `_BY_ANOTHER` (the same object as `_BY_OTHER` under a
     second name, which this walk counts as its own id by design): 172 -> 188,
-    233 -> 249, the difference still 61."""
+    233 -> 249, the difference still 61.
+
+    Its fix round 2 (2026-09-29) moved them again, deliberately, and not the
+    difference: 9 new BARE module Patterns, reached by both walks — the
+    written-call framings `_WRITTEN_CALL_CONDITION`, `_WHETHER_VERB`,
+    `_WRITTEN_CALL_APPROVAL` and `_GERUND_START`, and the device-completion
+    cuts `_ACTION_CONDITION`, `_FRONTED_CONDITION`, `_CHANGE_MARK`,
+    `_OTHER_CAUSE` and `_NO_ANSWER` — less 1, `_BY_ANOTHER`, which
+    `_OTHER_CAUSE` replaced: 188 -> 196, 249 -> 257."""
     old = _pre_s42a_amendment_pattern_sweep()
     new = _every_pattern()
-    assert len(old) == 188, len(old)
-    assert len(new) == 249, len(new)
+    assert len(old) == 196, len(old)
+    assert len(new) == 257, len(new)
     assert len(new) - len(old) == 61
 
 
@@ -406,6 +414,17 @@ def _sweep_inputs(n: int) -> dict[str, str]:
         "link_then_spaces": "[" + half + "](" + half + "x",
         "relayed_then_spaces": "reports" + pad + "that",
         "subject_then_spaces": "Notepad" + pad + "opened",
+        # fix round 2: an intent walking to its verb of doing, a condition, a
+        # "whether" verb before an "if", waiting for the go-ahead, a numbered
+        # gerund, "the moment", and a refusal walking to its "answer".
+        "intent_then_spaces": "I'll" + pad + "run",
+        "let_me_then_spaces": "let me" + pad + "check",
+        "condition_then_spaces": "as" + pad + "soon",
+        "whether_then_spaces": "check" + pad,
+        "approval_then_spaces": "say" + pad + "the",
+        "numbered_gerund": "1." + pad + "Launching",
+        "moment_then_spaces": "the" + pad + "moment",
+        "refusal_then_spaces": "did" + pad + "not",
     }
 
 
@@ -484,10 +503,30 @@ def test_the_sweep_walks_the_said_not_done_legs():
     reach it — a tool's name, an open call, a copula, her own verb, an anchor
     — so the sweep carries padding after each, at both widths."""
     swept = _every_pattern()
-    for name in ("_written_call_pattern", "_device_anchor", "_ACTION_CLAIM", "_APP_OBJECT"):
+    for name in (
+        "_written_call_pattern",
+        "_device_anchor",
+        "_ACTION_CLAIM",
+        "_APP_OBJECT",
+        "_WRITTEN_CALL_LEAD",
+        "_WRITTEN_CALL_CONDITION",
+        "_ACTION_CONDITION",
+        "_NO_ANSWER",
+    ):
         assert name in swept, name
     for inputs in (SWEEP_INPUTS, LONG_SWEEP_INPUTS):
-        for lead in ("device_run", "device_run(", "Notepad is", "I have", "on your"):
+        for lead in (
+            "device_run",
+            "device_run(",
+            "Notepad is",
+            "I have",
+            "on your",
+            "I'll",
+            "let me",
+            "as",
+            "1.",
+            "did",
+        ):
             assert any(re.match(re.escape(lead) + r"\s{100,}", text) for text in inputs.values())
 
 
@@ -532,6 +571,36 @@ FIFTY_KB = [
     ("links", _fifty_kb("[DELL-XPS-8950](https://x.invalid/d) ")),
     ("negated_calls", _fifty_kb('I did not run `device_run ["x"]` and ')),
     ("dots", "." * 50_000),
+    # fix round 2's paths. The reviewer's shape first (minor: 41 KB took 13.8 s):
+    # one long intro line, then fence after fence, each re-reading it.
+    ("one_long_intro_many_fences", "I'll check " + "a" * 20_000 + ":\n" + "```\n```\n" * 7_500),
+    (
+        "one_long_intro_fenced_calls",
+        "I'll check " + "b " * 10_000 + ":\n" + _fifty_kb('```\ndevice_info "x"\n```\n')[:30_000],
+    ),
+    ("intros_and_fences", _fifty_kb('I\'ll check it now:\n```\ndevice_info "x"\n```\n')),
+    ("gerund_intros", _fifty_kb('Launching it via the shell.\n```\ndevice_run ["x"]\n```\n')),
+    (
+        "distinct_ruled_out_intros",
+        "".join(
+            f'I\'ll run this once you confirm {i}:\n```\ndevice_run ["x"]\n```\n'
+            for i in range(1_300)
+        )[:50_000],
+    ),
+    (
+        "distinct_intros_and_follows",
+        "".join(
+            f'Launching item {i} via the shell.\n```\ndevice_run ["x"]\n```\nShall I {i}?\n'
+            for i in range(900)
+        )[:50_000],
+    ),
+    ("one_long_follow", '```\ndevice_info "x"\n```\n' + "Shall " + "d " * 25_000 + "?"),
+    ("ifs", 'I\'ll run `device_info "x"` ' + "if " * 16_600),
+    ("whether_ifs", 'I\'ll run `device_info "x"` ' + "check if " * 5_550),
+    ("lead_adverbs", "I'll " + "now just first " * 3_300 + 'run `device_info "x"`'),
+    ("conditioned_claims", _fifty_kb("Notepad is now open on your DELL-XPS-8950 when ")),
+    ("fronted_conditions", "When " * 10_000 + "Notepad is now open on your DELL-XPS-8950"),
+    ("platform_words", _fifty_kb("Notepad is now open on your Windows PC and on your Mac ")),
 ]
 
 
@@ -543,6 +612,29 @@ def test_the_said_not_done_guards_read_50_kb_in_100_ms(label, reply):
     ):
         took = _best_of(check)
         assert took < WHOLE_GUARD_BUDGET_S, f"{label}: {took * 1000:.1f} ms"
+
+
+def test_a_huge_command_record_is_read_in_100_ms():
+    """(fix round 2, C1) device_completion reads a device_run's argv to tell a
+    launch from a read. A record is bounded where it is written (chat's span
+    caps), but the reading must not depend on that: 50 KB of argv, as a list
+    and as one string, is read in 100 ms."""
+    from types import SimpleNamespace
+
+    for argv in (["x"] * 25_000, ["cmd", "/c", "start " + "x " * 25_000], ["a" * 50_000]):
+        spans = [
+            SimpleNamespace(
+                kind="tool",
+                name="device_run",
+                meta={"ok": True, "args_redacted": {"argv": argv, "device": "DELL-XPS-8950"}},
+            )
+        ]
+        took = _best_of(
+            lambda spans=spans: guards.device_completion_check(
+                "Notepad is now open on your DELL-XPS-8950.", spans, _NAMES, ["DELL-XPS-8950"]
+            )
+        )
+        assert took < WHOLE_GUARD_BUDGET_S, f"{len(argv)} argv words: {took * 1000:.1f} ms"
 
 
 # -- _sentences() is linear (said-not-done fix round 1, M2) --------------------

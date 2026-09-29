@@ -426,130 +426,56 @@ BARE_INTENT_HONEST_NOTE = "[I said I'd check but did not — ask again and I'll 
 # whole guard family (tests/test_chat_said_not_done.py) — a correction that
 # tripped a guard would be corrected forever.
 #
-# The live notes shipped ahead of a regeneration that STOOD. "Making that
-# call now" / "Doing that now" only when the redirect really ran the action
-# (fix round 1, C1: an action span she made, of the claimed family — never a
-# read); otherwise the note says it answered again (C14's rule).
+# Fix round 2 (2026-09-29): a false positive must cost ONE SENTENCE, never an
+# action the owner did not ask for. So nothing here asks for one: the
+# written-call nudge states facts and invites nothing (R-B), no correction
+# offers to do anything, and a device claim has no redirect at all — its
+# correction is its own record (guards.DeviceCompletionClaim.sentence, R-A).
+#
+# The live notes shipped ahead of a written-call regeneration that STOOD:
+# "Making that call now" only when the redirect really made a call to a tool
+# she wrote (fix round 1, C1); otherwise that the written call did not run —
+# true whether she then made another call, said plainly she had not, or kept
+# her reply as it was (C14's rule).
 WRITTEN_CALL_REDIRECT_NOTE = "Making that call now instead of writing it out."
-WRITTEN_CALL_REDIRECT_NOTE_NO_CALL = "Answering again, without the call written as text."
-DEVICE_COMPLETION_REDIRECT_NOTE = "Doing that now instead of saying it was done."
-DEVICE_COMPLETION_REDIRECT_NOTE_NO_CALL = "Answering again, without the claim that it was done."
+WRITTEN_CALL_REDIRECT_NOTE_NO_CALL = "Answering again — the call written as text did not run."
 
 
-def _calls_to(names: Sequence[str]) -> str:
-    return f"a call to {names[0]}" if len(names) == 1 else f"calls to {_names(names)}"
+def _written_sentence(names: Sequence[str]) -> str:
+    """ "I wrote device_launch_app as text; it did not run." — what the record
+    shows about calls she wrote and never made, and nothing more: no offer to
+    make them (fix round 2, R-B)."""
+    they = "it" if len(names) == 1 else "they"
+    return f"I wrote {_names(names)} as text; {they} did not run."
 
 
-def _on_device(claim: guards.DeviceCompletionClaim) -> str:
-    """ " on DELL-XPS-8950" when she named one of her devices; nothing for "your
-    PC", which names none in particular."""
-    return f" on {claim.device}" if claim.device and not claim.generic else ""
-
-
-def _failure_words(failure: guards.DeviceFailure) -> str:
-    """ "device_launch_app failed on DELL-XPS-8950: <its reason>" — the tool, the
-    device and the reason the span recorded (fix round 1, I1)."""
-    on = f" on {failure.device}" if failure.device else ""
-    return f"{failure.tool} failed{on}: {failure.reason}"
-
-
-def written_call_redirect_nudge(*, names: Sequence[str], ran_a_tool: bool) -> str:
-    """The written-call redirect's nudge: the fact the guard established —
-    she wrote these tools as text, and text never runs a tool — and a clean way
-    out either way (fix round 1, C2): make the call if she meant to run it now,
-    keep the reply if she was explaining, proposing or asking. It never repeats
-    her arguments: the model makes the call from its own schema or keeps its
-    words (markup_calls' ruling — nothing may run what she wrote). Sent only
-    when nothing has run (`_claim_redirect`'s precondition), so it refuses to
-    be built otherwise, like its siblings."""
+def written_call_redirect_nudge(
+    *, names: Sequence[str], where: str = "a code block", ran_a_tool: bool
+) -> str:
+    """The written-call redirect's nudge: the FACTS, and nothing else (fix
+    round 2, R-B) — her reply contains these calls written as text, where, text
+    never runs a tool, and none of them ran. No imperative and no invitation:
+    the model decides from the facts whether it meant to make the call, and a
+    reply it keeps stands (its own regeneration is not re-vetted by the
+    written-call guard). It never repeats her arguments (markup_calls' ruling
+    — nothing may run what she wrote). Sent only when nothing has run
+    (`_claim_redirect`'s precondition), so it refuses to be built otherwise,
+    like its siblings."""
     if ran_a_tool:
         raise ValueError(
             f"the written-call nudge is only sent when nothing has run; ran_a_tool={ran_a_tool}"
         )
-    call = "the call" if len(names) == 1 else "the calls"
+    calls = f"a call to {names[0]}" if len(names) == 1 else f"calls to {_names(names)}"
     return (
-        f"You wrote {_calls_to(names)} as text — text never runs a tool. If you meant to run "
-        f"it now, make {call}; if you were explaining, proposing or asking, keep your reply "
-        "as it is."
-    )
-
-
-def device_completion_redirect_nudge(
-    claim: guards.DeviceCompletionClaim, *, ran_a_tool: bool
-) -> str:
-    """The device-completion redirect's nudge, from what the record shows.
-
-    No call of the family ran: say so, naming the tools that would have done
-    it (true even when a READ ran — fix round 1, C1). One ran and FAILED:
-    state the failure with its reason and ask for the plain truth — never
-    "nothing ran", and never a push to retry (I1). Refuses to be built when
-    anything ran successfully: the redirect never runs then."""
-    if ran_a_tool:
-        raise ValueError(
-            "the device-completion nudge is only sent when nothing has run; "
-            f"ran_a_tool={ran_a_tool}"
-        )
-    if claim.failed is not None:
-        return (
-            f"You said “{claim.phrase}”, but {_failure_words(claim.failed)} — "
-            f"{guards.ACTION_NOT_DONE[claim.kind]}. Say so plainly; do not claim it "
-            f"{guards.ACTION_DONE_WORD[claim.kind]}."
-        )
-    return (
-        f"You said “{claim.phrase}”, but no {' or '.join(claim.tools)} call ran"
-        f"{_on_device(claim)} this turn. Do it now with the tool, or say plainly that you have "
-        "not done it."
+        f"Your reply contains {calls} written as text in {where}. Text never runs a tool, "
+        f"and no {' or '.join(names)} call ran this turn."
     )
 
 
 def _written_call_honest_note(names: Sequence[str]) -> str:
-    """The correction when she wrote calls as text and nothing she said was
-    done by any of them. States only what the record shows."""
-    if len(names) == 1:
-        return (
-            f"Correction: I wrote {names[0]} as text instead of calling it — text never runs a "
-            f"tool, so {names[0]} did not run this turn. Ask me again and I'll make the call."
-        )
-    return (
-        f"Correction: I wrote {_names(names)} as text instead of calling them — text never "
-        "runs a tool, so none of them ran this turn. Ask me again and I'll make the calls."
-    )
-
-
-def _device_completion_honest_note(claim: guards.DeviceCompletionClaim) -> str:
-    """The correction when she said a device action happened and no call that
-    performs it ran. It says what the record shows — none of those calls ran,
-    so she did not do it — and no more: nothing checked whether the app is
-    open either, so it does not say that it is closed. True even when a READ
-    of the device ran (fix round 1, C1)."""
-    return (
-        f"Correction: I said “{claim.phrase}”, but no {' or '.join(claim.tools)} call ran"
-        f"{_on_device(claim)} this turn — I did not do that, and I have not checked whether it "
-        "is so. Ask me again and I'll do it."
-    )
-
-
-def _device_failure_correction(claim: guards.DeviceCompletionClaim) -> str:
-    """The correction when the call that would have done it FAILED (I1): the
-    failure and its reason, never "nothing ran", and no push to retry."""
-    assert claim.failed is not None
-    return (
-        f"Correction: I said “{claim.phrase}”, but {_failure_words(claim.failed)} — "
-        f"{guards.ACTION_NOT_DONE[claim.kind]}."
-    )
-
-
-def _written_and_claimed_correction(
-    names: Sequence[str], claim: guards.DeviceCompletionClaim
-) -> str:
-    """ONE correction for a reply that wrote the call as text AND said it was
-    done (890b1c63): never two that could disagree (I1)."""
-    it = "it" if len(names) == 1 else "them"
-    return (
-        f"Correction: I wrote {_names(names)} as text instead of calling {it} — text never "
-        f"runs a tool, so no {' or '.join(claim.tools)} call ran{_on_device(claim)} this turn "
-        f"and I did not do what I said (“{claim.phrase}”). Ask me again and I'll make the call."
-    )
+    """The correction when she wrote calls as text and none of them ran — set
+    off from her prose, like every said-not-done correction."""
+    return f"({_written_sentence(names)})"
 
 
 def said_not_done_correction(
@@ -562,15 +488,19 @@ def said_not_done_correction(
     claimed: guards.DeviceCompletionClaim | None,
 ) -> str:
     """The turn's ONE correction for the said-not-done pair, derived from the
-    FINAL spans (fix round 1, I1): both claims re-read over `base` (what she
-    said) against what ran by the time it ships.
+    FINAL spans (fix rounds 1 and 2, I1 and R-A): both claims re-read over
+    `base` (what she said) against what ran by the time it ships, set off from
+    her prose in one parenthesis.
 
-      * the call that would have done it FAILED: that failure, with its reason;
-      * she wrote the call and said it was done, and neither happened: one
-        sentence covering both;
-      * one of them still stands: its own correction;
+      * a call she wrote still never ran: "I wrote X as text; it did not run.";
+      * a device claim still stands: what the record shows — none of the calls
+        that perform it ran on that device; one ran for something else; one
+        failed, with its reason; one was sent and never answered
+        (guards.DeviceCompletionClaim.sentence);
+      * both: both sentences, that order, one correction;
       * neither stands any more — a redirect's own call ran — but its report did
-        not survive: what ran, never "nothing ran" (A9's note).
+        not survive: the call that failed, with its reason, or what ran (A9's
+        note), never "nothing ran".
 
     Fail-open: a guard that raises reads as the claim still standing, so the
     correction is never softened by an error."""
@@ -592,21 +522,58 @@ def said_not_done_correction(
     )
     if still == "raised":
         still = claimed
-    if still is not None and still.failed is not None:
-        return _device_failure_correction(still)
-    if written is not None and still is not None:
-        return _written_and_claimed_correction(written.tools, still)
-    if still is not None:
-        return _device_completion_honest_note(still)
-    if written is not None:
-        return _written_call_honest_note(written.tools)
+    sentences = [
+        *([_written_sentence(written.tools)] if written is not None else []),
+        *([still.sentence] if still is not None else []),
+    ]
+    if sentences:
+        return f"({' '.join(sentences)})"
     failure = guards.failed_call(
         spans, [*(wrote.tools if wrote else ()), *(claimed.tools if claimed else ())]
     )
     if failure is not None:
-        return f"Correction: {_failure_words(failure)}."
+        return f"({failure.tool} failed: {failure.reason}.)"
     ran = ", ".join(guards.successful_tool_names(spans)) or "a tool"
     return _bare_intent_ran_but_unreported_note(ran)
+
+
+def _minimal_said_correction(
+    wrote: guards.WrittenCallClaim | None,
+    claimed: guards.DeviceCompletionClaim | None,
+    spans: Sequence[Any],
+    seen: int,
+) -> str:
+    """The correction when the derived one could not be built (fix round 2,
+    minor: it used to fall back to an empty string). Never empty, and never
+    more than the record shows: while nothing has run since the claims were
+    read (`seen` spans), what they found then is still true; once something
+    has, only what ran — or the call that failed, with its reason."""
+    since = list(spans)[seen:]
+    if guards.ran_a_tool(since):
+        ran = ", ".join(guards.successful_tool_names(since)) or "a tool"
+        return _bare_intent_ran_but_unreported_note(ran)
+    failure = guards.failed_call(since, [span.name for span in since if span.kind == "tool"])
+    if failure is not None:
+        return f"({failure.tool} failed: {failure.reason}.)"
+    sentences = [
+        *([_written_sentence(wrote.tools)] if wrote is not None else []),
+        *([claimed.sentence] if claimed is not None else []),
+    ]
+    return f"({' '.join(sentences)})" if sentences else "(Nothing this reply says it did ran.)"
+
+
+def _completion_meta(claim: guards.DeviceCompletionClaim) -> dict:
+    """The facts a device-completion guard span records: what she said, where,
+    and what the record showed instead (fix round 2, R-A)."""
+    return {
+        "detected": True,
+        "phrase": claim.phrase,
+        "device": claim.device,
+        "action": claim.action,
+        "kind": claim.kind,
+        "record": claim.record.case,
+        "record_tool": claim.record.tool,
+    }
 
 
 # How much of a tool call lands in its span. The result head is the
@@ -2412,26 +2379,31 @@ def _queue_ingest(
         span.meta["queued"] = True
 
 
-async def _paired_device_names(pool: asyncpg.Pool) -> list[str]:
-    """Every LIVE paired device's name, from the registry itself.
+async def _paired_device_names(pool: asyncpg.Pool) -> guards.PairedNames:
+    """Every LIVE paired device's name, from the registry itself — a tuple of
+    names to every reader, carrying each one's platform from the same read
+    (guards.PairedNames: the device-completion guard reads "your Mac" and
+    "your PC" by platform, said-not-done fix round 2).
 
     Revoked rows are excluded: a revoked machine is not paired, so a claim about
-    it is not a claim about anything this household has. Returns [] on ANY
+    it is not a claim about anything this household has. Returns no names on ANY
     failure — the state-claim guard never fires without names, so a database
     blip costs a check, never a false correction (precision-first: doubt never
     becomes a correction).
     """
     try:
-        return [
-            device["name"]
-            for device in await devices.list_devices(pool)
-            if not device.get("revoked_at")
-        ]
+        return guards.PairedNames(
+            {
+                device["name"]: device.get("platform") or ""
+                for device in await devices.list_devices(pool)
+                if not device.get("revoked_at")
+            }
+        )
     except Exception:
         logger.exception(
             "device registry read failed; the state-claim guard stays silent this turn"
         )
-        return []
+        return guards.PairedNames({})
 
 
 # The two exemption reads behind _agent_names, as ONE round trip. Each half
@@ -3822,6 +3794,25 @@ def _append_class_claims(text: str, turn: traces.Turn) -> list[tuple[str, object
     return found
 
 
+def _regen_append_claims(
+    text: str, turn: traces.Turn, persona: agents.Persona, device_names: Sequence[str]
+) -> list[tuple[str, object]]:
+    """The APPEND-class claims over a regeneration that STOOD: the served-model
+    and memory-outage claims (S40b, A9), and the device-completion claim
+    (said-not-done fix round 2, R-A) — a device action the regeneration says
+    happened that nothing performed is corrected beside it, from the record,
+    never by throwing the regeneration away. Each fail-open on its own."""
+    found = _append_class_claims(text, turn)
+    try:
+        claim = guards.device_completion_check(text, turn.spans, persona.tool_names, device_names)
+    except Exception:
+        logger.exception("device-completion guard raised; shipping the regeneration uncorrected")
+        claim = None
+    if claim is not None:
+        found.append(("device_completion", claim))
+    return found
+
+
 def _file_claim_span(turn: traces.Turn, name: str, claim) -> None:
     """The guard span each APPEND-class claim files, in one place: the turn
     body and a redirect's regeneration record the same facts."""
@@ -3832,6 +3823,10 @@ def _file_claim_span(turn: traces.Turn, name: str, claim) -> None:
                 claimed=claim.claimed,
                 served=list(claim.served),
                 phrase=claim.phrase,
+            )
+        elif name == "device_completion":
+            span.meta.update(
+                _completion_meta(claim), redirected=False, not_redirected_because="append_class"
             )
         else:
             span.meta.update(
@@ -3850,6 +3845,7 @@ def _regen_rejected_by(
     persona: agents.Persona,
     *,
     agent_names: Sequence[str],
+    exempt: Collection[str] = (),
 ) -> str | None:
     """Which mechanical guard, if any, REFUSES the regenerated reply.
 
@@ -3884,6 +3880,13 @@ def _regen_rejected_by(
     for having been written on the second try. Whose reply it is comes from
     `persona`, so the regeneration is judged by exactly the rule the
     original was.
+
+    `exempt` names the guards that do NOT judge this regeneration: the
+    written-call redirect's own (said-not-done fix round 2, R-B) — its nudge
+    stated the facts and left the choice to her, so a reply she keeps stands.
+    The device-completion guard is not in this set at all: it is APPEND-class
+    (R-A), and `_claim_redirect` corrects a regeneration it fires on beside its
+    prose (`_regen_append_claims`) instead of throwing it away.
     """
     # Read once, exactly as the turn body reads it before its own checks tuple
     # (S47) — a regen that invents an address is judged against the SAME
@@ -3945,19 +3948,13 @@ def _regen_rejected_by(
                 corrected, turn.spans, persona.listing_tools, user_message
             ),
         ),
-        # The said-not-done pair (2026-09-28), in the turn's own order: a
-        # regeneration that writes a call as text, or says a device action
-        # happened that no device span backs, has not done the thing — whichever
-        # claim's redirect produced it.
+        # The written-call guard (2026-09-28), in the turn's own order: a
+        # regeneration that writes one of her tools as text, framed as her call
+        # now, has not made it — whichever other claim's redirect produced it.
+        # (Its device sibling is APPEND-class: see `_regen_append_claims`.)
         (
             "written_call",
             lambda: guards.written_call_check(corrected, turn.spans, persona.tool_names),
-        ),
-        (
-            "device_completion",
-            lambda: guards.device_completion_check(
-                corrected, turn.spans, persona.tool_names, device_names
-            ),
         ),
         (
             "deferral",
@@ -3968,6 +3965,8 @@ def _regen_rejected_by(
         ("bare_intent", lambda: guards.bare_intent_check(corrected, turn.spans)),
     )
     for name, check in checks:
+        if name in exempt:
+            continue
         try:
             if check() is not None:
                 return name
@@ -3976,19 +3975,37 @@ def _regen_rejected_by(
     return None
 
 
+# What a correction says when neither the derived one nor its fallback could be
+# built: true whenever it is reached, and never empty.
+UNCHECKED_CORRECTION = "(This reply could not be checked against the turn's record.)"
+
+
 def _derived_correction(
-    correction_for: Callable[[], str] | None, fallback: str, claim_kind: str
+    correction_for: Callable[[], str] | None,
+    fallback: str | Callable[[], str],
+    claim_kind: str,
 ) -> str:
     """The correction a redirect ships, derived from the final spans when it
-    can be (said-not-done fix round 1, I1). Fail-open to the one computed
-    before the redirect: an error never softens a correction."""
+    can be (said-not-done fix round 1, I1). Fail-open to `fallback` — the one
+    computed before the redirect, or (fix round 2) a builder of the minimal
+    correction the record supports: an error never softens a correction, and
+    never empties one."""
+
+    def fall_back() -> str:
+        try:
+            text = fallback() if callable(fallback) else fallback
+        except Exception:
+            logger.exception("%s fallback correction could not be built", claim_kind)
+            text = ""
+        return text or UNCHECKED_CORRECTION
+
     if correction_for is None:
-        return fallback
+        return fall_back()
     try:
-        return correction_for()
+        return correction_for() or fall_back()
     except Exception:
-        logger.exception("%s correction could not be derived; shipping the first one", claim_kind)
-        return fallback
+        logger.exception("%s correction could not be derived; shipping the fallback", claim_kind)
+        return fall_back()
 
 
 def _did_it(did_the_work: Callable[[], bool], claim_kind: str) -> bool:
@@ -4034,6 +4051,7 @@ async def _claim_redirect(
     still_unbacked: Callable[[], bool] | None = None,
     correction_for: Callable[[], str] | None = None,
     did_the_work: Callable[[], bool] | None = None,
+    exempt_from_vetting: Collection[str] = (),
     out_of_rounds: bool,
     messages: Sequence[dict],
     advertised: Sequence[dict],
@@ -4070,6 +4088,12 @@ async def _claim_redirect(
     note: "doing it now" is said only when it reports that the redirect really
     did the claimed action (C1: a read in the redirect is not the action), and
     `redirect_note_no_call` is sent otherwise.
+
+    `exempt_from_vetting` (said-not-done fix round 2, R-B) names the guards
+    that do not judge this regeneration — the written-call redirect's own: its
+    nudge stated the facts and left the choice to her, so a reply she keeps
+    stands. Every other guard still vets it, and the APPEND-class ones still
+    correct it beside its prose (`_regen_append_claims`).
 
     Outcomes, all recorded on the turn's single guard span:
 
@@ -4242,6 +4266,7 @@ async def _claim_redirect(
                 user_message,
                 persona,
                 agent_names=agent_names,
+                exempt=exempt_from_vetting,
             )
             if corrected
             else None
@@ -4262,7 +4287,7 @@ async def _claim_redirect(
         # It stands. An APPEND-class claim in it is corrected beside it, exactly
         # as over an original reply (A9): the reading this redirect took is not
         # thrown away over a side line, and the record carries both.
-        appended = _append_class_claims(corrected, turn)
+        appended = _regen_append_claims(corrected, turn, persona, device_names)
         span.meta["redirected"] = True
         if appended:
             span.meta["regen_appended"] = [name for name, _ in appended]
@@ -4288,12 +4313,10 @@ async def _said_not_done_redirect(
     turn: traces.Turn,
     model: str,
     *,
-    claim_kind: str,
     span_meta: dict,
     correction_for: Callable[[], str],
+    fallback: Callable[[], str],
     nudge_for: Callable[[bool], str],
-    redirect_note: str,
-    redirect_note_no_call: str,
     did_the_work: Callable[[], bool],
     blocked_by: str | None,
     out_of_rounds: bool,
@@ -4307,16 +4330,24 @@ async def _said_not_done_redirect(
     persona: agents.Persona,
     subset: Collection[str] | None,
 ) -> _ClaimRedirect:
-    """The said-not-done pair's ONE claim on the turn's redirect budget
-    (written_call, else device_completion) through the EXISTING machinery — or,
-    when the turn's rules say no redirect may run (`blocked_by`: a hard guard
-    already corrected the reply, or the budget is spent), its ONE span, stating
-    why, and the turn's one correction. Nothing here reads her text for a
-    call: `_claim_redirect` advertises tools and the MODEL makes the call. The
-    correction is derived from the final spans (`correction_for`, I1)."""
+    """The written-call claim's ONE turn on the redirect budget (fix round 2,
+    R-B), through the EXISTING machinery — or, when the turn's rules say no
+    redirect may run (`blocked_by`: a hard guard already corrected the reply,
+    or the budget is spent), its ONE span, stating why, and the turn's one
+    correction. Nothing here reads her text for a call: `_claim_redirect`
+    advertises tools and the MODEL makes the call — or not; its regeneration is
+    not re-vetted by the written-call guard, so a reply she keeps stands. The
+    correction is derived from the final spans (`correction_for`, I1) and falls
+    back to the minimal one the record supports (`fallback`), never to an
+    empty one. The device-completion claim has no redirect (R-A)."""
+
+    def derived() -> str:
+        # Read when it ships, so the fallback too is what is true THEN.
+        return _derived_correction(correction_for, fallback, "written_call")
+
     if blocked_by is not None:
-        text = _derived_correction(correction_for, "", claim_kind)
-        with turn.span("guard", claim_kind) as span:
+        text = derived()
+        with turn.span("guard", "written_call") as span:
             span.meta.update(span_meta, redirected=False, not_redirected_because=blocked_by)
         emit(_frame({"correction": text}))
         return _ClaimRedirect(text, False, False)
@@ -4324,14 +4355,15 @@ async def _said_not_done_redirect(
         app,
         turn,
         model,
-        claim_kind=claim_kind,
-        correction_text=_derived_correction(correction_for, "", claim_kind),
+        claim_kind="written_call",
+        correction_text=derived(),
         span_meta=span_meta,
         nudge_for=nudge_for,
-        redirect_note=redirect_note,
-        redirect_note_no_call=redirect_note_no_call,
-        correction_for=correction_for,
+        redirect_note=WRITTEN_CALL_REDIRECT_NOTE,
+        redirect_note_no_call=WRITTEN_CALL_REDIRECT_NOTE_NO_CALL,
+        correction_for=derived,
         did_the_work=did_the_work,
+        exempt_from_vetting=("written_call",),
         out_of_rounds=out_of_rounds,
         messages=messages,
         advertised=advertised,
@@ -5645,39 +5677,53 @@ async def _run_turn(
         # The SAID-NOT-DONE pair (the owner's test, 2026-09-28): a call to one of
         # her own tools written as text (guards.written_call_check), and a claim
         # that an action happened on a device with nothing run to do it
-        # (guards.device_completion_check). Read on what persisted, like the
-        # deferral guard below.
+        # (guards.device_completion_check). Read on HER prose where it persists
+        # — not on the corrections other guards appended after it (`said_base`,
+        # below).
         #
-        # WHERE THEY SIT on the turn's one redirect budget, and why:
-        #   * consent, state, presented_listing (above) first. REPLACE-class: each
-        #     drops the prose whole, so each settles before anything reads the
-        #     prose, and when its redirect STANDS these two are skipped — its
-        #     regeneration was vetted by them already (_regen_rejected_by).
-        #   * written_call, then device_completion (here) — ahead of every
-        #     deferral shape and bare_intent. A call she WROTE is the most
-        #     specific broken promise there is: it names the exact tool, so its
-        #     redirect (tools advertised, through _claim_redirect) can make that
-        #     very call, where the commitment shape's redirect is text-only and
-        #     can make none. written_call goes first because the call it asks for
-        #     also settles a device claim beside it ("Teams is now opening"). The
-        #     handback claim (fix/handback-guard) sits after these two.
-        #   * deferral (commitment, offer, completion), then bare_intent (below):
-        #     they read what these left, so a regeneration that stood is judged
-        #     clean by them too.
+        # Fix round 2 (2026-09-29): a false positive must cost ONE SENTENCE,
+        # never an action the owner did not ask for.
+        #   * The DEVICE claim is APPEND-class (R-A): no redirect, no tools, no
+        #     push. It files its one span and appends the one correction its
+        #     record supports (guards.DeviceCompletionClaim.sentence), and the
+        #     turn stays out of memory. It takes nothing from the redirect
+        #     budget, and, like the other APPEND-class claims, it holds off the
+        #     two redirects that re-run no guard (the text-only commitment and
+        #     responsiveness ones, below).
+        #   * The WRITTEN call keeps ONE redirect with tools advertised (R-B),
+        #     through _claim_redirect: its nudge states the facts and invites
+        #     nothing, and its regeneration is vetted by every guard but its own
+        #     — a reply she keeps stands (kept out of memory while it still
+        #     writes a call it never made). It sits where it did on the budget:
+        #     after consent, state and presented_listing (REPLACE-class; when
+        #     one of their redirects STANDS these two are skipped, its
+        #     regeneration was vetted by them already), ahead of every deferral
+        #     shape and bare_intent. The handback claim (fix/handback-guard)
+        #     sits after it.
+        #   * A reply with BOTH ships ONE correction for the two (I1), derived
+        #     from the FINAL spans (said_not_done_correction) whenever the
+        #     redirect does not stand: a reply that wrote the call and said it
+        #     was done is one lie, told twice. A redirect that stands replaces
+        #     the prose, and its own claims are corrected beside it.
         #
-        # The pair takes ONE redirect between them, and the turn ships ONE
-        # correction for both (fix round 1, I1), derived from the FINAL spans
-        # (said_not_done_correction): a reply that wrote the call and said it was
-        # done is one lie, told twice. Like the offer/completion/bare-intent
-        # redirects, the redirect yields to a hard guard that already corrected
-        # the reply and to a spent budget — and even then each claim files its
-        # ONE span, saying why, the correction is APPENDED (the prose around a
-        # written call can be real content: 3dee5106's manual steps), and the turn
-        # stays out of memory (plumbing_turn below).
-        said_base = persisted
+        # Like the offer/completion/bare-intent redirects, the written-call
+        # redirect yields to a hard guard that already corrected the reply and
+        # to a spent budget — and even then the claim files its ONE span, saying
+        # why, the correction is APPENDED (the prose around a written call can
+        # be real content: 3dee5106's manual steps), and the turn stays out of
+        # memory (plumbing_turn below).
+        #
+        # What SHE wrote, when her prose is what persists: never the backend's
+        # corrections appended after it (narration's, the served-model note…),
+        # which the fence rule would otherwise read as the sentence after her
+        # fence (fix round 2). When a REPLACE-class correction dropped her prose,
+        # the corrections are all there is, and they are pinned clean.
+        said_base = persisted if prose_dropped else text
         written_call = None
         device_completion = None
         said_redirected = False
+        said_kept: tuple[str, ...] = ()
+        said_seen = len(turn.spans)
         if not (consent_redirected or state_redirected or listing_redirected):
             try:
                 written_call = guards.written_call_check(said_base, turn.spans, persona.tool_names)
@@ -5693,11 +5739,6 @@ async def _run_turn(
                 device_completion = None
         if written_call is not None or device_completion is not None:
             wrote, claimed = written_call, device_completion
-            blocked = (
-                "mechanical_guard_fired"
-                if mechanical_guard_fired
-                else ("redirect_spent" if redirect_spent else None)
-            )
 
             def _said_correction() -> str:
                 return said_not_done_correction(
@@ -5709,88 +5750,106 @@ async def _run_turn(
                     claimed=claimed,
                 )
 
-            claimed_meta = (
-                {
-                    "detected": True,
-                    "phrase": claimed.phrase,
-                    "device": claimed.device,
-                    "action": claimed.kind,
-                    "failed": claimed.failed.tool if claimed.failed else None,
-                }
-                if claimed is not None
-                else {}
-            )
+            def _said_minimal() -> str:
+                return _minimal_said_correction(wrote, claimed, turn.spans, said_seen)
 
-            def nudge_for(ran: bool) -> str:
-                if wrote is not None:
-                    return written_call_redirect_nudge(names=wrote.tools, ran_a_tool=ran)
-                return device_completion_redirect_nudge(claimed, ran_a_tool=ran)
-
-            def did_the_work() -> bool:
-                """Did the redirect really do what she said? Her successful call
-                of a tool she wrote; or the claim she made backed now — a call
-                that performs it, on that device, succeeded (C1)."""
-                if wrote is not None:
-                    return guards.ran_her_call(turn.spans, wrote.tools)
-                again = guards.device_completion_check(
-                    said_base, turn.spans, persona.tool_names, device_names
+            if wrote is None:
+                # The device claim alone: APPEND-class (R-A). No redirect, no
+                # tools, no push — the record, stated once.
+                said = _derived_correction(_said_correction, _said_minimal, "device_completion")
+                with turn.span("guard", "device_completion") as span:
+                    span.meta.update(
+                        _completion_meta(claimed),
+                        redirected=False,
+                        not_redirected_because="append_class",
+                    )
+                emit(_frame({"correction": said}))
+                persisted = f"{persisted}\n\n{said}"
+            else:
+                blocked = (
+                    "mechanical_guard_fired"
+                    if mechanical_guard_fired
+                    else ("redirect_spent" if redirect_spent else None)
                 )
-                return again is None or again.phrase != claimed.phrase
-
-            if wrote is not None:
-                primary = "written_call"
-                span_meta = {"detected": True, "tools": list(wrote.tools), "phrase": wrote.phrase}
-                notes = (WRITTEN_CALL_REDIRECT_NOTE, WRITTEN_CALL_REDIRECT_NOTE_NO_CALL)
-            else:
-                primary = "device_completion"
-                span_meta = claimed_meta
-                notes = (DEVICE_COMPLETION_REDIRECT_NOTE, DEVICE_COMPLETION_REDIRECT_NOTE_NO_CALL)
-
-            outcome = await _said_not_done_redirect(
-                app,
-                turn,
-                model,
-                claim_kind=primary,
-                span_meta=span_meta,
-                correction_for=_said_correction,
-                nudge_for=nudge_for,
-                redirect_note=notes[0],
-                redirect_note_no_call=notes[1],
-                did_the_work=did_the_work,
-                blocked_by=blocked,
-                out_of_rounds=out_of_rounds,
-                messages=messages,
-                advertised=advertised,
-                tool_ctx=tool_ctx,
-                device_names=device_names,
-                agent_names=agent_names,
-                user_message=message,
-                emit=emit,
-                persona=persona,
-                subset=subset,
-            )
-            said_redirected = outcome.redirected
-            redirect_appended += outcome.appended
-            read_ephemeral = read_ephemeral or outcome.read_ephemeral
-            if said_redirected:
-                persisted = outcome.text
-            else:
-                persisted = f"{persisted}\n\n{outcome.text}"
-                if wrote is not None and claimed is not None:
-                    # The completion claim beside the written call: its ONE span,
-                    # and no second correction — the one that shipped covers it.
-                    with turn.span("guard", "device_completion") as span:
-                        span.meta.update(
-                            claimed_meta,
-                            redirected=False,
-                            not_redirected_because=blocked or "redirect_spent",
-                            correction="joined",
+                outcome = await _said_not_done_redirect(
+                    app,
+                    turn,
+                    model,
+                    span_meta={
+                        "detected": True,
+                        "tools": list(wrote.tools),
+                        "phrase": wrote.phrase,
+                        "where": wrote.where,
+                    },
+                    correction_for=_said_correction,
+                    fallback=_said_minimal,
+                    nudge_for=lambda ran: written_call_redirect_nudge(
+                        names=wrote.tools, where=wrote.where, ran_a_tool=ran
+                    ),
+                    # "Making that call now" only when the redirect really made
+                    # a call to a tool she wrote — succeeded or failed, it was
+                    # made; its report says which (fix round 1, C1).
+                    did_the_work=lambda: guards._attempted(frozenset(wrote.tools), turn.spans),
+                    blocked_by=blocked,
+                    out_of_rounds=out_of_rounds,
+                    messages=messages,
+                    advertised=advertised,
+                    tool_ctx=tool_ctx,
+                    device_names=device_names,
+                    agent_names=agent_names,
+                    user_message=message,
+                    emit=emit,
+                    persona=persona,
+                    subset=subset,
+                )
+                said_redirected = outcome.redirected
+                redirect_appended += outcome.appended
+                read_ephemeral = read_ephemeral or outcome.read_ephemeral
+                if said_redirected:
+                    persisted = outcome.text
+                    # A reply she KEPT stands (R-B) — it is not re-vetted by
+                    # this guard — but while it still writes a call that never
+                    # ran it is not ingested either: a recalled written call is
+                    # how the next one gets its wording. No correction; the
+                    # span says so.
+                    try:
+                        kept = guards.written_call_check(
+                            outcome.text, turn.spans, persona.tool_names
                         )
-            if outcome.markup_note:
-                persisted = f"{persisted}\n\n{outcome.markup_note}"
-            backend_note = backend_note or outcome.markup_note
-            if blocked is None:
-                redirect_spent = True  # spent by TRYING, as every claim's is
+                    except Exception:
+                        logger.exception("written-call re-read of the kept reply raised")
+                        kept = None
+                    if kept is not None:
+                        said_kept = kept.tools
+                        for span in reversed(turn.spans):
+                            if span.kind == "guard" and span.name == "written_call":
+                                span.meta["kept_written_call"] = list(kept.tools)
+                                break
+                else:
+                    persisted = f"{persisted}\n\n{outcome.text}"
+                    if claimed is not None:
+                        # The device claim beside the written call: its ONE
+                        # span, and no second correction — the one that shipped
+                        # covers both (I1).
+                        with turn.span("guard", "device_completion") as span:
+                            span.meta.update(
+                                _completion_meta(claimed),
+                                redirected=False,
+                                not_redirected_because="append_class",
+                                correction="joined",
+                            )
+                if outcome.markup_note:
+                    persisted = f"{persisted}\n\n{outcome.markup_note}"
+                backend_note = backend_note or outcome.markup_note
+                if blocked is None:
+                    redirect_spent = True  # spent by TRYING, as every claim's is
+        # A device claim corrected beside the prose is an APPEND-class side line
+        # like the served-model and memory-outage claims (A11): the text-only
+        # commitment redirect and the soft responsiveness one re-run no guard,
+        # so either could bring the claim straight back — both hold off.
+        append_only_guard_fired = append_only_guard_fired or (
+            device_completion is not None and not said_redirected
+        )
 
         # The ALWAYS-ON deferral guard, the next claim on the turn's single
         # redirect budget after the said-not-done pair above (which is why a
@@ -6135,9 +6194,14 @@ async def _run_turn(
             # completion claim below: a call written as text that never ran,
             # or "Notepad is now open" with nothing run, is a fabricated fact
             # — and a recalled fabrication is how the next one gets its
-            # wording. All four of the owner's turns were ingested. A redirect
-            # that stood made the call (or said plainly it had not).
-            or ((written_call is not None or device_completion is not None) and not said_redirected)
+            # wording. All four of the owner's turns were ingested. A written
+            # call's redirect that stood made the call, or said plainly it had
+            # not — unless the reply it kept still writes one (fix round 2,
+            # R-B). A device claim stays out while the prose it corrected is
+            # what persists (R-A); a redirect that replaced it vetted its own.
+            or (written_call is not None and not said_redirected)
+            or bool(said_kept)
+            or (device_completion is not None and not prose_replaced)
             # An offer-shape deferral that did not redirect is the same shape
             # again: "want me to?" plus the honest note is choreography about
             # the instruction handed back, and recalling it later is how the

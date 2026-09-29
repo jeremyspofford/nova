@@ -1367,3 +1367,81 @@ async def test_an_agent_that_says_nothing_is_not_quoted_as_having_launched_it(po
         "DELL-XPS-8950: answered ok to launching brave and said nothing more — whether a "
         "window opened is not confirmed."
     )
+
+
+# -- a launch SENT and never answered: its outcome is not known (said-not-done) --
+#
+# The device-completion guard's correction (fix round 2, R-A) says "was sent
+# but did not answer — whether it opened is not known" for exactly the failures
+# where the command left core and no result came back — never "it did not
+# open". It reads that off the failure's own words (guards._NO_ANSWER), so the
+# words are pinned HERE, produced by the real hub and the real tool: a hub
+# refusal reworded tomorrow turns this red instead of turning the correction
+# into a guess. A refusal BEFORE sending ("not connected") is a plain failure.
+
+
+async def _launch_failure(pool, monkeypatch, how: str) -> str:
+    from app.tools import devices as device_tools
+
+    person = await _person(pool)
+    if how == "not connected":
+        await _enroll(pool, name="DELL-XPS-8950", platform="windows")
+        result, ok = await tools.dispatch(
+            "device_launch_app", {"device": "DELL-XPS-8950", "app": "notepad"}, _ctx(person)
+        )
+        assert ok is False
+        return result
+    device_id, _device, conn, task = await _connect(pool, name="DELL-XPS-8950", platform="windows")
+    if how == "timeout":
+        monkeypatch.setattr(device_tools, "COMMAND_TIMEOUT_SECONDS", 0.05)
+    call = asyncio.create_task(
+        tools.dispatch(
+            "device_launch_app", {"device": "DELL-XPS-8950", "app": "notepad"}, _ctx(person)
+        )
+    )
+    await asyncio.wait_for(conn.next_sent(), 2)  # the command left core
+    if how == "dropped":
+        devices_ws.hub.unregister(device_id, conn)
+    elif how == "closed":
+        await devices_ws.hub.disconnect(device_id, "revoked")
+    result, ok = await asyncio.wait_for(call, 2)
+    assert ok is False
+    if how != "closed":
+        await _close(conn, task)
+    else:
+        await asyncio.wait_for(task, 2)
+    return result
+
+
+@pytest.mark.parametrize("how", ["timeout", "dropped", "closed", "not connected"])
+async def test_a_launch_sent_and_never_answered_is_read_as_not_known(pool, monkeypatch, how):
+    from types import SimpleNamespace
+
+    from app import guards
+
+    error = await _launch_failure(pool, monkeypatch, how)
+    span = SimpleNamespace(
+        kind="tool",
+        name="device_launch_app",
+        meta={
+            "ok": False,
+            "args_redacted": {"app": "notepad", "device": "DELL-XPS-8950"},
+            "error": error,
+        },
+    )
+    claim = guards.device_completion_check(
+        "Notepad is now open on your DELL-XPS-8950.",
+        [span],
+        tools.tool_names(),
+        {"DELL-XPS-8950": "windows"},
+    )
+    assert claim is not None, error
+    if how == "not connected":
+        assert claim.record.case == "failed", error
+        assert "not connected" in claim.text
+    else:
+        assert claim.record.case == "no_answer", error
+        assert claim.text == (
+            "(device_launch_app was sent but did not answer — whether Notepad was opened is "
+            "not known.)"
+        )
