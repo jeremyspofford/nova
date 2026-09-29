@@ -107,7 +107,25 @@ still decides, and every guard still judges what she writes.
     priced or capped. The server is started by hand until the Kev engine exists, run
     from a clone of [jaredpalmer/kev](https://github.com/jaredpalmer/kev):
     `uv run --extra serve python -m kev.serve --run jaredpalmer/kev-4b --host 0.0.0.0
-    --port 8009` — `--host 0.0.0.0` is what lets the gateway reach it.
+    --port 8009` — `--host 0.0.0.0` is what lets the gateway reach it. Kev is a local
+    decision model, and those are switched off until you turn them on (below).
+- **Local and cloud: two switches.** Beside the decisions chain in Settings → Routing:
+  **Local decision model** (alpha, off by default) and **Cloud decision model** (beta, on
+  by default). A link's kind is its provider's "Runs on my own machine" flag, never its
+  name. A link whose kind is switched off is passed over for that call — never dialled,
+  never walled — and the next link answers; the route says why
+  (`dell-kev:kev-latest: local decision models are switched off in Settings (alpha)`), and
+  so do "right now: … would answer" in Routing and Nova's `route_explain`. The chain's
+  order stays yours. Local is alpha because on a GPU shared with the chat model it rarely
+  answers in time: measured on 2026-09-29 with `dell:qwen3:8b` loaded, Kev-4B answered
+  within the 5 s budget on 1 of 90 corpus turns and 0 of 10 latency runs (1.8 s alone and
+  warm; Jev took 0.8 s). When it cannot answer in time, the step is skipped and the
+  message waits up to 5 s. Cloud is beta: the message and its recalled notes go to the
+  provider, at a small cost per message. With **both off**, the step does not run at all
+  — no call, no delay, no cost — and the turn's `decisions` span says so
+  (`outcome: "off"`). Core reads the switches for each turn that asks and names the kinds
+  allowed on each call (`X-Nova-Decision-Kinds`); a call with no such header allows every
+  kind.
 - **With no decision model** — an empty chain, which is how every install starts — nothing
   changes: each turn runs exactly as before, and its trace says why.
 - **The budget.** The whole step has 5 seconds per turn (`decisions.TURN_BUDGET_S` in
@@ -122,10 +140,10 @@ still decides, and every guard still judges what she writes.
   does a second message sent while she is still answering the first — it is queued, then
   drained without the step once her turn ends. The eval runner's turns do run it,
   because they measure the chat path.
-- **Reading it.** Each turn it ran on has one `decisions` span: the hint, its fit and the
-  gate, each note's scores and verdict by path (never its text) when the notes were
-  checked, who served, its cost (`cost_usd`), and — as the span's duration — how long it
-  took:
+- **Reading it.** Each turn it ran on has one `decisions` span: the kinds allowed
+  (`kinds`), the hint, its fit and the gate, each note's scores and verdict by path (never
+  its text) when the notes were checked, who served, its cost (`cost_usd`), and — as the
+  span's duration — how long it took:
   `SELECT meta, duration_ms FROM turn_spans WHERE turn_id = '<id>' AND kind = 'decisions';`
 - **The Jev Router switch.** Settings → Routing shows "Let Jev Router pick the cloud
   model" on Chat, Scheduled tasks and each agent's role, read off what your turns
