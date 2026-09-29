@@ -854,3 +854,44 @@ func TestARevertThatLeavesNothingInstalledSaysSoAndKeepsTheFailedBuild(t *testin
 		t.Fatalf("agents started from %q, want nothing from the missing binary, then the previous build", from)
 	}
 }
+
+// A "ready" older than this agent (from before it started, under its reused
+// pid) is not taken as it connecting, the same guard the confirm uses.
+func TestAStaleReadyIsNotTakenAsTheNewBuildConnecting(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{exit: 2})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	if err := state.WriteJSON(filepath.Join(r.dir, state.AgentStatusFile), state.AgentStatus{
+		V: 1, PID: 1001, Version: "bbbbbbbbbbbb", State: state.StateReady, Since: time.Now().Add(-time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 3 })
+	if u := r.update(t); u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "exited with 2 before it connected") {
+		t.Fatalf("update = %+v, want the stale ready ignored", u)
+	}
+}
+
+// A build whose ready as its own version landed after the last poll, just
+// before it exited, did connect: it is confirmed — never reverted, never
+// "connected as X, not X" — and its exit is handled as after any confirm.
+func TestABuildThatConnectedAsItsVersionBeforeExitingIsConfirmed(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{exit: 2})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	cfg := r.config()
+	cfg.Sleep = func(ctx context.Context, d time.Duration) error {
+		if d == exitGrace {
+			_ = state.WriteJSON(filepath.Join(r.dir, state.AgentStatusFile), state.AgentStatus{
+				V: 1, PID: 1001, Version: "aaaaaaaaaaaa", State: state.StateReady, Since: time.Now()})
+		}
+		return ctx.Err()
+	}
+	runUntil(t, cfg, func() bool { return len(r.sp.spawned()) == 3 })
+	if u := r.update(t); u.Outcome != state.UpdateApplied || strings.Contains(u.Reason, "not aaaaaaaaaaaa") {
+		t.Fatalf("update = %+v, want the build that connected confirmed", u)
+	}
+	if got := read(t, r.bin); got != "new" {
+		t.Fatalf("installed build = %q, want the confirmed build kept", got)
+	}
+	if from := r.sp.spawned(); from[2] != "new" {
+		t.Fatalf("after its exit the agent restarted from %q, want the confirmed build", from[2])
+	}
+}

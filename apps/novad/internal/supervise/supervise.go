@@ -179,6 +179,7 @@ func (s *sup) loop(ctx context.Context) int {
 			}
 			exited <- code
 		}()
+		var early *int // an exit awaitReady already took from exited
 		if confirm != "" {
 			outcome, code, reason := s.awaitReady(ctx, child.PID(), exited, confirm, started)
 			switch outcome {
@@ -228,14 +229,21 @@ func (s *sup) loop(ctx context.Context) int {
 			s.record(confirm, state.UpdateApplied, "")
 			s.cfg.Logf("the new build %s connected", confirm)
 			confirm = ""
+			if code != nil {
+				early = code // it connected, then exited: handled below
+			}
 		}
 		var code int
-		select {
-		case code = <-exited:
-		case <-ctx.Done():
-			_ = child.Kill()
-			<-exited
-			return 0
+		if early != nil {
+			code = *early
+		} else {
+			select {
+			case code = <-exited:
+			case <-ctx.Done():
+				_ = child.Kill()
+				<-exited
+				return 0
+			}
 		}
 		s.restarts++
 		s.lastExit = &code
@@ -279,23 +287,39 @@ func (s *sup) loop(ctx context.Context) int {
 // pid, since it started), to exit, or for the bound — whichever is first.
 // A stop is never a failed build: an exit seen once ctx has ended — or
 // before exitGrace has passed — is the stop, and returns readyStopped with
-// the code it consumed.
+// the code it consumed. A build whose ready as version lands after the last
+// poll, just before it exits, did connect: readyOK, with the code consumed.
 func (s *sup) awaitReady(ctx context.Context, pid int, exited <-chan int, version string, started time.Time) (readyOutcome, *int, string) {
 	path := filepath.Join(s.cfg.StateDir, state.AgentStatusFile)
 	deadline := s.cfg.Now().Add(s.cfg.ConfirmWithin)
-	connectedAs := "" // the version this agent's status said it connected as
-	for {
+	connectedAs := "" // another version this agent's status said it connected as
+	// ready is whether the agent's status says it connected as version
+	// since it started; a ready as another version is kept in connectedAs.
+	// A ready from before it started (a stale file, a reused pid) is
+	// neither.
+	ready := func() bool {
 		var st state.AgentStatus
-		if state.ReadJSON(path, &st) == nil && st.PID == pid && st.State == state.StateReady {
-			if st.Version == version && !st.Since.Before(started.Add(-time.Second)) {
-				return readyOK, nil, ""
-			}
-			connectedAs = st.Version
+		if state.ReadJSON(path, &st) != nil || st.PID != pid || st.State != state.StateReady ||
+			st.Since.Before(started.Add(-time.Second)) {
+			return false
+		}
+		if st.Version == version {
+			return true
+		}
+		connectedAs = st.Version
+		return false
+	}
+	for {
+		if ready() {
+			return readyOK, nil, ""
 		}
 		select {
 		case code := <-exited:
 			if ctx.Err() != nil || s.cfg.Sleep(ctx, exitGrace) != nil || ctx.Err() != nil {
 				return readyStopped, &code, ""
+			}
+			if ready() {
+				return readyOK, &code, ""
 			}
 			return readyFailed, &code, s.failure(path, pid, version, &code, connectedAs)
 		case <-ctx.Done():
@@ -312,15 +336,11 @@ func (s *sup) awaitReady(ctx context.Context, pid int, exited <-chan int, versio
 }
 
 // failure says why a new build was not confirmed — its exit (code), else
-// the bound — from the last status its agent wrote. It never says "before
-// it connected" or "did not connect" of a build whose status said it had
-// connected, under another version (connectedAs, from an earlier read, or
-// this one).
+// the bound — from what its agent's status said. It never says "before it
+// connected" or "did not connect" of a build whose status said it had
+// connected under another version (connectedAs), and never "connected as
+// X, not X": a ready as version itself is a confirm (awaitReady).
 func (s *sup) failure(path string, pid int, version string, code *int, connectedAs string) string {
-	var st state.AgentStatus
-	if state.ReadJSON(path, &st) == nil && st.PID == pid && st.State == state.StateReady {
-		connectedAs = st.Version
-	}
 	var reason string
 	switch {
 	case code != nil && connectedAs != "":
