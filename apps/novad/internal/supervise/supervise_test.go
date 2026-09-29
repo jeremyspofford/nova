@@ -4,8 +4,11 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -37,13 +40,15 @@ func (c *fakeChild) Kill() error {
 // step is what one spawned agent does: after delay, write "ready" as that
 // version (when ready is set), then exit with code — or block until killed.
 // A stopped agent exits 0 when the supervisor's context ends, as `novad run`
-// does when the service manager stops the whole group at once.
+// does when the service manager stops the whole group at once. With
+// startErr, the agent never starts: the spawn itself fails.
 type step struct {
-	ready   string
-	exit    int
-	block   bool
-	stopped bool
-	delay   time.Duration
+	ready    string
+	exit     int
+	block    bool
+	stopped  bool
+	startErr string
+	delay    time.Duration
 }
 
 type fakeSpawner struct {
@@ -65,6 +70,9 @@ func (f *fakeSpawner) spawn(ctx context.Context, bin string, _ []string, env []s
 	st := step{block: true}
 	if n < len(f.steps) {
 		st = f.steps[n]
+	}
+	if st.startErr != "" {
+		return nil, errors.New(st.startErr)
 	}
 	go func() {
 		time.Sleep(st.delay)
@@ -398,5 +406,121 @@ func TestAnUnconfirmedSwapWithNoPreviousBuildIsNotConfirmed(t *testing.T) {
 	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 2 })
 	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
 		t.Fatalf("update = %+v", u)
+	}
+}
+
+// swapRevert makes revertBuild fake for one test.
+func swapRevert(t *testing.T, fake func(string) error) {
+	t.Helper()
+	was := revertBuild
+	revertBuild = fake
+	t.Cleanup(func() { revertBuild = was })
+}
+
+// logLines collects what a supervisor logs.
+type logLines struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logLines) logf(format string, a ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, fmt.Sprintf(format, a...))
+}
+
+func (l *logLines) contain(s string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, line := range l.lines {
+		if strings.Contains(line, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// rolled_back is recorded only when the revert happened. A revert that fails
+// records nothing: the build that never connected is still installed. The
+// failure is logged with its reason, and the build is confirmed again on the
+// backoff ladder, so the revert is retried.
+func TestAFailedRevertRecordsNothingAndIsRetried(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{exit: 2}, step{exit: 2})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	var reverts atomic.Int32
+	swapRevert(t, func(string) error { reverts.Add(1); return errors.New("the disk refused") })
+	var logged logLines
+	cfg := r.config()
+	cfg.Logf = logged.logf
+	runUntil(t, cfg, func() bool { return reverts.Load() >= 2 })
+	if u := r.update(t); u.Outcome != state.UpdateStaged || u.Reason != "" {
+		t.Fatalf("a revert that failed was recorded: %+v", u)
+	}
+	if got := read(t, r.bin); got != "new" {
+		t.Fatalf("installed build = %q", got)
+	}
+	if from := r.sp.spawned(); len(from) < 3 || from[1] != "new" || from[2] != "new" {
+		t.Fatalf("agents started from %v, want the unconfirmed build confirmed again", from)
+	}
+	if !logged.contain("the disk refused") {
+		t.Fatalf("the failed revert is not logged with its reason: %q", logged.lines)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !slices.Contains(r.slept, time.Second) {
+		t.Fatalf("slept %v, want the retry on the backoff ladder (1s first)", r.slept)
+	}
+}
+
+func TestARevertThatLaterSucceedsRecordsRolledBackOnce(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{exit: 2}, step{exit: 2})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	var reverts atomic.Int32
+	var atRetry atomic.Value // update.json's outcome as the revert is retried
+	swapRevert(t, func(bin string) error {
+		if reverts.Add(1) == 1 {
+			return errors.New("the disk refused")
+		}
+		var u state.Update
+		_ = state.ReadJSON(filepath.Join(r.dir, state.UpdateFile), &u)
+		atRetry.Store(u.Outcome)
+		return Revert(bin)
+	})
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 4 })
+	if got, _ := atRetry.Load().(string); got != state.UpdateStaged {
+		t.Fatalf("update.json said %q when the revert was retried, want staged: the failed one recorded it", got)
+	}
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "exited with 2") || strings.Contains(u.Reason, "refused") {
+		t.Fatalf("update = %+v, want rolled_back for the build that failed, recorded by the revert that happened", u)
+	}
+	if n := reverts.Load(); n != 2 {
+		t.Fatalf("%d reverts, want 2: one that failed, one retried", n)
+	}
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q, want the old one back", got)
+	}
+	if from := r.sp.spawned(); from[3] != "old" {
+		t.Fatalf("the agent after the revert started from %q", from[3])
+	}
+}
+
+// The revert's other way in: a new build that cannot even start.
+func TestANewBuildThatCannotStartIsRolledBack(t *testing.T) {
+	r := newRig(t, step{exit: ExitUpdateStaged}, step{startErr: "exec format error"})
+	r.stage(t, "new", "aaaaaaaaaaaa", "")
+	runUntil(t, r.config(), func() bool { return len(r.sp.spawned()) == 3 })
+	u := r.update(t)
+	if u.Outcome != state.UpdateRolledBack || !strings.Contains(u.Reason, "could not start: exec format error") {
+		t.Fatalf("update = %+v", u)
+	}
+	if got := read(t, r.bin); got != "old" {
+		t.Fatalf("installed build = %q, want the old one back", got)
+	}
+	if got := read(t, r.bin+".failed"); got != "new" {
+		t.Fatalf(".failed = %q", got)
+	}
+	if from := r.sp.spawned(); from[1] != "new" || from[2] != "old" {
+		t.Fatalf("agents started from %v", from)
 	}
 }

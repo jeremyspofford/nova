@@ -121,12 +121,14 @@ func (s *sup) loop(ctx context.Context) int {
 		started := s.cfg.Now()
 		child, err := s.cfg.Spawn(ctx, s.cfg.Binary, []string{"run"}, s.env())
 		if err != nil {
-			if confirm != "" {
-				s.revert(confirm, fmt.Sprintf("the new build could not start: %v", err))
+			if confirm == "" {
+				s.cfg.Logf("could not start the agent: %v", err)
+			} else if s.revert(confirm, fmt.Sprintf("the new build could not start: %v", err)) {
 				confirm = ""
 				continue
 			}
-			s.cfg.Logf("could not start the agent: %v", err)
+			// A failed revert keeps confirm: the build is tried again, and so
+			// the revert, on the backoff ladder.
 			if s.cfg.Sleep(ctx, s.backoff(attempt)) != nil {
 				return 0
 			}
@@ -160,8 +162,17 @@ func (s *sup) loop(ctx context.Context) int {
 					_ = child.Kill()
 					<-exited
 				}
-				s.revert(confirm, reason)
-				confirm = ""
+				if s.revert(confirm, reason) {
+					confirm = ""
+					continue
+				}
+				// The revert failed and the build that did not connect is
+				// still installed: confirm it again, on the backoff ladder,
+				// which retries the revert.
+				if s.cfg.Sleep(ctx, s.backoff(attempt)) != nil {
+					return 0
+				}
+				attempt++
 				continue
 			}
 			s.record(confirm, state.UpdateApplied, "")
@@ -297,12 +308,24 @@ func (s *sup) swapStaged() (string, error) {
 	return u.Version, nil
 }
 
-func (s *sup) revert(version, reason string) {
-	if err := Revert(s.cfg.Binary); err != nil {
-		reason += fmt.Sprintf("; putting the previous build back failed too: %v", err)
+// revertBuild is Revert; a test makes it fail.
+var revertBuild = Revert
+
+// revert puts .prev back for a build that failed to confirm, and records
+// rolled_back only once that has happened. A revert that fails records
+// nothing: the build that did not connect is still installed, so the record
+// would be false (and a next start would read it as done and never retry).
+// The failure is logged with its reason. The caller keeps confirming the
+// build, which retries the revert.
+func (s *sup) revert(version, reason string) bool {
+	if err := revertBuild(s.cfg.Binary); err != nil {
+		s.cfg.Logf("%s did not confirm (%s), and putting the previous build back failed: %v; it stays installed, and the revert is retried",
+			version, reason, err)
+		return false
 	}
 	s.cfg.Logf("rolled back %s: %s", version, reason)
 	s.record(version, state.UpdateRolledBack, reason)
+	return true
 }
 
 // record writes an update's outcome, keeping what daemon.update staged.
